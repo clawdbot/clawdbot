@@ -139,11 +139,67 @@ describe("Discord Activity interaction", () => {
     expect(writeOrder).toBeLessThan(launchOrder);
   });
 
+  it("clears the exact watchdog handle when the pending launch write wins", async () => {
+    const runtime = createActivityTestRuntime();
+    setDiscordActivitiesRuntime(runtime);
+    const nativeSetTimeout = globalThis.setTimeout;
+    let watchdogHandle: ReturnType<typeof setTimeout> | undefined;
+    let watchdogFired = false;
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+      callback: (...args: unknown[]) => void,
+      delay?: number,
+      ...args: unknown[]
+    ): ReturnType<typeof setTimeout> => {
+      const handle = nativeSetTimeout(() => {
+        if (delay === 250) {
+          watchdogFired = true;
+        }
+        callback(...args);
+      }, delay);
+      if (delay === 250) {
+        watchdogHandle = handle;
+      }
+      return handle;
+    }) as typeof setTimeout);
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    const button = createDiscordActivityButton(componentContext(), "123456789012345678", {
+      reply: vi.fn(async () => undefined) as never,
+    });
+    if (!button) {
+      throw new Error("expected activity button");
+    }
+    const launchActivity = vi.fn(async () => undefined);
+    const interaction = {
+      launchActivity,
+      rawData: { channel_id: "777" },
+      userId: "42",
+    } as unknown as ButtonInteraction;
+
+    try {
+      await button.run(interaction, { widgetId: "AAAAAAAAAAAAAAAAAAAAAA" });
+
+      expect(watchdogHandle).toBeDefined();
+      expect(clearTimeoutSpy).toHaveBeenCalledWith(watchdogHandle);
+      await new Promise<void>((resolve) => {
+        nativeSetTimeout(resolve, 275);
+      });
+      expect(watchdogFired).toBe(false);
+      expect(launchActivity).toHaveBeenCalledOnce();
+    } finally {
+      setTimeoutSpy.mockRestore();
+      clearTimeoutSpy.mockRestore();
+    }
+  });
+
   it("launches after the write budget when the store stalls and logs once", async () => {
     const runtime = createActivityTestRuntime();
     setDiscordActivitiesRuntime(runtime);
     const pendingWrite = createDeferred<void>();
-    vi.spyOn(runtime.store, "recordPendingLaunch").mockReturnValue(pendingWrite.promise);
+    let backgroundSettled = false;
+    const stalledWrite = pendingWrite.promise.then(() => {
+      backgroundSettled = true;
+    });
+    vi.spyOn(runtime.store, "recordPendingLaunch").mockReturnValue(stalledWrite);
     const logError = vi.fn();
     const button = createDiscordActivityButton(componentContext(), "123456789012345678", {
       reply: vi.fn(async () => undefined) as never,
@@ -158,14 +214,21 @@ describe("Discord Activity interaction", () => {
       rawData: { channel_id: "777" },
       userId: "42",
     } as unknown as ButtonInteraction;
+    const startedAt = performance.now();
     try {
       await button.run(interaction, { widgetId: "AAAAAAAAAAAAAAAAAAAAAA" });
+      const elapsedMs = performance.now() - startedAt;
       expect(launchActivity).toHaveBeenCalledOnce();
       expect(logError).toHaveBeenCalledTimes(1);
       expect(String(logError.mock.calls[0]?.[0])).toContain("exceeded");
+      expect(elapsedMs).toBeGreaterThanOrEqual(240);
+      expect(backgroundSettled).toBe(false);
     } finally {
       pendingWrite.resolve();
+      await stalledWrite;
     }
+    expect(backgroundSettled).toBe(true);
+    expect(logError).toHaveBeenCalledTimes(1);
   });
 
   it("still launches when recording the pending launch fails and logs once", async () => {

@@ -66,6 +66,15 @@ function inspectSlackToken(value: unknown): {
   };
 }
 
+function selectInspectedSlackToken(
+  configured: ReturnType<typeof inspectSlackToken>,
+  envToken: string | undefined,
+): string | undefined {
+  // A configured SecretRef remains authoritative while unavailable; read-only
+  // inspection must not make a lower-precedence environment token look active.
+  return configured.status === "missing" ? envToken : configured.token;
+}
+
 export function inspectSlackAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -100,10 +109,10 @@ export function inspectSlackAccount(params: {
     ? normalizeSecretInputString(params.envUserToken ?? process.env.SLACK_USER_TOKEN)
     : undefined;
 
-  const botToken = configBot.token ?? envBot;
-  const appToken = configApp.token ?? envApp;
+  const botToken = selectInspectedSlackToken(configBot, envBot);
+  const appToken = selectInspectedSlackToken(configApp, envApp);
   const signingSecret = configSigningSecret.token;
-  const userToken = configUser.token ?? envUser;
+  const userToken = selectInspectedSlackToken(configUser, envUser);
   const relayConfigured =
     isRelayMode &&
     Boolean(normalizeOptionalString(merged.relay?.url)) &&

@@ -29,7 +29,12 @@ enum ExecApprovalsLegacyMigrationGate {
                 userInfo: [
                     NSLocalizedDescriptionKey:
                         "Legacy exec approvals exist at \(sourceURL.path). " +
-                        "Run `openclaw doctor --fix` before using exec approvals.",
+                        // Doctor repairs whichever state directory its own environment resolves to,
+                        // and an app store never shares the CLI's default root, so always name the
+                        // directory; a bare `doctor --fix` would repair a different one. Prose,
+                        // not a `VAR=value cmd` one-liner, so the path needs no shell quoting.
+                        "Run `openclaw doctor --fix` with OPENCLAW_STATE_DIR set to " +
+                        "\(stateDirectoryURL.path) before using exec approvals.",
                 ])
         }
     }

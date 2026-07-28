@@ -29,8 +29,44 @@ function reviewArtifactEnumHint(enumName, initialValue) {
   return `${initialValue} (allowed: ${allowed.join("|")})`;
 }
 
-function createReviewArtifactTemplate() {
+// Both artifacts carry the same stamp: review.md holds the prose verdict a human
+// reads, so binding only review.json would still let a foreign markdown verdict
+// ride along with a freshly stamped JSON.
+function reviewIdentityLine({ number, headSha }) {
+  return `Review artifact for PR #${number} at ${headSha}`;
+}
+
+function createReviewMarkdownTemplate(identity) {
+  return `${reviewIdentityLine(identity)}
+
+A) TL;DR recommendation
+
+B) What changed and what is good?
+
+C) Security findings
+
+D) What is the PR intent? Is this the most optimal implementation?
+
+E) Concerns or questions (actionable)
+
+F) Tests
+
+G) Docs status
+
+H) Changelog
+
+I) Follow ups (optional)
+
+J) Suggested PR comment (optional)
+`;
+}
+
+function createReviewArtifactTemplate({ number, headSha }) {
   return {
+    // Identity stamp, not reviewer input: validation refuses artifacts whose pr
+    // disagrees with .local/pr-meta.json, so a review written for another PR (or
+    // an already-superseded head) can never be landed as this one's verdict.
+    pr: { number, headSha },
     recommendation: reviewArtifactEnumHint("recommendation", "NEEDS WORK"),
     findings: [],
     nitSweep: {
@@ -100,6 +136,50 @@ function validateReviewArtifacts({ review, reviewMarkdown, prMeta }) {
     "Invalid .local/review.json: top-level value must be an object",
   );
   const value = reviewIsObject ? review : {};
+
+  const prMetaIsValid =
+    isObject(prMeta) &&
+    Array.isArray(prMeta.files) &&
+    prMeta.files.every((file) => isObject(file) && typeof file.path === "string");
+  if (!prMetaIsValid) {
+    add("Invalid .local/pr-meta.json: files must be an array of objects with string path");
+  }
+  const prMetaIdentifiesHead =
+    isObject(prMeta) && Number.isInteger(prMeta.number) && typeof prMeta.headRefOid === "string";
+  if (!prMetaIdentifiesHead) {
+    add(
+      "Invalid .local/pr-meta.json: number and headRefOid must identify the reviewed PR head; re-run scripts/pr review-init",
+    );
+  }
+  const stamp = isObject(value.pr) ? value.pr : undefined;
+  const stampIsValid =
+    stamp !== undefined && Number.isInteger(stamp.number) && typeof stamp.headSha === "string";
+  if (!stampIsValid) {
+    add(
+      "Invalid PR identity in .local/review.json: pr.number must be an integer and pr.headSha must be a string; re-run scripts/pr review-artifacts-init",
+    );
+  }
+  if (
+    stampIsValid &&
+    prMetaIdentifiesHead &&
+    (stamp.number !== prMeta.number || stamp.headSha !== prMeta.headRefOid)
+  ) {
+    add(
+      `Review artifact identity mismatch in .local/review.json: authored for PR #${stamp.number} at ${stamp.headSha}, but .local/pr-meta.json describes PR #${prMeta.number} at ${prMeta.headRefOid}; re-run scripts/pr review-artifacts-init`,
+    );
+  }
+  if (prMetaIdentifiesHead) {
+    const expectedLine = reviewIdentityLine({
+      number: prMeta.number,
+      headSha: prMeta.headRefOid,
+    });
+    if (reviewMarkdown.split("\n")[0] !== expectedLine) {
+      add(
+        `Review artifact identity mismatch in .local/review.md: first line must be ${jsonValue(expectedLine)}; re-run scripts/pr review-artifacts-init`,
+      );
+    }
+  }
+
   const recommendationIsString = requireType(
     typeof value.recommendation === "string",
     "Invalid recommendation in .local/review.json: recommendation must be a string",
@@ -259,13 +339,6 @@ function validateReviewArtifacts({ review, reviewMarkdown, prMeta }) {
     );
   }
 
-  const prMetaIsValid =
-    isObject(prMeta) &&
-    Array.isArray(prMeta.files) &&
-    prMeta.files.every((file) => isObject(file) && typeof file.path === "string");
-  if (!prMetaIsValid) {
-    add("Invalid .local/pr-meta.json: files must be an array of objects with string path");
-  }
   const runtimeFileCount = prMetaIsValid
     ? prMeta.files.filter(
         ({ path }) =>
@@ -462,8 +535,21 @@ function readJson(filePath) {
 
 function main(argv = process.argv.slice(2)) {
   const [command, ...args] = argv;
-  if (command === "template" && args.length === 0) {
-    process.stdout.write(`${JSON.stringify(createReviewArtifactTemplate(), null, 2)}\n`);
+  if ((command === "template" || command === "markdown") && args.length === 2) {
+    const [prNumber, headSha] = args;
+    if (!/^[1-9][0-9]*$/u.test(prNumber) || !/^[0-9a-f]{40}$/u.test(headSha)) {
+      console.error(
+        `Usage: review-artifacts.mjs ${command} <pr-number> <head-sha>; pr-number must be a positive integer and head-sha a 40-character lowercase hex commit id.`,
+      );
+      process.exitCode = 2;
+      return;
+    }
+    const identity = { number: Number(prNumber), headSha };
+    process.stdout.write(
+      command === "markdown"
+        ? createReviewMarkdownTemplate(identity)
+        : `${JSON.stringify(createReviewArtifactTemplate(identity), null, 2)}\n`,
+    );
     return;
   }
   if (command === "validate" && args.length === 3) {
@@ -483,7 +569,7 @@ function main(argv = process.argv.slice(2)) {
     return;
   }
   console.error(
-    "Usage: review-artifacts.mjs template | validate <review.json> <review.md> <pr-meta.json>",
+    "Usage: review-artifacts.mjs template|markdown <pr-number> <head-sha> | validate <review.json> <review.md> <pr-meta.json>",
   );
   process.exitCode = 2;
 }

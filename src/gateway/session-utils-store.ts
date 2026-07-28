@@ -37,7 +37,7 @@ import {
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils-store-lookup.js";
-import type { GatewayAgentRow, GatewaySessionRow } from "./session-utils.types.js";
+import type { GatewayAgentRow } from "./session-utils.types.js";
 
 /**
  * Returns the owning agent id if the session key belongs to an agent that is no
@@ -121,7 +121,7 @@ function readAcpMetaForDeletedAgentCheck(params: {
 
 function loadSessionEntryWithMode(
   sessionKey: string,
-  opts: { agentId?: string; clone?: boolean } | undefined,
+  opts: { agentId?: string; clone?: boolean; includeStoreChildEntries?: boolean } | undefined,
   readOnly: boolean,
 ) {
   const cfg = getRuntimeConfig();
@@ -131,17 +131,27 @@ function loadSessionEntryWithMode(
     key,
     ...(opts?.clone === false ? { clone: false } : {}),
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
-    ...(readOnly ? { readOnly: true } : {}),
+    ...(readOnly
+      ? {
+          exactRead: true,
+          readOnly: true,
+          ...(opts?.includeStoreChildEntries ? { includeStoreChildEntries: true } : {}),
+        }
+      : {}),
   });
   const storePath = target.storePath;
   const store = target.store;
   const freshestMatch = resolveFreshestSessionStoreMatchFromStoreKeys(store, target.storeKeys);
   const legacyKey = freshestMatch?.key !== target.canonicalKey ? freshestMatch?.key : undefined;
+  const entry =
+    readOnly && opts?.clone !== false && freshestMatch?.entry
+      ? structuredClone(freshestMatch.entry)
+      : freshestMatch?.entry;
   return {
     cfg,
     storePath,
     store,
-    entry: freshestMatch?.entry,
+    entry,
     canonicalKey: target.canonicalKey,
     storeKeys: target.storeKeys,
     legacyKey,
@@ -154,7 +164,7 @@ export function loadSessionEntry(sessionKey: string, opts?: { agentId?: string; 
 
 export function loadSessionEntryReadOnly(
   sessionKey: string,
-  opts?: { agentId?: string; clone?: boolean },
+  opts?: { agentId?: string; clone?: boolean; includeStoreChildEntries?: boolean },
 ) {
   return loadSessionEntryWithMode(sessionKey, opts, true);
 }
@@ -238,22 +248,6 @@ export function migrateAndPruneGatewaySessionStoreKey(params: {
     candidates: target.storeKeys,
   });
   return { target, primaryKey, entry: params.store[primaryKey] };
-}
-
-export function classifySessionKey(key: string, entry?: SessionEntry): GatewaySessionRow["kind"] {
-  if (key === "global") {
-    return "global";
-  }
-  if (key === "unknown") {
-    return "unknown";
-  }
-  if (entry?.chatType === "group" || entry?.chatType === "channel") {
-    return "group";
-  }
-  if (key.includes(":group:") || key.includes(":channel:")) {
-    return "group";
-  }
-  return "direct";
 }
 
 export function parseGroupKey(

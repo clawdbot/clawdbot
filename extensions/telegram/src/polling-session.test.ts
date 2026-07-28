@@ -1823,21 +1823,28 @@ describe("TelegramPollingSession", () => {
         },
       });
 
-      // Core drain serializes same-lane claims: 43 stays pending until 42 settles.
-      await waitForTelegramTestState(() => expect(events).toEqual(["topic10:42"]));
+      // Telegram releases lane occupancy after each buffered update defers, while
+      // retaining both durable claims until their participants settle.
+      await waitForTelegramTestState(() => expect(events).toEqual(["topic10:42", "topic10:43"]));
+      await waitForTelegramTestState(() => expect(participants).toHaveLength(2));
       await waitForTelegramTestState(async () =>
         expect(
           (await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).map(
             (claim) => claim.updateId,
           ),
-        ).toEqual([42]),
+        ).toEqual([42, 43]),
       );
-      expect(await pendingUpdateIds(tempDir, "all")).toEqual([43]);
+      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
 
       const completed: TelegramMessageProcessingResult = { kind: "completed" };
       participants[0]?.settle(completed);
-      await waitForTelegramTestState(() => expect(events).toEqual(["topic10:42", "topic10:43"]));
-      await waitForTelegramTestState(() => expect(participants).toHaveLength(2));
+      await waitForTelegramTestState(async () =>
+        expect(
+          (await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).map(
+            (claim) => claim.updateId,
+          ),
+        ).toEqual([43]),
+      );
       participants[1]?.settle(completed);
       await waitForTelegramTestState(async () =>
         expect(await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).toEqual([]),

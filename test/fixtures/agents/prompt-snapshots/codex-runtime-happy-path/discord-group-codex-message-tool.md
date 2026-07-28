@@ -75,21 +75,21 @@
   "cwd": "/tmp/openclaw-happy-path/workspace",
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "dynamicTools": [
-    "message",
     "agents_list",
+    "message",
     "sessions_spawn",
-    "nodes",
     "cron",
-    "tts",
     "gateway",
-    "sessions_list",
+    "nodes",
+    "session_status",
     "sessions_history",
+    "sessions_list",
     "sessions_search",
     "sessions_send",
     "subagents",
-    "session_status",
-    "web_search",
+    "tts",
     "web_fetch",
+    "web_search",
     "sessions_yield"
   ],
   "experimentalRawEvents": true,
@@ -221,8 +221,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 61383,
-    "roughTokens": 15346
+    "chars": 61437,
+    "roughTokens": 15360
   },
   "openClawDeveloperInstructions": {
     "chars": 3471,
@@ -233,8 +233,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6964
   },
   "totalWithDynamicToolsJson": {
-    "chars": 89239,
-    "roughTokens": 22310
+    "chars": 89293,
+    "roughTokens": 22324
   },
   "userInputText": {
     "chars": 1300,
@@ -521,21 +521,21 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
 
 ```json
 [
-  "message",
   "agents_list",
+  "message",
   "sessions_spawn",
-  "nodes",
   "cron",
-  "tts",
   "gateway",
-  "sessions_list",
+  "nodes",
+  "session_status",
   "sessions_history",
+  "sessions_list",
   "sessions_search",
   "sessions_send",
   "subagents",
-  "session_status",
-  "web_search",
+  "tts",
   "web_fetch",
+  "web_search",
   "sessions_yield"
 ]
 ```

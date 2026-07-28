@@ -13,7 +13,6 @@ import {
   reconcileSkillsAgentId,
   saveSkillApiKey,
   searchClawHub,
-  setClawHubSearchQuery,
   setSkillsAgentId,
   updateSkillEdit,
   updateSkillEnabled,
@@ -548,50 +547,18 @@ describe("loadSkillCard", () => {
 });
 
 describe("searchClawHub", () => {
-  it("clears stale query state immediately when the input changes", () => {
-    const { state } = createState();
-
-    state.clawhubSearchLoading = true;
-    state.clawhubInstallMessage = { kind: "success", text: "Installed github" };
-
-    setClawHubSearchQuery(state, "github app");
-
-    expect(state.clawhubSearchQuery).toBe("github app");
-    expect(state.clawhubSearchResults).toBeNull();
-    expect(state.clawhubSearchError).toBeNull();
-    expect(state.clawhubSearchLoading).toBe(false);
-    expect(state.clawhubInstallMessage).toBeNull();
-  });
-
-  it("clears stale results when the query is emptied", async () => {
+  it("skips the RPC when the query is empty", async () => {
     const { state, request } = createState();
 
-    await searchClawHub(state, "   ");
+    await expect(searchClawHub(state.client!, "   ")).resolves.toEqual([]);
 
     expect(request).not.toHaveBeenCalled();
-    expect(state.clawhubSearchResults).toBeNull();
-    expect(state.clawhubSearchError).toBeNull();
-    expect(state.clawhubSearchLoading).toBe(false);
   });
 
-  it("clears stale results as soon as a new search starts", async () => {
+  it("returns search results and forwards cancellation", async () => {
     const { state, request } = createState();
-    type SearchResponse = { results: SkillsState["clawhubSearchResults"] };
-    let resolveRequest: (value: SearchResponse) => void = () => {
-      throw new Error("expected search request promise to be pending");
-    };
-    request.mockImplementation(
-      () =>
-        new Promise<SearchResponse>((resolve) => {
-          resolveRequest = resolve;
-        }),
-    );
-
-    const pending = searchClawHub(state, "github");
-    expect(state.clawhubSearchResults).toBeNull();
-    expect(state.clawhubSearchLoading).toBe(true);
-
-    resolveRequest({
+    const controller = new AbortController();
+    request.mockResolvedValue({
       results: [
         {
           score: 0.95,
@@ -602,44 +569,15 @@ describe("searchClawHub", () => {
         },
       ],
     });
-    await pending;
-    expect(state.clawhubSearchResults?.[0]?.slug).toBe("github-new");
-    expect(state.clawhubSearchLoading).toBe(false);
-  });
 
-  it("ignores stale search responses after query changes", async () => {
-    const { state, request } = createState();
-    const queue = createDeferredRequestQueue(request);
-
-    const pending = searchClawHub(state, "github");
-    setClawHubSearchQuery(state, "gitlab");
-    queue.resolveNext({
-      results: [{ score: 1, slug: "github", displayName: "GitHub" }],
-    });
-    await pending;
-
-    expect(state.clawhubSearchQuery).toBe("gitlab");
-    expect(state.clawhubSearchResults).toBeNull();
-    expect(state.clawhubSearchError).toBeNull();
-    expect(state.clawhubSearchLoading).toBe(false);
-  });
-
-  it("ignores a same-client search response from an older connection epoch", async () => {
-    const { state, request } = createState();
-    const queue = createDeferredRequestQueue(request);
-
-    const pending = searchClawHub(state, "github");
-    state.connected = false;
-    state.skillsAgentRevision++;
-    state.clawhubSearchLoading = false;
-    state.connected = true;
-    queue.resolveNext({
-      results: [{ score: 1, slug: "stale", displayName: "Stale" }],
-    });
-    await pending;
-
-    expect(state.clawhubSearchResults).toBeNull();
-    expect(state.clawhubSearchLoading).toBe(false);
+    await expect(searchClawHub(state.client!, "github", controller.signal)).resolves.toEqual([
+      expect.objectContaining({ slug: "github-new" }),
+    ]);
+    expect(request).toHaveBeenCalledWith(
+      "skills.search",
+      { query: "github", limit: 20 },
+      { signal: controller.signal },
+    );
   });
 });
 

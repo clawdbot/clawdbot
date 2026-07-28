@@ -3,7 +3,7 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar.ts";
-import { refreshChatAvatar, renderChatAvatar } from "./chat-avatar.ts";
+import { invalidateChatAvatarCache, refreshChatAvatar, renderChatAvatar } from "./chat-avatar.ts";
 
 function renderAvatar(params: Parameters<typeof renderChatAvatar>) {
   const container = document.createElement("div");
@@ -146,6 +146,155 @@ describe("refreshChatAvatar", () => {
     await expect(refresh).resolves.toBeUndefined();
     expect(host.chatAvatarUrl).toBeNull();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("reuses the same-agent avatar without clearing or refetching it", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ avatarUrl: "/avatar/main", avatarStatus: "local" }),
+      })
+      .mockResolvedValueOnce({ ok: true, blob: async () => new Blob(["avatar"]) });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:main-avatar");
+
+    const host = createHost();
+    host.sessionKey = "agent:main:first";
+    await refreshChatAvatar(host);
+    expect(host.chatAvatarUrl).toBe("blob:main-avatar");
+
+    host.sessionKey = "agent:main:second";
+    const refresh = refreshChatAvatar(host);
+    expect(host.chatAvatarUrl).toBe("blob:main-avatar");
+    await refresh;
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(host.chatAvatarUrl).toBe("blob:main-avatar");
+  });
+
+  it("keeps an expired same-agent avatar visible while refreshing it", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ avatarUrl: "/avatar/main", avatarStatus: "local" }),
+      })
+      .mockResolvedValueOnce({ ok: true, blob: async () => new Blob(["first"]) })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ avatarUrl: "/avatar/main", avatarStatus: "local" }),
+      })
+      .mockResolvedValueOnce({ ok: true, blob: async () => new Blob(["second"]) });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    vi.spyOn(URL, "createObjectURL")
+      .mockReturnValueOnce("blob:first-avatar")
+      .mockReturnValueOnce("blob:second-avatar");
+
+    const host = createHost();
+    host.sessionKey = "agent:main:first";
+    await refreshChatAvatar(host);
+    now.mockReturnValue(61_001);
+    host.sessionKey = "agent:main:second";
+
+    const refresh = refreshChatAvatar(host);
+    expect(host.chatAvatarUrl).toBe("blob:first-avatar");
+    await refresh;
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(host.chatAvatarUrl).toBe("blob:second-avatar");
+  });
+
+  it("restores an expired avatar after a failed refresh and retries it", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ avatarUrl: "/avatar/main" }) })
+      .mockResolvedValueOnce({ ok: true, blob: async () => new Blob(["first"]) })
+      .mockResolvedValueOnce({ ok: false })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ avatarUrl: "/avatar/main" }) })
+      .mockResolvedValueOnce({ ok: true, blob: async () => new Blob(["second"]) });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    vi.spyOn(URL, "createObjectURL")
+      .mockReturnValueOnce("blob:first-avatar")
+      .mockReturnValueOnce("blob:second-avatar");
+    const host = createHost();
+
+    await refreshChatAvatar(host);
+    now.mockReturnValue(61_001);
+    await refreshChatAvatar(host);
+    expect(host.chatAvatarUrl).toBe("blob:first-avatar");
+
+    await refreshChatAvatar(host);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    expect(host.chatAvatarUrl).toBe("blob:second-avatar");
+  });
+
+  it("lets the newest same-agent waiter apply a shared avatar fetch", async () => {
+    let resolveBlob: (blob: Blob) => void = () => undefined;
+    const blob = new Promise<Blob>((resolve) => {
+      resolveBlob = resolve;
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ avatarUrl: "/avatar/main" }) })
+      .mockResolvedValueOnce({ ok: true, blob: async () => await blob });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:shared-avatar");
+    const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL");
+    const host = createHost();
+    host.sessionKey = "agent:main:first";
+
+    const first = refreshChatAvatar(host);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    host.sessionKey = "agent:main:second";
+    const second = refreshChatAvatar(host);
+    resolveBlob(new Blob(["avatar"]));
+    await Promise.all([first, second]);
+
+    expect(host.chatAvatarUrl).toBe("blob:shared-avatar");
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+  });
+
+  it("retries a failed local avatar download", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ avatarUrl: "/avatar/main" }) })
+      .mockResolvedValueOnce({ ok: false })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ avatarUrl: "/avatar/main" }) })
+      .mockResolvedValueOnce({ ok: true, blob: async () => new Blob(["avatar"]) });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:retried-avatar");
+    const host = createHost();
+
+    await refreshChatAvatar(host);
+    expect(host.chatAvatarUrl).toBeNull();
+    await refreshChatAvatar(host);
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(host.chatAvatarUrl).toBe("blob:retried-avatar");
+  });
+
+  it("invalidates a cached avatar before configuration refresh", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ avatarUrl: "/avatar/main" }) })
+      .mockResolvedValueOnce({ ok: true, blob: async () => new Blob(["first"]) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ avatarUrl: "/avatar/main" }) })
+      .mockResolvedValueOnce({ ok: true, blob: async () => new Blob(["second"]) });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    vi.spyOn(URL, "createObjectURL")
+      .mockReturnValueOnce("blob:first-avatar")
+      .mockReturnValueOnce("blob:second-avatar");
+    const host = createHost();
+
+    await refreshChatAvatar(host);
+    invalidateChatAvatarCache(host);
+    await refreshChatAvatar(host);
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(host.chatAvatarUrl).toBe("blob:second-avatar");
   });
 });
 

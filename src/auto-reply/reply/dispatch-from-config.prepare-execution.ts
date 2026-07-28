@@ -57,6 +57,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     suppressAutomaticSourceDelivery,
     suppressDelivery,
     traceReplyPhase,
+    turnLedger,
   } = state;
   // When automatic source delivery is suppressed, still let the agent process
   // the inbound message (context, memory, tool calls) but suppress automatic
@@ -114,7 +115,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
       return;
     }
     markInboundDedupeReplayUnsafe();
-    dispatcher.sendToolResult(payload);
+    turnLedger.sendQueued("tool", payload);
   };
   const sendPlanUpdate = async (payload: {
     explanation?: string;
@@ -137,7 +138,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
       return;
     }
     markInboundDedupeReplayUnsafe();
-    dispatcher.sendToolResult(replyPayload);
+    turnLedger.sendQueued("tool", replyPayload);
   };
   const summarizeApprovalLabel = (payload: {
     status?: string;

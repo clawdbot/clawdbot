@@ -5,15 +5,13 @@
  * the model response into conservative allow-once or ask decisions.
  */
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { z } from "zod";
-import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import {
+  buildExecAutoReviewFailureDecision,
   defaultExecAutoReviewer,
+  normalizeExecAutoReviewRationale,
   type ExecAutoReviewDecision,
   type ExecAutoReviewInput,
   type ExecAutoReviewer,
@@ -79,15 +77,6 @@ function buildReviewerUserPrompt(input: ExecAutoReviewInput): string {
     stringifyInput(input),
     "UNTRUSTED_EXEC_REQUEST_JSON_END",
   ].join("\n");
-}
-
-function normalizeRationale(value: unknown, fallback: string): string {
-  const text = normalizeOptionalString(typeof value === "string" ? value : undefined);
-  const sanitized = sanitizeTerminalText(text ?? fallback)
-    .replace(/[\p{Cf}\u2028\u2029]/gu, "")
-    .replace(/\s+/gu, " ")
-    .trim();
-  return truncateUtf16Safe(sanitized || fallback, 500);
 }
 
 function textLooksLikeReviewerDirective(value: string): boolean {
@@ -252,7 +241,7 @@ function parseExecAutoReviewResponse(text: string): ExecAutoReviewDecision {
   }
 
   const { decision, risk } = response.data;
-  const rationale = normalizeRationale(
+  const rationale = normalizeExecAutoReviewRationale(
     response.data.rationale,
     "exec reviewer did not explain decision",
   );
@@ -301,7 +290,7 @@ function extractCompletionFailure(
       "errorMessage" in result && typeof result.errorMessage === "string"
         ? result.errorMessage
         : undefined;
-    return normalizeRationale(message, "model returned an error");
+    return message?.trim() ? message : "model returned an error";
   }
   return `model stopped without a complete response (${stopReason ?? "unknown"})`;
 }
@@ -392,11 +381,10 @@ export function createModelExecAutoReviewer(params: {
         return buildReviewerTimeoutDecision(timeoutMs);
       }
       if ("error" in prepared) {
-        return {
-          decision: "ask",
-          risk: "unknown",
-          rationale: `exec reviewer model unavailable: ${prepared.error}`,
-        };
+        return buildExecAutoReviewFailureDecision(
+          "exec reviewer model unavailable",
+          prepared.error,
+        );
       }
 
       completionController = new AbortController();
@@ -435,11 +423,10 @@ export function createModelExecAutoReviewer(params: {
       }
       const completionFailure = extractCompletionFailure(result);
       if (completionFailure) {
-        return {
-          decision: "ask",
-          risk: "unknown",
-          rationale: `exec reviewer completion failed: ${completionFailure}`,
-        };
+        return buildExecAutoReviewFailureDecision(
+          "exec reviewer completion failed",
+          completionFailure,
+        );
       }
       return parseExecAutoReviewResponse(extractTextContent(result));
     } catch (err) {
@@ -447,11 +434,7 @@ export function createModelExecAutoReviewer(params: {
       if (completionController?.signal.aborted) {
         return buildReviewerTimeoutDecision(timeoutMs);
       }
-      return {
-        decision: "ask",
-        risk: "unknown",
-        rationale: `exec reviewer failed: ${formatErrorMessage(err)}`,
-      };
+      return buildExecAutoReviewFailureDecision("exec reviewer failed", err);
     }
   };
 }

@@ -147,6 +147,134 @@ function cancelTrackedResponse(init?: ResponseInit): {
 }
 
 describe("discoverOpenAICompatibleLocalModels", () => {
+  it("retains valid models when a provider catalog contains malformed entries", async () => {
+    const release = vi.fn(async () => undefined);
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(
+        JSON.stringify({
+          data: [
+            { id: "valid-a", meta: { n_ctx_train: 32_768 } },
+            null,
+            7,
+            "invalid",
+            [],
+            { id: "valid-b", meta: { n_ctx_train: 65_536 } },
+          ],
+        }),
+        { status: 200 },
+      ),
+      finalUrl: "http://127.0.0.1:8000/v1/models",
+      release,
+    });
+
+    const models = await discoverOpenAICompatibleLocalModels({
+      baseUrl: "http://127.0.0.1:8000/v1",
+      label: "vLLM",
+      discoverRuntimeContext: false,
+      env: {},
+    });
+
+    expect(models).toMatchObject([
+      { id: "valid-a", contextWindow: 32_768 },
+      { id: "valid-b", contextWindow: 65_536 },
+    ]);
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it.each([null, {}, "invalid"])("rejects a non-array model catalog: %j", async (data) => {
+    const release = vi.fn(async () => undefined);
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(JSON.stringify({ data }), { status: 200 }),
+      finalUrl: "http://127.0.0.1:8000/v1/models",
+      release,
+    });
+
+    await expect(
+      discoverOpenAICompatibleLocalModels({
+        baseUrl: "http://127.0.0.1:8000/v1",
+        label: "vLLM",
+        discoverRuntimeContext: false,
+        env: {},
+      }),
+    ).resolves.toEqual([]);
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("vLLM discovery: malformed JSON response"),
+    );
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("bounds concurrent llama.cpp runtime probes without truncating its model catalog", async () => {
+    const release = vi.fn(async () => undefined);
+    const data = Array.from({ length: 201 }, (_, index) => ({
+      id: `local/model-${index}`,
+      meta: { n_ctx_train: 32_768 },
+    }));
+    let activePropsRequests = 0;
+    let maximumPropsRequests = 0;
+    fetchWithSsrFGuardMock.mockImplementation(async ({ url }: { url: string }) => {
+      if (url.endsWith("/models")) {
+        return {
+          response: new Response(JSON.stringify({ data }), { status: 200 }),
+          finalUrl: url,
+          release,
+        };
+      }
+      activePropsRequests += 1;
+      maximumPropsRequests = Math.max(maximumPropsRequests, activePropsRequests);
+      await Promise.resolve();
+      activePropsRequests -= 1;
+      return {
+        response: new Response(JSON.stringify({ default_generation_settings: { n_ctx: 16_384 } }), {
+          status: 200,
+        }),
+        finalUrl: url,
+        release,
+      };
+    });
+
+    const models = await discoverOpenAICompatibleLocalModels({
+      baseUrl: "http://127.0.0.1:8080/v1",
+      label: "llama.cpp",
+      env: {},
+    });
+
+    expect(models).toHaveLength(201);
+    expect(models[0]).toMatchObject({ id: "local/model-0", contextTokens: 16_384 });
+    expect(models[199]).toMatchObject({ id: "local/model-199", contextTokens: 16_384 });
+    expect(models[200]).toMatchObject({ id: "local/model-200", contextWindow: 32_768 });
+    expect(models[200]).not.toHaveProperty("contextTokens");
+    expect(maximumPropsRequests).toBeLessThanOrEqual(8);
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(201);
+    expect(release).toHaveBeenCalledTimes(201);
+  });
+
+  it("discovers a large non-llama.cpp catalog without probing per-model llama.cpp props", async () => {
+    const release = vi.fn(async () => undefined);
+    const data = Array.from({ length: 500 }, (_, index) => ({
+      id: `Qwen/model-${index}`,
+      meta: { n_ctx_train: 32_768 },
+    }));
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(JSON.stringify({ data }), { status: 200 }),
+      finalUrl: "http://127.0.0.1:8000/v1/models",
+      release,
+    });
+
+    const models = await discoverOpenAICompatibleLocalModels({
+      baseUrl: "http://127.0.0.1:8000/v1",
+      label: "vLLM",
+      discoverRuntimeContext: false,
+      env: {},
+    });
+
+    expect(models).toHaveLength(500);
+    expect(models[0]).toMatchObject({ id: "Qwen/model-0", contextWindow: 32_768 });
+    expect(models[499]).toMatchObject({ id: "Qwen/model-499", contextWindow: 32_768 });
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("labels malformed discovery JSON in the warning", async () => {
     const release = vi.fn(async () => undefined);
     fetchWithSsrFGuardMock.mockResolvedValueOnce({

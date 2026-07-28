@@ -26,7 +26,11 @@ import {
   normalizeConversationReadInvocationOrigin,
   type ConversationReadInvocationOrigin,
 } from "../../channels/plugins/conversation-read-origin.js";
-import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
+import {
+  dispatchChannelMessageAction,
+  prepareExternalMessageActionTargetForResolution,
+  shouldDeferExternalMessageActionTargetResolution,
+} from "../../channels/plugins/message-action-dispatch.js";
 import type {
   ChannelId,
   ChannelMessageActionName,
@@ -72,6 +76,10 @@ import type { OutboundDeliveryResult } from "./deliver-types.js";
 import type { OutboundSendDeps } from "./deliver.js";
 import type { DurableDeliveryCompletion } from "./delivery-completion.js";
 import { shouldUseInternalSourceReplySink } from "./internal-source-reply.js";
+import {
+  type MessageBroadcastAccountPlan,
+  validateExplicitMessageAccountSelection,
+} from "./message-account-selection.js";
 import { normalizeMessageActionInput } from "./message-action-normalization.js";
 import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
 import {
@@ -152,6 +160,8 @@ export type RunMessageActionParams = {
   requesterSenderE164?: string | null;
   senderIsOwner?: boolean;
   conversationReadOrigin?: ConversationReadInvocationOrigin;
+  /** @internal Host-owned route plan computed before broadcast SecretRef resolution. */
+  broadcastAccountPlan?: MessageBroadcastAccountPlan;
   /**
    * Authorization facts resolved from the host-issued current-turn capability.
    * Presence means ambient routing fields must not be used as identity.
@@ -501,6 +511,26 @@ async function resolveChannel(
     params.channel = selection.channel;
   }
   return selection.channel;
+}
+
+function enforceCrossProviderEgressPolicyBeforeTargetResolution(params: {
+  channel: ChannelId;
+  action: ChannelMessageActionName;
+  args: Record<string, unknown>;
+  toolContext?: ChannelThreadingToolContext;
+  cfg: OpenClawConfig;
+  agentId?: string | null;
+}): void {
+  const currentProvider = params.toolContext?.currentChannelProvider;
+  if (!currentProvider || currentProvider === params.channel) {
+    return;
+  }
+  // Cross-context egress policy applies to direct and delegated callers alike;
+  // direct origin bypasses only the conversation-read visibility gate. A
+  // provider mismatch needs no target interpretation, so reject it before an
+  // external resolver can perform provider I/O. Same-provider aliases still
+  // wait for canonicalization before the full policy check below.
+  enforceCrossContextPolicy(params);
 }
 
 function addCandidateAndUnprefixedAlias(candidates: Set<string>, value?: string | null) {
@@ -986,16 +1016,29 @@ async function handleBroadcastAction(
     throw new Error("Broadcast requires at least one target in --targets.");
   }
   const channelHint = readStringParam(params, "channel");
+  const explicitAccountId = validateExplicitMessageAccountSelection({
+    cfg: input.cfg,
+    accountId: readStringParam(params, "accountId"),
+    checkResolvedAccount: false,
+  });
+  if (input.broadcastAccountPlan && input.broadcastAccountPlan.accountId !== explicitAccountId) {
+    throw new Error("Broadcast account plan does not match the requested account.");
+  }
   const targetChannels =
     channelHint && normalizeOptionalLowercaseString(channelHint) !== "all"
       ? [await resolveChannel(input.cfg, { channel: channelHint }, input.toolContext)]
-      : await (async () => {
-          const configured = await listConfiguredMessageChannels(input.cfg);
-          if (configured.length === 0) {
-            throw new Error("Broadcast requires at least one configured channel.");
-          }
-          return configured;
-        })();
+      : input.broadcastAccountPlan
+        ? input.broadcastAccountPlan.candidateChannels
+        : await (async () => {
+            const configured = await listConfiguredMessageChannels(input.cfg);
+            if (configured.length === 0) {
+              throw new Error("Broadcast requires at least one configured channel.");
+            }
+            return configured;
+          })();
+  if (targetChannels.length === 0) {
+    throw new Error("Broadcast requires at least one configured channel.");
+  }
   const results: Array<{
     channel: ChannelId;
     to: string;
@@ -1011,10 +1054,16 @@ async function handleBroadcastAction(
     for (const target of rawTargets) {
       throwIfAborted(input.abortSignal);
       try {
+        const targetAccountId = validateExplicitMessageAccountSelection({
+          cfg: input.cfg,
+          channel: targetChannel,
+          accountId: explicitAccountId,
+        });
         const resolved = await resolveResolvedTargetOrThrow({
           cfg: input.cfg,
           channel: targetChannel,
           input: target,
+          accountId: targetAccountId,
         });
         const sendResult = await runMessageAction({
           ...input,
@@ -1886,6 +1935,12 @@ export async function runMessageAction(
   const channel = await resolveChannel(cfg, params, input.toolContext, action);
   params.channel = channel;
   const channelPlugin = resolveOutboundChannelPlugin({ channel, cfg });
+  const explicitAccountId = validateExplicitMessageAccountSelection({
+    cfg,
+    channel,
+    accountId: readStringParam(params, "accountId"),
+    plugin: channelPlugin,
+  });
   const pluginOwnedAction = action !== "send" && action !== "poll";
   if (
     pluginOwnedAction &&
@@ -1900,7 +1955,7 @@ export async function runMessageAction(
     toolContext: input.toolContext,
     targetAliasSpec: channelPlugin?.actions?.messageActionTargetAliases?.[action],
   });
-  let accountId = readStringParam(params, "accountId") ?? input.defaultAccountId;
+  let accountId = explicitAccountId ?? input.defaultAccountId;
   if (!accountId && resolvedAgentId) {
     accountId = resolveTargetBoundAccountId({
       cfg,
@@ -1914,6 +1969,48 @@ export async function runMessageAction(
     params.accountId = accountId;
   }
   const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
+  enforceCrossProviderEgressPolicyBeforeTargetResolution({
+    channel,
+    action,
+    args: params,
+    toolContext: input.toolContext,
+    cfg,
+    agentId: resolvedAgentId,
+  });
+  const delegatesActionToGateway =
+    Boolean(input.gateway) &&
+    channelPlugin?.actions?.resolveExecutionMode?.({ action }) === "gateway";
+  const defersExternalTargetResolution =
+    delegatesActionToGateway &&
+    !dryRun &&
+    shouldDeferExternalMessageActionTargetResolution({
+      channel,
+      action,
+      cfg,
+      params,
+      accountId: accountId ?? undefined,
+      conversationReadOrigin: normalizeConversationReadInvocationOrigin(
+        input.conversationReadOrigin,
+      ),
+    });
+  if (!delegatesActionToGateway || dryRun) {
+    const authorization = input.messageActionAuthorization;
+    params = prepareExternalMessageActionTargetForResolution({
+      channel,
+      action,
+      cfg,
+      params,
+      accountId: accountId ?? undefined,
+      requesterAccountId:
+        authorization !== undefined
+          ? authorization.requesterAccountId
+          : (input.requesterAccountId ?? undefined),
+      conversationReadOrigin: normalizeConversationReadInvocationOrigin(
+        input.conversationReadOrigin,
+      ),
+      toolContext: authorization !== undefined ? authorization.toolContext : input.toolContext,
+    });
+  }
   const normalizationPolicy = resolveAttachmentMediaPolicy({
     sandboxRoot: input.sandboxRoot,
     mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, resolvedAgentId),
@@ -1983,13 +2080,15 @@ export async function runMessageAction(
     await hydrateActionAttachmentParams();
   }
 
-  const resolvedTarget = await resolveActionTarget({
-    cfg,
-    channel,
-    action,
-    args: params,
-    accountId,
-  });
+  const resolvedTarget = defersExternalTargetResolution
+    ? undefined
+    : await resolveActionTarget({
+        cfg,
+        channel,
+        action,
+        args: params,
+        accountId,
+      });
 
   enforceCrossContextPolicy({
     channel,

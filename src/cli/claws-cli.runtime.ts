@@ -44,6 +44,7 @@ import {
 } from "../cron/store.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
+import { waitUntilGatewayConfigApplied } from "./claws-cli.gateway-readiness.js";
 import type {
   ClawsAddOptions,
   ClawsExportOptions,
@@ -349,6 +350,7 @@ export async function runClawsAddCommand(
         add: async (input) => await callGatewayFromCli("cron.add", {}, input),
         list: async (agentId) =>
           await callGatewayFromCli("cron.list", {}, { agentId, includeDisabled: true }),
+        waitUntilAgentAvailable: async () => await waitUntilGatewayConfigApplied(),
       },
     });
   } catch (error) {

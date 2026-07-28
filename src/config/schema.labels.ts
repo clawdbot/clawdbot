@@ -1,6 +1,7 @@
 // Defines user-facing config field labels used by schema metadata.
 import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
 import { NODE_CAPABILITY_FIELD_LABELS } from "./schema.node-capabilities.js";
+import { CLOUD_WORKER_FIELD_LABELS } from "./zod-schema.cloud-workers.js";
 
 export const FIELD_LABELS: Record<string, string> = {
   "channels.discord.activities": "Discord Activities",
@@ -98,11 +99,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.entries.*.agentRuntime": "Legacy Agent Runtime",
   "agents.entries.*.agentRuntime.id": "Legacy Agent Runtime ID",
   cloudWorkers: "Cloud Workers",
-  "cloudWorkers.profiles": "Cloud Worker Profiles",
-  "cloudWorkers.profiles.*": "Cloud Worker Profile",
-  "cloudWorkers.profiles.*.provider": "Cloud Worker Provider",
-  "cloudWorkers.profiles.*.install": "Cloud Worker Install Method",
-  "cloudWorkers.profiles.*.settings": "Cloud Worker Provider Settings",
+  ...CLOUD_WORKER_FIELD_LABELS,
   gateway: "Gateway",
   "gateway.port": "Gateway Port",
   "gateway.mode": "Gateway Mode",
@@ -624,7 +621,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.compaction.postCompactionSections": "Post-Compaction Context Sections",
   "agents.defaults.compaction.timeoutSeconds": "Compaction Timeout (Seconds)",
   "agents.defaults.compaction.model": "Compaction Model Override",
-  "agents.defaults.compaction.truncateAfterCompaction": "Rotate Transcript After Compaction",
   "agents.defaults.compaction.maxActiveTranscriptBytes":
     "Compaction Active Transcript Size Threshold",
   "agents.defaults.compaction.notifyUser": "Compaction Notify User",

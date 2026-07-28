@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   ensurePortAvailable: vi.fn<(port: number, host?: string) => Promise<void>>(),
+  resolveSshClient: vi.fn<() => string | null>(() => "/usr/bin/ssh"),
   spawn: vi.fn(),
 }));
 
@@ -16,6 +17,10 @@ vi.mock("./ports.js", async (importOriginal) => ({
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawn: mocks.spawn,
+}));
+
+vi.mock("./ssh-client.js", () => ({
+  resolveSshClient: mocks.resolveSshClient,
 }));
 
 import { PortInUseError } from "./ports.js";
@@ -38,6 +43,19 @@ describe("parseSshTarget", () => {
     });
   });
 
+  it("preserves OpenSSH alias and username tokens", () => {
+    expect(parseSshTarget("me+prod@prod+gpu:2222")).toEqual({
+      user: "me+prod",
+      host: "prod+gpu",
+      port: 2222,
+    });
+    expect(parseSshTarget(String.raw`DOMAIN\alice@jump+gpu`)).toEqual({
+      user: String.raw`DOMAIN\alice`,
+      host: "jump+gpu",
+      port: 22,
+    });
+  });
+
   it("rejects invalid hosts and ports", () => {
     expect(parseSshTarget("")).toBeNull();
     expect(parseSshTarget("me@example.com:0")).toBeNull();
@@ -46,7 +64,17 @@ describe("parseSshTarget", () => {
     expect(parseSshTarget("me@example.com:not-a-port")).toBeNull();
     expect(parseSshTarget("-V")).toBeNull();
     expect(parseSshTarget("me@-badhost")).toBeNull();
+    expect(parseSshTarget("-oProxyCommand=touch@example.com")).toBeNull();
     expect(parseSshTarget("-oProxyCommand=echo")).toBeNull();
+  });
+
+  it("rejects targets that cannot be embedded in ssh config directives", () => {
+    expect(parseSshTarget("example.com\n  ProxyCommand touch marker")).toBeNull();
+    expect(parseSshTarget("example.com\r  ProxyCommand touch marker")).toBeNull();
+    expect(parseSshTarget("example.com\n  ProxyCommand touch marker:2222")).toBeNull();
+    expect(parseSshTarget("me\nProxyCommand=touch@example.com")).toBeNull();
+    expect(parseSshTarget("bad host")).toBeNull();
+    expect(parseSshTarget("me name@example.com")).toBeNull();
   });
 
   it("rejects hostnames with stray leading or trailing colons", () => {
@@ -73,6 +101,8 @@ describe("startSshPortForward", () => {
       });
     }
     mocks.ensurePortAvailable.mockReset();
+    mocks.resolveSshClient.mockReset();
+    mocks.resolveSshClient.mockReturnValue("/usr/bin/ssh");
     mocks.spawn.mockReset();
   });
 
@@ -107,6 +137,22 @@ describe("startSshPortForward", () => {
       return child;
     });
   }
+
+  it("fails before port probing when no trusted SSH client is installed", async () => {
+    mocks.resolveSshClient.mockReturnValueOnce(null);
+
+    await expect(
+      startSshPortForward({
+        target: "me@example.com",
+        localPortPreferred: 43210,
+        remotePort: 18789,
+        timeoutMs: 250,
+      }),
+    ).rejects.toThrow("trusted SSH client not found in system directories");
+
+    expect(mocks.ensurePortAvailable).not.toHaveBeenCalled();
+    expect(mocks.spawn).not.toHaveBeenCalled();
+  });
 
   it("scopes the preferred-port preflight to the IPv4 loopback interface", async () => {
     const sentinel = new Error("stop before spawning ssh");

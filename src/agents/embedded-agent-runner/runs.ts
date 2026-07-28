@@ -1,6 +1,8 @@
 /**
  * Manages active embedded-agent run handles, queues, aborts, and waiters.
  */
+import fs from "node:fs";
+import path from "node:path";
 import {
   abortActiveReplyRuns,
   abortReplyRunBySessionId,
@@ -33,18 +35,13 @@ import {
   markDiagnosticEmbeddedRunStarted,
   resolveRunStaleThresholdMs,
 } from "../../logging/diagnostic-run-activity.js";
-import {
-  diagnosticLogger as diag,
-  logMessageQueued,
-  logSessionStateChange,
-  updateDiagnosticSessionFile,
-} from "../../logging/diagnostic.js";
+import { logMessageQueuedWithBacklogPolicy } from "../../logging/diagnostic-runtime.js";
+import { diagnosticLogger as diag, logSessionStateChange } from "../../logging/diagnostic.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
 import {
   ACTIVE_EMBEDDED_RUNS,
   ACTIVE_EMBEDDED_RUNS_BY_RUN_ID,
-  ACTIVE_EMBEDDED_RUN_LIFECYCLE_GENERATIONS,
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE,
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
   ACTIVE_EMBEDDED_RUN_SNAPSHOTS,
@@ -61,7 +58,6 @@ import {
   type EmbeddedAgentQueueMessageOptions,
   type EmbeddedRunWaiter,
 } from "./run-state.js";
-import { resolveEmbeddedSessionFileKey } from "./session-file-key.js";
 
 export {
   getActiveEmbeddedRunCount,
@@ -156,14 +152,36 @@ function clearActiveRunSessionKeys(sessionId: string, sessionKey?: string): void
   }
 }
 
+function normalizeSessionFileRegistryKey(sessionFile: string | undefined): string | undefined {
+  const normalized = sessionFile?.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  if (
+    normalized.startsWith("agent:") ||
+    normalized.startsWith("sqlite:") ||
+    normalized.startsWith("in-memory:")
+  ) {
+    return normalized;
+  }
+  const resolved = path.resolve(normalized);
+  const parent = path.dirname(resolved);
+  try {
+    // Canonicalize only the parent so a registry key stays stable when the
+    // transcript file itself is created or removed during the active run.
+    // Artifact-file symlinks are not runtime session identity after SQLite migration.
+    return path.join(fs.realpathSync(parent), path.basename(resolved));
+  } catch {
+    return resolved;
+  }
+}
+
 function setActiveRunSessionFile(sessionFile: string | undefined, sessionId: string): void {
-  if (!sessionFile?.trim()) {
+  const normalizedSessionFile = normalizeSessionFileRegistryKey(sessionFile);
+  if (!normalizedSessionFile) {
     return;
   }
-  ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.set(
-    resolveEmbeddedSessionFileKey(sessionFile),
-    sessionId,
-  );
+  ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.set(normalizedSessionFile, sessionId);
 }
 
 function clearEmbeddedRunAbandonmentBySessionId(sessionId: string): void {
@@ -179,9 +197,9 @@ function clearEmbeddedRunAbandonmentBySessionId(sessionId: string): void {
   ) {
     ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.delete(normalizedSessionKey);
   }
-  const normalizedSessionFile = abandonedRun.sessionFile?.trim();
+  const normalizedSessionFile = normalizeSessionFileRegistryKey(abandonedRun.sessionFile);
   if (normalizedSessionFile) {
-    const sessionFileKey = resolveEmbeddedSessionFileKey(normalizedSessionFile);
+    const sessionFileKey = normalizedSessionFile;
     if (ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(sessionFileKey) === sessionId) {
       ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.delete(sessionFileKey);
     }
@@ -200,11 +218,11 @@ function clearEmbeddedRunAbandonmentBySessionKey(sessionKey: string | undefined)
 }
 
 function clearEmbeddedRunAbandonmentBySessionFile(sessionFile: string | undefined): void {
-  const normalizedSessionFile = sessionFile?.trim();
+  const normalizedSessionFile = normalizeSessionFileRegistryKey(sessionFile);
   if (!normalizedSessionFile) {
     return;
   }
-  const sessionFileKey = resolveEmbeddedSessionFileKey(normalizedSessionFile);
+  const sessionFileKey = normalizedSessionFile;
   const sessionId = ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(sessionFileKey);
   if (sessionId) {
     clearEmbeddedRunAbandonmentBySessionId(sessionId);
@@ -239,22 +257,20 @@ function markEmbeddedRunAbandoned(params: {
     sessionKey: params.sessionKey,
     sessionFile: params.sessionFile,
   });
+  const normalizedSessionFile = normalizeSessionFileRegistryKey(params.sessionFile);
   const abandonedRun: AbandonedEmbeddedRun = {
     sessionId,
     abandonedAtMs: Date.now(),
     reason: params.reason,
     ...(params.sessionKey?.trim() ? { sessionKey: params.sessionKey.trim() } : {}),
-    ...(params.sessionFile?.trim() ? { sessionFile: params.sessionFile.trim() } : {}),
+    ...(normalizedSessionFile ? { sessionFile: normalizedSessionFile } : {}),
   };
   ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.set(sessionId, abandonedRun);
   if (abandonedRun.sessionKey) {
     ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.set(abandonedRun.sessionKey, sessionId);
   }
   if (abandonedRun.sessionFile) {
-    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.set(
-      resolveEmbeddedSessionFileKey(abandonedRun.sessionFile),
-      sessionId,
-    );
+    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.set(abandonedRun.sessionFile, sessionId);
   }
 }
 
@@ -286,23 +302,21 @@ export function isEmbeddedRunAbandoned(params: {
   if (normalizedSessionKey && ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.has(normalizedSessionKey)) {
     return true;
   }
-  const normalizedSessionFile = params.sessionFile?.trim();
+  const normalizedSessionFile = normalizeSessionFileRegistryKey(params.sessionFile);
   return Boolean(
-    normalizedSessionFile &&
-    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.has(
-      resolveEmbeddedSessionFileKey(normalizedSessionFile),
-    ),
+    normalizedSessionFile && ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.has(normalizedSessionFile),
   );
 }
 
 function clearActiveRunSessionFiles(sessionId: string, sessionFile?: string): void {
-  const normalizedSessionFile = sessionFile?.trim();
+  const normalizedSessionFile = normalizeSessionFileRegistryKey(sessionFile);
   if (normalizedSessionFile) {
-    const sessionFileKey = resolveEmbeddedSessionFileKey(normalizedSessionFile);
-    if (ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(sessionFileKey) === sessionId) {
-      ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.delete(sessionFileKey);
+    if (ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(normalizedSessionFile) === sessionId) {
+      ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.delete(normalizedSessionFile);
     }
   }
+  // Always sweep every alias because callers may clear without the same
+  // compatibility token used when the active run was registered.
   for (const [sessionFileKey, activeSessionId] of ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE) {
     if (activeSessionId === sessionId) {
       ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.delete(sessionFileKey);
@@ -324,7 +338,7 @@ export function queueEmbeddedAgentMessageWithOutcome(
   if (prepared.kind === "complete") {
     return prepared.outcome;
   }
-  logMessageQueued({ sessionId, source: "embedded-agent-runner" });
+  logActiveRunMessageAccepted(sessionId);
   void prepared.handle
     .queueMessage(text, options ?? { steeringMode: "all" })
     .catch((err: unknown) => {
@@ -343,6 +357,18 @@ export function queueEmbeddedAgentMessageWithOutcome(
 
 function formatQueueError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+function logActiveRunMessageAccepted(sessionId: string): void {
+  // Active-run steering is consumed by the current turn, not queued as another
+  // turn for the single idle transition to drain. Keep the event and activity.
+  logMessageQueuedWithBacklogPolicy(
+    {
+      sessionId,
+      source: "embedded-agent-runner",
+    },
+    false,
+  );
 }
 
 function isEmbeddedQueueHandleMessageInjectable(
@@ -427,7 +453,7 @@ export async function queueEmbeddedAgentMessageWithOutcomeAsync(
     const enqueuedAtMs = Date.now();
     await prepared.handle.queueMessage(text, options ?? { steeringMode: "all" });
     const deliveredAtMs = options?.waitForTranscriptCommit ? Date.now() : undefined;
-    logMessageQueued({ sessionId, source: "embedded-agent-runner" });
+    logActiveRunMessageAccepted(sessionId);
     return {
       queued: true,
       sessionId,
@@ -468,7 +494,7 @@ function prepareEmbeddedAgentQueueMessage(
     }
     const queuedReplyRunMessage = queueReplyRunMessage(sessionId, text, options);
     if (queuedReplyRunMessage) {
-      logMessageQueued({ sessionId, source: "embedded-agent-runner" });
+      logActiveRunMessageAccepted(sessionId);
       return {
         kind: "complete",
         outcome: {
@@ -697,13 +723,11 @@ export function resolveActiveEmbeddedRunHandleSessionId(sessionKey: string): str
 export function resolveActiveEmbeddedRunHandleSessionIdBySessionFile(
   sessionFile: string,
 ): string | undefined {
-  const normalizedSessionFile = sessionFile.trim();
+  const normalizedSessionFile = normalizeSessionFileRegistryKey(sessionFile);
   if (!normalizedSessionFile) {
     return undefined;
   }
-  return ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(
-    resolveEmbeddedSessionFileKey(normalizedSessionFile),
-  );
+  return ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(normalizedSessionFile);
 }
 
 export function resolveActiveEmbeddedRunSessionIdBySessionFile(
@@ -1024,24 +1048,6 @@ export function updateActiveEmbeddedRunSnapshot(
     return;
   }
   ACTIVE_EMBEDDED_RUN_SNAPSHOTS.set(sessionId, snapshot);
-}
-
-export function updateActiveEmbeddedRunSessionFile(
-  sessionId: string,
-  sessionFile: string | undefined,
-  lifecycleGeneration: string,
-): void {
-  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
-  if (
-    handle === undefined ||
-    ACTIVE_EMBEDDED_RUN_LIFECYCLE_GENERATIONS.get(handle) !== lifecycleGeneration ||
-    !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)
-  ) {
-    return;
-  }
-  clearActiveRunSessionFiles(sessionId);
-  setActiveRunSessionFile(sessionFile, sessionId);
-  updateDiagnosticSessionFile({ sessionId, sessionFile });
 }
 
 export function clearActiveEmbeddedRun(

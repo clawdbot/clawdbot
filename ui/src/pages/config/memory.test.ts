@@ -4,6 +4,7 @@ import { html, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import {
   memorySchemaKeysForTab,
+  memoryTabForRoute,
   memoryVisibleSchemaKeys,
   narrowMemorySchema,
   resolveMemoryBackend,
@@ -15,7 +16,7 @@ type MemoryViewProps = Parameters<typeof renderMemory>[0];
 
 function createProps(overrides: Partial<MemoryViewProps> = {}): MemoryViewProps {
   return {
-    activeTab: "overview",
+    activeTab: "settings",
     onTabChange: vi.fn(),
     engineOptions: [
       { id: "memory-core", label: "Memory Core" },
@@ -40,8 +41,11 @@ function createProps(overrides: Partial<MemoryViewProps> = {}): MemoryViewProps 
     ],
     pluginsHref: "/settings/plugins",
     memoryImportHref: "/memory-import",
+    overview: html`<div class="test-overview"></div>`,
+    memories: html`<div class="test-memories"></div>`,
+    dreams: html`<div class="test-dreams"></div>`,
     editor: html`<div class="test-editor"></div>`,
-    dreaming: html`<div class="test-dreaming"></div>`,
+    dreamingSettings: html`<div class="test-dreaming-settings"></div>`,
     ...overrides,
   };
 }
@@ -126,25 +130,51 @@ describe("renderMemory", () => {
     }
   });
 
-  it("keeps the schema editor on the overview and search tabs and swaps in dreaming", () => {
-    expect(renderInto(createProps()).querySelector(".test-editor")).not.toBeNull();
+  it("keeps config only on Settings and the agent experience on Dreams", () => {
     expect(
-      renderInto(createProps({ activeTab: "search" })).querySelector(".test-editor"),
+      renderInto(createProps({ activeTab: "overview" })).querySelector(".test-overview"),
+    ).not.toBeNull();
+    expect(
+      renderInto(createProps({ activeTab: "memories" })).querySelector(".test-memories"),
     ).not.toBeNull();
 
-    const dreaming = renderInto(createProps({ activeTab: "dreaming" }));
-    expect(dreaming.querySelector(".test-dreaming")).not.toBeNull();
-    expect(dreaming.querySelector(".test-editor")).toBeNull();
+    const settings = renderInto(createProps({ activeTab: "settings" }));
+    expect(settings.querySelector(".test-editor")).not.toBeNull();
+    expect(settings.querySelector(".test-dreaming-settings")).not.toBeNull();
+
+    const dreams = renderInto(createProps({ activeTab: "dreams" }));
+    expect(dreams.querySelector(".test-dreams")).not.toBeNull();
+    expect(dreams.querySelector(".test-editor")).toBeNull();
+  });
+});
+
+describe("memoryTabForRoute", () => {
+  it("keeps old shared links working with the new destinations", () => {
+    expect(memoryTabForRoute({ tab: "search" })).toBe("settings");
+    expect(memoryTabForRoute({ tab: "dreaming" })).toBe("dreams");
+    expect(memoryTabForRoute({ tab: "overview" })).toBe("overview");
+    expect(memoryTabForRoute({ tab: "memories" })).toBe("memories");
+    expect(memoryTabForRoute({ tab: "unknown" })).toBeNull();
+  });
+
+  it("routes old tabless schema links to Settings without changing the plain landing", () => {
+    expect(memoryTabForRoute({ section: "memory", targetBlockId: "memory-backend" })).toBe(
+      "settings",
+    );
+    expect(memoryTabForRoute({ targetBlockId: "config-section-memory" })).toBe("settings");
+    expect(memoryTabForRoute({})).toBeNull();
   });
 });
 
 describe("memorySchemaKeysForTab", () => {
   it("reveals qmd sub-config only when qmd is the selected backend", () => {
-    expect(memorySchemaKeysForTab("overview", "builtin")).toEqual(["citations"]);
-    expect(memorySchemaKeysForTab("overview", "qmd")).toEqual(["citations", "qmd"]);
-    expect(memorySchemaKeysForTab("search", "qmd")).toEqual(["search"]);
+    expect(memorySchemaKeysForTab("overview", "builtin")).toEqual([]);
+    expect(memorySchemaKeysForTab("memories", "builtin")).toEqual([]);
+    expect(memorySchemaKeysForTab("dreams", "qmd")).toEqual([]);
+    expect(memorySchemaKeysForTab("settings", "builtin")).toEqual(["citations", "search"]);
+    expect(memorySchemaKeysForTab("settings", "qmd")).toEqual(["citations", "qmd", "search"]);
     // No applicable backend: qmd's sub-config belongs to a backend nothing reads.
-    expect(memorySchemaKeysForTab("overview", null)).toEqual(["citations"]);
+    expect(memorySchemaKeysForTab("settings", null)).toEqual(["citations", "search"]);
   });
 });
 

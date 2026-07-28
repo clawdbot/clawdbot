@@ -15,7 +15,6 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
 } from "../../config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import {
@@ -69,7 +68,7 @@ const browserMaintenanceMocks = vi.hoisted(() => ({
 
 type ForkSessionParamsForTest = {
   parentEntry: SessionEntry;
-  storePath: string;
+  sessionKey: string;
 };
 
 vi.mock("./session-fork.js", () => ({
@@ -284,7 +283,7 @@ function expectEntryFields(
   label?: string,
 ): void {
   for (const [key, value] of Object.entries(expected)) {
-    expect((entry as Record<string, unknown>)[key], label ?? key).toEqual(value);
+    expect((entry as unknown as Record<string, unknown>)[key], label ?? key).toEqual(value);
   }
 }
 
@@ -530,27 +529,9 @@ beforeEach(() => {
   });
   sessionForkMocks.forkSessionFromParent
     .mockReset()
-    .mockImplementation(async ({ parentEntry, storePath }: ForkSessionParamsForTest) => {
-      if (!parentEntry.sessionFile) {
-        return null;
-      }
-      const sessionsDir = path.dirname(storePath);
-      await fs.mkdir(sessionsDir, { recursive: true });
+    .mockImplementation(async ({ sessionKey }: ForkSessionParamsForTest) => {
       const sessionId = `forked-session-${++sessionForkMocks.nextSessionId}`;
-      const sessionFile = path.join(sessionsDir, `${sessionId}.jsonl`);
-      await fs.writeFile(
-        sessionFile,
-        `${JSON.stringify({
-          type: "session",
-          version: 3,
-          id: sessionId,
-          timestamp: new Date().toISOString(),
-          cwd: process.cwd(),
-          parentSession: parentEntry.sessionFile,
-        })}\n`,
-        "utf-8",
-      );
-      return { sessionId, sessionFile: await fs.realpath(sessionFile) };
+      return { sessionId, sessionFile: sessionKey };
     });
 });
 afterEach(async () => {
@@ -700,63 +681,25 @@ describe("initSessionState thread forking", () => {
       sessionKey: parentSessionKey,
       sessionId: parentSessionId,
     });
-    expect(result.sessionEntry.sessionFile).toBe(
-      formatSqliteSessionFileMarker({
-        agentId: "main",
-        sessionId: result.sessionEntry.sessionId,
-        storePath,
-      }),
-    );
+    expect(result.sessionEntry).not.toHaveProperty("sessionFile");
     const forkCall = requireMockCallArg(sessionForkMocks.forkSessionFromParent, "fork session");
     expect(forkCall.parentEntry).toMatchObject({
       sessionId: parentSessionId,
-      sessionFile: parentSessionFile,
     });
+    expect(forkCall.parentEntry).not.toHaveProperty("sessionFile");
     warn.mockRestore();
   });
 
   it("forks from parent when thread session key already exists but was not forked yet", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const root = await makeCaseDir("openclaw-thread-session-existing-");
-    const sessionsDir = path.join(root, "sessions");
-    await fs.mkdir(sessionsDir);
-
     const parentSessionId = "parent-session";
-    const parentSessionFile = path.join(sessionsDir, "parent.jsonl");
-    const header = {
-      type: "session",
-      version: 3,
-      id: parentSessionId,
-      timestamp: new Date().toISOString(),
-      cwd: process.cwd(),
-    };
-    const message = {
-      type: "message",
-      id: "m1",
-      parentId: null,
-      timestamp: new Date().toISOString(),
-      message: { role: "user", content: "Parent prompt" },
-    };
-    const assistantMessage = {
-      type: "message",
-      id: "m2",
-      parentId: "m1",
-      timestamp: new Date().toISOString(),
-      message: { role: "assistant", content: "Parent reply" },
-    };
-    await fs.writeFile(
-      parentSessionFile,
-      `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(assistantMessage)}\n`,
-      "utf-8",
-    );
-
     const storePath = path.join(root, "sessions.json");
     const parentSessionKey = "agent:main:slack:channel:c1";
     const threadSessionKey = "agent:main:slack:channel:c1:thread:123";
     await writeSessionStoreFast(storePath, {
       [parentSessionKey]: {
         sessionId: parentSessionId,
-        sessionFile: parentSessionFile,
         updatedAt: Date.now(),
       },
       [threadSessionKey]: {
@@ -774,6 +717,14 @@ describe("initSessionState thread forking", () => {
         },
       },
     });
+    await appendTranscriptMessage(
+      { agentId: "main", sessionId: parentSessionId, sessionKey: parentSessionKey, storePath },
+      { message: { role: "user", content: "Parent prompt" } },
+    );
+    await appendTranscriptMessage(
+      { agentId: "main", sessionId: parentSessionId, sessionKey: parentSessionKey, storePath },
+      { message: { role: "assistant", content: "Parent reply" } },
+    );
 
     const cfg = {
       session: { store: storePath },
@@ -972,13 +923,7 @@ describe("initSessionState thread forking", () => {
     });
 
     expect(result.sessionEntry.lastThreadId).toBe(456);
-    expect(result.sessionEntry.sessionFile).toBe(
-      formatSqliteSessionFileMarker({
-        agentId: "main",
-        sessionId: result.sessionEntry.sessionId,
-        storePath,
-      }),
-    );
+    expect(result.sessionEntry).not.toHaveProperty("sessionFile");
   });
 
   it("records topic-specific SQLite session identity from SessionKey", async () => {
@@ -1001,13 +946,7 @@ describe("initSessionState thread forking", () => {
       });
 
       expect(result.sessionKey).toBe("agent:main:telegram:group:123:topic:456");
-      expect(result.sessionEntry.sessionFile).toBe(
-        formatSqliteSessionFileMarker({
-          agentId: "main",
-          sessionId: result.sessionEntry.sessionId,
-          storePath,
-        }),
-      );
+      expect(result.sessionEntry).not.toHaveProperty("sessionFile");
     } finally {
       resetPluginRuntimeStateForTest();
     }
@@ -1108,12 +1047,7 @@ describe("initSessionState RawBody", () => {
           unwindowedMessageCount: 8,
         },
         compactionCount: 3,
-        memoryFlushAt: 123,
-        memoryFlushCompactionCount: 2,
-        memoryFlushContextHash: "stale-context",
-        memoryFlushFailureCount: 3,
-        memoryFlushLastFailedAt: 456,
-        memoryFlushLastFailureError: "provider crashed",
+        memoryFlush: { kind: "failed", compactionCount: 2, failureCount: 3 },
         skillsSnapshot: {
           prompt: "<available_skills><skill><name>stale</name></skill></available_skills>",
           skills: [{ name: "stale" }],
@@ -1148,12 +1082,7 @@ describe("initSessionState RawBody", () => {
     expect(result.sessionEntry.contextTokens).toBeUndefined();
     expect(result.sessionEntry.contextBudgetStatus).toBeUndefined();
     expect(result.sessionEntry.compactionCount).toBe(0);
-    expect(result.sessionEntry.memoryFlushAt).toBeUndefined();
-    expect(result.sessionEntry.memoryFlushCompactionCount).toBeUndefined();
-    expect(result.sessionEntry.memoryFlushContextHash).toBeUndefined();
-    expect(result.sessionEntry.memoryFlushFailureCount).toBeUndefined();
-    expect(result.sessionEntry.memoryFlushLastFailedAt).toBeUndefined();
-    expect(result.sessionEntry.memoryFlushLastFailureError).toBeUndefined();
+    expect(result.sessionEntry.memoryFlush).toBeUndefined();
 
     const store = readSessionStoreFast(storePath) as Record<
       string,
@@ -1164,12 +1093,7 @@ describe("initSessionState RawBody", () => {
         contextTokens?: number;
         contextBudgetStatus?: unknown;
         compactionCount?: number;
-        memoryFlushAt?: number;
-        memoryFlushCompactionCount?: number;
-        memoryFlushContextHash?: string;
-        memoryFlushFailureCount?: number;
-        memoryFlushLastFailedAt?: number;
-        memoryFlushLastFailureError?: string;
+        memoryFlush?: unknown;
       }
     >;
     expect(store[sessionKey]?.skillsSnapshot).toBeUndefined();
@@ -1178,12 +1102,7 @@ describe("initSessionState RawBody", () => {
     expect(store[sessionKey]?.contextTokens).toBeUndefined();
     expect(store[sessionKey]?.contextBudgetStatus).toBeUndefined();
     expect(store[sessionKey]?.compactionCount).toBe(0);
-    expect(store[sessionKey]?.memoryFlushAt).toBeUndefined();
-    expect(store[sessionKey]?.memoryFlushCompactionCount).toBeUndefined();
-    expect(store[sessionKey]?.memoryFlushContextHash).toBeUndefined();
-    expect(store[sessionKey]?.memoryFlushFailureCount).toBeUndefined();
-    expect(store[sessionKey]?.memoryFlushLastFailedAt).toBeUndefined();
-    expect(store[sessionKey]?.memoryFlushLastFailureError).toBeUndefined();
+    expect(store[sessionKey]?.memoryFlush).toBeUndefined();
   });
 
   it("drains stale system events when /new rotates an existing session", async () => {
@@ -1486,7 +1405,7 @@ describe("initSessionState RawBody", () => {
     if ("absent" in scenario && Array.isArray(scenario.absent)) {
       for (const field of scenario.absent) {
         expect(
-          (result.sessionEntry as Record<string, unknown>)[field],
+          (result.sessionEntry as unknown as Record<string, unknown>)[field],
           scenario.name,
         ).toBeUndefined();
       }
@@ -1797,13 +1716,7 @@ describe("initSessionState RawBody", () => {
       });
 
       expect(result.sessionEntry.sessionId).toBe(sessionId);
-      expect(result.sessionEntry.sessionFile).toBe(
-        formatSqliteSessionFileMarker({
-          agentId: "worker1",
-          sessionId,
-          storePath,
-        }),
-      );
+      expect(result.sessionEntry).not.toHaveProperty("sessionFile");
       expect(result.storePath).toBe(storePath);
     });
   });
@@ -3240,9 +3153,12 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       contextTokens: 400_000,
       cacheRead: 1_000,
       cacheWrite: 2_000,
-      fallbackNoticeSelectedModel: "openai/gpt-5.4-mini",
-      fallbackNoticeActiveModel: "minimax/m2.7",
-      fallbackNoticeReason: "rate limit",
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: "openai/gpt-5.4-mini",
+        activeModel: "minimax/m2.7",
+        reason: "rate limit",
+      },
       systemPromptReport: {
         source: "run",
         generatedAt: 1,
@@ -3275,9 +3191,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       expect(result.sessionEntry.model, name).toBeUndefined();
       expect(result.sessionEntry.cacheRead, name).toBeUndefined();
       expect(result.sessionEntry.cacheWrite, name).toBeUndefined();
-      expect(result.sessionEntry.fallbackNoticeSelectedModel, name).toBeUndefined();
-      expect(result.sessionEntry.fallbackNoticeActiveModel, name).toBeUndefined();
-      expect(result.sessionEntry.fallbackNoticeReason, name).toBeUndefined();
+      expect(result.sessionEntry.fallbackNotice, name).toBeUndefined();
       expect(result.sessionEntry.systemPromptReport, name).toBeUndefined();
       expect(result.sessionEntry.providerOverride, name).toBe(
         explicitUserOverride.providerOverride,
@@ -3291,9 +3205,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       expect(stored[sessionKey]?.model, name).toBeUndefined();
       expect(stored[sessionKey]?.cacheRead, name).toBeUndefined();
       expect(stored[sessionKey]?.cacheWrite, name).toBeUndefined();
-      expect(stored[sessionKey]?.fallbackNoticeSelectedModel, name).toBeUndefined();
-      expect(stored[sessionKey]?.fallbackNoticeActiveModel, name).toBeUndefined();
-      expect(stored[sessionKey]?.fallbackNoticeReason, name).toBeUndefined();
+      expect(stored[sessionKey]?.fallbackNotice, name).toBeUndefined();
       expect(stored[sessionKey]?.systemPromptReport, name).toBeUndefined();
       expect(stored[sessionKey]?.providerOverride, name).toBe(
         explicitUserOverride.providerOverride,

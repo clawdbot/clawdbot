@@ -58,6 +58,27 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
     });
   });
 
+  it("keeps proposal-only skill workshop runs on the raw harness tool surface", () => {
+    const rawTools = tools(["skill_workshop"]);
+    const runtime = createAgentHarnessToolSurfaceRuntime({
+      config: { tools: { codeMode: true, toolSearch: true } },
+      executeTool: async () => ({ content: [], details: {} }),
+      modelToolsEnabled: true,
+      skillWorkshopProposalOnly: true,
+      toolsAllow: ["skill_workshop"],
+    });
+
+    try {
+      expect(runtime.codeModeControlsEnabled).toBe(false);
+      expect(runtime.toolSearchControlsEnabled).toBe(false);
+      expect(runtime.compactTools(rawTools).tools).toEqual(rawTools);
+      expect(runtime.compactTools(rawTools).tools.map((tool) => tool.name)).not.toContain("exec");
+      expect(runtime.compactTools(rawTools).tools.map((tool) => tool.name)).not.toContain("wait");
+    } finally {
+      runtime.cleanup();
+    }
+  });
+
   it("filters raw SDK tools but does not refilter prepared constructor output", () => {
     const config: OpenClawConfig = {
       agents: { defaults: { experimental: { localModelLean: true } } },
@@ -171,6 +192,26 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
         TOOL_CALL_RAW_TOOL_NAME,
         "message",
       ]);
+    } finally {
+      runtime.cleanup();
+    }
+  });
+
+  it.each([
+    { name: "message-only delivery", sourceReplyDeliveryMode: "message_tool_only" as const },
+    { name: "forced message delivery", forceMessageTool: true },
+  ])("keeps $name directly visible in Code Mode", (delivery) => {
+    const runtime = createAgentHarnessToolSurfaceRuntime({
+      config: { tools: { codeMode: true } },
+      executeTool: async () => ({ content: [], details: {} }),
+      ...delivery,
+      modelToolsEnabled: true,
+    });
+
+    try {
+      expect(
+        runtime.compactTools(tools(["web_search", "message"])).tools.map((tool) => tool.name),
+      ).toEqual(["exec", "wait", "message"]);
     } finally {
       runtime.cleanup();
     }

@@ -71,14 +71,17 @@ function setLoaderMetadataSnapshot(params: { pluginIds?: readonly string[] } = {
 
 describe("resolvePluginLoadCacheContext", () => {
   it("reuses prepared install records from the compatible metadata generation", () => {
-    const { config, env, installRecords, workspaceDir } = setLoaderMetadataSnapshot();
+    const { config, env, installRecords, snapshot, workspaceDir } = setLoaderMetadataSnapshot();
 
-    expect(resolvePluginLoadCacheContext({ config, env, workspaceDir }).installRecords).toEqual(
-      installRecords,
-    );
-    expect(resolvePluginLoadCacheContext({ config, workspaceDir }).installRecords).toEqual(
-      installRecords,
-    );
+    for (const options of [
+      { config, env, workspaceDir },
+      { config, workspaceDir },
+    ]) {
+      const context = resolvePluginLoadCacheContext(options);
+
+      expect(context.installRecords).toEqual(installRecords);
+      expect(context.metadataSnapshot).toBe(snapshot);
+    }
   });
 
   it("loads a custom profile's install records instead of reusing the process snapshot", () => {
@@ -101,9 +104,34 @@ describe("resolvePluginLoadCacheContext", () => {
     expect(resolvePluginLoadCacheContext({ config, env, workspaceDir }).installRecords).toEqual(
       installRecords,
     );
-    expect(
-      resolvePluginLoadCacheContext({ config, env: profileEnv, workspaceDir }).installRecords,
-    ).toEqual(profileInstallRecords);
+    const profileContext = resolvePluginLoadCacheContext({
+      config,
+      env: profileEnv,
+      workspaceDir,
+    });
+
+    expect(profileContext.installRecords).toEqual(profileInstallRecords);
+    expect(profileContext.metadataSnapshot).toBeUndefined();
+  });
+
+  it("does not reuse metadata when the activation source adds plugin load paths", () => {
+    const { config, env, workspaceDir } = setLoaderMetadataSnapshot();
+    const activationSourceConfig: OpenClawConfig = {
+      plugins: {
+        ...config.plugins,
+        load: { paths: ["/plugins/activation-source-only"] },
+      },
+    };
+
+    const context = resolvePluginLoadCacheContext({
+      activationSourceConfig,
+      config,
+      env,
+      workspaceDir,
+    });
+
+    expect(context.normalized.loadPaths).toContain("/plugins/activation-source-only");
+    expect(context.metadataSnapshot).toBeUndefined();
   });
 
   it("reuses an exact matching scoped metadata generation", () => {

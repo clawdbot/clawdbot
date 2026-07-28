@@ -7,6 +7,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 // NodeSession is plugin-SDK-reachable; importing these types from the
 // gateway-protocol index would retain the whole ProtocolSchemas registry in
 // the public plugin-sdk dts (check-plugin-sdk-exports guards this).
@@ -257,7 +258,13 @@ export class NodeRegistry {
     pendingInvokes: this.pendingInvokes,
     sendCancel: (requestId, pending) => {
       const node = this.nodesById.get(pending.nodeId);
-      if (!node || node.connId !== pending.connId) {
+      // Older nodes only negotiated streamed cancellation. The authenticated
+      // first-party host also aborts ordinary shell, MCP, and inference calls.
+      if (
+        !node ||
+        node.connId !== pending.connId ||
+        (!pending.onProgress && node.clientId !== GATEWAY_CLIENT_IDS.NODE_HOST)
+      ) {
         return;
       }
       this.sendEventToSession(node, "node.invoke.cancel", {
@@ -433,7 +440,8 @@ export class NodeRegistry {
     }
     const connect = client.connect;
     const nodeId = connect.device?.id ?? connect.client.id;
-    const previousPairingGeneration = this.nodesById.get(nodeId)?.pairingGeneration;
+    const previousSession = this.nodesById.get(nodeId);
+    const previousPairingGeneration = previousSession?.pairingGeneration;
     const caps = Array.isArray(connect.caps) ? connect.caps : [];
     const declaredCaps = Array.isArray((connect as { declaredCaps?: string[] }).declaredCaps)
       ? ((connect as { declaredCaps?: string[] }).declaredCaps ?? [])
@@ -505,9 +513,14 @@ export class NodeRegistry {
       pathEnv,
       connectedAtMs: Date.now(),
     };
-    const replacesPresence = this.nodesById.get(nodeId)?.lastActiveAtMs !== undefined;
+    const replacesPresence = previousSession?.lastActiveAtMs !== undefined;
     this.nodesById.set(nodeId, session);
     this.nodesByConn.set(client.connId, nodeId);
+    if (previousSession && previousSession.connId !== client.connId) {
+      // Install the replacement first so retiring its old invokes cannot
+      // remove the new session or publish a false offline transition.
+      this.unregister(previousSession.connId);
+    }
     if (
       previousPairingGeneration &&
       session.pairingGeneration &&

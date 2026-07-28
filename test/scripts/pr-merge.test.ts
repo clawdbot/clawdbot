@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -12,6 +12,7 @@ const describePosix = process.platform === "win32" ? describe.skip : describe;
 
 type MergeScenario = {
   auto?: boolean;
+  autoError?: string;
   autoResult?: "enabled" | "inconclusive" | "unavailable";
   checks?: "fail" | "green" | "pending";
   existingAutoMethod?: "" | "MERGE" | "REBASE" | "SQUASH";
@@ -27,7 +28,23 @@ function runMerge(scenario: MergeScenario = {}) {
   const calls = join(root, "gh-calls.log");
   const autoCalled = join(root, "auto-called");
   const autoState = join(root, "auto-state");
+  const bin = join(root, "bin");
+  const rgCalls = join(root, "rg-calls.log");
+  mkdirSync(bin, { recursive: true });
   mkdirSync(localDir, { recursive: true });
+  writeFileSync(
+    join(bin, "rg"),
+    `#!/usr/bin/env node
+const { appendFileSync, readFileSync } = require("node:fs");
+const args = process.argv.slice(2);
+appendFileSync(process.env.OPENCLAW_TEST_RG_CALLS, JSON.stringify(args) + "\\n");
+const pattern = args.at(-2);
+const file = args.at(-1);
+const flags = args.includes("-i") ? "i" : "";
+process.exit(new RegExp(pattern, flags).test(readFileSync(file, "utf8")) ? 0 : 1);
+`,
+  );
+  chmodSync(join(bin, "rg"), 0o755);
   writeFileSync(
     join(localDir, "prep.env"),
     `PREP_HEAD_SHA=${headSha}\nLOCAL_PREP_HEAD_SHA=${headSha}\n`,
@@ -152,7 +169,7 @@ gh() {
           : > "$OPENCLAW_TEST_AUTO_CALLED"
           printf 'enabled\\n' > "$OPENCLAW_TEST_AUTO_STATE"
           if [ "$OPENCLAW_TEST_AUTO_RESULT" = "unavailable" ]; then
-            echo 'GraphQL: Pull request auto merge is not allowed for this repository' >&2
+            echo "$OPENCLAW_TEST_AUTO_ERROR" >&2
             return 1
           fi
           if [ "$OPENCLAW_TEST_AUTO_RESULT" = "inconclusive" ]; then
@@ -177,6 +194,8 @@ merge_run 123 "$OPENCLAW_TEST_AUTO_REQUESTED"
     env: {
       ...process.env,
       OPENCLAW_TEST_AUTO_CALLED: autoCalled,
+      OPENCLAW_TEST_AUTO_ERROR:
+        scenario.autoError ?? "GraphQL: Pull request auto merge is not allowed for this repository",
       OPENCLAW_TEST_AUTO_REQUESTED: scenario.auto ? "true" : "false",
       OPENCLAW_TEST_AUTO_RESULT: scenario.autoResult ?? "enabled",
       OPENCLAW_TEST_AUTO_STATE: autoState,
@@ -191,12 +210,15 @@ merge_run 123 "$OPENCLAW_TEST_AUTO_REQUESTED"
       OPENCLAW_TEST_PRE_AUTO_META: preAutoMeta,
       OPENCLAW_TEST_REVIEW_ARTIFACTS: scenario.reviewArtifacts ?? "valid",
       OPENCLAW_TEST_REVIEW_RECOMMENDATION: scenario.recommendation ?? "ready",
+      OPENCLAW_TEST_RG_CALLS: rgCalls,
       OPENCLAW_TEST_ROOT: root,
+      PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
     },
   });
   return {
     ...result,
     calls: existsSync(calls) ? readFileSync(calls, "utf8") : "",
+    rgCalls: existsSync(rgCalls) ? readFileSync(rgCalls, "utf8") : "",
   };
 }
 
@@ -301,7 +323,20 @@ describePosix("scripts/pr merge-run", () => {
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(result.calls).toContain(`pr merge 123 --auto --squash --match-head-commit ${headSha}`);
     expect(result.calls).toContain(`pr merge 123 --squash --match-head-commit ${headSha}`);
+    expect(result.rgCalls).toContain('"-q","-i","--"');
     expect(result.stdout).toContain("auto-merge is unavailable");
     expect(result.stdout).toContain("falling back");
+  });
+
+  it("recognizes unavailable auto-merge wording in reverse order", () => {
+    const result = runMerge({
+      auto: true,
+      autoError: "GraphQL: Branch protection must be enabled before using auto-merge",
+      autoResult: "unavailable",
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.calls).toContain(`pr merge 123 --squash --match-head-commit ${headSha}`);
+    expect(result.stdout).toContain("auto-merge is unavailable");
   });
 });

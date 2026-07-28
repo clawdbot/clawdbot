@@ -2,8 +2,9 @@ import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.j
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type {
   DeletedAgentSessionEntryPurgeParams,
+  DeleteSessionEntryLifecycleParams,
   DeleteSessionEntryLifecycleResult,
-  ResetSessionEntryLifecycleMutation,
+  ResetSessionEntryLifecycleParams,
   ResetSessionEntryLifecycleResult,
   SessionEntryLifecycleMutationResult,
   SessionEntryLifecycleRemoval,
@@ -43,7 +44,7 @@ type SessionTranscriptRuntimeScope = SessionAccessScope & {
 
 export type SessionTranscriptReadScope = Omit<SessionTranscriptRuntimeScope, "sessionKey"> & {
   sessionKey?: string;
-  sessionEntry?: Pick<SessionEntry, "sessionFile"> & Partial<Pick<SessionEntry, "sessionId">>;
+  sessionEntry?: Partial<Pick<SessionEntry, "sessionId">>;
 };
 
 export type SessionTranscriptWriteScope = Omit<SessionTranscriptAccessScope, "sessionId"> & {
@@ -137,7 +138,6 @@ export type SessionTranscriptTurnMessageAppend = TranscriptMessageAppendOptions<
 
 export type SessionTranscriptTurnWriteContext = {
   agentId?: string;
-  sessionFile: string;
   sessionId?: string;
   sessionKey?: string;
   storePath?: string;
@@ -178,34 +178,11 @@ export type SessionEntryReplacementUpdate<T> = {
   result: T;
 };
 
-export type ResetSessionEntryLifecycleParams = {
-  archivePreviousTranscript?: boolean;
-  afterEntryMutation?: (mutation: ResetSessionEntryLifecycleMutation) => Promise<void> | void;
-  agentId?: string;
-  buildNextEntry: (context: {
-    currentEntry?: SessionEntry;
-    primaryKey: string;
-  }) => Promise<SessionEntry> | SessionEntry;
-  resetBoundaryReason?: import("./session-reset-boundary-event.js").SessionResetBoundaryReason;
-  storePath: string;
-  target: SessionLifecycleStoreTarget;
-};
-
-export type DeleteSessionEntryLifecycleParams = {
-  agentId?: string;
-  archiveTranscript: boolean;
-  deleteTranscriptWithoutArchive?: boolean;
-  expectedEntry?: SessionEntry;
-  expectedSessionId?: string | null;
-  expectedLifecycleRevision?: string;
-  expectedUpdatedAt?: number;
-  storePath: string;
-  target: SessionLifecycleStoreTarget;
-};
-
 export type {
   DeletedAgentSessionEntryPurgeParams,
+  DeleteSessionEntryLifecycleParams,
   DeleteSessionEntryLifecycleResult,
+  ResetSessionEntryLifecycleParams,
   ResetSessionEntryLifecycleResult,
   SessionEntryLifecycleMutationResult,
   SessionEntryLifecycleRemoval,

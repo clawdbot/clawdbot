@@ -62,6 +62,10 @@ import type {
   ProviderSystemPromptSectionId,
 } from "./system-prompt-contribution.js";
 import type { PromptMode, SilentReplyPromptMode } from "./system-prompt.types.js";
+import {
+  buildWatchedSessionsPromptLines,
+  type PreparedWatchedSessionsPrompt,
+} from "./watched-sessions-prompt.js";
 
 /**
  * Controls which hardcoded sections are included in the system prompt.
@@ -239,13 +243,21 @@ function buildProjectContextSection(params: {
     const hasMemoryFile = params.files.some(
       (file) => getContextFileBasename(file.path) === "memory.md",
     );
+    const hasUserFile = params.files.some(
+      (file) => getContextFileBasename(file.path) === "user.md",
+    );
     lines.push("Loaded project context:");
     if (hasSoulFile) {
       lines.push("SOUL.md: persona/tone. Follow it unless higher-priority instructions override.");
     }
     if (hasMemoryFile) {
       lines.push(
-        "MEMORY.md: durable preferences/behavior; follow all session unless higher priority overrides.",
+        "MEMORY.md: durable non-profile facts and decisions; use when relevant unless higher-priority instructions override.",
+      );
+    }
+    if (hasUserFile) {
+      lines.push(
+        "USER.md: durable user preferences and profile directives; follow unless higher-priority instructions override.",
       );
     }
     lines.push("");
@@ -285,14 +297,20 @@ function buildExecApprovalPromptGuidance(params: {
   return 'exec approval-pending: send exact /approve from "Reply with:"; never ask for another code.';
 }
 
-function buildSkillsSection(params: { skillsPrompt?: string; readToolName: string }) {
+function buildSkillsSection(params: {
+  skillsPrompt?: string;
+  readToolName: string;
+  codeModeActive?: boolean;
+}) {
   const trimmed = params.skillsPrompt?.trim();
   if (!trimmed) {
     return [];
   }
   return [
     "## Skills",
-    `Scan <available_skills>. Clear match: read exact <location> with \`${params.readToolName}\`; obey.`,
+    params.codeModeActive
+      ? 'Scan <available_skills>. Clear match: use `skills.read("<name>")` inside `exec`; obey.'
+      : `Scan <available_skills>. Clear match: read exact <location> with \`${params.readToolName}\`; obey.`,
     "Changed <version>: re-read. Several: most specific. None: read none.",
     "Up-front max one. Never invent paths.",
     "External writes: batch safely; no tight loops; honor 429/Retry-After.",
@@ -742,6 +760,7 @@ export function buildAgentSystemPrompt(params: {
   bootstrapMode?: BootstrapMode;
   bootstrapTruncationNotice?: string;
   skillsPrompt?: string;
+  codeModeActive?: boolean;
   heartbeatPrompt?: string;
   docsPath?: string;
   sourcePath?: string;
@@ -797,6 +816,8 @@ export function buildAgentSystemPrompt(params: {
   memoryCitationsMode?: MemoryCitationsMode;
   /** Immutable memory state prepared before synchronous prompt assembly. */
   preparedMemoryPrompt?: PreparedMemoryPromptSection;
+  /** Watched same-agent group sessions prepared before synchronous prompt assembly. */
+  preparedWatchedSessions?: PreparedWatchedSessionsPrompt;
   promptContribution?: ProviderSystemPromptContribution;
 }) {
   const acpEnabled = params.acpEnabled === true;
@@ -835,8 +856,8 @@ export function buildAgentSystemPrompt(params: {
     agents_list: acpSpawnRuntimeEnabled
       ? "List allowed OpenClaw subagent ids; not ACP ids"
       : "List allowed subagent ids",
-    sessions_list: "List other sessions/subagents; filters/last",
-    sessions_history: "Read other session/subagent history",
+    sessions_list: "List visible sessions; filters/last",
+    sessions_history: "Read visible session/subagent history",
     sessions_search: "Search past sessions; use sessionKey with sessions_history",
     sessions_send: "Message other session/subagent",
     sessions_spawn: acpSpawnRuntimeEnabled
@@ -1031,6 +1052,7 @@ export function buildAgentSystemPrompt(params: {
   const skillsSection = buildSkillsSection({
     skillsPrompt,
     readToolName,
+    codeModeActive: params.codeModeActive,
   });
   const skillWorkshopSection = availableTools.has(SKILL_WORKSHOP_TOOL_NAME)
     ? buildSkillWorkshopPromptSection()
@@ -1101,6 +1123,7 @@ export function buildAgentSystemPrompt(params: {
     docsPath: params.docsPath,
     sourcePath: params.sourcePath,
     skillsPrompt,
+    codeModeActive: params.codeModeActive,
     modelAliasLines: params.modelAliasLines,
     includeMemorySection: params.includeMemorySection,
     memoryCitationsMode: params.memoryCitationsMode,
@@ -1159,6 +1182,12 @@ export function buildAgentSystemPrompt(params: {
             availableTools.has("sessions_yield")
               ? "Never loop-poll `subagents list`/`sessions_list`; wait with `sessions_yield`. Status only on-demand/intervention/debug/request."
               : "Never loop-poll `subagents list`/`sessions_list`; status only on-demand/intervention/debug/request.",
+          ]
+        : []),
+      ...(renderOpenClawToolWorkflowHints &&
+      (availableTools.has("sessions_search") || availableTools.has("sessions_list"))
+        ? [
+            "Asked about another chat/group/session not in context: check `sessions_list`/`sessions_search` before claiming no access.",
           ]
         : []),
       "",
@@ -1405,6 +1434,10 @@ export function buildAgentSystemPrompt(params: {
   if (providerDynamicSuffix) {
     lines.push(providerDynamicSuffix, "");
   }
+
+  // Watched sessions change rarely but per-session; keep them below the cache
+  // boundary so the shared stable prefix stays byte-identical across sessions.
+  lines.push(...buildWatchedSessionsPromptLines(params.preparedWatchedSessions));
 
   lines.push(...buildHeartbeatSection({ isMinimal, heartbeatPrompt }));
 

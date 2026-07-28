@@ -70,7 +70,7 @@ const browserActionsMocks = vi.hoisted(() => ({
       },
     ],
   })),
-  browserNavigate: vi.fn(async () => ({ ok: true })),
+  browserNavigate: vi.fn(async (): Promise<Record<string, unknown>> => ({ ok: true })),
   browserPageContent: vi.fn(async () => ({
     ok: true as const,
     targetId: "t1",
@@ -2427,6 +2427,171 @@ describe("browser tool url alias support", () => {
     expect(request.profile).toBeUndefined();
   });
 
+  it("returns inline page state after navigate", async () => {
+    browserActionsMocks.browserNavigate.mockResolvedValueOnce({
+      ok: true,
+      targetId: "nav-tab",
+      url: "https://example.com/next",
+    });
+    const tool = createBrowserTool();
+
+    const result = await tool.execute?.("call-1", {
+      action: "navigate",
+      url: "https://example.com/next",
+    });
+
+    const snapshotOpts = lastMockCallArg<{ targetId?: string; mode?: string }>(
+      browserClientMocks.browserSnapshot,
+      1,
+    );
+    expect(snapshotOpts.targetId).toBe("nav-tab");
+    expect(snapshotOpts.mode).toBe("efficient");
+    expect(result?.details).toMatchObject({
+      targetId: "nav-tab",
+      pageState: { ok: true, format: "ai" },
+    });
+    expect(result?.content.at(-1)).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
+    });
+  });
+
+  it("returns inline page state after node-proxied navigate", async () => {
+    mockSingleBrowserProxyNode();
+    gatewayMocks.callGatewayTool
+      .mockResolvedValueOnce({
+        ok: true,
+        payload: { result: { ok: true, targetId: "proxy-tab", url: "https://example.com/next" } },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        payload: {
+          result: {
+            ok: true,
+            format: "ai",
+            targetId: "proxy-tab",
+            url: "https://example.com/next",
+            snapshot: "proxy page",
+          },
+        },
+      });
+    const tool = createBrowserTool();
+
+    const result = await tool.execute?.("call-1", {
+      action: "navigate",
+      target: "node",
+      url: "https://example.com/next",
+    });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledTimes(2);
+    expect(result?.details).toMatchObject({
+      targetId: "proxy-tab",
+      pageState: { ok: true, format: "ai", targetId: "proxy-tab" },
+    });
+    expect(result?.content.at(-1)).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("proxy page"),
+    });
+  });
+
+  it("keeps navigate success when the inline snapshot fails", async () => {
+    browserActionsMocks.browserNavigate.mockResolvedValueOnce({
+      ok: true,
+      targetId: "nav-tab",
+      url: "https://example.com/next",
+    });
+    browserClientMocks.browserSnapshot.mockRejectedValueOnce(new Error("snapshot exploded"));
+    const tool = createBrowserTool();
+
+    const result = await tool.execute?.("call-1", {
+      action: "navigate",
+      url: "https://example.com/next",
+    });
+
+    expect(result?.details).toMatchObject({ ok: true, targetId: "nav-tab" });
+    expect(result?.details).not.toHaveProperty("pageState");
+    expect(result?.content.at(-1)).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("page snapshot unavailable: snapshot exploded"),
+    });
+  });
+
+  it("propagates cancellation from the inline page-state snapshot", async () => {
+    browserActionsMocks.browserNavigate.mockResolvedValueOnce({
+      ok: true,
+      targetId: "nav-tab",
+      url: "https://example.com/next",
+    });
+    const abortError = new Error("This operation was aborted");
+    abortError.name = "AbortError";
+    browserClientMocks.browserSnapshot.mockRejectedValueOnce(abortError);
+    const tool = createBrowserTool();
+
+    await expect(
+      tool.execute?.("call-1", { action: "navigate", url: "https://example.com/next" }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("degrades inline page state when the node proxy falls back to the host mid-call", async () => {
+    mockSingleBrowserProxyNode();
+    gatewayMocks.callGatewayTool
+      .mockResolvedValueOnce({
+        ok: true,
+        payload: { result: { ok: true, targetId: "proxy-tab", url: "https://example.com/next" } },
+      })
+      .mockRejectedValueOnce(
+        new Error("Browser control host is not reachable on 127.0.0.1:18791."),
+      );
+    toolCommonMocks.fetchBrowserJson.mockResolvedValueOnce({
+      ok: true,
+      format: "ai",
+      targetId: "host-tab",
+      url: "https://host.example.com",
+      snapshot: "host page",
+    });
+    const tool = createBrowserTool();
+
+    const result = await tool.execute?.("call-1", {
+      action: "navigate",
+      url: "https://example.com/next",
+    });
+
+    expect(result?.details).toMatchObject({ targetId: "proxy-tab" });
+    expect(result?.details).not.toHaveProperty("pageState");
+    expect(result?.content.at(-1)).toMatchObject({
+      type: "text",
+      text: expect.stringContaining(
+        "page snapshot unavailable: the browser node became unreachable",
+      ),
+    });
+    const combinedText = result?.content
+      .map((block) => ("text" in block ? block.text : ""))
+      .join("\n");
+    expect(combinedText).not.toContain("host page");
+  });
+
+  it("skips inline page state when navigate resolves to a download", async () => {
+    browserActionsMocks.browserNavigate.mockResolvedValueOnce({
+      ok: true,
+      targetId: "nav-tab",
+      url: "https://example.com/report.pdf",
+      download: {
+        path: "/tmp/openclaw/downloads/report.pdf",
+        suggestedFilename: "report.pdf",
+        url: "https://example.com/report.pdf",
+      },
+    });
+    const tool = createBrowserTool();
+
+    const result = await tool.execute?.("call-1", {
+      action: "navigate",
+      url: "https://example.com/report.pdf",
+    });
+
+    expect(browserClientMocks.browserSnapshot).not.toHaveBeenCalled();
+    expect(result?.details).toMatchObject({ ok: true, targetId: "nav-tab" });
+  });
+
   it("rejects credentialed navigate URLs before host or node dispatch", async () => {
     mockSingleBrowserProxyNode();
     const tool = createBrowserTool();
@@ -2519,13 +2684,54 @@ describe("browser tool act compatibility", () => {
       },
     });
 
-    expect(result?.details).toMatchObject({ aborted: { reason: "navigation", skipped: 2 } });
-    expect(result?.content.at(-1)).toMatchObject({
+    expect(result?.details).toMatchObject({
+      aborted: { reason: "navigation", skipped: 2 },
+      pageState: { ok: true, format: "ai" },
+    });
+    expect(result?.content.at(-2)).toMatchObject({
       type: "text",
       text: expect.stringContaining(
         "Batch aborted after action 1 because the page navigated to https://example.com/next",
       ),
     });
+    expect(result?.content.at(-1)).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
+    });
+  });
+
+  it("appends page state when a completed batch reports navigation", async () => {
+    browserActionsMocks.browserAct.mockResolvedValueOnce({
+      ok: true,
+      targetId: "tab-after-nav",
+      results: [{ ok: true, navigated: true, url: "https://example.com/next" }],
+    });
+    const tool = createBrowserTool();
+
+    const result = await tool.execute?.("call-1", {
+      action: "act",
+      request: { kind: "batch", actions: [{ kind: "click", ref: "1" }] },
+    });
+
+    const snapshotOpts = lastMockCallArg<{ targetId?: string }>(
+      browserClientMocks.browserSnapshot,
+      1,
+    );
+    expect(snapshotOpts.targetId).toBe("tab-after-nav");
+    expect(result?.details).toMatchObject({ pageState: { ok: true, format: "ai" } });
+  });
+
+  it("does not snapshot after acts that stay on the same document", async () => {
+    browserActionsMocks.browserAct.mockResolvedValueOnce({ ok: true, targetId: "tab-1" });
+    const tool = createBrowserTool();
+
+    const result = await tool.execute?.("call-1", {
+      action: "act",
+      request: { kind: "click", ref: "e3", targetId: "tab-1" },
+    });
+
+    expect(browserClientMocks.browserSnapshot).not.toHaveBeenCalled();
+    expect(result?.details).not.toHaveProperty("pageState");
   });
 
   it("accepts flattened act params for backward compatibility", async () => {

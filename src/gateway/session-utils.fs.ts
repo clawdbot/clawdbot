@@ -174,21 +174,6 @@ function readTranscriptMessageIdempotencyKey(message: unknown): string | undefin
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
-/** Read all visible transcript messages for a session from the first existing candidate file. */
-export function readSessionMessages(
-  sessionId: string,
-  storePath: string | undefined,
-  sessionFile?: string,
-  agentId?: string,
-): unknown[] {
-  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
-  if (!filePath) {
-    return [];
-  }
-
-  return transcriptRecordsToMessages(readSelectedTranscriptRecords(filePath));
-}
-
 export type ReadRecentSessionMessagesOptions = {
   maxMessages: number;
   maxBytes?: number;
@@ -384,32 +369,6 @@ function selectBoundedActiveTailRecords(
   });
 }
 
-function readTranscriptRecords(filePath: string): TailTranscriptRecord[] {
-  const records: TailTranscriptRecord[] = [];
-  visitTranscriptLines(filePath, (line) => {
-    if (!line.trim()) {
-      return;
-    }
-    const record = parseTailTranscriptRecord(line);
-    if (record && record.record.type !== "session") {
-      records.push(record);
-    }
-  });
-  return records;
-}
-
-function selectActiveTranscriptRecords(records: TailTranscriptRecord[]): TailTranscriptRecord[] {
-  return selectBoundedActiveTailRecords(records);
-}
-
-function readSelectedTranscriptRecords(filePath: string): TailTranscriptRecord[] {
-  try {
-    return selectActiveTranscriptRecords(readTranscriptRecords(filePath));
-  } catch {
-    return [];
-  }
-}
-
 function transcriptRecordsToMessages(records: TailTranscriptRecord[]): unknown[] {
   const messages: unknown[] = [];
   let messageSeq = 0;
@@ -438,33 +397,6 @@ function parseRecentTranscriptTailSnapshot(
     messages: transcriptRecordsToMessages(selected).slice(-maxMessages),
     transcriptEvents: selected.map((entry) => entry.record),
   };
-}
-
-function visitTranscriptLines(filePath: string, visit: (line: string) => void): void {
-  const fd = fs.openSync(filePath, "r");
-  try {
-    const decoder = new StringDecoder("utf8");
-    const buffer = Buffer.allocUnsafe(64 * 1024);
-    let carry = "";
-    while (true) {
-      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null);
-      if (bytesRead <= 0) {
-        break;
-      }
-      const text = carry + decoder.write(buffer.subarray(0, bytesRead));
-      const lines = text.split(/\r?\n/);
-      carry = lines.pop() ?? "";
-      for (const line of lines) {
-        visit(line);
-      }
-    }
-    const tail = carry + decoder.end();
-    if (tail) {
-      visit(tail);
-    }
-  } finally {
-    fs.closeSync(fd);
-  }
 }
 
 async function visitTranscriptLinesAsync(

@@ -1,3 +1,4 @@
+import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { acquireOwnedSessionTranscriptWriteLock } from "../../config/sessions/transcript-write-context.js";
 /**
  * Executes compaction while owning the transcript lock, session lifecycle,
@@ -19,12 +20,13 @@ import {
   isSilentOverflowProneModel,
 } from "../agent-settings.js";
 import { pickFallbackThinkingLevel } from "../embedded-agent-helpers.js";
-import { repairSessionFileIfNeeded } from "../session-file-repair.js";
+import { resolveAgentRunSessionTarget } from "../run-session-target.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 import {
   acquireSessionWriteLock,
   resolveSessionLockMaxHoldFromTimeout,
+  resolveSessionWriteLockTargetKey,
   resolveSessionWriteLockOptions,
 } from "../session-write-lock.js";
 import { createAgentSession, estimateTokens, SessionManager } from "../sessions/index.js";
@@ -51,24 +53,16 @@ import {
   resolveCompactionTimeoutMs,
 } from "./compaction-safety-timeout.js";
 import { prepareCompactionSessionAgent } from "./compaction-session-agent.js";
-import {
-  type CompactionTranscriptRotation,
-  rotateTranscriptAfterCompaction,
-  shouldRotateCompactionTranscript,
-} from "./compaction-successor-transcript.js";
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
 import { log } from "./logger.js";
-import { hardenManualCompactionBoundary } from "./manual-compaction-boundary.js";
 import type { PreparedCompactionRuntime } from "./prepared-compaction-runtime.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
 import { createEmbeddedAgentResourceLoader } from "./resource-loader.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./run/attempt.model-diagnostic-events.js";
-import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
 import { applySystemPromptToSession } from "./system-prompt.js";
 import { collectRegisteredToolNames, toSessionToolAllowlist } from "./tool-name-allowlist.js";
 import { splitSdkTools } from "./tool-split.js";
-import { readTranscriptFileState } from "./transcript-file-state.js";
 import { mapThinkingLevel } from "./utils.js";
 import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.js";
 
@@ -96,7 +90,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
     sandbox,
     effectiveWorkspace,
     effectiveCwd,
-    isSqliteSessionTranscript,
     contextTokenBudget,
     effectiveModel,
     runtimePlan,
@@ -115,13 +108,23 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
 
   try {
     const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
+    const sessionTarget = await resolveAgentRunSessionTarget({
+      agentId: sessionAgentId,
+      config: params.config,
+      sessionFile: params.sessionFile,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      sessionTarget: params.sessionTarget,
+    });
     const sessionLock =
       (await acquireOwnedSessionTranscriptWriteLock({
         sessionFile: params.sessionFile,
         sessionKey: params.sessionKey,
+        sessionTarget,
       })) ??
       (await acquireSessionWriteLock({
-        sessionFile: params.sessionFile,
+        sessionFile: resolveSessionWriteLockTargetKey(sessionTarget),
+        targetKind: "session-key",
         ...resolveSessionWriteLockOptions(params.config, {
           maxHoldMsFallback: resolveSessionLockMaxHoldFromTimeout({
             timeoutMs: compactionTimeoutMs,
@@ -129,16 +132,8 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         }),
       }));
     try {
-      if (!isSqliteSessionTranscript) {
-        await repairSessionFileIfNeeded({
-          sessionFile: params.sessionFile,
-          debug: (message) => log.debug(message),
-          warn: (message) => log.warn(message),
-        });
-        await prewarmSessionFile(params.sessionFile);
-      }
       const transcriptPolicy = runtimePlan.transcript.resolvePolicy(runtimePlanModelContext);
-      const sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
+      const sessionManager = guardSessionManager(SessionManager.open(sessionTarget), {
         agentId: sessionAgentId,
         sessionKey: params.sessionKey,
         config: params.config,
@@ -155,9 +150,9 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       checkpointSnapshot = await compactionCheckpointStore.captureSnapshot({
         sessionManager,
         sessionFile: params.sessionFile,
+        sessionTarget,
       });
       compactionSessionManager = sessionManager;
-      trackSessionManagerAccess(params.sessionFile);
       const settingsManager = createPreparedEmbeddedAgentSettingsManager({
         cwd: effectiveCwd,
         agentDir,
@@ -435,36 +430,11 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               },
             },
           );
-          let effectiveFirstKeptEntryId = result.firstKeptEntryId;
-          let postCompactionLeafId =
+          const effectiveFirstKeptEntryId = result.firstKeptEntryId;
+          const postCompactionLeafId =
             typeof sessionManager.getLeafId === "function"
               ? (sessionManager.getLeafId() ?? undefined)
               : undefined;
-          let transcriptRotationSessionManager: Parameters<
-            typeof rotateTranscriptAfterCompaction
-          >[0]["sessionManager"] = sessionManager;
-          if (params.trigger === "manual" && !isSqliteSessionTranscript) {
-            try {
-              const hardenedBoundary = await hardenManualCompactionBoundary({
-                sessionFile: params.sessionFile,
-                preserveRecentTail:
-                  typeof params.config?.agents?.defaults?.compaction?.keepRecentTokens === "number",
-              });
-              if (hardenedBoundary.applied) {
-                effectiveFirstKeptEntryId =
-                  hardenedBoundary.firstKeptEntryId ?? effectiveFirstKeptEntryId;
-                postCompactionLeafId = hardenedBoundary.leafId ?? postCompactionLeafId;
-                session.agent.state.messages = hardenedBoundary.messages;
-                transcriptRotationSessionManager = await readTranscriptFileState(
-                  params.sessionFile,
-                );
-              }
-            } catch (err) {
-              log.warn("[compaction] failed to harden manual compaction boundary", {
-                errorMessage: formatErrorMessage(err),
-              });
-            }
-          }
           // Estimate tokens after compaction by summing token estimates for remaining messages
           const tokensAfter = estimateTokensAfterCompaction({
             messagesAfter: session.messages,
@@ -474,29 +444,12 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           });
           const messageCountAfter = session.messages.length;
           const compactedCount = Math.max(0, messageCountCompactionInput - messageCountAfter);
-          let transcriptRotation: CompactionTranscriptRotation = { rotated: false };
-          if (shouldRotateCompactionTranscript(params.config) && !isSqliteSessionTranscript) {
-            try {
-              transcriptRotation = await rotateTranscriptAfterCompaction({
-                sessionManager: transcriptRotationSessionManager,
-                sessionFile: params.sessionFile,
-              });
-            } catch (err) {
-              log.warn("[compaction] post-compaction transcript rotation failed", {
-                errorMessage: formatErrorMessage(err),
-                errorStack: err instanceof Error ? err.stack : undefined,
-              });
-            }
-          }
-          const activeSessionId = transcriptRotation.sessionId ?? params.sessionId;
-          const activeSessionFile = transcriptRotation.sessionFile ?? params.sessionFile;
-          const activePostLeafId = transcriptRotation.leafId ?? postCompactionLeafId;
-          if (transcriptRotation.rotated) {
-            log.info(
-              `[compaction] rotated active transcript after compaction ` +
-                `(sessionKey=${params.sessionKey ?? params.sessionId})`,
-            );
-          }
+          const activeSessionId = params.sessionId;
+          const activeSessionFile = formatSqliteSessionFileMarker({
+            ...sessionTarget,
+            sessionId: activeSessionId,
+          });
+          const activePostLeafId = postCompactionLeafId;
           await runPostCompactionSideEffects({
             config: params.config,
             sessionKey: params.sessionKey,
@@ -564,8 +517,8 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               tokensBefore: observedTokenCount ?? result.tokensBefore,
               tokensAfter,
               details: result.details,
-              sessionId: transcriptRotation.sessionId,
-              sessionFile: transcriptRotation.sessionFile,
+              sessionId: undefined,
+              sessionFile: undefined,
             },
           };
         } catch (err) {

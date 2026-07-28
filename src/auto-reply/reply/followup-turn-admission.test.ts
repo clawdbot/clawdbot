@@ -150,7 +150,6 @@ describe("admitFollowupTurn", () => {
     const queuedEntry: SessionEntry = { sessionId: "queued-session", updatedAt: 1 };
     const admittedEntry: SessionEntry = {
       sessionId: "admitted-session",
-      sessionFile: "/tmp/admitted.jsonl",
       modelSelectionLocked: true,
       updatedAt: 2,
     };
@@ -179,7 +178,7 @@ describe("admitFollowupTurn", () => {
     if (result.kind === "admitted") {
       expect(result.turn.queued.run).toMatchObject({
         sessionId: "admitted-session",
-        sessionFile: "sqlite:agent:admitted-session:/tmp/sessions.json",
+        sessionFile: "main",
         modelSelectionLocked: true,
       });
       expect(result.turn.currentInboundContext).toEqual({ text: "fresh goal" });
@@ -191,6 +190,29 @@ describe("admitFollowupTurn", () => {
     expect(state.resolveSendPolicy).toHaveBeenCalledWith(
       expect.objectContaining({ chatType: "group" }),
     );
+  });
+
+  it("settles presentation and releases the reply operation when dispatcher setup fails", async () => {
+    const operation = createOperation();
+    const failure = new Error("dispatcher reset failed");
+    const onQueuedFollowupSettled = vi.fn(async () => {});
+    state.admitReply.mockResolvedValue({ status: "owned", operation });
+
+    await expect(
+      admitFollowupTurn({
+        queued: createRun(),
+        defaults: createDefaults({
+          opts: {
+            onQueuedFollowupAdmitted: vi.fn(async () => {
+              throw failure;
+            }),
+            onQueuedFollowupSettled,
+          },
+        }),
+      }),
+    ).rejects.toBe(failure);
+    expect(onQueuedFollowupSettled).toHaveBeenCalledOnce();
+    expect(operation.complete).toHaveBeenCalledOnce();
   });
 
   it("prefers the admitted snapshot over unchanged stale in-memory state", async () => {
@@ -250,26 +272,6 @@ describe("admitFollowupTurn", () => {
       expect(result.turn.queued.run.cliSessionBindingFacts).toBeUndefined();
       expect(result.turn.queued.run.autoFallbackPrimaryProbe).toBeUndefined();
     }
-  });
-
-  it("releases the reply operation when post-admission dispatcher setup fails", async () => {
-    const operation = createOperation();
-    const failure = new Error("dispatcher reset failed");
-    state.admitReply.mockResolvedValue({ status: "owned", operation });
-
-    await expect(
-      admitFollowupTurn({
-        queued: createRun(),
-        defaults: createDefaults({
-          opts: {
-            onQueuedFollowupAdmitted: vi.fn(async () => {
-              throw failure;
-            }),
-          },
-        }),
-      }),
-    ).rejects.toBe(failure);
-    expect(operation.complete).toHaveBeenCalledOnce();
   });
 
   it("does not pass stale enqueue-time state into a rotated session generation", async () => {
@@ -563,8 +565,7 @@ describe("admitFollowupTurn", () => {
         sessionId: "compacted-session",
         modelSelectionLocked: false,
       });
-      expect(result.turn.queued.run.sessionFile).toContain("compacted-session");
-      expect(result.turn.queued.run.sessionFile).not.toBe("/tmp/session.jsonl");
+      expect(result.turn.queued.run.sessionFile).toBe("main");
       expect(result.turn.queued.run.cliSessionBindingFacts).toBeUndefined();
       expect(result.turn.queued.run.autoFallbackPrimaryProbe).toBeUndefined();
       expect(result.turn.preflightCompactionApplied).toBe(true);

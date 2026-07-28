@@ -1,4 +1,5 @@
-import type { GatewaySessionRow } from "../../api/types.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ArtifactDownloadResult, GatewaySessionRow } from "../../api/types.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 
 type SelectedSessionProjectionState = {
@@ -81,6 +82,25 @@ export function resolveAssistantAttachmentAuthToken(state: {
   settings?: { token?: string | null } | null;
 }) {
   return resolveControlUiAuthToken(state);
+}
+
+export async function resolveChatArtifactDownload(
+  state: { connected: boolean; client?: GatewayBrowserClient | null },
+  params: { sessionKey: string; artifactId: string },
+): Promise<{ url: string; expiresAt?: string } | null> {
+  if (!state.connected || !state.client) {
+    return null;
+  }
+  const result = await state.client.request<ArtifactDownloadResult | null>(
+    "artifacts.download",
+    params,
+  );
+  const url = typeof result?.url === "string" ? result.url.trim() : "";
+  if (!url) {
+    return null;
+  }
+  const expiresAt = typeof result?.expiresAt === "string" ? result.expiresAt.trim() : undefined;
+  return { url, ...(expiresAt ? { expiresAt } : {}) };
 }
 
 export function dismissChatError(state: {
