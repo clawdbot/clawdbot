@@ -382,7 +382,7 @@ export function renderColumn(
         void moveWorkboardCard({
           host: props.host,
           client: props.client,
-          cardId,
+          cardId: card.id,
           status,
           position: nextWorkboardCardPosition(state.cards, card, status),
           requestUpdate: props.onRequestUpdate,

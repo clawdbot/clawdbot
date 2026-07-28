@@ -590,6 +590,36 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-column--drop")).toBeNull();
   });
 
+  it("moves the resolved active card when a drop has no transfer payload", async () => {
+    const { host, state } = createLoadedWorkboardState();
+    const card = createWorkboardCard({ title: "Fallback drag move" });
+    const moved = { ...card, status: "running" as const, position: 1000 };
+    state.cards = [card];
+    state.draggedCardId = card.id;
+    const request = vi.fn(async () => ({ card: moved }));
+    const container = document.createElement("div");
+
+    renderInto(
+      container,
+      createWorkboardRenderProps(host, {
+        client: { request } as unknown as GatewayBrowserClient,
+      }),
+    );
+
+    container
+      .querySelector(".workboard-column--running")
+      ?.dispatchEvent(new Event("drop", { bubbles: true, cancelable: true }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(request).toHaveBeenCalledWith("workboard.cards.move", {
+      id: card.id,
+      status: "running",
+      position: 1000,
+    });
+    expect(state.cards).toContainEqual(moved);
+  });
+
   it("hides cached card mutation controls until a lifecycle teardown reload succeeds", async () => {
     const { host, state } = createLoadedWorkboardState();
     state.cards = [
