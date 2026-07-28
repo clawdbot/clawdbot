@@ -6,14 +6,15 @@ import { evaluateChannelHealth, resolveChannelRestartReason } from "./channel-he
 
 function evaluateHealth(
   account: Record<string, unknown>,
-  opts: { now?: number; channelId?: string } = {},
+  opts: { now?: number; channelId?: string; busyStaleThresholdMs?: number } = {},
 ) {
-  const { now = 100_000, channelId = "discord" } = opts;
+  const { now = 100_000, channelId = "discord", busyStaleThresholdMs } = opts;
   return evaluateChannelHealth(account, {
     channelId,
     now,
     channelConnectGraceMs: 10_000,
     staleEventThresholdMs: 30_000,
+    ...(busyStaleThresholdMs !== undefined ? { busyStaleThresholdMs } : {}),
   });
 }
 
@@ -96,6 +97,19 @@ describe("evaluateChannelHealth", () => {
       { now },
     );
     expect(evaluation).toEqual({ healthy: false, reason: "stuck" });
+  });
+
+  it("respects a custom busyStaleThresholdMs override", () => {
+    const now = 35 * 60_000;
+    const customThresholdMs = 40 * 60_000;
+    const evaluation = evaluateHealth(
+      activeRunAccount(now - 30 * 60_000, {
+        connected: false,
+        activeRunStartedAt: now - 30 * 60_000,
+      }),
+      { now, busyStaleThresholdMs: customThresholdMs },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "busy" });
   });
 
   it("keeps a connected run healthy past the threshold while its heartbeat stays fresh", () => {

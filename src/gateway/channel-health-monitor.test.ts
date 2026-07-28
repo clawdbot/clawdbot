@@ -888,5 +888,25 @@ describe("channel-health-monitor", () => {
       expect(manager.startChannel).toHaveBeenCalledWith("slack", "default");
       monitor.stop();
     });
+
+    it("respects custom busyStaleThresholdMs", async () => {
+      const customThreshold = 40 * 60_000;
+      const now = Date.now();
+      const manager = createSlackSnapshotManager({
+        running: true,
+        connected: false,
+        busy: true,
+        activeRuns: 1,
+        lastStartAt: now - 30 * 60_000,
+        lastRunActivityAt: now - 30 * 60_000,
+        activeRunStartedAt: now - 30 * 60_000,
+      });
+      const monitor = await startAndRunCheck(manager, {
+        timing: { busyStaleThresholdMs: customThreshold },
+      });
+      expect(manager.stopChannel).not.toHaveBeenCalled();
+      expect(manager.startChannel).not.toHaveBeenCalled();
+      monitor.stop();
+    });
   });
 });

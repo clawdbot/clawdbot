@@ -4,6 +4,7 @@ import type { ChannelId } from "../channels/plugins/types.public.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import {
+  DEFAULT_CHANNEL_BUSY_STALE_THRESHOLD_MS,
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   evaluateChannelHealth,
@@ -31,6 +32,7 @@ type ChannelHealthTimingPolicy = {
   monitorStartupGraceMs: number;
   channelConnectGraceMs: number;
   staleEventThresholdMs: number;
+  busyStaleThresholdMs: number;
 };
 
 type ChannelHealthMonitorDeps = {
@@ -61,6 +63,8 @@ function resolveTimingPolicy(
     channelConnectGraceMs: deps.timing?.channelConnectGraceMs ?? DEFAULT_CHANNEL_CONNECT_GRACE_MS,
     staleEventThresholdMs:
       deps.timing?.staleEventThresholdMs ?? DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
+    busyStaleThresholdMs:
+      deps.timing?.busyStaleThresholdMs ?? DEFAULT_CHANNEL_BUSY_STALE_THRESHOLD_MS,
   };
 }
 
@@ -138,6 +142,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             now,
             staleEventThresholdMs: timing.staleEventThresholdMs,
             channelConnectGraceMs: timing.channelConnectGraceMs,
+            busyStaleThresholdMs: timing.busyStaleThresholdMs,
           };
           const health = evaluateChannelHealth(status, healthPolicy);
           if (health.healthy) {
