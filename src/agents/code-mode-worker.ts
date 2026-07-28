@@ -13,9 +13,16 @@ import {
 let quickJsWasmModulePromise: Promise<WebAssembly.Module> | undefined;
 
 function getQuickJsWasmModule(): Promise<WebAssembly.Module> {
-  quickJsWasmModulePromise ??= readFile(
-    createRequire(import.meta.url).resolve("quickjs-wasi/quickjs.wasm"),
-  ).then((bytes) => WebAssembly.compile(bytes));
+  quickJsWasmModulePromise ??= Promise.resolve()
+    .then(() => createRequire(import.meta.url).resolve("quickjs-wasi/quickjs.wasm"))
+    .then((wasmPath) => readFile(wasmPath))
+    .then((bytes) => WebAssembly.compile(bytes))
+    .catch((error: unknown) => {
+      // Failed initialization is transient host state, not a process-wide
+      // verdict; later runs must retry without bypassing their watchdog.
+      quickJsWasmModulePromise = undefined;
+      throw error;
+    });
   return quickJsWasmModulePromise;
 }
 
