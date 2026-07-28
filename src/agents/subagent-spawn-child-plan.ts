@@ -15,6 +15,7 @@ import {
 } from "./spawned-context.js";
 import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
 import type {
+  AtomicSpawnAdmissionReceipt,
   SpawnSubagentContext,
   SpawnSubagentParams,
   SpawnSubagentResult,
@@ -94,6 +95,7 @@ type ResolvedSubagentChildPlan = {
   modelPlan: Extract<ReturnType<typeof resolveSubagentModelAndThinkingPlan>, { status: "ok" }>;
   launchAuthorization?: SubagentLaunchAuthorization;
   resolvedModelMetadata: ReturnType<typeof buildResolvedSubagentModelMetadata>;
+  atomicAdmission?: Omit<AtomicSpawnAdmissionReceipt, "attemptId">;
 };
 
 type ResolveSubagentChildPlanResult =
@@ -219,8 +221,67 @@ export async function resolveSubagentChildPlan(params: {
   }
   const { resolvedModel } = modelPlan;
   const resolvedLaunchModel = splitModelRef(resolvedModel);
+  let atomicAdmission: ResolvedSubagentChildPlan["atomicAdmission"];
+  if (params.request.atomicGate) {
+    const expectedModel = normalizeOptionalString(params.request.atomicGate.expectedModel);
+    if (!expectedModel) {
+      return {
+        ok: false,
+        result: { status: "error", error: "atomicGate.expectedModel must be non-empty" },
+      };
+    }
+    if (params.request.atomicGate.authority !== "sandbox_workspace_write") {
+      return {
+        ok: false,
+        result: {
+          status: "forbidden",
+          error: "atomicGate only supports sandbox_workspace_write authority",
+        },
+      };
+    }
+    if (params.request.collect) {
+      return {
+        ok: false,
+        result: {
+          status: "forbidden",
+          error: "atomicGate is unavailable for queued collector launches",
+        },
+      };
+    }
+    if (expectedModel !== resolvedModel) {
+      return {
+        ok: false,
+        result: {
+          status: "forbidden",
+          error: `atomicGate expected "${expectedModel}" but resolved "${resolvedModel ?? "unknown"}"`,
+        },
+      };
+    }
+    if (params.sandboxMode !== "require" || !childRuntime.sandboxed || !spawnedWorkspaceDir) {
+      return {
+        ok: false,
+        result: {
+          status: "forbidden",
+          error:
+            "atomicGate sandbox_workspace_write requires sandbox=require and a sandboxed workspace",
+        },
+      };
+    }
+    atomicAdmission = {
+      version: 1,
+      state: "admitted",
+      expectedModel,
+      resolvedModel,
+      ...(resolvedLaunchModel.provider ? { resolvedProvider: resolvedLaunchModel.provider } : {}),
+      authority: "sandbox_workspace_write",
+      scope: {
+        kind: "sandbox_workspace",
+        workspaceDir: spawnedWorkspaceDir,
+      },
+    };
+  }
   const launchAuthorization: SubagentLaunchAuthorization | undefined =
-    params.request.model?.trim() && resolvedLaunchModel.model
+    (params.request.model?.trim() || atomicAdmission) && resolvedLaunchModel.model
       ? {
           modelOverride: {
             ...(resolvedLaunchModel.provider ? { provider: resolvedLaunchModel.provider } : {}),
@@ -258,6 +319,7 @@ export async function resolveSubagentChildPlan(params: {
       modelPlan,
       launchAuthorization,
       resolvedModelMetadata: buildResolvedSubagentModelMetadata(resolvedModel),
+      atomicAdmission,
     },
   };
 }

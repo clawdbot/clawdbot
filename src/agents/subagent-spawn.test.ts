@@ -29,6 +29,7 @@ const hoisted = vi.hoisted(() => ({
   countActiveRunsForSessionMock: vi.fn(),
   listSwarmRunsForGroupMock: vi.fn(),
   configOverride: {} as Record<string, unknown>,
+  childSandboxed: false,
 }));
 
 let resetSubagentRegistryForTests: typeof import("./subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
@@ -93,7 +94,7 @@ describe("spawnSubagentDirect seam flow", () => {
       countActiveRunsForSession: hoisted.countActiveRunsForSessionMock,
       listSwarmRunsForGroup: hoisted.listSwarmRunsForGroupMock,
       resolveSubagentSpawnModelSelection: () => "openai/gpt-5.4",
-      resolveSandboxRuntimeStatus: () => ({ sandboxed: false }),
+      resolveSandboxRuntimeStatus: () => ({ sandboxed: hoisted.childSandboxed }),
       sessionStorePath: "/tmp/subagent-spawn-session-store.json",
     }));
   });
@@ -121,6 +122,7 @@ describe("spawnSubagentDirect seam flow", () => {
         cfg.agents?.list?.find((agent) => agent.id === agentId),
     );
     hoisted.configOverride = createConfigOverride();
+    hoisted.childSandboxed = false;
     installAcceptedSubagentGatewayMock(hoisted.callGatewayMock);
     hoisted.loadSessionStoreMock.mockReturnValue({});
 
@@ -1030,6 +1032,89 @@ describe("spawnSubagentDirect seam flow", () => {
       allowSyntheticModelOverride: true,
       forceSyntheticClient: true,
     });
+  });
+
+  it("atomically admits an exact model into a sandboxed workspace", async () => {
+    hoisted.childSandboxed = true;
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "make one bounded repository change",
+        model: "openai/gpt-5.4",
+        sandbox: "require",
+        atomicGate: {
+          expectedModel: "openai/gpt-5.4",
+          authority: "sandbox_workspace_write",
+        },
+      },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expect(result).toMatchObject({
+      status: "accepted",
+      admissionReceipt: {
+        version: 1,
+        state: "admitted",
+        expectedModel: "openai/gpt-5.4",
+        resolvedModel: "openai/gpt-5.4",
+        resolvedProvider: "openai",
+        authority: "sandbox_workspace_write",
+        scope: {
+          kind: "sandbox_workspace",
+          workspaceDir: "/tmp/workspace-main",
+        },
+      },
+    });
+    expect(result.admissionReceipt?.attemptId).toBe(
+      requireRecord(gatewayRequest("agent").params).idempotencyKey,
+    );
+    expect(gatewayRequest("agent")).toMatchObject({
+      scopes: ["operator.admin"],
+      params: { provider: "openai", model: "gpt-5.4" },
+    });
+  });
+
+  it("fails atomic admission before dispatch on model mismatch", async () => {
+    hoisted.childSandboxed = true;
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "must not launch",
+        model: "openai/gpt-5.4",
+        sandbox: "require",
+        atomicGate: {
+          expectedModel: "deepseek/deepseek-v4-pro",
+          authority: "sandbox_workspace_write",
+        },
+      },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expect(result).toMatchObject({
+      status: "forbidden",
+      error: expect.stringContaining("but resolved"),
+    });
+    expect(gatewayRequestRecords()).toEqual([]);
+  });
+
+  it("fails atomic admission before dispatch without sandbox enforcement", async () => {
+    const result = await spawnSubagentDirect(
+      {
+        task: "must not launch",
+        model: "openai/gpt-5.4",
+        atomicGate: {
+          expectedModel: "openai/gpt-5.4",
+          authority: "sandbox_workspace_write",
+        },
+      },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expect(result).toMatchObject({
+      status: "forbidden",
+      error: expect.stringContaining("requires sandbox=require"),
+    });
+    expect(gatewayRequestRecords()).toEqual([]);
   });
 
   it("keeps admin-scoped cleanup on in-process spawn failure", async () => {

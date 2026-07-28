@@ -179,6 +179,14 @@ function createSessionsSpawnToolSchema(params: {
     sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES, {
       description: '"inherit" parent sandbox policy; "require" fails unless child is sandboxed.',
     }),
+    atomicGate: Type.Optional(
+      Type.Object({
+        expectedModel: Type.String({
+          description: "Exact resolved provider/model required before bounded mutation can launch.",
+        }),
+        authority: Type.Literal("sandbox_workspace_write"),
+      }),
+    ),
     context: optionalStringEnum(SUBAGENT_SPAWN_CONTEXT_MODES, {
       description:
         "Native: omit/isolated clean; fork only needing requester transcript; visible fork requires same agent.",
@@ -363,6 +371,9 @@ export function createSessionsSpawnTool(
       const taskName = taskNameResult.taskName;
       const label = readStringParam(params, "label") ?? "";
       const runtime = params.runtime === "acp" ? "acp" : "subagent";
+      if (params.atomicGate !== undefined && runtime !== "subagent") {
+        throw new ToolInputError('sessions_spawn "atomicGate" supports runtime="subagent" only.');
+      }
       if (collect && runtime === "acp") {
         throw new ToolInputError('sessions_spawn collect=true supports runtime="subagent" only.');
       }
@@ -536,6 +547,19 @@ export function createSessionsSpawnTool(
           attachMountPath:
             params.attachAs && typeof params.attachAs === "object"
               ? readStringParam(params.attachAs as Record<string, unknown>, "mountPath")
+              : undefined,
+          atomicGate:
+            params.atomicGate &&
+            typeof params.atomicGate === "object" &&
+            !Array.isArray(params.atomicGate)
+              ? {
+                  expectedModel: readStringParam(
+                    params.atomicGate as Record<string, unknown>,
+                    "expectedModel",
+                    { required: true },
+                  ),
+                  authority: "sandbox_workspace_write",
+                }
               : undefined,
         },
         {

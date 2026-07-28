@@ -166,6 +166,7 @@ export async function spawnSubagentDirect(
       modelPlan: plan,
       launchAuthorization,
       resolvedModelMetadata,
+      atomicAdmission,
     } = childPlan.resolved;
     let { childSessionOrigin } = childPlan.resolved;
     const spawnedByKey = requesterInternalKey;
@@ -636,6 +637,9 @@ export async function spawnSubagentDirect(
           : acceptedNote,
         ...resolvedModelMetadata,
         modelApplied: resolvedModel ? modelApplied : undefined,
+        admissionReceipt: atomicAdmission
+          ? { ...atomicAdmission, attemptId: childIdem }
+          : undefined,
         attachments: attachmentsReceipt,
       };
     }
@@ -665,6 +669,7 @@ export async function spawnSubagentDirect(
         : acceptedNote,
       ...resolvedModelMetadata,
       modelApplied: resolvedModel ? modelApplied : undefined,
+      admissionReceipt: atomicAdmission ? { ...atomicAdmission, attemptId: childIdem } : undefined,
       attachments: attachmentsReceipt,
     };
   } finally {

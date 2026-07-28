@@ -36,6 +36,29 @@ export type SpawnSubagentParams = {
     mimeType?: string;
   }>;
   attachMountPath?: string;
+  /**
+   * Opt-in fail-closed admission for bounded repository mutation.
+   * The trusted host must resolve the exact expected model and a sandboxed
+   * workspace before dispatching the child turn.
+   */
+  atomicGate?: {
+    expectedModel: string;
+    authority: "sandbox_workspace_write";
+  };
+};
+
+export type AtomicSpawnAdmissionReceipt = {
+  version: 1;
+  state: "admitted";
+  attemptId: string;
+  expectedModel: string;
+  resolvedModel: string;
+  resolvedProvider?: string;
+  authority: "sandbox_workspace_write";
+  scope: {
+    kind: "sandbox_workspace";
+    workspaceDir: string;
+  };
 };
 
 export type SpawnSubagentContext = {
@@ -75,6 +98,7 @@ export type SpawnSubagentResult = {
   /** Provider prefix parsed from resolvedModel when the ref includes one. */
   resolvedProvider?: string;
   modelApplied?: boolean;
+  admissionReceipt?: AtomicSpawnAdmissionReceipt;
   error?: string;
   attachments?: {
     count: number;
