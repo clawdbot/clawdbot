@@ -6,7 +6,7 @@
  */
 import { collectErrorGraphCandidates, extractErrorCode } from "../../infra/errors.js";
 
-export const CHANNEL_INGRESS_UNAVAILABLE_CODE = "CHANNEL_INGRESS_UNAVAILABLE";
+const CHANNEL_INGRESS_UNAVAILABLE_CODE = "CHANNEL_INGRESS_UNAVAILABLE";
 
 /** Raised when a channel's durable ingress queue cannot be opened. */
 export class ChannelIngressUnavailableError extends Error {
