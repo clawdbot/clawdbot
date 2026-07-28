@@ -14,7 +14,7 @@ const CODEX_TURN_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS = 10_000;
 // raw assistant/reasoning completions, or reasoning progress. Forwarded deltas
 // count as activity, but older native paths may not surface them, so keep this
 // terminal guard conservative.
-const CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS = 5 * 60_000;
+const CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS = 10 * 60_000;
 /** Guard after reasoning/commentary progress when no tool handoff occurred. */
 export const CODEX_POST_REASONING_REPLY_IDLE_TIMEOUT_MS = 5 * 60_000;
 /** Long terminal idle watch for app-server turns that never send completion. */

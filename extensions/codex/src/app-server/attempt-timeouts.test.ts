@@ -15,7 +15,7 @@ import {
 const CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS = 100;
 const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 60_000;
 const CODEX_TURN_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS = 10_000;
-const CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS = 5 * 60_000;
+const CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS = 10 * 60_000;
 const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
 
 describe("Codex app-server attempt timeouts", () => {
@@ -51,7 +51,7 @@ describe("Codex app-server attempt timeouts", () => {
   });
 
   it("normalizes turn idle timeout overrides", () => {
-    expect(CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS).toBe(5 * 60_000);
+    expect(CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS).toBe(10 * 60_000);
     expect(CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS).toBeGreaterThan(
       CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS,
     );
@@ -86,8 +86,8 @@ describe("Codex app-server attempt timeouts", () => {
     expect(resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(undefined, 120_000)).toBe(
       CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS,
     );
-    expect(resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(undefined, 6 * 60_000)).toBe(
-      6 * 60_000,
+    expect(resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(undefined, 11 * 60_000)).toBe(
+      11 * 60_000,
     );
     expect(resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(undefined, Number.NaN)).toBe(
       CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS,
