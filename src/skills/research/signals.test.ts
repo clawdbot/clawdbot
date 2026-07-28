@@ -374,36 +374,16 @@ describe("durable instruction signals", () => {
     },
   );
 
-  it("preserves command casing", () => {
-    const proposal = expectDefined(
-      proposals([user("From now on, git fetch before rebasing.")])[0],
-      "command rule",
-    );
-    expect(proposal.content).toContain("- git fetch before rebasing.");
-  });
-
-  it("preserves a lowercase shell command with an assignment argument", () => {
-    const proposal = expectDefined(
-      proposals([user("From now on, export FOO=bar.")])[0],
-      "assignment command",
-    );
-    expect(proposal.content).toContain("- export FOO=bar.");
-  });
-
-  it("preserves a literal trailing-dot command argument", () => {
-    const proposal = expectDefined(
-      proposals([user("Remember to run git add .")])[0],
-      "literal dot argument",
-    );
-    expect(proposal.content).toContain("- Run git add .");
-  });
-
-  it("accepts an explicitly marked directive outside the action vocabulary", () => {
-    const proposal = expectDefined(
-      proposals([user("Remember to call the release webhook before publishing.")])[0],
-      "explicit directive",
-    );
-    expect(proposal.content).toContain("- Call the release webhook before publishing.");
+  it.each([
+    ["From now on, git fetch before rebasing.", "- git fetch before rebasing."],
+    ["From now on, export FOO=bar.", "- export FOO=bar."],
+    ["Remember to run git add .", "- Run git add ."],
+    [
+      "Remember to call the release webhook before publishing.",
+      "- Call the release webhook before publishing.",
+    ],
+  ])("preserves explicit directive syntax: %s", (content, expected) => {
+    expect(proposals([user(content)])[0]?.content).toContain(expected);
   });
 
   it("rejects an ambiguous noun phrase after never", () => {

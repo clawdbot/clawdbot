@@ -36,6 +36,8 @@ const RULE_SHORTHAND =
 const UNMARKED_FIX = /^(?!i\b|it\b|th\w+\b|we\b|you\b)[a-z][\w-]*\s+\S+/i;
 const COMMAND_SHAPED =
   /^(?:git|gh|node|npm|openclaw|pnpm)\s+|^[a-z][\w-]*\s+(?:-|\.?\/|https?:\/\/|[A-Z_][A-Z0-9_]*=)/;
+const EXPLICIT_ACTION_MARKER =
+  /\b(?:remember to|make sure to)\b|^(?:(?:can|could|would|will) you\s+|please\s+)?always\b|[,;:—–-]\s+always\b/i;
 
 const MATCH_STOPWORDS = new Set(
   "and are as before but for from have into not should that the them then they this was were what when with you your".split(
@@ -195,9 +197,7 @@ function normalizeRule(value: string, explicit = false): string | undefined {
     .replace(/^(?:(?:also|always|make sure to|please|just|remember to)\s+)+/i, "")
     .trim();
   const literalDotArgument = /^run\s+\S+.*\s\.$/i.test(rule);
-  if (!literalDotArgument) {
-    rule = rule.replace(/[.!?]+$/, "");
-  }
+  rule = literalDotArgument ? rule : rule.replace(/[.!?]+$/, "");
   if (
     !rule ||
     (compact.endsWith("?") && !request && !IMPERATIVE_RULE.test(rule)) ||
@@ -240,8 +240,7 @@ function normalizeRule(value: string, explicit = false): string | undefined {
   } else if (/\bin parentheses$/i.test(rule) && !IMPERATIVE_RULE.test(rule)) {
     rule = `Include ${rule}`;
   }
-  const normalized = commandShaped ? rule : rule.charAt(0).toUpperCase() + rule.slice(1);
-  return literalDotArgument ? normalized : `${normalized}.`;
+  return `${commandShaped ? rule : rule.charAt(0).toUpperCase() + rule.slice(1)}${literalDotArgument ? "" : "."}`;
 }
 
 function normalizeRuleList(value: string, splitList: boolean, explicit = false): string[] {
@@ -269,10 +268,6 @@ function normalizeRuleList(value: string, splitList: boolean, explicit = false):
 
 function parseInstruction(instruction: string) {
   const compactInstruction = compactWhitespace(instruction.split("\uE000", 1)[0] ?? instruction);
-  const explicitActionMarker =
-    /\b(?:remember to|make sure to)\b|^(?:(?:can|could|would|will) you\s+|please\s+)?always\b|[,;:—–-]\s+always\b/i.test(
-      compactInstruction,
-    );
   const isolatedInstruction = stripSignalMarkers(compactInstruction);
   const actorEvent = isolatedInstruction.match(
     new RegExp(
@@ -508,7 +503,7 @@ function parseInstruction(instruction: string) {
       ? { rules: normalizeRuleList(explicitFix, false) }
       : undefined;
   }
-  const rules = normalizeRuleList(text, false, explicitActionMarker);
+  const rules = normalizeRuleList(text, false, EXPLICIT_ACTION_MARKER.test(compactInstruction));
   return rules.length > 0 ? { rules } : undefined;
 }
 
