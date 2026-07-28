@@ -3963,8 +3963,8 @@ export const en: TranslationMap = {
     startupStatus: {
       preparingWorkspace: "Preparing workspace…",
       provisioningEnvironment: "Provisioning environment…",
-      preparingContext: "Preparing context…",
-      startingModel: "Starting model…",
+      preparingContext: "Preparing this turn…",
+      startingModel: "Waiting for a response…",
     },
     outputTokens: "{count} output tokens",
     archivedSessionDisabled: "This session is archived. Unarchive it to continue the conversation.",
