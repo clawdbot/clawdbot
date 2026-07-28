@@ -2,7 +2,7 @@
 import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 
-export type GatewayOperatorAccess = Readonly<{
+type GatewayOperatorAccess = Readonly<{
   canWrite: boolean;
   canAdmin: boolean;
   canPair: boolean;

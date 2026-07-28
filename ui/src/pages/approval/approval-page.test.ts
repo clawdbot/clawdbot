@@ -157,7 +157,9 @@ afterEach(async () => {
 
 describe("ApprovalPage", () => {
   it("keeps a no-auth approval readable without enabling its decisions", async () => {
-    const request = vi.fn(async () => ({ approval: pendingApproval() }));
+    const request = vi.fn(
+      async (_method: string) => ({ approval: pendingApproval() }) satisfies ApprovalGetResult,
+    );
     const { page } = createPage({
       client: { request } as unknown as GatewayBrowserClient,
       hello: null,
@@ -280,7 +282,9 @@ describe("ApprovalPage", () => {
   });
 
   it("redacts a pending approval and rejects a retained action after a scope downgrade", async () => {
-    const request = vi.fn(async () => ({ approval: pendingApproval() }));
+    const request = vi.fn(
+      async (_method: string) => ({ approval: pendingApproval() }) satisfies ApprovalGetResult,
+    );
     const { page, source } = createPage({
       client: { request } as unknown as GatewayBrowserClient,
       hello: {
