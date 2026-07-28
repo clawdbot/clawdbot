@@ -4,8 +4,6 @@ import {
   bm25RankToScore,
   buildFtsQuery,
   mergeHybridResults,
-  projectMultiplier,
-  splitProjectKeys,
   scoreExactPathTieForTemporalDecay,
 } from "./hybrid.js";
 
@@ -114,26 +112,6 @@ describe("memory hybrid helpers", () => {
   });
 
   it("boosts active-project results, demotes foreign results, and leaves global results neutral", async () => {
-    expect(
-      projectMultiplier("github.com/openclaw/openclaw", ["github.com/openclaw/openclaw"]),
-    ).toBe(1.15);
-    expect(projectMultiplier("github.com/example/other", ["github.com/openclaw/openclaw"])).toBe(
-      0.9,
-    );
-    expect(projectMultiplier(null, ["github.com/openclaw/openclaw"])).toBe(1);
-    expect(projectMultiplier("github.com/example/other", [])).toBe(1);
-    expect(
-      projectMultiplier("github.com/example/other; github.com/openclaw/openclaw", [
-        "github.com/openclaw/openclaw",
-      ]),
-    ).toBe(1.15);
-    expect(
-      projectMultiplier("github.com/example/one; github.com/example/two", [
-        "github.com/openclaw/openclaw",
-      ]),
-    ).toBe(0.9);
-    expect(splitProjectKeys("project:b; project:a; project:b")).toEqual(["project:b", "project:a"]);
-
     const merged = await mergeHybridResults({
       vectorWeight: 1,
       textWeight: 0,

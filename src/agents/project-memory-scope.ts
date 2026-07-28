@@ -60,7 +60,3 @@ export function resolveProjectKey(repoRoot: string): Promise<string> {
   setBounded(projectKeyByRepoRoot, canonicalRoot, pending, MAX_PROJECT_KEY_CACHE_ENTRIES);
   return pending;
 }
-
-export function resetProjectMemoryScopeForTests(): void {
-  projectKeyByRepoRoot.clear();
-}

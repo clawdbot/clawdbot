@@ -310,7 +310,7 @@ export async function mergeHybridResults(params: {
   );
 }
 
-export function projectMultiplier(
+function projectMultiplier(
   projectKey: string | null | undefined,
   activeProjectKeys: readonly string[] | undefined,
 ): number {
@@ -321,7 +321,7 @@ export function projectMultiplier(
   return storedProjectKeys.some((key) => activeProjectKeys.includes(key)) ? 1.15 : 0.9;
 }
 
-export function splitProjectKeys(projectKey: string | null | undefined): string[] {
+function splitProjectKeys(projectKey: string | null | undefined): string[] {
   return projectKey
     ? [
         ...new Set(
@@ -334,7 +334,7 @@ export function splitProjectKeys(projectKey: string | null | undefined): string[
     : [];
 }
 
-export function applyProjectMultiplier<T extends { score: number; projectKey?: string }>(
+function applyProjectMultiplier<T extends { score: number; projectKey?: string }>(
   results: T[],
   activeProjectKeys?: readonly string[],
 ): T[] {

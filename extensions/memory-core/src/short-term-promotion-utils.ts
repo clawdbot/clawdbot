@@ -65,7 +65,7 @@ export function normalizeSnippet(raw: string): string {
   return trimmed.replace(/\s+/g, " ");
 }
 
-export function normalizeProjectKeyList(value: unknown): string | undefined {
+function normalizeProjectKeyList(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }

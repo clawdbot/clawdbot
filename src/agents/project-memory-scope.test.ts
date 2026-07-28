@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { resetProjectMemoryScopeForTests, resolveProjectKey } from "./project-memory-scope.js";
+import { resolveProjectKey } from "./project-memory-scope.js";
 
 const execFileAsync = promisify(execFile);
 const cleanup: string[] = [];
@@ -14,7 +14,6 @@ async function git(cwd: string, ...args: string[]): Promise<void> {
 }
 
 afterEach(async () => {
-  resetProjectMemoryScopeForTests();
   await Promise.all(
     cleanup.splice(0).map((entry) => fs.rm(entry, { recursive: true, force: true })),
   );

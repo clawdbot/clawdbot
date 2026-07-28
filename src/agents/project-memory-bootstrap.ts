@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MemorySearchResult } from "../memory-host-sdk/host/types.js";
 import { getMemoryRuntime } from "../plugins/memory-state.js";
 
-export const PROJECT_MEMORY_BOOTSTRAP_MAX_CHARS = 2_000;
+const PROJECT_MEMORY_BOOTSTRAP_MAX_CHARS = 2_000;
 const PROJECT_MEMORY_ENTRY_MAX_CHARS = 600;
 
 function cleanProjectMemorySnippet(value: string): string {
@@ -24,7 +24,7 @@ function truncateEntry(value: string, maxChars: number): string {
   return `${truncated.trimEnd()}…`;
 }
 
-export function buildProjectMemoryBootstrap(params: {
+function buildProjectMemoryBootstrap(params: {
   entries: MemorySearchResult[];
   activeProjectKeys: readonly string[];
   maxChars?: number;

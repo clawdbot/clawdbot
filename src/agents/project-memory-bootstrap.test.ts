@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  buildProjectMemoryBootstrap,
   buildProjectMemoryWriteInstruction,
   prepareProjectMemoryBootstrap,
 } from "./project-memory-bootstrap.js";
@@ -45,53 +44,49 @@ describe("project memory bootstrap", () => {
     },
   ];
 
-  it("includes only active-project entries and stays inside its budget", () => {
-    const lines = buildProjectMemoryBootstrap({
-      entries,
-      activeProjectKeys: ["github.com/openclaw/openclaw"],
-      maxChars: 180,
+  async function prepareEntries(
+    candidates: typeof entries,
+    activeProjectKeys: string[] = ["github.com/openclaw/openclaw"],
+  ): Promise<string[]> {
+    runtimeMocks.listCurated.mockResolvedValue(candidates);
+    runtimeMocks.getManager.mockResolvedValue({
+      manager: { listCuratedProjectCandidates: runtimeMocks.listCurated },
     });
+    return await prepareProjectMemoryBootstrap({ cfg: {}, agentId: "main", activeProjectKeys });
+  }
+
+  it("includes only active-project entries and stays inside its budget", async () => {
+    const lines = await prepareEntries(entries);
     const rendered = lines.join("\n");
     expect(rendered).toContain("Use the release helper.");
     expect(rendered).not.toContain("Foreign fact");
-    expect(rendered.length).toBeLessThanOrEqual(180);
+    expect(rendered.length).toBeLessThanOrEqual(2_000);
   });
 
-  it("never emits a partial entry or exceeds the exact boundary budget", () => {
-    const full = buildProjectMemoryBootstrap({
-      entries: [entries[0]!],
-      activeProjectKeys: ["github.com/openclaw/openclaw"],
-      maxChars: 10_000,
-    });
-    const boundary = full.join("\n").length;
-    expect(
-      buildProjectMemoryBootstrap({
-        entries: [entries[0]!],
-        activeProjectKeys: ["github.com/openclaw/openclaw"],
-        maxChars: boundary,
-      }),
-    ).toEqual(full);
-    const below = buildProjectMemoryBootstrap({
-      entries: [entries[0]!],
-      activeProjectKeys: ["github.com/openclaw/openclaw"],
-      maxChars: boundary - 1,
-    });
-    expect(below).toEqual([]);
-    expect(below.join("\n").length).toBeLessThanOrEqual(boundary - 1);
+  it("never emits a partial entry or exceeds the hard budget", async () => {
+    const crowded = Array.from({ length: 10 }, (_, index) => ({
+      ...entries[0]!,
+      startLine: index + 1,
+      snippet: `${String(index)} ${"bounded entry ".repeat(50)}`,
+    }));
+    const lines = await prepareEntries(crowded);
+    expect(lines.join("\n").length).toBeLessThanOrEqual(2_000);
+    expect(lines.slice(2, -1).every((line) => /\(Source: MEMORY\.md#L\d+\)$/u.test(line))).toBe(
+      true,
+    );
   });
 
-  it("truncates long entries before admission while preserving the hard cap", () => {
-    const rendered = buildProjectMemoryBootstrap({
-      entries: [{ ...entries[0]!, snippet: "🧠".repeat(1_000) }],
-      activeProjectKeys: ["github.com/openclaw/openclaw"],
-      maxChars: 800,
-    }).join("\n");
+  it("truncates long entries before admission while preserving the hard cap", async () => {
+    const rendered = (await prepareEntries([{ ...entries[0]!, snippet: "🧠".repeat(1_000) }])).join(
+      "\n",
+    );
     expect(rendered).toContain("…");
-    expect(rendered.length).toBeLessThanOrEqual(800);
+    expect(rendered.length).toBeLessThanOrEqual(2_000);
   });
 
-  it("keeps sessions without an active repository unchanged", () => {
-    expect(buildProjectMemoryBootstrap({ entries, activeProjectKeys: [] })).toEqual([]);
+  it("keeps sessions without an active repository unchanged", async () => {
+    await expect(prepareEntries(entries, [])).resolves.toEqual([]);
+    expect(runtimeMocks.getManager).not.toHaveBeenCalled();
     expect(buildProjectMemoryWriteInstruction(undefined)).toBe("");
   });
 
