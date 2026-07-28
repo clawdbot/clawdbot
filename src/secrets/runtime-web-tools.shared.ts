@@ -22,8 +22,6 @@ import {
 import type { RuntimeWebDiagnostic } from "./runtime-web-tools.types.js";
 export { isRecord } from "./shared.js";
 export {
-  type RuntimeWebProviderMetadataBase,
-  type RuntimeWebProviderSelectionParams,
   type RuntimeWebProviderSelectionResult,
   type RuntimeWebSecretOwner,
   type RuntimeWebUnavailableProvider,

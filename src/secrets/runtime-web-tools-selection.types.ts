@@ -11,7 +11,7 @@ import type { RuntimeWebDiagnostic, RuntimeWebDiagnosticCode } from "./runtime-w
 
 export type RuntimeWebWarningCode = Extract<RuntimeWebDiagnosticCode, SecretResolverWarningCode>;
 
-export type RuntimeWebResolveSecretInputParams = {
+type RuntimeWebResolveSecretInputParams = {
   providerId: string;
   value: unknown;
   path: string;
