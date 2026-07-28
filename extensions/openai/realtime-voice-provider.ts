@@ -1817,7 +1817,7 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
       }
       return false;
     },
-    resolveBrowserSessionCapabilities: ({ cfg, providerConfig, model }) => {
+    resolveBrowserSessionCapabilities: ({ providerConfig, model }) => {
       const config = normalizeProviderConfig(providerConfig);
       if (isOpenAIGptLiveModel(model ?? config.model)) {
         return {
