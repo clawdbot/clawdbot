@@ -361,13 +361,21 @@ async function readProjectsTreeStamp(root: string): Promise<string> {
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
     .toSorted();
-  const mtimes = await Promise.all(
+  const directorySnapshots = await Promise.all(
     directoryNames.map(async (name) => {
-      const stat = await fs.stat(path.join(root, name)).catch(() => undefined);
-      return [name, stat?.isDirectory() === true ? stat.mtimeMs : null] as const;
+      const directory = path.join(root, name);
+      const [stat, childNames] = await Promise.all([
+        fs.stat(directory).catch(() => undefined),
+        fs.readdir(directory).catch(() => undefined),
+      ]);
+      return [
+        name,
+        stat?.isDirectory() === true ? stat.mtimeMs : null,
+        childNames?.toSorted() ?? null,
+      ] as const;
     }),
   );
-  return JSON.stringify(mtimes);
+  return JSON.stringify(directorySnapshots);
 }
 
 function desktopSessionsDir(homeDir: string): string {
@@ -781,9 +789,9 @@ async function listClaudeSessions(
   const root = projectsDir(homeDir);
   const treeStamp = await readProjectsTreeStamp(root);
   const cached = claudeSessionScanCache.get(root);
-  // This directory stamp is the catalog cache's cheap freshness owner: it replaces the full
-  // per-file walk on hits. Adds, deletes, and renames usually invalidate immediately; appends and
-  // Desktop-only changes may stay stale for at most one five-second TTL before a mandatory rescan.
+  // This tree stamp is the catalog cache's cheap freshness owner: exact child membership makes
+  // same-tick adds, deletes, and renames visible even when a filesystem reuses the directory mtime.
+  // File appends and Desktop-only changes may stay stale for at most the five-second TTL.
   if (
     options.forceRefresh !== true &&
     cached &&

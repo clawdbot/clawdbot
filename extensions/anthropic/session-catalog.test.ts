@@ -1655,14 +1655,17 @@ describe("Claude session catalog", () => {
     const home = await createHome();
     const projectDir = path.join(home, ".claude", "projects", "-workspace");
     const newPath = path.join(projectDir, "new-session.jsonl");
+    const fixedDirectoryTime = new Date("2026-07-20T12:00:00.000Z");
     await writeProject({
       home,
       entries: [],
       transcripts: { "existing-session": [sdkCliMessage("existing-session", "Existing")] },
     });
+    await fs.utimes(projectDir, fixedDirectoryTime, fixedDirectoryTime);
     const openSpy = vi.spyOn(fs, "open");
     await listLocalClaudeSessionPage({}, home);
     await fs.writeFile(newPath, `${JSON.stringify(sdkCliMessage("new-session", "New"))}\n`);
+    await fs.utimes(projectDir, fixedDirectoryTime, fixedDirectoryTime);
     const resolvedNewPath = await fs.realpath(newPath);
     openSpy.mockClear();
 
@@ -1840,13 +1843,16 @@ describe("Claude session catalog", () => {
       transcripts: { [sessionId]: [sdkCliMessage(sessionId, "Alpha")] },
     });
     await fs.utimes(transcriptPath, fixedTime, fixedTime);
+    await fs.utimes(projectDir, fixedTime, fixedTime);
     const originalStat = await fs.stat(transcriptPath);
     await listLocalClaudeSessionPage({}, home);
 
     await fs.rm(transcriptPath);
+    await fs.utimes(projectDir, fixedTime, fixedTime);
     expect((await listLocalClaudeSessionPage({}, home)).sessions).toEqual([]);
     await fs.writeFile(transcriptPath, `${JSON.stringify(sdkCliMessage(sessionId, "Bravo"))}\n`);
     await fs.utimes(transcriptPath, fixedTime, fixedTime);
+    await fs.utimes(projectDir, fixedTime, fixedTime);
     const recreatedStat = await fs.stat(transcriptPath);
     expect({ mtimeMs: recreatedStat.mtimeMs, size: recreatedStat.size }).toEqual({
       mtimeMs: originalStat.mtimeMs,
