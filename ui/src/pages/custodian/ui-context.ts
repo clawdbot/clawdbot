@@ -1,6 +1,6 @@
 import { inferBasePathFromPathname, routeIdFromPath } from "../../app-route-paths.ts";
 
-export function custodianUiContextFromPath(pathname: string): { page: string } | undefined {
+function custodianUiContextFromPath(pathname: string): { page: string } | undefined {
   const basePath = inferBasePathFromPathname(pathname);
   const page = routeIdFromPath(pathname, basePath);
   return page ? { page } : undefined;

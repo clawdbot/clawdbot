@@ -692,12 +692,10 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         const historyStart = session.engine.historyLength();
         let reply: Awaited<ReturnType<SystemAgentChatEngine["handle"]>>;
         try {
-          reply = await session.engine.handle(
-            params.message,
+          reply =
             params.delegation === undefined && params.context
-              ? { uiContext: params.context }
-              : undefined,
-          );
+              ? await session.engine.handle(params.message, { uiContext: params.context })
+              : await session.engine.handle(params.message);
         } catch (error) {
           persistEngineHistory(session.engine, historyStart);
           if (!isSystemAgentInferenceUnavailableError(error)) {

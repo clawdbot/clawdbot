@@ -687,7 +687,7 @@ describe("openclaw.chat", () => {
     });
 
     expect(call.ok).toBe(true);
-    expect(handle).toHaveBeenCalledWith("Status please.", undefined);
+    expect(handle).toHaveBeenCalledWith("Status please.");
   });
 
   it("does not pass UI context to welcome-only turns", async () => {
@@ -871,7 +871,7 @@ describe("openclaw.chat", () => {
       { dropIfSlow: true },
     );
     expect(resolveOperatorApproval).not.toHaveBeenCalled();
-    expect(handle).toHaveBeenNthCalledWith(1, "Change port.", undefined);
+    expect(handle).toHaveBeenNthCalledWith(1, "Change port.");
 
     await callChat(context, {
       sessionId: "delegate-1",
