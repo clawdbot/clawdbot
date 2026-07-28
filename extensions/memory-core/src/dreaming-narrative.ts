@@ -635,12 +635,15 @@ export async function writeBackfillDiaryEntries(params: {
     bodyLines: string[];
     sourcePath?: string;
   }>;
+  preserveExisting?: boolean;
   timezone?: string;
 }): Promise<{ dreamsPath: string; written: number; replaced: number }> {
   return await updateDreamsFile({
     workspaceDir: params.workspaceDir,
     updater: (existing, dreamsPath) => {
-      const stripped = stripBackfillDiaryBlocks(existing);
+      const stripped = params.preserveExisting
+        ? { updated: existing, removed: 0 }
+        : stripBackfillDiaryBlocks(existing);
       const startIdx = stripped.updated.indexOf(DIARY_START_MARKER);
       const endIdx = stripped.updated.indexOf(DIARY_END_MARKER);
       const inner =

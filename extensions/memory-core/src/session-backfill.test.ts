@@ -198,6 +198,8 @@ describe("runSessionBackfill", () => {
     expect((await run()).candidateCount).toBe(80);
     expect((await run()).candidateCount).toBe(20);
     expect((await run()).candidateCount).toBe(0);
+    const dreams = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+    expect(dreams.match(/openclaw:dreaming:backfill-entry/g)).toHaveLength(2);
   });
 
   it("applies the total cap after finding the oldest candidate across sources", async () => {

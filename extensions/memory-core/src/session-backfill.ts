@@ -617,6 +617,7 @@ export async function runSessionBackfill(
     const diary = await writeBackfillDiaryEntries({
       workspaceDir,
       entries: diaryEntries,
+      preserveExisting: Boolean(params.apply),
       ...(params.timezone !== undefined ? { timezone: params.timezone } : {}),
     });
     writtenDiaryEntries = diary.written;
