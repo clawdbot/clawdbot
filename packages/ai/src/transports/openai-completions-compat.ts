@@ -100,6 +100,13 @@ function matchesOpenAIFamilyModelToken(token: string | undefined): boolean {
   );
 }
 
+/** First-party OpenAI API hostnames: api.openai.com and its regional subdomains
+ * (for example us.api.openai.com / eu.api.openai.com). Matching is exact or
+ * dot-suffix so proxy hosts that merely embed the name never qualify. */
+function isFirstPartyOpenAIHostname(hostname: string): boolean {
+  return hostname === "api.openai.com" || hostname.endsWith(".api.openai.com");
+}
+
 function normalizeBaseUrlHostname(baseUrl: string | undefined): string | undefined {
   const trimmed = baseUrl?.trim();
   if (!trimmed) {
@@ -175,13 +182,14 @@ function resolveOpenAICompletionsCompatDefaults(
   // Other OpenAI-compatible proxies may reject the field, so it stays off by default.
   // With the inert package host every route resolves to the "default" endpoint class,
   // so the default route only counts as first-party OpenAI when no custom base URL
-  // overrides the destination. Dedicated Azure OpenAI hosts always qualify;
+  // overrides the destination. First-party OpenAI hosts include the regional
+  // us./eu.api.openai.com subdomains. Dedicated Azure OpenAI hosts always qualify;
   // multi-model Azure Foundry hosts only for OpenAI-family deployment ids, since
   // those resources also front non-OpenAI models (MAI, Llama, ...).
   const supportsPromptCacheKey =
     endpointClass === "openai-public" ||
     endpointClass === "azure-openai" ||
-    baseUrlHostname === "api.openai.com" ||
+    (baseUrlHostname !== undefined && isFirstPartyOpenAIHostname(baseUrlHostname)) ||
     (isDefaultRoute &&
       isDefaultRouteProvider(provider, "openai") &&
       baseUrlHostname === undefined) ||

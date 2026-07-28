@@ -759,6 +759,15 @@ describe("OpenAI-compatible completions compatibility", () => {
       expected: { ...defaultResolvedCompat, supportsPromptCacheKey: true },
     },
     {
+      name: "regional OpenAI endpoint",
+      model: createModel({
+        id: "gpt-5.6-luna",
+        provider: "openai",
+        baseUrl: "https://eu.api.openai.com/v1",
+      }),
+      expected: { ...proxyResolvedCompat, supportsPromptCacheKey: true },
+    },
+    {
       name: "custom proxy",
       model: createModel(),
       expected: proxyResolvedCompat,
@@ -812,6 +821,18 @@ describe("OpenAI-compatible completions compatibility", () => {
       baseUrl: "https://api.openai.com/v1",
     });
     expect(resolveOpenAICompletionsCompat(explicitOpenAI).supportsPromptCacheKey).toBe(true);
+    const regionalOpenAI = createModel({
+      id: "gpt-5.6-luna",
+      provider: "openai",
+      baseUrl: "https://us.api.openai.com/v1",
+    });
+    expect(resolveOpenAICompletionsCompat(regionalOpenAI).supportsPromptCacheKey).toBe(true);
+    const lookalikeProxy = createModel({
+      id: "gpt-5.6-luna",
+      provider: "openai",
+      baseUrl: "https://fake-api.openai.com.attacker.example/v1",
+    });
+    expect(resolveOpenAICompletionsCompat(lookalikeProxy).supportsPromptCacheKey).toBe(false);
   });
 
   it("buffers encrypted reasoning details until their tool call arrives", async () => {
