@@ -107,6 +107,13 @@ export function disposeCodeModeRun(runId: string): void {
   scheduleActiveRunExpiry();
 }
 
+/** Cancel suspended bridge work before its Gateway-owned runtimes disappear. */
+export function disposeAllCodeModeRuns(): void {
+  for (const runId of activeRuns.keys()) {
+    disposeCodeModeRun(runId);
+  }
+}
+
 /** Advance the snapshot frontier before exposing output to a wait observer. */
 export function takeUndeliveredCodeModeRunOutput(state: CodeModeRunState): unknown[] {
   const output = state.output.slice(state.deliveredOutputCount);

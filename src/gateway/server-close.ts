@@ -4,6 +4,7 @@ import type { Server as HttpServer } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { WebSocketServer } from "ws";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
+import { disposeAllCodeModeRuns } from "../agents/code-mode-state.js";
 import { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { clearSessionSuspensionTimers } from "../agents/session-suspension.js";
@@ -862,6 +863,8 @@ export function createGatewayCloseHandler(
           await shutdownStep(`channel/${channelId}`, () => params.stopChannel(channelId), warnings);
         }
       });
+      // Cancel parked bridge calls while their agent harnesses and MCP transports still exist.
+      await shutdownStep("code-mode-runs", () => disposeAllCodeModeRuns(), warnings);
       await shutdownStep("agent-harnesses", () => disposeRegisteredAgentHarnesses(), warnings);
       await measureCloseStep("bundle-runtimes", async () => {
         await Promise.all([
