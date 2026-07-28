@@ -2597,7 +2597,6 @@ describe("runMemoryFlushIfNeeded", () => {
             defaults: {
               compaction: {
                 memoryFlush: {},
-                truncateAfterCompaction: true,
                 maxActiveTranscriptBytes: "10mb",
               },
             },
@@ -2652,7 +2651,6 @@ describe("runMemoryFlushIfNeeded", () => {
         agents: {
           defaults: {
             compaction: {
-              truncateAfterCompaction: true,
               maxActiveTranscriptBytes: "10b",
             },
           },
@@ -2706,7 +2704,6 @@ describe("runMemoryFlushIfNeeded", () => {
         agents: {
           defaults: {
             compaction: {
-              truncateAfterCompaction: true,
               maxActiveTranscriptBytes: "10b",
             },
           },
@@ -2921,7 +2918,6 @@ describe("runMemoryFlushIfNeeded", () => {
           defaults: {
             compaction: {
               notifyUser: true,
-              truncateAfterCompaction: true,
               maxActiveTranscriptBytes: "10b",
             },
           },
@@ -2972,7 +2968,6 @@ describe("runMemoryFlushIfNeeded", () => {
             defaults: {
               compaction: {
                 notifyUser: true,
-                truncateAfterCompaction: true,
                 maxActiveTranscriptBytes: "10b",
               },
             },
@@ -2997,50 +2992,6 @@ describe("runMemoryFlushIfNeeded", () => {
 
     expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
     expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "incomplete");
-  });
-
-  it("keeps the active transcript byte threshold inactive unless transcript rotation is enabled", async () => {
-    const sessionFile = path.join(rootDir, "large-session-no-rotation.jsonl");
-    await fs.writeFile(
-      sessionFile,
-      `${JSON.stringify({ message: { role: "user", content: "x".repeat(256) } })}\n`,
-      "utf8",
-    );
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      transcriptPath: sessionFile,
-      updatedAt: Date.now(),
-      totalTokens: 10,
-      totalTokensFresh: true,
-      compactionCount: 0,
-    };
-
-    const entry = await runPreflightCompactionIfNeeded({
-      cfg: {
-        agents: {
-          defaults: {
-            compaction: {
-              maxActiveTranscriptBytes: "10b",
-            },
-          },
-        },
-      },
-      followupRun: createTestFollowupRun({
-        sessionId: "session",
-        sessionFile,
-        sessionKey: "main",
-      }),
-      defaultModel: "anthropic/claude-opus-4-6",
-      agentCfgContextTokens: 100_000,
-      sessionEntry,
-      sessionStore: { main: sessionEntry },
-      sessionKey: "main",
-      isHeartbeat: false,
-      replyOperation: createReplyOperation(),
-    });
-
-    expect(entry).toBe(sessionEntry);
-    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
   });
 
   it("uses configured prompts and stored bootstrap warning signatures", async () => {

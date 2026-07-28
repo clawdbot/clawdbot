@@ -884,7 +884,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       agents: {
         defaults: {
           compaction: {
-            truncateAfterCompaction: true,
             maxActiveTranscriptBytes: 1_000,
           },
         },
@@ -1054,7 +1053,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       agents: {
         defaults: {
           compaction: {
-            truncateAfterCompaction: true,
             maxActiveTranscriptBytes: "1mb",
           },
         },

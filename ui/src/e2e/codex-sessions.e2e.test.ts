@@ -92,9 +92,7 @@ suite("Codex native session catalog", () => {
     });
 
     await page.goto(`${server.baseUrl}chat`);
-    await expect
-      .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
-      .toBeGreaterThan(0);
+    await gateway.waitForRequest("sessions.catalog.list");
     expect(await page.locator('[data-session-section="catalog:codex"]').count()).toBe(0);
     expect(await page.locator('[data-session-section="catalog:claude"]').count()).toBe(0);
     await page.close();

@@ -5,7 +5,7 @@ import type { SkillStatusEntry } from "../../api/types.ts";
 import { renderAgentSkills, renderAgentTools } from "./panels-tools-skills.ts";
 
 afterEach(() => {
-  window.history.replaceState({}, "", "/");
+  window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
 });
 
 function createBaseParams(overrides: Partial<Parameters<typeof renderAgentTools>[0]> = {}) {
@@ -421,15 +421,21 @@ describe("agents tools panel (browser)", () => {
     expect(group.open).toBe(false);
     expect(tool.open).toBe(false);
 
-    chip.click();
-    await new Promise((resolve) => {
-      requestAnimationFrame(resolve);
-    });
+    const previousUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    try {
+      chip.click();
+      await new Promise((resolve) => {
+        requestAnimationFrame(resolve);
+      });
 
-    expect(group.open).toBe(true);
-    expect(tool.open).toBe(true);
-
-    container.remove();
+      expect(group.open).toBe(true);
+      expect(tool.open).toBe(true);
+    } finally {
+      // Hash links mutate shared jsdom history; restore the actual prior URL
+      // so a later Settings route never inherits this tool-card deep link.
+      window.history.replaceState({}, "", previousUrl);
+      container.remove();
+    }
   });
 });
 
