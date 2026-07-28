@@ -28,6 +28,7 @@ export type ChannelIngressMonitorLifecycle = {
   onAdopted: () => void | Promise<void>;
   onDeferred: () => void;
   onAdoptionFinalizing: () => void;
+  onFailed?: (error: unknown) => void | Promise<void>;
   onAbandoned: () => void | Promise<void>;
 };
 
@@ -305,6 +306,12 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
             handedOff = true;
             deferredHandoff = true;
             lifecycle.onAdoptionFinalizing();
+          },
+          onFailed: async (error) => {
+            handedOff = true;
+            deferredHandoff = true;
+            await lifecycle.onFailed?.(error);
+            requestDrain();
           },
           onAbandoned: async () => {
             handedOff = true;
