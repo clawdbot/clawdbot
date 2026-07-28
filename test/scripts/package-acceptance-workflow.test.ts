@@ -3319,6 +3319,19 @@ describe("package artifact reuse", () => {
     }
   });
 
+  it("lets manual Telegram QA select deterministic mock streaming proof", () => {
+    const workflowText = readFileSync(QA_LIVE_TRANSPORTS_WORKFLOW, "utf8");
+    const job = workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_telegram");
+    const step = workflowStep(job, "Run Telegram live lane");
+
+    expect(workflowText).toContain("provider_mode:");
+    expect(workflowText).toContain("- mock-openai");
+    expect(step.env?.INPUT_PROVIDER_MODE).toContain("inputs.provider_mode");
+    expect(step.run).toContain('case "$INPUT_PROVIDER_MODE" in');
+    expect(step.run).toContain('model="mock-openai/gpt-5.6-luna"');
+    expect(step.run).toContain('--provider-mode "$INPUT_PROVIDER_MODE"');
+  });
+
   it("keeps release QA and repo E2E lanes off scarce 32-core runners", () => {
     const releaseChecksWorkflow = readFileSync(RELEASE_CHECKS_WORKFLOW, "utf8");
     const liveE2eWorkflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");

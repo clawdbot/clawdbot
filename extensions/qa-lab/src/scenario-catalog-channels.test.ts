@@ -103,6 +103,10 @@ describe("qa scenario catalog channel contracts", () => {
     expect(scenario.gatewayConfigPatch).toMatchObject({
       channels: { telegram: { streaming: { mode: "partial" } } },
     });
+    const flow = JSON.stringify(scenario.execution.flow);
+    expect(flow).toContain("event.message.editedAt ?? event.message.timestamp");
+    expect(flow).toContain("eventIntervals.slice(0, -1).every");
+    expect(flow).toContain("eventIntervals.at(-1) <= config.telegramFinalFlushMaxMs");
   });
 
   it("rejects malformed string matcher lists before running a flow", () => {

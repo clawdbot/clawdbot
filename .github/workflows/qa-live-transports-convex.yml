@@ -54,6 +54,14 @@ on:
         description: Optional comma-separated Telegram scenario ids
         required: false
         type: string
+      provider_mode:
+        description: Provider mode for a manually dispatched Telegram scenario
+        required: false
+        default: live-frontier
+        type: choice
+        options:
+          - live-frontier
+          - mock-openai
       discord_scenario:
         description: Optional comma-separated Discord scenario ids
         required: false
@@ -508,6 +516,7 @@ jobs:
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
           OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "180000"
           INPUT_SCENARIO: ${{ github.event_name == 'workflow_dispatch' && inputs.scenario || '' }}
+          INPUT_PROVIDER_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.provider_mode || 'live-frontier' }}
         run: |
           set -euo pipefail
 
@@ -526,12 +535,27 @@ jobs:
 
           echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
 
+          case "$INPUT_PROVIDER_MODE" in
+            mock-openai)
+              model="mock-openai/gpt-5.6-luna"
+              alt_model="mock-openai/gpt-5.6-luna-alt"
+              ;;
+            live-frontier)
+              model="$OPENCLAW_CI_OPENAI_MODEL"
+              alt_model="$OPENCLAW_CI_OPENAI_FALLBACK_MODEL"
+              ;;
+            *)
+              echo "Unsupported Telegram provider mode: $INPUT_PROVIDER_MODE" >&2
+              exit 1
+              ;;
+          esac
+
           pnpm openclaw qa telegram \
             --repo-root . \
             --output-dir "${output_dir}" \
-            --provider-mode live-frontier \
-            --model "${OPENCLAW_CI_OPENAI_MODEL}" \
-            --alt-model "${OPENCLAW_CI_OPENAI_FALLBACK_MODEL}" \
+            --provider-mode "$INPUT_PROVIDER_MODE" \
+            --model "$model" \
+            --alt-model "$alt_model" \
             --fast \
             --credential-source convex \
             --credential-role ci \
