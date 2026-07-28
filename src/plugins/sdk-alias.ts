@@ -899,6 +899,8 @@ function resolveWorkspacePackageAliasMap(params: {
     isProduction: process.env.NODE_ENV === "production",
     pluginSdkResolution: params.pluginSdkResolution,
   });
+  // Raw modes with the same effective preference order resolve identical targets.
+  // Key the process-stable cache by that target-affecting order, not the caller spelling.
   const cacheKey = `${packageRoot}::${orderedKinds.join(",")}`;
   const cached = cachedWorkspacePackageAliasMaps.get(cacheKey);
   if (cached) {

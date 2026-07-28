@@ -2256,6 +2256,16 @@ describe("buildPluginLoaderAliasMap memoization", () => {
     expect(auto).not.toBe(dist);
   });
 
+  it("reuses one merged map when resolution modes have the same effective order", () => {
+    const fixture = createPluginSdkAliasFixture();
+    const entry = writePluginEntry(fixture.root, bundledPluginFile("same-order", "src/index.ts"));
+
+    const auto = buildPluginLoaderAliasMap(entry, undefined, undefined, "auto");
+    const source = buildPluginLoaderAliasMap(entry, undefined, undefined, "src");
+
+    expect(source).toBe(auto);
+  });
+
   it("reuses a merged map when different argv hints resolve the same SDK surface", () => {
     const fixture = createPluginSdkAliasFixture();
     const entry = writePluginEntry(fixture.root, bundledPluginFile("argv", "src/index.ts"));
