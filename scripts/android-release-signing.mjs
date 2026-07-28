@@ -1,11 +1,9 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-
-const ANDROID_SIGNING_TIMEOUT_MS = 120_000;
+import { runAndroidSigningCommandSync } from "./lib/android-release-signing-process.mjs";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const defaultManifestPath = path.join(rootDir, "apps", "android", "Config", "ReleaseSigning.json");
@@ -187,23 +185,19 @@ function requireMatchPassword() {
 }
 
 function run(command, args, options = {}) {
-  execFileSync(command, args, {
+  runAndroidSigningCommandSync(command, args, {
     cwd: options.cwd,
     env: options.env || process.env,
-    killSignal: "SIGKILL",
     stdio: options.stdio || "pipe",
-    timeout: ANDROID_SIGNING_TIMEOUT_MS,
   });
 }
 
 function runText(command, args, options = {}) {
-  return execFileSync(command, args, {
+  return runAndroidSigningCommandSync(command, args, {
     cwd: options.cwd,
     env: options.env || process.env,
     encoding: "utf8",
-    killSignal: "SIGKILL",
     stdio: ["ignore", "pipe", "pipe"],
-    timeout: ANDROID_SIGNING_TIMEOUT_MS,
   });
 }
 
