@@ -3243,6 +3243,11 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Notes
   - H2: Related
 
+## evals/judge-model-eval-2026-05-20.md
+
+- Route: /evals/judge-model-eval-2026-05-20
+- Headings: none
+
 ## gateway/1password.md
 
 - Route: /gateway/1password
