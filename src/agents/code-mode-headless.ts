@@ -300,7 +300,10 @@ export async function runCodeModeScriptHeadless(params: {
           signal: abortScope.signal,
         }),
       );
-      const frontierPending = pendingBridgeStatesForSettlement(pending, result.settlementMode);
+      // Preserve the waiting frontier before the lazy deadline callback;
+      // later worker legs replace the discriminated result entirely.
+      const settlementMode = result.settlementMode;
+      const frontierPending = pendingBridgeStatesForSettlement(pending, settlementMode);
       if (frontierPending.length === 0) {
         return headlessFailure({
           code: "internal_error",
@@ -310,7 +313,7 @@ export async function runCodeModeScriptHeadless(params: {
         });
       }
       await awaitCodeModeDeadline({
-        operation: () => waitForPendingBridgeSettlement(pending, result.settlementMode),
+        operation: () => waitForPendingBridgeSettlement(pending, settlementMode),
         deadlineMs: deadline,
         signal: abortScope.signal,
         createTimeoutError: () => new CodeModeHeadlessTimeoutError(),
