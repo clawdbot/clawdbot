@@ -138,7 +138,7 @@ describe("config view", () => {
     return container.textContent?.replace(/\s+/g, " ").trim() ?? "";
   }
 
-  it("uses one global advanced toggle while preserving deep-link reveals", () => {
+  it("uses one inline advanced disclosure without mutating config fields", () => {
     const schema = {
       type: "object",
       properties: {
@@ -170,6 +170,7 @@ describe("config view", () => {
     );
     ghost.click();
     expect(setShowAdvancedSettings).toHaveBeenCalledWith(true);
+    expect(collapsed.container.querySelector(".config-show-advanced")).toBeNull();
 
     const global = renderConfigView({
       schema,
@@ -179,9 +180,11 @@ describe("config view", () => {
       showAdvancedSettings: true,
     });
     expect(global.container.querySelector(".config-advanced-ghost")).toBeNull();
-    expect(global.container.querySelector(".config-advanced-divider")?.textContent?.trim()).toBe(
-      "Advanced",
-    );
+    const divider = queryRequired(global.container, ".config-advanced-divider", HTMLElement);
+    expect(divider.textContent?.replace(/\s+/g, " ").trim()).toBe("Advanced Hide Advanced");
+    const hide = queryRequired(divider, ".config-advanced-divider__toggle", HTMLButtonElement);
+    hide.click();
+    expect(global.props.setShowAdvancedSettings).toHaveBeenCalledWith(false);
     expect(normalizedText(global.container)).toContain("Reload mode");
 
     const searchHit = renderConfigView({
@@ -251,16 +254,15 @@ describe("config view", () => {
       },
     };
 
-    // Unhinted leaves default to the advanced tier: the toggle must show even
-    // though no hint carries advanced === true, or the ghost row's enable has
-    // no matching control to turn advanced back off.
+    // Unhinted leaves default to the advanced tier, so the inline disclosure
+    // must remain available even when no hint carries advanced === true.
     const unhinted = renderConfigView({
       schema,
       uiHints: {},
       formValue: { diagnostics: { flags: "all" } },
       activeSection: "diagnostics",
     });
-    expect(findOptionalButtonByText(unhinted.container, "Show advanced")).toBeDefined();
+    expect(findOptionalButtonByText(unhinted.container, "Show advanced")).toBeUndefined();
     expect(unhinted.container.querySelector(".config-advanced-ghost")).not.toBeNull();
 
     // An advanced hint in a different top-level section must not surface a

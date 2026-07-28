@@ -125,4 +125,115 @@ describeControlUiE2e("Control UI config form guidance mocked Gateway E2E", () =>
       await context.close();
     }
   });
+
+  it("keeps the one advanced disclosure browser-local", async () => {
+    const context = await browser.newContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 1000, width: 1440 },
+    });
+    const page = await context.newPage();
+    const config = { ui: { prefs: { theme: "claw" } } };
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "config.get": {
+          appliedConfigHash: "advanced-disclosure-e2e",
+          config,
+          configRevisionHash: "advanced-disclosure-e2e",
+          hash: "advanced-disclosure-e2e",
+          issues: [],
+          raw: JSON.stringify(config),
+          valid: true,
+        },
+        "config.schema": {
+          generatedAt: "2026-07-27T00:00:00.000Z",
+          schema: {
+            type: "object",
+            properties: {
+              ui: {
+                type: "object",
+                title: "UI",
+                properties: {
+                  seamColor: { type: "string", title: "Accent Color" },
+                  prefs: {
+                    type: "object",
+                    title: "Prefs",
+                    properties: {
+                      theme: { type: "string", title: "Theme" },
+                      sidebarEntries: {
+                        type: "array",
+                        title: "Sidebar Entries",
+                        items: { type: "string" },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          uiHints: {
+            "ui.prefs.theme": { advanced: false },
+            "ui.prefs.sidebarEntries": { advanced: true },
+            "ui.seamColor": { advanced: true },
+          },
+          version: "e2e",
+        },
+      },
+    });
+
+    try {
+      const response = await page.goto(`${server.baseUrl}settings/appearance`);
+      expect(response?.status()).toBe(200);
+      await page.getByRole("radio", { name: "UI", exact: true }).click();
+
+      const disclosure = page.locator(".config-advanced-ghost");
+      await expect.poll(() => disclosure.count()).toBe(1);
+      await expect.poll(() => disclosure.textContent()).toContain("2 advanced settings hidden");
+      await expect.poll(() => page.locator(".config-show-advanced").count()).toBe(0);
+      await expect
+        .poll(() => page.getByText("Show Advanced Settings", { exact: true }).count())
+        .toBe(0);
+
+      if (captureUiProofEnabled) {
+        await mkdir(uiProofArtifactDir, { recursive: true });
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(uiProofArtifactDir, "02-advanced-collapsed.png"),
+        });
+      }
+
+      await disclosure.click();
+      const hideAdvanced = page.locator(".config-advanced-divider__toggle");
+      await expect.poll(() => hideAdvanced.count()).toBe(1);
+      await expect.poll(() => hideAdvanced.textContent()).toContain("Hide Advanced");
+      await expect.poll(() => disclosure.count()).toBe(0);
+
+      if (captureUiProofEnabled) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(uiProofArtifactDir, "03-advanced-expanded.png"),
+        });
+      }
+
+      await hideAdvanced.click();
+      await expect.poll(() => disclosure.count()).toBe(1);
+      await page.waitForTimeout(750);
+      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+      expect(await gateway.getRequests("config.set")).toHaveLength(0);
+      await expect.poll(() => page.locator(".config-apply-banner").count()).toBe(0);
+
+      if (captureUiProofEnabled) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(uiProofArtifactDir, "04-advanced-collapsed-final.png"),
+        });
+      }
+    } finally {
+      await context.close();
+    }
+  });
 });
