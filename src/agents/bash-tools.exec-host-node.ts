@@ -702,21 +702,11 @@ export async function executeNodeHostCommand(
       inlineEvalHit === null &&
       !requiresSecurityAuditSuppressionApproval,
   });
-  const approvedInlineInvoke = Boolean(
-    (inlineApprovedByAsk || inlineApprovalSource) && inlineApprovalId,
-  );
-  const invokeCallOptions = {
-    ...(approvedInlineInvoke ? { scopes: APPROVED_NODE_INVOKE_SCOPES } : {}),
-    ...(params.signal ? { signal: params.signal } : {}),
-  };
   const raw =
-    approvedInlineInvoke || params.signal
-      ? await callGatewayTool(
-          "node.invoke",
-          { timeoutMs: target.invokeTimeoutMs },
-          invoke,
-          invokeCallOptions,
-        )
+    (inlineApprovedByAsk || inlineApprovalSource) && inlineApprovalId
+      ? await callGatewayTool("node.invoke", { timeoutMs: target.invokeTimeoutMs }, invoke, {
+          scopes: APPROVED_NODE_INVOKE_SCOPES,
+        })
       : await callGatewayTool("node.invoke", { timeoutMs: target.invokeTimeoutMs }, invoke);
   return formatNodeRunToolResult({
     raw,
