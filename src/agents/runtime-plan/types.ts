@@ -282,6 +282,8 @@ type AgentRuntimeReplyPayload = {
   presentation?: AgentRuntimeMessagePresentation;
   presentationTextMode?: "fallback";
   delivery?: AgentRuntimeReplyPayloadDelivery;
+  /** Suppress the Workboard card marker for exact machine-readable output. */
+  workboardMarker?: "omit";
   /**
    * @deprecated Use presentation.
    */
