@@ -66,14 +66,15 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     if (persistedEventId && this.byId.has(persistedEventId)) {
       // The recorder pre-persisted this turn before this manager loaded it; the
       // entry is already canonical. Appending again would force-insert a duplicate
-      // idempotency-key row into SQLite (#115389). Adopt it as the active leaf the
-      // same way appendEntry would — without the leaf move the turn is loaded but
-      // off the prompt path, and the model never sees it.
+      // idempotency-key row into SQLite (#115389). Adopt it as the active leaf via a
+      // persisted leaf control: an in-memory-only repoint is erased by
+      // reloadPersistedTranscript() mid-run and invisible to store-side readers,
+      // leaving the turn off the active path and out of the model prompt.
       if (this.appendParentId !== persistedEventId) {
-        this.appendParentId = persistedEventId;
-        this.leafId = persistedEventId;
-        this.appendMode = undefined;
-        this.promptReleasedSideBranchParentId = undefined;
+        this.appendLeafControl({
+          targetId: persistedEventId,
+          appendParentId: persistedEventId,
+        });
       }
       return persistedEventId;
     }

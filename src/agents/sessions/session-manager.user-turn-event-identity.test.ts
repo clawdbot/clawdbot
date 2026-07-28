@@ -229,16 +229,16 @@ describe("SessionManager user-turn event identity", () => {
     });
     expect(entryId).toBe(prePersisted.messageId);
 
+    // The adoption must survive a mid-run transcript reload: the embedded runner
+    // reloads from SQLite when another writer touches the session, so an
+    // in-memory-only leaf repoint would silently drop the turn from the prompt.
+    sessionManager.reloadPersistedTranscript();
+    expect(sessionManager.getLeafId()).toBe(prePersisted.messageId);
+
     // The short-circuit must adopt the loaded row as the leaf: the turn has to be
     // in the prompt path, and the next assistant event must parent off it.
-    const contextTexts = sessionManager
-      .buildSessionContext()
-      .messages.map((message) =>
-        typeof message.content === "string"
-          ? message.content
-          : message.content?.map((block: { text?: string }) => block.text ?? "").join(" "),
-      );
-    expect(contextTexts.some((text) => text?.includes("keep the active turn"))).toBe(true);
+    const contextJson = JSON.stringify(sessionManager.buildSessionContext().messages);
+    expect(contextJson).toContain("keep the active turn");
     const assistantEntryId = sessionManager.appendMessage(buildAssistantMessage("adopted reply"));
     const events = (
       await loadTranscriptEvents({ agentId: "main", sessionId, sessionKey, storePath })
