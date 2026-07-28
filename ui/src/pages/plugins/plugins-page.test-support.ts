@@ -1,6 +1,6 @@
 import { vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { en } from "../../i18n/locales/en.ts";
+import { t } from "../../i18n/index.ts";
 import type {
   ApplicationContext,
   ApplicationGateway,
@@ -47,7 +47,7 @@ export function createPlugin(overrides: Partial<PluginCatalogItem> = {}): Plugin
   return {
     id: "workboard",
     name: "Workboard",
-    description: en.subtitles.workboard,
+    description: t("subtitles.workboard"),
     origin: "bundled",
     installed: true,
     enabled: false,
