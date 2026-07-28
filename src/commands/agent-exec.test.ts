@@ -295,6 +295,47 @@ describe("agent exec command composition", () => {
     await expect(fs.stat(observedStateDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("applies explicit Code Mode and lean local-model controls to the isolated config", async () => {
+    const { runtime } = createRuntime();
+    let observedConfig: unknown;
+
+    const result = await agentExecCommand(
+      "inspect",
+      { codeMode: "code", localModelLean: true },
+      runtime,
+      {
+        runAgent: vi.fn(async () => {
+          observedConfig = JSON.parse(
+            await fs.readFile(process.env.OPENCLAW_CONFIG_PATH ?? "", "utf8"),
+          );
+          return successResult();
+        }),
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(observedConfig).toMatchObject({
+      agents: { defaults: { experimental: { localModelLean: true } } },
+      tools: { codeMode: true },
+    });
+  });
+
+  it("rejects invalid programmatic Code Mode values", async () => {
+    const { runtime } = createRuntime();
+
+    const result = await agentExecCommand("inspect", { codeMode: "invalid" as never }, runtime, {
+      runAgent: vi.fn(async () => successResult()),
+    });
+
+    expect(result).toMatchObject({
+      exitCode: 1,
+      envelope: {
+        status: "error",
+        error: { kind: "exception", message: "--code-mode must be one of direct, auto, code." },
+      },
+    });
+  });
+
   it("classifies cleanup failures before emitting the JSON envelope", async () => {
     const { runtime, log } = createRuntime();
     let observedStateDir = "";
