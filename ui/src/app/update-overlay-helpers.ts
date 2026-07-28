@@ -65,7 +65,7 @@ export function readUpdateAvailable(hello: GatewayHelloOk | null): UpdateAvailab
  * Numeric-only prereleases such as stable corrections ("2026.7.1-2") return null.
  */
 export function resolveUpdatePrereleaseLabel(version: string): string | null {
-  const withoutBuild = version.trim().split("+", 1)[0];
+  const withoutBuild = version.trim().split("+", 1)[0] ?? "";
   const dashIndex = withoutBuild.indexOf("-");
   if (dashIndex < 0) {
     return null;
