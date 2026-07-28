@@ -513,6 +513,26 @@ async function resolveChannel(
   return selection.channel;
 }
 
+function enforceCrossProviderEgressPolicyBeforeTargetResolution(params: {
+  channel: ChannelId;
+  action: ChannelMessageActionName;
+  args: Record<string, unknown>;
+  toolContext?: ChannelThreadingToolContext;
+  cfg: OpenClawConfig;
+  agentId?: string | null;
+}): void {
+  const currentProvider = params.toolContext?.currentChannelProvider;
+  if (!currentProvider || currentProvider === params.channel) {
+    return;
+  }
+  // Cross-context egress policy applies to direct and delegated callers alike;
+  // direct origin bypasses only the conversation-read visibility gate. A
+  // provider mismatch needs no target interpretation, so reject it before an
+  // external resolver can perform provider I/O. Same-provider aliases still
+  // wait for canonicalization before the full policy check below.
+  enforceCrossContextPolicy(params);
+}
+
 function addCandidateAndUnprefixedAlias(candidates: Set<string>, value?: string | null) {
   const normalized = normalizeOptionalString(value);
   if (!normalized) {
@@ -1949,6 +1969,14 @@ export async function runMessageAction(
     params.accountId = accountId;
   }
   const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
+  enforceCrossProviderEgressPolicyBeforeTargetResolution({
+    channel,
+    action,
+    args: params,
+    toolContext: input.toolContext,
+    cfg,
+    agentId: resolvedAgentId,
+  });
   const delegatesActionToGateway =
     Boolean(input.gateway) &&
     channelPlugin?.actions?.resolveExecutionMode?.({ action }) === "gateway";
