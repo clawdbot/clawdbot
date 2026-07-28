@@ -3,7 +3,7 @@
 import { render } from "lit";
 import { beforeEach, describe, expect, it } from "vitest";
 import { i18n } from "../../i18n/index.ts";
-import { renderLobsterdex, type LobsterdexViewEntry } from "./view.ts";
+import { renderLobsterdex } from "./view.ts";
 
 describe("renderLobsterdex", () => {
   beforeEach(async () => {
@@ -13,8 +13,8 @@ describe("renderLobsterdex", () => {
 
   it("renders discovered lore, first visit, hidden hints, and the count", () => {
     const firstSeenAt = new Date("2026-07-10T12:00:00.000Z").getTime();
-    const entries = new Map<string, LobsterdexViewEntry>([
-      ["crimson", { firstSeenAt, name: "Ruby", shinySeenAt: firstSeenAt }],
+    const entries = new Map([
+      ["crimson", { firstSeenAt, name: "Ruby", shinySeenAt: firstSeenAt }] as const,
     ]);
     const container = document.createElement("div");
     render(renderLobsterdex(entries), container);

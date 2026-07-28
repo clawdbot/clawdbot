@@ -9,7 +9,7 @@ import {
 import { i18n, t } from "../../i18n/index.ts";
 import "../../styles/lobster-pet.css";
 
-export type LobsterdexViewEntry = {
+type LobsterdexViewEntry = {
   firstSeenAt: number | null;
   name: string | null;
   shinySeenAt: number | null;
