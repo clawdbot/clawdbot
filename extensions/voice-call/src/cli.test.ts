@@ -127,6 +127,7 @@ describe("voice-call CLI status fallback", () => {
     appended: string | Buffer,
     firstReadBytes?: number,
     initial: string | Buffer = "initial\n",
+    copyTruncated?: string | Buffer,
   ): Promise<{ output: string; shortened: boolean }> {
     // openclaw-temp-dir: allow extension tests cannot import repo-only test helpers
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-voice-call-tail-"));
@@ -164,7 +165,11 @@ describe("voice-call CLI status fallback", () => {
       .mockImplementationOnce(async () => {
         fs.appendFileSync(logFile, appended);
       })
-      .mockImplementationOnce(async () => {})
+      .mockImplementationOnce(async () => {
+        if (copyTruncated !== undefined) {
+          fs.writeFileSync(logFile, copyTruncated);
+        }
+      })
       .mockImplementationOnce(async () => {
         throw sentinel;
       });
@@ -219,6 +224,29 @@ describe("voice-call CLI status fallback", () => {
     expect(result.shortened).toBe(true);
     expect(result.output).not.toContain("\ufffd");
     expect(result.output).toContain('{"word":"café"}\n');
+  });
+
+  it("resets short-read text and UTF-8 state when a custom log is copy-truncated", async () => {
+    const initial = "initial\n";
+    const appended = '{"event":"staleé-with-more-observed-bytes"}\n';
+    const replacement = '{"event":"fresh-start-full"}\n';
+    const firstReadBytes = Buffer.byteLength('{"event":"stale', "utf8") + 1;
+    const shortReadCursor = Buffer.byteLength(initial, "utf8") + firstReadBytes;
+
+    expect(Buffer.byteLength(replacement, "utf8")).toBeGreaterThan(shortReadCursor);
+    expect(Buffer.byteLength(replacement, "utf8")).toBeLessThan(
+      Buffer.byteLength(initial, "utf8") + Buffer.byteLength(appended, "utf8"),
+    );
+
+    const result = await runCustomLogTailShortRead(
+      appended,
+      firstReadBytes,
+      initial,
+      replacement,
+    );
+
+    expect(result.shortened).toBe(true);
+    expect(result.output).toBe(replacement);
   });
 
   it("buffers custom log tail records that are partial at startup", async () => {

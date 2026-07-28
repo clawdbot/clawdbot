@@ -777,14 +777,18 @@ export function registerVoiceCallCli(params: {
         }
 
         let offset = initial.length;
+        let lastObservedSize = initial.length;
         for (;;) {
           try {
             const stat = fs.statSync(file);
-            if (stat.size < offset) {
+            // A short read can leave the cursor behind the observed file size;
+            // compare observed sizes so copytruncate also clears buffered text.
+            if (stat.size < lastObservedSize) {
               offset = 0;
               decoder = new StringDecoder("utf8");
               pendingLine = "";
             }
+            lastObservedSize = stat.size;
             if (stat.size > offset) {
               const fd = fs.openSync(file, "r");
               try {
