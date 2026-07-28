@@ -162,7 +162,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
 
     const converted = await activeSession.agent.convertToLlm([runtimeMessage]);
 
-    expect((converted[0] as { content?: unknown }).content).toContain('"name": "Alice"');
+    expect((converted[0] as { content?: unknown }).content).toContain('"name":"Alice"');
   });
 
   it("retains sender projection for earlier in-memory turns after a queued turn", async () => {
@@ -208,8 +208,8 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
 
     const converted = await activeSession.agent.convertToLlm([initialRuntime, queuedRuntime]);
 
-    expect((converted[0] as { content?: unknown }).content).toContain('"name": "Alice"');
-    expect((converted[1] as { content?: unknown }).content).toContain('"name": "Bob"');
+    expect((converted[0] as { content?: unknown }).content).toContain('"name":"Alice"');
+    expect((converted[1] as { content?: unknown }).content).toContain('"name":"Bob"');
   });
 
   it("reserves exact pairings before matching duplicate timestamp and text", async () => {
@@ -255,8 +255,8 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
 
     const converted = await activeSession.agent.convertToLlm([firstRuntime, secondRuntime]);
 
-    expect((converted[0] as { content?: unknown }).content).toContain('"name": "Alice"');
-    expect((converted[1] as { content?: unknown }).content).toContain('"name": "Bob"');
+    expect((converted[0] as { content?: unknown }).content).toContain('"name":"Alice"');
+    expect((converted[1] as { content?: unknown }).content).toContain('"name":"Bob"');
   });
 
   it("repairs an orphaned user leaf before rebuilding active session messages", () => {

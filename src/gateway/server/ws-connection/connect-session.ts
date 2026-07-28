@@ -9,7 +9,6 @@ import {
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes, PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../../../config/io.js";
-import { getPairedDevice } from "../../../infra/device-pairing.js";
 import {
   captureAuthenticatedNodePairingState,
   type NodePairingGeneration,
@@ -214,33 +213,6 @@ export async function attachAuthenticatedGatewayConnect(
       );
     }
   }
-  let pairedDeviceLabel: string | undefined;
-  if (device?.id) {
-    try {
-      const pairedDevice = await getPairedDevice(device.id);
-      pairedDeviceLabel =
-        normalizeOptionalString(pairedDevice?.operatorLabel) ??
-        normalizeOptionalString(pairedDevice?.displayName);
-    } catch (error) {
-      // Pairing metadata is attribution-only and must not turn into a login dependency.
-      logWsControl.warn(
-        `paired device label resolution failed conn=${connId}: ${formatForLog(error)}`,
-      );
-    }
-  }
-  // SSO identity wins over device labeling so one person keeps the same creator
-  // across browsers; paired-device labels cover gateways without trusted proxy auth.
-  const operatorIdentity = authenticatedUserProfile
-    ? {
-        id: authenticatedUserId,
-        label: authenticatedUserProfile.displayName ?? authenticatedUserId,
-      }
-    : authenticatedUserId
-      ? { id: authenticatedUserId, label: authenticatedUserId }
-      : device?.id && pairedDeviceLabel
-        ? { id: device.id, label: pairedDeviceLabel }
-        : undefined;
-
   const pluginSurfaceUrls: Record<string, string> = {};
   const pluginNodeCapabilitySurfaces = indexPluginNodeCapabilitySurfaces(pluginNodeCapabilities);
   const pendingPluginNodeCapabilities: Array<{
@@ -323,10 +295,17 @@ export async function attachAuthenticatedGatewayConnect(
   clearHandshakeTimer();
   const nextClient: GatewayWsClient = {
     socket,
-    connect: connectParams,
+    connect: state.controlUiDeviceAuthMigrationPending
+      ? { ...connectParams, scopes }
+      : connectParams,
     connId,
     connectionKind: "gateway",
     isDeviceTokenAuth: authMethod === "device-token",
+    isControlUiDeviceAuthMigrationSession: state.controlUiDeviceAuthMigrationPending,
+    // Only identity-bearing migration sessions may use bounded self-pairing.
+    // Device-less sessions remain pairing-scoped until reopened securely.
+    isControlUiDeviceAuthMigration:
+      state.controlUiDeviceAuthMigrationPending && Boolean(connectParams.device),
     pairedClientId: isBrowserCopilotClient(connectParams.client)
       ? connectParams.client.id
       : undefined,
@@ -335,7 +314,6 @@ export async function attachAuthenticatedGatewayConnect(
     presenceKey,
     ...(authenticatedUserId ? { authenticatedUserId } : {}),
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
-    ...(operatorIdentity ? { operatorIdentity } : {}),
     clientIp: reportedClientIp,
     ...(internal ? { internal } : {}),
     ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
@@ -407,6 +385,31 @@ export async function attachAuthenticatedGatewayConnect(
       close(1008, truncateCloseReason(message));
       return;
     }
+  }
+
+  if (
+    state.controlUiDeviceAuthMigrationPending &&
+    context.handler.isControlUiDeviceAuthMigrationPending?.() !== true
+  ) {
+    const hasDeviceIdentity = Boolean(device);
+    const message = "device auth migration completed during connect; reconnect";
+    markHandshakeFailure("control-ui-device-auth-migration-completed", {
+      device: hasDeviceIdentity ? "yes" : "no",
+    });
+    sendHandshakeErrorResponse(
+      hasDeviceIdentity ? ErrorCodes.NOT_PAIRED : ErrorCodes.INVALID_REQUEST,
+      message,
+      {
+        details: {
+          code: hasDeviceIdentity
+            ? ConnectErrorDetailCodes.PAIRING_REQUIRED
+            : ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
+        },
+      },
+    );
+    await releasePendingNodePairingCleanup();
+    close(1008, truncateCloseReason(message));
+    return;
   }
 
   if (!setClient(nextClient)) {

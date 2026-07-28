@@ -288,14 +288,7 @@ export async function resolveTelegramInboundBody(params: {
         OriginatingTo: originatingTo,
         AccountId: accountId,
         MessageThreadId: replyThreadId,
-        MediaPaths:
-          materializedMedia.length > 0
-            ? materializedMedia.map((media) => media.path as string)
-            : undefined,
-        MediaTypes:
-          materializedMedia.length > 0
-            ? materializedMedia.map((media) => media.contentType ?? media.kind)
-            : undefined,
+        media: materializedMedia,
       };
       preflightTranscript = await transcribeFirstAudio({
         ctx: tempCtx,

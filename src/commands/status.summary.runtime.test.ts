@@ -1,7 +1,17 @@
 // Status summary runtime tests cover model context-token resolution.
 import { describe, expect, it } from "vitest";
 import { ANTHROPIC_CONTEXT_1M_TOKENS } from "../agents/context-resolution.js";
+import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { statusSummaryRuntime } from "./status.summary.runtime.js";
+
+function resolveSessionRuntimeLabel(
+  params: Parameters<typeof statusSummaryRuntime.resolveSessionRuntimeLabel>[0],
+) {
+  return statusSummaryRuntime.resolveSessionRuntimeLabel({
+    ...params,
+    cfg: migratePersistedImplicitMainRoster(params.cfg).config as never,
+  });
+}
 
 describe("statusSummaryRuntime.resolveContextTokensForModel", () => {
   it("does not match provider context window overrides across provider id variants", () => {
@@ -205,7 +215,7 @@ describe("statusSummaryRuntime.classifySessionKey", () => {
 describe("statusSummaryRuntime.resolveSessionRuntimeLabel", () => {
   it("uses the shared /status runtime label for the implicit OpenAI Codex route", () => {
     expect(
-      statusSummaryRuntime.resolveSessionRuntimeLabel({
+      resolveSessionRuntimeLabel({
         cfg: {} as never,
         entry: {
           sessionId: "session-1",
@@ -220,7 +230,7 @@ describe("statusSummaryRuntime.resolveSessionRuntimeLabel", () => {
 
   it("preserves configured default model CLI runtimes", () => {
     expect(
-      statusSummaryRuntime.resolveSessionRuntimeLabel({
+      resolveSessionRuntimeLabel({
         cfg: {
           agents: {
             defaults: {
@@ -243,7 +253,7 @@ describe("statusSummaryRuntime.resolveSessionRuntimeLabel", () => {
 
   it("preserves configured agent model runtimes before harness selection", () => {
     expect(
-      statusSummaryRuntime.resolveSessionRuntimeLabel({
+      resolveSessionRuntimeLabel({
         cfg: {
           agents: {
             defaults: {
@@ -275,7 +285,7 @@ describe("statusSummaryRuntime.resolveSessionRuntimeLabel", () => {
 
   it("reports the owning Codex harness for a locked session with stale OpenClaw metadata", () => {
     expect(
-      statusSummaryRuntime.resolveSessionRuntimeLabel({
+      resolveSessionRuntimeLabel({
         cfg: {
           agents: {
             defaults: {

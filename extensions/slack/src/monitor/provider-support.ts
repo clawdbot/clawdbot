@@ -1,4 +1,5 @@
 // Slack provider module implements model/runtime integration.
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { asOptionalRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SlackChannelResolution } from "../resolve-channels.js";
 import type { SlackUserResolution } from "../resolve-users.js";
@@ -103,7 +104,7 @@ function installSlackNativeReconnectFailureObserver(receiver: unknown) {
               resolve(undefined);
               return;
             }
-            reject(toLintErrorObject(error, "Non-Error rejection"));
+            reject(toErrorObject(error, "Non-Error rejection"));
           });
         }, delayMs);
       });
@@ -309,6 +310,7 @@ export function createSlackBoltApp(params: {
   signingSecret?: string;
   slackWebhookPath: string;
   clientOptions: Record<string, unknown>;
+  dispatcher?: SlackSocketModeReceiverOptions["dispatcher"];
   wrapReceiver?: (receiver: SlackReceiver) => SlackReceiver;
 }) {
   const socketModeLogger = createSlackSocketModeLogger();
@@ -317,6 +319,7 @@ export function createSlackBoltApp(params: {
     autoReconnectEnabled: true,
     clientPingTimeout: OPENCLAW_SLACK_CLIENT_PING_TIMEOUT_MS,
     logger: socketModeLogger,
+    ...(params.dispatcher ? { dispatcher: params.dispatcher } : {}),
     installerOptions: {
       clientOptions: params.clientOptions,
     },
@@ -403,7 +406,7 @@ export async function startSlackSocketAndWaitForDisconnect(params: {
     const disconnect = disconnectWaiter.getLatest();
     disconnectWaiter.cancel();
     if (isMissingSocketStartErrorDetail(err) && disconnect?.error !== undefined) {
-      throw toLintErrorObject(disconnect.error, "Non-Error thrown");
+      throw toErrorObject(disconnect.error, "Non-Error thrown");
     }
     if (isMissingSocketStartErrorDetail(err)) {
       const suffix = disconnect ? ` after ${disconnect.event}` : "";
@@ -485,18 +488,4 @@ export function formatSlackUserResolved(entry: SlackUserResolution): string | nu
     name: entry.name,
     extra: entry.note ? [entry.note] : [],
   });
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

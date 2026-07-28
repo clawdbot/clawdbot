@@ -52,8 +52,7 @@ openclaw-lobster-pet {
 /* Seeded glint tint rides its own variable, mapped here (before the palette
    rules) so palette and offline class rules still out-cascade it on both
    look surfaces. */
-.lobster-pet,
-.sidebar-brand__pet {
+.lobster-pet {
   --lob-glint: var(--lob-glint-seed, #00e5cc);
 }
 
@@ -1092,74 +1091,4 @@ openclaw-lobster-pet[data-dex-complete]::after {
   line-height: 1;
   color: #f4b840;
   pointer-events: none;
-}
-
-/* ---- Logo stand-in ----
-   On planned loads (isLobsterLogoLoad) the pet's first scheduled visit
-   perches in the sidebar brand slot instead of the ledge. The sidebar
-   renders this sprite into .sidebar-brand__logo-slot (layout.css); the
-   ledge stays empty meanwhile - one crab, two homes. */
-
-.sidebar-brand__pet {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  cursor: default;
-  animation: lobster-pet-logo-settle 0.45s ease-out;
-}
-
-.sidebar-brand__pet .lobster-pet__svg {
-  width: calc(22px * var(--lob-w, 1));
-  height: calc(19px * var(--lob-h, 1));
-  overflow: visible;
-  animation: lobster-pet-breathe 3.4s ease-in-out infinite;
-}
-
-/* Blink like the ledge sprite. The closed-lid curves need an explicit
-   resting opacity here: the base rule is scoped to .lobster-pet, which the
-   brand slot intentionally does not use (it would drag perch layout along). */
-.sidebar-brand__pet .lob-eye-closed {
-  opacity: 0;
-  animation: lobster-pet-blink-closed 5.2s linear infinite;
-  animation-delay: var(--lob-blink-delay, 0s);
-}
-
-.sidebar-brand__pet .lob-eye-open {
-  animation: lobster-pet-blink-open 5.2s linear infinite;
-  animation-delay: var(--lob-blink-delay, 0s);
-}
-
-/* Departure mirrors LEAVE_MS in lobster-pet.ts: the stand-in sinks toward
-   the ledge while the real logo scales back in underneath. */
-.sidebar-brand__pet--leaving {
-  opacity: 0;
-  transform: translateY(7px);
-  transition:
-    transform 0.3s ease-in,
-    opacity 0.25s ease 0.05s;
-}
-
-@keyframes lobster-pet-logo-settle {
-  0% {
-    opacity: 0;
-    transform: translateY(-7px);
-  }
-  55% {
-    opacity: 1;
-    transform: translateY(1.5px) scaleY(0.92);
-  }
-  100% {
-    transform: translateY(0) scaleY(1);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .sidebar-brand__pet,
-  .sidebar-brand__pet *,
-  .sidebar-brand__logo {
-    animation: none !important;
-    transition: none !important;
-  }
 }

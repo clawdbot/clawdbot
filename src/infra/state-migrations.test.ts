@@ -6,7 +6,6 @@ import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../config/config.js";
-import * as sessionStore from "../config/sessions.js";
 import { loadNodeHostConfig } from "../node-host/config.js";
 import { readChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -38,6 +37,7 @@ import {
   resetAutoMigrateLegacyStateForTest,
   runLegacyStateMigrations,
 } from "./state-migrations.js";
+import * as sessionStore from "./state-migrations.legacy-session-store.js";
 import { loadVoiceWakeRoutingConfig, setVoiceWakeRoutingConfig } from "./voicewake-routing.js";
 import { loadVoiceWakeConfig, setVoiceWakeTriggers } from "./voicewake.js";
 
@@ -786,8 +786,8 @@ describe("state migrations", () => {
     expect(Object.getOwnPropertyDescriptor(mergedStore, "__proto__")?.value.sessionId).toBe(
       "prototype-row",
     );
-    expect(Object.getOwnPropertyDescriptor(mergedStore, "__proto__")?.value.sessionFile).toBe(
-      path.join(stateDir, "agents", "worker-1", "sessions", "trace.jsonl"),
+    expect(Object.getOwnPropertyDescriptor(mergedStore, "__proto__")?.value).not.toHaveProperty(
+      "sessionFile",
     );
     expect(mergedStore["agent:worker-1:acp:task"]?.acp).toBeUndefined();
 
@@ -993,17 +993,14 @@ describe("state migrations", () => {
       agents: { list: [{ id: "main", default: true }] },
     } as OpenClawConfig;
     const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
-    const realSaveSessionStore = sessionStore.saveSessionStore;
+    const realSaveSessionStore = sessionStore.saveLegacySessionStore;
     let sawRequiredWrite = false;
     const saveSpy = vi
-      .spyOn(sessionStore, "saveSessionStore")
+      .spyOn(sessionStore, "saveLegacySessionStore")
       .mockImplementation(async (storePath, store, options) => {
         sawRequiredWrite ||= options?.requireWriteSuccess === true;
         if (storePath === targetStorePath) {
-          if (options?.requireWriteSuccess) {
-            throw new Error("simulated alias write failure");
-          }
-          return;
+          throw new Error("simulated alias write failure");
         }
         await realSaveSessionStore(storePath, store, options);
       });
@@ -1427,18 +1424,22 @@ describe("state migrations", () => {
     >;
     for (const { legacyKey, canonicalKey, sessionId, runtimeSessionName } of cases) {
       expect(store[legacyKey]).toBeUndefined();
-      expect(store[canonicalKey]).toEqual({ sessionId, updatedAt: 10 });
+      expect(store[canonicalKey]).toEqual({
+        sessionId,
+        updatedAt: 10,
+        delivery: { kind: "none" },
+      });
       expect(
         readAcpSessionMetaForEntry({
           sessionKey: canonicalKey,
-          entry: { sessionId },
+          entry: { sessionId, lifecycleRevision: undefined },
           env,
         })?.runtimeSessionName,
       ).toBe(runtimeSessionName);
       expect(
         readAcpSessionMetaForEntry({
           sessionKey: legacyKey,
-          entry: { sessionId },
+          entry: { sessionId, lifecycleRevision: undefined },
           env,
         }),
       ).toBeUndefined();
@@ -1627,14 +1628,14 @@ describe("state migrations", () => {
     expect(
       readAcpSessionMetaForEntry({
         sessionKey: "agent:voice:desk",
-        entry: { sessionId: "voice-main" },
+        entry: { sessionId: "voice-main", lifecycleRevision: undefined },
         env,
       })?.runtimeSessionName,
     ).toBe("voice-runtime");
     expect(
       readAcpSessionMetaForEntry({
         sessionKey: "agent:voice:main",
-        entry: { sessionId: "voice-main" },
+        entry: { sessionId: "voice-main", lifecycleRevision: undefined },
         env,
       }),
     ).toBeUndefined();
@@ -1976,6 +1977,16 @@ describe("state migrations", () => {
       expect(db.prepare("PRAGMA user_version").get()).toEqual({
         user_version: OPENCLAW_STATE_SCHEMA_VERSION,
       });
+      expect(
+        db
+          .prepare(
+            "SELECT role, schema_version FROM schema_meta WHERE meta_key = 'primary' LIMIT 1",
+          )
+          .get(),
+      ).toEqual({
+        role: "global",
+        schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      });
     } finally {
       db.close();
     }
@@ -1984,6 +1995,52 @@ describe("state migrations", () => {
     expect(after.preview).not.toContain(
       "- Shared SQLite schema: audit event ledger → versioned message lifecycle schema",
     );
+  });
+
+  it("doctor discards worktree rows that predate the provisioned-file ledger", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const db = openOpenClawStateDatabase({ env }).db;
+    db.prepare(
+      `INSERT INTO worktrees (
+        id, repo_fingerprint, repo_root, path, branch, base_ref, owner_kind,
+        created_at, last_active_at, provisioned_paths_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+    ).run(
+      "legacy-worktree",
+      "legacy-fingerprint",
+      path.join(root, "repo"),
+      path.join(stateDir, "worktrees", "legacy"),
+      "openclaw/legacy",
+      "HEAD",
+      "session",
+      1,
+      1,
+    );
+
+    const runtime = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    expect(runtime.preview).not.toContain(
+      "- Managed worktrees: discard rows without provisioned-file ledgers",
+    );
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
+    expect(detected.preview).toContain(
+      "- Managed worktrees: discard rows without provisioned-file ledgers",
+    );
+
+    const result = await runLegacyStateMigrations({ detected, config: cfg, env });
+    expect(result.changes).toContain(
+      "Discarded 1 legacy managed worktree row; affected worktrees will provision fresh on next use",
+    );
+    expect(
+      db.prepare("SELECT id FROM worktrees WHERE id = ?").get("legacy-worktree"),
+    ).toBeUndefined();
   });
 
   it("does not run plugin doctor migrations after shared state schema repair fails", async () => {

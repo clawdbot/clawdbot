@@ -21,10 +21,6 @@ import {
 } from "./model-metadata.js";
 
 export const PROVIDER_ID = "github-copilot";
-const CODEX_FORWARD_COMPAT_TARGET_IDS = new Set(["gpt-5.4", "gpt-5.3-codex"]);
-// gpt-5.3-codex is only a useful template when gpt-5.4 is the target; it is
-// always a registry miss (and therefore skipped) when it is the target itself.
-const CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.3-codex"] as const;
 
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 const DEFAULT_MAX_TOKENS = 8192;
@@ -46,26 +42,6 @@ export function resolveCopilotForwardCompatModel(
   const existing = ctx.modelRegistry.find(PROVIDER_ID, lowerModelId);
   if (existing) {
     return undefined;
-  }
-
-  // For gpt-5.4 and gpt-5.3-codex, clone from a registered codex template
-  // to inherit the correct reasoning and capability flags.
-  if (CODEX_FORWARD_COMPAT_TARGET_IDS.has(lowerModelId)) {
-    for (const templateId of CODEX_TEMPLATE_MODEL_IDS) {
-      const template = ctx.modelRegistry.find(
-        PROVIDER_ID,
-        templateId,
-      ) as ProviderRuntimeModel | null;
-      if (!template) {
-        continue;
-      }
-      return normalizeModelCompat({
-        ...template,
-        id: trimmedModelId,
-        name: trimmedModelId,
-      } as ProviderRuntimeModel);
-    }
-    // Template not found — fall through to synthetic catch-all below.
   }
 
   const staticOverride = resolveStaticCopilotModelOverride(lowerModelId);

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 2026.7.21
+
 - Fixed background Gateway sessions restarting while waiting for pairing or authentication attention.
 - Prevented failed offline-data resets from reusing retired chat database handles and kept byte-distinct Gateway owners isolated.
 - Made Apple Watch message acknowledgments wait for persisted handling and preserved pending voice turns across navigation and relaunches.

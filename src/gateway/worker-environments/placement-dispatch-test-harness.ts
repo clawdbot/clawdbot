@@ -15,6 +15,7 @@ import {
   seedStartingPlacement,
 } from "./placement-dispatch-test-fixtures.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
+import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
 import type { WorkerTunnelHandle } from "./tunnel.js";
 import {
   createWorkerWorkspaceOperationCoordinator,
@@ -43,6 +44,8 @@ export function createHarness(
     reconcileConflictPaths?: string[];
     workspaceOperations?: WorkerWorkspaceOperationCoordinator;
     destroyFailureState?: "draining" | "destroying";
+    terminalizeReclaimOnTunnelDrop?: boolean;
+    terminalizedReclaimError?: Error;
   } = {},
 ) {
   const reconciledManifestRef = MANIFEST_REF.replaceAll("b", "c");
@@ -185,6 +188,29 @@ export function createHarness(
       }
       if (options.reconcileCommitsManifest !== false) {
         request.journal.commit(reconciledManifestRef);
+      }
+      if (options.terminalizeReclaimOnTunnelDrop) {
+        const owned = placementStore.get(REQUEST.sessionId);
+        const persistedClaim = owned?.turnClaim;
+        if (owned?.state !== "active" || persistedClaim?.owner !== "worker") {
+          throw new Error("tunnel-drop fixture lost its active worker claim");
+        }
+        const claim = {
+          sessionId: owned.sessionId,
+          claimId: persistedClaim.claimId,
+          runId: persistedClaim.runId,
+          placementGeneration: persistedClaim.generation,
+          owner: {
+            kind: "worker" as const,
+            environmentId: owned.environmentId,
+            ownerEpoch: persistedClaim.ownerEpoch,
+          },
+        };
+        placementStore.acceptWorkspaceResult(claim);
+        currentEnvironment = destroyedEnvironment(currentEnvironment?.ownerEpoch ?? 1);
+        log.push("teardown:destroy");
+        placementStore.completeWorkspaceResultAndReleaseTurn(claim, { reclaim: true });
+        throw options.terminalizedReclaimError ?? new WorkerTunnelOwnerDisconnectedError();
       }
       if (options.reconcileConflictPaths?.length && request.stagedResult) {
         request.stagedResult.record(request.stagedResult.ref);
@@ -346,6 +372,15 @@ export function createHarness(
     },
     markEnvironmentAttachments: (attachedSessionIds: string[]) => {
       currentEnvironment = { ...attached, attachedSessionIds };
+    },
+    markEnvironmentProtocolFeatures: (protocolFeatures: string[]) => {
+      if (!currentEnvironment?.bootstrapReceipt) {
+        throw new Error("worker environment fixture has no bootstrap receipt");
+      }
+      currentEnvironment = {
+        ...currentEnvironment,
+        bootstrapReceipt: { ...currentEnvironment.bootstrapReceipt, protocolFeatures },
+      };
     },
     service,
     ready,

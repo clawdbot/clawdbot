@@ -31,7 +31,14 @@ type PluginTargetedInboundClaimOutcome = Awaited<
 
 const mocks = vi.hoisted(() => ({
   isRoutableChannel: vi.fn((_channel: string | undefined) => true),
-  routeReply: vi.fn(async (_params: unknown) => ({ ok: true, messageId: "mock" })),
+  routeReply: vi.fn(
+    async (
+      _params: unknown,
+    ): Promise<{ ok: boolean; messageId?: string; suppressed?: boolean; error?: string }> => ({
+      ok: true,
+      messageId: "mock",
+    }),
+  ),
   tryFastAbortFromMessage: vi.fn<() => Promise<AbortResult>>(async () => ({
     handled: false,
     aborted: false,
@@ -241,7 +248,12 @@ const transcriptMocks = vi.hoisted(() => ({
   persistAcpDispatchTranscript: vi.fn(async (_params: unknown) => undefined),
   appendAssistantMessageToSessionTranscript: vi.fn(async (_params: unknown) => ({
     ok: true,
-    sessionFile: "/tmp/session.jsonl",
+    target: {
+      agentId: "main",
+      sessionId: "test-session",
+      sessionKey: "agent:main",
+      storePath: "/tmp/sessions.json",
+    },
     messageId: "message-1",
   })),
 }));

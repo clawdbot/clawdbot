@@ -1,11 +1,13 @@
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
+import type { SessionVisibility } from "../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import type { SessionCreatorIdentity } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import type { SessionCreatedActor } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionAgentAttentionIconId } from "../../../packages/gateway-protocol/src/session-icon.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { SessionRunStatus } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import type { BoardFace } from "../lib/board/settings.ts";
 import {
   normalizeCatalogProjectGrouping,
   type CatalogProjectGrouping,
@@ -51,7 +53,10 @@ export function sidebarSessionAttentionPriority(attention: SidebarSessionAttenti
 
 export type SidebarRecentSession = {
   key: string;
-  createdBy?: SessionCreatorIdentity;
+  displayName?: string;
+  incognito?: boolean;
+  createdActor?: SessionCreatedActor;
+  archivedBy?: SessionCreatedActor;
   label: string;
   meta: string;
   /** Compact repo/branch/node line for work sessions. */
@@ -65,8 +70,11 @@ export type SidebarRecentSession = {
   kind?: string;
   pinned: boolean;
   archived?: boolean;
+  visibility?: SessionVisibility;
+  draftOwnedBySelf?: boolean;
   icon?: string;
   category?: string;
+  boardFace?: BoardFace;
   channel?: string;
   channelSession?: boolean;
   workSession?: boolean;
@@ -85,7 +93,7 @@ export type SidebarRecentSession = {
   agentStatusNote?: string;
   observerDigest?: Pick<
     SessionObserverDigest,
-    "runId" | "headline" | "health" | "updatedAt" | "revision"
+    "agentId" | "runId" | "headline" | "health" | "updatedAt" | "revision"
   >;
   spawnedBy?: string;
   status?: SessionRunStatus;
@@ -140,8 +148,24 @@ export type SidebarSessionGroupMenuState = {
 export type SidebarSessionSortMode = "created" | "updated";
 export type SidebarSessionStatusFilter = "active" | "archived" | "all";
 export type SidebarSessionsScrollState = "none" | "top" | "middle" | "bottom";
-export type SidebarSessionGroupDropTarget = {
-  group: string;
+
+export function resolveSidebarSessionsScrollState(
+  element: HTMLElement,
+): SidebarSessionsScrollState {
+  const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight);
+  if (maxScrollTop <= 1) {
+    return "none";
+  }
+  if (element.scrollTop <= 1) {
+    return "top";
+  }
+  if (element.scrollTop >= maxScrollTop - 1) {
+    return "bottom";
+  }
+  return "middle";
+}
+export type SidebarSectionDropTarget = {
+  sectionId: string;
   position: "before" | "after";
 };
 

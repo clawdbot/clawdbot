@@ -790,6 +790,28 @@ export function recordSessionGoalChanged(params: {
   });
 }
 
+/** Record the child's own creation fact when its durable stamp identifies an actor. */
+export function recordSessionCreated(params: {
+  sessionKey: string;
+  entry: SessionEntry;
+  agentId?: string;
+}): void {
+  const actor = params.entry.createdActor;
+  if (!actor) {
+    return;
+  }
+  recordSessionStateEvent({
+    sessionKey: params.sessionKey,
+    sessionId: params.entry.sessionId,
+    agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
+    kind: "created",
+    actorType: actor.type,
+    ...(actor.id ? { actorId: actor.id } : {}),
+    dedupeKey: `created:${params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey)}:${params.sessionKey}:${params.entry.sessionId}`,
+    summary: "session created",
+  });
+}
+
 /** True when any seeded or explicitly registered watcher cursor targets this session. */
 function hasSessionStateWatchers(
   targetSessionKey: string,

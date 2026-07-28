@@ -10,9 +10,8 @@ import {
   stripExtractedFileImageMetadata,
   type ExtractedFileImage,
 } from "../../media-understanding/extracted-file-images.js";
-import { projectMediaFacts } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
-import type { MsgContext } from "../templating.js";
+import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import { resolveAgentTurnAttachments } from "./agent-turn-attachments.js";
 
 type CurrentImageAttachment = {
@@ -92,7 +91,6 @@ function createUndescribedImageContext(
   return {
     ...ctx,
     media,
-    ...projectMediaFacts(media),
   };
 }
 
@@ -137,6 +135,7 @@ function appendOrderedImages(params: {
 function resolveMergedTurnImages(entries: OrderedTurnImage[]): {
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
+  imageSourceIndexes?: Array<number | undefined>;
 } {
   if (entries.length === 0) {
     return {};
@@ -151,10 +150,14 @@ function resolveMergedTurnImages(entries: OrderedTurnImage[]): {
     return left.sequence - right.sequence;
   });
   const images = merged.flatMap((entry) => (entry.image ? [entry.image] : []));
-  return {
+  const result = {
     ...(images.length > 0 ? { images } : {}),
     imageOrder: merged.map((entry) => entry.imageOrder),
   };
+  Object.defineProperty(result, "imageSourceIndexes", {
+    value: merged.map((entry) => entry.sourceIndex),
+  });
+  return result;
 }
 
 /** Resolves current-turn image attachments that were not already described by media understanding. */
@@ -167,6 +170,7 @@ export async function resolveCurrentTurnImages(params: {
 }): Promise<{
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
+  imageSourceIndexes?: Array<number | undefined>;
 }> {
   const entries: OrderedTurnImage[] = [];
   appendOrderedImages({

@@ -73,8 +73,8 @@ export type {
   MeetingBrowserStatusScriptParams,
   MeetingManualAction,
   MeetingManualActionCategory,
-  MeetingPlatformAdapter,
 } from "../meeting-bot/platform-adapter.js";
+export { MeetingPlatformAdapter } from "../meeting-bot/platform-adapter.js";
 export { createMeetingRealtimeEngineBindings } from "../meeting-bot/agent-consult.js";
 export {
   createMeetingVoiceCallGateway,

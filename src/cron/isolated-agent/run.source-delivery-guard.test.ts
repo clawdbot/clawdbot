@@ -413,7 +413,7 @@ describe("executeCronRun sourceDelivery mapping", () => {
 
   it("forwards an explicit OpenClaw runtime override to cron execution", async () => {
     mockRunCronFallbackPassthrough();
-    const cronSession = makeCronSession() as MutableCronSession;
+    const cronSession = makeCronSession() as unknown as MutableCronSession;
     cronSession.sessionEntry.agentRuntimeOverride = "openclaw";
     cronSession.sessionEntry.agentHarnessId = "codex";
     const executor = makeExecutor({
@@ -463,7 +463,7 @@ function makeExecuteCronRunParams(overrides: Record<string, unknown> = {}) {
       provider: "openai",
       model: "gpt-5.4",
     },
-    cronSession: makeCronSession() as MutableCronSession,
+    cronSession: makeCronSession() as unknown as MutableCronSession,
     commandBody: "run a task",
     persistSessionEntry: vi.fn().mockResolvedValue(undefined),
     abortReason: () => "aborted",

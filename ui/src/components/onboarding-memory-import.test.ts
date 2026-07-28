@@ -85,9 +85,9 @@ function createContext(
   const client = { request } as unknown as GatewayBrowserClient;
   const snapshot: ApplicationGatewaySnapshot = {
     client: connected ? client : null,
-    connected,
+    phase: connected ? "connected" : "stopped",
     offlineStable: false,
-    reconnecting: false,
+    canvasPluginSurfaceUrl: null,
     hello: {
       auth: {
         role: "operator",

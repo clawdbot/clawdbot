@@ -3,7 +3,6 @@ title: Long-context progress watchdog
 scenario:
   id: long-context-progress-watchdog
   surface: runtime
-  runtimeParityTier: live-only
   coverage:
     primary:
       - session-memory.codex-progress-sentinel

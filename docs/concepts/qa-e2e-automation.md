@@ -110,6 +110,23 @@ the QA Lab page where an operator or automation loop can give the agent a QA
 mission, observe real channel behavior, and record what worked, failed, or
 stayed blocked.
 
+The Runner's Scenarios panel can launch flow, Playwright, Vitest, and script
+catalog entries together. **Profile** uses the taxonomy-owned membership plan;
+checking scenarios creates an explicit override, while **Profile** in the
+Scenarios panel returns to server-resolved profile membership.
+
+Config also exposes **Provider lane**, primary and alternate models,
+**Execution channel**, **Channel driver**, **Evidence mode**, **Runtime pair**,
+and **Runtime-pair lane** (`core`, `extended`, or `soak`). Provider/model,
+runtime, and channel-driver choices remain independent: for example, Real
+frontier providers can use the Crabline channel driver, and Synthetic (mock) can
+use Real channels. The server resolves taxonomy membership, provider/model
+eligibility, declared `execution.channel`, runtime-pair-lane membership, and
+supported execution kinds before launch. The Run panel shows the selected
+execution kinds plus explicit exclusions or errors. Unknown, empty explicit,
+profile-incompatible, or lane-incompatible selections fail closed instead of
+being replaced by a default suite.
+
 For faster QA Lab UI iteration without rebuilding the Docker image each time,
 start the stack with a bind-mounted QA Lab bundle:
 

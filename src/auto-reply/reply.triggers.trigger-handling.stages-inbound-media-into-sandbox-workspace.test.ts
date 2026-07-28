@@ -176,8 +176,8 @@ describe("stageSandboxMedia", () => {
       await writeInboundMedia(home, fileName, "pdf-bytes");
       const mediaUri = `media://inbound/${fileName}`;
       const { ctx, sessionCtx } = createSandboxMediaContexts(mediaUri);
-      ctx.MediaType = "application/pdf";
-      sessionCtx.MediaType = "application/pdf";
+      ctx.media = [{ ...ctx.media?.[0], contentType: "application/pdf" }];
+      sessionCtx.media = ctx.media;
 
       const result = await stageSandboxMedia({
         ctx,
@@ -189,10 +189,10 @@ describe("stageSandboxMedia", () => {
 
       const stagedPath = `media/inbound/${fileName}`;
       expect(result.staged.get(0)).toBe(stagedPath);
-      expect(ctx.MediaPath).toBe(stagedPath);
-      expect(sessionCtx.MediaPath).toBe(stagedPath);
-      expect(ctx.MediaUrl).toBe(stagedPath);
-      expect(sessionCtx.MediaUrl).toBe(stagedPath);
+      expect(ctx.media?.[0]?.path).toBe(stagedPath);
+      expect(sessionCtx.media?.[0]?.path).toBe(stagedPath);
+      expect(ctx.media?.[0]?.url).toBe(stagedPath);
+      expect(sessionCtx.media?.[0]?.url).toBe(stagedPath);
       expect(ctx.media?.[0]).toMatchObject({ path: stagedPath, workspaceDir: sandboxDir });
       expect(sessionCtx.media?.[0]).toMatchObject({ path: stagedPath, workspaceDir: sandboxDir });
       await expect(fs.readFile(join(sandboxDir, stagedPath), "utf8")).resolves.toBe("pdf-bytes");
@@ -211,8 +211,8 @@ describe("stageSandboxMedia", () => {
       await fs.writeFile(existingProjectFile, "project-file");
       const mediaUri = `media://inbound/${fileName}`;
       const { ctx, sessionCtx } = createSandboxMediaContexts(mediaUri);
-      ctx.MediaType = "image/png";
-      sessionCtx.MediaType = "image/png";
+      ctx.media = [{ ...ctx.media?.[0], contentType: "image/png" }];
+      sessionCtx.media = ctx.media;
 
       const result = await stageSandboxMedia({
         ctx,
@@ -222,15 +222,13 @@ describe("stageSandboxMedia", () => {
         workspaceDir,
       });
 
-      const stagedPath = ctx.MediaPath ?? "";
+      const stagedPath = ctx.media?.[0]?.path ?? "";
       const stagedRelativePath = path.relative(workspaceDir, stagedPath);
       expect(stagedRelativePath).toMatch(
         new RegExp(`^media/inbound/openclaw-staged-[0-9a-f-]+/${fileName}$`),
       );
       expect(result.staged.get(0)).toBe(stagedPath);
-      expect(sessionCtx.MediaPath).toBe(stagedPath);
-      expect(ctx.MediaWorkspaceDir).toBe(dirname(stagedPath));
-      expect(sessionCtx.MediaWorkspaceDir).toBeUndefined();
+      expect(sessionCtx.media?.[0]?.path).toBe(stagedPath);
       expect(ctx.media?.[0]).toMatchObject({ path: stagedPath, workspaceDir });
       expect(sessionCtx.media?.[0]).toMatchObject({ path: stagedPath, workspaceDir });
       await expect(fs.readFile(stagedPath, "utf8")).resolves.toBe("host-image-bytes");
@@ -240,8 +238,6 @@ describe("stageSandboxMedia", () => {
       await fs.writeFile(blockedPath, "blocked");
       const { ctx: blockedCtx, sessionCtx: blockedSessionCtx } =
         createSandboxMediaContexts(blockedPath);
-      blockedCtx.MediaWorkspaceDir = workspaceDir;
-      blockedSessionCtx.MediaWorkspaceDir = workspaceDir;
       const blockedResult = await stageSandboxMedia({
         ctx: blockedCtx,
         sessionCtx: blockedSessionCtx,
@@ -250,8 +246,8 @@ describe("stageSandboxMedia", () => {
         workspaceDir,
       });
       expect(blockedResult.staged).toEqual(new Map());
-      expect(blockedCtx.MediaWorkspaceDir).toBe(workspaceDir);
-      expect(blockedSessionCtx.MediaWorkspaceDir).toBe(workspaceDir);
+      expect(blockedCtx.media?.[0]?.workspaceDir).toBeUndefined();
+      expect(blockedSessionCtx.media?.[0]?.workspaceDir).toBeUndefined();
 
       const partialCtx = {
         media: [
@@ -299,10 +295,10 @@ describe("stageSandboxMedia", () => {
         });
 
         const stagedPath = `media/inbound/${basename(mediaPath)}`;
-        expect(ctx.MediaPath).toBe(stagedPath);
-        expect(sessionCtx.MediaPath).toBe(stagedPath);
-        expect(ctx.MediaUrl).toBe(stagedPath);
-        expect(sessionCtx.MediaUrl).toBe(stagedPath);
+        expect(ctx.media?.[0]?.path).toBe(stagedPath);
+        expect(sessionCtx.media?.[0]?.path).toBe(stagedPath);
+        expect(ctx.media?.[0]?.url).toBe(stagedPath);
+        expect(sessionCtx.media?.[0]?.url).toBe(stagedPath);
         const stagedStats = await fs.stat(
           join(sandboxDir, "media", "inbound", basename(mediaPath)),
         );
@@ -329,7 +325,7 @@ describe("stageSandboxMedia", () => {
           stagedStatError = error as NodeJS.ErrnoException;
         }
         expect(stagedStatError?.code).toBe("ENOENT");
-        expect(ctx.MediaPath).toBe(sensitiveFile);
+        expect(ctx.media?.[0]?.path).toBe(sensitiveFile);
       }
 
       {
@@ -350,7 +346,7 @@ describe("stageSandboxMedia", () => {
         });
 
         expect(childProcessMocks.spawn).not.toHaveBeenCalled();
-        expect(ctx.MediaPath).toBe("/etc/passwd");
+        expect(ctx.media?.[0]?.path).toBe("/etc/passwd");
       }
     });
   });
@@ -394,7 +390,6 @@ describe("stageSandboxMedia", () => {
       expect(result.staged).toEqual(new Map([[allowedIndex, stagedPath]]));
       expect(ctx.media[allowedIndex]).toMatchObject({ path: stagedPath, workspaceDir: sandboxDir });
       expect(ctx.media[allowedIndex]?.url).toBe(allowedUrl);
-      expect(ctx).toHaveProperty(`MediaUrls.${allowedIndex}`, allowedUrl);
       expect(ctx.media[blockedIndex]).toMatchObject({ path: blockedPath });
       expect(ctx.media[blockedIndex]).not.toHaveProperty("workspaceDir");
       expect(sessionCtx.media).toEqual(ctx.media);
@@ -466,7 +461,7 @@ describe("stageSandboxMedia", () => {
           url: expectedUrl,
           workspaceDir: sandboxDir,
         });
-        expect(ctx).toHaveProperty("MediaUrl", expectedUrl);
+        expect(ctx.media?.[0]?.url).toBe(expectedUrl);
         expect(sessionCtx.media).toEqual(ctx.media);
       });
     },
@@ -498,8 +493,8 @@ describe("stageSandboxMedia", () => {
       });
 
       await expect(fs.readFile(victimPath, "utf8")).resolves.toBe("ORIGINAL");
-      expect(ctx.MediaPath).toBe(mediaPath);
-      expect(sessionCtx.MediaPath).toBe(mediaPath);
+      expect(ctx.media?.[0]?.path).toBe(mediaPath);
+      expect(sessionCtx.media?.[0]?.path).toBe(mediaPath);
     });
   });
 
@@ -529,8 +524,8 @@ describe("stageSandboxMedia", () => {
         stagedStatError = error as NodeJS.ErrnoException;
       }
       expect(stagedStatError?.code).toBe("ENOENT");
-      expect(ctx.MediaPath).toBe(mediaPath);
-      expect(sessionCtx.MediaPath).toBe(mediaPath);
+      expect(ctx.media?.[0]?.path).toBe(mediaPath);
+      expect(sessionCtx.media?.[0]?.path).toBe(mediaPath);
     });
   });
 });

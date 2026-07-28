@@ -93,15 +93,6 @@
         "api": "openai-completions",
         "models": [
           {
-            "id": "qwen3.7-max",
-            "name": "qwen3.7-max",
-            "reasoning": true,
-            "input": ["text"],
-            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
-            "contextWindow": 1000000,
-            "maxTokens": 65536
-          },
-          {
             "id": "qwen3.7-plus",
             "name": "qwen3.7-plus",
             "reasoning": true,
@@ -120,58 +111,15 @@
             "maxTokens": 65536
           },
           {
-            "id": "qwen3.6-flash",
-            "name": "qwen3.6-flash",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
-            "contextWindow": 1000000,
-            "maxTokens": 65536
-          },
-          {
-            "id": "deepseek-v4-pro",
-            "name": "deepseek-v4-pro",
+            "id": "qwen3-coder-next",
+            "name": "qwen3-coder-next",
             "reasoning": true,
             "input": ["text"],
-            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
-            "contextWindow": 1000000,
-            "maxTokens": 393216
-          },
-          {
-            "id": "deepseek-v4-flash",
-            "name": "deepseek-v4-flash",
-            "reasoning": true,
-            "input": ["text"],
-            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
-            "contextWindow": 1000000,
-            "maxTokens": 393216
-          },
-          {
-            "id": "deepseek-v3.2",
-            "name": "deepseek-v3.2",
-            "reasoning": true,
-            "input": ["text"],
-            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
-            "contextWindow": 131072,
-            "maxTokens": 65536
-          },
-          {
-            "id": "kimi-k2.7-code",
-            "name": "kimi-k2.7-code",
-            "reasoning": true,
-            "input": ["text", "image"],
             "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
             "contextWindow": 262144,
-            "maxTokens": 98304
-          },
-          {
-            "id": "kimi-k2.6",
-            "name": "kimi-k2.6",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
-            "contextWindow": 262144,
-            "maxTokens": 98304
+            "maxTokens": 65536,
+            "status": "deprecated",
+            "replacedBy": "qwen3.7-plus"
           },
           {
             "id": "kimi-k2.5",
@@ -181,24 +129,6 @@
             "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
             "contextWindow": 262144,
             "maxTokens": 98304
-          },
-          {
-            "id": "glm-5.2",
-            "name": "glm-5.2",
-            "reasoning": true,
-            "input": ["text"],
-            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
-            "contextWindow": 1000000,
-            "maxTokens": 131072
-          },
-          {
-            "id": "glm-5.1",
-            "name": "glm-5.1",
-            "reasoning": true,
-            "input": ["text"],
-            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
-            "contextWindow": 202752,
-            "maxTokens": 131072
           },
           {
             "id": "glm-5",

@@ -1730,11 +1730,15 @@ describe("worker environment service", () => {
     await createService(createProvider({ destroy })).reconcileOnce();
 
     expect(destroy).toHaveBeenCalledOnce();
+    expect(destroy).toHaveBeenCalledWith({
+      leaseId: `lease:${environmentId}`,
+      profile: { region: "test" },
+    });
     expect(store.get(environmentId)).toMatchObject({
-      state: "failed",
-      leaseId: null,
+      state: "destroyed",
+      leaseId: `lease:${environmentId}`,
       attachedSessionIds: [],
-      lastError: "Attached worker build no longer matches the Gateway",
+      lastError: null,
     });
   });
 

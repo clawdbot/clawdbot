@@ -3,7 +3,7 @@ title: "Runtime tool fixture — memory.add"
 scenario:
   id: runtime-tool-memory-add
   surface: runtime-tools
-  runtimeParityTier: optional
+  runtimePairLane: extended
   coverage:
     primary:
       - session-memory.memory-add

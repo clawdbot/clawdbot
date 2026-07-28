@@ -69,6 +69,8 @@ describe("config view", () => {
     setTextScale: vi.fn(),
     sidebarLiveActivity: true,
     setSidebarLiveActivity: vi.fn(),
+    chatMessageMaxWidth: undefined,
+    setChatMessageMaxWidth: vi.fn(),
     showAdvancedSettings: false,
     setShowAdvancedSettings: vi.fn(),
     chatSendShortcut: "enter" as const,
@@ -136,7 +138,7 @@ describe("config view", () => {
     return container.textContent?.replace(/\s+/g, " ").trim() ?? "";
   }
 
-  it("collapses advanced fields per section and supports global or search-driven expansion", () => {
+  it("uses one global advanced toggle while preserving deep-link reveals", () => {
     const schema = {
       type: "object",
       properties: {
@@ -162,12 +164,11 @@ describe("config view", () => {
       setShowAdvancedSettings,
     });
 
-    const details = collapsed.container.querySelector<HTMLDetailsElement>(
-      "details.config-advanced-fields",
+    const ghost = queryRequired(collapsed.container, ".config-advanced-ghost", HTMLButtonElement);
+    expect(ghost.textContent?.replace(/\s+/g, " ").trim()).toBe(
+      "1 advanced setting hidden Show advanced",
     );
-    expect(details?.open).toBe(false);
-    expect(details?.querySelector("summary")?.textContent?.trim()).toBe("Advanced (1)");
-    findButtonByText(collapsed.container, "Show advanced").click();
+    ghost.click();
     expect(setShowAdvancedSettings).toHaveBeenCalledWith(true);
 
     const global = renderConfigView({
@@ -177,16 +178,11 @@ describe("config view", () => {
       activeSection: "gateway",
       showAdvancedSettings: true,
     });
-    const globalDetails = global.container.querySelector<HTMLDetailsElement>(
-      "details.config-advanced-fields",
+    expect(global.container.querySelector(".config-advanced-ghost")).toBeNull();
+    expect(global.container.querySelector(".config-advanced-divider")?.textContent?.trim()).toBe(
+      "Advanced",
     );
-    expect(globalDetails?.open).toBe(true);
-    if (globalDetails) {
-      globalDetails.open = false;
-    }
-    globalDetails?.dispatchEvent(new Event("toggle"));
-    expect(globalDetails?.open).toBe(true);
-    expect(global.props.viewState.expandedAdvancedSections.size).toBe(0);
+    expect(normalizedText(global.container)).toContain("Reload mode");
 
     const searchHit = renderConfigView({
       schema,
@@ -195,9 +191,8 @@ describe("config view", () => {
       activeSection: "gateway",
       forceAdvancedSection: "gateway",
     });
-    expect(
-      searchHit.container.querySelector<HTMLDetailsElement>("details.config-advanced-fields")?.open,
-    ).toBe(true);
+    expect(searchHit.container.querySelector(".config-advanced-ghost")).toBeNull();
+    expect(normalizedText(searchHit.container)).toContain("Reload mode");
 
     const nested = document.createElement("div");
     render(
@@ -221,13 +216,122 @@ describe("config view", () => {
         activeSection: "agents",
         activeSubsection: "defaults",
         forceAdvancedSection: "agents",
+        onShowAdvanced: vi.fn(),
         onPatch: vi.fn(),
       }),
       nested,
     );
-    expect(nested.querySelector<HTMLDetailsElement>("details.config-advanced-fields")?.open).toBe(
-      true,
+    expect(nested.querySelector(".config-advanced-ghost")).toBeNull();
+    expect(normalizedText(nested)).toContain("Tuning");
+
+    const forcedPage = renderConfigView({
+      schema,
+      uiHints,
+      formValue: { gateway: { port: 18789, reload: "hybrid" } },
+      activeSection: "gateway",
+      forceShowAdvanced: true,
+    });
+    expect(findOptionalButtonByText(forcedPage.container, "Show advanced")).toBeUndefined();
+    expect(forcedPage.container.querySelector(".config-advanced-ghost")).toBeNull();
+    expect(normalizedText(forcedPage.container)).toContain("Reload mode");
+  });
+
+  it("offers the toggle exactly when the active scope can hide advanced fields", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        gateway: {
+          type: "object",
+          properties: { mode: { type: "string", title: "Mode" } },
+        },
+        diagnostics: {
+          type: "object",
+          properties: { flags: { type: "string", title: "Flags" } },
+        },
+      },
+    };
+
+    // Unhinted leaves default to the advanced tier: the toggle must show even
+    // though no hint carries advanced === true, or the ghost row's enable has
+    // no matching control to turn advanced back off.
+    const unhinted = renderConfigView({
+      schema,
+      uiHints: {},
+      formValue: { diagnostics: { flags: "all" } },
+      activeSection: "diagnostics",
+    });
+    expect(findOptionalButtonByText(unhinted.container, "Show advanced")).toBeDefined();
+    expect(unhinted.container.querySelector(".config-advanced-ghost")).not.toBeNull();
+
+    // An advanced hint in a different top-level section must not surface a
+    // no-op toggle on a fully-common active section.
+    const offScope = renderConfigView({
+      schema,
+      uiHints: {
+        "gateway.mode": { advanced: false },
+        "diagnostics.flags": { advanced: true },
+      },
+      formValue: { gateway: { mode: "local" } },
+      activeSection: "gateway",
+    });
+    expect(findOptionalButtonByText(offScope.container, "Show advanced")).toBeUndefined();
+    expect(offScope.container.querySelector(".config-advanced-ghost")).toBeNull();
+  });
+
+  it("shows the form-unsafe banner only for populated unsupported paths", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        gateway: {
+          type: "object",
+          properties: {
+            opaque: {
+              title: "Opaque setting",
+              anyOf: [{ type: "string" }, {}],
+            },
+          },
+        },
+        agents: {
+          type: "object",
+          properties: {
+            opaque: { anyOf: [{ type: "string" }, {}] },
+          },
+        },
+      },
+    };
+
+    const empty = renderConfigView({
+      schema,
+      formValue: { gateway: {}, agents: { opaque: "off-scope" } },
+      activeSection: "gateway",
+    });
+    expect(empty.container.querySelector(".config-content-callout .info")).toBeNull();
+    expect(findButtonByText(empty.container, "Form").getAttribute("title")).toBe("");
+
+    const onFormModeChange = vi.fn();
+    const populated = renderConfigView({
+      schema,
+      formValue: {
+        gateway: { opaque: "custom" },
+        agents: { opaque: "off-scope" },
+      },
+      activeSection: "gateway",
+      onFormModeChange,
+    });
+    const banner = queryRequired(
+      populated.container,
+      ".config-content-callout .callout.info",
+      HTMLElement,
     );
+    expect(normalizedText(banner)).toBe(
+      "1 setting in this config can only be edited as text: gateway.opaque Open Raw editor",
+    );
+    expect(banner.querySelector("code")?.textContent).toBe("gateway.opaque");
+    expect(findButtonByText(populated.container, "Form").getAttribute("title")).toBe(
+      "Form view can't safely edit some fields",
+    );
+    findButtonByText(banner, "Open Raw editor").click();
+    expect(onFormModeChange).toHaveBeenCalledWith("raw");
   });
 
   function findButtonByText(container: HTMLElement, text: string): HTMLButtonElement {
@@ -287,6 +391,7 @@ describe("config view", () => {
           gateway: { type: "object", properties: { mode: { type: "string" } } },
         },
       },
+      uiHints: { "gateway.mode": { advanced: false } },
       formValue: { gateway: { mode: "remote" } },
       originalValue: { gateway: { mode: "local" } },
     });
@@ -451,6 +556,7 @@ describe("config view", () => {
           gateway: { type: "object", properties: { mode: { type: "string" } } },
         },
       },
+      uiHints: { "gateway.mode": { advanced: false } },
       formValue: { gateway: { mode: "remote" } },
       originalValue: { gateway: { mode: "local" } },
     });
@@ -491,12 +597,12 @@ describe("config view", () => {
 
     render(renderConfig({ ...props, formMode: "form" }), container);
     expect(normalizedText(container)).toContain(
-      "Your config contains fields the form editor can't safely represent. Use Raw mode to edit those entries.",
+      "1 setting in this config can only be edited as text: lastTouchedAt Open Raw editor",
     );
 
     render(renderConfig({ ...props, formMode: "raw" }), container);
     expect(normalizedText(container)).not.toContain(
-      "Your config contains fields the form editor can't safely represent. Use Raw mode to edit those entries.",
+      "1 setting in this config can only be edited as text: lastTouchedAt Open Raw editor",
     );
     expect(container.querySelector(".config-raw-field")).not.toBeNull();
   });
@@ -658,6 +764,7 @@ describe("config view", () => {
           },
         },
       },
+      uiHints: { "channels.telegram": { advanced: false } },
       formValue: {
         channels: { telegram: "on" },
         messages: { inbox: "smart" },
@@ -758,6 +865,7 @@ describe("config view", () => {
           models: offScopeSchema,
         },
       },
+      uiHints: { "channels.telegram": { advanced: false } },
       formValue: {
         channels: { telegram: "enabled" },
         models: {},
@@ -791,6 +899,7 @@ describe("config view", () => {
           },
         },
       },
+      uiHints: { "auth.order": { advanced: false } },
       formValue: {
         auth: {
           order: {},
@@ -951,7 +1060,7 @@ describe("config view", () => {
       raw: '{\n  channels: { discord: { token: { id: "TOKEN_AFTER" } } }\n}\n',
       originalRaw: '{\n  channels: { discord: { token: { id: "TOKEN_BEFORE" } } }\n}\n',
       uiHints: {
-        "channels.discord.token": { sensitive: true },
+        "channels.discord.token": { sensitive: true, advanced: false },
       },
       formValue: {
         channels: {
@@ -1213,7 +1322,7 @@ describe("config view", () => {
     const { container } = renderConfigView({
       schema: secretRefSchema,
       uiHints: {
-        "channels.discord.token": { sensitive: true },
+        "channels.discord.token": { sensitive: true, advanced: false },
       },
       formMode: "form",
       formValue: secretRefValue,
@@ -1237,7 +1346,7 @@ describe("config view", () => {
         formMode: "raw",
         schema: secretRefSchema,
         uiHints: {
-          "channels.discord.token": { sensitive: true },
+          "channels.discord.token": { sensitive: true, advanced: false },
         },
         formValue: secretRefValue,
         originalValue: secretRefOriginalValue,
@@ -1267,6 +1376,7 @@ describe("config view", () => {
           },
         },
       },
+      uiHints: { "gateway.mode": { advanced: false } },
       formValue: {
         gateway: {
           mode: { malformed: true },
@@ -1631,6 +1741,26 @@ describe("config view", () => {
     expect(row?.querySelector<HTMLElement & { checked: boolean }>("wa-switch")?.checked).toBe(true);
     row?.click();
     expect(setSidebarLiveActivity).toHaveBeenCalledWith(false);
+  });
+
+  it("validates and changes the browser-local chat width", () => {
+    const setChatMessageMaxWidth = vi.fn();
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      setChatMessageMaxWidth,
+    });
+    const input = container.querySelector<HTMLInputElement>("[data-settings-chat-message-width]");
+    expect(input).not.toBeNull();
+
+    input!.value = " min(1280px,  82%) ";
+    input!.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(setChatMessageMaxWidth).toHaveBeenCalledWith("min(1280px, 82%)");
+
+    input!.value = "960px; color: red";
+    input!.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(input!.validationMessage).not.toBe("");
+    expect(setChatMessageMaxWidth).toHaveBeenCalledTimes(1);
   });
 
   it("marks browser follow-up overrides and resets them to the server", () => {

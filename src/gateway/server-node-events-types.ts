@@ -4,7 +4,7 @@ import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { HealthSummary } from "../commands/health.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
-import type { ChatAbortMarker, ChatRunEntry, ChatRunRegistration } from "./server-chat.js";
+import type { ChatRunEntry, ChatRunRegistration } from "./server-chat.js";
 import type { DedupeEntry } from "./server-shared.js";
 
 /** Runtime context available to node event handlers. */
@@ -22,9 +22,6 @@ export type NodeEventContext = {
     sessionKey?: string,
   ) => ChatRunEntry | undefined;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
-  chatAbortedRuns: Map<string, ChatAbortMarker>;
-  chatRunBuffers: Map<string, string>;
-  chatDeltaSentAt: Map<string, number>;
   dedupe: Map<string, DedupeEntry>;
   agentRunSeq: Map<string, number>;
   getHealthCache: () => HealthSummary | null;

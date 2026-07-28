@@ -139,6 +139,7 @@ export const AgentDefaultsSchema = z
       .optional(),
     compaction: z
       .object({
+        enabled: z.boolean().optional(),
         mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),
         provider: z.string().optional(),
         thinkingLevel: AgentThinkingLevelSchema.optional(),
@@ -198,7 +199,15 @@ export const AgentDefaultsSchema = z
     imageQuality: z.enum(["auto", "efficient", "balanced", "high"]).optional(),
     typingIntervalSeconds: z.number().int().positive().optional(),
     typingMode: TypingModeSchema.optional(),
-    heartbeat: HeartbeatSchema,
+    heartbeat: HeartbeatSchema.unwrap()
+      .safeExtend({ agentId: z.string().trim().min(1).optional() })
+      .optional(),
+    systemAgent: z
+      .object({
+        agentId: z.string().trim().min(1).optional(),
+      })
+      .strict()
+      .optional(),
     maxConcurrent: z.number().int().positive().optional(),
     subagents: z
       .object({

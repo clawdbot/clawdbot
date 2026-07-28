@@ -163,6 +163,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
             claimHeartbeatOutcomeForRun({
               agentId: input.context.sessionAgentId,
               sessionKey: attempt.sessionKey,
+              storePath: attempt.sessionTarget?.storePath,
               runId: attempt.runId,
             }),
           )
@@ -294,7 +295,6 @@ export async function runEmbeddedAttemptPromptPhase(input: {
 
   const pendingMidTurnPrecheckRequest = input.lifecycle.takePendingMidTurnPrecheckRequest();
   if (pendingMidTurnPrecheckRequest) {
-    await input.sessionLockController.waitForSessionEvents(activeSession);
     await input.withOwnedSessionWriteLock(() => {
       removeTrailingMidTurnPrecheckAssistantError({ activeSession, sessionManager });
       const state = input.lifecycle.readState();

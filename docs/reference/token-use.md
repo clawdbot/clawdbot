@@ -20,8 +20,8 @@ OpenClaw assembles its own system prompt on every run. It includes:
   Bounded by `skills.limits.maxSkillsPromptChars`, with optional per-agent
   override at `agents.entries.*.skillsLimits.maxSkillsPromptChars`.
 - Self-update instructions
-- Workspace + bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`,
-  `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md` when new, plus
+- Workspace + bootstrap files (`AGENTS.md`, `SOUL.md`,
+  `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md` when new, plus
   `MEMORY.md` when present). Large injected files are truncated by
   `agents.defaults.bootstrapMaxChars` (default: `20000`); total bootstrap
   injection is capped by `agents.defaults.bootstrapTotalMaxChars` (default:
@@ -71,19 +71,25 @@ Runtime-heavy surfaces have their own explicit caps under
 | Key                      | Purpose                                                                  |
 | ------------------------ | ------------------------------------------------------------------------ |
 | `memoryGetMaxChars`      | Max characters `memory_get` returns before truncation.                   |
-| `memoryGetDefaultLines`  | Default `memory_get` line window when a request omits `lines`.           |
-| `toolResultMaxChars`     | Advanced ceiling for a single live tool result (up to `1000000` chars).  |
 | `postCompactionMaxChars` | Max characters retained from `AGENTS.md` during post-compaction refresh. |
 
 These are bounded runtime excerpts and injected runtime-owned blocks,
 separate from bootstrap limits, startup-context limits, and skills prompt
 limits.
 
-`toolResultMaxChars` is unset by default, so OpenClaw derives the live
-tool-result cap from the effective model context window: `16000` chars below
+OpenClaw derives the live tool-result cap from the effective model context
+window: `16000` chars below
 100K tokens, `32000` chars at 100K+ tokens, `64000` chars at 200K+ tokens.
-The runtime context-share guard still caps a single tool result at 30% of the
-context window even when a larger explicit ceiling is configured.
+The runtime context-share guard also caps a single tool result at 30% of the
+context window.
+
+Large provider windows are not enabled automatically when they materially
+change cost or latency. For example, direct OpenAI GPT-5.5 and GPT-5.6 models
+publish a `1050000` token total window, but OpenClaw defaults their active
+runtime budget to `272000` tokens. The opt-in `922000` input budget reserves the
+full `128000` output allowance, and OpenAI applies higher long-context pricing
+to the entire request once input exceeds `272000` tokens. See
+[OpenAI context window defaults](/providers/openai#context-window-defaults-and-long-context-opt-in).
 
 For images, OpenClaw downscales transcript/tool image payloads before
 provider calls. Tune with `agents.defaults.imageMaxDimensionPx` (default:
@@ -177,11 +183,10 @@ auth: non-API-key providers such as `aws-sdk` can show estimated cost when
 their configured model entry includes local pricing and the provider
 returns usage metadata.
 
-After sidecars and channels reach the Gateway ready path, OpenClaw starts an
-optional background pricing bootstrap for configured model refs that do not
-already have local pricing. That bootstrap fetches remote OpenRouter and
-LiteLLM pricing catalogs. Set `models.pricing.enabled: false` to skip those
-catalog fetches on offline or restricted networks; explicit
+Pricing updates ship in the hosted model catalog alongside model metadata.
+OpenClaw does not fetch OpenRouter or LiteLLM directly. Set
+`models.catalogRefresh.enabled: false` to disable hosted catalog traffic on
+offline or restricted networks; bundled pricing and explicit
 `models.providers.*.models[].cost` entries still drive local cost estimates.
 
 ## Cache TTL and pruning impact
@@ -207,7 +212,7 @@ For a full knob-by-knob guide, see [Prompt Caching](/reference/prompt-caching).
 For Anthropic API pricing, cache reads are significantly cheaper than input
 tokens, while cache writes are billed at a higher multiplier. See Anthropic's
 prompt caching pricing for the latest rates and TTL multipliers:
-[https://docs.anthropic.com/docs/build-with-claude/prompt-caching](https://docs.anthropic.com/docs/build-with-claude/prompt-caching)
+[https://platform.claude.com/docs/en/build-with-claude/prompt-caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
 
 ### Example: keep 1h cache warm with heartbeat
 

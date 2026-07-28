@@ -5,8 +5,6 @@ import type {
   CliBackendConfig,
   CliBackendNormalizeConfigContext,
   CliBackendResolveExecutionArgsContext,
-  CliBackendResolveRuntimeToolAvailabilityContext,
-  CliBackendRuntimeToolAvailability,
 } from "openclaw/plugin-sdk/cli-backend";
 import { resolveExecModePolicy } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -450,8 +448,11 @@ function resolveClaudeCliRestrictedExecutionArgs(
     CLAUDE_TOOLS_ARG,
     availability.native.join(","),
   );
-  if (availability.mcp.length > 0) {
-    normalized.push(CLAUDE_ALLOWED_TOOLS_ARG, availability.mcp.join(","));
+  if (availability.openClaw.length > 0) {
+    normalized.push(
+      CLAUDE_ALLOWED_TOOLS_ARG,
+      availability.openClaw.map((toolName) => `${OPENCLAW_MCP_TOOL_PREFIX}${toolName}`).join(","),
+    );
   } else {
     normalized.push(CLAUDE_DISALLOWED_TOOLS_ARG, CLAUDE_DENY_MCP_TOOLS_VALUE);
   }
@@ -482,15 +483,6 @@ export function resolveClaudeCliExecutionArgs(
     return executionArgs;
   }
   return resolveClaudeCliRestrictedExecutionArgs(executionArgs, context.toolAvailability);
-}
-
-/** Route restricted runs entirely through OpenClaw's grant-scoped MCP policy boundary. */
-export function resolveClaudeCliRuntimeToolAvailability(
-  context: CliBackendResolveRuntimeToolAvailabilityContext,
-): CliBackendRuntimeToolAvailability {
-  return {
-    mcp: context.toolsAllow.map((toolName) => `${OPENCLAW_MCP_TOOL_PREFIX}${toolName}`),
-  };
 }
 
 /** Normalize Claude CLI backend config before registration or execution. */

@@ -4,6 +4,7 @@ import { isBunRuntime, isNodeRuntime } from "../daemon/runtime-binary.js";
 import {
   consumeRootOptionToken,
   FLAG_TERMINATOR,
+  getRootOptionAwareCommandPath,
   isValueToken,
 } from "../infra/cli-root-options.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
@@ -464,40 +465,7 @@ export function getPositiveIntFlagValue(argv: string[], name: string): number | 
 }
 
 export function getCommandPathWithRootOptions(argv: string[], depth = 2): string[] {
-  return getCommandPathInternal(argv, depth, { skipRootOptions: true });
-}
-
-function getCommandPathInternal(
-  argv: string[],
-  depth: number,
-  opts: { skipRootOptions: boolean },
-): string[] {
-  const args = argv.slice(2);
-  const path: string[] = [];
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
-    if (!arg) {
-      continue;
-    }
-    if (arg === "--") {
-      break;
-    }
-    if (opts.skipRootOptions) {
-      const consumed = consumeRootOptionToken(args, i);
-      if (consumed > 0) {
-        i += consumed - 1;
-        continue;
-      }
-    }
-    if (arg.startsWith("-")) {
-      continue;
-    }
-    path.push(arg);
-    if (path.length >= depth) {
-      break;
-    }
-  }
-  return path;
+  return getRootOptionAwareCommandPath(argv, depth);
 }
 
 export function getPrimaryCommand(argv: string[]): string | null {

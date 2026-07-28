@@ -337,6 +337,51 @@ describe("qa test file scenario runner", () => {
     });
   });
 
+  it.each([
+    { failFast: true, expectedScenarioIds: ["first-native-scenario"] },
+    {
+      failFast: false,
+      expectedScenarioIds: ["first-native-scenario", "later-native-scenario"],
+    },
+    {
+      failFast: undefined,
+      expectedScenarioIds: ["first-native-scenario", "later-native-scenario"],
+    },
+  ])(
+    "honors native scenario fail-fast mode ($failFast)",
+    async ({ failFast, expectedScenarioIds }) => {
+      const repoRoot = await makeTempRepo("qa-vitest-fail-fast-");
+      const runCommand = vi.fn(async () => ({
+        exitCode: 1,
+        stdout: "",
+        stderr: "native scenario failed\n",
+      }));
+      const firstScenario = {
+        ...makeTestFileScenario("vitest", "extensions/qa-lab/src/coverage-report.test.ts"),
+        id: "first-native-scenario",
+      };
+      const laterScenario = {
+        ...makeTestFileScenario("vitest", "extensions/qa-lab/src/cli.test.ts"),
+        id: "later-native-scenario",
+      };
+
+      const result = await runQaTestFileScenarios({
+        repoRoot,
+        outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "native-fail-fast"),
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        failFast,
+        scenarios: [firstScenario, laterScenario],
+        runCommand,
+      });
+
+      expect(runCommand).toHaveBeenCalledTimes(expectedScenarioIds.length);
+      expect(result.results.map((scenario) => scenario.scenario.id)).toEqual(expectedScenarioIds);
+      expect(result.results.every((scenario) => scenario.status === "fail")).toBe(true);
+      expect(result.evidence.entries.map((entry) => entry.test.id)).toEqual(expectedScenarioIds);
+    },
+  );
+
   it("runs script scenarios and imports producer QA evidence artifacts", async () => {
     const repoRoot = await makeTempRepo("qa-script-scenario-");
     const commands: QaScenarioCommandExecution[] = [];

@@ -42,7 +42,6 @@ import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
 import { detectSkillWorkshopToolPolicyDiagnostic } from "../skills/workshop/tool-policy-diagnostic.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import { removedWorkspacesStateCheck } from "./doctor-removed-workspaces-state-check.js";
-import { registerHealthCheck } from "./health-check-registry.js";
 import type { SplitHealthCheckInput } from "./health-check-runner-types.js";
 import type {
   HealthCheck,
@@ -58,6 +57,8 @@ const GATEWAY_DAEMON_CHECK_ID = "core/doctor/gateway-daemon";
 const GATEWAY_HEALTH_CHECK_ID = "core/doctor/gateway-health";
 const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
 const SESSION_LOCKS_CHECK_ID = "core/doctor/session-locks";
+const TELEGRAM_GENERAL_TOPIC_CONVERSATIONS_CHECK_ID =
+  "core/doctor/telegram-general-topic-conversations";
 const SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID = "core/doctor/skill-workshop-tool-policy";
 type CoreHealthCheckContext = HealthCheckContext & {
   readonly deep?: boolean;
@@ -575,7 +576,7 @@ const bootstrapSizeCheck: HealthCheck = {
         message: `${file.name} exceeds bootstrap limits and will be truncated.`,
         path: file.path,
         fixHint:
-          "Reduce the file size or tune `agents.list[].bootstrapMaxChars` / `bootstrapTotalMaxChars` for this agent, or the corresponding `agents.defaults.*` fallback.",
+          "Reduce the file size or tune `agents.entries.*.bootstrapMaxChars` / `bootstrapTotalMaxChars` for this agent, or the corresponding `agents.defaults.*` fallback.",
       });
     }
     for (const file of analysis.nearLimitFiles) {
@@ -588,7 +589,7 @@ const bootstrapSizeCheck: HealthCheck = {
         message: `${file.name} is near the configured bootstrap file limit.`,
         path: file.path,
         fixHint:
-          "Reduce the file size or tune `agents.list[].bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits.",
+          "Reduce the file size or tune `agents.entries.*.bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits.",
       });
     }
     if (analysis.totalNearLimit) {
@@ -598,7 +599,7 @@ const bootstrapSizeCheck: HealthCheck = {
         message: "Total bootstrap context is near the configured total limit.",
         path: workspaceDir,
         fixHint:
-          "Reduce bootstrap file sizes or tune `agents.list[].bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback.",
+          "Reduce bootstrap file sizes or tune `agents.entries.*.bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback.",
       });
     }
     return findings;
@@ -843,6 +844,53 @@ const codexSessionRoutesCheck: HealthCheck = {
             ].join(" "),
       }),
     );
+  },
+};
+
+const telegramGeneralTopicConversationsCheck: HealthCheck = {
+  id: TELEGRAM_GENERAL_TOPIC_CONVERSATIONS_CHECK_ID,
+  kind: "core",
+  description: "Telegram General-topic conversation bindings use the canonical chat target.",
+  source: "doctor",
+  async detect(ctx) {
+    const { detectTelegramGeneralTopicConversationRepairs } =
+      await import("../commands/doctor-telegram-general-topic-conversations.js");
+    const repairs = detectTelegramGeneralTopicConversationRepairs({
+      cfg: ctx.cfg,
+      ...(ctx.env ? { env: ctx.env } : {}),
+    });
+    return repairs.map((repair) => ({
+      checkId: TELEGRAM_GENERAL_TOPIC_CONVERSATIONS_CHECK_ID,
+      severity: "warning" as const,
+      message: `Agent ${repair.agentId} has a stale Telegram General-topic conversation identity.`,
+      target: repair.agentId,
+      requirement: "One canonical chat-scoped conversation binding for Telegram General topic.",
+      fixHint: "Run `openclaw doctor --fix` to merge the stale topic-qualified identity.",
+    }));
+  },
+  async repair(ctx) {
+    const { repairTelegramGeneralTopicConversations } =
+      await import("../commands/doctor-telegram-general-topic-conversations.js");
+    const effect = {
+      kind: "state" as const,
+      action: ctx.dryRun ? "would-merge-stale-bindings" : "merge-stale-bindings",
+      target: "Telegram General topic conversations",
+      dryRunSafe: false,
+    };
+    if (ctx.dryRun) {
+      return {
+        changes: ["Would merge stale Telegram General-topic identities."],
+        effects: [effect],
+      };
+    }
+    const repaired = await repairTelegramGeneralTopicConversations({
+      cfg: ctx.cfg,
+      ...(ctx.env ? { env: ctx.env } : {}),
+    });
+    return {
+      changes: [`Merged ${repaired} stale Telegram General-topic conversation identity row(s).`],
+      effects: repaired > 0 ? [effect] : [],
+    };
   },
 };
 
@@ -1212,6 +1260,7 @@ function createConvertedWorkflowChecks(
     legacyWhatsAppCrontabCheck,
     legacyCronStoreCheck,
     codexSessionRoutesCheck,
+    telegramGeneralTopicConversationsCheck,
     sessionLocksCheck,
     shellCompletionCheck,
     uiProtocolFreshnessCheck,
@@ -1264,23 +1313,6 @@ function createConvertedWorkflowChecks(
         ]
       : []),
   ];
-}
-
-let registered = false;
-
-/** @deprecated Core doctor flows use ordered doctor contributions; keep this only for SDK compatibility. */
-export function registerCoreHealthChecks(): void {
-  if (registered) {
-    return;
-  }
-  for (const check of CORE_HEALTH_CHECKS) {
-    registerHealthCheck(check);
-  }
-  registered = true;
-}
-
-export function resetCoreHealthChecksForTest(): void {
-  registered = false;
 }
 
 export function createCoreHealthChecks(

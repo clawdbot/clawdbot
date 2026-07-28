@@ -11,12 +11,12 @@ import {
 } from "../agents/model-catalog-visibility.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
-import { createModelPickerVisibleProviderPredicate } from "../agents/model-picker-visibility.js";
 import {
   createProviderAuthChecker,
   type ProviderModelAuthChecker,
 } from "../agents/model-provider-auth.js";
 import { formatLiteralProviderPrefixedModelRef } from "../agents/model-ref-shared.js";
+import { createModelPickerVisibleProviderPredicate } from "../agents/model-runtime-aliases.js";
 import {
   buildConfiguredModelCatalog,
   buildModelAliasIndex,

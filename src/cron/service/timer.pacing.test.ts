@@ -4,6 +4,7 @@ import { createNoopLogger } from "../service.test-harness.js";
 import type { CronJob, CronPacing } from "../types.js";
 import { recomputeNextRunsForMaintenance } from "./jobs.js";
 import { createCronServiceState } from "./state.js";
+import { applyOutcomeToStoredJob } from "./timer-outcomes.js";
 import { applyJobResult } from "./timer.js";
 
 const ENDED_AT = Date.parse("2026-07-18T12:00:00.000Z");
@@ -64,6 +65,48 @@ describe("applyJobResult dynamic cadence", () => {
     expect(job.state.nextRunAtMs).toBe(STARTED_AT + 60 * 60_000);
     expect(job.state.pacedNextRunAtMs).toBeUndefined();
     expect(job.state.forcePreservedNextRunAtMs).toBeUndefined();
+  });
+
+  it("clears the consumed pacing override after a current quiet trigger", () => {
+    const state = makeState();
+    const job = makePacedJob({ min: "15m", max: "4h" });
+    job.state.pacedNextRunAtMs = ENDED_AT + 30 * 60_000;
+    state.store = { version: 1, jobs: [job] };
+    const admittedJob = structuredClone(job);
+
+    applyOutcomeToStoredJob(state, {
+      jobId: job.id,
+      job: admittedJob,
+      status: "ok",
+      startedAt: STARTED_AT,
+      endedAt: ENDED_AT,
+      triggerEval: { fired: false, stateChanged: false },
+    });
+
+    expect(job.state.pacedNextRunAtMs).toBeUndefined();
+  });
+
+  it("preserves an edited pacing override after a stale quiet trigger", () => {
+    const state = makeState();
+    const job = makePacedJob({ min: "15m", max: "4h" });
+    const admittedJob = structuredClone(job);
+    const editedNextRunAtMs = ENDED_AT + 45 * 60_000;
+    job.schedule = { kind: "every", everyMs: 2 * 60 * 60_000, anchorMs: STARTED_AT };
+    job.state.nextRunAtMs = editedNextRunAtMs;
+    job.state.pacedNextRunAtMs = editedNextRunAtMs;
+    state.store = { version: 1, jobs: [job] };
+
+    applyOutcomeToStoredJob(state, {
+      jobId: job.id,
+      job: admittedJob,
+      status: "ok",
+      startedAt: STARTED_AT,
+      endedAt: ENDED_AT,
+      triggerEval: { fired: false, stateChanged: false },
+    });
+
+    expect(job.state.nextRunAtMs).toBe(editedNextRunAtMs);
+    expect(job.state.pacedNextRunAtMs).toBe(editedNextRunAtMs);
   });
 
   it.each([

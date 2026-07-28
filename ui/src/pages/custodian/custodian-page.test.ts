@@ -293,11 +293,10 @@ describe("custodian page", () => {
     await page.updateComplete;
     expect(page.querySelector("openclaw-option-card")).not.toBeNull();
 
-    setGatewaySnapshot({ connected: false, reconnecting: true });
+    setGatewaySnapshot({ phase: "reconnecting" });
     await page.updateComplete;
     setGatewaySnapshot({
-      connected: true,
-      reconnecting: false,
+      phase: "connected",
     });
     await page.updateComplete;
 
@@ -743,7 +742,8 @@ describe("custodian page", () => {
     await page.updateComplete;
 
     expect(context.navigate).toHaveBeenCalledWith("chat", {
-      search: `?session=main&draft=${encodeURIComponent("Wake up, my friend!")}`,
+      pathname: "/chat/main",
+      search: `?draft=${encodeURIComponent("Wake up, my friend!")}`,
     });
   });
 

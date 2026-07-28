@@ -41,7 +41,6 @@ import { parseDurationMs } from "../../cli/parse-duration.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { normalizeAgentModelRefForConfig } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { callGateway } from "../../gateway/call.js";
 import { isRemoteEnvironment } from "../../infra/remote-env.js";
 import {
   applyProviderAuthConfigPatch,
@@ -69,22 +68,10 @@ import type { WizardPrompter } from "../../wizard/prompts.js";
 import { validateAnthropicSetupToken } from "../auth-token.js";
 import { repairCodexRuntimePluginInstallForModelSelection } from "../codex-runtime-plugin-install.js";
 import { repairCopilotRuntimePluginInstallForModelSelection } from "../copilot-runtime-plugin-install.js";
+import { refreshRunningGatewayAuthState } from "./auth-refresh.js";
 import { loadValidConfigOrThrow, resolveKnownAgentId, updateConfig } from "./shared.js";
 
 type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
-
-// CLI auth writes occur outside the gateway process, which may retain an older runtime snapshot.
-async function refreshRunningGatewayAuthState(): Promise<void> {
-  try {
-    await callGateway({
-      method: "models.authStatus",
-      params: { refresh: true },
-      timeoutMs: 3000,
-    });
-  } catch {
-    // Auth writes must still succeed when no local gateway is running.
-  }
-}
 
 function resolveManualTokenExpiryMs(expiresIn: string | undefined): number | undefined {
   const normalizedExpiresIn = normalizeStringifiedOptionalString(expiresIn);

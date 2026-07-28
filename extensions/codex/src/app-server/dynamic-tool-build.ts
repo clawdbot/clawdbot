@@ -267,6 +267,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     senderIsOwner: params.senderIsOwner,
     inputProvenance: params.inputProvenance,
     trustedInternalHandoff: params.trustedInternalHandoff,
+    scheduledToolPolicy: params.scheduledToolPolicy,
     allowGatewaySubagentBinding:
       params.allowGatewaySubagentBinding || isForcedPrivateQaCodexRuntime(),
     ...sessionKeys,
@@ -396,6 +397,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     senderE164: params.senderE164,
     inputProvenance: params.inputProvenance,
     trustedInternalHandoff: params.trustedInternalHandoff,
+    scheduledToolPolicy: params.scheduledToolPolicy,
   });
   const senderScopedWebSearchRestriction =
     !webSearchPolicy.allowed && webSearchPolicy.persistentAllowed;

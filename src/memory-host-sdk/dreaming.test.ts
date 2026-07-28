@@ -210,7 +210,7 @@ describe("memory dreaming host helpers", () => {
     const cfg = {
       agents: {
         list: [
-          { id: "alpha", workspace: "/workspace/shared" },
+          { id: "alpha", default: true, workspace: "/workspace/shared" },
           { id: "beta", workspace: "/workspace/beta" },
           { id: "gamma", workspace: "/workspace/shared" },
         ],
@@ -233,7 +233,7 @@ describe("memory dreaming host helpers", () => {
     const cfg = {
       agents: {
         list: [
-          { id: "agi-ceo", workspace: "/workspace/agi-ceo" },
+          { id: "agi-ceo", default: true, workspace: "/workspace/agi-ceo" },
           { id: "agi-cdo", workspace: "/workspace/agi-cdo" },
         ],
       },
@@ -266,6 +266,7 @@ describe("memory dreaming host helpers", () => {
         defaults: {
           workspace: "/workspace",
         },
+        entries: { main: { default: true } },
       },
     } as OpenClawConfig;
 

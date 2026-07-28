@@ -3,10 +3,10 @@ import { createHash } from "node:crypto";
 import {
   embeddedAgentLog,
   formatErrorMessage,
+  projectAgentHarnessTranscriptMessageForDisplay,
   runAgentHarnessBeforeMessageWriteHook,
   type AgentMessage,
   type EmbeddedRunAttemptParams,
-  type EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
 import {
@@ -16,6 +16,7 @@ import {
   type SessionTranscriptWriteLockParams,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import type { CodexThread, JsonValue } from "./protocol.js";
 import {
   attachCodexMirrorAttestation,
@@ -338,6 +339,7 @@ async function mirrorBestEffort(params: {
   turnId: string;
 }): Promise<{
   assistantTranscriptOwned: boolean;
+  assistantTranscriptIdempotencyKey?: string;
   mirroredMessages: MirroredAgentMessage[];
 }> {
   try {
@@ -386,10 +388,18 @@ async function mirrorBestEffort(params: {
         readCodexMirrorSourceFingerprint(message) === expectedFingerprints.get(identity)
       );
     });
+    const assistantMirrorIdentity = `${params.turnId}:assistant`;
+    const assistantTranscriptOwned =
+      mirrorResult.assistantMirrorIdentitiesOwned.includes(assistantMirrorIdentity);
+    const assistantTranscriptMessage = assistantTranscriptOwned
+      ? mirroredMessages.find((message) => readMirrorIdentity(message) === assistantMirrorIdentity)
+      : undefined;
+    const assistantTranscriptIdempotencyKey = normalizeOptionalString(
+      (assistantTranscriptMessage as { idempotencyKey?: unknown } | undefined)?.idempotencyKey,
+    );
     return {
-      assistantTranscriptOwned: mirrorResult.assistantMirrorIdentitiesOwned.includes(
-        `${params.turnId}:assistant`,
-      ),
+      assistantTranscriptOwned,
+      ...(assistantTranscriptIdempotencyKey ? { assistantTranscriptIdempotencyKey } : {}),
       mirroredMessages,
     };
   } catch (error) {
@@ -462,13 +472,16 @@ export async function mirrorPromptAtTurnStartBestEffort(params: {
   }
   try {
     const mirrorPromise = (async () => {
-      const userPromptMessage = attachUpstreamUserText(
-        attachCodexMirrorIdentity(
-          await buildResolvedCodexUserPromptMessage(params.params),
-          `${params.turnId}:prompt`,
+      const userPromptMessage = projectAgentHarnessTranscriptMessageForDisplay({
+        hidden: params.params.trigger === "memory",
+        message: attachUpstreamUserText(
+          attachCodexMirrorIdentity(
+            await buildResolvedCodexUserPromptMessage(params.params),
+            `${params.turnId}:prompt`,
+          ),
+          params.upstreamUserText,
         ),
-        params.upstreamUserText,
-      );
+      });
       const mirrorResult = await mirror({
         agentId: params.agentId,
         sessionKey: params.sessionKey,
@@ -608,6 +621,10 @@ async function mirror(params: {
           // identity so retries cannot turn a stale idempotency hit into evidence.
           messageToAppend = attachCodexMirrorIdentity(messageToAppend, mirrorIdentity);
         }
+        messageToAppend = projectAgentHarnessTranscriptMessageForDisplay({
+          hidden: (message as { display?: boolean }).display === false,
+          message: messageToAppend,
+        });
         const appended = await transcript.appendMessage({
           message: messageToAppend,
           idempotencyLookup: idempotencyKey ? "caller-checked" : "scan",

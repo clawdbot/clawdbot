@@ -24,9 +24,9 @@ import {
   POSIX_INLINE_COMMAND_FLAGS,
   resolveInlineCommandMatch,
 } from "./shell-inline-command.js";
-import { POSIX_SHELL_WRAPPERS } from "./shell-wrapper-resolution.js";
+import { POSIX_PARSEABLE_SHELL_WRAPPERS } from "./shell-wrapper-resolution.js";
 
-const POSIX_SHELL_NAMES: ReadonlySet<string> = new Set(POSIX_SHELL_WRAPPERS);
+const POSIX_SHELL_NAMES: ReadonlySet<string> = new Set(POSIX_PARSEABLE_SHELL_WRAPPERS);
 
 type ExecAuthorizationDialect = "argv" | "posix-shell" | "windows-cmd" | "powershell";
 

@@ -137,7 +137,7 @@ async function proxyReconnect(
 ): Promise<void> {
   await gateway.closeLatest(1001, "proxy idle timeout");
   await expect.poll(() => gateway.getSocketCount(), { timeout: 10_000 }).toBe(expectedSocketCount);
-  expect(await page.locator(".sidebar-footer-bar__status").count()).toBe(0);
+  expect(await page.locator(".sidebar-identity-card__subtitle").count()).toBe(0);
 }
 
 async function captureProof(page: Page, name: string): Promise<void> {
@@ -179,8 +179,14 @@ describeControlUiE2e("Control UI usage proxy reconnect lifecycle", () => {
     });
 
     try {
-      const response = await page.goto(`${server.baseUrl}usage`);
+      const response = await page.goto(`${server.baseUrl}chat`);
       expect(response?.status()).toBe(200);
+      const sidebar = page.locator("openclaw-app-sidebar");
+      await sidebar.locator(".sidebar-identity-card").click();
+      await sidebar
+        .locator('wa-dropdown.sidebar-identity-menu wa-dropdown-item[value="command:usage"]')
+        .click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/usage");
       await waitForRequestCount(gateway, "sessions.usage", 1);
       await waitForRequestCount(gateway, "usage.cost", 1);
       await page.locator(".daily-chart-compact").waitFor({ timeout: 10_000 });
@@ -226,7 +232,10 @@ describeControlUiE2e("Control UI usage proxy reconnect lifecycle", () => {
 
       await gateway.deferNext("sessions.usage");
       await gateway.deferNext("usage.cost");
-      await page.getByRole("button", { name: "Refresh", exact: true }).click();
+      await page
+        .locator("openclaw-usage-page")
+        .getByRole("button", { name: "Refresh", exact: true })
+        .click();
       await waitForRequestCount(gateway, "sessions.usage", 3);
       await waitForRequestCount(gateway, "usage.cost", 3);
 

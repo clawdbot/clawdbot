@@ -9,6 +9,7 @@ import { assertNoSymlinkParents } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, root as fsSafeRoot, type Root } from "../infra/fs-safe.js";
 import { resolveUserPath } from "../utils.js";
 import { digestClawMcpServer } from "./mcp.js";
+import { clawManifestWorkspaceConflictsWithPath } from "./schema.js";
 import { MAX_MANAGED_FILE_BYTES, MAX_MANAGED_WORKSPACE_BYTES } from "./source-limits.js";
 import {
   CLAW_ADD_PLAN_SCHEMA_VERSION,
@@ -20,6 +21,7 @@ import {
   type ClawDiagnostic,
   type ClawManifest,
   type ClawLocalPrerequisite,
+  type ClawOpenClawProfile,
   type ClawPackage,
   type ClawSourceIdentity,
 } from "./types.js";
@@ -37,7 +39,7 @@ function capabilityChange(
   };
 }
 
-type ClawAddPlanContext = {
+export type ClawAddPlanContext = {
   agentId?: string;
   workspace?: string;
   resumableWorkspace?: string;
@@ -73,6 +75,7 @@ type PendingWorkspaceFileAction = {
   sourcePath: string;
   manifestPath: string;
   byteLength: number;
+  content?: Buffer;
 };
 
 function blockedWorkspaceFileAction(params: {
@@ -189,6 +192,8 @@ async function inspectWorkspaceFileAction(params: {
 
 export async function buildClawAddPlan(params: {
   manifest: ClawManifest;
+  clawMarkdownBody?: Buffer;
+  openClawProfile?: ClawOpenClawProfile;
   source: ClawSourceIdentity;
   diagnostics?: ClawDiagnostic[];
   context?: ClawAddPlanContext;
@@ -219,6 +224,13 @@ export async function buildClawAddPlan(params: {
   }
   const existingAgentIds = new Set(context.existingAgentIds ?? []);
   const agentBlocked = existingAgentIds.has(finalId);
+  const openClawAgentSettings = params.openClawProfile?.agent ?? {};
+  const agentConfig: ClawAddPlan["agent"]["config"] = {
+    ...params.manifest.agent,
+    ...openClawAgentSettings,
+    id: finalId,
+    workspace,
+  };
   if (agentBlocked) {
     blockers.push(
       blocker(
@@ -233,13 +245,14 @@ export async function buildClawAddPlan(params: {
     id: finalId,
     action: "create",
     target: `agents.entries[${JSON.stringify(finalId)}]`,
-    details: { ...params.manifest.agent, id: finalId, workspace, expectedState: "absent" },
+    details: { ...agentConfig, expectedState: "absent" },
     blocked: agentBlocked || !AGENT_ID_PATTERN.test(finalId),
   });
   const agentCapabilityEffect = {
-    ...(params.manifest.agent.sandbox ? { sandbox: params.manifest.agent.sandbox } : {}),
-    ...(params.manifest.agent.tools ? { tools: params.manifest.agent.tools } : {}),
-    ...(params.manifest.agent.heartbeat ? { heartbeat: params.manifest.agent.heartbeat } : {}),
+    ...(openClawAgentSettings.sandbox ? { sandbox: openClawAgentSettings.sandbox } : {}),
+    ...(openClawAgentSettings.tools ? { tools: openClawAgentSettings.tools } : {}),
+    ...(openClawAgentSettings.memory ? { memory: openClawAgentSettings.memory } : {}),
+    ...(openClawAgentSettings.heartbeat ? { heartbeat: openClawAgentSettings.heartbeat } : {}),
   };
   if (Object.keys(agentCapabilityEffect).length > 0) {
     capabilityChanges.push(
@@ -248,7 +261,8 @@ export async function buildClawAddPlan(params: {
         id: finalId,
         path: "agent",
         action: "create",
-        reason: "The new agent declares sandbox, tool, or recurring heartbeat capabilities.",
+        reason:
+          "The new agent declares sandbox, tool, memory-search, or recurring heartbeat capabilities.",
         effect: agentCapabilityEffect,
       }),
     );
@@ -320,6 +334,46 @@ export async function buildClawAddPlan(params: {
     }
   }
 
+  if (params.clawMarkdownBody && params.clawMarkdownBody.toString("utf8").trim().length > 0) {
+    if (clawManifestWorkspaceConflictsWithPath(params.manifest, "SOUL.md")) {
+      const diagnostic = blocker(
+        "claw_body_soul_conflict",
+        "$.workspace",
+        "CLAW.md body content and an explicit SOUL.md workspace declaration cannot both be present.",
+      );
+      blockers.push(diagnostic);
+      actions.push({
+        kind: "workspaceFile",
+        id: "SOUL.md",
+        action: "write",
+        target: resolve(workspace, "SOUL.md"),
+        source: source.manifestPath,
+        sourceKind: "clawMarkdownBody",
+        blocked: true,
+        reason: diagnostic.message,
+      });
+    } else {
+      const pending: PendingWorkspaceFileAction = {
+        sourcePath: source.manifestPath,
+        manifestPath: "$body",
+        byteLength: params.clawMarkdownBody.byteLength,
+        content: params.clawMarkdownBody,
+        action: {
+          kind: "workspaceFile",
+          id: "SOUL.md",
+          action: "write",
+          target: resolve(workspace, "SOUL.md"),
+          source: source.manifestPath,
+          sourceKind: "clawMarkdownBody",
+          details: { expectedState: "absent" },
+          blocked: false,
+        },
+      };
+      pendingWorkspaceFiles.push(pending);
+      actions.push(pending.action);
+    }
+  }
+
   for (const name of CLAW_BOOTSTRAP_FILE_NAMES) {
     const declaration = params.manifest.workspace.bootstrapFiles[name];
     if (!declaration) {
@@ -358,6 +412,10 @@ export async function buildClawAddPlan(params: {
     }
   } else {
     for (const pending of pendingWorkspaceFiles) {
+      if (pending.content) {
+        pending.action.digest = `sha256:${createHash("sha256").update(pending.content).digest("hex")}`;
+        continue;
+      }
       try {
         await assertNoSymlinkParents({
           rootDir: source.packageRoot,
@@ -559,7 +617,7 @@ export async function buildClawAddPlan(params: {
       requestedId: params.manifest.agent.id,
       finalId,
       workspace,
-      config: { ...params.manifest.agent, id: finalId, workspace },
+      config: agentConfig,
     },
     summary: {
       totalActions: actions.length,

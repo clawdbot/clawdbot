@@ -4,6 +4,7 @@ import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.js"
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { resolveDelegationCapability } from "../../delegation-capability.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "../../harness/runtime-artifact.types.js";
+import { appendIncognitoSystemPrompt } from "../../incognito-system-prompt.js";
 import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../model-auth.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import { createToolTerminalObserver } from "../../tool-terminal-outcome.js";
@@ -14,6 +15,7 @@ import {
   EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
 } from "./lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
+import { preparePluginHarnessPromptImages } from "./plugin-harness-prompt-images.js";
 import { resolveSkillWorkshopAttemptParams } from "./skill-workshop-attempt-params.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptTrajectoryRecorder } from "./types.js";
 
@@ -161,6 +163,11 @@ export async function dispatchEmbeddedRunAttempt(input: {
   };
 
   let cancellationRequested = false;
+  const promptMedia = await preparePluginHarnessPromptImages({
+    runParams: params,
+    runtime,
+    pluginHarnessOwnsTransport: control.pluginHarnessOwnsTransport,
+  });
   const attemptParams: EmbeddedRunAttemptParams = {
     operation: "attempt",
     sessionId: runtime.sessionId,
@@ -223,8 +230,9 @@ export async function dispatchEmbeddedRunAttempt(input: {
     skipPreparedUserTurnMessage: runtime.skipPreparedUserTurnMessage,
     currentInboundEventKind: params.currentInboundEventKind,
     currentInboundContext: params.currentInboundContext,
-    images: params.images,
-    imageOrder: params.imageOrder,
+    images: promptMedia.images,
+    imageOrder: promptMedia.imageOrder,
+    media: promptMedia.media,
     clientTools: params.clientTools,
     disableTools: params.disableTools,
     provider: runtime.provider,
@@ -324,11 +332,17 @@ export async function dispatchEmbeddedRunAttempt(input: {
     // Normalize the shipped harness alias once; attempt internals consume only the canonical flag.
     deferTerminalLifecycle: params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd,
     onExecutionPhase: params.onExecutionPhase,
-    extraSystemPrompt: params.extraSystemPrompt,
+    extraSystemPrompt: appendIncognitoSystemPrompt({
+      agentId: runtime.agentId,
+      extraSystemPrompt: params.extraSystemPrompt,
+      sessionKey: params.sessionKey,
+      storePath: params.sessionTarget?.storePath,
+    }),
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     inputProvenance: params.inputProvenance,
     trustedInternalHandoff: params.trustedInternalHandoff,
+    scheduledToolPolicy: params.scheduledToolPolicy,
     streamParams: params.streamParams,
     modelRun: params.modelRun,
     disableTrajectory: params.disableTrajectory,

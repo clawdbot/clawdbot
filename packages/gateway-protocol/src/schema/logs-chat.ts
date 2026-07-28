@@ -118,6 +118,9 @@ export const ChatSendParamsSchema = closedObject({
   systemInputProvenance: Type.Optional(InputProvenanceSchema),
   systemProvenanceReceipt: Type.Optional(Type.String()),
   suppressCommandInterpretation: Type.Optional(Type.Boolean()),
+  // Client's believed active-branch leaf entry id. A mismatch with the
+  // session's current active leaf rejects the send so stale views cannot post elsewhere.
+  expectedLeafEntryId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   expectedSessionRoutingContract: Type.Optional(NonEmptyString),
   idempotencyKey: NonEmptyString,
 });

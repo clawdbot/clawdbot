@@ -416,9 +416,9 @@ export const mockedMarkAuthProfileSuccess = vi.fn(async () => {});
 const mockedShouldPreferExplicitConfigApiKeyAuth = vi.fn(() => false);
 
 export const overflowBaseRunParams = {
+  agentId: "main",
   sessionId: "test-session",
   sessionKey: "test-key",
-  sessionFile: "/tmp/session.json",
   workspaceDir: "/tmp/workspace",
   prompt: "hello",
   timeoutMs: 30000,
@@ -948,9 +948,15 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     resolveContextWindowInfo: mockedResolveContextWindowInfo,
   }));
 
-  vi.doMock("../../utils/message-channel.js", () => ({
-    isMarkdownCapableMessageChannel: vi.fn(() => true),
-  }));
+  vi.doMock("../../utils/message-channel.js", async () => {
+    const actual = await vi.importActual<typeof import("../../utils/message-channel.js")>(
+      "../../utils/message-channel.js",
+    );
+    return {
+      ...actual,
+      isMarkdownCapableMessageChannel: vi.fn(() => true),
+    };
+  });
 
   vi.doMock("../defaults.js", () => ({
     DEFAULT_CONTEXT_TOKENS: 200000,
@@ -997,7 +1003,10 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   });
 
   const { runEmbeddedAgent } = await import("./run.js");
-  return { runEmbeddedAgent };
+  return {
+    runEmbeddedAgent: (params) =>
+      runEmbeddedAgent({ ...params, agentId: params.agentId ?? "main" }),
+  };
 }
 
 /** Move one-time runner compilation out of individual behavior timings. */

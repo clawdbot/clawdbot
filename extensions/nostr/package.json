@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "nostr-tools": "2.23.9",
+    "nostr-tools": "2.23.12",
     "zod": "4.4.3"
   },
   "devDependencies": {

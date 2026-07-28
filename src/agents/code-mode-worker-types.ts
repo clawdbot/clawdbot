@@ -6,6 +6,7 @@ type CodeModeBridgeMethod =
   | "describe"
   | "call"
   | "callValue"
+  | "nodes"
   | "yield"
   | "namespace"
   | "agentSpawn"

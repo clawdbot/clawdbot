@@ -18,7 +18,7 @@ import type { TalkEventInput } from "../talk/talk-events.js";
 import type {
   MeetingAgentConsultSurface,
   MeetingPlatformRuntimeMetadata,
-} from "./platform-adapter.js";
+} from "./platform-adapter-contract.js";
 import type {
   MeetingAgentConsultParams,
   MeetingRealtimeToolCallParams,

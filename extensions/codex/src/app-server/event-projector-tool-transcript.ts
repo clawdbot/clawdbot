@@ -1,4 +1,5 @@
 import {
+  embeddedAgentLog,
   runAgentHarnessAfterToolCallHook,
   type AgentMessage,
   type EmbeddedRunAttemptParams,
@@ -66,6 +67,8 @@ export class CodexToolTranscriptProjection {
   private readonly trajectoryNamesById = new Map<string, string>();
   private readonly trajectoryItemsById = new Map<string, CodexThreadItem>();
   private readonly afterToolCallObservedItemIds = new Set<string>();
+  private readonly nativeMcpAppResultDetails = new Map<string, unknown>();
+  private readonly nativeMcpAppResultDetailsAttempted = new Set<string>();
 
   constructor(
     private readonly params: EmbeddedRunAttemptParams,
@@ -75,6 +78,7 @@ export class CodexToolTranscriptProjection {
     private readonly nextTranscriptTimestamp: () => number,
     private readonly options: {
       nativePostToolUseRelayEnabled?: boolean;
+      prepareNativeMcpAppResultDetails?: (item: CodexThreadItem) => Promise<unknown>;
       trajectoryRecorder?: CodexTrajectoryRecorder | null;
     } = {},
   ) {}
@@ -96,12 +100,14 @@ export class CodexToolTranscriptProjection {
     tool: string;
     success: boolean;
     contentItems: CodexDynamicToolCallOutputContentItem[];
+    details?: unknown;
   }): void {
     this.recordToolResult({
       id: params.callId,
       name: params.tool,
       text: collectDynamicToolContentText(params.contentItems),
       isError: !params.success,
+      details: params.details,
     });
   }
 
@@ -115,7 +121,7 @@ export class CodexToolTranscriptProjection {
     }
   }
 
-  recordNativeToolResult(item: CodexThreadItem | undefined): void {
+  recordNativeToolResult(item: CodexThreadItem | undefined, details?: unknown): void {
     if (!item || !shouldRecordNativeToolTranscript(item)) {
       return;
     }
@@ -126,7 +132,43 @@ export class CodexToolTranscriptProjection {
         name,
         text: itemTranscriptResultText(item, this.progress.outputTextByItem),
         isError: isNonSuccessItemStatus(itemStatus(item)),
+        details,
       });
+    }
+  }
+
+  async recordNativeToolResultWithDetails(item: CodexThreadItem | undefined): Promise<void> {
+    this.recordNativeToolResult(item, await this.prepareNativeMcpAppResultDetails(item));
+  }
+
+  private async prepareNativeMcpAppResultDetails(
+    item: CodexThreadItem | undefined,
+  ): Promise<unknown> {
+    if (!item || item.type !== "mcpToolCall" || itemStatus(item) === "running") {
+      return undefined;
+    }
+    if (this.nativeMcpAppResultDetails.has(item.id)) {
+      return this.nativeMcpAppResultDetails.get(item.id);
+    }
+    if (
+      this.nativeMcpAppResultDetailsAttempted.has(item.id) ||
+      !this.options.prepareNativeMcpAppResultDetails
+    ) {
+      return undefined;
+    }
+    this.nativeMcpAppResultDetailsAttempted.add(item.id);
+    try {
+      const details = await this.options.prepareNativeMcpAppResultDetails(item);
+      if (details !== undefined) {
+        this.nativeMcpAppResultDetails.set(item.id, details);
+      }
+      return details;
+    } catch (error) {
+      embeddedAgentLog.debug("codex native MCP App preview preparation failed", {
+        itemId: item.id,
+        error,
+      });
+      return undefined;
     }
   }
 
@@ -368,6 +410,7 @@ export class CodexToolTranscriptProjection {
           text,
         },
       ],
+      ...(params.details !== undefined ? { details: params.details } : {}),
       timestamp: this.nextTranscriptTimestamp(),
     } as unknown as AgentMessage;
   }

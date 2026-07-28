@@ -17,7 +17,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "../plugins/runtime-state.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { resolveAgentConfig } from "./agent-scope-config.js";
 import { resolveConfiguredProviderFallback } from "./configured-provider-fallback.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
 import { findModelCatalogEntry } from "./model-catalog-lookup.js";
@@ -132,10 +132,7 @@ function createModelManifestPluginContext(params: {
 function listModelAliasCandidates(cfg: OpenClawConfig, agentId?: string): ModelAliasCandidate[] {
   const modelMaps = [cfg.agents?.defaults?.models];
   if (agentId) {
-    const normalizedAgentId = normalizeAgentId(agentId);
-    const agentModels = cfg.agents?.list?.find(
-      (entry) => normalizeAgentId(entry.id) === normalizedAgentId,
-    )?.models;
+    const agentModels = resolveAgentConfig(cfg, agentId)?.models;
     modelMaps.push(agentModels);
   }
   return modelMaps.flatMap((models) =>
@@ -792,6 +789,38 @@ export function resolveModelRefFromString(
   return { ref: parsed };
 }
 
+/** Resolves legacy provider/model pairs whose model field may still contain an alias. */
+export function resolveModelAliasFromPair(
+  params: {
+    cfg?: OpenClawConfig;
+    provider: string;
+    model: string;
+    defaultProvider: string;
+    aliasIndex?: ModelAliasIndex;
+    allowManifestNormalization?: boolean;
+    allowPluginNormalization?: boolean;
+  } & ModelManifestNormalizationContext,
+): ModelRef | null {
+  const bareAlias = resolveModelRefFromString({
+    ...params,
+    raw: params.model,
+    defaultProvider: params.provider,
+  });
+  const providerAlias = resolveModelRefFromString({
+    ...params,
+    raw: `${params.provider}/${params.model}`,
+  });
+  if (providerAlias?.alias) {
+    return providerAlias.ref;
+  }
+  const provider = normalizeProviderId(params.provider);
+  return bareAlias?.alias &&
+    (normalizeProviderId(bareAlias.ref.provider) === provider ||
+      provider === normalizeProviderId(params.defaultProvider))
+    ? bareAlias.ref
+    : null;
+}
+
 /** Resolve the default configured model ref, including aliases and fallback provider rows. */
 export function resolveConfiguredModelRef(
   params: {
@@ -954,6 +983,7 @@ export function resolveConfiguredModelRef(
   const fallbackProvider = resolveConfiguredProviderFallback({
     cfg: params.cfg,
     defaultProvider: params.defaultProvider,
+    defaultModel: params.defaultModel,
   });
   if (fallbackProvider) {
     return fallbackProvider;
@@ -1484,7 +1514,7 @@ export function normalizeModelSelection(value: unknown): string | undefined {
 }
 
 const DEFAULT_MODEL_POLICY_ALLOW_CONFIG_PATH = "agents.defaults.modelPolicy.allow";
-const AGENT_MODEL_POLICY_ALLOW_CONFIG_PATH = "agents.list[].modelPolicy.allow";
+const AGENT_MODEL_POLICY_ALLOW_CONFIG_PATH = "agents.entries.*.modelPolicy.allow";
 
 function resolvePolicyAliasAgentId(
   configPath: string | null,
@@ -1499,10 +1529,7 @@ export function resolveConfiguredModelPolicyAllow(params: {
 }): { refs: readonly string[]; configPath: string | null; repairConfigPath: string } {
   const defaults = params.cfg?.agents?.defaults;
   if (params.agentId) {
-    const normalizedAgentId = normalizeAgentId(params.agentId);
-    const agent = params.cfg?.agents?.list?.find(
-      (entry) => normalizeAgentId(entry.id) === normalizedAgentId,
-    );
+    const agent = params.cfg ? resolveAgentConfig(params.cfg, params.agentId) : undefined;
     const agentPolicy = agent?.modelPolicy;
     if (hasExplicitModelPolicyAllow(agentPolicy)) {
       return {
@@ -1651,6 +1678,7 @@ export type ModelVisibilityPolicy = {
   allowedCatalog: ModelCatalogEntry[];
   allowedKeys: Set<string>;
   policyAliasIndex: ModelAliasIndex;
+  selectionAliasIndex: ModelAliasIndex;
   configuredKeys: ReadonlySet<string>;
   retainedKeys: ReadonlySet<string>;
   exactModelRefs: readonly string[];
@@ -1803,6 +1831,7 @@ export function createModelVisibilityPolicyWithFallbacks(
     allowedCatalog: allowed.allowedCatalog,
     allowedKeys: allowed.allowedKeys,
     policyAliasIndex,
+    selectionAliasIndex,
     configuredKeys,
     retainedKeys,
     exactModelRefs: visibility.exactModelRefs,

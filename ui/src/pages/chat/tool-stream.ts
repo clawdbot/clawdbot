@@ -1,7 +1,7 @@
 // Control UI module implements app tool stream behavior.
 import { stripInlineDirectiveTagsForDelivery } from "../../../../src/utils/directive-tags.js";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
-import type { ChatStreamSegment } from "../../lib/chat/chat-types.ts";
+import type { ChatQueueItem, ChatStreamSegment } from "../../lib/chat/chat-types.ts";
 import { formatUnknownText, truncateText } from "../../lib/format.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
@@ -382,6 +382,27 @@ export function resolveActiveRunOutputTokens(params: {
     }
   }
   return null;
+}
+
+export function resolveChatProjectionRunId(params: {
+  localRunId?: string | null;
+  activeRunIds?: readonly string[];
+  queue?: readonly ChatQueueItem[];
+}): string | null {
+  if (params.localRunId) {
+    return params.localRunId;
+  }
+  const activeRunIds = new Set(params.activeRunIds ?? []);
+  // A session row can lag local completion. Restore its run identity only when
+  // the durable outbox independently proves that the same send is reconnecting.
+  return (
+    params.queue?.find(
+      (item) =>
+        item.sendState === "waiting-reconnect" &&
+        typeof item.sendRunId === "string" &&
+        activeRunIds.has(item.sendRunId),
+    )?.sendRunId ?? null
+  );
 }
 
 type WaitingApprovalSnapshotHost = Pick<
@@ -808,7 +829,7 @@ function handlePreambleProgressEvent(host: ToolStreamHost, payload: AgentEventPa
       return true;
     }
     host.chatStreamSegments = host.chatStreamSegments.map((segment, index) =>
-      index === existingIndex ? { ...segment, text: progress.text } : segment,
+      index === existingIndex ? { ...segment, text: progress.text, runId: payload.runId } : segment,
     );
     return true;
   }
@@ -821,6 +842,7 @@ function handlePreambleProgressEvent(host: ToolStreamHost, payload: AgentEventPa
     {
       text: progress.text,
       ts: Date.now(),
+      runId: payload.runId,
       ...(progress.itemId ? { itemId: progress.itemId } : {}),
     },
   ];
@@ -990,7 +1012,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     ) {
       host.chatStreamSegments = [
         ...host.chatStreamSegments,
-        { text: host.chatStream, ts: now, toolCallId },
+        { text: host.chatStream, ts: now, runId: payload.runId, toolCallId },
       ];
       host.chatStream = null;
       host.chatStreamStartedAt = null;

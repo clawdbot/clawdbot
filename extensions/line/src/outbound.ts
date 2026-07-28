@@ -24,6 +24,7 @@ import { createLineSendReceipt } from "./send-receipt.js";
 import type { LineChannelData, LineSendResult } from "./types.js";
 
 const loadLineOutboundRuntime = createLazyRuntimeModule(() => import("./outbound.runtime.js"));
+const LINE_FLEX_ALT_TEXT_LIMIT = 1500;
 
 export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>["outbound"]> = {
   deliveryMode: "direct",
@@ -211,7 +212,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       if (lineData.flexMessage) {
         quickReplyMessages.push({
           type: "flex",
-          altText: truncateUtf16Safe(lineData.flexMessage.altText, 400),
+          altText: truncateUtf16Safe(lineData.flexMessage.altText, LINE_FLEX_ALT_TEXT_LIMIT),
           contents: lineData.flexMessage.contents,
         });
       }
@@ -233,7 +234,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       for (const flexMsg of processed.flexMessages) {
         quickReplyMessages.push({
           type: "flex",
-          altText: truncateUtf16Safe(flexMsg.altText, 400),
+          altText: truncateUtf16Safe(flexMsg.altText, LINE_FLEX_ALT_TEXT_LIMIT),
           contents: flexMsg.contents,
         });
       }

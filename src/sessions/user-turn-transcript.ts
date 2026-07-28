@@ -1,18 +1,16 @@
 // User turn transcript helpers extract user-turn text from session transcripts.
-import path from "node:path";
 import { mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import {
   persistSessionTranscriptTurn,
   type SessionTranscriptTurnPersistOptions,
 } from "../config/sessions/session-accessor.js";
-import {
-  projectMediaFacts,
-  resolveMediaFacts,
-  type MediaFact,
-  type MediaFactInput,
-} from "../media/media-facts.js";
+import { readPersistedMediaFacts, type MediaFact } from "../media/media-facts.js";
 import { applyInputProvenanceToUserMessage, normalizeInputProvenance } from "./input-provenance.js";
+import {
+  normalizeStructuredMediaEntryForTranscript,
+  resolveTranscriptMediaPath,
+} from "./user-turn-transcript.media-normalize.js";
 import type {
   CreateUserTurnTranscriptRecorderParams,
   PersistUserTurnTranscriptParams,
@@ -37,23 +35,6 @@ export function buildRunUserTurnIdempotencyKey(runId: string): string {
   return `${runId}:user`;
 }
 
-type PersistedUserTurnMediaFields = {
-  MediaPath?: string;
-  MediaPaths?: string[];
-  MediaType?: string;
-  MediaTypes?: string[];
-};
-
-type PersistedUserTurnMediaFieldSource = {
-  MediaPath?: string | null;
-  MediaPaths?: readonly (string | null | undefined)[] | null;
-  MediaUrl?: string | null;
-  MediaUrls?: readonly (string | null | undefined)[] | null;
-  MediaType?: string | null;
-  MediaTypes?: readonly (string | null | undefined)[] | null;
-  MediaWorkspaceDir?: string | null;
-};
-
 function normalizeOptionalText(value: string | null | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized ? normalized : undefined;
@@ -72,37 +53,6 @@ export function resolvePersistedUserTurnText(value: string | null | undefined): 
   return normalized;
 }
 
-function mediaTypeForTranscript(media: PersistedUserTurnMediaInput, mediaPath?: string): string {
-  return (
-    normalizeOptionalText(media.contentType) ??
-    normalizeOptionalText(media.kind) ??
-    mimeTypeFromFilePath(mediaPath) ??
-    "application/octet-stream"
-  );
-}
-
-function normalizeMediaEntryForTranscript(media: PersistedUserTurnMediaInput): MediaFactInput {
-  const rawPath = normalizeOptionalText(media.path) ?? normalizeOptionalText(media.url);
-  if (!rawPath) {
-    return {};
-  }
-  return {
-    path: resolveTranscriptMediaPath(rawPath, normalizeOptionalText(media.workspaceDir)),
-    contentType: mediaTypeForTranscript(media, rawPath),
-  };
-}
-
-const URL_LIKE_MEDIA_PATH_PATTERN = /^[a-z][a-z0-9+.-]*:/i;
-
-function resolveTranscriptMediaPath(pathValue: string, workspaceDir: string | undefined): string {
-  // Relative staged media paths are anchored to the media workspace; absolute
-  // paths and URL-like refs are already stable transcript references.
-  if (!workspaceDir || path.isAbsolute(pathValue) || URL_LIKE_MEDIA_PATH_PATTERN.test(pathValue)) {
-    return pathValue;
-  }
-  return path.join(workspaceDir, pathValue);
-}
-
 function resolveTranscriptMediaType(params: {
   explicitType: string | undefined;
   mediaPath: string | undefined;
@@ -112,13 +62,13 @@ function resolveTranscriptMediaType(params: {
 }
 
 export function buildPersistedUserTurnMediaInputsFromFields(
-  fields: PersistedUserTurnMediaFieldSource | PersistedUserTurnMessage | null | undefined,
+  fields: PersistedUserTurnMessage | null | undefined,
 ): PersistedUserTurnMediaInput[] {
   if (!fields) {
     return [];
   }
 
-  const facts = resolveMediaFacts(fields as unknown as Parameters<typeof resolveMediaFacts>[0]);
+  const facts = readPersistedMediaFacts(fields) ?? [];
   const normalizedMedia = facts.map((fact) => {
     const rawPath = normalizeOptionalText(fact.path);
     const mediaPath = rawPath
@@ -153,37 +103,14 @@ export function buildLateMediaAttachedProjection(message: AgentMessage): {
   media: MediaFact[];
 } {
   const isLateMedia = readOpenClawMessageMeta(message)?.lateMedia === true;
-  const entries = isLateMedia
-    ? buildPersistedUserTurnMediaInputsFromFields(message as PersistedUserTurnMediaFieldSource)
-    : [];
-  const text = entries
-    .flatMap((entry) => {
-      const mediaRef = entry.path ?? entry.url;
+  const media = isLateMedia ? (readPersistedMediaFacts(message) ?? []) : [];
+  const text = media
+    .flatMap((fact) => {
+      const mediaRef = fact.path ?? fact.url;
       return mediaRef ? [`[media attached: ${mediaRef}]`] : [];
     })
     .join("\n");
-  const media = isLateMedia
-    ? resolveMediaFacts(message as unknown as Parameters<typeof resolveMediaFacts>[0]).filter(
-        (entry) => entry.path || entry.url,
-      )
-    : [];
   return { ...(text ? { text } : {}), media };
-}
-
-function buildPersistedUserTurnMediaFields(
-  media: readonly PersistedUserTurnMediaInput[] | null | undefined,
-): PersistedUserTurnMediaFields {
-  const normalized = (Array.isArray(media) ? media : []).map(normalizeMediaEntryForTranscript);
-  const projected = projectMediaFacts(normalized, "aligned");
-  if (!projected.MediaPaths?.some(Boolean)) {
-    return {};
-  }
-  return {
-    ...(projected.MediaPath ? { MediaPath: projected.MediaPath } : {}),
-    MediaPaths: projected.MediaPaths,
-    ...(projected.MediaType ? { MediaType: projected.MediaType } : {}),
-    MediaTypes: projected.MediaTypes ?? [],
-  };
 }
 
 function buildUserTurnSenderMeta(
@@ -210,7 +137,7 @@ function readOpenClawMessageMeta(message: AgentMessage): Record<string, unknown>
 }
 
 export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurnMessage {
-  const mediaFields = buildPersistedUserTurnMediaFields(params.media);
+  const normalizedMedia = (params.media ?? []).map(normalizeStructuredMediaEntryForTranscript);
   const text = normalizeTranscriptText(params.text);
   // Storage is BARE (no timestamp prefix). The per-message timestamp is added
   // at the single LLM-boundary stamping site (normalizeMessagesForLlmBoundary),
@@ -223,13 +150,25 @@ export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedU
     ...(params.senderIsOwner === undefined ? {} : { senderIsOwner: params.senderIsOwner }),
     ...senderMeta,
     ...(params.transport ? { transport: params.transport } : {}),
+    ...(normalizedMedia.length > 0 ? { media: normalizedMedia } : {}),
+    ...(params.mediaImageLayout
+      ? {
+          mediaImageLayout: {
+            slots: params.mediaImageLayout.slots.map((slot) => ({ ...slot })),
+            ...(params.mediaImageLayout.suppressedFactIndexes?.length
+              ? {
+                  suppressedFactIndexes: [...params.mediaImageLayout.suppressedFactIndexes],
+                }
+              : {}),
+          },
+        }
+      : {}),
   };
   const message = {
     role: "user",
     content: text,
     timestamp: params.timestamp ?? Date.now(),
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
-    ...mediaFields,
     ...(Object.keys(openClawMeta).length > 0 ? { __openclaw: openClawMeta } : {}),
   } as PersistedUserTurnMessage;
   return applyInputProvenanceToUserMessage(message, params.provenance) as PersistedUserTurnMessage;
@@ -370,6 +309,11 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   const senderIsOwner = readOpenClawMessageMeta(message)?.senderIsOwner;
   const originalTransport = readOpenClawMessageMeta(message)?.transport;
   const lateMedia = readOpenClawMessageMeta(message)?.lateMedia === true;
+  const originalMedia = readOpenClawMessageMeta(message)?.media;
+  const media = Array.isArray(originalMedia) ? structuredClone(originalMedia) : undefined;
+  const originalMediaImageLayout = readOpenClawMessageMeta(message)?.mediaImageLayout;
+  const mediaImageLayout =
+    originalMediaImageLayout === undefined ? undefined : structuredClone(originalMediaImageLayout);
   // Hooks receive the original message object and may mutate nested metadata in
   // place. Snapshot transport correlation before handing them that reference.
   const transport =
@@ -387,7 +331,14 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   const nextUserMessage = provenance
     ? (applyInputProvenanceToUserMessage(nextMessage, provenance) as PersistedUserTurnMessage)
     : nextMessage;
-  if (!idempotencyKey && typeof senderIsOwner !== "boolean" && !transport && !lateMedia) {
+  if (
+    !idempotencyKey &&
+    typeof senderIsOwner !== "boolean" &&
+    !transport &&
+    !lateMedia &&
+    media === undefined &&
+    mediaImageLayout === undefined
+  ) {
     return nextUserMessage;
   }
   const protectedMeta = {
@@ -395,6 +346,8 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
     ...(typeof senderIsOwner === "boolean" ? { senderIsOwner } : {}),
     ...(transport ? { transport } : {}),
     ...(lateMedia ? { lateMedia: true } : {}),
+    ...(media === undefined ? {} : { media }),
+    ...(mediaImageLayout === undefined ? {} : { mediaImageLayout }),
   };
   return {
     ...(nextUserMessage as unknown as Record<string, unknown>),
@@ -461,7 +414,7 @@ async function persistUserTurnTranscript(
   return {
     ...appended,
     sessionEntry: turn.sessionEntry,
-    sessionFile: turn.sessionFile,
+    sessionFile: params.sessionKey,
   };
 }
 

@@ -8,6 +8,7 @@ import { setUiTimeFormatPreference } from "../../../lib/format.ts";
 import { setAvatarGatewayOrigin } from "../../../lib/identity-avatar.ts";
 import * as localStorageModule from "../../../local-storage.ts";
 import * as chatAvatar from "../chat-avatar.ts";
+import { renderChatNotice } from "./chat-divider.ts";
 import {
   dismissConfirmedActionPopovers,
   renderMessageGroup,
@@ -15,6 +16,7 @@ import {
 } from "./chat-message.ts";
 
 const localStorageValues = new Map<string, string>();
+const renderMarkdownHtml = markdown.toSanitizedMarkdownHtml;
 const markdownRenderMock = vi.fn(
   (value: string, _options?: { codeBlockChrome?: "copy" | "none"; fileLinks?: boolean }) => value,
 );
@@ -712,6 +714,40 @@ describe("grouped chat rendering", () => {
     });
   });
 
+  it("orders user footer actions before the sender name and timestamp", () => {
+    const container = document.createElement("div");
+    renderGroupedMessage(
+      container,
+      {
+        role: "user",
+        content: "User footer order.",
+        timestamp: Date.now(),
+      },
+      "user",
+      {
+        onDelete: vi.fn(),
+        onReply: vi.fn(),
+        onRewind: vi.fn(),
+        userName: "Jason",
+      },
+    );
+
+    const footer = expectElement(container, ".chat-group.user .chat-group-footer", HTMLElement);
+    const order = [
+      ...footer.querySelectorAll<HTMLElement>("button, .chat-sender-name, .chat-group-timestamp"),
+    ].map((element) => {
+      if (element.classList.contains("chat-sender-name")) {
+        return "name";
+      }
+      if (element.classList.contains("chat-group-timestamp")) {
+        return "time";
+      }
+      return element.getAttribute("aria-label");
+    });
+
+    expect(order).toEqual(["Reply to message", "Hide message", "Rewind", "name", "time"]);
+  });
+
   it("keeps hidden assistant thinking out of inline reply context", () => {
     const container = document.createElement("div");
     const onReply = vi.fn();
@@ -1024,68 +1060,56 @@ describe("grouped chat rendering", () => {
     expect(tooltip?.content).toBe("Rewind is unavailable while the agent is working");
   });
 
-  it("places the delete confirm below the trigger near the top viewport edge", () => {
-    stubDeleteConfirmGeometry({
+  it.each([
+    {
+      name: "places the delete confirm below the trigger near the top viewport edge",
       trigger: { left: 20, top: 4, width: 24, height: 24 },
       popover: { width: 200, height: 96 },
       viewport: { width: 320, height: 240 },
-    });
-    const fixture = renderDeleteConfirmFixture();
-
-    openDeleteConfirm(fixture.deleteButton);
-
-    const popover = expectElement(fixture.container, ".chat-delete-confirm", HTMLElement);
-    expect(popover.dataset.placement).toBe("below");
-    expect(popover.style.top).toBe("34px");
-    expect(popover.style.left).toBe("20px");
-  });
-
-  it("places the delete confirm above the trigger near the bottom viewport edge", () => {
-    stubDeleteConfirmGeometry({
+      placement: "below",
+      top: "34px",
+      left: "20px",
+    },
+    {
+      name: "places the delete confirm above the trigger near the bottom viewport edge",
       trigger: { left: 20, top: 190, width: 24, height: 24 },
       popover: { width: 200, height: 80 },
       viewport: { width: 320, height: 240 },
-    });
-    const fixture = renderDeleteConfirmFixture();
-
-    openDeleteConfirm(fixture.deleteButton);
-
-    const popover = expectElement(fixture.container, ".chat-delete-confirm", HTMLElement);
-    expect(popover.dataset.placement).toBe("above");
-    expect(popover.style.top).toBe("104px");
-    expect(popover.style.left).toBe("20px");
-  });
-
-  it("clamps the delete confirm horizontally inside narrow viewports", () => {
-    stubDeleteConfirmGeometry({
+      placement: "above",
+      top: "104px",
+      left: "20px",
+    },
+    {
+      name: "clamps the delete confirm horizontally inside narrow viewports",
       trigger: { left: 260, top: 120, width: 24, height: 24 },
       popover: { width: 200, height: 80 },
       viewport: { width: 320, height: 240 },
-    });
-    const fixture = renderDeleteConfirmFixture();
-
-    openDeleteConfirm(fixture.deleteButton);
-
-    const popover = expectElement(fixture.container, ".chat-delete-confirm", HTMLElement);
-    expect(popover.style.left).toBe("112px");
-  });
-
-  it("clamps the delete confirm inside shifted visual viewports", () => {
-    stubDeleteConfirmGeometry({
+      left: "112px",
+    },
+    {
+      name: "clamps the delete confirm inside shifted visual viewports",
       trigger: { left: 620, top: 540, width: 24, height: 24 },
       popover: { width: 200, height: 80 },
       viewport: { left: 320, top: 300, width: 320, height: 240 },
-    });
+      placement: "above",
+      top: "452px",
+      left: "432px",
+    },
+  ])("$name", ({ trigger, popover, viewport, placement, top, left }) => {
+    stubDeleteConfirmGeometry({ trigger, popover, viewport });
     const fixture = renderDeleteConfirmFixture();
 
     openDeleteConfirm(fixture.deleteButton);
 
-    const popover = expectElement(fixture.container, ".chat-delete-confirm", HTMLElement);
-    expect(popover.dataset.placement).toBe("above");
-    expect(popover.style.left).toBe("432px");
-    expect(popover.style.top).toBe("452px");
+    const element = expectElement(fixture.container, ".chat-delete-confirm", HTMLElement);
+    if (placement) {
+      expect(element.dataset.placement).toBe(placement);
+    }
+    if (top) {
+      expect(element.style.top).toBe(top);
+    }
+    expect(element.style.left).toBe(left);
   });
-
   it("exposes dialog semantics and keeps keyboard focus inside the confirmation", () => {
     const fixture = renderDeleteConfirmFixture();
 
@@ -1556,6 +1580,40 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-group-footer")).toBeNull();
   });
 
+  it("morphs one assistant turn from working status to its terminal recap", () => {
+    const container = document.createElement("div");
+    const message = {
+      role: "assistant",
+      content: "First result is ready.",
+      timestamp: 1_000,
+    };
+
+    renderAssistantMessage(container, message, {
+      activeContinuation: {
+        parts: [{ kind: "reading-indicator", key: "reading", startedAt: 1_000 }],
+        options: {},
+      },
+    });
+
+    expect(container.querySelectorAll(".chat-group.assistant")).toHaveLength(1);
+    expect(container.querySelector(".chat-reading-indicator")).toBeNull();
+    expect(container.querySelector(".chat-working-indicator--continuation")).not.toBeNull();
+    expect(container.querySelector(".chat-working-indicator__status")?.textContent).toContain(
+      "Working…",
+    );
+
+    renderAssistantMessage(container, message, {
+      turnRecap: { runtimeMs: 5_000, outputTokens: 42 },
+    });
+
+    expect(container.querySelectorAll(".chat-group.assistant")).toHaveLength(1);
+    expect(container.querySelector(".chat-working-indicator")).toBeNull();
+    expect(container.querySelector(".chat-turn-recap--continuation")?.textContent).toContain(
+      "Done in 5s",
+    );
+    expect(container.querySelector(".chat-tasks-status__claw")).toBeNull();
+  });
+
   it("renders the active startup phase with elapsed time", () => {
     const container = document.createElement("div");
 
@@ -1655,8 +1713,8 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
   });
 
-  it("seeds a stable claw stance per reading-indicator key", () => {
-    const stanceFor = (key: string) => {
+  it("seeds at most one stable claw surprise per reading-indicator key", () => {
+    const surpriseFor = (key: string) => {
       const container = document.createElement("div");
       render(renderStreamGroup([{ kind: "reading-indicator", key, startedAt: 1 }]), container);
       const bubble = container.querySelector(".chat-reading-indicator");
@@ -1665,10 +1723,10 @@ describe("grouped chat rendering", () => {
       );
     };
 
-    const first = stanceFor("stream:agent:main:pending");
-    // Stable across re-renders: same key always claws the same style.
-    expect(stanceFor("stream:agent:main:pending")).toEqual(first);
-    // At most one stance modifier; plain in-place clawing is the unmarked default.
+    const first = surpriseFor("stream:agent:main:pending");
+    // Stable across re-renders: the same key keeps the same surprise decision.
+    expect(surpriseFor("stream:agent:main:pending")).toEqual(first);
+    // At most one surprise modifier; plain in-place clawing is the unmarked default.
     expect(first.length).toBeLessThanOrEqual(1);
     for (const cls of first) {
       expect([
@@ -1809,6 +1867,90 @@ describe("grouped chat rendering", () => {
     const local = renderGroupFor();
     expect(local?.classList.contains("chat-group--sender-tint")).toBe(false);
     expect(local?.style.getPropertyValue("--chat-sender-hue")).toBe("");
+  });
+
+  it.each([
+    { label: "foreign sender", sender: { id: "other-user" }, userId: "current-user", peer: true },
+    { label: "own sender", sender: { id: "current-user" }, userId: "current-user", peer: false },
+    { label: "unattributed sender", sender: undefined, userId: "current-user", peer: false },
+    {
+      label: "attributed sender without a viewer",
+      sender: { id: "other-user" },
+      userId: null,
+      peer: true,
+    },
+  ])("sets peer alignment for $label", ({ sender, userId, peer }) => {
+    const container = document.createElement("div");
+    render(
+      renderMessageGroup(
+        {
+          kind: "group",
+          key: "peer-group",
+          role: "user",
+          ...(sender ? { sender } : {}),
+          messages: [{ key: "peer-message", message: { role: "user", content: "hi" } }],
+          timestamp: 1000,
+          isStreaming: false,
+        },
+        { showReasoning: true, showToolCalls: true, userId },
+      ),
+      container,
+    );
+
+    expect(
+      container.querySelector(".chat-group.user")?.classList.contains("chat-group--peer"),
+    ).toBe(peer);
+  });
+
+  it("renders assistant reply attribution for a multi-sender thread", () => {
+    const container = document.createElement("div");
+    render(
+      renderMessageGroup(
+        {
+          kind: "group",
+          key: "reply-attribution",
+          role: "assistant",
+          replyToSender: { id: "alice@example.com", name: "Alice" },
+          messages: [{ key: "reply", message: { role: "assistant", content: "hello" } }],
+          timestamp: 1000,
+          isStreaming: false,
+        },
+        { showReasoning: true, showToolCalls: true },
+      ),
+      container,
+    );
+
+    const attribution = container.querySelector<HTMLElement>(".chat-reply-attribution");
+    expect(attribution?.textContent?.trim()).toBe("Alice");
+    expect(attribution?.getAttribute("title")).toBe("Replying to Alice");
+    expect(attribution?.nextElementSibling?.classList.contains("chat-bubble")).toBe(true);
+  });
+
+  it("renders multiline system notices as sanitized markdown", () => {
+    const container = document.createElement("div");
+    markdownRenderMock.mockImplementationOnce(renderMarkdownHtml);
+    render(
+      renderChatNotice({
+        kind: "notice",
+        key: "notice:command",
+        text: "**first line**\nsecond line\n<img src=x onerror=alert(1)><script>alert(1)</script>",
+        timestamp: 1000,
+      }),
+      container,
+    );
+
+    const notice = container.querySelector<HTMLElement>(".chat-notice");
+    expect(notice?.querySelector("strong")?.textContent).toBe("first line");
+    expect(notice?.textContent).not.toContain("**");
+    expect(notice?.querySelector("br")).not.toBeNull();
+    expect(notice?.textContent).toContain("first line");
+    expect(notice?.textContent).toContain("second line");
+    expect(notice?.querySelector("script")).toBeNull();
+    expect(notice?.querySelector("img[onerror]")).toBeNull();
+    expect(notice?.dataset.chatRowKey).toBe("notice:command");
+    expect(markdownRenderMock).toHaveBeenCalledWith(expect.any(String), {
+      codeBlockChrome: "none",
+    });
   });
 
   it("uses the current profile display name for the signed-in user's historical messages", () => {
@@ -3227,7 +3369,7 @@ describe("grouped chat rendering", () => {
         id: "user-encoded-video",
         role: "user",
         content: "",
-        MediaPath: mediaUrl,
+        __openclaw: { media: [{ url: mediaUrl, contentType: "video/mp4" }] },
         timestamp: Date.now(),
       },
       "user",
@@ -3266,8 +3408,9 @@ describe("grouped chat rendering", () => {
       id: "user-history-image-octet-stream",
       role: "user",
       content: "",
-      MediaPath: firstSource,
-      MediaType: "application/octet-stream",
+      __openclaw: {
+        media: [{ path: firstSource, contentType: "application/octet-stream" }],
+      },
       timestamp: Date.now(),
     });
     await flushAssistantAttachmentAvailabilityChecks();
@@ -3279,8 +3422,12 @@ describe("grouped chat rendering", () => {
       id: "user-history-images",
       role: "user",
       content: "",
-      MediaPaths: [firstSource, secondSource],
-      MediaTypes: ["image/png", "application/octet-stream"],
+      __openclaw: {
+        media: [
+          { path: firstSource, contentType: "image/png" },
+          { path: secondSource, contentType: "application/octet-stream" },
+        ],
+      },
       timestamp: Date.now(),
     });
     await flushAssistantAttachmentAvailabilityChecks();
@@ -3321,8 +3468,7 @@ describe("grouped chat rendering", () => {
           id: "user-inbound-media-ref",
           role: "user",
           content: "",
-          MediaPath: source,
-          MediaType: "image/png",
+          __openclaw: { media: [{ path: source, contentType: "image/png" }] },
           timestamp: Date.now(),
         },
         "user",
@@ -3414,8 +3560,7 @@ describe("grouped chat rendering", () => {
         id: "user-invalid-inbound-media-ref",
         role: "user",
         content: "",
-        MediaPath: source,
-        MediaType: "image/png",
+        __openclaw: { media: [{ path: source, contentType: "image/png" }] },
         timestamp: Date.now(),
       },
       "user",
@@ -3469,6 +3614,7 @@ describe("grouped chat rendering", () => {
       {
         showToolCalls: false,
         assistantAttachmentAuthToken: "test-auth-token",
+        basePath: "/rosita",
         onOpenImage,
       },
     );

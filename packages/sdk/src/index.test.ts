@@ -1414,6 +1414,23 @@ describe("OpenClaw SDK", () => {
     ]);
   });
 
+  it("keeps key-only Session.abort compatible by omitting clearQueued", async () => {
+    const transport = new FakeTransport({
+      "sessions.create": { key: "session-main", label: "Main" },
+      "sessions.abort": { ok: true, abortedRunId: null, status: "no-active-run" },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const session = await oc.sessions.create({ key: "session-main" });
+    await session.abort();
+
+    expect(transport.calls.at(-1)).toEqual({
+      method: "sessions.abort",
+      options: undefined,
+      params: { key: "session-main" },
+    });
+  });
+
   it("normalizes Gateway agent stream events into SDK events", () => {
     const ts = 1_777_000_000_000;
 

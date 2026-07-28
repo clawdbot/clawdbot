@@ -7,7 +7,6 @@ import {
   resolveContextEngineOwnerPluginId,
   runAgentHarnessLlmOutputHook,
   runHarnessContextEngineMaintenance,
-  type EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readMirroredSessionHistoryMessages } from "./attempt-context.js";
 import { classifyCodexModelCallFailureKind } from "./attempt-diagnostics.js";
@@ -17,6 +16,7 @@ import {
   isInvalidCodexImagePayloadError,
   resolveCodexAppServerReplayBlockedReason,
 } from "./attempt-results.js";
+import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { readCodexRateLimitsRevision, readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import type { CodexAttemptActiveTurn } from "./run-attempt-active-turn.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
@@ -146,11 +146,12 @@ export async function finalizeCodexAttempt(
   const result = activeProjector.buildResult(toolBridge.telemetry, {
     yieldDetected: toolState.yieldDetected,
   });
+  const projectedTerminal = attemptTerminal.project(result.terminal);
   const effectiveTimedOut = state.timedOut && !recoveredTurnWatchTimeout;
   const effectiveTurnCompletionIdleTimedOut =
     state.turnCompletionIdleTimedOut && !recoveredTurnWatchTimeout;
   const isFinalAborted = () =>
-    result.aborted ||
+    projectedTerminal.aborted ||
     terminalState.explicitCancellationObserved ||
     (runAbortController.signal.aborted && !state.clientClosedAbort && !recoveredTurnWatchTimeout);
   const clientClosedPromptErrorForFinal =
@@ -163,7 +164,7 @@ export async function finalizeCodexAttempt(
       ? state.turnCompletionIdleTimeoutMessage
       : effectiveTimedOut
         ? "codex app-server attempt timed out"
-        : result.promptError);
+        : projectedTerminal.promptError);
   const finalPromptErrorMessage =
     typeof finalPromptError === "string"
       ? finalPromptError
@@ -226,7 +227,9 @@ export async function finalizeCodexAttempt(
     });
   }
   const finalPromptErrorSource =
-    effectiveTimedOut || clientClosedPromptErrorForFinal ? "prompt" : result.promptErrorSource;
+    effectiveTimedOut || clientClosedPromptErrorForFinal
+      ? "prompt"
+      : projectedTerminal.promptErrorSource;
   const codexAppServerFailureKind = clientClosedPromptErrorForFinal
     ? "client_closed_before_turn_completed"
     : effectiveTurnCompletionIdleTimedOut
@@ -290,6 +293,7 @@ export async function finalizeCodexAttempt(
     result.agentHarnessResultClassification = undefined;
   }
   const attemptSucceeded = turnSucceeded && result.agentHarnessResultClassification === undefined;
+  terminalState.turnSucceeded = turnSucceeded;
   terminalState.sharedAbortAllowedAfterTerminalOutcome = shouldKeepCodexSharedAbortOpen({
     trigger: params.trigger,
     result,
@@ -330,7 +334,7 @@ export async function finalizeCodexAttempt(
     threadId: resourceState.thread.threadId,
     turnId: activeTurnId,
   });
-  const { assistantTranscriptOwned } = mirrorOutcome;
+  const { assistantTranscriptOwned, assistantTranscriptIdempotencyKey } = mirrorOutcome;
   const shouldCaptureSettledTurnFinalizationContext =
     turnSucceeded &&
     result.assistantTexts.every((text) => !text.trim()) &&
@@ -513,13 +517,16 @@ export async function finalizeCodexAttempt(
   );
   return {
     ...result,
-    timedOut: effectiveTimedOut,
-    aborted: finalAborted,
-    promptError: finalPromptError,
-    promptErrorSource: finalPromptErrorSource,
+    terminal: attemptTerminal.normalize({
+      timedOut: effectiveTimedOut,
+      aborted: finalAborted,
+      promptError: finalPromptError,
+      promptErrorSource: finalPromptErrorSource,
+    }),
     ...(codexAppServerFailure ? { codexAppServerFailure } : {}),
     ...(promptTimeoutOutcome ? { promptTimeoutOutcome } : {}),
     ...(assistantTranscriptOwned ? { assistantTranscriptOwned: true } : {}),
+    ...(assistantTranscriptIdempotencyKey ? { assistantTranscriptIdempotencyKey } : {}),
     ...(settledTurnFinalizationContext ? { settledTurnFinalizationContext } : {}),
     ...(resourceState.runtimeArtifact ? { runtimeArtifact: resourceState.runtimeArtifact } : {}),
     ...(!finalAborted && !effectiveTimedOut && !finalPromptError && preparedAuthBinding

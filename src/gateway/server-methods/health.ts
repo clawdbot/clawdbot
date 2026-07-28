@@ -7,7 +7,6 @@ import type { ChannelHealthSummary, HealthSummary } from "../../commands/health.
 import { getStatusSummary } from "../../commands/status.js";
 import { listContextEngineQuarantines } from "../../context-engine/registry.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
-import { getGatewayModelPricingHealth } from "../model-pricing-cache-state.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
 import { formatError } from "../server-utils.js";
@@ -127,9 +126,6 @@ function mergeCachedHealthRuntimeState(params: {
     ...(params.configReloadHotReloadStatus
       ? { configReload: { hotReloadStatus: params.configReloadHotReloadStatus } }
       : {}),
-    modelPricing: getGatewayModelPricingHealth({
-      enabled: params.cached.modelPricing?.state !== "disabled",
-    }),
   };
 }
 

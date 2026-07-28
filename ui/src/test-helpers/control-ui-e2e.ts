@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import { createServer as createNetServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import type { Page } from "playwright";
 import type { ViteDevServer } from "vite";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
@@ -16,6 +17,25 @@ import {
   resolveTsconfigPathAliasesForVite,
 } from "../../vite.config.ts";
 import type { ControlUiBuildInfo } from "../build-info.ts";
+
+export function controlUiSessionPath(sessionKey: string, basePath = ""): string {
+  return (
+    buildControlUiSessionPath({
+      namespace: "chat",
+      sessionKey,
+      fallbackAgentId: sessionKey.split(":")[1] || "main",
+      basePath,
+    }) ?? `${basePath}/chat`
+  );
+}
+
+export function controlUiSessionUrl(baseUrl: string, sessionKey: string): string {
+  const url = new URL(baseUrl);
+  url.pathname = controlUiSessionPath(sessionKey, url.pathname);
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
 
 const require = createRequire(import.meta.url);
 const json5EsmPath = require.resolve("json5/dist/index.mjs");
@@ -59,11 +79,15 @@ export type ControlUiMockGatewayScenario = {
     label: string;
     pluginId: string;
   }>;
+  allowedSessionVisibilities?: Array<"shared" | "read-only" | "suggest" | "draft">;
+  hasMultipleSessionSharingIdentities?: boolean;
   featureCapabilities?: string[];
   defaultAgentId?: string;
   deferredMethods?: string[];
   /** Non-release gateway checkout branch surfaced in the sidebar footer. */
   devGitBranch?: string;
+  /** Simulate the one-time legacy Control UI device-auth pairing transition. */
+  deviceAuthMigrationPending?: boolean;
   deviceToken?: string;
   featureMethods?: string[];
   historyMessages?: unknown[];
@@ -129,6 +153,10 @@ export type MockGatewayControls = {
   setOnline: (online: boolean) => Promise<void>;
   setHistoryMessages: (messages: unknown[]) => Promise<void>;
   setMethodResponse: (method: string, payload: unknown) => Promise<void>;
+  setSessionSharingPolicy: (policy: {
+    allowedSessionVisibilities: Array<"shared" | "read-only" | "suggest" | "draft">;
+    hasMultipleSessionSharingIdentities: boolean;
+  }) => Promise<void>;
   waitForRequest: (method: string) => Promise<MockGatewayRequest>;
 };
 
@@ -277,10 +305,18 @@ function normalizeScenario(
     basePath,
     controlUiTabs: scenario.controlUiTabs ?? [],
     controlUiWidgetKinds: scenario.controlUiWidgetKinds ?? [],
+    allowedSessionVisibilities: scenario.allowedSessionVisibilities ?? [
+      "shared",
+      "read-only",
+      "suggest",
+      "draft",
+    ],
+    hasMultipleSessionSharingIdentities: scenario.hasMultipleSessionSharingIdentities ?? false,
     featureCapabilities: scenario.featureCapabilities ?? [],
     defaultAgentId,
     deferredMethods: scenario.deferredMethods ?? [],
     devGitBranch: scenario.devGitBranch?.trim() || "",
+    deviceAuthMigrationPending: scenario.deviceAuthMigrationPending ?? false,
     deviceToken: scenario.deviceToken?.trim() || "e2e-device-token",
     featureMethods: scenario.featureMethods ?? ["chat.metadata", "chat.startup"],
     historyMessages: scenario.historyMessages ?? [],
@@ -368,6 +404,10 @@ function installControlUiMockGateway(input: {
     setOnline: (online: boolean) => void;
     setHistoryMessages: (messages: unknown[]) => void;
     setMethodResponse: (method: string, payload: unknown) => void;
+    setSessionSharingPolicy: (policy: {
+      allowedSessionVisibilities: Array<"shared" | "read-only" | "suggest" | "draft">;
+      hasMultipleSessionSharingIdentities: boolean;
+    }) => void;
     socketCount: () => number;
     socketUrls: () => string[];
   };
@@ -396,8 +436,11 @@ function installControlUiMockGateway(input: {
   const requests: BrowserRequest[] = [];
   const methodResponseSequenceIndexes = new Map<string, number>();
   const sessionPatches = new Map<string, Record<string, unknown>>();
+  const createdSessions = new Map<string, Record<string, unknown>>();
   const sessionMessageSubscriptions = new Set<string>();
   const sockets: Array<{ readonly url: string }> = [];
+  let deviceAuthMigrationPending = scenario.deviceAuthMigrationPending;
+  let deviceAuthMigrationDeviceId = "";
   let sessionMessageEventIndex = 0;
   let sessionMessageEventTimer: number | null = null;
   const offlineStateKey = "openclaw.control-ui-e2e.gatewayOffline";
@@ -406,8 +449,13 @@ function installControlUiMockGateway(input: {
   // gateway's SQLite store does; renames replay onto static sessions.list
   // fixtures because the real gateway rewrites member categories server-side.
   const groupsStateKey = "openclaw.control-ui-e2e.sessionGroups";
-  let groupsState: { names: string[]; renames: Array<{ from: string; to: string | null }> } = {
+  let groupsState: {
+    names: string[];
+    sectionOrder: string[];
+    renames: Array<{ from: string; to: string | null }>;
+  } = {
     names: [...input.scenario.sessionGroups],
+    sectionOrder: [],
     renames: [],
   };
   let online = true;
@@ -420,6 +468,7 @@ function installControlUiMockGateway(input: {
     const rawGroups = window.sessionStorage.getItem(groupsStateKey);
     if (rawGroups) {
       groupsState = JSON.parse(rawGroups) as typeof groupsState;
+      groupsState.sectionOrder ??= [];
     }
   } catch {
     // Storage-disabled browser contexts still get the scenario catalog.
@@ -500,8 +549,14 @@ function installControlUiMockGateway(input: {
     }
   }
 
-  function groupsPayload(): { groups: Array<{ name: string; position: number }> } {
-    return { groups: groupsState.names.map((name, position) => ({ name, position })) };
+  function groupsPayload(): {
+    groups: Array<{ name: string; position: number }>;
+    sectionOrder: string[];
+  } {
+    return {
+      groups: groupsState.names.map((name, position) => ({ name, position })),
+      sectionOrder: [...groupsState.sectionOrder],
+    };
   }
 
   function normalizedGroupNames(value: unknown): string[] {
@@ -603,6 +658,22 @@ function installControlUiMockGateway(input: {
     return { found: true, value: matchingCase.response };
   }
 
+  /** Transcript fields a scenario configured on chat.history, replayed onto the
+   * chat.startup payload so both bootstrap paths serve the same conversation. */
+  function configuredHistoryTranscript(): Record<string, unknown> {
+    const configured = scenario.methodResponses["chat.history"];
+    if (!isRecord(configured) || responseCases(configured) || responseSequence(configured)) {
+      return {};
+    }
+    const transcript: Record<string, unknown> = {};
+    for (const field of ["messages", "sessionId", "sessionInfo", "inFlightRun", "thinkingLevel"]) {
+      if (hasOwn(configured, field)) {
+        transcript[field] = configured[field];
+      }
+    }
+    return transcript;
+  }
+
   /** Presence slice of the connect snapshot. The self-flagged entry adopts the
    * connecting client's instanceId so presence surfaces resolve "you". */
   function presenceSnapshot(connectParams: unknown): { presence?: unknown[] } {
@@ -646,6 +717,34 @@ function installControlUiMockGateway(input: {
     sessionPatches.set(params.key, patch);
   }
 
+  function recordMaterializedSession(params: unknown, response: unknown): void {
+    if (!isRecord(response)) {
+      return;
+    }
+    const key =
+      typeof response.key === "string"
+        ? response.key
+        : typeof response.sessionKey === "string"
+          ? response.sessionKey
+          : "";
+    if (!key.trim()) {
+      return;
+    }
+    const label = isRecord(params) && typeof params.label === "string" ? params.label.trim() : "";
+    const {
+      displayName: _defaultDisplayName,
+      label: _defaultLabel,
+      ...defaultSession
+    } = sessionRow();
+    createdSessions.set(key, {
+      ...defaultSession,
+      key,
+      ...(label ? { displayName: label, label } : {}),
+      hasActiveRun: response.runStarted === true,
+      status: response.runStarted === true ? "running" : "done",
+    });
+  }
+
   function applySessionPatches(response: unknown, params: unknown): unknown {
     if (!isRecord(response) || !Array.isArray(response.sessions)) {
       return response;
@@ -656,12 +755,23 @@ function installControlUiMockGateway(input: {
         : isRecord(params) && params.archived === true
           ? "archived"
           : "active";
-    const sessions = response.sessions.map((row) => {
+    const knownSessionKeys = new Set(
+      response.sessions.flatMap((row) =>
+        isRecord(row) && typeof row.key === "string" ? [row.key] : [],
+      ),
+    );
+    // Successful session creation and catalog adoption commit before their
+    // responses. Route resolution must see either session in the next list.
+    const sourceSessions = [
+      ...response.sessions,
+      ...[...createdSessions].flatMap(([key, row]) => (knownSessionKeys.has(key) ? [] : [row])),
+    ];
+    const sessions = sourceSessions.map((row) => {
       if (!isRecord(row) || typeof row.key !== "string") {
         return row;
       }
       const patch = sessionPatches.get(row.key);
-      const next = patch ? { ...row, ...patch } : { ...row };
+      const next = Object.assign({}, row, patch);
       // Replay group renames/deletes over static fixtures: the real gateway
       // rewrites member categories server-side before the next sessions.list.
       let category = typeof next.category === "string" ? next.category : undefined;
@@ -678,7 +788,11 @@ function installControlUiMockGateway(input: {
       return next;
     });
     if (!scenario.sessionArchiveFiltering) {
-      return { ...response, sessions };
+      return {
+        ...response,
+        ...(createdSessions.size > 0 ? { count: sessions.length } : {}),
+        sessions,
+      };
     }
     const filteredSessions = sessions.filter(
       (row) =>
@@ -764,6 +878,28 @@ function installControlUiMockGateway(input: {
   }
 
   function buildResponse(method: string, params: unknown): unknown {
+    if (method === "connect") {
+      const device = isRecord(params) ? params.device : undefined;
+      deviceAuthMigrationDeviceId =
+        isRecord(device) && typeof device.id === "string" ? device.id : "";
+    }
+    if (deviceAuthMigrationPending && method === "device.pair.list") {
+      return {
+        paired: [],
+        pending: deviceAuthMigrationDeviceId
+          ? [
+              {
+                requestId: "mock-device-auth-migration-request",
+                deviceId: deviceAuthMigrationDeviceId,
+              },
+            ]
+          : [],
+      };
+    }
+    if (deviceAuthMigrationPending && method === "device.pair.approve") {
+      deviceAuthMigrationPending = false;
+      return { requestId: "mock-device-auth-migration-request" };
+    }
     if (method === "sessions.patch") {
       recordSessionPatch(params);
     }
@@ -836,6 +972,9 @@ function installControlUiMockGateway(input: {
     }
     const configured = configuredResponse(method, params);
     if (configured.found) {
+      if (method === "sessions.create" || method === "sessions.catalog.continue") {
+        recordMaterializedSession(params, configured.value);
+      }
       return method === "sessions.list"
         ? applySessionPatches(configured.value, params)
         : configured.value;
@@ -844,7 +983,7 @@ function installControlUiMockGateway(input: {
       case "connect":
         return {
           auth: {
-            deviceToken: scenario.deviceToken,
+            ...(deviceAuthMigrationPending ? {} : { deviceToken: scenario.deviceToken }),
             role: "operator",
             scopes: [
               "operator.admin",
@@ -861,8 +1000,18 @@ function installControlUiMockGateway(input: {
           },
           controlUiTabs: scenario.controlUiTabs,
           controlUiWidgetKinds: scenario.controlUiWidgetKinds,
+          ...(deviceAuthMigrationPending
+            ? { deviceAuthMigration: { pending: true as const } }
+            : {}),
           protocol: protocolVersion,
           server: { connId: "control-ui-e2e", version: "e2e" },
+          policy: {
+            maxPayload: 1_048_576,
+            maxBufferedBytes: 1_048_576,
+            tickIntervalMs: 30_000,
+            allowedSessionVisibilities: scenario.allowedSessionVisibilities,
+            hasMultipleSessionSharingIdentities: scenario.hasMultipleSessionSharingIdentities,
+          },
           snapshot: {
             ...presenceSnapshot(params),
             sessionDefaults: {
@@ -956,6 +1105,10 @@ function installControlUiMockGateway(input: {
           thinkingLevel: null,
           ...(scenario.inFlightRun ? { inFlightRun: scenario.inFlightRun } : {}),
           ...(scenario.sessionInfo ? { sessionInfo: scenario.sessionInfo } : {}),
+          // The transcript bootstrap picks chat.startup whenever the Gateway
+          // advertises it, so a scenario that configures only chat.history would
+          // otherwise have its transcript silently dropped on the startup path.
+          ...configuredHistoryTranscript(),
         };
       case "chat.metadata":
         return {
@@ -1005,6 +1158,9 @@ function installControlUiMockGateway(input: {
         return groupsPayload();
       case "sessions.groups.put": {
         groupsState.names = normalizedGroupNames(isRecord(params) ? params.names : undefined);
+        if (isRecord(params) && Array.isArray(params.sectionOrder)) {
+          groupsState.sectionOrder = normalizedGroupNames(params.sectionOrder);
+        }
         persistGroupsState();
         return { ok: true, ...groupsPayload() };
       }
@@ -1019,6 +1175,14 @@ function installControlUiMockGateway(input: {
             names.splice(sourceIndex < 0 ? names.length : sourceIndex, 0, to);
           }
           groupsState.names = names;
+          const sourceSectionId = `category:${from}`;
+          const targetSectionId = `category:${to}`;
+          groupsState.sectionOrder = groupsState.sectionOrder.flatMap((sectionId) => {
+            if (sectionId !== sourceSectionId) {
+              return [sectionId];
+            }
+            return groupsState.sectionOrder.includes(targetSectionId) ? [] : [targetSectionId];
+          });
           groupsState.renames.push({ from, to });
           persistGroupsState();
         }
@@ -1028,6 +1192,9 @@ function installControlUiMockGateway(input: {
         const name = isRecord(params) && typeof params.name === "string" ? params.name.trim() : "";
         if (name) {
           groupsState.names = groupsState.names.filter((existing) => existing !== name);
+          groupsState.sectionOrder = groupsState.sectionOrder.filter(
+            (sectionId) => sectionId !== `category:${name}`,
+          );
           groupsState.renames.push({ from: name, to: null });
           persistGroupsState();
         }
@@ -1239,10 +1406,17 @@ function installControlUiMockGateway(input: {
       if (!response) {
         throw new Error(`Deferred mock Gateway response disappeared for ${method}`);
       }
+      const resolvedPayload = payload ?? buildResponse(response.method, response.params);
+      if (
+        response.method === "sessions.create" ||
+        response.method === "sessions.catalog.continue"
+      ) {
+        recordMaterializedSession(response.params, resolvedPayload);
+      }
       response.socket.deliver({
         id: response.id,
         ok: true,
-        payload: payload ?? buildResponse(response.method, response.params),
+        payload: resolvedPayload,
         type: "res",
       });
     },
@@ -1275,6 +1449,10 @@ function installControlUiMockGateway(input: {
       } catch {
         // Current-document responses still work if browser storage is unavailable.
       }
+    },
+    setSessionSharingPolicy(policy) {
+      scenario.allowedSessionVisibilities = policy.allowedSessionVisibilities;
+      scenario.hasMultipleSessionSharingIdentities = policy.hasMultipleSessionSharingIdentities;
     },
     setHistoryMessages(messages) {
       scenario.historyMessages = Array.isArray(messages) ? messages : [];
@@ -1527,6 +1705,21 @@ function createMockGatewayControls(page: Page, defaultSessionKey: string): MockG
         },
         { targetMethod: method, responsePayload: payload },
       );
+    },
+    async setSessionSharingPolicy(policy) {
+      await page.evaluate((nextPolicy) => {
+        const gateway = (
+          window as Window & {
+            openclawControlUiE2eGateway?: {
+              setSessionSharingPolicy: (policy: typeof nextPolicy) => void;
+            };
+          }
+        ).openclawControlUiE2eGateway;
+        if (!gateway) {
+          throw new Error("Mock Gateway is not installed");
+        }
+        gateway.setSessionSharingPolicy(nextPolicy);
+      }, policy);
     },
     async waitForRequest(method) {
       await page.waitForFunction(

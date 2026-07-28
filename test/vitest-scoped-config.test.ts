@@ -613,6 +613,10 @@ describe("scoped vitest configs", () => {
     expectForkedIsolatedRunner(defaultInfraConfig);
   });
 
+  it("keeps native SQLite runtime config tests in forked workers", () => {
+    expectForkedNonIsolatedRunner(defaultRuntimeConfig);
+  });
+
   it("keeps process, runtime config, and tooling lanes off the openclaw runtime setup", () => {
     expect(normalizeConfigPaths(requireTestConfig(defaultProcessConfig).setupFiles)).toEqual([
       "test/setup.ts",
@@ -714,8 +718,8 @@ describe("scoped vitest configs", () => {
     expectThreadedNonIsolatedRunner(defaultExtensionsConfig);
   });
 
-  it("serializes Telegram extension files that share process globals", () => {
-    expectThreadedNonIsolatedRunner(defaultExtensionTelegramConfig);
+  it("serializes and isolates Telegram extension files with conflicting mocks", () => {
+    expectThreadedIsolatedRunner(defaultExtensionTelegramConfig);
     expect(requireTestConfig(defaultExtensionTelegramConfig).fileParallelism).toBe(false);
   });
 

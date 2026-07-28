@@ -3,7 +3,7 @@ title: Streaming final integrity
 scenario:
   id: streaming-final-integrity
   surface: runtime
-  runtimeParityTier: live-only
+  runtimePairLane: core
   coverage:
     primary:
       - agent-runtime.streaming-replies
@@ -26,6 +26,7 @@ scenario:
     kind: flow
     summary: Verify streaming output is represented as one channel-visible final reply.
     config:
+      requiredProviderMode: live-frontier
       prompt: "Streaming final integrity marker. Reply exactly: STREAMING-FINAL-OK"
       expectedReply: STREAMING-FINAL-OK
 

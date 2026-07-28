@@ -208,15 +208,16 @@ export function renderSettingsToggleRow(props: {
 
 export function renderSettingsSegmented<T extends string>(props: {
   value: T;
-  options: ReadonlyArray<{ value: T; label: unknown; title?: string }>;
+  options: ReadonlyArray<{ value: T; label: unknown; title?: string; testId?: string }>;
   /** The selected radio is passed so callers can anchor visual transitions. */
   onChange: (value: T, element: HTMLElement) => void;
   disabled?: boolean;
   ariaLabel?: string;
+  className?: string;
 }): TemplateResult {
   return html`
     <wa-radio-group
-      class="settings-segmented"
+      class="settings-segmented ${props.className ?? ""}"
       size="s"
       orientation="horizontal"
       .value=${props.value}
@@ -245,6 +246,7 @@ export function renderSettingsSegmented<T extends string>(props: {
             value=${option.value}
             .checked=${option.value === props.value}
             title=${option.title ?? nothing}
+            data-test-id=${option.testId ?? nothing}
           >
             ${option.label}
           </wa-radio>

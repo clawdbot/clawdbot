@@ -13,6 +13,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withEnv } from "../test-utils/env.js";
 import {
+  deleteSessionCostUsageRollupsExcept,
   isSessionCostUsageRefreshRunning,
   readSessionCostUsageRollupRows,
   writeSessionCostUsageRollup,
@@ -77,6 +78,52 @@ describe("session cost usage SQLite cache", () => {
         }),
       ).toBe(true);
       expect(countRegisteredAgentDatabases()).toBe(1);
+    });
+  });
+
+  it.each([
+    { label: "changed totals", refreshedValue: '{"totalTokens":2}' },
+    { label: "unchanged totals at a newer revision", refreshedValue: '{"totalTokens":1}' },
+  ])("preserves a refreshed usage rollup with $label during pruning", ({ refreshedValue }) => {
+    const stateDir = makeTempDir(tempDirs, "openclaw-usage-cache-prune-race-");
+
+    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+      const agentId = "worker-1";
+      const rollupId = "session.jsonl";
+      const staleValue = '{"totalTokens":1}';
+
+      expect(
+        writeSessionCostUsageRollup({
+          agentId,
+          rollupId,
+          previousValueJson: null,
+          valueJson: staleValue,
+          updatedAt: 1,
+        }),
+      ).toBe(true);
+
+      const liveKeys = new (class extends Set<string> {
+        override has(key: string): boolean {
+          if (key === rollupId) {
+            expect(
+              writeSessionCostUsageRollup({
+                agentId,
+                rollupId,
+                previousValueJson: staleValue,
+                valueJson: refreshedValue,
+                updatedAt: 2,
+              }),
+            ).toBe(true);
+          }
+          return false;
+        }
+      })();
+
+      deleteSessionCostUsageRollupsExcept({ agentId, liveKeys });
+
+      expect(readSessionCostUsageRollupRows(agentId)).toEqual([
+        { key: rollupId, updatedAt: 2, valueJson: refreshedValue },
+      ]);
     });
   });
 });

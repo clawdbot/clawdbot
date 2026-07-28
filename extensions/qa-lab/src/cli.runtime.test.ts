@@ -556,7 +556,7 @@ describe("qa cli runtime", () => {
     expectWriteContains(stdoutWrite, "QA run profile: all; categories: 1; scenarios:");
   });
 
-  it("filters QA-channel-pinned scenarios from the Crabline smoke profile", async () => {
+  it("filters QA-channel-pinned scenarios from an implicit Crabline smoke profile", async () => {
     runQaSuite.mockImplementationOnce(async () => {
       await fs.writeFile(suiteEvidencePath, JSON.stringify(makeQaEvidence()), "utf8");
       return flowSuiteRuntimeResult({
@@ -568,12 +568,11 @@ describe("qa cli runtime", () => {
     await runQaProfileCommand({
       repoRoot: "/tmp/openclaw-repo",
       profile: "smoke-ci",
-      scenarioIds: ["channel-top-level-reply-shape", "control-ui-qa-channel-image-roundtrip"],
     });
 
     const suiteArgs = mockFirstObjectArg(runQaSuite);
     expect(suiteArgs.channelDriver).toBe("crabline");
-    expect(suiteArgs.scenarioIds).toEqual(["channel-top-level-reply-shape"]);
+    expect(suiteArgs.scenarioIds).toContain("channel-top-level-reply-shape");
     expect(suiteArgs.scenarioIds).not.toEqual(
       expect.arrayContaining([
         "instruction-followthrough-repo-contract",
@@ -601,6 +600,20 @@ describe("qa cli runtime", () => {
         "config-apply-restart-wakeup",
       ]),
     );
+  });
+
+  it("rejects explicit profile selections with an incompatible scenario", async () => {
+    await expect(
+      runQaProfileCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        profile: "smoke-ci",
+        scenarioIds: ["channel-top-level-reply-shape", "control-ui-qa-channel-image-roundtrip"],
+      }),
+    ).rejects.toThrow(
+      "qa run --qa-profile smoke-ci cannot run explicitly selected scenario(s): control-ui-qa-channel-image-roundtrip (channelDriver=qa-channel).",
+    );
+
+    expect(runQaSuite).not.toHaveBeenCalled();
   });
 
   it("dispatches the Matrix restart scenario through the Crabline smoke profile", async () => {
@@ -773,15 +786,20 @@ describe("qa cli runtime", () => {
     expect(runQaMultipass).not.toHaveBeenCalled();
   });
 
-  it("rejects runtime-pair execution for live adapters", async () => {
-    await expect(
-      runQaSuiteCommand({
+  it("keeps runtime-pair execution independent from live adapters", async () => {
+    await runQaSuiteCommand({
+      channelDriver: "live",
+      channel: "telegram",
+      runtimePair: "openclaw,codex",
+    });
+
+    expect(runQaSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
         channelDriver: "live",
-        channel: "telegram",
-        runtimePair: "openclaw,codex",
+        channelId: "telegram",
+        runtimePair: ["openclaw", "codex"],
       }),
-    ).rejects.toThrow("--runtime-pair is not supported with a live QA adapter.");
-    expect(runQaSuite).not.toHaveBeenCalled();
+    );
   });
 
   it("loads contributed adapters without preselecting a scenario channel", async () => {
@@ -1724,41 +1742,33 @@ describe("qa cli runtime", () => {
     });
   });
 
-  it("expands runtime parity tier selections onto the suite scenario list", async () => {
+  it("expands runtime-pair lane selections onto the suite scenario list", async () => {
     await runQaSuiteCommand({
       repoRoot: "/tmp/openclaw-repo",
-      runtimeParityTier: ["standard"],
+      providerMode: "mock-openai",
+      runtimePairLane: ["core"],
       scenarioIds: ["channel-chat-baseline", "runtime-tool-bash"],
     });
 
-    expectFields(mockFirstObjectArg(runQaSuite), {
-      repoRoot: path.resolve("/tmp/openclaw-repo"),
-      scenarioIds: [
+    const runOptions = mockFirstObjectArg(runQaSuite);
+    expect(runOptions.repoRoot).toBe(path.resolve("/tmp/openclaw-repo"));
+    expect(runOptions.scenarioIds).toEqual(
+      expect.arrayContaining([
         "channel-chat-baseline",
         "runtime-tool-bash",
-        "codex-plugin-cold-install",
-        "codex-plugin-pinned-new",
-        "codex-plugin-pinned-old",
+        "approval-turn-tool-followthrough",
         "runtime-first-hour-20-turn",
         "runtime-tool-apply-patch",
-        "runtime-tool-edit",
-        "runtime-tool-exec",
-        "runtime-tool-fs-list",
-        "runtime-tool-fs-read",
-        "runtime-tool-fs-write",
-        "runtime-tool-grep",
-        "runtime-tool-session-status",
-        "runtime-tool-sessions-spawn",
-        "runtime-tool-web-fetch",
-        "runtime-tool-web-search",
-      ],
-    });
+        "source-docs-discovery-report",
+      ]),
+    );
+    expect(runOptions.scenarioIds).not.toContain("streaming-final-integrity");
   });
 
-  it("accepts comma-separated runtime parity tier filters", async () => {
+  it("accepts comma-separated runtime-pair lane filters", async () => {
     await runQaSuiteCommand({
       repoRoot: "/tmp/openclaw-repo",
-      runtimeParityTier: ["optional,soak"],
+      runtimePairLane: ["extended,soak"],
     });
 
     expectFields(mockFirstObjectArg(runQaSuite), {
@@ -1780,17 +1790,17 @@ describe("qa cli runtime", () => {
     );
   });
 
-  it("keeps runtime-pair tier selection on flow scenarios and reports exclusions", async () => {
+  it("keeps runtime-pair lane selection on flow scenarios and reports exclusions", async () => {
     await runQaSuiteCommand({
       repoRoot: "/tmp/openclaw-repo",
       runtimePair: "openclaw,codex",
-      runtimeParityTier: ["standard", "live-only"],
+      runtimePairLane: ["core"],
     });
 
     const scenarioIds = mockFirstObjectArg(runQaSuite).scenarioIds as string[];
     expect(scenarioIds).toContain("runtime-first-hour-20-turn");
-    expect(scenarioIds).toContain("streaming-final-integrity");
     expect(scenarioIds).not.toContain("gateway-restart-inflight-run");
+    expect(scenarioIds).toContain("streaming-final-integrity");
     expect(scenarioIds).not.toContain("hosted-image-generation-providers-live");
     expect(scenarioIds).not.toContain("hosted-video-generation-providers-live");
     expectFields(mockFirstObjectArg(runQaSuite), {
@@ -1798,11 +1808,7 @@ describe("qa cli runtime", () => {
     });
     expectWriteContains(
       stderrWrite,
-      "excluded incompatible non-flow scenario(s): hosted-image-generation-providers-live (script), hosted-video-generation-providers-live (script)",
-    );
-    expectWriteContains(
-      stderrWrite,
-      "excluded lane-incompatible scenario(s): gateway-restart-inflight-run",
+      "excluded incompatible non-flow scenario(s): codex-plugin-cold-install (script)",
     );
   });
 
@@ -1820,41 +1826,39 @@ describe("qa cli runtime", () => {
     expect(runQaSuite).not.toHaveBeenCalled();
   });
 
-  it("rejects runtime-pair tiers with no compatible flow scenarios", async () => {
+  it("rejects runtime-pair lanes with no compatible flow scenarios", async () => {
     const catalog = readQaScenarioPack();
-    const hostedImageScenario = catalog.scenarios.find(
-      (scenario) => scenario.id === "hosted-image-generation-providers-live",
+    const coldInstallScenario = catalog.scenarios.find(
+      (scenario) => scenario.id === "codex-plugin-cold-install",
     );
-    if (!hostedImageScenario) {
-      throw new Error("missing hosted image scenario fixture");
+    if (!coldInstallScenario) {
+      throw new Error("missing Codex cold-install scenario fixture");
     }
     readQaScenarioPack.mockReturnValueOnce({
       ...catalog,
-      scenarios: [hostedImageScenario],
+      scenarios: [coldInstallScenario],
     });
 
     await expect(
       runQaSuiteCommand({
         repoRoot: "/tmp/openclaw-repo",
         runtimePair: "openclaw,codex",
-        runtimeParityTier: ["live-only"],
+        runtimePairLane: ["core"],
       }),
     ).rejects.toThrow(
-      "--runtime-parity-tier matched no execution.kind: flow scenarios for live-only; incompatible scenario(s): hosted-image-generation-providers-live (script).",
+      "--runtime-pair-lane matched no execution.kind: flow scenarios for core; incompatible scenario(s): codex-plugin-cold-install (script).",
     );
 
     expect(runQaSuite).not.toHaveBeenCalled();
   });
 
-  it("rejects unknown runtime parity tier filters", async () => {
+  it("rejects unknown runtime-pair lane filters", async () => {
     await expect(
       runQaSuiteCommand({
         repoRoot: "/tmp/openclaw-repo",
-        runtimeParityTier: ["standardish"],
+        runtimePairLane: ["coreish"],
       }),
-    ).rejects.toThrow(
-      '--runtime-parity-tier must be one of standard, optional, live-only, soak, got "standardish".',
-    );
+    ).rejects.toThrow('--runtime-pair-lane must be one of core, extended, soak, got "coreish".');
   });
 
   it("rejects unknown suite packs", async () => {
@@ -1930,6 +1934,7 @@ describe("qa cli runtime", () => {
                 cells: {
                   openclaw: {
                     runtime: "openclaw",
+                    status: "pass",
                     transcriptBytes: '{"role":"assistant"}\n',
                     toolCalls: [{ tool: "read_file", argsHash: "a", resultHash: "r" }],
                     finalText: "done",
@@ -1939,6 +1944,7 @@ describe("qa cli runtime", () => {
                   },
                   codex: {
                     runtime: "codex",
+                    status: "pass",
                     transcriptBytes: '{"role":"assistant"}\n',
                     toolCalls: [{ tool: "read_file", argsHash: "b", resultHash: "r" }],
                     finalText: "done",
@@ -2000,6 +2006,7 @@ describe("qa cli runtime", () => {
                 cells: {
                   openclaw: {
                     runtime: "openclaw",
+                    status: "pass",
                     transcriptBytes: '{"role":"assistant"}\n',
                     toolCalls: [{ tool: "fs.read", argsHash: "a", resultHash: "r" }],
                     finalText: "done",
@@ -2009,6 +2016,7 @@ describe("qa cli runtime", () => {
                   },
                   codex: {
                     runtime: "codex",
+                    status: "pass",
                     transcriptBytes: '{"role":"assistant"}\n',
                     toolCalls: Array.from({ length: 40 }, (_, index) => ({
                       tool: "fs.read",
@@ -2176,6 +2184,7 @@ describe("qa cli runtime", () => {
                 cells: {
                   openclaw: {
                     runtime: "openclaw",
+                    status: "pass",
                     transcriptBytes: "",
                     toolCalls: [{ tool: "web_search", argsHash: "a", resultHash: "r" }],
                     finalText: "",
@@ -2185,6 +2194,7 @@ describe("qa cli runtime", () => {
                   },
                   codex: {
                     runtime: "codex",
+                    status: "pass",
                     transcriptBytes: "",
                     toolCalls: [],
                     finalText: "",
@@ -2209,7 +2219,10 @@ describe("qa cli runtime", () => {
 
       expect(process.exitCode).toBe(1);
       expectWriteContains(stdoutWrite, "- Verdict: fail");
-      expectWriteContains(stdoutWrite, "web_search missing codex tool call web_search");
+      expectWriteContains(
+        stdoutWrite,
+        "web_search missing successful codex tool call/result web_search",
+      );
     } finally {
       process.exitCode = priorExitCode;
       await fs.rm(repoRoot, { recursive: true, force: true });

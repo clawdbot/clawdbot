@@ -1,17 +1,24 @@
 // Transcript write contexts let nested append paths reuse an already-owned session write lock.
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
-import { parseSqliteSessionFileMarker } from "./sqlite-marker.js";
 
 type OwnedSessionTranscriptWriteContext = {
   sessionFile?: string;
   sessionKey?: string;
+  sessionTarget?: SessionTranscriptWriteLockTarget;
   canAdvanceSessionEntryCache?: (snapshot: OwnedSessionTranscriptCacheSnapshot) => boolean;
   publishSessionFileSnapshot?: (snapshot: OwnedSessionTranscriptCacheSnapshot) => boolean;
   withSessionWriteLock: <T>(
     run: () => Promise<T> | T,
     options?: OwnedSessionTranscriptWriteOptions<T>,
   ) => Promise<T>;
+};
+
+export type SessionTranscriptWriteLockTarget = {
+  agentId?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  storePath?: string;
 };
 
 export type OwnedSessionTranscriptWriteOptions<T> = {
@@ -39,7 +46,7 @@ const ownedTranscriptWriteContext = new AsyncLocalStorage<OwnedSessionTranscript
 // identity because they are storage references rather than lockable paths.
 function normalizeConcretePathForCompare(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
-  if (!trimmed || parseSqliteSessionFileMarker(trimmed)) {
+  if (!trimmed || !path.isAbsolute(trimmed) || !trimmed.endsWith(".jsonl")) {
     return undefined;
   }
   return path.resolve(trimmed);
@@ -49,7 +56,33 @@ function contextMatches(params: {
   context: OwnedSessionTranscriptWriteContext;
   sessionFile?: string;
   sessionKey?: string;
+  sessionTarget?: SessionTranscriptWriteLockTarget;
 }): boolean {
+  const normalizeTarget = (target: SessionTranscriptWriteLockTarget | undefined) => {
+    const agentId = target?.agentId?.trim();
+    const sessionId = target?.sessionId?.trim();
+    const sessionKey = target?.sessionKey?.trim();
+    const storePath = target?.storePath?.trim();
+    return sessionKey && storePath
+      ? { agentId, sessionId, sessionKey, storePath: path.resolve(storePath) }
+      : undefined;
+  };
+  const contextTarget = normalizeTarget(params.context.sessionTarget);
+  const requestedTarget = normalizeTarget(params.sessionTarget);
+  if (params.context.sessionTarget || params.sessionTarget) {
+    return Boolean(
+      contextTarget &&
+      requestedTarget &&
+      contextTarget.sessionKey === requestedTarget.sessionKey &&
+      contextTarget.storePath === requestedTarget.storePath &&
+      (!contextTarget.agentId ||
+        !requestedTarget.agentId ||
+        contextTarget.agentId === requestedTarget.agentId) &&
+      (!contextTarget.sessionId ||
+        !requestedTarget.sessionId ||
+        contextTarget.sessionId === requestedTarget.sessionId),
+    );
+  }
   const contextSessionFile = normalizeConcretePathForCompare(params.context.sessionFile);
   const sessionFile = normalizeConcretePathForCompare(params.sessionFile);
   if (contextSessionFile && sessionFile) {
@@ -81,6 +114,7 @@ export async function runWithOwnedSessionTranscriptWriteLock<T>(
   params: {
     sessionFile?: string;
     sessionKey?: string;
+    sessionTarget?: SessionTranscriptWriteLockTarget;
   },
   run: () => Promise<T> | T,
 ): Promise<T> {
@@ -90,6 +124,7 @@ export async function runWithOwnedSessionTranscriptWriteLock<T>(
 export async function acquireOwnedSessionTranscriptWriteLock(params: {
   sessionFile?: string;
   sessionKey?: string;
+  sessionTarget?: SessionTranscriptWriteLockTarget;
 }): Promise<{ release: () => Promise<void> } | undefined> {
   const context = ownedTranscriptWriteContext.getStore();
   if (!context || !contextMatches({ context, ...params })) {
@@ -128,36 +163,11 @@ export async function acquireOwnedSessionTranscriptWriteLock(params: {
   };
 }
 
-export function canAdvanceOwnedSessionEntryCache(params: {
-  sessionFile?: string;
-  sessionKey?: string;
-  snapshot: OwnedSessionTranscriptCacheSnapshot;
-}): boolean {
-  const context = ownedTranscriptWriteContext.getStore();
-  return Boolean(
-    context &&
-    contextMatches({ context, ...params }) &&
-    context.publishSessionFileSnapshot &&
-    context.canAdvanceSessionEntryCache?.(params.snapshot),
-  );
-}
-
-export function publishOwnedSessionFileSnapshot(params: {
-  sessionFile?: string;
-  sessionKey?: string;
-  snapshot: OwnedSessionTranscriptCacheSnapshot;
-}): boolean | undefined {
-  const context = ownedTranscriptWriteContext.getStore();
-  if (!context || !contextMatches({ context, ...params }) || !context.publishSessionFileSnapshot) {
-    return undefined;
-  }
-  return context.publishSessionFileSnapshot(params.snapshot);
-}
-
 async function runWithOwnedSessionTranscriptWriteContext<T>(
   params: {
     sessionFile?: string;
     sessionKey?: string;
+    sessionTarget?: SessionTranscriptWriteLockTarget;
   },
   run: () => Promise<T> | T,
   options?: OwnedSessionTranscriptWriteOptions<T>,

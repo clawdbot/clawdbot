@@ -217,6 +217,8 @@ export type ReplyPayloadMetadata = {
   assistantMessageIndex?: number;
   /** The runtime owns the transcript decision for this assistant payload. */
   assistantTranscriptOwned?: boolean;
+  /** Exact key for replacing a runtime-owned assistant row after media materialization. */
+  assistantTranscriptIdempotencyKey?: string;
   /** Foreground freshness prevented a visible final after transcript persistence. */
   foregroundDeliverySuppression?: {
     reason: "stale-foreground";

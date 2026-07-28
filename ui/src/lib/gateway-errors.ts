@@ -4,14 +4,9 @@ import {
   GatewayErrorDetailCodes,
   readMissingScopeError,
 } from "@openclaw/gateway-client/browser";
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { resolveGatewayErrorDetailCode } from "../api/gateway.ts";
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 /** Identifies an expired process-local wizard session without parsing public copy. */
 export function isWizardNotFoundError(err: unknown): boolean {

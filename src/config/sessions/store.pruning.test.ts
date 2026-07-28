@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { enforceSessionDiskBudget } from "./disk-budget.js";
 import { applyFileBackedSessionStoreMaintenance } from "./store-maintenance-operations.js";
 import {
@@ -211,15 +212,11 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
   it("preserves the active session and cleans artifacts using the final referenced session set", async () => {
     const now = Date.now();
     const store = makeStore([
-      [
-        "stale",
-        { sessionId: "stale-session", sessionFile: "stale.jsonl", updatedAt: now - 30 * DAY_MS },
-      ],
+      ["stale", { sessionId: "stale-session", updatedAt: now - 30 * DAY_MS }],
       [
         "stale-shared",
         {
           sessionId: "shared-session",
-          sessionFile: "shared-old.jsonl",
           updatedAt: now - 30 * DAY_MS,
         },
       ],
@@ -269,8 +266,8 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
     expect(archiveCalls).toEqual([
       {
         removedSessionFiles: [
-          ["stale-session", "stale.jsonl"],
-          ["shared-session", "shared-old.jsonl"],
+          ["stale-session", undefined],
+          ["shared-session", undefined],
         ],
         referencedSessionIds: new Set(["shared-session", "active-session"]),
       },
@@ -674,6 +671,26 @@ describe("capEntryCount", () => {
     expect(store.old).toBeUndefined();
   });
 
+  it("never evicts the agent primary main session even when protected entries fill the cap (#112637)", () => {
+    const now = Date.now();
+    const mainKey = "agent:main:main";
+    // `main` is the oldest entry, so pre-fix it was the first unprotected eviction target once
+    // protected thread entries (>= maxEntries) left zero removable budget.
+    const store = makeStore([
+      [mainKey, makeEntry(now - 10 * DAY_MS)],
+      ["agent:main:slack:channel:C1:thread:1", makeEntry(now - 3 * DAY_MS)],
+      ["agent:main:slack:channel:C2:thread:2", makeEntry(now - 2 * DAY_MS)],
+      ["agent:main:slack:channel:C3:thread:3", makeEntry(now - DAY_MS)],
+    ]);
+
+    const evicted = capEntryCount(store, 2);
+
+    // Every entry is now protected (main + threads), so nothing is evicted and `main` survives.
+    expect(store).toHaveProperty(mainKey);
+    expect(evicted).toBe(0);
+    expect(Object.keys(store)).toHaveLength(4);
+  });
+
   it("preserves model-locked harness sessions when capping", () => {
     const now = Date.now();
     const lockedKey = "agent:main:harness-owned:locked";
@@ -821,6 +838,15 @@ describe("enforceSessionDiskBudget", () => {
 });
 
 describe("isProtectedSessionMaintenanceEntry", () => {
+  it.each([
+    ["agent:main:main", true],
+    ["agent:worker:main", true],
+    ["global", true],
+    ["agent:main:opaque", false],
+  ])("classifies primary session key %s as protected=%s", (key, expected) => {
+    expect(isProtectedSessionMaintenanceEntry(key, makeEntry(Date.now()))).toBe(expected);
+  });
+
   it("treats generated ACP bridge sessions as disposable", () => {
     expect(
       isProtectedSessionMaintenanceEntry("agent:main:acp-bridge:session-1", {
@@ -840,7 +866,10 @@ describe("isProtectedSessionMaintenanceEntry", () => {
     expect(
       isProtectedSessionMaintenanceEntry("agent:main:cron:job:run:123", {
         ...makeEntry(Date.now()),
-        origin: { chatType: "group" },
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "telegram", to: "group:test" },
+          origin: { chatType: "group" },
+        }),
       }),
     ).toBe(false);
   });
