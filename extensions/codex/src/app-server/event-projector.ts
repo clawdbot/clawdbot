@@ -441,10 +441,7 @@ export class CodexAppServerEventProjector {
       ...(this.completedCompactionCount > 0
         ? { compactionCount: this.completedCompactionCount }
         : {}),
-      replayMetadata: {
-        hadPotentialSideEffects,
-        replaySafe: !hadPotentialSideEffects,
-      },
+      replayMetadata: { hadPotentialSideEffects, replaySafe: !hadPotentialSideEffects },
       itemLifecycle: {
         startedCount: this.activeItemIds.size + this.completedItemIds.size,
         completedCount: this.completedItemIds.size,
@@ -766,4 +763,3 @@ export class CodexAppServerEventProjector {
 function isHookNotificationMethod(method: string): method is "hook/started" | "hook/completed" {
   return method === "hook/started" || method === "hook/completed";
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
