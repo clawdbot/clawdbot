@@ -63,13 +63,29 @@ function migrateV2ToV3(entries: FileEntry[]): void {
   }
 }
 
+/**
+ * Header rows are appended lazily, so a transcript can hold canonical events with no header.
+ * Such a transcript is already current: inferring version 1 from the absent header would make
+ * the v1 migration regenerate every entry id and parent link on each read, stranding persisted
+ * ids held elsewhere (leaf controls, compaction cut points, labels, branch snapshots). Opaque
+ * rows are ignored because callers pass both raw and partitioned entry lists, and only rows a
+ * migration would rewrite decide whether the transcript is legacy.
+ */
+export function isHeaderlessCanonicalTranscript(entries: readonly FileEntry[]): boolean {
+  return (
+    !entries.some((entry) => entry.type === "session") &&
+    entries.some((entry) => isIndexedSessionEntry(entry)) &&
+    entries.every((entry) => !isReadableLegacySessionEntry(entry) || isIndexedSessionEntry(entry))
+  );
+}
+
 export function migrateToCurrentVersion(
   entries: FileEntry[],
   entriesByOriginalIndex?: readonly (FileEntry | undefined)[],
 ): boolean {
   const header = entries.find((entry) => entry.type === "session");
   const version = header?.version ?? 1;
-  if (version >= CURRENT_SESSION_VERSION) {
+  if (version >= CURRENT_SESSION_VERSION || isHeaderlessCanonicalTranscript(entries)) {
     return false;
   }
   if (version < 2) {

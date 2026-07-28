@@ -6,6 +6,7 @@ import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/sessi
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import {
+  isHeaderlessCanonicalTranscript,
   isIndexedSessionEntry,
   migrateToCurrentVersion,
   parseOpaqueLeafEntry,
@@ -80,10 +81,8 @@ export class SessionManagerCore {
       return;
     }
     const header = partitioned.fileEntries.find((entry) => entry.type === "session");
-    // Only a persisted header declares a legacy version. A header-less transcript whose entries
-    // are already canonical predates the lazy header append, so treating it as v1 would strand
-    // live SQLite sessions behind a migration that has nothing to migrate.
-    if (target && header && (header.version ?? 1) < CURRENT_SESSION_VERSION) {
+    const headerlessCanonical = isHeaderlessCanonicalTranscript(partitioned.fileEntries);
+    if (target && !headerlessCanonical && (header?.version ?? 1) < CURRENT_SESSION_VERSION) {
       throw new Error(
         "Persisted legacy session transcripts require doctor/import migration before runtime use",
       );
@@ -93,11 +92,34 @@ export class SessionManagerCore {
     this.fileEntries = partitioned.fileEntries;
     this.opaqueFileEntries = partitioned.opaqueEntries;
     this.sessionId = header?.id ?? target?.sessionId ?? createSessionId();
+    if (headerlessCanonical) {
+      this.restoreMissingSessionHeader();
+    }
     this.migrated = migrateToCurrentVersion(
       this.fileEntries,
       partitioned.fileEntriesByOriginalIndex,
     );
     this.buildIndex();
+  }
+
+  /**
+   * Rebuilds the header for a transcript whose canonical events were persisted without one.
+   * Restoring it at the current version keeps entry ids stable, because inferring v1 would make
+   * migrateToCurrentVersion regenerate every id and parent link on each load. The header stays
+   * in memory so appends cannot land a header row after existing events; a full transcript
+   * rewrite persists it in position.
+   */
+  private restoreMissingSessionHeader(): void {
+    this.fileEntries.unshift({
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: this.sessionId,
+      timestamp: new Date().toISOString(),
+      cwd: this.cwd,
+    } satisfies SessionHeader);
+    for (const opaqueEntry of this.opaqueFileEntries) {
+      opaqueEntry.index += 1;
+    }
   }
 
   reloadPersistedTranscript(): void {
