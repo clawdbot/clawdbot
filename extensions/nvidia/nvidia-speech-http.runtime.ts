@@ -35,6 +35,7 @@ const QUERY_FIELD_ALIASES: Readonly<Record<string, string>> = {
 };
 
 const BOOSTED_WORD_KEYS = new Set(["boostedWords", "boostedLmWords", "boosted_lm_words"]);
+const RESERVED_ASR_FIELDS = new Set(["file", "language", "model", "response_format"]);
 const RIFF_HEADER = Buffer.from("RIFF");
 const WAVE_HEADER = Buffer.from("WAVE");
 const OGG_HEADER = Buffer.from("OggS");
@@ -80,6 +81,9 @@ function appendAsrCustomizations(form: FormData, query: AudioTranscriptionReques
       continue;
     }
     const field = QUERY_FIELD_ALIASES[key] ?? toSnakeCase(key);
+    if (RESERVED_ASR_FIELDS.has(field)) {
+      continue;
+    }
     form.append(field, String(value));
   }
 }

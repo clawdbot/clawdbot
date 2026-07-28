@@ -87,6 +87,10 @@ describe("NVIDIA speech HTTP runtime", () => {
           wordTimeOffsets: true,
           automaticPunctuation: true,
           customConfiguration: "foo:bar",
+          responseFormat: "text",
+          response_format: "verbose_json",
+          language: "fr-FR",
+          model: "internal-model-id",
         },
       }),
     );
@@ -103,6 +107,9 @@ describe("NVIDIA speech HTTP runtime", () => {
     expect(form.get("word_time_offsets")).toBe("true");
     expect(form.get("enable_automatic_punctuation")).toBe("true");
     expect(form.get("custom_configuration")).toBe("foo:bar");
+    expect(form.getAll("response_format")).toEqual(["json"]);
+    expect(form.getAll("language")).toEqual(["en-US"]);
+    expect(form.get("model")).toBeNull();
   });
 
   it("uses an explicitly configured HTTP model and base URL", async () => {
