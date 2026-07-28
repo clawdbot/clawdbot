@@ -2,6 +2,7 @@ import * as agentsModelsSkills from "./agents-models-skills.js";
 import * as agentsWorkspace from "./agents-workspace.js";
 import * as artifacts from "./artifacts.js";
 import * as commands from "./commands.js";
+import * as memory from "./memory.js";
 import * as skillWorkshop from "./skill-protocol-schemas.js";
 
 export const AgentSkillProtocolSchemas = {
@@ -33,6 +34,10 @@ export const AgentSkillProtocolSchemas = {
   ArtifactsGetResult: artifacts.ArtifactsGetResultSchema,
   ArtifactsDownloadParams: artifacts.ArtifactsDownloadParamsSchema,
   ArtifactsDownloadResult: artifacts.ArtifactsDownloadResultSchema,
+  MemoryListFile: memory.MemoryListFileSchema,
+  MemoryListRootMemory: memory.MemoryListRootMemorySchema,
+  MemoryListParams: memory.MemoryListParamsSchema,
+  MemoryListResult: memory.MemoryListResultSchema,
   AgentsListParams: agentsModelsSkills.AgentsListParamsSchema,
   AgentsListResult: agentsModelsSkills.AgentsListResultSchema,
   ModelChoice: agentsModelsSkills.ModelChoiceSchema,

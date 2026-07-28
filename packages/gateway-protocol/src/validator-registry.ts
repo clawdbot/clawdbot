@@ -65,6 +65,7 @@ import {
   ArtifactsListParamsSchema,
   ArtifactsGetParamsSchema,
   ArtifactsDownloadParamsSchema,
+  MemoryListParamsSchema,
   NodePairListParamsSchema,
   NodePairApproveParamsSchema,
   NodePairRejectParamsSchema,
@@ -421,6 +422,7 @@ export const validateAgentsWorkspaceGetParams = lazyCompile(AgentsWorkspaceGetPa
 export const validateArtifactsListParams = lazyCompile(ArtifactsListParamsSchema);
 export const validateArtifactsGetParams = lazyCompile(ArtifactsGetParamsSchema);
 export const validateArtifactsDownloadParams = lazyCompile(ArtifactsDownloadParamsSchema);
+export const validateMemoryListParams = lazyCompile(MemoryListParamsSchema);
 export const validateNodePairListParams = lazyCompile(NodePairListParamsSchema);
 export const validateNodePairApproveParams = lazyCompile(NodePairApproveParamsSchema);
 export const validateNodePairRejectParams = lazyCompile(NodePairRejectParamsSchema);

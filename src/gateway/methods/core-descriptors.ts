@@ -359,6 +359,7 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   // reads. Strong user/tenant isolation requires separate Gateways; see operator-scopes.md.
   { name: "agents.workspace.list", scope: "operator.read", since: "2026.7" },
   { name: "agents.workspace.get", scope: "operator.read", since: "2026.7" },
+  { name: "memory.list", scope: "operator.read", since: "2026.7" },
   { name: "tts.speak", scope: "operator.write", since: "2026.7" },
   { name: "plugins.list", scope: "operator.read", since: "<=2026.7" },
   { name: "plugins.search", scope: "operator.read", since: "<=2026.7" },
