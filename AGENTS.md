@@ -44,7 +44,7 @@ Skills own workflows; root owns hard policy and routing.
 
 - Core TS: `src/`, `ui/`, `packages/`; plugins: `extensions/`; SDK: `src/plugin-sdk/*`; channels: `src/channels/*`; loader: `src/plugins/*`; protocol: `packages/gateway-protocol/*`; docs/apps: `docs/`, `apps/`.
 - Installers: sibling `../openclaw.ai`.
-- Scoped guides: `extensions/`, `src/{plugin-sdk,channels,plugins,gateway,agents}/`, `packages/`, `test/helpers*/`, `docs/`, `ui/`, `scripts/`.
+- Scoped guides: `extensions/`, `src/{agents,channels,gateway,infra/outbound,plugin-sdk,plugins,tui}/`, `apps/{android,ios}/`, `test/`, `test/helpers/`, `docs/`, `ui/`, `scripts/`.
 
 ## Docs
 
@@ -54,6 +54,7 @@ Skills own workflows; root owns hard policy and routing.
 
 ## Architecture
 
+- Big-picture system narrative before these policy rules: `docs/concepts/architecture.md` (gateway/protocol/clients), `docs/agent-runtime-architecture.md` (agent runtime layout), `docs/plugins/architecture.md` (plugin capability model).
 - Core stays plugin-agnostic. No bundled ids/defaults/policy in core when manifest/registry/capability contracts work.
 - Plugins cross into core only via `openclaw/plugin-sdk/*`, manifest metadata, injected runtime helpers, documented barrels (`api.ts`, `runtime-api.ts`).
 - Plugin prod code: no core `src/**`, `src/plugin-sdk-internal/**`, other plugin `src/**`, or relative outside package.
