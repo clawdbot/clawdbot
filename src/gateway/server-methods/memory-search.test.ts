@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { MemorySearchResult } from "../../memory-host-sdk/host/types.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -53,7 +54,7 @@ async function invokeMemorySearch(params: unknown, cfg: OpenClawConfig) {
 
 function createStubManager() {
   return {
-    search: vi.fn(async () => []),
+    search: vi.fn(async (): Promise<MemorySearchResult[]> => []),
     status: vi.fn(() => ({
       backend: "builtin" as const,
       provider: "none",
