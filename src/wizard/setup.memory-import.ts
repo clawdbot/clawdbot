@@ -20,6 +20,19 @@ type MemoryImportOffer = {
   conflicts: number;
 };
 
+export type MemoryImportProviderOutcome = {
+  providerId: string;
+  label: string;
+  migrated: number;
+  skipped: number;
+  failure?: string;
+};
+
+export type SetupMemoryImportOutcome = {
+  status: "completed" | "nothing-to-import" | "skipped";
+  providers: MemoryImportProviderOutcome[];
+};
+
 // No CLI hint here: `openclaw migrate <id>` runs the FULL provider migration
 // (config/credentials/skills), not a memory-only retry. The Control UI Memory
 // import page is the only equivalent memory-scoped surface.
@@ -31,11 +44,13 @@ export async function runSetupMemoryImportStep(params: {
   config: OpenClawConfig;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
-}): Promise<void> {
+  /** Recheck host authority at the copy boundary; onboarding intentionally omits this hook. */
+  beforeApply?: () => Promise<void>;
+}): Promise<SetupMemoryImportOutcome> {
   const agentId = resolveDefaultAgentId(params.config);
   const providers = listMemoryMigrationProviders(params.config);
   if (providers.length === 0) {
-    return;
+    return { status: "nothing-to-import", providers: [] };
   }
 
   const logger = createMigrationLogger(params.runtime);
@@ -71,7 +86,7 @@ export async function runSetupMemoryImportStep(params: {
     }
   }
   if (offers.length === 0) {
-    return;
+    return { status: "nothing-to-import", providers: [] };
   }
 
   const offerLines = offers.map((offer) => {
@@ -93,7 +108,7 @@ export async function runSetupMemoryImportStep(params: {
   });
   if (!confirmed) {
     await showSkipHint(params.prompter);
-    return;
+    return { status: "skipped", providers: [] };
   }
 
   const selectedIds =
@@ -112,18 +127,20 @@ export async function runSetupMemoryImportStep(params: {
   const selectedOffers = offers.filter((offer) => selected.has(offer.provider.id));
   if (selectedOffers.length === 0) {
     await showSkipHint(params.prompter);
-    return;
+    return { status: "skipped", providers: [] };
   }
 
   params.prompter.disableBackNavigation?.();
   const workspace = resolveAgentWorkspaceDir(params.config, agentId);
   const summaryLines: string[] = [];
   const failureLines: string[] = [];
+  const providerOutcomes: MemoryImportProviderOutcome[] = [];
   for (const offer of selectedOffers) {
     const progress = params.prompter.progress(
       t("wizard.memoryImport.importing", { label: offer.provider.label }),
     );
     try {
+      await params.beforeApply?.();
       const result = await applyProviderMemoryImport({
         provider: offer.provider,
         config: params.config,
@@ -145,6 +162,13 @@ export async function runSetupMemoryImportStep(params: {
       const incomplete = result.summary.errors + result.summary.conflicts;
       if (incomplete > 0) {
         const reason = t("wizard.memoryImport.partialFailure", { count: incomplete });
+        providerOutcomes.push({
+          providerId: offer.provider.id,
+          label: offer.provider.label,
+          migrated: result.summary.migrated,
+          skipped: result.summary.skipped,
+          failure: reason,
+        });
         failureLines.push(
           t("wizard.memoryImport.failureLine", {
             label: offer.provider.label,
@@ -160,10 +184,23 @@ export async function runSetupMemoryImportStep(params: {
           t("wizard.memoryImport.errorTitle"),
         );
       } else {
+        providerOutcomes.push({
+          providerId: offer.provider.id,
+          label: offer.provider.label,
+          migrated: result.summary.migrated,
+          skipped: result.summary.skipped,
+        });
         progress.stop(t("wizard.memoryImport.imported", { label: offer.provider.label }));
       }
     } catch (error) {
       const reason = formatErrorMessage(error);
+      providerOutcomes.push({
+        providerId: offer.provider.id,
+        label: offer.provider.label,
+        migrated: 0,
+        skipped: 0,
+        failure: reason,
+      });
       summaryLines.push(
         t("wizard.memoryImport.summaryLine", {
           label: offer.provider.label,
@@ -193,4 +230,5 @@ export async function runSetupMemoryImportStep(params: {
     [...summaryLines, ...failureLines].join("\n"),
     t("wizard.memoryImport.summaryTitle"),
   );
+  return { status: "completed", providers: providerOutcomes };
 }
