@@ -72,6 +72,49 @@ describe("checkBrowserOrigin", () => {
       },
       expected: { ok: false as const, reason: "origin not allowed" },
     },
+    // Migration paths for non-local clients that previously relied on implicit
+    // private-host same-origin trust: explicit allowedOrigins, the opt-in
+    // Host-header fallback, and the explicit wildcard allow-all policy.
+    {
+      name: "accepts non-local private LAN host when Host-header fallback is explicitly enabled",
+      input: {
+        requestHost: "192.168.0.202:18789",
+        origin: "http://192.168.0.202:18789",
+        isLocalClient: false,
+        allowHostHeaderOriginFallback: true,
+      },
+      expected: { ok: true as const, matchedBy: "host-header-fallback" as const },
+    },
+    {
+      name: "accepts an explicitly allowlisted remote origin for non-local clients",
+      input: {
+        requestHost: "gateway.example.com:18789",
+        origin: "https://control.example.com",
+        allowedOrigins: ["https://control.example.com"],
+        isLocalClient: false,
+      },
+      expected: { ok: true as const, matchedBy: "allowlist" as const },
+    },
+    {
+      name: "rejects non-local spoofed private host when allowedOrigins does not match the spoof",
+      input: {
+        requestHost: "192.168.0.202:18789",
+        origin: "http://192.168.0.202:18789",
+        allowedOrigins: ["https://control.example.com"],
+        isLocalClient: false,
+      },
+      expected: { ok: false as const, reason: "origin not allowed" },
+    },
+    {
+      name: "accepts non-local spoofed private host via explicit wildcard allowedOrigins",
+      input: {
+        requestHost: "192.168.0.202:18789",
+        origin: "http://192.168.0.202:18789",
+        allowedOrigins: ["*"],
+        isLocalClient: false,
+      },
+      expected: { ok: true as const, matchedBy: "allowlist" as const },
+    },
     {
       name: "accepts same-origin loopback host for local clients",
       input: {
