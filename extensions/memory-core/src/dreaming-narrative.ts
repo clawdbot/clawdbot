@@ -1041,18 +1041,17 @@ async function generateAndAppendDreamNarrative(params: DreamNarrativeRequest): P
 // write-lock while it runs and burns a model slot, which caused lock
 // contention (>30 s) and cascading narrative timeouts (#73198).
 //
-// `runDetachedDreamNarrative` caps total in-flight detached narratives across
+// `runDetachedNarrativeJob` caps total in-flight detached narratives across
 // phases/workspaces so cron sweeps cannot exhaust model and session-lock slots.
 const DETACHED_NARRATIVE_CONCURRENCY = 3;
 const detachedNarrativeLimit = pLimit(DETACHED_NARRATIVE_CONCURRENCY);
 
-function runDetachedDreamNarrative(params: DreamNarrativeRequest): void {
+function runDetachedNarrativeJob(job: () => Promise<void>): void {
   queueMicrotask(() => {
-    void detachedNarrativeLimit(() => generateAndAppendDreamNarrative(params)).catch(() => {
+    void detachedNarrativeLimit(job).catch(() => {
       // Detached narratives intentionally swallow errors — callers (cron
       // sweeps) cannot recover, and surfacing here would only cause noisy
-      // unhandled rejections. Logging happens inside
-      // generateAndAppendDreamNarrative.
+      // unhandled rejections. Logging happens inside the job itself.
     });
   });
 }
@@ -1071,21 +1070,21 @@ export async function runDreamNarrative(
   if (rest.data.snippets.length === 0 && !rest.data.promotions?.length) {
     return;
   }
-  if (!agentId) {
-    // Narrative sessions are stored per agent, so an ownerless sweep cannot start one.
-    // Write the local diary fallback instead of skipping the entry without a trace.
-    await appendFallbackNarrativeEntry({
-      ...rest,
-      nowMs: Number.isFinite(rest.nowMs) ? (rest.nowMs as number) : Date.now(),
-      reason: "the dreaming sweep has no owning agent id",
-    });
-    return;
-  }
-  const request = { ...rest, agentId };
+  // Narrative sessions are stored per agent, so an ownerless sweep cannot start one.
+  // Write the local diary fallback instead of skipping the entry without a trace, and
+  // keep it on the same dispatch so a detached cron sweep never awaits a diary write.
+  const job = agentId
+    ? () => generateAndAppendDreamNarrative({ ...rest, agentId })
+    : () =>
+        appendFallbackNarrativeEntry({
+          ...rest,
+          nowMs: Number.isFinite(rest.nowMs) ? (rest.nowMs as number) : Date.now(),
+          reason: "the dreaming sweep has no owning agent id",
+        });
   if (detached) {
-    runDetachedDreamNarrative(request);
+    runDetachedNarrativeJob(job);
     return;
   }
-  await generateAndAppendDreamNarrative(request);
+  await job();
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

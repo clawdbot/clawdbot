@@ -1159,6 +1159,36 @@ describe("runDreamNarrative ownership gate", () => {
     expectLogIncludes(logger.info, "no owning agent id");
   });
 
+  it("queues the ownerless fallback through detached dispatch", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const subagent = {
+      run: vi.fn(),
+      waitForRun: vi.fn(),
+      getSessionMessages: vi.fn(),
+      deleteSession: vi.fn(),
+    };
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+    // A detached cron sweep must not await the diary write, so the ownerless fallback rides
+    // the same limiter as the subagent path instead of blocking inline.
+    await runDreamNarrative({
+      subagent,
+      workspaceDir,
+      data: { phase: "light", snippets: ["A detached ownerless sweep still leaves a trace."] },
+      nowMs: Date.parse("2026-04-05T03:00:00Z"),
+      timezone: "UTC",
+      logger,
+      detached: true,
+    });
+
+    expect(subagent.run).not.toHaveBeenCalled();
+    await vi.waitFor(async () => {
+      expect(await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).toContain(
+        "A memory trace surfaced, but details were unavailable in this run.",
+      );
+    });
+  });
+
   it("stays a no-op for an ownerless sweep with nothing to narrate", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
     const subagent = {
