@@ -16,6 +16,7 @@ import {
   recordStructuredReplayTrustForToolCall,
   runBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
+import { consumeFinalClientVoiceToolConfirmation } from "./agent-tools.before-tool-call.policy.js";
 import {
   finalizeBeforeToolCallExecutionParams,
   prepareBeforeToolCallExecutionParams,
@@ -388,6 +389,21 @@ export function toToolDefinitions(
               adjustedParams: hookOutcome.params,
               finalizerMode: "adapter",
             });
+            // A voice grant binds the post-finalizer execution shape. Consuming it
+            // earlier would let later alias or tool-owned rewrites escape the grant.
+            const voiceConfirmation = consumeFinalClientVoiceToolConfirmation({
+              toolName: name,
+              params: executeParams,
+              ctx: hookContext,
+            });
+            if (!voiceConfirmation.allowed) {
+              return buildBlockedToolResult({
+                reason: voiceConfirmation.reason,
+                deniedReason: "client-voice-confirmation",
+                toolCallId,
+                runId: hookContext?.runId,
+              });
+            }
             recordAdjustedParamsForToolCall(toolCallId, executeParams, hookContext?.runId);
           }
           const rawResult = await tool.execute(toolCallId, executeParams, signal, onUpdate);
@@ -503,6 +519,24 @@ export function toClientToolDefinitions(
           }
           const adjustedParams = outcome.params;
           const paramsRecord = coerceParamsRecord(adjustedParams);
+          // Client-hosted tools have no tool-owned finalizer, so hook reconciliation
+          // produces the canonical execution shape consumed here.
+          const voiceConfirmation = consumeFinalClientVoiceToolConfirmation({
+            toolName: func.name,
+            params: paramsRecord,
+            ctx: hookContext,
+          });
+          if (!voiceConfirmation.allowed) {
+            if (onClientToolCall && typeof onClientToolCall !== "function") {
+              onClientToolCall.discard?.(toolCallId, func.name);
+            }
+            return buildBlockedToolResult({
+              reason: voiceConfirmation.reason,
+              deniedReason: "client-voice-confirmation",
+              toolCallId,
+              runId: hookContext?.runId,
+            });
+          }
           // Notify handler that a client tool was called.
           if (onClientToolCall) {
             if (typeof onClientToolCall === "function") {

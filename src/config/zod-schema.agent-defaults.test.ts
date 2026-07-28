@@ -410,6 +410,24 @@ describe("agent defaults schema", () => {
     expect(result.compaction?.midTurnPrecheck?.enabled).toBe(true);
   });
 
+  it("accepts compaction.enabled so auto-compaction can be turned off", () => {
+    const result = AgentDefaultsSchema.parse({
+      compaction: {
+        enabled: false,
+      },
+    })!;
+
+    expect(result.compaction?.enabled).toBe(false);
+  });
+
+  it("rejects a non-boolean compaction.enabled", () => {
+    expect(
+      AgentDefaultsSchema.safeParse({
+        compaction: { enabled: "false" },
+      }).success,
+    ).toBe(false);
+  });
+
   it("accepts focused contextLimits on defaults and agent entries", () => {
     const defaults = AgentDefaultsSchema.parse({
       contextLimits: {

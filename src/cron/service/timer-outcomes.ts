@@ -493,10 +493,11 @@ export function applyTriggerNoFireResult(
   state: CronServiceState,
   job: CronJob,
   result: { startedAt: number; endedAt: number; triggerEval: CronTriggerEvalOutcome },
-  opts?: { scheduleMode?: "advance" | "preserve" },
+  opts?: { scheduleMode?: "advance" | "force-preserve" | "stale-preserve" },
 ): void {
   const previousNextRunAtMs = job.state.nextRunAtMs;
   const previousPacedNextRunAtMs = job.state.pacedNextRunAtMs;
+  const previousForcePreservedNextRunAtMs = job.state.forcePreservedNextRunAtMs;
   job.state.queuedAtMs = undefined;
   job.state.runningAtMs = undefined;
   job.updatedAtMs = result.endedAt;
@@ -508,10 +509,15 @@ export function applyTriggerNoFireResult(
     job.state.lastFailureAlertAtMs = undefined;
     applyTriggerEvaluationState(job, result.triggerEval, result.endedAt);
   }
-  if (opts?.scheduleMode === "preserve") {
+  if (opts?.scheduleMode === "force-preserve" || opts?.scheduleMode === "stale-preserve") {
     job.state.nextRunAtMs = previousNextRunAtMs;
     job.state.pacedNextRunAtMs = previousPacedNextRunAtMs;
-    job.state.forcePreservedNextRunAtMs = previousNextRunAtMs;
+    // A stale wake preserves the operator's complete schedule; only an actual
+    // force run may create the marker that exempts its slot from repair.
+    job.state.forcePreservedNextRunAtMs =
+      opts.scheduleMode === "force-preserve"
+        ? previousNextRunAtMs
+        : previousForcePreservedNextRunAtMs;
     return;
   }
   job.state.pacedNextRunAtMs = undefined;
@@ -541,7 +547,7 @@ export function applyOutcomeToStoredJob(
   }
   const jobs = store.jobs;
   const job = jobs.find((entry) => entry.id === result.jobId);
-  if (!job) {
+  if (!job || result.activeJobMarker?.jobRemoved === true) {
     if (result.status === "ok" && result.triggerEval?.fired === false) {
       tryFinishCronTaskRunWithoutHistory(state, result);
       return undefined;
@@ -582,7 +588,7 @@ export function applyOutcomeToStoredJob(
         endedAt: result.endedAt,
         triggerEval: result.triggerEval,
       },
-      { scheduleMode: scheduleOwnership === "stale" ? "preserve" : "advance" },
+      { scheduleMode: scheduleOwnership === "stale" ? "stale-preserve" : "advance" },
     );
     job.state.startupCatchupAtMs = undefined;
     if (scheduleOwnership === "current") {

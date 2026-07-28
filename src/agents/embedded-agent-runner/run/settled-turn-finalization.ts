@@ -5,7 +5,10 @@ import type {
   AgentHarnessSettledTurnFinalizationResult,
 } from "../../harness/types.js";
 import { log } from "../logger.js";
-import { mergeUsageIntoAccumulator } from "../usage-accumulator.js";
+import {
+  mergeAttemptRunStatsIntoAccumulator,
+  mergeUsageIntoAccumulator,
+} from "../usage-accumulator.js";
 import { runEmbeddedSettledTurnFinalizationWithBackend } from "./backend.js";
 import { EMBEDDED_RUN_LANE_HEARTBEAT_MS } from "./lane-runtime.js";
 import {
@@ -106,6 +109,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       noteLaneTaskProgress: input.finalization.noteLaneTaskProgress,
     });
     mergeUsageIntoAccumulator(input.terminalBase.usageAccumulator, attempt.attemptUsage);
+    mergeAttemptRunStatsIntoAccumulator(input.terminalBase.usageAccumulator, attempt);
     lastRunPromptUsage = attempt.attemptUsage ?? lastRunPromptUsage;
     lastTurnTotal = attempt.attemptUsage?.total ?? lastTurnTotal;
     // Successful isolated finalization owns a fresh terminal, never the original abort signal.

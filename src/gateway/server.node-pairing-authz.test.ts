@@ -2,15 +2,9 @@
 // command scopes, and gateway enforcement around node client identity.
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import {
-  approveDevicePairing,
-  getPairedDevice,
-  listDevicePairing,
-  requestDevicePairing,
-} from "../infra/device-pairing.js";
+import { getPairedDevice, listDevicePairing } from "../infra/device-pairing.js";
 import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
 import { approveNodePairing, listNodePairing, requestNodePairing } from "../infra/node-pairing.js";
-import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -23,6 +17,10 @@ import {
   openTrackedWs,
   pairDeviceIdentity,
 } from "./device-authz.test-helpers.js";
+import {
+  createNodePairingTestState,
+  describeWithGatewayServer,
+} from "./server.node-pairing.test-support.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
 import {
   connectOk,
@@ -33,20 +31,12 @@ import {
 
 installGatewayTestHooks({ scope: "suite" });
 
-const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-node-pair-authz-" });
-
-async function makeNodePairingStateDir(): Promise<string> {
-  return await tempDirs.make("case");
-}
-
-// Node surfaces attach to paired devices, so tests seed device pairing first.
-async function seedNodeDevice(nodeId: string, baseDir?: string): Promise<void> {
-  const request = await requestDevicePairing(
-    { deviceId: nodeId, publicKey: `pk-${nodeId}`, role: "node", roles: ["node"], scopes: [] },
-    baseDir,
-  );
-  await approveDevicePairing(request.request.requestId, { callerScopes: [] }, baseDir);
-}
+const {
+  cleanup: cleanupNodePairingTestState,
+  makeStateDir: makeNodePairingStateDir,
+  seedNodeDevice,
+  setup: setupNodePairingTestState,
+} = createNodePairingTestState("openclaw-node-pair-authz-");
 
 async function findPairedNode(nodeId: string, baseDir?: string) {
   const pairing = await listNodePairing(baseDir);
@@ -241,39 +231,13 @@ async function expectRpcNodePairingApprovalRejected(params: {
   }
 }
 
-function describeWithGatewayServer(
-  name: string,
-  defineTests: (getStarted: () => Awaited<ReturnType<typeof startServerWithClient>>) => void,
-): void {
-  describe(name, () => {
-    let started: Awaited<ReturnType<typeof startServerWithClient>> | undefined;
-
-    beforeAll(async () => {
-      started = await startServerWithClient("secret");
-    });
-
-    afterAll(async () => {
-      started?.ws.close();
-      await started?.server.close();
-      started?.envSnapshot.restore();
-    });
-
-    defineTests(() => {
-      if (!started) {
-        throw new Error("gateway test server was not started");
-      }
-      return started;
-    });
-  });
-}
-
 describe("gateway node pairing authorization", () => {
   beforeAll(async () => {
-    await tempDirs.setup();
+    await setupNodePairingTestState();
   });
 
   afterAll(async () => {
-    await tempDirs.cleanup();
+    await cleanupNodePairingTestState();
   });
 
   describe("approval scopes", () => {

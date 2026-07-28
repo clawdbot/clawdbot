@@ -11,7 +11,7 @@ import {
   type SecretInput,
   createSetupTranslator,
 } from "openclaw/plugin-sdk/setup";
-import { resolveZaloAccount } from "./accounts.js";
+import { inspectZaloAccount } from "./accounts.js";
 import { noteZaloTokenHelp, promptZaloAllowFrom } from "./setup-allow-from.js";
 import { zaloDmPolicy } from "./setup-core.js";
 
@@ -110,11 +110,7 @@ export const zaloSetupWizard: ChannelSetupWizard = {
     unconfiguredScore: 10,
     includeStatusLine: true,
     resolveConfigured: ({ cfg, accountId }) => {
-      const account = resolveZaloAccount({
-        cfg,
-        accountId,
-        allowUnresolvedSecretRef: true,
-      });
+      const account = inspectZaloAccount({ cfg, accountId });
       return (
         Boolean(account.token) ||
         hasConfiguredSecretInput(account.config.botToken) ||
@@ -125,11 +121,7 @@ export const zaloSetupWizard: ChannelSetupWizard = {
   credentials: [],
   finalize: async ({ cfg, accountId, forceAllowFrom, options, prompter }) => {
     let next = cfg;
-    const resolvedAccount = resolveZaloAccount({
-      cfg: next,
-      accountId,
-      allowUnresolvedSecretRef: true,
-    });
+    const resolvedAccount = inspectZaloAccount({ cfg: next, accountId });
     const accountConfigured = Boolean(resolvedAccount.token);
     const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
     const hasConfigToken = Boolean(

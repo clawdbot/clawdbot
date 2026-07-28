@@ -10,6 +10,7 @@ export type ChangedLane =
   | "docs"
   | "tooling"
   | "liveDockerTooling"
+  | "bundledChannelConfigMetadata"
   | "releaseMetadata"
   | "all";
 

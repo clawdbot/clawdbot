@@ -49,7 +49,7 @@ type PendingOffer = {
   request: CodexRealtimeBrowserSessionCreateRequest;
 };
 
-export type CodexRealtimeBrowserSessionFallback = {
+type CodexRealtimeBrowserSessionFallback = {
   capabilities: CodexRealtimeProviderCapabilities;
   isConfigured: () => boolean;
   createBrowserSession: (

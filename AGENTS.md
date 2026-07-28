@@ -297,6 +297,8 @@ Skills own workflows; root owns hard policy and routing.
 - Split files around ~700 LOC when clarity/testability improves.
 - Never add a `max-lines` suppression. Existing suppressions are grandfathered TODOs; split the file and remove its suppression plus baseline entry.
 - Naming: **OpenClaw** product/docs; `openclaw` CLI/package/path/config.
+- Agents navigate by grep: exported symbols use 2-3 word unique names; no generic single-word exports (`get`, `run`, `create`, `handle`).
+- New modules/dirs concept-named; no new `utils/`, `helpers/`, `common/`. One spelling per concept repo-wide.
 - English: American spelling.
 
 ## Tests

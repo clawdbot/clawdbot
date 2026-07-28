@@ -31,7 +31,7 @@ install them only after the registry pages below resolve.
   provides schemas, runtime validators, TypeScript types, client identity and
   capability registries, structured error readers, and protocol version constants.
   Its npm tarball also includes the generated
-  [`protocol.schema.json`](https://unpkg.com/@openclaw/gateway-protocol/protocol.schema.json)
+  [`protocol.schema.json`](https://unpkg.com/@openclaw/gateway-protocol@beta/protocol.schema.json)
   machine-readable contract.
 - [`@openclaw/gateway-client`](https://www.npmjs.com/package/@openclaw/gateway-client)
   is the reference connection implementation. Import the package root for the Node

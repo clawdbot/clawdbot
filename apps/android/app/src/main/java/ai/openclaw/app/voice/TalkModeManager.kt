@@ -3191,33 +3191,12 @@ class TalkModeManager internal constructor(
         if (stopRequested) return
         _isListening.value = false
         _inputLevel.value = 0f
-        if (activePttCaptureId != null) {
+        val pushToTalkActive = activePttCaptureId != null
+        if (pushToTalkActive) {
           pttReleaseCompletion?.let {
             it.complete(Unit)
             return
           }
-          if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
-            setStatus(nativeText("Microphone permission required"))
-            return
-          }
-          setStatus(
-            when (error) {
-              SpeechRecognizer.ERROR_AUDIO -> nativeText("Audio error")
-              SpeechRecognizer.ERROR_CLIENT -> nativeText("Client error")
-              SpeechRecognizer.ERROR_NETWORK -> nativeText("Network error")
-              SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> nativeText("Network timeout")
-              SpeechRecognizer.ERROR_NO_MATCH -> nativeText("Listening (PTT)")
-              SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> nativeText("Recognizer busy")
-              SpeechRecognizer.ERROR_SERVER -> nativeText("Server error")
-              SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> nativeText("Listening (PTT)")
-              else -> nativeText("Speech error (\$error)", error)
-            },
-          )
-          schedulePushToTalkRestart(
-            delayMs = 600L,
-            advanceRung = pttRecognitionRung !is PushToTalkRecognitionRung.RestartingSingleSession,
-          )
-          return
         }
         if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
           setStatus(nativeText("Microphone permission required"))
@@ -3230,13 +3209,21 @@ class TalkModeManager internal constructor(
             SpeechRecognizer.ERROR_CLIENT -> nativeText("Client error")
             SpeechRecognizer.ERROR_NETWORK -> nativeText("Network error")
             SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> nativeText("Network timeout")
-            SpeechRecognizer.ERROR_NO_MATCH -> nativeText("Listening")
+            SpeechRecognizer.ERROR_NO_MATCH,
+            SpeechRecognizer.ERROR_SPEECH_TIMEOUT,
+            -> if (pushToTalkActive) nativeText("Listening (PTT)") else nativeText("Listening")
             SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> nativeText("Recognizer busy")
             SpeechRecognizer.ERROR_SERVER -> nativeText("Server error")
-            SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> nativeText("Listening")
             else -> nativeText("Speech error (\$error)", error)
           },
         )
+        if (pushToTalkActive) {
+          schedulePushToTalkRestart(
+            delayMs = 600L,
+            advanceRung = pttRecognitionRung !is PushToTalkRecognitionRung.RestartingSingleSession,
+          )
+          return
+        }
         scheduleRestart(delayMs = 600)
       }
 

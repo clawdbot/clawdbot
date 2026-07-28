@@ -4,6 +4,7 @@
  * observability decisions shared across embedded-agent hot paths.
  */
 import type { TSchema } from "typebox";
+import type { ModelPickerAction } from "../../interactive/payload.js";
 import type {
   ModelApi,
   ProviderModelRouteRuntimePolicy,
@@ -137,7 +138,8 @@ type AgentRuntimeMessagePresentationAction =
       type: "web-app";
       url?: string;
       widgetId: string;
-    };
+    }
+  | ModelPickerAction;
 
 /** Portable action control exposed to agent runtime reply payloads. */
 type AgentRuntimeMessagePresentationButton = {
@@ -166,7 +168,10 @@ type AgentRuntimeMessagePresentationOption = {
   /** User-visible option label. */
   label: string;
   /** Typed action sent when selected. */
-  action?: Extract<AgentRuntimeMessagePresentationAction, { type: "command" | "callback" }>;
+  action?: Extract<
+    AgentRuntimeMessagePresentationAction,
+    { type: "command" | "callback" | "model-picker" }
+  >;
   /** @deprecated Use action. */
   value?: string;
 };

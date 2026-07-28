@@ -47,7 +47,6 @@ import {
   resolveFreshestTargetEntry,
 } from "./session-entry-selection.js";
 import { projectSessionStoreForPersistence } from "./skill-prompt-blobs.js";
-import { formatSqliteSessionFileMarker } from "./sqlite-marker.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import type { GroupKeyResolution, SessionEntry } from "./types.js";
@@ -151,7 +150,7 @@ export async function createSessionEntryWithTranscript<TError = string>(
   ) =>
     | Promise<SessionEntryCreateWithTranscriptPrepareResult<TError>>
     | SessionEntryCreateWithTranscriptPrepareResult<TError>,
-  _options: SessionEntryCreateWithTranscriptOptions = {},
+  options: SessionEntryCreateWithTranscriptOptions = {},
 ): Promise<SessionEntryCreateWithTranscriptResult<TError>> {
   const storePath = resolveAccessStorePath(scope);
   const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
@@ -167,11 +166,6 @@ export async function createSessionEntryWithTranscript<TError = string>(
     return { ok: false, error: created.error, phase: "entry" };
   }
 
-  const sessionFile = formatSqliteSessionFileMarker({
-    agentId,
-    sessionId: created.entry.sessionId,
-    storePath,
-  });
   try {
     await appendSqliteTranscriptEvent(
       {
@@ -180,7 +174,7 @@ export async function createSessionEntryWithTranscript<TError = string>(
         sessionKey: resolved.normalizedKey,
         storePath,
       },
-      createSessionTranscriptHeader({ sessionId: created.entry.sessionId }),
+      createSessionTranscriptHeader({ cwd: options.cwd, sessionId: created.entry.sessionId }),
     );
   } catch (err) {
     return {
@@ -190,13 +184,7 @@ export async function createSessionEntryWithTranscript<TError = string>(
     };
   }
 
-  const entry =
-    created.entry.sessionFile === sessionFile
-      ? created.entry
-      : {
-          ...created.entry,
-          sessionFile,
-        };
+  const entry = created.entry;
   await applySessionEntryLifecycleMutation({
     agentId,
     storePath,
@@ -204,7 +192,7 @@ export async function createSessionEntryWithTranscript<TError = string>(
     upserts: [{ sessionKey: resolved.normalizedKey, entry }],
     skipMaintenance: true,
   });
-  return { ok: true, entry, sessionFile };
+  return { ok: true, entry, sessionFile: resolved.normalizedKey };
 }
 
 export function cloneSessionEntries(
@@ -315,13 +303,7 @@ export function createReplySessionInitializationRevision(params: {
   // activity/context writes are merged below; comparing them here would reject
   // before the merge can preserve the concurrent metadata.
   const projected = projectSessionEntryForPersistenceRevision({ storePath, entry });
-  const revisionEntry: Pick<SessionEntry, "sessionFile" | "sessionId"> = {
-    sessionId: projected.sessionId,
-  };
-  if (projected.sessionFile !== undefined) {
-    revisionEntry.sessionFile = projected.sessionFile;
-  }
-  return JSON.stringify(revisionEntry);
+  return JSON.stringify({ sessionId: projected.sessionId });
 }
 
 export function resolveInitializedReplySessionEntry(params: {
@@ -330,15 +312,7 @@ export function resolveInitializedReplySessionEntry(params: {
   sessionEntry: SessionEntry;
   storePath: string;
 }): SessionEntry {
-  const sessionFile = formatSqliteSessionFileMarker({
-    agentId: params.agentId,
-    sessionId: params.sessionEntry.sessionId,
-    storePath: params.storePath,
-  });
-  return {
-    ...params.sessionEntry,
-    sessionFile,
-  };
+  return params.sessionEntry;
 }
 
 /** Updates an existing entry only; returns null when the session is absent. */

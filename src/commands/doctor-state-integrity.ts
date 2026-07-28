@@ -23,6 +23,7 @@ import {
   formatSessionArchiveTimestamp,
   isPrimarySessionTranscriptFileName,
 } from "../config/sessions/artifacts.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import {
   resolveSessionFilePath,
@@ -34,7 +35,6 @@ import {
   applySessionEntryReplacements,
   listSessionEntriesReadOnly,
 } from "../config/sessions/session-accessor.js";
-import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
@@ -1349,12 +1349,16 @@ export async function noteStateIntegrity(
       })
       .slice(0, 5);
     const recentTranscriptCandidates = recent.filter(([key]) => !isSlashRoutingSessionKey(key));
-    const missing = recentTranscriptCandidates.filter(([, entry]) => {
+    const missing = recentTranscriptCandidates.filter(([key, entry]) => {
+      if (sqliteSessionKeys.has(key)) {
+        return false;
+      }
       const sessionId = entry.sessionId;
       if (!sessionId) {
         return false;
       }
-      if (parseSqliteSessionFileMarker(entry.sessionFile)) {
+      const legacySessionFile = (entry as SessionEntry & { sessionFile?: string }).sessionFile;
+      if (parseSqliteSessionFileMarker(legacySessionFile)) {
         return false;
       }
       const transcriptPath = resolveSessionFilePath(sessionId, entry, sessionPathOpts);

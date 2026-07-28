@@ -33,6 +33,30 @@ describe("zaloMessageActions.describeMessageTool", () => {
     expect(zaloMessageActions.supportsAction?.({ action: "send" })).toBe(true);
     expect(zaloMessageActions.supportsAction?.({ action: "react" })).toBe(false);
   });
+
+  it("keeps healthy account actions when one account SecretRef is unavailable", () => {
+    const cfg = {
+      channels: {
+        zalo: {
+          accounts: {
+            broken: {
+              botToken: {
+                source: "env",
+                provider: "default",
+                id: "OPENCLAW_TEST_MISSING_ZALO_TOKEN",
+              },
+            },
+            healthy: { botToken: "healthy-token" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    expect(zaloMessageActions.describeMessageTool?.({ cfg })).toEqual({
+      actions: ["send"],
+      capabilities: [],
+    });
+    expect(zaloMessageActions.describeMessageTool?.({ cfg, accountId: "broken" })).toBeNull();
+  });
 });
 
 describe("zaloMessageActions.handleAction", () => {

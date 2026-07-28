@@ -434,7 +434,6 @@ private struct ChatMessageBody: View {
             text: text,
             context: .user,
             variant: self.markdownVariant,
-            font: OpenClawChatTypography.body,
             textColor: textColor)
     }
 
@@ -920,6 +919,15 @@ extension ChatPendingToolsBubble: @MainActor Equatable {
     }
 }
 
+extension AssistantTextSegment.Kind {
+    var markdownTypography: ChatMarkdownRenderer.Typography {
+        switch self {
+        case .response: .response
+        case .thinking: .thinking
+        }
+    }
+}
+
 private struct ChatAssistantTextBody: View {
     let text: String
     let markdownVariant: ChatMarkdownVariant
@@ -941,19 +949,12 @@ private struct ChatAssistantTextBody: View {
         let segments = AssistantTextParser.segments(from: self.text, includeThinking: self.includesThinking)
         return VStack(alignment: .leading, spacing: 10) {
             ForEach(segments) { segment in
-                let font = segment.kind == .thinking
-                    ? OpenClawChatTypography.callout.italic()
-                    : OpenClawChatTypography.body
-                let inlineMathTypography: ChatMarkdownRenderer.InlineMathTypography = segment.kind == .thinking
-                    ? .callout
-                    : .body
                 ChatMarkdownRenderer(
                     text: segment.text,
                     context: .assistant,
                     variant: self.markdownVariant,
-                    font: font,
+                    typography: segment.kind.markdownTypography,
                     textColor: OpenClawChatTheme.assistantText,
-                    inlineMathTypography: inlineMathTypography,
                     isComplete: self.isComplete)
             }
         }
@@ -1028,12 +1029,6 @@ private struct ChatStreamingAssistantTextBody: View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(Array(self.snapshot.segments.enumerated()), id: \.offset) { entry in
                 let segment = entry.element
-                let font = segment.kind == .thinking
-                    ? OpenClawChatTypography.callout.italic()
-                    : OpenClawChatTypography.body
-                let inlineMathTypography: ChatMarkdownRenderer.InlineMathTypography = segment.kind == .thinking
-                    ? .callout
-                    : .body
                 let reveal = self.reveal(
                     segmentIndex: entry.offset,
                     now: now)
@@ -1041,9 +1036,8 @@ private struct ChatStreamingAssistantTextBody: View {
                     snapshot: segment.markdown,
                     context: .assistant,
                     variant: self.markdownVariant,
-                    font: font,
+                    typography: segment.kind.markdownTypography,
                     textColor: OpenClawChatTheme.assistantText,
-                    inlineMathTypography: inlineMathTypography,
                     reveal: reveal)
             }
         }

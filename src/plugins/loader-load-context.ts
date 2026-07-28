@@ -352,6 +352,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   // scoped snapshots must match exactly to protect activation boundaries.
   const currentMetadataSnapshot =
     options.installRecords === undefined &&
+    trustNormalized.loadPaths === normalized.loadPaths &&
     !shouldResolveRawConfigEnvVars &&
     (options.env === undefined || options.env === process.env)
       ? (getCurrentPluginMetadataSnapshot({
@@ -411,6 +412,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   return {
     env,
     cfg,
+    metadataSnapshot: currentMetadataSnapshot,
     normalized: trustNormalized,
     activationSourceConfig,
     activationSource,

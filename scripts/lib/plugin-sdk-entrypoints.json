@@ -201,6 +201,7 @@
   "response-limit-runtime",
   "session-binding-runtime",
   "session-catalog",
+  "session-catalog-runtime",
   "session-discussion",
   "session-key-runtime",
   "session-store-runtime",

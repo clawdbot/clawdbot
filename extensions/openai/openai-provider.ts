@@ -28,7 +28,6 @@ import {
   classifyOpenAIBaseUrl,
   isOpenAICodexBaseUrl,
   isOpenAIHttpsApiBaseUrl,
-  normalizeOpenAICodexLoopbackBaseUrl,
   resolveOpenAIDefaultBaseUrl,
 } from "./base-url.js";
 import {
@@ -86,7 +85,6 @@ const OPENAI_MODELS_ENDPOINT = "https://api.openai.com/v1/models";
 // the provider contract test fails when that managed-runtime pin changes.
 const OPENAI_CODEX_CLIENT_VERSION = "0.145.0";
 const OPENAI_CODEX_MODELS_ENDPOINT = `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=${OPENAI_CODEX_CLIENT_VERSION}`;
-const OPENAI_CODEX_PROXY_BASE_URL_PARAM = "codexProxyBaseUrl";
 const OPENAI_MODELS_CACHE_TTL_MS = 60_000;
 const OPENAI_CODEX_MODELS_CACHE_TTL_MS = 60_000;
 const OPENAI_GPT_56_DIRECT_CONTEXT_WINDOW = 1_050_000;
@@ -465,10 +463,7 @@ function resolveCodexModelFallback(modelId: string): ModelDefinitionConfig | und
   return fallbackModel ? normalizeOpenAICodexCatalogModel(fallbackModel) : undefined;
 }
 
-function buildOpenAICodexModelFromLiveRow(
-  row: unknown,
-  baseUrl = OPENAI_CODEX_RESPONSES_BASE_URL,
-): ModelDefinitionConfig | undefined {
+function buildOpenAICodexModelFromLiveRow(row: unknown): ModelDefinitionConfig | undefined {
   if (!shouldIncludeCodexModelRow(row)) {
     return undefined;
   }
@@ -523,7 +518,7 @@ function buildOpenAICodexModelFromLiveRow(
     id: modelId,
     name: readCodexModelString(row, "display_name") ?? fallback?.name ?? modelId,
     api: "openai-chatgpt-responses",
-    baseUrl,
+    baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
     reasoning: (reasoningLevels?.length ?? 0) > 0 || fallback?.reasoning || false,
     input: resolveCodexModelInput(row, fallback),
     cost: fallback?.cost ?? OPENAI_UNKNOWN_MODEL_COST,
@@ -538,15 +533,11 @@ function buildOpenAICodexModelFromLiveRow(
   };
 }
 
-function buildOpenAICodexStaticProviderConfig(params?: {
-  baseUrl?: string;
-  auth?: "oauth" | "token";
-}): ModelProviderConfig {
-  const baseUrl = params?.baseUrl ?? OPENAI_CODEX_RESPONSES_BASE_URL;
+function buildOpenAICodexStaticProviderConfig(): ModelProviderConfig {
   return {
-    baseUrl,
+    baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
     api: "openai-chatgpt-responses",
-    auth: params?.auth ?? "oauth",
+    auth: "oauth",
     models: OPENAI_MANIFEST_PROVIDER.models.flatMap((model) => {
       const modelId = normalizeLowercaseStringOrEmpty(model.id);
       // Static OAuth rows are offline hints, not entitlement claims. Keep only
@@ -555,7 +546,7 @@ function buildOpenAICodexStaticProviderConfig(params?: {
         return [];
       }
       const normalized = normalizeOpenAICodexCatalogModel(model);
-      return normalized ? [{ ...normalized, api: "openai-chatgpt-responses", baseUrl }] : [];
+      return normalized ? [normalized] : [];
     }),
   };
 }
@@ -563,19 +554,13 @@ function buildOpenAICodexStaticProviderConfig(params?: {
 async function buildOpenAICodexLiveProviderConfig(params: {
   discoveryApiKey: string;
   accountId?: string;
-  baseUrl?: string;
-  auth?: "oauth" | "token";
   fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
 }): Promise<ModelProviderConfig> {
-  const baseUrl = params.baseUrl ?? OPENAI_CODEX_RESPONSES_BASE_URL;
-  const modelsEndpoint = params.baseUrl
-    ? `${baseUrl}/models?client_version=${OPENAI_CODEX_CLIENT_VERSION}`
-    : OPENAI_CODEX_MODELS_ENDPOINT;
   try {
     const rows = await getCachedLiveProviderModelRows({
       providerId: PROVIDER_ID,
-      endpoint: modelsEndpoint,
+      endpoint: OPENAI_CODEX_MODELS_ENDPOINT,
       discoveryApiKey: params.discoveryApiKey,
       fetchGuard: params.fetchGuard,
       signal: params.signal,
@@ -590,20 +575,20 @@ async function buildOpenAICodexLiveProviderConfig(params: {
       cacheKeyParts: [
         PROVIDER_ID,
         "codex-model-rows",
-        modelsEndpoint,
+        OPENAI_CODEX_MODELS_ENDPOINT,
         params.discoveryApiKey,
         params.accountId ?? "",
       ],
     });
     const models = rows
-      .map((row) => buildOpenAICodexModelFromLiveRow(row, baseUrl))
+      .map(buildOpenAICodexModelFromLiveRow)
       .filter((model): model is ModelDefinitionConfig => Boolean(model));
     // A successful account-scoped response is authoritative even when all
     // rows are hidden; static hints must not invent subscription access.
     return {
-      baseUrl,
+      baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
       api: "openai-chatgpt-responses",
-      auth: params.auth ?? "oauth",
+      auth: "oauth",
       models,
     };
   } catch (error) {
@@ -611,62 +596,15 @@ async function buildOpenAICodexLiveProviderConfig(params: {
       error instanceof LiveModelCatalogHttpError &&
       (error.status === 401 || error.status === 403)
     ) {
-      return {
-        ...buildOpenAICodexStaticProviderConfig({ baseUrl, auth: params.auth }),
-        models: [],
-      };
+      return { ...buildOpenAICodexStaticProviderConfig(), models: [] };
     }
     // Codex/ChatGPT discovery is advisory. Static OpenAI rows stay available
     // when OAuth refresh or the remote model list is unavailable.
   }
-  return buildOpenAICodexStaticProviderConfig({ baseUrl, auth: params.auth });
+  return buildOpenAICodexStaticProviderConfig();
 }
 
-class OpenAICodexProxyConfigError extends Error {}
-
-function resolveOpenAICodexProxyBaseUrl(config: unknown): string | undefined {
-  const providers = (config as { models?: { providers?: Record<string, unknown> } } | undefined)
-    ?.models?.providers;
-  const provider = Object.entries(providers ?? {}).find(
-    ([providerId]) => normalizeProviderId(providerId) === PROVIDER_ID,
-  )?.[1] as { params?: Record<string, unknown> } | undefined;
-  const configured = provider?.params?.[OPENAI_CODEX_PROXY_BASE_URL_PARAM];
-  if (configured === undefined) {
-    return undefined;
-  }
-  const normalized = normalizeOpenAICodexLoopbackBaseUrl(configured);
-  if (!normalized) {
-    throw new OpenAICodexProxyConfigError(
-      `models.providers.openai.params.${OPENAI_CODEX_PROXY_BASE_URL_PARAM} must be an HTTP(S) URL using 127.0.0.1 or [::1]`,
-    );
-  }
-  return normalized;
-}
-
-function withOpenAICodexProxyRoute(
-  ctx: ProviderResolveDynamicModelContext,
-): ProviderResolveDynamicModelContext {
-  const baseUrl = resolveOpenAICodexProxyBaseUrl(ctx.config);
-  if (!baseUrl || ctx.providerConfig?.baseUrl === baseUrl) {
-    return ctx;
-  }
-  return {
-    ...ctx,
-    providerConfig: ctx.providerConfig
-      ? { ...ctx.providerConfig, baseUrl }
-      : { baseUrl, models: [] },
-  };
-}
-
-function applyOpenAICodexProxyRoute<T extends ProviderRuntimeModel>(model: T, config: unknown): T {
-  const baseUrl = resolveOpenAICodexProxyBaseUrl(config);
-  if (!baseUrl || model.baseUrl === baseUrl) {
-    return model;
-  }
-  return { ...model, api: "openai-chatgpt-responses", baseUrl };
-}
-
-function isCodexCatalogAuthMode(mode: string): mode is "oauth" | "token" {
+function isCodexCatalogAuthMode(mode: string): boolean {
   return mode === "oauth" || mode === "token";
 }
 
@@ -1019,15 +957,10 @@ export function buildOpenAIProvider(): ProviderPlugin {
             const provider = await buildOpenAICodexLiveProviderConfig({
               discoveryApiKey: runtimeAuth.apiKey,
               accountId: metadata.accountId,
-              baseUrl: resolveOpenAICodexProxyBaseUrl(ctx.config),
-              auth: runtimeAuth.mode,
             });
             return { providers: { [PROVIDER_ID]: provider } };
           }
-        } catch (error) {
-          if (error instanceof OpenAICodexProxyConfigError) {
-            throw error;
-          }
+        } catch {
           // OAuth discovery is advisory; fall through so configured API-key
           // auth can still publish the standard OpenAI catalog.
         }
@@ -1063,7 +996,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
     },
     resolveDynamicModel: (ctx) =>
       shouldResolveDynamicModelThroughCodex(ctx)
-        ? codexHooks.resolveDynamicModel?.(withOpenAICodexProxyRoute(ctx))
+        ? codexHooks.resolveDynamicModel?.(ctx)
         : resolveOpenAIGptForwardCompatModel(ctx),
     preferRuntimeResolvedModel: (ctx) => codexHooks.preferRuntimeResolvedModel?.(ctx) ?? false,
     normalizeResolvedModel: (ctx) => {
@@ -1081,9 +1014,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
           baseUrl: ctx.model.baseUrl,
         })
       ) {
-        const normalized = codexHooks.normalizeResolvedModel?.(ctx) ?? ctx.model;
-        const routed = applyOpenAICodexProxyRoute(normalized, ctx.config);
-        return routed === ctx.model ? undefined : routed;
+        return codexHooks.normalizeResolvedModel?.(ctx);
       }
       return normalizeOpenAITransport(ctx.model, ctx);
     },
@@ -1096,12 +1027,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
           : authoredCompletionsRoute;
       }
       if (shouldUseCodexResponsesHooks(ctx)) {
-        const normalized = codexHooks.normalizeTransport?.(ctx);
-        const baseUrl = resolveOpenAICodexProxyBaseUrl(ctx.config);
-        if (baseUrl) {
-          return { api: normalized?.api ?? "openai-chatgpt-responses", baseUrl };
-        }
-        return normalized;
+        return codexHooks.normalizeTransport?.(ctx);
       }
       return shouldUseOpenAIResponsesTransport(ctx)
         ? { api: "openai-responses", baseUrl: ctx.baseUrl }
@@ -1119,17 +1045,9 @@ export function buildOpenAIProvider(): ProviderPlugin {
         (normalizeProviderId(ctx.provider) === PROVIDER_ID &&
           (!providerConfig?.baseUrl || isOpenAIHttpsApiBaseUrl(providerConfig.baseUrl)) &&
           resolveConfiguredProviderAuthTransport(providerConfig) === "codex");
-      const prepared = (
-        useCodexTransport ? codexResponsesHooks : responsesHooks
-      ).prepareExtraParams?.(ctx);
-      return useCodexTransport && resolveOpenAICodexProxyBaseUrl(ctx.config)
-        ? { ...prepared, transport: "sse" }
-        : prepared;
+      return (useCodexTransport ? codexResponsesHooks : responsesHooks).prepareExtraParams?.(ctx);
     },
-    resolveUsageAuth: (ctx) =>
-      resolveOpenAICodexProxyBaseUrl(ctx.config)
-        ? { handled: true }
-        : codexHooks.resolveUsageAuth?.(ctx),
+    resolveUsageAuth: codexHooks.resolveUsageAuth,
     fetchUsageSnapshot: codexHooks.fetchUsageSnapshot,
     refreshOAuth: codexHooks.refreshOAuth,
     buildUnknownModelHint: ({ modelId }) => buildOpenAIUnknownModelHint(modelId),

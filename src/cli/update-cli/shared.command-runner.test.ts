@@ -59,6 +59,7 @@ describe("createGlobalCommandRunner", () => {
     const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
 
     try {
+      expect(parseTimeoutMsOrExit("")).toBeNull();
       expect(parseTimeoutMsOrExit("1.5")).toBeNull();
       expect(parseTimeoutMsOrExit("10abc")).toBeNull();
       expect(parseTimeoutMsOrExit("0x10")).toBeNull();
@@ -67,9 +68,9 @@ describe("createGlobalCommandRunner", () => {
       expect(parseTimeoutMsOrExit("   ")).toBeNull();
       expect(parseTimeoutMsOrExit(String(Number.MAX_SAFE_INTEGER))).toBeNull();
 
-      expect(error).toHaveBeenCalledTimes(7);
+      expect(error).toHaveBeenCalledTimes(8);
       expect(error).toHaveBeenCalledWith("--timeout must be a positive integer (seconds)");
-      expect(exit).toHaveBeenCalledTimes(7);
+      expect(exit).toHaveBeenCalledTimes(8);
       expect(exit).toHaveBeenCalledWith(1);
     } finally {
       error.mockRestore();

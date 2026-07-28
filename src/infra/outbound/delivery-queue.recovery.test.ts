@@ -25,18 +25,18 @@ import {
 } from "./deliver-types.js";
 import { attachOutboundDeliveryCommitHook } from "./delivery-commit-hooks.js";
 import { pruneOrphanedDeliveryQueueMedia } from "./delivery-queue-media-spool.js";
-import { loadPendingDeliveries, reserveDeliveryAttempt } from "./delivery-queue-storage.js";
 import {
   ackDelivery,
   claimDeliveryPlatformSendAttempt,
   enqueueDelivery,
   enqueueDeliveryOnce,
+  loadPendingDeliveries,
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendDispatched,
   markDeliveryPlatformSendAttemptStarted,
-  recoverPendingDeliveries,
-  type DeliverFn,
-} from "./delivery-queue.js";
+  reserveDeliveryAttempt,
+} from "./delivery-queue-storage.js";
+import { recoverPendingDeliveries, type DeliverFn } from "./delivery-queue.js";
 import {
   asDeliverFn,
   createRecoveryLog,

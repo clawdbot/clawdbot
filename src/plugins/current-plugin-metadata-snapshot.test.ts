@@ -5,11 +5,11 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   captureCurrentPluginMetadataSnapshotState,
-  clearCurrentPluginMetadataSnapshot,
   getCurrentPluginMetadataSnapshot,
   restoreCurrentPluginMetadataSnapshotState,
   setCurrentPluginMetadataSnapshot,
 } from "./current-plugin-metadata-snapshot.js";
+import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
@@ -339,6 +339,39 @@ describe("current plugin metadata snapshot", () => {
 
     expect(getCurrentPluginMetadataSnapshot({ config: firstConfig })).toBe(first);
     expect(getCurrentPluginMetadataSnapshot({ config: secondConfig })).toBeUndefined();
+  });
+
+  it("restores exact config identity across a temporary metadata snapshot", () => {
+    const config = { plugins: { load: { paths: ["~/plugins"] } } };
+    const snapshot = createSnapshot({ config });
+    const originalEnv = {
+      HOME: "/home/original-snapshot",
+      OPENCLAW_HOME: undefined,
+    } as NodeJS.ProcessEnv;
+    const changedEnv = {
+      HOME: "/home/changed-snapshot",
+      OPENCLAW_HOME: undefined,
+    } as NodeJS.ProcessEnv;
+    setCurrentPluginMetadataSnapshot(snapshot, { config, env: originalEnv });
+    const captured = captureCurrentPluginMetadataSnapshotState();
+
+    setCurrentPluginMetadataSnapshot(createSnapshot());
+    restoreCurrentPluginMetadataSnapshotState(captured);
+
+    expect(getCurrentPluginMetadataSnapshot({ config, env: changedEnv })).toBe(snapshot);
+  });
+
+  it("restores exact config identity after in-place changes", () => {
+    const config = { plugins: { allow: ["first"] } };
+    const snapshot = createSnapshot({ config });
+    setCurrentPluginMetadataSnapshot(snapshot, { config });
+    const captured = captureCurrentPluginMetadataSnapshotState();
+
+    setCurrentPluginMetadataSnapshot(createSnapshot());
+    restoreCurrentPluginMetadataSnapshotState(captured);
+    config.plugins.allow = ["changed"];
+
+    expect(getCurrentPluginMetadataSnapshot({ config })).toBe(snapshot);
   });
 
   it("clears the current snapshot when the persisted installed index changes", () => {

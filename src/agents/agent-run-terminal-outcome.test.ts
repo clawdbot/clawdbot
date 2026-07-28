@@ -324,6 +324,49 @@ describe("agent run terminal outcome", () => {
 });
 
 describe("agent run attempt terminal", () => {
+  it.each([
+    {
+      label: "external abort",
+      terminal: { kind: "aborted", source: "external" } as const,
+      expected: { aborted: true, externalAbort: true, timedOut: false, interrupted: true },
+    },
+    {
+      label: "run-budget timeout",
+      terminal: { kind: "timeout", phase: "prompt", source: "run_budget", aborted: true } as const,
+      expected: {
+        aborted: true,
+        externalAbort: false,
+        timedOut: true,
+        timedOutByRunBudget: true,
+        interrupted: true,
+      },
+    },
+    {
+      label: "compaction observation",
+      terminal: { kind: "timeout", phase: "compaction", source: "observation" } as const,
+      expected: {
+        aborted: false,
+        externalAbort: false,
+        timedOut: false,
+        timedOutDuringCompaction: true,
+        interrupted: false,
+      },
+    },
+    {
+      label: "tool-execution observation",
+      terminal: { kind: "timeout", phase: "tool_execution", source: "observation" } as const,
+      expected: {
+        aborted: false,
+        externalAbort: false,
+        timedOut: false,
+        timedOutDuringToolExecution: true,
+        interrupted: false,
+      },
+    },
+  ])("preserves the exact public projection for $label", ({ terminal, expected }) => {
+    expect(projectAgentRunAttemptTerminal(terminal)).toMatchObject(expected);
+  });
+
   it("merges observation-only timeout phases without creating a run timeout", () => {
     const toolExecution = {
       kind: "timeout",

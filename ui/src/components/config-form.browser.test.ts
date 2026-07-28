@@ -718,4 +718,26 @@ describe("config form renderer", () => {
     removeButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["accounts"], {});
   });
+
+  it("shows field help once instead of repeating it on every array item", () => {
+    const container = document.createElement("div");
+    const analysis = analyzeConfigSchema(rootSchema);
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        // Item paths collapse their numeric segment, so the item rows resolve
+        // this same hint; only the array header should render it.
+        uiHints: { allowFrom: { help: "Sender ids allowed to reach the agent." } },
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: { allowFrom: ["+15550001111", "+15550002222"] },
+        onPatch: vi.fn(),
+      }),
+      container,
+    );
+
+    const help = Array.from(container.querySelectorAll(".settings-row__desc")).filter(
+      (node) => node.textContent?.trim() === "Sender ids allowed to reach the agent.",
+    );
+    expect(help).toHaveLength(1);
+  });
 });

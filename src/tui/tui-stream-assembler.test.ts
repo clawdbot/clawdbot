@@ -82,6 +82,20 @@ describe("TuiStreamAssembler", () => {
     expect(output).toBe("Visible");
   });
 
+  it("tracks literal placeholder text as real displayable content until finalization", () => {
+    const assembler = new TuiStreamAssembler();
+
+    expect(assembler.hasDisplayText("run-literal-output")).toBe(false);
+
+    assembler.ingestDelta("run-literal-output", messageWithContent([text("(no output)")]), false);
+
+    expect(assembler.hasDisplayText("run-literal-output")).toBe(true);
+    expect(
+      assembler.finalize("run-literal-output", { role: "assistant", content: [] }, false),
+    ).toBe("(no output)");
+    expect(assembler.hasDisplayText("run-literal-output")).toBe(false);
+  });
+
   it("falls back to streamed text on empty final payload", () => {
     const assembler = new TuiStreamAssembler();
     assembler.ingestDelta("run-3", messageWithContent([text("Streamed")]), false);
