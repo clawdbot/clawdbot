@@ -9,6 +9,7 @@ import {
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import type { SessionIngestionFileState } from "./dreaming-ingestion-state.js";
 import { removeBackfillDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-narrative.js";
 import {
   SESSION_INGESTION_MAX_MESSAGES_PER_FILE,
@@ -20,6 +21,7 @@ import {
   buildSessionFileScopeKey,
   buildSessionRenderedLine,
   buildSqliteDreamingSessionPath,
+  buildSessionStateKey,
   hashSessionMessageId,
   mergeTrackedMessageHashes,
   normalizeSessionCorpusSnippet,
@@ -58,6 +60,7 @@ type SessionBackfillSource = {
   absolutePath: string;
   foreign: boolean;
   sessionPath: string;
+  stateKey: string;
   scope: string;
   legacyScope?: string;
   sessionKey?: string;
@@ -69,9 +72,25 @@ type SessionBackfillSource = {
 
 type SessionBackfillCandidate = SessionIngestionMessage & {
   hash: string;
+  contentIndex: number;
   legacyHash?: string;
   lineNumber: number;
   scope: string;
+};
+
+type SessionBackfillScan = {
+  candidates: SessionBackfillCandidate[];
+  contentHash: string;
+  lineCount: number;
+  mtimeMs: number;
+  scannedEndIndex: number;
+  size: number;
+  stateKey: string;
+};
+
+type SessionBackfillCollection = {
+  byDay: Map<string, SessionBackfillCandidate[]>;
+  scans: SessionBackfillScan[];
 };
 
 export type SessionBackfillDay = {
@@ -152,6 +171,7 @@ function sourceFromCorpusEntry(entry: SessionTranscriptCorpusEntry): SessionBack
     absolutePath: entry.sessionFile,
     foreign: false,
     sessionPath,
+    stateKey: buildSessionStateKey(entry.agentId, sessionPath),
     scope:
       entry.transcriptSource === "sqlite"
         ? `${entry.agentId}:${sessionPath}`
@@ -177,6 +197,7 @@ function sourceFromArchiveFile(agentId: string, archiveFile: string): SessionBac
     absolutePath,
     foreign: true,
     sessionPath,
+    stateKey: `session-backfill:${absolutePath.replaceAll("\\", "/")}`,
     // Foreign files do not inherit canonical session identity from a matching basename.
     scope: `archive:${agentId}:${absolutePath.replaceAll("\\", "/")}`,
     sessionKind: "interactive",
@@ -218,12 +239,14 @@ function candidateDayInRange(
 
 async function collectSessionBackfillCandidates(params: {
   sources: SessionBackfillSource[];
+  files: Record<string, SessionIngestionFileState>;
   seenMessages: Record<string, string[]>;
   from?: string;
   to?: string;
   timezone?: string;
-}): Promise<Map<string, SessionBackfillCandidate[]>> {
+}): Promise<SessionBackfillCollection> {
   const candidates: SessionBackfillCandidate[] = [];
+  const scans: SessionBackfillScan[] = [];
   const perFileCap = Math.min(
     SESSION_INGESTION_MAX_MESSAGES_PER_FILE,
     Math.max(
@@ -252,11 +275,21 @@ async function collectSessionBackfillCandidates(params: {
       ? new Set(params.seenMessages[source.legacyScope] ?? [])
       : undefined;
     const lines = entry.content.length > 0 ? entry.content.split("\n") : [];
+    const previous = params.files[source.stateKey];
+    const unchanged =
+      previous?.mtimeMs === Math.floor(entry.mtimeMs) &&
+      previous.size === Math.floor(entry.size) &&
+      previous.contentHash === entry.hash &&
+      previous.lineCount === lines.length;
+    const startIndex = unchanged ? Math.min(previous.lastContentLine, lines.length) : 0;
+    const sourceCandidates: SessionBackfillCandidate[] = [];
     let fileCount = 0;
-    for (let index = 0; index < lines.length; index += 1) {
+    let scannedEndIndex = startIndex;
+    for (let index = startIndex; index < lines.length; index += 1) {
       if (fileCount >= perFileCap) {
         break;
       }
+      scannedEndIndex = index + 1;
       const snippet = normalizeSessionCorpusSnippet(lines[index] ?? "");
       if (snippet.length < SESSION_INGESTION_MIN_SNIPPET_CHARS) {
         continue;
@@ -299,7 +332,8 @@ async function collectSessionBackfillCandidates(params: {
         lineNumber,
         snippet,
       });
-      candidates.push({
+      const candidate = {
+        contentIndex: index,
         day,
         hash,
         ...(legacyHash ? { legacyHash } : {}),
@@ -308,10 +342,21 @@ async function collectSessionBackfillCandidates(params: {
         rendered,
         scope: source.scope,
         snippet,
-      });
+      } satisfies SessionBackfillCandidate;
+      candidates.push(candidate);
+      sourceCandidates.push(candidate);
       seen.add(hash);
       fileCount += 1;
     }
+    scans.push({
+      candidates: sourceCandidates,
+      contentHash: entry.hash,
+      lineCount: lines.length,
+      mtimeMs: Math.floor(entry.mtimeMs),
+      scannedEndIndex,
+      size: Math.floor(entry.size),
+      stateKey: source.stateKey,
+    });
   }
   const selected = candidates
     .toSorted((a, b) => {
@@ -333,7 +378,31 @@ async function collectSessionBackfillCandidates(params: {
     bucket.push(candidate);
     byDay.set(candidate.day, bucket);
   }
-  return byDay;
+  return { byDay, scans };
+}
+
+function mergeSessionBackfillFileProgress(params: {
+  current: Record<string, SessionIngestionFileState>;
+  scans: SessionBackfillScan[];
+  selectedDays: Array<{ candidates: SessionBackfillCandidate[] }>;
+}): Record<string, SessionIngestionFileState> {
+  const selectedHashes = new Set(
+    params.selectedDays.flatMap((day) => day.candidates.map((candidate) => candidate.hash)),
+  );
+  const files = { ...params.current };
+  for (const scan of params.scans) {
+    const firstUnselected = scan.candidates.find(
+      (candidate) => !selectedHashes.has(candidate.hash),
+    );
+    files[scan.stateKey] = {
+      mtimeMs: scan.mtimeMs,
+      size: scan.size,
+      contentHash: scan.contentHash,
+      lineCount: scan.lineCount,
+      lastContentLine: firstUnselected?.contentIndex ?? scan.scannedEndIndex,
+    };
+  }
+  return files;
 }
 
 function summarizeDay(day: string, candidates: SessionBackfillCandidate[]): SessionBackfillDay {
@@ -377,18 +446,27 @@ async function buildRemDiaryEntries(params: {
       }
       const corpusPath = path.join(scratchDir, SESSION_CORPUS_RELATIVE_DIR, `${day.day}.txt`);
       const inputPath = path.join(scratchDir, "memory", `${day.day}.md`);
-      await fs.copyFile(corpusPath, inputPath);
+      const corpus = await fs.readFile(corpusPath, "utf-8");
+      await fs.writeFile(inputPath, `## Session transcript\n\n${corpus}`);
       const preview = await previewGroundedRemMarkdown({
         workspaceDir: scratchDir,
         inputPaths: [inputPath],
       });
-      const rendered = preview.files.at(0)?.renderedMarkdown;
+      const file = preview.files.at(0);
+      const hasGroundedContent = Boolean(
+        file &&
+        (file.facts.length > 0 ||
+          file.reflections.length > 0 ||
+          file.memoryImplications.length > 0 ||
+          file.candidates.length > 0),
+      );
       entries.push({
         isoDay: day.day,
         sourcePath: results[0]?.path ?? `memory/.dreams/session-corpus/${day.day}.txt`,
-        bodyLines: rendered
-          ? groundedMarkdownToDiaryLines(rendered)
-          : buildSummaryDiaryLines(summarizeDay(day.day, day.candidates)),
+        bodyLines:
+          hasGroundedContent && file
+            ? groundedMarkdownToDiaryLines(file.renderedMarkdown)
+            : buildSummaryDiaryLines(summarizeDay(day.day, day.candidates)),
       });
     }
     return entries;
@@ -498,17 +576,18 @@ export async function runSessionBackfill(
     agentId: params.agentId,
     archiveFiles: params.archiveFiles ?? [],
   });
-  const byDay = await collectSessionBackfillCandidates({
+  const collected = await collectSessionBackfillCandidates({
     sources,
+    files: state.files,
     seenMessages: state.seenMessages,
     ...(from !== undefined ? { from } : {}),
     ...(to !== undefined ? { to } : {}),
     ...(params.timezone !== undefined ? { timezone: params.timezone } : {}),
   });
-  const selectedDays = [...byDay.keys()]
+  const selectedDays = [...collected.byDay.keys()]
     .toSorted()
     .slice(0, limitDays)
-    .map((day) => ({ day, candidates: byDay.get(day) ?? [] }));
+    .map((day) => ({ day, candidates: collected.byDay.get(day) ?? [] }));
   const days = selectedDays.map((entry) => summarizeDay(entry.day, entry.candidates));
   const candidateCount = days.reduce((sum, day) => sum + day.candidateCount, 0);
   let writtenDiaryEntries = 0;
@@ -532,13 +611,15 @@ export async function runSessionBackfill(
     replacedDiaryEntries = diary.replaced;
   }
 
-  if (params.apply && selectedDays.length > 0) {
-    stagedEntries = await applySessionBackfillDays({
-      workspaceDir,
-      days: selectedDays,
-      nowMs,
-      ...(params.timezone !== undefined ? { timezone: params.timezone } : {}),
-    });
+  if (params.apply) {
+    if (selectedDays.length > 0) {
+      stagedEntries = await applySessionBackfillDays({
+        workspaceDir,
+        days: selectedDays,
+        nowMs,
+        ...(params.timezone !== undefined ? { timezone: params.timezone } : {}),
+      });
+    }
     const nextSeenMessages = { ...state.seenMessages };
     for (const { candidates } of selectedDays) {
       const hashesByScope = new Map<string, string[]>();
@@ -553,6 +634,11 @@ export async function runSessionBackfill(
     }
     await writeSessionIngestionState(workspaceDir, {
       ...state,
+      files: mergeSessionBackfillFileProgress({
+        current: state.files,
+        scans: collected.scans,
+        selectedDays,
+      }),
       seenMessages: trimTrackedSessionScopes(nextSeenMessages),
     });
   }

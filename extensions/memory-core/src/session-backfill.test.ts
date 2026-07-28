@@ -138,6 +138,32 @@ describe("runSessionBackfill", () => {
     expect(result.days.map((day) => day.day)).toEqual(["2026-01-01", "2026-01-02"]);
   });
 
+  it("advances the source cursor beyond the per-file signal cap", async () => {
+    const workspaceDir = await createIsolatedWorkspace("cursor-");
+    await seedCanonicalTranscript(
+      "cursor",
+      Array.from({ length: 100 }, (_, index) => ({
+        role: "user" as const,
+        content: `Durable cursor note ${index}`,
+        timestamp: new Date(Date.parse("2026-01-01T00:00:00.000Z") + index * 60_000).toISOString(),
+        owner: true,
+      })),
+    );
+
+    const run = () =>
+      runSessionBackfill({
+        agentId: "main",
+        workspaceDir,
+        apply: true,
+        nowMs: Date.parse("2026-01-02T12:00:00.000Z"),
+        timezone: "UTC",
+      });
+
+    expect((await run()).candidateCount).toBe(80);
+    expect((await run()).candidateCount).toBe(20);
+    expect((await run()).candidateCount).toBe(0);
+  });
+
   it("applies the total cap after finding the oldest candidate across sources", async () => {
     const workspaceDir = await createIsolatedWorkspace("oldest-cap-");
     for (let sourceIndex = 0; sourceIndex < 16; sourceIndex += 1) {
@@ -256,6 +282,29 @@ describe("runSessionBackfill", () => {
       "User: Owner confirmed durable preference",
       "Assistant: Agent response in the owner turn",
     ]);
+  });
+
+  it("renders selected session candidates into the REM diary preview", async () => {
+    const workspaceDir = await createIsolatedWorkspace("rem-");
+    await seedCanonicalTranscript("rem", [
+      {
+        role: "user",
+        content: "Owner prefers dark mode for all editors",
+        timestamp: "2026-02-01T10:00:00.000Z",
+        owner: true,
+      },
+    ]);
+
+    await runSessionBackfill({
+      agentId: "main",
+      workspaceDir,
+      rem: true,
+      timezone: "UTC",
+    });
+
+    const dreams = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+    expect(dreams).toContain("Owner prefers dark mode for all editors");
+    expect(dreams).not.toContain("No grounded facts were extracted");
   });
 
   it("stages idempotently, converges duplicate facts, and rolls back staged artifacts", async () => {

@@ -363,6 +363,8 @@ function toRetainedSessionCorpusEntry(
   if (typeof sessionFile !== "string") {
     return null;
   }
+  // The accessor constructs this marker from its resolved database path; no
+  // persisted session row can supply or redirect the retained store path.
   const marker = parseSqliteSessionFileMarker(sessionFile);
   if (
     !marker ||

@@ -2064,6 +2064,7 @@ export {
   buildSessionFileScopeKey,
   buildSessionRenderedLine,
   buildSqliteDreamingSessionPath,
+  buildSessionStateKey,
   hashSessionMessageId,
   mergeTrackedMessageHashes,
   normalizeSessionCorpusSnippet,
