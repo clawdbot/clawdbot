@@ -283,6 +283,36 @@ describe("GatewayClient", () => {
     client.stop();
   });
 
+  test("restarts immediately after resetting a pending reconnect", async () => {
+    vi.useFakeTimers();
+    const { client, connections } = createSyntheticGatewayProtocol();
+    client.start();
+    const firstConnection = connections[0];
+    if (!firstConnection) {
+      throw new Error("synthetic protocol connection missing");
+    }
+
+    firstConnection.close(1012, "first service restart");
+    expect(vi.getTimerCount()).toBe(1);
+    client.resetReconnectBackoff(10);
+    client.start();
+
+    expect(connections).toHaveLength(2);
+    const secondConnection = connections[1];
+    if (!secondConnection) {
+      throw new Error("synthetic replacement connection missing");
+    }
+    secondConnection.close(1012, "second service restart");
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(1);
+    client.start();
+    expect(connections).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(connections).toHaveLength(3);
+    client.stop();
+  });
+
   test("starts a fresh protocol socket after an explicit stop", () => {
     const { client, connections } = createSyntheticGatewayProtocol();
 

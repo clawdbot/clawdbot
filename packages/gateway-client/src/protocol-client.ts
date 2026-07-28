@@ -320,6 +320,7 @@ export class GatewayProtocolClient<TPlan> {
   }
 
   resetReconnectBackoff(initialMs: number): void {
+    this.reconnectSignal = null;
     this.reconnectSupervisor.reset(initialMs);
   }
 
