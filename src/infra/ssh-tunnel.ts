@@ -21,8 +21,6 @@ export type SshTunnel = {
   stop: () => Promise<void>;
 };
 
-const SSH_TARGET_TOKEN = /^[A-Za-z0-9._-]+$/;
-
 function hasControlOrWhitespace(value: string): boolean {
   for (const char of value) {
     const code = char.charCodeAt(0);
@@ -34,21 +32,19 @@ function hasControlOrWhitespace(value: string): boolean {
 }
 
 function isSafeSshTargetUser(user: string): boolean {
-  return SSH_TARGET_TOKEN.test(user);
+  return !hasControlOrWhitespace(user);
 }
 
 // Reject hosts that would corrupt the SSH HostName field or enable argument
-// injection. Parsed targets are later interpolated into ssh_config directives
-// and argv, so keep the accepted token grammar intentionally narrow.
+// injection. Parsed targets are later interpolated into unquoted ssh_config
+// directives and argv, so each accepted user/host must stay one SSH token.
 function isSafeSshTargetHost(host: string): boolean {
   return (
     !hasControlOrWhitespace(host) &&
     !host.startsWith("-") &&
     !host.startsWith(":") &&
     !host.endsWith(":") &&
-    !host.includes("/") &&
-    !host.includes("\\") &&
-    SSH_TARGET_TOKEN.test(host)
+    !host.includes("@")
   );
 }
 

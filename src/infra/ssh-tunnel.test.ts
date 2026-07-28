@@ -38,6 +38,19 @@ describe("parseSshTarget", () => {
     });
   });
 
+  it("preserves OpenSSH alias and username tokens", () => {
+    expect(parseSshTarget("me+prod@prod+gpu:2222")).toEqual({
+      user: "me+prod",
+      host: "prod+gpu",
+      port: 2222,
+    });
+    expect(parseSshTarget(String.raw`DOMAIN\alice@jump+gpu`)).toEqual({
+      user: String.raw`DOMAIN\alice`,
+      host: "jump+gpu",
+      port: 22,
+    });
+  });
+
   it("rejects invalid hosts and ports", () => {
     expect(parseSshTarget("")).toBeNull();
     expect(parseSshTarget("me@example.com:0")).toBeNull();
@@ -55,8 +68,6 @@ describe("parseSshTarget", () => {
     expect(parseSshTarget("example.com\n  ProxyCommand touch marker:2222")).toBeNull();
     expect(parseSshTarget("me\nProxyCommand=touch@example.com")).toBeNull();
     expect(parseSshTarget("bad host")).toBeNull();
-    expect(parseSshTarget("host/name")).toBeNull();
-    expect(parseSshTarget("host\\name")).toBeNull();
     expect(parseSshTarget("me name@example.com")).toBeNull();
   });
 
