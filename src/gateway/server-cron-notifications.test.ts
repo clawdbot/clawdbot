@@ -813,7 +813,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
         sessionKey: undefined,
         inheritSessionThread: false,
       },
-      '⚠️ Cron job "channel fd no mode" failed: boom',
+      '⚠️ Automation "channel fd no mode" failed: boom',
     );
     expect(logger.warn).not.toHaveBeenCalledWith(
       expect.objectContaining({ jobId: job.id }),
