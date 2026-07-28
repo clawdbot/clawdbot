@@ -151,11 +151,15 @@ export async function resetSessionEntryLifecycleImpl(
             );
           }
           try {
+            const sessionFile =
+              "sessionFile" in originalEntry && typeof originalEntry.sessionFile === "string"
+                ? originalEntry.sessionFile
+                : undefined;
             await params.releasePhysicalOwner({
               ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
               entry: structuredClone(originalEntry),
               reason: "reset",
-              ...(originalEntry.sessionFile ? { sessionFile: originalEntry.sessionFile } : {}),
+              ...(sessionFile ? { sessionFile } : {}),
               sessionId: expectedSessionId,
               sessionKey: params.sessionKey,
               storePath,
