@@ -22,16 +22,30 @@ function readTrimmedString(value: unknown): string | null {
   return trimmed ? trimmed : null;
 }
 
-/** The three talk.realtime keys the curated rows lift out of the raw form. */
+/**
+ * Effective talk.realtime picks as the gateway resolves them: top-level keys
+ * override, then the selected provider's own entry supplies the fallback
+ * (mirrors buildTalkRealtimeConfig's precedence). Without the fallback an
+ * existing provider-level GPT-Live config would render as "Provider default"
+ * and hide the GPT-Live row.
+ */
 export function resolveTalkRealtimeSelection(
   configObject: Record<string, unknown>,
 ): TalkRealtimeSelection {
   const realtime = readRecord(readRecord(configObject.talk)?.realtime);
+  const providerConfigs = readRecord(realtime?.providers) ?? {};
+  const providerIds = Object.keys(providerConfigs);
+  const provider =
+    readTrimmedString(realtime?.provider) ?? (providerIds.length === 1 ? providerIds[0] : null);
+  const providerEntry = provider ? readRecord(providerConfigs[provider]) : undefined;
   return {
     provider: readTrimmedString(realtime?.provider),
-    model: readTrimmedString(realtime?.model),
+    model: readTrimmedString(realtime?.model) ?? readTrimmedString(providerEntry?.model),
     speakerVoice:
-      readTrimmedString(realtime?.speakerVoice) ?? readTrimmedString(realtime?.speakerVoiceId),
+      readTrimmedString(realtime?.speakerVoice) ??
+      readTrimmedString(realtime?.speakerVoiceId) ??
+      readTrimmedString(providerEntry?.speakerVoice) ??
+      readTrimmedString(providerEntry?.voice),
   };
 }
 

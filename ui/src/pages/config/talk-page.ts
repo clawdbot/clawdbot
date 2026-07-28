@@ -68,7 +68,25 @@ class TalkSettingsPage extends OpenClawLightDomElement {
       (runtimeConfig) => this.refreshCatalogOnConfigChange(runtimeConfig.state),
     );
 
+  /**
+   * The GPT-Live setup this page advertises runs `openclaw models auth login`
+   * in a terminal; that changes credential readiness without advancing the
+   * config hash, so returning focus to the window re-reads the catalog.
+   */
+  private readonly refreshOnFocus = () => {
+    const connection = this.connection;
+    if (connection?.client && connection.connected) {
+      void this.loadCatalog(connection.client, connection);
+    }
+  };
+
+  override connectedCallback() {
+    super.connectedCallback();
+    window.addEventListener("focus", this.refreshOnFocus);
+  }
+
   override disconnectedCallback() {
+    window.removeEventListener("focus", this.refreshOnFocus);
     this.subscriptions.clear();
     this.connection = null;
     this.catalog = { kind: "unavailable" };
@@ -148,6 +166,21 @@ class TalkSettingsPage extends OpenClawLightDomElement {
     runtimeConfig.patchForm(["talk", "realtime", key], value);
   }
 
+  /**
+   * Model, voice, and transport picks are provider-coupled (an xAI session
+   * cannot use a gpt-live model, marin, or webrtc), so a provider switch
+   * clears the top-level overrides instead of carrying them across. Each
+   * provider's own `talk.realtime.providers.<id>` entry survives untouched and
+   * supplies that provider's fallback values.
+   */
+  private changeProvider(providerId: string | null) {
+    const runtimeConfig = this.context.runtimeConfig;
+    for (const key of ["model", "speakerVoice", "speakerVoiceId", "transport"]) {
+      runtimeConfig.removeFormValue(["talk", "realtime", key]);
+    }
+    this.patchRealtimeValue("provider", providerId);
+  }
+
   override render() {
     const runtimeState = this.context.runtimeConfig.state;
     return renderTalk({
@@ -155,7 +188,7 @@ class TalkSettingsPage extends OpenClawLightDomElement {
       catalog: this.catalog,
       configBusy:
         runtimeState.configLoading || runtimeState.configSaving || runtimeState.configApplying,
-      onProviderChange: (providerId) => this.patchRealtimeValue("provider", providerId),
+      onProviderChange: (providerId) => this.changeProvider(providerId),
       onModelChange: (model) => this.patchRealtimeValue("model", model),
       onVoiceChange: (voice) => this.patchRealtimeValue("speakerVoice", voice),
       editor: this.buildEditor(),
