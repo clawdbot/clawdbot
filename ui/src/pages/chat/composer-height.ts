@@ -85,6 +85,23 @@ export function clampComposerHeight(px: number, max: number): number {
 }
 
 /**
+ * Resolve the auto-mode height cap for a compositor without a drag handle.
+ * Parses the element's CSS `max-height`; uses it when it's a concrete pixel
+ * value, otherwise falls back to the default cap. This lets each surface
+ * (new-session, suggestion, etc.) define its own growth limit via CSS.
+ */
+function resolveElementAutoCap(el: HTMLTextAreaElement): number {
+  const raw = getComputedStyle(el).maxHeight;
+  if (raw && raw.endsWith("px")) {
+    const parsed = Number.parseFloat(raw);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  return COMPOSER_AUTO_HEIGHT_CAP;
+}
+
+/**
  * Autosize the composer textarea, or apply the exact manual height (Option A').
  *
  * The textarea is the resized element and is never flex-stretched inside a
@@ -94,9 +111,17 @@ export function clampComposerHeight(px: number, max: number): number {
  *
  * In manual mode autosizing is disabled entirely: the height is exactly what
  * the user set, so they can shrink the box BELOW the current content (which
- * then scrolls). Auto mode grows with content up to the original auto cap.
+ * then scrolls). Auto mode grows with content up to the auto cap.
+ *
+ * Auto-cap source depends on context:
+ *   floorOverride === undefined (handle composer): hardcoded 150px so auto only
+ *     grows beyond that once the user drags.
+ *   floorOverride === null (no handle): the element's CSS max-height so each
+ *     surface defines its own natural growth limit.
  *
  * @param floorOverride Live drag value; omit to read the persisted floor.
+ *   `undefined` = handle composer (read stored floor, 150 auto-cap).
+ *   `null` = no-handle composer (CSS-max auto-cap, pure auto).
  */
 export function applyComposerTextareaHeight(
   el: HTMLTextAreaElement,
@@ -112,9 +137,11 @@ export function applyComposerTextareaHeight(
     el.style.overflowY = el.scrollHeight > el.clientHeight ? "auto" : "hidden";
     return;
   }
-  // Auto mode: size to content up to the original cap. Measure at height:auto,
-  // then restore the prior height before applying the target so an animated
-  // change (reset) transitions from the real starting height instead of snapping.
+  // Auto mode: size to content up to the surface-appropriate cap.
+  // Handle composers cap at 150 (growth beyond requires explicit drag);
+  // non-handle composers respect their CSS max-height.
+  const autoCap =
+    floorOverride === undefined ? COMPOSER_AUTO_HEIGHT_CAP : resolveElementAutoCap(el);
   const previousHeight = el.style.height;
   el.style.overflowY = "hidden";
   el.style.height = "auto";
@@ -127,7 +154,7 @@ export function applyComposerTextareaHeight(
   if (el.classList.contains("composer-animate-height")) {
     void el.offsetHeight;
   }
-  const target = clampComposerHeight(Math.min(content, COMPOSER_AUTO_HEIGHT_CAP), dynamicMax);
+  const target = clampComposerHeight(Math.min(content, autoCap), dynamicMax);
   el.style.height = `${target}px`;
   el.style.overflowY = el.scrollHeight > el.clientHeight ? "auto" : "hidden";
 }

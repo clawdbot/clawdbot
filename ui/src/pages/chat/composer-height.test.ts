@@ -66,10 +66,48 @@ describe("composer-height store", () => {
     expect(heightPx(tiny)).toBe(36); // COMPOSER_MIN_TEXTAREA_HEIGHT
   });
 
-  it("preserves the legacy 150px auto cap when no floor is set", () => {
+  it("preserves the legacy 150px auto cap when no floor is set (handle mode)", () => {
     const el = makeTextarea(500);
     applyComposerTextareaHeight(el);
     expect(heightPx(el)).toBe(150); // COMPOSER_AUTO_HEIGHT_CAP
+  });
+
+  it("no-handle auto mode grows to CSS max-height instead of the 150 cap", () => {
+    const el = makeTextarea(250);
+    vi.spyOn(window, "getComputedStyle").mockReturnValue({
+      maxHeight: "260px",
+    } as CSSStyleDeclaration);
+    // floorOverride = null → no-handle → use CSS max-height (260) as cap
+    applyComposerTextareaHeight(el, null);
+    expect(heightPx(el)).toBe(250); // content fits within CSS cap
+  });
+
+  it("no-handle auto mode caps at the CSS max-height when content exceeds it", () => {
+    const el = makeTextarea(400);
+    vi.spyOn(window, "getComputedStyle").mockReturnValue({
+      maxHeight: "260px",
+    } as CSSStyleDeclaration);
+    applyComposerTextareaHeight(el, null);
+    expect(heightPx(el)).toBe(260); // capped at CSS max
+  });
+
+  it("no-handle auto mode falls back to 150 for non-pixel CSS max-height", () => {
+    const el = makeTextarea(500);
+    vi.spyOn(window, "getComputedStyle").mockReturnValue({
+      maxHeight: "50vh",
+    } as CSSStyleDeclaration);
+    applyComposerTextareaHeight(el, null);
+    expect(heightPx(el)).toBe(150); // fallback
+  });
+
+  it("handle auto mode still caps at 150 regardless of CSS max-height", () => {
+    const el = makeTextarea(500);
+    vi.spyOn(window, "getComputedStyle").mockReturnValue({
+      maxHeight: "500px",
+    } as CSSStyleDeclaration);
+    // floorOverride = undefined → handle mode → hardcoded 150 cap
+    applyComposerTextareaHeight(el);
+    expect(heightPx(el)).toBe(150);
   });
 
   it("uses the exact manual height and ignores content autosize (may scroll)", () => {

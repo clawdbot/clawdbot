@@ -94,6 +94,20 @@ describe("new-session composer sizing lifecycle", () => {
     expect(textarea.style.height).toBe("150px");
   });
 
+  it("grows to the element CSS max-height for non-handle composers", () => {
+    const textarea = document.createElement("textarea");
+    Object.defineProperty(textarea, "scrollHeight", { configurable: true, value: 220 });
+    vi.spyOn(window, "getComputedStyle").mockReturnValue({
+      maxHeight: "260px",
+    } as CSSStyleDeclaration);
+
+    // No .agent-chat__input ancestor → no handle → floorOverride=null path
+    adjustTextareaHeight(textarea);
+
+    // Content (220) is below CSS max (260), so height = content
+    expect(textarea.style.height).toBe("220px");
+  });
+
   it("keeps one observer across controlled updates and remeasures programmatic drafts", async () => {
     const observe = vi.fn();
     const disconnect = vi.fn();

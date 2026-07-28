@@ -36,9 +36,16 @@ export function adjustTextareaHeight(el: HTMLTextAreaElement) {
   // applyComposerTextareaHeight already manages overflowY (auto/hidden) and the
   // max-height cap (dynamic viewport ratio, 150px fallback), subsuming the prior
   // inline autosize + updateTextareaOverflow path.
-  const hasHandle = Boolean(
-    el.closest(".agent-chat__input")?.querySelector("composer-resize-handle"),
-  );
+  const composerInput = el.closest(".agent-chat__input");
+  const hasHandle = Boolean(composerInput?.querySelector("composer-resize-handle"));
+
+  // While a drag is actively in progress, the handle owns the live height.
+  // Programmatic calls (e.g. turn-end re-render) must not override it; the
+  // persisted floor will be written on pointerup and applied on next call.
+  if (composerInput?.querySelector("composer-resize-handle.dragging")) {
+    return;
+  }
+
   applyComposerTextareaHeight(el, hasHandle ? undefined : null);
 }
 

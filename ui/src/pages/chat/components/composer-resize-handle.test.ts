@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../../test-helpers/storage.ts";
 import { readComposerFloor, writeComposerFloor } from "../composer-height.ts";
+import { adjustTextareaHeight } from "./chat-composer-dom.ts";
 import "./composer-resize-handle.ts";
 
 function stubRect(el: HTMLElement, height: number) {
@@ -11,6 +12,8 @@ function stubRect(el: HTMLElement, height: number) {
 }
 
 function mount(boxHeight = 40, scrollHeight = 40) {
+  const inputWrapper = document.createElement("div");
+  inputWrapper.className = "agent-chat__input";
   const combobox = document.createElement("div");
   combobox.className = "agent-chat__composer-combobox";
   const handle = document.createElement("composer-resize-handle");
@@ -18,7 +21,8 @@ function mount(boxHeight = 40, scrollHeight = 40) {
   Object.defineProperty(textarea, "scrollHeight", { configurable: true, get: () => scrollHeight });
   stubRect(textarea, boxHeight);
   combobox.append(handle, textarea);
-  document.body.append(combobox);
+  inputWrapper.append(combobox);
+  document.body.append(inputWrapper);
   return { handle, textarea };
 }
 
@@ -128,5 +132,40 @@ describe("composer-resize-handle", () => {
     vi.stubGlobal("innerHeight", 400);
     window.dispatchEvent(new Event("resize"));
     expect(textarea.style.height).toBe("220px"); // round(400 * 0.55)
+  });
+
+  it("adjustTextareaHeight is a no-op while a drag is in progress", () => {
+    const { handle, textarea } = mount(40, 80);
+    handle.setPointerCapture = () => {};
+    handle.releasePointerCapture = () => {};
+    handle.hasPointerCapture = () => false;
+
+    const opts = { bubbles: true, pointerId: 1, pointerType: "mouse", button: 0 } as const;
+    handle.dispatchEvent(new PointerEvent("pointerdown", { ...opts, clientY: 200 }));
+    handle.dispatchEvent(new PointerEvent("pointermove", { ...opts, clientY: 190 })); // past threshold
+
+    expect(handle.classList.contains("dragging")).toBe(true);
+    // The drag set the height to startHeight(40) + 10 = 50
+    expect(textarea.style.height).toBe("50px");
+
+    // A programmatic adjustTextareaHeight call (e.g. turn-end re-render) must
+    // NOT override the live drag height.
+    adjustTextareaHeight(textarea);
+    expect(textarea.style.height).toBe("50px"); // preserved, not overridden
+
+    // After drag ends, adjustTextareaHeight applies normally.
+    handle.dispatchEvent(new PointerEvent("pointerup", { ...opts, clientY: 190 }));
+    expect(handle.classList.contains("dragging")).toBe(false);
+    adjustTextareaHeight(textarea);
+    // Now it applies: stored floor is 50, content is 80 — manual mode uses floor.
+    expect(textarea.style.height).toBe("50px");
+  });
+
+  it("adjustTextareaHeight works normally when no drag is in progress", () => {
+    const { textarea } = mount(40, 80);
+    // No drag active — adjustTextareaHeight should run and auto-size to content.
+    adjustTextareaHeight(textarea);
+    // Has handle → floorOverride undefined → auto mode capped at 150, content is 80
+    expect(textarea.style.height).toBe("80px");
   });
 });
