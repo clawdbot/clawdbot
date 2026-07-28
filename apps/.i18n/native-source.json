@@ -27163,7 +27163,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 870,
+      "line": 873,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Gateway needs attention",
       "surface": "apple",
@@ -27171,7 +27171,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 870,
+      "line": 873,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "OpenClaw iOS",
       "surface": "apple",
@@ -27179,7 +27179,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 906,
+      "line": 909,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Available",
       "surface": "apple",
@@ -27187,7 +27187,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 906,
+      "line": 909,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Gateway default",
       "surface": "apple",
@@ -27195,7 +27195,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 906,
+      "line": 909,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Routed on this phone",
       "surface": "apple",
