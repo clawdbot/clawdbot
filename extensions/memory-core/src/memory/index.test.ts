@@ -2205,7 +2205,11 @@ describe("memory index", () => {
       provider: "ollama",
       fallback: "compatible-fallback",
       providerAliases: {
-        "compatible-fallback": { api: "ollama", models: [] },
+        "compatible-fallback": {
+          api: "ollama",
+          baseUrl: "http://127.0.0.1:11434",
+          models: [],
+        },
       },
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
@@ -2246,7 +2250,11 @@ describe("memory index", () => {
       provider: "ollama",
       fallback: "compatible-fallback",
       providerAliases: {
-        "compatible-fallback": { api: "ollama", models: [] },
+        "compatible-fallback": {
+          api: "ollama",
+          baseUrl: "http://127.0.0.1:11434",
+          models: [],
+        },
       },
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
