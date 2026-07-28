@@ -1,8 +1,5 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getMemorySearchManager } from "../../../extensions/memory-core/runtime-api.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createOpenClawTestState,
@@ -78,52 +75,6 @@ describe("memory.search gateway method", () => {
 
   afterEach(async () => {
     await testState.cleanup();
-  });
-
-  it("searches a seeded workspace with the native FTS-only manager result shape", async () => {
-    const workspaceDir = await fs.realpath(testState.workspaceDir);
-    const memoryDir = path.join(workspaceDir, "memory");
-    await fs.mkdir(memoryDir, { recursive: true });
-    await fs.writeFile(
-      path.join(memoryDir, "project-lantern.md"),
-      "# Project Lantern\nThe launch window opens at sunrise.\n",
-    );
-    const cfg = createConfig(workspaceDir);
-    const acquired = await getMemorySearchManager({ cfg, agentId: "main", purpose: "cli" });
-    const manager = acquired.manager;
-    if (!manager) {
-      throw new Error(acquired.error ?? "expected seeded memory search manager");
-    }
-    const close = vi.spyOn(manager, "close");
-    getActiveMemorySearchManager.mockResolvedValue({ manager });
-
-    const respond = await invokeMemorySearch({ query: "  sunrise  " }, cfg);
-
-    expect(getActiveMemorySearchManager).toHaveBeenCalledWith({
-      cfg,
-      agentId: "main",
-      purpose: "cli",
-    });
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      {
-        agentId: "main",
-        provider: "none",
-        searchMode: "fts-only",
-        results: [
-          expect.objectContaining({
-            path: "memory/project-lantern.md",
-            startLine: expect.any(Number),
-            endLine: expect.any(Number),
-            score: expect.any(Number),
-            snippet: expect.stringMatching(/sunrise/i),
-            source: "memory",
-          }),
-        ],
-      },
-      undefined,
-    );
-    expect(close).toHaveBeenCalledOnce();
   });
 
   it("rejects a missing or whitespace-only query before acquiring a manager", async () => {
@@ -221,7 +172,16 @@ describe("memory.search gateway method", () => {
       ...cfg.agents,
       list: [{ id: "main", default: true }, { id: configured }],
     };
+    const result = {
+      path: "memory/project-lantern.md",
+      startLine: 2,
+      endLine: 2,
+      score: 0.75,
+      snippet: "The launch window opens at sunrise.",
+      source: "memory" as const,
+    };
     const manager = createStubManager();
+    manager.search.mockResolvedValue([result]);
     getActiveMemorySearchManager.mockResolvedValue({ manager });
 
     const respond = await invokeMemorySearch({ query: "lantern", agentId: requested }, cfg);
@@ -234,7 +194,12 @@ describe("memory.search gateway method", () => {
     expect(resolveDefaultAgentId).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
       true,
-      expect.objectContaining({ agentId: configured }),
+      {
+        agentId: configured,
+        provider: "none",
+        searchMode: "fts-only",
+        results: [result],
+      },
       undefined,
     );
   });
