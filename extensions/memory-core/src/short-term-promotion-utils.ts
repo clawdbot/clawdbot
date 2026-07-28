@@ -75,7 +75,19 @@ function normalizeProjectKeyList(value: unknown): string | undefined {
     if (!trimmed || /[\r\n<>]/u.test(trimmed)) {
       continue;
     }
-    keys.add(trimmed.startsWith("path:") ? trimmed : trimmed.toLowerCase());
+    if (trimmed.startsWith("path:")) {
+      keys.add(trimmed);
+      continue;
+    }
+    const separator = trimmed.indexOf("/");
+    if (separator < 1) {
+      keys.add(trimmed);
+      continue;
+    }
+    // Preserve remote path case so case-sensitive hosts fail closed. Providers
+    // with case-insensitive slugs may miss boosts/digests across casing variants,
+    // but folding paths could cross-inject memory between distinct repositories.
+    keys.add(`${trimmed.slice(0, separator).toLowerCase()}${trimmed.slice(separator)}`);
   }
   return keys.size > 0 ? [...keys].join("; ") : undefined;
 }

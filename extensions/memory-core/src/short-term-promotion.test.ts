@@ -640,13 +640,30 @@ describe("short-term promotion", () => {
           },
         ],
       });
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "mixed case repository",
+        results: [
+          {
+            path: "memory/2026-04-02.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.9,
+            snippet,
+            source: "memory",
+            projectKey: "github.com/OpenClaw/OpenClaw",
+          },
+        ],
+      });
       const candidates = await rankShortTermPromotionCandidates({
         workspaceDir,
         minScore: 0,
         minRecallCount: 0,
         minUniqueQueries: 0,
       });
-      expect(candidates[0]?.projectKey).toBe("path:/Users/Alice/Repo; path:/Users/alice/repo");
+      expect(candidates[0]?.projectKey).toBe(
+        "path:/Users/Alice/Repo; path:/Users/alice/repo; github.com/OpenClaw/OpenClaw",
+      );
 
       await applyShortTermPromotions({
         workspaceDir,
@@ -656,7 +673,7 @@ describe("short-term promotion", () => {
         minUniqueQueries: 0,
       });
       await expect(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).resolves.toContain(
-        "<!-- project: path:/Users/Alice/Repo; path:/Users/alice/repo -->",
+        "<!-- project: path:/Users/Alice/Repo; path:/Users/alice/repo; github.com/OpenClaw/OpenClaw -->",
       );
     });
   });

@@ -719,6 +719,59 @@ describe("memory index", () => {
     }
   });
 
+  it("round-trips mixed-case project keys through indexed recall consumers", async () => {
+    const projectKey = "github.com/OpenClaw/OpenClaw";
+    await fs.writeFile(
+      path.join(workspaceDir, "MEMORY.md"),
+      `- Follow the kraken deploy ritual. <!-- trigger: kraken deploy ritual --> <!-- importance: 8 --> <!-- project: ${projectKey} -->\n`,
+    );
+
+    const manager = await getFreshManager(createCfg({}));
+    try {
+      await manager.sync({ reason: "test", force: true });
+      const db = Reflect.get(manager, "db") as DatabaseSync;
+      expect(
+        db
+          .prepare(
+            `SELECT project_key AS projectKey
+             FROM memory_index_chunks
+             WHERE path = 'MEMORY.md' AND triggers = 'kraken deploy ritual'`,
+          )
+          .get(),
+      ).toEqual({ projectKey });
+
+      if (!manager.listCuratedProjectCandidates || !manager.listTriggerCandidates) {
+        throw new Error("expected curated project and trigger candidate listing");
+      }
+      const activeProjectKeys = [projectKey];
+      const curated = await manager.listCuratedProjectCandidates({ activeProjectKeys });
+      const triggers = await manager.listTriggerCandidates({ activeProjectKeys });
+      expect(curated).toMatchObject([{ projectKey, triggers: "kraken deploy ritual" }]);
+      expect(triggers).toMatchObject([{ projectKey, triggers: "kraken deploy ritual" }]);
+
+      const neutral = await manager.search("kraken deploy", {
+        minScore: 0,
+        maxResults: 10,
+        activeProjectKeys: [],
+      });
+      const active = await manager.search("kraken deploy", {
+        minScore: 0,
+        maxResults: 10,
+        activeProjectKeys,
+      });
+      const neutralHit = neutral.find((entry) => entry.projectKey === projectKey);
+      const activeHit = active.find((entry) => entry.projectKey === projectKey);
+      expect(neutralHit).toBeDefined();
+      expect(activeHit).toBeDefined();
+      if (!neutralHit || !activeHit) {
+        throw new Error("expected mixed-case project hit in neutral and active search");
+      }
+      expect(activeHit.score).toBeGreaterThan(neutralHit.score);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
   it("inherits entry-scoped annotations across oversized curated fragments", async () => {
     await fs.writeFile(
       path.join(workspaceDir, "MEMORY.md"),
