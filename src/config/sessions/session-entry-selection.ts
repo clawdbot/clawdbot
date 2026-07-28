@@ -62,12 +62,15 @@ export function normalizeTargetStoreKeys(target: SessionStoreTarget): string[] {
 
 /** Selects the row that alias migration would promote. */
 export function resolveFreshestTargetEntry(
-  store: Record<string, SessionEntry>,
+  entries: Iterable<{ sessionKey: string; entry: SessionEntry }>,
   targetKeys: readonly string[],
 ): { key: string; entry: SessionEntry } | undefined {
+  const store = new Map(
+    Array.from(entries, ({ entry, sessionKey }) => [sessionKey, entry] as const),
+  );
   let freshest: { key: string; entry: SessionEntry } | undefined;
   for (const key of targetKeys) {
-    const entry = store[key];
+    const entry = store.get(key);
     if (entry && (!freshest || (entry.updatedAt ?? 0) > (freshest.entry.updatedAt ?? 0))) {
       freshest = { key, entry };
     }

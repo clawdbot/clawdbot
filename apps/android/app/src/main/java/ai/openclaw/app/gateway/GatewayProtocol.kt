@@ -128,6 +128,7 @@ data class SessionObserverPlanProgress(
 @Serializable
 data class SessionObserverDigest(
   val sessionKey: String,
+  val agentId: String? = null,
   val runId: String? = null,
   val revision: Long,
   val updatedAt: Long,

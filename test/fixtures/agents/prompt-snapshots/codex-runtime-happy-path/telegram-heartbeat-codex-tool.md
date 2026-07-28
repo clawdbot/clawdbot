@@ -7,7 +7,7 @@
 - Heartbeat happy path: Codex receives the structured `heartbeat_respond` dynamic tool in the searchable catalog instead of the initial tool context.
 - The heartbeat tool still carries the notify/no-notify decision, outcome, summary, and optional notification text instead of relying only on final-text parsing.
 - This captures the OpenClaw-owned Codex app-server inputs and reconstructs the stable Codex model/permission layers from committed Codex prompt fixtures.
-- This also simulates Codex workspace bootstrap routing: `TOOLS.md` as inherited developer instructions, `SOUL.md`, `IDENTITY.md`, and `USER.md` as turn-scoped collaboration instructions, `MEMORY.md` in turn input, and `HEARTBEAT.md` as a heartbeat-only file pointer.
+- This also simulates Codex workspace bootstrap routing: `AGENTS.md` through native project-doc discovery, `SOUL.md`, `IDENTITY.md`, and `USER.md` as turn-scoped collaboration instructions, `MEMORY.md` in turn input, and `HEARTBEAT.md` as a heartbeat-only file pointer.
 
 ## Scenario Metadata
 
@@ -22,7 +22,6 @@
   "runtime": "codex_app_server",
   "simulatedHeartbeatWorkspaceFile": "/tmp/openclaw-happy-path/workspace/HEARTBEAT.md",
   "simulatedWorkspaceBootstrapFiles": ["/tmp/openclaw-happy-path/workspace/MEMORY.md"],
-  "simulatedWorkspaceDeveloperInstructionFiles": ["/tmp/openclaw-happy-path/workspace/TOOLS.md"],
   "simulatedWorkspaceTurnScopedDeveloperInstructionFiles": [
     "/tmp/openclaw-happy-path/workspace/IDENTITY.md",
     "/tmp/openclaw-happy-path/workspace/SOUL.md",
@@ -65,6 +64,7 @@
   "approvalPolicy": "never",
   "approvalsReviewer": "user",
   "config": {
+    "code_mode.direct_only_tool_namespaces": ["openclaw_direct"],
     "features.apply_patch_streaming_events": true,
     "features.code_mode": true,
     "features.code_mode_only": false,
@@ -78,10 +78,8 @@
     "message",
     "agents_list",
     "sessions_spawn",
-    "sessions_yield",
     "nodes",
     "cron",
-    "heartbeat_respond",
     "tts",
     "gateway",
     "sessions_list",
@@ -91,7 +89,9 @@
     "subagents",
     "session_status",
     "web_search",
-    "web_fetch"
+    "web_fetch",
+    "heartbeat_respond",
+    "sessions_yield"
   ],
   "experimentalRawEvents": true,
   "model": "gpt-5.5",
@@ -222,24 +222,24 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 60878,
-    "roughTokens": 15220
+    "chars": 62607,
+    "roughTokens": 15652
   },
   "openClawDeveloperInstructions": {
-    "chars": 2625,
-    "roughTokens": 657
+    "chars": 2362,
+    "roughTokens": 591
   },
   "totalTextOnly": {
-    "chars": 27130,
-    "roughTokens": 6783
+    "chars": 26803,
+    "roughTokens": 6701
   },
   "totalWithDynamicToolsJson": {
-    "chars": 88010,
-    "roughTokens": 22003
+    "chars": 89412,
+    "roughTokens": 22353
   },
   "userInputText": {
-    "chars": 1348,
-    "roughTokens": 337
+    "chars": 1284,
+    "roughTokens": 321
   }
 }
 ```
@@ -422,7 +422,7 @@ Approval policy is currently never. Do not provide the `sandbox_permissions` for
 ````text
 You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.
 
-Deferred searchable OpenClaw dynamic tools available: cron, gateway, heartbeat_respond, nodes, session_status, sessions_history, sessions_list, sessions_search, sessions_send, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
+Deferred searchable OpenClaw dynamic tools available: cron, gateway, nodes, session_status, sessions_history, sessions_list, sessions_search, sessions_send, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
 
 Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred: when `spawn_agent` is not directly listed, load it with `tool_search` before spawning. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`.
 
@@ -447,14 +447,6 @@ When explicitly_mentioned_bot is true, the incoming message mentions your channe
 
 
 You are in a Telegram direct conversation. Normal final replies are private and are not automatically sent to this conversation. To post visible output here, use the message tool with action=send; the target defaults to this conversation. If no visible direct response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the conversation.
-
-## OpenClaw Workspace Instructions
-
-OpenClaw loaded these workspace instruction files from the active agent workspace. Internalize and follow them accordingly.
-
-### /tmp/openclaw-happy-path/workspace/TOOLS.md
-
-<TOOLS.md contents will be here>
 ````
 
 ### Developer: Codex Collaboration Mode Instructions
@@ -497,7 +489,7 @@ Treat this OpenClaw-provided context as supporting project/user reference for th
 
 ## OpenClaw Workspace Context
 
-OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. TOOLS.md is provided as inherited Codex developer instructions. SOUL.md, IDENTITY.md, and USER.md are provided as turn-scoped collaboration instructions so native Codex subagents do not inherit them. HEARTBEAT.md is handled by heartbeat collaboration-mode guidance. Those files are not repeated here.
+OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. SOUL.md, IDENTITY.md, and USER.md are provided as turn-scoped collaboration instructions so native Codex subagents do not inherit them. HEARTBEAT.md is handled by heartbeat collaboration-mode guidance. Those files are not repeated here.
 
 # Project Context
 
@@ -527,10 +519,8 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
   "message",
   "agents_list",
   "sessions_spawn",
-  "sessions_yield",
   "nodes",
   "cron",
-  "heartbeat_respond",
   "tts",
   "gateway",
   "sessions_list",
@@ -540,7 +530,9 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
   "subagents",
   "session_status",
   "web_search",
-  "web_fetch"
+  "web_fetch",
+  "heartbeat_respond",
+  "sessions_yield"
 ]
 ```
 
@@ -676,7 +668,6 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
     "type": "function"
   },
   {
-    "deferLoading": true,
     "description": "Record heartbeat result. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only; manage recurring tasks with cron.",
     "inputSchema": {
       "additionalProperties": false,

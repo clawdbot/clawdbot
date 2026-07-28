@@ -1,11 +1,10 @@
 // Googlechat plugin module implements accounts behavior.
+import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
 import {
-  createAccountListHelpers,
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   type OpenClawConfig,
   resolveAccountEntry,
-  resolveMergedAccountConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
@@ -47,11 +46,14 @@ const JsonRecordSchema = z.record(z.string(), z.unknown());
 const {
   listAccountIds: listGoogleChatAccountIds,
   resolveDefaultAccountId: resolveDefaultGoogleChatAccountId,
-} = createAccountListHelpers("googlechat", {
+  resolveAccountConfig: resolveMergedGoogleChatAccountConfig,
+} = createAccountListHelpers<GoogleChatAccountConfig>("googlechat", {
   implicitDefaultAccount: {
     channelKeys: ["serviceAccount", "serviceAccountFile"],
     envVars: [ENV_SERVICE_ACCOUNT, ENV_SERVICE_ACCOUNT_FILE],
   },
+  omitKeys: ["defaultAccount"],
+  nestedObjectKeys: ["botLoopProtection"],
 });
 export { listGoogleChatAccountIds, resolveDefaultGoogleChatAccountId };
 
@@ -60,13 +62,7 @@ function mergeGoogleChatAccountConfig(
   accountId: string,
 ): GoogleChatAccountConfig {
   const raw = cfg.channels?.["googlechat"] ?? {};
-  const base = resolveMergedAccountConfig<GoogleChatAccountConfig>({
-    channelConfig: raw as GoogleChatAccountConfig,
-    accounts: raw.accounts as Record<string, Partial<GoogleChatAccountConfig>> | undefined,
-    accountId,
-    omitKeys: ["defaultAccount"],
-    nestedObjectKeys: ["botLoopProtection"],
-  });
+  const base = resolveMergedGoogleChatAccountConfig(cfg, accountId);
   const defaultAccountConfig = resolveAccountEntry(raw.accounts, DEFAULT_ACCOUNT_ID) ?? {};
   if (accountId === DEFAULT_ACCOUNT_ID) {
     return base;

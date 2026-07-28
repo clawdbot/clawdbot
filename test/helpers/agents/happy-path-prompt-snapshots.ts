@@ -240,13 +240,6 @@ const CODEX_WORKSPACE_BOOTSTRAP_CONTEXT_FILES = [
   },
 ] as const;
 
-const CODEX_WORKSPACE_THREAD_DEVELOPER_CONTEXT_FILES = [
-  {
-    path: path.join(WORKSPACE_DIR, "TOOLS.md"),
-    content: "<TOOLS.md contents will be here>",
-  },
-] as const;
-
 const CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_CONTEXT_FILES = [
   {
     path: path.join(WORKSPACE_DIR, "IDENTITY.md"),
@@ -268,7 +261,7 @@ const CODEX_HEARTBEAT_CONTEXT_FILE = {
 } as const;
 
 const CODEX_WORKSPACE_BOOTSTRAP_PROMPT_CONTEXT = [
-  "OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. TOOLS.md is provided as inherited Codex developer instructions. SOUL.md, IDENTITY.md, and USER.md are provided as turn-scoped collaboration instructions so native Codex subagents do not inherit them. HEARTBEAT.md is handled by heartbeat collaboration-mode guidance. Those files are not repeated here.",
+  "OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. SOUL.md, IDENTITY.md, and USER.md are provided as turn-scoped collaboration instructions so native Codex subagents do not inherit them. HEARTBEAT.md is handled by heartbeat collaboration-mode guidance. Those files are not repeated here.",
   "",
   "# Project Context",
   "",
@@ -276,21 +269,6 @@ const CODEX_WORKSPACE_BOOTSTRAP_PROMPT_CONTEXT = [
   "",
   ...CODEX_WORKSPACE_BOOTSTRAP_CONTEXT_FILES.flatMap((file) => [
     `## ${file.path}`,
-    "",
-    file.content,
-    "",
-  ]),
-]
-  .join("\n")
-  .trim();
-
-const CODEX_WORKSPACE_THREAD_DEVELOPER_INSTRUCTIONS = [
-  "## OpenClaw Workspace Instructions",
-  "",
-  "OpenClaw loaded these workspace instruction files from the active agent workspace. Internalize and follow them accordingly.",
-  "",
-  ...CODEX_WORKSPACE_THREAD_DEVELOPER_CONTEXT_FILES.flatMap((file) => [
-    `### ${file.path}`,
     "",
     file.content,
     "",
@@ -903,7 +881,6 @@ function renderScenarioSnapshot(
     appServer,
     config: CODEX_PROMPT_SNAPSHOT_THREAD_CONFIG,
     promptText: codexTurnPromptText,
-    developerInstructionAdditions: CODEX_WORKSPACE_THREAD_DEVELOPER_INSTRUCTIONS,
     turnScopedDeveloperInstructions: CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_INSTRUCTIONS,
     heartbeatCollaborationInstructions:
       scenario.trigger === "heartbeat" ? CODEX_HEARTBEAT_COLLABORATION_INSTRUCTIONS : undefined,
@@ -922,7 +899,7 @@ function renderScenarioSnapshot(
     "",
     ...scenario.notes.map((note) => `- ${note}`),
     "- This captures the OpenClaw-owned Codex app-server inputs and reconstructs the stable Codex model/permission layers from committed Codex prompt fixtures.",
-    "- This also simulates Codex workspace bootstrap routing: `TOOLS.md` as inherited developer instructions, `SOUL.md`, `IDENTITY.md`, and `USER.md` as turn-scoped collaboration instructions, `MEMORY.md` in turn input, and `HEARTBEAT.md` as a heartbeat-only file pointer.",
+    "- This also simulates Codex workspace bootstrap routing: `AGENTS.md` through native project-doc discovery, `SOUL.md`, `IDENTITY.md`, and `USER.md` as turn-scoped collaboration instructions, `MEMORY.md` in turn input, and `HEARTBEAT.md` as a heartbeat-only file pointer.",
     "",
     "## Scenario Metadata",
     "",
@@ -942,8 +919,6 @@ function renderScenarioSnapshot(
         simulatedWorkspaceBootstrapFiles: CODEX_WORKSPACE_BOOTSTRAP_CONTEXT_FILES.map(
           (file) => file.path,
         ),
-        simulatedWorkspaceDeveloperInstructionFiles:
-          CODEX_WORKSPACE_THREAD_DEVELOPER_CONTEXT_FILES.map((file) => file.path),
         simulatedWorkspaceTurnScopedDeveloperInstructionFiles:
           CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_CONTEXT_FILES.map((file) => file.path),
         simulatedHeartbeatWorkspaceFile: CODEX_HEARTBEAT_CONTEXT_FILE.path,

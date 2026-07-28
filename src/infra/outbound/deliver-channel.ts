@@ -249,6 +249,11 @@ function createPluginHandler(
     chunkerMode,
     chunkedTextFormatting: outbound?.chunkedTextFormatting,
     textChunkLimit: outbound?.textChunkLimit,
+    preserveMarkdownDetails:
+      outbound?.preserveMarkdownDetails?.({
+        cfg: params.cfg,
+        accountId: params.accountId,
+      }) === true,
     supportsMedia: Boolean(messageMedia ?? sendMedia),
     sanitizeText: outbound?.sanitizeText
       ? (payload) =>

@@ -951,6 +951,7 @@ describe("ollama setup", () => {
       primary: "ollama/qwen2.5-coder:7b",
       fallbacks: ["anthropic/claude-sonnet-4-5"],
     });
+    expect(upsertAuthProfileWithLock).toHaveBeenCalledTimes(1);
   });
 
   it("normalizes ollama/ prefix in non-interactive custom model download", async () => {
@@ -973,6 +974,7 @@ describe("ollama setup", () => {
     const pullRequest = mockCallArg(fetchMock, 1, 1) as RequestInit | undefined;
     expect(JSON.parse(requestBodyText(pullRequest?.body))).toEqual({ name: "llama3.2:latest" });
     expect(result.agents?.defaults?.model).toEqual({ primary: "ollama/llama3.2:latest" });
+    expect(upsertAuthProfileWithLock).toHaveBeenCalledTimes(1);
   });
 
   it("uses the discovered latest tag as the non-interactive default without pulling", async () => {
@@ -996,6 +998,7 @@ describe("ollama setup", () => {
     ]);
     expect(result.agents?.defaults?.model).toEqual({ primary: "ollama/gemma4:latest" });
     expect(runtime.log).toHaveBeenCalledWith("Default Ollama model: gemma4:latest");
+    expect(upsertAuthProfileWithLock).toHaveBeenCalledTimes(1);
   });
 
   it.each(["kimi-k2.5:cloud", "gpt-oss:120b-cloud"])(
@@ -1050,6 +1053,7 @@ describe("ollama setup", () => {
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(result).toBe(nextConfig);
+    expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
   });
 });
 

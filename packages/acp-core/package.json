@@ -14,25 +14,10 @@
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
     },
-    "./normalize-text": {
-      "types": "./dist/normalize-text.d.mts",
-      "import": "./dist/normalize-text.mjs",
-      "default": "./dist/normalize-text.mjs"
-    },
     "./meta": {
       "types": "./dist/meta.d.mts",
       "import": "./dist/meta.mjs",
       "default": "./dist/meta.mjs"
-    },
-    "./numeric-options": {
-      "types": "./dist/numeric-options.d.mts",
-      "import": "./dist/numeric-options.mjs",
-      "default": "./dist/numeric-options.mjs"
-    },
-    "./record-shared": {
-      "types": "./dist/record-shared.d.mts",
-      "import": "./dist/record-shared.mjs",
-      "default": "./dist/record-shared.mjs"
     },
     "./session": {
       "types": "./dist/session.d.mts",
@@ -84,6 +69,6 @@
     "@openclaw/normalization-core": "workspace:*"
   },
   "scripts": {
-    "build": "tsdown src/index.ts src/error-format.ts src/meta.ts src/normalize-text.ts src/numeric-options.ts src/record-shared.ts src/session.ts src/session-interaction-mode.ts src/session-lineage-meta.ts src/types.ts src/runtime/error-text.ts src/runtime/errors.ts src/runtime/session-identifiers.ts src/runtime/session-identity.ts src/runtime/types.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+    "build": "tsdown src/index.ts src/error-format.ts src/meta.ts src/session.ts src/session-interaction-mode.ts src/session-lineage-meta.ts src/types.ts src/runtime/error-text.ts src/runtime/errors.ts src/runtime/session-identifiers.ts src/runtime/session-identity.ts src/runtime/types.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
   }
 }

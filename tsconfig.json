@@ -145,6 +145,9 @@
       "@openclaw/normalization-core/boolean-coercion": [
         "./packages/normalization-core/src/boolean-coercion.ts"
       ],
+      "@openclaw/normalization-core/cjk-chars": [
+        "./packages/normalization-core/src/cjk-chars.ts"
+      ],
       "@openclaw/normalization-core/error-coercion": [
         "./packages/normalization-core/src/error-coercion.ts"
       ],
@@ -177,9 +180,6 @@
       "@openclaw/workboard-contract": ["./packages/workboard-contract/src/index.ts"],
       "@openclaw/acp-core": ["./packages/acp-core/src/index.ts"],
       "@openclaw/acp-core/meta": ["./packages/acp-core/src/meta.ts"],
-      "@openclaw/acp-core/numeric-options": ["./packages/acp-core/src/numeric-options.ts"],
-      "@openclaw/acp-core/normalize-text": ["./packages/acp-core/src/normalize-text.ts"],
-      "@openclaw/acp-core/record-shared": ["./packages/acp-core/src/record-shared.ts"],
       "@openclaw/acp-core/session": ["./packages/acp-core/src/session.ts"],
       "@openclaw/acp-core/session-interaction-mode": [
         "./packages/acp-core/src/session-interaction-mode.ts"
@@ -244,10 +244,6 @@
       "@openclaw/net-policy/url-protocol": ["./packages/net-policy/src/url-protocol.ts"],
       "@openclaw/net-policy/url-userinfo": ["./packages/net-policy/src/url-userinfo.ts"],
       "@openclaw/net-policy/*": ["./packages/net-policy/src/*"],
-      "@openclaw/web-content-core/provider-runtime-shared": [
-        "./packages/web-content-core/src/provider-runtime-shared.ts"
-      ],
-      "@openclaw/web-content-core/*": ["./packages/web-content-core/src/*"],
       "@openclaw/speech-core": ["./packages/speech-core/runtime-api.ts"],
       "@openclaw/speech-core/runtime-api": ["./packages/speech-core/runtime-api.ts"],
       "@openclaw/speech-core/speaker": ["./packages/speech-core/speaker.ts"],

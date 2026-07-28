@@ -4,7 +4,7 @@ import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
   setupAgentRunnerExecutionTestState,
-  getRunAgentTurnWithFallback,
+  getExecuteAgentTurnForTest,
   createMockTypingSignaler,
   createFollowupRun,
   createTestUserTurnRecorder,
@@ -17,7 +17,7 @@ import type { FallbackRunnerParams } from "./agent-runner-execution.test-support
 
 const state = setupAgentRunnerExecutionTestState();
 
-describe("runAgentTurnWithFallback: CLI session routing", () => {
+describe("executeAgentTurn: CLI session routing", () => {
   it("forwards the static extra system prompt to CLI backends", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
@@ -31,7 +31,7 @@ describe("runAgentTurnWithFallback: CLI session routing", () => {
       meta: {},
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "codex-cli";
     followupRun.run.model = "gpt-5.4";
@@ -54,7 +54,7 @@ describe("runAgentTurnWithFallback: CLI session routing", () => {
     followupRun.run.runtimePolicySessionKey = "agent:main:telegram:default:direct:sender-static";
     followupRun.originatingChannel = "telegram";
 
-    const result = await runAgentTurnWithFallback({
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun,
       sessionCtx: {
@@ -112,7 +112,7 @@ describe("runAgentTurnWithFallback: CLI session routing", () => {
       meta: { executionTrace: { fallbackUsed: false } },
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "claude-cli";
     followupRun.run.model = "claude-sonnet-4-6";
@@ -120,7 +120,7 @@ describe("runAgentTurnWithFallback: CLI session routing", () => {
     followupRun.run.allowEmptyAssistantReplyAsSilent = true;
     followupRun.originatingChannel = "telegram";
 
-    const result = await runAgentTurnWithFallback(
+    const result = await executeAgentTurn(
       createMinimalRunAgentTurnParams({
         followupRun,
         sessionCtx: {
@@ -155,7 +155,7 @@ describe("runAgentTurnWithFallback: CLI session routing", () => {
       meta: {},
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "codex-cli";
     followupRun.run.model = "gpt-5.4";
@@ -175,7 +175,7 @@ describe("runAgentTurnWithFallback: CLI session routing", () => {
     };
     const activeSessionStore = { main: sessionEntry };
 
-    const result = await runAgentTurnWithFallback({
+    const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({ followupRun }),
       commandBody: "runtime prompt",
       transcriptCommandBody: "display prompt",
@@ -224,7 +224,7 @@ describe("runAgentTurnWithFallback: CLI session routing", () => {
       },
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.currentInboundEventKind = "room_event";
     followupRun.run.provider = "codex-cli";
@@ -236,7 +236,7 @@ describe("runAgentTurnWithFallback: CLI session routing", () => {
     } as unknown as SessionEntry;
     const activeSessionStore = { main: sessionEntry };
 
-    const result = await runAgentTurnWithFallback({
+    const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({ followupRun }),
       activeSessionStore,
       getActiveSessionEntry: () => sessionEntry,
@@ -282,14 +282,14 @@ describe("runAgentTurnWithFallback: CLI session routing", () => {
       },
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.currentInboundEventKind = "room_event";
     followupRun.run.provider = "codex-cli";
     followupRun.run.model = "gpt-5.4";
     const sessionEntry = {} as unknown as SessionEntry;
 
-    const result = await runAgentTurnWithFallback({
+    const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({ followupRun }),
       getActiveSessionEntry: () => sessionEntry,
     });
@@ -332,7 +332,7 @@ describe("runAgentTurnWithFallback: CLI session routing", () => {
       },
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.currentInboundEventKind = "room_event";
     followupRun.run.provider = "codex-cli";
@@ -344,7 +344,7 @@ describe("runAgentTurnWithFallback: CLI session routing", () => {
     } as unknown as SessionEntry;
     const activeSessionStore = { main: sessionEntry };
 
-    const result = await runAgentTurnWithFallback({
+    const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({ followupRun }),
       activeSessionStore,
       getActiveSessionEntry: () => sessionEntry,
@@ -386,7 +386,7 @@ describe("runAgentTurnWithFallback: CLI session routing", () => {
       },
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.currentInboundEventKind = "room_event";
     followupRun.run.provider = "codex-cli";
@@ -398,7 +398,7 @@ describe("runAgentTurnWithFallback: CLI session routing", () => {
     } as unknown as SessionEntry;
     const activeSessionStore = { main: sessionEntry };
 
-    const result = await runAgentTurnWithFallback({
+    const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({ followupRun }),
       activeSessionStore,
       getActiveSessionEntry: () => sessionEntry,
@@ -435,7 +435,7 @@ describe("runAgentTurnWithFallback: CLI session routing", () => {
       },
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.currentInboundEventKind = "room_event";
     followupRun.run.provider = "codex-cli";
@@ -447,7 +447,7 @@ describe("runAgentTurnWithFallback: CLI session routing", () => {
     } as unknown as SessionEntry;
     const activeSessionStore = { main: sessionEntry };
 
-    const result = await runAgentTurnWithFallback({
+    const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({ followupRun }),
       activeSessionStore,
       getActiveSessionEntry: () => sessionEntry,

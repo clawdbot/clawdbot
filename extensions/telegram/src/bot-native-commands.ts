@@ -222,20 +222,14 @@ type TelegramNativeCommandRuntime = Awaited<ReturnType<typeof loadTelegramNative
 
 function resolveTelegramCommandSessionFile(params: {
   agentId: string;
-  sessionFile?: string;
   sessionId: string;
   storePath: string;
 }): string {
-  const sqliteMarker = formatSqliteSessionFileMarker({
+  return formatSqliteSessionFileMarker({
     agentId: params.agentId,
     sessionId: params.sessionId,
     storePath: params.storePath,
   });
-  const explicitSessionFile = params.sessionFile?.trim();
-  if (explicitSessionFile === sqliteMarker) {
-    return explicitSessionFile;
-  }
-  return sqliteMarker;
 }
 
 function resolveTelegramProgressPlaceholder(command: {
@@ -267,7 +261,6 @@ async function resolveTelegramCommandTranscriptContext(params: {
     const sessionId = entry?.sessionId?.trim() || randomUUID();
     const sessionFile = resolveTelegramCommandSessionFile({
       agentId: params.agentId,
-      sessionFile: entry?.sessionFile,
       sessionId,
       storePath,
     });

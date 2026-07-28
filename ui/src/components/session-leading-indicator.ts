@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import type { ActorIdentityUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
@@ -41,6 +42,7 @@ export function renderSessionLeadingState(
   pullRequestState: SessionPullRequestIndicatorState,
   ownerActor: SessionCreatedActor | null | undefined,
   attribution: "created" | "archived",
+  ownerUser?: ActorIdentityUser,
 ) {
   const running = session.hasActiveRun || session.status === "running";
 
@@ -72,7 +74,7 @@ export function renderSessionLeadingState(
     return {
       running,
       leadingIndicator: renderSessionGlyph({
-        content: renderSessionOwnerChip(ownerActor, "row", attribution),
+        content: renderSessionOwnerChip(ownerActor, "row", attribution, ownerUser),
         running,
         circular: true,
         badge: renderGlyphBadge(session, pullRequestState),

@@ -1,6 +1,4 @@
 /** Tests auto-reply status message formatting. */
-import fs from "node:fs";
-import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
@@ -10,6 +8,11 @@ import {
   providerContextTokenCacheKey,
 } from "../agents/context-cache.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import {
+  appendTranscriptMessageSync,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import {
   buildStatusMessage as buildStatusMessageRaw,
@@ -1982,29 +1985,21 @@ describe("buildStatusMessage", () => {
       totalTokens: number;
     };
   }) {
-    const logPath = path.join(
-      params.dir,
-      ".openclaw",
-      "agents",
-      params.agentId,
-      "sessions",
-      `${params.sessionId}.jsonl`,
-    );
-    fs.mkdirSync(path.dirname(logPath), { recursive: true });
-    fs.writeFileSync(
-      logPath,
-      [
-        JSON.stringify({
-          type: "message",
-          message: {
-            role: "assistant",
-            model: params.model ?? "claude-opus-4-6",
-            usage: params.usage,
-          },
-        }),
-      ].join("\n"),
-      "utf-8",
-    );
+    void params.dir;
+    const scope = {
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      sessionKey: `agent:${params.agentId}:main`,
+      storePath: resolveStorePath(undefined, { agentId: params.agentId }),
+    };
+    replaceSessionEntrySync(scope, { sessionId: params.sessionId, updatedAt: Date.now() });
+    appendTranscriptMessageSync(scope, {
+      message: {
+        role: "assistant",
+        model: params.model ?? "claude-opus-4-6",
+        usage: params.usage,
+      },
+    });
   }
 
   const baselineTranscriptUsage = {
@@ -2250,51 +2245,28 @@ describe("buildStatusMessage", () => {
     await withTempHome(
       async (dir) => {
         const sessionId = "sess-cache-delivery-mirror";
-        const logPath = path.join(
-          dir,
-          ".openclaw",
-          "agents",
-          "main",
-          "sessions",
-          `${sessionId}.jsonl`,
-        );
-        fs.mkdirSync(path.dirname(logPath), { recursive: true });
-        fs.writeFileSync(
-          logPath,
-          [
-            JSON.stringify({ type: "session", version: 1, id: sessionId }),
-            JSON.stringify({
-              type: "message",
-              message: {
-                role: "assistant",
-                provider: "anthropic",
-                model: "claude-opus-4-6",
-                usage: {
-                  input: 1,
-                  output: 2,
-                  cacheRead: 1000,
-                  cacheWrite: 0,
-                  totalTokens: 1003,
-                },
+        writeBaselineTranscriptUsageLog({ dir, agentId: "main", sessionId });
+        appendTranscriptMessageSync(
+          {
+            agentId: "main",
+            sessionId,
+            sessionKey: "agent:main:main",
+            storePath: resolveStorePath(undefined, { agentId: "main" }),
+          },
+          {
+            message: {
+              role: "assistant",
+              provider: "openclaw",
+              model: "delivery-mirror",
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
               },
-            }),
-            JSON.stringify({
-              type: "message",
-              message: {
-                role: "assistant",
-                provider: "openclaw",
-                model: "delivery-mirror",
-                usage: {
-                  input: 0,
-                  output: 0,
-                  cacheRead: 0,
-                  cacheWrite: 0,
-                  totalTokens: 0,
-                },
-              },
-            }),
-          ].join("\n"),
-          "utf-8",
+            },
+          },
         );
 
         const text = buildTranscriptStatusText({

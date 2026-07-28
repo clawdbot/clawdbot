@@ -73,6 +73,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     reasoningPayloadsEnabled,
     recordAgentDispatchCompleted,
     recordProcessed,
+    recordRoutedBlockReplyDelivery,
     replyConfig,
     replyContextAccountId,
     replyResolver,
@@ -82,6 +83,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     routeReplyThreadId,
     routeReplyTo,
     runWithDispatchLifecycleAdmission,
+    sendTrackedBlockReply,
     sendPlanUpdate,
     sendPolicy,
     sendPolicyDenied,
@@ -606,18 +608,19 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       }
                       if (shouldRouteToOriginating) {
                         dispatchOwnsPolicySettlement = true;
-                        await settleRoutedOperationalPolicyAfterDispatch(
+                        const result = await settleRoutedOperationalPolicyAfterDispatch(
                           normalizedPayload,
                           policyResult,
                           { abortSignal: context?.abortSignal, kind: "block" },
                         );
+                        recordRoutedBlockReplyDelivery(normalizedPayload, result);
                       } else {
                         markInboundDedupeReplayUnsafe();
                         dispatchOwnsPolicySettlement = true;
                         const delivered = await settleDirectOperationalPolicyAfterDispatch(
                           normalizedPayload,
                           policyResult,
-                          () => dispatcher.sendBlockReply(normalizedPayload),
+                          () => sendTrackedBlockReply(normalizedPayload),
                         );
                         if (delivered) {
                           state.hasPendingDirectBlockReplyDelivery = true;

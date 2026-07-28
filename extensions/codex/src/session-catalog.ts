@@ -422,6 +422,7 @@ async function listCodexSessionCatalog(params: {
   runtime: PluginRuntime;
   control: CodexSessionCatalogControl;
   query?: CodexSessionCatalogParams;
+  listNodes?: Parameters<SessionCatalogProvider["list"]>[0]["listNodes"];
   onHost?: (host: CodexSessionCatalogHost) => void;
   sessionEntries?: SessionCatalogEntrySnapshot;
 }): Promise<CodexSessionCatalogResult> {
@@ -452,7 +453,7 @@ async function listCodexSessionCatalog(params: {
   }
   let nodes: CatalogNode[];
   try {
-    nodes = (await params.runtime.nodes.list()).nodes
+    nodes = (await (params.listNodes?.() ?? params.runtime.nodes.list())).nodes
       .filter(
         (node) =>
           node.commands?.includes(CODEX_APP_SERVER_THREADS_LIST_COMMAND) &&
@@ -1273,7 +1274,7 @@ function registerCodexSessionCatalog(params: {
       ),
     list: async (query) => {
       const localTerminalAvailable = resolveLocalCodexTerminalExecutable() !== undefined;
-      const { onHost, sessionEntries, ...gatewayQuery } = query;
+      const { listNodes, onHost, sessionEntries, ...gatewayQuery } = query;
       const mapHost = (host: CodexSessionCatalogHost) =>
         toGenericCatalogHost(host, localTerminalAvailable);
       return (
@@ -1283,6 +1284,7 @@ function registerCodexSessionCatalog(params: {
           runtime: params.api.runtime,
           control: params.control,
           query: gatewayQuery,
+          listNodes,
           sessionEntries,
           ...(onHost ? { onHost: (host) => onHost(mapHost(host)) } : {}),
         })

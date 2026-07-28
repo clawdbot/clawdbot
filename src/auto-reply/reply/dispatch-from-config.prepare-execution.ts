@@ -100,16 +100,19 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     payload: ReplyPayload,
     policyResult: Awaited<ReturnType<typeof applyDispatchOperationalReplyPolicy>>,
     options?: { abortSignal?: AbortSignal; kind?: "block" },
-  ): Promise<boolean> => {
-    let delivered: boolean;
+  ) => {
+    let result: Awaited<ReturnType<typeof sendPayloadAsync>>;
     try {
-      delivered = await sendPayloadAsync(payload, options?.abortSignal, false, options?.kind);
+      result = await sendPayloadAsync(payload, options?.abortSignal, false, options?.kind);
     } catch (error) {
       await markOperationalReplyPolicyDelivered(policyResult, false);
       throw error;
     }
-    await markOperationalReplyPolicyDelivered(policyResult, delivered);
-    return delivered;
+    await markOperationalReplyPolicyDelivered(
+      policyResult,
+      Boolean(result?.ok && result.suppressed !== true),
+    );
+    return result;
   };
   // When automatic source delivery is suppressed, still let the agent process
   // the inbound message (context, memory, tool calls) but suppress automatic

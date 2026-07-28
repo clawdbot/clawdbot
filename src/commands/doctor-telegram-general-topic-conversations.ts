@@ -13,11 +13,10 @@ import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targe
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
-import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { buildConversationRef } from "../routing/conversation-ref.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import {
-  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 
@@ -316,10 +315,8 @@ export async function repairTelegramGeneralTopicConversations(params: {
   let repaired = 0;
   for (const { scope } of resolveRepairScopes(params.cfg, env)) {
     await runExclusiveSqliteSessionWrite(scope, async () => {
-      const database = openOpenClawAgentDatabase(toDatabaseOptions(scope));
-      repaired += runSqliteImmediateTransactionSync(
-        database.db,
-        () => {
+      repaired += runOpenClawAgentWriteTransaction(
+        (database) => {
           // Detection is advisory. Re-read every candidate after BEGIN so a live
           // session write cannot turn the doctor repair into a stale merge.
           let databaseRepairs = 0;
@@ -330,7 +327,8 @@ export async function repairTelegramGeneralTopicConversations(params: {
           }
           return databaseRepairs;
         },
-        { databaseLabel: database.path, operationLabel: "doctor-telegram-general-topic" },
+        toDatabaseOptions(scope),
+        { operationLabel: "doctor-telegram-general-topic" },
       );
     });
   }

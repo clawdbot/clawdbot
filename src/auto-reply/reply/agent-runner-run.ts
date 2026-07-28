@@ -534,7 +534,8 @@ export async function runReplyAgent(
         const admittedSessionFile = resolveAdmittedRunSessionFile({
           agentId: followupRun.run.agentId,
           sessionId: replyOperation.sessionId,
-          sessionFile: admittedSessionEntry.sessionFile,
+          sessionFile: undefined,
+          sessionKey: replySessionKey,
           storePath,
         });
         if (admittedSessionFile) {

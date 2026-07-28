@@ -66,7 +66,9 @@ field map and defaults.
     Settings show common fields first. Each section keeps its advanced fields
     in a collapsed **Advanced (N)** group; use **Show advanced** to expand all
     groups. Settings search always includes both tiers and opens the matching
-    advanced group when needed.
+    advanced group when needed. Per-channel settings under **Settings ->
+    Channels** use the same split and share the **Show advanced** preference,
+    with **Hide advanced** on the divider to collapse them again.
   </Tab>
   <Tab title="Direct edit">
     Edit `~/.openclaw/openclaw.json` directly. The Gateway watches the file and applies changes automatically (see [hot reload](#config-hot-reload)).

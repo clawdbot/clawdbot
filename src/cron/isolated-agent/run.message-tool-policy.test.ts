@@ -383,7 +383,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
             provider: "openai",
             model: "gpt-5.4",
           },
-          cronSession: makeCronSession() as MutableCronSession,
+          cronSession: makeCronSession() as unknown as MutableCronSession,
           commandBody,
           persistSessionEntry: async () => undefined,
           abortReason: () => "aborted",

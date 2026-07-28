@@ -77,20 +77,23 @@ describe("telegram actions contract", () => {
     },
   );
 
-  it("does not advertise a richText message-tool capability", () => {
-    const capabilities = telegramPlugin.agentPrompt?.messageToolCapabilities?.({
-      cfg: {
-        channels: {
-          telegram: {
-            botToken: "test-token-placeholder",
-            richMessages: true,
+  it("advertises markdown details only for rich-message accounts", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            rich: { botToken: "rich-token-placeholder", richMessages: true },
+            plain: { botToken: "plain-token-placeholder", richMessages: false },
           },
         },
-      } as OpenClawConfig,
-    });
+      },
+    } as OpenClawConfig;
+    const capabilitiesFor = (accountId: string) =>
+      telegramPlugin.agentPrompt?.messageToolCapabilities?.({ cfg, accountId });
 
-    expect(capabilities).toContain("inlineButtons");
-    expect(capabilities).not.toContain("richText");
+    expect(capabilitiesFor("rich")).toContain("markdownDetails");
+    expect(capabilitiesFor("rich")).not.toContain("richText");
+    expect(capabilitiesFor("plain")).not.toContain("markdownDetails");
   });
 
   it("advertises inline buttons when legacy Telegram capabilities are empty", () => {

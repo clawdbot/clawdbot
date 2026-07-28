@@ -1,7 +1,7 @@
 // Line tests cover monitor.lifecycle plugin behavior.
 import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
@@ -376,6 +376,102 @@ describe("monitorLineProvider lifecycle", () => {
 
     await firstMonitor.stop();
     await secondMonitor.stop();
+  });
+
+  it("redacts structured admission failures from signed HTTP webhook requests", async () => {
+    const runtimeError = vi.fn<(...args: unknown[]) => void>();
+    const runtime: RuntimeEnv = {
+      log: vi.fn<(...args: unknown[]) => void>(),
+      error: runtimeError,
+      exit: vi.fn<(code: number) => void>(),
+    };
+    const monitor = await monitorLineProvider({
+      channelAccessToken: "token",
+      channelSecret: "secret", // pragma: allowlist secret
+      accountId: "default",
+      config: {} as OpenClawConfig,
+      runtime,
+    });
+    const route = requireRegisteredRoute();
+    const server = createServer((req, res) => {
+      void route.handler(req, res);
+    });
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", () => {
+          server.removeListener("error", reject);
+          resolve();
+        });
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected LINE webhook test server to have a TCP address");
+      }
+
+      const webhookUrl = `http://127.0.0.1:${address.port}/line/webhook`;
+      const payload = JSON.stringify({ events: [{ type: "message" }] });
+      const rejected = await fetch(webhookUrl, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-line-signature": "invalid-signature",
+        },
+        body: payload,
+      });
+      expect(rejected.status).toBe(401);
+      expect(await rejected.json()).toEqual({ error: "Invalid signature" });
+
+      const bot = createLineBotMock.mock.results[0]?.value;
+      if (!bot) {
+        throw new Error("expected registered LINE webhook bot");
+      }
+      expect(bot.handleWebhook).not.toHaveBeenCalled();
+
+      const bearerToken = "test_line_access_token_1234567890";
+      bot.handleWebhook.mockRejectedValueOnce({
+        code: "LINE_ADMISSION_REJECTED",
+        retryAfterMs: 250,
+        authorization: `Bearer ${bearerToken}`,
+      });
+      const signature = crypto.createHmac("SHA256", "secret").update(payload).digest("base64");
+      const response = await fetch(webhookUrl, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-line-signature": signature,
+        },
+        body: payload,
+      });
+
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({ error: "Internal server error" });
+      expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
+      expect(runtimeError).toHaveBeenCalledTimes(1);
+      const message = String(runtimeError.mock.calls[0]?.[0]);
+      expect(message).toContain("line webhook error:");
+      expect(message).toContain("LINE_ADMISSION_REJECTED");
+      expect(message).toContain("retryAfterMs");
+      expect(message).not.toContain("[object Object]");
+      expect(message).not.toContain(bearerToken);
+    } finally {
+      try {
+        if (server.listening) {
+          await new Promise<void>((resolve, reject) => {
+            server.close((error) => {
+              if (error) {
+                reject(error);
+                return;
+              }
+              resolve();
+            });
+          });
+        }
+      } finally {
+        await monitor.stop();
+      }
+    }
   });
 
   it("dispatches a signed POST to a configured trailing-slash webhook path", async () => {

@@ -4649,6 +4649,145 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.meta.livenessState).toBe("working");
   });
 
+  it("treats reply-optional post-tool empty stops as silent even after side-effecting tools", () => {
+    // Regression: a cron agentTurn without a delivery route ran a successful
+    // replay-unsafe sessions patch and intentionally sent no final text; the run
+    // must finish silent, not as an incomplete-turn error.
+    const sideEffectToolAttempt = makeAttemptResult({
+      assistantTexts: [],
+      toolMetas: [{ toolName: "sessions", meta: "patch archived", replaySafe: false }],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [{ type: "text", text: "" }],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    });
+
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({
+        allowEmptyAssistantReplyAsSilent: true,
+        terminalReplyExpectation: "optional",
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt: sideEffectToolAttempt,
+      }),
+    ).toBe(true);
+    // A required or unspecified terminal reply keeps the ambiguous-failure path.
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({
+        allowEmptyAssistantReplyAsSilent: true,
+        terminalReplyExpectation: "required",
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt: sideEffectToolAttempt,
+      }),
+    ).toBe(false);
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({
+        allowEmptyAssistantReplyAsSilent: true,
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt: sideEffectToolAttempt,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps reply-optional runs erroring on real failure states", () => {
+    const toolErrorAttempt = makeAttemptResult({
+      assistantTexts: [],
+      toolMetas: [{ toolName: "sessions", meta: "patch failed", replaySafe: false, isError: true }],
+      lastToolError: { toolName: "sessions", error: "patch failed" },
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [{ type: "text", text: "" }],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    });
+    const errorStopAttempt = makeAttemptResult({
+      assistantTexts: [],
+      toolMetas: [{ toolName: "sessions", meta: "patch archived", replaySafe: false }],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "error",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    });
+
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({
+        allowEmptyAssistantReplyAsSilent: true,
+        terminalReplyExpectation: "optional",
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt: toolErrorAttempt,
+      }),
+    ).toBe(false);
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({
+        allowEmptyAssistantReplyAsSilent: true,
+        terminalReplyExpectation: "optional",
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt: errorStopAttempt,
+      }),
+    ).toBe(false);
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({
+        allowEmptyAssistantReplyAsSilent: true,
+        terminalReplyExpectation: "optional",
+        payloadCount: 0,
+        aborted: true,
+        timedOut: false,
+        attempt: errorStopAttempt,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns NO_REPLY for reply-optional cron-style runs whose side-effecting tools succeeded", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "sessions", meta: "patch archived", replaySafe: false }],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.5",
+          content: [{ type: "text", text: "" }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      allowEmptyAssistantReplyAsSilent: true,
+      terminalReplyExpectation: "optional",
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-reply-optional-post-tool-silent",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expectNoWarnMessageWith("incomplete turn detected");
+    expect(result.payloads).toEqual([{ text: "NO_REPLY" }]);
+    expect(result.meta.error).toBeUndefined();
+    expect(result.meta.terminalReplyKind).toBe("silent-empty");
+    expect(result.meta.livenessState).toBe("working");
+  });
+
   it("keeps retrying and surfacing clean empty assistant turns without the silence flag", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockResolvedValue(

@@ -22,17 +22,20 @@ import { resolveConcreteSessionStorePath } from "./session-utils-store.js";
 export function buildSessionListRowContext(params: {
   store: Record<string, SessionEntry>;
   now: number;
+  userProfileLabelById?: Map<string, string | undefined>;
 }): SessionListRowContext {
   const subagentRuns = buildSubagentRunReadIndex(params.now);
   return buildSessionListRowContextFromParts({
     subagentRuns,
     storeChildSessionsByKey: buildStoreChildSessionIndex(params.store, params.now, subagentRuns),
+    userProfileLabelById: params.userProfileLabelById,
   });
 }
 
 function buildSessionListRowContextFromParts(params: {
   subagentRuns: ReturnType<typeof buildSubagentRunReadIndex>;
   storeChildSessionsByKey: Map<string, string[]>;
+  userProfileLabelById?: Map<string, string | undefined>;
 }): SessionListRowContext {
   return {
     subagentRuns: params.subagentRuns,
@@ -41,14 +44,19 @@ function buildSessionListRowContextFromParts(params: {
     thinkingMetadataByModelRef: new Map(),
     displayModelIdentityByKey: new Map(),
     modelCostConfigByModelRef: new Map(),
-    userProfileLabelById: new Map(),
+    userProfileLabelById: params.userProfileLabelById ?? new Map(),
+    acpSessionMetaByEntry: new Map(),
   };
 }
 
-export function buildSessionListRowMetadataContext(params: { now: number }): SessionListRowContext {
+export function buildSessionListRowMetadataContext(params: {
+  now: number;
+  userProfileLabelById?: Map<string, string | undefined>;
+}): SessionListRowContext {
   return buildSessionListRowContextFromParts({
     subagentRuns: buildSubagentRunReadIndex(params.now),
     storeChildSessionsByKey: new Map(),
+    userProfileLabelById: params.userProfileLabelById,
   });
 }
 

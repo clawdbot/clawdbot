@@ -24,7 +24,11 @@ describe("chat pane session hydration", () => {
       listBranches,
       setPullRequestSummary: vi.fn(),
     } as unknown as SessionCapability;
-    const client = { request } as unknown as GatewayBrowserClient;
+    const client = {
+      request,
+      requestSessionPullRequests: (params: { sessionKey: string }) =>
+        request("controlUi.sessionPullRequests", params),
+    } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions });
     pane.context.gateway.snapshot.hello = {
       features: {
@@ -69,7 +73,11 @@ describe("chat pane session hydration", () => {
   it("drops a previous session's deferred hydration before it reaches commit", async () => {
     const request = vi.fn((_method: string, _params?: unknown) => new Promise<never>(() => {}));
     const { pane, state } = createTestChatPane({
-      client: { request } as unknown as GatewayBrowserClient,
+      client: {
+        request,
+        requestSessionPullRequests: (params: { sessionKey: string }) =>
+          request("controlUi.sessionPullRequests", params),
+      } as unknown as GatewayBrowserClient,
       sessions: {} as SessionCapability,
     });
     const afterCommit = vi.fn<RenderLifecycle["afterCommit"]>(() => () => undefined);

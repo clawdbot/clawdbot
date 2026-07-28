@@ -7,7 +7,7 @@
 - Default happy path: OpenAI model through the Codex harness/runtime, Telegram direct conversation, and message-tool-only visible replies.
 - A quiet turn is represented by not calling `message(action=send)`; the normal final assistant text is private to OpenClaw/Codex.
 - This captures the OpenClaw-owned Codex app-server inputs and reconstructs the stable Codex model/permission layers from committed Codex prompt fixtures.
-- This also simulates Codex workspace bootstrap routing: `TOOLS.md` as inherited developer instructions, `SOUL.md`, `IDENTITY.md`, and `USER.md` as turn-scoped collaboration instructions, `MEMORY.md` in turn input, and `HEARTBEAT.md` as a heartbeat-only file pointer.
+- This also simulates Codex workspace bootstrap routing: `AGENTS.md` through native project-doc discovery, `SOUL.md`, `IDENTITY.md`, and `USER.md` as turn-scoped collaboration instructions, `MEMORY.md` in turn input, and `HEARTBEAT.md` as a heartbeat-only file pointer.
 
 ## Scenario Metadata
 
@@ -22,7 +22,6 @@
   "runtime": "codex_app_server",
   "simulatedHeartbeatWorkspaceFile": "/tmp/openclaw-happy-path/workspace/HEARTBEAT.md",
   "simulatedWorkspaceBootstrapFiles": ["/tmp/openclaw-happy-path/workspace/MEMORY.md"],
-  "simulatedWorkspaceDeveloperInstructionFiles": ["/tmp/openclaw-happy-path/workspace/TOOLS.md"],
   "simulatedWorkspaceTurnScopedDeveloperInstructionFiles": [
     "/tmp/openclaw-happy-path/workspace/IDENTITY.md",
     "/tmp/openclaw-happy-path/workspace/SOUL.md",
@@ -65,6 +64,7 @@
   "approvalPolicy": "never",
   "approvalsReviewer": "user",
   "config": {
+    "code_mode.direct_only_tool_namespaces": ["openclaw_direct"],
     "features.apply_patch_streaming_events": true,
     "features.code_mode": true,
     "features.code_mode_only": false,
@@ -78,7 +78,6 @@
     "message",
     "agents_list",
     "sessions_spawn",
-    "sessions_yield",
     "nodes",
     "cron",
     "tts",
@@ -90,7 +89,8 @@
     "subagents",
     "session_status",
     "web_search",
-    "web_fetch"
+    "web_fetch",
+    "sessions_yield"
   ],
   "experimentalRawEvents": true,
   "model": "gpt-5.5",
@@ -221,24 +221,24 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 59316,
-    "roughTokens": 14829
+    "chars": 61075,
+    "roughTokens": 15269
   },
   "openClawDeveloperInstructions": {
-    "chars": 2606,
-    "roughTokens": 652
+    "chars": 2362,
+    "roughTokens": 591
   },
   "totalTextOnly": {
-    "chars": 26682,
-    "roughTokens": 6671
+    "chars": 26374,
+    "roughTokens": 6594
   },
   "totalWithDynamicToolsJson": {
-    "chars": 86000,
-    "roughTokens": 21500
+    "chars": 87451,
+    "roughTokens": 21863
   },
   "userInputText": {
-    "chars": 993,
-    "roughTokens": 249
+    "chars": 929,
+    "roughTokens": 233
   }
 }
 ```
@@ -446,14 +446,6 @@ When explicitly_mentioned_bot is true, the incoming message mentions your channe
 
 
 You are in a Telegram direct conversation. Normal final replies are private and are not automatically sent to this conversation. To post visible output here, use the message tool with action=send; the target defaults to this conversation. If no visible direct response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the conversation.
-
-## OpenClaw Workspace Instructions
-
-OpenClaw loaded these workspace instruction files from the active agent workspace. Internalize and follow them accordingly.
-
-### /tmp/openclaw-happy-path/workspace/TOOLS.md
-
-<TOOLS.md contents will be here>
 ````
 
 ### Developer: Codex Collaboration Mode Instructions
@@ -496,7 +488,7 @@ Treat this OpenClaw-provided context as supporting project/user reference for th
 
 ## OpenClaw Workspace Context
 
-OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. TOOLS.md is provided as inherited Codex developer instructions. SOUL.md, IDENTITY.md, and USER.md are provided as turn-scoped collaboration instructions so native Codex subagents do not inherit them. HEARTBEAT.md is handled by heartbeat collaboration-mode guidance. Those files are not repeated here.
+OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. SOUL.md, IDENTITY.md, and USER.md are provided as turn-scoped collaboration instructions so native Codex subagents do not inherit them. HEARTBEAT.md is handled by heartbeat collaboration-mode guidance. Those files are not repeated here.
 
 # Project Context
 
@@ -526,7 +518,6 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
   "message",
   "agents_list",
   "sessions_spawn",
-  "sessions_yield",
   "nodes",
   "cron",
   "tts",
@@ -538,7 +529,8 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
   "subagents",
   "session_status",
   "web_search",
-  "web_fetch"
+  "web_fetch",
+  "sessions_yield"
 ]
 ```
 

@@ -137,6 +137,132 @@ describe("defineSingleProviderPluginEntry", () => {
     ]);
   });
 
+  it("preserves manifest-owned onboarding scope and assistant metadata", () => {
+    const manifest = createProviderManifest();
+    const entry = defineSingleProviderPluginEntry({
+      id: "demo",
+      name: "Demo Provider",
+      description: "Demo provider plugin",
+      manifest: {
+        ...manifest,
+        providerAuthChoices: [
+          {
+            ...manifest.providerAuthChoices[0]!,
+            assistantPriority: 4,
+            assistantVisibility: "manual-only",
+            onboardingFeatured: true,
+            onboardingScopes: ["text-inference", "music-generation"],
+          },
+        ],
+      },
+      provider: { label: "Demo", docsPath: "/providers/demo", catalog: {} },
+    });
+
+    expect(capturePluginRegistration(entry).providers[0]?.auth[0]?.wizard).toMatchObject({
+      assistantPriority: 4,
+      assistantVisibility: "manual-only",
+      onboardingFeatured: true,
+      onboardingScopes: ["text-inference", "music-generation"],
+    });
+  });
+
+  it("creates registration-scoped provider state for provider factories", () => {
+    let registrations = 0;
+    const registrationApis: unknown[] = [];
+    const entry = defineSingleProviderPluginEntry({
+      id: "demo",
+      name: "Demo Provider",
+      description: "Demo provider plugin",
+      manifest: createProviderManifest(),
+      provider(api) {
+        registrationApis.push(api);
+        const registration = ++registrations;
+        return {
+          label: "Demo",
+          docsPath: "/providers/demo",
+          catalog: {},
+          normalizeModelId: ({ modelId }) => `${modelId}:${registration}`,
+        };
+      },
+    });
+
+    const firstRegistration = capturePluginRegistration(entry);
+    const secondRegistration = capturePluginRegistration(entry);
+    const first = firstRegistration.providers[0];
+    const second = secondRegistration.providers[0];
+
+    expect(first?.normalizeModelId?.({ provider: "demo", modelId: "example" })).toBe("example:1");
+    expect(second?.normalizeModelId?.({ provider: "demo", modelId: "example" })).toBe("example:2");
+    expect(registrationApis).toEqual([firstRegistration.api, secondRegistration.api]);
+    expect(registrationApis[0]).not.toBe(registrationApis[1]);
+    expect(registrations).toBe(2);
+  });
+
+  it("merges manifest onboarding metadata with provider-owned wizard model policies", () => {
+    const manifest = createProviderManifest();
+    const entry = defineSingleProviderPluginEntry({
+      id: "demo",
+      name: "Demo Provider",
+      description: "Demo provider plugin",
+      manifest: {
+        ...manifest,
+        providerAuthChoices: [
+          {
+            ...manifest.providerAuthChoices[0]!,
+            assistantPriority: 4,
+            assistantVisibility: "manual-only",
+            onboardingFeatured: true,
+            onboardingScopes: ["text-inference", "music-generation"],
+          },
+        ],
+      },
+      provider: {
+        label: "Demo",
+        docsPath: "/providers/demo",
+        manifestAuth: {
+          wizard: {
+            modelAllowlist: { allowedKeys: ["demo/default"], loadCatalog: true },
+            modelSelection: { promptWhenAuthChoiceProvided: true, allowKeepCurrent: false },
+          },
+        },
+        catalog: {},
+      },
+    });
+
+    expect(capturePluginRegistration(entry).providers[0]?.auth[0]?.wizard).toMatchObject({
+      choiceId: "demo-api-key",
+      choiceLabel: "Demo API key",
+      choiceHint: "Manifest-owned key",
+      groupId: "demo-group",
+      groupLabel: "Demo providers",
+      groupHint: "Manifest-owned setup",
+      assistantPriority: 4,
+      assistantVisibility: "manual-only",
+      onboardingFeatured: true,
+      onboardingScopes: ["text-inference", "music-generation"],
+      methodId: "api-key",
+      modelAllowlist: { allowedKeys: ["demo/default"], loadCatalog: true },
+      modelSelection: { promptWhenAuthChoiceProvided: true, allowKeepCurrent: false },
+    });
+  });
+
+  it("allows provider-owned manifest auth to disable the onboarding wizard", () => {
+    const entry = defineSingleProviderPluginEntry({
+      id: "demo",
+      name: "Demo Provider",
+      description: "Demo provider plugin",
+      manifest: createProviderManifest(),
+      provider: {
+        label: "Demo",
+        docsPath: "/providers/demo",
+        manifestAuth: { wizard: false },
+        catalog: {},
+      },
+    });
+
+    expect(capturePluginRegistration(entry).providers[0]?.auth[0]?.wizard).toBeUndefined();
+  });
+
   it("honors explicit base URLs and provider-owned manifest auth overrides", async () => {
     const entry = defineSingleProviderPluginEntry({
       id: "demo",

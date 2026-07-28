@@ -171,7 +171,7 @@ describe("registerPolicyDoctorChecks", () => {
       JSON.stringify({ channels: {}, mcp: {}, models: {}, network: {}, tools: {} }),
       "utf-8",
     );
-    await fs.writeFile(join(workspaceDir, "TOOLS.md"), "## Tools\n\n### deploy\n", "utf-8");
+    await fs.writeFile(join(workspaceDir, "AGENTS.md"), "## Tools\n\n### deploy\n", "utf-8");
 
     const result = await runPolicyChecks(ctx(configPath, cfg));
 
@@ -186,7 +186,7 @@ describe("registerPolicyDoctorChecks", () => {
       JSON.stringify({ tools: { requireMetadata: ["risk", "unsupported"] } }),
       "utf-8",
     );
-    await fs.writeFile(join(workspaceDir, "TOOLS.md"), "## Tools\n\n### deploy\n", "utf-8");
+    await fs.writeFile(join(workspaceDir, "AGENTS.md"), "## Tools\n\n### deploy\n", "utf-8");
 
     const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()), {
       checks: registerChecks(),
@@ -258,7 +258,7 @@ describe("registerPolicyDoctorChecks", () => {
       JSON.stringify({ tools: { requireMetadata: ["risk", "sensitivity", "owner"] } }),
       "utf-8",
     );
-    await fs.writeFile(join(workspaceDir, "TOOLS.md"), "## Tools\n\n### deploy\n", "utf-8");
+    await fs.writeFile(join(workspaceDir, "AGENTS.md"), "## Tools\n\n### deploy\n", "utf-8");
 
     const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()), {
       checks: registerChecks(),
@@ -270,23 +270,117 @@ describe("registerPolicyDoctorChecks", () => {
         expect.objectContaining({
           checkId: "policy/tools-missing-risk-level",
           severity: "error",
-          path: "TOOLS.md",
-          ocPath: "oc://TOOLS.md/tools/deploy",
+          path: "AGENTS.md",
+          ocPath: "oc://AGENTS.md/tools/deploy",
         }),
         expect.objectContaining({
           checkId: "policy/tools-missing-sensitivity-token",
           severity: "error",
-          path: "TOOLS.md",
-          ocPath: "oc://TOOLS.md/tools/deploy",
+          path: "AGENTS.md",
+          ocPath: "oc://AGENTS.md/tools/deploy",
         }),
         expect.objectContaining({
           checkId: "policy/tools-missing-owner",
           severity: "error",
-          path: "TOOLS.md",
-          ocPath: "oc://TOOLS.md/tools/deploy",
+          path: "AGENTS.md",
+          ocPath: "oc://AGENTS.md/tools/deploy",
         }),
       ]),
     );
+  });
+
+  it("blocks governed tool evaluation until TOOLS.md is migrated into AGENTS.md", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ tools: { requireMetadata: ["risk"] } }),
+      "utf-8",
+    );
+    await fs.writeFile(join(workspaceDir, "TOOLS.md"), "### deploy\n", "utf-8");
+
+    const beforeMigration = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()), {
+      checks: registerChecks(),
+    });
+
+    expect(beforeMigration.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/tools-md-migration-required",
+        severity: "error",
+        message:
+          "TOOLS.md contains unmigrated governed tool declarations; run `openclaw doctor --fix` to migrate them into the AGENTS.md `## Tools` section before policy evaluation can pass.",
+        path: "TOOLS.md",
+      }),
+    ]);
+
+    await fs.writeFile(join(workspaceDir, "AGENTS.md"), "## Tools\n\n### deploy\n", "utf-8");
+    await fs.rm(join(workspaceDir, "TOOLS.md"));
+
+    const afterMigration = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()), {
+      checks: registerChecks(),
+    });
+
+    expect(afterMigration.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/tools-missing-risk-level",
+        path: "AGENTS.md",
+        ocPath: "oc://AGENTS.md/tools/deploy",
+      }),
+    ]);
+  });
+
+  it("runs required metadata checks for a tool literally named tools", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ tools: { requireMetadata: ["risk", "sensitivity", "owner"] } }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "AGENTS.md"),
+      "# Tools\n\n## Local notes\n\n- SSH: prod-host\n\n## tools risk: high\n",
+      "utf-8",
+    );
+
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()), {
+      checks: registerChecks(),
+    });
+
+    expect(result.findings).toHaveLength(2);
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/tools-missing-sensitivity-token",
+          ocPath: "oc://AGENTS.md/tools/tools",
+        }),
+        expect.objectContaining({
+          checkId: "policy/tools-missing-owner",
+          ocPath: "oc://AGENTS.md/tools/tools",
+        }),
+      ]),
+    );
+  });
+
+  it("does not capture an unrelated nested Tools section as governed evidence", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ tools: { requireMetadata: ["risk", "sensitivity", "owner"] } }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "AGENTS.md"),
+      "## Build\n\n### Tools\n\n- npm: install dependencies\n",
+      "utf-8",
+    );
+
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()), {
+      checks: registerChecks(),
+    });
+
+    expect(result.findings).toEqual([]);
   });
 
   it("reports governed bullet tools missing required metadata", async () => {
@@ -297,7 +391,7 @@ describe("registerPolicyDoctorChecks", () => {
       JSON.stringify({ tools: { requireMetadata: ["risk", "sensitivity", "owner"] } }),
       "utf-8",
     );
-    await fs.writeFile(join(workspaceDir, "TOOLS.md"), "## Tools\n\n- deploy: deploys\n", "utf-8");
+    await fs.writeFile(join(workspaceDir, "AGENTS.md"), "## Tools\n\n- deploy: deploys\n", "utf-8");
 
     const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()), {
       checks: registerChecks(),
@@ -308,18 +402,18 @@ describe("registerPolicyDoctorChecks", () => {
       expect.arrayContaining([
         expect.objectContaining({
           checkId: "policy/tools-missing-risk-level",
-          path: "TOOLS.md",
-          ocPath: "oc://TOOLS.md/tools/deploy",
+          path: "AGENTS.md",
+          ocPath: "oc://AGENTS.md/tools/deploy",
         }),
         expect.objectContaining({
           checkId: "policy/tools-missing-sensitivity-token",
-          path: "TOOLS.md",
-          ocPath: "oc://TOOLS.md/tools/deploy",
+          path: "AGENTS.md",
+          ocPath: "oc://AGENTS.md/tools/deploy",
         }),
         expect.objectContaining({
           checkId: "policy/tools-missing-owner",
-          path: "TOOLS.md",
-          ocPath: "oc://TOOLS.md/tools/deploy",
+          path: "AGENTS.md",
+          ocPath: "oc://AGENTS.md/tools/deploy",
         }),
       ]),
     );
@@ -334,7 +428,7 @@ describe("registerPolicyDoctorChecks", () => {
       "utf-8",
     );
     await fs.writeFile(
-      join(workspaceDir, "TOOLS.md"),
+      join(workspaceDir, "AGENTS.md"),
       [
         "## Tools",
         "",
@@ -359,7 +453,7 @@ describe("registerPolicyDoctorChecks", () => {
     const evidence = await collectPolicyEvidence(
       {},
       {
-        toolsRaw: await fs.readFile(join(workspaceDir, "TOOLS.md"), "utf-8"),
+        toolsRaw: await fs.readFile(join(workspaceDir, "AGENTS.md"), "utf-8"),
       },
     );
 
@@ -367,7 +461,7 @@ describe("registerPolicyDoctorChecks", () => {
     expect(evidence.tools).toEqual([
       {
         id: "deploy",
-        source: "oc://TOOLS.md/tools/deploy",
+        source: "oc://AGENTS.md/tools/deploy",
         line: 3,
         risk: "critical",
         sensitivity: "restricted",
@@ -376,7 +470,7 @@ describe("registerPolicyDoctorChecks", () => {
       },
       {
         id: "inspect",
-        source: "oc://TOOLS.md/tools/inspect",
+        source: "oc://AGENTS.md/tools/inspect",
         line: 9,
         risk: "low",
         sensitivity: "public",
@@ -394,7 +488,7 @@ describe("registerPolicyDoctorChecks", () => {
       "utf-8",
     );
     await fs.writeFile(
-      join(workspaceDir, "TOOLS.md"),
+      join(workspaceDir, "AGENTS.md"),
       "## Tools\n\n### deploy risk:critcal\n",
       "utf-8",
     );
@@ -407,8 +501,8 @@ describe("registerPolicyDoctorChecks", () => {
       expect.objectContaining({
         checkId: "policy/tools-unknown-risk-level",
         severity: "error",
-        path: "TOOLS.md",
-        ocPath: "oc://TOOLS.md/tools/deploy",
+        path: "AGENTS.md",
+        ocPath: "oc://AGENTS.md/tools/deploy",
       }),
     ]);
   });
@@ -762,7 +856,7 @@ describe("registerPolicyDoctorChecks", () => {
       }),
       "utf-8",
     );
-    await fs.writeFile(join(workspaceDir, "TOOLS.md"), "## Tools\n\n### deploy\n", "utf-8");
+    await fs.writeFile(join(workspaceDir, "AGENTS.md"), "## Tools\n\n### deploy\n", "utf-8");
 
     const result = await runPolicyDoctorLint(
       ctx(configPath, cfgWithPolicy({ enabled: undefined })),

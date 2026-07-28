@@ -14,6 +14,7 @@ import "../components/github-link-hovercard-registration.ts";
 import "../components/login-gate.ts";
 import "../components/macos-titlebar-controls.ts";
 import "../components/onboarding-memory-import.ts";
+import "../components/openclaw-mascot.ts";
 import "../components/resizable-divider.ts";
 import "../components/sidebar-update-card.ts";
 import "../components/tooltip.ts";
@@ -76,6 +77,7 @@ import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
 import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/location.ts";
 import { renderDevicePairSetup } from "../pages/nodes/view-pairing.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
+import { selectApplicationSession } from "./agent-selection.ts";
 import { selectShellRouteState, type ShellRouteState } from "./app-host-route-state.ts";
 import { findInlineApproval } from "./approval-presentation.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
@@ -124,6 +126,7 @@ import {
   normalizeCatalogOpenTarget,
   setSettingsChangeListener,
 } from "./settings.ts";
+import { isStaleChunkImportError, scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
 
 type AppSidebarElement = HTMLElement & {
   dismissTransientMenus: () => boolean;
@@ -137,6 +140,16 @@ const EMPTY_OUTBOX_COUNT_FOR_SESSION = () => 0;
 const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
   ? "⌘K"
   : "Ctrl K";
+
+i18n.setLocaleLoadRecovery({
+  isUnrecoverableError: isStaleChunkImportError,
+  onUnrecoverableLocaleLoad: () => {
+    // Chrome 149 and WebKit can pin network-failed dynamic imports for the document. Keep the
+    // in-place retry for engines that refetch; repeat failures use the guarded stale-chunk reload
+    // owner instead of adding a locale-specific reload path.
+    void scheduleStaleChunkReload();
+  },
+});
 
 type StoredOutboxScopeHost = {
   settings: { gatewayUrl?: string | null };
@@ -204,16 +217,10 @@ function resolveTerminalThemeMode(): "dark" | "light" {
   return document.documentElement.dataset.themeMode === "light" ? "light" : "dark";
 }
 
-// The mascot SVG animates via SMIL, so it must load through <img src> —
-// inlining the markup would freeze it (see ui/public/favicon.svg).
-function renderConnectingSplash(basePath: string) {
+function renderConnectingSplash() {
   return html`
     <main class="connect-splash" role="status" aria-live="polite" aria-label=${t("common.loading")}>
-      <img
-        class="connect-splash__logo"
-        src=${controlUiPublicAssetPath("favicon.svg", basePath)}
-        alt=""
-      />
+      <openclaw-mascot mood="thinking" .size=${120}></openclaw-mascot>
     </main>
   `;
 }
@@ -405,7 +412,7 @@ class OpenClawApp extends OpenClawLightDomElement {
           fullscreen
         ></openclaw-terminal-panel>
         ${!isOptionalElementDefined(TERMINAL_PANEL_ELEMENT) && terminalAvailable
-          ? renderConnectingSplash(context.basePath)
+          ? renderConnectingSplash()
           : nothing}
         ${!terminalAvailable && (gatewayConnected || gatewaySnapshot.lastError)
           ? html`<div class="terminal-view-unavailable">${t("terminal.unavailable")}</div>`
@@ -428,7 +435,7 @@ class OpenClawApp extends OpenClawLightDomElement {
     if (initialConnectPending) {
       return html`
         <openclaw-tooltip-provider>
-          ${renderConnectingSplash(context.basePath)} ${gatewayUrlConfirmation}
+          ${renderConnectingSplash()} ${gatewayUrlConfirmation}
         </openclaw-tooltip-provider>
       `;
     }
@@ -527,6 +534,7 @@ class OpenClawShell extends OpenClawLightDomElement {
   private sessionKeyClient: GatewayBrowserClient | null = null;
   private runtimeConfigClient: GatewayBrowserClient | null = null;
   private runtimeConfigSource: ApplicationContext["runtimeConfig"] | null = null;
+  private previousGatewayPhase: ApplicationContext["gateway"]["snapshot"]["phase"] | null = null;
   private sidebarWorkboardSnapshot = EMPTY_SIDEBAR_WORKBOARD_SNAPSHOT;
   private sidebarWorkboardRuntime: SidebarWorkboardRuntime | null = null;
   private sidebarWorkboardHost: ApplicationContext["workboard"] | null = null;
@@ -794,6 +802,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.sessionKeyClient = null;
     this.runtimeConfigClient = null;
     this.runtimeConfigSource = null;
+    this.previousGatewayPhase = null;
     this.disposeSidebarWorkboard();
     if (this.agentRosterRefreshTimer !== null) {
       globalThis.clearTimeout(this.agentRosterRefreshTimer);
@@ -806,6 +815,29 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.settingsPreloadTimers.clear();
   }
 
+  private selectChatSession(sessionKey: string, agentId?: string | null) {
+    const context = this.context;
+    if (!context) {
+      return;
+    }
+    selectApplicationSession({
+      selection: context.agentSelection,
+      gateway: context.gateway,
+      sessionKey,
+      agentId,
+    });
+    const face = resolveSessionPreferredFaceForKey(context, sessionKey, agentId);
+    this.navigate(
+      face,
+      sessionNavigationTarget({
+        context,
+        face,
+        sessionKey,
+        ...(agentId ? { agentId } : {}),
+        preferenceDerivedFace: true,
+      }).options,
+    );
+  }
   private readonly handleGatewayEvent = (event: GatewayEventFrame) => {
     this.sidebarWorkboardRuntime?.handleGatewayEvent(event.event);
     if (event.event === "session.observer") {
@@ -821,13 +853,7 @@ class OpenClawShell extends OpenClawLightDomElement {
             selectedSessionKey: this.activeSessionKey,
             sessionHost: this.storedOutboxScopeHost(context),
             sessions: context.sessions.state.result?.sessions ?? [],
-            onOpen: (sessionKey) => {
-              context.gateway.setSessionKey(sessionKey);
-              const face = resolveSessionPreferredFaceForKey(context, sessionKey);
-              // Ambiguous one-segment keys intentionally fall back to /chat;
-              // the removed query deep-link format is not a compatibility path.
-              this.navigate(face, sessionNavigationTarget({ context, face, sessionKey }).options);
-            },
+            onOpen: (sessionKey, agentId) => this.selectChatSession(sessionKey, agentId),
           }),
         );
       }
@@ -884,12 +910,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     if (handled || (command.kind !== "navigate" && command.kind !== "split")) {
       return;
     }
-    context.gateway.setSessionKey(command.sessionKey);
-    const face = resolveSessionPreferredFaceForKey(context, command.sessionKey);
-    this.navigate(
-      face,
-      sessionNavigationTarget({ context, face, sessionKey: command.sessionKey }).options,
-    );
+    this.selectChatSession(command.sessionKey);
   };
 
   private scheduleAgentRosterRefresh() {
@@ -1433,9 +1454,14 @@ class OpenClawShell extends OpenClawLightDomElement {
   }
 
   private synchronizeGateway(snapshot: ApplicationContext["gateway"]["snapshot"]) {
+    const previousPhase = this.previousGatewayPhase;
+    this.previousGatewayPhase = snapshot.phase;
     this.updateGatewaySessionKey(snapshot);
     this.ensureAgentsList(snapshot);
     this.ensureRuntimeConfig(snapshot);
+    if (previousPhase !== "connected" && snapshot.phase === "connected") {
+      i18n.retryPendingLocale();
+    }
     this.syncSidebarWorkboard();
     // Chunks are usually served by the gateway, so a failed idle load of the
     // outbox module recovers on reconnect, not only on a browser online event.
@@ -1639,7 +1665,11 @@ class OpenClawShell extends OpenClawLightDomElement {
         const committedSessionKey = routeState.committedSessionKey;
         if (committedSessionKey) {
           this.activeSessionKey = committedSessionKey;
-          routeContext.gateway.setSessionKey(committedSessionKey);
+          selectApplicationSession({
+            selection: routeContext.agentSelection,
+            gateway: routeContext.gateway,
+            sessionKey: committedSessionKey,
+          });
         }
       }
     }
@@ -1744,11 +1774,7 @@ class OpenClawShell extends OpenClawLightDomElement {
       ${isOptionalElementDefined(this.commandPaletteElement)
         ? html`<openclaw-command-palette
             .onNavigate=${(routeId: RouteId) => this.navigate(routeId)}
-            .onSelectSession=${(sessionKey: string) => {
-              context.gateway.setSessionKey(sessionKey);
-              const face = resolveSessionPreferredFaceForKey(context, sessionKey);
-              this.navigate(face, sessionNavigationTarget({ context, face, sessionKey }).options);
-            }}
+            .onSelectSession=${(sessionKey: string) => this.selectChatSession(sessionKey)}
             .onSlashCommand=${this.handleCommandPaletteSlashCommand}
           ></openclaw-command-palette>`
         : nothing}
@@ -1989,11 +2015,13 @@ class OpenClawShell extends OpenClawLightDomElement {
         <openclaw-terminal-panel
           .client=${gatewayConnected ? gatewaySnapshot.client : null}
           .available=${terminalAvailable}
+          .suppressed=${settingsTakeover}
           .themeMode=${resolveTerminalThemeMode()}
         ></openclaw-terminal-panel>
         <openclaw-browser-panel
           .client=${gatewayConnected ? gatewaySnapshot.client : null}
           .available=${browserPanelAvailable}
+          .suppressed=${settingsTakeover}
           .basePath=${context.basePath}
           .authToken=${resolveControlUiAuthToken({
             hello: gatewaySnapshot.hello,

@@ -1662,5 +1662,9 @@
   {
     "source": "Cron CLI",
     "target": "Cron CLI"
+  },
+  {
+    "source": "TOOLS.md retired",
+    "target": "TOOLS.md 已弃用"
   }
 ]

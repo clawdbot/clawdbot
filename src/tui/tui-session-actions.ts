@@ -12,7 +12,12 @@ import {
 } from "../routing/session-key.js";
 import type { ChatLog } from "./components/chat-log.js";
 import type { TuiAgentsList, TuiBackend, TuiSessionMutationResult } from "./tui-backend.js";
-import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
+import {
+  asString,
+  extractTextFromMessage,
+  formatTuiErrorMessage,
+  isCommandMessage,
+} from "./tui-formatters.js";
 import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
 import * as submit from "./tui-submit-state.js";
 import type { SessionInfo, TuiHistoryLoadResult, TuiOptions, TuiStateAccess } from "./tui-types.js";
@@ -144,6 +149,17 @@ export function createSessionActions(context: SessionActionContext) {
     state.currentAgentId === selection.agentId &&
     agentSessionKeysMatchByRequestKey(state.currentSessionKey, selection.sessionKey);
 
+  const isCurrentSessionMutation = (result: { key?: string }): boolean => {
+    if (!result.key) {
+      return true;
+    }
+    const parsed = parseAgentSessionKey(result.key);
+    return isCurrentSessionSelection({
+      sessionKey: result.key,
+      agentId: parsed ? normalizeAgentId(parsed.agentId) : state.currentAgentId,
+    });
+  };
+
   const applyAgentsResult = (result: TuiAgentsList) => {
     state.agentDefaultId = normalizeAgentId(result.defaultId);
     state.sessionMainKey = normalizeMainKey(result.mainKey);
@@ -186,7 +202,7 @@ export function createSessionActions(context: SessionActionContext) {
       const result = await client.listAgents();
       applyAgentsResult(result);
     } catch (err) {
-      chatLog.addSystem(`agents list failed: ${String(err)}`);
+      chatLog.addSystem(`agents list failed: ${formatTuiErrorMessage(err)}`);
     }
   };
 
@@ -382,7 +398,7 @@ export function createSessionActions(context: SessionActionContext) {
       if (!isCurrentRefresh()) {
         return;
       }
-      chatLog.addSystem(`sessions list failed: ${String(err)}`);
+      chatLog.addSystem(`sessions list failed: ${formatTuiErrorMessage(err)}`);
     }
   };
 
@@ -410,7 +426,7 @@ export function createSessionActions(context: SessionActionContext) {
   const applySessionInfoFromPatch = (
     result?: SessionsPatchResult | TuiSessionMutationResult | null,
   ) => {
-    if (!result?.entry) {
+    if (!result?.entry || !isCurrentSessionMutation(result)) {
       return;
     }
     if (result.key && result.key !== state.currentSessionKey) {
@@ -441,8 +457,13 @@ export function createSessionActions(context: SessionActionContext) {
     tui.requestRender(true);
   };
 
-  const applySessionMutationResult = (result?: TuiSessionMutationResult | null): boolean => {
-    if (!result?.entry) {
+  const applySessionMutationResult = (
+    result?: TuiSessionMutationResult | null,
+    requestSelection = captureSessionSelection(),
+  ): boolean => {
+    // A reset can legitimately return a replacement key. Reject results using
+    // the request's original selection, not the key the response must adopt.
+    if (!result?.entry || !isCurrentSessionSelection(requestSelection)) {
       return false;
     }
     if (result.key && result.key !== state.currentSessionKey) {
@@ -611,7 +632,7 @@ export function createSessionActions(context: SessionActionContext) {
       if (!isCurrentLoad()) {
         return { loaded: false };
       }
-      chatLog.addSystem(`history failed: ${String(err)}`);
+      chatLog.addSystem(`history failed: ${formatTuiErrorMessage(err)}`);
       tui.requestRender(true);
       return { loaded: false };
     }
@@ -648,18 +669,22 @@ export function createSessionActions(context: SessionActionContext) {
       tui.requestRender();
       return;
     }
+    const selection = captureSessionSelection();
     const pendingRunId = submit.getPendingSubmitAcceptedRunId(state);
     const abortsPendingRun = Boolean(pendingRunId);
     const activeRunId = state.activeChatRunId;
     const sessionAbortParams = {
-      sessionKey: state.currentSessionKey,
-      ...(state.currentSessionKey === "global" ? { agentId: state.currentAgentId } : {}),
+      sessionKey: selection.sessionKey,
+      ...(selection.sessionKey === "global" ? { agentId: selection.agentId } : {}),
     };
     try {
       // Session-scoped abort is the only reliable TUI stop contract: queued
       // chat.send calls can terminalize before the queue drains, so their run
       // ids may no longer exist in local UI state.
       const result = await client.abortChat(sessionAbortParams);
+      if (!isCurrentSessionSelection(selection)) {
+        return;
+      }
       if (!result.aborted) {
         chatLog.addSystem("no active run", { coalesceConsecutive: true });
         tui.requestRender();
@@ -684,7 +709,10 @@ export function createSessionActions(context: SessionActionContext) {
       }
       setActivityStatus("aborted");
     } catch (err) {
-      chatLog.addSystem(`abort failed: ${String(err)}`);
+      if (!isCurrentSessionSelection(selection)) {
+        return;
+      }
+      chatLog.addSystem(`abort failed: ${formatTuiErrorMessage(err)}`);
       setActivityStatus("abort failed");
     }
     tui.requestRender();

@@ -129,14 +129,14 @@ export async function runCodeModeWorker(
         finish(failedCodeModeWorkerResult(error, "runtime_unavailable"));
       });
       worker.once("exit", (code) => {
-        if (code !== 0) {
-          finish(
-            failedCodeModeWorkerResult(
-              new Error(`code mode worker exited with code ${code}`),
-              "runtime_unavailable",
-            ),
-          );
-        }
+        // A clean exit without a response is still unavailable; `finish` keeps
+        // the normal message-then-exit sequence from replacing a real result.
+        finish(
+          failedCodeModeWorkerResult(
+            new Error(`code mode worker exited with code ${code} before returning a result`),
+            "runtime_unavailable",
+          ),
+        );
       });
     });
   } finally {

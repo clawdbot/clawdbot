@@ -1,8 +1,9 @@
 import {
   BROWSER_ANNOTATION_EVENT,
+  CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
   WIDGET_PROMPT_EVENT,
+  admitInitialTurnHandoff,
   admitInitialUserMessageHandoff,
-  areUiSessionKeysEquivalent,
   chatAttachmentFromDataUrl,
   createPageState,
   disposeQuestionPromptState,
@@ -19,6 +20,7 @@ import {
   resetChatViewState,
   resolveChatPaneObserverRunId,
   resolveSessionKey,
+  selectedChatSessionRow,
   toggleSessionWorkspace,
   type BrowserAnnotationDraft,
   type SessionObserverDigest,
@@ -251,6 +253,9 @@ export abstract class ChatPaneLifecycle extends ChatPaneReset {
     if (this.sessionKey) {
       const initialSessionKey = this.setPaneSessionKey(this.sessionKey);
       if (initialSessionKey && !parseCatalogSessionKey(initialSessionKey)) {
+        // First-turn handoffs are scoped to their Gateway client and must be
+        // claimed before attach starts outbox and transcript hydration.
+        pageState.client = this.context.gateway.snapshot.client ?? null;
         const snapshot = readChatSessionSnapshot(pageState.chatMessagesBySession, pageState, {
           sessionKey: initialSessionKey,
         });
@@ -259,6 +264,10 @@ export abstract class ChatPaneLifecycle extends ChatPaneReset {
           pageState.chatHistoryPagination = snapshot.pagination;
           pageState.currentSessionId = snapshot.sessionId;
           pageState.chatDisplayedLeafEntryId = snapshot.displayedLeafEntryId;
+        }
+        if (admitInitialTurnHandoff(pageState, initialSessionKey)) {
+          pageState.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
+          pageState.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
         }
         admitInitialUserMessageHandoff(pageState.initialUserMessage, pageState, initialSessionKey);
       }
@@ -356,6 +365,24 @@ export abstract class ChatPaneLifecycle extends ChatPaneReset {
       } else if (catalogKey && this.catalogRequestedSessionKey !== this.sessionKey) {
         this.catalogLoadGeneration += 1;
         this.openCatalogSession(catalogKey, this.state);
+      } else if (nextSessionKey) {
+        // A pane routed straight onto the created session never runs the switch
+        // path, so its one-shot handoffs would expire unclaimed: the rejected turn
+        // would vanish instead of offering a retry, and the accepted prompt would
+        // stay hidden until the transcript bootstrap resolved.
+        const rejectedTurn = admitInitialTurnHandoff(this.state, nextSessionKey);
+        const acceptedPrompt = admitInitialUserMessageHandoff(
+          this.state.initialUserMessage,
+          this.state,
+          nextSessionKey,
+        );
+        if (rejectedTurn) {
+          this.state.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
+          this.state.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
+        }
+        if (rejectedTurn || acceptedPrompt) {
+          this.requestUpdate();
+        }
       }
       this.chatState.restoreCreatedSessionComposer(nextSessionKey);
     }
@@ -390,9 +417,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneReset {
         }
       });
     }
-    const selectedSessionRow = this.state?.sessionsResult?.sessions.find((row) =>
-      areUiSessionKeysEquivalent(row.key, this.state?.sessionKey ?? ""),
-    );
+    const selectedSessionRow = this.state ? selectedChatSessionRow(this.state) : undefined;
     // Active runs count even without a digest: a hidden observer generates
     // none, and the rail module owns the restore control for turning it back on.
     const observerRunId = resolveChatPaneObserverRunId({
