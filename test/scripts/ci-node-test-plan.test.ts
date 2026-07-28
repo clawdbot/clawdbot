@@ -248,6 +248,9 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     const jobOf = (name: string) =>
       compact.findIndex((shard) => shard.groups.some((group) => group.shard_name === name));
     expect(jobOf("agentic-agents-core-runner-embedded")).toBeGreaterThanOrEqual(0);
+    // The complete Control UI and model catalog both cold-load broad graphs;
+    // pairing them starves model visibility and repeatedly hits its timeout.
+    expect(jobOf("agentic-agents-core-models")).not.toBe(jobOf("core-runtime-media-ui"));
     // Cheap stripes may legally co-locate in one bin; only existence matters.
     expect(jobOf("core-unit-fast-1")).toBeGreaterThanOrEqual(0);
     expect(jobOf("core-unit-fast-2")).toBeGreaterThanOrEqual(0);
