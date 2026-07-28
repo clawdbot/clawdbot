@@ -1,29 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  formatUpdateAvailableVersion,
-  resolveUpdatePrereleaseLabel,
-} from "./update-overlay-helpers.ts";
-
-describe("resolveUpdatePrereleaseLabel", () => {
-  it("returns null for stable releases", () => {
-    expect(resolveUpdatePrereleaseLabel("2026.7.2")).toBeNull();
-  });
-
-  it("returns null for numeric-only stable corrections", () => {
-    expect(resolveUpdatePrereleaseLabel("2026.7.1-2")).toBeNull();
-  });
-
-  it("extracts the named prerelease identifier", () => {
-    expect(resolveUpdatePrereleaseLabel("2026.7.2-beta.5")).toBe("beta");
-    expect(resolveUpdatePrereleaseLabel("2026.7.2-alpha.1")).toBe("alpha");
-    expect(resolveUpdatePrereleaseLabel("2.0.0-rc.3")).toBe("rc");
-  });
-
-  it("ignores build metadata", () => {
-    expect(resolveUpdatePrereleaseLabel("2026.7.2+build.7")).toBeNull();
-    expect(resolveUpdatePrereleaseLabel("2026.7.2-beta.5+build.7")).toBe("beta");
-  });
-});
+import { formatUpdateAvailableVersion } from "./update-overlay-helpers.ts";
 
 describe("formatUpdateAvailableVersion", () => {
   it("renders a newer stable release without a label", () => {
@@ -48,5 +24,31 @@ describe("formatUpdateAvailableVersion", () => {
         latestVersion: "2026.7.2-beta.5",
       }),
     ).toBe("v2026.7.2-beta.5 (beta)");
+  });
+
+  it("labels alpha and rc prereleases with their identifiers", () => {
+    expect(
+      formatUpdateAvailableVersion({
+        latestVersion: "2026.7.2-alpha.1",
+      }),
+    ).toBe("v2026.7.2-alpha.1 (alpha)");
+    expect(
+      formatUpdateAvailableVersion({
+        latestVersion: "2.0.0-rc.3",
+      }),
+    ).toBe("v2.0.0-rc.3 (rc)");
+  });
+
+  it("ignores build metadata when labeling prereleases", () => {
+    expect(
+      formatUpdateAvailableVersion({
+        latestVersion: "2026.7.2+build.7",
+      }),
+    ).toBe("v2026.7.2+build.7");
+    expect(
+      formatUpdateAvailableVersion({
+        latestVersion: "2026.7.2-beta.5+build.7",
+      }),
+    ).toBe("v2026.7.2-beta.5+build.7 (beta)");
   });
 });

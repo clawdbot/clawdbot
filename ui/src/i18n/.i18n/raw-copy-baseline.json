@@ -171,13 +171,6 @@
     },
     {
       "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/components/sidebar-update-card.ts",
-      "text": "· v"
-    },
-    {
-      "count": 1,
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/lib/agents/display.ts",
