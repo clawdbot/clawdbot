@@ -200,7 +200,9 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["gateway", "health"],
     exact: true,
-    policy: { networkProxy: "bypass" },
+    // The routed JSON command owns its config read; running the startup guard first
+    // duplicates config/state initialization before the health socket can open.
+    policy: { routeConfigGuard: "always", networkProxy: "bypass" },
     route: { id: "gateway-health" },
   },
   { commandPath: ["gateway", "install"], exact: true, policy: { networkProxy: "bypass" } },
