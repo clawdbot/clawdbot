@@ -1,5 +1,5 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
   MemoryProviderStatus,
@@ -55,6 +55,12 @@ function resolveSearchOptions(
   };
 }
 
+function hasUsableAgentIdInput(value: string): boolean {
+  // A valid suffix exposes whether the input contributes any canonical id characters
+  // without allowing normalizeAgentId's empty-input fallback to select `main`.
+  return normalizeAgentId(`${value}a`) !== "a";
+}
+
 /** Operator-scoped search over the active agent memory index. */
 export const memorySearchHandlers: GatewayRequestHandlers = {
   "memory.search": async ({ params, respond, context }) => {
@@ -82,9 +88,22 @@ export const memorySearchHandlers: GatewayRequestHandlers = {
     }
 
     const cfg = context.getRuntimeConfig();
-    const requestedAgentId =
-      typeof record.agentId === "string" ? normalizeAgentId(record.agentId) : null;
-    const agentId = requestedAgentId || resolveDefaultAgentId(cfg);
+    const hasAgentId = Object.hasOwn(record, "agentId");
+    if (hasAgentId && typeof record.agentId !== "string") {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "agentId must be a string"));
+      return;
+    }
+    if (hasAgentId && !hasUsableAgentIdInput(record.agentId as string)) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown agentId"));
+      return;
+    }
+    const requestedAgentId = hasAgentId ? normalizeAgentId(record.agentId as string) : null;
+    // Read-scoped input must not bootstrap state or index files for invented agent namespaces.
+    if (requestedAgentId !== null && !listAgentIds(cfg).includes(requestedAgentId)) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown agentId"));
+      return;
+    }
+    const agentId = requestedAgentId ?? resolveDefaultAgentId(cfg);
     let acquired: Awaited<ReturnType<typeof getActiveMemorySearchManager>>;
     try {
       // Use the transient CLI lifecycle so request cleanup cannot close a shared manager.

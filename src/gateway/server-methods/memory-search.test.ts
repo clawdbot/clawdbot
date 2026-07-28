@@ -160,6 +160,85 @@ describe("memory.search gateway method", () => {
     expect(manager.close).toHaveBeenCalledOnce();
   });
 
+  it("rejects an unknown agentId without acquiring a manager", async () => {
+    const cfg = createConfig(testState.workspaceDir);
+
+    const respond = await invokeMemorySearch({ query: "lantern", agentId: "invented" }, cfg);
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: "unknown agentId",
+      }),
+    );
+    expect(getActiveMemorySearchManager).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-string agentId without acquiring a manager", async () => {
+    const cfg = createConfig(testState.workspaceDir);
+
+    const respond = await invokeMemorySearch({ query: "lantern", agentId: 42 }, cfg);
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: "agentId must be a string",
+      }),
+    );
+    expect(getActiveMemorySearchManager).not.toHaveBeenCalled();
+  });
+
+  it.each(["   ", "---", "ſ"])(
+    "rejects a normalization-empty agentId without acquiring a manager: %j",
+    async (agentId) => {
+      const cfg = createConfig(testState.workspaceDir);
+
+      const respond = await invokeMemorySearch({ query: "lantern", agentId }, cfg);
+
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "INVALID_REQUEST",
+          message: "unknown agentId",
+        }),
+      );
+      expect(resolveDefaultAgentId).not.toHaveBeenCalled();
+      expect(getActiveMemorySearchManager).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { configured: "research", requested: "Research" },
+    { configured: "_", requested: "_" },
+  ])("searches configured non-default agent $configured", async ({ configured, requested }) => {
+    const cfg = createConfig(testState.workspaceDir);
+    cfg.agents = {
+      ...cfg.agents,
+      list: [{ id: "main", default: true }, { id: configured }],
+    };
+    const manager = createStubManager();
+    getActiveMemorySearchManager.mockResolvedValue({ manager });
+
+    const respond = await invokeMemorySearch({ query: "lantern", agentId: requested }, cfg);
+
+    expect(getActiveMemorySearchManager).toHaveBeenCalledWith({
+      cfg,
+      agentId: configured,
+      purpose: "cli",
+    });
+    expect(resolveDefaultAgentId).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ agentId: configured }),
+      undefined,
+    );
+  });
+
   it("returns unavailable when no memory manager is configured", async () => {
     const cfg: OpenClawConfig = {};
     getActiveMemorySearchManager.mockResolvedValue({
