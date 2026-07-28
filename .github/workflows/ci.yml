@@ -3297,6 +3297,7 @@ jobs:
             -parallel-testing-enabled NO \
             -only-testing:OpenClawTests/NodeAppModelInvokeTests \
             -only-testing:OpenClawTests/NotificationServingPreferenceTests \
+            -only-testing:OpenClawTests/RootTabsSourceGuardTests \
             test
 
       - name: Upload iOS lifecycle simulator evidence
