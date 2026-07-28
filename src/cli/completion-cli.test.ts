@@ -1,5 +1,6 @@
 // Completion CLI tests cover shell completion command generation and install output.
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -64,6 +65,55 @@ printf '%s\\n' "\${COMPREPLY[@]}"
   expect(result.stderr).toBe("");
   expect(result.status).toBe(0);
   return result.stdout.split("\n").filter(Boolean);
+}
+
+function findPowerShell(): string | null {
+  const executable = process.platform === "win32" ? "pwsh.exe" : "pwsh";
+  const candidates = [
+    process.env.OPENCLAW_TEST_PWSH,
+    ...(process.env.PATH ?? "")
+      .split(path.delimiter)
+      .filter(Boolean)
+      .map((directory) => path.join(directory, executable)),
+  ];
+  return (
+    candidates.find((candidate): candidate is string =>
+      Boolean(candidate && existsSync(candidate)),
+    ) ?? null
+  );
+}
+
+const powerShellPath = findPowerShell();
+const itWithPowerShell = powerShellPath ? it : it.skip;
+
+function runGeneratedPowerShellCompletion(program: Command, commandLine: string): string[] {
+  if (!powerShellPath) {
+    throw new Error("PowerShell is unavailable");
+  }
+
+  const script = getCompletionScript("powershell", program);
+  const quotedCommandLine = commandLine.replaceAll("'", "''");
+  const result = spawnSync(
+    powerShellPath,
+    [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      `${script}
+$line = '${quotedCommandLine}'
+[System.Management.Automation.CommandCompletion]::CompleteInput($line, $line.Length, $null).CompletionMatches | ForEach-Object { $_.CompletionText }
+`,
+    ],
+    { encoding: "utf8" },
+  );
+
+  if (result.error) {
+    throw result.error;
+  }
+  expect(result.stderr).toBe("");
+  expect(result.status).toBe(0);
+  return result.stdout.split(/\r?\n/).filter(Boolean);
 }
 
 describe("completion-cli", () => {
@@ -150,7 +200,7 @@ describe("completion-cli", () => {
     expect(script).toContain("if ($commandPath -eq 'gateway') {");
     expect(script).toContain("if ($commandPath -eq 'gateway status') {");
     expect(script).not.toContain("if ($commandPath -eq 'openclaw gateway') {");
-    expect(script).toContain("$completions = @('status','restart','--force','--token')");
+    expect(script).toContain("$completions = @('status','restart','--force','-t','--token')");
     expect(script).not.toContain("'-t,'");
   });
 
@@ -163,6 +213,55 @@ describe("completion-cli", () => {
     expect(getCompletionScript("powershell", commandsOnly)).toContain("$completions = @('status')");
     expect(getCompletionScript("powershell", optionsOnly)).toContain("$completions = @('--json')");
     expect(getCompletionScript("powershell", empty)).toContain("$completions = @()");
+  });
+
+  it("preserves documented short and long completion flags in PowerShell", () => {
+    const script = getCompletionScript("powershell", createDocumentedCompletionProgram());
+
+    expect(script).toContain("'-v','--verbose'");
+    expect(script).toContain("'--force','-t','--token'");
+    expect(script).toContain("'-s','--shell','-i','--install','--write-state','-y','--yes'");
+  });
+
+  itWithPowerShell("completes root short and long flags in real PowerShell", () => {
+    const completions = runGeneratedPowerShellCompletion(
+      createDocumentedCompletionProgram(),
+      "openclaw -",
+    );
+
+    expect(completions).toEqual(expect.arrayContaining(["-v", "--verbose", "--status-json"]));
+  });
+
+  itWithPowerShell("completes documented nested short and long flags in real PowerShell", () => {
+    const completions = runGeneratedPowerShellCompletion(
+      createDocumentedCompletionProgram(),
+      "openclaw completion -",
+    );
+
+    expect(completions).toEqual(
+      expect.arrayContaining(["-s", "--shell", "-i", "--install", "-y", "--yes", "--write-state"]),
+    );
+  });
+
+  itWithPowerShell.each([
+    ["a long flag", "openclaw gateway --token secret st"],
+    ["a short flag", "openclaw gateway -t secret st"],
+    ["an inline long value", "openclaw gateway --token=secret st"],
+    ["an inline short value", "openclaw gateway -t=secret st"],
+    ["a preceding boolean flag", "openclaw gateway --force --token secret st"],
+  ])("keeps real PowerShell nested completions after %s", (_name, commandLine) => {
+    expect(runGeneratedPowerShellCompletion(createCompletionProgram(), commandLine)).toEqual([
+      "status",
+    ]);
+  });
+
+  itWithPowerShell.each([
+    ["-v", ["-v"]],
+    ["--v", ["--verbose"]],
+  ])("filters real PowerShell root flag aliases for %s", (prefix, expected) => {
+    expect(
+      runGeneratedPowerShellCompletion(createDocumentedCompletionProgram(), `openclaw ${prefix}`),
+    ).toEqual(expected);
   });
 
   it("generates fish completions for root and nested command contexts", () => {
@@ -408,5 +507,26 @@ printf '%s\\n' "\${COMPREPLY[@]}"
     expect(script).toContain("$completions = @('infer','capability','cron','--profile')");
     expect(script).toContain("if ($commandPath -eq 'capability') {");
     expect(script).toContain("if ($commandPath -eq 'cron create') {");
+  });
+
+  it("tracks PowerShell command paths past inherited value-taking flags", () => {
+    const script = getCompletionScript("powershell", createAliasedCompletionProgram());
+
+    expect(script).toContain("$valueOptions = @('--profile')");
+    expect(script).toContain("switch ($candidatePath)");
+    expect(script).toContain("'cron create'");
+    expect(script).toContain("'--profile','--at'");
+  });
+
+  itWithPowerShell.each([
+    ["a global option", "openclaw --profile work cron create --a"],
+    ["an inline global option", "openclaw --profile=work cron create --a"],
+    ["repeated global options", "openclaw --profile first --profile second cron create --a"],
+    ["an inherited option after the parent", "openclaw cron --profile work create --a"],
+    ["the canonical nested command", "openclaw --profile work cron add --a"],
+  ])("completes real PowerShell nested aliases after %s", (_name, commandLine) => {
+    expect(runGeneratedPowerShellCompletion(createAliasedCompletionProgram(), commandLine)).toEqual(
+      ["--at"],
+    );
   });
 });
