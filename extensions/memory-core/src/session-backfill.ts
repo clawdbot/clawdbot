@@ -63,7 +63,9 @@ type SessionBackfillSource = {
   stateKey: string;
   scope: string;
   legacyScope?: string;
+  sessionId?: string;
   sessionKey?: string;
+  storePath?: string;
   updatedAtMs?: number;
   generatedByDreamingNarrative?: boolean;
   generatedByCronRun?: boolean;
@@ -180,7 +182,9 @@ function sourceFromCorpusEntry(entry: SessionTranscriptCorpusEntry): SessionBack
     ...(entry.transcriptSource === "sqlite"
       ? { legacyScope: `${entry.agentId}:${entry.sessionId}` }
       : {}),
+    ...(entry.transcriptSource === "sqlite" ? { sessionId: entry.sessionId } : {}),
     ...(entry.sessionKey ? { sessionKey: entry.sessionKey } : {}),
+    ...(entry.storePath ? { storePath: entry.storePath } : {}),
     ...(entry.updatedAtMs !== undefined ? { updatedAtMs: entry.updatedAtMs } : {}),
     ...(entry.generatedByDreamingNarrative
       ? { generatedByDreamingNarrative: entry.generatedByDreamingNarrative }
@@ -274,6 +278,7 @@ async function collectSessionBackfillCandidates(params: {
 
   for (const source of params.sources) {
     const entry = await buildSessionEntry(source.absolutePath, {
+      agentId: source.agentId,
       sessionKind: source.sessionKind,
       ...(source.generatedByDreamingNarrative !== undefined
         ? { generatedByDreamingNarrative: source.generatedByDreamingNarrative }
@@ -282,6 +287,8 @@ async function collectSessionBackfillCandidates(params: {
         ? { generatedByCronRun: source.generatedByCronRun }
         : {}),
       ...(source.sessionKey !== undefined ? { sessionKey: source.sessionKey } : {}),
+      ...(source.sessionId !== undefined ? { sessionId: source.sessionId } : {}),
+      ...(source.storePath !== undefined ? { storePath: source.storePath } : {}),
       ...(source.updatedAtMs !== undefined ? { updatedAtMs: source.updatedAtMs } : {}),
     });
     if (!entry || entry.generatedByDreamingNarrative || entry.generatedByCronRun) {

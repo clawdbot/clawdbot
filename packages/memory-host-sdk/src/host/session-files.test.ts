@@ -143,13 +143,9 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       { agentId: "main", sessionKey, storePath },
       { sessionId: "retained-new", updatedAt: 20 },
     );
-    await persistSessionTranscriptTurn(
+    await appendTranscriptMessage(
       { agentId: "main", sessionId: "retained-new", sessionKey, storePath },
-      {
-        messages: [{ message: { role: "assistant", content: "current transcript" } }],
-        touchSessionEntry: true,
-        updateMode: "none",
-      },
+      { message: { role: "assistant", content: "current transcript" } },
     );
 
     const currentOnly = await listSessionTranscriptCorpusEntriesForAgent("main");
@@ -176,7 +172,10 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     expect(
       requireSessionEntry(
         await buildSessionEntry(retained?.sessionFile ?? "", {
+          ...(retained?.agentId !== undefined ? { agentId: retained.agentId } : {}),
+          ...(retained?.sessionId !== undefined ? { sessionId: retained.sessionId } : {}),
           ...(retained?.sessionKey !== undefined ? { sessionKey: retained.sessionKey } : {}),
+          ...(retained?.storePath !== undefined ? { storePath: retained.storePath } : {}),
           ...(retained?.updatedAtMs !== undefined ? { updatedAtMs: retained.updatedAtMs } : {}),
         }),
       ).content,

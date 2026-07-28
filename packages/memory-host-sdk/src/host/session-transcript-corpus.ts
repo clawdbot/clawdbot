@@ -357,19 +357,16 @@ function toRetainedSessionCorpusEntry(
   agentId: string,
   instance: SessionTranscriptInstance,
   sessionKey: string,
+  storePath: string,
   cronGeneratedSessionKeys: ReadonlySet<string>,
 ): SessionTranscriptCorpusEntry | null {
-  const sessionFile = instance.entry.sessionFile;
-  if (typeof sessionFile !== "string") {
-    return null;
-  }
-  // The accessor constructs this marker from its resolved database path; no
-  // persisted session row can supply or redirect the retained store path.
-  const marker = parseSqliteSessionFileMarker(sessionFile);
+  // Retained rows predate the current logical session entry. Only rows whose
+  // exclusion-sensitive ownership was captured may enter historical ingestion.
   if (
-    !marker ||
-    marker.sessionId !== instance.sessionId ||
-    normalizeAgentId(marker.agentId) !== normalizeAgentId(agentId)
+    !instance.provenanceKnown ||
+    instance.acpOwned ||
+    instance.entry.pluginOwnerId ||
+    instance.entry.hookExternalContentSource
   ) {
     return null;
   }
@@ -378,14 +375,15 @@ function toRetainedSessionCorpusEntry(
     agentId,
     sessionId: instance.sessionId,
     ...(sessionKey ? { sessionKey } : {}),
-    storePath: marker.storePath,
+    storePath,
   });
   return {
     agentId,
     artifactKind: "retained-session",
-    sessionFile,
+    sessionFile: sessionKey,
     sessionId: instance.sessionId,
     ...(contentRevision ? { contentRevision } : {}),
+    storePath,
     transcriptSource: "sqlite",
     updatedAtMs: instance.updatedAtMs,
     ...(sessionKey ? { sessionKey } : {}),
@@ -579,6 +577,7 @@ export function listSessionTranscriptCorpusEntriesForAgentSync(
         ownerAgentId,
         instance,
         sessionKey,
+        storePath,
         cronGeneratedSessionKeys,
       );
       if (entry?.transcriptSource === "sqlite") {
