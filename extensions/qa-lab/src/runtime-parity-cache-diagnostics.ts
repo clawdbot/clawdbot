@@ -1,4 +1,8 @@
-import type { RuntimeParityUsage } from "./runtime-parity.js";
+type RuntimeParityCacheUsage = {
+  inputTokens: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+};
 
 export type RuntimeParityCacheMiss = {
   turn: number;
@@ -19,7 +23,7 @@ export type RuntimeParityCacheDiagnostics = {
 
 /** Detect complete cache losses only after this conversation has actually warmed its cache. */
 export function buildRuntimeParityCacheDiagnostics(
-  turns: readonly RuntimeParityUsage[],
+  turns: readonly RuntimeParityCacheUsage[],
 ): RuntimeParityCacheDiagnostics {
   const diagnostics: RuntimeParityCacheDiagnostics = {
     assistantTurns: turns.length,
