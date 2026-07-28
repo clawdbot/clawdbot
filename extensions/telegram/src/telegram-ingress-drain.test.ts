@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createTelegramSpooledReplayDeferredParticipant } from "./bot-processing-outcome.js";
 import { createTelegramIngressMonitor } from "./telegram-ingress-drain.js";
 import { telegramSpooledUpdateLaneKey } from "./telegram-ingress-spool.js";
 import type { TelegramSpooledUpdatePayload } from "./telegram-ingress-spool.payload.js";
@@ -140,6 +141,69 @@ describe("createTelegramIngressMonitor", () => {
       expect(
         logs.some((line) => line.includes("completed without a recorded processing outcome")),
       ).toBe(true);
+      await monitor.stop();
+    });
+  });
+
+  it("deferred buffered work does not block later same-lane updates (media_group album)", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
+        channelId: "telegram",
+        accountId: "default",
+        stateDir,
+      });
+      // Two album members share one chat lane, like updates with one media_group_id.
+      const eventIdA = "10".padStart(16, "0");
+      const eventIdB = "11".padStart(16, "0");
+      const payloadA = updatePayload(10);
+      const payloadB = updatePayload(11);
+      const laneA = telegramSpooledUpdateLaneKey(payloadA.update);
+      const laneB = telegramSpooledUpdateLaneKey(payloadB.update);
+      expect(laneA).toBe(laneB);
+      await queue.enqueue(eventIdA, payloadA, { laneKey: laneA });
+      await queue.enqueue(eventIdB, payloadB, { laneKey: laneB });
+
+      const dispatched: number[] = [];
+      let deferredParticipant: ReturnType<typeof createTelegramSpooledReplayDeferredParticipant>;
+      const monitor = createTelegramIngressMonitor({
+        queue,
+        cfg,
+        accountId: "default",
+        pollIntervalMs: 10,
+        dispatch: async (update, lifecycle) => {
+          const updateId = (update as { update_id: number }).update_id;
+          dispatched.push(updateId);
+          if (updateId === 10) {
+            // First album member buffers and defers; the spool claim must stay
+            // held without serializing the lane behind the open buffer.
+            deferredParticipant = createTelegramSpooledReplayDeferredParticipant(
+              `test:${updateId}`,
+            );
+            expect(deferredParticipant).not.toBeNull();
+            return;
+          }
+          await lifecycle.onAdopted();
+          return { kind: "completed" as const };
+        },
+      });
+
+      monitor.start();
+      // The second album member drains while the first member's buffer is open.
+      await vi.waitFor(
+        () => {
+          expect(dispatched).toContain(11);
+        },
+        { timeout: 5_000, interval: 20 },
+      );
+      expect(dispatched[0]).toBe(10);
+
+      // Buffer flushes: the deferred work completes and both claims tombstone.
+      deferredParticipant?.settle({ kind: "completed" });
+      await monitor.waitForIdle();
+      const statusA = await queue.enqueue(eventIdA, payloadA, { laneKey: laneA });
+      expect(statusA.kind).toBe("completed");
+      const statusB = await queue.enqueue(eventIdB, payloadB, { laneKey: laneB });
+      expect(statusB.kind).toBe("completed");
       await monitor.stop();
     });
   });

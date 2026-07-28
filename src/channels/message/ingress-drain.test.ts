@@ -196,6 +196,82 @@ describe("channel ingress drain", () => {
     });
   });
 
+  it("deferred claim does not block same-lane events when deferredClaimDoesNotBlockLane is set", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createTestIngressQueue(stateDir);
+      await queue.enqueue("evt-a", { text: "a" }, { laneKey: "l1" });
+      await queue.enqueue("evt-b", { text: "b" }, { laneKey: "l1" });
+
+      const dispatched: string[] = [];
+      const lifecycles = new Map<string, ChannelIngressDispatchLifecycle>();
+      const drain = createChannelIngressDrain<Payload>({
+        queue,
+        deferredClaimDoesNotBlockLane: true,
+        dispatchClaimedEvent: async (event, lifecycle) => {
+          dispatched.push(event.id);
+          lifecycles.set(event.id, lifecycle);
+          return { kind: "deferred" };
+        },
+      });
+
+      expect(await drain.drainOnce()).toEqual({ started: 1 });
+      await vi.waitFor(() => {
+        expect(dispatched).toEqual(["evt-a"]);
+      });
+      // evt-a is deferred: its claim stays held, but the lane must not block evt-b.
+      expect(await drain.drainOnce()).toEqual({ started: 1 });
+      await vi.waitFor(() => {
+        expect(dispatched).toEqual(["evt-a", "evt-b"]);
+      });
+      expect(await queue.listClaims()).toHaveLength(2);
+
+      // Both deferred claims adopt independently and tombstone.
+      await expectDefined(lifecycles.get("evt-a"), "evt-a lifecycle").onAdopted();
+      await expectDefined(lifecycles.get("evt-b"), "evt-b lifecycle").onAdopted();
+      await drain.waitForIdle();
+      expect(await queue.listClaims()).toHaveLength(0);
+      expect(await queue.listPending()).toEqual([]);
+      drain.dispose();
+    });
+  });
+
+  it("deferred claim still blocks same-lane events by default", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createTestIngressQueue(stateDir);
+      await queue.enqueue("evt-a", { text: "a" }, { laneKey: "l1" });
+      await queue.enqueue("evt-b", { text: "b" }, { laneKey: "l1" });
+
+      const dispatched: string[] = [];
+      const lifecycles = new Map<string, ChannelIngressDispatchLifecycle>();
+      const drain = createChannelIngressDrain<Payload>({
+        queue,
+        dispatchClaimedEvent: async (event, lifecycle) => {
+          dispatched.push(event.id);
+          lifecycles.set(event.id, lifecycle);
+          return { kind: "deferred" };
+        },
+      });
+
+      expect(await drain.drainOnce()).toEqual({ started: 1 });
+      await vi.waitFor(() => {
+        expect(dispatched).toEqual(["evt-a"]);
+      });
+      expect(await drain.drainOnce()).toEqual({ started: 0 });
+      expect(dispatched).toEqual(["evt-a"]);
+
+      // Adoption tombstones the deferred claim; the lane unblocks for evt-b.
+      await expectDefined(lifecycles.get("evt-a"), "evt-a lifecycle").onAdopted();
+      await drain.waitForIdle();
+      expect(await drain.drainOnce()).toEqual({ started: 1 });
+      await vi.waitFor(() => {
+        expect(dispatched).toEqual(["evt-a", "evt-b"]);
+      });
+      await expectDefined(lifecycles.get("evt-b"), "evt-b lifecycle").onAdopted();
+      await drain.waitForIdle();
+      drain.dispose();
+    });
+  });
+
   it("lets callers await an abandoned claim release", async () => {
     await withTempState(async (stateDir) => {
       const queue = createTestIngressQueue(stateDir);

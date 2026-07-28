@@ -103,6 +103,15 @@ export type CreateChannelIngressDrainOptions<
     lifecycle: ChannelIngressDispatchLifecycle,
   ) => Promise<ChannelIngressDrainDispatchResult | void> | ChannelIngressDrainDispatchResult | void;
   resolveNonRetryableFailure?: (err: unknown) => IngressNonRetryableFailure | null;
+  /**
+   * When true, a lane whose only in-flight work is deferred (turn ownership
+   * handed to buffered/followup work via lifecycle.onDeferred) does not block
+   * claiming later same-lane events. Channels that buffer same-lane updates
+   * into deferred work (e.g. Telegram media-group albums) rely on this so
+   * later album members can join the buffer before it flushes. The deferred
+   * claim itself remains held and heartbeat-refreshed until adopted/abandoned.
+   */
+  deferredClaimDoesNotBlockLane?: boolean;
   shouldSupersedePending?: (
     newEvent:
       | ChannelIngressQueueRecord<TPayload, TMetadata>
@@ -744,13 +753,23 @@ export function createChannelIngressDrain<
 
     const pending = await queue.listPending({ limit: "all", orderBy });
     const claims = await queue.listClaims();
+    const deferredLaneKeys = new Set(
+      [...activeByLane.values()]
+        .filter((state) => state.phase === "deferred")
+        .map((state) => state.laneKey),
+    );
+    const laneBlockedWhileDeferred = (laneKey: string): boolean =>
+      options.deferredClaimDoesNotBlockLane !== true || !deferredLaneKeys.has(laneKey);
     const activeLaneKeys = new Set(
       [...activeByLane.values()]
         .filter((state) => state.phase !== "settled")
-        .map((state) => state.laneKey),
+        .map((state) => state.laneKey)
+        .filter((laneKey) => laneBlockedWhileDeferred(laneKey)),
     );
     const claimedLaneKeys = new Set(
-      claims.map((claim) => resolveLaneKey(claim, options.deriveLaneKey)),
+      claims
+        .map((claim) => resolveLaneKey(claim, options.deriveLaneKey))
+        .filter((laneKey) => laneBlockedWhileDeferred(laneKey)),
     );
     const retryDelayedLaneKeys = new Set<string>();
     for (const event of pending) {
@@ -805,7 +824,12 @@ export function createChannelIngressDrain<
         if (await supersedeActiveIfNeeded(claimed, laneKey)) {
           blockedLaneKeys.delete(laneKey);
         }
-        if (activeByLane.has(laneKey)) {
+        const stillActive = activeByLane.get(laneKey);
+        if (
+          stillActive &&
+          stillActive.phase !== "settled" &&
+          !(options.deferredClaimDoesNotBlockLane === true && stillActive.phase === "deferred")
+        ) {
           await queue.release(claimed, { recordAttempt: false });
           blockedLaneKeys.add(laneKey);
           continue;

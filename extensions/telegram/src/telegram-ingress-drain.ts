@@ -148,6 +148,12 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
         // result so failed-retryable releases and stalls cannot disappear.
         const participant = result.deferredWork;
         if (participant) {
+          // The claim stays held until the deferred turn adopts or abandons,
+          // but it no longer serializes the lane: later same-lane updates
+          // (e.g. the rest of a media-group album) must drain now so they can
+          // join the open buffer instead of starting a second turn after the
+          // first member's buffer flushes.
+          lifecycle.onDeferred();
           const terminal = await new Promise<TelegramMessageProcessingResult>((resolve, reject) => {
             const abortError = () =>
               lifecycle.abortSignal.reason instanceof Error
@@ -218,6 +224,11 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
       orderBy: "id",
       scanLimit: TELEGRAM_SPOOLED_DRAIN_SCAN_LIMIT,
       startLimit: TELEGRAM_SPOOLED_DRAIN_START_LIMIT,
+      // Buffered work (media-group albums, debounce) holds its claim until the
+      // deferred turn settles, but later same-lane updates must still drain so
+      // they can join the open buffer before it flushes. Otherwise one album
+      // splits into multiple agent turns.
+      deferredClaimDoesNotBlockLane: true,
       resolveNonRetryableFailure: resolveTelegramIngressNonRetryableFailure,
       shouldSupersedePending: createShouldSupersedeTelegramSpooledPending({
         cfg: params.cfg,
