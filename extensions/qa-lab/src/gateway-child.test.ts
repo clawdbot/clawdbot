@@ -264,7 +264,7 @@ describe("Gateway child fixture helpers", () => {
       }),
     ).toEqual(
       expect.objectContaining({
-        OPENCLAW_CODEX_APP_SERVER_ARGS: `app-server -c openai_base_url=http://127.0.0.1:44080/v1 -c ${JSON.stringify(`model_catalog_json=${modelCatalogPath}`)} --listen stdio://`,
+        OPENCLAW_CODEX_APP_SERVER_ARGS: `app-server -c openai_base_url=http://127.0.0.1:44080/v1 -c ${JSON.stringify(`model_catalog_json=${modelCatalogPath}`)} -c sandbox_workspace_write.exclude_tmpdir_env_var=true -c sandbox_workspace_write.exclude_slash_tmp=true --listen stdio://`,
       }),
     );
   });
@@ -288,6 +288,39 @@ describe("Gateway child fixture helpers", () => {
     await expect(
       readFile(path.join(tempRoot, "codex-model-catalog.json"), "utf8"),
     ).rejects.toThrow();
+  });
+
+  it("confines live Codex QA without replacing its native provider configuration", () => {
+    expect(
+      testing.buildQaForcedRuntimeEnvPatch({
+        forcedRuntime: "codex",
+        providerMode: "live-frontier",
+      }),
+    ).toEqual({
+      OPENCLAW_BUILD_PRIVATE_QA: "1",
+      OPENCLAW_QA_FORCE_RUNTIME: "codex",
+      OPENCLAW_CODEX_APP_SERVER_ARGS:
+        "app-server -c sandbox_workspace_write.exclude_tmpdir_env_var=true " +
+        "-c sandbox_workspace_write.exclude_slash_tmp=true --listen stdio://",
+    });
+  });
+
+  it("preserves preconfigured live Codex arguments while enforcing QA containment", () => {
+    expect(
+      testing.buildQaForcedRuntimeEnvPatch({
+        forcedRuntime: "codex",
+        providerMode: "live-frontier",
+        nativeAppServerArgs:
+          'app-server -c openai_base_url="https://live.example/v1" --listen stdio://',
+      }),
+    ).toEqual({
+      OPENCLAW_BUILD_PRIVATE_QA: "1",
+      OPENCLAW_QA_FORCE_RUNTIME: "codex",
+      OPENCLAW_CODEX_APP_SERVER_ARGS:
+        'app-server -c openai_base_url="https://live.example/v1" --listen stdio:// ' +
+        "-c sandbox_workspace_write.exclude_tmpdir_env_var=true " +
+        "-c sandbox_workspace_write.exclude_slash_tmp=true",
+    });
   });
 
   it("resolves source and built Gateway CLI commands", async () => {

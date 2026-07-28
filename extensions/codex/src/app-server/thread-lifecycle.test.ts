@@ -1105,26 +1105,31 @@ describe("Codex app-server native code mode config", () => {
 });
 
 describe("Codex app-server turn input image sanitizing", () => {
-  it("excludes implicit temporary writable roots from forced private-QA Codex turns", () => {
-    vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "1");
-    vi.stubEnv("OPENCLAW_QA_FORCE_RUNTIME", "codex");
-    try {
-      const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
-        threadId: "thread-1",
-        cwd: "/tmp/qa/workspace",
-        appServer: createAppServerOptions() as never,
-      });
+  it("carries native workspace temporary-root overrides into turn policy", () => {
+    const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      cwd: "/tmp/qa/workspace",
+      appServer: {
+        ...createAppServerOptions(),
+        start: {
+          args: [
+            "app-server",
+            "-c",
+            "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+            "-c",
+            "sandbox_workspace_write.exclude_slash_tmp=true",
+          ],
+        },
+      } as never,
+    });
 
-      expect(request.sandboxPolicy).toEqual({
-        type: "workspaceWrite",
-        writableRoots: ["/tmp/qa/workspace"],
-        networkAccess: false,
-        excludeTmpdirEnvVar: true,
-        excludeSlashTmp: true,
-      });
-    } finally {
-      vi.unstubAllEnvs();
-    }
+    expect(request.sandboxPolicy).toEqual({
+      type: "workspaceWrite",
+      writableRoots: ["/tmp/qa/workspace"],
+      networkAccess: false,
+      excludeTmpdirEnvVar: true,
+      excludeSlashTmp: true,
+    });
   });
 
   it("preserves implicit temporary writable roots for ordinary Codex turns", () => {
