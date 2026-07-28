@@ -22,6 +22,9 @@ export class ChatLog extends Container {
   private readonly maxComponents: number;
   private toolById = new Map<string, ToolExecutionComponent>();
   private streamingRuns = new Map<string, AssistantMessageComponent>();
+  private frozenAssistants = new Map<string, Set<AssistantMessageComponent>>();
+  private committedAssistantText = new Map<string, string>();
+  private latestAssistantText = new Map<string, string>();
   private pendingUsers = new Map<
     string,
     {
@@ -50,6 +53,14 @@ export class ChatLog extends Container {
     for (const [runId, message] of this.streamingRuns.entries()) {
       if (message === component) {
         this.streamingRuns.delete(runId);
+      }
+    }
+    if (component instanceof AssistantMessageComponent) {
+      for (const [runId, messages] of this.frozenAssistants.entries()) {
+        messages.delete(component);
+        if (messages.size === 0) {
+          this.frozenAssistants.delete(runId);
+        }
       }
     }
     for (const [runId, entry] of this.pendingUsers.entries()) {
@@ -95,6 +106,9 @@ export class ChatLog extends Container {
     this.clear();
     this.toolById.clear();
     this.streamingRuns.clear();
+    this.frozenAssistants.clear();
+    this.committedAssistantText.clear();
+    this.latestAssistantText.clear();
     this.pendingSystemNotices.clear();
     this.btwMessage = null;
     this.repeatableSystemMessage = null;
@@ -270,14 +284,63 @@ export class ChatLog extends Container {
     return runId ?? "default";
   }
 
+  private resolveAssistantSegment(runId: string, text: string) {
+    const committed = this.committedAssistantText.get(runId);
+    if (!committed) {
+      return text;
+    }
+    if (text.startsWith(committed)) {
+      return text.slice(committed.length).replace(/^(?:\r?\n)+/u, "");
+    }
+
+    // A revised provider snapshot cannot be split at an obsolete tool boundary.
+    // Collapse its old segments instead of rendering both the stale and replacement answer.
+    const frozen = this.frozenAssistants.get(runId);
+    if (!frozen?.size) {
+      return text;
+    }
+    const [first, ...superseded] = frozen;
+    if (!first) {
+      return text;
+    }
+    first.setText(text);
+    for (const component of superseded) {
+      this.removeChild(component);
+      frozen.delete(component);
+    }
+    const streaming = this.streamingRuns.get(runId);
+    if (streaming) {
+      this.removeChild(streaming);
+      this.streamingRuns.delete(runId);
+    }
+    this.committedAssistantText.set(runId, text);
+    return "";
+  }
+
+  // Tool rows freeze earlier cumulative text so later deltas render below the tool.
+  private freezeStreamingAssistants() {
+    for (const [runId, component] of this.streamingRuns) {
+      let frozen = this.frozenAssistants.get(runId);
+      if (!frozen) {
+        frozen = new Set();
+        this.frozenAssistants.set(runId, frozen);
+      }
+      frozen.add(component);
+      this.committedAssistantText.set(runId, this.latestAssistantText.get(runId) ?? "");
+    }
+    this.streamingRuns.clear();
+  }
+
   startAssistant(text: string, runId?: string) {
     const effectiveRunId = this.resolveRunId(runId);
+    this.latestAssistantText.set(effectiveRunId, text);
+    const segmentText = this.resolveAssistantSegment(effectiveRunId, text);
     const existing = this.streamingRuns.get(effectiveRunId);
     if (existing) {
-      existing.setText(text);
+      existing.setText(segmentText);
       return existing;
     }
-    const component = new AssistantMessageComponent(text);
+    const component = new AssistantMessageComponent(segmentText);
     this.streamingRuns.set(effectiveRunId, component);
     this.appendNonSystem(component);
     return component;
@@ -294,27 +357,44 @@ export class ChatLog extends Container {
 
   updateAssistant(text: string, runId?: string) {
     const effectiveRunId = this.resolveRunId(runId);
+    this.latestAssistantText.set(effectiveRunId, text);
+    const segmentText = this.resolveAssistantSegment(effectiveRunId, text);
     const existing = this.streamingRuns.get(effectiveRunId);
     if (!existing) {
+      if (!segmentText && this.committedAssistantText.has(effectiveRunId)) {
+        return;
+      }
       this.startAssistant(text, runId);
       return;
     }
-    existing.setText(text);
+    existing.setText(segmentText);
   }
 
   finalizeAssistant(text: string, runId?: string) {
     const effectiveRunId = this.resolveRunId(runId);
     const existing = this.streamingRuns.get(effectiveRunId);
+    const segmentText = this.resolveAssistantSegment(effectiveRunId, text);
+    this.frozenAssistants.delete(effectiveRunId);
+    this.committedAssistantText.delete(effectiveRunId);
+    this.latestAssistantText.delete(effectiveRunId);
     if (existing) {
-      existing.setText(text);
+      existing.setText(segmentText);
       this.streamingRuns.delete(effectiveRunId);
       return;
     }
-    this.appendNonSystem(new AssistantMessageComponent(text));
+    if (segmentText) {
+      this.appendNonSystem(new AssistantMessageComponent(segmentText));
+    }
   }
 
   dropAssistant(runId?: string) {
     const effectiveRunId = this.resolveRunId(runId);
+    for (const component of this.frozenAssistants.get(effectiveRunId) ?? []) {
+      this.removeChild(component);
+    }
+    this.frozenAssistants.delete(effectiveRunId);
+    this.committedAssistantText.delete(effectiveRunId);
+    this.latestAssistantText.delete(effectiveRunId);
     const existing = this.streamingRuns.get(effectiveRunId);
     if (!existing) {
       return;
@@ -356,6 +436,7 @@ export class ChatLog extends Container {
       existing.setArgs(args);
       return existing;
     }
+    this.freezeStreamingAssistants();
     const component = new ToolExecutionComponent(toolName, args);
     component.setExpanded(this.toolsExpanded);
     this.toolById.set(toolCallId, component);
