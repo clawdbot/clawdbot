@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import type { InstalledPluginContributionInfo } from "./installed-plugin-index-types.js";
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 
@@ -335,7 +336,9 @@ function createInstalledPluginRecordFixture(
       modelSupportPatterns: record.modelSupport?.modelPatterns ?? [],
       autoEnableProviderIds: record.autoEnableWhenConfiguredProviders ?? [],
       commandAliases: record.commandAliases?.map((alias) => alias.name) ?? [],
-      contracts: Object.fromEntries(Object.entries(record.contracts ?? {})),
+      contracts: Object.fromEntries(
+        Object.entries(record.contracts ?? {}).filter(([, value]) => Array.isArray(value)),
+      ) as InstalledPluginContributionInfo["contracts"],
     },
     compat: [],
   };

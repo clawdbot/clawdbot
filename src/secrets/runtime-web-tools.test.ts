@@ -1166,7 +1166,7 @@ describe("runtime web tools resolution", () => {
             },
           },
         ],
-      } as Parameters<typeof runRuntimeWebTools>[0]["manifestRegistry"],
+      } as unknown as Parameters<typeof runRuntimeWebTools>[0]["manifestRegistry"],
     });
 
     // Perplexity's credential should NOT be marked inactive because its plugin
@@ -1227,7 +1227,7 @@ describe("runtime web tools resolution", () => {
             contracts: { webSearchProviders: ["perplexity"], tools: ["perplexity_search"] },
           },
         ],
-      } as Parameters<typeof runRuntimeWebTools>[0]["manifestRegistry"],
+      } as unknown as Parameters<typeof runRuntimeWebTools>[0]["manifestRegistry"],
     });
 
     expectDiagnostic(context.warnings, {
@@ -1286,7 +1286,7 @@ describe("runtime web tools resolution", () => {
             },
           },
         ],
-      } as Parameters<typeof runRuntimeWebTools>[0]["manifestRegistry"],
+      } as unknown as Parameters<typeof runRuntimeWebTools>[0]["manifestRegistry"],
     });
 
     expectDiagnostic(context.warnings, {
@@ -1393,7 +1393,7 @@ describe("runtime web tools resolution", () => {
             },
           },
         ],
-      } as Parameters<typeof runRuntimeWebTools>[0]["manifestRegistry"],
+      } as unknown as Parameters<typeof runRuntimeWebTools>[0]["manifestRegistry"],
     });
 
     // Perplexity is disabled, so its standalone-tool credential must remain inactive.
@@ -1449,7 +1449,7 @@ describe("runtime web tools resolution", () => {
             contracts: { tools: ["xai_unrelated_tool"] },
           },
         ],
-      } as Parameters<typeof runRuntimeWebTools>[0]["manifestRegistry"],
+      } as unknown as Parameters<typeof runRuntimeWebTools>[0]["manifestRegistry"],
     });
 
     // xai declares tools but not webSearchProviders, so its web-search credential
