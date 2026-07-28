@@ -182,6 +182,26 @@ describe("createGatewayCloseHandler", () => {
     }
   });
 
+  it("still runs later teardown when cron.stopAndDrain() rejects (no listener strand)", async () => {
+    const stopAndDrain = vi.fn().mockRejectedValue(new Error("stream watcher stop failed"));
+    const httpClose = vi.fn((cb: (err?: Error | null) => void) => cb(null));
+    const deps = createGatewayCloseTestDeps({
+      cron: { stop: vi.fn(), stopAndDrain } as never,
+      httpServer: { close: httpClose, closeIdleConnections: vi.fn() } as never,
+    });
+    const close = createGatewayCloseHandler(deps);
+
+    const result = await close({ reason: "test" });
+
+    // A rejecting stopAndDrain must be swallowed (recorded as a warning) and must NOT skip the
+    // remaining teardown -- otherwise the HTTP/WS listeners and timers strand and the next
+    // start hits EADDRINUSE.
+    expect(stopAndDrain).toHaveBeenCalledTimes(1);
+    expect(deps.heartbeatRunner.stop).toHaveBeenCalledTimes(1);
+    expect(httpClose).toHaveBeenCalled();
+    expect(result.warnings.length).toBeGreaterThan(0);
+  });
+
   it("completes a clean shutdown with a ShutdownResult", async () => {
     const deps = createGatewayCloseTestDeps();
     const close = createGatewayCloseHandler(deps);
