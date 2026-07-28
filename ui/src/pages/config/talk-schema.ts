@@ -3,7 +3,7 @@
 // chunk and must not pull settings UI code in with them.
 
 /** Normalized model/voice pair from one `talk.realtime.providers.<id>` entry. */
-export type TalkProviderEntryValues = {
+type TalkProviderEntryValues = {
   model: string | null;
   speakerVoice: string | null;
 };
