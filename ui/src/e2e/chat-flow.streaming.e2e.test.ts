@@ -392,6 +392,11 @@ suite.define(() => {
       timestamp: baseTs + index,
     }));
     const gateway = await installMockGateway(page, { historyMessages });
+    // This spec asserts pixel-level scroll anchoring of a delayed pending
+    // send, which relies on smooth scrolling; the reduced-motion emulation
+    // in installMockGateway switches it to instant jumps (#115297), so
+    // restore full motion for this test.
+    await page.emulateMedia({ reducedMotion: "no-preference" });
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);

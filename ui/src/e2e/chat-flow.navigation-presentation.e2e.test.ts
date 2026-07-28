@@ -120,6 +120,11 @@ suite.define(() => {
       },
       sessionKey: sessionA,
     });
+    // This spec asserts scroll-restoration geometry that depends on the
+    // chat scroller's smooth anchoring; the reduced-motion emulation in
+    // installMockGateway switches it to instant jumps (#115297), so
+    // restore full motion for this test.
+    await page.emulateMedia({ reducedMotion: "no-preference" });
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);

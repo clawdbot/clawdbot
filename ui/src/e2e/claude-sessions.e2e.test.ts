@@ -617,6 +617,11 @@ suite("Claude native session catalog", () => {
         },
       },
     });
+    // This spec asserts the older-history spinner and the scroll geometry
+    // around prepended virtual rows; the reduced-motion emulation in
+    // installMockGateway suppresses the spinner and switches scroll
+    // anchoring to instant jumps (#115297), so restore full motion here.
+    await page.emulateMedia({ reducedMotion: "no-preference" });
 
     await page.goto(`${server.baseUrl}chat`);
     await page.getByText(/^recent native message 140\n/).waitFor();

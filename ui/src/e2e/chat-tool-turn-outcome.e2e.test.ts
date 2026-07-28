@@ -254,6 +254,10 @@ describeControlUiE2e("Control UI autonomous tool-turn outcomes", () => {
         },
       ],
     });
+    // This spec asserts the chatToolRowTextWave CSS animation by name; the
+    // reduced-motion emulation in installMockGateway suppresses it
+    // (#115297), so restore full motion for this test.
+    await page.emulateMedia({ reducedMotion: "no-preference" });
 
     await page.goto(`${server.baseUrl}chat`);
     await page.getByText("Ready for the running tool wave proof.").waitFor();
