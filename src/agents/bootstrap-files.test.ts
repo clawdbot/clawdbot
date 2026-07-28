@@ -188,7 +188,6 @@ describe("resolveBootstrapFilesForRun", () => {
       "AGENTS.md",
       "SOUL.md",
       "IDENTITY.md",
-      "USER.md",
       "BOOTSTRAP.md",
     ]);
     expect(warnings).toHaveLength(3);
@@ -224,6 +223,30 @@ describe("resolveBootstrapFilesForRun", () => {
 
     expect(files.map((file) => file.name)).toContain("AGENTS.md");
     expect(files.map((file) => file.name)).not.toContain("BOOTSTRAP.md");
+  });
+
+  it("treats USER.md as optional", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+
+    const files = await resolveBootstrapFilesForRun({ workspaceDir });
+
+    expect(files.map((file) => file.name)).not.toContain("USER.md");
+  });
+
+  it("refreshes USER.md on every turn for long-lived sessions", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const userPath = path.join(workspaceDir, "USER.md");
+    const sessionKey = `agent:main:webchat:direct:${randomUUID()}`;
+    await fs.writeFile(userPath, "Prefer concise answers.", "utf8");
+    const first = await resolveBootstrapFilesForRun({ workspaceDir, sessionKey });
+
+    await fs.writeFile(userPath, "Prefer detailed answers.", "utf8");
+    const second = await resolveBootstrapFilesForRun({ workspaceDir, sessionKey });
+
+    expect(first.find((file) => file.name === "USER.md")?.content).toBe("Prefer concise answers.");
+    expect(second.find((file) => file.name === "USER.md")?.content).toBe(
+      "Prefer detailed answers.",
+    );
   });
 
   it("keeps BOOTSTRAP.md until Doctor migrates legacy setup state", async () => {
