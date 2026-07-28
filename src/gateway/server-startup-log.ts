@@ -7,7 +7,11 @@ import { resolveDefaultAgentId, resolveAgentConfig } from "../agents/agent-scope
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { formatFastModeValue, resolveFastModeState } from "../agents/fast-mode.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
-import { legacyModelKey, modelKey } from "../agents/model-ref-shared.js";
+import {
+  legacyModelKey,
+  type ModelManifestNormalizationContext,
+  modelKey,
+} from "../agents/model-ref-shared.js";
 import {
   buildConfiguredModelCatalog,
   resolveConfiguredModelRef,
@@ -80,8 +84,11 @@ export async function logGatewayStartup(params: {
   }
 }
 
-/** Format the model banner without loading the asynchronous startup warning pipeline. */
-export function formatAgentModelStartupLog(cfg: OpenClawConfig): {
+/** Format the model banner; prepared manifest context avoids redundant metadata discovery. */
+export function formatAgentModelStartupLog(
+  cfg: OpenClawConfig,
+  manifestContext: ModelManifestNormalizationContext = {},
+): {
   message: string;
   consoleMessage: string;
 } {
@@ -89,6 +96,7 @@ export function formatAgentModelStartupLog(cfg: OpenClawConfig): {
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
+    ...manifestContext,
   });
   const modelRef = `${provider}/${model}`;
   const modelDetails = formatAgentModelStartupDetails({ cfg, provider, model });

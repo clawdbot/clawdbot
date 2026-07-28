@@ -280,22 +280,25 @@ describe("gateway startup log", () => {
   });
 
   it("formats configured model thinking and fast mode defaults with the startup model", () => {
-    const modelLog = formatAgentModelStartupLog({
-      agents: {
-        defaults: {
-          model: "openai/gpt-5.5",
-          models: {
-            "openai/gpt-5.5": {
-              params: {
-                fastMode: true,
-                thinking: "medium",
+    const modelLog = formatAgentModelStartupLog(
+      {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.5",
+            models: {
+              "openai/gpt-5.5": {
+                params: {
+                  fastMode: true,
+                  thinking: "medium",
+                },
               },
             },
+            reasoningDefault: "stream",
           },
-          reasoningDefault: "stream",
         },
       },
-    });
+      { manifestPlugins: [] },
+    );
 
     expect(modelLog.message).toBe("agent model: openai/gpt-5.5 (thinking=medium, fast=on)");
     expect(stripAnsi(modelLog.consoleMessage)).toBe(
