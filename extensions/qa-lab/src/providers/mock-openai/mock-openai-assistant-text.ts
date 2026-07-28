@@ -36,7 +36,9 @@ import {
   extractLatestToolOutput,
   extractAllUserTexts,
   extractAllRequestTexts,
+  extractCompletedImageGenerationMediaPath,
   extractLatestImageUserTurn,
+  extractToolOutputCallId,
   parseToolOutputJson,
 } from "./mock-openai-input.js";
 import {
@@ -117,6 +119,13 @@ export function buildAssistantText(
     !Array.isArray(toolJson.details)
       ? readFirstMediaPath((toolJson.details as { media?: unknown }).media)
       : "";
+  const completedImageToolMediaPath = extractCompletedImageGenerationMediaPath(input);
+  const completionCallId = extractToolOutputCallId(input);
+  const hasPendingImageCall = Boolean(
+    completionCallId && scenarioState.pendingImageGenerationCallIds.has(completionCallId),
+  );
+  const trustedToolMediaPath = hasPendingImageCall ? mediaPath : "";
+  const trustedCompletedImageMediaPath = hasPendingImageCall ? completedImageToolMediaPath : "";
   const promptExactReplyDirective = extractExactReplyDirective(prompt);
   const promptExactMarkerDirective = extractExactMarkerDirective(prompt);
   const allUserText = userTexts.join("\n");
@@ -279,8 +288,14 @@ export function buildAssistantText(
   if (/switch(?:ing)? models?/i.test(prompt)) {
     return `Protocol note: model switch acknowledged. Continuing on ${model || "the requested model"}.`;
   }
-  if (QA_IMAGE_GENERATION_PROMPT_RE.test(allInputText) && mediaPath) {
-    return `Protocol note: generated the QA lighthouse image successfully. Attachment: ${mediaPath}`;
+  if (
+    QA_IMAGE_GENERATION_PROMPT_RE.test(allInputText) &&
+    (trustedToolMediaPath || trustedCompletedImageMediaPath)
+  ) {
+    if (completionCallId) {
+      scenarioState.pendingImageGenerationCallIds.delete(completionCallId);
+    }
+    return `Protocol note: generated the QA lighthouse image successfully.\nMEDIA:${trustedToolMediaPath || trustedCompletedImageMediaPath}`;
   }
   if (QA_SKILL_WORKSHOP_GIF_PROMPT_RE.test(prompt) && toolOutput) {
     return [

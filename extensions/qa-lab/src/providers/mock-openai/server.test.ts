@@ -3826,6 +3826,7 @@ describe("qa mock openai server", () => {
     expect(toolPlanOutput.type).toBe("function_call");
     expect(toolPlanOutput.name).toBe("image_generate");
     expect(String(toolPlanOutput.arguments)).toContain("qa-lighthouse.png");
+    const imageCallId = outputToolCallId(toolPlanOutput, "call_mock_image_generate_1");
 
     const toolResult = await postResponses(server, {
       stream: false,
@@ -3835,7 +3836,7 @@ describe("qa mock openai server", () => {
         {
           type: "function_call",
           name: "image_generate",
-          call_id: "call_mock_image_generate_1",
+          call_id: imageCallId,
           arguments: JSON.stringify({
             prompt: "A QA lighthouse",
             filename: "qa-lighthouse.png",
@@ -3843,7 +3844,7 @@ describe("qa mock openai server", () => {
         },
         {
           type: "function_call_output",
-          call_id: "call_mock_image_generate_1",
+          call_id: imageCallId,
           output: JSON.stringify({
             details: { media: { mediaUrls: ["/tmp/qa-lighthouse.png"] } },
           }),
@@ -3852,7 +3853,95 @@ describe("qa mock openai server", () => {
     });
 
     expect(toolResult.status).toBe(200);
-    expect(outputText(await toolResult.json())).toContain("Attachment: /tmp/qa-lighthouse.png");
+    expect(outputText(await toolResult.json())).toContain("MEDIA:/tmp/qa-lighthouse.png");
+  });
+
+  it("finishes a capability-flip image turn from its protected completion result", async () => {
+    const server = await startMockServer();
+    const prompt =
+      "Capability flip image check: generate a QA lighthouse image in this turn right now.";
+    const mediaPath = "/tmp/openclaw-qa/capability-flip-lighthouse.png";
+
+    const toolPlan = await postResponses(server, {
+      stream: false,
+      input: [makeUserInput(prompt)],
+    });
+    expect(toolPlan.status).toBe(200);
+    const toolCall = outputToolCall(await toolPlan.json(), "image_generate");
+    const callId = outputToolCallId(toolCall, "call_mock_image_generate_capability_flip");
+
+    const completion = [
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+      "OpenClaw runtime context (internal):",
+      "This context is runtime-generated, not user-authored. Keep internal details private.",
+      "",
+      "[Internal task completion event]",
+      "source: image_generation",
+      "session_key: image_generate:qa-capability-flip",
+      "session_id: qa-capability-flip",
+      "type: image generation task",
+      "task: QA lighthouse",
+      "status: completed successfully",
+      "",
+      "Generated media:",
+      `MEDIA:${mediaPath}`,
+      "",
+      "Action:",
+      "Write the normal final reply and attach every generated media path with final-reply MEDIA lines.",
+      "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+    ].join("\n");
+    const finalResponse = await postResponses(server, {
+      stream: false,
+      input: [
+        makeUserInput(prompt),
+        {
+          type: "function_call",
+          name: "image_generate",
+          call_id: callId,
+          arguments: String(toolCall.arguments),
+        },
+        {
+          type: "function_call_output",
+          call_id: callId,
+          output: JSON.stringify({
+            content: [{ type: "text", text: "Background image generation started." }],
+            details: { async: true, status: "started" },
+          }),
+        },
+        makeUserInput(completion),
+      ],
+    });
+
+    expect(finalResponse.status).toBe(200);
+    const finalPayload = await finalResponse.json();
+    expect(outputItems(finalPayload).some((item) => item.type === "function_call")).toBe(false);
+    expect(outputText(finalPayload)).toContain(`MEDIA:${mediaPath}`);
+
+    const followUp = await postResponses(server, {
+      stream: false,
+      input: [
+        makeUserInput(prompt),
+        {
+          type: "function_call",
+          name: "image_generate",
+          call_id: callId,
+          arguments: String(toolCall.arguments),
+        },
+        {
+          type: "function_call_output",
+          call_id: callId,
+          output: JSON.stringify({
+            content: [{ type: "text", text: "Background image generation started." }],
+            details: { async: true, status: "started" },
+          }),
+        },
+        makeUserInput(completion),
+        makeUserInput("Summarize the completed check without generating another image."),
+      ],
+    });
+    const followUpPayload = await followUp.json();
+    expect(outputItems(followUpPayload).some((item) => item.type === "function_call")).toBe(false);
+    expect(outputText(followUpPayload)).not.toContain(`MEDIA:${mediaPath}`);
   });
 
   it("completes an image without replaying a tool unavailable to the completion turn", async () => {

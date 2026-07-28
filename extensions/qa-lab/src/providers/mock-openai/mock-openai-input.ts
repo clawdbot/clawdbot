@@ -41,6 +41,32 @@ function isInternalRuntimeContextCarrierText(text: string) {
   );
 }
 
+const MAX_INTERNAL_MEDIA_PATH_CHARS = 4_096;
+
+/** Reads a completed image artifact only from a protected internal event. */
+export function extractCompletedImageGenerationMediaPath(input: ResponsesInputItem[]) {
+  const item = input.at(-1);
+  if (!item || !Array.isArray(item.content)) {
+    return "";
+  }
+  const text = extractInputText(item.content as unknown[]);
+  if (
+    !isInternalRuntimeContextCarrierText(text) ||
+    !/(?:^|\n)source: image_generation(?:\r?$)/m.test(text) ||
+    !/(?:^|\n)status: completed successfully(?:\r?$)/m.test(text)
+  ) {
+    return "";
+  }
+  const mediaPath = new RegExp(
+    `(?:^|\\n)MEDIA:([^\\r\\n]{1,${MAX_INTERNAL_MEDIA_PATH_CHARS}})(?:\\r?$)`,
+    "m",
+  ).exec(text)?.[1];
+  if (mediaPath?.trim()) {
+    return mediaPath.trim();
+  }
+  return "";
+}
+
 function isToolOutputContinuationText(text: string) {
   const trimmed = text.trim();
   if (!trimmed) {
