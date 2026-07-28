@@ -78,6 +78,16 @@ export function createGatewayHarness(
         listener(event);
       }
     },
+    emitDevicePairRequested() {
+      const event: GatewayEventFrame = {
+        event: "device.pair.requested",
+        payload: {},
+        type: "event",
+      };
+      for (const listener of eventListeners) {
+        listener(event);
+      }
+    },
     emitSystemApproval(id: string, createdAtMs: number) {
       const event: GatewayEventFrame = {
         event: "openclaw.approval.requested",
@@ -122,6 +132,48 @@ export async function flushMicrotasks() {
 
 export function registerOverlayPairingAccessTests() {
   describe("application pairing setup permissions", () => {
+    it("refreshes legacy admin pairing counts when device-pair events arrive", async () => {
+      let pending = [{ id: "first-pending" }];
+      const request = vi.fn<RequestFn>((method) =>
+        Promise.resolve(method === "device.pair.list" ? { pending } : []),
+      );
+      const harness = createGatewayHarness(client(request));
+      harness.update({ hello: null });
+      const overlays = createApplicationOverlays(harness.gateway);
+
+      await overlays.openDevicePairSetup();
+      await flushMicrotasks();
+
+      expect(overlays.snapshot.devicePairSetupOpen).toBe(true);
+      expect(overlays.snapshot.devicePairPendingCount).toBe(1);
+      expect(request).toHaveBeenCalledWith("device.pair.list", {});
+
+      pending = [{ id: "first-pending" }, { id: "second-pending" }];
+      harness.emitDevicePairRequested();
+      await flushMicrotasks();
+
+      expect(overlays.snapshot.devicePairPendingCount).toBe(2);
+      expect(request.mock.calls.filter(([method]) => method === "device.pair.list")).toHaveLength(
+        2,
+      );
+
+      harness.update({
+        hello: {
+          auth: { role: "operator", scopes: ["operator.read"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      expect(overlays.snapshot.devicePairSetupOpen).toBe(false);
+      expect(overlays.snapshot.devicePairPendingCount).toBe(0);
+      harness.emitDevicePairRequested();
+      await flushMicrotasks();
+
+      expect(request.mock.calls.filter(([method]) => method === "device.pair.list")).toHaveLength(
+        2,
+      );
+      expect(request).not.toHaveBeenCalledWith("device.pair.setupCode", {});
+      overlays.dispose();
+    });
+
     it("discards an in-flight setup credential after admin access becomes pairing-only", async () => {
       const setup = deferred();
       const request = vi.fn<RequestFn>((method) => {
