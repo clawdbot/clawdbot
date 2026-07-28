@@ -94,6 +94,7 @@ describe("listGatewayMethods", () => {
       "memory.search",
       "skills.proposals.events.list",
       "skills.proposals.evaluate",
+      "memory.list",
     ]);
     const methods = listGatewayMethods();
     expect(methods.indexOf("node.pluginSurface.refresh")).toBe(
@@ -194,6 +195,7 @@ describe("listGatewayMethods", () => {
       "memory.search",
       "skills.proposals.events.list",
       "skills.proposals.evaluate",
+      "memory.list",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);

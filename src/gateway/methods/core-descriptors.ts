@@ -491,6 +491,9 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
     since: "2026.7",
     controlPlaneWrite: true,
   },
+  // Read-only persisted memory enumeration; appended to keep the legacy
+  // advertised method order stable for existing clients.
+  { name: "memory.list", scope: "operator.read", since: "2026.7" },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(
