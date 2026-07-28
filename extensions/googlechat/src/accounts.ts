@@ -26,7 +26,7 @@ type CredentialUnavailableDiagnostic = Extract<
   { status: "configured_unavailable" }
 >["diagnostic"];
 
-type GoogleChatCredentialSource = "file" | "inline" | "env" | "none";
+type GoogleChatCredentialSource = "file" | "inline" | "env" | "adc" | "none";
 
 export type ResolvedGoogleChatAccount = {
   accountId: string;
@@ -54,7 +54,7 @@ const {
   resolveAccountConfig: resolveMergedGoogleChatAccountConfig,
 } = createAccountListHelpers<GoogleChatAccountConfig>("googlechat", {
   implicitDefaultAccount: {
-    channelKeys: ["serviceAccount", "serviceAccountFile"],
+    channelKeys: ["serviceAccount", "serviceAccountFile", "serviceAccountAdc"],
     envVars: [ENV_SERVICE_ACCOUNT, ENV_SERVICE_ACCOUNT_FILE],
   },
   omitKeys: ["defaultAccount"],
@@ -77,6 +77,7 @@ function mergeGoogleChatAccountConfig(
     dangerouslyAllowNameMatching: _ignoredDangerouslyAllowNameMatching,
     serviceAccount: _ignoredServiceAccount,
     serviceAccountFile: _ignoredServiceAccountFile,
+    serviceAccountAdc: _ignoredServiceAccountAdc,
     ...defaultAccountShared
   } = defaultAccountConfig;
   // In multi-account setups, allow accounts.default to provide shared defaults
@@ -200,6 +201,15 @@ function resolveCredentialsFromConfig(params: {
             diagnostic: result.diagnostic,
           };
     }
+  }
+
+  // Opt-in keyless mode: no explicit credential resolved, fall back to
+  // Application Default Credentials. credentials/credentialsFile stay undefined
+  // so the runtime mints a token via the ambient ADC chain (routed through the
+  // SSRF guard; see auth.ts). "adc" is a configured source (!== "none") so the
+  // channel still activates and mounts its webhook route.
+  if (account.serviceAccountAdc) {
+    return { source: "adc", status: "available" };
   }
 
   return { source: "none", status: "missing" };

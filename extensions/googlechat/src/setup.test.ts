@@ -395,6 +395,46 @@ describe("resolveGoogleChatAccount", () => {
     }
   });
 
+  it("uses Application Default Credentials when serviceAccountAdc is set and no key is provided", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        googlechat: {
+          accounts: {
+            bot: {
+              serviceAccountAdc: true,
+            },
+          },
+        },
+      },
+    };
+
+    const resolved = resolveGoogleChatAccount({ cfg, accountId: "bot" });
+
+    expect(resolved.credentialSource).toBe("adc");
+    expect(resolved.credentials).toBeUndefined();
+    expect(resolved.credentialsFile).toBeUndefined();
+  });
+
+  it("prefers an explicit service account over serviceAccountAdc", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        googlechat: {
+          accounts: {
+            bot: {
+              serviceAccountAdc: true,
+              serviceAccountFile: "/tmp/bot-sa.json",
+            },
+          },
+        },
+      },
+    };
+
+    const resolved = resolveGoogleChatAccount({ cfg, accountId: "bot" });
+
+    expect(resolved.credentialSource).toBe("file");
+    expect(resolved.credentialsFile).toBe("/tmp/bot-sa.json");
+  });
+
   it("resolves user-relative service-account files before checking availability", () => {
     const homeDir = makeTempDir("openclaw-googlechat-home-");
     fs.writeFileSync(path.join(homeDir, "service-account.json"), "{}", { mode: 0o600 });

@@ -56,6 +56,7 @@ const googleChatConfigAdapter = createScopedChannelConfigAdapter<
   clearBaseFields: [
     "serviceAccount",
     "serviceAccountFile",
+    "serviceAccountAdc",
     "audienceType",
     "audience",
     "webhookPath",

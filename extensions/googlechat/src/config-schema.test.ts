@@ -15,6 +15,14 @@ describe("googlechat config schema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts serviceAccountAdc for keyless (ADC) auth", () => {
+    const result = GoogleChatConfigSchema.safeParse({
+      serviceAccountAdc: true,
+    });
+
+    expect(result.success).toBe(true);
+  });
+
   it("accepts the documented group config shape", () => {
     const result = GoogleChatConfigSchema.safeParse({
       groups: {
