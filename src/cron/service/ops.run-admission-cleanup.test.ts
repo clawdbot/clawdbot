@@ -22,13 +22,18 @@ const opsRegressionFixtures = setupCronRegressionFixtures({
 });
 
 describe("cron service run admission cleanup", () => {
-  it.each(["force", "due"] as const)(
-    "preserves an operator-edited schedule when an active %s manual run completes",
-    async (mode) => {
+  it.each([
+    { mode: "force" as const, evaluation: "completed" as const },
+    { mode: "due" as const, evaluation: "completed" as const },
+    { mode: "force" as const, evaluation: "quiet" as const },
+    { mode: "due" as const, evaluation: "quiet" as const },
+  ])(
+    "preserves an operator-edited schedule after an active $mode $evaluation manual run",
+    async ({ mode, evaluation }) => {
       const store = opsRegressionFixtures.makeStorePath();
       const startedAt = Date.parse("2026-02-06T10:05:02.000Z");
       const job = createDueIsolatedJob({
-        id: `manual-${mode}-completion-preserves-edited-schedule`,
+        id: `manual-${mode}-${evaluation}-preserves-edited-schedule`,
         nowMs: startedAt,
         nextRunAtMs: startedAt,
       });
@@ -36,7 +41,11 @@ describe("cron service run admission cleanup", () => {
       await saveCronStore(store.storePath, { version: 1, jobs: [job] });
 
       const runnerStarted = createDeferred<void>();
-      const releaseRun = createDeferred<{ status: "ok"; summary: string }>();
+      const releaseRun = createDeferred<{
+        status: "ok";
+        summary: string;
+        triggerEval?: { fired: false; stateChanged: false };
+      }>();
       const state = createCronServiceState({
         cronEnabled: true,
         storePath: store.storePath,
@@ -58,7 +67,11 @@ describe("cron service run admission cleanup", () => {
       const editedNextRunAtMs = editedJob.state.nextRunAtMs;
       expect(editedNextRunAtMs).toBe(startedAt + 3_600_000);
 
-      releaseRun.resolve({ status: "ok", summary: "manual run completed" });
+      releaseRun.resolve({
+        status: "ok",
+        summary: "manual run completed",
+        ...(evaluation === "quiet" ? { triggerEval: { fired: false, stateChanged: false } } : {}),
+      });
       await expect(activeRun).resolves.toMatchObject({ ok: true, ran: true });
 
       const persistedJob = (await loadCronStore(store.storePath)).jobs.find(
