@@ -10,11 +10,11 @@
     "providers": [
       {
         "id": "azure-speech",
-        "envVars": ["AZURE_SPEECH_KEY", "AZURE_SPEECH_API_KEY", "SPEECH_KEY", "AZURE_SPEECH_REGION", "SPEECH_REGION"]
+        "envVars": ["AZURE_SPEECH_KEY", "AZURE_SPEECH_API_KEY", "SPEECH_KEY"]
       },
       {
         "id": "azure",
-        "envVars": ["AZURE_SPEECH_KEY", "AZURE_SPEECH_API_KEY", "SPEECH_KEY", "AZURE_SPEECH_REGION", "SPEECH_REGION"]
+        "envVars": ["AZURE_SPEECH_KEY", "AZURE_SPEECH_API_KEY", "SPEECH_KEY"]
       }
     ]
   },
