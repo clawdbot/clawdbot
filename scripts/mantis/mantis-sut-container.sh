@@ -22,7 +22,7 @@ run_cleanup_with_deadline() {
   shift
   # timeout owns a separate process group, so escalation reaches Docker and
   # network-cleanup descendants instead of killing only the caller's sudo.
-  exec "$timeout_bin" --signal=TERM --kill-after=5s 30s "$0" "__${action}" "$@"
+  exec "$timeout_bin" --signal=TERM --kill-after=5s 30s /bin/bash "$0" "__${action}" "$@"
 }
 
 require_cleanup_timeout_parent() {

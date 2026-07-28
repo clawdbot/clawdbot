@@ -198,7 +198,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
 
     const sutWrapper = readFileSync(SUT_CONTAINER_WRAPPER, "utf8");
     expect(sutWrapper).toContain(
-      'exec "$timeout_bin" --signal=TERM --kill-after=5s 30s "$0" "__${action}" "$@"',
+      'exec "$timeout_bin" --signal=TERM --kill-after=5s 30s /bin/bash "$0" "__${action}" "$@"',
     );
     expect(sutWrapper).toContain('"$(readlink -f "/proc/$PPID/exe")" == "$timeout_bin"');
     expect(sutWrapper).toContain("__stop)");
