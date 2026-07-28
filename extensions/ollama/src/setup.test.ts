@@ -827,6 +827,44 @@ describe("ollama setup", () => {
       }
     });
 
+    it("coerces non-Error model-pull stream rejections via the shared toErrorObject", async () => {
+      const progress = { update: vi.fn(), stop: vi.fn() };
+      const prompter = {
+        progress: vi.fn(() => progress),
+      } as unknown as WizardPrompter;
+      const fetchMock = vi.fn(async (input: string | URL | Request) => {
+        const url = requestUrl(input);
+        if (url.endsWith("/api/tags")) {
+          return jsonResponse({ models: [] });
+        }
+        if (url.endsWith("/api/pull")) {
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.error({ code: 500, status: "server_error" });
+              },
+            }),
+            { status: 200 },
+          );
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const result = await ensureOllamaModelPulled({
+        config: createDefaultOllamaConfig("ollama/gemma4"),
+        model: "ollama/gemma4",
+        prompter,
+      }).catch((err: unknown) => err);
+
+      expect(result).toBeInstanceOf(Error);
+      expect((result as Error).name).toBe("WizardCancelledError");
+      expect((result as Error).message).toBe("Failed to download selected Ollama model");
+      // The non-Error stream rejection is coerced by the shared toErrorObject with its
+      // "Non-Error rejection" fallback message, which surfaces in the progress stop text.
+      expect(progress.stop).toHaveBeenCalledWith(expect.stringContaining("Non-Error rejection"));
+    });
+
     it("skips pull when model is already available", async () => {
       const prompter = {} as unknown as WizardPrompter;
 
