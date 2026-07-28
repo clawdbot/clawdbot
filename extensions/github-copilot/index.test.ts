@@ -334,6 +334,23 @@ describe("github-copilot plugin", () => {
     expect(profile?.levels.map((level) => level.id)).toContain("max");
   });
 
+  it("keeps Copilot Claude thinking provider-owned when catalog reasoning is stale", () => {
+    const provider = registerProviderWithPluginConfig({});
+
+    const profile = provider.resolveThinkingProfile({
+      provider: "github-copilot",
+      modelId: "claude-sonnet-4.6",
+      api: "anthropic-messages",
+      reasoning: false,
+      compat: { supportedReasoningEfforts: ["low", "medium", "high", "max"] },
+    });
+
+    expect(profile?.preserveWhenCatalogReasoningFalse).toBe(true);
+    expect(profile?.levels.map((level) => level.id)).toEqual(
+      expect.arrayContaining(["high", "adaptive", "max"]),
+    );
+  });
+
   it("does not expose max for non-adaptive Claude Copilot models", () => {
     const provider = registerProviderWithPluginConfig({});
 

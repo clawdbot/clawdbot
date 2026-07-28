@@ -201,33 +201,16 @@ export function resolveThinkingProfile(params: {
         })
       : undefined;
   const pluginProfile = providerProfile ?? anthropicMessagesProfile;
-  const allowCopilotClaudeThinking =
-    context.normalizedProvider === "github-copilot" &&
-    context.api === "anthropic-messages" &&
-    (normalizeOptionalLowercaseString(context.modelId)?.includes("claude") ?? false);
   if (pluginProfile) {
     const normalized = normalizeThinkingProfile(pluginProfile);
-    const hasReasoningEfforts =
-      Array.isArray(context.compat?.supportedReasoningEfforts) &&
-      context.compat.supportedReasoningEfforts.length > 0;
     if (
       normalized.levels.length > 0 &&
-      (context.reasoning !== false ||
-        hasReasoningEfforts ||
-        allowCopilotClaudeThinking ||
-        pluginProfile.preserveWhenCatalogReasoningFalse === true)
+      (context.reasoning !== false || pluginProfile.preserveWhenCatalogReasoningFalse === true)
     ) {
       return normalized;
     }
   }
-  if (
-    context.reasoning === false &&
-    !allowCopilotClaudeThinking &&
-    !(
-      Array.isArray(context.compat?.supportedReasoningEfforts) &&
-      context.compat.supportedReasoningEfforts.length > 0
-    )
-  ) {
+  if (context.reasoning === false) {
     return buildOffOnlyThinkingProfile();
   }
 

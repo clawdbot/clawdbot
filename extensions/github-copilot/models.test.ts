@@ -690,6 +690,46 @@ describe("fetchCopilotModelCatalog", () => {
     expect(fetchImpl.mock.calls[0]?.[0]).toBe("https://api.githubcopilot.com/models");
   });
 
+  it("uses advertised supported_endpoints to resolve live transport", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      makeResponse(200, {
+        data: [
+          {
+            id: "claude-sonnet-4.6",
+            name: "Claude Sonnet 4.6",
+            object: "model",
+            supported_endpoints: ["/v1/messages"],
+            capabilities: { type: "chat" },
+          },
+          {
+            id: "gpt-responses-only",
+            name: "GPT Responses Only",
+            object: "model",
+            supported_endpoints: ["/v1/responses"],
+            capabilities: { type: "chat" },
+          },
+          {
+            id: "gemini-chat-completions",
+            name: "Gemini Chat Completions",
+            object: "model",
+            supported_endpoints: ["/v1/responses", "/v1/chat/completions"],
+            capabilities: { type: "chat" },
+          },
+        ],
+      }),
+    );
+
+    const out = await fetchCopilotModelCatalog({
+      copilotApiToken: "tid=test",
+      baseUrl: "https://api.githubcopilot.com",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    expect(out.find((m) => m.id === "claude-sonnet-4.6")?.api).toBe("anthropic-messages");
+    expect(out.find((m) => m.id === "gpt-responses-only")?.api).toBe("openai-responses");
+    expect(out.find((m) => m.id === "gemini-chat-completions")?.api).toBe("openai-completions");
+  });
+
   it("dedupes by id when API returns duplicates", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       makeResponse(200, {

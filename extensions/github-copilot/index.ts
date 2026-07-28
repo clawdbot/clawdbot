@@ -22,8 +22,9 @@ import {
 import { PUBLIC_GITHUB_COPILOT_DOMAIN, resolveGithubCopilotDomain } from "./domain.js";
 import { createGithubCopilotDynamicModelHooks } from "./dynamic-models.js";
 import { githubCopilotMemoryEmbeddingProviderAdapter } from "./embeddings.js";
-import { DEFAULT_COPILOT_MODEL, resolveCopilotExtendedThinkingLevels } from "./model-metadata.js";
+import { DEFAULT_COPILOT_MODEL } from "./model-metadata.js";
 import { PROVIDER_ID } from "./models.js";
+import { resolveThinkingProfile as resolveGithubCopilotThinkingProfile } from "./provider-policy-api.js";
 import {
   buildGithubCopilotReplayPolicy,
   sanitizeGithubCopilotReplayHistory,
@@ -605,19 +606,8 @@ export default definePluginEntry({
       wrapStreamFn: wrapCopilotProviderStream,
       buildReplayPolicy: ({ modelId }) => buildGithubCopilotReplayPolicy(modelId),
       sanitizeReplayHistory: sanitizeGithubCopilotReplayHistory,
-      resolveThinkingProfile: ({ modelId, compat }) => {
-        const extendedLevels = resolveCopilotExtendedThinkingLevels(modelId, compat);
-        return {
-          levels: [
-            { id: "off" },
-            { id: "minimal" },
-            { id: "low" },
-            { id: "medium" },
-            { id: "high" },
-            ...extendedLevels.map((id) => ({ id })),
-          ],
-        };
-      },
+      resolveThinkingProfile: (context) =>
+        resolveGithubCopilotThinkingProfile(context) ?? undefined,
       prepareRuntimeAuth: async (ctx) => {
         const { resolveCopilotRuntimeAuth } = await loadGithubCopilotRuntime();
         const auth = await resolveCopilotRuntimeAuth({

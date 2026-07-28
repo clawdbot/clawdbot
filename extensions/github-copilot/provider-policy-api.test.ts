@@ -51,6 +51,40 @@ describe("github-copilot provider-policy-api", () => {
     ).toContain("max");
   });
 
+  it("uses the Claude profile for Copilot Claude models on anthropic-messages", () => {
+    const profile = resolveThinkingProfile({
+      provider: "github-copilot",
+      modelId: "claude-sonnet-4.6",
+      api: "anthropic-messages",
+      reasoning: false,
+      compat: { supportedReasoningEfforts: ["low", "medium", "high", "max"] },
+    });
+
+    expect(profile?.preserveWhenCatalogReasoningFalse).toBe(true);
+    expect(profile?.levels.map((level) => level.id)).toEqual(
+      expect.arrayContaining(["off", "minimal", "low", "medium", "high", "adaptive", "max"]),
+    );
+  });
+
+  it("keeps non-Claude Copilot profiles from overriding catalog reasoning=false", () => {
+    const profile = resolveThinkingProfile({
+      provider: "github-copilot",
+      modelId: "gpt-5-mini",
+      api: "openai-responses",
+      reasoning: false,
+      compat: { supportedReasoningEfforts: ["low", "medium", "high"] },
+    });
+
+    expect(profile?.preserveWhenCatalogReasoningFalse).toBeUndefined();
+    expect(profile?.levels.map((level) => level.id)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+    ]);
+  });
+
   it("does not expose max for non-Anthropic Copilot transports", () => {
     expect(
       resolveThinkingProfile({
