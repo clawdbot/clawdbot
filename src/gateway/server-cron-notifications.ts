@@ -313,20 +313,38 @@ async function sendGatewayCronFailureAlertUnderAdmission(
   }
 
   const abortController = new AbortController();
-  await sendCronAnnouncePayloadStrict({
-    deps: params.deps,
-    cfg: runtimeConfig,
-    agentId,
-    jobId: params.job.id,
-    target: {
-      channel: params.channel,
-      to: params.to,
-      accountId: params.accountId,
-      sessionKey: resolveCronDeliverySessionKey(params.job),
-    },
-    message: params.text,
-    abortSignal: abortController.signal,
-  });
+  const deliveryTimeout = setTimeout(() => {
+    abortController.abort(new Error("cron: failure alert announcement timed out"));
+  }, CRON_WEBHOOK_TIMEOUT_MS);
+
+  try {
+    // Release Gateway admission on deadline even when a transport ignores abort.
+    await Promise.race([
+      sendCronAnnouncePayloadStrict({
+        deps: params.deps,
+        cfg: runtimeConfig,
+        agentId,
+        jobId: params.job.id,
+        target: {
+          channel: params.channel,
+          to: params.to,
+          accountId: params.accountId,
+          sessionKey: resolveCronDeliverySessionKey(params.job),
+        },
+        message: params.text,
+        abortSignal: abortController.signal,
+      }),
+      new Promise<never>((_resolve, reject) => {
+        abortController.signal.addEventListener(
+          "abort",
+          () => reject(abortController.signal.reason),
+          { once: true },
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(deliveryTimeout);
+  }
 }
 
 /** Dispatches completion and failure-destination notifications after a cron run finishes. */
