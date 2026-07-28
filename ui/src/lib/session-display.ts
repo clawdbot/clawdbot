@@ -81,7 +81,7 @@ export function resolveSessionWorkSubtitle(row: SessionWorktreeDisplayRow): stri
 
 /** Parsed type / context extracted from a session key. */
 type SessionKeyInfo = {
-  /** Prefix for typed sessions (Subagent:/Cron:). Empty for others. */
+  /** Prefix for typed sessions (Subagent:/Automation:). Empty for others. */
   prefix: string;
   /** Human-readable fallback when no label / displayName is available. */
   fallbackName: string;
@@ -118,9 +118,10 @@ function parseSessionKey(key: string): SessionKeyInfo {
     return { prefix: "Subagent:", fallbackName: "Subagent:" };
   }
 
-  // Cron job.
+  // Automation (cron) job. Session keys keep the `cron:` prefix; only the
+  // display strings use the Automations feature name.
   if (normalized.startsWith("cron:") || key.includes(":cron:")) {
-    return { prefix: "Cron:", fallbackName: "Cron Job:" };
+    return { prefix: "Automation:", fallbackName: "Automation:" };
   }
 
   // Direct chat: agent:<x>:<channel>:direct:<id>. Never render the raw peer

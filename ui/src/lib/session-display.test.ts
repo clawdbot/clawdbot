@@ -121,7 +121,7 @@ describe("resolveSessionDisplayName", () => {
           includeSubagentPrefix: false,
         },
       ),
-    ).toBe("Cron: Daily");
+    ).toBe("Automation: Daily");
   });
 });
 
