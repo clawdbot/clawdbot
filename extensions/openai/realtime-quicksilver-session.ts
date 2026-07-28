@@ -343,11 +343,11 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
       }
       return;
     }
-    const delegationInput = event.prompt.trim();
+    const delegationInput = event.prompt;
     const transcript = session.transcript;
     session.transcript = [];
     session.partialTranscriptRole = undefined;
-    if (!delegationInput) {
+    if (!delegationInput.trim()) {
       params.logger.debug?.("OpenAI GPT-Live ignored an empty client delegation");
       return;
     }

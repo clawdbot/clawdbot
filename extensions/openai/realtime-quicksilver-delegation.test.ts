@@ -57,14 +57,14 @@ describe("GPT-Live sideband protocol", () => {
             target: "client",
             id: "delegation-1",
             content: [
-              { type: "input_text", text: "Check " },
+              { type: "input_text", text: "curl https://exa" },
               { type: "output_text", text: "ignored" },
-              { type: "input_text", text: "the weather" },
+              { type: "input_text", text: "mple.com" },
             ],
           },
         }),
       ),
-    ).toEqual({ kind: "delegation", id: "delegation-1", prompt: "Check\nthe weather" });
+    ).toEqual({ kind: "delegation", id: "delegation-1", prompt: "curl https://example.com" });
     expect(
       parseOpenAIQuicksilverEvent(
         JSON.stringify({
@@ -160,7 +160,7 @@ describe("GPT-Live sideband protocol", () => {
       );
       await vi.waitFor(() =>
         expect(runAgentConsult).toHaveBeenCalledWith({
-          prompt: "<realtime_delegation>\n  <input>first\ntask</input>\n</realtime_delegation>",
+          prompt: "<realtime_delegation>\n  <input>first task</input>\n</realtime_delegation>",
           signal: expect.any(AbortSignal),
         }),
       );
@@ -172,7 +172,7 @@ describe("GPT-Live sideband protocol", () => {
           content: [
             {
               type: "input_text",
-              text: "Result for <realtime_delegation>\n  <input>first\ntask</input>\n</realtime_delegation>",
+              text: "Result for <realtime_delegation>\n  <input>first task</input>\n</realtime_delegation>",
             },
           ],
         }),

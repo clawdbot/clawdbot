@@ -470,10 +470,8 @@ export function parseOpenAIQuicksilverEvent(payload: string): OpenAIQuicksilverI
       id: item.id,
       prompt: (item.content ?? [])
         .filter((part) => part.type === "input_text")
-        .map((part) => part.text?.trim() ?? "")
-        .filter(Boolean)
-        .join("\n")
-        .trim(),
+        .map((part) => part.text ?? "")
+        .join(""),
     };
   }
   if (eventType === "error") {

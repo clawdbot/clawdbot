@@ -24,7 +24,7 @@ export function buildOpenAIQuicksilverDelegationPrompt(params: {
   input: string;
   transcript: readonly OpenAIQuicksilverTranscriptEntry[];
 }): string {
-  const input = escapeXmlText(params.input.trim());
+  const input = escapeXmlText(params.input);
   const transcript = params.transcript
     .map((entry) => ({ role: entry.role, text: entry.text.trim() }))
     .filter((entry) => entry.text.length > 0)
