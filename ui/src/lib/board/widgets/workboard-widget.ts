@@ -290,13 +290,6 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
     const refresh = (async () => {
       try {
         await loadSharedWorkboardCards(client, sharedRuntime);
-        if (
-          generation !== this.refreshGeneration ||
-          client !== this.client ||
-          sharedRuntime !== this.sharedRuntime
-        ) {
-          return;
-        }
       } catch (error) {
         if (generation === this.refreshGeneration && client === this.client) {
           this.error = error instanceof Error ? error.message : String(error);
