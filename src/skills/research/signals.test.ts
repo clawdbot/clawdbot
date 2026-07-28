@@ -1044,7 +1044,7 @@ describe("durable instruction signals", () => {
 
   it.each([
     ["I told you to compress screenshots before attaching them.", "Compress screenshots"],
-    ["That's not what I asked—watermark every image.", "Watermark every image"],
+    ["I thought we agreed to watermark every image.", "Watermark every image"],
   ])("keeps an explicit correction with an unlisted verb: %s", (content, expected) => {
     expect(proposals([user(content)])[0]?.content).toContain(expected);
   });

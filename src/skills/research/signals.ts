@@ -385,7 +385,7 @@ function parseInstruction(instruction: string) {
       taskClass: reflection[2]
         ? cleanTaskClass(reflection[1].replace(/^working on\s+/i, ""))
         : undefined,
-      rules: normalizeRuleList(replacement, false),
+      rules: normalizeRuleList(replacement, false, true),
     };
   }
 
