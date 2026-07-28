@@ -143,7 +143,6 @@ import {
   countImageInputs,
   hasCompletedWriteToolResult,
   hasSuccessfulWriteToolOutput,
-  hasSuccessfulSessionsSpawnToolResult,
   extractLatestImageUserTurn,
   parseToolOutputJson,
 } from "./mock-openai-input.js";
@@ -151,6 +150,7 @@ import {
   attachQaMockResponsesWebSocketServer,
   type QaMockResponsesDispatchResult,
 } from "./mock-openai-responses-websocket.js";
+import { hasSuccessfulSessionsSpawnToolResult } from "./mock-openai-spawn-result.js";
 import { resolveLogicalPlannedToolName } from "./mock-openai-tool-plan.js";
 import {
   readTargetFromPrompt,

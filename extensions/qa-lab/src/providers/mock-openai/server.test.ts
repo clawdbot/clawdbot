@@ -1,7 +1,7 @@
 // Qa Lab tests cover server plugin behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import { readQaMockRequestCursor } from "../shared/debug-request-cursor.js";
-import { hasSuccessfulSessionsSpawnToolResult } from "./mock-openai-input.js";
+import { hasSuccessfulSessionsSpawnToolResult } from "./mock-openai-spawn-result.js";
 import { startQaMockOpenAiServer } from "./server.js";
 
 const cleanups: Array<() => Promise<void>> = [];
