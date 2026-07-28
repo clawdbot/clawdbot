@@ -24,9 +24,9 @@ describe("findSettingsSearchBlocks", () => {
 
     expect(matches).toEqual([
       expect.objectContaining({
-        routeId: "config",
+        routeId: "connection",
         label: "Gateway Host",
-        hash: "#settings-general-system",
+        hash: "#settings-connection-host",
       }),
     ]);
   });
