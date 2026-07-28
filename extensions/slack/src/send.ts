@@ -42,7 +42,7 @@ import {
 import { createSlackTokenCacheKey, createSlackWebClient, getSlackWriteClient } from "./client.js";
 import { assertSlackDirectSendAllowed } from "./direct-send-admission.js";
 import { chunkSlackMrkdwnText, markdownToSlackMrkdwnChunks } from "./format.js";
-import { SLACK_TEXT_LIMIT } from "./limits.js";
+import { SLACK_EDIT_TEXT_LIMIT, SLACK_TEXT_LIMIT } from "./limits.js";
 import {
   buildSlackNativeDataAccessibilityText,
   hasSlackNativeDataBlock,
@@ -282,7 +282,7 @@ export async function updateMessageSlack(params: {
   await client.chat.update({
     channel: params.channelId,
     ts: params.messageTs,
-    text: truncateSlackText(params.text, SLACK_TEXT_LIMIT),
+    text: truncateSlackText(params.text, SLACK_EDIT_TEXT_LIMIT),
     blocks: validateSlackBlocksArray(params.blocks),
   });
 }
