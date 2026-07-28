@@ -74,8 +74,9 @@ metadata and replay fingerprints; surrounding whitespace is never part of the
 authorized agent identity.
 
 The response includes `status`, `gateway_lease_id`, `external_id`, `lease`, and
-`metadata`. Active lease status is `active`; terminal states are `consumed` and
-`released`. `metadata` has this envelope:
+`metadata`. Nonterminal lease statuses are `active` and `reserved`. `reserved`
+means the durable spawn reservation exists while launch or replay is pending.
+Terminal states are `consumed` and `released`. `metadata` has this envelope:
 
 ```json
 {

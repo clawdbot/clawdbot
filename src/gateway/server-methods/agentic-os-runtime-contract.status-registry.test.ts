@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SUBAGENT_ENDED_REASON_KILLED } from "../../agents/subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "../../agents/subagent-registry.types.js";
 import type { spawnSubagentDirect } from "../../agents/subagent-spawn.js";
 import type { waitForAgentJob } from "./agent-job.js";
@@ -224,6 +225,27 @@ describe("Agentic OS sessions_status registry fallback", () => {
       });
     },
   );
+
+  it("preserves an exact registry-only killed outcome as cancelled", async () => {
+    const accepted = await trackedSession();
+    const sessionKey = accepted.session_key as string;
+    const runId = accepted.runId as string;
+    registry.addSubagentRunForTests({
+      ...terminalRun(runId, sessionKey, "error"),
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
+    });
+
+    expect(
+      payload(await invoke("sessions_status", { session_key: sessionKey })).runtime_session,
+    ).toMatchObject({
+      key: sessionKey,
+      lifecycle_status: "failed",
+      runtime_status: "cancelled",
+      terminal: true,
+      started_at_ms: 22,
+      ended_at_ms: 25,
+    });
+  });
 
   it("does not use a mismatched registry row when task and job cache are absent", async () => {
     const accepted = await trackedSession();

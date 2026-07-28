@@ -1,6 +1,7 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agents/agent-run-terminal-outcome.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "../../agents/subagent-lifecycle-events.js";
 import { getSubagentRunByChildSessionKeyAndRunId } from "../../agents/subagent-registry-read.js";
 import type { SubagentRunRecord } from "../../agents/subagent-registry.types.js";
 import { stripToolMessages } from "../../agents/tools/chat-history-text.js";
@@ -141,6 +142,11 @@ function buildRegistryTerminalOutcome(entry: SubagentRunRecord | null | undefine
   return buildAgentRunTerminalOutcomeFromWaitResult({
     status: outcome.status === "ok" ? "ok" : outcome.status === "timeout" ? "timeout" : "error",
     error: outcome.status === "error" ? outcome.error : undefined,
+    stopReason:
+      entry?.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
+      entry.suppressAnnounceReason !== "steer-restart"
+        ? "stop"
+        : undefined,
     startedAt: outcome.startedAt ?? entry?.execution?.startedAt ?? entry?.startedAt,
     endedAt: outcome.endedAt ?? entry?.execution?.endedAt ?? entry?.endedAt,
   });
