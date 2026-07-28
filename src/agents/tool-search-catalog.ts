@@ -431,11 +431,21 @@ export function visibleCatalogEntries(
 export function compactToolSearchCatalogEntry(entry: ToolSearchCatalogEntry) {
   const output =
     entry.source === "openclaw" ? compactToolOutputHint(entry.outputSchema) : undefined;
+  // Node provenance is namespace-only metadata; generic Tool Search keeps its
+  // existing MCP result shape outside Code Mode.
+  const mcp = entry.mcp
+    ? {
+        serverName: entry.mcp.serverName,
+        safeServerName: entry.mcp.safeServerName,
+        toolName: entry.mcp.toolName,
+        operation: entry.mcp.operation,
+      }
+    : undefined;
   return {
     id: entry.id,
     source: entry.source,
     sourceName: entry.sourceName,
-    ...(entry.mcp ? { mcp: entry.mcp } : {}),
+    ...(mcp ? { mcp } : {}),
     name: entry.name,
     label: entry.label,
     description: entry.description,

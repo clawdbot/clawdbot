@@ -184,6 +184,40 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     };
   };
 
+  it("recovers a missed final from authoritative history after an event gap", async () => {
+    const { state, loadHistory, reconcileHistoryAfterGap, setActivityStatus } =
+      createHandlersHarness({ state: { activeChatRunId: "run-gap" } });
+
+    reconcileHistoryAfterGap();
+
+    await vi.waitFor(() => expect(state.activeChatRunId).toBeNull());
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
+  });
+
+  it("preserves an in-flight run when gap-recovery history reports it is still active", async () => {
+    const { state, loadHistory, reconcileHistoryAfterGap, setActivityStatus } =
+      createHandlersHarness({ state: { activeChatRunId: "run-gap" } });
+    loadHistory.mockResolvedValue({ loaded: true, inFlightRunId: "run-gap" });
+
+    reconcileHistoryAfterGap();
+
+    await vi.waitFor(() => expect(loadHistory).toHaveBeenCalledTimes(1));
+    expect(state.activeChatRunId).toBe("run-gap");
+    expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
+  });
+
+  it("reloads the selected session after an event gap while no run is active", async () => {
+    const { state, loadHistory, reconcileHistoryAfterGap } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+
+    reconcileHistoryAfterGap();
+
+    await vi.waitFor(() => expect(loadHistory).toHaveBeenCalledTimes(1));
+    expect(state.activeChatRunId).toBeNull();
+  });
+
   it("processes tool events when runId matches activeChatRunId (even if sessionId differs)", () => {
     const { chatLog, tui, handleAgentEvent } = createHandlersHarness({
       state: { currentSessionId: "session-xyz", activeChatRunId: "run-123" },

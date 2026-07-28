@@ -107,6 +107,7 @@ const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
     "boundary",
     "bundled",
     "channels",
+    "cli-process",
     "cli",
     "commands",
     "commands-light",

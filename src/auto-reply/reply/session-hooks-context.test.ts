@@ -254,7 +254,6 @@ describe("session hook context wiring", () => {
     expectFields(event, {
       sessionKey,
       reason: "new",
-      transcriptArchived: false,
     });
     expectFields(context, { sessionKey, agentId: "main", sessionId: event?.sessionId });
 
@@ -410,7 +409,6 @@ describe("session hook context wiring", () => {
       const [startEvent] = requireHookCall(hookRunnerMocks.runSessionStart, "session_start");
       expectFields(event, {
         reason: "daily",
-        transcriptArchived: false,
       });
       expect(event?.nextSessionId).toBe(startEvent?.sessionId);
       expect(startEvent?.sessionId).toBe("daily-session");

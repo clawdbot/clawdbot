@@ -7,6 +7,7 @@ type ChannelHealthSnapshot = {
   connected?: boolean;
   enabled?: boolean;
   configured?: boolean;
+  linked?: boolean;
   restartPending?: boolean;
   busy?: boolean;
   activeRuns?: number;
@@ -47,7 +48,7 @@ export type ChannelHealthPolicy = {
 type ChannelRestartReason = "gave-up" | "stopped" | "stale-socket" | "stuck" | "disconnected";
 
 function isManagedAccount(snapshot: ChannelHealthSnapshot): boolean {
-  return snapshot.enabled !== false && snapshot.configured !== false;
+  return snapshot.enabled !== false && snapshot.configured !== false && snapshot.linked !== false;
 }
 
 const BUSY_ACTIVITY_STALE_THRESHOLD_MS = 25 * 60_000;

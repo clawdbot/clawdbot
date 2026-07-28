@@ -3,12 +3,14 @@
  *
  * Selects models, wires built-in/custom tools, loads resources, and creates AgentSession instances.
  */
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { clampThinkingLevel } from "@openclaw/ai/internal/runtime";
 import {
   resolveThinkingDefaultForModel,
   type ThinkingCatalogEntry,
 } from "../../auto-reply/thinking.js";
+import { createSessionEntryWithTranscript } from "../../config/sessions/session-accessor.js";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { Message, Model } from "../../llm/types.js";
 import { getAgentDir } from "../config.js";
@@ -35,7 +37,7 @@ import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { ModelRegistry } from "./model-registry.js";
 import { findInitialModel } from "./model-resolver.js";
 import { DefaultResourceLoader, type ResourceLoader } from "./resource-loader.js";
-import { getDefaultSessionDir, SessionManager } from "./session-manager.js";
+import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 import { isInstallTelemetryEnabled } from "./telemetry.js";
 import {
@@ -110,7 +112,7 @@ export interface CreateAgentSessionOptions {
   /** Resource loader. When omitted, DefaultResourceLoader is used. */
   resourceLoader?: ResourceLoader;
 
-  /** Session manager. Default: SessionManager.create(cwd) */
+  /** Session manager. Default: a new SQLite-backed main-agent SDK session. */
   sessionManager?: SessionManager;
 
   /** Settings manager. Default: SettingsManager.create(cwd, agentDir) */
@@ -306,7 +308,7 @@ async function createAgentSessionImpl(
 
   const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
   const sessionManager =
-    options.sessionManager ?? SessionManager.create(cwd, getDefaultSessionDir(cwd, agentDir));
+    options.sessionManager ?? (await createDefaultSdkSessionManager(cwd, agentDir));
 
   if (!resourceLoader) {
     resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
@@ -568,4 +570,29 @@ async function createAgentSessionImpl(
     extensionsResult,
     modelFallbackMessage,
   };
+}
+
+async function createDefaultSdkSessionManager(
+  cwd: string,
+  agentDir: string,
+): Promise<SessionManager> {
+  const sessionId = randomUUID();
+  const target = {
+    agentId: "main",
+    sessionId,
+    sessionKey: `agent:main:sdk:${sessionId}`,
+    storePath: join(agentDir, "openclaw-agent.sqlite"),
+  };
+  const created = await createSessionEntryWithTranscript(
+    target,
+    () => ({
+      ok: true,
+      entry: { sessionId, updatedAt: Date.now() },
+    }),
+    { cwd },
+  );
+  if (!created.ok) {
+    throw new Error(`Failed to initialize SDK session transcript: ${created.error}`);
+  }
+  return SessionManager.open(target, cwd);
 }

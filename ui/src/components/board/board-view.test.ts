@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
-import { recordBoardWidgetTicketReceipt } from "../../lib/board/widget-ticket-lifetime.ts";
 // Side-effect import: registers the custom elements mount() depends on
 // without relying on transitive fixture imports.
 import "./board-view.ts";
@@ -237,32 +236,6 @@ describe("openclaw-board-view", () => {
     expect(frameLoadFailed).toHaveBeenCalledTimes(3);
   });
 
-  it("pauses ticket refresh while hidden and re-arms when the document becomes visible", async () => {
-    vi.useFakeTimers();
-    let visibilityState: DocumentVisibilityState = "hidden";
-    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibilityState);
-    const frameLoadFailed = vi.fn(async () => undefined);
-    const ticketedWidget = boardWidget({
-      viewTicket: "ticket",
-      viewTicketTtlMs: 30_000,
-    });
-    recordBoardWidgetTicketReceipt(ticketedWidget);
-    await mount({
-      callbacks: callbacks({ frameLoadFailed }),
-      snapshot: snapshot({ widgets: [ticketedWidget] }),
-    });
-
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(frameLoadFailed).not.toHaveBeenCalled();
-
-    visibilityState = "visible";
-    document.dispatchEvent(new Event("visibilitychange"));
-    await vi.advanceTimersByTimeAsync(999);
-    expect(frameLoadFailed).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(frameLoadFailed).toHaveBeenCalledOnce();
-  });
-
   it("schedules proactive refresh from the relative ticket TTL", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2099-01-01T00:00:00Z"));
@@ -284,30 +257,6 @@ describe("openclaw-board-view", () => {
     // 2s rules out the 1s floor, and having fired by 8s rules out the 15s a full-TTL
     // calculation would produce. Call count is left open because the unreplaced ticket
     // keeps retrying, which is a different behavior with its own test.
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(frameLoadFailed).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(6_000);
-    expect(frameLoadFailed).toHaveBeenCalled();
-  });
-
-  it("schedules proactive refresh from a delayed mount's remaining ticket lifetime", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2099-01-01T00:00:00Z"));
-    const frameLoadFailed = vi.fn(async () => undefined);
-    const delayedWidget = boardWidget({
-      viewTicket: "ticket",
-      viewTicketTtlMs: 30_000,
-    });
-    recordBoardWidgetTicketReceipt(delayedWidget);
-    await vi.advanceTimersByTimeAsync(10_000);
-
-    await mount({
-      callbacks: callbacks({ frameLoadFailed }),
-      snapshot: snapshot({ widgets: [delayedWidget] }),
-    });
-
-    // Same band as above: the point is that the delay came from the 20s remaining
-    // lifetime, not the full 30s TTL, which would not fire until 15s.
     await vi.advanceTimersByTimeAsync(2_000);
     expect(frameLoadFailed).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(6_000);

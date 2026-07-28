@@ -22,7 +22,7 @@ import {
   recordPluginInstallInRecords,
   withoutPluginInstallRecords,
 } from "./installed-plugin-index-records.js";
-import type { PluginInstallUpdate } from "./installs.js";
+import { reconcileNpmPluginLoadPath, type PluginInstallUpdate } from "./installs.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { tracePluginLifecyclePhaseAsync } from "./plugin-lifecycle-trace.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
@@ -505,8 +505,13 @@ export async function persistPluginInstall(params: {
     pluginId: params.pluginId,
     ...params.install,
   });
-  const configEnablement = resolvePluginConfigEnablement({
+  const reconciledConfig = reconcileNpmPluginLoadPath({
     config: params.snapshot.config,
+    previousInstall,
+    nextInstall: params.install,
+  });
+  const configEnablement = resolvePluginConfigEnablement({
+    config: reconciledConfig,
     pluginId: params.pluginId,
     installRecords: nextInstallRecords,
   });
@@ -518,8 +523,8 @@ export async function persistPluginInstall(params: {
   const shouldEnable = params.enable !== false && configEnablement.mode === "ready";
   const configBase =
     params.enable === false || configEnablement.mode === "ready"
-      ? params.snapshot.config
-      : prepareConfigForDisabledInstall(params.snapshot.config, params.pluginId);
+      ? reconciledConfig
+      : prepareConfigForDisabledInstall(reconciledConfig, params.pluginId);
   const installConfig =
     params.enable === false
       ? configBase

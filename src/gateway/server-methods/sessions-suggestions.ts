@@ -579,7 +579,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     try {
       await appendSessionAudit({
         cfg: context.getRuntimeConfig(),
-        target,
+        target: { ...target, sessionKey: target.canonicalKey },
         text: `${actor.label ?? actor.id} ${resolutionAuditAction(resolution)}.`,
         now: Date.now(),
       });

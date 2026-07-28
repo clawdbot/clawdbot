@@ -124,6 +124,20 @@ describe("active-memory manifest config schema", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts max thinking overrides", () => {
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "active-memory.manifest.thinking.max",
+      value: {
+        enabled: true,
+        agents: ["main"],
+        thinking: "max",
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
   it("rejects timeoutMs values above the runtime ceiling", () => {
     const result = validateJsonSchemaValue({
       schema: manifest.configSchema,

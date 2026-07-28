@@ -4,6 +4,7 @@ import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { applicationContext, type ApplicationContext } from "../../../app/context.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../../lit/subscriptions-controller.ts";
+import { isActiveWorkboardCard, nextWorkboardCardPosition } from "../../workboard/card-state.ts";
 import { moveWorkboardCard } from "../../workboard/mutations.ts";
 import { normalizeCardsPayload } from "../../workboard/normalization.ts";
 import { getWorkboardState, type WorkboardHost } from "../../workboard/runtime.ts";
@@ -30,6 +31,7 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
   protected error = "";
   private loadAttempted = false;
 
+  private allCards: WorkboardCard[] = [];
   private workboardHost: WorkboardHost = {};
   private client: GatewayBrowserClient | null = null;
   private refreshGeneration = 0;
@@ -69,6 +71,8 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
     this.refreshPromise = null;
     this.refreshPending = false;
     this.client = null;
+    this.allCards = [];
+    this.cards = [];
     this.workboardHost = {};
     this.loaded = false;
     this.loadAttempted = false;
@@ -94,29 +98,22 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
 
   protected async moveCard(card: WorkboardCard, status: WorkboardStatus): Promise<void> {
     const client = this.client;
-    if (!client || !this.canMutate || card.status === status) {
+    if (!client || !this.canMutate || !isActiveWorkboardCard(card) || card.status === status) {
       return;
     }
     const host = this.workboardHost;
     const state = getWorkboardState(host);
-    state.cards = [...this.cards];
+    state.cards = [...this.allCards];
     state.statuses = this.statuses;
     state.loaded = true;
     state.loadAttempted = true;
     state.mutationReadiness = "ready";
-    const position =
-      Math.max(
-        -1,
-        ...state.cards
-          .filter((candidate) => candidate.status === status)
-          .map((candidate) => candidate.position),
-      ) + 1;
     await moveWorkboardCard({
       host,
       client,
       cardId: card.id,
       status,
-      position,
+      position: nextWorkboardCardPosition(state.cards, card, status),
       requestUpdate: () => {
         if (this.client === client && this.workboardHost === host) {
           this.syncFromHost();
@@ -137,6 +134,8 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
     // Pending mutation state belongs to its connection; never let its completion
     // block or replace cards loaded through the next Gateway client.
     this.workboardHost = {};
+    this.allCards = [];
+    this.cards = [];
     this.refreshGeneration += 1;
     this.refreshPromise = null;
     this.refreshPending = false;
@@ -172,7 +171,8 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
         if (generation !== this.refreshGeneration || client !== this.client) {
           return;
         }
-        this.cards = normalized.cards.filter((card) => !card.metadata?.archivedAt);
+        this.allCards = normalized.cards;
+        this.cards = normalized.cards.filter(isActiveWorkboardCard);
         this.statuses = normalized.statuses;
         this.loaded = true;
       } catch (error) {
@@ -204,7 +204,8 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
 
   private syncFromHost(): void {
     const state = getWorkboardState(this.workboardHost);
-    this.cards = [...state.cards];
+    this.allCards = [...state.cards];
+    this.cards = this.allCards.filter(isActiveWorkboardCard);
     this.statuses = state.statuses;
     this.error = state.error ?? "";
     this.requestRender();

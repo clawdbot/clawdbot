@@ -5,8 +5,12 @@ import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runWithAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
+import type { Skill } from "../skills/loading/skill-contract.js";
+import { resolveSkillsPromptForRun } from "../skills/loading/workspace.js";
+import { createFixtureSkillEntry } from "../skills/test-support/test-helpers.js";
 import { buildBlockedToolResult } from "./agent-tools.before-tool-call.js";
 import { createOpenClawReadTool } from "./agent-tools.read.js";
+import { resolveCodeModeSkills, type CodeModeSkill } from "./code-mode-skills.js";
 import {
   applyCodeModeCatalog,
   CODE_MODE_EXEC_TOOL_NAME,
@@ -24,6 +28,26 @@ import {
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
+
+function skillCandidate(params: {
+  name: string;
+  description: string;
+  filePath: string;
+  readContent?: string;
+}): Skill {
+  return {
+    ...params,
+    baseDir: params.filePath.replace(/\/[^/]+$/u, ""),
+    sourceInfo: {
+      path: params.filePath,
+      source: "test",
+      scope: "temporary",
+      origin: "top-level",
+    },
+    disableModelInvocation: false,
+    source: "test",
+  };
+}
 
 function fakeTool(name: string, description: string): AnyAgentTool {
   // Minimal tool shape keeps Code Mode catalog tests runtime-free.
@@ -112,6 +136,7 @@ function createCodeModeHarness(
   params: {
     agentId?: string;
     catalogRef?: ToolSearchCatalogRef;
+    codeModeSkills?: readonly CodeModeSkill[];
     forceRestartSafeTools?: boolean;
   } = {},
 ) {
@@ -126,6 +151,7 @@ function createCodeModeHarness(
     runId: "run-code-mode",
     catalogRef,
     forceRestartSafeTools: params.forceRestartSafeTools,
+    codeModeSkills: params.codeModeSkills,
   };
   const tools = createCodeModeTools(ctx);
   return { catalogRef, config, ctx, tools };
@@ -439,6 +465,12 @@ describe("Code Mode", () => {
     expect(execTool.description).toContain('"javascript" or "typescript"');
     expect(execTool.description).toContain("never a shell command");
     expect(execTool.description).toContain("do not retry failed shell source");
+    const nodesGuidance =
+      "- nodes: paired Gateway nodes; nodes.list(), (await nodes.get(id)).invoke(command, params)";
+    expect(execTool.description).toContain(nodesGuidance);
+    expect(execTool.description.indexOf(nodesGuidance)).toBe(
+      execTool.description.lastIndexOf(nodesGuidance),
+    );
 
     expect(parameters.properties?.code?.description).toContain(
       "`tools.search` takes a query string, not an object",
@@ -764,6 +796,61 @@ describe("Code Mode", () => {
     ).rejects.toThrow("code and command must match when both are provided");
   });
 
+  it("drains a nested combinator after its outer race wins", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    let nestedAborted = false;
+    const never = pluginToolWithExecute(
+      "fake_nested_race_never",
+      "Never-settling nested race helper",
+      async (_toolCallId, _input, signal) => {
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, 25);
+          signal?.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(timer);
+              nestedAborted = true;
+              reject(new Error("aborted"));
+            },
+            { once: true },
+          );
+        });
+        return jsonResult({ winner: "nested" });
+      },
+    );
+    const fast = pluginToolWithExecute(
+      "fake_nested_race_fast",
+      "Fast nested race helper",
+      async () => jsonResult({ winner: "fast" }),
+    );
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, never, fast],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = resultDetails(
+      await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+        "code-call-nested-combinator-race",
+        {
+          code: `return await Promise.race([
+            Promise.all([tools.callValue("fake_nested_race_never", {})]),
+            tools.callValue("fake_nested_race_fast", {}),
+          ]);`,
+        },
+      ),
+    );
+
+    expect(details).toMatchObject({ status: "completed", value: { winner: "fast" } });
+    expect(never.execute).toHaveBeenCalledOnce();
+    expect(fast.execute).toHaveBeenCalledOnce();
+    expect(nestedAborted).toBe(false);
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
   it.each([
     { code: "ls -la /workspace/" },
     { code: "ls -1" },
@@ -925,6 +1012,152 @@ describe("Code Mode", () => {
     expect(ticket.execute).toHaveBeenCalledTimes(1);
   });
 
+  it("returns structured values from named tools while preserving the raw call envelope", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const ticket = pluginTool("fake_create_ticket", "Create a fake ticket");
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, ticket],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
+      code: `
+        const id = "openclaw:fake-code-mode:fake_create_ticket";
+        const input = { value: "ship" };
+        return {
+          named: await tools.fake_create_ticket(input),
+          value: await tools.callValue(id, input),
+          envelope: await tools.call(id, input),
+        };
+      `,
+    });
+
+    const expectedValue = {
+      name: "fake_create_ticket",
+      input: { value: "ship" },
+    };
+    expect(details.status).toBe("completed");
+    expect(details.value).toEqual({
+      named: expectedValue,
+      value: expectedValue,
+      envelope: {
+        tool: expect.objectContaining({
+          id: "openclaw:fake-code-mode:fake_create_ticket",
+          name: "fake_create_ticket",
+        }),
+        result: expect.objectContaining({ details: expectedValue }),
+      },
+    });
+    expect(details.telemetry).toMatchObject({ callCount: 3 });
+    expect(ticket.execute).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps Code Mode skill parsing aligned with the production prompt renderer", () => {
+    const entries = [createFixtureSkillEntry("alpha"), createFixtureSkillEntry("beta")];
+    const skillsPrompt = resolveSkillsPromptForRun({
+      entries,
+      workspaceDir: "/workspace",
+    });
+
+    expect(
+      resolveCodeModeSkills({
+        skillsPrompt,
+        candidates: entries.map((entry) => entry.skill),
+      }).map(({ name, location }) => ({ name, location })),
+    ).toEqual([
+      { name: "alpha", location: "/skills/alpha/SKILL.md" },
+      { name: "beta", location: "/skills/beta/SKILL.md" },
+    ]);
+  });
+
+  it("lists and reads only prompt-eligible skills through the worker bridge", async () => {
+    const demo = skillCandidate({
+      name: "demo",
+      description: "Full demo description",
+      filePath: "/host/skills/demo/SKILL.md",
+    });
+    const hidden = skillCandidate({
+      name: "hidden",
+      description: "Hidden skill",
+      filePath: "/host/skills/hidden/SKILL.md",
+    });
+    const reader = vi.fn(async ({ location }: { location: string }) =>
+      location === "/guest/skills/demo/SKILL.md"
+        ? "---\nname: demo\n---\n\n# Complete demo instructions\n"
+        : "# Hidden\n",
+    );
+    const codeModeSkills = resolveCodeModeSkills({
+      skillsPrompt: [
+        "<available_skills>",
+        "  <skill>",
+        "    <name>demo</name>",
+        "    <description>Short prompt description</description>",
+        "    <location>/guest/skills/demo/SKILL.md</location>",
+        "  </skill>",
+        "</available_skills>",
+      ].join("\n"),
+      candidates: [demo, hidden],
+      reader,
+    });
+    const {
+      config,
+      catalogRef,
+      tools: codeModeTools,
+    } = createCodeModeHarness({
+      codeModeSkills,
+    });
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+      codeModeSkills,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
+      code: `
+        const listed = await skills.list();
+        const body = await skills.read("demo");
+        let unknown;
+        try {
+          await skills.read("missing");
+        } catch (error) {
+          unknown = error.message;
+        }
+        return { listed, body, unknown };
+      `,
+    });
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toEqual({
+      listed: [
+        {
+          name: "demo",
+          description: "Full demo description",
+          location: "/guest/skills/demo/SKILL.md",
+        },
+      ],
+      body: "---\nname: demo\n---\n\n# Complete demo instructions\n",
+      unknown: 'Unknown skill "missing". Available skills: demo',
+    });
+    expect(codeModeTools[0]?.description).toContain("`await skills.read(name)`");
+    expect(reader).toHaveBeenCalledOnce();
+    expect(reader).toHaveBeenCalledWith({
+      location: "/guest/skills/demo/SKILL.md",
+      signal: expect.any(AbortSignal),
+    });
+  });
+
   it("returns ordinary read content through tools.callValue", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const read = createOpenClawReadTool(
@@ -1003,6 +1236,357 @@ describe("Code Mode", () => {
     expect(details.status).toBe("completed");
     expect(details.value).toEqual([0, 1, 2, 3, 4]);
     expect(ticket.execute).toHaveBeenCalledTimes(5);
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
+  it("keeps the actual winner when the later-started nested tool settles first", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    let firstAborted = false;
+    const first = pluginToolWithExecute(
+      "fake_first",
+      "Earlier slow helper",
+      async (_toolCallId, _input, signal) => {
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, 25);
+          signal?.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(timer);
+              firstAborted = true;
+              reject(new Error("aborted"));
+            },
+            { once: true },
+          );
+        });
+        return jsonResult({ winner: "first" });
+      },
+    );
+    const second = pluginToolWithExecute("fake_second", "Later fast helper", async () =>
+      jsonResult({ winner: "second" }),
+    );
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, first, second],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = resultDetails(
+      await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+        "code-call-later-winner",
+        {
+          code: `return await Promise.race([
+            tools.callValue("fake_first", {}),
+            tools.callValue("fake_second", {}),
+          ]);`,
+        },
+      ),
+    );
+
+    expect(details).toMatchObject({ status: "completed", value: { winner: "second" } });
+    expect(first.execute).toHaveBeenCalledOnce();
+    expect(second.execute).toHaveBeenCalledOnce();
+    expect(firstAborted).toBe(false);
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
+  it.each([
+    {
+      label: "directly",
+      auditCode: 'void tools.callValue("fake_early_audit", {});',
+    },
+    {
+      label: "in a detached already-settled Promise.race",
+      auditCode: 'void Promise.race([tools.callValue("fake_early_audit", {}), Promise.resolve()]);',
+    },
+    {
+      label: "in a detached Promise.all",
+      auditCode: 'void Promise.all([tools.callValue("fake_early_audit", {})]);',
+    },
+    {
+      label: "in a detached Promise.allSettled",
+      auditCode: 'void Promise.allSettled([tools.callValue("fake_early_audit", {})]);',
+    },
+    {
+      label: "in a detached Promise.any",
+      auditCode: 'void Promise.any([tools.callValue("fake_early_audit", {})]);',
+    },
+    {
+      label: "in a detached Promise.race",
+      auditCode: 'void Promise.race([tools.callValue("fake_early_audit", {})]);',
+    },
+  ])(
+    "drains a detached audit started $label before an awaited nested call",
+    async ({ auditCode }) => {
+      const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+      let auditCompleted = false;
+      let auditAborted = false;
+      const audit = pluginToolWithExecute(
+        "fake_early_audit",
+        "Early detached audit",
+        async (_toolCallId, _input, signal) => {
+          await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(resolve, 250);
+            signal?.addEventListener(
+              "abort",
+              () => {
+                clearTimeout(timer);
+                auditAborted = true;
+                reject(new Error("aborted"));
+              },
+              { once: true },
+            );
+          });
+          auditCompleted = true;
+          return jsonResult({ recorded: true });
+        },
+      );
+      const fast = pluginToolWithExecute("fake_awaited_fast", "Awaited fast helper", async () =>
+        jsonResult({ winner: "fast" }),
+      );
+      applyCodeModeCatalog({
+        tools: [...codeModeTools, audit, fast],
+        config,
+        sessionId: "session-code-mode",
+        sessionKey: "agent:main:main",
+        runId: "run-code-mode",
+        catalogRef,
+      });
+
+      const details = resultDetails(
+        await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+          "code-call-early-detached-audit",
+          {
+            code: `${auditCode}
+            return await tools.callValue("fake_awaited_fast", {});`,
+          },
+        ),
+      );
+
+      expect(details).toMatchObject({ status: "completed", value: { winner: "fast" } });
+      expect(audit.execute).toHaveBeenCalledOnce();
+      expect(fast.execute).toHaveBeenCalledOnce();
+      expect(auditCompleted).toBe(true);
+      expect(auditAborted).toBe(false);
+      expect(testing.activeRuns.size).toBe(0);
+    },
+  );
+
+  it("drains a race winner's detached audit and its slower race branch", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    let loserAborted = false;
+    const winner = pluginToolWithExecute("fake_race_winner", "Race winner", async () =>
+      jsonResult({ winner: "fast" }),
+    );
+    const loser = pluginToolWithExecute(
+      "fake_race_loser",
+      "Race loser",
+      async (_toolCallId, _input, signal) => {
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, 25);
+          signal?.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(timer);
+              loserAborted = true;
+              reject(new Error("aborted"));
+            },
+            { once: true },
+          );
+        });
+        return jsonResult({ winner: "slow" });
+      },
+    );
+    const audit = pluginToolWithExecute("fake_race_audit", "Detached audit", async () =>
+      jsonResult({ recorded: true }),
+    );
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, winner, loser, audit],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = resultDetails(
+      await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+        "code-call-race-detached-audit",
+        {
+          code: `return Promise.race([
+            tools.callValue("fake_race_winner", {}),
+            tools.callValue("fake_race_loser", {}),
+          ]).then((value) => {
+            void tools.callValue("fake_race_audit", {});
+            return value;
+          });`,
+        },
+      ),
+    );
+
+    expect(details).toMatchObject({ status: "completed", value: { winner: "fast" } });
+    expect(winner.execute).toHaveBeenCalledOnce();
+    expect(loser.execute).toHaveBeenCalledOnce();
+    expect(audit.execute).toHaveBeenCalledOnce();
+    expect(loserAborted).toBe(false);
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
+  it("drains every detached nested tool before completing the guest", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const first = pluginToolWithExecute("fake_detached_first", "First detached helper", async () =>
+      jsonResult({ name: "first" }),
+    );
+    const second = pluginToolWithExecute(
+      "fake_detached_second",
+      "Second detached helper",
+      async () => jsonResult({ name: "second" }),
+    );
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, first, second],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = resultDetails(
+      await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+        "code-call-detached",
+        {
+          code: `void tools.callValue("fake_detached_first", {});
+            void tools.callValue("fake_detached_second", {});
+            return "done";`,
+        },
+      ),
+    );
+
+    expect(details).toMatchObject({ status: "completed", value: "done" });
+    expect(first.execute).toHaveBeenCalledOnce();
+    expect(second.execute).toHaveBeenCalledOnce();
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
+  it.each(["race", "any"] as const)(
+    "preserves the Promise.%s winner while draining the slower nested tool",
+    async (combinator) => {
+      const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+      let slowAborted = false;
+      let slowCompleted = false;
+      const fast = pluginToolWithExecute("fake_fast", "Fast helper", async () =>
+        jsonResult({ winner: "fast" }),
+      );
+      const slow = pluginToolWithExecute(
+        "fake_slow",
+        "Slow helper",
+        async (_toolCallId, _input, signal) => {
+          await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(resolve, 25);
+            signal?.addEventListener(
+              "abort",
+              () => {
+                clearTimeout(timer);
+                slowAborted = true;
+                reject(new Error("aborted"));
+              },
+              { once: true },
+            );
+          });
+          slowCompleted = true;
+          return jsonResult({ winner: "slow" });
+        },
+      );
+      applyCodeModeCatalog({
+        tools: [...codeModeTools, fast, slow],
+        config,
+        sessionId: "session-code-mode",
+        sessionKey: "agent:main:main",
+        runId: "run-code-mode",
+        catalogRef,
+      });
+
+      const details = resultDetails(
+        await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+          `code-call-${combinator}-fast`,
+          {
+            code: `return await Promise.${combinator}([
+              tools.callValue("fake_fast", {}),
+              tools.callValue("fake_slow", {}),
+            ]);`,
+          },
+        ),
+      );
+
+      expect(details).toMatchObject({ status: "completed", value: { winner: "fast" } });
+      expect(fast.execute).toHaveBeenCalledOnce();
+      expect(slow.execute).toHaveBeenCalledOnce();
+      expect(slowCompleted).toBe(true);
+      expect(slowAborted).toBe(false);
+      expect(testing.activeRuns.size).toBe(0);
+    },
+  );
+
+  it("preserves fail-fast Promise.all while draining the slower nested tool", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    let slowAborted = false;
+    let slowCompleted = false;
+    const failed = pluginToolWithExecute("fake_failed", "Failed helper", async () => {
+      throw new Error("fast failure");
+    });
+    const slow = pluginToolWithExecute(
+      "fake_slow",
+      "Slow helper",
+      async (_toolCallId, _input, signal) => {
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, 25);
+          signal?.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(timer);
+              slowAborted = true;
+              reject(new Error("aborted"));
+            },
+            { once: true },
+          );
+        });
+        slowCompleted = true;
+        return jsonResult({ winner: "slow" });
+      },
+    );
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, failed, slow],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = resultDetails(
+      await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+        "code-call-fail-fast",
+        {
+          code: `try {
+            await Promise.all([
+              tools.callValue("fake_failed", {}),
+              tools.callValue("fake_slow", {}),
+            ]);
+            return "unexpected success";
+          } catch (error) {
+            return error.message;
+          }`,
+        },
+      ),
+    );
+
+    expect(details).toMatchObject({ status: "completed", value: "fast failure" });
+    expect(failed.execute).toHaveBeenCalledOnce();
+    expect(slow.execute).toHaveBeenCalledOnce();
+    expect(slowCompleted).toBe(true);
+    expect(slowAborted).toBe(false);
     expect(testing.activeRuns.size).toBe(0);
   });
 
@@ -1599,6 +2183,43 @@ describe("Code Mode", () => {
     ]);
   });
 
+  it("preserves the original exec identity for tool calls after yield and wait", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const target = pluginTool("fake_resumed_identity", "Resumed identity helper");
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, target],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const suspended = resultDetails(
+      await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+        "code-call-original-parent",
+        {
+          code: 'await yield_control("pause"); return await tools.callValue("fake_resumed_identity", {});',
+        },
+      ),
+    );
+    expect(suspended.status).toBe("waiting");
+
+    const resumed = resultDetails(
+      await expectDefined(codeModeTools[1], "Code Mode wait test invariant").execute(
+        "code-wait-different-parent",
+        { runId: suspended.runId },
+      ),
+    );
+
+    expect(resumed.status).toBe("completed");
+    expect(target.execute).toHaveBeenCalledOnce();
+    expect(vi.mocked(target.execute).mock.calls[0]?.[0]).toContain("code-call-original-parent");
+    expect(vi.mocked(target.execute).mock.calls[0]?.[0]).not.toContain(
+      "code-wait-different-parent",
+    );
+  });
+
   it("allocates distinct replay identities when a later turn reuses a tool-call id", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     applyCodeModeCatalog({
@@ -2090,7 +2711,7 @@ describe("Code Mode", () => {
       ),
     );
     expect(first.status).toBe("waiting");
-    expect(first.pendingToolCalls).toHaveLength(2);
+    expect(first.pendingToolCalls).toEqual([expect.objectContaining({ method: "callValue" })]);
     const runId = first.runId;
     expect(typeof runId).toBe("string");
     if (typeof runId !== "string") {
@@ -2109,7 +2730,7 @@ describe("Code Mode", () => {
     );
 
     expect(second.status).toBe("waiting");
-    expect(second.pendingToolCalls).toEqual([expect.objectContaining({ method: "call" })]);
+    expect(second.pendingToolCalls).toEqual([expect.objectContaining({ method: "callValue" })]);
   });
 
   it("does not load TypeScript for plain JavaScript code mode runs", async () => {
@@ -2867,6 +3488,28 @@ describe("Code Mode", () => {
     expect(result.status).toBe("failed");
     expect(result).toMatchObject({
       code: "runtime_unavailable",
+    });
+  });
+
+  it("classifies clean worker exits without a result as unavailable", async () => {
+    const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
+    const exitingWorkerUrl = new URL("data:text/javascript,");
+
+    const result = await testing.runCodeModeWorker(
+      {
+        kind: "exec",
+        source: "return 1;",
+        config,
+        catalog: [],
+      },
+      5_000,
+      exitingWorkerUrl,
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "runtime_unavailable",
+      error: "code mode worker exited with code 0 before returning a result",
     });
   });
 

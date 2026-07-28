@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { TRAJECTORY_RUNTIME_EVENT_MAX_BYTES } from "./paths.js";
@@ -128,6 +128,69 @@ describe("trajectory runtime", () => {
     expect(fs.existsSync(path.join(path.dirname(storePath), "trajectory", "session-1.jsonl"))).toBe(
       false,
     );
+  });
+
+  it("rejects a legacy SQLite marker for another session", () => {
+    const storePath = path.join(makeTempDir(), "sessions.json");
+
+    expect(
+      createTrajectoryRuntimeRecorder({
+        sessionId: "current-session",
+        sessionFile: formatSqliteSessionFileMarker({
+          agentId: "main",
+          sessionId: "stale-session",
+          storePath,
+        }),
+      }),
+    ).toBeNull();
+  });
+
+  it.each([
+    ["requested key", "agent:main:other", "main", "agent:main:main"],
+    ["target key agent", undefined, "main", "agent:worker:main"],
+  ])(
+    "rejects a complete target that conflicts with the %s",
+    (_label, sessionKey, agentId, targetKey) => {
+      const storePath = path.join(makeTempDir(), "sessions.json");
+
+      expect(
+        createTrajectoryRuntimeRecorder({
+          sessionId: "session-1",
+          ...(sessionKey ? { sessionKey } : {}),
+          sessionTarget: {
+            agentId,
+            sessionId: "session-1",
+            sessionKey: targetKey,
+            storePath,
+          },
+        }),
+      ).toBeNull();
+    },
+  );
+
+  it("rejects a complete target whose key maps to another session", async () => {
+    const storePath = path.join(makeTempDir(), "sessions.json");
+    const sessionKey = "agent:main:stored-session";
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      {
+        sessionId: "stored-session",
+        updatedAt: 1,
+      },
+    );
+
+    expect(
+      createTrajectoryRuntimeRecorder({
+        sessionId: "requested-session",
+        sessionKey,
+        sessionTarget: {
+          agentId: "main",
+          sessionId: "requested-session",
+          sessionKey,
+          storePath,
+        },
+      }),
+    ).toBeNull();
   });
 
   it("stores bounded oversized runtime events in SQLite", async () => {

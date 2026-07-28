@@ -11,7 +11,9 @@ import {
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 
 const mockLoadConfig = vi.hoisted(() => vi.fn<() => OpenClawConfig>());
-const mockReadConfigFileSnapshot = vi.hoisted(() => vi.fn<() => Promise<ConfigFileSnapshot>>());
+const mockReadConfigFileSnapshot = vi.hoisted(() =>
+  vi.fn<(options?: { observe?: boolean }) => Promise<ConfigFileSnapshot>>(),
+);
 const mockLoadPluginManifestRegistry = vi.hoisted(() => vi.fn());
 const mockGetCurrentPluginMetadataSnapshot = vi.hoisted(() => vi.fn());
 
@@ -26,7 +28,8 @@ vi.mock("./config.js", () => {
   return {
     getRuntimeConfig: () => mockLoadConfig(),
     loadConfig: () => mockLoadConfig(),
-    readConfigFileSnapshot: () => mockReadConfigFileSnapshot(),
+    readConfigFileSnapshot: (...args: Parameters<typeof mockReadConfigFileSnapshot>) =>
+      mockReadConfigFileSnapshot(...args),
   };
 });
 
@@ -242,6 +245,16 @@ describe("readBestEffortRuntimeConfigSchema", () => {
     expect(channelProps).toHaveProperty("telegram");
     expect(channelProps).toHaveProperty("matrix");
     expect(entryProps).toHaveProperty("demo");
+  });
+
+  it("reads the best-effort CLI schema without observing configuration health", async () => {
+    mockReadConfigFileSnapshot.mockResolvedValueOnce(
+      makeSnapshot({ valid: true, config: explicitMainRoster() }),
+    );
+
+    await readBestEffortRuntimeConfigSchema();
+
+    expect(mockReadConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
   });
 
   it("falls back to bundled channel metadata when config is invalid", async () => {

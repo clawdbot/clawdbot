@@ -315,11 +315,13 @@ async function persistTextTurnTranscript(
         stopReason: "stop",
         timestamp: Date.now(),
       },
-      shouldAppend: async ({ sessionFile }: { sessionFile: string }) => {
+      shouldAppend: async (
+        context: import("../../config/sessions/session-accessor.js").SessionTranscriptTurnWriteContext,
+      ) => {
         if (!params.embeddedAssistantGapFill) {
           return true;
         }
-        const latest = await readTailAssistantTextFromSessionTranscript(sessionFile, {
+        const latest = await readTailAssistantTextFromSessionTranscript(context, {
           excludeTranscriptOnlyOpenClawAssistant: true,
         });
         const normalizedReply = normalizeTranscriptMirrorText(replyText);

@@ -112,6 +112,7 @@ import type {
   TuiSessionList,
   TuiSessionCreateOptions,
 } from "./tui-backend.js";
+import { formatTuiErrorMessage } from "./tui-formatters.js";
 
 type LocalRunState = {
   sessionKey: string;
@@ -203,7 +204,7 @@ function ensureEmbeddedHistoryRuntimePluginsLoaded(params: {
     });
     return { status: "warmed" };
   } catch (err) {
-    return { status: "failed", error: String(err) };
+    return { status: "failed", error: formatTuiErrorMessage(err) };
   }
 }
 
@@ -761,7 +762,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       ok: true as const,
       path: target.storePath,
       key: target.canonicalKey ?? opts.key,
-      entry: applied.entry,
+      entry: applied.entry as unknown as Record<string, unknown>,
       resolved: {
         modelProvider: resolved.provider,
         model: resolved.model,

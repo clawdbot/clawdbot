@@ -104,6 +104,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
         modelId: effectiveRuntimeModelId,
         model: supervisedRuntimeModel,
         thinkLevel: _outerThinkLevel,
+        fastMode: _outerFastMode,
         sessionKey: contextSessionKey,
       }
     : {

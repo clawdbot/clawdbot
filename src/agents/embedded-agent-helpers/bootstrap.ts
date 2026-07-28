@@ -1,8 +1,6 @@
 /**
  * Builds and sanitizes bootstrap context inserted into embedded-agent sessions.
  */
-import fs from "node:fs/promises";
-import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sanitizeGoogleAssistantFirstOrdering } from "../../shared/google-turn-ordering.js";
@@ -377,33 +375,6 @@ function clampToBudget(content: string, budget: number): string {
   }
   const safe = budget - 1;
   return `${truncateUtf16Safe(content, safe)}…`;
-}
-
-export async function ensureSessionHeader(params: {
-  sessionFile: string;
-  sessionId: string;
-  cwd: string;
-}) {
-  const file = params.sessionFile;
-  try {
-    await fs.stat(file);
-    return;
-  } catch {
-    // create
-  }
-  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-  const sessionVersion = 2;
-  const entry = {
-    type: "session",
-    version: sessionVersion,
-    id: params.sessionId,
-    timestamp: new Date().toISOString(),
-    cwd: params.cwd,
-  };
-  await fs.writeFile(file, `${JSON.stringify(entry)}\n`, {
-    encoding: "utf-8",
-    mode: 0o600,
-  });
 }
 
 export function buildBootstrapContextFiles(
