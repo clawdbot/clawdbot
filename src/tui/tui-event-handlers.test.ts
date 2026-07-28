@@ -371,6 +371,46 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(setActivityStatus).toHaveBeenLastCalledWith("running");
   });
 
+  it.each([
+    {
+      name: "the authoritative top-level stop reason",
+      topLevelStopReason: "error",
+      messageStopReason: "stop",
+    },
+    {
+      name: "a legacy nested message stop reason",
+      topLevelStopReason: undefined,
+      messageStopReason: "error",
+    },
+  ])(
+    "marks a completed response as failed using $name",
+    ({ topLevelStopReason, messageStopReason }) => {
+      const { state, chatLog, setActivityStatus, handleChatEvent } = createHandlersHarness({
+        state: { activeChatRunId: "run-provider-error" },
+      });
+
+      handleChatEvent({
+        runId: "run-provider-error",
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        ...(topLevelStopReason ? { stopReason: topLevelStopReason } : {}),
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Provider response." }],
+          stopReason: messageStopReason,
+        },
+      });
+
+      expect(chatLog.finalizeAssistant).toHaveBeenCalledExactlyOnceWith(
+        "Provider response.",
+        "run-provider-error",
+      );
+      expect(state.activeChatRunId).toBeNull();
+      expect(setActivityStatus).toHaveBeenCalledWith("error");
+      expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
+    },
+  );
+
   it("renders terminal lifecycle errors after retry grace and clears the active run", () => {
     vi.useFakeTimers();
     const { state, chatLog, tui, setActivityStatus, loadHistory, handleAgentEvent } =

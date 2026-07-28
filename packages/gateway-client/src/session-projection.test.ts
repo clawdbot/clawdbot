@@ -447,7 +447,7 @@ describe("session transcript projection", () => {
 
     expect(state.messages).toEqual([attachment]);
     expect(state.messages[0]).toBe(attachment);
-    expect((state.messages[0] as typeof attachment).__openclaw.media).toBe(media);
+    expect((state.messages[0] as typeof attachment)["__openclaw"].media).toBe(media);
   });
 
   it("reconciles the actual pending run and keeps a same-text peer pending turn", () => {

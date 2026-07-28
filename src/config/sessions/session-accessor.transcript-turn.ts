@@ -9,11 +9,11 @@ import {
   resolveSessionEntryFromStore,
   resolveSessionEntrySelection,
 } from "./session-accessor.entry.js";
-import { redactTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
 import {
   readCommittedSqliteTranscriptMessageSequence,
   rememberCommittedSqliteTranscriptMessageSequences,
-} from "./session-accessor.sqlite-transcript-write.js";
+} from "./session-accessor.sqlite-transcript-sequences.js";
+import { redactTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
 import { appendSqliteExpectedSessionTranscriptTurn } from "./session-accessor.sqlite.js";
 import { appendTranscriptMessage, emitTranscriptUpdate } from "./session-accessor.transcript.js";
 import type {

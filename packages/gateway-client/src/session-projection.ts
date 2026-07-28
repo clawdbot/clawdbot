@@ -126,7 +126,7 @@ export function readSessionMessageSequence(
   message: unknown,
   envelope?: SessionMessageEnvelope,
 ): number | null {
-  const metadata = readRecord(readRecord(message)?.__openclaw);
+  const metadata = readRecord(readRecord(message)?.["__openclaw"]);
   return readPositiveSafeInteger(metadata?.seq) ?? readPositiveSafeInteger(envelope?.messageSeq);
 }
 
@@ -146,7 +146,7 @@ export function readSessionMessageIdentity(
   if (!record || !role) {
     return null;
   }
-  const metadata = readRecord(record.__openclaw);
+  const metadata = readRecord(record["__openclaw"]);
   const importedFrom = readNonemptyString(metadata?.importedFrom);
   const cliSessionId = readNonemptyString(metadata?.cliSessionId);
   const externalId = readNonemptyString(metadata?.externalId);
@@ -414,7 +414,7 @@ function hasDisplayableSessionMessage(message: unknown): boolean {
       return true;
     }
   }
-  const media = readRecord(record.__openclaw)?.media;
+  const media = readRecord(record["__openclaw"])?.media;
   return Array.isArray(media) && media.length > 0;
 }
 
@@ -433,7 +433,7 @@ function readSessionProjectionFinalMessageIdentity(message: unknown): string | n
     return `seq:${identity.role}:${identity.sequence}`;
   }
   const record = readRecord(message);
-  const metadata = readRecord(record?.__openclaw);
+  const metadata = readRecord(record?.["__openclaw"]);
   try {
     return `content:${JSON.stringify([
       identity?.role ?? "assistant",
@@ -643,6 +643,8 @@ export function reduceSessionProjection(
       return state.hasTransportGap ? state : { ...state, hasTransportGap: true };
     case "reconnected":
       // A successful reconnect cannot clear a known gap before authoritative history arrives.
+      return state;
+    default:
       return state;
   }
 }

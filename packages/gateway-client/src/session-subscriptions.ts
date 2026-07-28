@@ -198,8 +198,7 @@ export class GatewaySessionMessageSubscriptionCoordinator {
       // Keep the final live handle until every provisional owner commits or
       // fails; otherwise a rejected approval upgrade or acquire orphans it.
       const pending = [entry.ready, ...(entry.approvalRequest ? [entry.approvalRequest] : [])];
-      let tracked: Promise<void>;
-      tracked = Promise.allSettled(pending).then(() => {
+      const tracked = Promise.allSettled(pending).then(() => {
         if (entry.release === tracked) {
           entry.release = null;
         }
@@ -334,7 +333,7 @@ export class GatewaySessionMessageSubscriptionCoordinator {
     entry: SessionMessageSubscriptionEntry,
     includeApprovals: boolean,
   ): Promise<SessionMessageSubscriptionResponse> {
-    const result = await this.#client.request<unknown>("sessions.messages.subscribe", {
+    const result = await this.#client.request("sessions.messages.subscribe", {
       ...sessionSubscriptionParams(entry.key, entry.agentId),
       ...(includeApprovals ? { includeApprovals: true } : {}),
     });
