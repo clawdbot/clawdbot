@@ -64,7 +64,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /automation/cron-jobs
 - Headings:
   - H2: Quick start
-  - H2: How cron works
+  - H2: How automations work
   - H2: Schedule types
   - H3: Heartbeat task migration
   - H3: Stream sources
@@ -144,9 +144,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /automation
 - Headings:
   - H2: Quick decision guide
-  - H3: Scheduled Tasks (Cron) vs Heartbeat
+  - H3: Automations vs Heartbeat
   - H2: Core concepts
-  - H3: Scheduled tasks (cron)
+  - H3: Automations
   - H3: Tasks
   - H3: Task Flow
   - H3: Standing orders
@@ -168,7 +168,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Why standing orders
   - H2: How they work
   - H2: Anatomy of a standing order
-  - H2: Standing orders plus cron jobs
+  - H2: Standing orders plus automations
   - H2: Examples
   - H3: Example 1: content and social media (weekly cycle)
   - H3: Example 2: finance operations (event-triggered)
@@ -1476,7 +1476,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /cli/cron
 - Headings:
-  - H1: openclaw cron
+  - H1: openclaw automations
   - H2: Create jobs quickly
   - H2: Sessions
   - H2: Delivery
@@ -1487,7 +1487,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Recurring jobs
   - H3: Manual runs
   - H2: Models
-  - H3: Isolated cron model precedence
+  - H3: Isolated automation model precedence
   - H3: Fast mode
   - H3: Live model switch retries
   - H2: Run output and denials
@@ -3561,7 +3561,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Wizard
   - H2: Identity
   - H2: Bridge (legacy, removed)
-  - H2: Cron
+  - H2: Automations (cron)
   - H3: cron.failureAlert
   - H2: Media model template variables
   - H2: Config includes ($include)
@@ -3694,7 +3694,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Per-channel vs per-account examples
   - H3: Common patterns
   - H2: Monitor scratch (optional)
-  - H3: Schedule recurring checks with cron
+  - H3: Schedule recurring checks with automations
   - H3: Can the agent update its scratch?
   - H2: Manual wake (on-demand)
   - H2: Cost awareness
