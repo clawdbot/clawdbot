@@ -64,20 +64,23 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
         return initialState;
       }
       const cron = createInitialCronState({ client, connected: true });
-      const [cronResult, auth] = await Promise.allSettled([
-        loadCronJobsPage(cron),
-        loadModelAuthStatus(client, { signal }).catch(() => null),
+      await Promise.allSettled([
+        loadCronJobsPage(cron).then(() => {
+          if (!signal.aborted) {
+            this.cronJobs = cron.cronJobs;
+          }
+        }),
+        loadModelAuthStatus(client, { signal })
+          .catch(() => null)
+          .then((modelAuthStatus) => {
+            if (!signal.aborted) {
+              this.modelAuthStatus = modelAuthStatus;
+            }
+          }),
       ]);
-      return {
-        cronJobs: cronResult.status === "fulfilled" ? cron.cronJobs : null,
-        modelAuthStatus: auth.status === "fulfilled" ? auth.value : null,
-      };
+      return true;
     },
-    onComplete: ({ cronJobs, modelAuthStatus }) => {
-      if (cronJobs) {
-        this.cronJobs = cronJobs;
-      }
-      this.modelAuthStatus = modelAuthStatus;
+    onComplete: () => {
       this.loadedAtMs = Date.now();
       this.pruneAfterRefresh();
     },
