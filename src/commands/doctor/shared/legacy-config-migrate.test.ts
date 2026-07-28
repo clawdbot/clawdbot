@@ -2323,6 +2323,21 @@ describe("legacy migrate sandbox scope aliases", () => {
               },
             },
           },
+          blankEnabled: {
+            sandbox: {
+              browser: {
+                enabled: true,
+                network: "   ",
+              },
+            },
+          },
+          blankInherited: {
+            sandbox: {
+              browser: {
+                network: "",
+              },
+            },
+          },
         },
       },
     };
@@ -2335,6 +2350,7 @@ describe("legacy migrate sandbox scope aliases", () => {
     expect(res.changes).toStrictEqual([
       'Disabled agents.entries.inherited.sandbox.browser because it inherited unsupported browser network "none".',
       "Set agents.entries.isolated.sandbox.browser.enabled to true to preserve its explicit supported network while disabling the unsupported default browser network.",
+      "Set agents.entries.blankInherited.sandbox.browser.enabled to true to preserve its explicit supported network while disabling the unsupported default browser network.",
       'Disabled agents.defaults.sandbox.browser and moved its unsupported network "none" → "openclaw-sandbox-browser".',
     ]);
     expect(res.config?.agents?.defaults?.sandbox?.browser).toEqual({
@@ -2349,6 +2365,14 @@ describe("legacy migrate sandbox scope aliases", () => {
     expect(res.config?.agents?.entries?.isolated?.sandbox?.browser).toEqual({
       enabled: true,
       network: "isolated-browser-net",
+    });
+    expect(res.config?.agents?.entries?.blankEnabled?.sandbox?.browser).toEqual({
+      enabled: true,
+      network: "   ",
+    });
+    expect(res.config?.agents?.entries?.blankInherited?.sandbox?.browser).toEqual({
+      enabled: true,
+      network: "",
     });
     expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
   });

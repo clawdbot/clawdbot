@@ -639,19 +639,20 @@ function migrateAgentBrowserInheritedFromUnsupportedDefault(params: {
   if (!browser) {
     return;
   }
+  const hasExplicitNetwork = typeof browser.network === "string";
   const network = normalizeOptionalLowercaseString(browser.network);
   if (network === "none") {
     migrateExplicitUnsupportedSandboxBrowserNetwork(browser, params.pathLabel, params.changes);
     return;
   }
-  if (network === undefined && browser.enabled === true) {
+  if (!hasExplicitNetwork && browser.enabled === true) {
     browser.enabled = false;
     params.changes.push(
       `Disabled ${params.pathLabel} because it inherited unsupported browser network "none".`,
     );
     return;
   }
-  if (network !== undefined && browser.enabled === undefined && params.defaultBrowserEnabled) {
+  if (hasExplicitNetwork && browser.enabled === undefined && params.defaultBrowserEnabled) {
     browser.enabled = true;
     params.changes.push(
       `Set ${params.pathLabel}.enabled to true to preserve its explicit supported network while disabling the unsupported default browser network.`,
