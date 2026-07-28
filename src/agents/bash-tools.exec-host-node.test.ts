@@ -856,6 +856,47 @@ describe("executeNodeHostCommand", () => {
     }
   });
 
+  it("does not report a failed detached approval after its owning run is aborted", async () => {
+    const abortController = new AbortController();
+    resolveApprovalDecisionOrUndefinedMock.mockImplementationOnce(async (params) => {
+      abortController.abort(new Error("run aborted before approval failure delivery"));
+      params?.onFailure();
+      return undefined;
+    });
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "full",
+      hostAsk: "always",
+      askFallback: "deny",
+    });
+
+    const result = await executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+      signal: abortController.signal,
+    });
+
+    expect(result.details?.status).toBe("approval-pending");
+    await setImmediate();
+    expect(resolveApprovalDecisionOrUndefinedMock).toHaveBeenCalledOnce();
+    expect(sendExecApprovalFollowupResultMock).not.toHaveBeenCalled();
+    expect(
+      callGatewayToolMock.mock.calls.some(
+        ([method, , params]) =>
+          method === "node.invoke" &&
+          (params as MockNodeInvokeParams | undefined)?.command === "system.run",
+      ),
+    ).toBe(false);
+  });
+
   it("never reports a completed detached node command as denied when delivery fails", async () => {
     const unhandledRejections = captureProcessUnhandledRejections();
 

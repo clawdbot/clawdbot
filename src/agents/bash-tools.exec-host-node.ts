@@ -5,7 +5,6 @@
  */
 import { randomUUID } from "node:crypto";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "../gateway/operator-scopes.js";
-import type { InterpreterInlineEvalHit } from "../infra/command-analysis/inline-eval.js";
 import {
   type ExecAsk,
   type ExecSecurity,
@@ -17,7 +16,6 @@ import {
 import {
   defaultExecAutoReviewer,
   resolveExecAutoReviewDecision,
-  type ExecAutoReviewInput,
 } from "../infra/exec-auto-review.js";
 import { tail } from "./bash-process-registry.js";
 import {
@@ -26,6 +24,11 @@ import {
   isExecApprovalRunAbortedError,
   registerExecApprovalRequestForHostOrThrow,
 } from "./bash-tools.exec-approval-request.js";
+import {
+  createNodeApprovalRequestFailureFollowup,
+  nodePolicyBlocksAutoReview,
+  resolveNodeAutoReviewReason,
+} from "./bash-tools.exec-host-node-followup.js";
 import {
   analyzeNodeApprovalRequirement,
   buildNodeSystemRunInvoke,
@@ -102,53 +105,6 @@ async function assertCurrentNodeGatewayPolicyAllowsDispatch(params: {
   if (!params.currentPolicyAllows?.(current)) {
     throw new Error("exec denied: host=node policy changed before dispatch");
   }
-}
-
-function resolveNodeAutoReviewReason(params: {
-  inlineEvalHit: InterpreterInlineEvalHit | null;
-  hostSecurity: ExecSecurity;
-  analysisOk: boolean;
-  allowlistSatisfied: boolean;
-  durableApprovalSatisfied: boolean;
-}): ExecAutoReviewInput["reason"] {
-  if (params.inlineEvalHit !== null) {
-    return "strict-inline-eval";
-  }
-  if (
-    params.hostSecurity === "allowlist" &&
-    (!params.analysisOk || !params.allowlistSatisfied) &&
-    !params.durableApprovalSatisfied
-  ) {
-    return "allowlist-miss";
-  }
-  return "approval-required";
-}
-
-function execSecurityFloorRank(security: ExecSecurity): number {
-  switch (security) {
-    case "full":
-      return 0;
-    case "allowlist":
-      return 1;
-    case "deny":
-      return 2;
-  }
-  throw new Error("Unsupported exec security floor");
-}
-
-function nodePolicyBlocksAutoReview(params: {
-  hostSecurity: ExecSecurity;
-  nodeApprovalPolicyKnown: boolean;
-  nodeSecurity?: ExecSecurity;
-  nodeAsk?: "off" | "on-miss" | "always";
-}): boolean {
-  // Remote node policy can be stricter than local host policy; do not auto-approve across that gap.
-  return (
-    !params.nodeApprovalPolicyKnown ||
-    params.nodeAsk === "always" ||
-    (params.nodeSecurity !== undefined &&
-      execSecurityFloorRank(params.nodeSecurity) > execSecurityFloorRank(params.hostSecurity))
-  );
 }
 
 /**
@@ -528,23 +484,14 @@ export async function executeNodeHostCommand(
           turnSourceAccountId: params.turnSourceAccountId,
           turnSourceThreadId: params.turnSourceThreadId,
         });
-        const sendApprovalRequestFailedFollowup = (): Promise<void> =>
-          Promise.resolve(
-            execHostShared.sendExecApprovalFollowupResult(
-              followupTarget,
-              `Exec denied (node=${target.nodeId} id=${approvalId}, approval-request-failed): ${params.command}`,
-            ),
-          ).catch(() => {
-            if (params.signal?.aborted) {
-              return;
-            }
-            return Promise.resolve(
-              execHostShared.sendExecApprovalFollowupResult(
-                followupTarget,
-                `Exec denied (node=${target.nodeId} id=${approvalId}, approval-request-failed): ${params.command}`,
-              ),
-            ).catch(() => undefined);
-          });
+        const sendApprovalRequestFailedFollowup = createNodeApprovalRequestFailureFollowup({
+          send: execHostShared.sendExecApprovalFollowupResult,
+          target: followupTarget,
+          nodeId: target.nodeId,
+          approvalId,
+          command: params.command,
+          signal: params.signal,
+        });
         let nodeInvocationStarted = false;
         let nodeInvocationCompleted = false;
 
@@ -689,7 +636,7 @@ export async function executeNodeHostCommand(
               `Exec denied (node=${target.nodeId} id=${approvalId}, invoke-failed): ${params.command}`,
             );
           }
-        })().catch((error: unknown) => {
+        })().catch(async (error: unknown): Promise<void> => {
           // Once dispatch starts, a delivery failure cannot mean execution was denied.
           if (
             nodeInvocationStarted ||
@@ -698,7 +645,7 @@ export async function executeNodeHostCommand(
           ) {
             return;
           }
-          return sendApprovalRequestFailedFollowup();
+          await sendApprovalRequestFailedFollowup();
         });
 
         return execHostShared.buildExecApprovalPendingToolResult({
