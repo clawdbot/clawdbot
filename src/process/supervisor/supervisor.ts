@@ -23,6 +23,17 @@ type ActiveRun = {
   scopeKey?: string;
 };
 
+type StartingRun = {
+  scopeKey?: string;
+  terminationReason?: TerminationReason;
+  cancel?: (reason: TerminationReason) => void;
+};
+
+type StartingScope = {
+  runs: Set<Promise<ManagedRun>>;
+  replacement?: Promise<ManagedRun>;
+};
+
 const GRACEFUL_CANCEL_TIMEOUT_MS = 5000;
 const DEFAULT_MAX_CAPTURED_OUTPUT_CHARS = 1024 * 1024;
 
@@ -94,22 +105,31 @@ function resolveElapsedTimeoutReason(params: {
 export function createProcessSupervisor(): ProcessSupervisor {
   const registry = createRunRegistry();
   const active = new Map<string, ActiveRun>();
+  const startingRuns = new Map<string, StartingRun>();
+  const startingScopes = new Map<string, StartingScope>();
 
   const cancel = (runId: string, reason: TerminationReason = "manual-cancel") => {
     const current = active.get(runId);
-    if (!current) {
+    if (current) {
+      registry.updateState(runId, "exiting", {
+        terminationReason: reason,
+      });
+      current.run.cancel(reason);
       return;
     }
+
+    const starting = startingRuns.get(runId);
+    if (!starting) {
+      return;
+    }
+    starting.terminationReason ??= reason;
     registry.updateState(runId, "exiting", {
-      terminationReason: reason,
+      terminationReason: starting.terminationReason,
     });
-    current.run.cancel(reason);
+    starting.cancel?.(starting.terminationReason);
   };
 
-  const cancelScope = (scopeKey: string, reason: TerminationReason = "manual-cancel") => {
-    if (!scopeKey.trim()) {
-      return;
-    }
+  const cancelActiveScope = (scopeKey: string, reason: TerminationReason) => {
     for (const [runId, run] of active.entries()) {
       if (run.scopeKey !== scopeKey) {
         continue;
@@ -118,19 +138,33 @@ export function createProcessSupervisor(): ProcessSupervisor {
     }
   };
 
-  const spawn = async (input: SpawnInput): Promise<ManagedRun> => {
-    const runId = normalizeOptionalString(input.runId) ?? crypto.randomUUID();
-    const scopeKey = normalizeOptionalString(input.scopeKey);
-    if (input.replaceExistingScope && scopeKey) {
-      cancelScope(scopeKey, "manual-cancel");
+  const cancelScope = (scopeKey: string, reason: TerminationReason = "manual-cancel") => {
+    if (!scopeKey.trim()) {
+      return;
     }
+    cancelActiveScope(scopeKey, reason);
+    for (const [runId, starting] of startingRuns.entries()) {
+      if (starting.scopeKey === scopeKey) {
+        cancel(runId, reason);
+      }
+    }
+  };
+
+  const startRun = async (
+    input: SpawnInput,
+    scopeKey: string | undefined,
+    runId: string,
+    startingRun: StartingRun,
+  ): Promise<ManagedRun> => {
     const startedAtMs = Date.now();
+    const startingTerminationReason = startingRun.terminationReason;
     const record: RunRecord = {
       runId,
       sessionId: input.sessionId,
       backendId: input.backendId,
       scopeKey,
-      state: "starting",
+      state: startingTerminationReason ? "exiting" : "starting",
+      ...(startingTerminationReason ? { terminationReason: startingTerminationReason } : {}),
       startedAtMs,
       lastOutputAtMs: startedAtMs,
       createdAtMs: startedAtMs,
@@ -138,13 +172,48 @@ export function createProcessSupervisor(): ProcessSupervisor {
     };
     registry.add(record);
 
-    let forcedReason: TerminationReason | null = null;
+    if (startingTerminationReason) {
+      // A replacement can be cancelled behind its scope fence. Never launch
+      // its command or terminate the surviving scope after that cancellation.
+      const exit: RunExit = {
+        reason: startingTerminationReason,
+        exitCode: null,
+        exitSignal: null,
+        durationMs: Date.now() - startedAtMs,
+        stdout: "",
+        stderr: "",
+        timedOut: isTimeoutReason(startingTerminationReason),
+        noOutputTimedOut: startingTerminationReason === "no-output-timeout",
+      };
+      registry.finalize(runId, {
+        reason: exit.reason,
+        exitCode: exit.exitCode,
+        exitSignal: exit.exitSignal,
+      });
+      return {
+        runId,
+        startedAtMs,
+        wait: async () => exit,
+        cancel: () => undefined,
+      };
+    }
+
+    if (input.replaceExistingScope && scopeKey) {
+      // Scope admission already waited for predecessor startups. Do not
+      // cancel this replacement or later runs reserved behind its fence.
+      cancelActiveScope(scopeKey, "manual-cancel");
+    }
+
+    let forcedReason: TerminationReason | null = startingRun.terminationReason ?? null;
     let settled = false;
     let stdout = "";
     let stderr = "";
+    let stdoutListener = input.onStdout;
+    let stderrListener = input.onStderr;
     let timeoutTimer: NodeJS.Timeout | null = null;
     let noOutputTimer: NodeJS.Timeout | null = null;
     let forceKillTimer: NodeJS.Timeout | null = null;
+    let cancelRequested = false;
     const captureOutput = input.captureOutput !== false;
     const maxCapturedOutputChars = clampCapturedOutputChars(input.maxCapturedOutputChars);
 
@@ -167,6 +236,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
       setForcedReason(reason);
       cancelAdapter?.(reason);
     };
+    startingRun.cancel = requestCancel;
 
     const touchOutput = () => {
       registry.touchOutput(runId);
@@ -208,9 +278,13 @@ export function createProcessSupervisor(): ProcessSupervisor {
               windowsVerbatimArguments: input.windowsVerbatimArguments,
               input: input.input,
               stdinMode: input.stdinMode,
+              secretInput: input.secretInput,
             });
 
-      registry.updateState(runId, "running", { pid: adapter.pid });
+      registry.updateState(runId, forcedReason ? "exiting" : "running", {
+        pid: adapter.pid,
+        ...(forcedReason ? { terminationReason: forcedReason } : {}),
+      });
 
       const clearTimers = () => {
         if (timeoutTimer) {
@@ -227,8 +301,19 @@ export function createProcessSupervisor(): ProcessSupervisor {
         }
       };
 
-      cancelAdapter = (_reason: TerminationReason) => {
-        if (settled || forceKillTimer) {
+      cancelAdapter = (reason: TerminationReason) => {
+        if (settled || cancelRequested) {
+          return;
+        }
+        cancelRequested = true;
+        // Windows has no catchable SIGTERM equivalent: the adapter implements it
+        // with asynchronous taskkill, so waiting the cleanup grace only delays an
+        // already-expired deadline before the same forced tree termination.
+        if (
+          process.platform === "win32" &&
+          (reason === "overall-timeout" || reason === "no-output-timeout")
+        ) {
+          adapter.kill("SIGKILL");
           return;
         }
         adapter.kill("SIGTERM");
@@ -257,14 +342,14 @@ export function createProcessSupervisor(): ProcessSupervisor {
         if (captureOutput) {
           stdout = appendCapturedOutput(stdout, chunk, "stdout", maxCapturedOutputChars);
         }
-        input.onStdout?.(chunk);
+        stdoutListener?.(chunk);
         touchOutput();
       });
       adapter.onStderr((chunk) => {
         if (captureOutput) {
           stderr = appendCapturedOutput(stderr, chunk, "stderr", maxCapturedOutputChars);
         }
-        input.onStderr?.(chunk);
+        stderrListener?.(chunk);
         touchOutput();
       });
 
@@ -335,12 +420,19 @@ export function createProcessSupervisor(): ProcessSupervisor {
         cancel: (reason = "manual-cancel") => {
           requestCancel(reason);
         },
+        detachOutput: () => {
+          stdoutListener = undefined;
+          stderrListener = undefined;
+        },
       };
 
       active.set(runId, {
         run: managedRun,
         scopeKey,
       });
+      if (forcedReason) {
+        managedRun.cancel(forcedReason);
+      }
       return managedRun;
     } catch (err) {
       registry.finalize(runId, {
@@ -352,6 +444,55 @@ export function createProcessSupervisor(): ProcessSupervisor {
       warnProcessSupervisorSpawnFailure(`spawn failed: runId=${runId} reason=${String(err)}`);
       throw err;
     }
+  };
+
+  const spawn = (input: SpawnInput): Promise<ManagedRun> => {
+    const scopeKey = normalizeOptionalString(input.scopeKey);
+    const runId = normalizeOptionalString(input.runId) ?? crypto.randomUUID();
+    const startingRun: StartingRun = { scopeKey };
+    // Reserve cancellation before either adapter startup or a replacement
+    // fence, so stopping a run cannot silently leave a late child alive.
+    startingRuns.set(runId, startingRun);
+
+    const starting = scopeKey
+      ? (startingScopes.get(scopeKey) ?? { runs: new Set<Promise<ManagedRun>>() })
+      : undefined;
+    if (scopeKey && starting) {
+      startingScopes.set(scopeKey, starting);
+    }
+
+    // Ordinary runs start together, but replacements fence later arrivals so
+    // delayed cancellation cannot accidentally terminate a newer scoped run.
+    const previous = starting
+      ? input.replaceExistingScope
+        ? Array.from(starting.runs)
+        : starting.replacement
+          ? [starting.replacement]
+          : []
+      : [];
+    const pending =
+      previous.length > 0
+        ? Promise.allSettled(previous).then(() => startRun(input, scopeKey, runId, startingRun))
+        : startRun(input, scopeKey, runId, startingRun);
+    starting?.runs.add(pending);
+    if (starting && input.replaceExistingScope) {
+      starting.replacement = pending;
+    }
+
+    const clearPendingStart = () => {
+      if (startingRuns.get(runId) === startingRun) {
+        startingRuns.delete(runId);
+      }
+      starting?.runs.delete(pending);
+      if (starting?.replacement === pending) {
+        delete starting.replacement;
+      }
+      if (scopeKey && starting?.runs.size === 0 && startingScopes.get(scopeKey) === starting) {
+        startingScopes.delete(scopeKey);
+      }
+    };
+    void pending.then(clearPendingStart, clearPendingStart);
+    return pending;
   };
 
   return {

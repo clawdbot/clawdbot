@@ -6,6 +6,9 @@ export const CONTROL_UI_BOOTSTRAP_CONFIG_PATH = "/control-ui-config.json";
 /** Authenticated same-origin prefix for plugin manifest/catalog icon bytes. */
 export const CONTROL_UI_PLUGIN_ICON_PATH_PREFIX = "/__openclaw__/plugin-icon";
 
+/** Authenticated same-origin prefix for allowlisted catalog icon bytes. */
+export const CONTROL_UI_CATALOG_ICON_PATH_PREFIX = "/__openclaw__/catalog-icon";
+
 /** Lifetime shared by server-minted plugin-tab grants and parent-side renewal. */
 export const CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS = 5 * 60 * 1000;
 
@@ -134,7 +137,7 @@ export type ControlUiBootstrapConfig = {
   assistantAvatarSource?: string | null;
   assistantAvatarStatus?: "none" | "local" | "remote" | "data" | null;
   assistantAvatarReason?: string | null;
-  assistantAgentId: string;
+  assistantAgentId?: string;
   serverVersion?: string;
   /**
    * Git branch of a source-checkout (non-release) gateway install. Omitted for
@@ -145,7 +148,6 @@ export type ControlUiBootstrapConfig = {
   localMediaPreviewRoots?: string[];
   embedSandbox?: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
-  chatMessageMaxWidth?: string;
   seamColor?: string;
   /** Resolved `agents.defaults.timeFormat`; "auto" keeps the browser locale default. */
   timeFormat?: "auto" | "12" | "24";

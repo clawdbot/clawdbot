@@ -1,5 +1,6 @@
 // Qqbot plugin module implements inbound context behavior.
 import type { ChannelIngressDecision } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { EngineAdapters } from "../adapter/index.js";
 import type { QQBotGroupCommandLevel } from "../config/group.js";
 import type { GroupActivationMode } from "../group/activation.js";
@@ -33,7 +34,12 @@ export interface InboundGroupInfo {
 
 export interface InboundContext {
   event: QueuedMessage;
-  route: { sessionKey: string; accountId: string; agentId?: string };
+  route: {
+    sessionKey: string;
+    accountId: string;
+    agentId?: string;
+    dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+  };
   isGroupChat: boolean;
   peerId: string;
   qualifiedTarget: string;
@@ -69,7 +75,7 @@ export interface InboundContext {
 
 export interface InboundPipelineDeps {
   account: GatewayAccount;
-  cfg: unknown;
+  cfg: OpenClawConfig;
   log?: EngineLogger;
   runtime: GatewayPluginRuntime;
   startTyping: (event: QueuedMessage) => Promise<{

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import JSON5 from "json5";
 import { isSensitiveConfigPath } from "./sensitive-paths.js";
 import type { ConfigValidationIssue } from "./types.js";
@@ -255,7 +256,7 @@ function stringifyReceivedValue(value: unknown): string | null {
     if (serialized === undefined) {
       return null;
     }
-    return serialized.length > 160 ? `${serialized.slice(0, 157)}...` : serialized;
+    return serialized.length > 160 ? `${truncateUtf16Safe(serialized, 157)}...` : serialized;
   } catch {
     return null;
   }

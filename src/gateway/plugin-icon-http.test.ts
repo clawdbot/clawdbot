@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   encodeImage: vi.fn(),
   readImageMetadata: vi.fn(),
   readRemoteMediaBuffer: vi.fn(),
+  resolveCatalogIconUrl: vi.fn(),
   resolveIconUrl: vi.fn(),
 }));
 
@@ -30,6 +31,7 @@ vi.mock("../media/image-ops.js", () => ({
 
 vi.mock("../plugins/management-service.js", () => ({
   resolveManagedPluginIconUrl: (...args: unknown[]) => mocks.resolveIconUrl(...args),
+  resolveManagedSetupCatalogIconUrl: (...args: unknown[]) => mocks.resolveCatalogIconUrl(...args),
 }));
 
 const {
@@ -88,6 +90,7 @@ beforeEach(() => {
     trustDeclaredOperatorScopes: false,
   });
   mocks.resolveIconUrl.mockResolvedValue("https://cdn.example.test/plugin.svg");
+  mocks.resolveCatalogIconUrl.mockImplementation(({ iconUrl }) => iconUrl);
   mocks.readImageMetadata.mockReturnValue({ width: 1, height: 1 });
   mocks.encodeImage.mockResolvedValue({ data: NORMALIZED_PNG_BYTES });
   mocks.readRemoteMediaBuffer.mockResolvedValue({
@@ -161,6 +164,30 @@ describe("GET /__openclaw__/plugin-icon/:pluginId", () => {
         enlarge: false,
       },
     });
+  });
+
+  it("resolves encoded catalog URLs through the server-owned allowlist", async () => {
+    const iconUrl = "https://cdn.example.test/setup-tool.svg";
+    const response = await request(`/__openclaw__/catalog-icon/${encodeURIComponent(iconUrl)}`);
+
+    expect(response.status).toBe(200);
+    expect(mocks.resolveCatalogIconUrl).toHaveBeenCalledWith({
+      config: testConfig,
+      iconUrl,
+    });
+    expect(mocks.readRemoteMediaBuffer).toHaveBeenCalledWith(
+      expect.objectContaining({ url: iconUrl }),
+    );
+  });
+
+  it("does not fetch catalog URLs rejected by the server-owned allowlist", async () => {
+    mocks.resolveCatalogIconUrl.mockReturnValueOnce(undefined);
+    const response = await request(
+      `/__openclaw__/catalog-icon/${encodeURIComponent("https://untrusted.example/icon.png")}`,
+    );
+
+    expect(response.status).toBe(404);
+    expect(mocks.readRemoteMediaBuffer).not.toHaveBeenCalled();
   });
 
   it("serves SVG only as a sandboxed attachment for browser-side rasterization", async () => {

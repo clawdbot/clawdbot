@@ -15,11 +15,13 @@ const {
   attachGatewayWsMessageHandlerMock,
   attachWorkerWsMessageHandlerMock,
   broadcastPresenceSnapshotMock,
+  touchPresenceMock,
   upsertPresenceMock,
 } = vi.hoisted(() => ({
   attachGatewayWsMessageHandlerMock: vi.fn(),
   attachWorkerWsMessageHandlerMock: vi.fn((_params: unknown) => vi.fn()),
   broadcastPresenceSnapshotMock: vi.fn(),
+  touchPresenceMock: vi.fn(),
   upsertPresenceMock: vi.fn(),
 }));
 
@@ -30,6 +32,7 @@ vi.mock("./ws-connection/worker-connection.js", () => ({
   attachWorkerWsMessageHandler: attachWorkerWsMessageHandlerMock,
 }));
 vi.mock("../../infra/system-presence.js", () => ({
+  touchPresence: touchPresenceMock,
   upsertPresence: upsertPresenceMock,
 }));
 vi.mock("./presence-events.js", () => ({
@@ -88,6 +91,7 @@ describe("attachGatewayWsConnectionHandler", () => {
     attachGatewayWsMessageHandlerMock.mockReset();
     attachWorkerWsMessageHandlerMock.mockClear();
     broadcastPresenceSnapshotMock.mockReset();
+    touchPresenceMock.mockReset();
     upsertPresenceMock.mockReset();
   });
 
@@ -240,13 +244,16 @@ describe("attachGatewayWsConnectionHandler", () => {
         socket,
         connect: { client: { id: "openclaw-control-ui", mode: "webchat" } },
         connId: "ping-client",
+        presenceKey: "ping-client",
         usesSharedGatewayAuth: false,
       }),
     ).toBe(true);
 
     vi.advanceTimersByTime(25_000);
     expect(socket.ping).toHaveBeenCalledTimes(1);
+    expect(touchPresenceMock).not.toHaveBeenCalled();
     socket.emit("pong");
+    expect(touchPresenceMock).toHaveBeenCalledWith("ping-client");
 
     vi.advanceTimersByTime(25_000);
     expect(socket.ping).toHaveBeenCalledTimes(2);
@@ -431,6 +438,31 @@ describe("attachGatewayWsConnectionHandler", () => {
     socket.emit("close", 1000, Buffer.from("done"));
 
     expect(logWsControl.warn).not.toHaveBeenCalled();
+  });
+
+  it("logs the authenticated user when a connection closes", async () => {
+    const { socket, logWsControl, passed } = await connectTestWs();
+    const handlerParams = passed as {
+      setClient: (client: never) => boolean;
+    };
+
+    expect(
+      handlerParams.setClient({
+        socket,
+        connect: { client: { id: "openclaw-control-ui", mode: "ui" } },
+        connId: "conn-authenticated-user",
+        authenticatedUserId: "alice@example.com",
+        usesSharedGatewayAuth: false,
+      } as never),
+    ).toBe(true);
+
+    socket.emit("close", 1000, Buffer.from("done"));
+
+    expect(logWsControl.info).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /^authenticated user disconnected code=1000 reason=done conn=.+ user=alice@example\.com$/,
+      ),
+    );
   });
 
   it("skips node presence disconnects for stale reconnected sockets", async () => {

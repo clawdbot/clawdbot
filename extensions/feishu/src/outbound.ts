@@ -7,11 +7,11 @@ import {
 } from "openclaw/plugin-sdk/channel-send-result";
 import type { MessagePresentationBlock } from "openclaw/plugin-sdk/interactive-runtime";
 import {
-  interactiveReplyToPresentation,
-  normalizeInteractiveReply,
+  legacyInteractiveReplyToPresentation,
+  normalizeLegacyInteractiveReply,
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
-  resolveInteractiveTextFallback,
+  resolveLegacyInteractiveTextFallback,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
@@ -179,10 +179,10 @@ function buildFeishuPayloadCard(params: {
 
   const rawText = params.text ?? params.payload.text;
   const textCard = readNativeFeishuCardJson(rawText);
-  const interactive = normalizeInteractiveReply(params.payload.interactive);
+  const interactive = normalizeLegacyInteractiveReply(params.payload.interactive);
   const presentation =
     normalizeMessagePresentation(params.payload.presentation) ??
-    (interactive ? interactiveReplyToPresentation(interactive) : undefined);
+    (interactive ? legacyInteractiveReplyToPresentation(interactive) : undefined);
   if (!presentation && !interactive) {
     if (!textCard) {
       return undefined;
@@ -193,7 +193,7 @@ function buildFeishuPayloadCard(params: {
 
   const text = textCard
     ? undefined
-    : resolveInteractiveTextFallback({
+    : resolveLegacyInteractiveTextFallback({
         text: rawText,
         interactive,
       });
@@ -600,10 +600,10 @@ export const feishuOutbound: ChannelOutboundAdapter = {
     const { payload, presentationFallback } = consumeFeishuPresentationFallbackMarker(ctx.payload);
     const ttsSupplement = getReplyPayloadTtsSupplement(payload);
     if (parseFeishuCommentTarget(ctx.to)) {
-      const interactive = normalizeInteractiveReply(payload.interactive);
+      const interactive = normalizeLegacyInteractiveReply(payload.interactive);
       const normalizedPresentation =
         normalizeMessagePresentation(payload.presentation) ??
-        (interactive ? interactiveReplyToPresentation(interactive) : undefined);
+        (interactive ? legacyInteractiveReplyToPresentation(interactive) : undefined);
       // Document comments cannot render cards. Resolve the text path before
       // validating card limits so unused native card data cannot block delivery.
       const textCard = readNativeFeishuCardJson(payload.text);
@@ -652,10 +652,10 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       if (ttsSupplement) {
         return await sendFeishuTtsSupplementPayload({ ctx, payload, supplement: ttsSupplement });
       }
-      const interactive = normalizeInteractiveReply(payload.interactive);
+      const interactive = normalizeLegacyInteractiveReply(payload.interactive);
       const presentation =
         normalizeMessagePresentation(payload.presentation) ??
-        (interactive ? interactiveReplyToPresentation(interactive) : undefined);
+        (interactive ? legacyInteractiveReplyToPresentation(interactive) : undefined);
       const fallbackPayload = presentation
         ? {
             ...payload,

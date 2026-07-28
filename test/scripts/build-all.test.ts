@@ -59,6 +59,10 @@ function withBuildCacheFixture(
             }
         >;
         restore?: "always";
+        runOnHit?: {
+          env?: NodeJS.ProcessEnv;
+          finalize?: "refresh";
+        };
       };
     };
   }) => void,
@@ -275,6 +279,21 @@ describe("resolveBuildAllStep", () => {
     const step = getBuildAllStep("copy-export-html-templates");
 
     expect(step.cache?.outputs).toEqual(["dist/export-html"]);
+  });
+
+  it("restores startup metadata as a validator seed and refreshes it after validation", () => {
+    const step = getBuildAllStep("write-cli-startup-metadata");
+
+    expect(step.cache).toMatchObject({
+      inputs: [
+        "scripts/write-cli-startup-metadata.ts",
+        "scripts/lib/cli-startup-root-help-bundle.ts",
+      ],
+      outputs: ["dist/cli-startup-metadata.json"],
+      restore: "always",
+      runOnHit: { finalize: "refresh" },
+    });
+    expect(resolveBuildAllStepOnCacheHit(step)).not.toBeNull();
   });
 });
 
@@ -676,7 +695,6 @@ describe("resolveBuildAllSteps", () => {
     expect(step.cache?.inputs).not.toContain("src/plugin-sdk");
     expect(step.cache?.outputs).toEqual(
       expect.arrayContaining([
-        "dist/plugin-sdk/webhook-path.js",
         "dist/plugin-sdk/.boundary-entry-shims.stamp",
         "packages/plugin-sdk/dist/src/plugin-sdk/provider-entry.d.ts",
       ]),
@@ -1012,6 +1030,33 @@ describe("resolveBuildAllStepCacheState", () => {
         finalizeBuildAllStepCache(alwaysRestoreStep, restorable, { rootDir, reusedCache: true }),
       ).toBe(true);
       expect(fs.readFileSync(outputPath, "utf8")).toBe("output");
+    });
+  });
+
+  it("refreshes validator cache outputs after a cache-hit command updates them", () => {
+    withBuildCacheFixture(({ rootDir, outputPath, step }) => {
+      const refreshStep = {
+        ...step,
+        cache: {
+          ...step.cache,
+          restore: "always" as const,
+          runOnHit: { finalize: "refresh" as const },
+        },
+      };
+      const cacheState = resolveBuildAllStepCacheState(refreshStep, { rootDir });
+      writeBuildAllStepCacheStamp(refreshStep, cacheState, { rootDir });
+      const restorable = resolveBuildAllStepCacheState(refreshStep, { rootDir });
+      expect(restoreBuildAllStepCacheOutputs(restorable, { rootDir })).toBe(true);
+
+      fs.writeFileSync(outputPath, "validated refresh");
+      expect(
+        finalizeBuildAllStepCache(refreshStep, restorable, { rootDir, reusedCache: true }),
+      ).toBe(true);
+      fs.rmSync(outputPath);
+
+      const refreshed = resolveBuildAllStepCacheState(refreshStep, { rootDir });
+      expect(restoreBuildAllStepCacheOutputs(refreshed, { rootDir })).toBe(true);
+      expect(fs.readFileSync(outputPath, "utf8")).toBe("validated refresh");
     });
   });
 

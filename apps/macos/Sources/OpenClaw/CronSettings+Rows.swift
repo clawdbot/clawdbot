@@ -48,6 +48,7 @@ extension CronSettings {
             self.editorError = nil
             self.showEditor = true
         }
+        .disabled(!job.payload.isEditableInMacApp)
         Divider()
         Button("Delete…", role: .destructive) {
             self.confirmDelete = job
@@ -87,6 +88,11 @@ extension CronSettings {
                     self.showEditor = true
                 }
                 .buttonStyle(.bordered)
+                .disabled(!job.payload.isEditableInMacApp)
+                .help(
+                    job.payload.isEditableInMacApp
+                        ? "Edit automation"
+                        : "Command and script payloads are read-only in the macOS app")
             }
         }
     }
@@ -238,6 +244,28 @@ extension CronSettings {
                                 }
                             }
                         }
+                    }
+                }
+            case let .command(argv, cwd, _, _, timeoutSeconds, _, _, _, _):
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(argv.joined(separator: " "))
+                        .font(.callout.monospaced())
+                        .textSelection(.enabled)
+                    HStack(spacing: 8) {
+                        StatusPill(text: "command · read-only", tint: .secondary)
+                        if let cwd, !cwd.isEmpty { StatusPill(text: cwd, tint: .secondary) }
+                        if let timeoutSeconds { StatusPill(text: "\(timeoutSeconds)s", tint: .secondary) }
+                    }
+                }
+            case let .script(script, timeoutSeconds, toolBudget, _, _):
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(script)
+                        .font(.callout.monospaced())
+                        .textSelection(.enabled)
+                    HStack(spacing: 8) {
+                        StatusPill(text: "script · read-only", tint: .secondary)
+                        if let timeoutSeconds { StatusPill(text: "\(timeoutSeconds)s", tint: .secondary) }
+                        if let toolBudget { StatusPill(text: "\(toolBudget) tools", tint: .secondary) }
                     }
                 }
             }

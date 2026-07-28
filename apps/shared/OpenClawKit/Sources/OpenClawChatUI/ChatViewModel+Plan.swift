@@ -5,13 +5,21 @@ import OpenClawKit
 extension OpenClawChatViewModel {
     func applyPlanSnapshot(runId: String, data: [String: AnyCodable]) {
         let steps = OpenClawChatPlanStep.parseSteps(data["steps"])
+        let explanation = data["explanation"]?.value as? String
+        self.applyPlanSnapshot(runId: runId, steps: steps, explanation: explanation)
+    }
+
+    func applyPlanSnapshot(
+        runId: String,
+        steps: [OpenClawChatPlanStep],
+        explanation: String?)
+    {
         guard !steps.isEmpty else {
             self.clearPlan(for: runId)
             return
         }
-        let explanation = (data["explanation"]?.value as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalizedExplanation = explanation?.isEmpty == false ? explanation : nil
+        let trimmedExplanation = explanation?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedExplanation = trimmedExplanation?.isEmpty == false ? trimmedExplanation : nil
         guard planRunId != runId ||
             planSteps != steps ||
             planExplanation != normalizedExplanation

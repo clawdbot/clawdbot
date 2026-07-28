@@ -10,7 +10,10 @@ import { resolveAgentExplicitRecipientSession } from "../../infra/outbound/agent
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
 import { normalizePluginsConfig } from "../../plugins/config-state.js";
-import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
+import {
+  isPluginMetadataSnapshotCompatible,
+  resolvePluginMetadataSnapshot,
+} from "../../plugins/plugin-metadata-snapshot.js";
 import {
   classifySessionKeyShape,
   isUnscopedSessionKeySentinel,
@@ -35,7 +38,7 @@ import {
 } from "../agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
-import type { ModelManifestNormalizationContext } from "../model-selection-normalize.js";
+import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import { buildConfiguredModelCatalog, resolveConfiguredModelRef } from "../model-selection.js";
 import { normalizeSpawnedRunMetadata } from "../spawned-context.js";
 import { resolveEffectiveAgentRuntime } from "../thinking-runtime.js";
@@ -133,7 +136,7 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
     );
   }
 
-  const { cfg } = await resolveAgentRuntimeConfig(runtime, {
+  const { cfg, pluginMetadataSnapshot } = await resolveAgentRuntimeConfig(runtime, {
     runtimeTargetsChannelSecrets: opts.deliver === true,
     runtimeChannelSecretScope:
       opts.deliver !== true && shouldResolveExplicitRecipientSession && recipientChannel
@@ -247,9 +250,15 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
     agentId: agentIdOverride,
     clone: false,
   });
-
-  const { sessionId, sessionKey, storePath, isNewSession, persistedThinking, persistedVerbose } =
-    sessionResolution;
+  const {
+    sessionId,
+    sessionKey,
+    storePath,
+    isNewSession,
+    previousSessionId,
+    persistedThinking,
+    persistedVerbose,
+  } = sessionResolution;
   const harnessSessionError = sessionKey
     ? resolveAgentHarnessSessionContextError(sessionKey, sessionResolution.sessionEntry)
     : undefined;
@@ -285,7 +294,16 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
   const pluginsEnabled = normalizePluginsConfig(cfg.plugins).enabled;
   const manifestMetadataSnapshot = pluginsEnabled
-    ? loadManifestMetadataSnapshot({ config: cfg, workspaceDir, env: process.env })
+    ? pluginMetadataSnapshot &&
+      pluginMetadataSnapshot.pluginIds === undefined &&
+      isPluginMetadataSnapshotCompatible({
+        snapshot: pluginMetadataSnapshot,
+        config: cfg,
+        env: process.env,
+        workspaceDir,
+      })
+      ? pluginMetadataSnapshot
+      : resolvePluginMetadataSnapshot({ config: cfg, env: process.env, workspaceDir })
     : undefined;
   const modelManifestContext = {
     manifestPlugins: manifestMetadataSnapshot?.plugins ?? [],
@@ -348,7 +366,7 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
     const transcriptBody =
       opts.transcriptMessage ?? resolveInternalEventTranscriptBody(message, opts.internalEvents);
 
-    return {
+    const prepared = {
       opts: commandOpts,
       body,
       transcriptBody,
@@ -367,6 +385,7 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
       sessionStore,
       storePath,
       isNewSession,
+      previousSessionId,
       persistedThinking,
       persistedVerbose,
       sessionAgentId,
@@ -383,6 +402,7 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
       acpResolution,
       runLease,
     };
+    return prepared;
   } catch (error) {
     await runLease?.release();
     throw error;

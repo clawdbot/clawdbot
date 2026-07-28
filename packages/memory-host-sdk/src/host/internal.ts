@@ -33,6 +33,7 @@ import {
   shouldSkipRootMemoryAuxiliaryPath,
 } from "./openclaw-runtime-memory.js";
 import { retryTransientMemoryRead } from "./read-retry.js";
+import type { MemoryEntryProvenance } from "./types.js";
 
 export { hashText } from "./hash.js";
 import { hashText } from "./hash.js";
@@ -56,6 +57,7 @@ export type MemoryChunk = {
   text: string;
   hash: string;
   embeddingInput?: EmbeddingInput;
+  provenance?: MemoryEntryProvenance;
 };
 
 type MultimodalMemoryChunk = {
@@ -108,7 +110,11 @@ export function isMemoryPath(relPath: string): boolean {
   if (!normalized) {
     return false;
   }
-  if (normalized === MEMORY_HOST_ROOT_FILENAME || normalized.toLowerCase() === "dreams.md") {
+  if (
+    normalized === MEMORY_HOST_ROOT_FILENAME ||
+    normalized === "USER.md" ||
+    normalized.toLowerCase() === "dreams.md"
+  ) {
     return true;
   }
   return normalized.startsWith("memory/");
@@ -178,6 +184,7 @@ export async function listMemoryFiles(
   if (memoryFile) {
     await addMarkdownFile(memoryFile);
   }
+  await addMarkdownFile(path.join(workspaceDir, "USER.md"));
   try {
     const dirStat = await fs.lstat(memoryDir);
     if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {

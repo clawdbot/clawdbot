@@ -117,6 +117,11 @@ describe("gateway-processes", () => {
       "run",
     ]);
     expect(readGatewayProcessArgsSync(124)).toBeNull();
+    expect(spawnSyncMock).toHaveBeenCalledWith("ps", ["-o", "command=", "-p", "123"], {
+      encoding: "utf8",
+      killSignal: "SIGKILL",
+      timeout: 1_000,
+    });
   });
 
   it("falls back from powershell to wmic for windows process args", () => {

@@ -2,6 +2,9 @@
  * Chat message types for the UI layer.
  */
 
+import type { MediaKind } from "@openclaw/media-core/constants";
+import type { SenderIdentity } from "./sender-label.ts";
+
 export type ChatAttachment = {
   id: string;
   dataUrl?: string;
@@ -20,6 +23,8 @@ export type ChatQueueItem = {
   kind?: "queued" | "steered";
   attachments?: ChatAttachment[];
   refreshSessions?: boolean;
+  /** Transcript id of the replied-to message; Gateway hydrates reply context. */
+  replyToId?: string;
   localCommandArgs?: string;
   localCommandName?: string;
   pendingRunId?: string;
@@ -39,12 +44,14 @@ export type ChatQueueItem = {
   sendRequestStartedAtMs?: number;
   sessionKey?: string;
   agentId?: string;
+  sender?: SenderIdentity;
   skillWorkshopRevision?: ChatQueueSkillWorkshopRevision;
 };
 
 /** Union type for items in the chat thread */
 export type ChatItem =
   | { kind: "message"; key: string; message: unknown; duplicateCount?: number }
+  | { kind: "notice"; key: string; text: string; timestamp: number }
   | {
       kind: "divider";
       key: string;
@@ -56,11 +63,13 @@ export type ChatItem =
     }
   | { kind: "stream"; key: string; text: string; startedAt: number; isStreaming: boolean }
   | { kind: "reading-indicator"; key: string; startedAt: number }
+  | { kind: "question"; key: string; questionId: string; startedAt: number }
   | { kind: "plan"; key: string };
 
 export type ChatStreamSegment = {
   text: string;
   ts: number;
+  runId?: string;
   toolCallId?: string;
   itemId?: string;
 };
@@ -86,6 +95,8 @@ export type MessageGroup = {
   key: string;
   role: string;
   senderLabel?: string | null;
+  sender?: SenderIdentity;
+  replyToSender?: SenderIdentity;
   messages: Array<{ message: unknown; key: string; duplicateCount?: number }>;
   timestamp: number;
   isStreaming: boolean;
@@ -104,7 +115,7 @@ export type MessageContentItem =
       type: "attachment";
       attachment: {
         url: string;
-        kind: "image" | "audio" | "video" | "document";
+        kind: Exclude<MediaKind, "sticker" | "unknown">;
         label: string;
         mimeType?: string;
         isVoiceNote?: boolean;
@@ -123,6 +134,7 @@ export type NormalizedMessage = {
   timestamp: number;
   id?: string;
   senderLabel?: string | null;
+  sender?: SenderIdentity;
   audioAsVoice?: boolean;
   replyTarget?:
     | {
@@ -162,12 +174,14 @@ export type ToolCard = {
     className?: string;
     style?: string;
     sandbox?: "strict" | "scripts";
+    boardWidgetName?: string;
     mcpApp?: {
       viewId: string;
       serverName?: string;
       toolName?: string;
       uiResourceUri?: string;
       toolCallId?: string;
+      originSessionKey?: string;
     };
   };
 };

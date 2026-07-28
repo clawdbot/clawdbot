@@ -43,7 +43,6 @@ const TSDOWN_MAIN_PACKAGE_OUTPUT_ROOTS = TSDOWN_PACKAGE_OUTPUT_ROOTS.filter(
 const TSDOWN_DECLARATION_TOOL_INPUTS = [
   "package.json",
   "pnpm-lock.yaml",
-  "npm-shrinkwrap.json",
   "tsconfig.json",
   "scripts/tsdown-build.mjs",
   "scripts/lib/bundled-plugin-build-entries.mjs",
@@ -97,7 +96,6 @@ const PLUGIN_SDK_SELF_BUILT_ENTRY_DTS_CACHE_INPUTS = [
   ...PLUGIN_SDK_ENTRY_DTS_SHARED_CACHE_INPUTS,
   "package.json",
   "pnpm-lock.yaml",
-  "npm-shrinkwrap.json",
   "tsconfig.json",
   "tsconfig.plugin-sdk.dts.json",
   {
@@ -112,7 +110,6 @@ const PLUGIN_SDK_SELF_BUILT_ENTRY_DTS_CACHE_INPUTS = [
   },
 ];
 const PLUGIN_SDK_ENTRY_DTS_CACHE_OUTPUTS = [
-  "dist/plugin-sdk/webhook-path.js",
   "dist/plugin-sdk/.boundary-entry-shims.stamp",
   ...pluginSdkEntrypoints.map((entry) => `packages/plugin-sdk/dist/src/plugin-sdk/${entry}.d.ts`),
 ];
@@ -263,6 +260,15 @@ export const BUILD_ALL_STEPS = [
     label: "write-cli-startup-metadata",
     kind: "node",
     args: ["--import", "tsx", "scripts/write-cli-startup-metadata.ts"],
+    cache: {
+      inputs: [
+        "scripts/write-cli-startup-metadata.ts",
+        "scripts/lib/cli-startup-root-help-bundle.ts",
+      ],
+      outputs: ["dist/cli-startup-metadata.json"],
+      restore: "always",
+      runOnHit: { finalize: "refresh" },
+    },
   },
 ];
 
@@ -791,9 +797,11 @@ export function restoreBuildAllStepCacheOutputs(cacheState, params = {}) {
 }
 
 export function finalizeBuildAllStepCache(step, cacheState, params = {}) {
-  if (params.reusedCache) {
+  if (params.reusedCache && step.cache?.runOnHit?.finalize !== "refresh") {
     return restoreBuildAllStepCacheOutputs(cacheState, params);
   }
+  // Validator-style cache hits may update a restored seed. Capture that result;
+  // restoring the old seed here would silently discard the validated refresh.
   writeBuildAllStepCacheStamp(
     step,
     resolveBuildAllStepCacheStampState(step, cacheState, params),
@@ -869,7 +877,7 @@ if (isMainModule()) {
         reusedCache = true;
         stepToRun = cacheHitStep;
       }
-      console.error(`[build-all] ${step.label}${reusedCache ? " (cached declarations)" : ""}`);
+      console.error(`[build-all] ${step.label}${reusedCache ? " (cache restored)" : ""}`);
       const invocation = resolveBuildAllStep(stepToRun, { env: buildEnv });
       const result = spawnSync(invocation.command, invocation.args, invocation.options);
       const durationMs = performance.now() - startedAt;

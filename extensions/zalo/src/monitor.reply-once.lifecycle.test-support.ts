@@ -21,14 +21,6 @@ describe("Zalo reply-once lifecycle", () => {
   const recordInboundSessionMock = vi.fn(
     async (_input: { sessionKey?: string; ctx?: Record<string, unknown> }) => undefined,
   );
-  const resolveAgentRouteMock = vi.fn(() => ({
-    agentId: "main",
-    channel: "zalo",
-    accountId: "acct-zalo-lifecycle",
-    sessionKey: "agent:main:zalo:direct:dm-chat-1",
-    mainSessionKey: "agent:main:main",
-    matchedBy: "default",
-  }));
   const dispatchReplyWithBufferedBlockDispatcherMock = vi.fn();
 
   beforeAll(async () => {
@@ -38,10 +30,6 @@ describe("Zalo reply-once lifecycle", () => {
   beforeEach(async () => {
     await resetLifecycleTestState();
     setLifecycleRuntimeCore({
-      routing: {
-        resolveAgentRoute:
-          resolveAgentRouteMock as unknown as PluginRuntime["channel"]["routing"]["resolveAgentRoute"],
-      },
       reply: {
         finalizeInboundContext:
           finalizeInboundContextMock as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
@@ -60,10 +48,17 @@ describe("Zalo reply-once lifecycle", () => {
   });
 
   function createReplyOnceMonitorSetup() {
-    return createLifecycleMonitorSetup({
+    const setup = createLifecycleMonitorSetup({
       accountId: "acct-zalo-lifecycle",
       dmPolicy: "open",
     });
+    return {
+      ...setup,
+      config: {
+        ...setup.config,
+        session: { dmScope: "per-channel-peer" as const },
+      },
+    };
   }
 
   function requireRecordInboundSessionArgs() {
@@ -77,7 +72,8 @@ describe("Zalo reply-once lifecycle", () => {
 
   it("routes one accepted webhook event to one visible reply across duplicate replay", async () => {
     dispatchReplyWithBufferedBlockDispatcherMock.mockImplementation(
-      async ({ dispatcherOptions }) => {
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions.turnAdoptionLifecycle?.onAdopted();
         await dispatcherOptions.deliver({ text: "zalo reply once" });
       },
     );
@@ -137,8 +133,10 @@ describe("Zalo reply-once lifecycle", () => {
   it("does not emit a second visible reply when replay arrives after a post-send failure", async () => {
     let dispatchAttempts = 0;
     dispatchReplyWithBufferedBlockDispatcherMock.mockImplementation(
-      async ({ dispatcherOptions }) => {
+      async ({ dispatcherOptions, replyOptions }) => {
         dispatchAttempts += 1;
+        expect(replyOptions.turnAdoptionLifecycle).toBeDefined();
+        await replyOptions.turnAdoptionLifecycle?.onAdopted();
         await dispatcherOptions.deliver({ text: "zalo reply after failure" });
         if (dispatchAttempts === 1) {
           throw new Error("post-send failure");
@@ -178,9 +176,7 @@ describe("Zalo reply-once lifecycle", () => {
 
       expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
       expect(sendMessageMock).toHaveBeenCalledTimes(1);
-      expect(monitor.runtime.error).toHaveBeenCalledWith(
-        "[acct-zalo-lifecycle] Zalo webhook failed: Error: post-send failure",
-      );
+      expect(monitor.runtime.error).not.toHaveBeenCalled();
     } finally {
       await monitor.stop();
     }

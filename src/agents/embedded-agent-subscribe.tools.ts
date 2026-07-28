@@ -12,7 +12,10 @@ import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.
 import type { ChannelMessageActionName } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
-import { normalizeInteractiveReply, normalizeMessagePresentation } from "../interactive/payload.js";
+import {
+  normalizeLegacyInteractiveReply,
+  normalizeMessagePresentation,
+} from "../interactive/payload.js";
 import {
   redactSecrets,
   redactSensitiveFieldValue,
@@ -576,7 +579,7 @@ export function extractMessagingToolSourceReplyPayload(
   if (presentation) {
     payload.presentation = presentation;
   }
-  const interactive = normalizeInteractiveReply(sourceReply.interactive);
+  const interactive = normalizeLegacyInteractiveReply(sourceReply.interactive);
   if (interactive) {
     payload.interactive = interactive;
   }

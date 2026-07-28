@@ -58,7 +58,7 @@ import type {
 import type { OpenClawPluginCommandDefinition } from "./plugin-command.types.js";
 import type {
   OpenClawPluginChannelRegistration,
-  OpenClawPluginCliCommandDescriptor,
+  OpenClawPluginCliRegistrationOptions,
   OpenClawPluginCliRegistrar,
   OpenClawGatewayDiscoveryService,
   OpenClawPluginHostedMediaResolver,
@@ -223,20 +223,7 @@ export type OpenClawPluginApi = {
   registerSessionCatalog: (provider: SessionCatalogProvider) => void;
   registerCli: (
     registrar: OpenClawPluginCliRegistrar,
-    opts?: {
-      /** Parent command path for nested command groups, for example `["nodes"]`. */
-      parentPath?: string[];
-      /** Explicit command names owned by this registrar at `parentPath`. */
-      commands?: string[];
-      /**
-       * Parse-time command descriptors for lazy CLI registration.
-       *
-       * When descriptors cover every command exposed at `parentPath`, OpenClaw
-       * can keep the plugin registrar lazy. Command-only registrations stay on
-       * the eager compatibility path.
-       */
-      descriptors?: OpenClawPluginCliCommandDescriptor[];
-    },
+    opts?: OpenClawPluginCliRegistrationOptions,
   ) => void;
   /**
    * Register a plugin-owned node feature command group under `openclaw nodes`.
@@ -438,29 +425,18 @@ export type OpenClawPluginApi = {
   registerMemoryCapability: (
     capability: import("./memory-state.js").MemoryPluginCapability,
   ) => void;
-  /**
-   * Register the system prompt section builder for this memory plugin (exclusive slot).
-   * @deprecated Use registerMemoryCapability({ promptBuilder }) instead.
-   */
-  registerMemoryPromptSection: (
-    builder: import("./memory-state.js").MemoryPromptSectionBuilder,
-  ) => void;
   /** Register an additive memory-adjacent prompt section (non-exclusive). */
   registerMemoryPromptSupplement: (
     builder: import("./memory-state.js").MemoryPromptSectionBuilder,
   ) => void;
+  /** Register an async memory prompt preparation step (non-exclusive). */
+  registerMemoryPromptPreparation: (
+    prepare: (
+      params: import("./memory-state.js").MemoryPromptSectionParams,
+    ) => Promise<readonly string[]>,
+  ) => void;
   /** Register an additive memory-adjacent search/read corpus supplement (non-exclusive). */
   registerMemoryCorpusSupplement: (supplement: MemoryCorpusSupplement) => void;
-  /**
-   * Register the pre-compaction flush plan resolver for this memory plugin (exclusive slot).
-   * @deprecated Use registerMemoryCapability({ flushPlanResolver }) instead.
-   */
-  registerMemoryFlushPlan: (resolver: import("./memory-state.js").MemoryFlushPlanResolver) => void;
-  /**
-   * Register the active memory runtime adapter for this memory plugin (exclusive slot).
-   * @deprecated Use registerMemoryCapability({ runtime }) instead.
-   */
-  registerMemoryRuntime: (runtime: import("./memory-state.js").MemoryPluginRuntime) => void;
   /**
    * Register a memory embedding provider adapter. Multiple adapters may coexist.
    * @deprecated New embedding providers should use `registerEmbeddingProvider`

@@ -1,6 +1,9 @@
-// Codex plugin module implements protocol behavior.
-export type JsonValue = null | boolean | number | string | JsonValue[] | JsonObject;
-export type JsonObject = { [key: string]: JsonValue };
+import type { JsonObject, JsonValue } from "./protocol-json.js";
+import type * as CodexMcpProtocol from "./protocol-mcp.js";
+
+export type { CodexListMcpServerStatusResponse, CodexMcpServerStatus } from "./protocol-mcp.js";
+export type { JsonObject, JsonValue } from "./protocol-json.js";
+
 export type CodexServiceTier = string;
 export type CodexApprovalPolicy =
   | "untrusted"
@@ -95,8 +98,6 @@ export type CodexDynamicToolFunctionSpec = JsonObject & {
   deferLoading?: boolean;
 };
 
-type CodexDynamicToolNamespaceTool = CodexDynamicToolFunctionSpec;
-
 /** Namespace Codex keeps directly model-visible without exposing it to Code Mode guests. */
 export const CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE = "openclaw_direct";
 
@@ -104,7 +105,7 @@ type CodexDynamicToolNamespaceSpec = JsonObject & {
   type: "namespace";
   name: string;
   description: string;
-  tools: CodexDynamicToolNamespaceTool[];
+  tools: CodexDynamicToolFunctionSpec[];
 };
 
 export type CodexDynamicToolSpec = CodexDynamicToolFunctionSpec | CodexDynamicToolNamespaceSpec;
@@ -135,6 +136,7 @@ export type CodexThreadStartParams = JsonObject & {
   developerInstructions?: string;
   experimentalRawEvents?: boolean;
   environments?: CodexTurnEnvironmentParams[] | null;
+  ephemeral?: boolean;
 };
 
 export type CodexThreadResumeParams = JsonObject & {
@@ -148,6 +150,12 @@ export type CodexThreadResumeParams = JsonObject & {
   serviceTier?: CodexServiceTier | null;
   config?: JsonObject;
   developerInstructions?: string;
+  excludeTurns?: boolean;
+  initialTurnsPage?: {
+    limit?: number | null;
+    sortDirection?: "asc" | "desc" | null;
+    itemsView?: "notLoaded" | "summary" | "full" | null;
+  } | null;
 };
 
 export type CodexThreadStartResponse = {
@@ -159,6 +167,7 @@ export type CodexThreadStartResponse = {
 export type CodexThreadForkParams = JsonObject & {
   threadId: string;
   lastTurnId?: string | null;
+  beforeTurnId?: string | null;
   path?: string | null;
   model?: string | null;
   modelProvider?: string | null;
@@ -237,6 +246,10 @@ export type CodexThreadTurnsListResponse = {
   backwardsCursor?: string | null;
 };
 
+type CodexInitialTurnsPage = Omit<CodexThreadTurnsListResponse, "data"> & {
+  data: Pick<CodexTurn, "id" | "status">[];
+};
+
 type CodexThreadSetNameParams = JsonObject & {
   threadId: string;
   name: string;
@@ -254,6 +267,7 @@ export type CodexThreadResumeResponse = {
   thread: CodexThread;
   model: string;
   modelProvider?: string | null;
+  initialTurnsPage?: CodexInitialTurnsPage | null;
 };
 
 type CodexThreadGoalStatus =
@@ -354,6 +368,7 @@ export type CodexTurn = {
 export type CodexThread = {
   id: string;
   sessionId?: string;
+  path?: string | null;
   historyMode?: "legacy" | "paginated";
   extra?: JsonObject | null;
   name?: string | null;
@@ -681,16 +696,6 @@ type CodexHooksListResponse = {
   nextCursor?: string | null;
 };
 
-export type CodexMcpServerStatus = {
-  name: string;
-  tools: JsonObject;
-};
-
-export type CodexListMcpServerStatusResponse = {
-  data: CodexMcpServerStatus[];
-  nextCursor?: string | null;
-};
-
 export type CodexConfigReadResponse = {
   config: JsonObject;
   layers?: JsonValue[] | null;
@@ -738,6 +743,8 @@ type CodexAppServerRequestParamsOverride = {
   "thread/goal/get": CodexThreadGoalGetParams;
   "thread/goal/clear": CodexThreadGoalClearParams;
   "turn/interrupt": CodexTurnInterruptParams;
+  "mcpServer/resource/read": CodexMcpProtocol.ResourceReadParams;
+  "mcpServer/tool/call": CodexMcpProtocol.ToolCallParams;
 };
 
 type CodexAppServerRequestResultMap = {
@@ -754,7 +761,9 @@ type CodexAppServerRequestResultMap = {
   "feedback/upload": JsonValue;
   "hooks/list": CodexHooksListResponse;
   "marketplace/add": JsonValue;
-  "mcpServerStatus/list": CodexListMcpServerStatusResponse;
+  "mcpServerStatus/list": CodexMcpProtocol.CodexListMcpServerStatusResponse;
+  "mcpServer/resource/read": CodexMcpProtocol.ResourceReadResult;
+  "mcpServer/tool/call": CodexMcpProtocol.ToolCallResult;
   "model/list": CodexModelListResponse;
   "modelProvider/capabilities/read": CodexModelProviderCapabilitiesReadResponse;
   "plugin/install": CodexPluginInstallResponse;

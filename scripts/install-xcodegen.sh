@@ -7,8 +7,8 @@ if [[ "$#" -ne 1 ]]; then
   exit 2
 fi
 
-readonly xcodegen_version="2.45.4"
-readonly xcodegen_checksum="090ec29491aad50aec10631bf6e62253fed733c50f3aab0f5ffc86bc170bdbef"
+readonly xcodegen_version="2.46.0"
+readonly xcodegen_checksum="4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806"
 
 install_dir="$1"
 temp_dir="$(mktemp -d)"

@@ -1,5 +1,4 @@
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
-import { streamSimple } from "../../llm/stream.js";
 import type { AssistantMessage, Model } from "../../llm/types.js";
 import type {
   Agent,
@@ -36,6 +35,7 @@ import {
   type TurnStartEvent,
 } from "./extensions/index.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
+import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import type { ModelRegistry } from "./model-registry.js";
 import type { PromptTemplate } from "./prompt-templates.js";
 import type { ResourceLoader } from "./resource-loader.js";
@@ -77,6 +77,7 @@ export abstract class AgentSessionBase {
   protected compactionAbortController: AbortController | undefined = undefined;
   protected autoCompactionAbortController: AbortController | undefined = undefined;
   protected overflowRecoveryAttempted = false;
+  protected contextOverflowRecoveryOwner: "session" | "caller";
 
   // Branch summarization state
   protected branchSummaryAbortController: AbortController | undefined = undefined;
@@ -125,6 +126,7 @@ export abstract class AgentSessionBase {
   protected baseSystemPrompt = "";
   protected baseSystemPromptOptions!: BuildSystemPromptOptions;
   protected exactBaseSystemPrompt: string | undefined;
+  protected systemPromptOverride: string | undefined;
 
   constructor(config: AgentSessionConfig) {
     this.agent = config.agent;
@@ -145,6 +147,7 @@ export abstract class AgentSessionBase {
       reason: "startup",
     };
     this.withExternalSessionWriteLock = config.withSessionWriteLock;
+    this.contextOverflowRecoveryOwner = config.contextOverflowRecoveryOwner ?? "session";
   }
 
   /** Model registry for API key resolution and model discovery */
@@ -182,7 +185,10 @@ export abstract class AgentSessionBase {
     apiKey?: string;
     headers?: Record<string, string>;
   }> {
-    if (this.agent.streamFn === streamSimple) {
+    if (
+      this.agent.streamFn ===
+      getModelRegistryRuntime(this.sessionModelRegistry).llmRuntime.streamSimple
+    ) {
       return this.getRequiredRequestAuth(model);
     }
 
@@ -285,9 +291,18 @@ export abstract class AgentSessionBase {
 
   // Track last assistant message for auto-compaction check
   protected lastAssistantMessage: AssistantMessage | undefined = undefined;
+  protected lastRunEndedForTurnHandoff = false;
 
   /** Internal handler for agent events - shared by subscribe and reconnect */
-  protected handleAgentEvent = async (event: AgentEvent): Promise<void> => {
+  protected handleAgentEvent = async (event: AgentEvent, signal?: AbortSignal): Promise<void> => {
+    if (event.type === "agent_end") {
+      const reason: unknown = signal?.reason;
+      this.lastRunEndedForTurnHandoff =
+        signal?.aborted === true &&
+        typeof reason === "object" &&
+        reason !== null &&
+        (reason as { turnHandoff?: unknown }).turnHandoff === true;
+    }
     if (this.eventMayWriteSession(event)) {
       await this.runWithSessionWriteLock(async () => await this.handleAgentEventUnlocked(event));
       return;
@@ -360,7 +375,9 @@ export abstract class AgentSessionBase {
         this.lastAssistantMessage = event.message;
 
         const assistantMsg = event.message;
-        if (assistantMsg.stopReason !== "error") {
+        // A length response may still need overflow recovery in checkCompaction();
+        // retryCount is independent and resets for every non-error response below.
+        if (assistantMsg.stopReason !== "error" && assistantMsg.stopReason !== "length") {
           this.overflowRecoveryAttempted = false;
         }
 
@@ -540,6 +557,21 @@ export abstract class AgentSessionBase {
    * Call this when completely done with the session.
    */
   dispose(): void {
+    const abortOperations = [
+      () => this.abortRetry(),
+      () => this.abortCompaction(),
+      () => this.abortBranchSummary(),
+      () => this.abortBash(),
+      () => this.agent.abort(),
+    ];
+    for (const abortOperation of abortOperations) {
+      try {
+        abortOperation();
+      } catch {
+        // One broken abort hook must not prevent the remaining work from being cancelled.
+      }
+    }
+
     this.currentExtensionRunner.invalidate(
       "This extension ctx is stale after session replacement or reload. Do not use a captured api or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
     );
@@ -626,7 +658,7 @@ export abstract class AgentSessionBase {
 
     // Rebuild base system prompt with new tool set
     this.baseSystemPrompt = this.rebuildSystemPrompt(validToolNames);
-    this.agent.state.systemPrompt = this.baseSystemPrompt;
+    this.agent.state.systemPrompt = this.systemPromptOverride ?? this.baseSystemPrompt;
   }
 
   /** Set an exact base prompt owned by the current runtime. */
@@ -670,9 +702,19 @@ export abstract class AgentSessionBase {
     return this.agent.followUpMode;
   }
 
-  /** Current session file path, or undefined if sessions are disabled */
+  /** Current persisted transcript target, or undefined for in-memory sessions. */
+  get sessionTarget() {
+    return this.sessionManager.getSessionTarget();
+  }
+
+  /** Current persisted session key, or undefined for in-memory sessions. */
+  get sessionKey(): string | undefined {
+    return this.sessionTarget?.sessionKey;
+  }
+
+  /** @deprecated Compatibility token; returns the session key, not a file path. */
   get sessionFile(): string | undefined {
-    return this.sessionManager.getSessionFile();
+    return this.sessionKey;
   }
 
   /** Current session ID */
@@ -788,5 +830,8 @@ export abstract class AgentSessionBase {
     skipAbortedCheck?: boolean,
   ): Promise<boolean>;
   abstract abortRetry(): void;
+  abstract abortCompaction(): void;
+  abstract abortBranchSummary(): void;
+  abstract abortBash(): void;
   protected abstract flushPendingBashMessages(): void;
 }

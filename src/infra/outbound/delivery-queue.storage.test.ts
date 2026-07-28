@@ -5,22 +5,22 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
-  failPendingDelivery,
-  loadPendingDelivery,
-  loadPendingDeliveries,
-  moveToFailed,
-} from "./delivery-queue-storage.js";
-import {
   ackDelivery,
+  claimDeliveryPlatformSendAttempt,
   enqueueDelivery,
   enqueueDeliveryOnce,
   failDelivery,
   failDeliveryAfterPlatformSend,
   failDeliveryBeforePlatformSend,
+  failPendingDelivery,
+  loadPendingDelivery,
+  loadPendingDeliveries,
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendDispatched,
   markDeliveryPlatformSendAttemptStarted,
-} from "./delivery-queue.js";
+  moveToFailed,
+  reserveDeliveryAttempt,
+} from "./delivery-queue-storage.js";
 import { installDeliveryQueueTmpDirHooks, readQueuedEntry } from "./delivery-queue.test-helpers.js";
 
 describe("delivery-queue storage", () => {
@@ -55,6 +55,155 @@ describe("delivery-queue storage", () => {
   }
 
   describe("enqueue + ack lifecycle", () => {
+    it("fences stale same-millisecond terminal mutations without releasing newer owner media", async () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date("2026-07-20T10:00:00.000Z"));
+        const stateDir = tmpDir();
+        const id = "cron-direct-delivery:v1:fenced-stale-terminal-media";
+        const artifact = path.join(
+          stateDir,
+          "delivery-queue-media",
+          "00000000-0000-4000-8000-000000000090.ogg",
+        );
+        await fs.mkdir(path.dirname(artifact), { recursive: true });
+        await fs.writeFile(artifact, "newer owner still needs these bytes");
+        await enqueueDeliveryOnce(
+          {
+            channel: "directchat",
+            to: "+1555",
+            payloads: [{ mediaUrl: artifact, audioAsVoice: true }],
+            completionRetention: {
+              idPrefix: "cron-direct-delivery:v1:",
+              maxAgeMs: 24 * 60 * 60_000,
+              maxEntries: 2_000,
+            },
+          },
+          id,
+          stateDir,
+        );
+        const unclaimedSnapshot = await loadPendingDelivery(id, stateDir);
+        if (!unclaimedSnapshot) {
+          throw new Error("test invariant: the unclaimed bounded row must be readable");
+        }
+        const firstAttemptId = await claimDeliveryPlatformSendAttempt(id, stateDir);
+        if (!firstAttemptId) {
+          throw new Error("test invariant: first platform owner must claim the durable row");
+        }
+        const lostClaim = `Stable delivery platform claim was lost: ${id}`;
+        // Admission snapshots taken before ownership must CAS the unclaimed
+        // state; a producer that claimed meanwhile retains its media and row.
+        await expect(
+          ackDelivery(id, stateDir, { expectedPlatformSendAttemptId: null }),
+        ).rejects.toThrow(lostClaim);
+        await expect(moveToFailed(id, stateDir, null)).rejects.toThrow(lostClaim);
+        await expect(
+          failPendingDelivery(
+            {
+              id,
+              expectedStatus: "pending",
+              lastError: "stale preclaim admission",
+              entry: unclaimedSnapshot,
+            },
+            stateDir,
+          ),
+        ).resolves.toEqual({ status: "not_pending" });
+        expect(await fs.readFile(artifact, "utf8")).toBe("newer owner still needs these bytes");
+        await markDeliveryPlatformSendAttemptStarted(
+          id,
+          stateDir,
+          { replyToId: null },
+          firstAttemptId,
+        );
+        const sameStartedAt = Date.now();
+        const secondAttemptId = await claimDeliveryPlatformSendAttempt(
+          id,
+          stateDir,
+          sameStartedAt,
+          firstAttemptId,
+        );
+        if (!secondAttemptId) {
+          throw new Error("test invariant: reconciled replacement must claim the durable row");
+        }
+        await markDeliveryPlatformSendAttemptStarted(
+          id,
+          stateDir,
+          { replyToId: null },
+          secondAttemptId,
+        );
+
+        await expect(
+          ackDelivery(id, stateDir, { expectedPlatformSendAttemptId: firstAttemptId }),
+        ).rejects.toThrow(lostClaim);
+        await expect(failDelivery(id, "stale failure", stateDir, firstAttemptId)).rejects.toThrow(
+          lostClaim,
+        );
+        await expect(
+          failDeliveryBeforePlatformSend(id, "stale pre-send", stateDir, firstAttemptId),
+        ).rejects.toThrow(lostClaim);
+        await expect(
+          failDeliveryAfterPlatformSend(id, "stale post-send", stateDir, firstAttemptId),
+        ).rejects.toThrow(lostClaim);
+        await expect(
+          markDeliveryPlatformOutcomeUnknown(id, stateDir, firstAttemptId),
+        ).rejects.toThrow(lostClaim);
+        await expect(
+          markDeliveryPlatformSendDispatched(id, stateDir, { replyToId: null }, firstAttemptId),
+        ).rejects.toThrow(lostClaim);
+        await expect(moveToFailed(id, stateDir, firstAttemptId)).rejects.toThrow(lostClaim);
+        await expect(reserveDeliveryAttempt(id, 5, stateDir, firstAttemptId)).rejects.toThrow(
+          lostClaim,
+        );
+        expect(await fs.readFile(artifact, "utf8")).toBe("newer owner still needs these bytes");
+        expect(await loadPendingDelivery(id, stateDir)).toMatchObject({
+          recoveryState: "send_attempt_started",
+          platformSendAttemptId: secondAttemptId,
+          platformSendStartedAt: sameStartedAt,
+        });
+        expect(readStatus(id)).toBe("pending");
+
+        await ackDelivery(id, stateDir, { expectedPlatformSendAttemptId: secondAttemptId });
+        expect(readStatus(id)).toBe("completed");
+        await expect(fs.stat(artifact)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("persists a producer-specific retry budget", async () => {
+      const id = await enqueueTextDelivery({
+        channel: "directchat",
+        to: "+1555",
+        payloads: [{ text: "retry-budget" }],
+        maxRetries: 45,
+      });
+
+      expect(readQueuedEntry(tmpDir(), id).maxRetries).toBe(45);
+    });
+
+    it("atomically reserves delivery attempts up to the producer budget", async () => {
+      const id = await enqueueTextDelivery({
+        channel: "directchat",
+        to: "+1555",
+        payloads: [{ text: "attempt-budget" }],
+        maxRetries: 2,
+      });
+
+      await expect(reserveDeliveryAttempt(id, 2, tmpDir())).resolves.toEqual({
+        status: "reserved",
+        attemptCount: 1,
+      });
+      await expect(reserveDeliveryAttempt(id, 2, tmpDir())).resolves.toEqual({
+        status: "reserved",
+        attemptCount: 2,
+      });
+      await expect(reserveDeliveryAttempt(id, 2, tmpDir())).resolves.toEqual({
+        status: "exhausted",
+        attemptCount: 2,
+      });
+      expect(readQueuedEntry(tmpDir(), id).attemptCount).toBe(2);
+    });
+
     it("creates and removes a queue entry", async () => {
       const id = await enqueueTextDelivery(
         {
@@ -178,6 +327,36 @@ describe("delivery-queue storage", () => {
           operationId: "operation-stable",
         },
       });
+    });
+
+    it("keeps permanent completion ownership after ack", async () => {
+      const id = "restart-sentinel-notice:agent:main:main:123";
+      await enqueueDeliveryOnce(
+        {
+          channel: "directchat",
+          to: "+1555",
+          payloads: [{ text: "restart complete" }],
+          completionRetention: "permanent",
+        },
+        id,
+        tmpDir(),
+      );
+
+      await ackDelivery(id, tmpDir());
+      const repeated = await enqueueDeliveryOnce(
+        {
+          channel: "directchat",
+          to: "+1555",
+          payloads: [{ text: "must not replay" }],
+          completionRetention: "permanent",
+        },
+        id,
+        tmpDir(),
+      );
+
+      expect(repeated).toEqual({ id, created: false });
+      expect(await loadPendingDeliveries(tmpDir())).toEqual([]);
+      expect(readStatus(id)).toBe("completed");
     });
 
     it("ack is idempotent (no error on missing file)", async () => {

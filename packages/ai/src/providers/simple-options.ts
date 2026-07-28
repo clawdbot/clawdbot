@@ -41,6 +41,20 @@ export function buildBaseOptions(
   };
 }
 
+export function clampMaxTokensToModel(model: Model, requestedMaxTokens: number): number;
+export function clampMaxTokensToModel(
+  model: Model,
+  requestedMaxTokens: number | undefined,
+): number | undefined;
+export function clampMaxTokensToModel(
+  model: Model,
+  requestedMaxTokens: number | undefined,
+): number | undefined {
+  return requestedMaxTokens === undefined
+    ? undefined
+    : Math.max(1, Math.min(requestedMaxTokens, model.maxTokens));
+}
+
 export function clampReasoning(effort: ThinkingLevel): Exclude<ThinkingLevel, "xhigh">;
 export function clampReasoning(
   effort: ThinkingLevel | undefined,

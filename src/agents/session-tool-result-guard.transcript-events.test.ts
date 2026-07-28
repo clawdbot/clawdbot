@@ -6,6 +6,8 @@ import {
   onInternalSessionTranscriptUpdate,
   type InternalSessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
+import { attachRuntimeUserTurnTranscriptContext } from "../sessions/user-turn-transcript-runtime-context.js";
+import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 
 const listeners: Array<() => void> = [];
@@ -18,6 +20,96 @@ afterEach(() => {
 });
 
 describe("guardSessionManager transcript updates", () => {
+  it("persists and broadcasts memory-maintenance messages as hidden", () => {
+    const updates: InternalSessionTranscriptUpdate[] = [];
+    listeners.push(onInternalSessionTranscriptUpdate((update) => updates.push(update)));
+
+    const sm = SessionManager.inMemory();
+    const sessionFile = "/tmp/openclaw-session-memory-events.jsonl";
+    Object.assign(sm, {
+      getSessionFile: () => sessionFile,
+    });
+
+    const guarded = guardSessionManager(sm, {
+      agentId: "main",
+      sessionKey: "agent:main:memory",
+      trigger: "memory",
+    });
+    const appendMessage = guarded.appendMessage.bind(guarded) as unknown as (
+      message: AgentMessage,
+    ) => void;
+
+    appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "NO_REPLY" }],
+      timestamp: Date.now(),
+    } as AgentMessage);
+
+    const persisted = sm.getEntries().find((entry) => entry.type === "message") as
+      | { message?: AgentMessage }
+      | undefined;
+    expect(persisted?.message).toMatchObject({ display: false, role: "assistant" });
+    expect(updates[0]?.message).toMatchObject({ display: false, role: "assistant" });
+  });
+
+  it("keeps the user-turn recorder attached when hiding memory maintenance", () => {
+    const sm = SessionManager.inMemory();
+    const markRuntimePersisted = vi.fn();
+    const recorder = {
+      markBlocked: vi.fn(),
+      markRuntimePersisted,
+    } as unknown as UserTurnTranscriptRecorder;
+    const runtimeMessage = attachRuntimeUserTurnTranscriptContext(
+      {
+        role: "user",
+        content: "Pre-compaction memory flush",
+        timestamp: Date.now(),
+      },
+      {
+        message: {
+          role: "user",
+          content: "Pre-compaction memory flush",
+          timestamp: Date.now(),
+        },
+        recorder,
+      },
+    );
+    const guarded = guardSessionManager(sm, {
+      agentId: "main",
+      sessionKey: "agent:main:memory",
+      trigger: "memory",
+    });
+
+    guarded.appendMessage(runtimeMessage as Parameters<typeof guarded.appendMessage>[0]);
+
+    expect(markRuntimePersisted).toHaveBeenCalledWith(
+      expect.objectContaining({ display: false, role: "user" }),
+    );
+  });
+
+  it("does not hide ordinary messages that mention memory flushes", () => {
+    const sm = SessionManager.inMemory();
+    const guarded = guardSessionManager(sm, {
+      agentId: "main",
+      sessionKey: "agent:main:user",
+      trigger: "user",
+    });
+    const appendMessage = guarded.appendMessage.bind(guarded) as unknown as (
+      message: AgentMessage,
+    ) => void;
+
+    appendMessage({
+      role: "user",
+      content: "Why did the memory flush leak?",
+      timestamp: Date.now(),
+    } as AgentMessage);
+
+    const persisted = sm.getEntries().find((entry) => entry.type === "message") as
+      | { message?: AgentMessage }
+      | undefined;
+    expect(persisted?.message).not.toHaveProperty("display", false);
+  });
+
   it("includes the session key when broadcasting appended non-tool-result messages", () => {
     const updates: InternalSessionTranscriptUpdate[] = [];
     listeners.push(onInternalSessionTranscriptUpdate((update) => updates.push(update)));

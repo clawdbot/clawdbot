@@ -1,8 +1,12 @@
+import { resolveDefaultAgentDir } from "../../agent-scope.js";
 import { FailoverError } from "../../failover-error.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../harness/runtime-plugin.js";
 import { selectAgentHarness } from "../../harness/selection.js";
-import { ensureOpenClawModelsJson } from "../../models-config.js";
 import { resolveSelectedOpenAIRuntimeProvider } from "../../openai-routing.js";
+import {
+  prepareModelRuntimeSnapshot,
+  type PreparedModelRuntimeSnapshot,
+} from "../../prepared-model-runtime.js";
 import { createEmptyAgentDiscoveryStores, resolveModelAsync } from "../model.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import { resolveRequestStreamTransportOverrides } from "./runtime-resolution.js";
@@ -23,6 +27,7 @@ export async function resolveEmbeddedRunModelSetup(params: {
   hookRunner: Parameters<typeof resolveHookModelSelection>[0]["hookRunner"];
   hookContext: Parameters<typeof resolveHookModelSelection>[0]["hookContext"];
   onHooksResolved: () => void;
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
 }) {
   const runParams = params.runParams;
   const hookSelection = await resolveHookModelSelection({
@@ -137,9 +142,16 @@ export async function resolveEmbeddedRunModelSetup(params: {
       modelResolution = firstModelResolution;
     }
     if (!modelResolution) {
-      await ensureOpenClawModelsJson(runParams.config, params.agentDir, {
-        workspaceDir: params.workspaceDir,
-      });
+      const config = runParams.config ?? {};
+      const preparedModelRuntime =
+        params.preparedModelRuntime ??
+        (await prepareModelRuntimeSnapshot({
+          config,
+          agentDir: params.agentDir,
+          inheritedAuthDir: resolveDefaultAgentDir(config),
+          workspaceDir: params.workspaceDir,
+        }));
+      const preparedStores = preparedModelRuntime.createStores();
       for (const candidateProvider of modelResolutionProviders) {
         const candidateResolution = await resolveModelAsync(
           candidateProvider,
@@ -147,6 +159,8 @@ export async function resolveEmbeddedRunModelSetup(params: {
           params.agentDir,
           runParams.config,
           {
+            authStorage: preparedStores.authStorage,
+            modelRegistry: preparedStores.modelRegistry,
             workspaceDir: params.workspaceDir,
             authProfileId: runParams.authProfileId,
             allowBundledStaticCatalogFallback: true,
@@ -188,7 +202,6 @@ export async function resolveEmbeddedRunModelSetup(params: {
     modelId,
     requestedModelId,
     modelSelectionChangedByHook,
-    beforeAgentStartResult: hookSelection.beforeAgentStartResult,
     requestStreamTransportOverrides,
     expectedHarnessArtifact,
     agentHarness,

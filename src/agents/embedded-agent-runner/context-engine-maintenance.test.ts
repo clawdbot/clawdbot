@@ -241,7 +241,7 @@ describe("runContextEngineMaintenance", () => {
     });
   });
 
-  it("forces background maintenance rewrites through the session file even when a session manager exists", async () => {
+  it("forces background maintenance rewrites through the runtime target even when a session manager exists", async () => {
     const maintain = vi.fn(async (params?: unknown) => {
       await (
         params as { runtimeContext?: ContextEngineRuntimeContext } | undefined
@@ -277,19 +277,27 @@ describe("runContextEngineMaintenance", () => {
       },
       sessionId: "session-background-file-rewrite",
       sessionKey: "agent:main:session-background-file-rewrite",
+      sessionTarget: {
+        agentId: "custom-agent",
+        sessionId: "custom-session",
+        sessionKey: "agent:custom-agent:custom-session",
+        storePath: "/tmp/custom-agent.sqlite",
+      },
       sessionFile: "/tmp/session-background-file-rewrite.jsonl",
       reason: "turn",
       executionMode: "background",
       sessionManager,
-      config: { session: { writeLock: { acquireTimeoutMs: 75_000 } } },
+      config: {},
     });
 
     expect(rewriteTranscriptEntriesInSessionManagerMock).not.toHaveBeenCalled();
     expect(rewriteTranscriptEntriesInRuntimeTranscriptMock).toHaveBeenCalledWith({
       scope: {
-        sessionId: "session-background-file-rewrite",
-        sessionKey: "agent:main:session-background-file-rewrite",
+        agentId: "custom-agent",
+        sessionId: "custom-session",
+        sessionKey: "agent:custom-agent:custom-session",
         sessionFile: "/tmp/session-background-file-rewrite.jsonl",
+        storePath: "/tmp/custom-agent.sqlite",
       },
       request: {
         replacements: [
@@ -303,7 +311,6 @@ describe("runContextEngineMaintenance", () => {
           },
         ],
       },
-      config: { session: { writeLock: { acquireTimeoutMs: 75_000 } } },
     });
   });
 
@@ -436,7 +443,7 @@ describe("runContextEngineMaintenance", () => {
             tokenBudget: 2048,
             currentTokenCount: 1536,
           },
-          config: { session: { writeLock: { acquireTimeoutMs: 91_000 } } },
+          config: {},
         });
 
         expect(result).toBeUndefined();
@@ -460,7 +467,6 @@ describe("runContextEngineMaintenance", () => {
                 },
               ],
             },
-            config: { session: { writeLock: { acquireTimeoutMs: 91_000 } } },
           }),
         );
 

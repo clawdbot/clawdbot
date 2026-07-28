@@ -1,5 +1,4 @@
 // Covers heartbeat system-event isolation by stable session keys.
-import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as replyModule from "../auto-reply/reply.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -7,6 +6,7 @@ import { resolveMainSessionKey } from "../config/sessions.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import {
   readSessionStoreForTest,
+  seedHeartbeatScratchForTest,
   seedSessionStore,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
@@ -369,7 +369,7 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
     });
   });
 
-  it("does not create an isolated session when task-based heartbeat skips for no-tasks-due", async () => {
+  it("treats leftover tasks text as ordinary scratch instead of runtime scheduling state", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
       const cfg: OpenClawConfig = {
         agents: {
@@ -386,19 +386,18 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
       };
       const baseSessionKey = resolveMainSessionKey(cfg);
       const isolatedSessionKey = `${baseSessionKey}:heartbeat`;
-      await fs.writeFile(
-        `${tmpDir}/HEARTBEAT.md`,
-        `tasks:
+      const nowMs = Date.now();
+      await seedHeartbeatScratchForTest({
+        content: `tasks:
   - name: daily-check
     interval: 1d
     prompt: "Check status"
 `,
-        "utf-8",
-      );
+      });
 
       await seedSessionStore(storePath, baseSessionKey, {
         sessionId: "sid",
-        updatedAt: Date.now(),
+        updatedAt: nowMs,
         lastChannel: "whatsapp",
         lastProvider: "whatsapp",
         lastTo: "+1555",
@@ -414,15 +413,49 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
         sessionKey: baseSessionKey,
         deps: {
           getQueueSize: () => 0,
-          nowMs: () => 2,
+          nowMs: () => nowMs,
         },
       });
 
-      expect(result).toEqual({ status: "skipped", reason: "no-tasks-due" });
-      expect(replySpy).not.toHaveBeenCalled();
+      expect(result.status).toBe("ran");
+      expect(replySpy).toHaveBeenCalledOnce();
+      expect(replyCall(replySpy).Body).toContain("Heartbeat monitor scratch:\ntasks:");
+      expect(replyCall(replySpy).Body).not.toContain(
+        "Run the following periodic tasks (only those due based on their intervals)",
+      );
 
       const store = readSessionStoreForTest(storePath);
-      expect(store[isolatedSessionKey]).toBeUndefined();
+      expect(store[isolatedSessionKey]).toBeDefined();
+      expect(store[baseSessionKey]?.heartbeatTaskState).toEqual({ "daily-check": 1 });
+    });
+  });
+
+  it("renders cron-carried task prompts through the heartbeat response path", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      const cfg = makeIsolatedHeartbeatConfig(tmpDir, storePath);
+      const baseSessionKey = resolveMainSessionKey(cfg);
+      await seedSessionStore(storePath, baseSessionKey, {
+        sessionId: "sid",
+        updatedAt: Date.now(),
+        lastChannel: "whatsapp",
+        lastProvider: "whatsapp",
+        lastTo: "+1555",
+      });
+      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        source: "interval",
+        intent: "task",
+        reason: "heartbeat-task:job-inbox",
+        tasks: [{ jobId: "job-inbox", name: "inbox", prompt: "Check urgent inbox items" }],
+        deps: { getQueueSize: () => 0, nowMs: () => Date.now() },
+      });
+
+      expect(result.status).toBe("ran");
+      expect(replyCall(replySpy).Body).toContain("- inbox: Check urgent inbox items");
+      expect(replyCall(replySpy).Body).toContain("After completing all due tasks");
     });
   });
 

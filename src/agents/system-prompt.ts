@@ -28,7 +28,10 @@ import {
 } from "../channels/plugins/native-approval-prompt.js";
 import type { SubagentDelegationMode } from "../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
-import { buildMemoryPromptSection } from "../plugins/memory-state.js";
+import {
+  buildMemoryPromptSection,
+  type PreparedMemoryPromptSection,
+} from "../plugins/memory-state.js";
 import type { AgentPromptSurfaceKind } from "../plugins/types.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
@@ -78,9 +81,9 @@ const CONTEXT_FILE_ORDER = new Map<string, number>([
   ["memory.md", 70],
 ]);
 
-const DYNAMIC_CONTEXT_FILE_BASENAMES = new Set(["heartbeat.md"]);
+const DYNAMIC_CONTEXT_FILE_BASENAMES = new Set<string>();
 const DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK =
-  "Default heartbeat prompt:\n`Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`";
+  "Default heartbeat prompt:\n`Follow the heartbeat monitor scratch context when provided. Recurring tasks are cron jobs; create or change their schedules with cron tools or the openclaw cron CLI, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`";
 const SYSTEM_PROMPT_STABLE_PREFIX_CACHE_LIMIT = 64;
 
 type StablePromptPrefixCacheEntry = {
@@ -108,7 +111,7 @@ function buildSubagentDelegationPreferenceSection(params: {
     "- Otherwise use `sessions_spawn`; avoid expensive calls yourself.",
     "- Delegate inspection, shell/web/browser, long reads, debugging, coding, multi-step analysis, comparison, summarization, waits.",
     "- Brief each child: objective, output, inputs/files, write scope, verification, blocking status.",
-    '- Need stable handle: lowercase `taskName` (underscores/hyphens). Default isolated: omit `context`; transcript needed: `context:"fork"`.',
+    '- Need stable handle: lowercase `taskName` (underscores/hyphens); `label`: short task title for UI lists, not a persona. Default isolated: omit `context`; transcript needed: `context:"fork"`.',
     params.hasSessionsYield
       ? "- Need results before reply: `sessions_yield`; never poll."
       : "- Completion is push-based; never poll. Synthesize returned events for user.",
@@ -236,13 +239,21 @@ function buildProjectContextSection(params: {
     const hasMemoryFile = params.files.some(
       (file) => getContextFileBasename(file.path) === "memory.md",
     );
+    const hasUserFile = params.files.some(
+      (file) => getContextFileBasename(file.path) === "user.md",
+    );
     lines.push("Loaded project context:");
     if (hasSoulFile) {
       lines.push("SOUL.md: persona/tone. Follow it unless higher-priority instructions override.");
     }
     if (hasMemoryFile) {
       lines.push(
-        "MEMORY.md: durable preferences/behavior; follow all session unless higher priority overrides.",
+        "MEMORY.md: durable non-profile facts and decisions; use when relevant unless higher-priority instructions override.",
+      );
+    }
+    if (hasUserFile) {
+      lines.push(
+        "USER.md: durable user preferences and profile directives; follow unless higher-priority instructions override.",
       );
     }
     lines.push("");
@@ -282,14 +293,20 @@ function buildExecApprovalPromptGuidance(params: {
   return 'exec approval-pending: send exact /approve from "Reply with:"; never ask for another code.';
 }
 
-function buildSkillsSection(params: { skillsPrompt?: string; readToolName: string }) {
+function buildSkillsSection(params: {
+  skillsPrompt?: string;
+  readToolName: string;
+  codeModeActive?: boolean;
+}) {
   const trimmed = params.skillsPrompt?.trim();
   if (!trimmed) {
     return [];
   }
   return [
     "## Skills",
-    `Scan <available_skills>. Clear match: read exact <location> with \`${params.readToolName}\`; obey.`,
+    params.codeModeActive
+      ? 'Scan <available_skills>. Clear match: use `skills.read("<name>")` inside `exec`; obey.'
+      : `Scan <available_skills>. Clear match: read exact <location> with \`${params.readToolName}\`; obey.`,
     "Changed <version>: re-read. Several: most specific. None: read none.",
     "Up-front max one. Never invent paths.",
     "External writes: batch safely; no tight loops; honor 429/Retry-After.",
@@ -306,17 +323,21 @@ function buildMemorySection(params: {
   agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
+  prepared?: PreparedMemoryPromptSection;
 }) {
   if (params.isMinimal || params.includeMemorySection === false) {
     return [];
   }
-  return buildMemoryPromptSection({
-    availableTools: params.availableTools,
-    citationsMode: params.citationsMode,
-    agentId: params.agentId,
-    agentSessionKey: params.agentSessionKey,
-    sandboxed: params.sandboxed,
-  });
+  return buildMemoryPromptSection(
+    {
+      availableTools: params.availableTools,
+      citationsMode: params.citationsMode,
+      agentId: params.agentId,
+      agentSessionKey: params.agentSessionKey,
+      sandboxed: params.sandboxed,
+    },
+    params.prepared,
+  );
 }
 
 function buildAgentBootstrapSystemContext(params: {
@@ -460,6 +481,22 @@ function buildWebchatCanvasSection(params: {
   ];
 }
 
+function buildControlUiSessionCompanionSection(params: {
+  isMinimal: boolean;
+  runtimeChannel?: string;
+}) {
+  if (params.isMinimal || params.runtimeChannel !== "webchat") {
+    return [];
+  }
+  return [
+    "## Control UI Session Companion",
+    "- Operator has a read-only rail companion for this session's status and explanations.",
+    "- On request, do not spawn sub-agents or burn main-thread turns merely to summarize status or re-explain recent work.",
+    "- Reserve `sessions_spawn` for delegated work with its own deliverable.",
+    "",
+  ];
+}
+
 function buildExecutionBiasSection(params: { isMinimal: boolean }) {
   if (params.isMinimal) {
     return [];
@@ -524,8 +561,8 @@ function buildMessagingSection(params: {
     : `- Completion event requesting update: rewrite in normal voice; send. Never forward raw metadata or default to ${SILENT_REPLY_TOKEN}.`;
   const subagentOrchestrationGuidance = hasSessionsSpawn
     ? hasSubagents
-      ? `- Subagents: \`sessions_spawn\` with objective/output/write-scope/verification; stable handle needs \`taskName\`; isolated omits \`context\`, transcript needs \`context:"fork"\`; ${hasSessionsYield ? "wait via `sessions_yield`; " : ""}\`subagents(action=list)\` only status/debug.`
-      : `- Subagents: \`sessions_spawn\` with objective/output/write-scope/verification; stable handle needs \`taskName\`; isolated omits \`context\`, transcript needs \`context:"fork"\`${hasSessionsYield ? "; wait via `sessions_yield`" : ""}.`
+      ? `- Subagents: \`sessions_spawn\` with objective/output/write-scope/verification; stable handle needs \`taskName\`, UI title \`label\`; isolated omits \`context\`, transcript needs \`context:"fork"\`; ${hasSessionsYield ? "wait via `sessions_yield`; " : ""}\`subagents(action=list)\` only status/debug.`
+      : `- Subagents: \`sessions_spawn\` with objective/output/write-scope/verification; stable handle needs \`taskName\`, UI title \`label\`; isolated omits \`context\`, transcript needs \`context:"fork"\`${hasSessionsYield ? "; wait via `sessions_yield`" : ""}.`
     : hasSubagents
       ? "- Subagents: `subagents(action=list)` only for status/debug visibility."
       : "";
@@ -571,6 +608,21 @@ function buildMessagingSection(params: {
           .filter(Boolean)
           .join("\n")
       : "",
+    "",
+  ];
+}
+
+function buildCollapsibleDetailsSection(params: {
+  isMinimal: boolean;
+  collapsibleDetailsSupported: boolean;
+}) {
+  if (params.isMinimal || !params.collapsibleDetailsSupported) {
+    return [];
+  }
+  return [
+    "## Collapsible Details",
+    "This surface renders `<details>` disclosures. When a reply has optional depth — long derivations, logs, background, worked examples — you may place it inside `<details><summary>Label</summary>` … `</details>` written on their own lines.",
+    "Keep the primary answer, and anything the user must act on, outside the block. Never hide the actual answer behind a disclosure.",
     "",
   ];
 }
@@ -704,6 +756,7 @@ export function buildAgentSystemPrompt(params: {
   bootstrapMode?: BootstrapMode;
   bootstrapTruncationNotice?: string;
   skillsPrompt?: string;
+  codeModeActive?: boolean;
   heartbeatPrompt?: string;
   docsPath?: string;
   sourcePath?: string;
@@ -757,6 +810,8 @@ export function buildAgentSystemPrompt(params: {
   };
   includeMemorySection?: boolean;
   memoryCitationsMode?: MemoryCitationsMode;
+  /** Immutable memory state prepared before synchronous prompt assembly. */
+  preparedMemoryPrompt?: PreparedMemoryPromptSection;
   promptContribution?: ProviderSystemPromptContribution;
 }) {
   const acpEnabled = params.acpEnabled === true;
@@ -944,6 +999,7 @@ export function buildAgentSystemPrompt(params: {
   const runtimeCapabilities = runtimeInfo?.capabilities ?? [];
   const runtimeCapabilitiesLower = new Set(normalizeStringEntriesLower(runtimeCapabilities));
   const inlineButtonsEnabled = runtimeCapabilitiesLower.has("inlinebuttons");
+  const collapsibleDetailsSupported = runtimeCapabilitiesLower.has("markdowndetails");
   const threadBoundAcpSpawnEnabled = runtimeCapabilitiesLower.has("threadbound-acp-spawn");
   const promptMode = params.promptMode ?? "full";
   const isMinimal = promptMode === "minimal" || promptMode === "none";
@@ -990,6 +1046,7 @@ export function buildAgentSystemPrompt(params: {
   const skillsSection = buildSkillsSection({
     skillsPrompt,
     readToolName,
+    codeModeActive: params.codeModeActive,
   });
   const skillWorkshopSection = availableTools.has(SKILL_WORKSHOP_TOOL_NAME)
     ? buildSkillWorkshopPromptSection()
@@ -1002,6 +1059,7 @@ export function buildAgentSystemPrompt(params: {
     agentId: params.runtimeInfo?.agentId,
     agentSessionKey: params.runtimeInfo?.sessionKey,
     sandboxed: params.sandboxInfo?.enabled === true,
+    prepared: params.preparedMemoryPrompt,
   });
   const docsSection = buildDocsSection({
     docsPath: params.docsPath,
@@ -1059,6 +1117,7 @@ export function buildAgentSystemPrompt(params: {
     docsPath: params.docsPath,
     sourcePath: params.sourcePath,
     skillsPrompt,
+    codeModeActive: params.codeModeActive,
     modelAliasLines: params.modelAliasLines,
     includeMemorySection: params.includeMemorySection,
     memoryCitationsMode: params.memoryCitationsMode,
@@ -1082,7 +1141,7 @@ export function buildAgentSystemPrompt(params: {
       ...(toolSchemaDirectoryPrompt
         ? ["", "### Deferred Tool Schemas", toolSchemaDirectoryPrompt]
         : []),
-      "TOOLS.md guides usage; never grants availability.",
+      "The AGENTS.md Tools section guides usage; it never grants availability.",
       ...(renderOpenClawToolWorkflowHints
         ? [
             `Long wait: no rapid poll. Use ${execToolName} yieldMs or ${processToolName}(poll, timeout=<ms>).`,
@@ -1318,6 +1377,10 @@ export function buildAgentSystemPrompt(params: {
       runtimeChannel,
       sourceMessageToolOnly,
     }),
+    ...buildControlUiSessionCompanionSection({
+      isMinimal,
+      runtimeChannel,
+    }),
     ...buildMessagingSection({
       isMinimal,
       availableTools,
@@ -1330,6 +1393,9 @@ export function buildAgentSystemPrompt(params: {
       requireExplicitMessageTarget: params.requireExplicitMessageTarget,
       silentReplyPromptMode,
     }),
+    // Capability-gated reply guidance stays below the cache boundary so channel changes
+    // cannot alter the byte-identical stable prefix shared across sessions.
+    ...buildCollapsibleDetailsSection({ isMinimal, collapsibleDetailsSupported }),
     ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
   );
 

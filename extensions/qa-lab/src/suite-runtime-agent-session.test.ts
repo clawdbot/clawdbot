@@ -179,8 +179,26 @@ describe("qa suite runtime agent session helpers", () => {
         gateway: { tempRoot },
       } as never),
     ).resolves.toEqual({
-      "session-1": { sessionId: "session-1", status: "running", updatedAt: 10 },
+      "session-1": {
+        sessionId: "session-1",
+        status: "running",
+        updatedAt: 10,
+        delivery: { kind: "none" },
+      },
     });
+  });
+
+  it("reads a requested agent session store", async () => {
+    const readEntries = vi.fn(() => []);
+
+    await expect(
+      readRawQaSessionStore({ gateway: { tempRoot: "/tmp/qa-agent-store" } } as never, {
+        agentId: "alternate",
+        readEntries,
+        retryDelaysMs: [],
+      }),
+    ).resolves.toEqual({});
+    expect(readEntries).toHaveBeenCalledWith(expect.objectContaining({ agentId: "alternate" }));
   });
 
   it("retries transient FTS integrity mismatches while child transcripts settle", async () => {
@@ -351,6 +369,9 @@ describe("qa suite runtime agent session helpers", () => {
       ),
     ).resolves.toEqual({
       assistantToolCallCounts: { message: 1 },
+      completedToolCallCounts: {},
+      eventCursor: 2,
+      successfulToolCallCounts: {},
       finalText: "",
       hasDirectReplySelfMessage: false,
       lastAssistantContentTypes: ["tool_use"],
@@ -375,6 +396,9 @@ describe("qa suite runtime agent session helpers", () => {
       ),
     ).resolves.toEqual({
       assistantToolCallCounts: { message: 1 },
+      completedToolCallCounts: {},
+      eventCursor: 3,
+      successfulToolCallCounts: {},
       finalText: "Sent.",
       hasDirectReplySelfMessage: true,
       lastMessageRole: "assistant",
@@ -427,11 +451,184 @@ describe("qa suite runtime agent session helpers", () => {
       ),
     ).resolves.toEqual({
       assistantToolCallCounts: { message: 1 },
+      completedToolCallCounts: {},
+      eventCursor: 4,
+      successfulToolCallCounts: {},
       finalText: "Sent.",
       hasDirectReplySelfMessage: true,
       lastAssistantErrorMessage: "Request was aborted",
       lastAssistantStopReason: "aborted",
       lastMessageRole: "assistant",
+    });
+  });
+
+  it("reports provider-owned assistant mirror identities", async () => {
+    const tempRoot = await makeTempDir("qa-session-transcript-mirrors-");
+    const sessionKey = "agent:qa:provider-mirrors";
+    await seedQaSession({ tempRoot, sessionKey, sessionId: "session-mirrors" });
+    await appendQaTranscriptMessage({
+      tempRoot,
+      sessionKey,
+      sessionId: "session-mirrors",
+      message: {
+        role: "assistant",
+        content: "Codex plan:\n- inspect\n- build",
+        __openclaw: { mirrorIdentity: "turn-123:plan" },
+      },
+    });
+
+    await expect(
+      readSessionTranscriptSummary(
+        {
+          gateway: { tempRoot },
+        } as never,
+        sessionKey,
+      ),
+    ).resolves.toMatchObject({
+      assistantMirrors: [
+        {
+          identity: "turn-123:plan",
+          text: "Codex plan:\n- inspect\n- build",
+        },
+      ],
+    });
+  });
+
+  it("counts only correlated non-error tool results as successful", async () => {
+    const tempRoot = await makeTempDir("qa-session-transcript-tool-results-");
+    const sessionKey = "agent:qa:tool-results";
+    await seedQaSession({ tempRoot, sessionKey, sessionId: "session-tool-results" });
+    await appendQaTranscriptMessage({
+      tempRoot,
+      sessionKey,
+      sessionId: "session-tool-results",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "plan-ok", name: "update_plan", arguments: {} },
+          { type: "toolCall", id: "plan-error", name: "update_plan", arguments: {} },
+          { type: "toolCall", id: "write-mismatch", name: "write", arguments: {} },
+        ],
+      },
+    });
+    for (const message of [
+      {
+        role: "toolResult",
+        toolCallId: "plan-ok",
+        toolName: "update_plan",
+        content: [{ type: "text", text: "Plan updated" }],
+        isError: false,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "plan-ok",
+        toolName: "update_plan",
+        content: [{ type: "text", text: "duplicate" }],
+        isError: false,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "plan-error",
+        toolName: "update_plan",
+        content: [{ type: "text", text: "failed" }],
+        isError: true,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "write-mismatch",
+        toolName: "exec",
+        content: [{ type: "text", text: "wrong tool" }],
+        isError: false,
+      },
+    ]) {
+      await appendQaTranscriptMessage({
+        tempRoot,
+        sessionKey,
+        sessionId: "session-tool-results",
+        message,
+      });
+    }
+
+    await expect(
+      readSessionTranscriptSummary(
+        {
+          gateway: { tempRoot },
+        } as never,
+        sessionKey,
+      ),
+    ).resolves.toMatchObject({
+      assistantToolCallCounts: { update_plan: 2, write: 1 },
+      completedToolCallCounts: { update_plan: 2 },
+      successfulToolCallCounts: { update_plan: 1 },
+    });
+  });
+
+  it("scopes transcript evidence after an event cursor", async () => {
+    const tempRoot = await makeTempDir("qa-session-transcript-cursor-");
+    const sessionKey = "agent:qa:cursor";
+    const sessionId = "session-cursor";
+    await seedQaSession({ tempRoot, sessionKey, sessionId });
+    for (const message of [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "old-plan", name: "update_plan", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "old-plan",
+        toolName: "update_plan",
+        content: [{ type: "text", text: "Plan updated" }],
+        isError: false,
+      },
+      {
+        role: "assistant",
+        content: "same visible reply",
+        __openclaw: { mirrorIdentity: "old-turn:assistant" },
+      },
+    ]) {
+      await appendQaTranscriptMessage({ tempRoot, sessionKey, sessionId, message });
+    }
+    const checkpoint = await readSessionTranscriptSummary(
+      { gateway: { tempRoot } } as never,
+      sessionKey,
+    );
+    await appendQaTranscriptMessage({
+      tempRoot,
+      sessionKey,
+      sessionId,
+      message: {
+        role: "assistant",
+        content: "same visible reply",
+        __openclaw: { mirrorIdentity: "current-turn:assistant" },
+      },
+    });
+
+    await expect(
+      readSessionTranscriptSummary({ gateway: { tempRoot } } as never, sessionKey, {
+        afterEventCursor: checkpoint.eventCursor,
+      }),
+    ).resolves.toMatchObject({
+      assistantMirrors: [{ identity: "current-turn:assistant", text: "same visible reply" }],
+      assistantToolCallCounts: {},
+      eventCursor: 5,
+      successfulToolCallCounts: {},
+    });
+  });
+
+  it("returns an empty checkpoint before the session exists", async () => {
+    const tempRoot = await makeTempDir("qa-session-transcript-checkpoint-");
+
+    await expect(
+      readSessionTranscriptSummary({ gateway: { tempRoot } } as never, "agent:qa:not-created-yet", {
+        allowEmpty: true,
+      }),
+    ).resolves.toEqual({
+      assistantToolCallCounts: {},
+      completedToolCallCounts: {},
+      eventCursor: 0,
+      successfulToolCallCounts: {},
+      finalText: "",
+      hasDirectReplySelfMessage: false,
     });
   });
 

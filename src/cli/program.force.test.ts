@@ -258,12 +258,14 @@ describe("gateway --force helpers", () => {
     });
 
     const killMock = vi.fn();
+    const beforeSignal = vi.fn();
     process.kill = killMock;
 
     const promise = forceFreePortAndWait(18789, {
       timeoutMs: 800,
       intervalMs: 100,
       sigtermTimeoutMs: 300,
+      beforeSignal,
     });
 
     await vi.runAllTimersAsync();
@@ -271,6 +273,8 @@ describe("gateway --force helpers", () => {
 
     expect(killMock).toHaveBeenCalledWith(42, "SIGTERM");
     expect(killMock).toHaveBeenCalledWith(42, "SIGKILL");
+    expect(beforeSignal).toHaveBeenCalledWith({ port: 18789, pid: 42, signal: "SIGTERM" });
+    expect(beforeSignal).toHaveBeenCalledWith({ port: 18789, pid: 42, signal: "SIGKILL" });
     expect(res.escalatedToSigkill).toBe(true);
 
     vi.useRealTimers();
@@ -300,7 +304,7 @@ describe("gateway --force helpers", () => {
         err.code = "EACCES";
         throw err;
       }
-      return "18789/tcp: 4242\n";
+      return "4242\n";
     });
     probePortUsageMock.mockResolvedValueOnce("busy").mockResolvedValue("free");
 
@@ -320,6 +324,77 @@ describe("gateway --force helpers", () => {
     });
   });
 
+  it("freezes guarded fuser PIDs before signaling when the port owner changes", async () => {
+    let fuserPids = [4242];
+    (execFileSync as unknown as Mock).mockImplementation((cmd: string, args: string[]) => {
+      if (cmd.includes("lsof")) {
+        const err = new Error("spawnSync lsof EACCES") as NodeJS.ErrnoException;
+        err.code = "EACCES";
+        throw err;
+      }
+      if (args.includes("-k")) {
+        throw new Error("guarded fuser cleanup must not use resource-targeted kill");
+      }
+      return `${fuserPids.join(" ")}\n`;
+    });
+    probePortUsageMock.mockResolvedValueOnce("busy").mockResolvedValue("free");
+    const killMock = vi.fn();
+    process.kill = killMock;
+    const beforeSignal = vi.fn(() => {
+      fuserPids = [5252];
+    });
+
+    const result = await forceFreePortAndWait(18789, {
+      timeoutMs: 500,
+      intervalMs: 100,
+      beforeSignal,
+    });
+
+    expect(result.killed).toEqual<PortProcess[]>([{ pid: 4242 }]);
+    expect(beforeSignal).toHaveBeenCalledWith({ port: 18789, pid: 4242, signal: "SIGTERM" });
+    expect(killMock).toHaveBeenCalledOnce();
+    expect(killMock).toHaveBeenCalledWith(4242, "SIGTERM");
+    expect(killMock).not.toHaveBeenCalledWith(5252, expect.anything());
+    expect(execFileSync).toHaveBeenCalledWith("fuser", ["18789/tcp"], expect.anything());
+  });
+
+  it("never derives guarded fuser victims from stderr diagnostics", async () => {
+    (execFileSync as unknown as Mock).mockImplementation((cmd: string) => {
+      if (cmd.includes("lsof")) {
+        const err = new Error("spawnSync lsof EACCES") as NodeJS.ErrnoException;
+        err.code = "EACCES";
+        throw err;
+      }
+      const err = new Error("fuser diagnostics") as NodeJS.ErrnoException & {
+        status?: number;
+        stdout?: string;
+        stderr?: string;
+      };
+      err.status = 1;
+      err.stdout = "4242 5151oops\n";
+      err.stderr = "18789/tcp: 5252\nfuser warning for device 6161\n";
+      throw err;
+    });
+    probePortUsageMock.mockResolvedValueOnce("busy").mockResolvedValue("free");
+    const killMock = vi.fn();
+    process.kill = killMock;
+    const beforeSignal = vi.fn();
+
+    const result = await forceFreePortAndWait(18789, {
+      timeoutMs: 500,
+      intervalMs: 100,
+      beforeSignal,
+    });
+
+    expect(result.killed).toEqual<PortProcess[]>([{ pid: 4242 }]);
+    expect(beforeSignal).toHaveBeenCalledOnce();
+    expect(beforeSignal).toHaveBeenCalledWith({ port: 18789, pid: 4242, signal: "SIGTERM" });
+    expect(killMock).toHaveBeenCalledOnce();
+    expect(killMock).toHaveBeenCalledWith(4242, "SIGTERM");
+    expect(killMock).not.toHaveBeenCalledWith(5252, expect.anything());
+    expect(killMock).not.toHaveBeenCalledWith(6161, expect.anything());
+  });
+
   it("uses fuser SIGKILL escalation when port stays busy", async () => {
     vi.useFakeTimers();
     (execFileSync as unknown as Mock).mockImplementation((cmd: string, args: string[]) => {
@@ -329,10 +404,10 @@ describe("gateway --force helpers", () => {
         throw err;
       }
       if (args.includes("-TERM")) {
-        return "18789/tcp: 1337\n";
+        return "1337\n";
       }
       if (args.includes("-KILL")) {
-        return "18789/tcp: 1337\n";
+        return "1337\n";
       }
       return "";
     });

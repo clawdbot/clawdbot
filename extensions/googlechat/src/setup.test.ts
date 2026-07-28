@@ -1,8 +1,12 @@
 // Googlechat tests cover setup plugin behavior.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   createStartAccountContext,
   expectLifecyclePatch,
   expectPendingUntilAbort,
+  installChannelDmPolicyContractSuite,
   startAccountAndTrackLifecycle,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import {
@@ -249,29 +253,18 @@ describe("googlechat setup", () => {
     expect(result.cfg.channels?.googlechat?.audience).toBe("https://example.com/googlechat");
   });
 
-  it("reads the named-account DM policy instead of the channel root", () => {
-    expect(
-      googlechatSetupWizard.dmPolicy?.getCurrent(
-        {
-          channels: {
-            googlechat: {
-              dm: {
-                policy: "disabled",
-              },
-              accounts: {
-                alerts: {
-                  serviceAccount: { client_email: "bot@example.com" },
-                  dm: {
-                    policy: "allowlist",
-                  },
-                },
-              },
-            },
-          },
-        } as OpenClawConfig,
-        "alerts",
-      ),
-    ).toBe("allowlist");
+  installChannelDmPolicyContractSuite({
+    dmPolicy: googlechatSetupWizard.dmPolicy!,
+    cases: [
+      {
+        name: "Google Chat named accounts",
+        channel: "googlechat",
+        accountId: "alerts",
+        accountConfig: { serviceAccount: { client_email: "bot@example.com" } },
+        inheritedAllowFrom: ["users/123"],
+        defaultAccount: {},
+      },
+    ],
   });
 
   it("reports configured state for the selected account instead of any account", async () => {
@@ -319,44 +312,6 @@ describe("googlechat setup", () => {
     expect(status.configured).toBe(false);
   });
 
-  it("reports account-scoped config keys for named accounts", () => {
-    expect(googlechatSetupWizard.dmPolicy?.resolveConfigKeys?.({}, "alerts")).toEqual({
-      policyKey: "channels.googlechat.accounts.alerts.dm.policy",
-      allowFromKey: "channels.googlechat.accounts.alerts.dm.allowFrom",
-    });
-  });
-
-  it("uses configured defaultAccount for omitted DM policy account context", () => {
-    const cfg = {
-      channels: {
-        googlechat: {
-          defaultAccount: "alerts",
-          dm: {
-            policy: "disabled",
-          },
-          accounts: {
-            alerts: {
-              serviceAccount: { client_email: "bot@example.com" },
-              dm: {
-                policy: "allowlist",
-              },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(googlechatSetupWizard.dmPolicy?.getCurrent(cfg)).toBe("allowlist");
-    expect(googlechatSetupWizard.dmPolicy?.resolveConfigKeys?.(cfg)).toEqual({
-      policyKey: "channels.googlechat.accounts.alerts.dm.policy",
-      allowFromKey: "channels.googlechat.accounts.alerts.dm.allowFrom",
-    });
-
-    const next = googlechatSetupWizard.dmPolicy?.setPolicy(cfg, "open");
-    expect(next?.channels?.googlechat?.dm?.policy).toBe("disabled");
-    expect(next?.channels?.googlechat?.accounts?.alerts?.dm?.policy).toBe("open");
-  });
-
   it("uses configured defaultAccount for omitted allowFrom prompt context", async () => {
     const prompter = createTestWizardPrompter({
       note: vi.fn(async () => {}),
@@ -368,15 +323,11 @@ describe("googlechat setup", () => {
         channels: {
           googlechat: {
             defaultAccount: "alerts",
-            dm: {
-              allowFrom: ["users/root"],
-            },
+            allowFrom: ["users/root"],
             accounts: {
               alerts: {
                 serviceAccount: { client_email: "bot@example.com" },
-                dm: {
-                  allowFrom: ["users/alerts"],
-                },
+                allowFrom: ["users/alerts"],
               },
             },
           },
@@ -385,35 +336,8 @@ describe("googlechat setup", () => {
       prompter,
     });
 
-    expect(next?.channels?.googlechat?.dm?.allowFrom).toEqual(["users/root"]);
-    expect(next?.channels?.googlechat?.accounts?.alerts?.dm?.allowFrom).toEqual([
-      "users/123456789",
-    ]);
-  });
-
-  it('writes open DM policy to the named account and preserves inherited allowFrom with "*"', () => {
-    const next = googlechatSetupWizard.dmPolicy?.setPolicy(
-      {
-        channels: {
-          googlechat: {
-            dm: {
-              allowFrom: ["users/123"],
-            },
-            accounts: {
-              alerts: {
-                serviceAccount: { client_email: "bot@example.com" },
-              },
-            },
-          },
-        },
-      } as OpenClawConfig,
-      "open",
-      "alerts",
-    );
-
-    expect(next?.channels?.googlechat?.dm?.policy).toBeUndefined();
-    expect(next?.channels?.googlechat?.accounts?.alerts?.dm?.policy).toBe("open");
-    expect(next?.channels?.googlechat?.accounts?.alerts?.dm?.allowFrom).toEqual(["users/123", "*"]);
+    expect(next?.channels?.googlechat?.allowFrom).toEqual(["users/root"]);
+    expect(next?.channels?.googlechat?.accounts?.alerts?.allowFrom).toEqual(["users/123456789"]);
   });
 
   it("keeps startAccount pending until abort, then unregisters", async () => {
@@ -458,6 +382,43 @@ describe("googlechat setup", () => {
 });
 
 describe("resolveGoogleChatAccount", () => {
+  const tempDirs: string[] = [];
+  const makeTempDir = (prefix: string) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    tempDirs.push(dir);
+    return dir;
+  };
+
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves user-relative service-account files before checking availability", () => {
+    const homeDir = makeTempDir("openclaw-googlechat-home-");
+    fs.writeFileSync(path.join(homeDir, "service-account.json"), "{}", { mode: 0o600 });
+    vi.stubEnv("OPENCLAW_HOME", homeDir);
+    try {
+      const resolved = resolveGoogleChatAccount({
+        cfg: {
+          channels: {
+            googlechat: {
+              serviceAccountFile: "~/service-account.json",
+            },
+          },
+        },
+        accountId: "default",
+      });
+
+      expect(resolved.credentialSource).toBe("file");
+      expect(resolved.credentialsFile).toBe("~/service-account.json");
+      expect(resolved.tokenStatus).toBe("available");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("parses default-account env JSON credentials only when they decode to an object", () => {
     vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT", '{"client_email":"bot@example.com"}');
 
@@ -471,8 +432,9 @@ describe("resolveGoogleChatAccount", () => {
   });
 
   it("ignores env JSON credentials when they decode to a non-object value", () => {
+    const missingFile = path.join(makeTempDir("openclaw-googlechat-missing-"), "missing.json");
     vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT", '["not","an","object"]');
-    vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT_FILE", "/tmp/googlechat.json");
+    vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT_FILE", missingFile);
 
     const resolved = resolveGoogleChatAccount({
       cfg: { channels: { googlechat: {} } },
@@ -481,7 +443,16 @@ describe("resolveGoogleChatAccount", () => {
 
     expect(resolved.credentialSource).toBe("env");
     expect(resolved.credentials).toBeUndefined();
-    expect(resolved.credentialsFile).toBe("/tmp/googlechat.json");
+    expect(resolved.credentialsFile).toBe(missingFile);
+    expect(resolved.tokenStatus).toBe("configured_unavailable");
+    expect(resolved.credentialDiagnostics).toEqual([
+      {
+        code: "CREDENTIAL_FILE_UNAVAILABLE",
+        path: "env.GOOGLE_CHAT_SERVICE_ACCOUNT_FILE",
+        reason: "not-found",
+      },
+    ]);
+    expect(JSON.stringify(resolved.credentialDiagnostics)).not.toContain(missingFile);
   });
 
   it("inherits shared defaults from accounts.default for named accounts", () => {
@@ -625,7 +596,7 @@ describe("resolveGoogleChatAccount", () => {
         googlechat: {
           accounts: {
             default: {
-              serviceAccountRef: {
+              serviceAccount: {
                 source: "env",
                 provider: "test",
                 id: "default-sa",

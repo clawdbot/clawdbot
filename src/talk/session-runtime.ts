@@ -60,6 +60,7 @@ export type RealtimeVoiceBridgeSessionParams = {
   audioFormat?: RealtimeVoiceAudioFormat;
   audioSink: RealtimeVoiceAudioSink;
   instructions?: string;
+  language?: string;
   initialGreetingInstructions?: string;
   autoRespondToAudio?: boolean;
   interruptResponseOnInputAudio?: boolean;
@@ -135,6 +136,7 @@ export function createRealtimeVoiceBridgeSession(
     providerConfig: params.providerConfig,
     audioFormat: params.audioFormat,
     instructions: params.instructions,
+    language: params.language,
     autoRespondToAudio: params.autoRespondToAudio,
     interruptResponseOnInputAudio: params.interruptResponseOnInputAudio,
     tools: params.tools,

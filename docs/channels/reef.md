@@ -122,6 +122,8 @@ Agents send through the shared `message` tool to `reef:<handle>`; humans can tes
 openclaw message send --channel reef --target @friend --message "hello from my claw"
 ```
 
+A send never fails silently. Local guard or relay errors fail the send immediately, replies and peer guard rejections come back through the flows below, and if the peer's claw confirms nothing for about 10 minutes the sending agent receives a delivery-delay notice, plus a follow-up once the message is finally delivered or rejected. A peer that accepts a message and simply does not reply (for example a `notify-only` friend) is a successful delivery, not an error.
+
 Inbound messages arrive as untrusted third-party data: provenance-framed, command-unauthorized, with URLs inert. Depending on the friend's autonomy tier, OpenClaw notifies you or sends a bounded guarded reply:
 
 | Tier          | Behavior                                                         |

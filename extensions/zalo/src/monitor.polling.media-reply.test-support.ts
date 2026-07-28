@@ -106,14 +106,6 @@ function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean):
 describe("Zalo polling media replies", () => {
   const finalizeInboundContextMock = vi.fn((ctx: Record<string, unknown>) => ctx);
   const recordInboundSessionMock = vi.fn(async () => undefined);
-  const resolveAgentRouteMock = vi.fn(() => ({
-    agentId: "main",
-    channel: "zalo",
-    accountId: "acct-zalo-polling-media",
-    sessionKey: "agent:main:zalo:direct:dm-chat-1",
-    mainSessionKey: "agent:main:main",
-    matchedBy: "default",
-  }));
   const dispatchReplyWithBufferedBlockDispatcherMock = vi.fn();
 
   beforeAll(async () => {
@@ -143,10 +135,6 @@ describe("Zalo polling media replies", () => {
     );
     setLifecycleRuntimeCore(
       {
-        routing: {
-          resolveAgentRoute:
-            resolveAgentRouteMock as unknown as PluginRuntime["channel"]["routing"]["resolveAgentRoute"],
-        },
         reply: {
           finalizeInboundContext:
             finalizeInboundContextMock as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],

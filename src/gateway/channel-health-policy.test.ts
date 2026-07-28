@@ -64,6 +64,16 @@ describe("evaluateChannelHealth", () => {
     expect(evaluation).toEqual({ healthy: true, reason: "unmanaged" });
   });
 
+  it("treats explicitly unlinked accounts as healthy unmanaged", () => {
+    const evaluation = evaluateHealth({
+      running: false,
+      enabled: true,
+      configured: true,
+      linked: false,
+    });
+    expect(evaluation).toEqual({ healthy: true, reason: "unmanaged" });
+  });
+
   it("uses channel connect grace before flagging disconnected", () => {
     const evaluation = evaluateHealth(
       runningAccount({
@@ -84,6 +94,53 @@ describe("evaluateChannelHealth", () => {
     const now = 100_000;
     const evaluation = evaluateHealth(activeRunAccount(now - 26 * 60_000), { now });
     expect(evaluation).toEqual({ healthy: false, reason: "stuck" });
+  });
+
+  it("flags a hung run masking a disconnected transport as stuck despite a fresh heartbeat", () => {
+    const now = 30 * 60_000;
+    const evaluation = evaluateHealth(
+      activeRunAccount(now - 1_000, {
+        connected: false,
+        activeRunStartedAt: now - 26 * 60_000,
+      }),
+      { now },
+    );
+    expect(evaluation).toEqual({ healthy: false, reason: "stuck" });
+  });
+
+  it("keeps a connected run healthy past the threshold while its heartbeat stays fresh", () => {
+    const now = 30 * 60_000;
+    const evaluation = evaluateHealth(
+      activeRunAccount(now - 1_000, {
+        connected: true,
+        activeRunStartedAt: now - 26 * 60_000,
+      }),
+      { now },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "busy" });
+  });
+
+  it("keeps a run without transport reporting healthy past the threshold while its heartbeat stays fresh", () => {
+    const now = 30 * 60_000;
+    const evaluation = evaluateHealth(
+      activeRunAccount(now - 1_000, {
+        connected: undefined,
+        activeRunStartedAt: now - 26 * 60_000,
+      }),
+      { now },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "busy" });
+  });
+
+  it("keeps a short-lived run healthy when both start and activity are recent", () => {
+    const now = 30 * 60_000;
+    const evaluation = evaluateHealth(
+      activeRunAccount(now - 1_000, {
+        activeRunStartedAt: now - 5_000,
+      }),
+      { now },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "busy" });
   });
 
   it("ignores inherited busy flags until current lifecycle reports run activity", () => {

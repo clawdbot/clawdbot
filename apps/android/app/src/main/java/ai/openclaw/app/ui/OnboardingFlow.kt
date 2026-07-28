@@ -8,6 +8,7 @@ import ai.openclaw.app.R
 import ai.openclaw.app.SensitiveFeatureConfig
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.isLocalCleartextGatewayHost
+import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprintInput
 import ai.openclaw.app.hasPhotoReadPermission
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeString
@@ -106,6 +107,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -812,35 +814,77 @@ fun OnboardingFlow(
     }
 
     pendingTrust?.let { prompt ->
+      val manualEntry = prompt.fingerprintSha256 == null
+      val systemTrustAvailable = prompt.systemTrustAvailable
+      var manualFingerprint by
+        rememberSaveable(prompt.endpoint.stableId, prompt.probeFailure) {
+          mutableStateOf("")
+        }
+      val normalizedManualFingerprint = normalizeGatewayTlsFingerprintInput(manualFingerprint)
       AlertDialog(
         onDismissRequest = viewModel::declineGatewayTrustPrompt,
         containerColor = ClawTheme.colors.surfaceRaised,
         title = { Text(stringResource(R.string.trust_this_gateway), style = ClawTheme.type.section, color = ClawTheme.colors.text) },
         text = {
           val message =
-            if (prompt.previousFingerprintSha256.isNullOrBlank()) {
-              stringResource(R.string.gateway_trust_first_seen, prompt.fingerprintSha256)
-            } else {
-              stringResource(
-                R.string.gateway_trust_changed,
-                prompt.previousFingerprintSha256,
-                prompt.fingerprintSha256,
+            when {
+              manualEntry ->
+                nativeString(
+                  "The gateway certificate could not be read automatically. Paste the SHA-256 fingerprint obtained on the gateway host.",
+                )
+              prompt.previousFingerprintSha256.isNullOrBlank() ->
+                stringResource(R.string.gateway_trust_first_seen, prompt.fingerprintSha256)
+              else ->
+                stringResource(
+                  R.string.gateway_trust_changed,
+                  prompt.previousFingerprintSha256,
+                  prompt.fingerprintSha256,
+                )
+            }
+          Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(
+              message,
+              style = ClawTheme.type.body,
+              color = ClawTheme.colors.textMuted,
+            )
+            if (systemTrustAvailable) {
+              Text(
+                nativeString("This gateway now presents a certificate trusted by this device."),
+                style = ClawTheme.type.body,
+                color = ClawTheme.colors.textMuted,
               )
             }
-          Text(
-            message,
-            style = ClawTheme.type.body,
-            color = ClawTheme.colors.textMuted,
-          )
+            if (manualEntry) {
+              OutlinedTextField(
+                value = manualFingerprint,
+                onValueChange = { manualFingerprint = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text(nativeString("SHA-256 fingerprint")) },
+                singleLine = true,
+              )
+            }
+          }
         },
         confirmButton = {
-          TextButton(onClick = viewModel::acceptGatewayTrustPrompt) {
+          TextButton(
+            onClick = {
+              viewModel.acceptGatewayTrustPrompt(if (manualEntry) normalizedManualFingerprint else null)
+            },
+            enabled = !manualEntry || normalizedManualFingerprint != null,
+          ) {
             Text(nativeString("Trust"))
           }
         },
         dismissButton = {
-          TextButton(onClick = viewModel::declineGatewayTrustPrompt) {
-            Text(nativeString("Cancel"))
+          Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (systemTrustAvailable) {
+              TextButton(onClick = viewModel::useSystemGatewayTrustPrompt) {
+                Text(nativeString("Use system trust"))
+              }
+            }
+            TextButton(onClick = viewModel::declineGatewayTrustPrompt) {
+              Text(nativeString("Cancel"))
+            }
           }
         },
       )

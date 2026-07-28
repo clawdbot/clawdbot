@@ -10,6 +10,12 @@ import type {
 /** Channel-agnostic assistant reply payload. */
 export type ReplyPayload = {
   text?: string;
+  /** Visible body a channel adapter may use when native structured content requires text. */
+  fallbackText?: {
+    text: string;
+    /** Batch payload replaced when the adapter adopts this fallback body. */
+    replacesPayloadIndex?: number;
+  };
   mediaUrl?: string;
   mediaUrls?: string[];
   /** Internal-only trust signal for gateway webchat local media embedding. */
@@ -18,6 +24,8 @@ export type ReplyPayload = {
   sensitiveMedia?: boolean;
   /** Channel-agnostic rich presentation. Core degrades or asks the channel renderer to map it. */
   presentation?: MessagePresentation;
+  /** Runtime-authored text is the exact fallback, not additional native presentation content. */
+  presentationTextMode?: "fallback";
   /** Channel-agnostic delivery preferences, e.g. pin the sent message when supported. */
   delivery?: ReplyPayloadDelivery;
   /**
@@ -209,6 +217,8 @@ export type ReplyPayloadMetadata = {
   assistantMessageIndex?: number;
   /** The runtime owns the transcript decision for this assistant payload. */
   assistantTranscriptOwned?: boolean;
+  /** Exact key for replacing a runtime-owned assistant row after media materialization. */
+  assistantTranscriptIdempotencyKey?: string;
   /** Foreground freshness prevented a visible final after transcript persistence. */
   foregroundDeliverySuppression?: {
     reason: "stale-foreground";
@@ -229,9 +239,9 @@ export type ReplyPayloadMetadata = {
     accountId?: string;
   };
   /**
-   * Internal OpenClaw notices generated after a runtime/provider failure are
-   * not assistant source replies. Dispatch may deliver them even when normal
-   * assistant source replies are message-tool-only; sendPolicy deny still wins.
+   * Internal OpenClaw notices and host-owned artifacts are not assistant source
+   * replies. Dispatch may deliver them even when normal assistant source replies
+   * are message-tool-only; sendPolicy deny still wins.
    */
   deliverDespiteSourceReplySuppression?: boolean;
   /**
@@ -243,6 +253,9 @@ export type ReplyPayloadMetadata = {
   sourceReplyTranscriptMirror?: {
     sessionKey: string;
     agentId?: string;
+    expectedSessionId?: string;
+    /** Delivery stays live, but neither side may be appended to a transcript. */
+    transcriptWriteBlocked?: boolean;
     text?: string;
     mediaUrls?: string[];
     idempotencyKey?: string;
@@ -284,7 +297,7 @@ export function copyReplyPayloadMetadata<T extends object>(source: object, paylo
   return metadata ? setReplyPayloadMetadata(payload, metadata) : payload;
 }
 
-/** Marks a notice payload as deliverable even when normal source replies are suppressed. */
+/** Marks a host-owned payload as deliverable even when normal source replies are suppressed. */
 export function markReplyPayloadForSourceSuppressionDelivery<T extends object>(payload: T): T {
   return setReplyPayloadMetadata(payload, {
     deliverDespiteSourceReplySuppression: true,

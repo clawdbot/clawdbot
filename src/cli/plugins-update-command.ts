@@ -12,12 +12,12 @@ import {
   formatInvalidConfigDetails,
 } from "../config/io.invalid-config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
-import { createMergePatch } from "../config/io.write-prepare.js";
+import { createMergePatch } from "../config/merge-patch.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import { ConfigMutationConflictError } from "../config/mutate.js";
-import { extractShippedPluginInstallConfigRecords } from "../config/plugin-install-config-migration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { readHookInstalls } from "../hooks/installs.js";
 import { updateNpmInstalledHookPacks } from "../hooks/update.js";
 import { normalizeUpdateChannel } from "../infra/update-channels.js";
 import {
@@ -35,6 +35,8 @@ import {
   withoutPluginInstallRecords,
   withPluginInstallRecords,
 } from "../plugins/installed-plugin-index-records.js";
+import { configReferencesNpmInstallPath } from "../plugins/installs.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../plugins/registry-refresh.js";
 import {
   isPluginInstallRecordUpdateSource,
@@ -170,8 +172,7 @@ async function assertRecordsOnlyUpdateConfigFresh(params: {
   }
 }
 
-/** Run plugin/hook-pack updates, persist changed install records, and refresh runtime registry. */
-export async function runPluginUpdateCommand(params: {
+type RunPluginUpdateCommandParams = {
   id?: string;
   opts: {
     all?: boolean;
@@ -179,7 +180,21 @@ export async function runPluginUpdateCommand(params: {
     dryRun?: boolean;
     dangerouslyForceUnsafeInstall?: boolean;
   };
-}) {
+};
+
+/** Run plugin/hook-pack updates, persist changed install records, and refresh runtime registry. */
+export async function runPluginUpdateCommand(params: RunPluginUpdateCommandParams) {
+  assertConfigWriteAllowedInCurrentMode();
+  if (params.opts.dryRun) {
+    return await runPluginUpdateCommandUnlocked(params);
+  }
+  return await withPluginLifecycleLease(
+    {},
+    async () => await runPluginUpdateCommandUnlocked(params),
+  );
+}
+
+async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandParams) {
   assertConfigWriteAllowedInCurrentMode();
 
   const sourceSnapshotPromise = readConfigFileSnapshotForWrite()
@@ -201,18 +216,8 @@ export async function runPluginUpdateCommand(params: {
   // mutation-start snapshot so concurrent config changes cannot be resurrected.
   const cfg = mutationSnapshot?.snapshot.runtimeConfig ?? getRuntimeConfig();
   const sourceCfg = mutationSnapshot?.snapshot.sourceConfig ?? cfg;
-  const shippedPluginInstallRecords = mutationSnapshot
-    ? {
-        ...extractShippedPluginInstallConfigRecords(mutationSnapshot.snapshot.parsed),
-        ...extractShippedPluginInstallConfigRecords(mutationSnapshot.snapshot.sourceConfig),
-      }
-    : extractShippedPluginInstallConfigRecords(cfg);
   const persistedPluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
-  // Persisted index records win over shipped legacy config during migration.
-  const pluginInstallRecords = {
-    ...shippedPluginInstallRecords,
-    ...persistedPluginInstallRecords,
-  };
+  const pluginInstallRecords = persistedPluginInstallRecords;
   const cfgWithPluginInstallRecords = withPluginInstallRecords(cfg, pluginInstallRecords);
   const sourceCfgWithPluginInstallRecords = withPluginInstallRecords(
     sourceCfg,
@@ -230,8 +235,9 @@ export async function runPluginUpdateCommand(params: {
     rawId: params.id,
     all: params.opts.all,
   });
+  const selectedHooks = readHookInstalls();
   const hookSelection = resolveHookPackUpdateSelection({
-    installs: cfg.hooks?.internal?.installs ?? {},
+    installs: selectedHooks,
     rawId: params.id,
     all: params.opts.all,
   });
@@ -245,7 +251,6 @@ export async function runPluginUpdateCommand(params: {
     return defaultRuntime.exit(1);
   }
 
-  const selectedHooks = cfg.hooks?.internal?.installs ?? {};
   const pluginUpdateMayMutate =
     !params.opts.dryRun &&
     pluginSelection.pluginIds.some((pluginId) => {
@@ -272,13 +277,6 @@ export async function runPluginUpdateCommand(params: {
       snapshotPath: mutationSnapshot.snapshot.path,
       writeOptions: mutationSnapshot.writeOptions,
     });
-    // Write snapshots retain valid shipped install records in sourceConfig after
-    // include resolution; parsed also catches root-authored legacy records.
-    const pluginRecordCleanupMayMutate =
-      Object.keys(extractShippedPluginInstallConfigRecords(mutationSnapshot.snapshot.sourceConfig))
-        .length > 0 ||
-      Object.keys(extractShippedPluginInstallConfigRecords(mutationSnapshot.snapshot.parsed))
-        .length > 0;
     const parsedConfig =
       mutationSnapshot.snapshot.parsed &&
       typeof mutationSnapshot.snapshot.parsed === "object" &&
@@ -299,9 +297,15 @@ export async function runPluginUpdateCommand(params: {
           pluginConfigReferencesId(mutationSnapshot.snapshot.sourceConfig, pluginId))
       );
     });
-    // Manual update records stay in the index unless shipped-record cleanup or
-    // scoped-package compatibility migrates authored references from a legacy id.
-    const pluginConfigMayMutate = pluginRecordCleanupMayMutate || pluginIdMigrationMayMutate;
+    const pluginLoadPathMayMutate = pluginSelection.pluginIds.some((pluginId) =>
+      configReferencesNpmInstallPath({
+        config: cfg,
+        install: pluginInstallRecords[pluginId],
+      }),
+    );
+    // Manual update records stay in the index unless scoped-package compatibility
+    // migrates authored references or moves an explicit prior managed root.
+    const pluginConfigMayMutate = pluginIdMigrationMayMutate || pluginLoadPathMayMutate;
     const blockedReasons = new Set<string>();
     if (pluginConfigMayMutate && pluginMutation.mode === "blocked") {
       blockedReasons.add(pluginMutation.reason);

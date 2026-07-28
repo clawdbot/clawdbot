@@ -1,7 +1,5 @@
-// Sessions tool tests cover list/send helpers, transcript path reporting,
-// announce-target resolution, and assistant-visible text sanitization.
-import os from "node:os";
-import path from "node:path";
+// Sessions tool tests cover list/send helpers, announce-target resolution,
+// and assistant-visible text sanitization.
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,10 +7,15 @@ import type { ChannelMessagingAdapter } from "../../channels/plugins/types.publi
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { withEnvAsync } from "../../test-utils/env.js";
 import { extractAssistantText, sanitizeTextContent } from "./chat-history-text.js";
 
 const callGatewayMock = vi.fn();
+const inProcessCreationMock = vi.fn(
+  async (..._args: [unknown, unknown, unknown]): Promise<unknown> => ({}),
+);
+// Default false mirrors running outside a gateway process; the trusted-creation
+// regression test flips it on and restores it.
+let inProcessGatewayContextAvailable = false;
 const facadeRuntimeMock = vi.hoisted(() => ({
   sessionKeyResolvers: new Map<
     string,
@@ -27,6 +30,11 @@ const facadeRuntimeMock = vi.hoisted(() => ({
 
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
+}));
+vi.mock("./in-process-gateway.js", () => ({
+  callInProcessGatewayToolWithCreation: (method: unknown, params: unknown, creation: unknown) =>
+    inProcessCreationMock(method, params, creation),
+  hasInProcessGatewayToolContext: () => inProcessGatewayContextAvailable,
 }));
 vi.mock("../../plugin-sdk/facade-runtime.js", async () => {
   const actual = await vi.importActual<typeof import("../../plugin-sdk/facade-runtime.js")>(
@@ -92,10 +100,6 @@ const resolveSessionTargetStub: NonNullable<ChannelMessagingAdapter["resolveSess
   id,
   threadId,
 }) => (threadId ? `${kind}:${id}:thread:${threadId}` : `${kind}:${id}`);
-
-type SessionsListResult = Awaited<
-  ReturnType<ReturnType<typeof import("./sessions-list-tool.js").createSessionsListTool>["execute"]>
->;
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -248,7 +252,7 @@ async function executeFireAndForgetA2AFrom(requesterSessionKey: string) {
   vi.mocked(runSessionsSendA2AFlow).mockClear();
   const targetSessionKey = "agent:other:discord:group:ops";
   loadConfigMock.mockReturnValue({
-    session: { scope: "per-sender", mainKey: "main", agentToAgent: { maxPingPongTurns: 5 } },
+    session: { scope: "per-sender", mainKey: "main" },
     tools: {
       agentToAgent: { enabled: true },
       sessions: { visibility: "all" },
@@ -287,32 +291,6 @@ async function executeFireAndForgetA2AFrom(requesterSessionKey: string) {
     throw new Error("expected A2A flow");
   }
   return flowParams;
-}
-
-function getFirstListedSession(result: SessionsListResult) {
-  const details = result.details as
-    | { sessions?: Array<{ key?: string; transcriptPath?: string }> }
-    | undefined;
-  return details?.sessions?.[0];
-}
-
-function expectWorkerTranscriptPath(
-  result: SessionsListResult,
-  params: { containsPath: string; sessionId: string },
-) {
-  const session = getFirstListedSession(result);
-  expect(session?.key).toBe("agent:worker:main");
-  const transcriptPath = session?.transcriptPath ?? "";
-  expect(path.normalize(transcriptPath)).toContain(path.normalize(params.containsPath));
-  expect(transcriptPath).toMatch(new RegExp(`${params.sessionId}\\.jsonl$`));
-}
-
-async function withStubbedStateDir<T>(
-  name: string,
-  run: (stateDir: string) => Promise<T>,
-): Promise<T> {
-  const stateDir = path.join(os.tmpdir(), name);
-  return await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => await run(stateDir));
 }
 
 describe("sanitizeTextContent", () => {
@@ -466,17 +444,17 @@ describe("resolveAnnounceTarget", () => {
     expect(requireGatewayRequest().method).toBe("sessions.list");
   });
 
-  it("falls back to origin provider and accountId from sessions.list when legacy route fields are absent", async () => {
+  it("hydrates provider and accountId from the canonical delivery projection", async () => {
     callGatewayMock.mockResolvedValueOnce({
       sessions: [
         {
           key: "agent:main:whatsapp:group:123@g.us",
-          origin: {
-            provider: "whatsapp",
+          deliveryContext: {
+            channel: "whatsapp",
+            to: "123@g.us",
             accountId: "work",
+            threadId: 271,
           },
-          lastTo: "123@g.us",
-          lastThreadId: 271,
         },
       ],
     });
@@ -520,24 +498,14 @@ describe("resolveAnnounceTarget", () => {
     });
   });
 
-  it("hydrates announce delivery from explicit external context over stale webchat session fields", async () => {
+  it("hydrates announce delivery from the canonical external projection", async () => {
     callGatewayMock.mockResolvedValueOnce({
       sessions: [
         {
           key: "agent:main:feishu:direct:ou_user",
-          channel: "webchat",
-          lastChannel: "webchat",
-          lastTo: "session:dashboard",
-          route: {
-            channel: "webchat",
-            target: { to: "session:dashboard" },
-          },
           deliveryContext: {
             channel: "feishu",
             to: "user:ou_user",
-          },
-          origin: {
-            provider: "feishu",
             accountId: "work",
             threadId: "thread-77",
           },
@@ -636,7 +604,7 @@ describe("sessions_list gating", () => {
     expect(details.count).toBe(1);
     const session = requireSessions(details)[0];
     expect(session?.key).toBe("agent:codex:acp:child-1");
-    expect(session?.spawnedBy).toBe(MAIN_AGENT_SESSION_KEY);
+    expect(session?.parentSessionKey).toBe(MAIN_AGENT_SESSION_KEY);
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
   });
 
@@ -705,119 +673,6 @@ describe("sessions_list gating", () => {
     expect(callGatewayMock).toHaveBeenLastCalledWith({
       method: "chat.history",
       params: { sessionKey: "current", limit: 1 },
-    });
-  });
-});
-
-describe("sessions_list transcriptPath resolution", () => {
-  beforeEach(() => {
-    callGatewayMock.mockClear();
-    loadConfigMock.mockReturnValue({
-      session: { scope: "per-sender", mainKey: "main" },
-      tools: {
-        agentToAgent: { enabled: true },
-        sessions: { visibility: "all" },
-      },
-    });
-  });
-
-  it("resolves cross-agent transcript paths from agent defaults when gateway store path is relative", async () => {
-    await withStubbedStateDir("openclaw-state-relative", async () => {
-      callGatewayMock.mockResolvedValueOnce({
-        path: "agents/main/sessions/sessions.json",
-        sessions: [
-          {
-            key: "agent:worker:main",
-            kind: "direct",
-            sessionId: "sess-worker",
-          },
-        ],
-      });
-      const result = await executeMainSessionsList();
-      expectWorkerTranscriptPath(result, {
-        containsPath: path.join("agents", "worker", "sessions"),
-        sessionId: "sess-worker",
-      });
-    });
-  });
-
-  it("resolves transcriptPath even when sessions.list does not return a store path", async () => {
-    await withStubbedStateDir("openclaw-state-no-path", async () => {
-      callGatewayMock.mockResolvedValueOnce({
-        sessions: [
-          {
-            key: "agent:worker:main",
-            kind: "direct",
-            sessionId: "sess-worker-no-path",
-          },
-        ],
-      });
-      const result = await executeMainSessionsList();
-      expectWorkerTranscriptPath(result, {
-        containsPath: path.join("agents", "worker", "sessions"),
-        sessionId: "sess-worker-no-path",
-      });
-    });
-  });
-
-  it("falls back to agent defaults when gateway path is non-string", async () => {
-    await withStubbedStateDir("openclaw-state-non-string-path", async () => {
-      callGatewayMock.mockResolvedValueOnce({
-        path: { raw: "agents/main/sessions/sessions.json" },
-        sessions: [
-          {
-            key: "agent:worker:main",
-            kind: "direct",
-            sessionId: "sess-worker-shape",
-          },
-        ],
-      });
-      const result = await executeMainSessionsList();
-      expectWorkerTranscriptPath(result, {
-        containsPath: path.join("agents", "worker", "sessions"),
-        sessionId: "sess-worker-shape",
-      });
-    });
-  });
-
-  it("falls back to agent defaults when gateway path is '(multiple)'", async () => {
-    await withStubbedStateDir("openclaw-state-multiple", async (stateDir) => {
-      callGatewayMock.mockResolvedValueOnce({
-        path: "(multiple)",
-        sessions: [
-          {
-            key: "agent:worker:main",
-            kind: "direct",
-            sessionId: "sess-worker-multiple",
-          },
-        ],
-      });
-      const result = await executeMainSessionsList();
-      expectWorkerTranscriptPath(result, {
-        containsPath: path.join(stateDir, "agents", "worker", "sessions"),
-        sessionId: "sess-worker-multiple",
-      });
-    });
-  });
-
-  it("resolves absolute {agentId} template paths per session agent", async () => {
-    const templateStorePath = "/tmp/openclaw/agents/{agentId}/sessions/sessions.json";
-
-    callGatewayMock.mockResolvedValueOnce({
-      path: templateStorePath,
-      sessions: [
-        {
-          key: "agent:worker:main",
-          kind: "direct",
-          sessionId: "sess-worker-template",
-        },
-      ],
-    });
-    const result = await executeMainSessionsList();
-    const expectedSessionsDir = path.dirname(templateStorePath.replace("{agentId}", "worker"));
-    expectWorkerTranscriptPath(result, {
-      containsPath: expectedSessionsDir,
-      sessionId: "sess-worker-template",
     });
   });
 });
@@ -1387,6 +1242,65 @@ describe("sessions_send gating", () => {
 
     expect(requireDetails(result).status).toBe("ok");
     expect(waitTimeouts).toEqual([MAX_TIMER_TIMEOUT_MS]);
+  });
+});
+
+describe("sessions_send agent-main materialization provenance", () => {
+  it("uses the trusted in-process creation stamp in the production assembly (no injected caller)", async () => {
+    inProcessGatewayContextAvailable = true;
+    inProcessCreationMock.mockClear();
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: false },
+        sessions: { visibility: "all" },
+      },
+    });
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.resolve") {
+        // Unmaterialized agent main: the probe fails, forcing creation.
+        throw new Error("unknown session: agent:main:main");
+      }
+      if (request.method === "sessions.create") {
+        throw new Error("plain sessions.create must not be used for trusted materialization");
+      }
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-ensure-main", acceptedAt: 1 };
+      }
+      return {};
+    });
+    // Mirror production assembly (openclaw-tools.ts): no callGateway override, so
+    // ensureConfiguredAgentMainSession takes the trusted in-process branch.
+    const tool = createSessionsSendTool({
+      agentSessionKey: "agent:main:dashboard:req-provenance",
+      agentChannel: MAIN_AGENT_CHANNEL,
+    });
+
+    try {
+      const result = await tool.execute("call-ensure-main-provenance", {
+        sessionKey: "agent:main:main",
+        message: "wake up",
+        timeoutSeconds: 0,
+      });
+
+      expect(requireDetails(result).status).toBe("accepted");
+      expect(inProcessCreationMock).toHaveBeenCalledTimes(1);
+      expect(inProcessCreationMock).toHaveBeenCalledWith(
+        "sessions.create",
+        { key: "agent:main:main", agentId: "main" },
+        {
+          via: "internal",
+          actor: { type: "agent", id: "agent:main:dashboard:req-provenance" },
+        },
+      );
+    } finally {
+      inProcessGatewayContextAvailable = false;
+      inProcessCreationMock.mockClear();
+    }
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

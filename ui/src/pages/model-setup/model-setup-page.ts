@@ -15,6 +15,8 @@ import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { fetchCatalogIconBlobUrl } from "../plugins/icon-loader.ts";
+import type { ModelSetupPrepareOption } from "./prepare-options.ts";
 import { detectModelSetup, verifyModelSetup } from "./rpc.ts";
 import {
   activationTargetId,
@@ -27,8 +29,9 @@ import {
   type ModelSetupVerifyState,
   type ModelSetupWizardState,
 } from "./state.ts";
-import { renderModelSetup } from "./view.ts";
+import { renderModelSetup, resolveSetupBrandIcon } from "./view.ts";
 import { ModelSetupWizardRunner } from "./wizard-runner.ts";
+import type { ModelSetupWizardStartMethod } from "./wizard-runner.ts";
 
 type Candidate = SystemAgentSetupDetectResult["candidates"][number];
 type AuthOption = NonNullable<SystemAgentSetupDetectResult["authOptions"]>[number];
@@ -36,6 +39,7 @@ type AuthOption = NonNullable<SystemAgentSetupDetectResult["authOptions"]>[numbe
 export type ModelSetupRouteData = {
   state: ModelSetupPageState;
   client: GatewayBrowserClient | null;
+  firstRun: boolean;
 };
 
 function errorMessage(error: unknown): string {
@@ -55,11 +59,13 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   @state() private activationState: ModelSetupActivationState = { phase: "idle" };
   @state() private verifyState: ModelSetupVerifyState = { phase: "idle" };
   @state() private wizardState: ModelSetupWizardState = { phase: "idle" };
+  @state() private wizardMode: "auth" | "prepare" = "auth";
   @state() private wizardValue: unknown;
   @state() private manualProviderId = "";
   @state() private manualApiKey = "";
   @state() private manualError: string | null = null;
   @state() private moreSignInOpen = false;
+  @state() private iconUrls: Record<string, string> = {};
 
   private observedClient: GatewayBrowserClient | null = null;
   private dataClient: GatewayBrowserClient | null = null;
@@ -69,6 +75,11 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   private detectEpoch = 0;
   private activationEpoch = 0;
   private verifyEpoch = 0;
+  private readonly iconMisses = new Set<string>();
+  private readonly iconRequests = new Map<
+    string,
+    { controller: AbortController; timeout: ReturnType<typeof setTimeout> }
+  >();
   private readonly subscriptions = new SubscriptionsController(this).watch(
     () => this.context?.gateway,
     (gateway, notify) => gateway.subscribe(notify),
@@ -82,15 +93,17 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         this.wizardValue = initialWizardValue(next.step);
       }
     },
-    onDone: () => void this.handleWizardDone(),
+    onDone: (startMethod) => void this.handleWizardDone(startMethod),
     requestFailedMessage: () => t("modelSetup.errors.requestFailed"),
     cancelledMessage: () => t("modelSetup.wizard.cancelled"),
+    sessionExpiredMessage: () => t("modelSetup.wizard.sessionExpired"),
   });
 
   override disconnectedCallback() {
     this.detectAbort?.abort();
     this.activationAbort?.abort();
     this.verifyAbort?.abort();
+    this.resetIcons();
     void this.wizard.cancel();
     this.subscriptions.clear();
     super.disconnectedCallback();
@@ -108,12 +121,14 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   override updated() {
     const snapshot = this.context.gateway.snapshot;
     if (snapshot.client === this.observedClient) {
+      this.reconcileIcons();
       return;
     }
     this.observedClient = snapshot.client;
     this.detectAbort?.abort();
     this.activationAbort?.abort();
     this.verifyAbort?.abort();
+    this.resetIcons();
     this.activationState = { phase: "idle" };
     this.verifyState = { phase: "idle" };
     void this.wizard.cancel();
@@ -131,7 +146,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     const snapshot = this.context.gateway.snapshot;
     return Boolean(
       client &&
-      snapshot.connected &&
+      snapshot.phase === "connected" &&
       hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
       isGatewayMethodAdvertised(snapshot, "openclaw.setup.detect") === true,
     );
@@ -147,6 +162,137 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     if (!available) {
       this.manualProviderId = pageState.result.manualProviders[0]?.id ?? "";
     }
+  }
+
+  private currentIconUrls(): Set<string> {
+    if (this.pageState.phase !== "ready") {
+      return new Set();
+    }
+    const result = this.pageState.result;
+    return new Set(
+      [
+        ...result.candidates,
+        ...result.manualProviders,
+        ...(result.authOptions ?? []),
+        ...(result.recommendedInstalls ?? []),
+      ].flatMap((entry) => (entry.icon && !resolveSetupBrandIcon(entry) ? [entry.icon] : [])),
+    );
+  }
+
+  private reconcileIcons(): void {
+    const eligible = this.currentIconUrls();
+    const nextUrls = { ...this.iconUrls };
+    let changed = false;
+    for (const [iconUrl, blobUrl] of Object.entries(nextUrls)) {
+      if (!eligible.has(iconUrl)) {
+        URL.revokeObjectURL(blobUrl);
+        delete nextUrls[iconUrl];
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.iconUrls = nextUrls;
+    }
+    for (const [iconUrl, request] of this.iconRequests) {
+      if (!eligible.has(iconUrl)) {
+        clearTimeout(request.timeout);
+        request.controller.abort();
+        this.iconRequests.delete(iconUrl);
+      }
+    }
+    for (const iconUrl of this.iconMisses) {
+      if (!eligible.has(iconUrl)) {
+        this.iconMisses.delete(iconUrl);
+      }
+    }
+    for (const iconUrl of eligible) {
+      if (
+        !this.iconUrls[iconUrl] &&
+        !this.iconMisses.has(iconUrl) &&
+        !this.iconRequests.has(iconUrl)
+      ) {
+        this.fetchIcon(iconUrl);
+      }
+    }
+  }
+
+  private fetchIcon(iconUrl: string): void {
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () => controller.abort(new DOMException("catalog icon fetch timed out", "TimeoutError")),
+      10_000,
+    );
+    const request = { controller, timeout };
+    this.iconRequests.set(iconUrl, request);
+    void fetchCatalogIconBlobUrl({
+      iconUrl,
+      basePath: this.context.basePath,
+      gatewayUrl: this.context.gateway.connection.gatewayUrl,
+      auth: {
+        hello: this.context.gateway.snapshot.hello,
+        settings: { token: this.context.gateway.connection.token },
+        password: this.context.gateway.connection.password,
+      },
+      signal: controller.signal,
+    })
+      .then((blobUrl) => {
+        if (
+          this.iconRequests.get(iconUrl) !== request ||
+          this.context.gateway.snapshot.phase !== "connected" ||
+          !this.currentIconUrls().has(iconUrl)
+        ) {
+          if (blobUrl) {
+            URL.revokeObjectURL(blobUrl);
+          }
+          return;
+        }
+        if (blobUrl) {
+          this.iconUrls = { ...this.iconUrls, [iconUrl]: blobUrl };
+        } else {
+          this.iconMisses.add(iconUrl);
+        }
+      })
+      .catch(() => {
+        if (this.iconRequests.get(iconUrl) === request) {
+          this.iconMisses.add(iconUrl);
+        }
+      })
+      .finally(() => {
+        clearTimeout(timeout);
+        if (this.iconRequests.get(iconUrl) === request) {
+          this.iconRequests.delete(iconUrl);
+        }
+      });
+  }
+
+  private invalidateIcon(iconUrl: string): void {
+    const request = this.iconRequests.get(iconUrl);
+    if (request) {
+      clearTimeout(request.timeout);
+      request.controller.abort();
+      this.iconRequests.delete(iconUrl);
+    }
+    const blobUrl = this.iconUrls[iconUrl];
+    if (blobUrl) {
+      URL.revokeObjectURL(blobUrl);
+    }
+    const next = { ...this.iconUrls };
+    delete next[iconUrl];
+    this.iconUrls = next;
+    this.iconMisses.add(iconUrl);
+  }
+
+  private resetIcons(): void {
+    for (const request of this.iconRequests.values()) {
+      clearTimeout(request.timeout);
+      request.controller.abort();
+    }
+    for (const blobUrl of Object.values(this.iconUrls)) {
+      URL.revokeObjectURL(blobUrl);
+    }
+    this.iconRequests.clear();
+    this.iconMisses.clear();
+    this.iconUrls = {};
   }
 
   private async detect(): Promise<SystemAgentSetupDetectResult | null> {
@@ -304,20 +450,22 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     );
   }
 
-  private async handleWizardDone(): Promise<void> {
+  private async handleWizardDone(startMethod: ModelSetupWizardStartMethod): Promise<void> {
     const result = await this.detect();
     if (!result) {
       this.wizard.fail(t("modelSetup.errors.requestFailed"));
       return;
     }
-    if (!result.setupComplete) {
+    if (startMethod === "openclaw.setup.auth.start" && !result.setupComplete) {
       this.wizard.fail(t("modelSetup.wizard.notComplete"));
       return;
     }
-    this.activationState = {
-      phase: "success",
-      modelRef: result.configuredModel ?? t("modelSetup.success.configuredModel"),
-    };
+    if (startMethod === "openclaw.setup.auth.start") {
+      this.activationState = {
+        phase: "success",
+        modelRef: result.configuredModel ?? t("modelSetup.success.configuredModel"),
+      };
+    }
     this.wizard.close();
   }
 
@@ -335,7 +483,8 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     const snapshot = this.context.gateway.snapshot;
     const canAdmin = hasOperatorAdminAccess(snapshot.hello?.auth ?? null);
     const gatewayTooOld =
-      snapshot.connected && isGatewayMethodAdvertised(snapshot, "openclaw.setup.detect") !== true;
+      snapshot.phase === "connected" &&
+      isGatewayMethodAdvertised(snapshot, "openclaw.setup.detect") !== true;
     const canVerify =
       canAdmin &&
       !gatewayTooOld &&
@@ -345,19 +494,32 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       activation: this.activationState,
       verify: this.verifyState,
       wizard: this.wizardState,
+      wizardMode: this.wizardMode,
       wizardValue: this.wizardValue,
       canAdmin,
       canVerify,
+      canPrepare:
+        canAdmin &&
+        !gatewayTooOld &&
+        isGatewayMethodAdvertised(snapshot, "openclaw.setup.prepare.start") === true,
       gatewayTooOld,
       actionsDisabled: this.actionsDisabled(),
       manualProviderId: this.manualProviderId,
       manualApiKey: this.manualApiKey,
       manualError: this.manualError,
       moreSignInOpen: this.moreSignInOpen,
+      iconUrls: this.iconUrls,
       onDetect: () => void this.detect(),
       onVerify: () => void this.verifyConnection(),
       onActivateCandidate: (candidate) => this.activateCandidate(candidate),
-      onStartAuth: (option: AuthOption) => void this.wizard.start(option.id),
+      onStartAuth: (option: AuthOption) => {
+        this.wizardMode = "auth";
+        void this.wizard.start(option.id);
+      },
+      onStartPrepare: (option: ModelSetupPrepareOption) => {
+        this.wizardMode = "prepare";
+        void this.wizard.start(option.id, "openclaw.setup.prepare.start");
+      },
       onManualProviderChange: (providerId) => {
         this.manualProviderId = providerId;
         this.manualError = null;
@@ -368,7 +530,14 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       },
       onManualConnect: () => this.connectManual(),
       onMoreSignInToggle: (open) => (this.moreSignInOpen = open),
-      onOpenChat: () => this.context.navigate("chat"),
+      onIconError: (iconUrl) => this.invalidateIcon(iconUrl),
+      onOpenChat: () => {
+        if (this.routeData?.firstRun) {
+          this.context.navigate("custodian", { search: "?onboarding=1" });
+          return;
+        }
+        this.context.navigate("chat");
+      },
       onWizardValueChange: (value) => (this.wizardValue = value),
       onWizardAnswer: (value, includeValue) => void this.wizard.answer(value, includeValue),
       onWizardCancel: () => void this.wizard.cancel(),
@@ -383,4 +552,6 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   }
 }
 
-customElements.define("openclaw-model-setup-page", ModelSetupPage);
+if (!customElements.get("openclaw-model-setup-page")) {
+  customElements.define("openclaw-model-setup-page", ModelSetupPage);
+}

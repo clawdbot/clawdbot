@@ -11,6 +11,12 @@ import { isRecord } from "../utils.js";
 import { asBoolean } from "../utils/boolean.js";
 import type { ChannelAccountSnapshot } from "./plugins/types.core.js";
 
+type CredentialUnavailableDiagnostic = {
+  code: "CREDENTIAL_FILE_UNAVAILABLE";
+  path: string;
+  reason: string;
+};
+
 const CREDENTIAL_STATUS_KEYS = [
   "tokenStatus",
   "botTokenStatus",
@@ -133,6 +139,28 @@ export function hasConfiguredUnavailableCredentialStatus(account: unknown): bool
   return CREDENTIAL_STATUS_KEYS.some(
     (key) => readCredentialStatus(record, key) === "configured_unavailable",
   );
+}
+
+/** Reads typed, redacted credential diagnostics from a resolved channel account. */
+export function getCredentialUnavailableDiagnostics(
+  account: unknown,
+): CredentialUnavailableDiagnostic[] {
+  const record = isRecord(account) ? account : null;
+  if (!record || !Array.isArray(record.credentialDiagnostics)) {
+    return [];
+  }
+  const diagnostics: CredentialUnavailableDiagnostic[] = [];
+  for (const value of record.credentialDiagnostics) {
+    if (!isRecord(value) || value.code !== "CREDENTIAL_FILE_UNAVAILABLE") {
+      continue;
+    }
+    const path = normalizeOptionalString(value.path);
+    const reason = normalizeOptionalString(value.reason);
+    if (path && reason) {
+      diagnostics.push({ code: value.code, path, reason });
+    }
+  }
+  return diagnostics;
 }
 
 /** Returns true when account data contains a resolved credential value or available status. */
@@ -265,6 +293,9 @@ export function projectSafeChannelAccountSnapshotFields(
       : {}),
     ...(readNullableNumber(record, "lastRunActivityAt") !== undefined
       ? { lastRunActivityAt: readNullableNumber(record, "lastRunActivityAt") }
+      : {}),
+    ...(readNullableNumber(record, "activeRunStartedAt") !== undefined
+      ? { activeRunStartedAt: readNullableNumber(record, "activeRunStartedAt") }
       : {}),
     ...(mode ? { mode } : {}),
     ...(dmPolicy ? { dmPolicy } : {}),

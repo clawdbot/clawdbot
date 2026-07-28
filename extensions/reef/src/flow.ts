@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   appendAudit,
   appendInboxRead,
@@ -259,6 +260,20 @@ export class ReefMessageFlow {
         return undefined;
       }
       if (receipt.status === "accepted") {
+        // The owner was told this send looked undelivered; close that loop so
+        // silence after an overdue notice always means "still undelivered".
+        // Notify before consuming the binding: a failed dispatch leaves the
+        // record for the retried receipt, while a duplicate enqueue stays
+        // deduped by its context key. Skip conflicted records — the rejection
+        // notice path owns their follow-up. A rejection cannot appear during
+        // this await: receipts are the only rejection writer and the inbox
+        // dispatches entries strictly serially (ReefInboxConnection.serialize),
+        // so this snapshot stays authoritative until the consume below.
+        if (delivery.overdueNotifiedAt !== undefined && !delivery.rejection) {
+          await this.options.onOwnerNotice(
+            `Reef message ${entry.id} to @${entry.peer} was delivered after the earlier delay notice; the peer's claw is reachable again.`,
+          );
+        }
         if (
           !this.options.trust.consumeOutboundDelivery(entry.peer, entry.id, delivery) &&
           this.options.trust.outboundDelivery(entry.peer, entry.id)?.rejection
@@ -449,14 +464,14 @@ export function createConfiguredGuard(
   if (!config.guard) {
     throw new Error("Reef guard is not configured");
   }
-  const apiKey = process.env[config.guard.apiKeyEnv];
-  if (!apiKey) {
+  const guardCredential = normalizeOptionalString(process.env[config.guard.apiKeyEnv]);
+  if (!guardCredential) {
     throw new Error(
       `Reef guard credential environment variable ${config.guard.apiKeyEnv} is unset`,
     );
   }
   const options = {
-    apiKey,
+    apiKey: guardCredential,
     pinnedModel: config.guard.pinnedModel,
     timeoutMs: config.guard.timeoutMs,
     fetch: fetcher,

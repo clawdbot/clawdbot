@@ -3,7 +3,10 @@ scenario:
   id: whatsapp-outbound-media-matrix
   surface: channels
   coverage:
-    primary: [channels.group-messages]
+    primary:
+      - whatsapp.outbound-image
+      - whatsapp.outbound-document
+      - whatsapp.outbound-audio
   execution:
     profiles: { "whatsapp:mock-default": 18 }
     kind: flow

@@ -13,10 +13,10 @@ import {
   type TelegramSpooledUpdatePayload,
 } from "./telegram-ingress-spool.payload.js";
 const TELEGRAM_INGRESS_SPOOL_PREFIX = "ingress-spool-";
-const TELEGRAM_SPOOLED_UPDATE_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const TELEGRAM_SPOOLED_UPDATE_FAILED_MAX_ENTRIES = 1000;
-const TELEGRAM_SPOOLED_UPDATE_COMPLETED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const TELEGRAM_SPOOLED_UPDATE_COMPLETED_MAX_ENTRIES = 1000;
+export const TELEGRAM_SPOOLED_UPDATE_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+export const TELEGRAM_SPOOLED_UPDATE_FAILED_MAX_ENTRIES = 1000;
+export const TELEGRAM_SPOOLED_UPDATE_COMPLETED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+export const TELEGRAM_SPOOLED_UPDATE_COMPLETED_MAX_ENTRIES = 1000;
 const TELEGRAM_SPOOLED_COMPLETION_RETRY_POLICY: BackoffPolicy = {
   initialMs: 250,
   maxMs: 5_000,
@@ -40,7 +40,7 @@ export function resolveTelegramIngressSpoolDir(params: {
   );
 }
 
-function resolveTelegramUpdateId(update: unknown): number | null {
+export function resolveTelegramUpdateId(update: unknown): number | null {
   if (!update || typeof update !== "object") {
     return null;
   }
@@ -48,7 +48,7 @@ function resolveTelegramUpdateId(update: unknown): number | null {
   return isValidUpdateId(value) ? value : null;
 }
 
-function telegramQueueEventId(updateId: number): string {
+export function telegramQueueEventId(updateId: number): string {
   return String(updateId).padStart(16, "0");
 }
 
@@ -88,19 +88,6 @@ export function telegramSpooledUpdateLaneKey(update: unknown, botInfo?: Telegram
   });
 }
 
-async function pruneTelegramIngressQueue(
-  queue: ChannelIngressQueue<TelegramSpooledUpdatePayload>,
-  now?: number,
-): Promise<void> {
-  await queue.prune({
-    completedTtlMs: TELEGRAM_SPOOLED_UPDATE_COMPLETED_TTL_MS,
-    completedMaxEntries: TELEGRAM_SPOOLED_UPDATE_COMPLETED_MAX_ENTRIES,
-    failedTtlMs: TELEGRAM_SPOOLED_UPDATE_FAILED_TTL_MS,
-    failedMaxEntries: TELEGRAM_SPOOLED_UPDATE_FAILED_MAX_ENTRIES,
-    ...(now === undefined ? {} : { now }),
-  });
-}
-
 /**
  * Durable-before-ack accept path: commit the update to the ingress queue.
  * Polling advances offset only after this returns; webhook returns 200 only after.
@@ -117,7 +104,6 @@ export async function writeTelegramSpooledUpdate(params: {
   }
   const receivedAt = params.now ?? Date.now();
   const queue = openTelegramIngressQueue(params.spoolDir);
-  await pruneTelegramIngressQueue(queue, params.now);
   await queue.enqueue(
     telegramQueueEventId(updateId),
     {

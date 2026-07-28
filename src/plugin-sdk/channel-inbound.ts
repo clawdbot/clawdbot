@@ -5,7 +5,6 @@ import {
   filterChannelInboundQuoteContext,
   filterChannelInboundSupplementalContext,
   resolveInboundSupplementalSenderAllowed,
-  resolveChannelInboundSupplementalContext,
   type BuildChannelInboundEventContextAsyncParams,
   type BuildChannelInboundEventContextParams,
   type BuiltChannelInboundEventContext,
@@ -23,6 +22,7 @@ export {
 export {
   createDirectDmPreCryptoGuardPolicy,
   createPreCryptoDirectDmAuthorizer,
+  dispatchInboundDirectDm,
   dispatchInboundDirectDmWithRuntime,
   resolveInboundDirectDmAccessWithRuntime,
   type AccessGroupMembershipResolver,
@@ -32,6 +32,7 @@ export {
   type ResolvedInboundDirectDmAccess,
 } from "../channels/direct-dm.js";
 export {
+  formatAgentEnvelope,
   formatInboundEnvelope,
   formatInboundFromLabel,
   resolveEnvelopeFormatOptions,
@@ -63,10 +64,6 @@ export type {
   InboundMentionPolicy,
   InboundImplicitMentionKind,
   InboundMentionDecision,
-  MentionGateParams,
-  MentionGateResult,
-  MentionGateWithBypassParams,
-  MentionGateWithBypassResult,
   ResolveInboundMentionDecisionFlatParams,
   ResolveInboundMentionDecisionNestedParams,
   ResolveInboundMentionDecisionParams,
@@ -74,10 +71,6 @@ export type {
 export {
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
-  // @deprecated Prefer `resolveInboundMentionDecision({ facts, policy })`.
-  resolveMentionGating,
-  // @deprecated Prefer `resolveInboundMentionDecision({ facts, policy })`.
-  resolveMentionGatingWithBypass,
 } from "../channels/mention-gating.js";
 export type { LocationSource, NormalizedLocation, OutboundLocation } from "../channels/location.js";
 export {
@@ -94,14 +87,23 @@ export {
 } from "../channels/inbound-event/classification.js";
 export type { ClassifyChannelInboundEventParams } from "../channels/inbound-event/classification.js";
 export {
+  createChannelInboundEnvelopeBuilder,
+  resolveChannelInboundRouteEnvelope,
+  type ChannelInboundEnvelopeInput,
+} from "../channels/inbound-event/envelope.js";
+export {
+  DEFAULT_CHANNEL_FEEDBACK_REFLECTION_COOLDOWN_MS,
+  recordChannelFeedbackEvent,
+  runChannelFeedbackReflection,
+  type ChannelFeedbackReflectionResult,
+} from "../channels/feedback-reflection.js";
+export {
   buildChannelInboundEventContext,
   // @deprecated Prefer `buildChannelInboundEventContext`.
   finalizeChannelInboundContext,
   filterChannelInboundQuoteContext,
   filterChannelInboundSupplementalContext,
   resolveInboundSupplementalSenderAllowed,
-  // @deprecated Prefer `buildChannelInboundEventContext({ resolveSupplementalMedia: true })`.
-  resolveChannelInboundSupplementalContext,
 };
 export type {
   BuildChannelInboundEventContextAsyncParams,
@@ -167,6 +169,7 @@ export const filterChannelTurnSupplementalContext = filterChannelInboundSuppleme
 export {
   runChannelInboundEvent,
   runPreparedInboundReply,
+  dispatchChannelInboundTurn,
   dispatchChannelInboundReply,
   recordDroppedChannelInboundHistory,
   dispatchReplyFromConfigWithSettledDispatcher,
@@ -179,25 +182,36 @@ export type {
   AssembledInboundReply,
   ChannelBotLoopProtectionFacts,
   ChannelInboundEventRunnerParams,
+  ChannelInboundTurnPlan,
   ChannelInboundDroppedHistoryOptions,
   PreparedInboundReply,
   InboundReplyDispatchResult,
   InboundReplyRecordOptions,
 } from "../channels/message/inbound-reply-dispatch.js";
+export {
+  createChannelPartialDeliveryError,
+  isChannelPartialDeliveryError,
+  type ChannelPartialDeliveryError,
+} from "../channels/turn/delivery-result.js";
 
 export {
   toHistoryMediaEntries,
   toInboundMediaFacts,
+  /** @deprecated Pass ordered facts as the context's `media` field. */
   buildChannelInboundMediaPayload,
+  formatMediaPlaceholderText,
   formatInboundMediaUnavailableText,
-  // @deprecated Prefer `buildChannelInboundMediaPayload`.
+  /** @deprecated Pass ordered facts as the context's `media` field. */
   buildChannelInboundMediaPayload as buildChannelTurnMediaPayload,
 } from "../channels/inbound-event/media.js";
 export type {
   ChannelInboundMediaInput,
   ChannelInboundMediaInput as ChannelTurnMediaInput,
+  /** @deprecated Pass ordered `InboundMediaFacts[]` as the context's `media` field. */
   ChannelInboundMediaPayload,
+  /** @deprecated Pass ordered `InboundMediaFacts[]` as the context's `media` field. */
   ChannelInboundMediaPayload as ChannelTurnMediaPayload,
+  MediaPlaceholderTextFact,
 } from "../channels/inbound-event/media.js";
 export type {
   CommandFacts,

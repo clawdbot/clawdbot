@@ -65,4 +65,37 @@ describe("resolveFeishuSenderName", () => {
 
     expect(get).toHaveBeenCalledTimes(2);
   });
+
+  it("evicts the oldest sender while retaining recent sender names", async () => {
+    const get = vi.fn(async (params: { path: { user_id: string } }) => ({
+      data: { user: { name: `name-${params.path.user_id}` } },
+    }));
+    createFeishuClientMock.mockReturnValue({ contact: { user: { get } } });
+
+    for (let index = 0; index < 501; index += 1) {
+      await resolveFeishuSenderName({
+        account,
+        senderId: `ou_sender_cap_${index}`,
+        log: vi.fn(),
+      });
+    }
+    await resolveFeishuSenderName({
+      account,
+      senderId: "ou_sender_cap_0",
+      log: vi.fn(),
+    });
+    await resolveFeishuSenderName({
+      account,
+      senderId: "ou_sender_cap_500",
+      log: vi.fn(),
+    });
+
+    expect(get).toHaveBeenCalledTimes(502);
+    expect(
+      get.mock.calls.filter(([params]) => params.path.user_id === "ou_sender_cap_0"),
+    ).toHaveLength(2);
+    expect(
+      get.mock.calls.filter(([params]) => params.path.user_id === "ou_sender_cap_500"),
+    ).toHaveLength(1);
+  });
 });

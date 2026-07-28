@@ -2,11 +2,14 @@
 import type { webhook } from "@line/bot-sdk";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import {
+  buildChannelInboundEventContext,
   formatInboundMediaUnavailableText,
   formatInboundEnvelope,
   formatLocationText,
   resolveInboundSessionEnvelopeContext,
+  toInboundMediaFacts,
   toLocationContext,
+  type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -15,7 +18,6 @@ import {
   resolveConfiguredBindingRoute,
   resolveRuntimeConversationBindingRoute,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute, resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -225,57 +227,25 @@ function extractMessageText(message: MessageEvent["message"]): string {
   return "";
 }
 
-function extractMediaPlaceholder(message: MessageEvent["message"]): string {
+function extractNativeMediaKind(
+  message: MessageEvent["message"],
+): ChannelInboundMediaInput["kind"] | undefined {
   switch (message.type) {
     case "image":
-      return "<media:image>";
+      return "image";
     case "video":
-      return "<media:video>";
+      return "video";
     case "audio":
-      return "<media:audio>";
+      return "audio";
     case "file":
-      return "<media:document>";
+      return "document";
     default:
-      return "";
+      return undefined;
   }
 }
 
 type LineRouteInfo = ReturnType<typeof resolveAgentRoute>;
 type LineSourceInfoWithPeerId = LineSourceInfo & { peerId: string };
-
-function resolveLineConversationLabel(params: {
-  isGroup: boolean;
-  groupId?: string;
-  roomId?: string;
-  senderLabel: string;
-}): string {
-  return params.isGroup
-    ? params.groupId
-      ? `group:${params.groupId}`
-      : params.roomId
-        ? `room:${params.roomId}`
-        : "unknown-group"
-    : params.senderLabel;
-}
-
-function resolveLineAddresses(params: {
-  isGroup: boolean;
-  groupId?: string;
-  roomId?: string;
-  userId?: string;
-  peerId: string;
-}): { fromAddress: string; toAddress: string; originatingTo: string } {
-  const fromAddress = params.isGroup
-    ? params.groupId
-      ? `line:group:${params.groupId}`
-      : params.roomId
-        ? `line:room:${params.roomId}`
-        : `line:${params.peerId}`
-    : `line:${params.userId ?? params.peerId}`;
-  const toAddress = params.isGroup ? fromAddress : `line:${params.userId ?? params.peerId}`;
-  const originatingTo = params.isGroup ? fromAddress : `line:${params.userId ?? params.peerId}`;
-  return { fromAddress, toAddress, originatingTo };
-}
 
 async function finalizeLineInboundContext(params: {
   cfg: OpenClawConfig;
@@ -288,32 +258,25 @@ async function finalizeLineInboundContext(params: {
   timestamp: number;
   messageSid: string;
   commandAuthorized: boolean;
-  media: {
-    firstPath: string | undefined;
-    firstContentType?: string;
-    paths?: string[];
-    types?: string[];
-  };
+  media: readonly ChannelInboundMediaInput[];
   locationContext?: ReturnType<typeof toLocationContext>;
   verboseLog: { kind: "inbound" | "postback"; mediaCount?: number };
   inboundHistory?: Pick<HistoryEntry, "sender" | "body" | "timestamp">[];
 }) {
-  const { fromAddress, toAddress, originatingTo } = resolveLineAddresses({
-    isGroup: params.source.isGroup,
-    groupId: params.source.groupId,
-    roomId: params.source.roomId,
-    userId: params.source.userId,
-    peerId: params.source.peerId,
-  });
-
   const senderId = params.source.userId ?? "unknown";
   const senderLabel = params.source.userId ? `user:${params.source.userId}` : "unknown";
-  const conversationLabel = resolveLineConversationLabel({
-    isGroup: params.source.isGroup,
-    groupId: params.source.groupId,
-    roomId: params.source.roomId,
-    senderLabel,
-  });
+  const conversationLabel = params.source.isGroup
+    ? params.source.groupId
+      ? `group:${params.source.groupId}`
+      : params.source.roomId
+        ? `room:${params.source.roomId}`
+        : "unknown-group"
+    : senderLabel;
+  const address = params.source.groupId
+    ? `line:group:${params.source.groupId}`
+    : params.source.roomId
+      ? `line:room:${params.source.roomId}`
+      : `line:${params.source.userId ?? params.source.peerId}`;
 
   const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
     cfg: params.cfg,
@@ -322,6 +285,7 @@ async function finalizeLineInboundContext(params: {
   });
 
   const agentBody = params.agentBody ?? params.rawBody;
+  const media = toInboundMediaFacts(params.media);
   const body = formatInboundEnvelope({
     channel: "LINE",
     from: conversationLabel,
@@ -335,44 +299,48 @@ async function finalizeLineInboundContext(params: {
     envelope: envelopeOptions,
   });
 
-  const ctxPayload = finalizeInboundContext({
-    Body: body,
-    BodyForAgent: agentBody,
-    RawBody: params.rawBody,
-    CommandBody: params.rawBody,
-    From: fromAddress,
-    To: toAddress,
-    SessionKey: params.route.sessionKey,
-    AccountId: params.route.accountId,
-    ChatType: params.source.isGroup ? "group" : "direct",
-    ConversationLabel: conversationLabel,
-    GroupSubject: params.source.isGroup
-      ? (params.source.groupId ?? params.source.roomId)
-      : undefined,
-    SenderId: senderId,
-    Provider: "line",
-    Surface: "line",
-    MessageSid: params.messageSid,
-    Timestamp: params.timestamp,
-    MediaPath: params.media.firstPath,
-    MediaType: params.media.firstContentType,
-    MediaUrl: params.media.firstPath,
-    MediaPaths: params.media.paths,
-    MediaUrls: params.media.paths,
-    MediaTypes: params.media.types,
-    ...params.locationContext,
-    CommandAuthorized: params.commandAuthorized,
-    OriginatingChannel: "line" as const,
-    OriginatingTo: originatingTo,
-    GroupSystemPrompt: params.source.isGroup
-      ? normalizeOptionalString(
-          resolveLineGroupConfigEntry(params.account.config.groups, {
-            groupId: params.source.groupId,
-            roomId: params.source.roomId,
-          })?.systemPrompt,
-        )
-      : undefined,
-    InboundHistory: params.inboundHistory,
+  const ctxPayload = buildChannelInboundEventContext({
+    channel: "line",
+    accountId: params.route.accountId,
+    messageId: params.messageSid,
+    timestamp: params.timestamp,
+    from: address,
+    sender: { id: senderId },
+    conversation: {
+      kind: params.source.isGroup ? "group" : "direct",
+      id: params.source.peerId,
+      label: conversationLabel,
+    },
+    route: {
+      agentId: params.route.agentId,
+      dmScope: params.route.dmScope,
+      accountId: params.route.accountId,
+      routeSessionKey: params.route.sessionKey,
+    },
+    reply: { to: address, originatingTo: address },
+    message: {
+      body,
+      bodyForAgent: agentBody,
+      rawBody: params.rawBody,
+      commandBody: params.rawBody,
+      inboundHistory: params.inboundHistory,
+    },
+    access: { commands: { authorized: params.commandAuthorized } },
+    media,
+    extra: {
+      ...params.locationContext,
+      GroupSubject: params.source.isGroup
+        ? (params.source.groupId ?? params.source.roomId)
+        : undefined,
+      GroupSystemPrompt: params.source.isGroup
+        ? normalizeOptionalString(
+            resolveLineGroupConfigEntry(params.account.config.groups, {
+              groupId: params.source.groupId,
+              roomId: params.source.roomId,
+            })?.systemPrompt,
+          )
+        : undefined,
+    },
   });
 
   const pinnedMainDmOwner = !params.source.isGroup
@@ -456,21 +424,22 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
   const timestamp = event.timestamp;
 
   const textContent = extractMessageText(message);
-  const placeholder = extractMediaPlaceholder(message);
-
-  let rawBody = textContent || placeholder;
-  if (!rawBody && allMedia.length > 0) {
-    rawBody = `<media:image>${allMedia.length > 1 ? ` (${allMedia.length} images)` : ""}`;
-  }
+  const nativeMediaKind = extractNativeMediaKind(message);
+  const mediaFacts: ChannelInboundMediaInput[] =
+    allMedia.length > 0
+      ? allMedia.map((media) => ({ ...media, kind: nativeMediaKind }))
+      : nativeMediaKind
+        ? [{ kind: nativeMediaKind }]
+        : [];
+  const rawBody = textContent;
   const agentBody = mediaUnavailable
     ? formatInboundMediaUnavailableText({
         body: rawBody,
-        mediaPlaceholder: placeholder,
         notice: "[line attachment unavailable]",
       })
     : rawBody;
 
-  if (!agentBody && allMedia.length === 0) {
+  if (!agentBody && mediaFacts.length === 0) {
     return null;
   }
 
@@ -496,15 +465,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     timestamp,
     messageSid: messageId,
     commandAuthorized,
-    media: {
-      firstPath: allMedia[0]?.path,
-      firstContentType: allMedia[0]?.contentType,
-      paths: allMedia.length > 0 ? allMedia.map((m) => m.path) : undefined,
-      types:
-        allMedia.length > 0
-          ? (allMedia.map((m) => m.contentType).filter(Boolean) as string[])
-          : undefined,
-    },
+    media: mediaFacts,
     locationContext,
     verboseLog: { kind: "inbound", mediaCount: allMedia.length },
     inboundHistory,
@@ -563,12 +524,7 @@ export async function buildLinePostbackContext(params: {
     timestamp,
     messageSid,
     commandAuthorized,
-    media: {
-      firstPath: "",
-      firstContentType: undefined,
-      paths: undefined,
-      types: undefined,
-    },
+    media: [],
     verboseLog: { kind: "postback" },
   });
 

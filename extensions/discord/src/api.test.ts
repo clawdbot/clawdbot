@@ -429,4 +429,29 @@ describe("fetchDiscord", () => {
       await closeServer(server);
     }
   });
+
+  it("aborts promptly during 429 retry backoff when the caller signal fires", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetcher = vi.fn(async () =>
+        jsonResponse({ message: "rate limited", retry_after: 30, global: false }, 429),
+      );
+      const controller = new AbortController();
+      const request = requestDiscord("/users/@me/guilds", "test-token", {
+        fetcher: withFetchPreconnect(fetcher),
+        retry: { attempts: 3 },
+        signal: controller.signal,
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      controller.abort();
+
+      await expect(request).rejects.toThrow(/abort/i);
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

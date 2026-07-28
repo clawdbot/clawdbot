@@ -3,7 +3,7 @@ import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { stripLeadingInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import type { SessionGoal } from "../config/sessions/types.js";
-import { isLoopbackHost } from "../gateway/net.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
 import { chunkTextByBreakResolver } from "../shared/text-chunking.js";
@@ -219,6 +219,11 @@ export function sanitizeRenderableText(text: string): string {
       )
     : redacted;
   return applyRtlIsolation(tokenSafe);
+}
+
+/** Render error causes without exposing secrets or terminal control sequences. */
+export function formatTuiErrorMessage(error: unknown): string {
+  return sanitizeRenderableText(formatErrorMessage(error));
 }
 
 export function resolveFinalAssistantText(params: {
@@ -476,15 +481,6 @@ export function formatTokens(total?: number | null, context?: number | null) {
       ? Math.min(999, Math.round((total / context) * 100))
       : null;
   return `tokens ${totalLabel}/${formatTokenCount(context)}${pct !== null ? ` (${pct}%)` : ""}`;
-}
-
-export function formatRemoteConnectionHostFooter(connectionUrl: string): string | null {
-  try {
-    const hostname = new URL(connectionUrl.trim()).hostname.trim();
-    return hostname && !isLoopbackHost(hostname) ? `host ${hostname}` : null;
-  } catch {
-    return null;
-  }
 }
 
 function formatGoalUsage(goal: SessionGoal): string | null {

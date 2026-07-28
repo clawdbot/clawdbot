@@ -12,7 +12,7 @@ import { resolveLineAccount } from "./accounts.js";
 import { handleLineWebhookEvents } from "./bot-handlers.js";
 import type { LineInboundContext } from "./bot-message-context.js";
 import type { ResolvedLineAccount } from "./types.js";
-import { createLineWebhookSpool } from "./webhook-spool.js";
+import { createLineWebhookSpool, type LineWebhookTurnAdoptionLifecycle } from "./webhook-spool.js";
 
 interface LineBotOptions {
   channelAccessToken: string;
@@ -23,7 +23,7 @@ interface LineBotOptions {
   mediaMaxMb?: number;
   onMessage?: (
     ctx: LineInboundContext,
-    control: { abortSignal?: AbortSignal; onTurnAdopted?: () => Promise<void> },
+    control: { turnAdoptionLifecycle?: LineWebhookTurnAdoptionLifecycle },
   ) => Promise<void>;
 }
 
@@ -60,8 +60,9 @@ export function createLineBot(opts: LineBotOptions): LineBot {
         runtime,
         mediaMaxBytes,
         processMessage,
-        ...(control.abortSignal ? { abortSignal: control.abortSignal } : {}),
-        ...(control.onTurnAdopted ? { onTurnAdopted: control.onTurnAdopted } : {}),
+        ...(control.turnAdoptionLifecycle
+          ? { turnAdoptionLifecycle: control.turnAdoptionLifecycle }
+          : {}),
         groupHistories,
         historyLimit: cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
       }),

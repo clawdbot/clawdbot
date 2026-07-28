@@ -8,10 +8,16 @@ import {
   MAX_IMAGE_INPUT_PIXELS,
   readImageMetadataFromHeader,
 } from "../media/image-ops.js";
-import { resolveManagedPluginIconUrl } from "../plugins/management-service.js";
+import {
+  resolveManagedPluginIconUrl,
+  resolveManagedSetupCatalogIconUrl,
+} from "../plugins/management-service.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { CONTROL_UI_PLUGIN_ICON_PATH_PREFIX } from "./control-ui-contract.js";
+import {
+  CONTROL_UI_CATALOG_ICON_PATH_PREFIX,
+  CONTROL_UI_PLUGIN_ICON_PATH_PREFIX,
+} from "./control-ui-contract.js";
 import { sendMethodNotAllowed } from "./http-common.js";
 import { authorizeGatewayHttpRequestOrReply } from "./http-utils.js";
 
@@ -80,6 +86,26 @@ function parsePluginIconRequest(urlRaw: string | undefined, basePath?: string): 
   }
 }
 
+function parseCatalogIconRequest(urlRaw: string | undefined, basePath?: string): string | null {
+  if (!urlRaw) {
+    return null;
+  }
+  const pathname = new URL(urlRaw, "http://localhost").pathname;
+  const prefix = `${normalizeBasePath(basePath)}${CONTROL_UI_CATALOG_ICON_PATH_PREFIX}/`;
+  if (!pathname.startsWith(prefix)) {
+    return null;
+  }
+  const encodedIconUrl = pathname.slice(prefix.length);
+  if (!encodedIconUrl || encodedIconUrl.includes("/")) {
+    return null;
+  }
+  try {
+    return decodeURIComponent(encodedIconUrl) || null;
+  } catch {
+    return null;
+  }
+}
+
 function normalizeMimeType(contentType: string | undefined): string | undefined {
   return contentType?.split(";", 1)[0]?.trim().toLowerCase() || undefined;
 }
@@ -114,9 +140,9 @@ function rememberIcon(
   return entry;
 }
 
-async function loadPluginIcon(params: {
+async function loadCatalogIcon(params: {
+  cacheScope: string;
   iconUrl: string;
-  pluginId: string;
 }): Promise<PluginIconPayload | null> {
   let parsed: URL;
   try {
@@ -134,7 +160,7 @@ async function loadPluginIcon(params: {
     return null;
   }
 
-  const cacheKey = `${params.pluginId}\0${parsed.href}`;
+  const cacheKey = `${params.cacheScope}\0${parsed.href}`;
   const now = Date.now();
   const cached = pluginIconCache.get(cacheKey);
   if (cached && cached.expiresAt > now) {
@@ -239,7 +265,8 @@ export async function handlePluginIconHttpRequest(
   },
 ): Promise<boolean> {
   const pluginId = parsePluginIconRequest(req.url, opts.basePath);
-  if (!pluginId) {
+  const catalogIconUrl = parseCatalogIconRequest(req.url, opts.basePath);
+  if (!pluginId && !catalogIconUrl) {
     return false;
   }
   if (req.method !== "GET") {
@@ -258,17 +285,24 @@ export async function handlePluginIconHttpRequest(
     return true;
   }
 
-  const iconUrl = await resolveManagedPluginIconUrl({
-    config: opts.config,
-    pluginId,
-  });
+  const iconUrl = pluginId
+    ? await resolveManagedPluginIconUrl({
+        config: opts.config,
+        pluginId,
+      })
+    : catalogIconUrl
+      ? resolveManagedSetupCatalogIconUrl({
+          config: opts.config,
+          iconUrl: catalogIconUrl,
+        })
+      : undefined;
   if (!iconUrl) {
     sendNotFound(res);
     return true;
   }
-  const icon = await loadPluginIcon({
+  const icon = await loadCatalogIcon({
+    cacheScope: pluginId ? `plugin:${pluginId}` : "catalog",
     iconUrl,
-    pluginId,
   });
   if (!icon) {
     sendNotFound(res);

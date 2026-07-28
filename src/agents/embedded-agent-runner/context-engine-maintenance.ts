@@ -3,6 +3,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveStorePath } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveContextEngineOwnerPluginId } from "../../context-engine/registry.js";
 import type {
@@ -323,16 +324,22 @@ function buildContextEngineMaintenanceRuntimeContext(params: {
           ? await params.withSessionManagerRewriteLock(rewriteSessionManagerEntries)
           : rewriteSessionManagerEntries();
       }
+      const runtimeAgentId = params.sessionTarget?.agentId ?? params.agentId;
+      const runtimeStorePath =
+        params.sessionTarget?.storePath ??
+        (runtimeAgentId
+          ? resolveStorePath(params.config?.session?.store, { agentId: runtimeAgentId })
+          : undefined);
       const rewriteRuntimeTranscriptEntries = async () =>
         await rewriteTranscriptEntriesInRuntimeTranscript({
           scope: {
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey ?? params.sessionId,
+            sessionId: params.sessionTarget?.sessionId ?? params.sessionId,
+            sessionKey: params.sessionTarget?.sessionKey ?? params.sessionKey ?? params.sessionId,
             sessionFile: params.sessionFile,
-            ...(params.agentId ? { agentId: params.agentId } : {}),
+            ...(runtimeAgentId ? { agentId: runtimeAgentId } : {}),
+            ...(runtimeStorePath ? { storePath: runtimeStorePath } : {}),
           },
           request,
-          config: params.config,
         });
       return await rewriteRuntimeTranscriptEntries();
     },

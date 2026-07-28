@@ -1,197 +1,31 @@
-.memory-import {
-  display: grid;
-  gap: 16px;
-}
+/* Memory Import keeps custom styling only for what the settings design
+   language cannot express: the collection review list (select-all checkbox +
+   collapsible per-file status list), the apply-result report, the loading
+   skeleton, and the confirmation dialog spacing. Everything else renders
+   through settings-ui primitives (ui/src/styles/settings.css). */
 
-.memory-import__intro {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 24px;
-}
-
-.memory-import__controls {
-  display: flex;
-  align-items: flex-end;
-  justify-content: flex-end;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.memory-import__controls > label:not(.memory-import__replace) {
-  display: grid;
-  gap: 5px;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 650;
-}
-
-.memory-import__controls select {
-  min-width: 160px;
-}
-
-.memory-import__replace {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  max-width: 230px;
-  cursor: pointer;
-}
-
-.memory-import__replace input {
-  margin-top: 3px;
-}
-
-.memory-import__replace span {
-  display: grid;
-  gap: 2px;
-}
-
-.memory-import__replace strong {
-  color: var(--text);
-  font-size: 12px;
-}
-
-.memory-import__replace small {
-  color: var(--muted);
-  font-size: 10px;
-  line-height: 1.35;
-}
-
-.memory-import__grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
-}
-
-.memory-import__provider {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  min-width: 0;
-}
-
-.memory-import__provider-header,
-.memory-import__provider-identity,
-.memory-import__provider-actions,
-.memory-import__collection-header,
-.memory-import__result {
-  display: flex;
+.memory-import__provider-title {
+  display: inline-flex;
   align-items: center;
-}
-
-.memory-import__provider-header,
-.memory-import__provider-actions,
-.memory-import__collection-header {
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.memory-import__provider-identity {
-  align-items: flex-start;
-  gap: 11px;
-  min-width: 0;
+  gap: 8px;
 }
 
 .memory-import__provider-icon {
-  width: 30px;
-  height: 30px;
-  flex: 0 0 30px;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
 }
 
-.memory-import__provider h3 {
-  margin: 0;
-  color: var(--text);
-  font-size: 14px;
-}
-
-.memory-import__provider p {
-  margin: 3px 0 0;
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.45;
-}
-
-.memory-import__badge {
-  display: inline-flex;
-  align-items: center;
-  min-height: 23px;
-  padding: 2px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  font-size: 10px;
-  font-weight: 700;
-  white-space: nowrap;
-}
-
-.memory-import__badge--ready {
-  color: var(--ok);
-  border-color: color-mix(in srgb, var(--ok) 32%, var(--border));
-  background: color-mix(in srgb, var(--ok) 8%, transparent);
-}
-
-.memory-import__badge--muted {
-  color: var(--muted);
-  background: var(--bg-muted);
-}
-
-.memory-import__badge--conflict {
-  color: var(--warn);
-  border-color: color-mix(in srgb, var(--warn) 32%, var(--border));
-  background: color-mix(in srgb, var(--warn) 8%, transparent);
-}
-
-.memory-import__paths {
-  display: grid;
-  gap: 7px;
-  margin: 0;
-  padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
-  border-radius: var(--radius-md);
-  background: var(--bg-muted);
-}
-
-.memory-import__paths > div {
-  display: grid;
-  grid-template-columns: 78px minmax(0, 1fr);
-  gap: 8px;
-  min-width: 0;
-}
-
-.memory-import__paths dt {
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.memory-import__paths dd {
-  min-width: 0;
-  margin: 0;
-}
-
-.memory-import__paths code {
+.memory-import__collection.settings-row {
   display: block;
-  overflow: hidden;
-  color: var(--text);
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.memory-import__collections {
-  display: grid;
-  gap: 8px;
-}
-
-.memory-import__collection {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  overflow: hidden;
+  padding: 0;
 }
 
 .memory-import__collection-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   padding: 10px 12px;
 }
 
@@ -305,41 +139,21 @@
   color: var(--ok);
 }
 
-.memory-import__result.memory-import__result--incomplete {
-  background: color-mix(in srgb, var(--danger) 9%, transparent);
-  color: var(--danger);
-}
-
 .memory-import__file-status--conflict {
   color: var(--warn);
 }
 
-.memory-import__provider-actions {
-  margin-top: auto;
-  padding-top: 2px;
-}
-
-.memory-import__provider-actions > span {
-  color: var(--muted);
-  font-size: 10px;
-}
-
-.memory-import__empty {
-  padding: 18px 12px;
-  border: 1px dashed var(--border);
-  border-radius: var(--radius-md);
-  color: var(--muted);
-  font-size: 12px;
-  text-align: center;
-}
-
-.memory-import__result {
+.memory-import__result.settings-row {
+  display: flex;
   align-items: flex-start;
   gap: 8px;
-  padding: 9px 11px;
-  border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--ok) 9%, transparent);
   color: var(--ok);
+}
+
+.memory-import__result.memory-import__result--incomplete {
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+  color: var(--danger);
 }
 
 .memory-import__result div {
@@ -401,12 +215,12 @@
 
 .memory-import__loading {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+  gap: 12px;
+  padding: 12px;
 }
 
 .memory-import__skeleton {
-  height: 220px;
+  height: 96px;
   border-radius: var(--radius-md);
   background: linear-gradient(90deg, var(--bg-muted), var(--bg-elevated), var(--bg-muted));
   background-size: 200% 100%;
@@ -420,21 +234,5 @@
 @keyframes memory-import-pulse {
   to {
     background-position: -200% 0;
-  }
-}
-
-@media (max-width: 900px) {
-  .memory-import__intro {
-    flex-direction: column;
-  }
-
-  .memory-import__controls {
-    width: 100%;
-    justify-content: flex-start;
-  }
-
-  .memory-import__grid,
-  .memory-import__loading {
-    grid-template-columns: 1fr;
   }
 }

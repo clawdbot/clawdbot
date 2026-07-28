@@ -505,6 +505,31 @@ function createReleasedClaimError(scopedKey: string): Error {
   return new Error(`claim released before commit: ${scopedKey}`);
 }
 
+type ClaimLoopInflight = { kind: "inflight"; pending: Promise<boolean> };
+type ClaimLoopSettled = { kind: "claimed" } | { kind: "duplicate" } | { kind: "invalid" };
+
+/** Resolve a claim, waiting on an active owner and retrying only when its release allows it. */
+export async function runClaimableDedupeClaimLoop<TClaim extends ClaimLoopSettled>(
+  claimNext: () => Promise<TClaim | ClaimLoopInflight>,
+  retryAfterRejection: (error: unknown, rejectionCount: number) => boolean,
+): Promise<TClaim | { kind: "duplicate" }> {
+  let rejectionCount = 0;
+  while (true) {
+    const claim = await claimNext();
+    if (claim.kind !== "inflight") {
+      return claim;
+    }
+    try {
+      await claim.pending;
+      return { kind: "duplicate" };
+    } catch (error) {
+      if (!retryAfterRejection(error, ++rejectionCount)) {
+        return { kind: "duplicate" };
+      }
+    }
+  }
+}
+
 /** Create a claim/commit/release dedupe guard backed by memory and optional persistent storage. */
 export function createClaimableDedupe(
   options: ClaimableDedupeOptions,
@@ -678,7 +703,19 @@ export function createClaimableDedupe(
   };
 }
 
-/** Create an event-keyed replay guard whose claims own their settlement handles. */
+/**
+ * Create an event-keyed replay guard whose claims own their settlement handles.
+ *
+ * Layering contract vs the durable ingress drain (`src/channels/message/ingress-queue.ts`):
+ * the drain already rejects duplicate event ids durably — `complete()` tombstones the row
+ * and enqueue is `ON CONFLICT DO NOTHING` for the tombstone retention window. A replay
+ * guard on a drained channel is justified only when its identity or retention exceeds the
+ * queue's: a *logical* message key that differs from the transport delivery id (Telegram:
+ * `chat_id:message_id` vs `update_id` — debounce/media-group merges can re-surface a
+ * constituent message under a fresh update_id only the guard sees), or a window longer
+ * than the channel's tombstone retention. If the guard key would equal the drain event_id
+ * and retention fits the tombstone window, delete the guard when adopting the drain.
+ */
 export function createChannelReplayGuard<TEvent>(
   params: ChannelReplayGuardParams<TEvent>,
 ): ChannelReplayGuard<TEvent> {

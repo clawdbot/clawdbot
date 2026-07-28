@@ -11,8 +11,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TtsAutoMode } from "../config/types.tts.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import type {
-  PluginHookBeforeAgentStartEvent,
-  PluginHookBeforeAgentStartResult,
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildEvent,
@@ -39,8 +37,6 @@ import type {
 } from "./host-hook-turn-types.js";
 
 export type {
-  PluginHookBeforeAgentStartEvent,
-  PluginHookBeforeAgentStartResult,
   PluginHookBeforeModelResolveAttachment,
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
@@ -52,7 +48,6 @@ export type {
   PluginHookChannelContext,
   PluginHookChannelSenderContext,
 } from "./hook-channel-context.types.js";
-export { stripPromptMutationFieldsFromLegacyHookResult } from "./hook-before-agent-start.types.js";
 export type {
   PluginAgentTurnPrepareEvent,
   PluginAgentTurnPrepareResult,
@@ -62,6 +57,8 @@ export type {
 export type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
+  PluginHookInboundMessageMetadata,
+  PluginHookMediaFact,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
@@ -78,7 +75,6 @@ export type PluginHookName =
   | "before_model_resolve"
   | "agent_turn_prepare"
   | "before_prompt_build"
-  | "before_agent_start"
   | "before_agent_reply"
   | "model_call_started"
   | "model_call_ended"
@@ -109,6 +105,7 @@ export type PluginHookName =
   | "subagent_spawning"
   | "subagent_delivery_target"
   | "subagent_spawned"
+  | "subagent_progress"
   | "subagent_ended"
   /** @deprecated Use gateway_stop. */
   | "deactivate"
@@ -127,7 +124,6 @@ const PLUGIN_HOOK_NAMES = [
   "before_model_resolve",
   "agent_turn_prepare",
   "before_prompt_build",
-  "before_agent_start",
   "before_agent_reply",
   "model_call_started",
   "model_call_ended",
@@ -153,6 +149,7 @@ const PLUGIN_HOOK_NAMES = [
   "subagent_spawning",
   "subagent_delivery_target",
   "subagent_spawned",
+  "subagent_progress",
   "subagent_ended",
   "deactivate",
   "gateway_start",
@@ -231,7 +228,6 @@ export const isPluginHookName = (hookName: unknown): hookName is PluginHookName 
 const PROMPT_INJECTION_HOOK_NAMES = [
   "agent_turn_prepare",
   "before_prompt_build",
-  "before_agent_start",
   "heartbeat_prompt_contribution",
 ] as const satisfies readonly PluginHookName[];
 
@@ -268,6 +264,8 @@ export type PluginHookAgentContext = {
   messageProvider?: string;
   /** Channel/plugin id for channel-originated runs, e.g. `discord`. */
   channel?: string;
+  /** Channel account used by the agent when multiple accounts are configured. */
+  accountId?: string;
   /** Conversation target id for channel-originated runs. Mirrors `channelId` for compatibility. */
   chatId?: string;
   /** Sender identity for channel-originated runs when available. */
@@ -626,6 +624,20 @@ export type PluginHookReplyPayloadSendingResult = {
 export type PluginHookToolKind = "code_mode_exec";
 export type PluginHookToolInputKind = "javascript" | "typescript";
 
+/** Host-derived identity for the message requester that initiated a tool call. */
+export type PluginHookToolRequesterContext = {
+  /** Channel/plugin id, for example `discord` or `telegram`. */
+  readonly channel?: string;
+  /** Channel account used by the agent when multiple accounts are configured. */
+  readonly accountId?: string;
+  /** Channel-scoped sender id when the host received one. */
+  readonly senderId?: string;
+  /** True only when the host resolved the sender as an owner. */
+  readonly senderIsOwner?: boolean;
+  /** Provider-native role ids when the channel supplies them. */
+  readonly roleIds?: readonly string[];
+};
+
 export type PluginHookToolContext = {
   agentId?: string;
   sessionKey?: string;
@@ -640,6 +652,12 @@ export type PluginHookToolContext = {
   toolCallId?: string;
   getSessionExtension?: (namespace: string) => PluginJsonValue | undefined;
   channelId?: string;
+  /**
+   * Message requester for this turn. Absent for non-message runs and harnesses
+   * that cannot prove requester identity. Authorization hooks should fail
+   * closed when a required field is absent.
+   */
+  requester?: PluginHookToolRequesterContext;
 };
 
 export type PluginHookBeforeToolCallEvent = {
@@ -747,17 +765,23 @@ export type PluginHookSubagentContext = {
 
 type PluginHookSubagentTargetKind = "subagent" | "acp";
 
+type PluginHookSubagentRequester = {
+  channel?: string;
+  accountId?: string;
+  to?: string;
+  threadId?: string | number;
+  /** Native source channel/conversation id, when distinct from the routable target. */
+  channelId?: string | number;
+  /** Native source message that initiated the parent run, when available. */
+  messageId?: string | number;
+};
+
 type PluginHookSubagentSpawnBase = {
   childSessionKey: string;
   agentId: string;
   label?: string;
   mode: "run" | "session";
-  requester?: {
-    channel?: string;
-    accountId?: string;
-    to?: string;
-    threadId?: string | number;
-  };
+  requester?: PluginHookSubagentRequester;
   threadRequested: boolean;
 };
 
@@ -835,6 +859,22 @@ export type PluginHookSubagentSpawnedEvent = PluginHookSubagentSpawnBase & {
   resolvedProvider?: string;
 };
 
+/** Portable channel presentation signal for one background child run. */
+export type PluginHookSubagentProgressEvent =
+  | {
+      phase: "started";
+      runId: string;
+      childSessionKey: string;
+      requester?: PluginHookSubagentRequester;
+    }
+  | {
+      phase: "ended";
+      runId: string;
+      childSessionKey: string;
+      outcome: "ok" | "error" | "timeout" | "killed" | "unknown";
+      requester?: PluginHookSubagentRequester;
+    };
+
 export type PluginHookSubagentEndedEvent = {
   targetSessionKey: string;
   targetKind: PluginHookSubagentTargetKind;
@@ -893,6 +933,14 @@ type PluginHookGatewayCronJobState = {
   lastFailureNotificationDelivered?: boolean;
   lastFailureNotificationDeliveryStatus?: PluginHookGatewayCronDeliveryStatus;
   lastFailureNotificationDeliveryError?: string;
+  streamStatus?: "starting" | "running" | "restarting" | "stopped" | "disabled" | "error";
+  streamError?: string;
+  streamConsecutiveFailures?: number;
+  streamRestartExhausted?: boolean;
+  streamDroppedBatches?: number;
+  streamCoalescedBatches?: number;
+  streamLastStartedAtMs?: number;
+  streamLastExitAtMs?: number;
 };
 
 export type PluginHookGatewayCronJob = {
@@ -922,6 +970,15 @@ export type PluginHookGatewayCronJob = {
         kind: "on-exit";
         command?: string;
         cwd?: string;
+      }
+    | {
+        kind: "stream";
+        command?: string[];
+        cwd?: string;
+        mode?: "line" | "match";
+        match?: string;
+        batchMs?: number;
+        maxBatchBytes?: number;
       };
   sessionTarget?: string;
   wakeMode?: string;
@@ -1125,11 +1182,6 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforePromptBuildEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforePromptBuildResult | void> | PluginHookBeforePromptBuildResult | void;
-  /** @deprecated Use before_model_resolve and before_prompt_build. */
-  before_agent_start: (
-    event: PluginHookBeforeAgentStartEvent,
-    ctx: PluginHookAgentContext,
-  ) => Promise<PluginHookBeforeAgentStartResult | void> | PluginHookBeforeAgentStartResult | void;
   before_agent_reply: (
     event: PluginHookBeforeAgentReplyEvent,
     ctx: PluginHookAgentContext,
@@ -1244,6 +1296,10 @@ export type PluginHookHandlerMap = {
     | void;
   subagent_spawned: (
     event: PluginHookSubagentSpawnedEvent,
+    ctx: PluginHookSubagentContext,
+  ) => Promise<void> | void;
+  subagent_progress: (
+    event: PluginHookSubagentProgressEvent,
     ctx: PluginHookSubagentContext,
   ) => Promise<void> | void;
   subagent_ended: (

@@ -88,6 +88,24 @@ vi.mock("../config/runtime-snapshot.js", () => ({
   setRuntimeConfigSnapshot: setRuntimeConfigSnapshotMock,
 }));
 
+const getActiveSecretsRuntimeSnapshotMock = vi.hoisted(() => vi.fn<() => object | null>());
+const prepareSecretsRuntimeSnapshotMock = vi.hoisted(() =>
+  vi.fn(async (params: { config: OpenClawConfig; assignmentConfig: OpenClawConfig }) => ({
+    sourceConfig: params.config,
+    config: params.assignmentConfig,
+    authStores: [],
+    authStoreCredentialsRevision: 0,
+    warnings: [],
+    webTools: {},
+  })),
+);
+const activateSecretsRuntimeSnapshotMock = vi.hoisted(() => vi.fn());
+vi.mock("../secrets/runtime.js", () => ({
+  getActiveSecretsRuntimeSnapshot: getActiveSecretsRuntimeSnapshotMock,
+  prepareSecretsRuntimeSnapshot: prepareSecretsRuntimeSnapshotMock,
+  activateSecretsRuntimeSnapshot: activateSecretsRuntimeSnapshotMock,
+}));
+
 const resolveCommandConfigWithSecretsMock = vi.hoisted(() =>
   vi.fn<
     (params: ResolveCommandConfigParams) => Promise<{
@@ -133,6 +151,7 @@ function mockConfig(home: string, storePath: string): OpenClawConfig {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  getActiveSecretsRuntimeSnapshotMock.mockReturnValue({});
   readConfigFileSnapshotForWriteMock.mockResolvedValue({
     snapshot: { valid: false, resolved: {} as OpenClawConfig },
     writeOptions: {},
@@ -140,6 +159,31 @@ beforeEach(() => {
 });
 
 describe("agentCommand runtime config", () => {
+  it("materializes auth-profile refs for standalone local runs", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const loadedConfig = mockConfig(home, store);
+      const sourceConfig = { ...loadedConfig, secrets: { providers: {} } } as OpenClawConfig;
+      readConfigFileSnapshotForWriteMock.mockResolvedValue({
+        snapshot: { valid: true, resolved: sourceConfig },
+        writeOptions: {},
+      });
+      getActiveSecretsRuntimeSnapshotMock.mockReturnValue(null);
+
+      await resolveAgentRuntimeConfig(runtime);
+
+      expect(prepareSecretsRuntimeSnapshotMock).toHaveBeenCalledWith({
+        config: sourceConfig,
+        assignmentConfig: loadedConfig,
+        includeConfigRefs: false,
+      });
+      expect(activateSecretsRuntimeSnapshotMock).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceConfig, config: loadedConfig }),
+      );
+      expect(setRuntimeConfigSnapshotMock).not.toHaveBeenCalled();
+    });
+  });
+
   it("sets runtime snapshots from source config before embedded agent run", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
@@ -363,6 +407,81 @@ describe("agentCommand runtime config", () => {
       expect(resolveCommandConfigWithSecretsMock).not.toHaveBeenCalled();
       expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(loadedConfig, loadedConfig);
       expect(prepared.cfg).toBe(loadedConfig);
+    });
+  });
+
+  it.each([
+    {
+      name: "global memory headers",
+      apply: (config: OpenClawConfig) => {
+        config.memory = {
+          search: {
+            remote: {
+              headers: {
+                Authorization: { source: "env", provider: "default", id: "MEMORY_HEADER" },
+              },
+            },
+          },
+        } as unknown as OpenClawConfig["memory"];
+      },
+    },
+    {
+      name: "per-agent memory headers",
+      apply: (config: OpenClawConfig) => {
+        config.agents = {
+          ...config.agents,
+          entries: {
+            personal: {
+              memory: {
+                search: {
+                  remote: {
+                    headers: {
+                      Authorization: {
+                        source: "env",
+                        provider: "default",
+                        id: "AGENT_MEMORY_HEADER",
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        } as unknown as OpenClawConfig["agents"];
+      },
+    },
+    {
+      name: "per-agent TTS provider",
+      apply: (config: OpenClawConfig) => {
+        config.agents = {
+          ...config.agents,
+          entries: {
+            personal: {
+              tts: {
+                providers: {
+                  elevenlabs: {
+                    apiKey: { source: "env", provider: "default", id: "AGENT_TTS_KEY" },
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig["agents"];
+      },
+    },
+  ])("resolves command secrets for $name", async ({ apply }) => {
+    await withTempHome(async (home) => {
+      const loadedConfig = mockConfig(home, path.join(home, "sessions.json"));
+      apply(loadedConfig);
+      resolveCommandConfigWithSecretsMock.mockResolvedValueOnce({
+        resolvedConfig: loadedConfig,
+        effectiveConfig: loadedConfig,
+        diagnostics: [],
+      });
+
+      await resolveAgentRuntimeConfig(runtime);
+
+      expect(resolveCommandConfigWithSecretsMock).toHaveBeenCalledTimes(1);
     });
   });
 

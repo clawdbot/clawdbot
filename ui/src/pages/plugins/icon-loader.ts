@@ -1,5 +1,8 @@
 import { normalizeRouteBasePath } from "@openclaw/uirouter";
-import { CONTROL_UI_PLUGIN_ICON_PATH_PREFIX } from "../../../../src/gateway/control-ui-contract.js";
+import {
+  CONTROL_UI_CATALOG_ICON_PATH_PREFIX,
+  CONTROL_UI_PLUGIN_ICON_PATH_PREFIX,
+} from "../../../../src/gateway/control-ui-contract.js";
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 
 const ALLOWED_PLUGIN_ICON_MIME_TYPES = new Set(["image/png", "image/svg+xml"]);
@@ -85,6 +88,11 @@ function gatewayIsSameOrigin(gatewayUrl: string): boolean {
 function pluginIconRouteUrl(basePath: string, pluginId: string): string {
   const normalizedBasePath = normalizeRouteBasePath(basePath);
   return `${normalizedBasePath}${CONTROL_UI_PLUGIN_ICON_PATH_PREFIX}/${encodeURIComponent(pluginId)}`;
+}
+
+function catalogIconRouteUrl(basePath: string, iconUrl: string): string {
+  const normalizedBasePath = normalizeRouteBasePath(basePath);
+  return `${normalizedBasePath}${CONTROL_UI_CATALOG_ICON_PATH_PREFIX}/${encodeURIComponent(iconUrl)}`;
 }
 
 function parseSvgNumber(value: string): number | null {
@@ -316,19 +324,22 @@ async function rasterizeSvg(blob: Blob): Promise<Blob | null> {
   }
 }
 
-export async function fetchPluginIconBlobUrl(params: {
+type FetchProxiedIconParams = {
   auth: PluginIconAuthSource;
   basePath: string;
   gatewayUrl: string;
-  pluginId: string;
   signal: AbortSignal;
-}): Promise<string | null> {
+};
+
+async function fetchProxiedIconBlobUrl(
+  params: FetchProxiedIconParams,
+  routeUrl: string,
+): Promise<string | null> {
   if (!gatewayIsSameOrigin(params.gatewayUrl)) {
     return null;
   }
   const authCandidates = resolveControlUiAuthCandidates(params.auth);
   const attempts = authCandidates.length > 0 ? authCandidates : [""];
-  const url = pluginIconRouteUrl(params.basePath, params.pluginId);
   for (const candidate of attempts) {
     const headers: Record<string, string> = {
       Accept: "image/avif,image/webp,image/png,image/jpeg,image/gif,image/svg+xml",
@@ -336,7 +347,7 @@ export async function fetchPluginIconBlobUrl(params: {
     if (candidate) {
       headers.Authorization = `Bearer ${candidate}`;
     }
-    const response = await fetch(url, {
+    const response = await fetch(routeUrl, {
       method: "GET",
       headers,
       credentials: "same-origin",
@@ -357,4 +368,16 @@ export async function fetchPluginIconBlobUrl(params: {
     return rendered ? URL.createObjectURL(rendered) : null;
   }
   return null;
+}
+
+export function fetchPluginIconBlobUrl(
+  params: FetchProxiedIconParams & { pluginId: string },
+): Promise<string | null> {
+  return fetchProxiedIconBlobUrl(params, pluginIconRouteUrl(params.basePath, params.pluginId));
+}
+
+export function fetchCatalogIconBlobUrl(
+  params: FetchProxiedIconParams & { iconUrl: string },
+): Promise<string | null> {
+  return fetchProxiedIconBlobUrl(params, catalogIconRouteUrl(params.basePath, params.iconUrl));
 }

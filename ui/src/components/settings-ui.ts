@@ -7,6 +7,7 @@ import "@awesome.me/webawesome/dist/components/radio-group/radio-group.js";
 import "@awesome.me/webawesome/dist/components/switch/switch.js";
 import { html, nothing, type TemplateResult } from "lit";
 import { icons } from "./icons.ts";
+import "./tooltip.ts";
 
 type SettingsStatusKind = "ok" | "warn" | "danger" | "accent" | "muted";
 
@@ -150,8 +151,23 @@ export function renderSettingsToggleRow(props: {
   description?: unknown;
   checked: boolean;
   onChange: (checked: boolean) => void;
+  /** Runs synchronously during direct activation for effects gated on user activation. */
+  onAct?: (checked: boolean) => void;
   disabled?: boolean;
 }): TemplateResult {
+  const notifySwitchActivation = (event: MouseEvent | KeyboardEvent) => {
+    const fromInput = event.composedPath().some((node) => node instanceof HTMLInputElement);
+    if (
+      !fromInput ||
+      (event instanceof KeyboardEvent && event.key !== "ArrowLeft" && event.key !== "ArrowRight")
+    ) {
+      return;
+    }
+    const checked = (event.currentTarget as HTMLElement & { checked: boolean }).checked;
+    if (checked !== props.checked) {
+      props.onAct?.(checked);
+    }
+  };
   return html`
     <div
       class="settings-row settings-row--toggle"
@@ -160,7 +176,9 @@ export function renderSettingsToggleRow(props: {
         if (props.disabled || (target instanceof Element && target.closest("wa-switch") !== null)) {
           return;
         }
-        props.onChange(!props.checked);
+        const checked = !props.checked;
+        props.onAct?.(checked);
+        props.onChange(checked);
       }}
     >
       <div class="settings-row__text">
@@ -175,6 +193,8 @@ export function renderSettingsToggleRow(props: {
           size="s"
           .checked=${props.checked}
           ?disabled=${props.disabled ?? false}
+          @click=${notifySwitchActivation}
+          @keydown=${notifySwitchActivation}
           @change=${(event: Event) => {
             props.onChange((event.currentTarget as HTMLElement & { checked: boolean }).checked);
           }}
@@ -188,15 +208,16 @@ export function renderSettingsToggleRow(props: {
 
 export function renderSettingsSegmented<T extends string>(props: {
   value: T;
-  options: ReadonlyArray<{ value: T; label: unknown; title?: string }>;
+  options: ReadonlyArray<{ value: T; label: unknown; title?: string; testId?: string }>;
   /** The selected radio is passed so callers can anchor visual transitions. */
   onChange: (value: T, element: HTMLElement) => void;
   disabled?: boolean;
   ariaLabel?: string;
+  className?: string;
 }): TemplateResult {
   return html`
     <wa-radio-group
-      class="settings-segmented"
+      class="settings-segmented ${props.className ?? ""}"
       size="s"
       orientation="horizontal"
       .value=${props.value}
@@ -225,6 +246,7 @@ export function renderSettingsSegmented<T extends string>(props: {
             value=${option.value}
             .checked=${option.value === props.value}
             title=${option.title ?? nothing}
+            data-test-id=${option.testId ?? nothing}
           >
             ${option.label}
           </wa-radio>
@@ -258,4 +280,42 @@ export function renderSettingsValue(value: unknown, options: { mono?: boolean } 
 
 export function renderSettingsEmpty(message: unknown): TemplateResult {
   return html`<div class="settings-empty">${message}</div>`;
+}
+
+/** Secret text input with an inset reveal toggle — one field, no trailing
+ * button, so secret rows line up with plain input rows in the same group. */
+export function renderSettingsSecretInput(props: {
+  value: string;
+  placeholder?: string;
+  visible: boolean;
+  showLabel: string;
+  hideLabel: string;
+  toggleLabel: string;
+  onInput: (next: string) => void;
+  onToggle: () => void;
+}): TemplateResult {
+  return html`
+    <span class="settings-secret">
+      <input
+        class="settings-input"
+        type=${props.visible ? "text" : "password"}
+        autocomplete="off"
+        spellcheck="false"
+        .value=${props.value}
+        placeholder=${props.placeholder ?? ""}
+        @input=${(e: Event) => props.onInput((e.target as HTMLInputElement).value)}
+      />
+      <openclaw-tooltip .content=${props.visible ? props.hideLabel : props.showLabel}>
+        <button
+          type="button"
+          class="settings-secret__toggle"
+          aria-label=${props.toggleLabel}
+          aria-pressed=${props.visible}
+          @click=${props.onToggle}
+        >
+          ${props.visible ? icons.eye : icons.eyeOff}
+        </button>
+      </openclaw-tooltip>
+    </span>
+  `;
 }

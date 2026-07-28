@@ -1,4 +1,5 @@
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeActiveMemoryFastMode } from "./config.js";
 import { getModelRef } from "./query.js";
@@ -32,6 +33,7 @@ import type {
   ActiveMemoryFastMode,
   ActiveMemoryTranscriptSource,
   ActiveRecallResult,
+  ConversationRecallContext,
   ResolvedActiveRecallPluginConfig,
   TerminalMemorySearchWatch,
 } from "./types.js";
@@ -48,6 +50,7 @@ function formatActiveMemoryFastMode(fastMode: ActiveMemoryFastMode | undefined):
 
 function prepareRecallRunContext(params: {
   api: OpenClawPluginApi;
+  runtimeConfig: OpenClawConfig;
   config: ResolvedActiveRecallPluginConfig;
   agentId: string;
   sessionKey?: string;
@@ -65,7 +68,7 @@ function prepareRecallRunContext(params: {
       sessionId: params.sessionId,
     });
   const storePath = params.api.runtime.agent.session.resolveStorePath(
-    params.api.config.session?.store,
+    params.runtimeConfig.session?.store,
     { agentId: params.agentId },
   );
   if (params.config.fastMode !== undefined) {
@@ -82,13 +85,14 @@ function prepareRecallRunContext(params: {
   const fastMode =
     normalizeActiveMemoryFastMode(sessionFastMode) ??
     normalizeActiveMemoryFastMode(
-      resolveAgentConfig(params.api.config, params.agentId)?.fastModeDefault,
+      resolveAgentConfig(params.runtimeConfig, params.agentId)?.fastModeDefault,
     );
   return { parentSessionKey, storePath, fastMode };
 }
 
 async function maybeResolveActiveRecall(params: {
   api: OpenClawPluginApi;
+  runtimeConfig: OpenClawConfig;
   config: ResolvedActiveRecallPluginConfig;
   agentId: string;
   sessionKey?: string;
@@ -99,18 +103,23 @@ async function maybeResolveActiveRecall(params: {
   searchQuery: string;
   currentModelProviderId?: string;
   currentModelId?: string;
+  conversationRecall?: ConversationRecallContext;
   abortSignal?: AbortSignal;
 }): Promise<ActiveRecallResult> {
   params.abortSignal?.throwIfAborted();
   const startedAt = Date.now();
-  const cacheKey = buildCacheKey({
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-    query: params.query,
-  });
-  const cached = getCachedResult(cacheKey);
-  const resolvedModelRef = getModelRef(params.api, params.agentId, params.config, {
+  // Memory Core re-authorizes every conversation-recall request against live
+  // session state. Never replay a cached private summary after eligibility changes.
+  const cacheKey = params.conversationRecall
+    ? undefined
+    : buildCacheKey({
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        query: params.query,
+      });
+  const cached = cacheKey ? getCachedResult(cacheKey) : undefined;
+  const resolvedModelRef = getModelRef(params.runtimeConfig, params.agentId, params.config, {
     modelProviderId: params.currentModelProviderId,
     modelId: params.currentModelId,
   });
@@ -346,7 +355,7 @@ async function maybeResolveActiveRecall(params: {
         searchDebug: result.searchDebug,
       });
       params.abortSignal?.throwIfAborted();
-      if (shouldCacheResult(result)) {
+      if (cacheKey && shouldCacheResult(result)) {
         setCachedResult(cacheKey, result, params.config.cacheTtlMs);
       }
       return result;
@@ -379,7 +388,7 @@ async function maybeResolveActiveRecall(params: {
       searchDebug: result.searchDebug,
     });
     params.abortSignal?.throwIfAborted();
-    if (shouldCacheResult(result)) {
+    if (cacheKey && shouldCacheResult(result)) {
       setCachedResult(cacheKey, result, params.config.cacheTtlMs);
     }
     return result;

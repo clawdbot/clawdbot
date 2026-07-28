@@ -16,7 +16,7 @@ Dashboard workboard for agent-owned issues and sessions.
 
 ## Surface
 
-contracts: `tools`
+contracts: `tools`; dashboard data bindings: `workboard.cards.list`, `workboard.stats`, `workboard.boards.list`; dashboard action verbs: `workboard.dispatch`
 
 ## Related docs
 

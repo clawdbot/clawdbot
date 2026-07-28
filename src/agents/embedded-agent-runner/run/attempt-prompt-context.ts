@@ -85,6 +85,7 @@ export function prepareEmbeddedAttemptPromptContext(input: {
   isRawModelRun: boolean;
   messages: AgentMessage[];
   preparedUserTurnMessage?: AgentMessage;
+  heartbeatOutcomeContext?: string;
   prompt: PromptAssemblyContext;
   replaceSessionMessages: (messages: AgentMessage[]) => void;
   sessionAgentId: string;
@@ -109,8 +110,6 @@ export function prepareEmbeddedAttemptPromptContext(input: {
   const contextTokenBudget = attempt.contextTokenBudget ?? DEFAULT_CONTEXT_TOKENS;
   const promptToolResultMaxChars = resolveLiveToolResultMaxChars({
     contextWindowTokens: contextTokenBudget,
-    cfg: attempt.config,
-    agentId: input.sessionAgentId,
   });
   const promptToolResultAggregateMaxChars = resolveLiveToolResultAggregateMaxChars({
     contextWindowTokens: contextTokenBudget,
@@ -140,7 +139,7 @@ export function prepareEmbeddedAttemptPromptContext(input: {
     if (aggregatePressureEngaged) {
       if (!toolResultWarningDedupe.promptPressure.check(sessionLogKey)) {
         log.warn(
-          `${truncationLog}; aggregate tool-result pressure detected, compaction has been requested; consider /compact or /new if pressure persists`,
+          `${truncationLog}; aggregate tool-result pressure detected; final provider-bound projection will determine whether recovery is needed`,
         );
       }
     } else {
@@ -148,14 +147,19 @@ export function prepareEmbeddedAttemptPromptContext(input: {
     }
   }
 
+  const hasNonEmptyTranscriptPrompt = Boolean(input.prompt.effectiveTranscriptPrompt?.trim());
+  // A non-empty transcript prompt is a persistence substitution. Keep the
+  // assembled model prompt authoritative even when no hook added context.
+  const shouldUseExplicitModelPrompt =
+    input.prompt.hasPromptBuildContext || hasNonEmptyTranscriptPrompt;
   const promptSubmission = resolveRuntimeContextPromptParts({
     effectivePrompt: input.prompt.promptForRuntimeContextSplit,
     transcriptPrompt: input.prompt.transcriptPromptForRuntimeSplit,
-    modelPrompt: input.prompt.hasPromptBuildContext
+    modelPrompt: shouldUseExplicitModelPrompt
       ? input.prompt.promptForModelBeforeRuntimeContextSplit
       : undefined,
     modelPromptBuildContext:
-      input.prompt.hasPromptBuildContext && input.prompt.effectiveTranscriptPrompt !== undefined
+      shouldUseExplicitModelPrompt && input.prompt.effectiveTranscriptPrompt !== undefined
         ? {
             promptBeforeHooks: input.prompt.promptBeforePromptBuildHooks,
             transcriptPromptBeforeTransforms: input.prompt.effectiveTranscriptPrompt,
@@ -209,7 +213,11 @@ export function prepareEmbeddedAttemptPromptContext(input: {
   }
   const runtimeContextForHook = isRuntimeOnlyTurn
     ? undefined
-    : [currentInboundContextText, promptSubmission.runtimeContext?.trim()]
+    : [
+        currentInboundContextText,
+        promptSubmission.runtimeContext?.trim(),
+        input.heartbeatOutcomeContext?.trim(),
+      ]
         .filter((value): value is string => Boolean(value))
         .join("\n\n") || undefined;
   const runtimeContextMessageForCurrentTurn =

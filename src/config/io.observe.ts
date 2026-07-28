@@ -259,7 +259,6 @@ export async function observeConfigSnapshot(
     (baseline?.hash ? baseline : null) ?? (await readConfigFingerprintForPath(deps, backupPath));
   deps.logger.warn(`Config observe anomaly: ${snapshot.path} (${suspicious.join(", ")})`);
   await appendConfigAuditRecord({
-    fs: deps.fs,
     env: deps.env,
     homedir: deps.homedir,
     record: createObserveAuditRecord({ snapshot, current, suspicious, entry, backup }),
@@ -306,7 +305,6 @@ export function observeConfigSnapshotSync(
     (baseline?.hash ? baseline : null) ?? readConfigFingerprintForPathSync(deps, backupPath);
   deps.logger.warn(`Config observe anomaly: ${snapshot.path} (${suspicious.join(", ")})`);
   appendConfigAuditRecordSync({
-    fs: deps.fs,
     env: deps.env,
     homedir: deps.homedir,
     record: createObserveAuditRecord({ snapshot, current, suspicious, entry, backup }),

@@ -4,7 +4,7 @@
  * Owns claim recovery, per-lane serialization, adoption-time complete, retry /
  * dead-letter disposition, pre-adoption stall watchdog, and optional supersede.
  */
-import { formatErrorMessage } from "../../infra/errors.js";
+import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import {
   createIngressDrainOwnerId,
   deregisterLiveIngressDrainInstance,
@@ -79,7 +79,7 @@ type ChannelIngressDispatchLifecycle = {
    * Deferred turn finished without ever owning the reply lane.
    * Drain releases the claim for retry.
    */
-  onAbandoned: () => void;
+  onAbandoned: () => void | Promise<void>;
 };
 
 type ChannelIngressDrainDispatchResult =
@@ -170,7 +170,7 @@ export function bindIngressLifecycleToReplyOptions(lifecycle: ChannelIngressDisp
     admission: "exclusive";
     onAdopted: () => void | Promise<void>;
     onDeferred: () => void;
-    onAbandoned: () => void;
+    onAbandoned: () => void | Promise<void>;
     abortSignal: AbortSignal;
   };
 } {
@@ -228,6 +228,23 @@ export function createChannelIngressDrain<
       state.claimRefreshTimer = undefined;
     }
   };
+
+  const abortActiveClaims = () => {
+    // Retire before abort so replacements recover; Set.delete makes disposal repeat safe.
+    // Claim-token fencing prevents this owner from settling a recovered claim.
+    deregisterLiveIngressDrainInstance(ownerId);
+    const reason = toErrorObject(options.abortSignal?.reason, "ingress-drain-aborted");
+    for (const state of activeByLane.values()) {
+      if (state.phase === "dispatching" || state.phase === "deferred") {
+        state.abortController.abort(reason);
+      }
+    }
+  };
+  if (options.abortSignal?.aborted) {
+    abortActiveClaims();
+  } else {
+    options.abortSignal?.addEventListener("abort", abortActiveClaims, { once: true });
+  }
 
   const removeActive = (state: ActiveHandlerState<TPayload, TMetadata>) => {
     clearStallTimer(state);
@@ -517,7 +534,7 @@ export function createChannelIngressDrain<
         // stall watchdog race and dead-letter an about-to-complete event.
         clearStallTimer(state);
       },
-      onAbandoned: () => {
+      onAbandoned: async () => {
         if (state.phase !== "deferred" && state.phase !== "dispatching") {
           return;
         }
@@ -525,7 +542,7 @@ export function createChannelIngressDrain<
           return;
         }
         clearStallTimer(state);
-        void state
+        await state
           .settleOnce(async () => {
             await releaseClaim(state.claim, "turn-abandoned");
           })
@@ -811,6 +828,7 @@ export function createChannelIngressDrain<
     },
     dispose: () => {
       disposed = true;
+      options.abortSignal?.removeEventListener("abort", abortActiveClaims);
       deregisterLiveIngressDrainInstance(ownerId);
       // Snapshot: removeActive mutates activeByLane during this sweep.
       const activeStates = Array.from(activeByLane.values());

@@ -1,4 +1,5 @@
 // Slack tests cover dispatch.preview fallback plugin behavior.
+import type { GetReplyOptions, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const FINAL_REPLY_TEXT = "final answer";
@@ -13,7 +14,6 @@ const finalizeSlackPreviewEditMock = vi.fn(async () => {});
 const normalizeSlackOutboundTextMock = vi.fn((value: string) => value.trim());
 const postMessageMock = vi.fn(async () => ({ ok: true, ts: "171234.999" }));
 const chatUpdateMock = vi.fn(async () => ({ ok: true, ts: "171234.999" }));
-const recordInboundSessionMock = vi.fn(async () => undefined);
 const recordSlackThreadParticipationMock = vi.fn();
 const updateLastRouteMock = vi.fn(async () => {});
 const appendSlackStreamMock = vi.fn(async () => {});
@@ -44,76 +44,7 @@ let mockedBlockStreamingEnabled: boolean | undefined = false;
 let mockedSlackStreamingMode: "off" | "partial" | "block" | "progress" = "partial";
 let mockedSlackDraftMode: "replace" | "status_final" | "append" = "append";
 let mockedPinnedMainDmOwner: string | undefined;
-let capturedReplyOptions:
-  | {
-      disableBlockStreaming?: boolean;
-      sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
-      suppressTyping?: boolean;
-      suppressDefaultToolProgressMessages?: boolean;
-      commentaryProgressEnabled?: boolean;
-      progressPreambleEnabled?: boolean;
-      commentaryPayloadsEnabled?: boolean;
-      onVerboseProgressVisibility?: (isActive: () => boolean) => void;
-      allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
-      allowToolLifecycleWhenProgressHidden?: boolean;
-      onAssistantMessageStart?: () => Promise<void> | void;
-      onReasoningEnd?: () => Promise<void> | void;
-      onReasoningStream?: (payload?: {
-        text?: string;
-        isReasoningSnapshot?: boolean;
-      }) => Promise<void> | void;
-      onItemEvent?: (payload: {
-        kind?: string;
-        itemId?: string;
-        toolCallId?: string;
-        progressText?: string;
-        summary?: string;
-        title?: string;
-        name?: string;
-        phase?: string;
-        status?: string;
-        meta?: string;
-      }) => Promise<void> | void;
-      onCommandOutput?: (payload: {
-        itemId?: string;
-        toolCallId?: string;
-        phase?: string;
-        title?: string;
-        name?: string;
-        status?: string;
-        exitCode?: number | null;
-      }) => Promise<void> | void;
-      onToolStart?: (payload: {
-        itemId?: string;
-        toolCallId?: string;
-        name: string;
-        phase?: string;
-        args?: Record<string, unknown>;
-        detailMode?: "explain" | "raw";
-      }) => Promise<void> | void;
-      onPatchSummary?: (payload: {
-        itemId?: string;
-        toolCallId?: string;
-        phase?: string;
-        title?: string;
-        name?: string;
-        added?: string[];
-        modified?: string[];
-        deleted?: string[];
-        summary?: string;
-      }) => Promise<void> | void;
-      onPlanUpdate?: (payload: {
-        phase?: string;
-        explanation?: string;
-        steps?: Array<{
-          step: string;
-          status: "pending" | "in_progress" | "completed";
-        }>;
-      }) => Promise<void> | void;
-      onPartialReply?: (payload: { text: string }) => Promise<void> | void;
-      onQueuedFollowupAdmitted?: () => Promise<void> | void;
-    }
-  | undefined;
+let capturedReplyOptions: GetReplyOptions | undefined;
 let capturedStatusReactionOptions: { enabled?: boolean; initialEmoji?: string } | undefined;
 const statusReactionControllerMock = {
   setQueued: vi.fn(async () => {}),
@@ -344,11 +275,11 @@ const noopAsync = async () => {};
 function createDraftStreamStub() {
   return {
     update: vi.fn(),
-    flush: noopAsync,
-    clear: noopAsync,
-    discardPending: noopAsync,
-    seal: noopAsync,
-    stop: noop,
+    flush: vi.fn(noopAsync),
+    clear: vi.fn(noopAsync),
+    discardPending: vi.fn(noopAsync),
+    seal: vi.fn(noopAsync),
+    stop: vi.fn(noop),
     forceNewMessage: vi.fn(),
     messageId: () => "171234.567",
     channelId: () => "C123",
@@ -387,6 +318,7 @@ function createPreparedSlackMessage(params?: {
   ackReactionMessageTs?: string;
   ackReactionPromise?: Promise<boolean> | null;
   relayIdentity?: { username?: string; iconUrl?: string; iconEmoji?: string };
+  turnAdoptionLifecycle?: object;
   eventScope?: {
     apiAppId: string;
     enterpriseId: string;
@@ -418,7 +350,6 @@ function createPreparedSlackMessage(params?: {
       botId: "B_OPENCLAW",
       textLimit: 4000,
       typingReaction: params?.typingReaction ?? "",
-      removeAckAfterReply: false,
       historyLimit: 0,
       channelHistories: new Map(),
       allowFrom: [],
@@ -429,6 +360,7 @@ function createPreparedSlackMessage(params?: {
       config: params?.accountConfig ?? {},
     },
     relayIdentity: params?.relayIdentity,
+    turnAdoptionLifecycle: params?.turnAdoptionLifecycle,
     eventScope: params?.eventScope,
     message,
     route: {
@@ -516,10 +448,6 @@ vi.mock("openclaw/plugin-sdk/channel-feedback", () => ({
   logAckFailure: () => {},
   logTypingFailure: () => {},
   removeAckReactionAfterReply: () => {},
-}));
-
-vi.mock("../conversation.runtime.js", () => ({
-  recordInboundSession: recordInboundSessionMock,
 }));
 
 vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
@@ -1018,361 +946,134 @@ vi.mock("../replies.js", () => ({
   resolveSlackThreadTs: () => mockedReplyThreadTs,
 }));
 
-vi.mock("../reply.runtime.js", () => ({
-  createReplyDispatcherWithTyping: (params: {
-    transformReplyPayload?: (payload: TestReplyPayload) => TestReplyPayload | null;
-    beforeDeliver?: (
-      payload: TestReplyPayload,
-      info: { kind: TestReplyDispatchKind },
-    ) => Promise<TestReplyPayload | null> | TestReplyPayload | null;
-    deliver: (payload: TestReplyPayload, info: { kind: TestReplyDispatchKind }) => Promise<void>;
-  }) => ({
-    dispatcher: {
-      deliver: async (payload: TestReplyPayload, info: { kind: TestReplyDispatchKind }) => {
-        const transformed = params.transformReplyPayload
-          ? params.transformReplyPayload(payload)
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
+  type DispatchParams = Parameters<typeof actual.dispatchChannelInboundTurn>[0];
+  return {
+    ...actual,
+    dispatchChannelInboundTurn: async (params: DispatchParams) => {
+      capturedReplyOptions = params.replyOptions as typeof capturedReplyOptions;
+      if (mockedReplyOptionEvents.length > 0) {
+        for (const entry of mockedReplyOptionEvents) {
+          if (entry.kind === "item") {
+            await params.replyOptions?.onItemEvent?.({
+              kind: entry.itemKind,
+              itemId: entry.itemId,
+              toolCallId: entry.toolCallId,
+              progressText: entry.progressText,
+              summary: entry.summary,
+              title: entry.title,
+              name: entry.name,
+              phase: entry.phase,
+              status: entry.status,
+              meta: entry.meta,
+            });
+          } else if (entry.kind === "command_output") {
+            await params.replyOptions?.onCommandOutput?.({
+              itemId: entry.itemId,
+              toolCallId: entry.toolCallId,
+              phase: entry.phase,
+              title: entry.title,
+              name: entry.name,
+              status: entry.status,
+              exitCode: entry.exitCode,
+            });
+          } else if (entry.kind === "tool_start") {
+            await params.replyOptions?.onToolStart?.({
+              itemId: entry.itemId,
+              toolCallId: entry.toolCallId,
+              name: entry.name,
+              phase: entry.phase,
+              args: entry.args,
+              detailMode: entry.detailMode,
+            });
+          } else if (entry.kind === "patch") {
+            await params.replyOptions?.onPatchSummary?.({
+              itemId: entry.itemId,
+              toolCallId: entry.toolCallId,
+              phase: entry.phase,
+              title: entry.title,
+              name: entry.name,
+              added: entry.added,
+              modified: entry.modified,
+              deleted: entry.deleted,
+              summary: entry.summary,
+            });
+          } else if (entry.kind === "plan") {
+            await params.replyOptions?.onPlanUpdate?.({
+              phase: entry.phase,
+              explanation: entry.explanation,
+              steps: entry.steps,
+            });
+          } else if (entry.kind === "concurrent_items") {
+            await Promise.all(
+              entry.progressTexts.map((progressText) =>
+                Promise.resolve(params.replyOptions?.onItemEvent?.({ progressText })),
+              ),
+            );
+          } else if (entry.kind === "assistant_start") {
+            await params.replyOptions?.onAssistantMessageStart?.();
+          } else if (entry.kind === "reasoning") {
+            await params.replyOptions?.onReasoningStream?.({
+              text: entry.text,
+              isReasoningSnapshot: entry.isReasoningSnapshot,
+            });
+          } else if (entry.kind === "reasoning_end") {
+            await params.replyOptions?.onReasoningEnd?.();
+          } else {
+            await params.replyOptions?.onPartialReply?.({ text: entry.text });
+          }
+        }
+      } else {
+        for (const progressText of mockedProgressEvents) {
+          await params.replyOptions?.onItemEvent?.({ progressText });
+        }
+      }
+      for (const entry of mockedDispatchSequence) {
+        if (entry.kind === "queued_followup") {
+          await params.replyOptions?.onQueuedFollowupAdmitted?.();
+          continue;
+        }
+        if (entry.kind === "item") {
+          await params.replyOptions?.onItemEvent?.({ progressText: entry.progressText });
+          continue;
+        }
+        const payload = entry.payload as ReplyPayload;
+        const transformed = params.dispatcherOptions?.transformReplyPayload
+          ? params.dispatcherOptions.transformReplyPayload(payload)
           : payload;
         if (!transformed) {
-          return;
+          continue;
         }
-        const deliverPayload = params.beforeDeliver
-          ? await params.beforeDeliver(transformed, info)
+        const deliverPayload = params.dispatcherOptions?.beforeDeliver
+          ? await params.dispatcherOptions.beforeDeliver(transformed, { kind: entry.kind })
           : transformed;
         if (!deliverPayload) {
-          return;
+          continue;
         }
-        mockedQueuedDispatchCounts[info.kind] += 1;
-        await params.deliver(deliverPayload, info);
-      },
+        mockedQueuedDispatchCounts[entry.kind] += 1;
+        try {
+          await params.delivery.deliver(deliverPayload, { kind: entry.kind });
+        } catch (error) {
+          if (!mockedDispatcherCapturesDeliveryErrors) {
+            throw error;
+          }
+          mockedQueuedDispatchCounts[entry.kind] -= 1;
+        }
+      }
+      return {
+        admission: { kind: "dispatch" } as const,
+        dispatched: true as const,
+        ctxPayload: params.ctxPayload,
+        routeSessionKey: params.route.sessionKey,
+        dispatchResult: {
+          queuedFinal: false,
+          counts: { ...mockedQueuedDispatchCounts },
+        },
+      };
     },
-    replyOptions: {},
-    markDispatchIdle: () => {},
-  }),
-  dispatchReplyWithBufferedBlockDispatcher: async (params: {
-    dispatcherOptions: {
-      transformReplyPayload?: (payload: TestReplyPayload) => TestReplyPayload | null;
-      beforeDeliver?: (
-        payload: TestReplyPayload,
-        info: { kind: TestReplyDispatchKind },
-      ) => Promise<TestReplyPayload | null> | TestReplyPayload | null;
-      deliver: (payload: TestReplyPayload, info: { kind: TestReplyDispatchKind }) => Promise<void>;
-    };
-    replyOptions?: {
-      disableBlockStreaming?: boolean;
-      sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
-      suppressTyping?: boolean;
-      suppressDefaultToolProgressMessages?: boolean;
-      onItemEvent?: (payload: {
-        kind?: string;
-        itemId?: string;
-        toolCallId?: string;
-        progressText?: string;
-        summary?: string;
-        title?: string;
-        name?: string;
-        phase?: string;
-        status?: string;
-        meta?: string;
-      }) => Promise<void> | void;
-      onCommandOutput?: (payload: {
-        itemId?: string;
-        toolCallId?: string;
-        phase?: string;
-        title?: string;
-        name?: string;
-        status?: string;
-        exitCode?: number | null;
-      }) => Promise<void> | void;
-      onToolStart?: (payload: {
-        itemId?: string;
-        toolCallId?: string;
-        name: string;
-        phase?: string;
-        args?: Record<string, unknown>;
-        detailMode?: "explain" | "raw";
-      }) => Promise<void> | void;
-      onPatchSummary?: (payload: {
-        itemId?: string;
-        toolCallId?: string;
-        phase?: string;
-        title?: string;
-        name?: string;
-        added?: string[];
-        modified?: string[];
-        deleted?: string[];
-        summary?: string;
-      }) => Promise<void> | void;
-      onPlanUpdate?: (payload: {
-        phase?: string;
-        explanation?: string;
-        steps?: Array<{
-          step: string;
-          status: "pending" | "in_progress" | "completed";
-        }>;
-      }) => Promise<void> | void;
-      onAssistantMessageStart?: () => Promise<void> | void;
-      onReasoningEnd?: () => Promise<void> | void;
-      onReasoningStream?: (payload?: {
-        text?: string;
-        isReasoningSnapshot?: boolean;
-      }) => Promise<void> | void;
-      onPartialReply?: (payload: { text: string }) => Promise<void> | void;
-      onQueuedFollowupAdmitted?: () => Promise<void> | void;
-    };
-  }) => {
-    capturedReplyOptions = params.replyOptions;
-    if (mockedReplyOptionEvents.length > 0) {
-      for (const entry of mockedReplyOptionEvents) {
-        if (entry.kind === "item") {
-          await params.replyOptions?.onItemEvent?.({
-            kind: entry.itemKind,
-            itemId: entry.itemId,
-            toolCallId: entry.toolCallId,
-            progressText: entry.progressText,
-            summary: entry.summary,
-            title: entry.title,
-            name: entry.name,
-            phase: entry.phase,
-            status: entry.status,
-            meta: entry.meta,
-          });
-        } else if (entry.kind === "command_output") {
-          await params.replyOptions?.onCommandOutput?.({
-            itemId: entry.itemId,
-            toolCallId: entry.toolCallId,
-            phase: entry.phase,
-            title: entry.title,
-            name: entry.name,
-            status: entry.status,
-            exitCode: entry.exitCode,
-          });
-        } else if (entry.kind === "tool_start") {
-          await params.replyOptions?.onToolStart?.({
-            itemId: entry.itemId,
-            toolCallId: entry.toolCallId,
-            name: entry.name,
-            phase: entry.phase,
-            args: entry.args,
-            detailMode: entry.detailMode,
-          });
-        } else if (entry.kind === "patch") {
-          await params.replyOptions?.onPatchSummary?.({
-            itemId: entry.itemId,
-            toolCallId: entry.toolCallId,
-            phase: entry.phase,
-            title: entry.title,
-            name: entry.name,
-            added: entry.added,
-            modified: entry.modified,
-            deleted: entry.deleted,
-            summary: entry.summary,
-          });
-        } else if (entry.kind === "plan") {
-          await params.replyOptions?.onPlanUpdate?.({
-            phase: entry.phase,
-            explanation: entry.explanation,
-            steps: entry.steps,
-          });
-        } else if (entry.kind === "concurrent_items") {
-          await Promise.all(
-            entry.progressTexts.map((progressText) =>
-              Promise.resolve(params.replyOptions?.onItemEvent?.({ progressText })),
-            ),
-          );
-        } else if (entry.kind === "assistant_start") {
-          await params.replyOptions?.onAssistantMessageStart?.();
-        } else if (entry.kind === "reasoning") {
-          await params.replyOptions?.onReasoningStream?.({
-            text: entry.text,
-            isReasoningSnapshot: entry.isReasoningSnapshot,
-          });
-        } else if (entry.kind === "reasoning_end") {
-          await params.replyOptions?.onReasoningEnd?.();
-        } else {
-          await params.replyOptions?.onPartialReply?.({ text: entry.text });
-        }
-      }
-    } else {
-      for (const progressText of mockedProgressEvents) {
-        await params.replyOptions?.onItemEvent?.({ progressText });
-      }
-    }
-    for (const entry of mockedDispatchSequence) {
-      if (entry.kind === "queued_followup") {
-        await params.replyOptions?.onQueuedFollowupAdmitted?.();
-        continue;
-      }
-      if (entry.kind === "item") {
-        await params.replyOptions?.onItemEvent?.({ progressText: entry.progressText });
-        continue;
-      }
-      const transformed = params.dispatcherOptions.transformReplyPayload
-        ? params.dispatcherOptions.transformReplyPayload(entry.payload)
-        : entry.payload;
-      if (!transformed) {
-        continue;
-      }
-      const deliverPayload = params.dispatcherOptions.beforeDeliver
-        ? await params.dispatcherOptions.beforeDeliver(transformed, { kind: entry.kind })
-        : transformed;
-      if (!deliverPayload) {
-        continue;
-      }
-      mockedQueuedDispatchCounts[entry.kind] += 1;
-      try {
-        await params.dispatcherOptions.deliver(deliverPayload, { kind: entry.kind });
-      } catch (error) {
-        if (!mockedDispatcherCapturesDeliveryErrors) {
-          throw error;
-        }
-        mockedQueuedDispatchCounts[entry.kind] -= 1;
-      }
-    }
-    return {
-      queuedFinal: false,
-      counts: { ...mockedQueuedDispatchCounts },
-    };
-  },
-  dispatchInboundMessage: async (params: {
-    replyOptions?: {
-      disableBlockStreaming?: boolean;
-      sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
-      suppressTyping?: boolean;
-      suppressDefaultToolProgressMessages?: boolean;
-      onAssistantMessageStart?: () => Promise<void> | void;
-      onReasoningEnd?: () => Promise<void> | void;
-      onReasoningStream?: (payload?: {
-        text?: string;
-        isReasoningSnapshot?: boolean;
-      }) => Promise<void> | void;
-      onItemEvent?: (payload: {
-        kind?: string;
-        itemId?: string;
-        progressText?: string;
-        summary?: string;
-        title?: string;
-        name?: string;
-        phase?: string;
-        status?: string;
-        meta?: string;
-      }) => Promise<void> | void;
-      onToolStart?: (payload: {
-        itemId?: string;
-        toolCallId?: string;
-        name: string;
-        phase?: string;
-        args?: Record<string, unknown>;
-        detailMode?: "explain" | "raw";
-      }) => Promise<void> | void;
-      onPatchSummary?: (payload: {
-        itemId?: string;
-        toolCallId?: string;
-        phase?: string;
-        title?: string;
-        name?: string;
-        added?: string[];
-        modified?: string[];
-        deleted?: string[];
-        summary?: string;
-      }) => Promise<void> | void;
-      onPlanUpdate?: (payload: {
-        phase?: string;
-        explanation?: string;
-        steps?: Array<{
-          step: string;
-          status: "pending" | "in_progress" | "completed";
-        }>;
-      }) => Promise<void> | void;
-      onPartialReply?: (payload: { text: string }) => Promise<void> | void;
-      onQueuedFollowupAdmitted?: () => Promise<void> | void;
-    };
-    dispatcher: {
-      deliver: (payload: TestReplyPayload, info: { kind: TestReplyDispatchKind }) => Promise<void>;
-    };
-  }) => {
-    capturedReplyOptions = params.replyOptions;
-    if (mockedReplyOptionEvents.length > 0) {
-      for (const entry of mockedReplyOptionEvents) {
-        if (entry.kind === "item") {
-          await params.replyOptions?.onItemEvent?.({
-            kind: entry.itemKind,
-            itemId: entry.itemId,
-            progressText: entry.progressText,
-            summary: entry.summary,
-            title: entry.title,
-            name: entry.name,
-            phase: entry.phase,
-            status: entry.status,
-            meta: entry.meta,
-          });
-        } else if (entry.kind === "tool_start") {
-          await params.replyOptions?.onToolStart?.({
-            itemId: entry.itemId,
-            toolCallId: entry.toolCallId,
-            name: entry.name,
-            phase: entry.phase,
-            args: entry.args,
-            detailMode: entry.detailMode,
-          });
-        } else if (entry.kind === "patch") {
-          await params.replyOptions?.onPatchSummary?.({
-            itemId: entry.itemId,
-            toolCallId: entry.toolCallId,
-            phase: entry.phase,
-            title: entry.title,
-            name: entry.name,
-            added: entry.added,
-            modified: entry.modified,
-            deleted: entry.deleted,
-            summary: entry.summary,
-          });
-        } else if (entry.kind === "plan") {
-          await params.replyOptions?.onPlanUpdate?.({
-            phase: entry.phase,
-            explanation: entry.explanation,
-            steps: entry.steps,
-          });
-        } else if (entry.kind === "concurrent_items") {
-          await Promise.all(
-            entry.progressTexts.map((progressText) =>
-              Promise.resolve(params.replyOptions?.onItemEvent?.({ progressText })),
-            ),
-          );
-        } else if (entry.kind === "partial") {
-          await params.replyOptions?.onPartialReply?.({ text: entry.text });
-        } else if (entry.kind === "assistant_start") {
-          await params.replyOptions?.onAssistantMessageStart?.();
-        } else if (entry.kind === "reasoning") {
-          await params.replyOptions?.onReasoningStream?.({
-            text: entry.text,
-            isReasoningSnapshot: entry.isReasoningSnapshot,
-          });
-        } else {
-          await params.replyOptions?.onReasoningEnd?.();
-        }
-      }
-    } else {
-      for (const progressText of mockedProgressEvents) {
-        await params.replyOptions?.onItemEvent?.({ progressText });
-      }
-    }
-    for (const entry of mockedDispatchSequence) {
-      if (entry.kind === "queued_followup") {
-        await params.replyOptions?.onQueuedFollowupAdmitted?.();
-        continue;
-      }
-      if (entry.kind === "item") {
-        await params.replyOptions?.onItemEvent?.({ progressText: entry.progressText });
-        continue;
-      }
-      await params.dispatcher.deliver(entry.payload, { kind: entry.kind });
-    }
-    return {
-      queuedFinal: false,
-      counts: { ...mockedQueuedDispatchCounts },
-    };
-  },
-}));
+  };
+});
 
 vi.mock("./preview-finalize.js", () => ({
   finalizeSlackPreviewEdit: finalizeSlackPreviewEditMock,
@@ -1392,7 +1093,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     normalizeSlackOutboundTextMock.mockClear();
     postMessageMock.mockClear();
     chatUpdateMock.mockClear();
-    recordInboundSessionMock.mockReset();
     recordSlackThreadParticipationMock.mockReset();
     updateLastRouteMock.mockReset();
     appendSlackStreamMock.mockReset();
@@ -1435,6 +1135,20 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     appendSlackStreamMock.mockResolvedValue(undefined);
     stopSlackStreamMock.mockResolvedValue({});
     emitSlackMessageSentHooksMock.mockClear();
+  });
+
+  it("forwards durable ingress ownership into reply options", async () => {
+    const turnAdoptionLifecycle = {
+      admission: "exclusive",
+      abortSignal: new AbortController().signal,
+      onAdopted: vi.fn(),
+      onDeferred: vi.fn(),
+      onAbandoned: vi.fn(),
+    };
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage({ turnAdoptionLifecycle }));
+
+    expect(capturedReplyOptions?.turnAdoptionLifecycle).toBe(turnAdoptionLifecycle);
   });
 
   it("falls back to normal delivery when preview finalize fails", async () => {
@@ -1488,168 +1202,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
     expectDeliverReplyCall(0, FINAL_REPLY_TEXT, { replyThreadTs: THREAD_TS });
-  });
-
-  it("passes accepted Slack bot messages through the shared bot loop guard", async () => {
-    const base = {
-      cfg: {
-        channels: {
-          defaults: {
-            botLoopProtection: {
-              maxEventsPerWindow: 1,
-              windowSeconds: 60,
-              cooldownSeconds: 60,
-            },
-          },
-        },
-      },
-      accountConfig: { allowBots: true },
-      message: {
-        channel: "C_LOOP_SLACK",
-        bot_id: "B_OTHER",
-        user: undefined,
-      },
-    };
-
-    await dispatchPreparedSlackMessage(
-      createPreparedSlackMessage({
-        ...base,
-        message: {
-          ...base.message,
-          ts: "900.001",
-          event_ts: "900.001",
-        },
-      }),
-    );
-    await dispatchPreparedSlackMessage(
-      createPreparedSlackMessage({
-        ...base,
-        message: {
-          ...base.message,
-          ts: "900.002",
-          event_ts: "900.002",
-        },
-      }),
-    );
-
-    expect(recordInboundSessionMock).toHaveBeenCalledTimes(1);
-    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("restores Slack status reactions when bot loop protection drops a turn", async () => {
-    const base = {
-      cfg: {
-        messages: {
-          statusReactions: { enabled: true },
-        },
-        channels: {
-          defaults: {
-            botLoopProtection: {
-              maxEventsPerWindow: 1,
-              windowSeconds: 60,
-              cooldownSeconds: 60,
-            },
-          },
-        },
-      },
-      accountConfig: { allowBots: true },
-      message: {
-        channel: "C_LOOP_SLACK_STATUS",
-        bot_id: "B_OTHER",
-        user: undefined,
-      },
-    };
-
-    await dispatchPreparedSlackMessage(
-      createPreparedSlackMessage({
-        ...base,
-        message: {
-          ...base.message,
-          ts: "910.001",
-          event_ts: "910.001",
-        },
-      }),
-    );
-
-    for (const value of Object.values(statusReactionControllerMock)) {
-      value.mockClear();
-    }
-
-    await dispatchPreparedSlackMessage(
-      createPreparedSlackMessage({
-        ...base,
-        ackReactionMessageTs: "910.002",
-        ackReactionPromise: Promise.resolve(true),
-        message: {
-          ...base.message,
-          ts: "910.002",
-          event_ts: "910.002",
-        },
-      }),
-    );
-
-    expect(recordInboundSessionMock).toHaveBeenCalledTimes(1);
-    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
-    expect(statusReactionControllerMock.setQueued).toHaveBeenCalledTimes(1);
-    expect(statusReactionControllerMock.restoreInitial).toHaveBeenCalledTimes(1);
-    expect(statusReactionControllerMock.setDone).not.toHaveBeenCalled();
-  });
-
-  it("layers Slack channel bot loop overrides over account settings field-by-field", async () => {
-    const base = {
-      cfg: {
-        channels: {
-          defaults: {
-            botLoopProtection: {
-              maxEventsPerWindow: 20,
-              windowSeconds: 1,
-              cooldownSeconds: 60,
-            },
-          },
-        },
-      },
-      accountConfig: {
-        allowBots: true,
-        botLoopProtection: {
-          windowSeconds: 120,
-          cooldownSeconds: 240,
-        },
-      },
-      channelConfig: {
-        botLoopProtection: {
-          maxEventsPerWindow: 1,
-        },
-      },
-      message: {
-        channel: "C_LOOP_SLACK_LAYERED",
-        bot_id: "B_OTHER_LAYERED",
-        user: undefined,
-      },
-    };
-
-    await dispatchPreparedSlackMessage(
-      createPreparedSlackMessage({
-        ...base,
-        message: {
-          ...base.message,
-          ts: "900.001",
-          event_ts: "900.001",
-        },
-      }),
-    );
-    await dispatchPreparedSlackMessage(
-      createPreparedSlackMessage({
-        ...base,
-        message: {
-          ...base.message,
-          ts: "961.001",
-          event_ts: "961.001",
-        },
-      }),
-    );
-
-    expect(recordInboundSessionMock).toHaveBeenCalledTimes(1);
-    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
   });
 
   it("updates non-main DM last-route metadata on the prepared direct session", async () => {
@@ -1775,13 +1327,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("finalizes fast draft preview text without sending a duplicate normal reply", async () => {
-    const draftStream = {
-      ...createDraftStreamStub(),
-      flush: vi.fn(noopAsync),
-      clear: vi.fn(noopAsync),
-      discardPending: vi.fn(noopAsync),
-      seal: vi.fn(noopAsync),
-    };
+    const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
     mockedDispatchSequence = [{ kind: "final", payload: { text: "✅" } }];
@@ -1807,13 +1353,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("finalizes native chart blocks without re-escaping accessible preview text", async () => {
-    const draftStream = {
-      ...createDraftStreamStub(),
-      flush: vi.fn(noopAsync),
-      clear: vi.fn(noopAsync),
-      discardPending: vi.fn(noopAsync),
-      seal: vi.fn(noopAsync),
-    };
+    const draftStream = createDraftStreamStub();
     const accessibleText =
       "Quarterly results\n\nRevenue (bar chart)\n- &lt;@U123&gt;: Q1: 12; Q2: 18";
     mockedSlackReplyBlocks = [
@@ -1881,13 +1421,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("normalizes only authored preview text when blocks own their fallback", async () => {
-    const draftStream = {
-      ...createDraftStreamStub(),
-      flush: vi.fn(noopAsync),
-      clear: vi.fn(noopAsync),
-      discardPending: vi.fn(noopAsync),
-      seal: vi.fn(noopAsync),
-    };
+    const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
     mockedDispatchSequence = [
@@ -1922,13 +1456,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("delivers split table fallbacks normally instead of hiding them in a preview edit", async () => {
-    const draftStream = {
-      ...createDraftStreamStub(),
-      flush: vi.fn(noopAsync),
-      clear: vi.fn(noopAsync),
-      discardPending: vi.fn(noopAsync),
-      seal: vi.fn(noopAsync),
-    };
+    const draftStream = createDraftStreamStub();
     const payload = {
       text: "Accounts",
       presentation: {
@@ -1999,13 +1527,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("does not clear a finalized Slack draft when a later tool warning is delivered", async () => {
-    const draftStream = {
-      ...createDraftStreamStub(),
-      flush: vi.fn(noopAsync),
-      clear: vi.fn(noopAsync),
-      discardPending: vi.fn(noopAsync),
-      seal: vi.fn(noopAsync),
-    };
+    const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
     mockedDispatchSequence = [
@@ -2035,13 +1557,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("does not reuse draft cleanup after a normally delivered final reply", async () => {
-    const draftStream = {
-      ...createDraftStreamStub(),
-      flush: vi.fn(noopAsync),
-      clear: vi.fn(noopAsync),
-      discardPending: vi.fn(noopAsync),
-      seal: vi.fn(noopAsync),
-    };
+    const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedDispatchSequence = [
       {
@@ -2415,13 +1931,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("renders rich status-final progress drafts as legacy Slack section blocks and finalizes once", async () => {
-    const draftStream = {
-      ...createDraftStreamStub(),
-      flush: vi.fn(noopAsync),
-      clear: vi.fn(noopAsync),
-      discardPending: vi.fn(noopAsync),
-      seal: vi.fn(noopAsync),
-    };
+    const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
     mockedSlackStreamingMode = "progress";
@@ -2523,13 +2033,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("keeps unlabeled rich Slack progress drafts as legacy section blocks", async () => {
-    const draftStream = {
-      ...createDraftStreamStub(),
-      flush: vi.fn(noopAsync),
-      clear: vi.fn(noopAsync),
-      discardPending: vi.fn(noopAsync),
-      seal: vi.fn(noopAsync),
-    };
+    const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
     mockedSlackStreamingMode = "progress";
@@ -2571,7 +2075,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("sends a progress final fresh before collapsing its draft to a receipt", async () => {
-    const draftStream = { ...createDraftStreamStub(), clear: vi.fn(noopAsync) };
+    const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
     mockedReplyThreadTsSequence = [undefined];
@@ -2608,7 +2112,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("leaves a progress draft untouched when the fresh final send fails", async () => {
-    const draftStream = { ...createDraftStreamStub(), clear: vi.fn(noopAsync) };
+    const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     deliverRepliesMock.mockRejectedValueOnce(new Error("final send failed"));
     mockedSlackStreamingMode = "progress";
@@ -2630,7 +2134,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("keeps a progress draft for an error final without creating a receipt", async () => {
-    const draftStream = { ...createDraftStreamStub(), clear: vi.fn(noopAsync) };
+    const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedSlackStreamingMode = "progress";
     mockedSlackDraftMode = "status_final";
@@ -3796,13 +3300,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("preserves the last rich Slack progress lines after a draft boundary status update", async () => {
-    const draftStream = {
-      ...createDraftStreamStub(),
-      flush: vi.fn(noopAsync),
-      clear: vi.fn(noopAsync),
-      discardPending: vi.fn(noopAsync),
-      seal: vi.fn(noopAsync),
-    };
+    const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
     mockedSlackStreamingMode = "progress";
@@ -3952,10 +3450,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("starts a new draft delivery target when a queued followup is admitted", async () => {
-    const draftStream = {
-      ...createDraftStreamStub(),
-      flush: vi.fn(noopAsync),
-    };
+    const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedSlackStreamingMode = "partial";
     mockedSlackDraftMode = "replace";
@@ -4271,13 +3766,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("preserves hidden-title rich Slack progress drafts when the label is hidden", async () => {
-    const draftStream = {
-      ...createDraftStreamStub(),
-      flush: vi.fn(noopAsync),
-      clear: vi.fn(noopAsync),
-      discardPending: vi.fn(noopAsync),
-      seal: vi.fn(noopAsync),
-    };
+    const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
     mockedSlackStreamingMode = "progress";
@@ -4552,13 +4041,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("does not flush draft previews for media finals before normal delivery", async () => {
-    const draftStream = {
-      ...createDraftStreamStub(),
-      flush: vi.fn(noopAsync),
-      clear: vi.fn(noopAsync),
-      discardPending: vi.fn(noopAsync),
-      seal: vi.fn(noopAsync),
-    };
+    const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
     mockedDispatchSequence = [
@@ -4578,13 +4061,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("keeps the preview and sends media-only for TTS supplement finals", async () => {
-    const draftStream = {
-      ...createDraftStreamStub(),
-      flush: vi.fn(noopAsync),
-      clear: vi.fn(noopAsync),
-      discardPending: vi.fn(noopAsync),
-      seal: vi.fn(noopAsync),
-    };
+    const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
     mockedReplyThreadTsSequence = [undefined];
@@ -4670,13 +4147,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("suppresses duplicate TTS supplement finals after preview finalization", async () => {
-    const draftStream = {
-      ...createDraftStreamStub(),
-      flush: vi.fn(noopAsync),
-      clear: vi.fn(noopAsync),
-      discardPending: vi.fn(noopAsync),
-      seal: vi.fn(noopAsync),
-    };
+    const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
     mockedSlackIsThreadReply = false;
@@ -4718,13 +4189,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("falls back with visible text when TTS supplement preview finalization fails", async () => {
-    const draftStream = {
-      ...createDraftStreamStub(),
-      flush: vi.fn(noopAsync),
-      clear: vi.fn(noopAsync),
-      discardPending: vi.fn(noopAsync),
-      seal: vi.fn(noopAsync),
-    };
+    const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedReplyThreadTsSequence = [undefined];
     mockedDispatchSequence = [
@@ -4761,13 +4226,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("keeps chart semantics singular when TTS preview finalization fails", async () => {
-    const draftStream = {
-      ...createDraftStreamStub(),
-      flush: vi.fn(noopAsync),
-      clear: vi.fn(noopAsync),
-      discardPending: vi.fn(noopAsync),
-      seal: vi.fn(noopAsync),
-    };
+    const draftStream = createDraftStreamStub();
     mockedSlackReplyBlocks = [
       {
         type: "section",
@@ -4930,13 +4389,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("does not flush draft previews for error finals before normal delivery", async () => {
-    const draftStream = {
-      ...createDraftStreamStub(),
-      flush: vi.fn(noopAsync),
-      clear: vi.fn(noopAsync),
-      discardPending: vi.fn(noopAsync),
-      seal: vi.fn(noopAsync),
-    };
+    const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedDispatchSequence = [
       {

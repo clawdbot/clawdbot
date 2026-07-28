@@ -2,7 +2,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const createChannelMessageReplyPipelineMock = vi.hoisted(() => vi.fn());
-const createReplyDispatcherWithTypingMock = vi.hoisted(() => vi.fn());
 const getMSTeamsRuntimeMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
 const renderReplyPayloadsToMessagesMock = vi.hoisted(() => vi.fn(() => []));
@@ -82,13 +81,6 @@ describe("createMSTeamsReplyDispatcher", () => {
       typingCallbacks,
     });
 
-    createReplyDispatcherWithTypingMock.mockImplementation((options) => ({
-      dispatcher: {},
-      replyOptions: {},
-      markDispatchIdle: vi.fn(),
-      _options: options,
-    }));
-
     getMSTeamsRuntimeMock.mockReturnValue({
       system: {
         enqueueSystemEvent: enqueueSystemEventMock,
@@ -98,10 +90,7 @@ describe("createMSTeamsReplyDispatcher", () => {
           resolveChunkMode: vi.fn(() => "length"),
           resolveMarkdownTableMode: vi.fn(() => "code"),
         },
-        reply: {
-          createReplyDispatcherWithTyping: createReplyDispatcherWithTypingMock,
-          resolveHumanDelayConfig: vi.fn(() => undefined),
-        },
+        reply: { resolveHumanDelayConfig: vi.fn(() => undefined) },
       },
     });
   });
@@ -182,11 +171,16 @@ describe("createMSTeamsReplyDispatcher", () => {
   };
 
   function dispatcherOptions(): DispatcherOptions {
-    const [call] = createReplyDispatcherWithTypingMock.mock.calls;
-    if (!call) {
-      throw new Error("expected reply dispatcher factory call");
+    const created = lastCreatedDispatcher;
+    if (!created) {
+      throw new Error("createDispatcher must be called first");
     }
-    return call[0] as DispatcherOptions;
+    return {
+      onReplyStart: created.dispatcherOptions.onReplyStart,
+      deliver: async (payload) => {
+        await created.delivery.deliver(payload, { kind: "final" });
+      },
+    };
   }
 
   function pipelineArgs(): PipelineArgs {
@@ -405,7 +399,7 @@ describe("createMSTeamsReplyDispatcher", () => {
 
     dispatcher.replyOptions.onPartialReply?.({ text: "streamed" });
     await options.deliver({ text: "streamed final" });
-    await dispatcher.markDispatchIdle();
+    await dispatcher.dispatcherOptions.onSettled?.();
 
     expect(renderReplyPayloadsToMessagesMock).toHaveBeenCalledWith(
       [{ text: "streamed final" }],
@@ -629,7 +623,7 @@ describe("createMSTeamsReplyDispatcher", () => {
     const options = dispatcherOptions();
 
     await options.deliver({ text: "block content" });
-    await dispatcher.markDispatchIdle();
+    await dispatcher.dispatcherOptions.onSettled?.();
 
     expect(onSentMessageIds).toHaveBeenCalledWith(["id-1"]);
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
@@ -652,7 +646,7 @@ describe("createMSTeamsReplyDispatcher", () => {
     const options = dispatcherOptions();
 
     await options.deliver({ text: "block content" });
-    await dispatcher.markDispatchIdle();
+    await dispatcher.dispatcherOptions.onSettled?.();
 
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
   });

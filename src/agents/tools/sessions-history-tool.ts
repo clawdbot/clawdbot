@@ -13,6 +13,7 @@ import { capArrayByJsonBytes } from "../../gateway/session-transcript-readers.js
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
 import { truncateUtf16Safe } from "../../utils.js";
+import { resolveDefaultAgentId } from "../agent-scope-config.js";
 import { optionalPositiveIntegerSchema } from "../schema/typebox.js";
 import {
   describeSessionsHistoryTool,
@@ -27,6 +28,7 @@ import {
   readStringParam,
   ToolInputError,
 } from "./common.js";
+import { runWithScopedSessionAccess } from "./scoped-session-access.js";
 import {
   createSessionVisibilityGuard,
   createAgentToAgentPolicy,
@@ -44,6 +46,32 @@ const SessionsHistoryToolSchema = Type.Object({
   sessionId: Type.Optional(Type.String({ minLength: 1 })),
   includeTools: Type.Optional(Type.Boolean()),
 });
+
+const SessionsHistoryOutputSchema = Type.Union([
+  Type.Object(
+    {
+      sessionKey: Type.String(),
+      messages: Type.Array(Type.Unknown()),
+      truncated: Type.Boolean(),
+      droppedMessages: Type.Boolean(),
+      contentTruncated: Type.Boolean(),
+      contentRedacted: Type.Boolean(),
+      bytes: Type.Number(),
+      offset: Type.Optional(Type.Number()),
+      nextOffset: Type.Optional(Type.Number()),
+      hasMore: Type.Optional(Type.Boolean()),
+      totalMessages: Type.Optional(Type.Number()),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      status: Type.Union([Type.Literal("error"), Type.Literal("forbidden")]),
+      error: Type.String(),
+    },
+    { additionalProperties: false },
+  ),
+]);
 
 const SESSIONS_HISTORY_MAX_BYTES = 80 * 1024;
 const SESSIONS_HISTORY_TEXT_MAX_CHARS = 4000;
@@ -357,6 +385,7 @@ export function createSessionsHistoryTool(opts?: {
     displaySummary: SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
     description: describeSessionsHistoryTool(),
     parameters: SessionsHistoryToolSchema,
+    outputSchema: SessionsHistoryOutputSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const gatewayCall = opts?.callGateway ?? callGateway;
@@ -381,6 +410,7 @@ export function createSessionsHistoryTool(opts?: {
         return jsonResult({ status: resolvedSession.status, error: resolvedSession.error });
       }
       const visibleSession = await resolveVisibleSessionReference({
+        action: "history",
         resolvedSession,
         requesterSessionKey: effectiveRequesterKey,
         restrictToSpawned,
@@ -403,6 +433,7 @@ export function createSessionsHistoryTool(opts?: {
       });
       const visibilityGuard = await createSessionVisibilityGuard({
         action: "history",
+        defaultAgentId: resolveDefaultAgentId(cfg),
         requesterSessionKey: effectiveRequesterKey,
         visibility,
         a2aPolicy,
@@ -426,21 +457,27 @@ export function createSessionsHistoryTool(opts?: {
         throw new ToolInputError("sessionId requires messageId");
       }
       const includeTools = Boolean(params.includeTools);
-      const result = await gatewayCall<{
-        messages: Array<unknown>;
-        offset?: number;
-        nextOffset?: number;
-        hasMore?: boolean;
-        totalMessages?: number;
-      }>({
-        method: "chat.history",
-        params: {
-          sessionKey: resolvedKey,
-          limit,
-          ...(offset !== undefined ? { offset } : {}),
-          ...(messageId ? { messageId } : {}),
-          ...(sessionId ? { sessionId } : {}),
-        },
+      const result = await runWithScopedSessionAccess({
+        cfg,
+        expectedSessionId: access.expectedSessionId,
+        targetSessionKey: resolvedKey,
+        run: async () =>
+          await gatewayCall<{
+            messages: Array<unknown>;
+            offset?: number;
+            nextOffset?: number;
+            hasMore?: boolean;
+            totalMessages?: number;
+          }>({
+            method: "chat.history",
+            params: {
+              sessionKey: resolvedKey,
+              limit,
+              ...(offset !== undefined ? { offset } : {}),
+              ...(messageId ? { messageId } : {}),
+              ...(sessionId ? { sessionId } : {}),
+            },
+          }),
       });
       const rawMessages = Array.isArray(result?.messages) ? result.messages : [];
       const selectedMessages = includeTools ? rawMessages : stripToolMessages(rawMessages);

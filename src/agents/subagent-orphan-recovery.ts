@@ -33,6 +33,7 @@ import {
 import {
   finalizeInterruptedSubagentRun,
   replaceSubagentRunAfterSteer,
+  reserveSwarmCollectorLaunch,
 } from "./subagent-registry-steer-runtime.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
@@ -167,6 +168,12 @@ async function resumeOrphanedSession(params: {
 
   try {
     const idempotencyKey = crypto.randomUUID();
+    if (
+      params.originalRun.collect === true &&
+      !reserveSwarmCollectorLaunch(params.originalRunId, idempotencyKey)
+    ) {
+      return { resumed: false, error: "failed to reserve collector recovery launch" };
+    }
     const result = await params.gatewayRuntime.dispatchAgent<{ runId: string }>(
       {
         message: resumeMessage,
@@ -174,6 +181,12 @@ async function resumeOrphanedSession(params: {
         idempotencyKey,
         deliver: false,
         lane: "subagent",
+        ...(params.originalRun.collect
+          ? {
+              swarmCollector: true,
+              swarmOutputSchema: params.originalRun.outputSchema,
+            }
+          : {}),
         inputProvenance: {
           kind: "inter_session",
           sourceSessionKey: params.originalRun.requesterSessionKey,
@@ -231,6 +244,8 @@ async function resumeOrphanedSession(params: {
 export async function recoverOrphanedSubagentSessions(params: {
   gatewayRuntime: GatewayRecoveryRuntime;
   getActiveRuns: () => Map<string, SubagentRunRecord>;
+  /** Test seam for transcript reads; production uses the canonical reader. */
+  readSessionMessages?: typeof readSessionMessagesAsync;
   /** Persisted across retries so already-resumed sessions are not resumed again. */
   resumedSessionKeys?: Set<string>;
   /** Exact stale generations whose terminal transition must retry without session state. */
@@ -249,6 +264,7 @@ export async function recoverOrphanedSubagentSessions(params: {
   };
   const resumedSessionKeys = params.resumedSessionKeys ?? new Set<string>();
   const pendingStaleFinalizations = params.pendingStaleFinalizations ?? new Map<string, string>();
+  const readSessionMessages = params.readSessionMessages ?? readSessionMessagesAsync;
   const configChangePattern = /openclaw\.json|openclaw gateway restart|config\.patch/i;
 
   try {
@@ -431,7 +447,7 @@ export async function recoverOrphanedSubagentSessions(params: {
 
         log.info(`found orphaned subagent session: ${childSessionKey} (run=${runId})`);
 
-        const messages = await readSessionMessagesAsync(
+        const messages = await readSessionMessages(
           {
             agentId: resolveAgentIdFromSessionKey(childSessionKey),
             sessionEntry: entry,
@@ -592,6 +608,8 @@ async function finalizeInterruptedRunWithRetry(params: {
 export function scheduleOrphanRecovery(params: {
   getGatewayRuntime: () => GatewayRecoveryRuntime | undefined;
   getActiveRuns: () => Map<string, SubagentRunRecord>;
+  /** Test seam for transcript reads; production uses the canonical reader. */
+  readSessionMessages?: typeof readSessionMessagesAsync;
   delayMs?: number;
   maxRetries?: number;
 }): void {
@@ -617,6 +635,7 @@ export function scheduleOrphanRecovery(params: {
         const result = await recoverOrphanedSubagentSessions({
           gatewayRuntime,
           getActiveRuns: params.getActiveRuns,
+          readSessionMessages: params.readSessionMessages ?? readSessionMessagesAsync,
           resumedSessionKeys,
           pendingStaleFinalizations,
         });

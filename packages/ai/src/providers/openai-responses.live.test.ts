@@ -1,6 +1,7 @@
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import type { Context, Model } from "../types.js";
+import { isContextOverflow } from "../utils/overflow.js";
 import { streamOpenAIResponses } from "./openai-responses.js";
 
 // Live coverage for the Responses stream state machine: real streams interleave
@@ -12,6 +13,8 @@ const describeLive = LIVE && OPENAI_KEY ? describe : describe.skip;
 
 const LIVE_MODEL_ID = process.env.OPENCLAW_LIVE_RESPONSES_MODEL || "gpt-5.6-luna";
 const LIVE_TIMEOUT_MS = 120_000;
+const OVERFLOW_MODEL_ID = "gpt-4o-mini";
+const OVERFLOW_CONTEXT_WINDOW = 128_000;
 
 function liveModel(overrides: Partial<Model<"openai-responses">> = {}) {
   return {
@@ -110,6 +113,36 @@ describeLive("OpenAI Responses live", () => {
           expect(block.thinkingSignature).toBeTruthy();
         }
       }
+    },
+    LIVE_TIMEOUT_MS,
+  );
+
+  it(
+    "classifies the provider's current context-overflow error",
+    async () => {
+      const overflowModel = liveModel({
+        id: OVERFLOW_MODEL_ID,
+        name: OVERFLOW_MODEL_ID,
+        contextWindow: OVERFLOW_CONTEXT_WINDOW,
+        maxTokens: 16_384,
+        reasoning: false,
+      });
+      const result = await streamOpenAIResponses(
+        overflowModel,
+        {
+          messages: [
+            {
+              role: "user",
+              content: "x ".repeat(Math.ceil(overflowModel.contextWindow * 1.1)),
+              timestamp: 0,
+            },
+          ],
+        },
+        { apiKey: OPENAI_KEY, maxTokens: 16, maxRetries: 0 },
+      ).result();
+
+      expect(result.stopReason).toBe("error");
+      expect(isContextOverflow(result)).toBe(true);
     },
     LIVE_TIMEOUT_MS,
   );

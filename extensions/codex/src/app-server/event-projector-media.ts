@@ -3,13 +3,12 @@ import {
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { generatedImageAssetFromBase64 } from "openclaw/plugin-sdk/image-generation";
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { readItemString, readString } from "./event-projector-values.js";
 import type { CodexThreadItem, JsonObject } from "./protocol.js";
 
 const GENERATED_IMAGE_MEDIA_SUBDIR = "tool-image-generation";
-const BYTES_PER_MB = 1024 * 1024;
-const DEFAULT_GENERATED_IMAGE_MAX_BYTES = 6 * BYTES_PER_MB;
 
 export class CodexGeneratedMediaProjection {
   private readonly itemIds = new Set<string>();
@@ -41,7 +40,7 @@ export class CodexGeneratedMediaProjection {
     }
     const itemId = readString(item, "id") ?? `raw-image-${this.itemIds.size}`;
     this.itemIds.add(itemId);
-    const maxBytes = resolveGeneratedImageMaxBytes(this.config);
+    const maxBytes = resolveGeneratedMediaMaxBytes(this.config, "image");
     const estimatedDecodedBytes = estimateBase64DecodedBytes(result);
     if (estimatedDecodedBytes !== undefined && estimatedDecodedBytes > maxBytes) {
       embeddedAgentLog.warn("codex app-server raw image generation result exceeds media limit", {
@@ -97,6 +96,14 @@ export class CodexGeneratedMediaProjection {
     return mediaUrls.size > 0 ? [...mediaUrls] : params.toolMediaUrls;
   }
 
+  buildHostOwnedMediaUrls(params: { messagingToolSentMediaUrls?: string[] }): string[] | undefined {
+    if ((params.messagingToolSentMediaUrls?.length ?? 0) > 0) {
+      return undefined;
+    }
+    const mediaUrls = [...this.urlsByItemId.values()];
+    return mediaUrls.length > 0 ? mediaUrls : undefined;
+  }
+
   private recordUrl(params: { itemId: string; mediaUrl: string; replaceExisting?: boolean }): void {
     if (this.urlsByItemId.has(params.itemId) && params.replaceExisting !== true) {
       this.itemIds.add(params.itemId);
@@ -130,12 +137,4 @@ function estimateBase64DecodedBytes(base64: string): number | undefined {
 
 function isBase64WhitespaceCode(code: number): boolean {
   return code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d;
-}
-
-function resolveGeneratedImageMaxBytes(config: EmbeddedRunAttemptParams["config"]): number {
-  const configured = config?.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * BYTES_PER_MB);
-  }
-  return DEFAULT_GENERATED_IMAGE_MAX_BYTES;
 }

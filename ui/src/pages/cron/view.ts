@@ -3,6 +3,7 @@
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { repeat } from "lit/directives/repeat.js";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { ChannelUiMetaEntry, CronJob, CronRunLogEntry, CronStatus } from "../../api/types.ts";
 import "../../styles/chat/text.css";
 import "../../styles/cron.css";
@@ -14,6 +15,7 @@ import type {
   CronSortDir,
 } from "../../api/types.ts";
 import { icon, icons } from "../../components/icons.ts";
+import { highlightCodeHtml } from "../../components/markdown-code-blocks.ts";
 import {
   renderSettingsPage,
   renderSettingsRow,
@@ -49,6 +51,7 @@ export type CronDetailTab = "settings" | "history";
 
 type CronProps = {
   basePath: string;
+  agentId: string;
   loading: boolean;
   jobsLoadingMore: boolean;
   status: CronStatus | null;
@@ -311,6 +314,8 @@ function renderRequiredTitle(label: string) {
 // wrapped control its accessible name (including the visually-hidden required marker).
 function renderFieldRow(params: {
   label: string;
+  // Blank when the control is not labelable (e.g. a code block); the label then
+  // has no `for` target and the control carries its own aria-label.
   controlId: string;
   control: unknown;
   required?: boolean;
@@ -328,7 +333,7 @@ function renderFieldRow(params: {
     : html`<div class=${controlClass}>${params.control}</div>`;
   return html`
     <div class=${params.stacked ? "settings-row settings-row--stacked" : "settings-row"}>
-      <label class="settings-row__text" for=${params.controlId}>
+      <label class="settings-row__text" for=${ifDefined(params.controlId || undefined)}>
         <span class="settings-row__title">
           ${params.required ? renderRequiredTitle(params.label) : params.label}
         </span>
@@ -1047,46 +1052,75 @@ function renderMenuItem(
 
 // ── Editor sections ──
 
+// Only the read-only payload kinds carry source text; the rest are prose prompts,
+// so an empty language keeps them on the plain editable textarea.
+const CRON_PAYLOAD_CODE_LANGUAGES: Record<CronFormState["payloadKind"], string> = {
+  script: "javascript",
+  command: "bash",
+  heartbeat: "",
+  systemEvent: "",
+  agentTurn: "",
+};
+
 function renderPromptSection(
   props: CronProps,
   ctx: { payloadLocked: boolean; isAgentTurn: boolean },
 ) {
+  const lockedPayloadLabel =
+    props.form.payloadKind === "script" ? t("cron.form.script") : t("cron.form.command");
   const promptLabel = ctx.payloadLocked
-    ? t("cron.form.command")
+    ? lockedPayloadLabel
     : props.form.payloadKind === "systemEvent"
       ? t("cron.form.mainTimelineMessage")
       : t("cron.form.assistantTaskPrompt");
   const promptHelp = ctx.payloadLocked
-    ? undefined
+    ? t("cron.form.readOnlyPayloadHelp")
     : props.form.payloadKind === "systemEvent"
       ? t("cron.form.systemEventHelp")
       : t("cron.form.agentTurnHelp");
+  // Script/command payloads are always read-only here, so they render as a highlighted
+  // code block instead of a textarea; every other kind stays an editable field. The code
+  // block carries no aria-invalid/describedby because validateCronForm skips payloadText
+  // for locked payloads, so this branch can never render a payload error.
+  const codeLanguage = ctx.payloadLocked ? CRON_PAYLOAD_CODE_LANGUAGES[props.form.payloadKind] : "";
   const promptRow = renderFieldRow({
     label: promptLabel,
-    controlId: "cron-payload-text",
+    controlId: codeLanguage ? "" : "cron-payload-text",
     required: true,
     help: promptHelp,
     stacked: true,
     wide: true,
     error: props.fieldErrors.payloadText,
     errorId: errorIdForField("payloadText"),
-    control: html`
-      <textarea
-        id="cron-payload-text"
-        class="settings-input"
-        rows="6"
-        .value=${props.form.payloadText}
-        ?readonly=${ctx.payloadLocked}
-        aria-required="true"
-        placeholder=${t("cron.form.promptPlaceholder")}
-        aria-invalid=${props.fieldErrors.payloadText ? "true" : "false"}
-        aria-describedby=${ifDefined(
-          props.fieldErrors.payloadText ? errorIdForField("payloadText") : undefined,
-        )}
-        @input=${(e: Event) =>
-          props.onFormChange({ payloadText: (e.target as HTMLTextAreaElement).value })}
-      ></textarea>
-    `,
+    control: codeLanguage
+      ? html`
+          <pre
+            id="cron-payload-text"
+            class="code-block cron-payload-code"
+            data-test-id="cron-payload-code"
+            tabindex="0"
+            aria-label=${promptLabel}
+          ><code class="hljs">${unsafeHTML(
+            highlightCodeHtml(props.form.payloadText, codeLanguage),
+          )}</code></pre>
+        `
+      : html`
+          <textarea
+            id="cron-payload-text"
+            class="settings-input"
+            rows="6"
+            .value=${props.form.payloadText}
+            ?readonly=${ctx.payloadLocked}
+            aria-required="true"
+            placeholder=${t("cron.form.promptPlaceholder")}
+            aria-invalid=${props.fieldErrors.payloadText ? "true" : "false"}
+            aria-describedby=${ifDefined(
+              props.fieldErrors.payloadText ? errorIdForField("payloadText") : undefined,
+            )}
+            @input=${(e: Event) =>
+              props.onFormChange({ payloadText: (e.target as HTMLTextAreaElement).value })}
+          ></textarea>
+        `,
   });
   const actionRow = renderFieldRow({
     label: t("cron.form.action"),
@@ -1096,7 +1130,7 @@ function renderPromptSection(
           <input
             id="cron-payload-kind"
             class="settings-input"
-            .value=${t("cron.form.command")}
+            .value=${lockedPayloadLabel}
             readonly
           />
         `
@@ -1241,19 +1275,23 @@ function describeFormSchedule(form: CronFormState): string | null {
     }
     if (Number(amount) === 1) {
       const singularKey =
-        form.everyUnit === "minutes"
-          ? "cron.form.summaryEveryMinuteOne"
-          : form.everyUnit === "hours"
-            ? "cron.form.summaryEveryHourOne"
-            : "cron.form.summaryEveryDayOne";
+        form.everyUnit === "seconds"
+          ? "cron.form.summaryEverySecondOne"
+          : form.everyUnit === "minutes"
+            ? "cron.form.summaryEveryMinuteOne"
+            : form.everyUnit === "hours"
+              ? "cron.form.summaryEveryHourOne"
+              : "cron.form.summaryEveryDayOne";
       return t(singularKey);
     }
     const key =
-      form.everyUnit === "minutes"
-        ? "cron.form.summaryEveryMinutes"
-        : form.everyUnit === "hours"
-          ? "cron.form.summaryEveryHours"
-          : "cron.form.summaryEveryDays";
+      form.everyUnit === "seconds"
+        ? "cron.form.summaryEverySeconds"
+        : form.everyUnit === "minutes"
+          ? "cron.form.summaryEveryMinutes"
+          : form.everyUnit === "hours"
+            ? "cron.form.summaryEveryHours"
+            : "cron.form.summaryEveryDays";
     return t(key, { amount });
   }
   if (form.scheduleKind === "at") {
@@ -1268,14 +1306,18 @@ function describeFormSchedule(form: CronFormState): string | null {
     const tz = form.cronTz.trim();
     return tz ? t("cron.form.summaryCronTz", { expr, tz }) : t("cron.form.summaryCron", { expr });
   }
-  return form.scheduleKind === "on-exit" ? t("cron.form.repeatOnExit") : null;
+  if (form.scheduleKind === "on-exit") {
+    return t("cron.form.repeatOnExit");
+  }
+  return form.scheduleKind === "stream" ? t("cron.form.repeatStream") : null;
 }
 
 function renderScheduleSection(props: CronProps) {
   const form = props.form;
   const isOnExit = form.scheduleKind === "on-exit";
-  // on-exit stays selectable only while it is the current value: jobs can
-  // convert to an editable schedule, but never back to a watched command.
+  const isStream = form.scheduleKind === "stream";
+  // Process-backed schedules stay selectable only while current: jobs can
+  // convert to an editable schedule, but never synthesize a command in the UI.
   const kinds: Array<{ value: CronFormState["scheduleKind"]; label: string; testId: string }> = [
     ...(isOnExit
       ? [
@@ -1283,6 +1325,15 @@ function renderScheduleSection(props: CronProps) {
             value: "on-exit" as const,
             label: t("cron.form.repeatOnExit"),
             testId: "cron-schedule-kind-on-exit",
+          },
+        ]
+      : []),
+    ...(isStream
+      ? [
+          {
+            value: "stream" as const,
+            label: t("cron.form.repeatStream"),
+            testId: "cron-schedule-kind-stream",
           },
         ]
       : []),
@@ -1302,7 +1353,15 @@ function renderScheduleSection(props: CronProps) {
           value: form.scheduleKind,
           options: kinds,
           ariaLabel: t("cron.form.repeat"),
-          onChange: (value) => props.onFormChange({ scheduleKind: value }),
+          onChange: (value) =>
+            props.onFormChange({
+              scheduleKind: value,
+              ...(value === "at" && (form.scheduleKind === "every" || form.scheduleKind === "cron")
+                ? { deleteAfterRun: true }
+                : value === "every" || value === "cron"
+                  ? { deleteAfterRun: false }
+                  : {}),
+            }),
         }),
       })}
       ${form.scheduleKind === "at"
@@ -1361,6 +1420,7 @@ function renderScheduleSection(props: CronProps) {
                         .value as CronFormState["everyUnit"],
                     })}
                 >
+                  <option value="seconds">${t("cron.form.seconds")}</option>
                   <option value="minutes">${t("cron.form.minutes")}</option>
                   <option value="hours">${t("cron.form.hours")}</option>
                   <option value="days">${t("cron.form.days")}</option>
@@ -1608,12 +1668,14 @@ function renderAdvanced(
                 `,
               })
             : nothing}
-          ${renderToggleRow({
-            label: t("cron.form.deleteAfterRun"),
-            checked: props.form.deleteAfterRun,
-            help: t("cron.form.deleteAfterRunHelp"),
-            onChange: (checked) => props.onFormChange({ deleteAfterRun: checked }),
-          })}
+          ${props.form.scheduleKind === "at" || props.form.scheduleKind === "on-exit"
+            ? renderToggleRow({
+                label: t("cron.form.deleteAfterRun"),
+                checked: props.form.deleteAfterRun,
+                help: t("cron.form.deleteAfterRunHelp"),
+                onChange: (checked) => props.onFormChange({ deleteAfterRun: checked }),
+              })
+            : nothing}
           ${renderToggleRow({
             label: t("cron.form.clearAgentOverride"),
             checked: props.form.clearAgent,

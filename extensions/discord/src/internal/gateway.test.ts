@@ -50,11 +50,12 @@ function firstSentGatewayPayload(send: ReturnType<typeof attachOpenSocket>): unk
 
 function presenceUpdate(
   status: PresenceUpdateStatus.Online | PresenceUpdateStatus.Idle = PresenceUpdateStatus.Online,
+  since: number | null = null,
 ): GatewaySendPayload {
   return {
     op: GatewayOpcodes.PresenceUpdate,
     d: {
-      since: null,
+      since,
       activities: [],
       status,
       afk: false,
@@ -305,7 +306,7 @@ describe("GatewayPlugin", () => {
     expect(thirdResolved).toBe(true);
   });
 
-  it("preserves MESSAGE_CREATE author payloads for inbound dispatch", async () => {
+  it("passes the raw MESSAGE_CREATE envelope to durable ingress", async () => {
     const gateway = new GatewayPlugin({ autoInteractions: false });
     const dispatchGatewayEvent = vi.fn(async (_eventValue: string, _dataValue: unknown) => {});
     (gateway as unknown as { client: unknown }).client = {
@@ -337,10 +338,11 @@ describe("GatewayPlugin", () => {
     const dispatched = firstDispatchedData(dispatchGatewayEvent) as {
       author?: { id: string };
       message?: { author?: { id: string } | null; content?: string };
+      content?: string;
     };
     expect(dispatched.author?.id).toBe("u1");
-    expect(dispatched.message?.author?.id).toBe("u1");
-    expect(dispatched.message?.content).toBe("hello");
+    expect(dispatched.content).toBe("hello");
+    expect(dispatched.message).toBeUndefined();
   });
 
   it("tracks the live voice roster across guild snapshots and voice updates", async () => {
@@ -494,6 +496,7 @@ describe("GatewayPlugin", () => {
       resetTime: 60_000,
       currentEventCount: 120,
       queuedEvents: 1,
+      droppedEvents: 0,
     });
 
     vi.advanceTimersByTime(59_999);
@@ -506,7 +509,41 @@ describe("GatewayPlugin", () => {
       resetTime: 120_000,
       currentEventCount: 1,
       queuedEvents: 0,
+      droppedEvents: 0,
     });
+  });
+
+  it("drops the oldest queued events and warns once per saturation episode", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const gateway = new GatewayPlugin({ autoInteractions: false });
+    const send = attachOpenSocket(gateway);
+    const warningSpy = vi.fn();
+    gateway.emitter.on("warning", warningSpy);
+
+    for (let index = 0; index < 242; index += 1) {
+      gateway.send(presenceUpdate(PresenceUpdateStatus.Online, index));
+    }
+
+    expect(gateway.getRateLimitStatus()).toEqual({
+      remainingEvents: 0,
+      resetTime: 60_000,
+      currentEventCount: 120,
+      queuedEvents: 120,
+      droppedEvents: 2,
+    });
+    expect(warningSpy).toHaveBeenCalledTimes(1);
+    expect(warningSpy).toHaveBeenCalledWith(
+      "Gateway outbound queue overflow policy=drop-oldest droppedEvents=1 queuedEvents=120 maxQueuedEvents=120",
+    );
+
+    vi.advanceTimersByTime(60_000);
+
+    const flushedSinceValues = send.mock.calls.slice(120).map(([serialized]) => {
+      const payload = JSON.parse(String(serialized)) as { d?: { since?: number } };
+      return payload.d?.since;
+    });
+    expect(flushedSinceValues).toEqual(Array.from({ length: 120 }, (_, index) => index + 122));
   });
 
   it("sends critical gateway events immediately even when regular sends are queued", () => {
@@ -531,6 +568,7 @@ describe("GatewayPlugin", () => {
       resetTime: 60_000,
       currentEventCount: 121,
       queuedEvents: 1,
+      droppedEvents: 0,
     });
   });
 

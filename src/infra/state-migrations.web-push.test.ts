@@ -38,7 +38,7 @@ describe("legacy Web Push Doctor migration", () => {
 
   function useStateDir(): string {
     const stateDir = tempDirs.make("openclaw-web-push-migration-");
-    envSnapshot ??= captureEnv(["OPENCLAW_STATE_DIR"]);
+    envSnapshot ??= captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_VAPID_SUBJECT"]);
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     return stateDir;
   }
@@ -198,23 +198,56 @@ describe("legacy Web Push Doctor migration", () => {
   });
 
   it.each([
-    ["missing", undefined],
-    ["empty", ""],
-  ])("normalizes a %s legacy VAPID subject", async (_label, subject) => {
+    ["missing legacy subject", undefined, undefined, DEFAULT_WEB_PUSH_VAPID_SUBJECT],
+    ["empty legacy subject", "", undefined, DEFAULT_WEB_PUSH_VAPID_SUBJECT],
+    ["blank injected subject", undefined, "   ", DEFAULT_WEB_PUSH_VAPID_SUBJECT],
+    [
+      "padded injected subject",
+      undefined,
+      "  mailto:injected@example.com  ",
+      "mailto:injected@example.com",
+    ],
+    [
+      "padded legacy subject",
+      "  mailto:legacy@example.com  ",
+      "mailto:injected@example.com",
+      "mailto:legacy@example.com",
+    ],
+  ])("normalizes a %s", async (_label, legacySubject, injectedSubject, expectedSubject) => {
     const stateDir = useStateDir();
-    const legacyKeys = vapidKeys({ subject: subject ?? "" });
-    if (subject === undefined) {
+    setTestEnvValue("OPENCLAW_VAPID_SUBJECT", "mailto:ambient@example.com");
+    const legacyKeys = vapidKeys({ subject: legacySubject ?? "" });
+    if (legacySubject === undefined) {
       delete (legacyKeys as Partial<VapidKeyPair>).subject;
     }
     await writeLegacyState({ stateDir, vapid: legacyKeys });
 
     const result = await migrateLegacyWebPush({
       detected: detectLegacyWebPush({ stateDir, doctorOnlyStateMigrations: true }),
+      env: { ...process.env, OPENCLAW_VAPID_SUBJECT: injectedSubject },
       stateDir,
     });
 
     expect(result.warnings).toEqual([]);
-    expect(readPersistedVapidKeyPair(stateDir)?.subject).toBe(DEFAULT_WEB_PUSH_VAPID_SUBJECT);
+    expect(readPersistedVapidKeyPair(stateDir)?.subject).toBe(expectedSubject);
+  });
+
+  it("rejects a present non-string legacy VAPID subject", async () => {
+    const stateDir = useStateDir();
+    const paths = await writeLegacyState({
+      stateDir,
+      vapid: { ...vapidKeys(), subject: 42 },
+    });
+
+    const result = await migrateLegacyWebPush({
+      detected: detectLegacyWebPush({ stateDir, doctorOnlyStateMigrations: true }),
+      env: { ...process.env, OPENCLAW_VAPID_SUBJECT: "mailto:fallback@example.com" },
+      stateDir,
+    });
+
+    expect(result.warnings[0]).toContain("VAPID keys are invalid");
+    expect(readPersistedVapidKeyPair(stateDir)).toBeNull();
+    expect(fs.existsSync(paths.vapidKeysPath!)).toBe(true);
   });
 
   it("removes an empty valid store only after opening SQLite", async () => {

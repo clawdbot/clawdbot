@@ -154,6 +154,7 @@ async function main() {
   const scenarioIds = splitCsv(process.env.OPENCLAW_NPM_TELEGRAM_SCENARIOS);
   const result = await runQaTelegramSuite({
     allowFailures: true,
+    failFast: true,
     repoRoot,
     outputDir,
     sutOpenClawCommand,

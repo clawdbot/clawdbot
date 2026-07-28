@@ -4,7 +4,7 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.dm
+      - matrix.encryption-setup
   execution:
     profiles: { "matrix:all": 81, "matrix:e2ee-deep": 15 }
     kind: flow

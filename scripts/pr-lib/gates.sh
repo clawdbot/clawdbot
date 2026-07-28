@@ -3,8 +3,11 @@ run_hosted_prepare_gates() {
   local current_head="$2"
   local changelog_only="$3"
   local recent_sha=""
-  local remote_head
-  remote_head=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
+  local remote_record remote_head remote_head_ref remote_is_cross_repository
+  remote_record=$(gh pr view "$pr" --json headRefName,headRefOid,isCrossRepository)
+  remote_head=$(printf '%s\n' "$remote_record" | jq -r .headRefOid)
+  remote_head_ref=$(printf '%s\n' "$remote_record" | jq -r .headRefName)
+  remote_is_cross_repository=$(printf '%s\n' "$remote_record" | jq -r .isCrossRepository)
   if [ "$remote_head" != "$current_head" ]; then
     echo "PR head changed before hosted gate verification (expected $current_head, got $remote_head). Re-run prepare-init."
     return 1
@@ -40,7 +43,60 @@ run_hosted_prepare_gates() {
   if [ "$changelog_only" = "true" ]; then
     args+=(--changelog-only)
   fi
-  run_quiet_logged "hosted CI/Testbox gates" ".local/gates-hosted-checks.log" node "${args[@]}"
+  if run_quiet_logged "hosted CI/Testbox gates" ".local/gates-hosted-checks.log" node "${args[@]}"; then
+    return 0
+  fi
+
+  if rg -F -q "Missing successful recent CI workflow for $current_head. Observed: none" \
+    .local/gates-hosted-checks.log
+  then
+    if [ "$remote_is_cross_repository" = "true" ]; then
+      cat <<EOF_RECOVERY
+Missing hosted CI recovery:
+  scripts/pr ci-dispatch $pr
+  unavailable: PR #$pr comes from a fork, and release-gate dispatch requires the exact target SHA on a base-repository branch.
+EOF_RECOVERY
+      return 1
+    fi
+    cat <<EOF_RECOVERY
+Missing hosted CI recovery:
+  scripts/pr ci-dispatch $pr
+Underlying command:
+EOF_RECOVERY
+    printf '  gh workflow run ci.yml --ref %q -f %q -f release_gate=true -f %q\n' \
+      "$remote_head_ref" \
+      "target_ref=$remote_head" \
+      "pull_request_number=$pr"
+  fi
+  return 1
+}
+
+ci_dispatch() {
+  local pr="$1"
+  local record head_ref head_sha is_cross_repository
+  record=$(gh pr view "$pr" --json headRefName,headRefOid,isCrossRepository)
+  head_ref=$(printf '%s\n' "$record" | jq -r .headRefName)
+  head_sha=$(printf '%s\n' "$record" | jq -r .headRefOid)
+  is_cross_repository=$(printf '%s\n' "$record" | jq -r .isCrossRepository)
+  if [ -z "$head_ref" ] || [ "$head_ref" = "null" ] || [ -z "$head_sha" ] || [ "$head_sha" = "null" ]; then
+    echo "PR #$pr is missing remote headRefName/headRefOid metadata." >&2
+    return 1
+  fi
+  if [ "$is_cross_repository" = "true" ]; then
+    echo "PR #$pr comes from a fork; release-gate workflow dispatch requires a base-repository branch at $head_sha." >&2
+    return 1
+  fi
+
+  mark_pr_operation_side_effects_if_available
+  node "$script_parent_dir/pr-lib/ci-dispatch.mjs" "$pr" "$head_ref" "$head_sha" false
+}
+
+mark_pr_operation_side_effects_if_available() {
+  # scripts/pr sources operation-lock.sh first. Policy tests may source this
+  # library alone, where advancing a lock phase is neither possible nor needed.
+  if declare -F mark_pr_operation_side_effects_started >/dev/null; then
+    mark_pr_operation_side_effects_started
+  fi
 }
 
 pin_worktree_bundled_plugins_dir() {
@@ -313,6 +369,8 @@ prepare_gates() {
 
   enter_worktree "$pr" false
 
+  mark_pr_operation_side_effects_if_available
+  refresh_prep_branch_for_reviewed_head "$pr"
   checkout_prep_branch "$pr"
   require_artifact .local/pr-meta.env
   # shellcheck disable=SC1091

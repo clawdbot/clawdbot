@@ -26,7 +26,9 @@ import {
 
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 type FactoryContext = Parameters<AdapterFactory["create"]>[0];
-type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
+type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>> & {
+  cleanupAfterGatewayStop?: () => Promise<void>;
+};
 export async function createTelegramQaTransportAdapter(
   context: FactoryContext,
 ): Promise<AdapterDefinition> {
@@ -227,6 +229,8 @@ export async function createTelegramQaTransportAdapter(
     async cleanup() {
       stopped = true;
       await polling.catch(() => undefined);
+    },
+    async cleanupAfterGatewayStop() {
       if (await shouldRetainQaGatewayCredentialLease()) {
         const quarantineErrors: unknown[] = [];
         try {

@@ -10,6 +10,16 @@ const OpenClawDelegateSchema = Type.Object({
   sessionId: Type.Optional(Type.String({ description: "Continue prior OpenClaw talk." })),
 });
 
+const OpenClawDelegateOutputSchema = Type.Object(
+  {
+    reply: Type.String(),
+    action: Type.Optional(Type.String()),
+    needsApproval: Type.Optional(Type.Literal(true)),
+    proposalId: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
 type OpenClawDelegateResult = {
   sessionId: string;
   reply: string;
@@ -40,6 +50,7 @@ function createOpenClawDelegateTool(options?: {
     description:
       "Ask system expert. Config, channels, plugins, agents, models/providers, updates. Writes need human approval.",
     parameters: OpenClawDelegateSchema,
+    outputSchema: OpenClawDelegateOutputSchema,
     execute: async (_toolCallId, args) => {
       const params = (args ?? {}) as Record<string, unknown>;
       const message = readStringParam(params, "message", { required: true });

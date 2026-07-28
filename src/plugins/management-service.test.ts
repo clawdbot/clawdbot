@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   applyUninstall: vi.fn(),
+  clawReferenceWarnings: vi.fn(),
   clawhubInstall: vi.fn(),
   commitRecords: vi.fn(),
   installRecords: vi.fn(),
@@ -12,7 +13,9 @@ const mocks = vi.hoisted(() => ({
   officialCatalog: vi.fn(),
   persistInstall: vi.fn(),
   preflight: vi.fn(),
+  providerAuthChoices: vi.fn(),
   readConfig: vi.fn(),
+  recommendedInstalls: vi.fn(),
   refreshRegistry: vi.fn(),
   replaceConfig: vi.fn(),
   planUninstall: vi.fn(),
@@ -76,10 +79,22 @@ vi.mock("./install-record-commit.js", () => ({
   commitPluginInstallRecordsWithConfig: (...args: unknown[]) => mocks.commitRecords(...args),
 }));
 
+vi.mock("./uninstall-claw-references.js", () => ({
+  collectClawPluginUninstallWarnings: (...args: unknown[]) => mocks.clawReferenceWarnings(...args),
+}));
+
 vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./official-external-plugin-catalog.js")>()),
   loadConfiguredHostedOfficialExternalPluginCatalogEntries: (...args: unknown[]) =>
     mocks.officialCatalog(...args),
+}));
+
+vi.mock("./provider-auth-choices.js", () => ({
+  resolveManifestProviderAuthChoices: (...args: unknown[]) => mocks.providerAuthChoices(...args),
+}));
+
+vi.mock("./recommended-tool-installs.js", () => ({
+  listRecommendedToolInstalls: (...args: unknown[]) => mocks.recommendedInstalls(...args),
 }));
 
 const {
@@ -87,6 +102,7 @@ const {
   installManagedPlugin,
   listManagedPlugins,
   resolveManagedPluginIconUrl,
+  resolveManagedSetupCatalogIconUrl,
   setManagedPluginEnabled,
   uninstallManagedPlugin,
 } = await import("./management-service.js");
@@ -208,6 +224,9 @@ describe("plugin management service", () => {
     mocks.slotSelection.mockImplementation((config) => ({ config, warnings: [] }));
     mocks.installRecords.mockResolvedValue({});
     mocks.applyUninstall.mockResolvedValue({ directoryRemoved: true, warnings: [] });
+    mocks.providerAuthChoices.mockReturnValue([]);
+    mocks.recommendedInstalls.mockReturnValue([]);
+    mocks.clawReferenceWarnings.mockReturnValue([]);
     mocks.officialCatalog.mockResolvedValue({
       source: "hosted",
       entries: [],
@@ -397,6 +416,26 @@ describe("plugin management service", () => {
     expect(catalog.plugins[0]).toMatchObject({ id: "firecrawl", hasIcon: true });
     expect(catalog.plugins[0]).not.toHaveProperty("icon");
     expect(resolved).toBe(icon);
+  });
+
+  it("allows only manifest and bundled setup catalog icon URLs", async () => {
+    const providerIcon = "https://cdn.example.test/provider.svg";
+    const recommendedIcon = "https://cdn.example.test/tool.png";
+    mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
+    mocks.providerAuthChoices.mockReturnValue([{ choiceId: "provider", icon: providerIcon }]);
+    mocks.recommendedInstalls.mockReturnValue([{ id: "tool", icon: recommendedIcon }]);
+    const resolve = (iconUrl: string) =>
+      resolveManagedSetupCatalogIconUrl({ config: {}, env: {}, iconUrl });
+    expect(resolve(providerIcon)).toBe(providerIcon);
+    expect(resolve(recommendedIcon)).toBe(recommendedIcon);
+    expect(resolve("https://untrusted.example/icon.png")).toBeUndefined();
+    expect(resolve("http://127.0.0.1/private.png")).toBeUndefined();
+    expect(mocks.providerAuthChoices).toHaveBeenCalledWith({
+      config: {},
+      env: {},
+      includeUntrustedWorkspacePlugins: false,
+      includeWorkspacePlugins: false,
+    });
   });
 
   it("omits icon capability when neither manifest nor catalog has one", async () => {
@@ -1002,6 +1041,9 @@ describe("plugin management service", () => {
     });
     mocks.commitRecords.mockResolvedValue(undefined);
     mocks.applyUninstall.mockResolvedValue({ directoryRemoved: true, warnings: [] });
+    mocks.clawReferenceWarnings.mockReturnValue([
+      'Warning: plugin "diffs" is referenced by Claw: @acme/review.',
+    ]);
     mocks.refreshRegistry.mockResolvedValue(undefined);
 
     const result = await uninstallManagedPlugin({ pluginId: "diffs", env: {} });
@@ -1025,12 +1067,10 @@ describe("plugin management service", () => {
       )[0].nextConfig.plugins?.installs,
     ).toBeUndefined();
     expect(mocks.applyUninstall).toHaveBeenCalledWith({ target: "/tmp/extensions/diffs" });
-    expect(mocks.refreshRegistry).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: "source-changed", installRecords: {} }),
-    );
     expect(result).toMatchObject({
       pluginId: "diffs",
       removed: ["config entry", "install record", "directory"],
+      warnings: ['Warning: plugin "diffs" is referenced by Claw: @acme/review.'],
     });
   });
 

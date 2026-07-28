@@ -219,21 +219,6 @@ export function createLiveTransportQaCliRegistration(
   };
 }
 
-/** One top-level check row in a rendered QA markdown report. */
-export type QaReportCheck = {
-  name: string;
-  status: "pass" | "fail" | "skip";
-  details?: string;
-};
-
-/** One scenario section in a rendered QA markdown report. */
-export type QaReportScenario = {
-  name: string;
-  status: "pass" | "fail" | "skip";
-  details?: string;
-  steps?: QaReportCheck[];
-};
-
 /** Docker command runner abstraction used by QA Docker helpers and tests. */
 export type QaDockerRunCommand = (
   command: string,
@@ -253,95 +238,6 @@ export type QaDockerFetchLike = (
 
 const DEFAULT_QA_DOCKER_COMMAND_TIMEOUT_MS = 120_000;
 const DEFAULT_QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS = 2_000;
-
-function pushQaReportDetailsBlock(lines: string[], label: string, details: string, indent = "") {
-  if (!details.includes("\n")) {
-    lines.push(`${indent}- ${label}: ${details}`);
-    return;
-  }
-  lines.push(`${indent}- ${label}:`);
-  lines.push("", "```text", details, "```");
-}
-
-/** Render checks, scenarios, timeline, and notes into the standard QA markdown report format. */
-export function renderQaMarkdownReport(params: {
-  title: string;
-  startedAt: Date;
-  finishedAt: Date;
-  checks?: QaReportCheck[];
-  scenarios?: QaReportScenario[];
-  timeline?: string[];
-  notes?: string[];
-}) {
-  const checks = params.checks ?? [];
-  const scenarios = params.scenarios ?? [];
-  const passCount =
-    checks.filter((check) => check.status === "pass").length +
-    scenarios.filter((scenario) => scenario.status === "pass").length;
-  const failCount =
-    checks.filter((check) => check.status === "fail").length +
-    scenarios.filter((scenario) => scenario.status === "fail").length;
-
-  const lines = [
-    `# ${params.title}`,
-    "",
-    `- Started: ${params.startedAt.toISOString()}`,
-    `- Finished: ${params.finishedAt.toISOString()}`,
-    `- Duration ms: ${params.finishedAt.getTime() - params.startedAt.getTime()}`,
-    `- Passed: ${passCount}`,
-    `- Failed: ${failCount}`,
-    "",
-  ];
-
-  if (checks.length > 0) {
-    lines.push("## Checks", "");
-    for (const check of checks) {
-      lines.push(`- [${check.status === "pass" ? "x" : " "}] ${check.name}`);
-      if (check.details) {
-        pushQaReportDetailsBlock(lines, "Details", check.details, "  ");
-      }
-    }
-  }
-
-  if (scenarios.length > 0) {
-    lines.push("", "## Scenarios", "");
-    for (const scenario of scenarios) {
-      lines.push(`### ${scenario.name}`);
-      lines.push("");
-      lines.push(`- Status: ${scenario.status}`);
-      if (scenario.details) {
-        pushQaReportDetailsBlock(lines, "Details", scenario.details);
-      }
-      if (scenario.steps?.length) {
-        lines.push("- Steps:");
-        for (const step of scenario.steps) {
-          lines.push(`  - [${step.status === "pass" ? "x" : " "}] ${step.name}`);
-          if (step.details) {
-            pushQaReportDetailsBlock(lines, "Details", step.details, "    ");
-          }
-        }
-      }
-      lines.push("");
-    }
-  }
-
-  if (params.timeline && params.timeline.length > 0) {
-    lines.push("## Timeline", "");
-    for (const item of params.timeline) {
-      lines.push(`- ${item}`);
-    }
-  }
-
-  if (params.notes && params.notes.length > 0) {
-    lines.push("", "## Notes", "");
-    for (const note of params.notes) {
-      lines.push(`- ${note}`);
-    }
-  }
-
-  lines.push("");
-  return lines.join("\n");
-}
 
 /** Append a formatted live-lane issue while preserving the caller-owned issue list. */
 export function appendQaLiveLaneIssue(issues: string[], label: string, error: unknown) {
@@ -529,6 +425,7 @@ export function createQaDockerRuntime(params: {
     try {
       return { ok: response.ok };
     } finally {
+      await releaseQaDockerFetchResponse(response);
       await release();
     }
   };
@@ -568,11 +465,14 @@ export function createQaDockerRuntime(params: {
         break;
       }
       let response: QaDockerFetchResponse | undefined;
+      const requestTimeoutMs = Math.max(
+        1,
+        Math.min(DEFAULT_QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS, remainingMs),
+      );
+      const requestSignal = AbortSignal.timeout(requestTimeoutMs);
       try {
         response = await deps.fetchImpl(url, {
-          signal: AbortSignal.timeout(
-            Math.max(1, Math.min(DEFAULT_QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS, remainingMs)),
-          ),
+          signal: requestSignal,
         });
         if (response.ok) {
           return;
@@ -580,6 +480,9 @@ export function createQaDockerRuntime(params: {
         lastError = new Error(`Health check returned non-OK for ${url}`);
       } catch (error) {
         lastError = error;
+        if (requestSignal.aborted && requestTimeoutMs === remainingMs) {
+          break;
+        }
       } finally {
         await releaseQaDockerFetchResponse(response);
       }

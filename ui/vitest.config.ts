@@ -59,6 +59,14 @@ const workspaceSourceAliases = [
     replacement: path.resolve(repoRoot, "packages/media-core/src/index.ts"),
   },
   {
+    find: "@openclaw/session-url-contract/parse",
+    replacement: path.resolve(repoRoot, "packages/session-url-contract/src/parse.ts"),
+  },
+  {
+    find: "@openclaw/session-url-contract",
+    replacement: path.resolve(repoRoot, "packages/session-url-contract/src/index.ts"),
+  },
+  {
     find: "@openclaw/workboard-contract",
     replacement: path.resolve(repoRoot, "packages/workboard-contract/src/index.ts"),
   },
@@ -84,6 +92,10 @@ const nodeDrivenBrowserLayoutTests = [
   "src/pages/chat/chat-responsive.browser.test.ts",
   "src/components/form-controls.browser.test.ts",
   "src/pages/sessions/view.browser.test.ts",
+] as const;
+const mockRegistryUnitTests = [
+  "src/components/mcp-app-view.test.ts",
+  "src/pages/chat/chat-page.test.ts",
 ] as const;
 const chromiumExecutableOverrideEnvKey = "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH";
 const systemChromiumExecutableCandidates = [
@@ -134,7 +146,28 @@ export default defineConfig({
           deps: jsdomOptimizedDeps,
           name: "unit",
           include: ["src/**/*.test.ts"],
-          exclude: ["src/**/*.browser.test.ts", "src/**/*.e2e.test.ts", "src/**/*.node.test.ts"],
+          exclude: [
+            "src/**/*.browser.test.ts",
+            "src/**/*.e2e.test.ts",
+            "src/**/*.node.test.ts",
+            ...mockRegistryUnitTests,
+          ],
+          environment: "jsdom",
+          setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
+        },
+      }),
+      defineProject({
+        resolve: {
+          alias: workspaceSourceAliases,
+        },
+        test: {
+          ...sharedUiTestConfig,
+          // These two tests intentionally replace module exports. Isolate only this tiny
+          // project so the main 339-file suite keeps its isolate:false speed contract.
+          isolate: true,
+          deps: jsdomOptimizedDeps,
+          name: "unit-mock-registry",
+          include: [...mockRegistryUnitTests],
           environment: "jsdom",
           setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
         },

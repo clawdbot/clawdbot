@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import type { ExecApprovalRequest } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  normalizeSessionDeliveryState,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { normalizeMatrixApproverId } from "./approval-ids.js";
@@ -364,20 +367,19 @@ describe("matrix exec approvals", () => {
       entry: {
         sessionId: "main",
         updatedAt: 1,
-        origin: {
-          provider: "matrix",
-          accountId: "ops",
-          to: "room:!room:example.org",
-          nativeChannelId: "!room:example.org",
-        },
-        deliveryContext: {
-          channel: "matrix",
-          to: "room:!room:example.org",
-          accountId: "ops",
-        },
-        lastChannel: "slack",
-        lastTo: "channel:C999",
-        lastAccountId: "work",
+        delivery: normalizeSessionDeliveryState({
+          origin: {
+            provider: "matrix",
+            accountId: "ops",
+            to: "room:!room:example.org",
+            nativeChannelId: "!room:example.org",
+          },
+          context: {
+            channel: "matrix",
+            to: "room:!room:example.org",
+            accountId: "ops",
+          },
+        }),
       },
     });
     const cfg = buildMultiAccountMatrixConfig({ sessionStorePath: storePath });

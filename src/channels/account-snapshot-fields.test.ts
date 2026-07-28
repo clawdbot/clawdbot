@@ -1,6 +1,7 @@
 // Account snapshot field tests cover channel account snapshot serialization fields.
 import { describe, expect, it } from "vitest";
 import {
+  getCredentialUnavailableDiagnostics,
   projectSafeChannelAccountSnapshotFields,
   redactChannelAccountSnapshotBaseUrl,
 } from "./account-snapshot-fields.js";
@@ -10,6 +11,28 @@ function joinUrlParts(...parts: string[]): string {
 }
 
 describe("projectSafeChannelAccountSnapshotFields", () => {
+  it("accepts only typed redacted credential diagnostics", () => {
+    expect(
+      getCredentialUnavailableDiagnostics({
+        credentialDiagnostics: [
+          {
+            code: "CREDENTIAL_FILE_UNAVAILABLE",
+            path: "channels.telegram.tokenFile",
+            reason: "not-found",
+          },
+          { code: "OTHER", path: "ignored", reason: "ignored" },
+          { code: "CREDENTIAL_FILE_UNAVAILABLE", path: "", reason: "not-found" },
+        ],
+      }),
+    ).toEqual([
+      {
+        code: "CREDENTIAL_FILE_UNAVAILABLE",
+        path: "channels.telegram.tokenFile",
+        reason: "not-found",
+      },
+    ]);
+  });
+
   it("omits webhook and public-key style fields from generic snapshots", () => {
     const snapshot = projectSafeChannelAccountSnapshotFields({
       name: "Primary",

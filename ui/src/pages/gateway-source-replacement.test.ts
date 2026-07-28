@@ -4,6 +4,7 @@ import { nothing } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
+import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { SessionsRouteData } from "./sessions/sessions-page.ts";
 import type { SkillsRouteData } from "./skills/skills-page.ts";
 import { USAGE_PAYLOAD_TTL_MS, type UsageRefreshReason } from "./usage/refresh-policy.ts";
@@ -38,8 +39,9 @@ function gatewayWithClient(
 ): ApplicationContext["gateway"] {
   const snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected,
-    reconnecting: false,
+    phase: connected ? "connected" : "stopped",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",
@@ -111,7 +113,7 @@ function contextWithMutableGateway(client: GatewayBrowserClient) {
   return {
     context,
     emitConnected(connected: boolean) {
-      currentSnapshot = { ...currentSnapshot, connected };
+      currentSnapshot = { ...currentSnapshot, phase: connected ? "connected" : "stopped" };
       for (const listener of listeners) {
         listener(currentSnapshot);
       }
@@ -152,7 +154,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       result: { count: 1, sessions: [{ key: "old" }] },
       error: null,
       expandedSessionKey: null,
-      showArchived: false,
+      statusFilter: "active",
     } as unknown as SessionsRouteData;
     const page = createPage("openclaw-sessions-page", context) as TestPage & {
       routeData: SessionsRouteData;
@@ -235,7 +237,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
 
     document.body.append(page);
     await page.updateComplete;
-    await vi.waitFor(() => expect(page.usageResult).toBe(freshResult));
+    await waitForFast(() => expect(page.usageResult).toBe(freshResult));
 
     expect(request).toHaveBeenCalledWith("sessions.usage", expect.any(Object));
     expect(page.usageResult).not.toBe(staleResult);
@@ -275,7 +277,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     await page.updateComplete;
     page.refreshRuntime.applyGatewaySnapshot({
       ...context.gateway.snapshot,
-      connected: false,
+      phase: "stopped",
     });
     page.refreshRuntime.applyGatewaySnapshot(context.gateway.snapshot);
     await Promise.resolve();
@@ -320,11 +322,11 @@ describe("gateway source replacement across reconnect with a reused client", () 
     page.usageLoading = true;
     page.refreshRuntime.applyGatewaySnapshot({
       ...context.gateway.snapshot,
-      connected: false,
+      phase: "stopped",
     });
     page.refreshRuntime.applyGatewaySnapshot(context.gateway.snapshot);
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("sessions.usage", expect.any(Object)),
     );
   });
@@ -385,7 +387,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     visibility.mockReturnValue("visible");
     document.dispatchEvent(new Event("visibilitychange"));
     window.dispatchEvent(new Event("focus"));
-    await vi.waitFor(() => expect(page.usageLoading).toBe(false));
+    await waitForFast(() => expect(page.usageLoading).toBe(false));
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "sessions.usage",
       "usage.cost",
@@ -394,7 +396,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
 
     page.usageLoading = true;
     page.refreshRuntime.request("manual");
-    await vi.waitFor(() => expect(page.usageLoading).toBe(false));
+    await waitForFast(() => expect(page.usageLoading).toBe(false));
     expect(request).toHaveBeenCalledTimes(6);
 
     const failedRefresh = deferred<never>();
@@ -404,8 +406,8 @@ describe("gateway source replacement across reconnect with a reused client", () 
     expect(request).toHaveBeenCalledTimes(9);
     page.refreshRuntime.request("focus");
     failedRefresh.reject(new Error("connection interrupted"));
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(12));
-    await vi.waitFor(() => expect(page.usageLoading).toBe(false));
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(12));
+    await waitForFast(() => expect(page.usageLoading).toBe(false));
   });
   it("preserves matching skills route data on the first bind", async () => {
     const request = vi.fn();
@@ -460,7 +462,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
 
     document.body.append(page);
     await page.updateComplete;
-    await vi.waitFor(() => expect(page.skillsReport).toBe(freshReport));
+    await waitForFast(() => expect(page.skillsReport).toBe(freshReport));
 
     expect(page.skillsReport).not.toBe(staleReport);
   });
@@ -538,11 +540,11 @@ describe("gateway source replacement across reconnect with a reused client", () 
     };
     document.body.append(page);
     await page.updateComplete;
-    (context.gateway.snapshot as ApplicationGatewaySnapshot).connected = true;
+    (context.gateway.snapshot as ApplicationGatewaySnapshot).phase = "connected";
     page.connected = true;
 
     const load = page.loadAgents();
-    await vi.waitFor(() => expect(ensureList).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(ensureList).toHaveBeenCalledOnce());
     const replacementAgents = {
       defaultId: "fresh",
       mainKey: "agent:fresh:main",
@@ -618,11 +620,11 @@ describe("gateway source replacement across reconnect with a reused client", () 
     };
     document.body.append(page);
     await page.updateComplete;
-    (context.gateway.snapshot as ApplicationGatewaySnapshot).connected = true;
+    (context.gateway.snapshot as ApplicationGatewaySnapshot).phase = "connected";
     page.connected = true;
 
     const load = page.loadDiagnostics();
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(4));
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(4));
     await replaceContext(page, client);
     pending.resolve({ models: [{ id: "stale" }], stale: true });
     await load;

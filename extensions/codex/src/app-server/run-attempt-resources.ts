@@ -21,8 +21,8 @@ import type { CodexAttemptPrompt } from "./run-attempt-prompt.js";
 import { releaseCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import {
+  clearSharedCodexAppServerClientIfCurrentAndUnclaimed,
   retainSharedCodexAppServerClientIfCurrent,
-  retireSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
 import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle.js";
 import { createCodexTrajectoryRecorder, type CodexHostTrajectoryRecorder } from "./trajectory.js";
@@ -132,16 +132,17 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       return;
     }
     state.sharedCodexClientRetiredForOneShotCleanup = true;
-    const retired = retireSharedCodexAppServerClientIfCurrent(state.client);
-    embeddedAgentLog.info("codex app-server one-shot cleanup retired shared client", {
+    const retired = clearSharedCodexAppServerClientIfCurrentAndUnclaimed(state.client);
+    embeddedAgentLog.info("codex app-server one-shot cleanup checked shared client retirement", {
       runId: params.runId,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
-      activeLeases: retired?.activeLeases ?? null,
-      closed: retired?.closed ?? false,
-      matchedSharedClient: Boolean(retired),
+      activeLeases: retired.activeLeases,
+      pendingAcquires: retired.pendingAcquires,
+      closed: retired.closed,
+      matchedSharedClient: retired.found,
     });
-    if (retired?.closed) {
+    if (retired.closed) {
       await state.client.closeAndWait({ exitTimeoutMs: 2_000, forceKillDelayMs: 250 });
     }
   };
@@ -182,6 +183,15 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     timeoutMs: params.timeoutMs,
     timeoutFloorMs: options.startupTimeoutFloorMs,
   });
+  const requesterChannel = params.messageChannel ?? params.messageProvider;
+  const requester = {
+    ...(requesterChannel ? { channel: requesterChannel } : {}),
+    ...(params.agentAccountId ? { accountId: params.agentAccountId } : {}),
+    ...(params.senderId ? { senderId: params.senderId } : {}),
+    ...(params.senderIsOwner !== undefined ? { senderIsOwner: params.senderIsOwner } : {}),
+    ...(params.memberRoleIds?.length ? { roleIds: [...params.memberRoleIds] } : {}),
+  };
+  const hasRequester = Object.keys(requester).length > 0;
   const buildNativeHookRelayFinalConfigPatch = (
     decision: { action: "resume"; binding: CodexAppServerThreadBinding } | { action: "start" },
   ) => {
@@ -201,6 +211,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       config: params.config,
       runId: params.runId,
       channelId: hookChannelId,
+      ...(hasRequester ? { requester } : {}),
       attemptTimeoutMs: params.timeoutMs,
       startupTimeoutMs,
       turnStartTimeoutMs: params.timeoutMs,

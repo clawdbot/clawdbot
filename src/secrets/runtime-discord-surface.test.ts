@@ -197,6 +197,56 @@ describe("secrets runtime snapshot discord surface", () => {
     ).rejects.toThrow('Environment variable "MISSING_DISCORD_BASE_TOKEN" is missing or empty.');
   });
 
+  it("isolates one unresolved Discord account token while resolving its sibling", async () => {
+    const env = Object.fromEntries([["DISCORD_HEALTHY_TOKEN", "fixture-value"]]);
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        channels: {
+          discord: {
+            accounts: {
+              broken: {
+                enabled: true,
+                token: {
+                  source: "env",
+                  provider: "default",
+                  id: "MISSING_DISCORD_BROKEN_TOKEN",
+                },
+              },
+              healthy: {
+                enabled: true,
+                token: {
+                  source: "env",
+                  provider: "default",
+                  id: "DISCORD_HEALTHY_TOKEN",
+                },
+              },
+            },
+          },
+        },
+      }),
+      env,
+      allowUnavailableSecretOwners: true,
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => loadAuthStoreWithProfiles({}),
+    });
+
+    expect(snapshot.config.channels?.discord?.accounts?.broken?.token).toEqual({
+      source: "env",
+      provider: "default",
+      id: "MISSING_DISCORD_BROKEN_TOKEN",
+    });
+    expect(snapshot.config.channels?.discord?.accounts?.healthy?.token).toBe("fixture-value");
+    expect(snapshot.degradedOwners).toMatchObject([
+      {
+        ownerKind: "account",
+        ownerId: "discord:broken",
+        state: "unavailable",
+        paths: ["channels.discord.accounts.broken.token"],
+        reason: "secret reference was not found",
+      },
+    ]);
+  });
+
   it("treats top-level Discord token refs as inactive when account token is explicitly blank", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({

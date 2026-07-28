@@ -12,6 +12,10 @@ type OnboardingMemoryImportElement = HTMLElement & {
   updateComplete: Promise<boolean>;
 };
 
+function waitForOnboardingMemoryImport(assertion: () => void) {
+  return vi.waitFor(assertion, { interval: 1 });
+}
+
 const guardKey = "openclaw.onboarding.memory-import";
 
 function createProvider(providerId: string, fingerprint: string) {
@@ -81,8 +85,9 @@ function createContext(
   const client = { request } as unknown as GatewayBrowserClient;
   const snapshot: ApplicationGatewaySnapshot = {
     client: connected ? client : null,
-    connected,
-    reconnecting: false,
+    phase: connected ? "connected" : "stopped",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: {
       auth: {
         role: "operator",
@@ -163,7 +168,9 @@ describe("OnboardingMemoryImport", () => {
     const context = createContext(request, { agentsLoaded: false });
     await mount(context);
 
-    await vi.waitFor(() => expect(context.agents.ensureList).toHaveBeenCalledTimes(1));
+    await waitForOnboardingMemoryImport(() =>
+      expect(context.agents.ensureList).toHaveBeenCalledTimes(1),
+    );
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -171,7 +178,9 @@ describe("OnboardingMemoryImport", () => {
     const request = vi.fn(async () => createPlan([]));
     const element = await mount(createContext(request));
 
-    await vi.waitFor(() => expect(sessionStorage.getItem(guardKey)).toBe("done"));
+    await waitForOnboardingMemoryImport(() =>
+      expect(sessionStorage.getItem(guardKey)).toBe("done"),
+    );
     expect(request).toHaveBeenCalledWith("migrations.memory.plan", {
       agentId: "research",
       overwrite: false,
@@ -185,7 +194,7 @@ describe("OnboardingMemoryImport", () => {
     });
     const element = await mount(createContext(request));
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    await waitForOnboardingMemoryImport(() => expect(request).toHaveBeenCalledTimes(1));
     await element.updateComplete;
     expect(element.querySelector("openclaw-modal-dialog")).toBeNull();
     expect(sessionStorage.getItem(guardKey)).toBeNull();
@@ -207,7 +216,7 @@ describe("OnboardingMemoryImport", () => {
     }));
     const element = await mount(createContext(request));
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    await waitForOnboardingMemoryImport(() => expect(request).toHaveBeenCalledTimes(1));
     await element.updateComplete;
     expect(element.querySelector("openclaw-modal-dialog")).toBeNull();
     expect(sessionStorage.getItem(guardKey)).toBeNull();
@@ -223,7 +232,7 @@ describe("OnboardingMemoryImport", () => {
     );
     const context = createContext(request);
     const element = await mount(context);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    await waitForOnboardingMemoryImport(() => expect(request).toHaveBeenCalledTimes(1));
 
     context.gateway.snapshot.client = createContext(vi.fn()).gateway.snapshot.client;
     resolvePlan(createPlan());
@@ -246,7 +255,7 @@ describe("OnboardingMemoryImport", () => {
       .mockReturnValueOnce("00000000-0000-4000-8000-000000000001")
       .mockReturnValueOnce("00000000-0000-4000-8000-000000000002");
     const element = await mount(createContext(request));
-    await vi.waitFor(() =>
+    await waitForOnboardingMemoryImport(() =>
       expect(
         element.querySelector<HTMLButtonElement>(
           "[data-test-id='onboarding-memory-import-import']",
@@ -258,7 +267,7 @@ describe("OnboardingMemoryImport", () => {
       .querySelector<HTMLButtonElement>("[data-test-id='onboarding-memory-import-import']")
       ?.click();
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+    await waitForOnboardingMemoryImport(() => expect(request).toHaveBeenCalledTimes(3));
     const applyCalls = request.mock.calls.filter(
       ([method]) => method === "migrations.memory.apply",
     );
@@ -297,7 +306,7 @@ describe("OnboardingMemoryImport", () => {
       return createApplyResult("codex");
     });
     const element = await mount(createContext(originalRequest));
-    await vi.waitFor(() =>
+    await waitForOnboardingMemoryImport(() =>
       expect(
         element.querySelector<HTMLButtonElement>(
           "[data-test-id='onboarding-memory-import-import']",
@@ -309,11 +318,11 @@ describe("OnboardingMemoryImport", () => {
     // never be applied through the old binding. The offer replans instead.
     element.context = createContext(replacementRequest);
     await element.updateComplete;
-    await vi.waitFor(() => expect(replacementRequest).toHaveBeenCalled());
+    await waitForOnboardingMemoryImport(() => expect(replacementRequest).toHaveBeenCalled());
     expect(replacementRequest.mock.calls[0]?.[0]).toBe("migrations.memory.plan");
     expect(originalRequest).toHaveBeenCalledTimes(1);
 
-    await vi.waitFor(() =>
+    await waitForOnboardingMemoryImport(() =>
       expect(
         element.querySelector<HTMLButtonElement>(
           "[data-test-id='onboarding-memory-import-import']",
@@ -323,7 +332,7 @@ describe("OnboardingMemoryImport", () => {
     element
       .querySelector<HTMLButtonElement>("[data-test-id='onboarding-memory-import-import']")
       ?.click();
-    await vi.waitFor(() =>
+    await waitForOnboardingMemoryImport(() =>
       expect(
         replacementRequest.mock.calls.filter((call) => call[0] === "migrations.memory.apply"),
       ).toHaveLength(1),
@@ -344,7 +353,7 @@ describe("OnboardingMemoryImport", () => {
       return result;
     });
     const element = await mount(createContext(request));
-    await vi.waitFor(() =>
+    await waitForOnboardingMemoryImport(() =>
       expect(
         element.querySelector<HTMLButtonElement>(
           "[data-test-id='onboarding-memory-import-import']",
@@ -356,14 +365,14 @@ describe("OnboardingMemoryImport", () => {
       .querySelector<HTMLButtonElement>("[data-test-id='onboarding-memory-import-import']")
       ?.click();
 
-    await vi.waitFor(() => expect(element.textContent).toContain("1 failed"));
+    await waitForOnboardingMemoryImport(() => expect(element.textContent).toContain("1 failed"));
     expect(element.textContent).toContain("Migrated 1");
   });
 
   it("sets the guard when skipped", async () => {
     const request = vi.fn(async () => createPlan());
     const element = await mount(createContext(request));
-    await vi.waitFor(() =>
+    await waitForOnboardingMemoryImport(() =>
       expect(
         element.querySelector<HTMLButtonElement>("[data-test-id='onboarding-memory-import-skip']"),
       ).not.toBeNull(),
@@ -389,7 +398,7 @@ describe("OnboardingMemoryImport", () => {
       return createApplyResult("claude", 1, 0);
     });
     const element = await mount(createContext(request));
-    await vi.waitFor(() =>
+    await waitForOnboardingMemoryImport(() =>
       expect(
         element.querySelector<HTMLButtonElement>(
           "[data-test-id='onboarding-memory-import-import']",
@@ -401,7 +410,7 @@ describe("OnboardingMemoryImport", () => {
       .querySelector<HTMLButtonElement>("[data-test-id='onboarding-memory-import-import']")
       ?.click();
 
-    await vi.waitFor(() =>
+    await waitForOnboardingMemoryImport(() =>
       expect(
         element.querySelector<HTMLButtonElement>(
           "[data-test-id='onboarding-memory-import-continue']",

@@ -72,10 +72,6 @@ type MatrixThreadBindingsConfig = {
   maxAgeHours?: number;
   spawnSessions?: boolean;
   defaultSpawnContext?: "isolated" | "fork";
-  /** @deprecated Use spawnSessions instead. */
-  spawnSubagentSessions?: boolean;
-  /** @deprecated Use spawnSessions instead. */
-  spawnAcpSessions?: boolean;
 };
 
 type MatrixExecApprovalTarget = "dm" | "channel" | "both";
@@ -242,9 +238,7 @@ export type CoreConfig = {
       botLoopProtection?: ChannelBotLoopProtectionConfig;
     };
   };
-  commands?: {
-    useAccessGroups?: boolean;
-  };
+  commands?: OpenClawConfig["commands"];
   session?: {
     store?: string;
     dmScope?: NonNullable<OpenClawConfig["session"]>["dmScope"];

@@ -12,6 +12,7 @@ import type { ElevatedLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import type { CommandContext } from "./commands-types.js";
 import { isDirectiveOnly } from "./directive-handling.directive-only.js";
+import { resolveModelRuntimeDirective } from "./directive-handling.model-runtime.js";
 import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
 import type { ApplyInlineDirectivesFastLaneParams } from "./directive-handling.params.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
@@ -72,8 +73,17 @@ function hasOnlyModelDirective(directives: InlineDirectives): boolean {
 function formatModelOverrideResetEvent(params: {
   rejectedRef?: string;
   initialModelLabel: string;
-  reason?: "disallowed" | "stale";
+  reason?: "disallowed" | "stale" | "temporarily-unavailable";
+  modelPolicyConfigPath?: string;
+  modelPolicyRepairConfigPath?: string;
 }): string {
+  if (params.reason === "temporarily-unavailable") {
+    // Non-destructive: the pin is preserved and comes back once the catalog reloads.
+    if (params.rejectedRef) {
+      return `Model override ${params.rejectedRef} is temporarily unavailable (model catalog is still loading); using ${params.initialModelLabel} for this turn. Your pinned model is unchanged.`;
+    }
+    return `Your pinned model override is temporarily unavailable (model catalog is still loading); using ${params.initialModelLabel} for this turn. Your pinned model is unchanged.`;
+  }
   if (params.reason === "stale") {
     if (params.rejectedRef) {
       return `Stored model override ${params.rejectedRef} is stale for this session; reverted to ${params.initialModelLabel}. Pick a model again with /model if you still want to override the default.`;
@@ -81,7 +91,9 @@ function formatModelOverrideResetEvent(params: {
     return `Stored model override is stale for this session; reverted to ${params.initialModelLabel}.`;
   }
   if (params.rejectedRef) {
-    return `Model override ${params.rejectedRef} is not allowed for this agent; reverted to ${params.initialModelLabel}. Add ${params.rejectedRef} to agents.defaults.models or pick an allowed model with /model list.`;
+    const policyPath = params.modelPolicyConfigPath ?? "modelPolicy.allow";
+    const repairPath = params.modelPolicyRepairConfigPath ?? "modelPolicy.allow";
+    return `Model override ${params.rejectedRef} is not allowed for this agent by ${policyPath}; reverted to ${params.initialModelLabel}. Add ${params.rejectedRef} to ${repairPath} or pick an allowed model with /model list.`;
   }
   return `Model override not allowed for this agent; reverted to ${params.initialModelLabel}.`;
 }
@@ -175,6 +187,7 @@ export async function applyInlineDirectiveOverrides(params: {
   const directiveModelState = {
     allowedModelKeys: modelState.allowedModelKeys,
     allowedModelCatalog: modelState.allowedModelCatalog,
+    policyAliasIndex: modelState.policyAliasIndex,
     resetModelOverride: modelState.resetModelOverride,
   };
   const createDirectiveHandlingBase = () => ({
@@ -200,12 +213,16 @@ export async function applyInlineDirectiveOverrides(params: {
 
   let directiveAck: ReplyPayload | undefined;
 
-  if (modelState.resetModelOverride) {
+  // Fire on the reason, not the boolean: a temporarily-unavailable override
+  // surfaces a notice without destroying the pin, so resetModelOverride stays false.
+  if (modelState.resetModelOverrideReason) {
     enqueueSystemEvent(
       formatModelOverrideResetEvent({
         rejectedRef: modelState.resetModelOverrideRef,
         initialModelLabel,
         reason: modelState.resetModelOverrideReason,
+        modelPolicyConfigPath: modelState.modelPolicyConfigPath,
+        modelPolicyRepairConfigPath: modelState.modelPolicyRepairConfigPath,
       }),
       {
         sessionKey,
@@ -236,6 +253,7 @@ export async function applyInlineDirectiveOverrides(params: {
       allowedModelKeys: modelState.allowedModelKeys,
       allowedModelCatalog: modelState.allowedModelCatalog,
       provider,
+      agentId,
     });
     if (lockedModelResolution.modelSelection) {
       typing.cleanup();
@@ -255,7 +273,7 @@ export async function applyInlineDirectiveOverrides(params: {
     directives.hasQueueDirective ||
     directives.hasStatusDirective;
 
-  if (!hasAnyDirective && !modelState.resetModelOverride) {
+  if (!hasAnyDirective && !modelState.resetModelOverride && !modelState.resetModelOverrideReason) {
     return {
       kind: "continue",
       directives,
@@ -306,6 +324,8 @@ export async function applyInlineDirectiveOverrides(params: {
       typing.cleanup();
       return { kind: "reply", reply: undefined };
     }
+    // Only the exact model-only case uses the focused service; mixed directives
+    // fall through so their settings remain one broad atomic session transaction.
     if (hasOnlyModelDirective(directives) && effectiveModelDirective) {
       const modelResolution = resolveModelSelectionFromDirective({
         directives: {
@@ -320,6 +340,7 @@ export async function applyInlineDirectiveOverrides(params: {
         allowedModelKeys: modelState.allowedModelKeys,
         allowedModelCatalog: modelState.allowedModelCatalog,
         provider,
+        agentId,
       });
       if (modelResolution.errorText) {
         typing.cleanup();
@@ -327,38 +348,63 @@ export async function applyInlineDirectiveOverrides(params: {
       }
       const modelSelection = modelResolution.modelSelection;
       if (modelSelection) {
-        const persisted = await (
+        const runtime = resolveModelRuntimeDirective({
+          rawRuntime: directives.rawModelRuntime,
+          provider: modelSelection.provider,
+          cfg,
+          sessionEntry,
+        });
+        if (runtime.kind === "invalid") {
+          typing.cleanup();
+          return { kind: "reply", reply: { text: runtime.errorText } };
+        }
+        const applied = await (
           await loadDirectivePersist()
-        ).persistInlineDirectives({
-          ...directivePersistenceContext,
-          provider,
-          model,
+        ).applySessionModelSelection({
+          cfg,
+          agentId,
+          sessionKey,
+          storePath,
+          sessionEntry,
+          sessionStore,
+          defaultProvider,
+          defaultModel,
+          currentProvider: provider,
+          currentModel: model,
+          allowedModelKeys: modelState.allowedModelKeys,
+          modelCatalog: modelState.allowedModelCatalog,
+          thinkingCatalog: modelState.allowedModelCatalog,
+          request: {
+            ...modelSelection,
+            profileOverride: modelResolution.profileOverride,
+            runtime,
+          },
+          patchModel: effectiveModelDirective,
           markLiveSwitchPending: true,
         });
-        if (persisted.errorText) {
+        if (applied.status === "rejected") {
           typing.cleanup();
-          return { kind: "reply", reply: { text: persisted.errorText } };
+          return { kind: "reply", reply: { text: applied.message } };
         }
-        if (!persisted.sessionChangesApplied) {
+        if (applied.status === "conflict") {
           typing.cleanup();
-          return {
-            kind: "reply",
-            reply: { text: "Model change was not applied because the session changed. Retry." },
-          };
+          return { kind: "reply", reply: { text: applied.message } };
         }
         const label = `${modelSelection.provider}/${modelSelection.model}`;
         const labelWithAlias = modelSelection.alias ? `${modelSelection.alias} (${label})` : label;
+        // Model change first, then the thinking remap it triggered: the remap is a
+        // consequence of the model switch, so the cause is announced before the effect.
         const parts = [
-          persisted.thinkingRemap
-            ? `Thinking level set to ${persisted.thinkingRemap.to} (${persisted.thinkingRemap.from} not supported for ${persisted.thinkingRemap.provider}/${persisted.thinkingRemap.model}).`
-            : undefined,
           modelSelection.isDefault
             ? `Model reset to default (${labelWithAlias}).`
             : `Model set to ${labelWithAlias} for this session.`,
-          persisted.runtimeChange?.kind === "clear"
+          applied.thinkingRemap
+            ? `Thinking level set to ${applied.thinkingRemap.to} (${applied.thinkingRemap.from} not supported for ${applied.thinkingRemap.provider}/${applied.thinkingRemap.model}).`
+            : undefined,
+          applied.runtimeChange?.kind === "clear"
             ? "Runtime reset to configured policy."
-            : persisted.runtimeChange?.kind === "set"
-              ? `Runtime set to ${persisted.runtimeChange.runtime} for this session.`
+            : applied.runtimeChange?.kind === "set"
+              ? `Runtime set to ${applied.runtimeChange.runtime} for this session.`
               : undefined,
           modelResolution.profileOverride
             ? `Auth profile set to ${modelResolution.profileOverride}.`
@@ -417,6 +463,7 @@ export async function applyInlineDirectiveOverrides(params: {
         provider,
         model,
         contextTokens,
+        thinkingCatalog,
         workspaceDir,
         resolvedThinkLevel: resolvedDefaultThinkLevel,
         resolvedVerboseLevel: currentVerboseLevel ?? "off",

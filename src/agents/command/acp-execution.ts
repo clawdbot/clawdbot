@@ -206,7 +206,6 @@ export async function runAcpAgentCommand(params: {
             userInput: {
               text: params.transcriptBody,
               media: params.opts.transcriptMedia,
-              mediaOnlyText: "[User sent media without caption]",
             },
           }
         : {}),

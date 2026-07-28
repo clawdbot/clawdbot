@@ -41,7 +41,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => {
 
 function sseResponse(
   lines: Array<string | Uint8Array>,
-  options?: { cancel?: () => void; releaseLock?: () => void },
+  options?: { cancel?: () => void | Promise<void>; releaseLock?: () => void },
 ): Response {
   const encoder = new TextEncoder();
   const encodeLine = (line: string | Uint8Array) =>
@@ -59,7 +59,7 @@ function sseResponse(
           controller.enqueue(encodeLine(line));
         },
         cancel() {
-          options?.cancel?.();
+          return options?.cancel?.();
         },
       }),
       { status: 200, headers: { "content-type": "text/event-stream" } },
@@ -211,7 +211,10 @@ describe("openrouter music generation provider", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it("releases OpenRouter audio stream readers after completion", async () => {
+  it("preserves completed OpenRouter audio when reader cleanup fails", async () => {
+    const cancel = vi.fn(async () => {
+      throw new Error("cancel failed");
+    });
     const releaseLock = vi.fn();
     postJsonRequestMock.mockResolvedValue({
       response: sseResponse(
@@ -219,7 +222,7 @@ describe("openrouter music generation provider", () => {
           audio: Buffer.from("wav-bytes").toString("base64"),
           done: true,
         }),
-        { releaseLock },
+        { cancel, releaseLock },
       ),
       release: vi.fn(async () => {}),
     });
@@ -234,7 +237,24 @@ describe("openrouter music generation provider", () => {
     ).resolves.toMatchObject({
       tracks: [{ mimeType: "audio/wav" }],
     });
+    expect(cancel).toHaveBeenCalledTimes(1);
     expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects streamed audio with non-canonical base64 pad bits", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: sseResponse(sseResponseLines({ audio: "ZE==", done: true })),
+      release: vi.fn(async () => {}),
+    });
+
+    await expect(
+      buildOpenRouterMusicGenerationProvider().generateMusic({
+        provider: "openrouter",
+        model: "",
+        prompt: "short track",
+        cfg: {},
+      }),
+    ).rejects.toThrow("OpenRouter music generation returned malformed base64 audio data");
   });
 
   it("decodes independently padded OpenRouter audio chunks", async () => {
@@ -403,8 +423,10 @@ describe("openrouter music generation provider", () => {
     ).rejects.toThrow("OpenRouter music generation stream ended before completion");
   });
 
-  it("surfaces and cancels OpenRouter mid-stream errors", async () => {
-    const cancel = vi.fn();
+  it("preserves OpenRouter mid-stream errors when reader cleanup fails", async () => {
+    const cancel = vi.fn(async () => {
+      throw new Error("cancel failed");
+    });
     postJsonRequestMock.mockResolvedValue({
       response: sseResponse(
         [

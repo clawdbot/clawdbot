@@ -153,9 +153,7 @@ export function createCodexAttemptLifecycleController(
         startedAt: attemptStartedAt,
         endedAt: Date.now(),
         ...data,
-        ...((params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd)
-          ? { phase: "finishing" }
-          : {}),
+        ...(params.deferTerminalLifecycle ? { phase: "finishing" } : {}),
       },
     });
     state.lifecycleTerminalEmitted = true;

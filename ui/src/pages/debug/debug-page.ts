@@ -87,13 +87,13 @@ class DebugPage extends OpenClawLightDomElement {
   }
 
   private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot, resetForSourceBind = false) {
-    const connectionChanged = snapshot.connected !== this.connected;
+    const connectionChanged = (snapshot.phase === "connected") !== this.connected;
     const clientChanged = resetForSourceBind || snapshot.client !== this.client;
     if (clientChanged || connectionChanged) {
       this.requestGeneration += 1;
     }
     this.client = snapshot.client;
-    this.connected = snapshot.connected;
+    this.connected = snapshot.phase === "connected";
     if (clientChanged) {
       this.resetServerState();
     } else if (connectionChanged) {
@@ -231,4 +231,6 @@ class DebugPage extends OpenClawLightDomElement {
   }
 }
 
-customElements.define("openclaw-debug-page", DebugPage);
+if (!customElements.get("openclaw-debug-page")) {
+  customElements.define("openclaw-debug-page", DebugPage);
+}

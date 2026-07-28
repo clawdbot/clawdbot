@@ -1,0 +1,243 @@
+import {
+  CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+  closeCodexStartupClientBestEffort,
+  CodexAppServerUnsafeSubscriptionError,
+  unsubscribeCodexThreadBestEffort,
+} from "./attempt-client-cleanup.js";
+import { consumeCodexAppServerLiveThread } from "./client-runtime.js";
+import type { CodexAppServerClient } from "./client.js";
+import {
+  buildCodexPluginAppsConfigPatchFromPolicyContext,
+  mergeCodexThreadConfigs,
+} from "./plugin-thread-config.js";
+import type { JsonObject } from "./protocol.js";
+import type {
+  CodexAppServerBindingIdentity,
+  CodexAppServerContextEngineBinding,
+  CodexAppServerThreadBinding,
+} from "./session-binding.js";
+import { fingerprintCodexThreadConfig } from "./thread-fingerprints.js";
+import { CodexThreadBindingConflictError } from "./thread-lifecycle-errors.js";
+import type { CodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timing.js";
+import type {
+  CodexAppServerThreadLifecycleBinding,
+  CodexStartOrResumeThreadParams,
+} from "./thread-lifecycle-types.js";
+import type { resolveCodexAppServerThreadModelSelection } from "./thread-model-selection.js";
+import { buildThreadResumeParams } from "./thread-requests.js";
+
+type CodexWarmThreadFinalConfigPatch = {
+  configPatch?: JsonObject;
+  nativeHookRelayGeneration?: string;
+};
+
+type CodexWarmThreadReuseParams = {
+  params: CodexStartOrResumeThreadParams;
+  binding: CodexAppServerThreadBinding;
+  bindingIdentity: CodexAppServerBindingIdentity;
+  clientId?: string;
+  contextEngineBinding?: CodexAppServerContextEngineBinding;
+  dynamicToolsFingerprint: string;
+  hostSystemAgentActive: boolean;
+  lifecycleTiming: CodexThreadLifecycleTimingTracker;
+  releaseConsumedThread: (threadId: string, cause?: unknown) => Promise<void>;
+  ringZeroActive: boolean;
+  ringZeroInheritedMcpServerNames: string[];
+  startModelProvider?: string;
+  startModelSelection: ReturnType<typeof resolveCodexAppServerThreadModelSelection>;
+  throwIfAborted: () => void;
+  userMcpServersConfigPatch?: JsonObject;
+};
+
+type CodexWarmThreadReuseResult = {
+  binding?: CodexAppServerThreadLifecycleBinding;
+  prebuiltFinalConfigPatch?: CodexWarmThreadFinalConfigPatch;
+};
+
+type CodexLiveThreadReleaseParams = {
+  client: CodexAppServerClient;
+  abandonClient?: () => Promise<void>;
+  lifecycleTiming: CodexThreadLifecycleTimingTracker;
+  threadId: string;
+  cause?: unknown;
+};
+
+/** Preserves the caller's abort reason across thread ownership transitions. */
+export function throwIfCodexThreadLifecycleAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) {
+    return;
+  }
+  const reason = signal.reason;
+  if (reason instanceof Error) {
+    throw reason;
+  }
+  const error = new Error(
+    typeof reason === "string" && reason.length > 0
+      ? reason
+      : "codex app-server thread lifecycle aborted",
+  );
+  error.name = "AbortError";
+  throw error;
+}
+
+/** Releases consumed subscription ownership or retires an unsafe client. */
+export async function releaseCodexConsumedLiveThread(
+  options: CodexLiveThreadReleaseParams,
+): Promise<void> {
+  const released = await options.lifecycleTiming.measure("retained-thread-unsubscribe", () =>
+    unsubscribeCodexThreadBestEffort(options.client, {
+      threadId: options.threadId,
+      timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+    }),
+  );
+  if (released) {
+    return;
+  }
+  await (options.abandonClient ?? (() => closeCodexStartupClientBestEffort(options.client)))();
+  throw new CodexAppServerUnsafeSubscriptionError(
+    `Codex retained thread subscription could not be released: ${options.threadId}`,
+    options.cause !== undefined ? { cause: options.cause } : undefined,
+  );
+}
+
+/** Transfers retained-slot ownership before unconditionally releasing it. */
+export async function releaseCodexRetainedLiveThread(
+  options: CodexLiveThreadReleaseParams,
+): Promise<void> {
+  if (await consumeCodexAppServerLiveThread(options.client, options.threadId)) {
+    // An abort must not leave a consumed subscription orphaned on the client.
+    await releaseCodexConsumedLiveThread(options);
+  }
+}
+
+/** Reuses one safely owned, fully matching subscription on its original client. */
+export async function tryReuseCodexLiveThread(
+  options: CodexWarmThreadReuseParams,
+): Promise<CodexWarmThreadReuseResult> {
+  const {
+    params,
+    binding,
+    bindingIdentity,
+    clientId,
+    contextEngineBinding,
+    dynamicToolsFingerprint,
+    hostSystemAgentActive,
+    lifecycleTiming,
+    releaseConsumedThread,
+    ringZeroActive,
+    ringZeroInheritedMcpServerNames,
+    startModelProvider,
+    startModelSelection,
+    throwIfAborted,
+    userMcpServersConfigPatch,
+  } = options;
+
+  if (
+    !binding.clientId ||
+    binding.clientId !== clientId ||
+    binding.preserveNativeModel === true ||
+    binding.connectionScope === "supervision" ||
+    ringZeroActive ||
+    contextEngineBinding
+  ) {
+    return {};
+  }
+
+  const prebuiltFinalConfigPatch = params.buildFinalConfigPatch?.({
+    action: "resume",
+    binding,
+  }) ?? {
+    configPatch: params.finalConfigPatch,
+    nativeHookRelayGeneration: params.nativeHookRelayGeneration,
+  };
+  const pluginAppsConfigPatch =
+    params.pluginThreadConfig?.enabled && binding.pluginAppPolicyContext
+      ? buildCodexPluginAppsConfigPatchFromPolicyContext(binding.pluginAppPolicyContext)
+      : undefined;
+  const resumeAuthProfileId = params.params.authProfileId ?? binding.authProfileId;
+  const resumeConfig = mergeCodexThreadConfigs(
+    params.config,
+    userMcpServersConfigPatch,
+    pluginAppsConfigPatch,
+    prebuiltFinalConfigPatch.configPatch,
+  );
+  const resumeParams = lifecycleTiming.measureSync("warm-thread-resume-params", () =>
+    buildThreadResumeParams(params.params, {
+      threadId: binding.threadId,
+      authProfileId: resumeAuthProfileId,
+      model: startModelSelection.model,
+      modelProvider: startModelProvider,
+      preserveNativeModel: false,
+      appServer: params.appServer,
+      dynamicTools: params.dynamicTools,
+      developerInstructions: params.developerInstructions,
+      config: resumeConfig,
+      nativeCodeModeEnabled: params.nativeCodeModeEnabled,
+      nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
+      nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
+      webSearchAllowed: params.webSearchAllowed,
+      hostSystemAgentActive,
+      ringZeroInheritedMcpServerNames,
+    }),
+  );
+  const liveThreadConfigFingerprint = fingerprintCodexThreadConfig(
+    {
+      ...resumeParams,
+      // Keep the actual loaded provider separate from caller-selected
+      // overrides so account or provider changes always invalidate reuse.
+      model: binding.model ?? resumeParams.model ?? null,
+      requestedModel: resumeParams.model ?? null,
+      modelProvider: binding.modelProvider ?? resumeParams.modelProvider ?? null,
+      requestedModelProvider: resumeParams.modelProvider ?? binding.modelProvider ?? null,
+    },
+    resumeAuthProfileId,
+    dynamicToolsFingerprint,
+  );
+  if (
+    !(await consumeCodexAppServerLiveThread(
+      params.client,
+      binding.threadId,
+      liveThreadConfigFingerprint,
+    ))
+  ) {
+    return { prebuiltFinalConfigPatch };
+  }
+
+  try {
+    const nativeHookRelayGeneration =
+      prebuiltFinalConfigPatch.nativeHookRelayGeneration ?? binding.nativeHookRelayGeneration;
+    // Validate ownership even when relay generation is unchanged; reset may
+    // have replaced the persisted binding since it was first read.
+    const committed = await lifecycleTiming.measure("warm-thread-write-binding", () =>
+      params.bindingStore.mutate(bindingIdentity, {
+        kind: "patch",
+        threadId: binding.threadId,
+        patch: { nativeHookRelayGeneration },
+      }),
+    );
+    if (!committed) {
+      throw new CodexThreadBindingConflictError(binding.threadId, "committing a reused thread");
+    }
+    throwIfAborted();
+    lifecycleTiming.mark("thread-ready");
+    lifecycleTiming.logSummary({
+      runId: params.params.runId,
+      sessionId: params.params.sessionId,
+      sessionKey: params.params.sessionKey,
+      threadId: binding.threadId,
+      action: "resumed",
+    });
+    return {
+      binding: {
+        ...binding,
+        nativeHookRelayGeneration,
+        liveThreadConfigFingerprint,
+        lifecycle: { action: "resumed" },
+      },
+      prebuiltFinalConfigPatch,
+    };
+  } catch (error) {
+    await releaseConsumedThread(binding.threadId, error);
+    throw error;
+  }
+}

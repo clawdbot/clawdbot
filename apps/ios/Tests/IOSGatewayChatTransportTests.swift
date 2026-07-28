@@ -11,7 +11,15 @@ struct IOSGatewayChatTransportTests {
 
         func record(_ request: OpenClawChatGatewayRequest) -> Data {
             self.requests.append(request)
-            return Data(#"{"key":"forked","entry":{}}"#.utf8)
+            if request.method == "sessions.create" {
+                return Data(#"{"key":"forked"}"#.utf8)
+            }
+            return Data(#"{"entry":{}}"#.utf8)
+        }
+
+        func record(_ request: OpenClawChatGatewayRequest, response: Data) -> Data {
+            self.requests.append(request)
+            return response
         }
 
         func all() -> [OpenClawChatGatewayRequest] {
@@ -145,6 +153,121 @@ struct IOSGatewayChatTransportTests {
         #expect(request.params["key"]?.value as? String == "global")
         #expect(request.params["agentId"]?.value as? String == "reviewer")
         #expect(request.params["thinkingLevel"]?.value as? String == "high")
+    }
+
+    @Test func `advanced session creation forwards agent worktree and base ref`() async throws {
+        let recorder = RequestRecorder()
+        let transport = IOSGatewayChatTransport(
+            gateway: GatewayNodeSession(),
+            globalAgentId: " Reviewer ",
+            sessionMutationRequest: { request in
+                await recorder.record(request)
+            })
+
+        let created = try await transport.createSession(
+            key: "agent:builder:ios-new",
+            label: "Build",
+            agentID: " Builder ",
+            parentSessionKey: "agent:builder:main",
+            worktree: true,
+            worktreeBaseRef: " origin/release ")
+
+        #expect(created.key == "forked")
+        let request = try #require(await recorder.all().first)
+        #expect(request.method == "sessions.create")
+        #expect(request.params["key"]?.value as? String == "agent:builder:ios-new")
+        #expect(request.params["label"]?.value as? String == "Build")
+        #expect(request.params["agentId"]?.value as? String == "builder")
+        #expect(request.params["parentSessionKey"]?.value as? String == "agent:builder:main")
+        #expect(request.params["worktree"]?.value as? Bool == true)
+        #expect(request.params["worktreeBaseRef"]?.value as? String == "origin/release")
+    }
+
+    @Test func `verbosity patches preserve set and clear values`() async throws {
+        let recorder = RequestRecorder()
+        let transport = IOSGatewayChatTransport(
+            gateway: GatewayNodeSession(),
+            globalAgentId: " Reviewer ",
+            sessionMutationRequest: { request in
+                await recorder.record(request)
+            })
+
+        _ = try await transport.patchSessionSettings(
+            sessionKey: "global",
+            agentID: nil,
+            patch: OpenClawChatSessionSettingsPatch(verboseLevel: .some("full")))
+        _ = try await transport.patchSessionSettings(
+            sessionKey: "global",
+            agentID: nil,
+            patch: OpenClawChatSessionSettingsPatch(verboseLevel: .some(nil)))
+
+        let requests = await recorder.all()
+        #expect(requests.count == 2)
+        #expect(requests.allSatisfy { $0.method == "sessions.patch" })
+        #expect(requests.allSatisfy { $0.params["key"]?.value as? String == "global" })
+        #expect(requests.allSatisfy { $0.params["agentId"]?.value as? String == "reviewer" })
+        #expect(requests[0].params["verboseLevel"]?.value as? String == "full")
+        #expect(requests[1].params["verboseLevel"]?.value is NSNull)
+        #expect(requests.allSatisfy { $0.params["model"] == nil })
+        #expect(requests.allSatisfy { $0.params["thinkingLevel"] == nil })
+    }
+
+    @Test func `fast mode patches preserve boolean and explicit null`() async throws {
+        let recorder = RequestRecorder()
+        let transport = IOSGatewayChatTransport(
+            gateway: GatewayNodeSession(),
+            globalAgentId: " Reviewer ",
+            sessionMutationRequest: { request in
+                await recorder.record(request)
+            })
+
+        _ = try await transport.patchSessionSettings(
+            sessionKey: "global",
+            agentID: nil,
+            patch: OpenClawChatSessionSettingsPatch(fastMode: .some(.on)))
+        _ = try await transport.patchSessionSettings(
+            sessionKey: "global",
+            agentID: nil,
+            patch: OpenClawChatSessionSettingsPatch(fastMode: .some(nil)))
+
+        let requests = await recorder.all()
+        #expect(requests.count == 2)
+        #expect(requests[0].params["fastMode"]?.value as? Bool == true)
+        #expect(requests[1].params["fastMode"]?.value is NSNull)
+        #expect(requests.allSatisfy { $0.params["verboseLevel"] == nil })
+    }
+
+    @Test func `session groups lease uses the supplied pinned request path`() async throws {
+        let recorder = RequestRecorder()
+        let lease = IOSGatewayChatTransport.makeSessionGroupsRouteLease { request in
+            let response = if request.method == "sessions.groups.list" {
+                Data(#"{"groups":[{"name":"Work","position":0}]}"#.utf8)
+            } else {
+                Data(#"{"ok":true,"groups":[{"name":"Projects","position":0}]}"#.utf8)
+            }
+            return await recorder.record(request, response: response)
+        }
+
+        let listed = try await lease.listGroups()
+        let put = try await lease.putGroups(names: ["Work", "Personal"])
+        let renamed = try await lease.renameGroup(name: "Work", to: "Projects")
+        let deleted = try await lease.deleteGroup(name: "Personal")
+
+        #expect(listed?.groups.map(\.name) == ["Work"])
+        #expect(put.groups.map(\.name) == ["Projects"])
+        #expect(renamed.groups.map(\.name) == ["Projects"])
+        #expect(deleted.groups.map(\.name) == ["Projects"])
+        let requests = await recorder.all()
+        #expect(requests.map(\.method) == [
+            "sessions.groups.list",
+            "sessions.groups.put",
+            "sessions.groups.rename",
+            "sessions.groups.delete",
+        ])
+        #expect(requests[1].params["names"]?.value as? [String] == ["Work", "Personal"])
+        #expect(requests[2].params["name"]?.value as? String == "Work")
+        #expect(requests[2].params["to"]?.value as? String == "Projects")
+        #expect(requests[3].params["name"]?.value as? String == "Personal")
     }
 
     @Test func `requests fail fast when gateway not connected`() async {

@@ -248,7 +248,6 @@ function setDedupPassThroughMocks(): void {
   vi.spyOn(dedup, "claimUnprocessedFeishuMessage").mockResolvedValue(
     createClaimedFeishuDedupeResult(),
   );
-  vi.spyOn(dedup, "recordProcessedFeishuMessage").mockResolvedValue(true);
   vi.spyOn(dedup, "hasProcessedFeishuMessage").mockResolvedValue(false);
 }
 
@@ -611,7 +610,6 @@ describe("Feishu inbound debounce regressions", () => {
     vi.spyOn(dedup, "claimUnprocessedFeishuMessage").mockResolvedValue(
       createClaimedFeishuDedupeResult(),
     );
-    vi.spyOn(dedup, "recordProcessedFeishuMessage").mockResolvedValue(true);
     vi.spyOn(dedup, "hasProcessedFeishuMessage").mockResolvedValue(false);
     const onMessage = await setupDebounceMonitor({ botName: "OpenClaw Bot" });
 
@@ -696,7 +694,6 @@ describe("Feishu inbound debounce regressions", () => {
     vi.spyOn(dedup, "claimUnprocessedFeishuMessage").mockResolvedValue(
       createClaimedFeishuDedupeResult(),
     );
-    vi.spyOn(dedup, "recordProcessedFeishuMessage").mockResolvedValue(true);
     setStaleRetryMocks();
     const onMessage = await setupDebounceMonitor();
 

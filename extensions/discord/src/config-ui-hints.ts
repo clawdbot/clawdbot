@@ -9,11 +9,7 @@ export const discordChannelConfigUiHints = {
   },
   ...createChannelConfigUiHints({
     channelLabel: "Discord",
-    dmPolicy: {
-      channelKey: "discord",
-      includeLegacyNestedPolicy: true,
-      legacyNestedPolicyOrder: "after",
-    },
+    dmPolicy: { channelKey: "discord" },
     configWrites: true,
     mentionPatterns: {
       targetDescription: "Discord channel IDs",
@@ -69,7 +65,6 @@ export const discordChannelConfigUiHints = {
   ...createChannelConfigUiHints({
     channelLabel: "Discord",
     progress: { includeCommentary: true },
-    retry: true,
   }),
   maxLinesPerMessage: {
     label: "Discord Max Lines Per Message",
@@ -82,18 +77,6 @@ export const discordChannelConfigUiHints = {
   "thread.inheritParent": {
     label: "Discord Thread Parent Inheritance",
     help: "If true, Discord thread sessions inherit the parent channel transcript (default: false).",
-  },
-  "eventQueue.listenerTimeout": {
-    label: "Discord EventQueue Listener Timeout (ms)",
-    help: "Canonical Discord listener timeout control in ms for gateway normalization/enqueue handlers. Default is 120000 in OpenClaw; set per account via channels.discord.accounts.<id>.eventQueue.listenerTimeout.",
-  },
-  "eventQueue.maxQueueSize": {
-    label: "Discord EventQueue Max Queue Size",
-    help: "Optional Discord EventQueue capacity override (max queued events before backpressure). Set per account via channels.discord.accounts.<id>.eventQueue.maxQueueSize.",
-  },
-  "eventQueue.maxConcurrency": {
-    label: "Discord EventQueue Max Concurrency",
-    help: "Optional Discord EventQueue concurrency override (max concurrent handler executions). Set per account via channels.discord.accounts.<id>.eventQueue.maxConcurrency.",
   },
   "threadBindings.enabled": {
     label: "Discord Thread Binding Enabled",
@@ -115,10 +98,6 @@ export const discordChannelConfigUiHints = {
     label: "Discord Thread Spawn Context",
     help: 'Default native subagent context for thread-bound spawns. "fork" starts from the requester transcript; "isolated" starts clean. Default: "fork".',
   },
-  "ui.components.accentColor": {
-    label: "Discord Component Accent Color",
-    help: "Accent color for Discord component containers (hex). Set per account via channels.discord.accounts.<id>.ui.components.accentColor.",
-  },
   "agentComponents.ttlMs": {
     label: "Discord Component TTL (ms)",
     help: "How long sent Discord component callbacks remain registered. Default is 1800000 (30 minutes); maximum is 86400000 (24 hours).",
@@ -134,18 +113,6 @@ export const discordChannelConfigUiHints = {
   "intents.voiceStates": {
     label: "Discord Voice States Intent",
     help: "Enable the Guild Voice States intent. Defaults to the effective Discord voice setting; set true only for Discord voice channel conversations.",
-  },
-  gatewayInfoTimeoutMs: {
-    label: "Discord Gateway Metadata Timeout (ms)",
-    help: "Timeout for Discord /gateway/bot metadata lookup before falling back to the default gateway URL. Default is 30000; OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_MS can override when config is unset.",
-  },
-  gatewayReadyTimeoutMs: {
-    label: "Discord Gateway READY Timeout (ms)",
-    help: "Startup wait for the Discord gateway READY event before restarting the socket. Default is 15000; OPENCLAW_DISCORD_READY_TIMEOUT_MS can override when config is unset.",
-  },
-  gatewayRuntimeReadyTimeoutMs: {
-    label: "Discord Gateway Runtime READY Timeout (ms)",
-    help: "Runtime reconnect wait for the Discord gateway READY event before force-stopping the lifecycle. Default is 30000; OPENCLAW_DISCORD_RUNTIME_READY_TIMEOUT_MS can override when config is unset.",
   },
   "voice.enabled": {
     label: "Discord Voice Enabled",
@@ -190,10 +157,6 @@ export const discordChannelConfigUiHints = {
   "voice.realtime.speakerVoiceId": {
     label: "Discord Realtime Speaker Voice ID",
     help: "Provider realtime output voice id.",
-  },
-  "voice.realtime.voice": {
-    label: "Discord Realtime Voice",
-    help: "Deprecated provider realtime output voice. Use voice.realtime.speakerVoice.",
   },
   "voice.realtime.toolPolicy": {
     label: "Discord Realtime Tool Policy",
@@ -258,7 +221,7 @@ export const discordChannelConfigUiHints = {
   },
   "voice.tts": {
     label: "Discord Voice Text-to-Speech",
-    help: "Optional TTS overrides for Discord voice playback (merged with messages.tts).",
+    help: "Optional TTS overrides for Discord voice playback (merged with tts).",
   },
   "pluralkit.enabled": {
     label: "Discord PluralKit Enabled",
@@ -287,18 +250,6 @@ export const discordChannelConfigUiHints = {
   "autoPresence.minUpdateIntervalMs": {
     label: "Discord Auto Presence Min Update Interval (ms)",
     help: "Minimum time between actual Discord presence update calls in milliseconds (default: 15000). Prevents status spam on noisy state changes.",
-  },
-  "autoPresence.healthyText": {
-    label: "Discord Auto Presence Healthy Text",
-    help: "Optional custom status text while runtime is healthy (online). If omitted, falls back to static channels.discord.activity when set.",
-  },
-  "autoPresence.degradedText": {
-    label: "Discord Auto Presence Degraded Text",
-    help: "Optional custom status text while runtime/model availability is degraded or unknown (idle).",
-  },
-  "autoPresence.exhaustedText": {
-    label: "Discord Auto Presence Exhausted Text",
-    help: "Optional custom status text while runtime detects exhausted/unavailable model quota (dnd). Supports {reason} template placeholder.",
   },
   "guilds.*.presenceEvents": {
     label: "Discord Online Presence Events",

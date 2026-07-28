@@ -2,6 +2,15 @@ import {
   resolveOpenAIReasoningEffortForModel,
   supportsOpenAIReasoningEffort,
 } from "@openclaw/ai/internal/openai";
+import { emitModelTransportDebug, isCodeModeModelVisibleToolName } from "@openclaw/ai/transports";
+import {
+  flattenCompletionMessagesToStringContent,
+  stripCompletionMessagesToRoleContent,
+} from "@openclaw/ai/transports";
+import {
+  applyOpenAIResponsesPayloadPolicy,
+  resolveOpenAIResponsesPayloadPolicy,
+} from "@openclaw/ai/transports";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // OpenAI stream wrapper normalizes OpenAI-compatible streamed tool and text events.
 import {
@@ -13,15 +22,6 @@ import {
   patchCodexNativeWebSearchPayload,
   resolveCodexNativeSearchActivation,
 } from "../../../agents/codex-native-web-search-core.js";
-import { emitModelTransportDebug } from "../../../agents/model-transport-debug.js";
-import {
-  flattenCompletionMessagesToStringContent,
-  stripCompletionMessagesToRoleContent,
-} from "../../../agents/openai-completions-string-content.js";
-import {
-  applyOpenAIResponsesPayloadPolicy,
-  resolveOpenAIResponsesPayloadPolicy,
-} from "../../../agents/openai-responses-payload-policy.js";
 import {
   resolveOpenAITextVerbosity,
   type OpenAITextVerbosity,
@@ -163,7 +163,7 @@ function readPayloadToolName(tool: unknown): string | undefined {
 }
 
 function isCodeModePayloadToolName(name: string | undefined): boolean {
-  return name === "exec" || name === "wait";
+  return typeof name === "string" && isCodeModeModelVisibleToolName(name);
 }
 
 function filterCodeModeToolDeclarations(declarations: unknown): unknown[] | undefined {
@@ -698,8 +698,15 @@ export function createCodexNativeWebSearchWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
+    // Under `tools.codeMode.enabled: "auto"` the config alone cannot prove the
+    // surface; the run-level wrapper passes it down via stream options so the
+    // provider-family wrapper stays aligned for the same request.
+    const codeModeSurfaceFromOptions =
+      (options as OpenClawSimpleStreamOptions | undefined)?.openclawCodeModeToolSurface === true;
     if (
-      (params.codeModeToolSurfaceEnabled === true || isCodeModeEnabled(params.config)) &&
+      (params.codeModeToolSurfaceEnabled === true ||
+        codeModeSurfaceFromOptions ||
+        isCodeModeEnabled(params.config)) &&
       hasCodeModeVisibleTools(context)
     ) {
       emitModelTransportDebug(

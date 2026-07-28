@@ -6,6 +6,13 @@
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/app/lazy-custom-element.ts",
+      "text": "approval page"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/lazy-custom-element.ts",
       "text": "browser panel"
     },
     {
@@ -24,13 +31,6 @@
     },
     {
       "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/components/app-sidebar.ts",
-      "text": "OpenClaw"
-    },
-    {
-      "count": 1,
       "kind": "html-attribute",
       "name": "aria-label",
       "path": "ui/src/components/app-topbar.ts",
@@ -42,6 +42,41 @@
       "name": "text",
       "path": "ui/src/components/app-topbar.ts",
       "text": "OpenClaw"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/components/board/board-view.test-support.ts",
+      "text": "Alpha status"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/components/board/board-view.test-support.ts",
+      "text": "Beta chart"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/components/board/board-view.test-support.ts",
+      "text": "Main"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/components/board/board-view.test-support.ts",
+      "text": "Operations"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/components/board/board-view.test-support.ts",
+      "text": "Queue depth"
     },
     {
       "count": 1,
@@ -68,14 +103,14 @@
       "count": 2,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/components/lobster-pet.ts",
+      "path": "ui/src/components/lobster-pet-look.ts",
       "text": "z"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/components/lobster-pet.ts",
+      "path": "ui/src/components/lobster-pet-look.ts",
       "text": "Z"
     },
     {
@@ -98,6 +133,20 @@
       "name": "text",
       "path": "ui/src/components/login-gate.ts",
       "text": "OpenClaw"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/components/mcp-server-form.ts",
+      "text": "context7"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/components/mcp-server-form.ts",
+      "text": "https://mcp.example.com/mcp · npx some-mcp-server"
     },
     {
       "count": 1,
@@ -443,73 +492,73 @@
       "text": "NIP-05"
     },
     {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "Compacting context..."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "Context compacted"
-    },
-    {
       "count": 2,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
+      "path": "ui/src/pages/chat/components/chat-composer-slash-menu.ts",
       "text": "Enter"
     },
     {
       "count": 2,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
+      "path": "ui/src/pages/chat/components/chat-composer-slash-menu.ts",
       "text": "Esc"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "Replying to"
     },
     {
       "count": 2,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
+      "path": "ui/src/pages/chat/components/chat-composer-slash-menu.ts",
       "text": "Tab"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/chat/components/chat-message.ts",
-      "text": "% ctx"
+      "path": "ui/src/pages/chat/components/chat-composer-status.ts",
+      "text": "Compacting context..."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-composer-status.ts",
+      "text": "Context compacted"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-composer-view.ts",
+      "text": "Replying to"
     },
     {
       "count": 2,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/chat/components/chat-message.ts",
+      "path": "ui/src/pages/chat/components/chat-message-bubble.ts",
       "text": "JSON"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/chat/components/chat-message.ts",
+      "path": "ui/src/pages/chat/components/chat-message-timestamp.ts",
+      "text": "% ctx"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-message-timestamp.ts",
       "text": "R"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/chat/components/chat-message.ts",
+      "path": "ui/src/pages/chat/components/chat-message-timestamp.ts",
       "text": "W"
     },
     {
@@ -552,6 +601,13 @@
       "kind": "html-attribute",
       "name": "placeholder",
       "path": "ui/src/pages/config/view.ts",
+      "text": "48rem"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/pages/config/view.ts",
       "text": "https://tweakcn.com/editor/theme?theme=... or amethyst-haze"
     },
     {
@@ -567,13 +623,6 @@
       "name": "placeholder",
       "path": "ui/src/pages/connection/view.ts",
       "text": "OPENCLAW_GATEWAY_TOKEN"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/cron/view-runs.ts",
-      "text": "ms"
     },
     {
       "count": 1,
@@ -593,6 +642,13 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
+      "path": "ui/src/pages/custodian/custodian-page.ts",
+      "text": "OC"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
       "path": "ui/src/pages/debug/view.ts",
       "text": "openclaw security audit --deep"
     },
@@ -600,29 +656,8 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/memory-import/view.ts",
-      "text": "/memory/imports/"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
       "path": "ui/src/pages/nodes/view-exec-approvals.ts",
       "text": "exec host=gateway/node"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "placeholder",
-      "path": "ui/src/pages/plugins/view.ts",
-      "text": "context7"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "placeholder",
-      "path": "ui/src/pages/plugins/view.ts",
-      "text": "https://mcp.example.com/mcp · npx some-mcp-server"
     },
     {
       "count": 4,

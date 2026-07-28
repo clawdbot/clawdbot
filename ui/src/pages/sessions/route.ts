@@ -2,14 +2,22 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
+import {
+  DEFAULT_SESSION_LIST_QUERY,
+  type SessionArchivedFilter,
+} from "../../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import type { SessionsRouteData } from "./sessions-page.ts";
 
 function routeOptions(location: RouteLocation) {
   const search = new URLSearchParams(location.search);
   const expandedSessionKey = search.get("session")?.trim() || null;
-  const showArchived = ["1", "true"].includes(search.get("showArchived")?.toLowerCase() ?? "");
-  return { expandedSessionKey, showArchived };
+  // The retired internal `showArchived` param is deliberately not read; dashboard
+  // URLs are not a shipped contract and stale links fall back to the Active view.
+  const requestedStatus = search.get("status");
+  const statusFilter: SessionArchivedFilter =
+    requestedStatus === "archived" ? "archived" : requestedStatus === "all" ? "all" : "active";
+  return { expandedSessionKey, statusFilter };
 }
 
 async function loadSessionsRoute(
@@ -24,12 +32,11 @@ async function loadSessionsRoute(
   const [sessions] = await Promise.all([
     context.sessions
       .list({
-        activeMinutes: options.expandedSessionKey || options.showArchived ? 0 : 60,
-        limit: 50,
+        ...DEFAULT_SESSION_LIST_QUERY,
         search: options.expandedSessionKey ?? undefined,
         includeGlobal: true,
         includeUnknown: Boolean(options.expandedSessionKey),
-        showArchived: options.showArchived,
+        archivedFilter: options.statusFilter,
         ...(scopeAgentId ? { agentId: scopeAgentId } : {}),
       })
       .then(
@@ -49,11 +56,11 @@ async function loadSessionsRoute(
 
 export const page = definePage({
   id: "sessions",
-  path: "/settings/sessions",
-  aliases: ["/sessions"],
+  path: "/sessions",
+  aliases: ["/settings/sessions"],
   loaderDeps: (context: ApplicationContext, location: RouteLocation) => {
     const options = routeOptions(location);
-    return `${options.expandedSessionKey ?? ""}\u0000${options.showArchived ? "1" : "0"}\u0000${context.agentSelection.state.scopeId ?? "all"}`;
+    return `${options.expandedSessionKey ?? ""}\u0000${options.statusFilter}\u0000${context.agentSelection.state.scopeId ?? "all"}`;
   },
   loader: (context: ApplicationContext, { location }) => loadSessionsRoute(context, location),
   component: () =>

@@ -96,12 +96,14 @@ describe("ensureConfigReady", () => {
       snapshot,
       baseConfig: {},
     });
+    return snapshot;
   }
 
   function useTempOpenClawHome(): string {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-guard-"));
     tempRoots.push(root);
     setTestEnvValue("OPENCLAW_HOME", root);
+    deleteTestEnvValue("OPENCLAW_NIX_MODE");
     deleteTestEnvValue("OPENCLAW_PROFILE");
     deleteTestEnvValue("OPENCLAW_STATE_DIR");
     return root;
@@ -127,7 +129,13 @@ describe("ensureConfigReady", () => {
   }
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["HOME", "OPENCLAW_HOME", "OPENCLAW_PROFILE", "OPENCLAW_STATE_DIR"]);
+    envSnapshot = captureEnv([
+      "HOME",
+      "OPENCLAW_HOME",
+      "OPENCLAW_NIX_MODE",
+      "OPENCLAW_PROFILE",
+      "OPENCLAW_STATE_DIR",
+    ]);
     vi.clearAllMocks();
     resetConfigGuardStateForTests();
     for (const root of tempRoots.splice(0)) {
@@ -206,6 +214,23 @@ describe("ensureConfigReady", () => {
       observe: false,
     });
   });
+
+  it.each(["restart-sentinel.json", "restart-sentinel.json.doctor-importing"])(
+    "runs doctor flow when lightweight startup detection finds %s",
+    async (relativePath) => {
+      const root = useTempOpenClawHome();
+      writeStateMarker(root, relativePath);
+
+      await runEnsureConfigReady(["status"]);
+
+      expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledWith({
+        migrateState: true,
+        migrateLegacyConfig: false,
+        invalidConfigNote: false,
+        observe: false,
+      });
+    },
+  );
 
   it("runs doctor flow when lightweight startup detection finds a pending SQLite archive", async () => {
     const root = useTempOpenClawHome();
@@ -488,11 +513,85 @@ describe("ensureConfigReady", () => {
       "Problem:",
       "  - channels.quietchat: invalid",
       "",
-      `Fix: ${formatCliCommand("openclaw doctor --fix")}`,
       `Inspect: ${formatCliCommand("openclaw config validate")}`,
       "Audit, status, health, logs, tasks list/audit, and doctor commands still run with invalid config.",
+      `Run "${formatCliCommand("openclaw doctor --fix")}" to repair the config, then retry.`,
     ]);
     expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("runs doctor and retries the config guard once after consent", async () => {
+    writeLegacyTaskSidecarMarker(useTempOpenClawHome());
+    const invalidSnapshot = setInvalidSnapshot();
+    const validSnapshot = {
+      ...makeSnapshot(),
+      config: { gateway: { mode: "local" } },
+      sourceConfig: { gateway: { mode: "local" } },
+    };
+    loadAndMaybeMigrateDoctorConfigMock
+      .mockResolvedValueOnce({ snapshot: invalidSnapshot, baseConfig: {} })
+      .mockResolvedValueOnce({ snapshot: validSnapshot, baseConfig: validSnapshot.config });
+    readConfigFileSnapshotMock.mockResolvedValue(validSnapshot);
+    const runtime = makeRuntime();
+    const confirm = vi.fn(async () => true);
+    const runDoctor = vi.fn(async () => {});
+
+    await ensureConfigReady(
+      { runtime: runtime as never, commandPath: ["message"] },
+      { confirm, isInteractive: () => true, runDoctor },
+    );
+
+    expect(confirm).toHaveBeenCalledWith(
+      `Run "${formatCliCommand("openclaw doctor --fix")}" now?`,
+      true,
+    );
+    expect(runDoctor).toHaveBeenCalledOnce();
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledTimes(2);
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenLastCalledWith({
+      migrateState: false,
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+    });
+    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+    expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(
+      validSnapshot.config,
+      validSnapshot.sourceConfig,
+    );
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("does not prompt for repair when stdout belongs to a machine-readable command", async () => {
+    setInvalidSnapshot();
+    const runtime = makeRuntime();
+    const confirm = vi.fn(async () => true);
+
+    await ensureConfigReady(
+      {
+        runtime: runtime as never,
+        commandPath: ["agents", "list"],
+        suppressDoctorStdout: true,
+      },
+      { confirm, isInteractive: () => true },
+    );
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("keeps invalid Nix-managed config on the manual recovery path", async () => {
+    setInvalidSnapshot();
+    setTestEnvValue("OPENCLAW_NIX_MODE", "1");
+    const runtime = makeRuntime();
+    const confirm = vi.fn(async () => true);
+
+    await ensureConfigReady(
+      { runtime: runtime as never, commandPath: ["gateway", "run"] },
+      { confirm, isInteractive: () => true },
+    );
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(plainErrorCalls(runtime).join("\n")).toContain("Config is managed by Nix");
+    expect(runtime.exit).toHaveBeenCalledWith(78);
   });
 
   it("replaces doctor fix advice for plugin packaging-only invalid config", async () => {
@@ -517,9 +616,12 @@ describe("ensureConfigReady", () => {
     expect(calls).toContain(`Fix: ${pluginPackagingRecoveryHint}`);
     expect(calls).not.toContain(`Fix: ${formatCliCommand("openclaw doctor --fix")}`);
     expect(runtime.exit).toHaveBeenCalledWith(1);
+
+    const gatewayRuntime = await runEnsureConfigReady(["gateway", "start"]);
+    expect(gatewayRuntime.exit).toHaveBeenCalledWith(78);
   });
 
-  it("does not exit for invalid config on allowlisted commands", async () => {
+  it("allows read-only invalid-config commands but blocks gateway startup", async () => {
     setInvalidSnapshot({
       issues: [{ path: "agents.defaults", message: 'Unrecognized key: "agentRuntime"' }],
     });
@@ -530,10 +632,16 @@ describe("ensureConfigReady", () => {
     expect(auditRuntime.exit).not.toHaveBeenCalled();
 
     const bareGatewayRuntime = await runEnsureConfigReady(["gateway"]);
-    expect(bareGatewayRuntime.exit).not.toHaveBeenCalled();
+    expect(bareGatewayRuntime.exit).toHaveBeenCalledWith(78);
 
     const gatewayRunRuntime = await runEnsureConfigReady(["gateway", "run"]);
-    expect(gatewayRunRuntime.exit).not.toHaveBeenCalled();
+    expect(gatewayRunRuntime.exit).toHaveBeenCalledWith(78);
+
+    const gatewayStartRuntime = await runEnsureConfigReady(["gateway", "start"]);
+    expect(gatewayStartRuntime.exit).toHaveBeenCalledWith(78);
+
+    const gatewayRestartRuntime = await runEnsureConfigReady(["gateway", "restart"]);
+    expect(gatewayRestartRuntime.exit).toHaveBeenCalledWith(78);
 
     const gatewayRuntime = await runEnsureConfigReady(["gateway", "health"]);
     expect(gatewayRuntime.exit).not.toHaveBeenCalled();
@@ -563,6 +671,24 @@ describe("ensureConfigReady", () => {
       commandPath: ["plugins", "install"],
       allowInvalid: true,
     });
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("does not offer repair for an explicitly allowed gateway startup", async () => {
+    setInvalidSnapshot();
+    const runtime = makeRuntime();
+    const confirm = vi.fn(async () => true);
+
+    await ensureConfigReady(
+      {
+        runtime: runtime as never,
+        commandPath: ["gateway", "run"],
+        allowInvalid: true,
+      },
+      { confirm, isInteractive: () => true },
+    );
+
+    expect(confirm).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 

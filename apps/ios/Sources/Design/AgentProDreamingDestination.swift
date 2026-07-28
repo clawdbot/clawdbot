@@ -4,7 +4,7 @@ import SwiftUI
 
 struct AgentProDreamingDestination: View {
     @Environment(NodeAppModel.self) private var appModel
-    let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let headerSidebarAction: OpenClawSidebarHeaderAction?
     let overview: AgentOverviewSnapshot?
     let gatewayConnected: Bool
     let overviewLoading: Bool
@@ -62,14 +62,14 @@ struct AgentProDreamingDestination: View {
 
     @ViewBuilder
     private var header: some View {
-        if let headerLeadingAction {
+        if let headerSidebarAction {
             OpenClawAdaptiveHeaderRow(
                 title: "Dreaming",
                 subtitle: .localized(self.dreamingDetail),
                 titleFont: OpenClawType.title3SemiBold,
                 subtitleFont: OpenClawType.subheadMedium)
             {
-                OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
+                OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)
             } accessory: {
                 EmptyView()
             }
@@ -486,12 +486,12 @@ struct AgentProDreamingDestination: View {
         }
     }
 
-    private func detailMetric(label: String, value: String) -> some View {
+    private func detailMetric(label: OpenClawTextValue, value: String) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(label)
+            label.text
                 .font(OpenClawType.caption2Medium)
                 .foregroundStyle(.secondary)
-            Text(value)
+            Text(verbatim: value)
                 .font(OpenClawType.subheadSemiBold)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)

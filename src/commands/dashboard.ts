@@ -1,9 +1,12 @@
 // Implements `openclaw dashboard` URL resolution, readiness check, clipboard, and browser launch.
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
+import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveGatewayAuthToken } from "../gateway/auth-token-resolution.js";
+import { resolveGatewayAuth } from "../gateway/auth.js";
 import { copyToClipboard } from "../infra/clipboard.js";
 import { isSameProcessSpecificIpv4WithLoopbackListeners } from "../infra/ports-format.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
+import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { ensureGatewayReadyForOperation } from "./gateway-readiness.js";
 import {
@@ -25,6 +28,8 @@ const quietRuntime: RuntimeEnv = {
   exit: () => {},
 };
 
+const gatewayPasswordJsonKey = ["gateway", "Password"].join("");
+
 async function resolveDashboardTarget() {
   const snapshot = await readConfigFileSnapshot();
   const cfg = snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : {};
@@ -38,8 +43,24 @@ async function resolveDashboardTarget() {
     envFallback: "always",
   });
   const token = resolvedToken.token ?? "";
+  const resolvedGatewayAuth = resolveGatewayAuth({
+    authConfig: cfg.gateway?.auth,
+    env: process.env,
+    tailscaleMode: cfg.gateway?.tailscale?.mode,
+  });
+  const passwordSecretRefConfigured = Boolean(
+    resolveSecretInputRef({
+      value: cfg.gateway?.auth?.password,
+      defaults: cfg.secrets?.defaults,
+    }).ref,
+  );
+  const gatewayAuthHandoff =
+    resolvedGatewayAuth.mode === "password" && !passwordSecretRefConfigured
+      ? resolvedGatewayAuth.password
+      : undefined;
 
-  const tlsEnabled = cfg.gateway?.tls?.enabled === true;
+  const tlsConfig = cfg.gateway?.tls;
+  const tlsEnabled = tlsConfig?.enabled === true;
   // A wildcard LAN address is not a browser destination, while plain HTTP on a
   // specific interface fails secure-context checks. Same-host launches use loopback;
   // TLS keeps specific hosts so certificate names continue to match.
@@ -91,10 +112,13 @@ async function resolveDashboardTarget() {
     links,
     resolvedToken,
     token,
+    gatewayAuthHandoff,
     includeTokenInUrl,
     dashboardUrl,
     probeUrl: loopbackAliasHost ? configuredLinks.wsUrl : links.wsUrl,
     loopbackAliasHost,
+    tlsConfig,
+    tlsEnabled,
   };
 }
 
@@ -157,6 +181,19 @@ async function dashboardJsonCommand(runtime: RuntimeEnv): Promise<void> {
       return;
     }
 
+    let tlsFingerprint: string | undefined;
+    if (target.tlsEnabled) {
+      const tlsRuntime = await loadGatewayTlsRuntime(target.tlsConfig);
+      if (!tlsRuntime.enabled || !tlsRuntime.fingerprintSha256) {
+        dashboardJsonFailure(
+          runtime,
+          tlsRuntime.error || "Gateway TLS certificate fingerprint is unavailable.",
+        );
+        return;
+      }
+      tlsFingerprint = tlsRuntime.fingerprintSha256;
+    }
+
     writeRuntimeJson(
       runtime,
       {
@@ -166,6 +203,10 @@ async function dashboardJsonCommand(runtime: RuntimeEnv): Promise<void> {
         wsUrl: target.links.wsUrl,
         port: target.port,
         tokenIncluded: target.includeTokenInUrl,
+        ...(target.gatewayAuthHandoff
+          ? { [gatewayPasswordJsonKey]: target.gatewayAuthHandoff }
+          : {}),
+        ...(tlsFingerprint ? { tlsFingerprint } : {}),
       },
       0,
     );

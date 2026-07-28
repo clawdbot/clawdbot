@@ -9,7 +9,7 @@ import {
   verifyReceipt,
   type Verdict,
 } from "../protocol/index.js";
-import { ReefMessageFlow } from "./flow.js";
+import { createConfiguredGuard, ReefMessageFlow } from "./flow.js";
 import {
   allow,
   config,
@@ -26,7 +26,37 @@ import type { ReefTransportClient } from "./transport.js";
 import type { InboxEntry } from "./types.js";
 
 beforeEach(resetFlowStoresForTests);
-afterEach(resetFlowStoresForTests);
+afterEach(() => {
+  vi.unstubAllEnvs();
+  resetFlowStoresForTests();
+});
+
+describe("createConfiguredGuard", () => {
+  it("rejects a whitespace-only guard credential", () => {
+    vi.stubEnv("REEF_TEST_KEY", "   ");
+
+    expect(() => createConfiguredGuard(config())).toThrow(
+      "Reef guard credential environment variable REEF_TEST_KEY is unset",
+    );
+  });
+
+  it("trims a configured guard credential before requests", async () => {
+    vi.stubEnv("REEF_TEST_KEY", "  guard-key  ");
+    const fetcher = vi.fn<typeof fetch>(async () => new Response("", { status: 401 }));
+    const classifier = createConfiguredGuard(config(), fetcher);
+
+    await classifier.classify({
+      direction: "outbound",
+      source: "alice#1",
+      destination: "bob#1",
+      text: "hello",
+      policyVersion: "v1",
+    });
+
+    const init = fetcher.mock.calls[0]?.[1];
+    expect(new Headers(init?.headers).get("authorization")).toBe("Bearer guard-key");
+  });
+});
 
 describe("ReefMessageFlow inbound", () => {
   it("delivers and persists before ack, then acks duplicate redelivery without delivering twice", async () => {

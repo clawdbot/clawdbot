@@ -157,8 +157,14 @@ Options:
 
 function familyTitle(value: string): string {
   const titles: Record<string, string> = {
+    googlechat: "Google Chat",
+    imessage: "iMessage",
+    msteams: "Microsoft Teams",
+    openai: "OpenAI",
+    openclaw: "OpenClaw",
     "platform-app": "Platform",
     "provider-tool": "Provider and tool",
+    whatsapp: "WhatsApp",
   };
   return (
     titles[value] ??

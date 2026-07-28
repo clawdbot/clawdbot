@@ -23,6 +23,7 @@ export type BuildAllStep = {
     restore?: "always";
     runOnHit?: {
       env?: NodeJS.ProcessEnv;
+      finalize?: "refresh";
     };
   };
 };
