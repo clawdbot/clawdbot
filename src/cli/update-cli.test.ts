@@ -20,6 +20,7 @@ import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   writeUpdatePostInstallDoctorResult,
 } from "../infra/update-doctor-result.js";
+import { cleanupStaleManagedServiceUpdateHandoffs } from "../infra/update-managed-service-handoff-cleanup.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub-error-codes.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
@@ -2129,15 +2130,9 @@ describe("update-cli", () => {
   });
 
   it("post-core resume mode persists the requested update channel with the updated process", async () => {
-    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
-      ...baseSnapshot,
-      parsed: { update: { channel: "stable" } },
-      resolved: { update: { channel: "stable" } } as OpenClawConfig,
-      sourceConfig: { update: { channel: "stable" } } as OpenClawConfig,
-      runtimeConfig: { update: { channel: "stable" } } as OpenClawConfig,
-      config: { update: { channel: "stable" } } as OpenClawConfig,
-      hash: "stable-hash",
-    });
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue(
+      configSnapshot({ update: { channel: "stable" } }, { hash: "stable-hash" }),
+    );
 
     await runPostCoreCommand(
       { restart: false },
@@ -2166,37 +2161,14 @@ describe("update-cli", () => {
   });
 
   it("post-core resume mode retries update channel persistence after config hash drift", async () => {
-    vi.mocked(readConfigFileSnapshot).mockResolvedValueOnce({
-      ...baseSnapshot,
-      parsed: { update: { channel: "stable" } },
-      resolved: { update: { channel: "stable" } } as OpenClawConfig,
-      sourceConfig: { update: { channel: "stable" } } as OpenClawConfig,
-      runtimeConfig: { update: { channel: "stable" } } as OpenClawConfig,
-      config: { update: { channel: "stable" } } as OpenClawConfig,
-      hash: "stable-hash",
-    });
+    vi.mocked(readConfigFileSnapshot).mockResolvedValueOnce(
+      configSnapshot({ update: { channel: "stable" } }, { hash: "stable-hash" }),
+    );
     const newerSnapshot = {
-      ...baseSnapshot,
-      parsed: {
+      ...configSnapshot({
         meta: { lastTouchedVersion: "2026.4.30" },
         update: { channel: "stable" },
-      },
-      resolved: {
-        meta: { lastTouchedVersion: "2026.4.30" },
-        update: { channel: "stable" },
-      } as OpenClawConfig,
-      sourceConfig: {
-        meta: { lastTouchedVersion: "2026.4.30" },
-        update: { channel: "stable" },
-      } as OpenClawConfig,
-      runtimeConfig: {
-        meta: { lastTouchedVersion: "2026.4.30" },
-        update: { channel: "stable" },
-      } as OpenClawConfig,
-      config: {
-        meta: { lastTouchedVersion: "2026.4.30" },
-        update: { channel: "stable" },
-      } as OpenClawConfig,
+      }),
       hash: "newer-hash",
     };
     vi.mocked(mutateConfigFileWithRetry).mockImplementationOnce(async (params) => {
@@ -2567,14 +2539,7 @@ describe("update-cli", () => {
         },
       },
     } as OpenClawConfig;
-    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
-      ...baseSnapshot,
-      parsed: config,
-      resolved: config,
-      sourceConfig: config,
-      config,
-      runtimeConfig: config,
-    });
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue(configSnapshot(config));
     loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce({
       demo: {
         source: "npm",
@@ -2853,6 +2818,7 @@ describe("update-cli", () => {
       },
       assert: () => {
         expectNoSideEffects(
+          cleanupStaleManagedServiceUpdateHandoffs,
           replaceConfigFile,
           runGatewayUpdate,
           runDaemonInstall,
@@ -2875,6 +2841,7 @@ describe("update-cli", () => {
       },
       assert: () => {
         expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+        expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
         expect(runGatewayUpdate).not.toHaveBeenCalled();
         expect(
           launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
@@ -2882,6 +2849,40 @@ describe("update-cli", () => {
       },
     },
   ] as const)("updateCommand dry-run behavior: $name", runUpdateCliScenario);
+
+  it("does not clean managed-service handoffs during a JSON dry run", async () => {
+    await updateCommand({ dryRun: true, json: true, channel: "beta" });
+
+    expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
+    expectNoSideEffects(replaceConfigFile, runGatewayUpdate, runDaemonInstall);
+    expect(defaultRuntime.writeJson).toHaveBeenCalled();
+  });
+
+  it("does not clean managed-service handoffs before rejecting an invalid timeout", async () => {
+    await updateCommand({ timeout: "" });
+
+    expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it.each([
+    { name: "update", run: async () => await updateCommand({ channel: "" }) },
+    { name: "finalization", run: async () => await updateFinalizeCommand({ channel: "" }) },
+  ])("rejects an explicitly empty $name channel before mutation", async ({ run }) => {
+    await run();
+
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      '--channel must be "stable", "extended-stable", "beta", or "dev" (got "")',
+    );
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expectNoSideEffects(
+      cleanupStaleManagedServiceUpdateHandoffs,
+      replaceConfigFile,
+      runGatewayUpdate,
+      doctorCommand,
+      syncPluginsForUpdateChannel,
+    );
+  });
 
   it("refuses an incompatible package target before service stop or install", async () => {
     mockPackageInstallStatus(createCaseDir("openclaw-schema-refusal"));
@@ -3322,14 +3323,7 @@ describe("update-cli", () => {
     mockPackageInstallStatus(tempDir);
     readPackageVersion.mockResolvedValue("2026.6.33");
     const config = { update: { channel: "extended-stable" } } as OpenClawConfig;
-    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
-      ...baseSnapshot,
-      parsed: config,
-      sourceConfig: config,
-      resolved: config,
-      runtimeConfig: config,
-      config,
-    });
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue(configSnapshot(config));
 
     await updateCommand({ yes: true, restart: false });
 
@@ -3366,14 +3360,7 @@ describe("update-cli", () => {
     const tempDir = createCaseDir("openclaw-update");
     mockPackageInstallStatus(tempDir);
     const config = { update: { channel: "extended-stable" } } as OpenClawConfig;
-    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
-      ...baseSnapshot,
-      parsed: config,
-      sourceConfig: config,
-      resolved: config,
-      runtimeConfig: config,
-      config,
-    });
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue(configSnapshot(config));
     vi.mocked(resolveExtendedStablePackage).mockResolvedValueOnce({
       status: "failed",
       reason: "selector_query_failed",
@@ -3397,14 +3384,7 @@ describe("update-cli", () => {
     mockPackageInstallStatus(tempDir);
     if (!explicit) {
       const config = { update: { channel: "extended-stable" } } as OpenClawConfig;
-      vi.mocked(readConfigFileSnapshot).mockResolvedValue({
-        ...baseSnapshot,
-        parsed: config,
-        sourceConfig: config,
-        resolved: config,
-        runtimeConfig: config,
-        config,
-      });
+      vi.mocked(readConfigFileSnapshot).mockResolvedValue(configSnapshot(config));
     }
 
     await updateCommand({
@@ -6435,6 +6415,28 @@ describe("update-cli", () => {
     });
     expect(sentinel?.payload.stats?.mode).toBe("npm");
     expect(sentinel?.payload.stats?.after?.version).toBe("2026.4.24");
+  });
+
+  it("does not write a control-plane sentinel when a dry-run preflight fails", async () => {
+    const sentinel = await runControlPlaneUpdate({
+      meta: {
+        sessionKey: "agent:main:webchat:dm:user-123",
+        handoffId: "extended-stable-dry-run",
+        note: "Preview requested from the agent.",
+      },
+      options: { channel: "extended-stable", dryRun: true, yes: true, json: true },
+      beforeUpdate: () => {
+        mockPackageInstallStatus(createCaseDir("openclaw-update"));
+        vi.mocked(resolveExtendedStablePackage).mockResolvedValueOnce({
+          status: "failed",
+          reason: "selector_missing",
+        });
+      },
+    });
+
+    expect(sentinel).toBeNull();
+    expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
   it("writes an extended-stable selector failure to the control-plane sentinel", async () => {

@@ -5,6 +5,8 @@ import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
+  controlUiSessionPath,
+  controlUiSessionUrl,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -244,7 +246,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     });
 
     try {
-      await page.goto(`${server.baseUrl}chat?session=${encodeURIComponent(parentKey)}`);
+      await page.goto(controlUiSessionUrl(server.baseUrl, parentKey));
       const parent = page.locator(`[data-session-key="${parentKey}"]`);
       await parent.waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => page.locator(".sidebar-recent-session--child").count()).toBe(0);
@@ -269,7 +271,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await captureUiProof(page, "child-sessions-expanded.png");
 
       await childRows.nth(1).getByRole("link").click();
-      await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBe(childTwoKey);
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(childTwoKey));
     } finally {
       await context.close();
     }
@@ -487,7 +489,9 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       // returning the same list, so the archived row stays visible here.)
       const researchLink = sidebarResearch.locator("a").first();
       await researchLink.click();
-      await expect.poll(() => page.url()).toContain("session=agent%3Amain%3Aresearch");
+      await expect
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(controlUiSessionPath("agent:main:research"));
       await expect.poll(rowNames).toEqual(["Release planning", "Data migration", "Research notes"]);
       await expect
         .poll(() =>
@@ -542,7 +546,9 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       ).toBe(true);
       await captureUiProof(page, "command-palette-session-search.png");
       await paletteOption.click();
-      await expect.poll(() => page.url()).toContain("session=agent%3Amain%3Arelease");
+      await expect
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(controlUiSessionPath("agent:main:release"));
     } finally {
       await context.close();
     }
@@ -829,7 +835,9 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     });
 
     const assertSelectedRoute = async () => {
-      await expect.poll(() => page.url()).toContain(`session=${encodeURIComponent(selected.key)}`);
+      await expect
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(controlUiSessionPath(selected.key));
       const row = page.locator(`.sidebar-recent-session[data-session-key="${selected.key}"]`);
       await row.waitFor({ state: "visible", timeout: 10_000 });
       await expect
@@ -1459,8 +1467,9 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await alphaToggle.click();
       await expect.poll(() => alpha.locator(".sidebar-recent-session").count()).toBe(0);
 
-      // Reorder by dragging the whole group header (not just the dot handle).
-      await gamma.locator(".sidebar-recent-sessions__head").dragTo(alpha, {
+      // Header buttons intentionally keep their click behavior; reorder from
+      // the dedicated grip beside them.
+      await gamma.locator(".sidebar-session-group-drag-handle").dragTo(alpha, {
         targetPosition: { x: 4, y: 2 },
       });
       const customGroupOrder = () =>

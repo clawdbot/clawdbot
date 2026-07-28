@@ -4,7 +4,7 @@ import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CallGatewayCliOptions } from "../gateway/call.js";
 import { createSuiteLogPathTracker } from "../logging/log-test-helpers.js";
-import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -545,6 +545,8 @@ describe("runGuidedOnboarding", () => {
 
     transportLog.info("after activation");
     expect(consoleLog).toHaveBeenCalledOnce();
+    // The file transport appends asynchronously; drain it before reading.
+    await flushLogger();
     const fileLog = fs.readFileSync(file, "utf8");
     expect(fileLog).toContain("[model-fetch] response status=401");
     expect(fileLog).toContain("after activation");

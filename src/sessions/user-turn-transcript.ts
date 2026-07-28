@@ -414,7 +414,7 @@ async function persistUserTurnTranscript(
   return {
     ...appended,
     sessionEntry: turn.sessionEntry,
-    sessionFile: turn.sessionFile,
+    sessionFile: params.sessionKey,
   };
 }
 

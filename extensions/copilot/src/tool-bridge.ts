@@ -201,6 +201,8 @@ export async function createCopilotToolBridge(
     executeTool: (toolParams) => executeCatalogTool(input, toolParams),
     forceMessageTool: shouldForceCopilotMessageTool(attemptParams),
     isRawModelRun: isCopilotRawModelRun(attemptParams),
+    // Carries catalog compat so `tools.codeMode.enabled: "auto"` can resolve per model.
+    model: attemptParams.model,
     modelId: input.modelId,
     modelProvider: input.modelProvider,
     modelToolsEnabled: true,

@@ -186,7 +186,8 @@ restart handling continues.
   resumes on a later boot after the unclean-boot window drains. Gateway logs
   look like:
   `channel autostart suppressed by crash-loop breaker; refusing automatic
-start for <channel>… Use channels.start to override.`
+start for <channel>… Start a channel manually with: openclaw gateway call
+channels.start --params '{"channel":"<id>"}'`
 
   Operator recovery SOP:
 

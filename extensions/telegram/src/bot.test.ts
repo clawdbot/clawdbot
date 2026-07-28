@@ -23,6 +23,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import {
+  createTelegramNativeCommandTestDeps,
+  telegramBotInfoForTest,
+} from "./bot.create-telegram-bot.test-support.js";
+import {
   createTelegramCallbackContext,
   createTelegramReactionContext,
   runTelegramChannelInboundEventWithHarness,
@@ -120,7 +124,6 @@ const FIRE_EMOJI = "\u{1F525}";
 const PARTY_EMOJI = "\u{1F389}";
 const EYES_EMOJI = "\u{1F440}";
 const HEART_EMOJI = "\u{2764}\u{FE0F}";
-
 async function withTelegramSpooledReplayUpdate<T>(
   update: object,
   fn: () => Promise<T>,
@@ -336,7 +339,7 @@ function latestConversationContextMessages(): Record<string, unknown>[] {
     "replySpy call",
   );
   const [conversationContext] = requireArray(
-    payload.UntrustedStructuredContext,
+    payload.ChannelStructuredContext,
     "structured context",
   );
   const contextPayload = requireRecord(
@@ -631,10 +634,15 @@ describe("createTelegramBot", () => {
         telegram: { dmPolicy: "open", allowFrom: ["*"] },
       },
     });
+    const telegramDeps = {
+      ...telegramBotDepsForTest,
+      ...createTelegramNativeCommandTestDeps(dispatchReplyWithBufferedBlockDispatcher),
+    };
     createTelegramBot = (opts) =>
       createTelegramBotBase({
+        botInfo: telegramBotInfoForTest,
         ...opts,
-        telegramDeps: telegramBotDepsForTest,
+        telegramDeps,
       });
   });
 
@@ -720,7 +728,7 @@ describe("createTelegramBot", () => {
       ]),
     );
     const [conversationContext] = requireArray(
-      payload.UntrustedStructuredContext,
+      payload.ChannelStructuredContext,
       "structured context",
     );
     const contextPayload = requireRecord(
@@ -885,7 +893,7 @@ describe("createTelegramBot", () => {
         }),
       ]);
       const [conversationContext] = requireArray(
-        payload.UntrustedStructuredContext,
+        payload.ChannelStructuredContext,
         "structured context",
       );
       const messages = requireArray(
@@ -2764,7 +2772,7 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
     const [conversationContext] = requireArray(
-      payload.UntrustedStructuredContext,
+      payload.ChannelStructuredContext,
       "structured context",
     );
     const contextRecord = requireRecord(conversationContext, "conversation context");
@@ -2836,7 +2844,7 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
-    expect(payload.UntrustedStructuredContext).toEqual([
+    expect(payload.ChannelStructuredContext).toEqual([
       {
         label: "Conversation context",
         payload: {
@@ -2853,6 +2861,16 @@ describe("createTelegramBot", () => {
         type: "chat_window",
       },
     ]);
+    // Media-less unmentioned messages must reach the canonical mention gate so
+    // the rolling group history window records them (not just the reply cache).
+    expect(payload.InboundHistory).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          body: "Please run the maintenance step later.",
+          sender: "Requester id:111",
+        }),
+      ]),
+    );
   });
 
   it("excludes ambient transcript rows from live group conversation context", async () => {
@@ -2942,7 +2960,7 @@ describe("createTelegramBot", () => {
         "replySpy call",
       );
       const [conversationContext] = requireArray(
-        payload.UntrustedStructuredContext,
+        payload.ChannelStructuredContext,
         "structured context",
       );
       const contextPayload = requireRecord(
@@ -3012,7 +3030,7 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
-    expect(payload.UntrustedStructuredContext).toBeUndefined();
+    expect(payload.ChannelStructuredContext).toBeUndefined();
     expect(payload.Body).not.toContain("Do not include this cached group line.");
   });
 
@@ -3099,7 +3117,7 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
     const [conversationContext] = requireArray(
-      payload.UntrustedStructuredContext,
+      payload.ChannelStructuredContext,
       "structured context",
     );
     const contextRecord = requireRecord(conversationContext, "conversation context");
@@ -3175,7 +3193,7 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
     const [conversationContext] = requireArray(
-      payload.UntrustedStructuredContext,
+      payload.ChannelStructuredContext,
       "structured context",
     );
     const contextRecord = requireRecord(conversationContext, "conversation context");
@@ -3401,7 +3419,7 @@ describe("createTelegramBot", () => {
         "replySpy call",
       );
       const [conversationContext] = requireArray(
-        payload.UntrustedStructuredContext,
+        payload.ChannelStructuredContext,
         "structured context",
       );
       const contextRecord = requireRecord(conversationContext, "conversation context");
@@ -3902,7 +3920,7 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
-    expect(JSON.stringify(payload.UntrustedStructuredContext ?? [])).not.toContain(
+    expect(JSON.stringify(payload.ChannelStructuredContext ?? [])).not.toContain(
       "old private transcript text",
     );
   });
@@ -4286,7 +4304,7 @@ describe("createTelegramBot", () => {
         mediaRef?: string;
         replyToId?: string;
       }>;
-      UntrustedStructuredContext?: unknown[];
+      ChannelStructuredContext?: unknown[];
     };
     expect(payload.ReplyChain).toHaveLength(2);
     expect(payload.ReplyChain?.[0]?.messageId).toBe("9001");
@@ -4297,7 +4315,7 @@ describe("createTelegramBot", () => {
     expect(payload.ReplyChain?.[1]?.mediaPath).toContain("/media/inbound/");
     expect(payload.ReplyChain?.[1]?.mediaRef).toBeUndefined();
     const [conversationContext] = requireArray(
-      payload.UntrustedStructuredContext,
+      payload.ChannelStructuredContext,
       "structured context",
     );
     const contextRecord = requireRecord(conversationContext, "conversation context");
@@ -4426,7 +4444,7 @@ describe("createTelegramBot", () => {
         mediaRef?: string;
         mediaPath?: string;
       }>;
-      UntrustedStructuredContext?: unknown[];
+      ChannelStructuredContext?: unknown[];
     };
     expect(payload.ReplyChain?.map((entry) => entry.messageId)).toEqual(["102", "101"]);
     expect(payload.ReplyChain?.[1]).toMatchObject({
@@ -4442,7 +4460,7 @@ describe("createTelegramBot", () => {
       expect(payload.ReplyChain?.[1]?.mediaRef).toBe("telegram:file/generated-photo-1");
     }
     const [conversationContext] = requireArray(
-      payload.UntrustedStructuredContext,
+      payload.ChannelStructuredContext,
       "structured context",
     );
     const contextRecord = requireRecord(conversationContext, "conversation context");
@@ -4571,11 +4589,11 @@ describe("createTelegramBot", () => {
       "replySpy call",
     ) as {
       ReplyChain?: unknown[];
-      UntrustedStructuredContext?: unknown[];
+      ChannelStructuredContext?: unknown[];
     };
     expect(payload.ReplyChain).toBeUndefined();
     const [conversationContext] = requireArray(
-      payload.UntrustedStructuredContext,
+      payload.ChannelStructuredContext,
       "structured context",
     );
     const contextRecord = requireRecord(conversationContext, "conversation context");
@@ -4715,10 +4733,10 @@ describe("createTelegramBot", () => {
         0,
         "replySpy call",
       ) as {
-        UntrustedStructuredContext?: unknown[];
+        ChannelStructuredContext?: unknown[];
       };
       const [conversationContext] = requireArray(
-        payload.UntrustedStructuredContext,
+        payload.ChannelStructuredContext,
         "structured context",
       );
       const contextRecord = requireRecord(conversationContext, "conversation context");
@@ -4764,7 +4782,7 @@ describe("createTelegramBot", () => {
         chat: { id: 7, type: "private" },
         text: "hey",
         date: 1736380800,
-        from: { id: 999, first_name: "Eve" },
+        from: { id: 123, first_name: "Eve" },
         reply_to_message: {
           message_id: 9001,
           photo: [{ file_id: "reply-photo-1" }],
@@ -5980,21 +5998,21 @@ describe("createTelegramBot", () => {
     {
       name: "keeps unconfigured dm topic commands on the flat dm session",
       messageThreadId: 99,
-      me: undefined,
+      me: { id: 999, has_topics_enabled: false },
       expectedSessionKey: "agent:main:main",
       assertAuthorized: false,
     },
     {
       name: "uses bot topic capability for native dm topic command target sessions",
       messageThreadId: 99,
-      me: { has_topics_enabled: true },
+      me: { id: 999, has_topics_enabled: true },
       expectedSessionKey: "agent:main:main:thread:12345:99",
       assertAuthorized: false,
     },
     {
       name: "allows native DM commands for paired users",
       messageThreadId: undefined,
-      me: undefined,
+      me: { id: 999, has_topics_enabled: false },
       expectedSessionKey: undefined,
       assertAuthorized: true,
     },

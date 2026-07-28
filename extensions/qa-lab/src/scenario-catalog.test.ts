@@ -342,6 +342,7 @@ describe("qa scenario catalog", () => {
 
   it("loads runtime tool fixture metadata for core and extended lanes", () => {
     const applyPatch = readQaScenarioById("runtime-tool-apply-patch");
+    const sessionsSpawn = readQaScenarioById("runtime-tool-sessions-spawn");
     const messageTool = readQaScenarioById("runtime-tool-message-tool");
     const tavilySearch = readQaScenarioById("runtime-tool-tavily-search");
     const webFetch = readQaScenarioById("runtime-tool-web-fetch");
@@ -349,6 +350,23 @@ describe("qa scenario catalog", () => {
     const imageGenerate = readQaScenarioById("runtime-tool-image-generate");
 
     expect(applyPatch.runtimePairLane).toBe("core");
+    for (const scenarioId of [
+      "runtime-tool-apply-patch",
+      "runtime-tool-bash",
+      "runtime-tool-edit",
+      "runtime-tool-exec",
+      "runtime-tool-fs-list",
+      "runtime-tool-fs-read",
+      "runtime-tool-fs-write",
+      "runtime-tool-grep",
+    ]) {
+      const nativeWorkspaceScenario = readQaScenarioById(scenarioId);
+      expect(nativeWorkspaceScenario.coverage?.primary, scenarioId).toEqual([]);
+      expect(nativeWorkspaceScenario.coverage?.secondary?.length, scenarioId).toBeGreaterThan(0);
+    }
+    expect(sessionsSpawn.coverage?.primary).toEqual([
+      "agent-runtime.subagent-turns-sessions-spawn",
+    ]);
     expect(messageTool.runtimePairLane).toBe("extended");
     expect(tavilySearch.runtimePairLane).toBe("extended");
     expect(imageGenerate.runtimePairLane).toBe("extended");
@@ -357,8 +375,25 @@ describe("qa scenario catalog", () => {
       toolCoverage: {
         bucket: "codex-native-workspace",
         expectedLayer: "codex-native-workspace",
+        required: true,
       },
     });
+    expect(readQaScenarioExecutionConfig(applyPatch.id)).not.toHaveProperty("knownHarnessGap");
+    expect(readQaScenarioExecutionConfig(applyPatch.id)?.happyPrompt).toContain(
+      "runtime-tool-fixture-patch.txt",
+    );
+    expect(readQaScenarioExecutionConfig(applyPatch.id)?.failurePrompt).toContain(
+      "../runtime-tool-fixture-denied.txt",
+    );
+    expect(readQaScenarioExecutionConfig(applyPatch.id)?.failurePrompt).toContain(
+      "runtime-tool-fixture-denied-original",
+    );
+    expect(readQaScenarioExecutionConfig(applyPatch.id)?.failurePrompt).toContain(
+      "runtime patch outside the workspace",
+    );
+    expect(readQaScenarioExecutionConfig(applyPatch.id)?.failurePrompt).not.toContain(
+      "missing-context",
+    );
     expect(readQaScenarioExecutionConfig(messageTool.id)).toMatchObject({
       toolName: "message",
       expectedAvailable: false,
@@ -377,6 +412,16 @@ describe("qa scenario catalog", () => {
         required: true,
       },
     });
+    expect(readQaScenarioExecutionConfig(sessionsSpawn.id)).toMatchObject({
+      toolName: "sessions_spawn",
+      toolCoverage: {
+        bucket: "openclaw-dynamic-integration",
+        expectedLayer: "openclaw-dynamic",
+        capabilityLayer: "openclaw-dynamic-direct",
+        required: true,
+      },
+    });
+    expect(readQaScenarioExecutionConfig(sessionsSpawn.id)).not.toHaveProperty("knownHarnessGap");
     const webFetchConfig = readQaScenarioExecutionConfig(webFetch.id);
     expect(webFetchConfig?.happyPrompt).toContain("Call web_fetch exactly once");
     expect(webFetchConfig?.happyPrompt).toContain("call it directly without tool_search");
@@ -679,6 +724,15 @@ describe("qa scenario catalog", () => {
     expect(scenario?.execution.flow?.steps.map((step) => step.name)).toContain(
       "keeps codex coordination chatter out of the visible reply",
     );
+  });
+
+  it("binds model switch follow-up assertions to the configured alternate model", () => {
+    const scenario = requireFlowScenario(readQaScenarioById("model-switch-follow-up"));
+    const flow = JSON.stringify(scenario.execution.flow);
+
+    expect(flow).toContain("alternate?.model");
+    expect(flow).toContain("config.followupPrompt");
+    expect(flow).not.toContain("gpt-5.6-luna-alt");
   });
 
   it("keeps provider-sensitive QA flow scenarios on their supported lanes", () => {

@@ -18,6 +18,7 @@ import type {
   ClickClackDiscussionBinding,
   ClickClackDiscussionBindingStore,
 } from "./binding-store.js";
+import { controlSessionUrl } from "./control-session-url.js";
 import { normalizedServerBaseUrl } from "./eligibility.js";
 import {
   discussionCredentialFingerprint,
@@ -25,6 +26,7 @@ import {
   fallbackDiscussionLabel,
   resolveDiscussionLabel,
   slugifyDiscussionLabel,
+  truncateDiscussionDisplayTitle,
 } from "./naming.js";
 import { markClickClackDiscussionChannelIdentityRevoked } from "./revoked-channel-store.js";
 
@@ -54,25 +56,12 @@ function isDefinitiveNoCreateHttpError(error: unknown): boolean {
   return ![408, 409, 425, 429].includes(error.status);
 }
 
-export function controlSessionUrl(
-  baseUrl: string | undefined,
-  sessionKey: string,
-): string | undefined {
-  if (!baseUrl) {
-    return undefined;
-  }
-  const url = new URL(baseUrl);
-  url.pathname = `${url.pathname.replace(/\/+$/u, "")}/chat`;
-  url.hash = "";
-  url.searchParams.set("session", sessionKey);
-  return url.toString();
-}
-
 export async function resolveAvailableChannelName(params: {
   client: ClickClackClient;
   workspaceId: string;
   label: string;
   sessionKey: string;
+  agentId?: string;
   ownChannelId?: string;
   channels?: Awaited<ReturnType<ClickClackClient["channels"]>>;
 }): Promise<string> {
@@ -84,7 +73,15 @@ export async function resolveAvailableChannelName(params: {
   if (!occupied.has(desired)) {
     return desired;
   }
-  const fallback = fallbackDiscussionLabel(params.sessionKey);
+  // Suffixed candidates may exceed the 80-char slug cap; that cap is client-side
+  // cosmetics only — the ClickClack server stores names without a length limit.
+  for (let suffix = 2; suffix <= 20; suffix += 1) {
+    const candidate = `${desired}-${suffix}`;
+    if (!occupied.has(candidate)) {
+      return candidate;
+    }
+  }
+  const fallback = fallbackDiscussionLabel(params.sessionKey, params.agentId);
   if (!occupied.has(fallback)) {
     return fallback;
   }
@@ -105,11 +102,17 @@ export function assertChannelPatch(
     "external_managed",
     "external_ref",
     "external_url",
+    "display_title",
     "name",
     "sidebar_section",
   ] as const) {
     const expected = patch[key];
     if (expected === undefined) {
+      continue;
+    }
+    // Older ClickClack servers omit display_title during the rollout skew window.
+    // Verify it only when the response advertises the new field.
+    if (key === "display_title" && !(key in channel)) {
       continue;
     }
     const actual =
@@ -124,13 +127,24 @@ export function assertChannelPatch(
 
 function assertManagedChannelContract(
   channel: Awaited<ReturnType<ClickClackClient["createChannel"]>>,
-  expected: { sessionKey: string; externalRef: string; section: string; externalUrl?: string },
+  expected: {
+    sessionKey: string;
+    externalRef: string;
+    section: string;
+    externalUrl?: string;
+    displayTitle: string;
+  },
 ): void {
+  // Older ClickClack servers omit display_title during the rollout skew window.
+  // A present field must still match so partial or broken deployments fail closed.
+  const displayTitleMatches =
+    !("display_title" in channel) || channel.display_title === expected.displayTitle;
   if (
     channel.external_managed !== true ||
     (channel.external_ref ?? "") !== (expected.externalRef ?? "") ||
     (channel.sidebar_section ?? "") !== (expected.section ?? "") ||
-    (channel.external_url ?? "") !== (expected.externalUrl ?? "")
+    (channel.external_url ?? "") !== (expected.externalUrl ?? "") ||
+    !displayTitleMatches
   ) {
     throw new Error(
       `ClickClack server does not support the managed discussion channel contract for ${expected.sessionKey}`,
@@ -200,9 +214,19 @@ export async function openClickClackDiscussionBinding(
     }
   }
 
-  const label = resolveDiscussionLabel(entry.label, sessionKey);
+  const config = runtime.config.current() as CoreConfig;
+  const agentId = resolveAgentIdFromSessionKey(sessionKey, resolveDefaultAgentId(config));
+  const fallback = fallbackDiscussionLabel(sessionKey, agentId);
+  const label = resolveDiscussionLabel(entry, sessionKey, agentId);
+  const displayTitle = label === fallback ? "" : truncateDiscussionDisplayTitle(label);
   const section = entry.category?.trim() || account.discussions.section;
-  const externalUrl = controlSessionUrl(account.discussions.controlUrlBase, sessionKey);
+  const externalUrl = controlSessionUrl(
+    account.discussions.controlUrlBase,
+    sessionKey,
+    account.agentId ?? "main",
+    config.session?.mainKey,
+    label,
+  );
   const archived = entry.archivedAt !== undefined;
   return await params.withChannelMutationLock(async () => {
     if (!store.hasCapacity(sessionKey)) {
@@ -232,6 +256,7 @@ export async function openClickClackDiscussionBinding(
           external_ref: string;
           external_url: string;
           sidebar_section: string;
+          display_title: string;
         }
       | undefined;
     let resolved: Awaited<ReturnType<ClickClackClient["createChannel"]>> | undefined;
@@ -245,6 +270,7 @@ export async function openClickClackDiscussionBinding(
         workspaceId: workspace.id,
         label,
         sessionKey,
+        agentId,
         channels,
         ownChannelId: adopted?.id,
       });
@@ -254,6 +280,7 @@ export async function openClickClackDiscussionBinding(
         external_ref: externalRef,
         external_url: externalUrl ?? "",
         sidebar_section: section,
+        display_title: displayTitle,
       };
       recordPendingDiscussionOpen({
         runtime,
@@ -339,7 +366,13 @@ export async function openClickClackDiscussionBinding(
       throw new Error("ClickClack discussion channel name retries were exhausted");
     }
     try {
-      assertManagedChannelContract(resolved, { sessionKey, externalRef, section, externalUrl });
+      assertManagedChannelContract(resolved, {
+        sessionKey,
+        externalRef,
+        section,
+        externalUrl,
+        displayTitle,
+      });
       if (adopted) {
         assertChannelPatch(resolved, { ...managedFields, archived });
       }
@@ -382,10 +415,7 @@ export async function openClickClackDiscussionBinding(
     }
     const nextBinding: ClickClackDiscussionBinding = {
       accountId: account.accountId,
-      agentId: resolveAgentIdFromSessionKey(
-        sessionKey,
-        resolveDefaultAgentId(runtime.config.current() as CoreConfig),
-      ),
+      agentId,
       sessionId: entry.sessionId,
       serverBaseUrl,
       credentialFingerprint,
@@ -399,6 +429,7 @@ export async function openClickClackDiscussionBinding(
       section,
       archived,
       label,
+      displayTitle: "display_title" in channel ? channel.display_title : undefined,
     };
     const currentEntry = runtime.agent.session.getSessionEntry({
       sessionKey,

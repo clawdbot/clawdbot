@@ -8,6 +8,8 @@ import { defaultRuntime } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
+import { setCommandJsonMode } from "./program/json-mode.js";
+import { isSystemMachineOutput } from "./system-output-mode.js";
 
 type SystemEventOpts = GatewayRpcOpts & {
   text?: string;
@@ -56,6 +58,7 @@ export function registerSystemCli(program: Command) {
       () =>
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/system", "docs.openclaw.ai/cli/system")}\n`,
     );
+  setCommandJsonMode(system, "output", ({ argv }) => isSystemMachineOutput(argv));
 
   addGatewayClientOptions(
     system

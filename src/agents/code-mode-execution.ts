@@ -56,7 +56,9 @@ export async function runExec(params: {
     params.ctx.runtimeConfig ?? params.ctx.config,
     params.ctx.agentId,
   );
-  if (!config.enabled) {
+  // The exec/wait tools only exist when the run gate engaged code mode, so
+  // "auto" counts as enabled here; only a hard `false` rejects execution.
+  if (config.enabled === false) {
     throw new ToolInputError("code mode is disabled.");
   }
   const runtime = new ToolSearchRuntime(params.ctx, toToolSearchConfig(config));
@@ -388,15 +390,13 @@ export async function runWait(params: {
   if (!state) {
     throw new ToolInputError("code mode run is unavailable or expired.");
   }
-  if (state.ctx.runId && params.ctx.runId && state.ctx.runId !== params.ctx.runId) {
+  if (state.ctx.runId && state.ctx.runId !== params.ctx.runId) {
     throw new ToolInputError("code mode run belongs to a different agent run.");
   }
   if (
-    (state.ctx.sessionId && params.ctx.sessionId && state.ctx.sessionId !== params.ctx.sessionId) ||
-    (state.ctx.sessionKey &&
-      params.ctx.sessionKey &&
-      state.ctx.sessionKey !== params.ctx.sessionKey) ||
-    (state.ctx.agentId && params.ctx.agentId && state.ctx.agentId !== params.ctx.agentId)
+    (state.ctx.sessionId && state.ctx.sessionId !== params.ctx.sessionId) ||
+    (state.ctx.sessionKey && state.ctx.sessionKey !== params.ctx.sessionKey) ||
+    (state.ctx.agentId && state.ctx.agentId !== params.ctx.agentId)
   ) {
     throw new ToolInputError("code mode run belongs to a different session.");
   }

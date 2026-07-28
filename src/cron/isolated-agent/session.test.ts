@@ -41,7 +41,6 @@ vi.mock("../../agents/sessions/reset-boundary.js", () => ({
 
 import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
 import { evaluateSessionFreshness } from "../../config/sessions/reset-policy.js";
-import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { resolveCronSession } from "./session.js";
 
 const NOW_MS = 1_737_600_000_000;
@@ -217,13 +216,7 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.claudeCliSessionId).toBeUndefined();
       expect(result.sessionEntry.compactionCount).toBe(0);
       expect(result.sessionEntry.sendPolicy).toBe("allow");
-      expect(result.sessionEntry.sessionFile).toBe(
-        formatSqliteSessionFileMarker({
-          agentId: "main",
-          sessionId: "old-session-id",
-          storePath: "/tmp/test-store.json",
-        }),
-      );
+      expect(result.sessionEntry).not.toHaveProperty("sessionFile");
       expect(result.resetBoundaryPending).toMatchObject({ reason: "cron-stale" });
       expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
     });

@@ -160,21 +160,23 @@ export function buildCliRespawnPlan(
 
 export function runCliRespawnPlan(
   plan: CliRespawnPlan,
-  runtime: CliRespawnRuntime = {
+  runtime?: CliRespawnRuntime,
+  writeError: CliRespawnRuntime["writeError"] = (message, error) => console.error(message, error),
+): ChildProcess {
+  const resolvedRuntime: CliRespawnRuntime = runtime ?? {
     spawn,
     attachChildProcessBridge,
     exit: process.exit.bind(process) as (code?: number) => never,
-    writeError: (message, error) => console.error(message, error),
-  },
-): ChildProcess {
+    writeError,
+  };
   return runRespawnChildWithSignalBridge({
     command: plan.command,
     args: plan.argv,
     env: plan.env,
     detachForProcessTree: plan.detachForProcessTree,
-    runtime,
+    runtime: resolvedRuntime,
     onError: (error) => {
-      runtime.writeError(
+      resolvedRuntime.writeError(
         "[openclaw] Failed to respawn CLI:",
         error instanceof Error ? (error.stack ?? error.message) : error,
       );

@@ -5,6 +5,7 @@ import {
 // Gateway WebSocket broadcaster.
 // Applies event scope guards and slow-consumer handling before sending frames.
 import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
+import { queuePluginSessionsChanged } from "../plugins/gateway-events.js";
 import { isBrowserCopilotClient } from "../utils/message-channel.js";
 import {
   ADMIN_SCOPE,
@@ -201,6 +202,10 @@ export function createGatewayBroadcaster(params: {
     targetConnIds?: ReadonlySet<string>,
     explicitPluginScope?: GatewayPluginEventScope,
   ) => {
+    if (event === "sessions.changed") {
+      // Delivery is queued here so process-local handlers run after websocket fanout returns.
+      queuePluginSessionsChanged(payload);
+    }
     if (params.clients.size === 0) {
       return;
     }
@@ -324,9 +329,6 @@ export function createGatewayBroadcaster(params: {
     broadcastInternal(event, payload, opts);
 
   const broadcastToConnIds: GatewayBroadcastToConnIdsFn = (event, payload, connIds, opts) => {
-    if (connIds.size === 0) {
-      return;
-    }
     broadcastInternal(event, payload, opts, connIds);
   };
 

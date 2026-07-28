@@ -555,13 +555,15 @@ export {
   FsDirEntrySchema,
   FsListDirParamsSchema,
   FsListDirResultSchema,
-  MIN_CLIENT_PROTOCOL_VERSION,
-  MIN_NODE_PROTOCOL_VERSION,
-  MIN_PROBE_PROTOCOL_VERSION,
-  PROTOCOL_VERSION,
   ErrorCodes,
   buildMissingScopeErrorDetails,
   GatewayErrorDetailCodes,
   errorShape,
   missingScopeErrorShape,
-} from "./schema.js";
+} from "./schema-modules.js";
+export {
+  MIN_CLIENT_PROTOCOL_VERSION,
+  MIN_NODE_PROTOCOL_VERSION,
+  MIN_PROBE_PROTOCOL_VERSION,
+  PROTOCOL_VERSION,
+} from "./version.js";

@@ -31,6 +31,23 @@ const nonEmptyString = z
     "Value must not have leading or trailing whitespace.",
   );
 const optionalString = nonEmptyString.optional();
+
+export function clawManifestWorkspaceConflictsWithPath(
+  manifest: ClawManifest,
+  path: string,
+): boolean {
+  const targets = new Set<string>();
+  for (const name of CLAW_BOOTSTRAP_FILE_NAMES) {
+    if (manifest.workspace.bootstrapFiles[name]) {
+      targets.add(portableClawPathKey(name));
+    }
+  }
+  for (const file of manifest.workspace.files) {
+    targets.add(portableClawPathKey(file.path));
+  }
+  return conflictsWithClawPath(targets, portableClawPathKey(path));
+}
+
 const agentId = nonEmptyString.regex(
   /^[a-z][a-z0-9_-]{0,63}$/,
   "Agent id must start with a lowercase letter and contain only lowercase letters, digits, underscores, or hyphens.",

@@ -18,6 +18,11 @@ function expectSlackConfigIssue(config: unknown, path: string) {
 }
 
 describe("slack config schema", () => {
+  it("accepts capability arrays and rejects retired interactive reply objects", () => {
+    expectSlackConfigValid({ capabilities: ["presentation"] });
+    expectSlackConfigIssue({ capabilities: { interactiveReplies: true } }, "capabilities");
+  });
+
   it("accepts explicit Enterprise Grid org-install mode", () => {
     expectSlackConfigValid({ enterpriseOrgInstall: true });
     expectSlackConfigValid({ accounts: { org: { enterpriseOrgInstall: true } } });

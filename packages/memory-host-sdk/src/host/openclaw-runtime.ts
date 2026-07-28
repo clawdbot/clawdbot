@@ -36,11 +36,7 @@ export {
 } from "../../../../src/auto-reply/tokens.js";
 
 // CLI/runtime/config helpers.
-export { formatErrorMessage, withManager } from "../../../../src/cli/cli-utils.js";
-export { resolveCommandSecretRefsViaGateway } from "../../../../src/cli/command-secret-gateway.js";
-export { formatHelpExamples } from "../../../../src/cli/help-format.js";
 export { parseDurationMs } from "../../../../src/cli/parse-duration.js";
-export { withProgress, withProgressTotals } from "../../../../src/cli/progress.js";
 export { parseNonNegativeByteSize } from "../../../../src/config/byte-size.js";
 export {
   getRuntimeConfig,
@@ -102,7 +98,6 @@ export {
 } from "../../../../src/config/types.secrets.js";
 export type { SecretInput } from "../../../../src/config/types.secrets.js";
 export type { MemorySearchConfig } from "../../../../src/config/types.tools.js";
-export { isVerbose, setVerbose } from "../../../../src/globals.js";
 
 // IO, network, and logging helpers.
 export { isExecCompletionEvent } from "../../../../src/infra/heartbeat-events-filter.js";
@@ -160,13 +155,10 @@ export type {
 export type { OpenClawPluginApi } from "../../../../src/plugins/types.js";
 
 // Shared session/text utilities.
-export { defaultRuntime } from "../../../../src/runtime.js";
 export { parseAgentSessionKey } from "../../../../src/routing/session-key.js";
 export { hasInterSessionUserProvenance } from "../../../../src/sessions/input-provenance.js";
 export { isCronRunSessionKey } from "../../../../src/sessions/session-key-utils.js";
 export { onSessionTranscriptUpdate } from "../../../../src/sessions/transcript-events.js";
-export { formatDocsLink } from "../../../terminal-core/src/links.js";
-export { colorize, isRich, theme } from "../../../terminal-core/src/theme.js";
 export { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../../../../src/utils/cjk-chars.js";
 export { runTasksWithConcurrency } from "../../../../src/utils/run-with-concurrency.js";
 export { splitShellArgs } from "../../../../src/utils/shell-argv.js";

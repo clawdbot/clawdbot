@@ -45,6 +45,13 @@ openclaw-session-owner-chip {
   font-size: 10px;
 }
 
+.session-owner-chip .viewer-avatar {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  font-size: inherit;
+}
+
 /* Leading slot shared by every sidebar row: the row's own artwork plus a run
    ring and corner badge, so run state always reads at the row's left edge. */
 .session-glyph {
@@ -644,6 +651,9 @@ openclaw-session-owner-chip {
   font-size: 13px;
   font-weight: 500;
   letter-spacing: -0.01em;
+  /* Labels never break mid-text; tight clusters wrap whole buttons instead
+     (see .settings-row--actions). */
+  white-space: nowrap;
   transition:
     border-color var(--duration-fast) var(--ease-out),
     background var(--duration-fast) var(--ease-out),
@@ -1429,6 +1439,17 @@ openclaw-session-owner-chip {
   border-color: rgba(34, 197, 94, 0.25);
   background: linear-gradient(135deg, rgba(34, 197, 94, 0.08) 0%, rgba(34, 197, 94, 0.04) 100%);
   color: var(--ok);
+}
+
+/* Pending routes share the native mascot without exposing transient panel text. */
+.lazy-view-state--loading {
+  display: grid;
+  flex: 1 1 auto;
+  place-items: center;
+  min-width: 0;
+  min-height: min(50dvh, 360px);
+  width: 100%;
+  margin: auto;
 }
 
 /* Lazy route load failure — a centered panel state, not a stretched callout. */
@@ -3712,6 +3733,21 @@ td.data-table-key-col {
   opacity: 0.5;
 }
 
+.agent-tab-add {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  background: transparent;
+}
+
+.agent-tab-add:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
 .agent-tab-badge {
   margin-left: 4px;
   font-size: 12px; /* was 9px */
@@ -4040,6 +4076,7 @@ td.data-table-key-col {
 
 .md-preview-dialog__body {
   flex: 1;
+  min-height: 0;
   overflow: auto;
   overscroll-behavior: contain;
   padding: clamp(18px, 3vw, 28px);

@@ -50,10 +50,11 @@ describe("session-store lifecycle runtime", () => {
     expect(result).toMatchObject({ label: "Dale", updatedAt: 0 });
     expect(result?.sessionId).not.toBe("old-session");
     expect(result?.sessionFile).toContain(`${result?.sessionId}.jsonl`);
-    expect(getSessionEntry({ sessionKey, storePath })).toMatchObject({
-      sessionFile: result?.sessionFile,
+    const persisted = getSessionEntry({ sessionKey, storePath });
+    expect(persisted).toMatchObject({
       sessionId: result?.sessionId,
     });
+    expect(persisted?.sessionFile).not.toBe(oldTranscriptPath);
     expect(result?.sessionFile).not.toBe(oldTranscriptPath);
   });
 

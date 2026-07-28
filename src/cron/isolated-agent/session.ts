@@ -15,10 +15,6 @@ import {
   type SessionFreshness,
 } from "../../config/sessions/reset-policy.js";
 import { listSessionEntries, loadSessionEntry } from "../../config/sessions/session-accessor.js";
-import {
-  formatSqliteSessionFileMarker,
-  sqliteSessionFileMarkerMatchesTarget,
-} from "../../config/sessions/sqlite-marker.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
@@ -82,6 +78,9 @@ function preserveNonAutoModelOverride(target: SessionEntry, entry: SessionEntry)
     }
     if (entry.modelOverrideSource !== undefined) {
       target.modelOverrideSource = entry.modelOverrideSource;
+    }
+    if (entry.modelOverrideRouteResolution !== undefined) {
+      target.modelOverrideRouteResolution = entry.modelOverrideRouteResolution;
     }
     // Runtime overrides qualify an explicit model selection; carrying one alone
     // would pin a fresh cron session to a stale engine after its model resets.
@@ -188,6 +187,7 @@ export function resolveCronSession(params: {
           ...resolveSessionLifecycleTimestamps({
             entry,
             agentId: params.agentId,
+            sessionKey: params.sessionKey,
             storePath,
           }),
           now: params.nowMs,
@@ -204,11 +204,7 @@ export function resolveCronSession(params: {
       systemSent = false;
       if (!sourceSessionDiffers) {
         staleBoundaryReset = true;
-        const markerTarget = { agentId: params.agentId, sessionId, storePath };
-        const sessionFile = sqliteSessionFileMarkerMatchesTarget(entry.sessionFile, markerTarget)
-          ? entry.sessionFile!
-          : formatSqliteSessionFileMarker(markerTarget);
-        resetBoundaryPending = { reason: "cron-stale", sessionFile };
+        resetBoundaryPending = { reason: "cron-stale", sessionFile: params.sessionKey };
       }
     }
   } else {
@@ -244,6 +240,7 @@ export function resolveCronSession(params: {
         resolveSessionLifecycleTimestamps({
           entry,
           agentId: params.agentId,
+          sessionKey: params.sessionKey,
           storePath,
         }).sessionStartedAt),
     lastInteractionAt: isNewSession ? params.nowMs : baseEntry?.lastInteractionAt,
@@ -256,7 +253,6 @@ export function resolveCronSession(params: {
     clearAllCliSessions(sessionEntry);
     sessionEntry.agentHarnessId = undefined;
     sessionEntry.compactionCount = 0;
-    sessionEntry.sessionFile = resetBoundaryPending.sessionFile;
   }
   return {
     storePath,

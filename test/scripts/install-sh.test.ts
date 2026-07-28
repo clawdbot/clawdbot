@@ -533,7 +533,7 @@ NODE
       "error:Alpine apk repositories did not provide Node.js with WAL-reset-safe SQLite",
     );
     expect(result.stdout).toContain(
-      "Use an official node:24-alpine container or a glibc-based host",
+      "Use an official node:26-alpine container or a glibc-based host",
     );
   });
 
@@ -2088,15 +2088,13 @@ describe("install.sh macOS Homebrew Node behavior", () => {
 
   it("stops when Homebrew node installation fails", () => {
     expect(script).toContain(
-      'if ! run_quiet_step "Installing node@${NODE_DEFAULT_MAJOR}" brew install "node@${NODE_DEFAULT_MAJOR}"; then',
+      'if ! run_quiet_step "Installing ${NODE_BREW_FORMULA}" brew install "${NODE_BREW_FORMULA}"; then',
     );
 
     const failedInstallIndex = script.indexOf(
-      'if ! run_quiet_step "Installing node@${NODE_DEFAULT_MAJOR}" brew install "node@${NODE_DEFAULT_MAJOR}"; then',
+      'if ! run_quiet_step "Installing ${NODE_BREW_FORMULA}" brew install "${NODE_BREW_FORMULA}"; then',
     );
-    const brewLinkIndex = script.indexOf(
-      'brew link "node@${NODE_DEFAULT_MAJOR}" --overwrite --force',
-    );
+    const brewLinkIndex = script.indexOf('brew link "${NODE_BREW_FORMULA}" --overwrite --force');
     expect(failedInstallIndex).toBeGreaterThanOrEqual(0);
     expect(brewLinkIndex).toBeGreaterThan(failedInstallIndex);
   });
@@ -2118,7 +2116,7 @@ describe("install.sh macOS Homebrew Node behavior", () => {
 
     expect(result.status).toBe(1);
     expect(result.stdout).toContain(
-      "Re-run with --verbose or run 'brew install node@24' directly, then rerun the installer.",
+      "Re-run with --verbose or run 'brew install node' directly, then rerun the installer.",
     );
     expect(result.stdout).not.toContain("brew:link");
     expect(result.stdout).not.toContain("ensure-called");
@@ -2131,9 +2129,7 @@ describe("install.sh macOS Homebrew Node behavior", () => {
     const pathAdviceIndex = script.indexOf("Add this to your shell profile and restart shell:");
 
     expect(missingNodeGuardIndex).toBeGreaterThanOrEqual(0);
-    expect(script).toContain(
-      'ui_error "Homebrew node@${NODE_DEFAULT_MAJOR} is not installed on disk"',
-    );
+    expect(script).toContain('ui_error "Homebrew ${NODE_BREW_FORMULA} is not installed on disk"');
     expect(script).toContain('echo "  export PATH=\\"${brew_node_prefix}/bin:\\$PATH\\""');
     expect(pathAdviceIndex).toBeGreaterThan(missingNodeGuardIndex);
   });
@@ -2143,7 +2139,7 @@ describe("install.sh macOS Homebrew Node behavior", () => {
       set -euo pipefail
       source "${SCRIPT_PATH}"
       OS=macos
-      missing_prefix="$(mktemp -d)/node@24"
+      missing_prefix="$(mktemp -d)/node"
       brew() {
         if [[ "$1" == "--prefix" ]]; then
           echo "$missing_prefix"
@@ -2160,9 +2156,9 @@ describe("install.sh macOS Homebrew Node behavior", () => {
     `);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Homebrew node@24 is not installed on disk");
+    expect(result.stdout).toContain("Homebrew node is not installed on disk");
     expect(result.stdout).toContain("ensure returned failure");
-    expect(result.stdout).not.toContain("Node.js v24 was installed");
+    expect(result.stdout).not.toContain("Node.js v26 was installed");
     expect(result.stdout).not.toContain("Add this to your shell profile");
   });
 

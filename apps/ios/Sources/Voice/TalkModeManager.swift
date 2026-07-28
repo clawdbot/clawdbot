@@ -1121,75 +1121,30 @@ final class TalkModeManager: NSObject {
             return OpenClawTalkPTTStopPayload(captureId: captureId, transcript: nil, status: "idle")
         }
         guard self.isPushToTalkActive else {
-            let shouldResume = self.isEnabled
-            self.isListening = false
-            self.isUserSpeechDetected = false
-            self.captureMode = .idle
-            self.stopRecognition()
-            self.pttTimeoutTask?.cancel()
-            self.pttTimeoutTask = nil
-            self.pttAutoStopEnabled = false
-            self.setStatus(String(localized: "Ready"), phase: .idle)
-            self.finishActivePushToTalk(captureId)
-            let payload = OpenClawTalkPTTStopPayload(
-                captureId: captureId,
-                transcript: nil,
-                status: "idle")
-            self.finishPTTOnce(payload)
-            self.scheduleContinuousResume(shouldResume)
-            return payload
+            self.stopPushToTalkRecognition()
+            return self.finishCapturedPushToTalk(captureId, transcript: nil, status: "idle")
         }
 
-        self.isPushToTalkActive = false
-        self.isListening = false
-        self.isUserSpeechDetected = false
-        self.captureMode = .idle
-        self.stopRecognition()
-        self.pttTimeoutTask?.cancel()
-        self.pttTimeoutTask = nil
-        self.pttAutoStopEnabled = false
+        self.stopPushToTalkRecognition()
 
         let transcript = self.lastTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
         self.lastTranscript = ""
         self.lastHeard = nil
 
         guard !transcript.isEmpty else {
-            self.setStatus(String(localized: "Ready"), phase: .idle)
-            let shouldResume = self.isEnabled
-            self.finishActivePushToTalk(captureId)
-            let payload = OpenClawTalkPTTStopPayload(
-                captureId: captureId,
-                transcript: nil,
-                status: "empty")
-            self.finishPTTOnce(payload)
-            self.scheduleContinuousResume(shouldResume)
-            return payload
+            return self.finishCapturedPushToTalk(captureId, transcript: nil, status: "empty")
         }
 
         if activePushToTalk.transcriptionOnly {
-            self.setStatus(String(localized: "Ready"), phase: .idle)
-            let shouldResume = self.isEnabled
-            self.finishActivePushToTalk(captureId)
-            let payload = OpenClawTalkPTTStopPayload(
-                captureId: captureId,
-                transcript: transcript,
-                status: "transcribed")
-            self.finishPTTOnce(payload)
-            self.scheduleContinuousResume(shouldResume)
-            return payload
+            return self.finishCapturedPushToTalk(captureId, transcript: transcript, status: "transcribed")
         }
 
         guard self.gatewayConnected else {
-            self.setStatus(String(localized: "Gateway not connected"), phase: .idle)
-            let shouldResume = self.isEnabled
-            self.finishActivePushToTalk(captureId)
-            let payload = OpenClawTalkPTTStopPayload(
-                captureId: captureId,
+            return self.finishCapturedPushToTalk(
+                captureId,
                 transcript: transcript,
-                status: "offline")
-            self.finishPTTOnce(payload)
-            self.scheduleContinuousResume(shouldResume)
-            return payload
+                status: "offline",
+                statusText: String(localized: "Gateway not connected"))
         }
 
         let payload = OpenClawTalkPTTStopPayload(
@@ -1292,27 +1247,10 @@ final class TalkModeManager: NSObject {
             return OpenClawTalkPTTStopPayload(captureId: captureId, transcript: nil, status: "idle")
         }
 
-        let shouldResume = self.isEnabled
-        self.isPushToTalkActive = false
-        self.isListening = false
-        self.captureMode = .idle
-        self.stopRecognition()
+        self.stopPushToTalkRecognition()
         self.lastTranscript = ""
         self.lastHeard = nil
-        self.pttAutoStopEnabled = false
-        self.pttTimeoutTask?.cancel()
-        self.pttTimeoutTask = nil
-        self.finishActivePushToTalk(captureId)
-        self.setStatus(String(localized: "Ready"), phase: .idle)
-
-        let payload = OpenClawTalkPTTStopPayload(
-            captureId: captureId,
-            transcript: nil,
-            status: "cancelled")
-        self.finishPTTOnce(payload)
-
-        self.scheduleContinuousResume(shouldResume)
-        return payload
+        return self.finishCapturedPushToTalk(captureId, transcript: nil, status: "cancelled")
     }
 
     private func ensurePushToTalkStartCurrent(
@@ -1398,6 +1336,35 @@ final class TalkModeManager: NSObject {
         guard self.clearActivePushToTalk(captureId) else { return }
         deactivateStandaloneAudioSessionIfIdle()
         self.pttAudioOwnershipEndHandler?(captureId)
+    }
+
+    private func stopPushToTalkRecognition() {
+        self.isPushToTalkActive = false
+        self.isListening = false
+        self.isUserSpeechDetected = false
+        self.captureMode = .idle
+        self.stopRecognition()
+        self.pttTimeoutTask?.cancel()
+        self.pttTimeoutTask = nil
+        self.pttAutoStopEnabled = false
+    }
+
+    private func finishCapturedPushToTalk(
+        _ captureId: String,
+        transcript: String?,
+        status: String,
+        statusText: String = String(localized: "Ready")) -> OpenClawTalkPTTStopPayload
+    {
+        self.setStatus(statusText, phase: .idle)
+        let shouldResume = self.isEnabled
+        self.finishActivePushToTalk(captureId)
+        let payload = OpenClawTalkPTTStopPayload(
+            captureId: captureId,
+            transcript: transcript,
+            status: status)
+        self.finishPTTOnce(payload)
+        self.scheduleContinuousResume(shouldResume)
+        return payload
     }
 
     private func transferActivePushToTalkToFinalizer(_ captureId: String) {
@@ -4610,34 +4577,31 @@ extension TalkModeManager {
     }
 
     static func configureAudioSession(preferredInputDeviceID: String? = nil) throws {
-        let session = AVAudioSession.sharedInstance()
-        let forceSpeaker = TalkDefaults.speakerphoneEnabled()
-        let options = TalkAudioRoute.categoryOptions(speakerphoneEnabled: forceSpeaker)
         // Prefer `.spokenAudio` for STT; it tends to preserve speech energy better than `.voiceChat`.
-        try session.setCategory(.playAndRecord, mode: .spokenAudio, options: options)
-        try? session.setPreferredSampleRate(48000)
-        try? session.setPreferredIOBufferDuration(0.02)
-        try session.setActive(true, options: [])
-        if TalkAudioRoute.shouldForceSpeaker(
-            preferenceEnabled: forceSpeaker,
-            outputPortTypes: session.currentRoute.outputs.map(\.portType))
-        {
-            try? session.overrideOutputAudioPort(.speaker)
-        } else {
-            try? session.overrideOutputAudioPort(.none)
-        }
-        // A speaker override also forces the built-in microphone; apply an explicit input last.
-        self.applyPreferredInput(preferredInputDeviceID, to: session)
-        GatewayDiagnostics.log("talk audio: session speakerphone=\(forceSpeaker) \(Self.describeAudioSession())")
+        try self.configureAudioSession(
+            mode: .spokenAudio,
+            preferredInputDeviceID: preferredInputDeviceID,
+            diagnosticsPrefix: "talk audio")
     }
 
     static func configureRealtimeAudioSession(preferredInputDeviceID: String? = nil) throws {
+        // Realtime Talk is full duplex. `.voiceChat` enables iOS voice processing so speaker
+        // output is less likely to be captured as fresh microphone input.
+        try self.configureAudioSession(
+            mode: .voiceChat,
+            preferredInputDeviceID: preferredInputDeviceID,
+            diagnosticsPrefix: "talk realtime audio")
+    }
+
+    private static func configureAudioSession(
+        mode: AVAudioSession.Mode,
+        preferredInputDeviceID: String?,
+        diagnosticsPrefix: String) throws
+    {
         let session = AVAudioSession.sharedInstance()
         let forceSpeaker = TalkDefaults.speakerphoneEnabled()
         let options = TalkAudioRoute.categoryOptions(speakerphoneEnabled: forceSpeaker)
-        // Realtime Talk is full duplex. `.voiceChat` enables iOS voice processing so speaker
-        // output is less likely to be captured as fresh microphone input.
-        try session.setCategory(.playAndRecord, mode: .voiceChat, options: options)
+        try session.setCategory(.playAndRecord, mode: mode, options: options)
         try? session.setPreferredSampleRate(48000)
         try? session.setPreferredIOBufferDuration(0.02)
         try session.setActive(true, options: [])
@@ -4652,7 +4616,7 @@ extension TalkModeManager {
         // A speaker override also forces the built-in microphone; apply an explicit input last.
         self.applyPreferredInput(preferredInputDeviceID, to: session)
         GatewayDiagnostics.log(
-            "talk realtime audio: session speakerphone=\(forceSpeaker) \(Self.describeAudioSession())")
+            "\(diagnosticsPrefix): session speakerphone=\(forceSpeaker) \(Self.describeAudioSession())")
     }
 
     private static func applyPreferredInput(_ deviceID: String?, to session: AVAudioSession) {

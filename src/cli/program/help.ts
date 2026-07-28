@@ -3,6 +3,7 @@ import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveCommitHash } from "../../infra/git-commit.js";
+import { formatConsoleDiagnosticBlock } from "../../logging/json-console-line.js";
 import { escapeRegExp } from "../../utils.js";
 import { isRootVersionInvocation } from "../argv.js";
 import { formatCliBannerLine, hasEmittedCliBanner } from "../banner.js";
@@ -114,7 +115,8 @@ export function configureProgramHelp(
       process.stdout.write(formatProgramHelpOutput(str));
     },
     writeErr: (str) => {
-      process.stderr.write(formatProgramHelpOutput(str));
+      const message = formatProgramHelpOutput(str);
+      process.stderr.write(formatConsoleDiagnosticBlock({ level: "error", message }));
     },
     outputError: (str, write) => write(formatCliParseErrorOutput(str, { argv: process.argv })),
   });

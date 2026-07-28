@@ -190,10 +190,12 @@ export function transcriptPositionTimestamp(
 export function findNearestAssistantMessageIndex(
   items: ChatItem[],
   toolTimestamp: number | null,
+  minimumIndex = 0,
+  maximumIndex = items.length,
 ): number | null {
-  let currentTurnStart = 0;
-  let currentTurnEnd = items.length;
-  for (let index = 0; index < items.length; index += 1) {
+  let currentTurnStart = minimumIndex;
+  let currentTurnEnd = maximumIndex;
+  for (let index = minimumIndex; index < maximumIndex; index += 1) {
     const item = items[index];
     if (item?.kind !== "message") {
       continue;
@@ -261,11 +263,16 @@ export function findNearestAssistantMessageIndex(
   return assistantEntries[assistantEntries.length - 1]?.index ?? null;
 }
 
-export function findCanvasInsertionIndex(items: ChatItem[], toolTimestamp: number | null): number {
+export function findCanvasInsertionIndex(
+  items: ChatItem[],
+  toolTimestamp: number | null,
+  minimumIndex = 0,
+  maximumIndex = items.length,
+): number {
   if (toolTimestamp == null) {
-    return items.length;
+    return maximumIndex;
   }
-  for (let index = 0; index < items.length; index += 1) {
+  for (let index = minimumIndex; index < maximumIndex; index += 1) {
     const item = items[index];
     if (item?.kind !== "message") {
       continue;
@@ -280,7 +287,7 @@ export function findCanvasInsertionIndex(items: ChatItem[], toolTimestamp: numbe
       return index;
     }
   }
-  return items.length;
+  return maximumIndex;
 }
 
 export function resolveMessageToolUseId(message: Record<string, unknown>): string | undefined {
@@ -307,7 +314,7 @@ export function isPendingSendMessage(message: unknown): boolean {
 /** Every projection of one composer submit (pending queue row, locally
  * materialized turn, authoritative history) shares this identity so the
  * rendered bubble keeps one Lit key and never remounts mid-handoff. */
-function userTurnSendIdentity(message: unknown): string | null {
+export function userTurnSendIdentity(message: unknown): string | null {
   const record = asRecord(message);
   if (typeof record?.role !== "string" || record.role.toLowerCase() !== "user") {
     return null;
@@ -586,7 +593,7 @@ export function rawMessageTimestamp(message: unknown): number | null {
   return typeof timestamp === "number" && Number.isFinite(timestamp) ? timestamp : null;
 }
 
-export function chatItemTimestamp(item: ChatItem): number | null {
+function chatItemTimestamp(item: ChatItem): number | null {
   switch (item.kind) {
     case "message":
       return rawMessageTimestamp(item.message);
@@ -617,44 +624,72 @@ export function timestampAfterVisibleItems(items: ChatItem[], desiredTimestamp: 
     : desiredTimestamp;
 }
 
-export function sortChatItemsByVisibleTime(
+// Insert live tool/stream items into an already-ordered list of stable chat rows
+// (history, queued sends, canvas previews, etc.) by visible timestamp. Stable
+// rows keep their relative order; only tool cards and stream segments are
+// repositioned. This avoids reordering optimistic user bubbles or final
+// assistant replies when their timestamps come from different clocks (#112943).
+export type TurnInsertionBounds = { afterKey?: string; beforeKey?: string };
+
+export function insertionIndexesForBounds(
   items: ChatItem[],
+  bounds: TurnInsertionBounds | undefined,
+): { minimum: number; maximum: number } {
+  const afterIndex = bounds?.afterKey
+    ? items.findIndex((item) => item.key === bounds.afterKey)
+    : -1;
+  const beforeIndex = bounds?.beforeKey
+    ? items.findIndex((item) => item.key === bounds.beforeKey)
+    : -1;
+  return {
+    minimum: afterIndex + 1,
+    maximum: beforeIndex >= 0 ? beforeIndex : items.length,
+  };
+}
+
+export function insertChatItemsByTimestamp(
+  items: ChatItem[],
+  inserts: ChatItem[],
+  insertionBoundsByKey: ReadonlyMap<string, TurnInsertionBounds>,
   toolStreamPredecessors: ReadonlyMap<string, string>,
-): ChatItem[] {
+): void {
   const timestampsByKey = new Map<string, number>();
-  for (const item of items) {
+  for (const item of inserts) {
     const timestamp = chatItemTimestamp(item);
     if (timestamp != null) {
       timestampsByKey.set(item.key, timestamp);
     }
   }
-  return items
+  // Sort inserts among themselves by timestamp, preserving the original index
+  // order for ties and honoring predecessor relationships so a stream segment
+  // stays before the tool card it introduced.
+  const sortedInserts = inserts
     .map((item, index) => {
-      const timestamp = chatItemTimestamp(item);
+      const rawTimestamp = chatItemTimestamp(item);
       const predecessorKey = toolStreamPredecessors.get(item.key);
       const predecessorTimestamp = predecessorKey ? timestampsByKey.get(predecessorKey) : null;
       return {
         item,
         index,
         predecessorKey,
-        timestamp:
-          timestamp != null && predecessorTimestamp != null
-            ? Math.max(timestamp, predecessorTimestamp)
-            : timestamp,
+        effectiveTimestamp:
+          rawTimestamp != null && predecessorTimestamp != null
+            ? Math.max(rawTimestamp, predecessorTimestamp)
+            : rawTimestamp,
       };
     })
     .toSorted((a, b) => {
-      if (a.timestamp == null && b.timestamp == null) {
+      if (a.effectiveTimestamp == null && b.effectiveTimestamp == null) {
         return a.index - b.index;
       }
-      if (a.timestamp == null) {
+      if (a.effectiveTimestamp == null) {
         return 1;
       }
-      if (b.timestamp == null) {
+      if (b.effectiveTimestamp == null) {
         return -1;
       }
-      if (a.timestamp !== b.timestamp) {
-        return a.timestamp - b.timestamp;
+      if (a.effectiveTimestamp !== b.effectiveTimestamp) {
+        return a.effectiveTimestamp - b.effectiveTimestamp;
       }
       if (a.predecessorKey === b.item.key) {
         return 1;
@@ -663,8 +698,35 @@ export function sortChatItemsByVisibleTime(
         return -1;
       }
       return a.index - b.index;
-    })
-    .map(({ item }) => item);
+    });
+
+  for (const { item, effectiveTimestamp } of sortedInserts) {
+    const { minimum, maximum } = insertionIndexesForBounds(
+      items,
+      insertionBoundsByKey.get(item.key),
+    );
+    if (effectiveTimestamp == null) {
+      items.splice(maximum, 0, item);
+      continue;
+    }
+    const insertionIndex = items.findIndex((existing, index) => {
+      if (index < minimum || index >= maximum) {
+        return false;
+      }
+      const existingTimestamp = chatItemTimestamp(existing);
+      // Timestamped inserts render before stable items that lack a timestamp.
+      if (existingTimestamp == null) {
+        return true;
+      }
+      return existingTimestamp > effectiveTimestamp;
+    });
+
+    if (insertionIndex === -1) {
+      items.splice(maximum, 0, item);
+    } else {
+      items.splice(insertionIndex, 0, item);
+    }
+  }
 }
 
 export function messageKey(message: unknown, index: number, transcriptKey?: string): string {

@@ -381,12 +381,34 @@ describe("CronService failure alerts", () => {
         mode: "announce" as const,
         channel: "slack",
         to: "slack:cron-alerts",
+        accountId: "slack-bot",
       },
       jobAlert: undefined,
       expected: {
         mode: "announce",
         channel: "slack",
         to: "slack:cron-alerts",
+        accountId: "slack-bot",
+      },
+    },
+    {
+      name: "preserves a global route when a job explicitly repeats its alert mode",
+      globalAlert: {
+        enabled: true,
+        after: 1,
+        mode: "announce" as const,
+        channel: "slack",
+        to: "slack:cron-alerts",
+        accountId: "slack-bot",
+      },
+      jobAlert: {
+        mode: "announce" as const,
+      },
+      expected: {
+        mode: "announce",
+        channel: "slack",
+        to: "slack:cron-alerts",
+        accountId: "slack-bot",
       },
     },
     {
@@ -431,6 +453,7 @@ describe("CronService failure alerts", () => {
         mode: "announce" as const,
         channel: "slack",
         to: "slack:cron-alerts",
+        accountId: "slack-bot",
       },
       jobAlert: {
         mode: "announce" as const,
@@ -440,6 +463,28 @@ describe("CronService failure alerts", () => {
         mode: "announce",
         channel: "telegram",
         to: "telegram:19098680",
+        accountId: undefined,
+      },
+    },
+    {
+      name: "never reuses a global chat target or account for the last failure channel",
+      globalAlert: {
+        enabled: true,
+        after: 1,
+        mode: "announce" as const,
+        channel: "slack",
+        to: "slack:cron-alerts",
+        accountId: "slack-bot",
+      },
+      jobAlert: {
+        mode: "announce" as const,
+        channel: "last",
+      },
+      expected: {
+        mode: "announce",
+        channel: "last",
+        to: undefined,
+        accountId: undefined,
       },
     },
     {

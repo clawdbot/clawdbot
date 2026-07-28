@@ -1,9 +1,6 @@
 // Plugin runtime mock helpers build minimal runtime doubles for plugin SDK tests.
 import { vi } from "vitest";
-import {
-  normalizeInboundTextNewlines,
-  sanitizeInboundSystemTags,
-} from "../../auto-reply/reply/inbound-text.js";
+import { normalizeInboundTextNewlines } from "../../auto-reply/reply/inbound-text.js";
 import {
   createAckReactionHandle,
   removeAckReactionAfterReply,
@@ -34,9 +31,12 @@ type DeepPartial<T> = {
 
 type BuildContextParams = Parameters<PluginRuntime["channel"]["inbound"]["buildContext"]>[0];
 type BuildContextResult = ReturnType<PluginRuntime["channel"]["inbound"]["buildContext"]>;
-type UntrustedStructuredContextEntries = NonNullable<
-  Awaited<BuildContextResult>["UntrustedStructuredContext"]
+type ChannelStructuredContextEntries = NonNullable<
+  Awaited<BuildContextResult>["ChannelStructuredContext"]
 >;
+type ChannelStructuredContextResolution =
+  | { kind: "absent" }
+  | { kind: "present"; entries: ChannelStructuredContextEntries };
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -82,19 +82,24 @@ function normalizeUntrustedGroupPrompt(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = sanitizeInboundSystemTags(normalizeInboundTextNewlines(value));
+  const normalized = normalizeInboundTextNewlines(value);
   return normalized.trim().length > 0 ? normalized : undefined;
 }
 
-function resolveMockUntrustedStructuredContext(
+function resolveMockChannelStructuredContext(
   params: Pick<BuildContextParams, "extra" | "supplemental">,
-): UntrustedStructuredContextEntries | undefined {
-  const entries: UntrustedStructuredContextEntries = [];
-  const extraEntries = params.extra?.UntrustedStructuredContext;
+): ChannelStructuredContextResolution {
+  const entries: ChannelStructuredContextEntries = [];
+  const extraEntries =
+    params.extra?.ChannelStructuredContext ?? params.extra?.UntrustedStructuredContext;
   if (Array.isArray(extraEntries)) {
-    entries.push(...(extraEntries as UntrustedStructuredContextEntries));
+    entries.push(...(extraEntries as ChannelStructuredContextEntries));
   }
-  entries.push(...(params.supplemental?.untrustedContext ?? []));
+  const supplementalEntries =
+    params.supplemental?.channelStructuredContext ?? params.supplemental?.untrustedContext;
+  if (supplementalEntries !== undefined) {
+    entries.push(...supplementalEntries);
+  }
 
   const groupPrompt = normalizeUntrustedGroupPrompt(
     params.supplemental?.untrustedGroupSystemPrompt,
@@ -107,7 +112,9 @@ function resolveMockUntrustedStructuredContext(
     });
   }
 
-  return entries.length > 0 ? entries : undefined;
+  const contextProvided =
+    extraEntries !== undefined || supplementalEntries !== undefined || groupPrompt !== undefined;
+  return contextProvided ? { kind: "present", entries } : { kind: "absent" };
 }
 
 export type PluginRuntimeMediaMock = PluginRuntime["channel"]["media"];
@@ -408,7 +415,13 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     },
   ) as unknown as PluginRuntime["channel"]["inbound"]["run"];
   const buildChannelInboundEventContextMock = vi.fn((params: BuildContextParams) => {
-    const untrustedStructuredContext = resolveMockUntrustedStructuredContext(params);
+    const channelStructuredContext = resolveMockChannelStructuredContext(params);
+    const extra = { ...params.extra };
+    delete extra.UntrustedStructuredContext;
+    const structuredContextField =
+      channelStructuredContext.kind === "present"
+        ? { ChannelStructuredContext: channelStructuredContext.entries }
+        : {};
     return {
       Body: params.message.body ?? params.message.rawBody,
       BodyForAgent: params.message.bodyForAgent ?? params.message.rawBody,
@@ -437,8 +450,8 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       OriginatingChannel: params.channel,
       OriginatingTo: params.reply.originatingTo,
       CommandAuthorized: params.access?.commands?.authorized ?? false,
-      ...params.extra,
-      UntrustedStructuredContext: untrustedStructuredContext,
+      ...extra,
+      ...structuredContextField,
     } as Awaited<BuildContextResult>;
   }) as unknown as PluginRuntime["channel"]["inbound"]["buildContext"];
   const sessionRuntime = {

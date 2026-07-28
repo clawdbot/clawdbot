@@ -277,6 +277,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(laneNames).toContain("install-e2e-openai");
     expect(laneNames).toContain("openai-chat-tools");
     expect(laneNames).toContain("live-codex-npm-plugin");
+    expect(laneNames).toContain("release-typed-onboarding");
     expect(laneNames).toContain("install-e2e-anthropic");
     expect(laneNames).toContain("update-channel-switch");
     expect(laneNames).not.toContain("plugins");
@@ -310,6 +311,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(laneNames).not.toContain("live-codex-npm-plugin");
     expect(laneNames).not.toContain("install-e2e-anthropic");
     expect(laneNames).toContain("codex-on-demand");
+    expect(laneNames).toContain("release-typed-onboarding");
     expect(laneNames).toContain("update-channel-switch");
   });
 
@@ -396,6 +398,23 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "openai-chat-tools",
       "live-codex-npm-plugin",
       "codex-on-demand",
+      "release-typed-onboarding",
+    ]);
+    expect(
+      packageInstallOpenAi.lanes
+        .filter((lane) => lane.name === "release-typed-onboarding")
+        .map(summarizeLane),
+    ).toEqual([
+      {
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:release-typed-onboarding",
+        imageKind: "bare",
+        live: false,
+        name: "release-typed-onboarding",
+        resources: ["docker", "npm", "service"],
+        stateScenario: "empty",
+        timeoutMs: 1_200_000,
+        weight: 3,
+      },
     ]);
     expect(packageInstallAnthropic.lanes.map((lane) => lane.name)).toEqual([
       "install-e2e-anthropic",
@@ -656,6 +675,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "openai-chat-tools",
       "live-codex-npm-plugin",
       "codex-on-demand",
+      "release-typed-onboarding",
       "install-e2e-anthropic",
       "npm-onboard-channel-agent",
       "npm-onboard-discord-channel-agent",

@@ -13,7 +13,6 @@ import {
   isEmbeddedAgentRunActive,
   queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunSessionId,
-  resolveActiveEmbeddedRunSessionIdBySessionFile,
 } from "./commands-steer.runtime.js";
 import type {
   CommandHandler,
@@ -76,18 +75,6 @@ function resolveSteerSessionId(params: {
   const candidateKeys = listSteerCandidateSessionKeys(params.targetSessionKey);
   for (const candidateKey of candidateKeys) {
     const activeSessionId = resolveActiveEmbeddedRunSessionId(candidateKey);
-    if (activeSessionId) {
-      return activeSessionId;
-    }
-  }
-
-  for (const candidateKey of candidateKeys) {
-    const entry = resolveStoredSessionEntry(params.commandParams, candidateKey);
-    const sessionFile = normalizeOptionalString(entry?.sessionFile);
-    if (!sessionFile) {
-      continue;
-    }
-    const activeSessionId = resolveActiveEmbeddedRunSessionIdBySessionFile(sessionFile);
     if (activeSessionId) {
       return activeSessionId;
     }

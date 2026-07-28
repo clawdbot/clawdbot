@@ -48,6 +48,10 @@ Setup commands by intent:
 | `--update`              | Shorthand for [`openclaw update`](/cli/update); works for both source checkouts and package installs    |
 | `-V`, `--version`, `-v` | Print version and exit                                                                                  |
 
+A named `--profile` replaces canonical state and config paths inherited from
+another profile, including a running Gateway service. Explicitly customized
+state directories and config paths remain unchanged.
+
 ## Output modes
 
 - ANSI colors and progress indicators render only in TTY sessions.

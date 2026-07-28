@@ -4,6 +4,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
+import { readAcpSessionMetaBatch } from "../acp/runtime/session-meta.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
@@ -17,6 +18,7 @@ import { withPinnedActivePluginRegistryWorkspaceDir } from "../plugins/runtime-w
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { type SessionEntryPair, sortAndLimitSessionEntries } from "./session-list-order.js";
+import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import { readSessionTitleFieldsFromTranscriptAsync as readScopedSessionTitleFieldsFromTranscriptAsync } from "./session-transcript-readers.js";
 import type {
   SessionListRowContext,
@@ -63,6 +65,34 @@ type SessionEntrySelection = {
   hasMore: boolean;
 };
 
+function populateSessionListAcpMetadata(params: {
+  cfg: OpenClawConfig;
+  entries: readonly SessionEntryPair[];
+  opts: SessionsListParams;
+  rowContext?: SessionListRowContext;
+}): void {
+  if (!params.rowContext || params.entries.length === 0) {
+    return;
+  }
+  const entries = params.entries.map(([key, entry]) => {
+    const parsed = parseAgentSessionKey(key);
+    const agentId = normalizeAgentId(
+      key === "global" && typeof params.opts.agentId === "string"
+        ? params.opts.agentId
+        : (parsed?.agentId ?? resolveDefaultAgentId(params.cfg)),
+    );
+    return {
+      sessionKey: resolveStoredSessionKeyForAgentStore({
+        cfg: params.cfg,
+        agentId,
+        sessionKey: key,
+      }),
+      entry,
+    };
+  });
+  params.rowContext.acpSessionMetaByEntry = readAcpSessionMetaBatch({ entries });
+}
+
 function resolveSessionsListLimit(
   opts: SessionsListParams,
   defaultLimit?: number,
@@ -101,6 +131,7 @@ function filterSessionEntries(params: {
   const includeUnknown = opts.includeUnknown === true;
   const spawnedBy = typeof opts.spawnedBy === "string" ? opts.spawnedBy : "";
   const label = normalizeOptionalString(opts.label) ?? "";
+  const boardFace = opts.boardFace;
   const agentId = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
   const search = normalizeLowercaseStringOrEmpty(opts.search);
   const activeMinutes =
@@ -188,6 +219,12 @@ function filterSessionEntries(params: {
         return true;
       }
       return entry?.label === label;
+    })
+    .filter(([, entry]) => {
+      if (!boardFace) {
+        return true;
+      }
+      return entry?.boardFace === boardFace;
     });
 
   if (search) {
@@ -343,6 +380,7 @@ export function listSessionsFromStore(params: {
   const sharedRowContext =
     fullRowContext ??
     (entries.length > 0 ? buildSessionListRowMetadataContext({ now }) : undefined);
+  populateSessionListAcpMetadata({ cfg, entries, opts, rowContext: sharedRowContext });
 
   const sessions = entries.map(([key, entry], index) => {
     const includeTranscriptFields = index < sessionListTranscriptFieldRows;
@@ -444,6 +482,7 @@ export async function listSessionsFromStoreAsync(params: {
     const sharedRowContext =
       fullRowContext ??
       (entries.length > 0 ? buildSessionListRowMetadataContext({ now }) : undefined);
+    populateSessionListAcpMetadata({ cfg, entries, opts, rowContext: sharedRowContext });
 
     const sessions: GatewaySessionRow[] = [];
     for (let i = 0; i < entries.length; i++) {
@@ -490,7 +529,7 @@ export async function listSessionsFromStoreAsync(params: {
           storePath,
         });
         if (includeDerivedTitles) {
-          row.derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage);
+          row.derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage, row.displayName);
         }
         if (includeLastMessage && fields.lastMessagePreview) {
           row.lastMessagePreview = fields.lastMessagePreview;

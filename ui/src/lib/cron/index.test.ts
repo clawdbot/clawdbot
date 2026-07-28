@@ -1903,6 +1903,7 @@ describe("cron controller", () => {
           offset: 0,
           query: "daily",
           enabled: "enabled",
+          includeDeliveryPreviews: false,
           scheduleKind: "cron",
           lastRunStatus: "error",
           sortBy: "updatedAtMs",
@@ -2622,6 +2623,7 @@ describe("loadCronFailingCount", () => {
 
     expect(request).toHaveBeenCalledWith("cron.list", {
       enabled: "enabled",
+      includeDeliveryPreviews: false,
       lastRunStatus: "error",
       limit: 1,
       offset: 0,
