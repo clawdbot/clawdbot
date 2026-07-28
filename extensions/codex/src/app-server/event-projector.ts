@@ -766,3 +766,4 @@ export class CodexAppServerEventProjector {
 function isHookNotificationMethod(method: string): method is "hook/started" | "hook/completed" {
   return method === "hook/started" || method === "hook/completed";
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
