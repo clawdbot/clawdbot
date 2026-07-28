@@ -10,6 +10,7 @@ type CurrentDmRecoveryPersistedState =
   Awaited<ReturnType<CurrentDmRecoveryStore["load"]>> extends infer State
     ? Exclude<State, undefined>
     : never;
+type SendProgress = Parameters<typeof startCurrentDmRecoveryCoordinator>[0]["sendProgress"];
 
 const identity = (
   overrides: Partial<CurrentDmRecoveryIdentity> = {},
@@ -60,7 +61,11 @@ class FakeClock implements CurrentDmRecoveryScheduler {
       if (due.length === 0) {
         return;
       }
-      const [id, timer] = due[0];
+      const next = due[0];
+      if (!next) {
+        return;
+      }
+      const [id, timer] = next;
       this.timers.delete(id);
       await timer.callback();
     }
@@ -95,12 +100,12 @@ function harness(
     fresh?: () =>
       | { isCurrent: boolean; featureGateGeneration: number }
       | Promise<{ isCurrent: boolean; featureGateGeneration: number }>;
-    send?: ReturnType<typeof vi.fn>;
+    send?: ReturnType<typeof vi.fn<SendProgress>>;
   } = {},
 ) {
   const store = options.store ?? new FakeStore();
   const clock = options.clock ?? new FakeClock();
-  const send = options.send ?? vi.fn(async () => undefined);
+  const send = options.send ?? vi.fn<SendProgress>(async () => undefined);
   const fresh = options.fresh ?? (() => ({ isCurrent: true, featureGateGeneration: 7 }));
   return {
     store,
@@ -277,7 +282,7 @@ describe("current DM recovery coordinator", () => {
   });
 
   it("records unknown after a sender throw and never retries", async () => {
-    const send = vi.fn(async () => {
+    const send = vi.fn<SendProgress>(async () => {
       throw new Error("ambiguous network result");
     });
     const h = harness({ send });

@@ -45,9 +45,9 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-basics", () => {
     const getSessionEntry = vi.fn(() => ({ sessionId: "session-1", updatedAt: 1 }));
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
-        expect(replyOptions.onAgentRunStart).toBeTypeOf("function");
+        expect(replyOptions?.onAgentRunStart).toBeTypeOf("function");
         expect(dispatcherOptions.onDispatcherReady).toBeTypeOf("function");
-        replyOptions.onAgentRunStart?.("run-1");
+        replyOptions?.onAgentRunStart?.("run-1");
         const dispatcher = createReplyDispatcher(dispatcherOptions);
         // The extension test SDK shim does not invoke this newly added core callback yet.
         // Invoke the production callback explicitly so this remains a cross-layer delivery test.
@@ -80,8 +80,12 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-basics", () => {
         replyThreadId: undefined,
         route: {
           agentId: "main",
+          channel: "telegram",
           accountId: "default",
           sessionKey: "agent:main:telegram:direct:5397261498",
+          mainSessionKey: "agent:main:main",
+          lastRoutePolicy: "session",
+          matchedBy: "default",
         },
         threadSpec: { scope: "dm" },
       }),
@@ -91,7 +95,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-basics", () => {
         featureGateGeneration: 1,
         store: {} as never,
         scheduler: {} as never,
-        checkFreshness: async () => ({ fresh: true }),
+        checkFreshness: async () => ({ isCurrent: true, featureGateGeneration: 1 }),
       },
       streamMode: "off",
       telegramDeps: {
@@ -122,7 +126,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-basics", () => {
     const getSessionEntry = vi.fn(() => ({ sessionId: "session-1", updatedAt: 1 }));
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
-        replyOptions.onAgentRunStart?.("run-1");
+        replyOptions?.onAgentRunStart?.("run-1");
         const dispatcher = createReplyDispatcher(dispatcherOptions);
         dispatcherOptions.onDispatcherReady?.(dispatcher);
         expect(
@@ -153,8 +157,12 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-basics", () => {
         replyThreadId: undefined,
         route: {
           agentId: "main",
+          channel: "telegram",
           accountId: "default",
           sessionKey: "agent:main:telegram:direct:5397261498",
+          mainSessionKey: "agent:main:main",
+          lastRoutePolicy: "session",
+          matchedBy: "default",
         },
         threadSpec: { scope: "dm" },
       }),
@@ -164,7 +172,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-basics", () => {
         featureGateGeneration: 1,
         store: {} as never,
         scheduler: {} as never,
-        checkFreshness: async () => ({ fresh: true }),
+        checkFreshness: async () => ({ isCurrent: true, featureGateGeneration: 1 }),
       },
       streamMode: "off",
       telegramDeps: {

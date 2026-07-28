@@ -1,5 +1,4 @@
-import type { ReplyDispatcher } from "openclaw/plugin-sdk/reply-dispatch-runtime";
-import type { ReplyDispatchDeliveryOutcome } from "openclaw/plugin-sdk/reply-runtime";
+import type { ReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
@@ -46,6 +45,12 @@ function createOptions(): TelegramCurrentDmRecoveryOptions {
     checkFreshness: vi.fn(async () => ({ isCurrent: true, featureGateGeneration: 1 })),
   };
 }
+
+type ReplyDispatchDeliveryOutcome =
+  | "delivered"
+  | "cancelled"
+  | "failed-before-deliver"
+  | "failed-deliver";
 
 function deferredOutcome() {
   let resolve!: (value: ReplyDispatchDeliveryOutcome) => void;
