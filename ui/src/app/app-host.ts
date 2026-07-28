@@ -14,17 +14,17 @@ import "../components/github-link-hovercard-registration.ts";
 import "../components/login-gate.ts";
 import "../components/macos-titlebar-controls.ts";
 import "../components/modal-dialog.ts";
+import {
+  formatDocumentTitle,
+  isSettingsNavigationRoute,
+  titleForRoute,
+} from "../app-navigation.ts";
 import "../components/onboarding-memory-import.ts";
 import "../components/openclaw-mascot.ts";
 import "../components/resizable-divider.ts";
 import "../components/sidebar-update-card.ts";
 import "../components/tooltip.ts";
 import "../components/update-banner.ts";
-import {
-  formatDocumentTitle,
-  isSettingsNavigationRoute,
-  titleForRoute,
-} from "../app-navigation.ts";
 import { isSessionRouteId, workboardBoardIdFromPath } from "../app-route-paths.ts";
 import { APP_ROUTE_IDS, isRouteId, type RouteId } from "../app-routes.ts";
 import {
@@ -43,6 +43,7 @@ import {
   type ShellNavDrawerToggleDetail,
 } from "../components/command-palette-contract.ts";
 import { icons } from "../components/icons.ts";
+import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   CUSTODIAN_PANEL_TOGGLE_EVENT,
@@ -1096,6 +1097,15 @@ class OpenClawShell extends OpenClawLightDomElement {
       this.dismissSidebarTransientMenus();
     }
     const trigger = options.restoreFocus ? this.navDrawerTrigger : null;
+    if (options.restoreFocus) {
+      const returnFocusTarget =
+        trigger?.isConnected && trigger.checkVisibility()
+          ? trigger
+          : this.querySelector<HTMLElement>(".content");
+      this.querySelector<OpenClawModalDialog>(
+        "openclaw-modal-dialog.nav-drawer",
+      )?.setReturnFocusTarget(returnFocusTarget ?? null);
+    }
     this.navDrawerOpen = false;
     this.navDrawerTrigger = null;
     if (!options.restoreFocus) {

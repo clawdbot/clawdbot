@@ -14,6 +14,7 @@ export class OpenClawModalDialog extends OpenClawLitElement {
   @query("wa-dialog") private webAwesomeDialog?: WaDialog;
 
   private returnFocus: HTMLElement | null = null;
+  private returnFocusOverride: HTMLElement | null = null;
   private syncGeneration = 0;
   private suppressNextCancel = false;
 
@@ -206,8 +207,19 @@ export class OpenClawModalDialog extends OpenClawLitElement {
   };
 
   private handleAfterHide = () => {
+    const returnFocus = this.returnFocusOverride;
+    this.returnFocusOverride = null;
     this.open = false;
     this.returnFocus = null;
+    if (returnFocus?.isConnected) {
+      // Web Awesome queues its original-trigger restoration immediately before
+      // wa-after-hide; queue the owner's explicit target after that callback.
+      setTimeout(() => {
+        if (returnFocus.isConnected) {
+          returnFocus.focus({ preventScroll: true });
+        }
+      }, 0);
+    }
   };
 
   private handleHide = (event: Event) => {
@@ -228,6 +240,10 @@ export class OpenClawModalDialog extends OpenClawLitElement {
 
   show() {
     this.open = true;
+  }
+
+  setReturnFocusTarget(target: HTMLElement | null) {
+    this.returnFocusOverride = target;
   }
 
   hide() {

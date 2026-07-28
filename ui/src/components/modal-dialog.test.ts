@@ -138,6 +138,27 @@ describe("openclaw-modal-dialog", () => {
     returnTarget.remove();
   });
 
+  it("restores the explicit owner target after Web Awesome restores its original trigger", async () => {
+    const originalTrigger = document.createElement("button");
+    const returnTarget = document.createElement("button");
+    document.body.append(originalTrigger, returnTarget);
+    originalTrigger.focus();
+    const { modal, webAwesomeDialog } = await renderModal();
+
+    (
+      modal as HTMLElement & { setReturnFocusTarget(target: HTMLElement | null): void }
+    ).setReturnFocusTarget(returnTarget);
+    setTimeout(() => originalTrigger.focus(), 0);
+    webAwesomeDialog.dispatchEvent(new Event("wa-after-hide"));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    expect(document.activeElement).toBe(returnTarget);
+    originalTrigger.remove();
+    returnTarget.remove();
+  });
+
   it("reopens the same dialog element after reconnect", async () => {
     const focus = vi.spyOn(HTMLDialogElement.prototype, "focus");
     const { modal, dialog } = await renderModal();
