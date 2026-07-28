@@ -140,7 +140,7 @@ pnpm link --global
 openclaw onboard --install-daemon
 ```
 
-Or skip the link and use `pnpm openclaw ...` from inside the repo. See [Setup](/start/setup) for full development workflows.
+`pnpm link --global` is optional one-time setup that puts the `openclaw` command on your PATH. Or skip the link and use `pnpm openclaw ...` from inside the repo, which is the safer default for automation and agent-maintained checkouts: re-running `pnpm link` variants inside the checkout can rewrite `package.json` and `pnpm-workspace.yaml` and break later installs. Never run link commands as part of updating a checkout. See [Setup](/start/setup) for full development workflows.
 
 ### Install from the GitHub main checkout
 
