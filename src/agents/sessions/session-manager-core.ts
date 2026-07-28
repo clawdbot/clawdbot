@@ -80,7 +80,10 @@ export class SessionManagerCore {
       return;
     }
     const header = partitioned.fileEntries.find((entry) => entry.type === "session");
-    if (target && (header?.version ?? 1) < CURRENT_SESSION_VERSION) {
+    // Only a persisted header declares a legacy version. A header-less transcript whose entries
+    // are already canonical predates the lazy header append, so treating it as v1 would strand
+    // live SQLite sessions behind a migration that has nothing to migrate.
+    if (target && header && (header.version ?? 1) < CURRENT_SESSION_VERSION) {
       throw new Error(
         "Persisted legacy session transcripts require doctor/import migration before runtime use",
       );

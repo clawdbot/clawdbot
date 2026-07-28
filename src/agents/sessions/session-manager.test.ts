@@ -160,6 +160,47 @@ describe("SessionManager.open", () => {
     );
   });
 
+  it("opens header-less persisted transcripts written before the lazy header append", async () => {
+    const dir = await makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "header-less-persisted-session";
+    const sessionKey = "agent:main:telegram:direct:header-less";
+    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    await upsertSessionEntry(scope, { sessionId, updatedAt: 1 });
+    replaceTranscriptEventsSync(scope, [
+      {
+        type: "model_change",
+        id: "model-1",
+        parentId: null,
+        timestamp: "2026-07-15T21:23:03.632Z",
+        provider: "github-copilot",
+        modelId: "claude-opus-4.8",
+      },
+      {
+        type: "message",
+        id: "user-1",
+        parentId: "model-1",
+        timestamp: "2026-07-15T21:23:03.698Z",
+        message: { role: "user", content: "Is all good?" },
+      },
+    ]);
+
+    const manager = SessionManager.open(scope, dir);
+    expect(manager.getEntries()).toEqual([
+      expect.objectContaining({ type: "model_change", modelId: "claude-opus-4.8" }),
+      expect.objectContaining({
+        type: "message",
+        message: expect.objectContaining({ content: "Is all good?", role: "user" }),
+      }),
+    ]);
+    manager.appendModelChange("test-provider", "test-model");
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+      expect.objectContaining({ type: "model_change", modelId: "claude-opus-4.8" }),
+      expect.objectContaining({ type: "message" }),
+      expect.objectContaining({ type: "model_change", modelId: "test-model" }),
+    ]);
+  });
+
   it("rejects persisted legacy transcripts until doctor or import migrates them", async () => {
     const dir = await makeTempDir();
     const storePath = path.join(dir, "sessions.json");
