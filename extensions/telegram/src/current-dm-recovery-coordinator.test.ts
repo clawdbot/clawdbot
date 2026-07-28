@@ -1,12 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  CURRENT_DM_RECOVERY_PROGRESS_TEXT,
   startCurrentDmRecoveryCoordinator,
   type CurrentDmRecoveryIdentity,
-  type CurrentDmRecoveryPersistedState,
   type CurrentDmRecoveryScheduler,
   type CurrentDmRecoveryStore,
 } from "./current-dm-recovery-coordinator.js";
+
+type CurrentDmRecoveryPersistedState =
+  Awaited<ReturnType<CurrentDmRecoveryStore["load"]>> extends infer State
+    ? Exclude<State, undefined>
+    : never;
 
 const identity = (
   overrides: Partial<CurrentDmRecoveryIdentity> = {},
@@ -177,7 +180,11 @@ describe("current DM recovery coordinator", () => {
       "recovery",
     ]);
     expect(
-      h.send.mock.calls.every(([message]) => message.text === CURRENT_DM_RECOVERY_PROGRESS_TEXT),
+      h.send.mock.calls.every(
+        ([message]) =>
+          message.text ===
+          "Still working on your request. Progress is being tracked safely; no action is needed.",
+      ),
     ).toBe(true);
     expect(
       h.send.mock.calls.every(

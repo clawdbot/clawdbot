@@ -1,14 +1,9 @@
-export const CURRENT_DM_RECOVERY_PROGRESS_TEXT =
+const CURRENT_DM_RECOVERY_PROGRESS_TEXT =
   "Still working on your request. Progress is being tracked safely; no action is needed.";
 
-export type CurrentDmRecoveryMilestone = "status" | "checkpoint" | "recovery";
-export type CurrentDmRecoveryMilestoneState =
-  | "unclaimed"
-  | "intent"
-  | "sent"
-  | "superseded"
-  | "unknown";
-export type CurrentDmRecoveryLifecycle =
+type CurrentDmRecoveryMilestone = "status" | "checkpoint" | "recovery";
+type CurrentDmRecoveryMilestoneState = "unclaimed" | "intent" | "sent" | "superseded" | "unknown";
+type CurrentDmRecoveryLifecycle =
   | "active"
   | "final-accepted"
   | "cancelled"
@@ -33,7 +28,7 @@ export interface CurrentDmRecoveryIdentity {
   turnId: string;
 }
 
-export interface CurrentDmRecoveryPersistedState {
+interface CurrentDmRecoveryPersistedState {
   version: 1;
   identity: CurrentDmRecoveryIdentity;
   lifecycle: CurrentDmRecoveryLifecycle;
@@ -59,13 +54,13 @@ export interface CurrentDmRecoveryFreshness {
   featureGateGeneration: number;
 }
 
-export interface CurrentDmRecoveryProgress {
+interface CurrentDmRecoveryProgress {
   identity: CurrentDmRecoveryIdentity;
   milestone: CurrentDmRecoveryMilestone;
   text: typeof CURRENT_DM_RECOVERY_PROGRESS_TEXT;
 }
 
-export interface CurrentDmRecoveryDependencies {
+interface CurrentDmRecoveryDependencies {
   enabled?: boolean;
   identity: CurrentDmRecoveryIdentity;
   store: CurrentDmRecoveryStore;

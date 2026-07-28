@@ -123,7 +123,7 @@ describe("createReplyDispatcher", () => {
       },
       deliver: vi.fn().mockResolvedValue(undefined),
     });
-    dispatcher.appendBeforeDeliver(async () => {
+    dispatcher.appendBeforeDeliver?.(async () => {
       finalOutcome = captureReplyDispatchDeliveryOutcome(finalReplacement);
       return finalReplacement;
     });
@@ -154,7 +154,7 @@ describe("createReplyDispatcher", () => {
       },
       deliver: vi.fn().mockRejectedValue(new Error("provider failed")),
     });
-    dispatcher.appendBeforeDeliver((payload) => ({ ...payload, text: "replacement" }));
+    dispatcher.appendBeforeDeliver?.((payload) => ({ ...payload, text: "replacement" }));
 
     expect(dispatcher.sendFinalReply({ text: "original" })).toBe(true);
     await dispatcher.waitForIdle();

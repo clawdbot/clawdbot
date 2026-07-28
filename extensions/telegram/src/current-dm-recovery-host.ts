@@ -12,7 +12,7 @@ import type {
   CurrentDmRecoveryIdentity,
 } from "./current-dm-recovery-coordinator.js";
 
-export type CurrentDmRecoveryHost = {
+type CurrentDmRecoveryHost = {
   onDispatcherReady(dispatcher: ReplyDispatcher): void;
   onAgentRunStart(runId: string): void;
   beforeDeliver(
