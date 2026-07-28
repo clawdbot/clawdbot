@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { DoctorMemoryStatusPayload } from "../../../../src/gateway/server-methods/doctor.ts";
@@ -12,7 +13,10 @@ vi.mock("../../components/lobster-pet.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../components/lobster-pet.ts")>();
   return {
     ...actual,
-    createLobsterPetLook: () => actual.canonicalLobsterLook(actual.LOBSTER_PET_PALETTES[0]),
+    createLobsterPetLook: () =>
+      actual.canonicalLobsterLook(
+        expectDefined(actual.LOBSTER_PET_PALETTES[0], "canonical lobster palette"),
+      ),
   };
 });
 
