@@ -5,6 +5,9 @@ import { createApplicationOverlays } from "./overlays.ts";
 
 export type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
 
+const SYSTEM_APPROVAL_TITLE = "OpenClaw change";
+const SYSTEM_APPROVAL_COMMAND = "Set gateway.port to 19001";
+
 export function deferred<T = unknown>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
   let reject!: (reason?: unknown) => void;
@@ -83,9 +86,9 @@ export function createGatewayHarness(
           createdAtMs,
           expiresAtMs: Date.now() + 60_000,
           request: {
-            title: "OpenClaw change",
-            description: "Set gateway.port to 19001",
-            command: "Set gateway.port to 19001",
+            title: SYSTEM_APPROVAL_TITLE,
+            description: SYSTEM_APPROVAL_COMMAND,
+            command: SYSTEM_APPROVAL_COMMAND,
             proposalHash: "a".repeat(64),
             allowedDecisions: ["allow-once", "deny"],
           },
