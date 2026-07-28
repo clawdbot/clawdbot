@@ -3,6 +3,10 @@ import { normalizeOptionalString } from "../../packages/normalization-core/src/s
 import type { ChannelStatusAdapter } from "../channels/plugins/types.adapters.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.core.js";
 import type { ChannelStatusIssue } from "../channels/plugins/types.public.js";
+import {
+  applyChannelAccountState,
+  resolveChannelAccountState,
+} from "../channels/status/account-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 export type { ChannelAccountSnapshot } from "../channels/plugins/types.core.js";
 export type { ChannelStatusIssue } from "../channels/plugins/types.public.js";
@@ -21,6 +25,7 @@ export {
 } from "../utils/reaction-level.js";
 
 type RuntimeLifecycleSnapshot = {
+  linked?: boolean | null;
   running?: boolean | null;
   connected?: boolean | null;
   restartPending?: boolean | null;
@@ -181,6 +186,7 @@ export function buildBaseChannelStatusSummary<TExtra extends StatusSnapshotExtra
   },
   extra?: TExtra,
 ) {
+  // Channel summaries already consume projected account state; this helper only normalizes nulls.
   return {
     configured: snapshot.configured ?? false,
     ...(extra ?? ({} as TExtra)),
@@ -244,7 +250,7 @@ export function buildBaseAccountStatusSnapshot<TExtra extends StatusSnapshotExtr
   extra?: TExtra,
 ) {
   const { account, runtime, probe } = params;
-  return {
+  const snapshot = {
     accountId: account.accountId,
     name: account.name,
     enabled: account.enabled,
@@ -254,6 +260,14 @@ export function buildBaseAccountStatusSnapshot<TExtra extends StatusSnapshotExtr
     lastOutboundAt: runtime?.lastOutboundAt ?? null,
     ...(extra ?? ({} as TExtra)),
   };
+  const state = resolveChannelAccountState({
+    enabled: account.enabled !== false,
+    configured: account.configured === true,
+    linked: typeof snapshot.linked === "boolean" ? snapshot.linked : undefined,
+    runtime: snapshot,
+  });
+  applyChannelAccountState(snapshot, state);
+  return snapshot;
 }
 
 /** Convenience wrapper when the caller already has flattened account fields instead of an account object. */
@@ -367,6 +381,7 @@ export function buildRuntimeAccountStatusSnapshot<TExtra extends StatusSnapshotE
     lastStopAt: runtime?.lastStopAt ?? null,
     lastError: runtime?.lastError ?? null,
     probe,
+    ...(typeof runtime?.linked === "boolean" ? { linked: runtime.linked } : {}),
     ...(typeof runtime?.connected === "boolean" ? { connected: runtime.connected } : {}),
     ...(typeof runtime?.restartPending === "boolean"
       ? { restartPending: runtime.restartPending }

@@ -8,22 +8,43 @@ snapshot:
 profiles:
   - id: smoke-ci
     description: Deterministic PR and merge proof with mock model providers and the
-      Crabline-backed channel driver; categories are limited to exact owners exercised by the
-      fixed bounded CI plan.
+      Crabline-backed channel driver; coverage IDs resolve to every eligible primary owner.
     evidenceMode: slim
     channelDriver: crabline
-    categoryIds:
-      - agent-runtime.model-and-runtime-selection
-      - agent-runtime.tool-calls-and-response-handling
-      - session-memory.cross-client-history-and-session-parity
-      - session-memory.memory
-      - gateway.gateway-rpc-apis-and-events
-      - gateway.websocket-connection
-      - channels.channel-actions-commands-and-approvals
-      - channels.channel-setup
-      - channels.outbound-delivery-and-reply-pipeline
-      - plugins.installing-and-running-plugins
-      - control-ui.browser-ui
+    coverageIds:
+      - agent-runtime.runtime-override-switching
+      - agent-runtime.subagent-turns-delivery
+      - agent-runtime.tool-fs-read
+      - agent-runtime.tool-fs-write
+      - agent-runtime.tool-task-followthrough
+      - channels.outbound-group-reply
+      - channels.resumed-final-reply
+      - control-ui.gateway-hosted-ui-control
+      - gateway.health-apis
+      - gateway.hello-ok-snapshot
+      - gateway.websocket-transport
+      - plugins.activation-lifecycle
+      - session-memory.memory-files-dreaming
+      - telegram.built-in-commands
+  - id: personal-agent
+    description: Local personal-assistant reliability proof selected by semantic coverage targets.
+    coverageIds:
+      - agent-runtime.failure-recovery
+      - agent-runtime.progress-visibility-no-fake-progress
+      - agent-runtime.tool-safety-controls
+      - agent-runtime.tool-task-followthrough
+      - automation.agent-cron-tool-reminders
+      - channels.native-threads-channel-replies
+      - observability.support-zip-diagnostics
+      - security.approval-policy-approval-denial
+      - security.redaction-personal-redaction
+      - session-memory.personal-memory-recall
+  - id: observability
+    description: Source-checkout telemetry proof selected by semantic coverage targets.
+    coverageIds:
+      - observability.otlp-http-traces-otel
+      - observability.prometheus
+      - observability.prometheus-api-auth
   - id: release
     description: Stable/LTS proof selector for live providers, live channels, package artifacts,
       upgrade paths, and platform proof where the claim depends on real upstreams or release
@@ -1516,7 +1537,7 @@ surfaces:
           - docs/concepts/agent-runtimes.md
         search_anchors:
           - agent RPC shape and event stream
-          - runAgentTurnWithFallback
+          - executeAgentTurn
           - agent.wait timeout and terminal outcomes
         category_note: agent-turn-orchestration-and-runtime-lifecycle.md
         human_lts_override: true

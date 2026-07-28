@@ -350,17 +350,6 @@ describe("agent defaults schema", () => {
     expect(result.embeddedAgent?.projectSettingsPolicy).toBe("sanitize");
   });
 
-  it("accepts compaction.truncateAfterCompaction", () => {
-    const result = AgentDefaultsSchema.parse({
-      compaction: {
-        truncateAfterCompaction: true,
-        maxActiveTranscriptBytes: "20mb",
-      },
-    })!;
-    expect(result.compaction?.truncateAfterCompaction).toBe(true);
-    expect(result.compaction?.maxActiveTranscriptBytes).toBe("20mb");
-  });
-
   it.each([
     "off",
     "minimal",
@@ -408,6 +397,24 @@ describe("agent defaults schema", () => {
     })!;
 
     expect(result.compaction?.midTurnPrecheck?.enabled).toBe(true);
+  });
+
+  it("accepts compaction.enabled so auto-compaction can be turned off", () => {
+    const result = AgentDefaultsSchema.parse({
+      compaction: {
+        enabled: false,
+      },
+    })!;
+
+    expect(result.compaction?.enabled).toBe(false);
+  });
+
+  it("rejects a non-boolean compaction.enabled", () => {
+    expect(
+      AgentDefaultsSchema.safeParse({
+        compaction: { enabled: "false" },
+      }).success,
+    ).toBe(false);
   });
 
   it("accepts focused contextLimits on defaults and agent entries", () => {

@@ -12,7 +12,6 @@ import type {
 import { assertSecretInputResolved } from "../config/types.secrets.js";
 import type { PinnedDispatcherPolicy } from "../infra/net/ssrf.js";
 import type { Api } from "../llm/types.js";
-import { COPILOT_INTEGRATION_ID, buildCopilotIdeHeaders } from "./copilot-dynamic-headers.js";
 import type {
   ProviderRequestCapabilities,
   ProviderRequestCapability,
@@ -417,21 +416,6 @@ export function normalizeBaseUrl(
   return raw.replace(/\/+$/, "");
 }
 
-// Default Copilot headers are dynamic per IDE/runtime and must be merged through
-// the same header precedence path as configured provider headers.
-function resolveProviderDefaultRequestHeaders(
-  provider: string | undefined,
-): Record<string, string> | undefined {
-  if (normalizeLowercaseStringOrEmpty(provider) !== "github-copilot") {
-    return undefined;
-  }
-  return {
-    ...buildCopilotIdeHeaders(),
-    "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
-    "Openai-Organization": "github-copilot",
-  };
-}
-
 // Header keys are compared case-insensitively and prototype-polluting names are
 // dropped before values are attached to outbound provider requests.
 function mergeProviderRequestHeaders(
@@ -720,7 +704,6 @@ export function resolveProviderRequestPolicyConfig(
   });
   const extraHeaders = applyResolvedAuthHeader(
     mergeProviderRequestHeaders(
-      resolveProviderDefaultRequestHeaders(params.provider),
       params.discoveredHeaders,
       params.providerHeaders,
       params.modelHeaders,

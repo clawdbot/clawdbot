@@ -25,6 +25,47 @@ describe("argv-invocation", () => {
     });
   });
 
+  it.each([
+    {
+      name: "version-pinned install",
+      argv: ["node", "openclaw", "skills", "install", "@owner/weather", "--version", "1.2.3"],
+      commandPath: ["skills", "install"],
+    },
+    {
+      name: "version-pinned verification",
+      argv: ["node", "openclaw", "skills", "verify", "@owner/weather", "--version", "1.2.3"],
+      commandPath: ["skills", "verify"],
+    },
+    {
+      name: "equals-form version-pinned install",
+      argv: ["node", "openclaw", "skills", "install", "@owner/weather", "--version=1.2.3"],
+      commandPath: ["skills", "install"],
+    },
+    {
+      name: "profiled version-pinned verification",
+      argv: [
+        "node",
+        "openclaw",
+        "--profile",
+        "work",
+        "skills",
+        "verify",
+        "@owner/weather",
+        "--version",
+        "1.2.3",
+      ],
+      commandPath: ["skills", "verify"],
+    },
+  ])("keeps $name in command execution mode", ({ argv, commandPath }) => {
+    expect(resolveCliArgvInvocation(argv)).toEqual({
+      argv,
+      commandPath,
+      primary: "skills",
+      hasHelpOrVersion: false,
+      isRootHelpInvocation: false,
+    });
+  });
+
   it("consumes agent parent option values before the exec subcommand", () => {
     expect(
       resolveCliArgvInvocation([

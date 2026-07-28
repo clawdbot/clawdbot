@@ -4,15 +4,12 @@ import { clearAutoFallbackPrimaryProbeSelection } from "../../agents/agent-scope
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
-import {
-  formatSqliteSessionFileMarker,
-  sqliteSessionFileMarkerMatchesSession,
-} from "../../config/sessions/sqlite-marker.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
@@ -319,14 +316,9 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         : sessionEntry;
     const latestSessionId = latestSessionEntry?.sessionId ?? sessionIdFinal;
     opts?.onSessionPrepared?.({ sessionKey, sessionId: latestSessionId, storePath });
-    const existingSessionFile = latestSessionEntry?.sessionFile;
-    const sessionFile =
-      existingSessionFile &&
-      sqliteSessionFileMarkerMatchesSession(existingSessionFile, latestSessionId)
-        ? existingSessionFile
-        : storePath
-          ? formatSqliteSessionFileMarker({ agentId, sessionId: latestSessionId, storePath })
-          : resolveSessionFilePath(latestSessionId, latestSessionEntry, sessionFilePathOptions);
+    const sessionFile = storePath
+      ? formatSqliteSessionFileMarker({ agentId, sessionId: latestSessionId, storePath })
+      : resolveSessionFilePath(latestSessionId, latestSessionEntry, sessionFilePathOptions);
     return { sessionEntry: latestSessionEntry, sessionId: latestSessionId, sessionFile };
   };
   let preparedSessionState = resolvePreparedSessionState();

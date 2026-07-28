@@ -141,7 +141,7 @@ flow:
       actions:
         - set: controlUiChatUrl
           value:
-            expr: "(() => { const url = new URL(`${env.gateway.baseUrl}/`); url.searchParams.set('session', uiSessionKey); url.hash = `token=${encodeURIComponent(env.gateway.token ?? '')}`; return url.toString(); })()"
+            expr: "(() => { const url = new URL(`${env.gateway.baseUrl}/chat`); url.searchParams.set('session', uiSessionKey); url.hash = `token=${encodeURIComponent(env.gateway.token ?? '')}`; return url.toString(); })()"
         - call: webOpenPage
           saveAs: uiTab
           args:

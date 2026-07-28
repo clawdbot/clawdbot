@@ -18,6 +18,8 @@ import {
   renderChatSessionSharing,
   renderSessionDiffToggle,
   renderSessionWorkspaceToggle,
+  readPresenceEntries,
+  resolveActorIdentityUsers,
   resolveChatPaneWorkspace,
   t,
   type BackgroundTasksProps,
@@ -76,10 +78,19 @@ export abstract class ChatPaneHeaderRender extends ChatPaneHeader {
       : branchSwitchWorking
         ? t("chat.sessionHeader.branchSwitchUnavailable")
         : null;
+    const ownerActorId = row?.createdActor?.id?.trim();
+    const ownerUser = ownerActorId
+      ? resolveActorIdentityUsers({
+          snapshotUser: this.context.gateway.snapshot.selfUser,
+          presenceEntries: readPresenceEntries(this.presencePayload),
+          presenceInstanceId: this.context.gateway.snapshot.client?.instanceId,
+        }).get(ownerActorId)
+      : undefined;
     return renderChatPaneHeader({
       paneId: this.paneId,
       narrow: this.narrow,
       mergedChrome: this.mergedChrome,
+      navDrawerOpen: this.navDrawerOpen,
       title: this.paneTitle,
       session: row,
       showOwnerChip:
@@ -87,6 +98,7 @@ export abstract class ChatPaneHeaderRender extends ChatPaneHeader {
           this.state?.sessionsResult?.creators ??
           listSessionCreators(this.state?.sessionsResult?.sessions ?? [])
         ).length >= 2,
+      ownerUser,
       catalog,
       editing: this.headerEditing && this.headerRenameSessionKey === row?.key,
       renameValue: this.headerRenameValue,

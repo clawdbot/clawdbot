@@ -274,6 +274,8 @@ export async function createGatewaySession(params: {
   key?: string;
   agentId?: string;
   label?: string;
+  /** Trusted model-generated title, persisted with a newly created dashboard session. */
+  generatedDisplayName?: string;
   model?: string;
   thinkingLevel?: string;
   incognito?: boolean;
@@ -323,6 +325,7 @@ export async function createGatewaySession(params: {
 }): Promise<CreateGatewaySessionResult> {
   const requestedKey = normalizeOptionalString(params.key);
   const parentSessionKey = normalizeOptionalString(params.parentSessionKey);
+  const generatedDisplayName = normalizeOptionalString(params.generatedDisplayName);
   const agentId = normalizeAgentId(
     normalizeOptionalString(params.agentId) ?? resolveDefaultAgentId(params.cfg),
   );
@@ -603,6 +606,23 @@ export async function createGatewaySession(params: {
     key: targetSessionKey,
     agentId,
   });
+  if (explicitTargetKey && !params.initialEntry) {
+    // A trusted initializer holds the lifecycle fence through afterCreate. Waiting
+    // on that fence would deadlock callers that must reject its visible pending row.
+    const pendingEntry = resolveSessionEntryAccessTarget({
+      cfg: params.cfg,
+      sessionKey: creationTarget.canonicalKey,
+    }).entry;
+    if (pendingEntry?.initializationPending === true) {
+      return {
+        ok: false,
+        error: errorShape(
+          ErrorCodes.UNAVAILABLE,
+          `Session ${creationTarget.canonicalKey} is still initializing; retry creation later.`,
+        ),
+      };
+    }
+  }
   const agentMainSessionKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId });
   // Durable dashboard sessions parent to main for flow-up notices and sidebar threads.
   // Incognito roots omit durable lineage so notices cannot cross the storage boundary.
@@ -961,6 +981,7 @@ export async function createGatewaySession(params: {
           // the merge-level write-once guard), and legacy rows stay "unknown".
           ...(params.creation && createdNewEntry ? buildSessionCreationStamp(params.creation) : {}),
           ...(params.visibility && createdNewEntry ? { visibility: params.visibility } : {}),
+          ...(generatedDisplayName && createdNewEntry ? { displayName: generatedDisplayName } : {}),
           ...(catalogResolvedModel && catalogAgentRuntime
             ? {
                 providerOverride: catalogResolvedModel.provider,
@@ -1121,7 +1142,7 @@ export async function createGatewaySession(params: {
           sessionKey: canonicalParentSessionKey,
           sessionId: parentEntry?.sessionId,
           storePath: parentSessionTarget.storePath,
-          sessionFile: parentEntry?.sessionFile,
+          sessionFile: canonicalParentSessionKey,
           agentId: parentSessionTarget.agentId,
           reason: "new",
           nextSessionId: created.entry.sessionId,
@@ -1134,7 +1155,7 @@ export async function createGatewaySession(params: {
         sessionId: created.entry.sessionId,
         resumedFrom: parentEntry?.sessionId,
         storePath: target.storePath,
-        sessionFile: created.entry.sessionFile,
+        sessionFile: target.canonicalKey,
         agentId: target.agentId,
       });
     }
@@ -1154,14 +1175,12 @@ export async function createGatewaySession(params: {
     };
   };
 
-  const runWithCreationTargetLock = async () =>
-    await runExclusiveSessionLifecycleMutation({
+  const lifecycleTargets = [
+    {
       scope: creationTarget.storePath,
       identities: [creationTarget.canonicalKey],
-      run: createChildSession,
-    });
-
-  let result: CreateGatewaySessionResult;
+    },
+  ];
   if (
     canonicalParentSessionKey &&
     parentSessionEntry?.sessionId &&
@@ -1170,39 +1189,17 @@ export async function createGatewaySession(params: {
       params.fork === true ||
       params.authorizedPluginId !== undefined)
   ) {
-    if (parentSessionTarget.storePath === creationTarget.storePath) {
-      result = await runExclusiveSessionLifecycleMutation({
-        scope: creationTarget.storePath,
-        identities: [
-          canonicalParentSessionKey,
-          parentSessionEntry.sessionId,
-          creationTarget.canonicalKey,
-        ],
-        run: createChildSession,
-      });
-    } else {
-      const runWithParentLock = async (run: () => Promise<CreateGatewaySessionResult>) =>
-        await runExclusiveSessionLifecycleMutation({
-          scope: parentSessionTarget.storePath,
-          identities: [canonicalParentSessionKey, parentSessionEntry.sessionId],
-          run,
-        });
-      // Cross-agent forks touch two stores. Acquire their locks in canonical
-      // store order so simultaneous opposite-direction forks cannot deadlock.
-      result =
-        parentSessionTarget.storePath < creationTarget.storePath
-          ? await runWithParentLock(runWithCreationTargetLock)
-          : await runExclusiveSessionLifecycleMutation({
-              scope: creationTarget.storePath,
-              identities: [creationTarget.canonicalKey],
-              run: async () => await runWithParentLock(createChildSession),
-            });
-    }
-  } else {
-    // Keyed creates must observe and adopt the winning row under the same
-    // lifecycle fence; otherwise concurrent callers mint divergent session IDs.
-    result = await runWithCreationTargetLock();
+    lifecycleTargets.push({
+      scope: parentSessionTarget.storePath,
+      identities: [canonicalParentSessionKey, parentSessionEntry.sessionId],
+    });
   }
+  // Generated, keyed, same-store, and cross-agent creations all share the
+  // lifecycle owner's canonical identity order and one active mutation fence.
+  const result = await runExclusiveSessionLifecycleMutation({
+    targets: lifecycleTargets,
+    run: createChildSession,
+  });
   if (result.ok && !result.resetExisting && createdContext) {
     if (createdNewEntry) {
       recordSessionCreated({

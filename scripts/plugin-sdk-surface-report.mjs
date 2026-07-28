@@ -115,7 +115,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "agent-media-payload": 3,
   // +2: deprecated media projection type and builder.
   "reply-payload": 2,
-  "text-runtime": 191,
+  // +1: flushLogger projected through the deprecated text-runtime barrel.
+  "text-runtime": 192,
   "agent-runtime": 2,
   "channel-secret-runtime": 23,
   "agent-harness-runtime": 4,
@@ -152,7 +153,10 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: focused media-local-roots replacement for the legacy agent-media facade.
       // +1: account-aware channel DM policy setup descriptors.
       // +1: dependency-light CLI argv parsing for machine-output metadata.
-      143,
+      // +1: bounded archive extraction and single-entry reads.
+      // +1: budgeted root-bounded directory walking.
+      // +1: pinned secret reads and first-writer-wins creation.
+      146,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -184,7 +188,14 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: shared multi-claim ingress lifecycle fan-in.
       // +3: channel prompt-context entry/compat types and channel metadata builder.
       // +4: focused CLI root-option constants and parsers.
-      4731,
+      // +6: model-picker action/capability and authoritative session-apply contracts.
+      // +1: logger file-transport flush for graceful shutdown drains.
+      // +1: process-local sessions.changed plugin notification payload.
+      // +1: loopback-only host classifier for plugin local-machine boundaries.
+      // +7: bounded archive extraction, entry reads, errors, and policy types.
+      // +3: root-bounded walk iterator, options, and entry contract.
+      // +5: pinned secret create/read functions and their options contract.
+      4755,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -211,7 +222,13 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: shared multi-claim ingress lifecycle fan-in.
       // +1: channel metadata builder.
       // +3: focused CLI root-option parsers.
-      2866,
+      // +1: authoritative model-picker session-apply operation.
+      // +1: logger file-transport flush for graceful shutdown drains.
+      // +1: loopback-only host classifier for plugin local-machine boundaries.
+      // +2: bounded archive extraction and single-entry reads.
+      // +1: root-bounded directory walk iterator.
+      // +4: pinned secret create and synchronous/asynchronous reads.
+      2876,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -220,12 +237,13 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: shipped Slack and Discord setup compatibility helpers.
       // +10: named media legacy projection deprecations across public compatibility barrels.
       // +2: channel prompt-context type and metadata builder compatibility aliases.
-      1700,
+      // +1: flushLogger projected through the deprecated text-runtime barrel.
+      1701,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
-      83,
+      82,
       env,
     ),
   };

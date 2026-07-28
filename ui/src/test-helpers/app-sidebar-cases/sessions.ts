@@ -17,7 +17,7 @@ import {
   TWO_AGENTS,
 } from "../app-sidebar.ts";
 import { waitForFast } from "../wait-for.ts";
-import "../../components/app-sidebar.ts";
+import "./session-pagination.ts";
 
 describe("AppSidebar session indicators", () => {
   it("keeps one leading slot across neutral, running, open, and merged states", async () => {
@@ -404,7 +404,7 @@ describe("AppSidebar session accessibility", () => {
 });
 
 describe("AppSidebar session navigation", () => {
-  it("selects the session's agent before changing the active session", async () => {
+  it("selects a literal session's agent before changing the active session", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar, context } = await mountSidebar(
       gateway,

@@ -341,7 +341,10 @@ describe("runConfigureWizard", () => {
       },
     ]);
     mocks.setupSearch.mockReset();
-    mocks.setupSearch.mockImplementation(async (cfg: OpenClawConfig) => cfg);
+    mocks.setupSearch.mockImplementation(async (cfg: OpenClawConfig) => ({
+      outcome: "completed",
+      config: cfg,
+    }));
     mocks.promptAuthConfig.mockReset();
     mocks.promptAuthConfig.mockImplementation(async (cfg: OpenClawConfig) => cfg);
     mocks.promptGatewayConfig.mockReset();
@@ -642,12 +645,15 @@ describe("runConfigureWizard", () => {
         config: { webSearch: { apiKey: "fc-entered-key" } },
       })(cfg);
       return {
-        ...configured,
-        tools: {
-          ...configured.tools,
-          web: {
-            ...configured.tools?.web,
-            fetch: { provider: "firecrawl" },
+        outcome: "completed",
+        config: {
+          ...configured,
+          tools: {
+            ...configured.tools,
+            web: {
+              ...configured.tools?.web,
+              fetch: { provider: "firecrawl" },
+            },
           },
         },
       };
@@ -692,13 +698,16 @@ describe("runConfigureWizard", () => {
   it("keeps web_search disabled when provider setup has no credential", async () => {
     setupBaseWizardState();
     mocks.setupSearch.mockImplementation(async (cfg: OpenClawConfig) => ({
-      ...cfg,
-      tools: {
-        ...cfg.tools,
-        web: {
-          ...cfg.tools?.web,
-          fetch: { provider: "firecrawl" },
-          search: { enabled: false, provider: "firecrawl" },
+      outcome: "completed",
+      config: {
+        ...cfg,
+        tools: {
+          ...cfg.tools,
+          web: {
+            ...cfg.tools?.web,
+            fetch: { provider: "firecrawl" },
+            search: { enabled: false, provider: "firecrawl" },
+          },
         },
       },
     }));
@@ -794,11 +803,12 @@ describe("runConfigureWizard", () => {
         credentialPath: "",
       }),
     ]);
-    mocks.setupSearch.mockImplementation(async (cfg: OpenClawConfig) =>
-      createEnabledWebSearchConfig("duckduckgo", {
+    mocks.setupSearch.mockImplementation(async (cfg: OpenClawConfig) => ({
+      outcome: "completed",
+      config: createEnabledWebSearchConfig("duckduckgo", {
         enabled: true,
       })(cfg),
-    );
+    }));
     queueWizardPrompts({
       select: [],
       confirm: [true, false],

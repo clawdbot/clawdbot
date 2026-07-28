@@ -294,9 +294,11 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       row: this.findSidebarSessionByKey(sessionKey),
       mainKey: this.sessionMainKey(),
       preferenceDerivedFace: true,
+      navigationKey: sessionKey,
     });
-    this.setApplicationSession(sessionKey, this.selectedAgentIdForSessions());
+    this.prepareSessionNavigation(sessionKey, target.options.pathname);
     this.onNavigate?.(face, target.options);
+    this.bindLiteralSession(sessionKey, this.selectedAgentIdForSessions(), target.options);
   };
 
   /** Collapsed zones keep full rows for true header counts and status dots. */

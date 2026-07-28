@@ -105,7 +105,7 @@ describe("AppSidebar session catalog pagination", () => {
       });
       provider.setContext(createContext(currentGateway.gateway, sessions));
       await sidebar.updateComplete;
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(50);
 
       legacyFallback.resolve(catalogPage([]));
       await vi.advanceTimersByTimeAsync(0);
@@ -692,7 +692,7 @@ describe("AppSidebar session catalog pagination", () => {
     }
   });
 
-  it("refreshes immediately when paired-node presence changes", async () => {
+  it("coalesces a presence and focus burst into one catalog refresh", async () => {
     vi.useFakeTimers();
     try {
       const request = vi.fn().mockResolvedValue(catalogPage([]));
@@ -713,13 +713,13 @@ describe("AppSidebar session catalog pagination", () => {
       gateway.publishEvent("presence", {
         presence: [{ deviceId: "node-1", mode: "node", reason: "connect" }],
       });
+      globalThis.dispatchEvent(new Event("focus"));
+      await vi.advanceTimersByTimeAsync(49);
+      expect(request).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
       expect(request).toHaveBeenCalledTimes(2);
-
-      gateway.publishEvent("presence", {
-        presence: [{ deviceId: "node-1", mode: "node", reason: "disconnect" }],
-      });
       await vi.advanceTimersByTimeAsync(0);
-      expect(request).toHaveBeenCalledTimes(3);
+      expect(request).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
     }

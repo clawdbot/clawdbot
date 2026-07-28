@@ -113,6 +113,29 @@ describe("lazy protocol validators", () => {
     expect(validateSessionsListParams({ face: "dashboard" })).toBe(false);
   });
 
+  it("validates session patch compare-and-swap identity", () => {
+    expect(
+      validateSessionsPatchParams({
+        key: "agent:main:self-archive",
+        archived: true,
+        expectedSessionId: "session-self-archive",
+        expectedLifecycleRevision: "revision-self-archive",
+      }),
+    ).toBe(true);
+    expect(
+      validateSessionsPatchParams({
+        key: "agent:main:self-archive",
+        expectedSessionId: "",
+      }),
+    ).toBe(false);
+    expect(
+      validateSessionsPatchParams({
+        key: "agent:main:self-archive",
+        expectedLifecycleRevision: "",
+      }),
+    ).toBe(false);
+  });
+
   it("keeps validation errors readable on the exported validator", () => {
     expect(validateConnectParams({})).toBe(false);
     expect(formatValidationErrors(validateConnectParams.errors)).toContain("must have required");

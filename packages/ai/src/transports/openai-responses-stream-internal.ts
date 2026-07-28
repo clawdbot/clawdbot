@@ -694,7 +694,7 @@ export async function processResponsesStream<TApi extends Api>(
         if (streamingToolCalls.hasActive()) {
           throw new Error("Responses stream completed with unresolved tool calls");
         }
-        finalizeResponse(event.response);
+        finalizeResponse(event.response, event.type);
         if (event.type === "response.completed" || output.stopReason === "length") {
           recoverTerminalOutput(event.response.output ?? [], event.type === "response.completed");
         }

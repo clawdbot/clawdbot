@@ -8,6 +8,7 @@ import type {
 } from "../../../app/native-gateways.runtime.ts";
 import { isNativeWebChromeHost } from "../../../app/native-web-chrome.ts";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
+import type { ActorIdentityUser } from "../../../app/user-profile.ts";
 import {
   COMMAND_PALETTE_OPEN_EVENT,
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
@@ -28,9 +29,11 @@ type ChatPaneHeaderProps = {
   paneId: string;
   narrow: boolean;
   mergedChrome: boolean;
+  navDrawerOpen?: boolean;
   title: string;
   session: GatewaySessionRow | undefined;
   showOwnerChip?: boolean;
+  ownerUser?: ActorIdentityUser;
   catalog: boolean;
   editing: boolean;
   renameValue: string;
@@ -235,15 +238,17 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
       ? t("chat.sessionHeader.copied")
       : t("chat.sessionHeader.copyBranch");
   const copied = props.copiedAction === "copy-path" || props.copiedAction === "copy-branch";
+  const drawerLabel = props.navDrawerOpen ? t("nav.collapse") : t("nav.expand");
 
   return html`
     <div class="chat-pane__header" @mousedown=${beginNativeWindowDrag}>
       ${props.mergedChrome
-        ? html`<openclaw-tooltip .content=${t("nav.expand")}>
+        ? html`<openclaw-tooltip .content=${drawerLabel}>
             <button
               class="btn btn--ghost btn--icon chat-icon-btn chat-pane__nav-toggle"
               type="button"
-              aria-label=${t("nav.expand")}
+              aria-label=${drawerLabel}
+              aria-expanded=${String(Boolean(props.navDrawerOpen))}
               @click=${(event: MouseEvent) => {
                 window.dispatchEvent(
                   new CustomEvent<ShellNavDrawerToggleDetail>(SHELL_NAV_DRAWER_TOGGLE_EVENT, {
@@ -307,6 +312,8 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
       ${renderSessionOwnerChip(
         props.showOwnerChip ? props.session?.createdActor : undefined,
         "header",
+        "created",
+        props.ownerUser,
       )}
       ${!props.catalog && props.workspaceLabel
         ? html`

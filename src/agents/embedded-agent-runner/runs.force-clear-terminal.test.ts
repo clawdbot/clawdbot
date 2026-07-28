@@ -6,6 +6,7 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../conf
 import { loadSessionEntry, upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   abortAndDrainEmbeddedAgentRun,
+  clearActiveEmbeddedRun,
   isEmbeddedAgentRunHandleActive,
   setActiveEmbeddedRun,
 } from "./runs.js";
@@ -76,6 +77,38 @@ describe("force-clear terminal state persistence", () => {
     expect(entry?.abortedLastRun).toBe(true);
     expect(entry?.endedAt).toBeGreaterThanOrEqual(startedAt);
     expect(entry?.runtimeMs).toBe(12_345);
+  });
+
+  it("keeps the persisted killed state when the force-cleared owner finishes late", async () => {
+    const sessionKey = "agent:main:force-clear-late-completion";
+    const sessionId = "session-force-clear-late-completion";
+    const startedAt = Date.now() - 60_000;
+    const handle = createRunHandle();
+
+    await upsertSessionEntry(
+      { sessionKey, storePath },
+      { sessionId, updatedAt: startedAt, startedAt, status: "running" },
+    );
+    setActiveEmbeddedRun(sessionId, handle, sessionKey);
+
+    await expect(
+      abortAndDrainEmbeddedAgentRun({
+        sessionId,
+        sessionKey,
+        forceClear: true,
+        reason: "stuck_recovery",
+        settleMs: 0,
+      }),
+    ).resolves.toMatchObject({ forceCleared: true });
+
+    clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+
+    expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(false);
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      sessionId,
+      status: "killed",
+      abortedLastRun: true,
+    });
   });
 
   it("does not fail when the session entry is absent", async () => {

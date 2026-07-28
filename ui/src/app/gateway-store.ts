@@ -403,7 +403,13 @@ export function createApplicationGateway(
         });
         connect();
       },
-      onEvent: recordGatewayEvent,
+      onEvent: (event) => {
+        // A replaced socket can still deliver queued events; never let it
+        // project presence or history into the current gateway connection.
+        if (client === nextClient) {
+          recordGatewayEvent(event);
+        }
+      },
     });
     client = nextClient;
     syncClientEvents(nextClient);

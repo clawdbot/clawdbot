@@ -29,7 +29,7 @@ import {
 } from "./agent-runner-core.js";
 import { buildEmptyInteractiveReplyPayload } from "./agent-runner-failure-reply.js";
 import { signalTypingIfNeeded } from "./agent-runner-helpers.js";
-import { buildReplyPayloads } from "./agent-runner-payloads.js";
+import { buildReplyPayloads, loadReplyPayloadsDedupeRuntime } from "./agent-runner-payloads.js";
 import {
   appendUnscheduledReminderNote,
   hasSessionRelatedCronJobs,
@@ -175,8 +175,28 @@ export async function prepareReplyAgentPayloads(state: {
     });
     return recovery.kind === "diagnostic" ? recovery.payload : undefined;
   };
-  if (opts?.sourceReplyDeliveryMode === "message_tool_only" && completedSourceReplyDelivery) {
-    await opts.onObservedReplyDelivery?.();
+  // Route-aware message-tool delivery attests observed delivery in every mode:
+  // an automatic-mode turn answered via the message tool plus NO_REPLY must not
+  // draw the no-visible-reply fallback into the source conversation. The dedupe
+  // route matcher keeps unrelated-target tool sends from counting as the reply.
+  const sourceRoutedMessagingToolDelivery =
+    completedSourceReplyDelivery ||
+    ((runResult.messagingToolSentTargets?.length ?? 0) > 0 &&
+      (await loadReplyPayloadsDedupeRuntime()).hasSourceRoutedMessagingToolDelivery({
+        config: cfg,
+        messageProvider: followupRun.run.messageProvider,
+        messagingToolSentTargets: runResult.messagingToolSentTargets,
+        messagingToolSentTexts: runResult.messagingToolSentTexts,
+        messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
+        originatingTo: resolveOriginMessageTo({
+          originatingTo: sessionCtx.OriginatingTo,
+          to: sessionCtx.To,
+        }),
+        originatingThreadId: replyRouteThreadId,
+        accountId: sessionCtx.AccountId,
+      }));
+  if (sourceRoutedMessagingToolDelivery) {
+    await opts?.onObservedReplyDelivery?.();
   }
   const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
   // A terminal fallback is built separately after normal payload filtering.

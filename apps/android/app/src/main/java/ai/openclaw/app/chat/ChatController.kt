@@ -1,6 +1,7 @@
 package ai.openclaw.app.chat
 
 import ai.openclaw.app.GatewayModelSummary
+import ai.openclaw.app.gateway.GatewayLoadedImage
 import ai.openclaw.app.gateway.GatewayRequestDefinitiveFailure
 import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
@@ -56,6 +57,8 @@ internal const val SESSION_LIST_FETCH_LIMIT = 200
 private val QUESTION_REFRESH_RETRY_DELAYS_MS = longArrayOf(1_000L, 2_000L, 4_000L)
 private val SWARM_REFRESH_RETRY_DELAYS_MS = longArrayOf(1_000L, 2_000L, 4_000L)
 private const val SESSION_EDITOR_MAX_BASE64_CHARS = ((OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES + 2) / 3) * 4
+private val MANAGED_IMAGE_PATH_REGEX =
+  Regex("^/api/chat/media/outgoing/[^/]+/([0-9a-fA-F-]{36})/full(?:\\?.*)?$")
 
 internal fun chatOutboxQueueFailureText(): NativeText = ChatController.queueFailureText()
 
@@ -111,6 +114,12 @@ class ChatController internal constructor(
   private val cacheScope: () -> ChatCacheScope? = { null },
   private val currentDefaultAgentId: () -> String? = { "main" },
   private val currentDefaultAgentRevision: () -> Long = { 0L },
+  private val loadGatewayImageArtifact: suspend (
+    gatewayId: String?,
+    sessionKey: String,
+    agentId: String?,
+    artifactId: String,
+  ) -> GatewayLoadedImage? = { _, _, _, _ -> null },
   private val commandOutbox: ChatCommandOutbox? = null,
   private val recordModelRecent: (String) -> Unit = {},
   private val onSessionDeleted: (ChatSessionDeletion) -> Unit = {},
@@ -142,11 +151,25 @@ class ChatController internal constructor(
     cacheScope = cacheScope,
     currentDefaultAgentId = currentDefaultAgentId,
     currentDefaultAgentRevision = currentDefaultAgentRevision,
+    loadGatewayImageArtifact = { gatewayId, sessionKey, agentId, artifactId ->
+      session.loadImageArtifact(gatewayId, sessionKey, agentId, artifactId)
+    },
     commandOutbox = commandOutbox,
     recordModelRecent = recordModelRecent,
     onSessionDeleted = onSessionDeleted,
     onOfflineDefaultAgentRestored = onOfflineDefaultAgentRestored,
   )
+
+  suspend fun loadImageArtifact(artifactId: String): GatewayLoadedImage? {
+    val normalizedArtifactId = artifactId.trim().takeIf(String::isNotEmpty) ?: return null
+    val sessionKey = normalizeRequestedSessionKey(_sessionKey.value)
+    return loadGatewayImageArtifact(
+      currentCacheScope()?.gatewayId,
+      sessionKey,
+      resolveAgentIdForSessionKey(sessionKey),
+      normalizedArtifactId,
+    )
+  }
 
   private var appliedMainSessionKey = "main"
   private val cacheMutationMutex = Mutex()
@@ -508,9 +531,7 @@ class ChatController internal constructor(
       clearOptimisticMessages = false,
       preserveDisconnectedOwnership = true,
     )
-    pendingToolCallsById.clear()
-    publishPendingToolCalls()
-    _streamingAssistantText.value = null
+    clearLiveRunUi()
     // Older gateways cannot restate plan state, so reconnect retains it until
     // recovery proves another run, a terminal state, or an explicit empty snapshot.
     _historyLoading.value = false
@@ -617,9 +638,7 @@ class ChatController internal constructor(
       if (retireRunState) {
         restoreRunStateOnReconnect = false
         clearPendingRuns()
-        pendingToolCallsById.clear()
-        publishPendingToolCalls()
-        _streamingAssistantText.value = null
+        clearLiveRunUi()
       }
       clearPlanSteps()
       appliedMainSessionKey = "main"
@@ -2163,9 +2182,10 @@ class ChatController internal constructor(
     _sessionKey.value = key
     _sessionOwnerAgentId.value = owner
     _sessions.value =
-      clearForeignGlobalObserverDigest(
+      reconcileGlobalObserverDigestOwner(
         _sessions.value,
         activeAgentId = owner ?: resolveAgentIdForSessionKey(key),
+        adoptOwnerless = false,
       )
     applyThinkingMetadata(_sessions.value.firstOrNull { it.key == key })
     _selectedModelRef.value = null
@@ -2182,9 +2202,7 @@ class ChatController internal constructor(
     _healthOk.value = false
     clearLiveHistoryMarker()
     clearPendingRuns()
-    pendingToolCallsById.clear()
-    publishPendingToolCalls()
-    _streamingAssistantText.value = null
+    clearLiveRunUi()
     clearPlanSteps()
     _sessionId.value = null
     _historyLoading.value = markLoading
@@ -2504,9 +2522,7 @@ class ChatController internal constructor(
             settleProjectedRun(actualRunId)
             if (ack.isTerminalSuccess) {
               if (isCapturedOwnerCurrent()) {
-                pendingToolCallsById.clear()
-                publishPendingToolCalls()
-                _streamingAssistantText.value = null
+                clearLiveRunUi()
                 clearPlanSteps()
                 refreshCurrentHistoryBestEffort(runIdsToReconcile = setOf(actualRunId))
               }
@@ -2515,9 +2531,7 @@ class ChatController internal constructor(
               // Terminal timeout/error means the gateway did not accept a runnable turn.
               // Surface failed acceptance instead of letting a cleared composer look successful.
               if (isCapturedOwnerCurrent()) {
-                pendingToolCallsById.clear()
-                publishPendingToolCalls()
-                _streamingAssistantText.value = null
+                clearLiveRunUi()
                 clearPlanSteps()
                 updateLocalizedErrorText(nativeText("Chat failed before the run started; try again."))
               }
@@ -2870,9 +2884,7 @@ class ChatController internal constructor(
         // retain local ownership until the recovery snapshot can reconcile it.
         resetSwarmProgress()
         if (isSwarmEnabled()) refreshSwarmSessions()
-        pendingToolCallsById.clear()
-        publishPendingToolCalls()
-        _streamingAssistantText.value = null
+        clearLiveRunUi()
         refreshQuestions()
         refreshHistoryForRecovery()
       }
@@ -5153,9 +5165,7 @@ class ChatController internal constructor(
           val hasNewerRun =
             synchronized(pendingRuns) { pendingRuns.isNotEmpty() } || unresolvedRepliesByRunId.isNotEmpty()
           if (!hasNewerRun) {
-            pendingToolCallsById.clear()
-            publishPendingToolCalls()
-            _streamingAssistantText.value = null
+            clearLiveRunUi()
             clearPlanStepsFor(runId)
             updateLocalizedErrorText(
               if (state == "error") {
@@ -5187,9 +5197,7 @@ class ChatController internal constructor(
         } else {
           clearPendingRuns(clearOptimisticMessages = false)
         }
-        pendingToolCallsById.clear()
-        publishPendingToolCalls()
-        _streamingAssistantText.value = null
+        clearLiveRunUi()
         clearPlanStepsFor(runId)
         val terminalRunIds = runId?.let(::setOf) ?: unresolvedRepliesByRunId.keys.toSet()
         refreshCurrentHistoryBestEffort(
@@ -5412,9 +5420,7 @@ class ChatController internal constructor(
       "error" -> {
         updateLocalizedErrorText(nativeText("Event stream interrupted; try refreshing."))
         clearPendingRuns()
-        pendingToolCallsById.clear()
-        publishPendingToolCalls()
-        _streamingAssistantText.value = null
+        clearLiveRunUi()
         clearPlanSteps()
       }
     }
@@ -5438,6 +5444,12 @@ class ChatController internal constructor(
   private fun publishPendingToolCalls() {
     _pendingToolCalls.value =
       pendingToolCallsById.values.sortedBy { it.startedAtMs }
+  }
+
+  private fun clearLiveRunUi() {
+    pendingToolCallsById.clear()
+    publishPendingToolCalls()
+    _streamingAssistantText.value = null
   }
 
   private fun clearPlanSteps() {
@@ -5585,9 +5597,7 @@ class ChatController internal constructor(
 
   private fun clearTransientRunUiIfIdle(preservePlan: Boolean = false) {
     if (synchronized(pendingRuns) { pendingRuns.isNotEmpty() }) return
-    pendingToolCallsById.clear()
-    publishPendingToolCalls()
-    _streamingAssistantText.value = null
+    clearLiveRunUi()
     if (!preservePlan) clearPlanSteps()
   }
 
@@ -6381,10 +6391,18 @@ internal fun parseChatMessageContent(el: JsonElement): ChatMessageContent? {
     "image", "audio" -> {
       val type = obj["type"].asStringOrNull() ?: "image"
       val inlineContent = obj["content"].asStringOrNull()?.takeIf { it.isNotBlank() }
+      val url = obj["url"].asStringOrNull()
       ChatMessageContent(
         type = type,
         mimeType = obj["mimeType"].asStringOrNull(),
         fileName = obj["fileName"].asStringOrNull(),
+        artifactId = obj["artifactId"].asStringOrNull() ?: managedImageArtifactId(url),
+        url = url,
+        openUrl = obj["openUrl"].asStringOrNull(),
+        alt = obj["alt"].asStringOrNull(),
+        width = obj["width"].asLongOrNull()?.toInt(),
+        height = obj["height"].asLongOrNull()?.toInt(),
+        sizeBytes = obj["sizeBytes"].asLongOrNull(),
         base64 = inlineContent?.takeIf { type != "image" || it.length <= CHAT_IMAGE_MAX_BASE64_CHARS },
       )
     }
@@ -6426,6 +6444,16 @@ internal fun parseChatMessageContent(el: JsonElement): ChatMessageContent? {
 
     else -> null
   }
+}
+
+internal fun managedImageArtifactId(rawUrl: String?): String? {
+  val match =
+    rawUrl
+      ?.trim()
+      ?.let(MANAGED_IMAGE_PATH_REGEX::matchEntire)
+      ?: return null
+  val attachmentId = runCatching { UUID.fromString(match.groupValues[1]).toString() }.getOrNull() ?: return null
+  return "artifact_managed_image_$attachmentId"
 }
 
 internal fun parseChatMessageContents(obj: JsonObject): List<ChatMessageContent> {
@@ -6668,6 +6696,9 @@ private fun messageContentIdentityKey(message: ChatMessage): String? {
           ?.lowercase()
           .orEmpty(),
         part.fileName?.trim().orEmpty(),
+        part.artifactId?.trim().orEmpty(),
+        part.url?.trim().orEmpty(),
+        part.openUrl?.trim().orEmpty(),
         part.base64
           ?.hashCode()
           ?.toString()
@@ -6811,17 +6842,10 @@ internal fun applySessionObserverDigest(
   digest: SessionObserverDigest,
   activeAgentId: String? = null,
 ): List<ChatSessionEntry> {
-  val digestAgentId =
-    digest.agentId
-      ?.trim()
-      ?.lowercase()
-      ?.takeIf { it.isNotEmpty() }
-  val selectedAgentId =
-    activeAgentId
-      ?.trim()
-      ?.lowercase()
-      ?.takeIf { it.isNotEmpty() }
-  val scopedSessions = clearForeignGlobalObserverDigest(sessions, selectedAgentId)
+  val digestAgentId = normalizedObserverAgentId(digest.agentId)
+  val selectedAgentId = normalizedObserverAgentId(activeAgentId)
+  val scopedSessions =
+    reconcileGlobalObserverDigestOwner(sessions, selectedAgentId, adoptOwnerless = false)
   if (
     digest.sessionKey == "global" &&
     (selectedAgentId == null || digestAgentId == null || selectedAgentId != digestAgentId)
@@ -6845,35 +6869,15 @@ internal fun applySessionObserverDigest(
 internal fun reconcileGlobalObserverDigestOwner(
   sessions: List<ChatSessionEntry>,
   activeAgentId: String?,
-): List<ChatSessionEntry> = reconcileGlobalObserverDigestOwner(sessions, activeAgentId, adoptOwnerless = true)
-
-internal fun clearForeignGlobalObserverDigest(
-  sessions: List<ChatSessionEntry>,
-  activeAgentId: String?,
-): List<ChatSessionEntry> = reconcileGlobalObserverDigestOwner(sessions, activeAgentId, adoptOwnerless = false)
-
-private fun reconcileGlobalObserverDigestOwner(
-  sessions: List<ChatSessionEntry>,
-  activeAgentId: String?,
-  adoptOwnerless: Boolean,
+  adoptOwnerless: Boolean = true,
 ): List<ChatSessionEntry> {
   // A missing owner is transient disconnect state, not a selection change.
   // Callers retain the last verified offline projection until hello supplies an owner.
-  val selectedAgentId =
-    activeAgentId
-      ?.trim()
-      ?.lowercase()
-      ?.takeIf { it.isNotEmpty() }
-      ?: return sessions
+  val selectedAgentId = normalizedObserverAgentId(activeAgentId) ?: return sessions
   val index = sessions.indexOfFirst { it.key == "global" }
   if (index < 0) return sessions
   val session = sessions[index]
-  val digestAgentId =
-    session.observerDigest
-      ?.agentId
-      ?.trim()
-      ?.lowercase()
-      ?.takeIf { it.isNotEmpty() }
+  val digestAgentId = normalizedObserverAgentId(session.observerDigest?.agentId)
   if (digestAgentId == selectedAgentId) return sessions
   return sessions.toMutableList().also {
     it[index] =
@@ -6896,22 +6900,17 @@ internal fun reconcileSessionObserverProjectionOwner(
   val digest = session.observerDigest
   if (session.key != "global" || digest == null) return session
   val owner =
-    ownerAgentId
-      ?.trim()
-      ?.lowercase()
-      ?.takeIf { it.isNotEmpty() }
+    normalizedObserverAgentId(ownerAgentId)
       ?: return session.copy(observerDigest = null, hasObserverDigestMetadata = false)
-  val digestOwner =
-    digest.agentId
-      ?.trim()
-      ?.lowercase()
-      ?.takeIf { it.isNotEmpty() }
+  val digestOwner = normalizedObserverAgentId(digest.agentId)
   return when (digestOwner) {
     null -> session.copy(observerDigest = digest.copy(agentId = owner))
     owner -> session
     else -> session.copy(observerDigest = null, hasObserverDigestMetadata = false)
   }
 }
+
+private fun normalizedObserverAgentId(agentId: String?): String? = agentId?.trim()?.lowercase()?.takeIf(String::isNotEmpty)
 
 private fun reconcileSessionObserverDigest(
   existing: SessionObserverDigest?,

@@ -17,17 +17,17 @@ import {
   subscribeChatOutboxProjection,
   updateQueuedMessageForSession,
 } from "./chat-queue.ts";
+import { ChatStateController } from "./chat-state-controller.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
+import { createPageState } from "./chat-state-page.ts";
+import { invalidateChatMetadataCache, refreshChatMetadata } from "./chat-state-refresh.ts";
 import {
-  ChatStateController,
-  createPageState,
-  handlePageGatewayEvent,
-  refreshChatMetadata,
   resetChatStateForRouteSession,
   retryChatComposerMemoryFallback,
   resolveChatAvatarUrl,
   selectedChatSessionRow,
-  type ChatPageHost,
-} from "./chat-state.ts";
+} from "./chat-state-route.ts";
 import {
   admitStoredChatComposerQueueItem,
   ChatComposerPersistence,
@@ -55,6 +55,37 @@ afterEach(() => {
 });
 
 describe("ChatStateController render lifecycle", () => {
+  it("keeps the active observer digest when another run streams in the same session", () => {
+    const projectedDigest = {
+      sessionKey: "agent:main:current",
+      runId: "run-1",
+      revision: 1,
+      updatedAt: 1_000,
+      headline: "The active run's status",
+      health: "on-track" as const,
+    };
+    const state = {
+      sessionKey: projectedDigest.sessionKey,
+      assistantAgentId: "main",
+      agentsList: { defaultId: "main" },
+      chatRunId: "run-1",
+      observerDigest: projectedDigest,
+      requestUpdate: vi.fn(),
+    } as unknown as ChatPageHost;
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        state: "delta",
+        runId: "run-2",
+        sessionKey: projectedDigest.sessionKey,
+      },
+    });
+
+    expect(state.observerDigest).toBe(projectedDigest);
+  });
+
   it("rejects a run-less observer digest during an identified active run", () => {
     const projectedDigest = {
       sessionKey: "agent:main:current",
@@ -173,6 +204,56 @@ describe("ChatStateController render lifecycle", () => {
     handlePageGatewayEvent(state, observerEvent("work"));
     expect(state.observerDigest?.headline).toBe("work status");
     expect(requestUpdate).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a fresher selected-agent digest when reconnect replays stale global events", () => {
+    const requestUpdate = vi.fn();
+    const state = {
+      sessionKey: "global",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main", scope: "global" },
+      chatRunId: "run-work",
+      observerDigest: {
+        sessionKey: "global",
+        agentId: "work",
+        runId: "run-work",
+        revision: 4,
+        updatedAt: 4_000,
+        headline: "Current work status",
+        health: "grinding" as const,
+      },
+      requestUpdate,
+    } as unknown as ChatPageHost;
+
+    for (const payload of [
+      {
+        sessionKey: "global",
+        agentId: "main",
+        runId: "run-work",
+        revision: 8,
+        updatedAt: 8_000,
+        headline: "Other agent status",
+        health: "done" as const,
+      },
+      {
+        sessionKey: "global",
+        agentId: "work",
+        runId: "run-work",
+        revision: 3,
+        updatedAt: 9_000,
+        headline: "Replayed work status",
+        health: "on-track" as const,
+      },
+    ]) {
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "session.observer",
+        payload,
+      });
+    }
+
+    expect(state.observerDigest?.headline).toBe("Current work status");
+    expect(requestUpdate).not.toHaveBeenCalled();
   });
 
   it("reconciles a selected global alias with its scoped canonical row after reconnect", () => {
@@ -538,6 +619,48 @@ describe("ChatStateController render lifecycle", () => {
     await completion;
 
     expect(effect).not.toHaveBeenCalled();
+  });
+
+  it("aborts attachment reads when a pane adopts a different session", () => {
+    const host = {
+      addController: () => undefined,
+      removeController: () => undefined,
+      requestUpdate: () => undefined,
+      updateComplete: Promise.resolve(true),
+    } satisfies ReactiveControllerHost;
+    const controller = new ChatStateController<ChatPageHost>(host);
+    const previousSignal = controller.attachmentReads.readSignal;
+
+    controller.attachmentReads.updatePending(previousSignal, 1);
+    expect(controller.attachmentReads.pendingReads).toBe(1);
+
+    controller.adoptComposerRoute();
+
+    expect(previousSignal.aborted).toBe(true);
+    expect(controller.attachmentReads.pendingReads).toBe(0);
+    expect(controller.attachmentReads.readSignal).not.toBe(previousSignal);
+    controller.attachmentReads.updatePending(previousSignal, 1);
+    expect(controller.attachmentReads.pendingReads).toBe(0);
+  });
+
+  it("aborts attachment reads when a chat pane disconnects", () => {
+    const host = {
+      addController: () => undefined,
+      removeController: () => undefined,
+      requestUpdate: () => undefined,
+      updateComplete: Promise.resolve(true),
+    } satisfies ReactiveControllerHost;
+    const controller = new ChatStateController<ChatPageHost>(host);
+    const previousSignal = controller.attachmentReads.readSignal;
+
+    controller.attachmentReads.updatePending(previousSignal, 1);
+    controller.hostDisconnected();
+
+    expect(previousSignal.aborted).toBe(true);
+    expect(controller.attachmentReads.pendingReads).toBe(0);
+    expect(controller.attachmentReads.readSignal).not.toBe(previousSignal);
+    controller.attachmentReads.updatePending(previousSignal, -1);
+    expect(controller.attachmentReads.pendingReads).toBe(0);
   });
 
   it("rejects lifecycle work from detached and replaced state epochs", async () => {
@@ -1632,8 +1755,12 @@ describe("resolveChatAvatarUrl", () => {
 });
 
 describe("loadPageAssistantIdentity", () => {
-  it("loads the identity for the current session after a same-client route switch", async () => {
-    const request = vi.fn().mockResolvedValue({ name: "Second Session", agentId: "main" });
+  it("memoizes identity by agent while fetching a cross-agent switch", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const request = vi.fn(async (_method: string, params?: { agentId?: string }) => ({
+      name: params?.agentId === "other" ? "Other Agent" : "Main Agent",
+      agentId: params?.agentId ?? "main",
+    }));
     const client = { request } as unknown as GatewayBrowserClient;
     const context = {
       agents: { state: { agentsList: null }, adoptList: vi.fn() },
@@ -1659,15 +1786,30 @@ describe("loadPageAssistantIdentity", () => {
     );
     state.client = client;
     state.connected = true;
-    state.assistantName = "First Session";
-    state.sessionKey = "agent:main:second";
+    state.assistantName = "Initial";
+    state.sessionKey = "agent:main:first";
 
+    await state.loadAssistantIdentity();
+    state.sessionKey = "agent:main:second";
     await state.loadAssistantIdentity();
 
     expect(request).toHaveBeenCalledWith("agent.identity.get", {
-      sessionKey: "agent:main:second",
+      agentId: "main",
     });
-    expect(state.assistantName).toBe("Second Session");
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(state.assistantName).toBe("Main Agent");
+
+    state.sessionKey = "agent:other:main";
+    await state.loadAssistantIdentity();
+    expect(request).toHaveBeenLastCalledWith("agent.identity.get", { agentId: "other" });
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(state.assistantName).toBe("Other Agent");
+
+    now.mockReturnValue(61_001);
+    state.sessionKey = "agent:main:third";
+    await state.loadAssistantIdentity();
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenLastCalledWith("agent.identity.get", { agentId: "main" });
   });
 });
 
@@ -1729,6 +1871,30 @@ describe("refreshChatMetadata", () => {
       { id: "work-model", name: "Work Model", provider: "openai", available: true },
     ]);
     expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses same-agent metadata and fetches a cross-agent catalog", async () => {
+    const request = vi.fn(async (_method: string, params?: { agentId?: string }) => ({
+      commands: [],
+      models: [
+        {
+          id: `${params?.agentId}-model`,
+          name: `${params?.agentId} Model`,
+          provider: "openai",
+        },
+      ],
+    }));
+    const state = createMetadataState(request);
+
+    await refreshChatMetadata(state);
+    state.sessionKey = "agent:work:second";
+    await refreshChatMetadata(state);
+    expect(request).toHaveBeenCalledTimes(1);
+
+    state.sessionKey = "agent:other:main";
+    await refreshChatMetadata(state);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenLastCalledWith("chat.metadata", { agentId: "other" });
   });
 
   it("ignores metadata after switching to a different agent", async () => {
@@ -1840,6 +2006,7 @@ describe("refreshChatMetadata", () => {
     const state = createMetadataState(request);
 
     const firstRefresh = refreshChatMetadata(state);
+    invalidateChatMetadataCache(state);
     const secondRefresh = refreshChatMetadata(state);
     resolveSecond({
       commands: [],

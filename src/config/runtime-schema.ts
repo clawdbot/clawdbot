@@ -31,7 +31,7 @@ export function loadGatewayRuntimeConfigSchema(): ConfigSchemaResponse {
 }
 
 export async function readBestEffortRuntimeConfigSchema(): Promise<ConfigSchemaResponse> {
-  const snapshot = await readConfigFileSnapshot();
+  const snapshot = await readConfigFileSnapshot({ observe: false });
   const config = snapshot.valid
     ? snapshot.config
     : { agents: { list: [{ id: "main", default: true }] }, plugins: { enabled: true } };

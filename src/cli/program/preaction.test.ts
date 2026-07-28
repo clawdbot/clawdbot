@@ -201,6 +201,14 @@ describe("registerPreActionHooks", () => {
       .action(() => {});
     programLocal.command("completion").action(() => {});
     programLocal.command("secrets").action(() => {});
+    const skills = programLocal.command("skills");
+    for (const skillCommand of ["install", "verify"]) {
+      skills
+        .command(skillCommand)
+        .argument("<skill-ref>")
+        .option("--version <version>")
+        .action(() => {});
+    }
     programLocal
       .command("qa")
       .command("suite")
@@ -248,6 +256,7 @@ describe("registerPreActionHooks", () => {
       .argument("<value>")
       .option("--json")
       .action(() => {});
+    config.command("file").action(() => {});
     config
       .command("validate")
       .option("--json")
@@ -654,6 +663,51 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    {
+      name: "version-pinned skill install",
+      action: "install",
+      argv: ["node", "openclaw", "skills", "install", "@owner/weather", "--version", "1.2.3"],
+    },
+    {
+      name: "version-pinned skill verification",
+      action: "verify",
+      argv: ["node", "openclaw", "skills", "verify", "@owner/weather", "--version", "1.2.3"],
+    },
+    {
+      name: "equals-form version-pinned skill install",
+      action: "install",
+      argv: ["node", "openclaw", "skills", "install", "@owner/weather", "--version=1.2.3"],
+    },
+    {
+      name: "profiled version-pinned skill verification",
+      action: "verify",
+      argv: [
+        "node",
+        "openclaw",
+        "--profile",
+        "work",
+        "skills",
+        "verify",
+        "@owner/weather",
+        "--version",
+        "1.2.3",
+      ],
+    },
+  ])("runs the execution bootstrap for $name", async ({ action, argv }) => {
+    await runPreAction({
+      parseArgv: ["skills", action],
+      processArgv: argv,
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtime: runtimeMock,
+        commandPath: ["skills", action],
+      }),
+    );
+  });
+
   it("applies --json stdout suppression only for explicit JSON output commands", async () => {
     await runPreAction({
       parseArgv: ["status"],
@@ -827,6 +881,19 @@ describe("registerPreActionHooks", () => {
     });
 
     expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["default profile", ["node", "openclaw", "config", "file"]],
+    ["named profile", ["node", "openclaw", "--profile", "work", "config", "file"]],
+  ])("bypasses config guard for a %s config path query", async (_name, processArgv) => {
+    await runPreAction({
+      parseArgv: ["config", "file"],
+      processArgv,
+    });
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 

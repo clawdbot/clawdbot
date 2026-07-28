@@ -29,7 +29,6 @@ type AttemptRuntime = {
   sessionFile: string;
   sessionTarget?: ContextEngineSessionTarget;
   sessionKey?: string;
-  trajectorySessionFile: string;
   trajectoryRecorder?: EmbeddedRunAttemptTrajectoryRecorder;
   workspaceDir: string;
   isCanonicalWorkspace: boolean;
@@ -208,7 +207,6 @@ export async function dispatchEmbeddedRunAttempt(input: {
     hasRepliedRef: params.hasRepliedRef,
     sessionFile: runtime.sessionFile,
     sessionTarget: runtime.sessionTarget,
-    trajectorySessionFile: runtime.trajectorySessionFile,
     trajectoryRecorder: runtime.trajectoryRecorder,
     workspaceDir: runtime.workspaceDir,
     cwd: params.cwd,

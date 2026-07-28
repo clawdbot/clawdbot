@@ -1,21 +1,19 @@
 // Control UI chat module implements stream reconciliation behavior.
-import { asNullableRecord as asToolRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  isToolCallContentType,
-  isToolResultContentType,
-  resolveToolUseId,
-} from "../../../../src/chat/tool-content.js";
 import {
   streamSegmentHasItemId,
   streamSegmentUsesAccumulatedText,
   trimAccumulatedStreamPrefix,
 } from "../../lib/chat/chat-types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
-import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../lib/string-coerce.ts";
+import {
+  extractToolMessageRefs,
+  resolveLiveToolStreamRefs,
+  resolveMatchingLiveToolIdentity,
+} from "./tool-stream-identity.ts";
 import { resetToolStream } from "./tool-stream.ts";
 
 type StreamReconciliationState = {
@@ -27,6 +25,7 @@ type ToolStreamHost = StreamReconciliationState & {
   chatStreamSegments?: Array<{
     text?: unknown;
     ts?: unknown;
+    runId?: unknown;
     toolCallId?: unknown;
     itemId?: unknown;
   }>;
@@ -41,69 +40,9 @@ type VisibleAssistantStreamPart = {
   source: "segment" | "current";
   timestamp: number;
   itemId?: string;
+  runId?: string;
   toolCallId?: string;
 };
-
-type ToolMessageRef = {
-  id: string;
-};
-
-const TOOL_NAME_FIELDS = ["toolName", "tool_name"] as const;
-
-function addToolRef(refs: ToolMessageRef[], seen: Set<string>, id: string | undefined) {
-  if (!id || seen.has(id)) {
-    return;
-  }
-  seen.add(id);
-  refs.push({ id });
-}
-
-function isToolLikeRole(role: unknown): boolean {
-  return typeof role === "string" && normalizeRoleForGrouping(role).toLowerCase() === "tool";
-}
-
-function hasToolName(message: Record<string, unknown>): boolean {
-  return TOOL_NAME_FIELDS.some((field) => Boolean(normalizeOptionalString(message[field])));
-}
-
-function toolContentBlocks(message: Record<string, unknown>): Record<string, unknown>[] {
-  return Array.isArray(message.content)
-    ? message.content.filter(
-        (block): block is Record<string, unknown> => Boolean(block) && typeof block === "object",
-      )
-    : [];
-}
-
-function isToolContentBlock(block: Record<string, unknown>): boolean {
-  return isToolCallContentType(block.type) || isToolResultContentType(block.type);
-}
-
-function extractToolMessageRefs(message: unknown): ToolMessageRef[] {
-  const record = asToolRecord(message);
-  if (!record) {
-    return [];
-  }
-
-  const refs: ToolMessageRef[] = [];
-  const seen = new Set<string>();
-  const blocks = toolContentBlocks(record);
-  const topLevelToolId = resolveToolUseId(record);
-  const messageHasToolShape =
-    isToolLikeRole(record.role) || hasToolName(record) || blocks.some(isToolContentBlock);
-
-  if (messageHasToolShape) {
-    addToolRef(refs, seen, topLevelToolId);
-  }
-
-  for (const block of blocks) {
-    if (!isToolContentBlock(block)) {
-      continue;
-    }
-    addToolRef(refs, seen, resolveToolUseId(block) ?? topLevelToolId);
-  }
-
-  return refs;
-}
 
 type AssistantMessageVisibility = (message: unknown) => boolean;
 type StreamVisibility = (stream: string) => boolean;
@@ -180,21 +119,17 @@ export function persistedCurrentToolStreamIds(
   messages: unknown[],
   state: StreamReconciliationState,
 ): Set<string> {
-  const liveToolIds = currentLiveToolCallIds(state);
+  const liveToolRefs = resolveLiveToolStreamRefs(state);
   const matchedToolIds = new Set<string>();
-  if (liveToolIds.length === 0) {
+  if (liveToolRefs.length === 0) {
     return matchedToolIds;
   }
-  const liveToolIdSet = new Set(liveToolIds);
-  const persistedToolIds = new Set<string>();
   for (const message of messages.slice(lastUserMessageIndex(messages) + 1)) {
     for (const ref of extractToolMessageRefs(message)) {
-      persistedToolIds.add(ref.id);
-    }
-  }
-  for (const id of persistedToolIds) {
-    if (liveToolIdSet.has(id)) {
-      matchedToolIds.add(id);
+      const identity = resolveMatchingLiveToolIdentity(ref, liveToolRefs);
+      if (identity) {
+        matchedToolIds.add(identity);
+      }
     }
   }
   return matchedToolIds;
@@ -328,7 +263,7 @@ function visibleAssistantStreamParts(
   opts: Pick<MaterializeVisibleStreamOptions, "includeCurrent" | "isHiddenStreamText">,
 ): VisibleAssistantStreamPart[] {
   const streamHost = state as ToolStreamHost;
-  const liveToolIds = currentLiveToolCallIds(state);
+  const liveToolRefs = resolveLiveToolStreamRefs(state);
   const parts: VisibleAssistantStreamPart[] = [];
   let previousText: string | null = null;
   const segments = Array.isArray(streamHost.chatStreamSegments)
@@ -346,7 +281,8 @@ function visibleAssistantStreamParts(
     const usesItemId = streamSegmentHasItemId(segment);
     const itemId =
       usesItemId && typeof segment.itemId === "string" ? segment.itemId.trim() : undefined;
-    const indexedToolCallId = usesItemId ? undefined : liveToolIds[toolIndexedSegmentIndex];
+    const indexedToolRef = usesItemId ? undefined : liveToolRefs[toolIndexedSegmentIndex];
+    const segmentRunId = normalizeOptionalString(segment.runId) ?? indexedToolRef?.runId;
     if (!usesItemId) {
       toolIndexedSegmentIndex += 1;
     }
@@ -363,7 +299,8 @@ function visibleAssistantStreamParts(
         timestamp:
           typeof segment.ts === "number" && Number.isFinite(segment.ts) ? segment.ts : Date.now(),
         ...(itemId ? { itemId } : {}),
-        toolCallId: explicitToolCallId ?? indexedToolCallId,
+        ...(segmentRunId ? { runId: segmentRunId } : {}),
+        toolCallId: explicitToolCallId ?? indexedToolRef?.id,
       });
     }
     if (usesAccumulatedText && segment.text.trim()) {
@@ -519,13 +456,27 @@ function currentToolStreamMessageIndex(
   state: StreamReconciliationState,
   startIndex: number,
   toolCallId?: string,
+  runId?: string,
 ): number {
-  const liveToolIds = toolCallId ? new Set([toolCallId]) : new Set(currentLiveToolCallIds(state));
+  const liveToolRefs = resolveLiveToolStreamRefs(state);
+  const selectedToolIdentity = toolCallId
+    ? resolveMatchingLiveToolIdentity({ id: toolCallId, ...(runId ? { runId } : {}) }, liveToolRefs)
+    : undefined;
+  const liveToolIds = selectedToolIdentity
+    ? new Set([selectedToolIdentity])
+    : toolCallId
+      ? new Set<string>()
+      : new Set(liveToolRefs.map((ref) => ref.identity));
   if (liveToolIds.size === 0) {
     return -1;
   }
   for (let index = startIndex; index < messages.length; index++) {
-    if (extractToolMessageRefs(messages[index]).some((ref) => liveToolIds.has(ref.id))) {
+    if (
+      extractToolMessageRefs(messages[index]).some((ref) => {
+        const identity = resolveMatchingLiveToolIdentity(ref, liveToolRefs);
+        return identity !== undefined && liveToolIds.has(identity);
+      })
+    ) {
       return index;
     }
   }
@@ -619,7 +570,13 @@ export function materializeVisibleStreamState(
     }
     const toolIndex =
       part.source === "segment" && part.toolCallId
-        ? currentToolStreamMessageIndex(nextMessages, state, startIndex, part.toolCallId)
+        ? currentToolStreamMessageIndex(
+            nextMessages,
+            state,
+            startIndex,
+            part.toolCallId,
+            part.runId,
+          )
         : -1;
     if (opts.requirePersistedTool && toolIndex < 0) {
       continue;
@@ -650,7 +607,7 @@ export function prunePersistedToolStreamMessages(
     return;
   }
   const toolHost = state as ToolStreamHost;
-  const liveToolIds = currentLiveToolCallIds(state);
+  const liveToolRefs = resolveLiveToolStreamRefs(state);
   if (toolHost.toolStreamById instanceof Map) {
     for (const id of persistedToolIds) {
       toolHost.toolStreamById.delete(id);
@@ -664,7 +621,10 @@ export function prunePersistedToolStreamMessages(
   if (Array.isArray(toolHost.chatToolMessages)) {
     toolHost.chatToolMessages = toolHost.chatToolMessages.filter((message) => {
       const refs = extractToolMessageRefs(message);
-      return refs.every((ref) => !persistedToolIds.has(ref.id));
+      return refs.every((ref) => {
+        const identity = resolveMatchingLiveToolIdentity(ref, liveToolRefs);
+        return identity === undefined || !persistedToolIds.has(identity);
+      });
     });
   }
   if (!Array.isArray(toolHost.chatStreamSegments)) {
@@ -678,13 +638,22 @@ export function prunePersistedToolStreamMessages(
         ? segment.toolCallId.trim()
         : null;
     const usesItemId = streamSegmentHasItemId(segment);
-    const indexedToolCallId = usesItemId ? null : (liveToolIds[toolIndexedSegmentIndex] ?? null);
+    const indexedToolRef = usesItemId ? undefined : liveToolRefs[toolIndexedSegmentIndex];
     if (!usesItemId) {
       toolIndexedSegmentIndex += 1;
     }
-    const toolCallId = explicitToolCallId ?? indexedToolCallId;
+    const segmentRunId = normalizeOptionalString(segment.runId);
+    const toolIdentity = explicitToolCallId
+      ? resolveMatchingLiveToolIdentity(
+          {
+            id: explicitToolCallId,
+            ...(segmentRunId ? { runId: segmentRunId } : {}),
+          },
+          liveToolRefs,
+        )
+      : indexedToolRef?.identity;
     const text = typeof segment.text === "string" ? segment.text : "";
-    if (toolCallId && persistedToolIds.has(toolCallId)) {
+    if (toolIdentity && persistedToolIds.has(toolIdentity)) {
       if (streamSegmentUsesAccumulatedText(segment) && text.trim()) {
         lastPrunedAccumulatedText = text;
       }

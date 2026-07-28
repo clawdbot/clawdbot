@@ -15,25 +15,9 @@ import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import { projectSessionActor } from "../session-utils-row.js";
 
 type SessionCatalogRequestEntrySnapshot = {
-  cacheKey: string;
   sessionEntries: SessionCatalogEntrySnapshot;
   projectHostCreatedActors: (host: SessionCatalogHost) => SessionCatalogHost;
 };
-
-function stableJson(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map(stableJson).join(",")}]`;
-  }
-  if (value && typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    return `{${Object.keys(record)
-      .toSorted()
-      .filter((key) => record[key] !== undefined)
-      .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
 
 export function createSessionCatalogRequestEntrySnapshot(params: {
   cfg: OpenClawConfig;
@@ -42,13 +26,34 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
   const entriesByAgentId = new Map<string, readonly SessionEntrySummary[]>();
   const entryIndexByAgentId = new Map<string, ReadonlyMap<string, SessionEntry>>();
   const actorBySessionKey = new Map<string, SessionCatalogSession["createdActor"]>();
+  let catalogEntries:
+    | ReturnType<NonNullable<SessionCatalogEntrySnapshot["entriesForCatalog"]>>
+    | undefined;
 
   const entriesForAgent = (rawAgentId: string): readonly SessionEntrySummary[] => {
     const agentId = normalizeAgentId(rawAgentId);
     if (!entriesByAgentId.has(agentId)) {
-      entriesByAgentId.set(agentId, listSessionEntriesReadOnly({ agentId }));
+      entriesByAgentId.set(
+        agentId,
+        listSessionEntriesReadOnly({ agentId, clone: false, projection: "list" }),
+      );
     }
     return entriesByAgentId.get(agentId) ?? [];
+  };
+
+  const entriesForCatalog: NonNullable<SessionCatalogEntrySnapshot["entriesForCatalog"]> = () => {
+    if (catalogEntries) {
+      return catalogEntries;
+    }
+    const defaultAgentId = resolveDefaultAgentId(params.cfg);
+    const agentIds = [
+      defaultAgentId,
+      ...listAgentIds(params.cfg).filter((agentId) => agentId !== defaultAgentId),
+    ];
+    catalogEntries = agentIds.flatMap((agentId) =>
+      entriesForAgent(agentId).map((entry) => Object.assign({}, entry, { agentId })),
+    );
+    return catalogEntries;
   };
 
   const entryIndexForAgent = (agentId: string): ReadonlyMap<string, SessionEntry> => {
@@ -88,21 +93,8 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
     return actor;
   };
 
-  const defaultAgentId = resolveDefaultAgentId(params.cfg);
-  const cacheAgentIds = [
-    defaultAgentId,
-    ...listAgentIds(params.cfg).filter((agentId) => agentId !== defaultAgentId),
-  ];
-  const cacheKey = stableJson(
-    cacheAgentIds.map((agentId) => ({
-      agentId,
-      entries: entriesForAgent(agentId).map(({ sessionKey, entry }) => ({ sessionKey, entry })),
-    })),
-  );
-
   return {
-    cacheKey,
-    sessionEntries: { entriesForAgent },
+    sessionEntries: { entriesForAgent, entriesForCatalog },
     projectHostCreatedActors: (host) => ({
       ...host,
       sessions: host.sessions.map(({ createdActor: _providerCreatedActor, ...session }) => {

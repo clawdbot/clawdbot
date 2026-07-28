@@ -36,6 +36,15 @@ async function roundedWidth(locator: Locator): Promise<number> {
   return Math.round((await locator.boundingBox())?.width ?? 0);
 }
 
+async function waitForSettingsSidebar(page: Page) {
+  const sidebar = page.locator(".settings-sidebar");
+  const search = sidebar.getByRole("searchbox", { name: "Search settings" });
+  await sidebar.waitFor({ state: "visible" });
+  // The route shell can paint before the takeover controls settle on a loaded CI host.
+  await search.waitFor({ state: "visible" });
+  return { search, sidebar };
+}
+
 function visibleDrawerButton(page: Page) {
   return page.locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible").first();
 }
@@ -160,12 +169,11 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
 
     try {
       await page.goto(`${server.baseUrl}settings/general`);
-      const settingsSidebar = page.locator(".settings-sidebar");
+      const { search: settingsSearchInput, sidebar: settingsSidebar } =
+        await waitForSettingsSidebar(page);
       const settingsSearchShell = settingsSidebar.locator(".settings-sidebar__search");
-      const settingsSearchInput = settingsSidebar.locator(".settings-sidebar__search-input");
       const settingsNav = settingsSidebar.locator(".settings-sidebar__nav");
       const firstSettingsLink = settingsSidebar.locator(".settings-sidebar__item").first();
-      await settingsSidebar.waitFor();
       await expect
         .poll(() =>
           page
@@ -333,8 +341,8 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await expect.poll(() => identityCard.isVisible()).toBe(true);
       await openSettingsFromIdentity();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/general");
-      const settingsSidebar = page.locator(".settings-sidebar");
-      await expect.poll(() => settingsSidebar.isVisible()).toBe(true);
+      const { search: settingsSearch, sidebar: settingsSidebar } =
+        await waitForSettingsSidebar(page);
       await expect.poll(() => sidebar.isVisible()).toBe(false);
       await expect
         .poll(() =>
@@ -347,12 +355,8 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await captureUiProof(page, "01a-settings-takeover.png");
       await captureSettingsSidebarProof(settingsSidebar, "01a-settings-search-initial.png");
       await holdUiProof(page);
-      const settingsSearch = settingsSidebar.getByRole("searchbox", {
-        name: "Search settings",
-      });
       const settingsLinks = settingsSidebar.locator(".settings-sidebar__item");
       const allSettingsLabels = await trimmedTextContents(settingsLinks);
-      await expect.poll(() => settingsSearch.isVisible()).toBe(true);
       await expect
         .poll(() =>
           settingsSearch.evaluate((input) => {
@@ -372,7 +376,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
             ),
           ),
         )
-        .toEqual(["General", "Gateway Host"]);
+        .toEqual(["Gateway", "Gateway Host"]);
       await settingsSearch.fill("mcp");
       await expect
         .poll(() =>
@@ -401,9 +405,9 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
           "Debug",
           "Logs",
           "About",
-          "General",
           "Appearance",
           "Notifications",
+          "Gateway",
         ]);
       await captureSettingsSidebarProof(settingsSidebar, "01c-settings-search-group.png");
       await holdUiProof(page);
@@ -422,6 +426,45 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await expect.poll(() => page.locator("#config-section-browser").isVisible()).toBe(true);
       await captureSettingsSidebarProof(settingsSidebar, "01c-settings-search-deep-link.png");
       await holdUiProof(page);
+
+      await settingsSearch.fill("session observer");
+      const sidebarPreferencesResult = settingsSidebar.getByRole("link", {
+        exact: true,
+        name: "Sidebar",
+      });
+      await expect.poll(() => sidebarPreferencesResult.isVisible()).toBe(true);
+      await sidebarPreferencesResult.click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/appearance");
+      await expect.poll(() => new URL(page.url()).search).toBe("?section=__appearance__");
+      await expect.poll(() => new URL(page.url()).hash).toBe("#settings-appearance-sidebar");
+      await expect
+        .poll(() =>
+          page
+            .locator("#settings-appearance-sidebar")
+            .getByRole("heading", { name: "Session observer" })
+            .isVisible(),
+        )
+        .toBe(true);
+
+      await settingsSearch.fill("message width");
+      const chatPreferencesResult = settingsSidebar.getByRole("link", {
+        exact: true,
+        name: "Chat",
+      });
+      await expect.poll(() => chatPreferencesResult.isVisible()).toBe(true);
+      await chatPreferencesResult.click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/appearance");
+      await expect.poll(() => new URL(page.url()).search).toBe("?section=__appearance__");
+      await expect.poll(() => new URL(page.url()).hash).toBe("#settings-appearance-chat");
+      await expect
+        .poll(() =>
+          page
+            .locator("#settings-appearance-chat")
+            .getByText("Message width", { exact: true })
+            .isVisible(),
+        )
+        .toBe(true);
+
       await settingsSearch.fill("does-not-exist");
       await expect.poll(() => settingsLinks.count()).toBe(0);
       await expect
@@ -448,7 +491,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await captureSettingsSidebarProof(settingsSidebar, "01f-settings-search-navigated.png");
       await holdUiProof(page);
       await page.keyboard.press("Escape");
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/chat");
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath("main"));
       await expect.poll(() => sidebar.isVisible()).toBe(true);
       await openSettingsFromIdentity();
       await expect.poll(() => settingsSidebar.isVisible()).toBe(true);
@@ -518,12 +561,17 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       // The More menu is transient: closed after reload, unpinned routes inside.
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("false");
       await moreButton.click();
+      await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("true");
+      const editPersistedPinnedItems = moreMenu.getByRole("menuitem", {
+        name: "Edit pinned items",
+      });
+      await expect.poll(() => editPersistedPinnedItems.isVisible()).toBe(true);
       await expect
         .poll(() => trimmedTextContents(moreMenu.getByRole("menuitem")))
         .not.toContain("Tasks");
       await captureUiProof(page, "03-persisted-customization.png");
 
-      await moreMenu.getByRole("menuitem", { name: "Edit pinned items" }).click();
+      await editPersistedPinnedItems.click();
       await menu.getByRole("menuitem", { name: "Reset pinned items" }).click();
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Automations", "Plugins"]);
 
@@ -777,10 +825,19 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       expect(Number.parseFloat(movement.after)).toBeGreaterThanOrEqual(18);
       expect(Number.parseFloat(movement.after)).toBeLessThanOrEqual(50);
       await expectLobsterOnFooterLedge(sidebar);
-      const sprite = pet.locator(".lobster-pet:not(.lobster-pet--passer)").first();
-      await sprite.dispatchEvent("pointerdown");
-      await sprite.dispatchEvent("pointerup");
-      await expect.poll(() => sprite.getAttribute("class")).toContain("lobster-pet--act-startle");
+      // startle clears itself after LOBSTER_PET_ACT_DURATION_MS.startle (750ms), so
+      // poking over one round trip and then polling for the class over another can
+      // straddle the entire window on a loaded runner and never observe it. Poke and
+      // read the resulting class in a single in-page step, as the unit test does.
+      const startleClasses = await pet.evaluate(async (element) => {
+        const lobster = element as HTMLElement & { updateComplete: Promise<unknown> };
+        const target = lobster.querySelector<HTMLElement>(".lobster-pet:not(.lobster-pet--passer)");
+        target?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+        target?.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+        await lobster.updateComplete;
+        return target?.getAttribute("class") ?? "";
+      });
+      expect(startleClasses).toContain("lobster-pet--act-startle");
       await captureUiProof(page, "08-lobster-footer-ledge-desktop.png");
 
       await page.setViewportSize({ height: 900, width: 900 });
@@ -809,6 +866,17 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
           "wa-dropdown.sidebar-customize-menu:not(.sidebar-more-menu):not(.sidebar-agent-menu)",
         )
         .locator('[role="menuitem"], [role="menuitemcheckbox"]');
+      // The pin editor installs roving focus asynchronously. Pressing End before it
+      // settles sends the key to the outgoing More menu, so the list never moves and
+      // the focus assertions below can never become true.
+      await expect
+        .poll(() =>
+          pinItems.evaluateAll((items) => items.filter((item) => item.tabIndex === 0).length),
+        )
+        .toBe(1);
+      await expect
+        .poll(() => pinItems.first().evaluate((element) => element === document.activeElement))
+        .toBe(true);
       await page.keyboard.press("End");
       await expect
         .poll(() => pinItems.last().evaluate((element) => element === document.activeElement))

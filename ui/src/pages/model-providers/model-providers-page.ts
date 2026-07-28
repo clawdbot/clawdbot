@@ -1,8 +1,9 @@
 import { consume } from "@lit/context";
+import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ModelsProbeResult } from "../../api/types.ts";
+import type { FastMode, ModelsProbeResult } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
@@ -119,6 +120,19 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     .watch(
       () => this.context?.gateway,
       (gateway, notify) => gateway.subscribe(notify),
+    )
+    .watch(
+      () => this.context?.runtimeConfig,
+      (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
+      (runtimeConfig) => {
+        if (!runtimeConfig.state.configSnapshot && !runtimeConfig.state.configLoading) {
+          void runtimeConfig.ensureLoaded().catch(() => undefined);
+        }
+      },
+    )
+    .watch(
+      () => this.context?.overlays,
+      (overlays, notify) => overlays.subscribe(notify),
     )
     .watch(
       () => this.context?.agents,
@@ -570,6 +584,30 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     const data = this.data ?? EMPTY_MODEL_PROVIDERS_DATA;
     const config = readModelProviderConfig(data.config);
     const defaults = this.defaultsDraft ?? config.defaults;
+    const runtimeConfig = this.context.runtimeConfig;
+    const runtimeState = runtimeConfig.state;
+    const configObject =
+      asConfigRecord(runtimeState.configForm ?? runtimeState.configSnapshot?.config) ??
+      asConfigRecord(data.config) ??
+      {};
+    const agentsDefaults = asConfigRecord(asConfigRecord(configObject.agents)?.defaults);
+    const thinkingLevel =
+      typeof agentsDefaults?.thinkingDefault === "string" ? agentsDefaults.thinkingDefault : "off";
+    const configuredFastMode = agentsDefaults?.fastModeDefault;
+    const fastMode =
+      configuredFastMode === "auto" || typeof configuredFastMode === "boolean"
+        ? configuredFastMode
+        : false;
+    const update = this.context.overlays.snapshot;
+    // The overlay update states replace General's old configUpdating prop,
+    // which config-page derived from this same snapshot (isUpdateBusy); the
+    // busy gate is behavior-identical to the pre-move General controls.
+    const configBusy =
+      runtimeState.configLoading ||
+      runtimeState.configSaving ||
+      runtimeState.configApplying ||
+      update.updateRunning ||
+      update.updateReconciliationPending;
     const cards = buildModelProviderCards({
       ...data,
       configProviderIds: config.providerIds,
@@ -596,6 +634,17 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       configuredModels: buildSelectableDefaultModels(data.models, defaults),
       defaultModels: defaults,
       defaultModelsDirty: this.defaultsDraft !== null,
+      thinkingLevel,
+      fastMode,
+      configBusy,
+      configConnected: runtimeState.connected,
+      configLoading: runtimeState.configLoading,
+      configSaving: runtimeState.configSaving,
+      configApplying: runtimeState.configApplying,
+      configUpdating: update.updateRunning || update.updateReconciliationPending,
+      configNeedsApply: runtimeState.configNeedsApply,
+      configRawDraftPending: runtimeState.configFormMode === "raw" && runtimeState.configFormDirty,
+      configAutoSaveStatus: runtimeState.configAutoSaveStatus,
       unconfiguredProviders: buildUnconfiguredProviderOptions(
         data.catalogModels,
         configuredProviderIds,
@@ -661,6 +710,13 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         this.defaultsDraft = null;
         this.setMessage("defaults", null);
       },
+      onThinkingChange: (level) =>
+        runtimeConfig.patchForm(["agents", "defaults", "thinkingDefault"], level),
+      onFastModeChange: (mode: FastMode) =>
+        runtimeConfig.patchForm(["agents", "defaults", "fastModeDefault"], mode),
+      onApplyConfig: () => void runtimeConfig.apply(),
+      onRetrySaveConfig: () => void runtimeConfig.save(),
+      onDiscardConfig: () => void runtimeConfig.discardDraft(),
     });
     return html`
       <section class="content-header">

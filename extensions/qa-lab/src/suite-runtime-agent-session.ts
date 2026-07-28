@@ -3,7 +3,6 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
-  formatSqliteSessionFileMarker,
   listSessionEntries,
   loadTranscriptEventsSync,
   resolveStorePath,
@@ -333,11 +332,6 @@ async function seedQaSessionTranscript(
     sessionKey,
     storePath,
     entry: {
-      sessionFile: formatSqliteSessionFileMarker({
-        agentId: "qa",
-        sessionId,
-        storePath,
-      }),
       sessionId,
       updatedAt: params.updatedAt,
       ...(label ? { origin: { label } } : {}),

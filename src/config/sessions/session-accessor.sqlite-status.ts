@@ -5,6 +5,7 @@ import type {
   SessionEntryStatus,
   SessionEntrySummary,
 } from "./session-accessor.sqlite-contract.js";
+import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionStatusDatabase = Pick<OpenClawAgentKyselyDatabase, "session_nodes">;
@@ -25,8 +26,8 @@ export function parseSqliteSessionEntryJson(row: { entry_json: string }): Sessio
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return null;
     }
-    const entry = parsed as Partial<SessionEntry>;
-    return typeof entry.sessionId === "string" ? (entry as SessionEntry) : null;
+    const entry = projectCanonicalSessionEntryShape(parsed as Record<string, unknown>);
+    return typeof entry.sessionId === "string" ? entry : null;
   } catch {
     return null;
   }

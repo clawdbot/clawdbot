@@ -47,10 +47,23 @@ export const LAB_FEATURES = [
     description: () => t("labsPage.codeMode.description"),
     docsUrl: "https://docs.openclaw.ai/tools/code-mode",
     configPath: ["tools", "codeMode", "enabled"],
-    onValue: true,
+    // The on position writes the shipped "auto" tier, never `true`: Labs offers
+    // Auto/Off, and force-on for unevaluated models stays a config-only choice.
+    onValue: "auto",
     offValue: false,
-    activeValues: [true],
-    readEnabled: null,
+    activeValues: [true, "auto"],
+    // Mirrors resolveCodeModeConfig: the shipped default is "auto", so an unset
+    // gate reads as on; only an explicit `false` (shorthand or leaf) reads off.
+    // `true` remains a valid config-only force-on and must also read as on.
+    readEnabled: (raw) => {
+      if (typeof raw === "boolean") {
+        return raw;
+      }
+      if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+        return (raw as Record<string, unknown>).enabled !== false;
+      }
+      return true;
+    },
     enableAlso: null,
     restartHint: null,
   },

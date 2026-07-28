@@ -36,6 +36,7 @@ import type { ExecAuthorizationPlan } from "../infra/exec-authorization-plan.js"
 import { buildAuthorizedShellCommandFromPlan } from "../infra/exec-authorization-render.js";
 import {
   defaultExecAutoReviewer,
+  resolveExecAutoReviewDecision,
   type ExecAutoReviewer,
   type ExecAutoReviewInput,
 } from "../infra/exec-auto-review.js";
@@ -79,6 +80,7 @@ import type {
   ExecApprovalFollowupOutcome,
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
+import { abortable } from "./embedded-agent-runner/run/abortable.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
 /** Full input bundle for gateway-host allowlist and approval processing. */
@@ -766,6 +768,7 @@ export async function processGatewayAllowlist(
     const autoReviewArgv =
       allowlistEval.segments.length === 1 &&
       autoReviewSegment !== undefined &&
+      autoReviewSegment.resolution?.policyBlocked !== true &&
       // Shell startup can execute unreviewed profile code before its bound payload.
       !isBlockedShellWrapperCommand(autoReviewSegment.argv) &&
       (autoReviewSegment.raw === undefined ||
@@ -796,7 +799,7 @@ export async function processGatewayAllowlist(
       requiresSecurityAuditSuppressionApproval;
     if (canAutoReviewApprovalMiss) {
       const reviewer = params.autoReviewer ?? defaultExecAutoReviewer;
-      const decision = await reviewer({
+      const pendingDecision = resolveExecAutoReviewDecision(reviewer, {
         command: params.command,
         argv: autoReviewArgv,
         resolvedPath: autoReviewResolvedPath,
@@ -824,6 +827,10 @@ export async function processGatewayAllowlist(
           sessionKey: params.sessionKey,
         },
       });
+      // Custom reviewers may never settle; cancellation must not retain approval authority.
+      const decision = params.signal
+        ? await abortable(params.signal, pendingDecision)
+        : await pendingDecision;
       params.signal?.throwIfAborted();
       if (
         decision.decision === "allow-once" &&

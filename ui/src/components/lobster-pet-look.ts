@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing, svg } from "lit";
+import { fnv1aUtf16 } from "../lib/fnv1a.ts";
 import { lobsterHonorific } from "./lobster-dex.ts";
 import type {
   LobsterPasserKind,
@@ -14,63 +15,56 @@ import type {
   LobsterPetPaletteId,
   LobsterPetPersonalityId,
 } from "./lobster-pet-contract.ts";
+import { lobsterPaletteName, lobsterRandomName } from "./lobster-pet-lore.ts";
+import { moonPhaseFraction } from "./lobster-pet-moon.ts";
+import {
+  CANONICAL_CHIMERA_PARTS,
+  LOBSTER_PALETTE_WEIGHTS,
+  chimeraBodyClaw,
+  rollChimeraParts,
+} from "./lobster-pet-palettes.ts";
+import {
+  ACTUAL_LOBSTER,
+  FLATPACK_LOBSTER,
+  LOADING_LOBSTER,
+  TINFOIL_PARTS,
+} from "./lobster-pet-sprites-wild.ts";
 import {
   ACCESSORY_SPRITES,
   ANTENNAE_SPRITES,
   BALLOON,
   BINDLE,
-  CALICO_SPOTS,
   FRECKLE_SPOTS,
+  GLITCH_GHOSTS,
   GRUMPY_FACE,
   HEADWEAR,
-  LUMEN_SPOTS,
+  PALETTE_OVERLAYS,
   PASSER_SPRITES,
   PASSER_TITLES,
   PATTERNED_PALETTES,
+  PIXEL_LOBSTER,
   RETRO_ANTENNAE,
   RETRO_FACE,
   RETRO_MEGA_CLAW,
   renderBottleSvg,
   SAILOR_CAP,
+  SELENE_MOON,
   SPLIT_HALF,
   TAIL_FAN,
 } from "./lobster-pet-sprites.ts";
 
-// Rarity ladder loosely mirrors real lobster genetics: blue ~1 in 2 million,
-// yellow ~1 in 30 million, calico ~1 in 30 million, split two-tone ~1 in
-// 50 million, albino/ghost ~1 in 100 million, cotton candy ~1 in 100 million.
-// Abyss and lumen are our deep-sea fantasies. Split/calico extra geometry and
-// ghost/abyss/lumen/cottoncandy styling key off the palette id (see
-// lobster-pet.css and renderLobsterSvg).
-const PALETTES: Array<[LobsterPetPalette, number]> = [
-  [{ id: "crimson", shell: "#ff4f40", claw: "#ff775f" }, 26],
-  [{ id: "coral", shell: "#d0836a", claw: "#de9b80" }, 26],
-  [{ id: "teal", shell: "#2fbfa7", claw: "#5cd9c4" }, 10],
-  [{ id: "violet", shell: "#9f7dfa", claw: "#bba4fd" }, 10],
-  [{ id: "ink", shell: "#5e6b7a", claw: "#7b8996" }, 9],
-  [{ id: "blue", shell: "#4a7dfc", claw: "#7fa4ff" }, 7],
-  [{ id: "gold", shell: "#f4b840", claw: "#f9d47a" }, 5],
-  [{ id: "calico", shell: "#d97a3d", claw: "#e89a63" }, 3],
-  [{ id: "abyss", shell: "#2c3b68", claw: "#465b96" }, 2],
-  // Bioluminescent: photophore freckles that only really glow in the dark
-  // theme (see .lob-lumen in lobster-pet.css).
-  [{ id: "lumen", shell: "#1d2f4e", claw: "#2e4a77" }, 2],
-  [{ id: "ghost", shell: "#dce8f2", claw: "#ecf3fa" }, 1],
-  [{ id: "split", shell: "#ff4f40", claw: "#ff775f" }, 1],
-  // Pastel pink/blue iridescence, after the famous Maine catches.
-  [{ id: "cottoncandy", shell: "#f6a8c9", claw: "#a5c6f0" }, 0.8],
-  // The grail: homage to the classic OpenClaw logo (big raised claw, smirk,
-  // angry brows, white sticker outline). ~0.5% of sessions.
-  [{ id: "retro", shell: "#e8262c", claw: "#f04a3e" }, 0.5],
-];
+export { LOBSTER_PET_PALETTES } from "./lobster-pet-palettes.ts";
 
-// Catalog order for collection UIs (Lobsterdex): common to grail.
-export const LOBSTER_PET_PALETTES: readonly LobsterPetPalette[] = PALETTES.map(
-  ([palette]) => palette,
-);
+const RETRO_GEOMETRY_PALETTES: ReadonlySet<LobsterPetPaletteId> = new Set(["retro", "goldenretro"]);
+
+const PALETTE_FRAME_CLASSES: Partial<Record<LobsterPetPaletteId, string>> = {
+  heisenbug: "lob-heisenbug-frame",
+  cryptid: "lob-cryptid-frame",
+};
 
 // A neutral look used to render catalog minis outside the pet lifecycle.
 export function canonicalLobsterLook(palette: LobsterPetPalette): LobsterPetLook {
+  const paletteHash = fnv1aUtf16(palette.id);
   return {
     palette,
     scale: 2,
@@ -80,7 +74,7 @@ export function canonicalLobsterLook(palette: LobsterPetPalette): LobsterPetLook
     spotPct: 0,
     facing: 1,
     personality: "friendly",
-    blinkDelayS: 0,
+    blinkDelayS: (paletteHash % 36) / 10,
     build: "round",
     clawSize: "regular",
     tailFan: false,
@@ -88,6 +82,7 @@ export function canonicalLobsterLook(palette: LobsterPetPalette): LobsterPetLook
     crusherSide: null,
     freckles: false,
     glint: null,
+    chimeraParts: palette.id === "chimera" ? CANONICAL_CHIMERA_PARTS : null,
   };
 }
 
@@ -155,7 +150,7 @@ const CLAW_SIZES: Array<[LobsterPetClawSize, number]> = [
 // rare-variant geometry stay aligned for every silhouette.
 const LOBSTER_PET_BUILD_MULS: Record<LobsterPetBuild, { w: number; h: number }> = {
   round: { w: 1, h: 1 },
-  squat: { w: 1.14, h: 0.9 },
+  squat: { w: 1.14, h: 0.94 },
   slender: { w: 0.88, h: 1.1 },
 };
 
@@ -165,52 +160,9 @@ const LOBSTER_PET_CLAW_MULS: Record<LobsterPetClawSize, number> = {
   mighty: 1.18,
 };
 
-// Seeded pet names; rare palettes carry signature names. Shown via the
-// sprite's native title tooltip, so no i18n surface.
-const PET_NAMES = [
-  "Pinchy",
-  "Barnaby",
-  "Thermidor",
-  "Clawdette",
-  "Sheldon",
-  "Scuttles",
-  "Bisque",
-  "Crusty",
-  "Snips",
-  "Bubbles",
-  "Clawdia",
-  "Ferdinand",
-  "Maple",
-  "Pearl",
-  "Biscuit",
-  "Captain",
-  "Ziggy",
-  "Noodle",
-  "Waffles",
-  "Pippin",
-  "Squirt",
-  "Chip",
-  "Clementine",
-  "Moss",
-] as const;
-
-const RARE_NAMES: Partial<Record<LobsterPetPaletteId, string>> = {
-  blue: "Blueberry",
-  gold: "Goldie",
-  calico: "Patches",
-  abyss: "Lantern",
-  lumen: "Glimmer",
-  ghost: "Boo",
-  split: "Picasso",
-  cottoncandy: "Taffy",
-  retro: "OG",
-};
-
 export function lobsterPetName(look: LobsterPetLook, seed: number): string {
-  return (
-    RARE_NAMES[look.palette.id] ??
-    expectDefined(PET_NAMES[(seed >>> 3) % PET_NAMES.length], "lobster pet name catalog entry")
-  );
+  const signatureName = lobsterPaletteName(look.palette.id);
+  return signatureName !== look.palette.id ? signatureName : lobsterRandomName(seed);
 }
 
 // A stranger wears a different palette than the resident pet.
@@ -256,7 +208,7 @@ const GLINT_TINTS = ["#ffd166", "#ff8ac2", "#b79bff"] as const;
 
 export function createLobsterPetLook(seed: number, now: Date = new Date()): LobsterPetLook {
   const rng = mulberry32(seed);
-  const palette = pickWeighted(rng, PALETTES);
+  const palette = pickWeighted(rng, LOBSTER_PALETTE_WEIGHTS);
   const scale = pickWeighted(rng, SCALES);
   const accessory = pickWeighted(rng, [...ACCESSORIES, ...seasonalAccessories(now)]);
   const antennae: LobsterPetAntennae = rng() < 0.6 ? "perky" : "droopy";
@@ -281,6 +233,10 @@ export function createLobsterPetLook(seed: number, now: Date = new Date()): Lobs
   const glintRoll = rng();
   const glintPick = GLINT_TINTS[Math.floor(rng() * GLINT_TINTS.length)] ?? null;
   const glint = glintRoll < 0.3 ? glintPick : null;
+  // Append-only trait discipline: always burn all four distinct donor rolls,
+  // then expose them only for Chimera so older seeded traits never shift.
+  const rolledChimeraParts = rollChimeraParts(rng);
+  const chimeraParts = palette.id === "chimera" ? rolledChimeraParts : null;
   const look: LobsterPetLook = {
     palette,
     scale,
@@ -298,13 +254,27 @@ export function createLobsterPetLook(seed: number, now: Date = new Date()): Lobs
     crusherSide,
     freckles,
     glint,
+    chimeraParts,
   };
+  // The LED rides the perky antenna tip. Keep the original antenna roll above
+  // so adding Clawtron does not shift any later seeded trait.
+  let preparedLook = palette.id === "clawtron" ? { ...look, antennae: "perky" as const } : look;
+  // The undead do not do perky. Preserve the antenna roll above so later
+  // seeded traits stay aligned, then enforce the identity at the end.
+  if (palette.id === "zombie") {
+    preparedLook = { ...look, antennae: "droopy" };
+  }
   if (isLobsterAnniversary(now)) {
     // Birthday dress code: everyone is the classic logo, party hats on.
-    const retro = PALETTES.find(([entry]) => entry.id === "retro")?.[0];
-    return { ...look, palette: retro ?? palette, accessory: "party" };
+    const retro = LOBSTER_PALETTE_WEIGHTS.find(([entry]) => entry.id === "retro")?.[0];
+    return {
+      ...preparedLook,
+      palette: retro ?? palette,
+      accessory: "party",
+      chimeraParts: null,
+    };
   }
-  return look;
+  return preparedLook;
 }
 
 // Same species as icons.lobster / the dreams-scene sleeper: smooth dome body
@@ -320,6 +290,15 @@ export function renderLobsterSvg(
     sailorCap?: boolean;
   } = {},
 ) {
+  const isPixel = look.palette.id === "pixel";
+  const isFlatpack = look.palette.id === "flatpack";
+  const isLoading = look.palette.id === "loading";
+  const isActual = look.palette.id === "actual";
+  const hasRetroGeometry = RETRO_GEOMETRY_PALETTES.has(look.palette.id);
+  const openEyeStyle = options.shell || options.sleeping ? "display:none" : "";
+  const closedEyeStyle =
+    options.shell || options.sleeping ? "opacity:1" : options.standalone ? "display:none" : "";
+  const selenePhase = Math.round(moonPhaseFraction(new Date()) * 8) % 8;
   return svg`
     <svg
       class="lobster-pet__svg"
@@ -327,79 +306,89 @@ export function renderLobsterSvg(
       preserveAspectRatio="none"
       aria-hidden="true"
     >
-      ${look.palette.id === "retro" ? RETRO_ANTENNAE : ANTENNAE_SPRITES[look.antennae]}
-      ${look.tailFan ? TAIL_FAN : nothing}
-      <g class="lob-claw lob-claw--l">
-        <path
-          d="M20 42 C5 37 0 47 5 57 C10 67 20 62 25 52 C28 45 25 42 20 42 Z"
-          fill="var(--lob-claw)"
-        />
-      </g>
-      ${
-        look.palette.id === "retro"
-          ? nothing
-          : svg`
-            <g class="lob-claw lob-claw--r">
-              <path
-                d="M100 42 C115 37 120 47 115 57 C110 67 100 62 95 52 C92 45 95 42 100 42 Z"
-                fill="var(--lob-claw)"
-              />
-            </g>
-          `
-      }
-      <path
-        d="M60 8 C32 8 16 32 16 52 C16 72 30 90 44 95 L44 104 L54 104 L54 96 C58 97.5 62 97.5 66 96 L66 104 L76 104 L76 95 C90 90 104 72 104 52 C104 32 88 8 60 8 Z"
-        fill="var(--lob-shell)"
-      />
-      ${look.palette.id === "split" ? SPLIT_HALF : nothing}
-      ${look.palette.id === "calico" ? CALICO_SPOTS : nothing}
-      ${look.palette.id === "lumen" ? LUMEN_SPOTS : nothing}
-      ${look.freckles && !PATTERNED_PALETTES.has(look.palette.id) ? FRECKLE_SPOTS : nothing}
-      <ellipse cx="48" cy="28" rx="20" ry="11" fill="#ffffff" opacity="0.1" />
-      <g class="lob-eye-open" style=${options.shell || options.sleeping ? "display:none" : ""}>
-        <circle cx="45" cy="32" r="5.5" fill="#0a1014" />
-        <circle cx="75" cy="32" r="5.5" fill="#0a1014" />
-        <circle cx="46.5" cy="30.5" r="2.2" fill="var(--lob-glint, #00e5cc)" />
-        <circle cx="76.5" cy="30.5" r="2.2" fill="var(--lob-glint, #00e5cc)" />
-      </g>
-      ${
-        options.sleeping
-          ? svg`
-            <g class="lob-eye-peek">
-              <circle cx="45" cy="32" r="4" fill="#0a1014" />
-              <circle cx="46" cy="30.8" r="1.6" fill="var(--lob-glint, #00e5cc)" />
-            </g>
-          `
-          : nothing
-      }
-      <g
-        class="lob-eye-closed"
-        stroke="#0a1014"
-        stroke-width="3"
-        stroke-linecap="round"
-        fill="none"
-        style=${
-          options.shell || options.sleeping ? "opacity:1" : options.standalone ? "display:none" : ""
+      <g class=${PALETTE_FRAME_CLASSES[look.palette.id] ?? ""}>
+        ${
+          isFlatpack
+            ? FLATPACK_LOBSTER(openEyeStyle, closedEyeStyle)
+            : isLoading
+              ? LOADING_LOBSTER(openEyeStyle, closedEyeStyle)
+              : isActual
+                ? ACTUAL_LOBSTER(openEyeStyle, closedEyeStyle)
+                : isPixel
+                  ? PIXEL_LOBSTER(openEyeStyle, closedEyeStyle)
+                  : svg`
+              ${hasRetroGeometry ? RETRO_ANTENNAE : ANTENNAE_SPRITES[look.antennae]}
+              ${look.tailFan ? TAIL_FAN : nothing}
+              <g class="lob-claw lob-claw--l">
+                <path d="M20 42 C5 37 0 47 5 57 C10 67 20 62 25 52 C28 45 25 42 20 42 Z" fill="var(--lob-claw)" />
+              </g>
+              ${
+                hasRetroGeometry
+                  ? nothing
+                  : svg`<g class="lob-claw lob-claw--r"><path d="M100 42 C115 37 120 47 115 57 C110 67 100 62 95 52 C92 45 95 42 100 42 Z" fill="var(--lob-claw)" /></g>`
+              }
+              ${look.palette.id === "heisenbug" ? GLITCH_GHOSTS : nothing}
+              <path class="lob-standard-dome" d="M60 8 C32 8 16 32 16 52 C16 72 30 90 44 95 L44 104 L54 104 L54 96 C58 97.5 62 97.5 66 96 L66 104 L76 104 L76 95 C90 90 104 72 104 52 C104 32 88 8 60 8 Z" fill="var(--lob-shell)" />
+              ${look.palette.id === "split" || look.palette.id === "geode" ? SPLIT_HALF : nothing}
+              ${look.palette.id === "selene" ? SELENE_MOON(selenePhase) : nothing}
+              ${PALETTE_OVERLAYS[look.palette.id] ?? nothing}
+              ${
+                look.palette.id === "tinfoil"
+                  ? TINFOIL_PARTS(!HEADWEAR.has(look.accessory))
+                  : nothing
+              }
+              ${look.freckles && !PATTERNED_PALETTES.has(look.palette.id) ? FRECKLE_SPOTS : nothing}
+              ${look.palette.id === "invisible" ? nothing : svg`<ellipse cx="48" cy="28" rx="20" ry="11" fill="#ffffff" opacity="0.1" />`}
+              <g class="lob-eye-open" style=${openEyeStyle}>
+                <circle cx="45" cy="32" r="5.5" fill="#0a1014" />
+                <circle cx="75" cy="32" r="5.5" fill="#0a1014" />
+                <circle cx="46.5" cy="30.5" r="2.2" fill="var(--lob-glint, #00e5cc)" />
+                <circle cx="76.5" cy="30.5" r="2.2" fill="var(--lob-glint, #00e5cc)" />
+              </g>
+              ${
+                options.sleeping
+                  ? svg`<g class="lob-eye-peek"><circle cx="45" cy="32" r="4" fill="#0a1014" /><circle cx="46" cy="30.8" r="1.6" fill="var(--lob-glint, #00e5cc)" /></g>`
+                  : nothing
+              }
+              <g class="lob-eye-closed" stroke="#0a1014" stroke-width="3" stroke-linecap="round" fill="none" style=${closedEyeStyle}>
+                <path d="M39 33 Q45 28 51 33" /><path d="M69 33 Q75 28 81 33" />
+              </g>
+            `
         }
-      >
-        <path d="M39 33 Q45 28 51 33" />
-        <path d="M69 33 Q75 28 81 33" />
-      </g>
       ${
-        look.palette.id === "retro"
+        hasRetroGeometry
           ? svg`
             ${RETRO_FACE}
             <g class="lob-claw lob-claw--r">${RETRO_MEGA_CLAW}</g>
           `
           : nothing
       }
-      ${options.grumpy && look.palette.id !== "retro" ? GRUMPY_FACE : nothing}
-      ${look.accessory === "none" || options.shell ? nothing : ACCESSORY_SPRITES[look.accessory]}
+      ${
+        options.grumpy && !hasRetroGeometry && !isFlatpack && !isLoading && !isActual
+          ? GRUMPY_FACE
+          : nothing
+      }
+      ${
+        look.accessory === "none" || options.shell || isFlatpack
+          ? nothing
+          : ACCESSORY_SPRITES[look.accessory]
+      }
       ${
         // The retro grail's mega claw owns the same shoulder; it moves light.
-        options.bindle && look.palette.id !== "retro" ? BINDLE : nothing
+        options.bindle && !hasRetroGeometry && !isFlatpack ? BINDLE : nothing
       }
-      ${options.sailorCap && !options.shell && !HEADWEAR.has(look.accessory) ? SAILOR_CAP : nothing}
+      ${
+        // The foil hat is palette identity; Mulder declines the navy-issued
+        // sailor cap rather than stacking two hats on lobster days.
+        options.sailorCap &&
+        !options.shell &&
+        !isFlatpack &&
+        !HEADWEAR.has(look.accessory) &&
+        look.palette.id !== "tinfoil"
+          ? SAILOR_CAP
+          : nothing
+      }
+      </g>
     </svg>
   `;
 }
@@ -412,6 +401,9 @@ export const SPOT_ZONES = { left: [12, 38], right: [60, 84] } as const;
 // offline overrides in lobster-pet.css still out-cascade it.
 function lobsterLookStyleVars(look: LobsterPetLook): string[] {
   const crusher = look.crusherSide;
+  const paletteHash = fnv1aUtf16(look.palette.id);
+  const breatheDelayS = ((paletteHash >>> 8) % 34) / 10;
+  const bodyDonorClaw = look.chimeraParts ? chimeraBodyClaw(look.chimeraParts.body) : undefined;
   const clawMul = (side: "left" | "right") =>
     crusher === null
       ? LOBSTER_PET_CLAW_MULS[look.clawSize]
@@ -419,15 +411,27 @@ function lobsterLookStyleVars(look: LobsterPetLook): string[] {
         ? LOBSTER_PET_CLAW_MULS.mighty
         : LOBSTER_PET_CLAW_MULS.dainty;
   return [
-    `--lob-shell:${look.palette.shell}`,
-    `--lob-claw:${look.palette.claw}`,
+    `--lob-shell:${look.chimeraParts?.body ?? look.palette.shell}`,
+    `--lob-claw:${bodyDonorClaw ?? look.palette.claw}`,
     `--lob-blink-delay:${look.blinkDelayS}s`,
+    `--lob-breathe-delay:-${breatheDelayS}s`,
     `--lob-w:${LOBSTER_PET_BUILD_MULS[look.build].w}`,
     `--lob-h:${LOBSTER_PET_BUILD_MULS[look.build].h}`,
     `--lob-claw-l:${clawMul("left")}`,
     `--lob-claw-r:${clawMul("right")}`,
+    ...(look.chimeraParts
+      ? [
+          `--lob-chimera-l:${look.chimeraParts.clawLeft}`,
+          `--lob-chimera-r:${look.chimeraParts.clawRight}`,
+          `--lob-antennae-color:${look.chimeraParts.antennae}`,
+        ]
+      : []),
     ...(look.glint ? [`--lob-glint-seed:${look.glint}`] : []),
   ];
+}
+
+export function lobsterLookStyle(look: LobsterPetLook): string {
+  return lobsterLookStyleVars(look).join(";");
 }
 
 function lobsterPetSpriteStyle(

@@ -3,7 +3,6 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.chat.ChatSessionAgentStatus
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.applySessionObserverDigest
-import ai.openclaw.app.chat.clearForeignGlobalObserverDigest
 import ai.openclaw.app.chat.mergeChatSessionEntry
 import ai.openclaw.app.chat.reconcileGlobalObserverDigestOwner
 import ai.openclaw.app.chat.reconcileSessionObserverProjectionOwner
@@ -162,6 +161,54 @@ class SessionObserverDigestTest {
   }
 
   @Test
+  fun globalReconnectRejectsForeignAndStaleObserverDigests() {
+    val current =
+      SessionObserverDigest(
+        sessionKey = "global",
+        agentId = "work",
+        runId = "run-work",
+        revision = 4,
+        updatedAt = 400,
+        headline = "Current work status",
+        health = "grinding",
+      )
+    val running =
+      ChatSessionEntry(
+        key = "global",
+        updatedAtMs = 100,
+        hasActiveRun = true,
+        activeRunIds = listOf("run-work"),
+        status = "running",
+        observerDigest = current,
+      )
+
+    val foreign =
+      applySessionObserverDigest(
+        listOf(running),
+        current.copy(
+          agentId = "main",
+          revision = 9,
+          updatedAt = 900,
+          headline = "Foreign status",
+        ),
+        activeAgentId = "work",
+      )
+    val replayed =
+      applySessionObserverDigest(
+        foreign,
+        current.copy(
+          revision = 3,
+          updatedAt = 1_000,
+          headline = "Replayed work status",
+        ),
+        activeAgentId = "work",
+      )
+
+    assertEquals("Current work status", replayed.single().observerDigest?.headline)
+    assertEquals(4L, replayed.single().observerDigest?.revision)
+  }
+
+  @Test
   fun changingTheSelectedAgentClearsThePreviousGlobalDigest() {
     val previous =
       ChatSessionEntry(
@@ -182,13 +229,24 @@ class SessionObserverDigestTest {
           ),
       )
 
-    val switched = clearForeignGlobalObserverDigest(listOf(previous), activeAgentId = "work")
+    val switched =
+      reconcileGlobalObserverDigestOwner(
+        listOf(previous),
+        activeAgentId = "work",
+        adoptOwnerless = false,
+      )
     val ownerless =
-      clearForeignGlobalObserverDigest(
+      reconcileGlobalObserverDigestOwner(
         listOf(previous.copy(observerDigest = previous.observerDigest?.copy(agentId = null))),
         activeAgentId = "work",
+        adoptOwnerless = false,
       )
-    val disconnected = clearForeignGlobalObserverDigest(listOf(previous), activeAgentId = null)
+    val disconnected =
+      reconcileGlobalObserverDigestOwner(
+        listOf(previous),
+        activeAgentId = null,
+        adoptOwnerless = false,
+      )
 
     assertNull(switched.single().observerDigest)
     assertNull(ownerless.single().observerDigest)

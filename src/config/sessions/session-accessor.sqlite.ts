@@ -1,6 +1,7 @@
 // Stable SQLite accessor surface. Domain owners live in the focused modules below.
 export {
   listSqliteSessionEntries,
+  listSqliteSessionChildEntriesReadOnly,
   listSqliteSessionEntriesReadOnly,
   listSqliteSessionEntryKeysReadOnly,
   listSqliteSessionEntriesByStatus,
@@ -70,6 +71,8 @@ export {
   loadSqliteTranscriptEventRowsAfterSeqSync,
   loadSqliteTranscriptEvents,
   loadSqliteTranscriptEventsSync,
+  loadSqliteTranscriptHeaderSync,
+  loadSqliteTranscriptTailEventsSync,
   readSqliteTranscriptEventAtSeqSync,
   readSqliteTranscriptStatsSync,
 } from "./session-accessor.sqlite-read.js";

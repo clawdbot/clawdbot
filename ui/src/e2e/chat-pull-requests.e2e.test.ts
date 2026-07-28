@@ -60,7 +60,7 @@ describeControlUiE2e("session pull request chips", () => {
   it("pins detected PR chips above the composer with rate-limit staleness", async () => {
     const context = await newBrowserContext();
     const page = await context.newPage();
-    await installMockGateway(page, {
+    const gateway = await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "controlUi.sessionPullRequests"],
       methodResponses: {
         "controlUi.sessionPullRequests": {
@@ -102,6 +102,7 @@ describeControlUiE2e("session pull request chips", () => {
       },
     });
     await page.goto(`${server.baseUrl}chat`);
+    await gateway.waitForRequest("controlUi.sessionPullRequests");
 
     // Three detected PRs collapse to two chips; merged history hides first.
     const chips = page.locator(".chat-pr");
@@ -170,7 +171,7 @@ describeControlUiE2e("session pull request chips", () => {
   it("offers a Create PR row with the stale warning while rate limited pre-PR", async () => {
     const context = await newBrowserContext();
     const page = await context.newPage();
-    await installMockGateway(page, {
+    const gateway = await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "controlUi.sessionPullRequests"],
       methodResponses: {
         "controlUi.sessionPullRequests": {
@@ -189,6 +190,7 @@ describeControlUiE2e("session pull request chips", () => {
       },
     });
     await page.goto(`${server.baseUrl}chat`);
+    await gateway.waitForRequest("controlUi.sessionPullRequests");
 
     const row = page.locator('.chat-pr[data-state="branch"]');
     await expect.poll(() => row.count()).toBe(1);

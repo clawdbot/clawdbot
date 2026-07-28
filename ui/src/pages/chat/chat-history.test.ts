@@ -4,6 +4,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   loadChatHistory,
   rewindChatHistory,
+  syncSelectedSessionMessageSubscription,
   switchChatHistoryBranch,
   type ChatHistoryResult,
   type ChatState,
@@ -13,6 +14,7 @@ import {
   readChatMessagesFromCache,
   type ChatMessageCache,
 } from "./session-message-cache.ts";
+import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 import { handleAgentEvent, type PlanStatus, type ToolStreamEntry } from "./tool-stream.ts";
 
 type TestState = ChatState &
@@ -79,6 +81,121 @@ function activeHistory(
     },
   } satisfies ChatHistoryResult;
 }
+
+describe("syncSelectedSessionMessageSubscription", () => {
+  it("starts the new subscription before the previous unsubscribe settles", async () => {
+    let resolveUnsubscribe: () => void = () => undefined;
+    const unsubscribeMessages = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveUnsubscribe = resolve;
+        }),
+    );
+    const subscribeMessages = vi.fn(async (key: string) => ({ key, agentId: null }));
+    const state = createState({ messages: [] }) as TestState & {
+      chatSessionMessageSubscriptionRequestedKey: string;
+      chatSessionMessageSubscription: { key: string; agentId: null } | null;
+      sessions: {
+        subscribeMessages: typeof subscribeMessages;
+        unsubscribeMessages: typeof unsubscribeMessages;
+      };
+    };
+    state.sessionKey = "agent:main:next";
+    state.chatSessionMessageSubscriptionRequestedKey = "agent:main:previous";
+    state.chatSessionMessageSubscription = { key: "agent:main:previous", agentId: null };
+    state.sessions = {
+      setModelOverride: vi.fn(),
+      subscribeMessages,
+      unsubscribeMessages,
+    };
+
+    const sync = syncSelectedSessionMessageSubscription(state as never);
+    await Promise.resolve();
+
+    expect(unsubscribeMessages).toHaveBeenCalledOnce();
+    expect(subscribeMessages).toHaveBeenCalledWith("agent:main:next", { agentId: undefined });
+    expect(state.chatSessionMessageSubscription).toEqual({
+      key: "agent:main:previous",
+      agentId: null,
+    });
+
+    resolveUnsubscribe();
+    await sync;
+    expect(state.chatSessionMessageSubscription).toEqual({
+      key: "agent:main:next",
+      agentId: null,
+    });
+  });
+
+  it("retains the previous subscription when its release fails", async () => {
+    const previous = { key: "agent:main:previous", agentId: null };
+    const subscribed = { key: "agent:main:next", agentId: null };
+    const unsubscribeMessages = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("release failed"))
+      .mockResolvedValueOnce(undefined);
+    const subscribeMessages = vi.fn(async () => subscribed);
+    const state = createState({ messages: [] }) as TestState & {
+      chatSessionMessageSubscriptionRequestedKey: string;
+      chatSessionMessageSubscription: typeof previous | null;
+      sessionsError: string | null;
+    };
+    state.sessionKey = subscribed.key;
+    state.chatSessionMessageSubscriptionRequestedKey = previous.key;
+    state.chatSessionMessageSubscription = previous;
+    state.sessionsError = null;
+    state.sessions = {
+      setModelOverride: vi.fn((_key: string, _value: string | null | undefined) => undefined),
+      subscribeMessages,
+      unsubscribeMessages,
+    };
+
+    await syncSelectedSessionMessageSubscription(state as never);
+
+    expect(state.chatSessionMessageSubscriptionRequestedKey).toBe(previous.key);
+    expect(state.chatSessionMessageSubscription).toBe(previous);
+    expect(state.sessionsError).toContain("release failed");
+    expect(unsubscribeMessages).toHaveBeenNthCalledWith(1, previous);
+    expect(unsubscribeMessages).toHaveBeenNthCalledWith(2, subscribed);
+  });
+
+  it("retains the new subscription when both release attempts fail", async () => {
+    const previous = { key: "agent:main:previous", agentId: null };
+    const subscribed = { key: "agent:main:next", agentId: null };
+    const unsubscribeMessages = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("previous release failed"))
+      .mockRejectedValueOnce(new Error("replacement release failed"))
+      .mockResolvedValueOnce(undefined);
+    const subscribeMessages = vi.fn(async () => subscribed);
+    const state = createState({ messages: [] }) as TestState & {
+      chatSessionMessageSubscriptionRequestedKey: string;
+      chatSessionMessageSubscription: typeof previous | null;
+      sessionsError: string | null;
+    };
+    state.sessionKey = subscribed.key;
+    state.chatSessionMessageSubscriptionRequestedKey = previous.key;
+    state.chatSessionMessageSubscription = previous;
+    state.sessionsError = null;
+    state.sessions = {
+      setModelOverride: vi.fn((_key: string, _value: string | null | undefined) => undefined),
+      subscribeMessages,
+      unsubscribeMessages,
+    };
+
+    await syncSelectedSessionMessageSubscription(state as never);
+
+    expect(state.chatSessionMessageSubscriptionRequestedKey).toBe(subscribed.key);
+    expect(state.chatSessionMessageSubscription).toBe(subscribed);
+    expect(state.sessionsError).toContain("previous release failed");
+    expect(state.sessionsError).toContain("replacement release failed");
+
+    await syncSelectedSessionMessageSubscription(state as never);
+    expect(unsubscribeMessages).toHaveBeenNthCalledWith(3, previous);
+    expect(state.chatSessionMessageSubscriptionRequestedKey).toBe(subscribed.key);
+    expect(state.chatSessionMessageSubscription).toBe(subscribed);
+  });
+});
 
 describe("rewindChatHistory", () => {
   it("clears the cached snapshot, refetches, and returns the composer text", async () => {
@@ -312,6 +429,73 @@ describe("active-run commentary reconciliation", () => {
       ),
     ).toBe(true);
     expect(state.chatStreamSegments).toEqual([]);
+  });
+
+  it("keeps a foreground tool when history persists a sibling run with the same call id", async () => {
+    const toolCallId = "call-shared";
+    const foregroundIdentity = buildToolStreamIdentity("run-foreground", toolCallId);
+    const backgroundIdentity = buildToolStreamIdentity("run-background", toolCallId);
+    const backgroundResult = {
+      role: "toolResult",
+      runId: "run-background",
+      toolCallId,
+      content: "background complete",
+      timestamp: 4,
+    };
+    const state = createState({
+      ...activeHistory("run-foreground"),
+      messages: [{ role: "user", content: "do it", timestamp: 1 }, backgroundResult],
+    });
+    state.chatRunId = "run-foreground";
+    state.chatStream = "foreground still running";
+    state.chatStreamStartedAt = 5;
+    const foregroundMessage = {
+      role: "assistant",
+      runId: "run-foreground",
+      toolCallId,
+      content: [{ type: "toolcall", name: "read", arguments: { path: "foreground.txt" } }],
+    };
+    const backgroundMessage = {
+      role: "assistant",
+      runId: "run-background",
+      toolCallId,
+      content: [{ type: "toolcall", name: "exec", arguments: { command: "background" } }],
+    };
+    state.toolStreamOrder = [foregroundIdentity, backgroundIdentity];
+    state.toolStreamById.set(foregroundIdentity, {
+      toolCallId,
+      runId: "run-foreground",
+      name: "read",
+      startedAt: 2,
+      receivedAt: 2,
+      message: foregroundMessage,
+    });
+    state.toolStreamById.set(backgroundIdentity, {
+      toolCallId,
+      runId: "run-background",
+      name: "exec",
+      startedAt: 3,
+      receivedAt: 3,
+      resultReceived: true,
+      message: backgroundMessage,
+    });
+    state.chatToolMessages = [foregroundMessage, backgroundMessage];
+    state.chatStreamSegments = [
+      { text: "before foreground", ts: 2, runId: "run-foreground", toolCallId },
+      { text: "before background", ts: 3, runId: "run-background", toolCallId },
+    ];
+
+    await loadChatHistory(state);
+
+    expect(state.chatRunId).toBe("run-foreground");
+    expect(state.chatStream).toBe("foreground still running");
+    expect(state.toolStreamOrder).toEqual([foregroundIdentity]);
+    expect(state.toolStreamById.has(foregroundIdentity)).toBe(true);
+    expect(state.toolStreamById.has(backgroundIdentity)).toBe(false);
+    expect(state.chatToolMessages).toEqual([foregroundMessage]);
+    expect(state.chatStreamSegments).toEqual([
+      { text: "before foreground", ts: 2, runId: "run-foreground", toolCallId },
+    ]);
   });
 });
 

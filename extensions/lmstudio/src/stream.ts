@@ -78,7 +78,6 @@ function isPreloadCoolingDown(preloadKey: string, now: number): PreloadCooldownE
     return undefined;
   }
   if (entry.untilMs <= now) {
-    preloadCooldown.delete(preloadKey);
     return undefined;
   }
   return entry;
@@ -180,6 +179,37 @@ function createPreloadKey(params: {
   return `${params.baseUrl}::${params.modelKey}::${params.requestedContextLength ?? "default"}`;
 }
 
+function toLmstudioPreloadError(reason: unknown, message: string): Error {
+  return reason instanceof Error ? reason : new Error(message, { cause: reason });
+}
+
+function waitForLmstudioPreload(
+  preload: Promise<string | undefined>,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
+  if (!signal) {
+    return preload;
+  }
+  if (signal.aborted) {
+    return Promise.reject(toLmstudioPreloadError(signal.reason, "LM Studio preload aborted"));
+  }
+  return new Promise((resolve, reject) => {
+    const onAbort = () =>
+      reject(toLmstudioPreloadError(signal.reason, "LM Studio preload aborted"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    void preload.then(
+      (modelKey) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(modelKey);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(toLmstudioPreloadError(error, "LM Studio model preload failed"));
+      },
+    );
+  });
+}
+
 async function ensureLmstudioModelLoadedBestEffort(params: {
   baseUrl: string;
   modelKey: string;
@@ -235,6 +265,8 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
     if (!modelKey) {
       return underlying(model, context, options);
     }
+    // Cancellation belongs to this caller; never start or join a shared load after abort.
+    options?.signal?.throwIfAborted();
     const providerConfig = ctx.config?.models?.providers?.[LMSTUDIO_PROVIDER_ID];
     if (!shouldPreloadLmstudioModels(providerConfig)) {
       return streamWithThinkingLevel(withLmstudioUsageCompat(model), context, options);
@@ -292,8 +324,11 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
       let resolvedModelKey: string | undefined;
       if (preloadPromise) {
         try {
-          resolvedModelKey = await preloadPromise;
+          resolvedModelKey = await waitForLmstudioPreload(preloadPromise, options?.signal);
         } catch (error) {
+          // A caller owns its wait, not the shared model load needed by other
+          // in-flight requests; cancellation must never become preload backoff.
+          options?.signal?.throwIfAborted();
           const annotated = error as {
             cause?: unknown;
             consecutiveFailures?: number;

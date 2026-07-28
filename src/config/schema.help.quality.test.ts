@@ -471,7 +471,7 @@ describe("config help copy quality", () => {
       'FIELD_HELP["agents.defaults.compaction.maxActiveTranscriptBytes"] test invariant',
     );
     expect(/transcript|bytes|compaction/i.test(transcriptBytes)).toBe(true);
-    expect(/never splits raw transcript bytes/i.test(transcriptBytes)).toBe(true);
+    expect(/Codex app-server|native rollout|restart fresh/i.test(transcriptBytes)).toBe(true);
 
     const flush = expectDefined(
       FIELD_HELP["agents.defaults.compaction.memoryFlush.enabled"],

@@ -5,13 +5,22 @@ import { getCredentialUnavailableDiagnostics } from "../channels/account-snapsho
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { type ChannelId, getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
+import {
+  applyChannelAccountState,
+  resolveChannelAccountState,
+} from "../channels/status/account-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withGatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime-context.js";
+import type { GatewayNativeApprovalMethod } from "../infra/approval-gateway-runtime-methods.js";
 import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
 import { startChannelApprovalHandlerBootstrap } from "../infra/approval-handler-bootstrap.js";
 import { type BackoffPolicy, sleepWithAbort } from "../infra/backoff.js";
-import { createTaskScopedChannelRuntime } from "../infra/channel-runtime-context.js";
+import {
+  createTaskScopedChannelRuntime,
+  registerChannelRuntimeContext,
+} from "../infra/channel-runtime-context.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { formatGatewayCrashLoopManualChannelStartHint } from "../infra/gateway-boot-lifecycle.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import {
   createSubsystemLogger,
@@ -31,7 +40,6 @@ import type { RuntimeEnv } from "../runtime.js";
 import {
   assertSecretOwnerAvailable,
   clearActiveCredentialDegradedOwner,
-  SecretSurfaceUnavailableError,
   setActiveCredentialDegradedOwner,
 } from "../secrets/runtime-degraded-state.js";
 import { isAccountEnabled } from "../shared/account-enabled.js";
@@ -51,6 +59,9 @@ const MAX_RESTARTS = 10;
 const CHANNEL_STABLE_RUN_MS = RESTART_POLICY.maxMs;
 const CHANNEL_STOP_ABORT_TIMEOUT_MS = 5_000;
 const CHANNEL_STARTUP_CONCURRENCY = 4;
+// Private context key carried through the generic Plugin SDK registry. This is
+// not a new public capability surface; only the host installs its authority.
+const CHANNEL_APPROVAL_GATEWAY_RUNTIME_CONTEXT_CAPABILITY = "approval.gateway";
 function waitForChannelStartupHandoff(): Promise<void> {
   return new Promise((resolve) => {
     const handle = setImmediate(resolve);
@@ -162,25 +173,6 @@ async function waitForChannelStopGracefully(task: Promise<unknown> | undefined, 
   });
 }
 
-function applyDescribedAccountFields(
-  next: ChannelAccountSnapshot,
-  described: ChannelAccountSnapshot | undefined,
-) {
-  if (!described) {
-    next.configured ??= true;
-    return next;
-  }
-  if (typeof described.configured === "boolean") {
-    next.configured = described.configured;
-  } else {
-    next.configured ??= true;
-  }
-  if (described.mode !== undefined) {
-    next.mode = described.mode;
-  }
-  return next;
-}
-
 type ChannelManagerOptions = {
   getRuntimeConfig: () => OpenClawConfig;
   channelLogs: Partial<Record<ChannelId, SubsystemLogger>>;
@@ -269,6 +261,7 @@ export type ChannelManager = {
   isAmbientAutostartSuppressed: (channelId: string) => boolean;
   markChannelLoggedOut: (channelId: ChannelId, cleared: boolean, accountId?: string) => void;
   isManuallyStopped: (channelId: ChannelId, accountId: string) => boolean;
+  isAutoRestartScheduled: (channelId: ChannelId, accountId: string) => boolean;
   resetRestartAttempts: (channelId: ChannelId, accountId: string) => void;
   isHealthMonitorEnabled: (channelId: ChannelId, accountId: string) => boolean;
 };
@@ -291,6 +284,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   const manuallyStopped = new Set<string>();
   const recoveryStopTimedOut = new Set<string>();
   const recoveryStartRequested = new Set<string>();
+  // Accounts whose crash recovery is already owned by the retry supervisor below
+  // (backoff sleep plus its replacement start). `restartPending` cannot answer
+  // this: the timed-out-stop recovery sets it too, and that one needs the health
+  // monitor to keep driving it.
+  const pendingAutoRestarts = new Set<string>();
   let autostartSuppression: ChannelAutostartSuppression | null = null;
   let ambientAutostartSuppressedChannelIds = new Set(
     opts.ambientAutostartSuppressedChannelIds ?? [],
@@ -481,7 +479,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       // config reloads can undo the crash-loop breaker while operators inspect.
       const suffix = accountId ? ` account ${accountId}` : "";
       ensureChannelLog(channelId).warn?.(
-        `channel autostart suppressed by crash-loop breaker; refusing automatic start for ${channelId}${suffix}. Use channels.start to override.`,
+        `channel autostart suppressed by crash-loop breaker; refusing automatic start for ${channelId}${suffix}. ${formatGatewayCrashLoopManualChannelStartHint({ channelId, ...(accountId ? { accountId } : {}) })}`,
       );
       for (const id of accountIds) {
         setStoppedRuntime(channelId, id, {
@@ -494,7 +492,6 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     if (ambientAutostartSuppressedChannelIds.has(channelId) && optsValue.manual !== true) {
       for (const id of accountIds) {
         setStoppedRuntime(channelId, id, {
-          configured: false,
           restartPending: false,
           lastError: "ambient channel credentials suppressed for dev gateway",
         });
@@ -593,6 +590,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           clearActiveCredentialDegradedOwner("account", secretOwnerId);
           assertSecretOwnerAvailable("account", secretOwnerId);
           const account = plugin.config.resolveAccount(cfg, id);
+          const described = plugin.config.describeAccount?.(account, cfg);
           const enabled = plugin.config.isEnabled
             ? plugin.config.isEnabled(account, cfg)
             : isAccountEnabled(account);
@@ -600,10 +598,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             setRuntime(channelId, id, {
               accountId: id,
               enabled: false,
-              configured: true,
               running: false,
               restartPending: false,
-              lastError: plugin.config.disabledReason?.(account, cfg) ?? "disabled",
             });
             return;
           }
@@ -632,9 +628,36 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               accountId: id,
               enabled: true,
               configured: false,
+              linked: undefined,
               running: false,
               restartPending: false,
-              lastError: plugin.config.unconfiguredReason?.(account, cfg) ?? "not configured",
+            });
+            return;
+          }
+          setRuntime(channelId, id, {
+            accountId: id,
+            enabled: true,
+            configured: true,
+            ...(plugin.config.isLinked ? { linked: undefined } : {}),
+          });
+
+          const fallbackLinked = described?.linked ?? getRuntime(channelId, id).linked;
+          const linkState = plugin.config.isLinked
+            ? await measureStartup(`channels.${channelId}.is-linked`, () =>
+                plugin.config.isLinked!(account, cfg),
+              )
+            : fallbackLinked === true
+              ? "linked"
+              : fallbackLinked === false
+                ? "not-linked"
+                : undefined;
+          if (linkState === "not-linked" || linkState === "unknown") {
+            setRuntime(channelId, id, {
+              accountId: id,
+              enabled: true,
+              linked: linkState === "not-linked" ? false : undefined,
+              running: false,
+              restartPending: false,
             });
             return;
           }
@@ -681,7 +704,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           setRuntime(channelId, id, {
             accountId: id,
             enabled: true,
-            configured: true,
+            ...(linkState === "linked" ? { linked: true } : {}),
             running: true,
             restartPending: false,
             lastStartAt: Date.now(),
@@ -696,6 +719,33 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             }
             if (abort.signal.aborted || manuallyStopped.has(rKey)) {
               return;
+            }
+            const gatewayApprovalRuntime = opts.getNativeApprovalRuntime?.();
+            if (channelRuntimeForTask && gatewayApprovalRuntime) {
+              const approvalRuntime: Pick<GatewayNativeApprovalRuntime, "request"> = {
+                request: async <T>(
+                  method: GatewayNativeApprovalMethod,
+                  requestParams: Record<string, unknown>,
+                  requestOptions?: { clientDisplayName?: string },
+                ): Promise<T> => {
+                  if (method !== "approval.resolve") {
+                    throw new Error(`channel approval runtime cannot dispatch ${method}`);
+                  }
+                  return await gatewayApprovalRuntime.request<T>(
+                    "approval.resolve",
+                    requestParams,
+                    requestOptions,
+                  );
+                },
+              };
+              registerChannelRuntimeContext({
+                channelRuntime: channelRuntimeForTask,
+                channelId,
+                accountId: id,
+                capability: CHANNEL_APPROVAL_GATEWAY_RUNTIME_CONTEXT_CAPABILITY,
+                context: approvalRuntime,
+                abortSignal: abort.signal,
+              });
             }
             let startAccountTask: ReturnType<typeof startAccount> | undefined;
             await measureStartup(`channels.${channelId}.start-account-handoff`, () => {
@@ -863,6 +913,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 restartPending: true,
                 reconnectAttempts: restart.attempts,
               });
+              pendingAutoRestarts.add(rKey);
               try {
                 await sleepWithAbort(retry.delayMs, retry.signal);
                 if (manuallyStopped.has(rKey)) {
@@ -883,6 +934,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 });
               } catch {
                 // abort or startup failure — next crash will retry
+              } finally {
+                pendingAutoRestarts.delete(rKey);
               }
             })
             .finally(() => {
@@ -904,7 +957,6 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         } catch (error) {
           if (!handedOffTask) {
             setStoppedRuntime(channelId, id, {
-              ...(error instanceof SecretSurfaceUnavailableError ? { configured: true } : {}),
               restartPending: false,
               lastError: formatErrorMessage(error),
             });
@@ -1143,6 +1195,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     const current = getRuntime(channelId, resolvedId);
     const next: ChannelAccountSnapshot = {
       accountId: resolvedId,
+      ...(cleared ? { linked: false } : {}),
       running: false,
       restartPending: false,
       lastError: cleared ? "logged out" : current.lastError,
@@ -1173,16 +1226,24 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           : isAccountEnabled(account);
         const described = plugin.config.describeAccount?.(account, cfg);
         const current = store.runtimes.get(id) ?? cloneDefaultRuntime(plugin.id, id);
-        const next = { ...current, accountId: id };
-        next.enabled = enabled;
-        applyDescribedAccountFields(next, described);
-        const configured = described?.configured;
-        if (!next.running) {
-          if (!enabled) {
-            next.lastError ??= plugin.config.disabledReason?.(account, cfg) ?? "disabled";
-          } else if (configured === false) {
-            next.lastError ??= plugin.config.unconfiguredReason?.(account, cfg) ?? "not configured";
-          }
+        const configured = described?.configured ?? current.configured ?? true;
+        const state = resolveChannelAccountState({
+          enabled,
+          configured,
+          linked: plugin.config.isLinked
+            ? current.linked
+            : typeof current.linked === "boolean"
+              ? current.linked
+              : described?.linked,
+          runtime: current,
+          disabledReason: plugin.config.disabledReason?.(account, cfg),
+          unconfiguredReason: plugin.config.unconfiguredReason?.(account, cfg),
+          unlinkedReason: plugin.config.unlinkedReason?.(account, cfg),
+        });
+        const next = { ...current, accountId: id, enabled };
+        applyChannelAccountState(next, state);
+        if (described?.mode !== undefined) {
+          next.mode = described.mode;
         }
         accounts[id] = next;
       }
@@ -1198,7 +1259,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     return manuallyStopped.has(restartKey(channelId, accountId));
   };
 
-  const resetRestartAttemptsForTest = (channelId: ChannelId, accountId: string): void => {
+  const isAutoRestartScheduled = (channelId: ChannelId, accountId: string): boolean => {
+    return pendingAutoRestarts.has(restartKey(channelId, accountId));
+  };
+
+  const resetRestartAttempts = (channelId: ChannelId, accountId: string): void => {
     restarts.delete(restartKey(channelId, accountId));
   };
 
@@ -1218,7 +1283,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       ambientAutostartSuppressedChannelIds.has(channelId),
     markChannelLoggedOut,
     isManuallyStopped: isManuallyStoppedFlag,
-    resetRestartAttempts: resetRestartAttemptsForTest,
+    isAutoRestartScheduled,
+    resetRestartAttempts,
     isHealthMonitorEnabled,
   };
 }
