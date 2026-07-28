@@ -31,6 +31,36 @@ type ChatDisplayProjectionResult = {
 };
 
 const GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT = "The agent run failed before producing a reply.";
+const GATEWAY_ASSISTANT_CONTEXT_OVERFLOW_FALLBACK_TEXT =
+  "Context overflow: this conversation is too large for the model. Try /compact, use /new to start a fresh session, or retry the command with a tighter output limit.";
+
+function normalizeErrorSignal(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function isContextOverflowAssistantError(message: Record<string, unknown>): boolean {
+  const errorCode = normalizeErrorSignal(message.errorCode);
+  const errorType = normalizeErrorSignal(message.errorType);
+  const errorMessage = normalizeErrorSignal(message.errorMessage);
+  return (
+    errorCode === "context_overflow" ||
+    errorType === "context_overflow" ||
+    errorMessage.includes("context_overflow") ||
+    errorMessage.includes("context overflow:") ||
+    errorMessage.includes("context length exceeded") ||
+    errorMessage.includes("maximum context length") ||
+    errorMessage.includes("prompt is too long") ||
+    errorMessage.includes("prompt too long") ||
+    errorMessage.includes("exceeds model context window") ||
+    errorMessage.includes("model token limit")
+  );
+}
+
+function getAssistantErrorFallbackText(message: Record<string, unknown>): string {
+  return isContextOverflowAssistantError(message)
+    ? GATEWAY_ASSISTANT_CONTEXT_OVERFLOW_FALLBACK_TEXT
+    : GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT;
+}
 
 function sanitizeAssistantErrorDisplayMessage(
   message: Record<string, unknown>,
@@ -118,7 +148,7 @@ function projectEmptyAssistantErrorMessages(
     changed = true;
     const next: Record<string, unknown> = {
       ...sanitized,
-      content: [{ type: "text", text: GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT }],
+      content: [{ type: "text", text: getAssistantErrorFallbackText(message) }],
     };
     delete next.diagnostics;
     delete next.errorBody;

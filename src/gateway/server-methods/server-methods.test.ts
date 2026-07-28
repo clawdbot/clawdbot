@@ -1228,6 +1228,36 @@ describe("projectRecentChatDisplayMessages", () => {
     expect(JSON.stringify(result)).not.toContain("private_error");
   });
 
+  it("projects empty context-overflow assistant errors with recovery guidance", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [],
+        stopReason: "error",
+        errorCode: "context_overflow",
+        errorMessage:
+          "400 The prompt is too long: 203557, model maximum context length: 196607",
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "Context overflow: this conversation is too large for the model. Try /compact, use /new to start a fresh session, or retry the command with a tighter output limit.",
+          },
+        ],
+        stopReason: "error",
+        timestamp: 1,
+      },
+    ]);
+    expect(JSON.stringify(result)).not.toContain("203557");
+    expect(JSON.stringify(result)).not.toContain("196607");
+  });
+
   it.each([
     ["output_text", ""],
     ["output_text", "NO_REPLY"],
