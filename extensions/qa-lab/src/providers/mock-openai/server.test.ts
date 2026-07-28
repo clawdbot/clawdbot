@@ -2012,7 +2012,14 @@ describe("qa mock openai server", () => {
           ],
         },
         {
+          type: "function_call",
+          name: "write",
+          call_id: "call_compaction_write",
+          arguments: JSON.stringify({ path: "compaction-retry-summary.txt" }),
+        },
+        {
           type: "function_call_output",
+          call_id: "call_compaction_write",
           output: "Successfully wrote 41 bytes to compaction-retry-summary.txt",
         },
       ],
@@ -2026,7 +2033,7 @@ describe("qa mock openai server", () => {
     );
   });
 
-  it("finishes a compacted retry after the canonical successful write result", async () => {
+  it("finishes a retry after the matched canonical successful write result", async () => {
     const server = await startMockServer();
 
     const finalReply = await postResponses(server, {
@@ -2034,7 +2041,14 @@ describe("qa mock openai server", () => {
       model: "gpt-5.6-luna",
       input: [
         {
+          type: "function_call",
+          name: "write",
+          call_id: "call_compacted_write",
+          arguments: JSON.stringify({ path: "compaction-retry-summary.txt" }),
+        },
+        {
           type: "function_call_output",
+          call_id: "call_compacted_write",
           output: "Successfully wrote 41 bytes to compaction-retry-summary.txt",
         },
         makeUserInput("Continue after compaction."),
@@ -2053,7 +2067,14 @@ describe("qa mock openai server", () => {
       model: "gpt-5.6-luna",
       input: [
         {
+          type: "function_call",
+          name: "write",
+          call_id: "call_failed_write",
+          arguments: JSON.stringify({ path: "compaction-retry-summary.txt" }),
+        },
+        {
           type: "function_call_output",
+          call_id: "call_failed_write",
           output:
             'Write failed after reporting "Successfully wrote 41 bytes to compaction-retry-summary.txt."',
         },
@@ -2105,7 +2126,14 @@ describe("qa mock openai server", () => {
       input: [
         makeUserInput(prompt),
         {
+          type: "function_call",
+          name: "write",
+          call_id: "call_continuation_write",
+          arguments: JSON.stringify({ path: "compaction-retry-summary.txt" }),
+        },
+        {
           type: "function_call_output",
+          call_id: "call_continuation_write",
           output: "Successfully wrote 41 bytes to compaction-retry-summary.txt",
         },
         makeUserInput("Continue after compaction."),

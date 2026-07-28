@@ -379,7 +379,11 @@ export function hasCompletedWriteToolResult(input: ResponsesInputItem[], expecte
           extractFunctionCallOutputCallId(candidate) === item.call_id,
       );
     if (matchingOutput && !functionCallOutputIsStructuredError(matchingOutput)) {
-      if (item.name !== "exec" || codeModeWriteResultCompleted(input, callIndex, matchingOutput)) {
+      const completed =
+        item.name === "write"
+          ? extractSuccessfulWriteOutputPath(matchingOutput) === canonicalExpectedPath
+          : codeModeWriteResultCompleted(input, callIndex, matchingOutput);
+      if (completed) {
         return true;
       }
     }
