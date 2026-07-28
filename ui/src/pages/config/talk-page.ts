@@ -247,13 +247,17 @@ class TalkSettingsPage extends OpenClawLightDomElement {
    */
   private changeProvider(providerId: string | null) {
     const runtimeConfig = this.context.runtimeConfig;
-    for (const key of ["model", "speakerVoice", "speakerVoiceId", "transport"]) {
+    for (const key of ["model", "speakerVoice", "speakerVoiceId"]) {
       runtimeConfig.removeFormValue(["talk", "realtime", key]);
     }
     if (providerId === null) {
+      // Auto keeps the current transport: it was valid for the configuration
+      // auto-selection will re-derive from (clearing it would strand a
+      // relay-only provider on the client-owned default).
       runtimeConfig.removeFormValue(["talk", "realtime", "provider"]);
       return;
     }
+    runtimeConfig.removeFormValue(["talk", "realtime", "transport"]);
     runtimeConfig.patchForm(["talk", "realtime", "provider"], providerId);
     // A relay-only provider (no client-owned transport) needs the transport
     // written explicitly: an unset transport routes to talk.client.create,
