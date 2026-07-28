@@ -189,22 +189,69 @@ function extractSuccessfulWriteOutputPath(item: ResponsesInputItem) {
   return normalizeToolPath(match?.[1]);
 }
 
+function parseJsonRecord(value: string) {
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseCanonicalCodeModeCall(item: ResponsesInputItem) {
+  const code = parseFunctionCallArguments(item)?.code;
+  if (typeof code !== "string") {
+    return undefined;
+  }
+  const match = /^return await tools\.callValue\(("(?:[^"\\]|\\.)*"), (\{.*\})\);$/su.exec(
+    code.trim(),
+  );
+  if (!match?.[1] || !match[2]) {
+    return undefined;
+  }
+  try {
+    const toolId = JSON.parse(match[1]);
+    const args = JSON.parse(match[2]);
+    return typeof toolId === "string" && args && typeof args === "object" && !Array.isArray(args)
+      ? { toolId, args: args as Record<string, unknown> }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isSuccessfulCodeModeWriteOutput(item: ResponsesInputItem) {
+  const payload = parseJsonRecord(extractFunctionCallOutputText(item));
+  const value =
+    payload?.value && typeof payload.value === "object" && !Array.isArray(payload.value)
+      ? (payload.value as Record<string, unknown>)
+      : undefined;
+  return payload?.status === "completed" && value?.changed === true;
+}
+
 export function hasSuccessfulWriteToolOutput(input: ResponsesInputItem[], expectedPath: string) {
   const canonicalExpectedPath = normalizeToolPath(expectedPath);
   if (!canonicalExpectedPath) {
     return false;
   }
   for (const [callIndex, item] of input.entries()) {
-    if (
-      item.type !== "function_call" ||
-      item.name !== "write" ||
-      typeof item.call_id !== "string" ||
-      !item.call_id.trim()
-    ) {
+    if (item.type !== "function_call" || typeof item.call_id !== "string" || !item.call_id.trim()) {
       continue;
     }
-    const args = parseFunctionCallArguments(item);
-    if (normalizeToolPath(args?.path) !== canonicalExpectedPath) {
+    const isDirectWrite = item.name === "write";
+    const isCodeModeWrite = item.name === "exec";
+    if (!isDirectWrite && !isCodeModeWrite) {
+      continue;
+    }
+    const codeModeCall = isCodeModeWrite ? parseCanonicalCodeModeCall(item) : undefined;
+    const callPath = isDirectWrite
+      ? normalizeToolPath(parseFunctionCallArguments(item)?.path)
+      : codeModeCall?.toolId === "openclaw:core:write"
+        ? normalizeToolPath(codeModeCall.args.path)
+        : "";
+    if (callPath !== canonicalExpectedPath) {
       continue;
     }
     const matchingOutput = input
@@ -214,11 +261,12 @@ export function hasSuccessfulWriteToolOutput(input: ResponsesInputItem[], expect
           isResponsesToolCallOutput(candidate) &&
           extractFunctionCallOutputCallId(candidate) === item.call_id,
       );
-    if (
-      matchingOutput &&
-      !functionCallOutputIsStructuredError(matchingOutput) &&
-      extractSuccessfulWriteOutputPath(matchingOutput) === canonicalExpectedPath
-    ) {
+    const outputMatches = matchingOutput
+      ? isDirectWrite
+        ? extractSuccessfulWriteOutputPath(matchingOutput) === canonicalExpectedPath
+        : isSuccessfulCodeModeWriteOutput(matchingOutput)
+      : false;
+    if (matchingOutput && !functionCallOutputIsStructuredError(matchingOutput) && outputMatches) {
       return true;
     }
   }

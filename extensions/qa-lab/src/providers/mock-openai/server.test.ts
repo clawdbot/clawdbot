@@ -5186,6 +5186,192 @@ describe("qa mock openai server", () => {
     expect(textBlock?.text).toContain("Evidence");
   });
 
+  it("completes Anthropic repo-contract followthrough through a code-mode write result", async () => {
+    const server = await startMockServer();
+    const prompt =
+      "Repo contract followthrough check. Read AGENT.md, SOUL.md, and FOLLOWTHROUGH_INPUT.md first. Then follow the repo contract exactly, write ./repo-contract-summary.txt, and reply with three labeled lines: Read, Wrote, Status.";
+    const messages: Array<Record<string, unknown>> = [
+      { role: "user", content: [{ type: "text", text: prompt }] },
+    ];
+    const send = async () => {
+      const response = await postJson(server, "/v1/messages", {
+        model: "claude-opus-4-8",
+        max_tokens: 256,
+        tools: [
+          { name: "exec", input_schema: { type: "object", properties: {} } },
+          { name: "wait", input_schema: { type: "object", properties: {} } },
+        ],
+        messages,
+      });
+      expect(response.status).toBe(200);
+      return (await response.json()) as {
+        stop_reason: string;
+        content: Array<Record<string, unknown>>;
+      };
+    };
+    const requireToolUse = (body: Awaited<ReturnType<typeof send>>, name: string) => {
+      const toolUse = body.content.find(
+        (block) => block.type === "tool_use" && block.name === name,
+      );
+      return requireRecord(toolUse, `${name} tool_use`);
+    };
+    const parseCodeModeCall = (toolUse: Record<string, unknown>) => {
+      const input = requireRecord(toolUse.input, "code mode input");
+      const code = String(input.code);
+      const match = /^return await tools\.callValue\(("(?:[^"\\]|\\.)*"), (\{.*\})\);$/su.exec(
+        code,
+      );
+      expect(match).toBeTruthy();
+      return {
+        toolId: JSON.parse(String(match?.[1])) as string,
+        args: requireRecord(JSON.parse(String(match?.[2])) as unknown, "code mode args"),
+      };
+    };
+    const completeToolUse = (toolUse: Record<string, unknown>, output: string) => {
+      messages.push(
+        { role: "assistant", content: [toolUse] },
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: toolUse.id,
+              content: output,
+            },
+          ],
+        },
+      );
+    };
+
+    const readFixtures = [
+      {
+        path: "AGENT.md",
+        output:
+          "# Repo contract\n\nStep order:\n1. Read AGENT.md.\n2. Read SOUL.md.\n3. Read FOLLOWTHROUGH_INPUT.md.\n4. Write ./repo-contract-summary.txt.\n",
+      },
+      { path: "SOUL.md", output: "# Execution style\n\nStay brief, honest, and action-first.\n" },
+      {
+        path: "FOLLOWTHROUGH_INPUT.md",
+        output:
+          "Mission: prove you followed the repo contract.\nEvidence path: AGENT.md -> SOUL.md -> FOLLOWTHROUGH_INPUT.md -> repo-contract-summary.txt\n",
+      },
+    ];
+    const plannedTools: Array<{ name: string; path: unknown }> = [];
+    for (const fixture of readFixtures) {
+      const body = await send();
+      expect(body.stop_reason).toBe("tool_use");
+      const toolUse = requireToolUse(body, "exec");
+      const nestedCall = parseCodeModeCall(toolUse);
+      plannedTools.push({ name: "read", path: nestedCall.args.path });
+      expect(nestedCall).toMatchObject({
+        toolId: "openclaw:core:read",
+        args: { path: fixture.path },
+      });
+      completeToolUse(
+        toolUse,
+        JSON.stringify({
+          status: "completed",
+          value: { kind: "text", content: fixture.output },
+          output: [],
+          toolCallCount: 1,
+        }),
+      );
+    }
+
+    const writeBody = await send();
+    const writeToolUse = requireToolUse(writeBody, "exec");
+    const writeCall = parseCodeModeCall(writeToolUse);
+    const writeInput = writeCall.args;
+    expect(writeCall.toolId).toBe("openclaw:core:write");
+    plannedTools.push({ name: "write", path: writeInput.path });
+    expect(plannedTools).toEqual([
+      { name: "read", path: "AGENT.md" },
+      { name: "read", path: "SOUL.md" },
+      { name: "read", path: "FOLLOWTHROUGH_INPUT.md" },
+      { name: "write", path: "repo-contract-summary.txt" },
+    ]);
+    expect(writeInput.content).toEqual(expect.stringContaining("repo contract"));
+    expect(writeInput.content).toEqual(expect.stringContaining("Evidence:"));
+
+    const buildCodeModeResult = () =>
+      JSON.stringify({
+        status: "completed",
+        value: { changed: true, created: true },
+        output: [],
+        toolCallCount: 1,
+      });
+    const sendCodeModeResult = async (
+      toolUse: Record<string, unknown>,
+      content: string,
+      isError = false,
+    ) => {
+      const response = await postJson(server, "/v1/messages", {
+        model: "claude-opus-4-8",
+        max_tokens: 256,
+        messages: [
+          ...messages,
+          { role: "assistant", content: [toolUse] },
+          {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: toolUse.id,
+                content,
+                ...(isError ? { is_error: true } : {}),
+              },
+            ],
+          },
+        ],
+      });
+      expect(response.status).toBe(200);
+      return (await response.json()) as {
+        stop_reason: string;
+        content: Array<Record<string, unknown>>;
+      };
+    };
+    const wrongPathToolUse = {
+      ...writeToolUse,
+      id: "toolu_mock_exec_wrong_path",
+      input: {
+        language: "javascript",
+        code: `return await tools.callValue("openclaw:core:write", ${JSON.stringify({ ...writeInput, path: "other-summary.txt" })});`,
+      },
+    };
+    const wrongPathBody = await sendCodeModeResult(wrongPathToolUse, buildCodeModeResult());
+    expect(wrongPathBody.stop_reason).toBe("tool_use");
+    expect(wrongPathBody.content.some((block) => block.type === "tool_use")).toBe(true);
+    expect(wrongPathBody.content.some((block) => block.text === "Status: complete")).toBe(false);
+    const errorBody = await sendCodeModeResult(writeToolUse, "Error: EACCES", true);
+    expect(errorBody.stop_reason).toBe("tool_use");
+    expect(errorBody.content.some((block) => block.type === "tool_use")).toBe(true);
+    expect(errorBody.content.some((block) => block.text === "Status: complete")).toBe(false);
+
+    messages.push(
+      {
+        role: "assistant",
+        content: [writeToolUse],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: writeToolUse.id,
+            content: buildCodeModeResult(),
+          },
+        ],
+      },
+    );
+
+    const finalBody = await send();
+    expect(finalBody.stop_reason).toBe("end_turn");
+    const finalText = finalBody.content.find((block) => block.type === "text")?.text;
+    expect(finalText).toContain("Read: AGENT.md, SOUL.md, FOLLOWTHROUGH_INPUT.md");
+    expect(finalText).toContain("Wrote: repo-contract-summary.txt");
+    expect(finalText).toContain("Status: complete");
+  });
+
   it("places tool_result after the parent user message even in mixed-content turns", async () => {
     // Regression for the loop-6 Copilot / Greptile finding: a user message
     // that mixes a tool_result block with fresh text blocks must still land
