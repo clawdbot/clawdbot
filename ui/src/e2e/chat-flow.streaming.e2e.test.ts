@@ -1,3 +1,5 @@
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
 import {
   chatThreadDistanceFromBottom,
@@ -13,6 +15,110 @@ import {
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("keeps streamed audio and video metadata pinned without overriding manual scroll", async () => {
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const baseTs = Date.now() - 100_000;
+    const historyMessages = Array.from({ length: 50 }, (_, index) => ({
+      content: [
+        {
+          text: `Existing transcript message ${index}\n${"Existing streamed history.\n".repeat(5)}`,
+          type: "text",
+        },
+      ],
+      role: index % 2 === 0 ? "user" : "assistant",
+      timestamp: baseTs + index,
+    }));
+    const gateway = await installMockGateway(page, { historyMessages });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.getByText("Existing transcript message 49", { exact: false }).waitFor({
+        timeout: 10_000,
+      });
+      await waitForChatScrollIdle(page);
+
+      const prompt = "stream a voice note and video";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      const runId = requireString(
+        requireRecord(sendRequest.params).idempotencyKey,
+        "chat send idempotency key",
+      );
+      await gateway.emitChatFinal({
+        runId,
+        text:
+          "Here is the narrated update.\n" +
+          "MEDIA:https://example.com/voice.ogg\n" +
+          "MEDIA:https://example.com/clip.mp4",
+      });
+
+      for (const selector of ["audio", "video"]) {
+        const media = page.locator(`.chat-thread ${selector}`);
+        await media.waitFor({ state: "attached", timeout: 10_000 });
+        await waitForChatScrollIdle(page);
+        expect(await chatThreadDistanceFromBottom(page)).toBeLessThanOrEqual(8);
+
+        const scrollGeneration = await media.evaluate((element) => {
+          const pane = document.querySelector("openclaw-chat-pane") as
+            | (HTMLElement & { state?: { chatScrollGeneration?: number } })
+            | null;
+          const before = pane?.state?.chatScrollGeneration;
+          element.style.display = "block";
+          element.style.height = "480px";
+          element.dispatchEvent(new Event("loadedmetadata", { bubbles: true }));
+          return { after: pane?.state?.chatScrollGeneration, before };
+        });
+
+        expect(scrollGeneration.after).toBeGreaterThan(scrollGeneration.before ?? -1);
+        await expect
+          .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
+          .toBeLessThanOrEqual(8);
+      }
+
+      if (artifactDir) {
+        await mkdir(artifactDir, { recursive: true });
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(artifactDir, "streamed-media-pinned.png"),
+        });
+      }
+
+      const media = await page.locator(".chat-thread audio").elementHandle();
+      if (!media) {
+        throw new Error("expected rendered assistant audio");
+      }
+      await page.locator(".chat-thread").evaluate((element) => {
+        const thread = element as HTMLElement;
+        thread.scrollTop = Math.max(0, thread.scrollHeight - thread.clientHeight - 120);
+        thread.dispatchEvent(new Event("scroll", { bubbles: true }));
+      });
+      expect(await chatThreadDistanceFromBottom(page)).toBeGreaterThan(8);
+      await media.evaluate((element) => {
+        element.style.height = "600px";
+        element.dispatchEvent(new Event("loadedmetadata", { bubbles: true }));
+      });
+      await expect
+        .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
+        .toBeGreaterThan(8);
+
+      if (artifactDir) {
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(artifactDir, "streamed-media-manual-scroll.png"),
+        });
+      }
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("renders stable markdown during a streaming chat turn and finalizes the tail", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
