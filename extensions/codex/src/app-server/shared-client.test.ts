@@ -1711,6 +1711,7 @@ describe("shared Codex app-server client", () => {
       tryCreateRunningTaskRun: vi.fn(() => ({ taskId: "child-thread" })),
       recordTaskRunProgressByRunId: vi.fn(() => []),
       finalizeTaskRunByRunId: vi.fn(() => []),
+      emitSubagentProgress: vi.fn(),
       listTaskRecords: vi.fn(() => []),
       setDetachedTaskDeliveryStatusByRunId: vi.fn(() => []),
     };

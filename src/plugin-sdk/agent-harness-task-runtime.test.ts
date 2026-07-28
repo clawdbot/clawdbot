@@ -12,6 +12,14 @@ import {
   isDurableAgentHarnessCompletionDelivery,
 } from "./agent-harness-task-runtime.js";
 
+const hookMocks = vi.hoisted(() => ({
+  getGlobalHookRunner: vi.fn(),
+}));
+
+vi.mock("../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: hookMocks.getGlobalHookRunner,
+}));
+
 vi.mock("../agents/subagent-announce-delivery.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../agents/subagent-announce-delivery.js")>();
   return {
@@ -36,6 +44,7 @@ describe("agent-harness-task-runtime", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(listTaskRecords).mockReturnValue([]);
+    hookMocks.getGlobalHookRunner.mockReturnValue(null);
   });
 
   function createScope(requesterSessionKey = "agent:main:channel:C123") {
@@ -160,6 +169,130 @@ describe("agent-harness-task-runtime", () => {
     });
 
     expect(runtime.listTaskRecords().map((task) => task.taskId)).toEqual(["task-1"]);
+  });
+
+  it("emits scoped native subagent presentation without awaiting listeners", () => {
+    const runSubagentProgress = vi.fn(
+      () =>
+        new Promise<void>(() => {
+          // Intentionally never settles.
+        }),
+    );
+    hookMocks.getGlobalHookRunner.mockReturnValue({
+      hasHooks: vi.fn((hookName) => hookName === "subagent_progress"),
+      runSubagentProgress,
+    });
+    const scope = createAgentHarnessTaskRuntimeScope({
+      requesterSessionKey: " agent:main:channel:C123 ",
+      requesterPresentation: {
+        channel: " discord ",
+        accountId: " default ",
+        to: " channel:C123 ",
+        threadId: " 42 ",
+        channelId: " C123 ",
+        messageId: " M456 ",
+      },
+    });
+    const runtime = createAgentHarnessTaskRuntime({
+      runtime: "subagent",
+      taskKind: "example-harness",
+      scope,
+      runIdPrefix: "example:",
+    });
+
+    runtime.emitSubagentProgress({
+      phase: "started",
+      runId: " example:child-1 ",
+      childSessionKey: " native-child-1 ",
+    });
+
+    expect(runSubagentProgress).toHaveBeenCalledWith(
+      {
+        phase: "started",
+        runId: "example:child-1",
+        childSessionKey: "native-child-1",
+        requester: {
+          channel: "discord",
+          accountId: "default",
+          to: "channel:C123",
+          threadId: "42",
+          channelId: "C123",
+          messageId: "M456",
+        },
+      },
+      {
+        runId: "example:child-1",
+        childSessionKey: "native-child-1",
+        requesterSessionKey: "agent:main:channel:C123",
+      },
+    );
+  });
+
+  it("serializes presentation phases for one run without blocking the caller", async () => {
+    const calls: string[] = [];
+    let releaseStarted: (() => void) | undefined;
+    const startedGate = new Promise<void>((resolve) => {
+      releaseStarted = resolve;
+    });
+    const runSubagentProgress = vi.fn(async (event: { phase: "started" | "ended" }) => {
+      calls.push(`${event.phase}:begin`);
+      if (event.phase === "started") {
+        await startedGate;
+      }
+      calls.push(`${event.phase}:end`);
+    });
+    hookMocks.getGlobalHookRunner.mockReturnValue({
+      hasHooks: vi.fn((hookName) => hookName === "subagent_progress"),
+      runSubagentProgress,
+    });
+    const runtime = createAgentHarnessTaskRuntime({
+      runtime: "subagent",
+      taskKind: "example-harness",
+      scope: createScope(),
+      runIdPrefix: "example:",
+    });
+
+    runtime.emitSubagentProgress({
+      phase: "started",
+      runId: "example:child-1",
+      childSessionKey: "native-child-1",
+    });
+    runtime.emitSubagentProgress({
+      phase: "ended",
+      runId: "example:child-1",
+      childSessionKey: "native-child-1",
+      outcome: "ok",
+    });
+
+    expect(calls).toEqual(["started:begin"]);
+    releaseStarted?.();
+    await vi.waitFor(() => {
+      expect(calls).toEqual(["started:begin", "started:end", "ended:begin", "ended:end"]);
+    });
+  });
+
+  it("validates native presentation identities before dispatch", () => {
+    const runtime = createAgentHarnessTaskRuntime({
+      runtime: "subagent",
+      taskKind: "example-harness",
+      scope: createScope(),
+      runIdPrefix: "example:",
+    });
+
+    expect(() =>
+      runtime.emitSubagentProgress({
+        phase: "started",
+        runId: "other:child-1",
+        childSessionKey: "native-child-1",
+      }),
+    ).toThrow(/outside the configured scope/);
+    expect(() =>
+      runtime.emitSubagentProgress({
+        phase: "started",
+        runId: "example:child-1",
+        childSessionKey: " ",
+      }),
+    ).toThrow(/requires childSessionKey/);
   });
 
   it("delivers a generic harness completion through subagent announcement delivery", async () => {
