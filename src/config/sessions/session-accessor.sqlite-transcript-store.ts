@@ -4,6 +4,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import { getChildLogger } from "../../logging/logger.js";
 import { redactSecrets } from "../../logging/redact.js";
 import { canonicalizePersistedUserMessageMedia } from "../../media/media-facts.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -102,16 +103,30 @@ export function appendTranscriptEventInTransaction(
   }
   // Caller-checked appends may retain a duplicate key in the payload, but the
   // identity index can point at only one row.
-  const indexedMessageIdempotencyKey =
-    identity.messageIdempotencyKey &&
-    !options.dedupeByMessageIdempotency &&
-    readTranscriptIdentityByMessageIdempotencyKey(
-      database,
-      scope.sessionId,
-      identity.messageIdempotencyKey,
-    )
-      ? undefined
-      : identity.messageIdempotencyKey;
+  const duplicateKeyOwner =
+    identity.messageIdempotencyKey && !options.dedupeByMessageIdempotency
+      ? readTranscriptIdentityByMessageIdempotencyKey(
+          database,
+          scope.sessionId,
+          identity.messageIdempotencyKey,
+        )
+      : undefined;
+  if (duplicateKeyOwner) {
+    // The index keeps pointing at the first writer; surface the bypass so a
+    // duplicated enrollment is auditable instead of silently NULLed (#115389).
+    getChildLogger({ subsystem: "session-sqlite" }).warn(
+      "transcript append duplicated a message idempotency key past the identity index",
+      {
+        sessionId: scope.sessionId,
+        eventId: identity.eventId,
+        existingEventId: duplicateKeyOwner.eventId,
+        messageIdempotencyKey: identity.messageIdempotencyKey,
+      },
+    );
+  }
+  const indexedMessageIdempotencyKey = duplicateKeyOwner
+    ? undefined
+    : identity.messageIdempotencyKey;
   executeSqliteQuerySync(
     database.db,
     db
