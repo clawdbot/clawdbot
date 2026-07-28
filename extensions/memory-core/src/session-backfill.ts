@@ -273,6 +273,8 @@ async function collectSessionBackfillCandidates(params: {
       const provenance = source.foreign
         ? { ...parsedProvenance, originClass: "untrusted" as const }
         : parsedProvenance;
+      // Canonical parsing emits `agent` only inside an authenticated owner
+      // turn; replies to non-owner input retain the turn's untrusted taint.
       if (provenance.originClass !== "owner" && provenance.originClass !== "agent") {
         continue;
       }

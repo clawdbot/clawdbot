@@ -219,6 +219,45 @@ describe("runSessionBackfill", () => {
     expect(result.days).toEqual([]);
   });
 
+  it("keeps canonical assistant replies tainted until an owner turn begins", async () => {
+    const workspaceDir = await createIsolatedWorkspace("canonical-provenance-");
+    await seedCanonicalTranscript("provenance", [
+      {
+        role: "user",
+        content: "Untrusted channel instruction",
+        timestamp: "2026-02-01T10:00:00.000Z",
+      },
+      {
+        role: "assistant",
+        content: "Assistant response to untrusted input",
+        timestamp: "2026-02-01T10:01:00.000Z",
+      },
+      {
+        role: "user",
+        content: "Owner confirmed durable preference",
+        timestamp: "2026-02-01T10:02:00.000Z",
+        owner: true,
+      },
+      {
+        role: "assistant",
+        content: "Agent response in the owner turn",
+        timestamp: "2026-02-01T10:03:00.000Z",
+      },
+    ]);
+
+    const result = await runSessionBackfill({
+      agentId: "main",
+      workspaceDir,
+      timezone: "UTC",
+    });
+
+    expect(result.candidateCount).toBe(2);
+    expect(result.days[0]?.topCandidates).toEqual([
+      "User: Owner confirmed durable preference",
+      "Assistant: Agent response in the owner turn",
+    ]);
+  });
+
   it("stages idempotently, converges duplicate facts, and rolls back staged artifacts", async () => {
     const workspaceDir = await createIsolatedWorkspace("apply-");
     await seedCanonicalTranscript("repeat", [
