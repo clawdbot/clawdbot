@@ -4642,7 +4642,6 @@ describe("runCodexAppServerAttempt", () => {
       agents: {
         defaults: {
           compaction: {
-            truncateAfterCompaction: true,
             maxActiveTranscriptBytes: "1mb",
           },
         },
@@ -4758,7 +4757,6 @@ describe("runCodexAppServerAttempt", () => {
       agents: {
         defaults: {
           compaction: {
-            truncateAfterCompaction: true,
             maxActiveTranscriptBytes: "1mb",
           },
         },
