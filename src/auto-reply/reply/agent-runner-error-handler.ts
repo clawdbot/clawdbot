@@ -20,6 +20,7 @@ import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   resolveAgentRunErrorLifecycleFields,
 } from "../../agents/run-termination.js";
+import { isSessionWriteLockLeaseLostError } from "../../agents/session-write-lock-error.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
@@ -107,6 +108,24 @@ export async function cancelOverloadRetryNotice(state: OverloadRetryState): Prom
 type ErrorAction =
   | { kind: "retry"; liveModelSwitchError?: LiveSessionModelSwitchError }
   | Extract<AgentTurnInternalResult, { kind: "final" }>;
+
+function isSessionLeaseLoss(error: unknown): boolean {
+  const pending = [error];
+  const seen = new Set<unknown>();
+  for (const candidate of pending) {
+    if (!candidate || seen.has(candidate)) {
+      continue;
+    }
+    seen.add(candidate);
+    if (isSessionWriteLockLeaseLostError(candidate)) {
+      return true;
+    }
+    if (candidate instanceof Error && "cause" in candidate && candidate.cause !== undefined) {
+      pending.push(candidate.cause);
+    }
+  }
+  return false;
+}
 
 export async function handleAgentExecutionError(params: {
   turn: AgentTurnParams;
@@ -233,6 +252,17 @@ export async function handleAgentExecutionError(params: {
   const replyOperationAbortAction = resolveReplyOperationAbortAction(err);
   if (replyOperationAbortAction) {
     return replyOperationAbortAction;
+  }
+  if (isSessionLeaseLoss(err) && turn.isRestartRecoveryArmed?.() === true) {
+    // Shutdown durably hands the turn to restart recovery before the old
+    // process is aborted. If the replacement wins the SQLite lease first,
+    // converge the old owner onto the same interruption path: no fallback
+    // delivery, and claim cleanup remains owned by the replacement process.
+    turn.replyOperation?.abortForRestart();
+    const handoffAction = resolveReplyOperationAbortAction(err);
+    if (handoffAction) {
+      return handoffAction;
+    }
   }
   const restartLifecycleError = resolveRestartLifecycleError(err);
   if (

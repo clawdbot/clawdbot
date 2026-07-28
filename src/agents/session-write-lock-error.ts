@@ -68,6 +68,15 @@ function isSessionWriteLockStaleError(err: unknown): boolean {
   );
 }
 
+/** Returns whether the active SQLite session lease was replaced by another owner. */
+export function isSessionWriteLockLeaseLostError(err: unknown): boolean {
+  if (!isSessionWriteLockStaleError(err)) {
+    return false;
+  }
+  const staleReasons = (err as { staleReasons?: unknown }).staleReasons;
+  return Array.isArray(staleReasons) && staleReasons.includes("lease-lost");
+}
+
 /** Returns whether an error is any session write-lock acquisition failure. */
 export function isSessionWriteLockAcquireError(err: unknown): boolean {
   return isSessionWriteLockTimeoutError(err) || isSessionWriteLockStaleError(err);
