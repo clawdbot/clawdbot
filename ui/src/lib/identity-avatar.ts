@@ -1,3 +1,4 @@
+import { AVATAR_MAX_BYTES } from "../../../src/shared/avatar-limits.js";
 import { formatSenderLabel, type SenderIdentity } from "./chat/sender-label.ts";
 import { fnv1aUtf16 } from "./fnv1a.ts";
 
@@ -11,6 +12,48 @@ export type IdentityAvatarInput = SenderIdentity & {
 const ORIGIN_PROBE = "https://origin-probe.invalid";
 
 let appGatewayOrigin: string | null = null;
+let appGatewayAuthHeader: string | null = null;
+
+const IDENTITY_AVATAR_CACHE_MAX_ENTRIES = 128;
+const IDENTITY_AVATAR_FETCH_TIMEOUT_MS = 30_000;
+const IDENTITY_AVATAR_MIME_TYPES = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
+
+type CachedIdentityAvatar = {
+  blobUrl: string | null;
+  loaded: boolean;
+  promise: Promise<string | null>;
+};
+
+const identityAvatarCache = new Map<string, CachedIdentityAvatar>();
+
+function clearIdentityAvatarCache(): void {
+  for (const entry of identityAvatarCache.values()) {
+    if (entry.blobUrl) {
+      URL.revokeObjectURL(entry.blobUrl);
+    }
+  }
+  identityAvatarCache.clear();
+}
+
+function trimIdentityAvatarCache(protectedEntry?: CachedIdentityAvatar): void {
+  while (identityAvatarCache.size > IDENTITY_AVATAR_CACHE_MAX_ENTRIES) {
+    let evicted = false;
+    for (const [key, entry] of identityAvatarCache) {
+      // Pending consumers still need their eventual blob. Only completed LRU
+      // entries may be evicted; the request currently resolving stays valid.
+      if (!entry.blobUrl || !entry.loaded || entry === protectedEntry) {
+        continue;
+      }
+      identityAvatarCache.delete(key);
+      URL.revokeObjectURL(entry.blobUrl);
+      evicted = true;
+      break;
+    }
+    if (!evicted) {
+      break;
+    }
+  }
+}
 
 function toHttpOrigin(url: string | null | undefined): string | null {
   if (!url) {
@@ -26,9 +69,18 @@ function toHttpOrigin(url: string | null | undefined): string | null {
   }
 }
 
-/** Records the connected gateway URL so avatar routes resolve to its origin. */
-export function setAvatarGatewayOrigin(gatewayUrl: string | null | undefined): void {
-  appGatewayOrigin = toHttpOrigin(gatewayUrl);
+/** Keeps avatar routes, credentials, and cached images scoped to the current gateway. */
+export function setAvatarGatewayOrigin(
+  gatewayUrl: string | null | undefined,
+  authHeader: string | null = null,
+): void {
+  const nextOrigin = toHttpOrigin(gatewayUrl);
+  const nextAuthHeader = authHeader?.trim() || null;
+  if (appGatewayOrigin !== nextOrigin || appGatewayAuthHeader !== nextAuthHeader) {
+    clearIdentityAvatarCache();
+  }
+  appGatewayOrigin = nextOrigin;
+  appGatewayAuthHeader = nextAuthHeader;
 }
 
 // Mirrors the server's user-profiles-http-path matcher. Sender metadata may
@@ -39,10 +91,9 @@ const USER_AVATAR_PATHNAME = /^\/api\/users\/[^/]+\/avatar$/u;
  * Returns a browser-safe avatar URL, or null. Only the canonical
  * /api/users/<id>/avatar route is trusted (pathname pinned, fragment dropped).
  * The query is preserved: the gateway stamps a ?v=<updatedAt> revision there so
- * the browser cache-busts a replaced avatar. Since avatars now render as plain
- * <img> with no attached credentials, a varied query cannot amplify any
- * client cache — the browser bounds it. Relative paths resolve against the
- * trusted gateway origin; absolute URLs must match that origin.
+ * replacing an image invalidates its bounded authenticated blob-cache entry.
+ * Relative paths resolve against the trusted gateway origin; absolute URLs
+ * must match that origin.
  */
 function toTrustedAvatarUrl(value: string, gatewayOrigin: string | null): string | null {
   try {
@@ -60,9 +111,93 @@ function toTrustedAvatarUrl(value: string, gatewayOrigin: string | null): string
   }
 }
 
+function loadIdentityAvatar(url: string): string | Promise<string | null> {
+  const cacheKey = url;
+  const cached = identityAvatarCache.get(cacheKey);
+  if (cached) {
+    // Map order is the LRU order; concurrent roster, profile, and chat views
+    // must share both the authenticated request and its resulting blob.
+    identityAvatarCache.delete(cacheKey);
+    identityAvatarCache.set(cacheKey, cached);
+    return cached.loaded && cached.blobUrl ? cached.blobUrl : cached.promise;
+  }
+
+  const entry: CachedIdentityAvatar = {
+    blobUrl: null,
+    loaded: false,
+    promise: Promise.resolve(null),
+  };
+  const authHeader = appGatewayAuthHeader;
+  entry.promise = (async () => {
+    try {
+      const response = await fetch(url, {
+        credentials: "include",
+        ...(authHeader ? { headers: { Authorization: authHeader } } : {}),
+        signal: AbortSignal.timeout(IDENTITY_AVATAR_FETCH_TIMEOUT_MS),
+      });
+      if (!response.ok) {
+        return null;
+      }
+      const blob = await response.blob();
+      if (
+        blob.size === 0 ||
+        blob.size > AVATAR_MAX_BYTES ||
+        !IDENTITY_AVATAR_MIME_TYPES.has(blob.type.toLowerCase())
+      ) {
+        return null;
+      }
+      const blobUrl = URL.createObjectURL(blob);
+      // A gateway or credential change can finish while its old request is in
+      // flight. Never publish an image into the replacement security context.
+      if (identityAvatarCache.get(cacheKey) !== entry) {
+        URL.revokeObjectURL(blobUrl);
+        return null;
+      }
+      entry.blobUrl = blobUrl;
+      trimIdentityAvatarCache(entry);
+      return blobUrl;
+    } catch {
+      return null;
+    } finally {
+      if (!entry.blobUrl && identityAvatarCache.get(cacheKey) === entry) {
+        // Transient failures and uncached 404s must not hide a later upload.
+        identityAvatarCache.delete(cacheKey);
+      }
+    }
+  })();
+  identityAvatarCache.set(cacheKey, entry);
+  trimIdentityAvatarCache(entry);
+
+  return entry.promise;
+}
+
+/** Fetch protected or cross-origin profile images once and render CSP-safe blobs. */
+export function resolveAvatarImageUrl(value: string): string | Promise<string | null> | null {
+  const trusted = toTrustedAvatarUrl(value, appGatewayOrigin);
+  if (!trusted) {
+    return null;
+  }
+  const pageOrigin = globalThis.location?.origin;
+  const crossOrigin = pageOrigin ? new URL(trusted, pageOrigin).origin !== pageOrigin : false;
+  return appGatewayAuthHeader || crossOrigin ? loadIdentityAvatar(trusted) : trusted;
+}
+
+/** A blob stays live until its image has finished loading or definitively failed. */
+export function settleAvatarImageUrl(value: string | null): void {
+  if (!value?.startsWith("blob:")) {
+    return;
+  }
+  for (const entry of identityAvatarCache.values()) {
+    if (entry.blobUrl === value) {
+      entry.loaded = true;
+      trimIdentityAvatarCache();
+      return;
+    }
+  }
+}
+
 export type ResolvedIdentityAvatar =
   | { kind: "profile"; url: string }
-  | { kind: "gravatar"; url: string }
   | { kind: "initials"; initials: string; colorSeed: number };
 
 function initialsFromLabel(label: string): string {

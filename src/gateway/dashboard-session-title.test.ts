@@ -13,7 +13,10 @@ vi.mock("../config/sessions/session-accessor.js", () => ({ updateSessionEntry })
 
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { maybeGenerateDashboardSessionTitle } from "./dashboard-session-title.js";
+import {
+  generateDashboardSessionTitle,
+  maybeGenerateDashboardSessionTitle,
+} from "./dashboard-session-title.js";
 
 const cfg = {
   agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
@@ -237,5 +240,51 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     await expect(first).resolves.toBe(true);
 
     expect(generateConversationLabelWithFallback).toHaveBeenCalledOnce();
+  });
+});
+
+describe("generateDashboardSessionTitle", () => {
+  beforeEach(() => {
+    generateConversationLabelWithFallback.mockReset();
+    resolveUtilityModelRefForAgent.mockReset();
+    generateConversationLabelWithFallback.mockResolvedValue("Worktree Naming Improvements");
+    resolveUtilityModelRefForAgent.mockReturnValue("openai/gpt-5.6-luna");
+  });
+
+  it("generates the reusable short dashboard title", async () => {
+    await expect(
+      generateDashboardSessionTitle({
+        cfg,
+        agentId: "main",
+        userMessage: "Please improve the default names for managed worktrees",
+      }),
+    ).resolves.toBe("Worktree Naming Improvements");
+  });
+
+  it("uses a requested session model as the primary fallback", async () => {
+    await generateDashboardSessionTitle({
+      cfg,
+      agentId: "main",
+      entry: {
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-5",
+        authProfileOverride: "work",
+      },
+      userMessage: "Please improve the default names for managed worktrees",
+    });
+
+    expect(generateConversationLabelWithFallback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        regularModelRef: "anthropic/claude-opus-4-5@work",
+        preferredProfile: "work",
+      }),
+    );
+  });
+
+  it.each(["", "   ", "/status"])("skips non-title prompt %j", async (userMessage) => {
+    await expect(
+      generateDashboardSessionTitle({ cfg, agentId: "main", userMessage }),
+    ).resolves.toBeNull();
+    expect(generateConversationLabelWithFallback).not.toHaveBeenCalled();
   });
 });

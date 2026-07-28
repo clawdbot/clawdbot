@@ -1470,6 +1470,35 @@ struct ChatViewModelTests {
         }
     }
 
+    @Test @MainActor func `global Swarm activity follows the selected agent owner`() async {
+        let (_, viewModel) = await makeViewModel(
+            sessionKey: "global",
+            activeAgentId: "work",
+            historyResponses: [])
+        viewModel.swarmEnabled = true
+        let initial = viewModel.swarmActivityState
+        let foreign = OpenClawChatSessionsChangedEvent(
+            sessionKey: "global",
+            agentId: "main",
+            reason: "swarm-note",
+            swarmGroupId: "swarm:global:turn-1",
+            kind: "phase",
+            text: "Foreign phase")
+
+        viewModel.handleTransportEvent(.sessionsChanged(foreign))
+        #expect(viewModel.swarmActivityState == initial)
+
+        let selected = OpenClawChatSessionsChangedEvent(
+            sessionKey: "global",
+            agentId: "work",
+            reason: "swarm-note",
+            swarmGroupId: "swarm:global:turn-1",
+            kind: "phase",
+            text: "Selected phase")
+        viewModel.handleTransportEvent(.sessionsChanged(selected))
+        #expect(viewModel.swarmActivityState != initial)
+    }
+
     @Test @MainActor func `locally expired question remains in transcript`() {
         let viewModel = OpenClawChatViewModel(
             sessionKey: "main",
@@ -1914,7 +1943,9 @@ struct ChatViewModelTests {
         let discardedViewModel = try weakReference(to: viewModel)
 
         viewModel = nil
-        await Task.yield()
+        for _ in 0..<100 where discardedViewModel.value != nil {
+            await Task.yield()
+        }
 
         #expect(discardedViewModel.value == nil)
     }
@@ -2664,6 +2695,63 @@ struct ChatViewModelTests {
         try await waitUntil("late global agent identity adopts run") {
             await MainActor.run { lateVM.pendingRunCount == 1 }
         }
+    }
+
+    @Test @MainActor func `global session changes reconcile nested digest ownership`() async {
+        let (_, vm) = await makeViewModel(
+            sessionKey: "global",
+            activeAgentId: "work",
+            historyResponses: [])
+        var selected = sessionEntry(key: "global", updatedAt: 100)
+        selected.status = "running"
+        selected.hasActiveRun = true
+        selected.activeRunIds = ["run-work"]
+        selected.observerDigest = OpenClawChatSessionObserverDigest(
+            agentId: "work",
+            runId: "run-work",
+            revision: 2,
+            updatedAt: 200,
+            headline: "Selected owner",
+            health: "on-track")
+        vm.sessions = [selected]
+
+        vm.handleTransportEvent(.sessionsChanged(.init(
+            sessionKey: "global",
+            agentId: "work",
+            updatedAt: 900,
+            observerDigest: OpenClawChatSessionObserverDigest(
+                agentId: "main",
+                runId: "run-work",
+                revision: 9,
+                updatedAt: 900,
+                headline: "Foreign owner",
+                health: "stuck"),
+            status: "running",
+            hasActiveRun: true,
+            activeRunIds: ["run-work"])))
+
+        #expect(vm.sessions[0].observerDigest?.agentId == "work")
+        #expect(vm.sessions[0].observerDigest?.headline == "Selected owner")
+        #expect(vm.sessions[0].activeRunIds == ["run-work"])
+        #expect(vm.sessions[0].updatedAt == 900)
+
+        vm.handleTransportEvent(.sessionsChanged(.init(
+            sessionKey: "global",
+            agentId: "work",
+            updatedAt: 1000,
+            observerDigest: OpenClawChatSessionObserverDigest(
+                runId: "run-work",
+                revision: 10,
+                updatedAt: 1000,
+                headline: "Legacy selected owner",
+                health: "on-track"),
+            status: "running",
+            hasActiveRun: true,
+            activeRunIds: ["run-work"])))
+
+        #expect(vm.sessions[0].observerDigest?.agentId == "work")
+        #expect(vm.sessions[0].observerDigest?.headline == "Legacy selected owner")
+        #expect(vm.sessions[0].updatedAt == 1000)
     }
 
     @Test func `global agent switch clears previous run ownership`() async throws {

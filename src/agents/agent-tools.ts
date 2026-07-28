@@ -9,6 +9,7 @@ import type {
   TaskSuggestionDeliveryMode,
 } from "../auto-reply/get-reply-options.types.js";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-response.js";
+import { messageToolOwnsVisibleReply } from "../auto-reply/source-reply-delivery-mode.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
@@ -299,9 +300,8 @@ type OpenClawCodingToolsOptions = {
   sandbox?: SandboxContext | null;
   sessionKey?: string;
   /**
-   * The actual live run session key. When the tool set is constructed with a
-   * sandbox/policy session key, this allows `session_status({sessionKey:"current"})`
-   * to resolve to the live run session instead of the stale sandbox key.
+   * The durable store session key for the live run when it differs from the
+   * sandbox/policy session key used to construct the tool set.
    */
   runSessionKey?: string;
   /** Ephemeral session UUID — regenerated on /new and /reset. */
@@ -405,6 +405,8 @@ type OpenClawCodingToolsOptions = {
   runtimeToolAllowlist?: string[];
   /** True when runtimeToolAllowlist is real parent authority that child sessions inherit. */
   inheritRuntimeToolAllowlist?: boolean;
+  /** Mutable spawn capability snapshot refreshed after late-bound runtime tools are authorized. */
+  inheritedToolAllowlistRef?: string[];
   /** Mutable cron creator cap ref for callers that append final runtime tools later. */
   cronCreatorToolAllowlistRef?: CronCreatorToolAllowlistEntry[];
   /** If true, the model has native vision capability */
@@ -559,9 +561,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
   });
   const runtimeProfileAlsoAllow = [
-    ...(options?.forceMessageTool || options?.sourceReplyDeliveryMode === "message_tool_only"
-      ? ["message"]
-      : []),
+    ...(options && messageToolOwnsVisibleReply(options) ? ["message"] : []),
     ...(runtimeToolAllowlistIncludesMessage ? ["message"] : []),
     ...(forceHeartbeatTool ? [HEARTBEAT_RESPONSE_TOOL_NAME] : []),
     ...toolSearchControlAllowlist,
@@ -806,7 +806,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const inheritedToolDenylist = [...pluginToolDenylist];
   // Passed by reference to sessions_spawn and populated after the final policy
   // pass so child sessions inherit the actual parent tool surface.
-  const inheritedToolAllowlist: string[] = [];
+  const inheritedToolAllowlist = options?.inheritedToolAllowlistRef ?? [];
   const toolPolicyInheritanceSources = capabilityProfile.policy.inheritancePolicies;
   const shouldInheritEffectiveToolAllowlist =
     toolPolicyInheritanceSources.some(hasRestrictiveAllowPolicy);

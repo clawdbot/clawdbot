@@ -375,8 +375,8 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
         .poll(() => page.getByRole("button", { name: "Send message" }).isVisible())
         .toBe(true);
       await expect
-        .poll(() => page.getByRole("button", { name: "Start voice input" }).count())
-        .toBe(0);
+        .poll(() => page.getByRole("button", { name: "Start voice input" }).isVisible())
+        .toBe(true);
 
       await page.getByRole("button", { name: "Send message" }).click();
       const sendRequest = await gateway.waitForRequest("chat.send");
@@ -774,7 +774,19 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
-      deferredMethods: ["chat.startup", "chat.metadata"],
+      deferredMethods: ["chat.startup"],
+      methodResponses: {
+        "chat.metadata": {
+          cases: [
+            {
+              match: { agentId: "work" },
+              response: {
+                __mockError: { code: "UNAVAILABLE", message: "metadata unavailable" },
+              },
+            },
+          ],
+        },
+      },
       models: [{ id: "gpt-default", name: "GPT Default", provider: "openai", available: true }],
     });
 
@@ -792,9 +804,23 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
           );
         })
         .toBe(true);
-      await gateway.rejectDeferred("chat.metadata", {
-        code: "UNAVAILABLE",
-        message: "metadata unavailable",
+      await page.waitForFunction(() => {
+        const pane = document.querySelector("openclaw-chat-pane") as
+          | (HTMLElement & {
+              state?: {
+                sessionKey?: string;
+                chatMetadataRequestVersion?: number;
+                chatModelCatalog?: unknown[];
+                chatModelsLoading?: boolean;
+              };
+            })
+          | null;
+        return (
+          pane?.state?.sessionKey === "agent:work:main" &&
+          (pane.state.chatMetadataRequestVersion ?? 0) >= 2 &&
+          pane.state.chatModelsLoading === false &&
+          pane.state.chatModelCatalog?.length === 0
+        );
       });
       const agentsRequestsBeforeStartup = (await gateway.getRequests("agents.list")).length;
       await gateway.resolveDeferred("chat.startup", {
@@ -815,9 +841,6 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
         sessionId: "control-ui-e2e-session",
         thinkingLevel: null,
       });
-      await expect
-        .poll(async () => (await gateway.getRequests("agents.list")).length)
-        .toBeGreaterThan(agentsRequestsBeforeStartup);
       await page.waitForFunction(() => {
         const pane = document.querySelector("openclaw-chat-pane") as
           | (HTMLElement & {
@@ -829,6 +852,7 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
           pane.state.agentsList.agents?.some((agent) => agent.id === "main") === true
         );
       });
+      expect(await gateway.getRequests("agents.list")).toHaveLength(agentsRequestsBeforeStartup);
       const composer = page.locator(".agent-chat__input");
       await expect
         .poll(async () =>
@@ -836,10 +860,17 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
         )
         .not.toContain("GPT Default");
       const metadataRequests = await gateway.getRequests("chat.metadata");
-      expect(metadataRequests).toHaveLength(1);
-      expect((metadataRequests[0]?.params as { agentId?: string } | undefined)?.agentId).toBe(
-        "work",
-      );
+      expect(
+        metadataRequests.filter(
+          (request) => (request.params as { agentId?: string } | undefined)?.agentId === "work",
+        ),
+      ).toHaveLength(1);
+      expect(
+        metadataRequests.every(
+          (request) =>
+            typeof (request.params as { agentId?: string } | undefined)?.agentId === "string",
+        ),
+      ).toBe(true);
       expect(await gateway.getRequests("models.list")).toHaveLength(0);
     } finally {
       await context.close();

@@ -224,43 +224,29 @@ export function mergeAgentRunAttemptTerminal(
       : withAgentRunAttemptFailure(incoming, failure);
   }
   if (current.kind === "timeout" && incoming.kind === "timeout") {
-    if (current.source === "observation" && incoming.source === "observation") {
-      const phase =
-        ATTEMPT_TIMEOUT_PHASE_RANK[incoming.phase] > ATTEMPT_TIMEOUT_PHASE_RANK[current.phase]
-          ? incoming.phase
-          : current.phase;
-      return withAgentRunAttemptFailure({ kind: "timeout", phase, source: "observation" }, failure);
-    }
     const phase =
       ATTEMPT_TIMEOUT_PHASE_RANK[incoming.phase] > ATTEMPT_TIMEOUT_PHASE_RANK[current.phase]
         ? incoming.phase
         : current.phase;
-    let source: AgentRunAttemptTimeoutSource;
-    if (current.source === "observation") {
-      if (incoming.source === "observation") {
-        const observationPhase =
-          ATTEMPT_TIMEOUT_PHASE_RANK[incoming.phase] > ATTEMPT_TIMEOUT_PHASE_RANK[current.phase]
-            ? incoming.phase
-            : current.phase;
-        return withAgentRunAttemptFailure(
-          { kind: "timeout", phase: observationPhase, source: "observation" },
-          failure,
-        );
-      }
-      source = incoming.source;
-    } else if (incoming.source === "observation") {
-      source = current.source;
-    } else {
-      source =
-        ATTEMPT_TIMEOUT_SOURCE_RANK[incoming.source] > ATTEMPT_TIMEOUT_SOURCE_RANK[current.source]
-          ? incoming.source
-          : current.source;
+    const selected =
+      ATTEMPT_TIMEOUT_SOURCE_RANK[incoming.source] > ATTEMPT_TIMEOUT_SOURCE_RANK[current.source]
+        ? incoming
+        : current;
+    if (selected.source === "observation") {
+      const observationPhase =
+        current.phase === "compaction" || incoming.phase === "compaction"
+          ? "compaction"
+          : "tool_execution";
+      return withAgentRunAttemptFailure(
+        { kind: "timeout", phase: observationPhase, source: "observation" },
+        failure,
+      );
     }
     return withAgentRunAttemptFailure(
       {
         kind: "timeout",
         phase,
-        source,
+        source: selected.source,
         ...((hasAgentRunAttemptTimeoutAbort(current) ||
           hasAgentRunAttemptTimeoutAbort(incoming)) && { aborted: true as const }),
       },
@@ -476,13 +462,6 @@ function isHardAgentRunTimeoutPhase(value: unknown): value is AgentRunTimeoutPha
   return phase !== undefined && HARD_TIMEOUT_PHASES.has(phase);
 }
 
-/** True when an existing outcome is a hard timeout. */
-function isHardAgentRunTimeoutOutcome(
-  outcome: AgentRunTerminalOutcome | undefined | null,
-): boolean {
-  return outcome?.reason === "hard_timeout";
-}
-
 /** True when an outcome should not be overwritten by ordinary later status. */
 export function isStickyAgentRunTerminalOutcome(
   outcome: AgentRunTerminalOutcome | undefined | null,
@@ -641,7 +620,6 @@ export function buildAgentRunTerminalOutcomeFromAttempt(input: {
   });
 }
 
-/** Builds a terminal outcome from a wait result, ignoring pending/unknown status. */
 /** Builds a terminal outcome from wait paths where status may still be pending/unknown. */
 export function buildAgentRunTerminalOutcomeFromWaitResult(
   wait: AgentRunTerminalWaitInput | undefined,
@@ -674,7 +652,6 @@ function completedBeforeOrAtTimeout(params: {
   );
 }
 
-/** Merges terminal outcomes while preserving cancellation and hard-timeout ownership. */
 /** Merges later terminal observations without overwriting sticky cancellation/hard-timeout state. */
 export function mergeAgentRunTerminalOutcome(
   current: AgentRunTerminalOutcome | undefined,
@@ -684,11 +661,29 @@ export function mergeAgentRunTerminalOutcome(
     return incoming;
   }
   if (current.reason === "cancelled") {
+    // A cancellation callback can arrive before the already-recorded provider
+    // timeout; timestamps, not callback ordering, identify the terminal owner.
+    if (
+      incoming.reason === "hard_timeout" &&
+      typeof incoming.endedAt === "number" &&
+      typeof current.endedAt === "number" &&
+      incoming.endedAt <= current.endedAt
+    ) {
+      return incoming;
+    }
     return current;
   }
   // A hard timeout owns the run unless later evidence proves completion ended
   // before that timeout; late abort/error cleanup must not downgrade it.
-  if (isHardAgentRunTimeoutOutcome(current)) {
+  if (current.reason === "hard_timeout") {
+    if (
+      incoming.reason === "cancelled" &&
+      typeof incoming.endedAt === "number" &&
+      typeof current.endedAt === "number" &&
+      incoming.endedAt < current.endedAt
+    ) {
+      return incoming;
+    }
     return completedBeforeOrAtTimeout({ completed: incoming, timeout: current })
       ? incoming
       : current;
@@ -696,7 +691,7 @@ export function mergeAgentRunTerminalOutcome(
   if (incoming.reason === "cancelled") {
     return incoming;
   }
-  if (isHardAgentRunTimeoutOutcome(incoming)) {
+  if (incoming.reason === "hard_timeout") {
     return completedBeforeOrAtTimeout({ completed: current, timeout: incoming })
       ? current
       : incoming;

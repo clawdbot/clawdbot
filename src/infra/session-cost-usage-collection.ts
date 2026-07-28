@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   materializeSessionArchiveForRead,
   SESSION_ARCHIVE_ZSTD_SUFFIX,
@@ -12,24 +13,26 @@ import {
   parseUsageCountedSessionIdFromFileName,
 } from "../config/sessions/artifacts.js";
 import {
+  formatSqliteSessionFileMarker,
+  parseSqliteSessionFileMarker,
+  type SqliteSessionFileMarker,
+} from "../config/sessions/legacy-sqlite-marker.js";
+import {
   resolveDefaultSessionStorePath,
   resolveSessionFilePath,
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
 import {
   listSessionTranscriptInstances,
+  loadSessionEntry,
   loadTranscriptEventsSync,
   readTranscriptStatsSync,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import {
-  formatSqliteSessionFileMarker,
-  parseSqliteSessionFileMarker,
-  type SqliteSessionFileMarker,
-} from "../config/sessions/sqlite-marker.js";
 import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import {
@@ -37,7 +40,7 @@ import {
   parseUsageCostTranscriptEntry,
   type UsageCostResolver,
 } from "./session-cost-usage-pricing.js";
-import type { ParsedTranscriptEntry, ParsedUsageEntry } from "./session-cost-usage.types.js";
+import type { ParsedUsageEntry } from "./session-cost-usage.types.js";
 
 export const USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY = 32;
 
@@ -144,10 +147,7 @@ function listUsageCountedSqliteTranscriptStats(
   });
   const files: UsageCostTranscriptFile[] = [];
   for (const instance of listSessionTranscriptInstances({ agentId, storePath })) {
-    const marker = parseSqliteSessionFileMarker(instance.entry.sessionFile);
-    if (!marker) {
-      continue;
-    }
+    const marker = { agentId, sessionId: instance.sessionId, storePath };
     const mtimeMs = instance.updatedAtMs;
     if (params?.minMtimeMs !== undefined && mtimeMs < params.minMtimeMs) {
       continue;
@@ -337,28 +337,6 @@ export async function* readTranscriptRecordsBestEffort(
   }
 }
 
-async function scanTranscriptFile(params: {
-  filePath: string;
-  config?: OpenClawConfig;
-  resolveCost?: UsageCostResolver;
-  startOffset?: number;
-  endOffset?: number;
-  onEntry: (entry: ParsedTranscriptEntry) => void;
-}): Promise<void> {
-  const resolveCost = params.resolveCost ?? createUsageCostResolver({ config: params.config });
-  for await (const parsed of readTranscriptRecords(
-    params.filePath,
-    params.startOffset,
-    params.endOffset,
-  )) {
-    const entry = parseUsageCostTranscriptEntry(parsed, resolveCost);
-    if (!entry) {
-      continue;
-    }
-    params.onEntry(entry);
-  }
-}
-
 export async function scanUsageFile(params: {
   filePath: string;
   config?: OpenClawConfig;
@@ -367,26 +345,25 @@ export async function scanUsageFile(params: {
   endOffset?: number;
   onEntry: (entry: ParsedUsageEntry) => void;
 }): Promise<void> {
-  await scanTranscriptFile({
-    filePath: params.filePath,
-    config: params.config,
-    resolveCost: params.resolveCost,
-    startOffset: params.startOffset,
-    endOffset: params.endOffset,
-    onEntry: (entry) => {
-      if (!entry.usage) {
-        return;
-      }
-      params.onEntry({
-        usage: entry.usage,
-        costTotal: entry.costTotal,
-        costBreakdown: entry.costBreakdown,
-        provider: entry.provider,
-        model: entry.model,
-        timestamp: entry.timestamp,
-      });
-    },
-  });
+  const resolveCost = params.resolveCost ?? createUsageCostResolver({ config: params.config });
+  for await (const parsed of readTranscriptRecords(
+    params.filePath,
+    params.startOffset,
+    params.endOffset,
+  )) {
+    const entry = parseUsageCostTranscriptEntry(parsed, resolveCost);
+    if (!entry?.usage) {
+      continue;
+    }
+    params.onEntry({
+      usage: entry.usage,
+      costTotal: entry.costTotal,
+      costBreakdown: entry.costBreakdown,
+      provider: entry.provider,
+      model: entry.model,
+      timestamp: entry.timestamp,
+    });
+  }
 }
 
 export function resolveExistingUsageSessionFile(params: {
@@ -394,16 +371,94 @@ export function resolveExistingUsageSessionFile(params: {
   sessionEntry?: SessionEntry;
   sessionFile?: string;
   agentId: string;
+  sessionTarget?: {
+    agentId: string;
+    sessionId: string;
+    sessionKey: string;
+    storePath: string;
+  };
 }): string | undefined {
-  const sessionId = params.sessionId?.trim();
-  const entryMarker = parseSqliteSessionFileMarker(params.sessionEntry?.sessionFile);
-  const explicitMarker = parseSqliteSessionFileMarker(params.sessionFile);
-  const sqliteMarker = entryMarker ?? explicitMarker;
-  if (sqliteMarker) {
-    if (sessionId && sqliteMarker.sessionId !== sessionId) {
+  const sessionId = normalizeOptionalString(params.sessionId);
+  const target = params.sessionTarget
+    ? {
+        agentId: normalizeOptionalString(params.sessionTarget.agentId),
+        sessionId: normalizeOptionalString(params.sessionTarget.sessionId),
+        sessionKey: normalizeOptionalString(params.sessionTarget.sessionKey),
+        storePath: normalizeOptionalString(params.sessionTarget.storePath),
+      }
+    : undefined;
+  const completeTarget = Boolean(
+    target?.agentId && target.sessionId && target.sessionKey && target.storePath,
+  );
+  if (target && completeTarget) {
+    const targetKeyAgentId = parseAgentSessionKey(target.sessionKey)?.agentId;
+    const targetKeyEntry = loadSessionEntry({
+      agentId: target.agentId!,
+      sessionKey: target.sessionKey!,
+      storePath: target.storePath!,
+    });
+    // Complete targets remain authoritative after metadata cleanup; reject
+    // only an existing key row that proves the identity is stale.
+    if (
+      (sessionId !== undefined && target.sessionId !== sessionId) ||
+      target.agentId !== params.agentId ||
+      (targetKeyAgentId && targetKeyAgentId !== target.agentId) ||
+      (targetKeyEntry && targetKeyEntry.sessionId !== target.sessionId)
+    ) {
       return undefined;
     }
+    return formatCanonicalUsageCostSqliteMarker({
+      agentId: target.agentId!,
+      sessionId: target.sessionId!,
+      storePath: target.storePath!,
+    });
+  }
+  const legacySessionFile = (params.sessionEntry as { sessionFile?: unknown } | undefined)
+    ?.sessionFile;
+  const entryMarker = parseSqliteSessionFileMarker(
+    typeof legacySessionFile === "string" ? legacySessionFile : undefined,
+  );
+  const explicitMarker = parseSqliteSessionFileMarker(params.sessionFile);
+  const matchingEntryMarker =
+    entryMarker && (!sessionId || entryMarker.sessionId === sessionId) ? entryMarker : undefined;
+  const matchingExplicitMarker =
+    explicitMarker &&
+    explicitMarker.agentId === params.agentId &&
+    (!sessionId || explicitMarker.sessionId === sessionId)
+      ? explicitMarker
+      : undefined;
+  if (!matchingEntryMarker && explicitMarker && !matchingExplicitMarker) {
+    return undefined;
+  }
+  const sqliteMarker = matchingEntryMarker ?? matchingExplicitMarker;
+  const targetKeyAgentId = parseAgentSessionKey(target?.sessionKey)?.agentId;
+  const targetKeyEntry =
+    target?.sessionKey && sqliteMarker && !completeTarget
+      ? loadSessionEntry({
+          agentId: sqliteMarker.agentId,
+          sessionKey: target.sessionKey,
+          storePath: sqliteMarker.storePath,
+        })
+      : undefined;
+  if (
+    target &&
+    !completeTarget &&
+    sqliteMarker &&
+    ((target.agentId && target.agentId !== sqliteMarker.agentId) ||
+      (target.sessionId && target.sessionId !== sqliteMarker.sessionId) ||
+      (targetKeyAgentId && targetKeyAgentId !== sqliteMarker.agentId) ||
+      (target.sessionKey && targetKeyEntry?.sessionId !== sqliteMarker.sessionId) ||
+      (target.storePath && path.resolve(target.storePath) !== path.resolve(sqliteMarker.storePath)))
+  ) {
+    return undefined;
+  }
+  if (sqliteMarker) {
     return formatSqliteSessionFileMarker(sqliteMarker);
+  }
+  // An explicit JSONL artifact remains a supported read boundary, but a stale
+  // entry marker alone must not redirect the requested session.
+  if (entryMarker && !params.sessionFile) {
+    return undefined;
   }
 
   const candidate =

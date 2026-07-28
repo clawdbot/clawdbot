@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 const MIN_NODE_22 = { major: 22, minor: 22, patch: 3 };
 const MIN_NODE_24 = { major: 24, minor: 15, patch: 0 };
 const MIN_NODE_25 = { major: 25, minor: 9, patch: 0 };
-const RECOMMENDED_NODE_MAJOR = 24;
+const RECOMMENDED_NODE_MAJOR = 26;
 const SUPPORTED_NODE_RANGE = ">=22.22.3 <23, >=24.15.0 <25, or >=25.9.0";
 const COMPILE_CACHE_DISABLED_RESPAWNED_ENV = "OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED";
 

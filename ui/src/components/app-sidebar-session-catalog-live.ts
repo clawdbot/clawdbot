@@ -475,7 +475,7 @@ export async function refreshSessionCatalogsLive(params: {
   const revisionIsCurrent = () => requestIsCurrent() && revision === params.currentRevision();
   try {
     const result = await live.requestList(client, params.agentId, progressId);
-    if (!requestIsCurrent()) {
+    if (!requestIsCurrent() || !result?.catalogs) {
       return;
     }
     refetchOwner = live.beginRefetch(params.pageDepths.size > 0);

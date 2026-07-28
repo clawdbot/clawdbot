@@ -2,7 +2,6 @@
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateChatMessageGetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
@@ -22,6 +21,7 @@ import { readChatHistoryMessageId } from "./chat-history-pages.js";
 import { resolveRequestedChatAgentId, validateChatSelectedAgent } from "./chat-origin-routing.js";
 import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 async function isChatMessageIdVisibleAfterHistoryFilters(params: {
   sessionId: string;
@@ -57,15 +57,7 @@ async function isChatMessageIdVisibleAfterHistoryFilters(params: {
 
 export const chatMessageGetHandlers: GatewayRequestHandlers = {
   "chat.message.get": async ({ params, respond, context }) => {
-    if (!validateChatMessageGetParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid chat.message.get params: ${formatValidationErrors(validateChatMessageGetParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateChatMessageGetParams, "chat.message.get", respond)) {
       return;
     }
     const { sessionKey, messageId, maxChars } = params as {

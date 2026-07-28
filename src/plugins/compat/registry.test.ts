@@ -38,7 +38,7 @@ const deprecationMarkingSurfaceCounts: Record<(typeof deprecationMarkingCodes)[n
   "plugin-sdk-channel-setup-input-fields": 22,
   "plugin-sdk-broad-runtime-barrels": 12,
   "plugin-sdk-provider-owned-helper-shims": 35,
-  "message-presentation-legacy-bridges": 24,
+  "message-presentation-legacy-bridges": 21,
   "plugin-sdk-focused-compat-aliases": 23,
   "agent-harness-terminal-result-aliases": 10,
   "official-plugin-export-aliases": 7,

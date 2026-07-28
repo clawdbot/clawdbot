@@ -531,14 +531,14 @@ describe("runMessageAction context isolation", () => {
       message: /Cross-context messaging denied/,
     },
     {
-      name: "rejects channel ids that resolve to user targets",
+      name: "blocks delegated channel reads without current context before target resolution",
       action: "channel-info" as const,
       cfg: workspaceConfig,
       actionParams: {
         channel: "workspace",
         channelId: "U12345678",
       },
-      message: 'Channel id "U12345678" resolved to a user target.',
+      message: "requires the exact current conversation and account",
     },
     {
       name: "blocks actions outside the per-agent allowlist",
@@ -577,6 +577,62 @@ describe("runMessageAction context isolation", () => {
         agentId,
       }),
     ).rejects.toThrow(message);
+  });
+
+  it("retains direct-operator target-kind validation", async () => {
+    await expect(
+      runMessageAction({
+        cfg: workspaceConfig,
+        action: "channel-info",
+        params: {
+          channel: "workspace",
+          channelId: "U12345678",
+        },
+        conversationReadOrigin: "direct-operator",
+        dryRun: true,
+      }),
+    ).rejects.toThrow('Channel id "U12345678" resolved to a user target.');
+  });
+
+  it("retains direct-operator cross-provider reads", async () => {
+    await expect(
+      runMessageAction({
+        cfg: workspaceConfig,
+        action: "read",
+        params: {
+          channel: "workspace",
+          target: "C12345678",
+        },
+        defaultAccountId: "default",
+        conversationReadOrigin: "direct-operator",
+        toolContext: {
+          currentChannelId: "forum-current",
+          currentChannelProvider: "forum",
+        },
+        dryRun: false,
+      }),
+    ).resolves.toMatchObject({ kind: "action", channel: "workspace", action: "read" });
+    expect(handleWorkspaceAction).toHaveBeenCalledOnce();
+  });
+
+  it("retains cross-provider policy for direct operators", async () => {
+    await expect(
+      runMessageAction({
+        cfg: workspaceConfig,
+        action: "pin",
+        params: {
+          channel: "forum",
+          target: "@opsbot",
+          messageId: "forum-message-1",
+        },
+        conversationReadOrigin: "direct-operator",
+        toolContext: {
+          currentChannelId: "C12345678",
+          currentChannelProvider: "workspace",
+        },
+        dryRun: true,
+      }),
+    ).rejects.toThrow(/Cross-context messaging denied/);
   });
 
   it.each([

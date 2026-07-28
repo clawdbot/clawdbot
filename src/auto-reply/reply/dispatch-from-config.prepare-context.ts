@@ -224,7 +224,11 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
   const chatType = normalizeChatType(ctx.ChatType);
   const silentReplyConversationType = resolveRoutedPolicyConversationType(ctx);
   const silentReplySurface = normalizeLowercaseStringOrEmpty(ctx.Surface ?? ctx.Provider);
+  // Group silent-reply policy sanctions silence for ambient chatter only. A turn
+  // that explicitly addressed the bot (mention) must never end silently, matching
+  // the hard-coded direct-chat rule in resolveSilentReplyPolicyFromPolicies.
   const emptyFinalAllowedAsSilent =
+    ctx.WasMentioned !== true &&
     silentReplyConversationType !== undefined &&
     resolveSilentReplyPolicyFromPolicies({
       conversationType: silentReplyConversationType,

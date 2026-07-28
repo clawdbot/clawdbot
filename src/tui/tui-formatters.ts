@@ -3,6 +3,7 @@ import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { stripLeadingInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import type { SessionGoal } from "../config/sessions/types.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
 import { chunkTextByBreakResolver } from "../shared/text-chunking.js";
@@ -218,6 +219,11 @@ export function sanitizeRenderableText(text: string): string {
       )
     : redacted;
   return applyRtlIsolation(tokenSafe);
+}
+
+/** Render error causes without exposing secrets or terminal control sequences. */
+export function formatTuiErrorMessage(error: unknown): string {
+  return sanitizeRenderableText(formatErrorMessage(error));
 }
 
 export function resolveFinalAssistantText(params: {

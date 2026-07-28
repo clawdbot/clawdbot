@@ -89,12 +89,17 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       }
     },
   );
+  private readonly agentIdentitySubscriptions = new SubscriptionsController(this).watch(
+    () => this.context?.agentIdentity,
+    (agentIdentity, notify) => agentIdentity.subscribe(notify),
+  );
 
   @state() catalogProjectGrouping = loadStoredSidebarCatalogGrouping();
 
   constructor() {
     super();
     void this.narrationSubscriptions;
+    void this.agentIdentitySubscriptions;
     void new BoardAvailabilityController(
       this,
       () => {
@@ -146,6 +151,14 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   protected override willUpdate(changed: PropertyValues<this>) {
     super.willUpdate(changed);
+    const chip = this.activeChipAgent();
+    // An open switcher tracks roster/reconnect updates; otherwise only hydrate
+    // the active card and avoid background RPCs for every configured agent.
+    const identityIds =
+      this.sidebarMenus.agentMenuPosition === null
+        ? [chip.activeId]
+        : chip.agents.map((agent) => agent.id);
+    this.ensureAgentIdentities(identityIds);
     // A fresh draft must be visible where it will live: genuinely expand a
     // collapsed Threads section (persisted) instead of overriding at render
     // time, so the header toggle keeps matching the visible state.
@@ -155,6 +168,12 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       this.collapsedSessionSections.has("ungrouped")
     ) {
       this.sessionOrganizer.toggleSection("ungrouped");
+    }
+  }
+
+  ensureAgentIdentities(agentIds: readonly string[]): void {
+    if (this.connected) {
+      void this.context?.agentIdentity.ensure(agentIds);
     }
   }
 

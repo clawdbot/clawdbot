@@ -10,7 +10,6 @@ import {
   resolveSessionWorkStartError,
   type SessionEntry,
 } from "../../config/sessions.js";
-import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronScheduledToolPolicy } from "../../cron/scheduled-tool-policy.js";
 import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
@@ -239,12 +238,7 @@ export function withSqliteSessionFileMarker(params: {
   if (!agentId) {
     return params.entry;
   }
-  const sessionFile = formatSqliteSessionFileMarker({
-    agentId,
-    sessionId: params.entry.sessionId,
-    storePath: params.storePath,
-  });
-  return params.entry.sessionFile === sessionFile ? params.entry : { ...params.entry, sessionFile };
+  return params.entry;
 }
 
 export function yieldAfterAgentAcceptedAck(): Promise<void> {

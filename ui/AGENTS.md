@@ -23,6 +23,10 @@ This directory owns Control UI-specific guidance that should not live in the rep
 - Icons: shared 24x24 Lucide icons go through `strokeIcon()` in `ui/src/components/icons-tools.ts` so stroke presentation attributes stay inline and render inside shadow roots. Icon bodies are `svg\`\``fragments, never`html\`\`` (wrong namespace renders nothing).
 - `pnpm lint:ui:lit` is an opt-in lit-analyzer diagnostic for template bindings (slow, ~9 min; known baseline of pre-existing findings). It is not a CI gate.
 
+## Live Verification
+
+- The Gateway serves the prebuilt bundle from `dist/control-ui`; editing `ui/src` changes nothing live until `pnpm ui:build`. Confirm the served `/assets/index-*.js` hash changed before trusting a live result.
+
 ## Scope
 
 - Keep UI-specific rules here.

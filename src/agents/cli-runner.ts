@@ -3,6 +3,8 @@
  */
 import { setReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import { patchSessionEntry } from "../config/sessions/session-accessor.js";
 import { appendExactAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import { buildGenericCliContextEngineHostSupport } from "../context-engine/host-compat.js";
 import {
@@ -24,6 +26,7 @@ import {
 } from "../plugins/hook-agent-context.js";
 import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { isHeartbeatLifecycleRunKind } from "./bootstrap-mode.js";
 import {
   resolveCliRuntimeArtifactFingerprint,
@@ -889,7 +892,44 @@ export async function runPreparedCliAgent(
     }
 
     try {
-      const sessionManager = SessionManager.open(params.sessionFile);
+      const sessionKey = params.sessionKey?.trim() || params.sessionId;
+      const agentId = params.agentId ?? resolveAgentIdFromSessionKey(sessionKey);
+      let sessionManager = params.sessionManager;
+      if (!sessionManager) {
+        const sessionTarget = params.sessionTarget ?? {
+          agentId,
+          sessionId: params.sessionId,
+          sessionKey,
+          storePath:
+            params.storePath ??
+            resolveStorePath(params.config?.session?.store, {
+              agentId,
+            }),
+        };
+        const persistedEntry = await patchSessionEntry(
+          sessionTarget,
+          (entry, patchContext) => {
+            if (patchContext.existingEntry && entry.sessionId !== sessionTarget.sessionId) {
+              return null;
+            }
+            return {
+              sessionId: sessionTarget.sessionId,
+              updatedAt: Date.now(),
+            };
+          },
+          {
+            fallbackEntry: params.sessionEntry
+              ? undefined
+              : { sessionId: sessionTarget.sessionId, updatedAt: Date.now() },
+            skipMaintenance: true,
+          },
+        );
+        if (persistedEntry?.sessionId !== sessionTarget.sessionId) {
+          // Skip only this stale blocked-message write; the outer runner still returns blocked.
+          return;
+        }
+        sessionManager = SessionManager.open(sessionTarget);
+      }
       sessionManager.appendMessage(
         redactedUserMessage as Parameters<typeof sessionManager.appendMessage>[0],
       );

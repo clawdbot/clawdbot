@@ -10,10 +10,15 @@ function isTerminalTask(task: TaskRecord): boolean {
   return task.status !== "queued" && task.status !== "running";
 }
 
+type CronHistoryRetentionPartition = {
+  history: TaskRecord[];
+  quiet: TaskRecord[];
+};
+
 export function collectCronHistoryOverflowTaskIds(tasks: readonly TaskRecord[]): Set<string> {
   // Cron job ids are unique only within a configured store. Retention must
   // use the same storeKey/sourceId partition as history reads.
-  const byStore = new Map<string | undefined, Map<string, TaskRecord[]>>();
+  const byStore = new Map<string | undefined, Map<string, CronHistoryRetentionPartition>>();
   for (const task of tasks) {
     if (
       task.runtime !== "cron" ||
@@ -24,23 +29,35 @@ export function collectCronHistoryOverflowTaskIds(tasks: readonly TaskRecord[]):
       continue;
     }
     const storeKey = cronTaskRecordStoreKey(task);
-    const bySource = byStore.get(storeKey) ?? new Map<string, TaskRecord[]>();
-    const rows = bySource.get(task.sourceId) ?? [];
+    const bySource = byStore.get(storeKey) ?? new Map<string, CronHistoryRetentionPartition>();
+    const partition = bySource.get(task.sourceId) ?? { history: [], quiet: [] };
+    const detail = task.detail;
+    const hasHistory =
+      typeof detail === "object" &&
+      detail !== null &&
+      !Array.isArray(detail) &&
+      detail.kind === "cron-run";
+    // Quiet watcher ticks have no history entry. Bound them separately so
+    // ordinary non-firing evaluations cannot evict actual run history.
+    const rows = hasHistory ? partition.history : partition.quiet;
     rows.push(task);
-    bySource.set(task.sourceId, rows);
+    bySource.set(task.sourceId, partition);
     byStore.set(storeKey, bySource);
   }
   const overflow = new Set<string>();
   for (const bySource of byStore.values()) {
-    for (const rows of bySource.values()) {
-      rows.sort((left, right) => {
-        return (
-          resolveCronTaskRecordTimestamp(right) - resolveCronTaskRecordTimestamp(left) ||
-          right.taskId.localeCompare(left.taskId)
-        );
-      });
-      for (const task of rows.slice(CRON_HISTORY_KEEP_PER_JOB)) {
-        overflow.add(task.taskId);
+    for (const partition of bySource.values()) {
+      for (const rows of [partition.history, partition.quiet]) {
+        rows.sort((left, right) => {
+          return (
+            resolveCronTaskRecordTimestamp(right) - resolveCronTaskRecordTimestamp(left) ||
+            right.createdAt - left.createdAt ||
+            right.taskId.localeCompare(left.taskId)
+          );
+        });
+        for (const task of rows.slice(CRON_HISTORY_KEEP_PER_JOB)) {
+          overflow.add(task.taskId);
+        }
       }
     }
   }

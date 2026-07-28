@@ -7,7 +7,6 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { validateExecApprovalRequestParams } from "../../../packages/gateway-protocol/src/index.js";
@@ -1061,42 +1060,172 @@ describe("sanitizeChatHistoryMessages", () => {
 });
 
 describe("projectRecentChatDisplayMessages", () => {
-  it("projects empty assistant error turns as a generic safe failure", () => {
-    const result = projectRecentChatDisplayMessages([
-      {
-        role: "assistant",
-        content: [],
-        stopReason: "error",
-        errorMessage: "private upstream at secret.internal.example failed",
-        timestamp: 1,
+  const safeFailureContent = [
+    { type: "text", text: "The agent run failed before producing a reply." },
+  ];
+  const privateError = "private upstream at secret.internal.example failed";
+  const displayErrorCases: Array<{
+    name: string;
+    message: Record<string, unknown>;
+    content: Array<Record<string, unknown>>;
+    visibleText?: string;
+  }> = [
+    {
+      name: "projects empty assistant error turns as a generic safe failure",
+      message: { content: [], errorMessage: privateError },
+      content: safeFailureContent,
+    },
+    {
+      name: "projects empty text-block assistant errors as a generic safe failure",
+      message: { content: [{ type: "text", text: "" }], errorMessage: "Connection error." },
+      content: safeFailureContent,
+    },
+    {
+      name: "preserves visible output_text from a failed assistant turn",
+      message: {
+        content: [{ type: "output_text", text: "A partial reply before the run failed." }],
+        errorMessage: "Connection error.",
       },
-    ]);
+      content: [{ type: "output_text", text: "A partial reply before the run failed." }],
+    },
+    {
+      name: "projects thinking-only assistant errors as a generic safe failure",
+      message: {
+        content: [{ type: "thinking", thinking: "private upstream details" }],
+        errorMessage: "Connection error.",
+      },
+      content: safeFailureContent,
+    },
+    {
+      name: "projects reasoning-text-only assistant errors as a generic safe failure",
+      message: {
+        content: [{ type: "reasoning", text: "private upstream details" }],
+        errorMessage: privateError,
+      },
+      content: safeFailureContent,
+    },
+    {
+      name: "projects redacted-thinking-only assistant errors as a generic safe failure",
+      message: {
+        content: [{ type: "redacted_thinking", data: "private upstream details" }],
+        errorMessage: privateError,
+      },
+      content: safeFailureContent,
+    },
+    {
+      name: "projects commentary-phase assistant errors as a visible generic safe failure",
+      message: {
+        phase: "commentary",
+        content: [],
+        text: "private upstream details",
+        errorMessage: "Connection error.",
+      },
+      content: safeFailureContent,
+    },
+    {
+      name: "leaves legacy top-level assistant error text unchanged",
+      message: {
+        content: [],
+        text: "A real reply before the run failed.",
+        errorMessage: "Connection error.",
+      },
+      content: [],
+      visibleText: "A real reply before the run failed.",
+    },
+    {
+      name: "preserves partial error replies without hidden reasoning or diagnostics",
+      message: {
+        content: [
+          { type: "thinking", thinking: "private upstream reasoning" },
+          { type: "text", text: "A partial reply before the run failed." },
+        ],
+        errorMessage: privateError,
+        diagnostics: { provider: "private-provider" },
+      },
+      content: [{ type: "text", text: "A partial reply before the run failed." }],
+    },
+    {
+      name: "projects suppressed error text accompanied by hidden reasoning",
+      message: {
+        content: [
+          { type: "thinking", thinking: "private upstream details" },
+          { type: "text", text: "NO_REPLY" },
+        ],
+        errorMessage: privateError,
+      },
+      content: safeFailureContent,
+    },
+    {
+      name: "projects signature-only commentary errors as a visible generic safe failure",
+      message: {
+        content: [
+          {
+            type: "text",
+            text: "private upstream details",
+            textSignature: JSON.stringify({ v: 1, id: "msg-commentary", phase: "commentary" }),
+          },
+        ],
+        errorMessage: privateError,
+        errorCode: "private_error_code",
+        errorType: "private_error_type",
+        errorBody: "private response body from secret.internal.example",
+        diagnostics: [
+          {
+            type: "provider-error",
+            timestamp: 1,
+            error: { message: "private diagnostic from secret.internal.example" },
+          },
+        ],
+      },
+      content: safeFailureContent,
+    },
+    {
+      name: "preserves attachment-only assistant errors without private diagnostics",
+      message: {
+        content: [
+          { type: "attachment", name: "report.txt", url: "https://example.test/report.txt" },
+        ],
+        errorMessage: privateError,
+        diagnostics: { provider: "private-provider" },
+      },
+      content: [{ type: "attachment", name: "report.txt", url: "https://example.test/report.txt" }],
+    },
+    {
+      name: "preserves tool-bearing assistant errors without hidden reasoning or diagnostics",
+      message: {
+        content: [
+          { type: "thinking", thinking: "private upstream reasoning" },
+          { type: "text", text: "I read the requested file before the run failed." },
+          {
+            type: "toolCall",
+            id: "call-1",
+            name: "read",
+            arguments: { path: "README.md" },
+          },
+        ],
+        errorMessage: privateError,
+        errorBody: "private response body",
+      },
+      content: [{ type: "text", text: "I read the requested file before the run failed." }],
+    },
+  ];
 
+  it.each(displayErrorCases)("$name", ({ message, content, visibleText }) => {
+    const result = projectRecentChatDisplayMessages([
+      { role: "assistant", stopReason: "error", timestamp: 1, ...message },
+    ]);
     expect(result).toEqual([
       {
         role: "assistant",
-        content: [{ type: "text", text: "The agent run failed before producing a reply." }],
+        content,
         stopReason: "error",
         timestamp: 1,
+        ...(visibleText === undefined ? {} : { text: visibleText }),
       },
     ]);
     expect(JSON.stringify(result)).not.toContain("secret.internal.example");
-  });
-
-  it("projects empty text-block assistant errors as a generic safe failure", () => {
-    const result = projectRecentChatDisplayMessages([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "" }],
-        stopReason: "error",
-        errorMessage: "Connection error.",
-        timestamp: 1,
-      },
-    ]);
-
-    expect(result[0]?.content).toEqual([
-      { type: "text", text: "The agent run failed before producing a reply." },
-    ]);
+    expect(JSON.stringify(result)).not.toContain("private upstream");
+    expect(JSON.stringify(result)).not.toContain("private_error");
   });
 
   it.each([
@@ -1118,136 +1247,6 @@ describe("projectRecentChatDisplayMessages", () => {
     expect(result[0]?.content).toEqual([
       { type: "text", text: "The agent run failed before producing a reply." },
     ]);
-  });
-
-  it("preserves visible output_text from a failed assistant turn", () => {
-    const result = projectRecentChatDisplayMessages([
-      {
-        role: "assistant",
-        content: [{ type: "output_text", text: "A partial reply before the run failed." }],
-        stopReason: "error",
-        errorMessage: "Connection error.",
-        timestamp: 1,
-      },
-    ]);
-
-    expect(result[0]?.content).toEqual([
-      { type: "output_text", text: "A partial reply before the run failed." },
-    ]);
-  });
-
-  it("projects thinking-only assistant errors as a generic safe failure", () => {
-    const result = projectRecentChatDisplayMessages([
-      {
-        role: "assistant",
-        content: [{ type: "thinking", thinking: "private upstream details" }],
-        stopReason: "error",
-        errorMessage: "Connection error.",
-        timestamp: 1,
-      },
-    ]);
-
-    expect(result[0]?.content).toEqual([
-      { type: "text", text: "The agent run failed before producing a reply." },
-    ]);
-  });
-
-  it("projects reasoning-text-only assistant errors as a generic safe failure", () => {
-    const result = projectRecentChatDisplayMessages([
-      {
-        role: "assistant",
-        content: [{ type: "reasoning", text: "private upstream details" }],
-        stopReason: "error",
-        errorMessage: "private upstream at secret.internal.example failed",
-        timestamp: 1,
-      },
-    ]);
-
-    expect(result).toEqual([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "The agent run failed before producing a reply." }],
-        stopReason: "error",
-        timestamp: 1,
-      },
-    ]);
-    expect(JSON.stringify(result)).not.toContain("secret.internal.example");
-  });
-
-  it("projects redacted-thinking-only assistant errors as a generic safe failure", () => {
-    const result = projectRecentChatDisplayMessages([
-      {
-        role: "assistant",
-        content: [{ type: "redacted_thinking", data: "private upstream details" }],
-        stopReason: "error",
-        errorMessage: "private upstream at secret.internal.example failed",
-        timestamp: 1,
-      },
-    ]);
-
-    expect(result[0]?.content).toEqual([
-      { type: "text", text: "The agent run failed before producing a reply." },
-    ]);
-    expect(JSON.stringify(result[0]?.content)).not.toContain("secret.internal.example");
-  });
-
-  it("projects commentary-phase assistant errors as a visible generic safe failure", () => {
-    const result = projectRecentChatDisplayMessages([
-      {
-        role: "assistant",
-        phase: "commentary",
-        content: [],
-        text: "private upstream details",
-        stopReason: "error",
-        errorMessage: "Connection error.",
-        timestamp: 1,
-      },
-    ]);
-
-    expect(result[0]).not.toHaveProperty("phase");
-    expect(result[0]?.content).toEqual([
-      { type: "text", text: "The agent run failed before producing a reply." },
-    ]);
-    expect(result[0]).not.toHaveProperty("text");
-  });
-
-  it("leaves legacy top-level assistant error text unchanged", () => {
-    const result = projectRecentChatDisplayMessages([
-      {
-        role: "assistant",
-        content: [],
-        text: "A real reply before the run failed.",
-        stopReason: "error",
-        errorMessage: "Connection error.",
-        timestamp: 1,
-      },
-    ]);
-
-    expect(result[0]?.text).toBe("A real reply before the run failed.");
-    expect(result[0]).not.toHaveProperty("errorMessage");
-  });
-
-  it("preserves partial error replies without hidden reasoning or diagnostics", () => {
-    const result = projectRecentChatDisplayMessages([
-      {
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "private upstream reasoning" },
-          { type: "text", text: "A partial reply before the run failed." },
-        ],
-        stopReason: "error",
-        errorMessage: "private upstream at secret.internal.example failed",
-        diagnostics: { provider: "private-provider" },
-        timestamp: 1,
-      },
-    ]);
-
-    expect(result[0]?.content).toEqual([
-      { type: "text", text: "A partial reply before the run failed." },
-    ]);
-    expect(result[0]).not.toHaveProperty("diagnostics");
-    expect(result[0]).not.toHaveProperty("errorMessage");
-    expect(JSON.stringify(result)).not.toContain("private upstream");
   });
 
   it.each(["[[reply_to_current]]", "NO_REPLY", STREAM_ERROR_FALLBACK_TEXT])(
@@ -1275,32 +1274,6 @@ describe("projectRecentChatDisplayMessages", () => {
     },
   );
 
-  it("projects suppressed error text accompanied by hidden reasoning", () => {
-    const result = projectRecentChatDisplayMessages([
-      {
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "private upstream details" },
-          { type: "text", text: "NO_REPLY" },
-        ],
-        stopReason: "error",
-        errorMessage: "private upstream at secret.internal.example failed",
-        timestamp: 1,
-      },
-    ]);
-
-    expect(result).toEqual([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "The agent run failed before producing a reply." }],
-        stopReason: "error",
-        timestamp: 1,
-      },
-    ]);
-    expect(JSON.stringify(result)).not.toContain("secret.internal.example");
-    expect(JSON.stringify(result)).not.toContain("private upstream details");
-  });
-
   it.each([undefined, ""])(
     "projects repaired stream errors with errorMessage %j as a generic safe failure",
     (errorMessage) => {
@@ -1326,101 +1299,6 @@ describe("projectRecentChatDisplayMessages", () => {
       expect(JSON.stringify(result)).not.toContain("secret.internal.example");
     },
   );
-
-  it("projects signature-only commentary errors as a visible generic safe failure", () => {
-    const result = projectRecentChatDisplayMessages([
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "text",
-            text: "private upstream details",
-            textSignature: JSON.stringify({
-              v: 1,
-              id: "msg-commentary",
-              phase: "commentary",
-            }),
-          },
-        ],
-        stopReason: "error",
-        errorMessage: "private upstream at secret.internal.example failed",
-        errorCode: "private_error_code",
-        errorType: "private_error_type",
-        errorBody: "private response body from secret.internal.example",
-        diagnostics: [
-          {
-            type: "provider-error",
-            timestamp: 1,
-            error: { message: "private diagnostic from secret.internal.example" },
-          },
-        ],
-        timestamp: 1,
-      },
-    ]);
-
-    expect(result).toEqual([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "The agent run failed before producing a reply." }],
-        stopReason: "error",
-        timestamp: 1,
-      },
-    ]);
-    expect(JSON.stringify(result)).not.toContain("secret.internal.example");
-    expect(JSON.stringify(result)).not.toContain("private_error");
-  });
-
-  it("preserves attachment-only assistant errors without private diagnostics", () => {
-    const attachment = {
-      type: "attachment",
-      name: "report.txt",
-      url: "https://example.test/report.txt",
-    };
-    const result = projectRecentChatDisplayMessages([
-      {
-        role: "assistant",
-        content: [attachment],
-        stopReason: "error",
-        errorMessage: "private upstream at secret.internal.example failed",
-        diagnostics: { provider: "private-provider" },
-        timestamp: 1,
-      },
-    ]);
-
-    expect(result[0]?.content).toEqual([attachment]);
-    expect(result[0]).not.toHaveProperty("diagnostics");
-    expect(result[0]).not.toHaveProperty("errorMessage");
-  });
-
-  it("preserves tool-bearing assistant errors without hidden reasoning or diagnostics", () => {
-    const toolCall = {
-      type: "toolCall",
-      id: "call-1",
-      name: "read",
-      arguments: { path: "README.md" },
-    };
-    const result = projectRecentChatDisplayMessages([
-      {
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "private upstream reasoning" },
-          { type: "text", text: "I read the requested file before the run failed." },
-          toolCall,
-        ],
-        stopReason: "error",
-        errorMessage: "private upstream at secret.internal.example failed",
-        errorBody: "private response body",
-        timestamp: 1,
-      },
-    ]);
-
-    expect(result[0]?.content).toEqual([
-      { type: "text", text: "I read the requested file before the run failed." },
-    ]);
-    expect(result[0]).not.toHaveProperty("errorBody");
-    expect(result[0]).not.toHaveProperty("errorMessage");
-    expect(JSON.stringify(result)).not.toContain("private upstream");
-  });
 
   it("projects sessions_send inter-session turns as forwarded assistant-side display messages", () => {
     const result = projectRecentChatDisplayMessages([
@@ -2459,192 +2337,119 @@ describe("dropPreSessionStartAnnouncePairs (#85648)", () => {
     sourceTool: "subagent_announce",
   };
   const cutoff = 1_700_000_000_000;
+  function recordedMessage(
+    role: "user" | "assistant",
+    text: string,
+    seq: number,
+    recordTimestampMs?: number,
+    announce = false,
+  ) {
+    return {
+      role,
+      content: [{ type: "text", text }],
+      ...(announce ? { provenance: announceProvenance } : {}),
+      __openclaw: { seq, ...(recordTimestampMs === undefined ? {} : { recordTimestampMs }) },
+    };
+  }
+  const announceText = "[Inter-session message] sourceTool=subagent_announce";
 
-  it("drops a pre-cutoff announce user message together with its adjacent assistant reply", () => {
-    const messages = [
-      {
-        role: "user",
-        content: [{ type: "text", text: "real prior" }],
-        __openclaw: { seq: 1, recordTimestampMs: cutoff - 86_400_000 },
-      },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "real reply" }],
-        __openclaw: { seq: 2, recordTimestampMs: cutoff - 86_400_000 },
-      },
-      {
-        role: "user",
-        content: [{ type: "text", text: "[Inter-session message] sourceTool=subagent_announce" }],
-        provenance: announceProvenance,
-        __openclaw: { seq: 3, recordTimestampMs: cutoff - 1_000 },
-      },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "fanfic lore-bible summary" }],
-        __openclaw: { seq: 4, recordTimestampMs: cutoff - 1_000 },
-      },
-      {
-        role: "user",
-        content: [{ type: "text", text: "fresh user turn" }],
-        __openclaw: { seq: 5, recordTimestampMs: cutoff + 5_000 },
-      },
-    ];
-    const out = dropPreSessionStartAnnouncePairs(messages, cutoff);
-    expect(out.map((m) => asOptionalRecord(asOptionalRecord(m)?.["__openclaw"])?.["seq"])).toEqual([
-      1, 2, 5,
-    ]);
-  });
-
-  it("drops imported CLI-shaped announce pairs using timestamp and text fallback", () => {
-    const messages = [
-      {
-        role: "user",
-        content: [
-          "[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=internal sourceTool=subagent_announce",
-          "This content was routed by OpenClaw from another session or internal tool.",
-        ].join("\n"),
-        timestamp: cutoff - 1_000,
-      },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "stale imported assistant reply" }],
-        timestamp: cutoff - 500,
-      },
-      {
-        role: "user",
-        content: "fresh imported turn",
-        timestamp: cutoff + 1_000,
-      },
-    ];
-    const out = dropPreSessionStartAnnouncePairs(messages, cutoff);
-    expect(out).toEqual([messages[2]]);
-  });
-
-  it("keeps a mid-session announce pair whose timestamp is at or after the cutoff", () => {
-    const messages = [
-      {
-        role: "user",
-        content: [{ type: "text", text: "[Inter-session message] sourceTool=subagent_announce" }],
-        provenance: announceProvenance,
-        __openclaw: { seq: 1, recordTimestampMs: cutoff + 1_000 },
-      },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "current-session reply" }],
-        __openclaw: { seq: 2, recordTimestampMs: cutoff + 2_000 },
-      },
-    ];
-    const out = dropPreSessionStartAnnouncePairs(messages, cutoff);
-    expect(out).toEqual(messages);
-  });
-
-  it("keeps an adjacent assistant reply when only the announce user predates the cutoff", () => {
-    const messages = [
-      {
-        role: "user",
-        content: [{ type: "text", text: "[Inter-session message] sourceTool=subagent_announce" }],
-        provenance: announceProvenance,
-        __openclaw: { seq: 1, recordTimestampMs: cutoff - 1_000 },
-      },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "fresh-session reply" }],
-        __openclaw: { seq: 2, recordTimestampMs: cutoff + 1_000 },
-      },
-    ];
-    const out = dropPreSessionStartAnnouncePairs(messages, cutoff);
-    expect(out).toEqual([messages[1]]);
-  });
-
-  it("keeps an adjacent assistant reply when its record timestamp is missing", () => {
-    const messages = [
-      {
-        role: "user",
-        content: [{ type: "text", text: "[Inter-session message] sourceTool=subagent_announce" }],
-        provenance: announceProvenance,
-        __openclaw: { seq: 1, recordTimestampMs: cutoff - 1_000 },
-      },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "timestampless reply" }],
-        __openclaw: { seq: 2 },
-      },
-    ];
-    const out = dropPreSessionStartAnnouncePairs(messages, cutoff);
-    expect(out).toEqual([messages[1]]);
-  });
-
-  it("returns the input unchanged when sessionStartedAt is undefined", () => {
-    const messages = [
-      {
-        role: "user",
-        content: [{ type: "text", text: "[Inter-session message] sourceTool=subagent_announce" }],
-        provenance: announceProvenance,
-        __openclaw: { seq: 1, recordTimestampMs: cutoff - 1_000 },
-      },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "would-be-stripped reply" }],
-        __openclaw: { seq: 2, recordTimestampMs: cutoff - 1_000 },
-      },
-    ];
-    const out = dropPreSessionStartAnnouncePairs(messages, undefined);
-    expect(out).toBe(messages);
-  });
-
-  it("drops a trailing pre-cutoff announce user message even with no assistant reply", () => {
-    const messages = [
-      {
-        role: "user",
-        content: [{ type: "text", text: "real prior" }],
-        __openclaw: { seq: 1, recordTimestampMs: cutoff + 1_000 },
-      },
-      {
-        role: "user",
-        content: [{ type: "text", text: "[Inter-session message] sourceTool=subagent_announce" }],
-        provenance: announceProvenance,
-        __openclaw: { seq: 2, recordTimestampMs: cutoff - 1_000 },
-      },
-    ];
-    const out = dropPreSessionStartAnnouncePairs(messages, cutoff);
-    expect(out.map((m) => asOptionalRecord(asOptionalRecord(m)?.["__openclaw"])?.["seq"])).toEqual([
-      1,
-    ]);
-  });
-
-  it("does not drop a normal pre-cutoff user message that is not a subagent_announce", () => {
-    const messages = [
-      {
-        role: "user",
-        content: [{ type: "text", text: "older user turn" }],
-        __openclaw: { seq: 1, recordTimestampMs: cutoff - 1_000 },
-      },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "older reply" }],
-        __openclaw: { seq: 2, recordTimestampMs: cutoff - 1_000 },
-      },
-    ];
-    const out = dropPreSessionStartAnnouncePairs(messages, cutoff);
-    expect(out).toEqual(messages);
-  });
-
-  it("does not drop a pre-cutoff announce when its record timestamp is missing", () => {
-    const messages = [
-      {
-        role: "user",
-        content: [{ type: "text", text: "[Inter-session message] sourceTool=subagent_announce" }],
-        provenance: announceProvenance,
-        __openclaw: { seq: 1 },
-      },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "reply" }],
-        __openclaw: { seq: 2 },
-      },
-    ];
-    const out = dropPreSessionStartAnnouncePairs(messages, cutoff);
-    expect(out).toEqual(messages);
+  it.each([
+    {
+      name: "drops a pre-cutoff announce user message together with its adjacent assistant reply",
+      messages: [
+        recordedMessage("user", "real prior", 1, cutoff - 86_400_000),
+        recordedMessage("assistant", "real reply", 2, cutoff - 86_400_000),
+        recordedMessage("user", announceText, 3, cutoff - 1_000, true),
+        recordedMessage("assistant", "fanfic lore-bible summary", 4, cutoff - 1_000),
+        recordedMessage("user", "fresh user turn", 5, cutoff + 5_000),
+      ],
+      keptIndexes: [0, 1, 4],
+    },
+    {
+      name: "drops imported CLI-shaped announce pairs using timestamp and text fallback",
+      messages: [
+        {
+          role: "user",
+          content: [
+            "[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=internal sourceTool=subagent_announce",
+            "This content was routed by OpenClaw from another session or internal tool.",
+          ].join("\n"),
+          timestamp: cutoff - 1_000,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "stale imported assistant reply" }],
+          timestamp: cutoff - 500,
+        },
+        { role: "user", content: "fresh imported turn", timestamp: cutoff + 1_000 },
+      ],
+      keptIndexes: [2],
+    },
+    {
+      name: "keeps a mid-session announce pair whose timestamp is at or after the cutoff",
+      messages: [
+        recordedMessage("user", announceText, 1, cutoff + 1_000, true),
+        recordedMessage("assistant", "current-session reply", 2, cutoff + 2_000),
+      ],
+      keptIndexes: [0, 1],
+    },
+    {
+      name: "keeps an adjacent assistant reply when only the announce user predates the cutoff",
+      messages: [
+        recordedMessage("user", announceText, 1, cutoff - 1_000, true),
+        recordedMessage("assistant", "fresh-session reply", 2, cutoff + 1_000),
+      ],
+      keptIndexes: [1],
+    },
+    {
+      name: "keeps an adjacent assistant reply when its record timestamp is missing",
+      messages: [
+        recordedMessage("user", announceText, 1, cutoff - 1_000, true),
+        recordedMessage("assistant", "timestampless reply", 2),
+      ],
+      keptIndexes: [1],
+    },
+    {
+      name: "returns the input unchanged when sessionStartedAt is undefined",
+      messages: [
+        recordedMessage("user", announceText, 1, cutoff - 1_000, true),
+        recordedMessage("assistant", "would-be-stripped reply", 2, cutoff - 1_000),
+      ],
+      sessionStartedAt: undefined,
+      keptIndexes: [0, 1],
+      preservesReference: true,
+    },
+    {
+      name: "drops a trailing pre-cutoff announce user message even with no assistant reply",
+      messages: [
+        recordedMessage("user", "real prior", 1, cutoff + 1_000),
+        recordedMessage("user", announceText, 2, cutoff - 1_000, true),
+      ],
+      keptIndexes: [0],
+    },
+    {
+      name: "does not drop a normal pre-cutoff user message that is not a subagent_announce",
+      messages: [
+        recordedMessage("user", "older user turn", 1, cutoff - 1_000),
+        recordedMessage("assistant", "older reply", 2, cutoff - 1_000),
+      ],
+      keptIndexes: [0, 1],
+    },
+    {
+      name: "does not drop a pre-cutoff announce when its record timestamp is missing",
+      messages: [
+        recordedMessage("user", announceText, 1, undefined, true),
+        recordedMessage("assistant", "reply", 2),
+      ],
+      keptIndexes: [0, 1],
+    },
+  ])("$name", (testCase) => {
+    const sessionStartedAt = "sessionStartedAt" in testCase ? testCase.sessionStartedAt : cutoff;
+    const result = dropPreSessionStartAnnouncePairs(testCase.messages, sessionStartedAt);
+    expect(result).toEqual(testCase.keptIndexes.map((index) => testCase.messages[index]));
+    if ("preservesReference" in testCase) {
+      expect(result).toBe(testCase.messages);
+    }
   });
 });
 
@@ -5030,6 +4835,50 @@ describe("gateway healthHandlers.health cache freshness", () => {
   let healthHandlers: typeof import("./health.js").healthHandlers;
   const contextEngineTestOwner = "plugin:health-test";
 
+  function createHealthSnapshot<T extends Record<string, unknown>>(overrides: T) {
+    return {
+      ok: true,
+      ts: Date.now(),
+      durationMs: 1,
+      channels: {},
+      channelOrder: [] as string[],
+      channelLabels: {} as Record<string, string>,
+      heartbeatSeconds: 0,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      ...overrides,
+    };
+  }
+
+  async function requestHealthSnapshot(params: {
+    cached: Record<string, unknown> | null;
+    fresh?: Record<string, unknown>;
+    runtimeSnapshot?: Record<string, unknown>;
+    context?: Record<string, unknown>;
+  }) {
+    const respond = vi.fn();
+    const refreshHealthSnapshot = vi.fn().mockResolvedValue(params.fresh ?? params.cached);
+    await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
+      healthHandlers,
+      {
+        req: {} as never,
+        params: {} as never,
+        respond: respond as never,
+        context: {
+          getHealthCache: () => params.cached,
+          refreshHealthSnapshot,
+          getRuntimeSnapshot: () => params.runtimeSnapshot ?? { channels: {}, channelAccounts: {} },
+          logHealth: { error: vi.fn() },
+          ...params.context,
+        } as never,
+        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+        isWebchatConnect: () => false,
+      },
+    );
+    return { respond, refreshHealthSnapshot };
+  }
+
   beforeAll(async () => {
     ({ healthHandlers } = await import("./health.js"));
   });
@@ -5046,10 +4895,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
   });
 
   it("refreshes cached health when runtime channel lifecycle has changed", async () => {
-    const cached = {
-      ok: true,
-      ts: Date.now(),
-      durationMs: 1,
+    const cached = createHealthSnapshot({
       channels: {
         discord: {
           configured: true,
@@ -5067,11 +4913,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
       },
       channelOrder: ["discord"],
       channelLabels: { discord: "Discord" },
-      heartbeatSeconds: 0,
-      defaultAgentId: "main",
-      agents: [],
-      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
-    };
+    });
     const fresh = {
       ...cached,
       ts: cached.ts + 1,
@@ -5090,36 +4932,18 @@ describe("gateway healthHandlers.health cache freshness", () => {
         },
       },
     };
-    const respond = vi.fn();
-    const refreshHealthSnapshot = vi.fn().mockResolvedValue(fresh);
-
-    await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
-      healthHandlers,
-      {
-        req: {} as never,
-        params: {} as never,
-        respond: respond as never,
-        context: {
-          getHealthCache: () => cached,
-          refreshHealthSnapshot,
-          getRuntimeSnapshot: () => ({
-            channels: {},
-            channelAccounts: {
-              discord: {
-                default: {
-                  accountId: "default",
-                  running: true,
-                  connected: true,
-                },
-              },
-            },
-          }),
-          logHealth: { error: vi.fn() },
-        } as never,
-        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
-        isWebchatConnect: () => false,
+    const { respond, refreshHealthSnapshot } = await requestHealthSnapshot({
+      cached,
+      fresh,
+      runtimeSnapshot: {
+        channels: {},
+        channelAccounts: {
+          discord: {
+            default: { accountId: "default", running: true, connected: true },
+          },
+        },
       },
-    );
+    });
 
     expect(refreshHealthSnapshot).toHaveBeenCalledWith({
       probe: false,
@@ -5147,40 +4971,13 @@ describe("gateway healthHandlers.health cache freshness", () => {
       utilization: 0,
       cpuCoreRatio: 0,
     };
-    const fresh = {
-      ok: true,
-      ts: Date.now(),
-      durationMs: 1,
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-      heartbeatSeconds: 0,
-      defaultAgentId: "main",
-      agents: [],
-      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
-      eventLoop,
-    };
-    const respond = vi.fn();
-    const refreshHealthSnapshot = vi.fn().mockResolvedValue(fresh);
+    const fresh = createHealthSnapshot({ eventLoop });
     const getEventLoopHealth = vi.fn(() => replacementEventLoop);
-
-    await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
-      healthHandlers,
-      {
-        req: {} as never,
-        params: {} as never,
-        respond: respond as never,
-        context: {
-          getHealthCache: () => null,
-          refreshHealthSnapshot,
-          getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
-          getEventLoopHealth,
-          logHealth: { error: vi.fn() },
-        } as never,
-        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
-        isWebchatConnect: () => false,
-      },
-    );
+    const { respond, refreshHealthSnapshot } = await requestHealthSnapshot({
+      cached: null,
+      fresh,
+      context: { getEventLoopHealth },
+    });
 
     expect(refreshHealthSnapshot).toHaveBeenCalledWith({
       probe: false,
@@ -5213,37 +5010,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
       } as OpenClawConfig);
       await contextEngine.assemble({ sessionId: "s1", messages: [] });
 
-      const cached = {
-        ok: true,
-        ts: Date.now(),
-        durationMs: 1,
-        channels: {},
-        channelOrder: [],
-        channelLabels: {},
-        heartbeatSeconds: 0,
-        defaultAgentId: "main",
-        agents: [],
-        sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
-      };
-      const respond = vi.fn();
-      const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
-
-      await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
-        healthHandlers,
-        {
-          req: {} as never,
-          params: {} as never,
-          respond: respond as never,
-          context: {
-            getHealthCache: () => cached,
-            refreshHealthSnapshot,
-            getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
-            logHealth: { error: vi.fn() },
-          } as never,
-          client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
-          isWebchatConnect: () => false,
-        },
-      );
+      const { respond } = await requestHealthSnapshot({ cached: createHealthSnapshot({}) });
 
       const payload = mockCallArg(respond, 0, 1) as
         | {
@@ -5281,43 +5048,14 @@ describe("gateway healthHandlers.health cache freshness", () => {
       const { moveDeliveryQueueEntryToFailed, upsertDeliveryQueueEntry } =
         await import("../../infra/delivery-queue-sqlite.js");
       // The cached snapshot was built before this delivery dead-lettered.
-      const cached = {
-        ok: true,
-        ts: Date.now(),
-        durationMs: 1,
-        channels: {},
-        channelOrder: [],
-        channelLabels: {},
-        heartbeatSeconds: 0,
-        defaultAgentId: "main",
-        agents: [],
-        sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
-      };
+      const cached = createHealthSnapshot({});
       upsertDeliveryQueueEntry({
         queueName: "outbound",
         entry: { id: "dead-1", enqueuedAt: 1_000, retryCount: 5 },
       });
       moveDeliveryQueueEntryToFailed("outbound", "dead-1");
 
-      const respond = vi.fn();
-      const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
-
-      await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
-        healthHandlers,
-        {
-          req: {} as never,
-          params: {} as never,
-          respond: respond as never,
-          context: {
-            getHealthCache: () => cached,
-            refreshHealthSnapshot,
-            getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
-            logHealth: { error: vi.fn() },
-          } as never,
-          client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
-          isWebchatConnect: () => false,
-        },
-      );
+      const { respond } = await requestHealthSnapshot({ cached });
 
       const payload = mockCallArg(respond, 0, 1) as
         | {
@@ -5339,40 +5077,12 @@ describe("gateway healthHandlers.health cache freshness", () => {
   });
 
   it("merges a live disabled config hot-reload status into cached health responses", async () => {
-    const cached = {
-      ok: true,
-      ts: Date.now(),
-      durationMs: 1,
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-      heartbeatSeconds: 0,
-      defaultAgentId: "main",
-      agents: [],
-      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
-      configReload: { hotReloadStatus: "active" },
-    };
-    const respond = vi.fn();
-    const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
+    const cached = createHealthSnapshot({ configReload: { hotReloadStatus: "active" } });
     const getConfigReloaderHotReloadStatus = vi.fn(() => "disabled" as const);
-
-    await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
-      healthHandlers,
-      {
-        req: {} as never,
-        params: {} as never,
-        respond: respond as never,
-        context: {
-          getHealthCache: () => cached,
-          refreshHealthSnapshot,
-          getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
-          getConfigReloaderHotReloadStatus,
-          logHealth: { error: vi.fn() },
-        } as never,
-        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
-        isWebchatConnect: () => false,
-      },
-    );
+    const { respond } = await requestHealthSnapshot({
+      cached,
+      context: { getConfigReloaderHotReloadStatus },
+    });
 
     const payload = mockCallArg(respond, 0, 1) as
       | { configReload?: { hotReloadStatus?: string } }
@@ -5386,38 +5096,8 @@ describe("gateway healthHandlers.health cache freshness", () => {
   });
 
   it("preserves the cached config hot-reload status when no live accessor is available", async () => {
-    const cached = {
-      ok: true,
-      ts: Date.now(),
-      durationMs: 1,
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-      heartbeatSeconds: 0,
-      defaultAgentId: "main",
-      agents: [],
-      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
-      configReload: { hotReloadStatus: "disabled" },
-    };
-    const respond = vi.fn();
-    const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
-
-    await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
-      healthHandlers,
-      {
-        req: {} as never,
-        params: {} as never,
-        respond: respond as never,
-        context: {
-          getHealthCache: () => cached,
-          refreshHealthSnapshot,
-          getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
-          logHealth: { error: vi.fn() },
-        } as never,
-        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
-        isWebchatConnect: () => false,
-      },
-    );
+    const cached = createHealthSnapshot({ configReload: { hotReloadStatus: "disabled" } });
+    const { respond } = await requestHealthSnapshot({ cached });
 
     const payload = mockCallArg(respond, 0, 1) as
       | { configReload?: { hotReloadStatus?: string } }
@@ -5426,10 +5106,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
   });
 
   it("refreshes cached health when a runtime account is missing from the cached account summary", async () => {
-    const cached = {
-      ok: true,
-      ts: Date.now(),
-      durationMs: 1,
+    const cached = createHealthSnapshot({
       channels: {
         discord: {
           configured: true,
@@ -5447,11 +5124,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
       },
       channelOrder: ["discord"],
       channelLabels: { discord: "Discord" },
-      heartbeatSeconds: 0,
-      defaultAgentId: "main",
-      agents: [],
-      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
-    };
+    });
     const fresh = {
       ...cached,
       ts: cached.ts + 1,
@@ -5470,36 +5143,16 @@ describe("gateway healthHandlers.health cache freshness", () => {
         },
       },
     };
-    const respond = vi.fn();
-    const refreshHealthSnapshot = vi.fn().mockResolvedValue(fresh);
-
-    await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
-      healthHandlers,
-      {
-        req: {} as never,
-        params: {} as never,
-        respond: respond as never,
-        context: {
-          getHealthCache: () => cached,
-          refreshHealthSnapshot,
-          getRuntimeSnapshot: () => ({
-            channels: {},
-            channelAccounts: {
-              discord: {
-                work: {
-                  accountId: "work",
-                  running: true,
-                  connected: true,
-                },
-              },
-            },
-          }),
-          logHealth: { error: vi.fn() },
-        } as never,
-        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
-        isWebchatConnect: () => false,
+    const { respond, refreshHealthSnapshot } = await requestHealthSnapshot({
+      cached,
+      fresh,
+      runtimeSnapshot: {
+        channels: {},
+        channelAccounts: {
+          discord: { work: { accountId: "work", running: true, connected: true } },
+        },
       },
-    );
+    });
 
     expect(refreshHealthSnapshot).toHaveBeenCalledWith({
       probe: false,

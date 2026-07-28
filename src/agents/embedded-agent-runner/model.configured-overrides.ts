@@ -307,6 +307,18 @@ function markDiscoveredMaxTokensSource(model: ProviderRuntimeModel): ProviderRun
   return { ...model, maxTokensSource: "discovered" };
 }
 
+export function clampModelMaxTokensToContextWindow(
+  maxTokens: number | undefined,
+  contextWindow: number | undefined,
+): number | undefined {
+  if (typeof maxTokens !== "number" || !Number.isFinite(maxTokens)) {
+    return undefined;
+  }
+  return typeof contextWindow === "number" && Number.isFinite(contextWindow)
+    ? Math.min(maxTokens, contextWindow)
+    : maxTokens;
+}
+
 export function applyConfiguredProviderOverrides(params: {
   provider: string;
   discoveredModel: ProviderRuntimeModel;
@@ -503,12 +515,10 @@ export function applyConfiguredProviderOverrides(params: {
     metadataOverrideModel?.contextWindow ?? providerConfig.contextWindow;
   const configuredMaxTokens = metadataOverrideModel?.maxTokens ?? providerConfig.maxTokens;
   const resolvedMaxTokens = configuredMaxTokens ?? discoveredModel.maxTokens;
-  const normalizedResolvedMaxTokens =
-    typeof resolvedMaxTokens === "number" && Number.isFinite(resolvedMaxTokens)
-      ? typeof resolvedContextWindow === "number" && Number.isFinite(resolvedContextWindow)
-        ? Math.min(resolvedMaxTokens, resolvedContextWindow)
-        : resolvedMaxTokens
-      : undefined;
+  const normalizedResolvedMaxTokens = clampModelMaxTokensToContextWindow(
+    resolvedMaxTokens,
+    resolvedContextWindow,
+  );
   const catalogCompat = mergeModelCompat(
     configuredStaticCatalogModel?.compat,
     discoveredModel.compat,

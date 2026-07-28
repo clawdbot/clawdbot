@@ -37,7 +37,7 @@
       },
       "thinking": {
         "type": "string",
-        "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"]
+        "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"]
       },
       "fastMode": {
         "anyOf": [

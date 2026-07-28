@@ -46,6 +46,7 @@ export const SessionObserverPlanProgressSchema = closedObject({
 /** Live session status judgment broadcast to subscribed operator clients. */
 export const SessionObserverDigestSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   runId: Type.Optional(NonEmptyString),
   revision: Type.Integer({ minimum: 1 }),
   updatedAt: Type.Integer({ minimum: 0 }),
@@ -469,6 +470,9 @@ export const SessionsAbortParamsSchema = closedObject({
 export const SessionsPatchParamsSchema = closedObject({
   key: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
+  /** Reject the mutation if the session was reset or replaced before it commits. */
+  expectedSessionId: Type.Optional(NonEmptyString),
+  expectedLifecycleRevision: Type.Optional(NonEmptyString),
   label: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
   /** User-defined organization bucket ("category", not chat-group); null clears it. */
   category: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),

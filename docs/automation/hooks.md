@@ -251,7 +251,7 @@ Extracts the last user/assistant messages (default 15, configurable with `hooks.
       "entries": {
         "bootstrap-extra-files": {
           "enabled": true,
-          "paths": ["packages/*/AGENTS.md", "packages/*/TOOLS.md"]
+          "paths": ["packages/*/AGENTS.md"]
         }
       }
     }
@@ -259,7 +259,9 @@ Extracts the last user/assistant messages (default 15, configurable with `hooks.
 }
 ```
 
-`patterns` and `files` are accepted as aliases of `paths`. Paths resolve relative to the workspace and must stay inside it. Only recognized bootstrap basenames are loaded (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md`, `MEMORY.md`).
+`patterns` and `files` are accepted as aliases of `paths`. Paths resolve relative to the workspace and must stay inside it. Only recognized bootstrap basenames are loaded (`AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md`, `MEMORY.md`).
+
+`TOOLS.md` is no longer a recognized bootstrap basename and is not loaded into runtime context. `openclaw doctor --fix` migrates the workspace-root `TOOLS.md` into the `## Tools` section of `AGENTS.md`; patterns that name other `TOOLS.md` files are not migrated and should be repointed at `AGENTS.md`.
 
 <a id="command-logger"></a>
 

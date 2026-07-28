@@ -133,6 +133,7 @@ const gatewayLog = {
   warn: vi.fn(),
   error: vi.fn(),
 };
+const flushLogger = vi.fn(async () => {});
 
 vi.mock("../../infra/gateway-lock.js", () => ({
   acquireGatewayLock: (opts?: { port?: number }) => acquireGatewayLock(opts),
@@ -249,6 +250,10 @@ vi.mock("../../config/config.js", () => ({
 
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => gatewayLog,
+}));
+
+vi.mock("../../logging/logger.js", () => ({
+  flushLogger: () => flushLogger(),
 }));
 
 vi.mock("../../gateway/server-reload-handlers.js", () => ({
@@ -474,6 +479,9 @@ describe("runGatewayLoop", () => {
     await withIsolatedSignals(async ({ captureSignal }) => {
       const { close, start, runtime, exited } = await createSignaledLoopHarness();
       const sigterm = captureSignal("SIGTERM");
+      flushLogger.mockImplementationOnce(async () => {
+        expect(runtime.exit).not.toHaveBeenCalled();
+      });
 
       sigterm();
 
@@ -487,6 +495,30 @@ describe("runGatewayLoop", () => {
         requestHotReloadRecovery: requestGatewayRestartWithSignalAdmission,
       });
       expect(runtime.exit).toHaveBeenCalledWith(0);
+      expect(flushLogger).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("bounds the file-log flush before a graceful SIGTERM exit", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { runtime, exited } = await createSignaledLoopHarness();
+      const sigterm = captureSignal("SIGTERM");
+      flushLogger.mockReturnValueOnce(new Promise<void>(() => {}));
+      vi.useFakeTimers();
+      try {
+        sigterm();
+        await vi.advanceTimersByTimeAsync(4_000);
+
+        await expect(exited).resolves.toBe(0);
+        expect(runtime.exit).toHaveBeenCalledWith(0);
+        expect(gatewayLog.warn).toHaveBeenCalledWith(
+          "log flush did not settle within 4000ms; continuing shutdown",
+        );
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

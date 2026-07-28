@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.entry.js";
 import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
@@ -42,6 +42,35 @@ function createSqliteStore(): BoardStore {
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
+});
+
+it("does not select the HTML BLOB when preparing board view metadata", () => {
+  const stateDir = tempDirs.make("openclaw-board-projection-");
+  const env = { OPENCLAW_STATE_DIR: stateDir };
+  const sessionKey = "agent:main:projection";
+  seedSession(env, "main", sessionKey);
+  const database = openOpenClawAgentDatabase({ agentId: "main", env });
+  const store = new SqliteBoardStore({
+    resolveSession: () => ({ agentId: "main", sessionKey }),
+    env,
+  });
+  store.putWidget({
+    sessionKey,
+    name: "status",
+    content: { kind: "html", html: "x".repeat(256 * 1024) },
+  });
+  const prepare = vi.spyOn(database.db, "prepare");
+
+  const prepared = store.getSnapshotWithHtmlViewMetadata(sessionKey);
+
+  const widgetSelects = prepare.mock.calls
+    .map(([sql]) => sql)
+    .filter((sql) => /select .* from "board_widgets"/iu.test(sql));
+  expect(widgetSelects).toHaveLength(1);
+  expect(widgetSelects[0]).toContain('"sha256"');
+  expect(widgetSelects[0]).not.toContain('"html"');
+  expect(prepared.htmlViewMetadata.get("status")).not.toHaveProperty("html");
+  prepare.mockRestore();
 });
 
 describe.each([
@@ -87,19 +116,20 @@ describe.each([
       revision: 1,
       sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
     });
-    expect(store.getSnapshotWithHtmlDocuments("agent:main:board")).toMatchObject({
+    const preparedView = store.getSnapshotWithHtmlViewMetadata("agent:main:board");
+    expect(preparedView).toMatchObject({
       snapshot: { revision: 1 },
-      htmlDocuments: new Map([
+      htmlViewMetadata: new Map([
         [
           "weather",
           expect.objectContaining({
-            html: "<p>one</p>",
             revision: 1,
             sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
           }),
         ],
       ]),
     });
+    expect(preparedView.htmlViewMetadata.get("weather")).not.toHaveProperty("html");
 
     // Legacy clients omit heightMode on resize; explicit user sizing must pin.
     const resized = store.applyOps("agent:main:board", [

@@ -49,9 +49,7 @@ describe("embedded attempt phase lifecycle state", () => {
       } as never,
       activeSession: activeSession as never,
       sessionManager: sessionManager as never,
-      sessionLockController: {
-        waitForSessionEvents: async () => {},
-      } as never,
+      sessionLockController: {} as never,
       withOwnedSessionWriteLock: async (operation) => await operation(),
       subscription: {
         toolMetas: [],
@@ -97,7 +95,7 @@ describe("embedded attempt phase lifecycle state", () => {
     expect(removeTrailingEntries).toHaveBeenCalledOnce();
   });
 
-  it("re-reads abort state after post-turn session draining", async () => {
+  it("re-reads abort state inside the post-turn session write", async () => {
     let aborted = false;
     await completeEmbeddedAttemptAfterTurn({
       attempt: {
@@ -107,12 +105,11 @@ describe("embedded attempt phase lifecycle state", () => {
       } as never,
       activeSession: {} as never,
       sessionManager: { appendCustomEntry: vi.fn() } as never,
-      sessionLockController: {
-        waitForSessionEvents: async () => {
-          aborted = true;
-        },
-      } as never,
-      withOwnedSessionWriteLock: async (operation) => await operation(),
+      sessionLockController: {} as never,
+      withOwnedSessionWriteLock: async (operation) => {
+        aborted = true;
+        return await operation();
+      },
       state: {
         promptError: null,
         yieldAborted: false,
@@ -161,7 +158,7 @@ describe("embedded attempt phase lifecycle state", () => {
       } as never,
       activeSession: {} as never,
       sessionManager: { appendCustomEntry: vi.fn() } as never,
-      sessionLockController: { waitForSessionEvents: async () => undefined } as never,
+      sessionLockController: {} as never,
       withOwnedSessionWriteLock: async (operation) => await operation(),
       state: {
         promptError: null,

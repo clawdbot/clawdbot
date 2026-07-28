@@ -6,6 +6,7 @@ type CodeModeBridgeMethod =
   | "describe"
   | "call"
   | "callValue"
+  | "nodes"
   | "yield"
   | "namespace"
   | "agentSpawn"
@@ -55,7 +56,12 @@ export type CodeModeWorkerInput =
       snapshotBytes: Uint8Array;
       config: CodeModeConfig;
       settledRequests: SettledBridgeRequest[];
+      pendingRequests?: PendingBridgeRequest[];
     };
+
+type CodeModeSettlementMode =
+  | { kind: "awaiting" }
+  | { kind: "draining"; requiredRequestIds: string[] };
 
 export type CodeModeWorkerResult =
   | {
@@ -67,6 +73,7 @@ export type CodeModeWorkerResult =
       status: "waiting";
       snapshotBytes: Uint8Array;
       pendingRequests: PendingBridgeRequest[];
+      settlementMode: CodeModeSettlementMode;
       output: unknown[];
     }
   | {

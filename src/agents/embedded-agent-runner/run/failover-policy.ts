@@ -1,6 +1,7 @@
 /**
  * Resolves retry, fallback, and terminal failover decisions for a run.
  */
+import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
 
 /** Failover action selected for one embedded run failure decision point. */
@@ -59,17 +60,12 @@ type PromptDecisionParams = {
 type AssistantDecisionParams = {
   stage: "assistant";
   allowFormatRetry?: boolean;
-  aborted: boolean;
-  externalAbort: boolean;
+  terminal: AgentRunAttemptTerminal;
+  signalOwnedInterruption?: boolean;
   fallbackConfigured: boolean;
   failoverFailure: boolean;
   failoverReason: FailoverReason | null;
-  timedOut: boolean;
-  idleTimedOut: boolean;
-  timedOutDuringCompaction: boolean;
-  timedOutDuringToolExecution: boolean;
   harnessOwnsTransport?: boolean;
-  timedOutByRunBudget?: boolean;
   profileRotated: boolean;
 };
 
@@ -108,8 +104,9 @@ function shouldRotatePrompt(params: PromptDecisionParams): boolean {
 
 function isAssistantTimeoutFailure(params: AssistantDecisionParams): boolean {
   return (
-    params.idleTimedOut ||
-    (params.timedOut && !params.timedOutDuringCompaction && !params.timedOutDuringToolExecution)
+    params.terminal.kind === "timeout" &&
+    params.terminal.source !== "observation" &&
+    (params.terminal.source === "idle" || params.terminal.phase === "prompt")
   );
 }
 
@@ -123,7 +120,7 @@ function shouldRotateAssistant(params: AssistantDecisionParams): boolean {
   if (isTerminalFormatFailure(params)) {
     return false;
   }
-  if (params.timedOutByRunBudget) {
+  if (params.terminal.kind === "timeout" && params.terminal.source === "run_budget") {
     return false;
   }
   const timeoutFailure = isAssistantTimeoutFailure(params);
@@ -132,7 +129,12 @@ function shouldRotateAssistant(params: AssistantDecisionParams): boolean {
   if (harnessOwnedTimeout && !isConcreteNonTimeoutAssistantFailure(params)) {
     return false;
   }
-  return (!params.aborted && params.failoverFailure) || timeoutFailure;
+  const aborted =
+    (params.terminal.kind === "aborted" && params.terminal.source !== "yield_cleanup") ||
+    (params.terminal.kind === "timeout" &&
+      params.terminal.source !== "observation" &&
+      params.terminal.aborted === true);
+  return (!aborted && params.failoverFailure) || timeoutFailure;
 }
 
 function assistantFallbackReason(params: AssistantDecisionParams): FailoverReason {
@@ -231,7 +233,11 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
     };
   }
 
-  if (params.externalAbort) {
+  if (
+    params.signalOwnedInterruption ||
+    ((params.terminal.kind === "aborted" || params.terminal.kind === "timeout") &&
+      params.terminal.source === "external")
+  ) {
     return {
       action: "surface_error",
       reason: params.failoverReason,

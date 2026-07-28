@@ -56,7 +56,10 @@ import {
   preserveOptimisticTailMessages,
   readTranscriptSequence,
 } from "./history-merge.ts";
-import { reconcileInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
+import {
+  isPendingInitialUserMessage,
+  reconcileInitialUserMessageHandoff,
+} from "./initial-turn-handoff.ts";
 import {
   controlUiNowMs,
   recordControlUiPerformanceEvent,
@@ -1187,6 +1190,9 @@ async function loadChatHistoryUncached(
       reconciledTerminal.previousMessages,
       reconciledTerminal.currentMessages,
       authoritativeMessages,
+    ).filter(
+      (message) =>
+        !isPendingInitialUserMessage(state.initialUserMessage, state, sessionKey, message),
     );
     state.chatMessages = preserveOptimisticTailMessages(
       authoritativeMessages,

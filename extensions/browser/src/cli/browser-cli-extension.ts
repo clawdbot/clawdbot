@@ -138,13 +138,11 @@ export function registerBrowserExtensionCommands(
         async () => {
           const result = buildPairingString(opts.gatewayUrl);
           if (opts.json === true) {
-            defaultRuntime.log(
-              JSON.stringify({
-                pairingString: result.pairing,
-                relayPort: result.relayPort,
-                remote: result.remote,
-              }),
-            );
+            defaultRuntime.writeJson({
+              pairingString: result.pairing,
+              relayPort: result.relayPort,
+              remote: result.remote,
+            });
             return;
           }
           const setupLine = result.remote

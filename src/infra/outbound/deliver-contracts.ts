@@ -9,12 +9,13 @@ import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ReplyPayloadDeliveryPin } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
+import type { DeliveryQueueCompletionRetention } from "../delivery-queue-sqlite.js";
 import type { OutboundDeliveryResult, OutboundPayloadDeliveryOutcome } from "./deliver-types.js";
 import type { DurableDeliveryCompletion } from "./delivery-completion.js";
 import type {
   QueuedReplyPayloadSendingHook,
   QueuedRenderedMessageBatchPlan,
-} from "./delivery-queue.js";
+} from "./delivery-queue-storage.js";
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundIdentity } from "./identity.js";
 import type { OutboundMessageSendOverrides } from "./message-plan.js";
@@ -60,6 +61,7 @@ export type ChannelHandler = {
   chunkerMode?: "text" | "markdown";
   chunkedTextFormatting?: OutboundDeliveryFormattingOptions;
   textChunkLimit?: number;
+  preserveMarkdownDetails?: boolean;
   supportsMedia: boolean;
   sanitizeText?: (payload: ReplyPayload) => string;
   normalizePayload?: (payload: ReplyPayload) => ReplyPayload | null;
@@ -168,6 +170,10 @@ export type DeliverOutboundPayloadsCoreParams = {
   deliveryQueueId?: string;
   /** @internal Stable producer id used to make queue creation idempotent across crashes. */
   deliveryIntentId?: string;
+  /** @internal Retain the completed receipt for a producer-owned replayable intent. */
+  completionRetention?: DeliveryQueueCompletionRetention;
+  /** @internal Retry this producer's pending intent only when no platform send began. */
+  reusePendingDeliveryIntent?: boolean;
   /** @internal Serializable owner state finalized after live or recovered delivery. */
   deliveryCompletion?: DurableDeliveryCompletion;
   /** @internal Channel-valid id reserved before a correlated conversation turn is sent. */
@@ -196,6 +202,8 @@ export type DeliverOutboundPayloadsCoreParams = {
 export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & {
   /** @internal Skip write-ahead queue (used by crash-recovery to avoid re-enqueueing). */
   skipQueue?: boolean;
+  /** @internal Fence recovery ownership at the same provider boundary as live sends. */
+  deliveryProducerClaimId?: string;
   /** @internal Recovery already ran provider admission after its pending-row re-read. */
   deferredDeliveryAdmissionPassed?: true;
   /** @internal State directory that owns the existing recovery queue entry. */
