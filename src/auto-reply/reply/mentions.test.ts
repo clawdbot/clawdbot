@@ -208,6 +208,27 @@ describe("derived mention matching with decorated identity names", () => {
     expect(matchesMentionPatterns("clawdbot status", regexes)).toBe(false);
   });
 
+  it("only accepts the name's own decoration, not arbitrary punctuation", () => {
+    const regexes = buildMentionRegexes(configForName("Papillon🦋Bot"), "decorated-agent");
+
+    expect(matchesMentionPatterns("papillon,,,bot help", regexes)).toBe(false);
+    expect(matchesMentionPatterns("papillon...bot help", regexes)).toBe(false);
+  });
+
+  it("preserves unrelated punctuation adjacent to a stripped mention", () => {
+    const cfg = configForName("小蝶🦋");
+
+    expect(stripMentions("好的… 小蝶🦋 查天氣", {} as MsgContext, cfg, "decorated-agent")).toBe(
+      "好的… 查天氣",
+    );
+    expect(stripMentions("... 小蝶 查天氣", {} as MsgContext, cfg, "decorated-agent")).toBe(
+      "... 查天氣",
+    );
+    expect(stripMentions("@小蝶🦋。查天氣", {} as MsgContext, cfg, "decorated-agent")).toBe(
+      "。查天氣",
+    );
+  });
+
   it("strips the whole decorated name including adjacent emoji", () => {
     const cfg = configForName("小蝶🦋");
 
