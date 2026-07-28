@@ -26,7 +26,6 @@ import {
   isStaleApprovalResolutionError,
   parseApprovalRequestedEvent,
   parseExecApprovalResolved,
-  refreshPendingApprovalQueue,
   resolveApprovalRequest,
   type ExecApprovalDecision,
   type ExecApprovalPromptState,
@@ -34,6 +33,11 @@ import {
 } from "./exec-approval.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import { readGatewayOperatorAccess } from "./operator-access.ts";
+import {
+  createOverlayApprovalRefresher,
+  createOverlayPairingPendingCount,
+  readOverlayOperatorAccessTransition,
+} from "./overlays-access.ts";
 import {
   isPendingUpdateHandoffSentinel,
   readUpdateAvailable,
@@ -123,11 +127,7 @@ export function createApplicationOverlays(
   let activeClient = gateway.snapshot.client;
   let connectedSource: NonNullable<typeof activeClient> | null = null; // Retries start a new source epoch.
   let connectedEpoch = 0;
-  const initialAccess = readGatewayOperatorAccess(gateway.snapshot);
-  let adminAccess = initialAccess.canAdmin;
-  let approvalsAccess = initialAccess.canReviewApprovals;
-  let approvalGrantAccess = initialAccess.canGrantApprovals;
-  let pairingAccess = initialAccess.canPair;
+  let operatorAccess = readGatewayOperatorAccess(gateway.snapshot);
   let approvalAccessGeneration = 0;
   let approvalGrantGeneration = 0;
   let pendingUpdateExpectedVersion: string | null = null;
@@ -135,7 +135,6 @@ export function createApplicationOverlays(
   let updateRunGeneration = 0;
   let updateVerificationGeneration = 0;
   let updateVerificationWait: UpdateVerificationWait | null = null;
-  let devicePairPendingCountGeneration = 0;
   let approvalDecision: {
     client: NonNullable<typeof activeClient>;
     epoch: number;
@@ -173,6 +172,12 @@ export function createApplicationOverlays(
     }
   };
   promptState.execApprovalChanged = publish;
+  const pairingPendingCount = createOverlayPairingPendingCount({
+    gateway,
+    state: devicePairSetupState,
+    isDisposed: () => disposed,
+    publish,
+  });
   const publishDevicePairSetupOperation = async (operation: Promise<void>) => {
     publish();
     await operation;
@@ -198,65 +203,16 @@ export function createApplicationOverlays(
     },
   });
 
-  const refreshDevicePairPendingCount = async () => {
-    const client = gateway.snapshot.client;
-    if (
-      !client ||
-      gateway.snapshot.phase !== "connected" ||
-      disposed ||
-      !devicePairSetupState.devicePairSetupOpen ||
-      !pairingAccess ||
-      !readGatewayOperatorAccess(gateway.snapshot).canPair
-    ) {
-      return;
-    }
-    const generation = ++devicePairPendingCountGeneration;
-    let result: { pending?: unknown };
-    try {
-      result = await client.request<{ pending?: unknown }>("device.pair.list", {});
-    } catch {
-      return;
-    }
-    if (
-      disposed ||
-      generation !== devicePairPendingCountGeneration ||
-      gateway.snapshot.client !== client ||
-      gateway.snapshot.phase !== "connected" ||
-      !devicePairSetupState.devicePairSetupOpen ||
-      !pairingAccess ||
-      !readGatewayOperatorAccess(gateway.snapshot).canPair
-    ) {
-      return;
-    }
-    devicePairSetupState.pendingCount = Array.isArray(result.pending) ? result.pending.length : 0;
-    publish();
-  };
-
-  const refreshApprovals = async (
-    client: NonNullable<typeof activeClient>,
-    epoch = connectedEpoch,
-    accessGeneration = approvalAccessGeneration,
-  ) => {
-    if (
-      !approvalsAccess ||
-      accessGeneration !== approvalAccessGeneration ||
-      !readGatewayOperatorAccess(gateway.snapshot).canReviewApprovals
-    ) {
-      return;
-    }
-    const applied = await refreshPendingApprovalQueue(promptState, {
-      isCurrentClient: (requestClient) =>
-        requestClient === client &&
-        epoch === connectedEpoch &&
-        accessGeneration === approvalAccessGeneration &&
-        approvalsAccess &&
-        readGatewayOperatorAccess(gateway.snapshot).canReviewApprovals &&
-        isCurrentClient(client),
-    });
-    if (applied && !disposed) {
-      publish();
-    }
-  };
+  const refreshApprovals = createOverlayApprovalRefresher({
+    gateway,
+    state: promptState,
+    getConnectedEpoch: () => connectedEpoch,
+    getReviewGeneration: () => approvalAccessGeneration,
+    canReview: () => operatorAccess.canReviewApprovals,
+    isCurrentClient,
+    isDisposed: () => disposed,
+    publish,
+  });
 
   const publishUpdateBanner = (updateStatusBanner: ApplicationStatusBanner | null) => {
     snapshot = { ...snapshot, updateStatusBanner };
@@ -383,42 +339,32 @@ export function createApplicationOverlays(
     const connected = next.phase === "connected";
     const nextConnectedSource = connected ? next.client : null;
     const connectedSourceChanged = connectedSource !== nextConnectedSource;
-    const nextAccess = readGatewayOperatorAccess(next);
-    const nextApprovalsAccess = nextAccess.canReviewApprovals;
-    const approvalAccessChanged = approvalsAccess !== nextApprovalsAccess;
-    const approvalGrantAccessChanged = approvalGrantAccess !== nextAccess.canGrantApprovals;
-    approvalsAccess = nextApprovalsAccess;
-    approvalGrantAccess = nextAccess.canGrantApprovals;
-    if (approvalAccessChanged) {
+    const accessTransition = readOverlayOperatorAccessTransition(operatorAccess, next);
+    operatorAccess = accessTransition.access;
+    if (accessTransition.reviewChanged) {
       approvalAccessGeneration += 1;
     }
-    if (approvalGrantAccessChanged) {
+    if (accessTransition.grantChanged) {
       approvalGrantGeneration += 1;
     }
-    if (approvalGrantAccessChanged && !approvalGrantAccess) {
+    if (accessTransition.grantRevoked) {
       // Review can remain available without a decision grant. Retire the
       // in-flight owner without discarding the still-readable approval queue.
       approvalDecision = null;
       promptState.execApprovalBusy = false;
     }
-    if (adminAccess !== nextAccess.canAdmin) {
-      adminAccess = nextAccess.canAdmin;
-      if (!adminAccess) {
-        // Setup codes are admin-only bearer credentials. Closing retires the
-        // setup owner's request token before a same-client response can publish.
-        closeDevicePairSetupState(devicePairSetupState);
-        devicePairPendingCountGeneration += 1;
-        devicePairSetupState.pendingCount = 0;
+    if (accessTransition.adminRevoked || accessTransition.pairingSetupRevoked) {
+      // Admin revocation invalidates bearer setup codes; losing both setup
+      // authorities must also close a pairing-only operator's retained modal.
+      closeDevicePairSetupState(devicePairSetupState);
+      pairingPendingCount.invalidate({ clear: true });
+      if (accessTransition.adminRevoked) {
         updateRunGeneration += 1;
         snapshot = { ...snapshot, updateRunning: false };
       }
     }
-    if (pairingAccess !== nextAccess.canPair) {
-      pairingAccess = nextAccess.canPair;
-      devicePairPendingCountGeneration += 1;
-      if (!pairingAccess) {
-        devicePairSetupState.pendingCount = 0;
-      }
+    if (accessTransition.pairingChanged) {
+      pairingPendingCount.invalidate({ clear: !operatorAccess.canPair });
     }
     activeClient = next.client;
     connectedSource = nextConnectedSource;
@@ -431,12 +377,11 @@ export function createApplicationOverlays(
     }
     if (previousClient !== next.client || !connected) {
       approvalDecision = null;
-      devicePairPendingCountGeneration += 1;
+      pairingPendingCount.invalidate({ clear: true });
       deviceAuthMigration.reset();
       closeDevicePairSetupState(devicePairSetupState);
-      devicePairSetupState.pendingCount = 0;
     }
-    if (connected && !approvalsAccess) {
+    if (connected && !operatorAccess.canReviewApprovals) {
       approvalDecision = null;
       promptState.execApprovalQueue = [];
       promptState.execApprovalBusy = false;
@@ -470,12 +415,12 @@ export function createApplicationOverlays(
     publish();
     if (connectedSourceChanged) {
       connectedEpoch += 1;
-      if (approvalsAccess) {
+      if (operatorAccess.canReviewApprovals) {
         void refreshApprovals(next.client, connectedEpoch, approvalAccessGeneration);
       }
       void deviceAuthMigration.refresh(next.client, connectedEpoch);
       void verifyPendingUpdateVersion(next.client, connectedEpoch);
-    } else if (approvalAccessChanged && approvalsAccess) {
+    } else if (accessTransition.reviewChanged && operatorAccess.canReviewApprovals) {
       void refreshApprovals(next.client, connectedEpoch, approvalAccessGeneration);
     }
   };
@@ -486,7 +431,7 @@ export function createApplicationOverlays(
       return;
     }
     if (event.event === "device.pair.requested" || event.event === "device.pair.resolved") {
-      void refreshDevicePairPendingCount();
+      void pairingPendingCount.refresh();
       if (activeClient) {
         void deviceAuthMigration.refresh(activeClient, connectedEpoch);
       }
@@ -498,7 +443,10 @@ export function createApplicationOverlays(
       publish();
       return;
     }
-    if (!approvalsAccess || !readGatewayOperatorAccess(gateway.snapshot).canReviewApprovals) {
+    if (
+      !operatorAccess.canReviewApprovals ||
+      !readGatewayOperatorAccess(gateway.snapshot).canReviewApprovals
+    ) {
       return;
     }
     const requestedApproval = parseApprovalRequestedEvent(event.event, event.payload);
@@ -708,7 +656,7 @@ export function createApplicationOverlays(
       devicePairSetupState.pendingCount = 0;
       const setupOperation = openDevicePairSetupState(devicePairSetupState);
       // Pairing-list latency must not keep a ready setup code behind the loading state.
-      void refreshDevicePairPendingCount();
+      void pairingPendingCount.refresh();
       await publishDevicePairSetupOperation(setupOperation);
     },
     async refreshDevicePairSetup() {
@@ -724,9 +672,8 @@ export function createApplicationOverlays(
       await publishDevicePairSetupOperation(setPairAccess(devicePairSetupState, access));
     },
     closeDevicePairSetup() {
-      devicePairPendingCountGeneration += 1;
+      pairingPendingCount.invalidate({ clear: true });
       closeDevicePairSetupState(devicePairSetupState);
-      devicePairSetupState.pendingCount = 0;
       publish();
     },
     async secureThisBrowser() {
@@ -738,7 +685,7 @@ export function createApplicationOverlays(
       disposed = true;
       approvalDecision = null;
       updateRunGeneration += 1;
-      devicePairPendingCountGeneration += 1;
+      pairingPendingCount.invalidate();
       deviceAuthMigration.dispose();
       cancelUpdateVerification();
       closeDevicePairSetupState(devicePairSetupState);
