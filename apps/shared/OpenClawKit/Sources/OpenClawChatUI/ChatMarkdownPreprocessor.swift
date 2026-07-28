@@ -1,4 +1,5 @@
 import Foundation
+import Markdown
 
 enum ChatMarkdownPreprocessor {
     /// Provenance marker appended to every OpenClaw-injected inbound context header.
@@ -22,8 +23,105 @@ enum ChatMarkdownPreprocessor {
         "Zalo Personal",
     ]
 
-    private static let markdownImagePattern = #"!\[([^\]]*)\]\(([^)]+)\)"#
     private static let messageIdHintPattern = #"^\s*\[message_id:\s*[^\]]+\]\s*$"#
+    private static let markdownLiteralPunctuation = CharacterSet(
+        charactersIn: "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~")
+
+    private struct MarkdownImageOccurrence {
+        let range: Range<String.Index>
+        let label: String
+        let source: String
+    }
+
+    /// Maps swift-markdown's 1-based UTF-8 source locations back into the
+    /// original String without normalizing line endings or Unicode first.
+    private struct MarkdownSourceMap {
+        private let markdown: String
+        private let lineStarts: [String.Index]
+
+        init(_ markdown: String) {
+            self.markdown = markdown
+            var lineStarts = [markdown.startIndex]
+            let bytes = markdown.utf8
+            for byteIndex in bytes.indices {
+                let byte = bytes[byteIndex]
+                guard byte == 0x0A || byte == 0x0D else { continue }
+
+                let nextByteIndex = bytes.index(after: byteIndex)
+                // CommonMark counts CRLF as one line ending. Record the next
+                // line at LF, not at the midpoint of the two-byte sequence.
+                if byte == 0x0D,
+                   nextByteIndex < bytes.endIndex,
+                   bytes[nextByteIndex] == 0x0A
+                {
+                    continue
+                }
+                if let lineStart = String.Index(nextByteIndex, within: markdown) {
+                    lineStarts.append(lineStart)
+                }
+            }
+            self.lineStarts = lineStarts
+        }
+
+        func range(for sourceRange: SourceRange) -> Range<String.Index>? {
+            guard let lowerBound = self.index(for: sourceRange.lowerBound),
+                  let upperBound = self.index(for: sourceRange.upperBound),
+                  lowerBound <= upperBound
+            else {
+                return nil
+            }
+            return lowerBound..<upperBound
+        }
+
+        private func index(for location: SourceLocation) -> String.Index? {
+            guard location.line > 0,
+                  location.column > 0,
+                  self.lineStarts.indices.contains(location.line - 1)
+            else {
+                return nil
+            }
+
+            let bytes = self.markdown.utf8
+            guard let lineStart = self.lineStarts[location.line - 1].samePosition(in: bytes),
+                  let byteIndex = bytes.index(
+                      lineStart,
+                      offsetBy: location.column - 1,
+                      limitedBy: bytes.endIndex),
+                  let stringIndex = String.Index(byteIndex, within: self.markdown)
+            else {
+                return nil
+            }
+
+            // A malformed dependency range must not spill into the next line.
+            if self.lineStarts.indices.contains(location.line),
+               stringIndex >= self.lineStarts[location.line]
+            {
+                return nil
+            }
+            return stringIndex
+        }
+    }
+
+    private struct MarkdownImageCollector: MarkupWalker {
+        private let sourceMap: MarkdownSourceMap
+        private(set) var images: [MarkdownImageOccurrence] = []
+
+        init(markdown: String) {
+            self.sourceMap = MarkdownSourceMap(markdown)
+        }
+
+        mutating func visitImage(_ image: Markdown.Image) {
+            guard let sourceRange = image.range,
+                  let range = self.sourceMap.range(for: sourceRange)
+            else {
+                return
+            }
+            self.images.append(MarkdownImageOccurrence(
+                range: range,
+                label: image.plainText,
+                source: image.source ?? ""))
+        }
+    }
 
     struct InlineImage: Identifiable {
         let id = UUID()
@@ -41,29 +139,36 @@ enum ChatMarkdownPreprocessor {
         let withoutMessageIdHints = self.stripMessageIdHints(withoutEnvelope)
         let withoutContextBlocks = self.stripInboundContextBlocks(withoutMessageIdHints)
         let withoutTimestamps = self.stripPrefixedTimestamps(withoutContextBlocks)
-        guard let re = try? NSRegularExpression(pattern: self.markdownImagePattern) else {
-            return Result(cleaned: self.normalize(withoutTimestamps), images: [])
+        // cmark replaces NUL with U+FFFD before computing UTF-8 source columns.
+        // Use those same bytes for range mapping and the downstream renderer.
+        let markdown = withoutTimestamps.replacingOccurrences(of: "\0", with: "\u{FFFD}")
+        guard markdown.contains("![") else {
+            return Result(cleaned: self.normalize(markdown), images: [])
         }
 
-        let ns = withoutTimestamps as NSString
-        let matches = re.matches(
-            in: withoutTimestamps,
-            range: NSRange(location: 0, length: ns.length))
-        if matches.isEmpty { return Result(cleaned: self.normalize(withoutTimestamps), images: []) }
+        // Only structural CommonMark images are renderable. A document-wide
+        // regex also matches examples inside code and escaped user text.
+        var collector = MarkdownImageCollector(markdown: markdown)
+        collector.visit(Document(parsing: markdown))
+        guard !collector.images.isEmpty else {
+            return Result(cleaned: self.normalize(markdown), images: [])
+        }
 
         var images: [InlineImage] = []
-        let cleaned = NSMutableString(string: withoutTimestamps)
+        let cleaned = NSMutableString(string: markdown)
 
-        for match in matches.reversed() {
-            guard match.numberOfRanges >= 3 else { continue }
-            let label = ns.substring(with: match.range(at: 1))
-            let source = ns.substring(with: match.range(at: 2))
-
-            if let inlineImage = self.inlineImage(label: label, source: source) {
+        for occurrence in collector.images.reversed() {
+            let range = NSRange(occurrence.range, in: markdown)
+            if let inlineImage = self.inlineImage(
+                label: occurrence.label,
+                source: occurrence.source)
+            {
                 images.append(inlineImage)
-                cleaned.replaceCharacters(in: match.range, with: "")
+                cleaned.replaceCharacters(in: range, with: "")
             } else {
-                cleaned.replaceCharacters(in: match.range, with: self.fallbackImageLabel(label))
+                cleaned.replaceCharacters(
+                    in: range,
+                    with: self.fallbackImageLabel(occurrence.label))
             }
         }
 
@@ -87,7 +192,19 @@ enum ChatMarkdownPreprocessor {
 
     private static func fallbackImageLabel(_ label: String) -> String {
         let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "image" : trimmed
+        return self.markdownEscapedLiteral(trimmed.isEmpty ? "image" : trimmed)
+    }
+
+    private static func markdownEscapedLiteral(_ value: String) -> String {
+        var escaped = ""
+        escaped.reserveCapacity(value.utf8.count)
+        for scalar in value.unicodeScalars {
+            if self.markdownLiteralPunctuation.contains(scalar) {
+                escaped.append("\\")
+            }
+            escaped.unicodeScalars.append(scalar)
+        }
+        return escaped
     }
 
     private static func stripEnvelope(_ raw: String) -> String {

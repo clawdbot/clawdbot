@@ -48,6 +48,7 @@ export type SystemAgentToolDirective =
   | { kind: "skills-setup" }
   | { kind: "search-setup" }
   | { kind: "gateway-config-setup" }
+  | { kind: "memory-import" }
   | { kind: "model-setup"; workspace?: string }
   | { kind: "open-tui"; agentId?: string; workspace?: string }
   | Extract<SystemAgentOperation, { kind: "open-setup" }>
@@ -104,7 +105,8 @@ function directiveForOperation(
   if (
     operation.kind === "skills-setup" ||
     operation.kind === "search-setup" ||
-    operation.kind === "gateway-config-setup"
+    operation.kind === "gateway-config-setup" ||
+    operation.kind === "memory-import"
   ) {
     return operation;
   }
@@ -181,6 +183,7 @@ const SYSTEM_AGENT_TOOL_ACTIONS = [
   "configure_skills",
   "configure_search",
   "configure_gateway",
+  "import_memory",
   "configure_model_provider",
   "open_agent",
   "open_setup",
@@ -300,6 +303,8 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
       return { kind: "search-setup" };
     case "configure_gateway":
       return { kind: "gateway-config-setup" };
+    case "import_memory":
+      return { kind: "memory-import" };
     case "configure_model_provider": {
       const workspace = readStringParam(params, "workspace")?.trim();
       return { kind: "model-setup", ...(workspace ? { workspace } : {}) };
@@ -395,7 +400,7 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
     description: [
       "System agent. Setup, config, channels, plugins, agents, repair.",
       "Read now: status, models, agents, channels, channel_info, config_get, config_schema, gateway_status, plugin_search, validate_config, doctor, audit.",
-      "Handoff: connect_channel, configure_skills, configure_search, configure_gateway; open_setup target=channels|search|gateway; open_agent.",
+      "Handoff: connect_channel, configure_skills, configure_search, configure_gateway, import_memory; open_setup target=channels|search|gateway; open_agent.",
       "Provider/auth/credentials: exit; run `openclaw onboard`. Never request credentials.",
       "Write: setup, set_default_model (agentId optional; live-tested), config_set, config_set_ref, create_agent, gateway_*, plugin_install, plugin_uninstall. Exact user approval required; then approved=true. Host applies after turn; rechecks inference owner.",
       "plugin_install: ClawHub/bundled/official only. Arbitrary source: exit, trusted shell.",
@@ -422,17 +427,19 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
                 ? `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the host chat now starts guided web search provider setup with the user. Tell the user the provider setup questions come next; never ask for or repeat a credential yourself.`
                 : directive.kind === "gateway-config-setup"
                   ? `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the host chat now starts guided local Gateway configuration with the user. Tell the user the Gateway setup questions come next; never ask for or repeat a credential yourself.`
-                  : directive.kind === "model-setup"
-                    ? `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the active inference route cannot be changed inside OpenClaw. Tell the user to exit OpenClaw and run \`openclaw onboard\`; do not ask for provider credentials here.`
-                    : directive.kind === "open-tui"
-                      ? `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the host now hands the user over to their normal agent. Say goodbye briefly.`
-                      : directive.target === "channels"
-                        ? `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the host now opens channel setup${directive.channel ? ` for ${directive.channel}` : ""}. Tell the user the channel setup questions come next.`
-                        : directive.target === "search"
-                          ? `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the host now opens masked terminal web search setup. Tell the user the terminal wizard comes next.`
-                          : directive.target === "gateway"
-                            ? `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the host now opens masked terminal Gateway setup. Tell the user the terminal wizard comes next.`
-                            : `${SYSTEM_AGENT_DIRECTIVE_PREFIX} ${directive.target} setup cannot run inside OpenClaw because it may change the active inference route. Tell the user to exit OpenClaw and run \`openclaw onboard\`.`,
+                  : directive.kind === "memory-import"
+                    ? `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the host chat now starts guided copy-only memory import with the user. Tell the user the detected local-agent memory choices come next; do not describe steps yourself.`
+                    : directive.kind === "model-setup"
+                      ? `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the active inference route cannot be changed inside OpenClaw. Tell the user to exit OpenClaw and run \`openclaw onboard\`; do not ask for provider credentials here.`
+                      : directive.kind === "open-tui"
+                        ? `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the host now hands the user over to their normal agent. Say goodbye briefly.`
+                        : directive.target === "channels"
+                          ? `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the host now opens channel setup${directive.channel ? ` for ${directive.channel}` : ""}. Tell the user the channel setup questions come next.`
+                          : directive.target === "search"
+                            ? `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the host now opens masked terminal web search setup. Tell the user the terminal wizard comes next.`
+                            : directive.target === "gateway"
+                              ? `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the host now opens masked terminal Gateway setup. Tell the user the terminal wizard comes next.`
+                              : `${SYSTEM_AGENT_DIRECTIVE_PREFIX} ${directive.target} setup cannot run inside OpenClaw because it may change the active inference route. Tell the user to exit OpenClaw and run \`openclaw onboard\`.`,
           {},
         );
       }

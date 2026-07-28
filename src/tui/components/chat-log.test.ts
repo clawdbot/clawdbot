@@ -1041,97 +1041,6 @@ describe("ChatLog", () => {
     },
   );
 
-  it("deduplicates authoritative user events and adopts the matching pending prompt", () => {
-    const chatLog = new ChatLog(40);
-    chatLog.addPendingUser("shared-run", "Persisted prompt.");
-    chatLog.updateAssistant("Already streaming.", "shared-run");
-
-    chatLog.addLiveUser("Persisted prompt.", { messageId: "shared-user", runId: "shared-run" });
-    chatLog.addLiveUser("Persisted prompt.", { messageId: "shared-user", runId: "shared-run" });
-
-    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
-    expect(rendered).toContain("Persisted prompt.");
-    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
-      "UserMessageComponent",
-      "AssistantMessageComponent",
-    ]);
-    expect(chatLog.countPendingUsers()).toBe(0);
-  });
-
-  it("preserves a different pending prompt when another client uses the same run", () => {
-    const chatLog = new ChatLog(40);
-    chatLog.addPendingUser("shared-run", "My local steering prompt.");
-    chatLog.updateAssistant("Already streaming.", "shared-run");
-
-    chatLog.addLiveUser("Another client's persisted prompt.", {
-      messageId: "shared-remote-user",
-      runId: "shared-run",
-    });
-
-    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
-    expect(rendered).toContain("My local steering prompt.");
-    expect(rendered).toContain("Another client's persisted prompt.");
-    expect(rendered.indexOf("Another client's persisted prompt.")).toBeLessThan(
-      rendered.indexOf("Already streaming."),
-    );
-    expect(chatLog.countPendingUsers()).toBe(1);
-  });
-
-  it("deduplicates a replayed live prompt already loaded from authoritative history", () => {
-    const chatLog = new ChatLog(40);
-    chatLog.addUser("Loaded from history.", { messageId: "history-user" });
-
-    chatLog.addLiveUser("Loaded from history.", {
-      messageId: "history-user",
-      runId: "history-run",
-    });
-
-    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
-      "UserMessageComponent",
-    ]);
-    expect(normalizeTestText(chatLog.render(120).join("\n"))).toContain("Loaded from history.");
-  });
-
-  it("re-keys a pending user in place without moving its position", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.addPendingUser("local", "queued hello", 1_000);
-    chatLog.startAssistant("hi there", "r-accepted");
-
-    expect(chatLog.rekeyPendingUser("local", "r-accepted")).toBe(true);
-
-    const rendered = chatLog.render(120).join("\n");
-    expect(rendered.indexOf("queued hello")).toBeLessThan(rendered.indexOf("hi there"));
-    // The row is now addressable by the gateway-assigned runId.
-    expect(chatLog.dropPendingUser("r-accepted")).toBe(true);
-    expect(chatLog.countPendingUsers()).toBe(0);
-  });
-
-  it("reconciles pending users against rebuilt history using timestamps", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.addPendingUser("run-1", "queued hello", 2_000);
-
-    expect(
-      chatLog.reconcilePendingUsers([
-        { text: "queued hello", timestamp: 2_100 },
-        { text: "older", timestamp: 1_000 },
-      ]),
-    ).toEqual(["run-1"]);
-    expect(chatLog.countPendingUsers()).toBe(0);
-  });
-
-  it("reconciles pending users when the gateway clock is slightly behind the client", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.addPendingUser("run-1", "queued hello", 65_000);
-
-    expect(chatLog.reconcilePendingUsers([{ text: "queued hello", timestamp: 20_000 }])).toEqual([
-      "run-1",
-    ]);
-    expect(chatLog.countPendingUsers()).toBe(0);
-  });
-
   it("dismisses a pending system notice by runId", () => {
     const chatLog = new ChatLog(40);
 
@@ -1157,16 +1066,5 @@ describe("ChatLog", () => {
     expect(rendered).not.toContain("first notice");
     expect(rendered).toContain("second notice");
     expect(chatLog.children.length).toBe(1);
-  });
-
-  it("does not hide a new repeated prompt when only older history matches", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.addPendingUser("run-1", "continue", 5_000);
-
-    expect(chatLog.reconcilePendingUsers([{ text: "continue", timestamp: -56_000 }])).toStrictEqual(
-      [],
-    );
-    expect(chatLog.countPendingUsers()).toBe(1);
   });
 });

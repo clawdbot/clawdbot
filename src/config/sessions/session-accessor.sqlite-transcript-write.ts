@@ -42,6 +42,7 @@ import {
   toDatabaseOptions,
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
+import { rememberCommittedSqliteTranscriptMessageSequencesInTransaction } from "./session-accessor.sqlite-transcript-sequences.js";
 import {
   advanceTranscriptMutationAtInTransaction,
   readTranscriptGenerationInTransaction,
@@ -429,6 +430,14 @@ export async function appendSqliteExpectedSessionTranscriptTurn(
       ) {
         throw new Error("SQLite transcript batch was not wholly inserted or replayed");
       }
+
+      // Later explicit parents can abandon earlier rows. Capture every cursor
+      // from the final active projection before this atomic transaction commits.
+      rememberCommittedSqliteTranscriptMessageSequencesInTransaction(
+        transactionDb,
+        resolved.sessionId,
+        appendedMessages,
+      );
 
       const sessionPatch = buildExpectedTranscriptTurnSessionPatch({
         appendedMessages,

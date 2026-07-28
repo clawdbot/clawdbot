@@ -349,7 +349,6 @@ describe("runContextEngineMaintenance", () => {
         agentId: "custom-agent",
         sessionId: "custom-session",
         sessionKey: "agent:custom-agent:custom-session",
-        storePath: "/tmp/custom-agent.sqlite",
       },
     });
   });

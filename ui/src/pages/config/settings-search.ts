@@ -24,7 +24,6 @@ import {
   resolveMemoryBackend,
   MEMORY_BACKEND_ANCHOR_ID,
   MEMORY_CURATED_SCHEMA_KEYS,
-  MEMORY_SEARCH_TAB_SCHEMA_KEYS,
 } from "./memory-schema.ts";
 import {
   APPEARANCE_SETTINGS_TARGET_IDS,
@@ -308,11 +307,8 @@ function visibleMemorySchema(
 }
 
 /**
- * The Memory page splits `memory.*` across tabs and lifts `memory.backend` out
- * of the editor into a curated row, so the bare section destination can land on
- * a tab or an editor slice that omits the matched control. Only a hit one
- * surface alone can show re-routes; a section-level match (key, label,
- * description) is symmetric across slices and keeps the default destination.
+ * Every memory schema field lives on Settings. Backend remains a curated row,
+ * so its unique matches use that row's anchor instead of the editor section.
  */
 function memoryDestination(params: {
   key: string;
@@ -345,15 +341,12 @@ function memoryDestination(params: {
   const onlySliceMatches = (keys: readonly string[]) =>
     sliceMatches(keys) &&
     !sliceMatches(Object.keys(properties).filter((child) => !keys.includes(child)));
-  if (onlySliceMatches(MEMORY_SEARCH_TAB_SCHEMA_KEYS)) {
-    return { search: "&tab=search", hash: params.editorHash };
-  }
   // memoryVisibleSchemaKeys drops `backend` when no engine renders the curated
   // row, so a match here always has the anchor on the page to scroll to.
   if (onlySliceMatches(MEMORY_CURATED_SCHEMA_KEYS)) {
-    return { search: "", hash: `#${MEMORY_BACKEND_ANCHOR_ID}` };
+    return { search: "&tab=settings", hash: `#${MEMORY_BACKEND_ANCHOR_ID}` };
   }
-  return { search: "", hash: params.editorHash };
+  return { search: "&tab=settings", hash: params.editorHash };
 }
 
 function routeForConfigSection(key: string): RouteId {

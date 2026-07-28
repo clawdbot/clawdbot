@@ -371,6 +371,46 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(setActivityStatus).toHaveBeenLastCalledWith("running");
   });
 
+  it.each([
+    {
+      name: "the authoritative top-level stop reason",
+      topLevelStopReason: "error",
+      messageStopReason: "stop",
+    },
+    {
+      name: "a legacy nested message stop reason",
+      topLevelStopReason: undefined,
+      messageStopReason: "error",
+    },
+  ])(
+    "marks a completed response as failed using $name",
+    ({ topLevelStopReason, messageStopReason }) => {
+      const { state, chatLog, setActivityStatus, handleChatEvent } = createHandlersHarness({
+        state: { activeChatRunId: "run-provider-error" },
+      });
+
+      handleChatEvent({
+        runId: "run-provider-error",
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        ...(topLevelStopReason ? { stopReason: topLevelStopReason } : {}),
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Provider response." }],
+          stopReason: messageStopReason,
+        },
+      });
+
+      expect(chatLog.finalizeAssistant).toHaveBeenCalledExactlyOnceWith(
+        "Provider response.",
+        "run-provider-error",
+      );
+      expect(state.activeChatRunId).toBeNull();
+      expect(setActivityStatus).toHaveBeenCalledWith("error");
+      expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
+    },
+  );
+
   it("renders terminal lifecycle errors after retry grace and clears the active run", () => {
     vi.useFakeTimers();
     const { state, chatLog, tui, setActivityStatus, loadHistory, handleAgentEvent } =
@@ -1590,6 +1630,112 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.startTool).not.toHaveBeenCalled();
   });
 
+  it("reloads the selected session for an identity-only legacy batch invalidation", () => {
+    const { state, loadHistory, handleSessionsChangedEvent } = createHandlersHarness({
+      state: { activeChatRunId: null, currentSessionId: "session-1" },
+    });
+
+    handleSessionsChangedEvent({
+      sessionKey: state.currentSessionKey,
+      agentId: state.currentAgentId,
+      sessionId: "session-1",
+      phase: "message",
+    } satisfies SessionChangedEvent);
+
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+    expect(state.activeChatRunId).toBeNull();
+  });
+
+  it("preserves an active response during legacy batch history recovery", () => {
+    const pendingSubmit = acceptedSubmit("run-pending");
+    const { state, chatLog, btw, loadHistory, setActivityStatus, handleSessionsChangedEvent } =
+      createHandlersHarness({
+        state: {
+          activeChatRunId: "run-active",
+          activityStatus: "streaming",
+          currentSessionId: "session-1",
+          pendingSubmit,
+        },
+      });
+
+    handleSessionsChangedEvent({
+      sessionKey: state.currentSessionKey,
+      agentId: state.currentAgentId,
+      sessionId: "session-1",
+      phase: "message",
+    } satisfies SessionChangedEvent);
+
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+    expect(state.activeChatRunId).toBe("run-active");
+    expect(state.activityStatus).toBe("streaming");
+    expect(state.pendingSubmit).toBe(pendingSubmit);
+    expect(setActivityStatus).not.toHaveBeenCalled();
+    expect(chatLog.dropAssistant).not.toHaveBeenCalled();
+    expect(btw.clear).not.toHaveBeenCalled();
+  });
+
+  it("ignores a legacy batch invalidation for a different session incarnation", () => {
+    const { state, loadHistory, handleSessionsChangedEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-active", currentSessionId: "session-current" },
+    });
+
+    handleSessionsChangedEvent({
+      sessionKey: state.currentSessionKey,
+      agentId: state.currentAgentId,
+      sessionId: "session-other",
+      phase: "message",
+    } satisfies SessionChangedEvent);
+
+    expect(loadHistory).not.toHaveBeenCalled();
+    expect(state.currentSessionId).toBe("session-current");
+    expect(state.activeChatRunId).toBe("run-active");
+  });
+
+  it("ignores another agent's identity-only global batch invalidation", () => {
+    const { state, loadHistory, handleSessionsChangedEvent } = createHandlersHarness({
+      state: {
+        agentDefaultId: "main",
+        currentAgentId: "work",
+        currentSessionKey: "global",
+        currentSessionId: "session-work",
+        activeChatRunId: "run-active",
+      },
+    });
+
+    handleSessionsChangedEvent({
+      sessionKey: "global",
+      agentId: "main",
+      sessionId: "session-work",
+      phase: "message",
+    } satisfies SessionChangedEvent);
+
+    expect(loadHistory).not.toHaveBeenCalled();
+    expect(state.activeChatRunId).toBe("run-active");
+  });
+
+  it.each([
+    { name: "a persisted message identity", identity: { messageId: "message-1" } },
+    { name: "a persisted message sequence", identity: { messageSeq: 7 } },
+    { name: "a concrete message", identity: { message: { role: "user", content: "hello" } } },
+    { name: "a run identity", identity: { runId: "run-message" } },
+    { name: "a client run identity", identity: { clientRunId: "run-message" } },
+  ])("does not reload an ordinary message-phase event with $name", ({ identity }) => {
+    const { state, loadHistory, handleSessionsChangedEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-active", currentSessionId: "session-1" },
+    });
+
+    handleSessionsChangedEvent({
+      sessionKey: state.currentSessionKey,
+      agentId: state.currentAgentId,
+      sessionId: "session-1",
+      phase: "message",
+      ...identity,
+    });
+
+    expect(loadHistory).not.toHaveBeenCalled();
+    expect(state.activeChatRunId).toBe("run-active");
+  });
+
   it("ignores sessions.changed reset events for other sessions", () => {
     const { state, loadHistory, setActivityStatus, handleSessionsChangedEvent } =
       createHandlersHarness({
@@ -2335,6 +2481,215 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.addSystem).toHaveBeenCalledWith(`run error: ${backendError}`);
   });
 
+  it("surfaces a late provider error without replaying a completed assistant reply", () => {
+    const { state, chatLog, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-source-reply" },
+    });
+
+    handleChatEvent({
+      runId: "run-source-reply",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Source reply delivered." }],
+      },
+    });
+    handleChatEvent({
+      runId: "run-source-reply",
+      sessionKey: state.currentSessionKey,
+      state: "error",
+      errorMessage: "raw provider failure",
+    });
+
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledExactlyOnceWith(
+      "Source reply delivered.",
+      "run-source-reply",
+    );
+    expect(chatLog.addSystem).toHaveBeenCalledExactlyOnceWith("run error: raw provider failure");
+    expect(state.activeChatRunId).toBeNull();
+  });
+
+  it("renders a duplicated post-final provider diagnostic only once", () => {
+    const { state, chatLog, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-source-reply" },
+    });
+
+    handleChatEvent({
+      runId: "run-source-reply",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { role: "assistant", content: [{ type: "text", text: "Delivered once." }] },
+    });
+    const error = {
+      runId: "run-source-reply",
+      sessionKey: state.currentSessionKey,
+      state: "error" as const,
+      errorMessage: "late provider failure",
+    };
+
+    handleChatEvent(error);
+    handleChatEvent(error);
+
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledExactlyOnceWith(
+      "Delivered once.",
+      "run-source-reply",
+    );
+    expect(chatLog.addSystem).toHaveBeenCalledExactlyOnceWith("run error: late provider failure");
+    expect(state.activeChatRunId).toBeNull();
+  });
+
+  it("ignores blank late errors and renders a padded provider diagnostic exactly once", () => {
+    const { state, chatLog, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-source-reply" },
+    });
+
+    handleChatEvent({
+      runId: "run-source-reply",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { role: "assistant", content: [{ type: "text", text: "Delivered once." }] },
+    });
+    handleChatEvent({
+      runId: "run-source-reply",
+      sessionKey: state.currentSessionKey,
+      state: "error",
+      errorMessage: "  \t  ",
+    });
+    const error = {
+      runId: "run-source-reply",
+      sessionKey: state.currentSessionKey,
+      state: "error" as const,
+      errorMessage: "  actionable provider failure  ",
+    };
+
+    handleChatEvent(error);
+    handleChatEvent(error);
+
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledExactlyOnceWith(
+      "Delivered once.",
+      "run-source-reply",
+    );
+    expect(chatLog.addSystem).toHaveBeenCalledExactlyOnceWith(
+      "run error: actionable provider failure",
+    );
+    expect(state.activeChatRunId).toBeNull();
+  });
+
+  it.each([
+    {
+      name: "canonical persisted assistant identities",
+      sourceMetadata: { id: "message-tool-source-reply", seq: 7 },
+      finalMetadata: { id: "automatic-final-reply", seq: 8 },
+    },
+    {
+      name: "legacy assistant replies without transcript metadata",
+      sourceMetadata: undefined,
+      finalMetadata: undefined,
+    },
+  ])(
+    "keeps and deduplicates distinct same-run finals with $name",
+    ({ sourceMetadata, finalMetadata }) => {
+      const { state, chatLog, handleChatEvent } = createHandlersHarness({
+        state: { activeChatRunId: "run-message-tool" },
+      });
+      const sourceReply = {
+        role: "assistant",
+        content: [{ type: "text", text: "Visible progress from the targetless message tool." }],
+        ...(sourceMetadata ? { __openclaw: sourceMetadata } : {}),
+      };
+      const automaticReply = {
+        role: "assistant",
+        content: [{ type: "text", text: "Visible automatic final reply." }],
+        ...(finalMetadata ? { __openclaw: finalMetadata } : {}),
+      };
+      const sourceEvent = {
+        runId: "run-message-tool",
+        sessionKey: state.currentSessionKey,
+        state: "final" as const,
+        message: sourceReply,
+      };
+      const finalEvent = {
+        runId: "run-message-tool",
+        sessionKey: state.currentSessionKey,
+        state: "final" as const,
+        message: automaticReply,
+      };
+
+      handleChatEvent(sourceEvent);
+      handleChatEvent(finalEvent);
+      handleChatEvent(finalEvent);
+
+      expect(chatLog.finalizeAssistant).toHaveBeenCalledTimes(2);
+      expect(chatLog.finalizeAssistant).toHaveBeenNthCalledWith(
+        1,
+        "Visible progress from the targetless message tool.",
+        "run-message-tool",
+      );
+      expect(chatLog.finalizeAssistant).toHaveBeenNthCalledWith(
+        2,
+        "Visible automatic final reply.",
+        "run-message-tool",
+      );
+      expect(state.activeChatRunId).toBeNull();
+    },
+  );
+
+  it("keeps a newer response streaming when a completed run fails afterward", () => {
+    const { state, chatLog, setActivityStatus, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-completed" },
+    });
+
+    handleChatEvent({
+      runId: "run-completed",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { role: "assistant", content: [{ type: "text", text: "Delivered once." }] },
+    });
+    handleChatEvent({
+      runId: "run-newer",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "Newer response" },
+    });
+    setActivityStatus.mockClear();
+
+    handleChatEvent({
+      runId: "run-completed",
+      sessionKey: state.currentSessionKey,
+      state: "error",
+      errorMessage: "late provider failure",
+    });
+
+    expect(state.activeChatRunId).toBe("run-newer");
+    expect(chatLog.updateAssistant).toHaveBeenLastCalledWith("Newer response", "run-newer");
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledExactlyOnceWith(
+      "Delivered once.",
+      "run-completed",
+    );
+    expect(chatLog.addSystem).toHaveBeenCalledExactlyOnceWith("run error: late provider failure");
+    expect(setActivityStatus).not.toHaveBeenCalledWith("error");
+    expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
+  });
+
+  it("does not duplicate an aborted run when its terminal event is replayed", () => {
+    const { state, chatLog, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-abort-replay" },
+    });
+    const aborted = {
+      runId: "run-abort-replay",
+      sessionKey: state.currentSessionKey,
+      state: "aborted" as const,
+      errorMessage: "cancelled by user",
+    };
+
+    handleChatEvent(aborted);
+    handleChatEvent(aborted);
+
+    expect(chatLog.addSystem).toHaveBeenCalledExactlyOnceWith("run aborted: cancelled by user");
+    expect(state.activeChatRunId).toBeNull();
+  });
+
   it("drops streaming assistant when chat final has no message", () => {
     const { state, chatLog, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: null },
@@ -2477,6 +2832,40 @@ describe("tui-event-handlers: handleAgentEvent", () => {
   });
 
   describe("session.message history reload", () => {
+    it.each([
+      {
+        name: "prefers canonical persisted identity over a conflicting event envelope",
+        metadata: { id: "persisted-user", idempotencyKey: "persisted-run:user", seq: 7 },
+        envelope: { messageId: "envelope-user", clientRunId: "envelope-run", messageSeq: 99 },
+        expected: { messageId: "persisted-user", messageSeq: 7, runId: "persisted-run" },
+      },
+      {
+        name: "uses the envelope when canonical transcript identity is absent",
+        metadata: undefined,
+        envelope: { messageId: "envelope-user", clientRunId: "envelope-run", messageSeq: 99 },
+        expected: { messageId: "envelope-user", messageSeq: 99, runId: "envelope-run" },
+      },
+    ])("$name", ({ metadata, envelope, expected }) => {
+      const { state, chatLog, handleSessionMessageEvent } = createHandlersHarness({
+        state: { activeChatRunId: "run-existing" },
+      });
+
+      handleSessionMessageEvent({
+        sessionKey: state.currentSessionKey,
+        ...envelope,
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "Canonical cross-client prompt." }],
+          ...(metadata ? { __openclaw: metadata } : {}),
+        },
+      } satisfies SessionMessageEvent);
+
+      expect(chatLog.addLiveUser).toHaveBeenCalledExactlyOnceWith(
+        "Canonical cross-client prompt.",
+        expected,
+      );
+    });
+
     it.each([
       { identity: "transcript metadata", includeMessageMetadata: true },
       { identity: "gateway event envelope", includeMessageMetadata: false },

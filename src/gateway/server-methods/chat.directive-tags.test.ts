@@ -805,6 +805,7 @@ function expectUserUpdateIdentity(update: ReturnType<typeof findUserUpdate>) {
     agentId: "main",
     sessionId: mockState.sessionId,
     sessionKey: "main",
+    storePath: path.join(path.dirname(mockState.transcriptPath), "sessions.json"),
   });
   expect(update?.sessionKey).toBe("main");
   expect(update?.agentId).toBe("main");

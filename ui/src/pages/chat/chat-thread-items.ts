@@ -1,8 +1,12 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveToolUseId } from "../../../../src/chat/tool-content.js";
 import { escapeRegExp } from "../../../../src/shared/regexp.js";
-import type { ChatItem, NormalizedMessage, ToolCard } from "../../lib/chat/chat-types.ts";
-import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type {
+  ChatItem,
+  ChatQueueItem,
+  NormalizedMessage,
+  ToolCard,
+} from "../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import {
   normalizeMessage,
@@ -12,6 +16,11 @@ import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { extractToolCardsCached, extractToolPreview } from "../../lib/chat/tool-cards.ts";
 import { fnv1aUtf16 } from "../../lib/fnv1a.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import {
+  isUnprovenImportedChatThreadMessage,
+  readChatThreadDuplicateSourceKey,
+  readChatThreadSourceMessageId,
+} from "./chat-thread-source-identity.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
 export function appendCanvasBlockToAssistantMessage(
@@ -329,25 +338,8 @@ export function userTurnSendIdentity(message: unknown): string | null {
   return `send:${base}`;
 }
 
-function sourceMessageId(message: unknown): string | null {
-  const record = asRecord(message);
-  if (!record) {
-    return null;
-  }
-  const openclawId = asRecord(record["__openclaw"])?.id;
-  if (typeof openclawId === "string" && openclawId.trim()) {
-    return openclawId.trim();
-  }
-  const messageId = typeof record.messageId === "string" ? record.messageId.trim() : "";
-  if (messageId) {
-    return messageId;
-  }
-  const id = typeof record.id === "string" ? record.id.trim() : "";
-  return id || null;
-}
-
 export function persistedMessageEntryId(message: unknown): string | null {
-  return isPendingSendMessage(message) ? null : sourceMessageId(message);
+  return isPendingSendMessage(message) ? null : readChatThreadSourceMessageId(message);
 }
 
 function transcriptMessageSourceKey(message: unknown): string | null {
@@ -362,7 +354,7 @@ function transcriptMessageSourceKey(message: unknown): string | null {
   if (sendIdentity) {
     return sendIdentity;
   }
-  const id = sourceMessageId(message);
+  const id = readChatThreadSourceMessageId(message);
   if (id) {
     return `id:${id}`;
   }
@@ -424,11 +416,7 @@ function collapseDuplicateSourceKey(message: unknown): string | null {
     return null;
   }
   const role = normalizeRoleForGrouping(normalized.role).toLowerCase();
-  if (role !== "assistant") {
-    return null;
-  }
-  const id = sourceMessageId(message);
-  return id ? `${role}:${id}` : null;
+  return readChatThreadDuplicateSourceKey(message, role, readChatThreadSourceMessageId(message));
 }
 
 function prefersNativeChatSurface(message: unknown): boolean {
@@ -510,16 +498,20 @@ export function collapseSequentialDuplicateMessages(items: ChatItem[]): ChatItem
   const collapsed: ChatItem[] = [];
   let previousSignature: string | null = null;
   let previousSourceKey: string | null = null;
+  let previousSourceIsUnprovenImport = false;
 
   for (const item of items) {
     if (item.kind !== "message") {
       collapsed.push(item);
       previousSignature = null;
       previousSourceKey = null;
+      previousSourceIsUnprovenImport = false;
       continue;
     }
     const signature = collapseDuplicateDisplaySignature(item.message);
     const sourceKey = collapseDuplicateSourceKey(item.message);
+    const sourceIsUnprovenImport =
+      sourceKey === null && isUnprovenImportedChatThreadMessage(item.message);
     const previous = collapsed[collapsed.length - 1];
     if (
       sourceKey &&
@@ -537,6 +529,8 @@ export function collapseSequentialDuplicateMessages(items: ChatItem[]): ChatItem
       signature &&
       previousSignature === signature &&
       previous?.kind === "message" &&
+      !sourceIsUnprovenImport &&
+      !previousSourceIsUnprovenImport &&
       !(sourceKey && previousSourceKey && sourceKey !== previousSourceKey)
     ) {
       previous.duplicateCount = (previous.duplicateCount ?? 1) + 1;
@@ -545,6 +539,7 @@ export function collapseSequentialDuplicateMessages(items: ChatItem[]): ChatItem
     collapsed.push(item);
     previousSignature = signature;
     previousSourceKey = sourceKey;
+    previousSourceIsUnprovenImport = sourceIsUnprovenImport;
   }
 
   return collapsed;
