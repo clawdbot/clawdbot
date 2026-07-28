@@ -15,7 +15,11 @@ const FORCE_KILL_GRACE_MS = 5000;
  * Options for executing shell commands.
  */
 export interface ExecOptions {
-  /** AbortSignal to cancel the command */
+  /**
+   * AbortSignal to cancel the command. Firing this signal rejects the
+   * returned promise with an "Operation aborted" error (the process is
+   * killed first); it never resolves as a completed/killed result.
+   */
   signal?: AbortSignal;
   /** Timeout in milliseconds */
   timeout?: number;
@@ -35,6 +39,7 @@ export interface ExecResult {
   stderrTruncatedChars?: number;
   outputLimitExceeded?: "stdout" | "stderr";
   code: number;
+  /** True when `timeout` or the output-limit guard killed the process. Caller-initiated `signal` cancellation rejects instead of resolving here. */
   killed: boolean;
 }
 
