@@ -317,7 +317,6 @@ export async function finalizeChatSendNonAgentReplies(params: {
       ...(persistedContentForAppend?.length ? { content: persistedContentForAppend } : {}),
       sessionId,
       storePath: latestStorePath,
-      sessionFile: latestEntry?.sessionFile,
       agentId: transcriptAgentId,
       createIfMissing: true,
       idempotencyKey: clientRunId,

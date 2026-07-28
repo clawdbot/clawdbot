@@ -1,4 +1,3 @@
-import { parseSqliteSessionFileMarker } from "../../../config/sessions/sqlite-marker.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { formatAssistantErrorText } from "../../embedded-agent-helpers.js";
 import { createAgentRunDirectAbortError } from "../../run-termination.js";
@@ -9,6 +8,7 @@ import { createEmbeddedRunReplayState, observeReplayMetadata } from "../replay-s
 import type { EmbeddedAgentRunResult } from "../types.js";
 import type { createUsageAccumulator } from "../usage-accumulator.js";
 import { mergeUsageIntoAccumulator } from "../usage-accumulator.js";
+import { applyEmbeddedAttemptSessionIdentity } from "./attempt-session-identity.js";
 import type { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import { resolveRunFailoverDecision } from "./failover-policy.js";
@@ -41,6 +41,7 @@ import {
 
 type PreparedRuntime = Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>>;
 type SessionPromptState = ReturnType<typeof createEmbeddedRunSessionPromptState>;
+
 type ReplayState = ReturnType<typeof createEmbeddedRunReplayState>;
 
 export async function normalizeEmbeddedRunAttempt(input: {
@@ -144,26 +145,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
       aborted: terminalAborted,
     });
   };
-  const previousSessionId = sessionPromptState.sessionId;
-  const previousSessionFile = sessionPromptState.sessionFile;
-  sessionPromptState.adoptSessionId(sessionIdUsed);
-  if (sessionFileUsed && sessionFileUsed !== sessionPromptState.sessionFile) {
-    sessionPromptState.sessionFile = sessionFileUsed;
-  }
-  if (
-    (sessionIdUsed && sessionIdUsed !== previousSessionId) ||
-    (sessionFileUsed && sessionFileUsed !== previousSessionFile)
-  ) {
-    const marker = parseSqliteSessionFileMarker(sessionPromptState.sessionFile);
-    sessionPromptState.sessionTarget = marker
-      ? {
-          agentId: marker.agentId,
-          sessionId: marker.sessionId,
-          sessionKey: runInput.resolvedSessionKey,
-          storePath: marker.storePath,
-        }
-      : undefined;
-  }
+  applyEmbeddedAttemptSessionIdentity({ sessionPromptState, sessionFileUsed, sessionIdUsed });
   const bootstrapPromptWarningSignaturesSeen =
     attempt.bootstrapPromptWarningSignaturesSeen ??
     (attempt.bootstrapPromptWarningSignature

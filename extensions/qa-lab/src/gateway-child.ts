@@ -41,6 +41,7 @@ import {
   readQaChildOutput,
 } from "./child-output.js";
 import { assertRepoBoundPath, ensureRepoBoundDirectory } from "./cli-paths.js";
+import { buildQaCodexAppServerArgs } from "./codex-app-server-args.js";
 import { QaSuiteInfraError, toQaErrorObject } from "./errors.js";
 import { formatQaGatewayLogsForError, redactQaGatewayDebugText } from "./gateway-log-redaction.js";
 import {
@@ -460,6 +461,7 @@ function buildQaForcedRuntimeEnvPatch(params: {
   providerMode: QaProviderMode;
   providerBaseUrl?: string;
   codexModelCatalogPath?: string;
+  nativeAppServerArgs?: string;
 }): NodeJS.ProcessEnv | undefined {
   if (!params.forcedRuntime) {
     return undefined;
@@ -468,7 +470,13 @@ function buildQaForcedRuntimeEnvPatch(params: {
     OPENCLAW_BUILD_PRIVATE_QA: "1",
     OPENCLAW_QA_FORCE_RUNTIME: params.forcedRuntime,
   };
-  if (params.forcedRuntime !== "codex" || params.providerMode !== "mock-openai") {
+  if (params.forcedRuntime !== "codex") {
+    return patch;
+  }
+  if (params.providerMode !== "mock-openai") {
+    patch.OPENCLAW_CODEX_APP_SERVER_ARGS = buildQaCodexAppServerArgs({
+      existingArgs: params.nativeAppServerArgs,
+    });
     return patch;
   }
   const providerBaseUrl = params.providerBaseUrl?.trim().replace(/\/+$/u, "");
@@ -478,8 +486,10 @@ function buildQaForcedRuntimeEnvPatch(params: {
   if (!params.codexModelCatalogPath) {
     throw new Error("forced Codex mock QA requires the staged native model catalog");
   }
-  const modelCatalogOverride = JSON.stringify(`model_catalog_json=${params.codexModelCatalogPath}`);
-  patch.OPENCLAW_CODEX_APP_SERVER_ARGS = `app-server -c openai_base_url=${providerBaseUrl} -c ${modelCatalogOverride} --listen stdio://`;
+  patch.OPENCLAW_CODEX_APP_SERVER_ARGS = buildQaCodexAppServerArgs({
+    providerBaseUrl,
+    modelCatalogPath: params.codexModelCatalogPath,
+  });
   patch.OPENAI_API_KEY = QA_MOCK_OPENAI_API_KEY;
   patch.CODEX_API_KEY = QA_MOCK_OPENAI_API_KEY;
   return patch;
@@ -1347,6 +1357,9 @@ export async function startQaGatewayChild(params: {
               providerMode,
               providerBaseUrl: params.providerBaseUrl,
               codexModelCatalogPath,
+              nativeAppServerArgs:
+                params.runtimeEnvPatch?.OPENCLAW_CODEX_APP_SERVER_ARGS ??
+                process.env.OPENCLAW_CODEX_APP_SERVER_ARGS,
             }),
           },
           forwardHostHomeForClaudeCli: liveProviderIds.includes("claude-cli"),

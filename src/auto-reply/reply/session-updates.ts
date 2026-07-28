@@ -1,13 +1,15 @@
 /** Session update helpers for skill snapshots, compaction, and lifecycle hooks. */
 import crypto from "node:crypto";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveDefaultAgentId, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   type ExecPolicyOverrides,
   resolveNodeExecEligibility,
 } from "../../agents/exec-defaults.js";
-import { resolveCompactionSessionFile, type SessionEntry } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { patchSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import { projectCanonicalSessionEntryShape } from "../../config/sessions/store-entry-shape.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   forgetActiveSessionForShutdown,
@@ -70,12 +72,14 @@ async function persistSessionEntryUpdate(params: {
 }
 
 function emitCompactionSessionLifecycleHooks(params: {
+  agentId?: string;
   cfg: OpenClawConfig;
   sessionKey: string;
   storePath?: string;
   previousEntry: SessionEntry;
   nextEntry: SessionEntry;
 }) {
+  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
   if (params.previousEntry.sessionId) {
     forgetActiveSessionForShutdown(params.previousEntry.sessionId);
   }
@@ -85,8 +89,8 @@ function emitCompactionSessionLifecycleHooks(params: {
       sessionKey: params.sessionKey,
       sessionId: params.nextEntry.sessionId,
       storePath: params.storePath,
-      sessionFile: params.nextEntry.sessionFile,
-      agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+      sessionFile: params.sessionKey,
+      agentId,
     });
   }
   const hookRunner = getGlobalHookRunner();
@@ -95,18 +99,33 @@ function emitCompactionSessionLifecycleHooks(params: {
   }
 
   if (hookRunner.hasHooks("session_end")) {
+    const storePath =
+      agentId && params.storePath
+        ? resolveSessionStorePathForScope({
+            agentId,
+            sessionKey: params.sessionKey,
+            storePath: params.storePath,
+          })
+        : params.storePath;
     const transcript = resolveStableSessionEndTranscript({
       sessionId: params.previousEntry.sessionId,
-      storePath: params.storePath,
-      sessionFile: params.previousEntry.sessionFile,
-      agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+      storePath,
+      agentId,
     });
     const payload = buildSessionEndHookPayload({
       sessionId: params.previousEntry.sessionId,
       sessionKey: params.sessionKey,
       cfg: params.cfg,
       reason: "compaction",
-      sessionFile: transcript.sessionFile,
+      sessionFile:
+        transcript.sessionFile ??
+        (agentId && storePath
+          ? formatSqliteSessionFileMarker({
+              agentId,
+              sessionId: params.previousEntry.sessionId,
+              storePath,
+            })
+          : undefined),
       transcriptArchived: transcript.transcriptArchived,
       nextSessionId: params.nextEntry.sessionId,
     });
@@ -288,6 +307,7 @@ export async function ensureSkillSnapshot(params: {
 
 /** Increments compaction count and persists the updated session entry. */
 export async function incrementCompactionCount(params: {
+  agentId?: string;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
@@ -297,12 +317,11 @@ export async function incrementCompactionCount(params: {
   amount?: number;
   /** Token count after compaction - if provided, updates session token counts */
   tokensAfter?: number;
-  /** Session id after compaction, when the runtime rotated transcripts. */
+  /** Session id after compaction when a context engine changed identity. */
   newSessionId?: string;
-  /** Session file after compaction, when the runtime rotated transcripts. */
-  newSessionFile?: string;
 }): Promise<number | undefined> {
   const {
+    agentId,
     sessionEntry,
     sessionStore,
     sessionKey,
@@ -312,7 +331,6 @@ export async function incrementCompactionCount(params: {
     amount = 1,
     tokensAfter,
     newSessionId,
-    newSessionFile,
   } = params;
   if (!sessionStore || !sessionKey) {
     return undefined;
@@ -328,28 +346,13 @@ export async function incrementCompactionCount(params: {
     compactionCount: nextCount,
     updatedAt: now,
   };
-  const explicitNewSessionFile = normalizeOptionalString(newSessionFile);
   const sessionIdChanged = Boolean(newSessionId && newSessionId !== entry.sessionId);
-  const sessionFileChanged = Boolean(
-    explicitNewSessionFile && explicitNewSessionFile !== entry.sessionFile,
-  );
   if (sessionIdChanged && newSessionId) {
     updates.sessionId = newSessionId;
-    updates.sessionFile =
-      explicitNewSessionFile ??
-      resolveCompactionSessionFile({
-        entry,
-        sessionKey,
-        storePath,
-        ...(cfg ? { defaultAgentId: resolveDefaultAgentId(cfg) } : {}),
-        newSessionId,
-      });
     updates.usageFamilyKey = entry.usageFamilyKey ?? sessionKey;
     updates.usageFamilySessionIds = Array.from(
       new Set([...(entry.usageFamilySessionIds ?? []), entry.sessionId, newSessionId]),
     );
-  } else if (sessionFileChanged && explicitNewSessionFile) {
-    updates.sessionFile = explicitNewSessionFile;
   }
   // If tokensAfter is provided, update the cached token counts to reflect post-compaction state
   const tokensAfterCompaction = resolveNonNegativeTokenCount(tokensAfter);
@@ -364,24 +367,27 @@ export async function incrementCompactionCount(params: {
   } else if (incrementBy > 0) {
     updates.totalTokensFresh = false;
   }
-  const nextEntry = {
-    ...entry,
-    ...updates,
-  };
+  const nextEntry = projectCanonicalSessionEntryShape({ ...entry, ...updates });
   sessionStore[sessionKey] = nextEntry;
-  if (storePath) {
-    const persistedEntry = await patchSessionEntry({ storePath, sessionKey }, () => updates, {
-      fallbackEntry: nextEntry,
-    });
+  const effectiveStorePath = storePath
+    ? resolveSessionStorePathForScope({ agentId, sessionKey, storePath })
+    : undefined;
+  if (effectiveStorePath) {
+    const persistedEntry = await patchSessionEntry(
+      { ...(agentId ? { agentId } : {}), storePath: effectiveStorePath, sessionKey },
+      () => updates,
+      { fallbackEntry: nextEntry },
+    );
     if (persistedEntry) {
       sessionStore[sessionKey] = persistedEntry;
     }
   }
-  if ((sessionIdChanged || sessionFileChanged) && cfg) {
+  if (sessionIdChanged && cfg) {
     emitCompactionSessionLifecycleHooks({
+      agentId,
       cfg,
       sessionKey,
-      storePath,
+      storePath: effectiveStorePath,
       previousEntry: entry,
       nextEntry: sessionStore[sessionKey],
     });

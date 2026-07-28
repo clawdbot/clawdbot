@@ -33,7 +33,6 @@ import {
   openSessionEntryReadView,
   patchSessionEntry,
   patchSessionEntryTarget,
-  persistSessionResetLifecycle,
   persistSessionTranscriptTurn,
   readTranscriptStatsSync,
   readSessionUpdatedAt,
@@ -66,7 +65,6 @@ import {
   trimSqliteTranscriptForManualCompact,
 } from "./session-accessor.sqlite.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
-import { formatSqliteSessionFileMarker } from "./sqlite-marker.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 import type { SessionEntry } from "./types.js";
 
@@ -1093,8 +1091,8 @@ describe("session accessor seam", () => {
     if (!created.ok) {
       throw new Error("expected session creation to succeed");
     }
-    expect(created.sessionFile).toContain("sqlite:main:session-1:");
-    expect(created.entry.sessionFile).toBe(created.sessionFile);
+    expect(created.sessionFile).toBe(scope.sessionKey);
+    expect(created.entry).not.toHaveProperty("sessionFile");
     await expect(
       loadTranscriptEvents({
         agentId: "main",
@@ -1105,46 +1103,7 @@ describe("session accessor seam", () => {
     ).resolves.toEqual([expect.objectContaining({ id: "session-1", type: "session" })]);
   });
 
-  it("persists store-backed turns to SQLite when an old sessionFile path is present", async () => {
-    const legacyTranscript = path.join(tempDir, "legacy-topic.jsonl");
-    const scope = {
-      agentId: "main",
-      sessionId: "legacy-topic-session",
-      sessionKey: "agent:main:telegram:group:1:topic:2",
-      storePath,
-      sessionFile: legacyTranscript,
-    };
-    await upsertSessionEntry(
-      { sessionKey: scope.sessionKey, storePath },
-      {
-        sessionId: scope.sessionId,
-        sessionFile: legacyTranscript,
-        updatedAt: 10,
-      },
-    );
-
-    const result = await persistSessionTranscriptTurn(scope, {
-      messages: [{ message: { role: "user", content: "store-backed sqlite turn" } }],
-      touchSessionEntry: true,
-      updateMode: "none",
-    });
-
-    expect(result.sessionFile).toContain("sqlite:main:legacy-topic-session:");
-    const entry = loadSessionEntry({ sessionKey: scope.sessionKey, storePath });
-    expect(entry?.sessionFile).toBe(result.sessionFile);
-    await expect(loadTranscriptEvents(scope)).resolves.toContainEqual(
-      expect.objectContaining({
-        type: "message",
-        message: expect.objectContaining({
-          role: "user",
-          content: "store-backed sqlite turn",
-        }),
-      }),
-    );
-    expect(fs.existsSync(legacyTranscript)).toBe(false);
-  });
-
-  it("resolves default-store SQLite transcript turn markers before appending", async () => {
+  it("resolves the default-store SQLite identity before appending", async () => {
     const stateDir = path.join(tempDir, "state");
     const expectedStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
     const scope = {
@@ -1170,9 +1129,9 @@ describe("session accessor seam", () => {
       updateMode: "none",
     });
 
-    expect(result.sessionFile).toBe(`sqlite:main:${scope.sessionId}:${expectedStorePath}`);
     const persistedScope = { ...scope, storePath: expectedStorePath };
-    expect(loadSessionEntry(persistedScope)?.sessionFile).toBe(result.sessionFile);
+    expect(result.sessionEntry).not.toHaveProperty("sessionFile");
+    expect(loadSessionEntry(persistedScope)).not.toHaveProperty("sessionFile");
     await expect(loadTranscriptEvents(persistedScope)).resolves.toContainEqual(
       expect.objectContaining({
         type: "message",
@@ -1182,47 +1141,6 @@ describe("session accessor seam", () => {
         }),
       }),
     );
-  });
-
-  it("guards store-backed turns in SQLite when an old sessionFile path is present", async () => {
-    const legacyTranscript = path.join(tempDir, "guarded-legacy-topic.jsonl");
-    const scope = {
-      agentId: "main",
-      sessionId: "guarded-topic-session",
-      sessionKey: "agent:main:telegram:group:1:topic:3",
-      storePath,
-      sessionFile: legacyTranscript,
-    };
-    await upsertSessionEntry(
-      { sessionKey: scope.sessionKey, storePath },
-      {
-        sessionId: scope.sessionId,
-        sessionFile: legacyTranscript,
-        updatedAt: 10,
-      },
-    );
-
-    const result = await persistSessionTranscriptTurn(scope, {
-      expectedSessionId: scope.sessionId,
-      messages: [{ message: { role: "assistant", content: "guarded sqlite turn" } }],
-      touchSessionEntry: true,
-      updateMode: "none",
-    });
-
-    expect(result.rejectedReason).toBeUndefined();
-    expect(result.sessionFile).toContain("sqlite:main:guarded-topic-session:");
-    const entry = loadSessionEntry({ sessionKey: scope.sessionKey, storePath });
-    expect(entry?.sessionFile).toBe(result.sessionFile);
-    await expect(loadTranscriptEvents(scope)).resolves.toContainEqual(
-      expect.objectContaining({
-        type: "message",
-        message: expect.objectContaining({
-          role: "assistant",
-          content: "guarded sqlite turn",
-        }),
-      }),
-    );
-    expect(fs.existsSync(legacyTranscript)).toBe(false);
   });
 
   it("appends SQLite turns to the active transcript leaf", async () => {
@@ -1318,90 +1236,6 @@ describe("session accessor seam", () => {
       sessionId: "pending-session",
       initializationPending: true,
     });
-  });
-
-  it("commits reply session initialization with a guarded snapshot", async () => {
-    const sessionKey = "agent:main:main";
-    const previousTranscript = path.join(tempDir, "previous.jsonl");
-    fs.writeFileSync(
-      previousTranscript,
-      `${JSON.stringify({
-        type: "session",
-        version: 3,
-        id: "previous-session",
-        timestamp: new Date().toISOString(),
-      })}\n`,
-      "utf8",
-    );
-    await upsertSessionEntry(
-      { sessionKey, storePath },
-      {
-        sessionFile: previousTranscript,
-        sessionId: "previous-session",
-        updatedAt: 10,
-      },
-    );
-
-    const snapshot = loadMainInitializationSnapshot(sessionKey);
-    const committed = await commitReplySessionInitialization({
-      activeSessionKey: sessionKey,
-      agentId: "main",
-      expectedRevision: snapshot.revision,
-      previousEntry: snapshot.currentEntry,
-      sessionEntry: {
-        sessionId: "next-session",
-        updatedAt: 20,
-      },
-      sessionKey,
-      storePath,
-    });
-
-    expect(committed.ok).toBe(true);
-    if (!committed.ok) {
-      throw new Error("expected reply session initialization to commit");
-    }
-    expect(committed.sessionEntry.sessionFile).toBe(`sqlite:main:next-session:${storePath}`);
-    expect(committed.sessionStoreView[sessionKey]).toMatchObject({
-      sessionId: "next-session",
-      sessionFile: committed.sessionEntry.sessionFile,
-    });
-    expect(committed.previousSessionTranscript.transcriptArchived).toBe(true);
-    expect(fs.existsSync(previousTranscript)).toBe(false);
-  });
-
-  it("does not reuse the previous transcript file when initialization rotates session ids", async () => {
-    const sessionKey = "agent:main:main";
-    const previousTranscript = path.join(tempDir, "previous-rotation.jsonl");
-    await upsertSessionEntry(
-      { sessionKey, storePath },
-      {
-        sessionFile: previousTranscript,
-        sessionId: "previous-rotation",
-        updatedAt: 10,
-      },
-    );
-
-    const snapshot = loadMainInitializationSnapshot(sessionKey);
-    const committed = await commitReplySessionInitialization({
-      activeSessionKey: sessionKey,
-      agentId: "main",
-      expectedRevision: snapshot.revision,
-      previousEntry: snapshot.currentEntry,
-      sessionEntry: {
-        ...snapshot.currentEntry,
-        sessionFile: snapshot.currentEntry?.sessionFile,
-        sessionId: "next-rotation",
-        updatedAt: 20,
-      },
-      sessionKey,
-      storePath,
-    });
-
-    expect(committed.ok).toBe(true);
-    if (!committed.ok) {
-      throw new Error("expected reply session initialization to commit");
-    }
-    expect(committed.sessionEntry.sessionFile).toBe(`sqlite:main:next-rotation:${storePath}`);
   });
 
   it("rejects stale reply session initialization snapshots without writing", async () => {
@@ -2358,86 +2192,8 @@ describe("session accessor seam", () => {
     ).resolves.toEqual([]);
   });
 
-  it("persists reset lifecycle entry changes with an in-log boundary", async () => {
-    const now = Date.now();
-    const sessionKey = "agent:main:main";
-    const previousTranscript = path.join(tempDir, "previous-session.jsonl");
-    const previousEntry: SessionEntry = {
-      sessionFile: previousTranscript,
-      sessionId: "previous-session",
-      updatedAt: now,
-    };
-    const nextEntry: SessionEntry = {
-      sessionFile: formatSqliteSessionFileMarker({
-        agentId: "main",
-        sessionId: previousEntry.sessionId,
-        storePath,
-      }),
-      sessionId: previousEntry.sessionId,
-      updatedAt: now + 1,
-    };
-    fs.writeFileSync(
-      previousTranscript,
-      [
-        JSON.stringify({ type: "session", id: "previous-session" }),
-        JSON.stringify({
-          id: "msg-user",
-          message: { role: "user", content: "hello" },
-          parentId: null,
-          timestamp: "2026-06-16T00:00:00.000Z",
-          type: "message",
-        }),
-        JSON.stringify({
-          id: "msg-assistant",
-          message: { role: "assistant", content: "hi" },
-          parentId: "msg-user",
-          timestamp: "2026-06-16T00:00:01.000Z",
-          type: "message",
-        }),
-      ].join("\n") + "\n",
-      "utf-8",
-    );
-    await upsertSessionEntry({ sessionKey, storePath }, previousEntry);
-
-    const result = await persistSessionResetLifecycle({
-      agentId: "main",
-      cleanupPreviousTranscript: true,
-      nextEntry,
-      nextSessionFile: nextEntry.sessionFile!,
-      previousEntry,
-      previousSessionId: previousEntry.sessionId,
-      sessionKey,
-      storePath,
-    });
-
-    expect(result.replayedMessages).toBe(0);
-    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject(nextEntry);
-    expect(fs.existsSync(previousTranscript)).toBe(true);
-    const archivedPreviousTranscripts = fs
-      .readdirSync(tempDir)
-      .filter((file) => file.startsWith("previous-session.jsonl.reset."));
-    expect(archivedPreviousTranscripts).toEqual([]);
-    await expect(
-      loadTranscriptEvents({
-        agentId: "main",
-        sessionId: previousEntry.sessionId,
-        sessionKey,
-        storePath,
-      }),
-    ).resolves.toEqual([
-      expect.objectContaining({ id: "msg-user", parentId: null }),
-      expect.objectContaining({ id: "msg-assistant", parentId: "msg-user" }),
-      expect.objectContaining({
-        type: "reset",
-        reason: "reset",
-        firstKeptEntryId: "msg-user",
-      }),
-    ]);
-  });
-
   it("trims a manual compact transcript and clears stale token metadata", async () => {
     const sessionId = "11111111-1111-4111-8111-111111111111";
-    const manualTranscriptPath = path.join(tempDir, `${sessionId}.jsonl`);
     const scope = {
       agentId: "main",
       sessionId,
@@ -2467,7 +2223,6 @@ describe("session accessor seam", () => {
       contextBudgetStatus,
       inputTokens: 10,
       outputTokens: 20,
-      sessionFile: manualTranscriptPath,
       sessionId,
       totalTokens: 30,
       totalTokensFresh: true,
@@ -2522,7 +2277,6 @@ describe("session accessor seam", () => {
     ]);
     const updatedEntry = loadSessionEntry(scope);
     expect(updatedEntry).toMatchObject({
-      sessionFile: manualTranscriptPath,
       sessionId,
       updatedAt: 500,
     });
@@ -2850,10 +2604,10 @@ describe("session accessor seam", () => {
     expect(result.appendedCount).toBe(2);
     await expect(loadTranscriptEvents(scope)).resolves.toHaveLength(3);
     expect(loadSessionEntry(scope)).toMatchObject({
-      sessionFile: result.sessionFile,
       sessionId: scope.sessionId,
       updatedAt: expect.any(Number),
     });
+    expect(result).not.toHaveProperty("sessionFile");
     expect(loadSessionEntry(scope)?.updatedAt).toBeGreaterThanOrEqual(10);
     expect(updates).toEqual([
       {
@@ -3211,6 +2965,37 @@ describe("session accessor seam", () => {
     await expect(loadTranscriptEvents(scope)).resolves.toEqual([]);
   });
 
+  it("exposes only transcript identity to append predicates", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "session-predicate-context",
+      sessionKey: "agent:main:predicate-context",
+      storePath,
+    };
+    await upsertSessionEntry(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: 10,
+      lastRunError: "private entry state",
+    });
+    let predicateContext: unknown;
+
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          message: { role: "assistant", content: "not appended", timestamp: 100 },
+          shouldAppend: (context) => {
+            predicateContext = context;
+            return false;
+          },
+        },
+      ],
+      updateMode: "file-only",
+    });
+
+    expect(predicateContext).toEqual(scope);
+    expect(predicateContext).not.toHaveProperty("sessionEntry");
+  });
+
   it("rejects a guarded transcript turn when same-session lifecycle ownership changes", async () => {
     const scope = {
       agentId: "main",
@@ -3335,7 +3120,7 @@ describe("session accessor seam", () => {
     await expect(loadTranscriptEvents(scope)).resolves.toEqual([]);
   });
 
-  it("routes SQLite transcript turn appends through an active owned file lock", async () => {
+  it("routes SQLite transcript turn appends through an active owned target lock", async () => {
     const scope = {
       agentId: "main",
       sessionFile: transcriptPath,
@@ -3348,8 +3133,9 @@ describe("session accessor seam", () => {
 
     await withOwnedSessionTranscriptWrites(
       {
-        sessionFile: transcriptPath,
+        sessionFile: scope.sessionKey,
         sessionKey: scope.sessionKey,
+        sessionTarget: scope,
         withSessionWriteLock: async (run, options) => {
           publishOptions.push(options?.publishOwnedWrite);
           const result = await run();
@@ -3380,7 +3166,7 @@ describe("session accessor seam", () => {
     await expect(loadTranscriptEvents(scope)).resolves.toHaveLength(2);
   });
 
-  it("resolves store-backed runtime transcript targets with stale file paths to markers", async () => {
+  it("resolves store-backed runtime transcript targets from structured identity", async () => {
     const staleSessionFile = path.join(tempDir, "session-1.jsonl");
     const scope = {
       agentId: "main",
@@ -3388,7 +3174,6 @@ describe("session accessor seam", () => {
       sessionKey: "agent:main:main",
       storePath,
     };
-    const marker = `sqlite:main:${scope.sessionId}:${storePath}`;
 
     await upsertSessionEntry(scope, {
       sessionId: scope.sessionId,
@@ -3399,34 +3184,12 @@ describe("session accessor seam", () => {
     const readTarget = await resolveSessionTranscriptRuntimeReadTarget(scope);
     const writeTarget = await resolveSessionTranscriptRuntimeTarget(scope);
 
-    expect(readTarget.sessionFile).toBe(marker);
-    expect(writeTarget.sessionFile).toBe(marker);
-    expect(loadSessionEntry(scope)?.sessionFile).toBe(staleSessionFile);
+    expect(readTarget).toEqual(scope);
+    expect(writeTarget).toEqual(scope);
+    expect(loadSessionEntry(scope)).not.toHaveProperty("sessionFile");
   });
 
-  it("resolves SQLite-backed runtime transcript targets to markers", async () => {
-    const scope = {
-      agentId: "main",
-      sessionId: "session-1",
-      sessionKey: "agent:main:main",
-      storePath,
-    };
-    const marker = `sqlite:main:${scope.sessionId}:${storePath}`;
-
-    await upsertSessionEntry(scope, {
-      sessionId: scope.sessionId,
-      sessionFile: marker,
-      updatedAt: 10,
-    });
-
-    const readTarget = await resolveSessionTranscriptRuntimeReadTarget(scope);
-    const writeTarget = await resolveSessionTranscriptRuntimeTarget(scope);
-
-    expect(readTarget.sessionFile).toBe(marker);
-    expect(writeTarget.sessionFile).toBe(marker);
-  });
-
-  it("normalizes imported legacy session transcript paths to SQLite markers", async () => {
+  it("drops imported legacy session transcript paths from canonical rows", async () => {
     const sessionKey = "agent:main:main";
     await importSqliteSessionRows({
       agentId: "main",
@@ -3444,8 +3207,8 @@ describe("session accessor seam", () => {
         agentId: "main",
         sessionKey,
         storePath,
-      })?.entry.sessionFile,
-    ).toBe(`sqlite:main:session-1:${path.join(tempDir, "openclaw-agent.sqlite")}`);
+      })?.entry,
+    ).not.toHaveProperty("sessionFile");
   });
 
   it("tracks replacement and deletion transcript mutations", async () => {
@@ -3536,18 +3299,21 @@ describe("session accessor seam", () => {
     expect(readGeneration()?.generation).not.toBe(replaced);
   });
 
-  it("resolves an explicit read transcript file without agent identity", () => {
+  it("ignores an explicit legacy read file and resolves SQLite identity", () => {
     const explicitSessionFile = path.join(tempDir, "explicit-read-session.jsonl");
 
     const target = resolveSessionTranscriptReadTarget({
+      agentId: "main",
       sessionFile: explicitSessionFile,
       sessionId: "session-1",
     });
 
-    expect(target).toEqual({
-      sessionFile: explicitSessionFile,
+    expect(target).toMatchObject({
+      agentId: "main",
       sessionId: "session-1",
+      storePath: expect.stringMatching(/sessions\.json$/),
     });
+    expect(target).not.toHaveProperty("sessionFile");
   });
 
   it("does not expose legacy custom transcript paths as read fallbacks after SQLite migration", async () => {
@@ -3569,7 +3335,12 @@ describe("session accessor seam", () => {
       storePath,
     });
 
-    expect(target.sessionFile).toContain("sqlite:main:custom-topic-session:");
+    expect(target).toEqual({
+      agentId: "main",
+      sessionId: "custom-topic-session",
+      sessionKey,
+      storePath,
+    });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -301,6 +301,22 @@ describe("fetchCopilotUsage", () => {
     });
   });
 
+  it.each([
+    ["null", null],
+    ["an array", []],
+  ])("returns an empty window list for a non-object %s payload", async (_label, payload) => {
+    const mockFetch = createProviderUsageFetch(async () => makeResponse(200, payload));
+
+    const result = await fetchCopilotUsage("token", 5000, mockFetch);
+
+    expect(result).toEqual({
+      provider: "github-copilot",
+      displayName: "Copilot",
+      windows: [],
+      plan: undefined,
+    });
+  });
+
   it("bounds the usage read and cancels the stream when the body exceeds the JSON byte cap", async () => {
     // Larger than the shared 16 MiB readProviderJsonResponse cap so the bounded reader cancels the
     // stream mid-flight; if the cap were removed the unbounded res.json() would buffer the whole body.

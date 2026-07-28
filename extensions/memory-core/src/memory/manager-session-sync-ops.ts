@@ -64,6 +64,13 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     return {
       generatedByDreamingNarrative: entry.generatedByDreamingNarrative === true,
       generatedByCronRun: entry.generatedByCronRun === true,
+      ...(entry.transcriptSource === "sqlite" && entry.storePath
+        ? {
+            agentId: entry.agentId,
+            sessionId: entry.sessionId,
+            storePath: entry.storePath,
+          }
+        : {}),
       ...(entry.sessionKey ? { sessionKey: entry.sessionKey } : {}),
       ...(entry.updatedAtMs !== undefined ? { updatedAtMs: entry.updatedAtMs } : {}),
     };

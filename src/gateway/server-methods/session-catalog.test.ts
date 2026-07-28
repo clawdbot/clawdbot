@@ -2,13 +2,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { gatewaySubagentState } from "../../plugins/runtime/gateway-bindings.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
-import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
+import {
+  listSessionCatalogEntries,
+  type SessionCatalogProvider,
+} from "../../plugins/session-catalog.js";
 
 const hoisted = vi.hoisted(() => ({
   activeRegistry: { sessionCatalogs: [] as unknown[] },
   pinnedSessionExtensionRegistry: undefined as { sessionCatalogs: unknown[] } | undefined,
   listSessionEntriesReadOnly: vi.fn<
-    (scope?: { agentId?: string }) => Array<{
+    (scope?: { agentId?: string; clone?: boolean; projection?: "full" | "list" }) => Array<{
       sessionKey: string;
       entry: {
         createdActor?: { type: "human" | "agent" | "system"; id?: string };
@@ -246,10 +249,51 @@ describe("session catalog Gateway methods", () => {
       ],
     });
     expect(hoisted.listSessionEntriesReadOnly).toHaveBeenCalledOnce();
-    expect(hoisted.listSessionEntriesReadOnly).toHaveBeenCalledWith({ agentId: "main" });
+    expect(hoisted.listSessionEntriesReadOnly).toHaveBeenCalledWith({
+      agentId: "main",
+      clone: false,
+      projection: "list",
+    });
   });
 
-  it("shares one per-agent entry snapshot across catalogs and creator projection", async () => {
+  it("does not clone the shared list projection for each catalog request", async () => {
+    const storedEntries = [
+      {
+        sessionKey: "agent:main:shared",
+        entry: { createdActor: { type: "agent" as const, id: "worker" }, updatedAt: 1 },
+      },
+    ];
+    hoisted.listSessionEntriesReadOnly.mockImplementation((scope) =>
+      scope?.clone === false ? storedEntries : structuredClone(storedEntries),
+    );
+    hoisted.activeRegistry.sessionCatalogs = [
+      {
+        provider: provider("claude", {
+          list: vi.fn(async ({ sessionEntries }) => {
+            sessionEntries?.entriesForAgent("main");
+            return [];
+          }),
+        }),
+      },
+    ];
+    const cloneSpy = vi.spyOn(globalThis, "structuredClone");
+    try {
+      await call("sessions.catalog.list", {});
+      await call("sessions.catalog.list", {});
+
+      expect(cloneSpy).not.toHaveBeenCalled();
+      expect(hoisted.listSessionEntriesReadOnly).toHaveBeenCalledTimes(2);
+      expect(hoisted.listSessionEntriesReadOnly).toHaveBeenLastCalledWith({
+        agentId: "main",
+        clone: false,
+        projection: "list",
+      });
+    } finally {
+      cloneSpy.mockRestore();
+    }
+  });
+
+  it("shares one flattened entry snapshot across catalogs and creator projection", async () => {
     hoisted.listSessionEntriesReadOnly.mockReturnValue([
       {
         sessionKey: "agent:main:alpha-adopted",
@@ -260,12 +304,14 @@ describe("session catalog Gateway methods", () => {
         entry: { createdActor: { type: "system", id: "scheduler" }, updatedAt: 1 },
       },
     ]);
+    const flattenedEntries: unknown[] = [];
+    const runtime = createPluginRuntime();
     const catalogProvider = (id: string, sessionKey: string) =>
       provider(id, {
         list: vi.fn(async ({ sessionEntries }) => {
-          const adopted = sessionEntries
-            ?.entriesForAgent("main")
-            .find((candidate: { sessionKey: string }) => candidate.sessionKey === sessionKey);
+          const entries = listSessionCatalogEntries({ config: {}, runtime, sessionEntries });
+          flattenedEntries.push(entries);
+          const adopted = entries.find((candidate) => candidate.sessionKey === sessionKey);
           return [
             {
               hostId: `gateway:${id}`,
@@ -296,6 +342,8 @@ describe("session catalog Gateway methods", () => {
     const respond = await call("sessions.catalog.list", {});
 
     expect(hoisted.listSessionEntriesReadOnly).toHaveBeenCalledOnce();
+    expect(flattenedEntries).toHaveLength(2);
+    expect(flattenedEntries[0]).toBe(flattenedEntries[1]);
     expect(respond).toHaveBeenCalledWith(true, {
       catalogs: [
         {

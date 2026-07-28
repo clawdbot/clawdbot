@@ -26,7 +26,11 @@ import {
   normalizeConversationReadInvocationOrigin,
   type ConversationReadInvocationOrigin,
 } from "../../channels/plugins/conversation-read-origin.js";
-import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
+import {
+  dispatchChannelMessageAction,
+  prepareExternalMessageActionTargetForResolution,
+  shouldDeferExternalMessageActionTargetResolution,
+} from "../../channels/plugins/message-action-dispatch.js";
 import type {
   ChannelId,
   ChannelMessageActionName,
@@ -507,6 +511,26 @@ async function resolveChannel(
     params.channel = selection.channel;
   }
   return selection.channel;
+}
+
+function enforceCrossProviderEgressPolicyBeforeTargetResolution(params: {
+  channel: ChannelId;
+  action: ChannelMessageActionName;
+  args: Record<string, unknown>;
+  toolContext?: ChannelThreadingToolContext;
+  cfg: OpenClawConfig;
+  agentId?: string | null;
+}): void {
+  const currentProvider = params.toolContext?.currentChannelProvider;
+  if (!currentProvider || currentProvider === params.channel) {
+    return;
+  }
+  // Cross-context egress policy applies to direct and delegated callers alike;
+  // direct origin bypasses only the conversation-read visibility gate. A
+  // provider mismatch needs no target interpretation, so reject it before an
+  // external resolver can perform provider I/O. Same-provider aliases still
+  // wait for canonicalization before the full policy check below.
+  enforceCrossContextPolicy(params);
 }
 
 function addCandidateAndUnprefixedAlias(candidates: Set<string>, value?: string | null) {
@@ -1945,6 +1969,48 @@ export async function runMessageAction(
     params.accountId = accountId;
   }
   const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
+  enforceCrossProviderEgressPolicyBeforeTargetResolution({
+    channel,
+    action,
+    args: params,
+    toolContext: input.toolContext,
+    cfg,
+    agentId: resolvedAgentId,
+  });
+  const delegatesActionToGateway =
+    Boolean(input.gateway) &&
+    channelPlugin?.actions?.resolveExecutionMode?.({ action }) === "gateway";
+  const defersExternalTargetResolution =
+    delegatesActionToGateway &&
+    !dryRun &&
+    shouldDeferExternalMessageActionTargetResolution({
+      channel,
+      action,
+      cfg,
+      params,
+      accountId: accountId ?? undefined,
+      conversationReadOrigin: normalizeConversationReadInvocationOrigin(
+        input.conversationReadOrigin,
+      ),
+    });
+  if (!delegatesActionToGateway || dryRun) {
+    const authorization = input.messageActionAuthorization;
+    params = prepareExternalMessageActionTargetForResolution({
+      channel,
+      action,
+      cfg,
+      params,
+      accountId: accountId ?? undefined,
+      requesterAccountId:
+        authorization !== undefined
+          ? authorization.requesterAccountId
+          : (input.requesterAccountId ?? undefined),
+      conversationReadOrigin: normalizeConversationReadInvocationOrigin(
+        input.conversationReadOrigin,
+      ),
+      toolContext: authorization !== undefined ? authorization.toolContext : input.toolContext,
+    });
+  }
   const normalizationPolicy = resolveAttachmentMediaPolicy({
     sandboxRoot: input.sandboxRoot,
     mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, resolvedAgentId),
@@ -2014,13 +2080,15 @@ export async function runMessageAction(
     await hydrateActionAttachmentParams();
   }
 
-  const resolvedTarget = await resolveActionTarget({
-    cfg,
-    channel,
-    action,
-    args: params,
-    accountId,
-  });
+  const resolvedTarget = defersExternalTargetResolution
+    ? undefined
+    : await resolveActionTarget({
+        cfg,
+        channel,
+        action,
+        args: params,
+        accountId,
+      });
 
   enforceCrossContextPolicy({
     channel,
