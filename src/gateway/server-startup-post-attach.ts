@@ -1215,6 +1215,7 @@ export async function startGatewayPostAttachRuntime(
             await loadMainSessionRestartRecoveryModule();
           mainSessionRecoverySidecar = scheduleRestartAbortedMainSessionRecovery({
             cfg: params.cfgAtStart,
+            delayMs: 0,
             gatewayRuntime: params.recoveryRuntime,
           });
         } catch (err) {

@@ -415,6 +415,7 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(log.info).toHaveBeenCalledWith("gateway ready");
     expect(hoisted.scheduleRestartAbortedMainSessionRecovery).toHaveBeenCalledWith({
       cfg: { hooks: { internal: { enabled: false } } },
+      delayMs: 0,
       gatewayRuntime: expect.any(Object),
     });
     expect(hoisted.scheduleSubagentOrphanRecovery).toHaveBeenCalledWith();

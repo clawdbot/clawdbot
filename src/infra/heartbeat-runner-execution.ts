@@ -4,6 +4,7 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import { listActiveEmbeddedRunSessionKeys } from "../agents/embedded-agent-runner/run-state.js";
+import { transitionMainSessionRecovery } from "../agents/main-session-recovery-state.js";
 import {
   resolveHeartbeatReplyPayload,
   resolveHeartbeatTerminalToolFailure,
@@ -50,6 +51,7 @@ import { CommandLane } from "../process/lanes.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { getAgentEventLifecycleGeneration } from "./agent-events.js";
 import { formatErrorMessage } from "./errors.js";
 import { isWithinActiveHours } from "./heartbeat-active-hours.js";
 import { emitHeartbeatEvent } from "./heartbeat-events.js";
@@ -244,19 +246,26 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
   // Phase 2: Stronger heartbeat deferral while a final delivery replay is pending.
   // Plain `updatedAt` changes are normal for heartbeat sessions and should not
   // suppress heartbeat runs; only defer when final delivery recovery is active.
-  const { entry: recentSessionEntry } = resolveHeartbeatSession(
+  const { sessionKey: recentSessionKey, entry: recentSessionEntry } = resolveHeartbeatSession(
     cfg,
     agentId,
     heartbeat,
     opts.sessionKey,
   );
-  // Restart recovery owns the session before its delayed dispatch; automatic
-  // heartbeats must not race the interrupted turn while that owner is pending.
+  // Recovery can already have admitted its owner and cleared the abort flag;
+  // automatic and sentinel wakes must honor that canonical lifecycle fence.
+  const mainSessionRecovery =
+    opts.intent !== "manual" && recentSessionEntry
+      ? transitionMainSessionRecovery(recentSessionEntry, {
+          kind: "inspect",
+          lifecycleGeneration: getAgentEventLifecycleGeneration(),
+          sessionKey: recentSessionKey,
+        })
+      : undefined;
   if (
-    shouldHonorActiveReplyRuns &&
-    recentSessionEntry?.status === "running" &&
-    recentSessionEntry.abortedLastRun === true &&
-    recentSessionEntry.mainRestartRecovery
+    mainSessionRecovery?.kind === "observed" &&
+    (mainSessionRecovery.view.status === "blocked" ||
+      mainSessionRecovery.view.status === "recoverable")
   ) {
     return { kind: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT } as const;
   }
