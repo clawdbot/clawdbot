@@ -9,6 +9,7 @@ import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { formatSqliteSessionFileMarker } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { writeBackfillDiaryEntries } from "./dreaming-narrative.js";
 import { runSessionBackfill } from "./session-backfill.js";
 import { readShortTermRecallEntries } from "./short-term-promotion.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
@@ -357,6 +358,10 @@ describe("runSessionBackfill", () => {
 
   it("renders selected session candidates into the REM diary preview", async () => {
     const workspaceDir = await createIsolatedWorkspace("rem-");
+    await writeBackfillDiaryEntries({
+      workspaceDir,
+      entries: [{ isoDay: "2026-01-01", bodyLines: ["Existing backfill entry"] }],
+    });
     await seedCanonicalTranscript("rem", [
       {
         role: "user",
@@ -374,8 +379,10 @@ describe("runSessionBackfill", () => {
     });
 
     const dreams = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+    expect(dreams).toContain("Existing backfill entry");
     expect(dreams).toContain("Owner prefers dark mode for all editors");
     expect(dreams).not.toContain("No grounded facts were extracted");
+    expect(dreams.match(/openclaw:dreaming:backfill-entry/g)).toHaveLength(2);
   });
 
   it("stages idempotently, converges duplicate facts, and rolls back staged artifacts", async () => {

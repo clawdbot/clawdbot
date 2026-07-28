@@ -651,22 +651,33 @@ export async function writeBackfillDiaryEntries(params: {
           ? stripped.updated.slice(startIdx + DIARY_START_MARKER.length, endIdx)
           : "";
       const preservedBlocks = splitDiaryBlocks(inner);
-      const nextBlocks = [
-        ...preservedBlocks,
-        ...params.entries.map((entry) =>
-          buildBackfillDiaryEntry({
-            isoDay: entry.isoDay,
-            bodyLines: entry.bodyLines,
-            sourcePath: entry.sourcePath,
-            timezone: params.timezone,
-          }),
-        ),
-      ];
+      const additions = params.entries.map((entry) =>
+        buildBackfillDiaryEntry({
+          isoDay: entry.isoDay,
+          bodyLines: entry.bodyLines,
+          sourcePath: entry.sourcePath,
+          timezone: params.timezone,
+        }),
+      );
+      const existingFingerprints = new Set(
+        preservedBlocks.map((block) => normalizeDiaryBlockFingerprint(block)),
+      );
+      const appended = params.preserveExisting
+        ? additions.filter((block) => {
+            const fingerprint = normalizeDiaryBlockFingerprint(block);
+            if (existingFingerprints.has(fingerprint)) {
+              return false;
+            }
+            existingFingerprints.add(fingerprint);
+            return true;
+          })
+        : additions;
+      const nextBlocks = [...preservedBlocks, ...appended];
       return {
         content: replaceDiaryContent(stripped.updated, joinDiaryBlocks(nextBlocks)),
         result: {
           dreamsPath,
-          written: params.entries.length,
+          written: appended.length,
           replaced: stripped.removed,
         },
       };
