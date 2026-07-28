@@ -85,8 +85,40 @@ export function generateAttachmentId(): string {
 // size-bounded inline images come back; a corrupt transcript entry is skipped,
 // never fatal. 5 MiB decoded matches the gateway media cap (MEDIA_MAX_BYTES).
 const RESTORED_IMAGE_MIME = /^image\/[\w.+-]+$/u;
-const BASE64_PAYLOAD = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
 const RESTORED_ATTACHMENT_MAX_BASE64_CHARS = Math.ceil((5 * 1024 * 1024) / 3) * 4;
+
+// Iterative canonical-base64 check: the previous grouped-quantifier regex
+// overflowed the V8 regex stack below RESTORED_ATTACHMENT_MAX_BASE64_CHARS,
+// so restoring a large valid inline image threw RangeError (#90098).
+function isCanonicalBase64Payload(value: string): boolean {
+  if (value.length === 0 || value.length % 4 !== 0) {
+    return false;
+  }
+  let padding = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code === 0x3d) {
+      padding += 1;
+      if (padding > 2) {
+        return false;
+      }
+      continue;
+    }
+    if (padding > 0) {
+      return false;
+    }
+    const isBase64Char =
+      (code >= 0x41 && code <= 0x5a) ||
+      (code >= 0x61 && code <= 0x7a) ||
+      (code >= 0x30 && code <= 0x39) ||
+      code === 0x2b ||
+      code === 0x2f;
+    if (!isBase64Char) {
+      return false;
+    }
+  }
+  return true;
+}
 
 export function replaceChatAttachmentsFromEditor(
   current: readonly ChatAttachment[],
@@ -95,9 +127,8 @@ export function replaceChatAttachmentsFromEditor(
   releaseChatAttachmentPayloads(current);
   return restored.flatMap(({ mimeType, data }) =>
     RESTORED_IMAGE_MIME.test(mimeType) &&
-    data.length > 0 &&
     data.length <= RESTORED_ATTACHMENT_MAX_BASE64_CHARS &&
-    BASE64_PAYLOAD.test(data)
+    isCanonicalBase64Payload(data)
       ? [
           {
             id: generateAttachmentId(),

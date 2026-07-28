@@ -2,14 +2,21 @@ import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
 
+// Index/slice parsing only: a capture regex spanning a multi-megabyte payload
+// can overflow the browser regex stack before chat.send staging runs (#90098).
 function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string } | null {
-  const match = /^data:([^;]+);base64,(.+)$/.exec(dataUrl);
-  if (!match) {
+  if (!dataUrl.startsWith("data:")) {
     return null;
   }
-  const mimeType = match[1];
-  const content = match[2];
-  return mimeType && content ? { mimeType, content } : null;
+  const marker = ";base64,";
+  const markerIndex = dataUrl.indexOf(marker);
+  if (markerIndex <= "data:".length || markerIndex + marker.length >= dataUrl.length) {
+    return null;
+  }
+  return {
+    mimeType: dataUrl.slice("data:".length, markerIndex),
+    content: dataUrl.slice(markerIndex + marker.length),
+  };
 }
 
 /** Converts composer attachments into the base64 payload accepted by chat.send. */

@@ -4116,6 +4116,32 @@ describe("chat attachment picker", () => {
     );
   });
 
+  it("converts large pasted data image text without a full-payload regex", () => {
+    const onAttachmentsChange = vi.fn();
+    const container = renderChatView({ onAttachmentsChange });
+    const textarea = getComposerTextarea(container);
+    const base64 = btoa("png".repeat(64 * 1024));
+    const allowed = textarea.dispatchEvent(createPasteEvent(`data:image/png;base64,${base64}`, []));
+
+    expect(allowed).toBe(false);
+    const attachments = requireFirstAttachmentsChange(onAttachmentsChange);
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0]?.sizeBytes).toBe(3 * 64 * 1024);
+    expect(getChatAttachmentDataUrl(itemAt(attachments, 0, "large pasted attachment"))).toBe(
+      `data:image/png;base64,${base64}`,
+    );
+  });
+
+  it("ignores pasted data URLs with non-base64 payload characters", () => {
+    const onAttachmentsChange = vi.fn();
+    const container = renderChatView({ onAttachmentsChange });
+    const textarea = getComposerTextarea(container);
+
+    textarea.dispatchEvent(createPasteEvent("data:image/png;base64,AA$A", []));
+
+    expect(onAttachmentsChange).not.toHaveBeenCalled();
+  });
+
   it("removes a pasted image attachment from the preview", () => {
     const attachment: ChatAttachment = {
       id: "image",

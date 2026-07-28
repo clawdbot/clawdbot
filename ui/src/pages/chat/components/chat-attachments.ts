@@ -218,19 +218,60 @@ function dataImageClipboardFile(
   dataUrl: string,
   baseName = "pasted-image",
 ): { file: File; dataUrl: string } | null {
-  const match = /^\s*data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=\s]+)\s*$/i.exec(dataUrl);
-  if (!match) {
+  const trimmed = dataUrl.trim();
+  const marker = ";base64,";
+  const markerIndex = trimmed.indexOf(";");
+  // Keep the only regex bounded to a short MIME header. Running a capture
+  // regex over a multi-megabyte payload can exhaust the browser regex stack.
+  if (markerIndex <= "data:".length || markerIndex > 256) {
     return null;
   }
-  const mimeType = match[1]?.toLowerCase();
-  const base64Source = match[2];
-  if (!mimeType || !base64Source) {
+  if (trimmed.slice(markerIndex, markerIndex + marker.length).toLowerCase() !== marker) {
     return null;
   }
+  const head = trimmed.slice(0, markerIndex).toLowerCase();
+  if (!/^data:image\/[a-z0-9.+-]+$/.test(head)) {
+    return null;
+  }
+  const mimeType = head.slice("data:".length);
   if (!isSupportedChatAttachmentFile({ name: baseName, type: mimeType })) {
     return null;
   }
-  const base64 = base64Source.replace(/\s+/g, "");
+
+  // Iterative base64 scan: validates characters and drops whitespace in one
+  // bounded pass instead of a full-payload capture + replace.
+  const payloadStart = markerIndex + marker.length;
+  let segmentStart = payloadStart;
+  let segments: string[] | undefined;
+  for (let i = payloadStart; i < trimmed.length; i += 1) {
+    const code = trimmed.charCodeAt(i);
+    const isBase64Char =
+      (code >= 65 && code <= 90) ||
+      (code >= 97 && code <= 122) ||
+      (code >= 48 && code <= 57) ||
+      code === 43 ||
+      code === 47 ||
+      code === 61;
+    if (isBase64Char) {
+      continue;
+    }
+    const isWhitespace =
+      code === 9 || code === 10 || code === 11 || code === 12 || code === 13 || code === 32;
+    if (!isWhitespace) {
+      return null;
+    }
+    segments ??= [];
+    if (segmentStart < i) {
+      segments.push(trimmed.slice(segmentStart, i));
+    }
+    segmentStart = i + 1;
+  }
+  const tail = trimmed.slice(segmentStart);
+  const base64 = segments ? [...segments, tail].join("") : tail;
+  if (!base64) {
+    return null;
+  }
+
   try {
     const binary = atob(base64);
     const bytes = new Uint8Array(binary.length);
