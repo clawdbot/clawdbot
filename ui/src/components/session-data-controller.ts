@@ -609,6 +609,10 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   setVisibleSessionLimit(sectionId: string, limit: number): void {
     this.visibleSessionLimits.set(sectionId, limit);
     this.notify();
+    const result = this.sessionsResult;
+    if (result && limit > result.sessions.length && result.hasMore && !this.sessionsLoading) {
+      void this.loadMoreSidebarSessions();
+    }
   }
 
   dismissSessionMutationError(): void {
