@@ -16,6 +16,7 @@ import {
 } from "../infra/fs-safe.js";
 import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
 import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "../infra/local-file-access.js";
+import { writeSiblingTempFile } from "../infra/sibling-temp-file.js";
 import { decodeWindowsTextFileBuffer } from "../infra/windows-encoding.js";
 import {
   classifyMediaReferenceSource,
@@ -1076,10 +1077,134 @@ function resolveHostPath(filePath: string): string {
   return path.resolve(expandTildeToOsHome(filePath));
 }
 
+async function resolveHostWriteTarget(filePath: string): Promise<string> {
+  try {
+    return await fs.realpath(filePath);
+  } catch (error) {
+    if (!isNotFoundError(error)) {
+      throw error;
+    }
+  }
+
+  try {
+    const linkTarget = await fs.readlink(filePath);
+    return await resolveHostWriteTarget(path.resolve(path.dirname(filePath), linkTarget));
+  } catch (error) {
+    if (!isNotFoundError(error)) {
+      throw error;
+    }
+  }
+
+  return await canonicalPathFromExistingAncestor(filePath);
+}
+
+type HostWriteTargetState = {
+  dev: number;
+  gid: number;
+  ino: number;
+  mode: number;
+  uid: number;
+};
+
+function hostWriteCompatibilityError(code: string, message: string) {
+  return Object.assign(new Error(message), { code });
+}
+
+async function inspectHostWriteTarget(
+  targetPath: string,
+): Promise<HostWriteTargetState | undefined> {
+  const stat = await fs.stat(targetPath).catch((error: unknown) => {
+    if (isNotFoundError(error)) {
+      return undefined;
+    }
+    throw error;
+  });
+  if (!stat) {
+    return undefined;
+  }
+  if (!stat.isFile()) {
+    throw hostWriteCompatibilityError(
+      "EINVAL",
+      `Refusing to replace non-regular host path atomically: ${targetPath}`,
+    );
+  }
+  if (stat.nlink > 1) {
+    throw hostWriteCompatibilityError(
+      "EMLINK",
+      `Refusing to replace hard-linked host file atomically: ${targetPath}`,
+    );
+  }
+  await fs.access(targetPath, fs.constants.W_OK);
+  return {
+    dev: stat.dev,
+    gid: stat.gid,
+    ino: stat.ino,
+    mode: stat.mode & 0o7777,
+    uid: stat.uid,
+  };
+}
+
+async function assertHostWriteTargetUnchanged(
+  targetPath: string,
+  expected: HostWriteTargetState | undefined,
+) {
+  if (!expected) {
+    const appeared = await fs
+      .lstat(targetPath)
+      .then(() => true)
+      .catch((error: unknown) => {
+        if (isNotFoundError(error)) {
+          return false;
+        }
+        throw error;
+      });
+    if (appeared) {
+      throw hostWriteCompatibilityError(
+        "EEXIST",
+        `Host write target appeared while staging replacement: ${targetPath}`,
+      );
+    }
+    return;
+  }
+
+  const current = await inspectHostWriteTarget(targetPath);
+  if (
+    !current ||
+    current.dev !== expected.dev ||
+    current.ino !== expected.ino ||
+    current.uid !== expected.uid ||
+    current.gid !== expected.gid ||
+    current.mode !== expected.mode
+  ) {
+    throw hostWriteCompatibilityError(
+      "EBUSY",
+      `Host write target changed while staging replacement: ${targetPath}`,
+    );
+  }
+}
+
 async function writeHostFile(absolutePath: string, content: string) {
   const resolved = resolveHostPath(absolutePath);
   await fs.mkdir(path.dirname(resolved), { recursive: true });
-  await fs.writeFile(resolved, content, "utf-8");
+  const targetPath = await resolveHostWriteTarget(resolved);
+  const target = await inspectHostWriteTarget(targetPath);
+  const targetDir = path.dirname(targetPath);
+  await fs.access(targetDir);
+  await writeSiblingTempFile({
+    dir: targetDir,
+    chmodDir: false,
+    writeTemp: async (tempPath) => {
+      await fs.writeFile(tempPath, content, { encoding: "utf-8", mode: target?.mode });
+      if (target && process.platform !== "win32") {
+        await fs.chown(tempPath, target.uid, target.gid);
+      }
+      if (target) {
+        await fs.chmod(tempPath, target.mode);
+      }
+      await assertHostWriteTargetUnchanged(targetPath, target);
+    },
+    resolveFinalPath: () => targetPath,
+  });
 }
 
 async function statHostFile(absolutePath: string) {
