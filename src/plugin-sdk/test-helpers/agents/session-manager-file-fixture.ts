@@ -3,16 +3,21 @@ import fs from "node:fs";
 import path from "node:path";
 import { parseSessionEntries, SessionManager } from "../../agent-sessions.js";
 
-const TEST_SESSION_MANAGER_COMPAT = Symbol.for("openclaw.testSessionManagerCompat");
+type FileBackedSessionManagerForTest = SessionManager & {
+  getSessionDir(): string;
+  getSessionFile(): string;
+};
 
-function installFileSessionManagerCompat(params: {
+// Legacy JSONL tests need observable write-through files, but the production
+// constructor must stay SQLite/in-memory only. Decorate each fixture instance.
+function attachFilePersistence(params: {
   manager: SessionManager;
   sessionDir: string;
   target: () => string;
   initialize: boolean;
   rotateTarget?: (sessionId: string) => void;
-}): SessionManager {
-  const manager = params.manager as SessionManager & {
+}): FileBackedSessionManagerForTest {
+  const manager = params.manager as FileBackedSessionManagerForTest & {
     persistRecord(entry: unknown): void;
     replacePersistedTranscript(): void;
   };
@@ -52,43 +57,39 @@ function installFileSessionManagerCompat(params: {
   return manager;
 }
 
-export function installSessionManagerFileCompat(
+export function createFileBackedSessionManagerForTest(
+  cwd: string,
+  sessionDir: string = cwd,
   SessionManagerClass: typeof SessionManager = SessionManager,
-): void {
-  const sessionManagerConstructor = SessionManagerClass as typeof SessionManager & {
-    [TEST_SESSION_MANAGER_COMPAT]?: true;
-    create?: (cwd: string, sessionDir?: string) => SessionManager;
-  };
-  if (sessionManagerConstructor[TEST_SESSION_MANAGER_COMPAT]) {
-    return;
-  }
-  Object.assign(SessionManagerClass, {
-    create(cwd: string, sessionDir?: string) {
-      const manager = SessionManagerClass.inMemory(cwd);
-      const resolvedSessionDir = sessionDir ?? cwd;
-      return installFileSessionManagerCompat({
-        manager,
-        sessionDir: resolvedSessionDir,
-        target: () => path.join(resolvedSessionDir, `${manager.getSessionId()}.jsonl`),
-        initialize: true,
-      });
-    },
-    openFile(target: string, sessionDir?: string, cwd?: string) {
-      let activeTarget = target;
-      const exists = fs.existsSync(target);
-      const manager = exists
-        ? SessionManagerClass.fromEntries(parseSessionEntries(fs.readFileSync(target, "utf8")), cwd)
-        : SessionManagerClass.inMemory(cwd ?? sessionDir ?? process.cwd());
-      return installFileSessionManagerCompat({
-        manager,
-        sessionDir: sessionDir ?? path.dirname(target),
-        target: () => activeTarget,
-        initialize: !exists,
-        rotateTarget: (sessionId) => {
-          activeTarget = path.join(sessionDir ?? path.dirname(target), `${sessionId}.jsonl`);
-        },
-      });
+): FileBackedSessionManagerForTest {
+  const manager = SessionManagerClass.inMemory(cwd);
+  return attachFilePersistence({
+    manager,
+    sessionDir,
+    target: () => path.join(sessionDir, `${manager.getSessionId()}.jsonl`),
+    initialize: true,
+  });
+}
+
+export function openFileBackedSessionManagerForTest(
+  target: string,
+  sessionDir?: string,
+  cwd?: string,
+  SessionManagerClass: typeof SessionManager = SessionManager,
+): FileBackedSessionManagerForTest {
+  let activeTarget = target;
+  const resolvedSessionDir = sessionDir ?? path.dirname(target);
+  const exists = fs.existsSync(target);
+  const manager = exists
+    ? SessionManagerClass.fromEntries(parseSessionEntries(fs.readFileSync(target, "utf8")), cwd)
+    : SessionManagerClass.inMemory(cwd ?? sessionDir ?? process.cwd());
+  return attachFilePersistence({
+    manager,
+    sessionDir: resolvedSessionDir,
+    target: () => activeTarget,
+    initialize: !exists,
+    rotateTarget: (sessionId) => {
+      activeTarget = path.join(resolvedSessionDir, `${sessionId}.jsonl`);
     },
   });
-  sessionManagerConstructor[TEST_SESSION_MANAGER_COMPAT] = true;
 }

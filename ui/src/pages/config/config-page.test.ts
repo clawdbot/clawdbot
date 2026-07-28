@@ -29,6 +29,7 @@ function deferred<T>() {
 let localStorageMock: Storage;
 
 beforeEach(() => {
+  window.history.replaceState({}, "", "/");
   vi.spyOn(realtimeTalk, "switchActiveRealtimeTalkCameras").mockImplementation(
     switchActiveRealtimeTalkCameras,
   );

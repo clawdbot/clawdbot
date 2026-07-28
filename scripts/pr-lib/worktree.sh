@@ -29,6 +29,16 @@ EOF
   return 1
 }
 
+ensure_full_pr_worktree_checkout() {
+  local sparse_checkout
+  sparse_checkout=$(git config --bool core.sparseCheckout 2>/dev/null || true)
+  if [ "$sparse_checkout" = "true" ]; then
+    # Prepare gates build the whole repository. Inherited sparse settings can
+    # omit tracked transitive inputs and turn healthy PRs into false failures.
+    git sparse-checkout disable
+  fi
+}
+
 enter_worktree() {
   local pr="$1"
   local reset_to_main="${2:-false}"
@@ -81,6 +91,7 @@ enter_worktree() {
     return 1
   fi
 
+  ensure_full_pr_worktree_checkout
   git fetch origin main
   if [ "$reset_to_main" = "true" ]; then
     git checkout -B "temp/pr-$pr" origin/main

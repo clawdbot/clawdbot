@@ -14,6 +14,7 @@ import {
   validateSessionsCatalogReadParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getActivePluginSessionExtensionRegistry } from "../../plugins/runtime.js";
 import { gatewaySubagentState } from "../../plugins/runtime/gateway-bindings.js";
 import type {
@@ -31,6 +32,8 @@ import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const SESSION_CATALOG_SEARCH_MAX_UTF16_UNITS = 500;
+const SESSION_CATALOG_SHARE_WINDOW_MS = 3_000;
+const SESSION_CATALOG_LIST_CACHE_MAX_ENTRIES = 128;
 
 function createSessionCatalogRequestNodeSnapshot(): NonNullable<
   SessionCatalogListProviderParams["listNodes"]
@@ -64,8 +67,41 @@ function catalogError(error: unknown): { code: string; message: string } {
   };
 }
 
+type CatalogRegistrationSnapshot = {
+  registry: PluginRegistry | null;
+  source: PluginRegistry["sessionCatalogs"] | undefined;
+  registrations: PluginRegistry["sessionCatalogs"];
+  providers: SessionCatalogProvider[];
+};
+
+let cachedCatalogRegistrations: CatalogRegistrationSnapshot | undefined;
+
+function catalogRegistrationSnapshot(): CatalogRegistrationSnapshot {
+  const registry = getActivePluginSessionExtensionRegistry();
+  const source = registry?.sessionCatalogs;
+  if (
+    cachedCatalogRegistrations?.registry === registry &&
+    cachedCatalogRegistrations.source === source
+  ) {
+    return cachedCatalogRegistrations;
+  }
+  const sortedRegistrations = (source ?? []).toSorted((left, right) =>
+    left.provider.id.localeCompare(right.provider.id),
+  );
+  // Plugin registration arrays are process-stable until the active registry seam changes. Hoisting
+  // this sort avoids rebuilding identical order every poll; registry/list identity invalidates it.
+  // A stale snapshot would route requests to retired plugin instances, so callers share this owner.
+  cachedCatalogRegistrations = {
+    registry,
+    source,
+    registrations: sortedRegistrations,
+    providers: sortedRegistrations.map((entry) => entry.provider),
+  };
+  return cachedCatalogRegistrations;
+}
+
 function providers(): SessionCatalogProvider[] {
-  return registrations().map((entry) => entry.provider);
+  return catalogRegistrationSnapshot().providers;
 }
 
 export function resolveSessionCatalogProvider(
@@ -75,9 +111,7 @@ export function resolveSessionCatalogProvider(
 }
 
 function registrations() {
-  return (getActivePluginSessionExtensionRegistry()?.sessionCatalogs ?? []).toSorted(
-    (left, right) => left.provider.id.localeCompare(right.provider.id),
-  );
+  return catalogRegistrationSnapshot().registrations;
 }
 
 type SessionCatalogCreateTargetResolution =
@@ -93,10 +127,19 @@ const providerCreateTargetsByConfig = new WeakMap<
   WeakMap<SessionCatalogProvider, Map<string, ProviderCreateTargetResolution>>
 >();
 
-const catalogListsByConfig = new WeakMap<
-  OpenClawConfig,
-  Map<string, Promise<{ catalogs: SessionCatalog[] }>>
->();
+type CatalogListResult = { catalogs: SessionCatalog[] };
+
+type CatalogListCacheEntry = {
+  expiresAt?: number;
+  result: Promise<CatalogListResult>;
+};
+
+type CatalogListCacheState = {
+  registrations: CatalogRegistrationSnapshot;
+  entries: Map<string, CatalogListCacheEntry>;
+};
+
+const catalogListsByConfig = new WeakMap<OpenClawConfig, CatalogListCacheState>();
 
 function providerCreateTargetCache(
   config: OpenClawConfig,
@@ -185,15 +228,16 @@ function sessionCatalogListKey(params: {
   ]);
 }
 
-function catalogListInflightMap(
+function catalogListCache(
   config: OpenClawConfig,
-): Map<string, Promise<{ catalogs: SessionCatalog[] }>> {
-  let inFlight = catalogListsByConfig.get(config);
-  if (!inFlight) {
-    inFlight = new Map();
-    catalogListsByConfig.set(config, inFlight);
+  registrationSnapshot: CatalogRegistrationSnapshot,
+): Map<string, CatalogListCacheEntry> {
+  let state = catalogListsByConfig.get(config);
+  if (!state || state.registrations !== registrationSnapshot) {
+    state = { registrations: registrationSnapshot, entries: new Map() };
+    catalogListsByConfig.set(config, state);
   }
-  return inFlight;
+  return state.entries;
 }
 
 function providerOrRespond(
@@ -267,15 +311,23 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const catalogRegistrations = catalogRegistrationSnapshot();
     let selected: SessionCatalogProvider[];
     if (request.catalogId) {
-      const provider = providerOrRespond(request.catalogId, respond);
+      const provider = catalogRegistrations.providers.find(
+        (candidate) => candidate.id === request.catalogId,
+      );
       if (!provider) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `unknown session catalog: ${request.catalogId}`),
+        );
         return;
       }
       selected = [provider];
     } else {
-      selected = providers();
+      selected = catalogRegistrations.providers;
     }
     const config = context.getRuntimeConfig();
     const resolvedAgent = resolveAgentIdOrRespondError({
@@ -295,13 +347,18 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       request,
       search,
     });
-    const inFlight = catalogListInflightMap(config);
-    const pending = inFlight.get(listKey);
-    if (pending) {
+    const cache = catalogListCache(config, catalogRegistrations);
+    const cached = cache.get(listKey);
+    if (cached && (cached.expiresAt === undefined || cached.expiresAt > Date.now())) {
       // progressId is connection-owned and excluded from the work key. Followers skip progressive
       // frames and receive only the authoritative final result emitted for every caller below.
-      respond(true, await pending);
+      cache.delete(listKey);
+      cache.set(listKey, cached);
+      respond(true, await cached.result);
       return;
+    }
+    if (cached) {
+      cache.delete(listKey);
     }
     const operation = (async () => {
       const requestEntries = createSessionCatalogRequestEntrySnapshot({
@@ -357,14 +414,29 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       );
       return { catalogs: catalogList };
     })();
-    // Sharing ends when this exact promise settles; later polls always execute against fresh state.
-    inFlight.set(listKey, operation);
-    try {
-      respond(true, await operation);
-    } finally {
-      if (inFlight.get(listKey) === operation) {
-        inFlight.delete(listKey);
+    const entry: CatalogListCacheEntry = { result: operation };
+    // Exact request/config/registration results remain shareable for 3s after settling. This catches
+    // out-of-phase clients but expires before the UI's 5s fast follow, so changed rows surface there.
+    // Expired and rejected work is removed; retaining it would mask provider recovery or new sessions.
+    cache.set(listKey, entry);
+    while (cache.size > SESSION_CATALOG_LIST_CACHE_MAX_ENTRIES) {
+      const oldest = cache.keys().next();
+      if (oldest.done) {
+        break;
       }
+      cache.delete(oldest.value);
+    }
+    try {
+      const result = await operation;
+      if (cache.get(listKey) === entry) {
+        entry.expiresAt = Date.now() + SESSION_CATALOG_SHARE_WINDOW_MS;
+      }
+      respond(true, result);
+    } catch (error) {
+      if (cache.get(listKey) === entry) {
+        cache.delete(listKey);
+      }
+      throw error;
     }
   },
 
