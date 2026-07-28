@@ -88,7 +88,7 @@ export async function execCommand(
   cwd: string,
   options?: ExecOptions,
 ): Promise<ExecResult> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const proc = spawnCommand([command, ...args], {
       buffer: false,
       cwd,
@@ -103,6 +103,10 @@ export async function execCommand(
     const stdoutDecoder = new StringDecoder("utf8");
     const stderrDecoder = new StringDecoder("utf8");
     let killed = false;
+    // Caller cancellation (vs. an internal timeout/output-limit kill) must reject,
+    // matching AbortSignal convention and this module's sibling tools (find/grep);
+    // resolving here would let callers mistake a cancelled run for a completed one.
+    let abortedBySignal = false;
     let timeoutId: NodeJS.Timeout | undefined;
     let forceKillTimer: NodeJS.Timeout | undefined;
     let settled = false;
@@ -127,7 +131,11 @@ export async function execCommand(
         clearTimeout(forceKillTimer);
       }
       if (options?.signal) {
-        options.signal.removeEventListener("abort", killProcess);
+        options.signal.removeEventListener("abort", abortRequested);
+      }
+      if (abortedBySignal) {
+        reject(new Error("Operation aborted"));
+        return;
       }
       const stdoutBeforeFlush = stdout.truncatedChars;
       stdout = appendCapturedOutput(stdout, stdoutDecoder.end(), maxOutputChars, truncateOutput);
@@ -179,11 +187,15 @@ export async function execCommand(
     };
 
     // Handle abort signal
+    const abortRequested = () => {
+      abortedBySignal = true;
+      killProcess();
+    };
     if (options?.signal) {
       if (options.signal.aborted) {
-        killProcess();
+        abortRequested();
       } else {
-        options.signal.addEventListener("abort", killProcess, { once: true });
+        options.signal.addEventListener("abort", abortRequested, { once: true });
       }
     }
 

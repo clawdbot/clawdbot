@@ -239,6 +239,43 @@ describe("execCommand", () => {
     expect(result.killed).toBe(true);
   });
 
+  it("rejects instead of resolving when the caller's AbortSignal fires", async () => {
+    // ctx.exec's documented cancellation contract is AbortSignal semantics: a
+    // cancelled run must reject, not resolve as if it had completed normally
+    // (matches the sibling find/grep session tools' abort handling).
+    const child = createStubChild();
+    const wait = createDeferred<number | null>();
+    spawnMock.mockReturnValue(child);
+    completionMock.mockReturnValue(wait.promise);
+    const { execCommand } = await import("./exec.js");
+
+    const controller = new AbortController();
+    const resultPromise = execCommand("cmd", [], "/tmp", { signal: controller.signal });
+    controller.abort();
+    expect(killProcessTreeMock).toHaveBeenCalledWith(1234, {
+      detached: process.platform !== "win32",
+      graceMs: 5000,
+    });
+
+    wait.resolve(0);
+    await expect(resultPromise).rejects.toThrow("Operation aborted");
+  });
+
+  it("still resolves a timeout-triggered kill (not treated as caller abort)", async () => {
+    vi.useFakeTimers();
+    const child = createStubChild();
+    const wait = createDeferred<number | null>();
+    spawnMock.mockReturnValue(child);
+    completionMock.mockReturnValue(wait.promise);
+    const { execCommand } = await import("./exec.js");
+
+    const resultPromise = execCommand("cmd", [], "/tmp", { timeout: 10 });
+    await vi.advanceTimersByTimeAsync(10);
+    wait.resolve(null);
+
+    await expect(resultPromise).resolves.toMatchObject({ killed: true });
+  });
+
   it("does not crash when stdout or stderr emit an error event", async () => {
     const child = createStubChild();
     const wait = createDeferred<number | null>();
