@@ -1,6 +1,7 @@
 // Provides SQLite transaction helpers with nested savepoints.
 import type { DatabaseSync } from "node:sqlite";
 import { createSubsystemLogger, type SubsystemLogger } from "../logging/subsystem.js";
+import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync.js";
 
 const transactionDepthByDatabase = new WeakMap<DatabaseSync, number>();
 
@@ -197,6 +198,7 @@ function abortImmediateTransaction(db: DatabaseSync): void {
     // If rollback itself fails, close the handle so callers cannot keep using a
     // connection that may still hold an abandoned write transaction.
     try {
+      clearNodeSqliteKyselyCacheForDatabase(db);
       db.close();
     } catch {
       // Preserve the original transaction error; close failure is secondary.

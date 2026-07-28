@@ -619,7 +619,6 @@ export async function runGatewayClosePrelude(params: {
   disposeBrowserAuthRateLimiter: () => void;
   stopChannelHealthMonitor?: () => Promise<void>;
   stopReadinessEventLoopHealth?: () => void;
-  clearSecretsRuntimeSnapshot?: () => void;
   closeMcpServer?: () => Promise<void>;
 }): Promise<void> {
   params.stopDiagnostics?.();
@@ -629,7 +628,6 @@ export async function runGatewayClosePrelude(params: {
   params.disposeBrowserAuthRateLimiter();
   await params.stopChannelHealthMonitor?.();
   params.stopReadinessEventLoopHealth?.();
-  params.clearSecretsRuntimeSnapshot?.();
   await params.closeMcpServer?.().catch(() => {});
 }
 
@@ -674,6 +672,7 @@ export function createGatewayCloseHandler(
     bonjourStop: (() => Promise<void>) | null;
     tailscaleCleanup: (() => Promise<void>) | null;
     releasePluginRouteRegistry?: (() => void) | null;
+    clearSecretsRuntimeSnapshot?: (() => void) | null;
     channelIds?: readonly ChannelId[];
     stopChannel: (name: ChannelId, accountId?: string) => Promise<void>;
     pluginServices: PluginServicesHandle | null;
@@ -1040,6 +1039,13 @@ export function createGatewayCloseHandler(
     } finally {
       try {
         params.releasePluginRouteRegistry?.();
+      } catch {
+        /* ignore */
+      }
+      // Channel and plugin teardown still resolve account credentials. Keep the
+      // active snapshot until every teardown owner is done, then always scrub it.
+      try {
+        params.clearSecretsRuntimeSnapshot?.();
       } catch {
         /* ignore */
       }

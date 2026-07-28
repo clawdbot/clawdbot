@@ -17,11 +17,17 @@ const pairingQrExpiryRefreshTimers = new Map<string, PairingQrExpiryRefreshTimer
 
 export type ImageBlock = {
   url: string;
+  artifactId?: string;
   openUrl?: string;
   alt?: string;
   width?: number;
   height?: number;
 };
+
+export type ArtifactDownloadResolver = (params: {
+  sessionKey: string;
+  artifactId: string;
+}) => Promise<{ url: string; expiresAt?: string } | null>;
 
 export type ImageRenderOptions = {
   localMediaPreviewRoots?: readonly string[];
@@ -30,6 +36,7 @@ export type ImageRenderOptions = {
   onRequestUpdate?: () => void;
   onRequestOpenImage?: () => number;
   onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
+  resolveArtifactDownload?: ArtifactDownloadResolver;
 };
 
 export type RenderableImageBlock = ImageBlock & {
@@ -209,6 +216,7 @@ export function extractImages(message: unknown): ImageBlock[] {
         // Handle source object format from optimistic user sends.
         const source = b.source as Record<string, unknown> | undefined;
         const imageMeta = {
+          artifactId: typeof b.artifactId === "string" ? b.artifactId : undefined,
           alt: typeof b.alt === "string" ? b.alt : undefined,
           openUrl: typeof b.openUrl === "string" ? b.openUrl : undefined,
           width: typeof b.width === "number" ? b.width : undefined,

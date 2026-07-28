@@ -190,11 +190,11 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
         }
         const requestStartedAt = Date.now();
         firstEventAbort = createFirstStreamEventAbortController(options?.signal);
-        const requestOptions = buildOpenAISdkRequestOptions(
-          model,
-          firstEventAbort.signal,
-          config.streamRequest ? { stream: true } : undefined,
-        );
+        const requestOptions = buildOpenAISdkRequestOptions(model, firstEventAbort.signal, {
+          stream: config.streamRequest,
+          timeoutMs: options?.timeoutMs,
+          maxRetries: options?.maxRetries,
+        });
         emitModelTransportDebug(
           log,
           `[responses] start provider=${model.provider} api=${model.api} model=${model.id} ` +

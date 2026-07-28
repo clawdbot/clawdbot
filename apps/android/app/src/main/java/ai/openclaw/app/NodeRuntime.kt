@@ -4910,6 +4910,8 @@ class NodeRuntime private constructor(
     }
   }
 
+  internal suspend fun loadChatImageArtifact(artifactId: String) = chat.loadImageArtifact(artifactId)
+
   fun loadChat(
     sessionKey: String,
     ownerAgentId: String? = null,

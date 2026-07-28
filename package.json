@@ -409,6 +409,18 @@
       "types": "./dist/plugin-sdk/setup-tools.d.ts",
       "default": "./dist/plugin-sdk/setup-tools.js"
     },
+    "./plugin-sdk/archive": {
+      "types": "./dist/plugin-sdk/archive.d.ts",
+      "default": "./dist/plugin-sdk/archive.js"
+    },
+    "./plugin-sdk/root-walk": {
+      "types": "./dist/plugin-sdk/root-walk.d.ts",
+      "default": "./dist/plugin-sdk/root-walk.js"
+    },
+    "./plugin-sdk/secret-file": {
+      "types": "./dist/plugin-sdk/secret-file.d.ts",
+      "default": "./dist/plugin-sdk/secret-file.js"
+    },
     "./plugin-sdk/approval-auth-runtime": {
       "types": "./dist/plugin-sdk/approval-auth-runtime.d.ts",
       "default": "./dist/plugin-sdk/approval-auth-runtime.js"
@@ -1910,10 +1922,10 @@
     "@homebridge/ciao": "1.3.10",
     "@lydell/node-pty": "1.2.0-beta.12",
     "@mistralai/mistralai": "2.5.0",
-    "@modelcontextprotocol/sdk": "1.29.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "@mozilla/readability": "0.6.0",
     "@openclaw/ai": "workspace:*",
-    "@openclaw/fs-safe": "0.4.7",
+    "@openclaw/fs-safe": "0.5.0",
     "@openclaw/proxyline": "0.3.4",
     "@silvia-odwyer/photon-node": "0.3.4",
     "acorn": "8.17.0",
@@ -1947,12 +1959,11 @@
     "partial-json": "0.1.7",
     "playwright-core": "1.61.1",
     "pretty-ms": "9.3.0",
-    "proper-lockfile": "4.1.2",
     "qrcode": "1.5.4",
     "quickjs-wasi": "3.0.2",
     "rastermill": "0.3.1",
     "semver": "7.8.5",
-    "tar": "7.5.20",
+    "tar": "7.5.22",
     "tree-sitter-bash": "0.25.1",
     "tslog": "4.11.0",
     "typebox": "1.3.6",
@@ -1978,7 +1989,6 @@
     "@types/markdown-it": "14.1.2",
     "@types/ms": "2.1.0",
     "@types/node": "26.1.1",
-    "@types/proper-lockfile": "4.1.4",
     "@types/semver": "7.7.1",
     "@types/web-push": "3.6.4",
     "@types/ws": "8.18.1",

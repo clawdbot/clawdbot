@@ -5,6 +5,7 @@ import { WebClient } from "@slack/web-api";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createSlackLookupClient,
+  createSlackReadClient,
   createSlackWebClient,
   getSlackListenerUploadCompletionClient,
 } from "./client.js";
@@ -321,6 +322,29 @@ describe("Slack Web API routing", () => {
 
       expect(result.ok).toBe(true);
       expect(requests).toHaveLength(1);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("bounds dedicated reads without timing out shared clients", async () => {
+    for (const key of TEST_ENV_KEYS) {
+      delete process.env[key];
+    }
+    const requests: SlackApiRequest[] = [];
+    const server = await startSlackApiServer(requests, 80);
+    try {
+      const options = {
+        retryConfig: { retries: 0 },
+        slackApiUrl: `${server.baseUrl}/api/`,
+      };
+      const readClient = createSlackReadClient("xoxb-read", { ...options, timeout: 20 });
+      const sharedClient = createSlackWebClient("xoxb-shared", options);
+
+      await expect(readClient.auth.test()).rejects.toThrow();
+      await expect(sharedClient.auth.test()).resolves.toMatchObject({ ok: true });
+
+      expect(requests).toHaveLength(2);
     } finally {
       await server.close();
     }

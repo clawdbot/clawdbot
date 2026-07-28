@@ -9,11 +9,128 @@ import {
   installMockGateway,
   requireRecord,
   sidebarSessionOrder,
+  waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("restores a scrolled session after switching away while new messages arrive", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 720, width: 1280 },
+    });
+    const page = await context.newPage();
+    const sessionA = "agent:main:session-a";
+    const sessionB = "agent:main:session-b";
+    const messages = (label: string, count: number) =>
+      Array.from({ length: count }, (_, index) => ({
+        role: index % 2 === 0 ? "user" : "assistant",
+        content: `${label} message ${index}: ${"wrapped transcript content ".repeat(8)}`,
+        timestamp: 1_000 + index,
+        __openclaw: { seq: index + 1 },
+      }));
+    const response = (sessionKey: string, transcript: unknown[]) => ({
+      messages: transcript,
+      sessionId: `${sessionKey}:backing`,
+      thinkingLevel: null,
+    });
+    const responseCases = (messagesA: unknown[], messagesB = messages("B", 30)) => ({
+      cases: [
+        { match: { sessionKey: sessionA }, response: response(sessionA, messagesA) },
+        { match: { sessionKey: sessionB }, response: response(sessionB, messagesB) },
+      ],
+    });
+    const initialMessagesA = messages("A", 70);
+    const initialResponses = responseCases(initialMessagesA);
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "chat.history": initialResponses,
+        "chat.startup": initialResponses,
+        "sessions.list": chatSessionListResponse(),
+      },
+      sessionKey: sessionA,
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await waitForChatScrollIdle(page);
+      const thread = page.locator(".chat-thread");
+      await expect.poll(() => thread.count()).toBe(1);
+      const initialDistance = await thread.evaluate((element) => {
+        const transcript = element as HTMLElement;
+        return transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight;
+      });
+      expect(initialDistance).toBeLessThanOrEqual(8);
+      const storedScrollTop = await thread.evaluate((element) => {
+        const transcript = element as HTMLElement;
+        transcript.scrollTop = Math.floor((transcript.scrollHeight - transcript.clientHeight) / 3);
+        transcript.dispatchEvent(new Event("scroll", { bubbles: true }));
+        return transcript.scrollTop;
+      });
+      expect(storedScrollTop).toBeGreaterThan(0);
+
+      const sessionLink = (sessionKey: string) =>
+        page.locator(
+          `.sidebar-recent-session[data-session-key="${sessionKey}"] a.sidebar-recent-session__link`,
+        );
+      await sessionLink(sessionB).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionB));
+      await waitForChatScrollIdle(page);
+      const firstVisitDistance = await thread.evaluate((element) => {
+        const transcript = element as HTMLElement;
+        return transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight;
+      });
+      expect(firstVisitDistance).toBeLessThanOrEqual(8);
+
+      const messagesAWithNewTail = messages("A", 78);
+      const updatedResponses = responseCases(messagesAWithNewTail);
+      await gateway.setMethodResponse("chat.history", updatedResponses);
+      await gateway.setMethodResponse("chat.startup", updatedResponses);
+      const historyRequestsBeforeReturn = (await gateway.getRequests("chat.history")).length;
+      await sessionLink(sessionA).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionA));
+      await expect
+        .poll(async () => (await gateway.getRequests("chat.history")).length)
+        .toBeGreaterThan(historyRequestsBeforeReturn);
+      await waitForChatScrollIdle(page);
+
+      const restored = await thread.evaluate((element) => {
+        const transcript = element as HTMLElement;
+        return {
+          distanceFromBottom:
+            transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight,
+          scrollTop: transcript.scrollTop,
+        };
+      });
+      expect(
+        Math.abs(restored.scrollTop - storedScrollTop),
+        JSON.stringify({ restored, storedScrollTop }),
+      ).toBeLessThanOrEqual(120);
+      expect(restored.distanceFromBottom).toBeGreaterThan(8);
+
+      const messagesBWithNewTail = messages("B", 36);
+      const endAnchoredResponses = responseCases(messagesAWithNewTail, messagesBWithNewTail);
+      await gateway.setMethodResponse("chat.history", endAnchoredResponses);
+      await gateway.setMethodResponse("chat.startup", endAnchoredResponses);
+      const historyRequestsBeforeEndReturn = (await gateway.getRequests("chat.history")).length;
+      await sessionLink(sessionB).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionB));
+      await expect
+        .poll(async () => (await gateway.getRequests("chat.history")).length)
+        .toBeGreaterThan(historyRequestsBeforeEndReturn);
+      await waitForChatScrollIdle(page);
+      const endAnchoredDistance = await thread.evaluate((element) => {
+        const transcript = element as HTMLElement;
+        return transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight;
+      });
+      expect(endAnchoredDistance).toBeLessThanOrEqual(8);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("renders always-on pane headers without desktop topbar chrome", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",

@@ -32,7 +32,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway, randomIdempotencyKey } from "../../gateway/call.js";
 import { ADMIN_SCOPE } from "../../gateway/operator-scopes.js";
 import { convertHeicToJpeg } from "../../media/media-services.js";
+import { planEffectiveModelCatalogRows } from "../../model-catalog/index.js";
+import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import { defaultRuntime } from "../../runtime.js";
+import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { getModelsCommandSecretTargetIds } from "../command-secret-targets.js";
 import { collectOption } from "../program/helpers.js";
@@ -50,6 +53,25 @@ import {
 
 const LOCAL_MODEL_RUN_SYSTEM_PROMPT = "You are a personal assistant running inside OpenClaw.";
 const HEIC_MODEL_RUN_MIMES = new Set(["image/heic", "image/heif"]);
+
+async function loadModelCatalogForInspection(cfg: OpenClawConfig) {
+  const prepared = await loadPreparedModelCatalog({ config: cfg, readOnly: true });
+  const metadataSnapshot = loadManifestMetadataSnapshot({ config: cfg, env: process.env });
+  const manifest = planEffectiveModelCatalogRows({
+    registry: metadataSnapshot.manifestRegistry,
+    config: cfg,
+  }).rows;
+  const entries = new Map<string, (typeof prepared)[number] | (typeof manifest)[number]>();
+  for (const entry of manifest) {
+    entries.set(`${entry.provider}\0${entry.id}`, entry);
+  }
+  for (const entry of prepared) {
+    entries.set(`${entry.provider}\0${entry.id}`, entry);
+  }
+  return [...entries.values()].toSorted(
+    (a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id),
+  );
+}
 
 async function canonicalizeModelRunRef(params: {
   raw: string | undefined;
@@ -324,7 +346,7 @@ async function runModelRun(params: {
 
 async function buildModelProviders() {
   const cfg = getRuntimeConfig();
-  const catalog = await loadPreparedModelCatalog({ config: cfg });
+  const catalog = await loadModelCatalogForInspection(cfg);
   const selectedProvider = resolveSelectedProviderFromModelRef(
     resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model),
   );
@@ -345,7 +367,11 @@ async function buildModelProviders() {
       count: 0,
       defaults: [],
       available: true,
-      configured: providerHasGenericConfig({ cfg, providerId: entry.provider }),
+      configured: providerHasGenericConfig({
+        cfg,
+        providerId: entry.provider,
+        envVars: getProviderEnvVars(entry.provider),
+      }),
       selected: selectedProvider === entry.provider,
     };
     current.count += 1;
@@ -458,7 +484,7 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const result = await loadPreparedModelCatalog({ config: getRuntimeConfig() });
+        const result = await loadModelCatalogForInspection(getRuntimeConfig());
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, providerSummaryText);
       });
     });
@@ -471,7 +497,7 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const target = normalizeStringifiedOptionalString(opts.model) ?? "";
-        const catalog = await loadPreparedModelCatalog({ config: getRuntimeConfig() });
+        const catalog = await loadModelCatalogForInspection(getRuntimeConfig());
         const entry =
           catalog.find((candidate) => `${candidate.provider}/${candidate.id}` === target) ??
           catalog.find((candidate) => candidate.id === target);

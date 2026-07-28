@@ -1305,6 +1305,8 @@ class MainViewModel private constructor(
     failedResource: ChatWidgetResource?,
   ) = ensureRuntime().resolveInlineWidgetResource(path, failedResource)
 
+  internal suspend fun loadChatImageArtifact(artifactId: String) = ensureRuntime().loadChatImageArtifact(artifactId)
+
   fun requestCanvasRehydrate(source: String = "screen_tab") {
     ensureRuntime().requestCanvasRehydrate(source = source, force = true)
   }

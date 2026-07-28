@@ -1,10 +1,10 @@
 // @vitest-environment node
 // Control UI tests cover build chat items behavior.
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { markInboundContextLabel } from "../../../../src/auto-reply/reply/inbound-context-marker.js";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
-import { extractToolCardsCached as extractToolCards } from "../../lib/chat/tool-cards.ts";
+import * as toolCards from "../../lib/chat/tool-cards.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
   buildCachedChatItems,
@@ -18,6 +18,8 @@ import {
 } from "./chat-thread.ts";
 import { rememberLiveTerminalRun } from "./terminal-message-identity.ts";
 import { resolveChatProjectionRunId } from "./tool-stream.ts";
+
+const { extractToolCardsCached: extractToolCards } = toolCards;
 
 describe("assistantGroupCanOwnActiveRunStatus", () => {
   const group = (message: Record<string, unknown>): MessageGroup => ({
@@ -3308,6 +3310,36 @@ describe("buildCachedChatItems", () => {
 });
 
 describe("tool expansion state", () => {
+  it("skips the tool-card walk when the item array identity is unchanged", () => {
+    resetChatThreadState();
+    const group: MessageGroup = {
+      kind: "group",
+      key: "assistant-stable",
+      role: "assistant",
+      messages: [
+        {
+          key: "assistant-stable",
+          message: { role: "assistant", content: "No tools in this row" },
+        },
+      ],
+      timestamp: 1,
+      isStreaming: false,
+    };
+    const items = [group];
+    const extractSpy = vi.spyOn(toolCards, "extractToolCardsCached");
+    try {
+      syncToolCardExpansionState("identity-stable", items, false);
+      const callsAfterFirstSync = extractSpy.mock.calls.length;
+
+      syncToolCardExpansionState("identity-stable", items, false);
+
+      expect(callsAfterFirstSync).toBeGreaterThan(0);
+      expect(extractSpy).toHaveBeenCalledTimes(callsAfterFirstSync);
+    } finally {
+      extractSpy.mockRestore();
+    }
+  });
+
   it("expands already-visible tool cards when auto-expand turns on", () => {
     resetChatThreadState();
     const group: MessageGroup = {
@@ -3501,6 +3533,18 @@ describe("thread item cache", () => {
     resetChatThreadState("pane-a");
     expect(buildCachedChatItems({ ...paneA })).not.toBe(paneAItems);
     expect(buildCachedChatItems({ ...paneB })).toBe(paneBItems);
+  });
+
+  it("evicts the least-recently-used session after 20 cached transcripts", () => {
+    resetChatThreadState();
+    const paneId = "pane-lru";
+    const firstInput = createProps({ paneId, sessionKey: "session-0" });
+    const first = buildCachedChatItems(firstInput);
+    for (let index = 1; index <= 20; index += 1) {
+      buildCachedChatItems(createProps({ paneId, sessionKey: `session-${index}` }));
+    }
+
+    expect(buildCachedChatItems(firstInput)).not.toBe(first);
   });
 });
 

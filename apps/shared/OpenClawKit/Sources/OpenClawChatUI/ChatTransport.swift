@@ -548,6 +548,16 @@ public struct OpenClawChatMetadataCapabilities: Codable, Sendable, Equatable {
     }
 }
 
+public struct OpenClawChatLoadedImage: Sendable {
+    public let data: Data
+    public let mimeType: String
+
+    public init(data: Data, mimeType: String) {
+        self.data = data
+        self.mimeType = mimeType
+    }
+}
+
 /// One physical Gateway route for Swarm capability discovery and child paging.
 /// All pages use the captured route so a reconnect cannot combine two servers.
 public struct OpenClawChatSwarmRouteLease: Sendable {
@@ -671,6 +681,7 @@ public protocol OpenClawChatTransport: Sendable {
         path: String,
         replacing failedResource: OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?
     func resolveInlineWidgetURL(path: String, replacing failedURL: URL?) async -> URL?
+    func loadImageArtifact(sessionKey: String, artifactId: String) async throws -> OpenClawChatLoadedImage?
 
     func setActiveSessionKey(_ sessionKey: String) async throws
     func resetSession(sessionKey: String) async throws
@@ -678,6 +689,13 @@ public protocol OpenClawChatTransport: Sendable {
 }
 
 extension OpenClawChatTransport {
+    public func loadImageArtifact(
+        sessionKey _: String,
+        artifactId _: String) async throws -> OpenClawChatLoadedImage?
+    {
+        nil
+    }
+
     public func isSwarmEnabled(sessionKey _: String) async throws -> Bool {
         false
     }

@@ -1674,13 +1674,21 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       setActivityStatus("starting up");
     }
     void (async () => {
-      try {
-        await client.subscribeSessionEvents?.();
-      } catch (err) {
-        if (!ownsConnection()) {
-          return;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          await client.subscribeSessionEvents?.();
+          break;
+        } catch (err) {
+          if (!ownsConnection()) {
+            return;
+          }
+          // Subscription is idempotent; recover one transient Gateway failure
+          // without leaving this connected TUI permanently unsubscribed.
+          if (attempt === 0) {
+            continue;
+          }
+          chatLog.addSystem(`session event subscribe failed: ${formatTuiErrorMessage(err)}`);
         }
-        chatLog.addSystem(`session event subscribe failed: ${formatTuiErrorMessage(err)}`);
       }
       if (!ownsConnection()) {
         return;
