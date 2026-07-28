@@ -604,7 +604,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       "bonjour",
       "browser",
       "device-pair",
-      "phone-control",
       "talk-voice",
     ]);
     expect(allowlist).not.toContain("memory-core");

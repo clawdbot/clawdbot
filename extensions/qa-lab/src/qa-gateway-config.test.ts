@@ -291,7 +291,7 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.plugins?.allow).toContain("codex");
     expect(cfg.plugins?.entries?.codex).toEqual({
       enabled: true,
-      config: { appServer: { sandbox: "workspace-write" } },
+      config: { appServer: { sandbox: "workspace-write", serviceTier: "priority" } },
     });
   });
 
