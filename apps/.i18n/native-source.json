@@ -39939,7 +39939,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 52,
+      "line": 51,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatFullMessageReader.swift",
       "source": "Full message unavailable",
       "surface": "apple",
@@ -39947,7 +39947,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 58,
+      "line": 57,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatFullMessageReader.swift",
       "source": "Full Message",
       "surface": "apple",
@@ -39955,7 +39955,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 61,
+      "line": 60,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatFullMessageReader.swift",
       "source": "Close",
       "surface": "apple",
@@ -39963,7 +39963,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 77,
+      "line": 76,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatFullMessageReader.swift",
       "source": "The full message is no longer available.",
       "surface": "apple",
@@ -39971,7 +39971,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 82,
+      "line": 81,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatFullMessageReader.swift",
       "source": "The full message has no readable text.",
       "surface": "apple",
@@ -39979,7 +39979,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 89,
+      "line": 88,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatFullMessageReader.swift",
       "source": "The full message could not be loaded.",
       "surface": "apple",
@@ -40067,7 +40067,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 292,
+      "line": 289,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownBlockViews.swift",
       "source": "List item",
       "surface": "apple",
@@ -40075,7 +40075,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 295,
+      "line": 292,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownBlockViews.swift",
       "source": "Item",
       "surface": "apple",
@@ -40083,7 +40083,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 577,
+      "line": 603,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownRenderer.swift",
       "source": "Image",
       "surface": "apple",
@@ -40139,7 +40139,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 448,
+      "line": 447,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift",
       "source": "Message usage",
       "surface": "apple",
@@ -40147,7 +40147,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 628,
+      "line": 627,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift",
       "source": "Voice note",
       "surface": "apple",
@@ -40155,7 +40155,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 685,
+      "line": 684,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift",
       "source": "Writing",
       "surface": "apple",
@@ -40163,7 +40163,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 719,
+      "line": 718,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift",
       "source": "Preparing audio…",
       "surface": "apple",
@@ -40171,7 +40171,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 722,
+      "line": 721,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift",
       "source": "Speaking…",
       "surface": "apple",
@@ -40179,7 +40179,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 730,
+      "line": 729,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift",
       "source": "Preparing audio, tap to cancel",
       "surface": "apple",
@@ -40187,7 +40187,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 731,
+      "line": 730,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift",
       "source": "Speaking, tap to stop",
       "surface": "apple",

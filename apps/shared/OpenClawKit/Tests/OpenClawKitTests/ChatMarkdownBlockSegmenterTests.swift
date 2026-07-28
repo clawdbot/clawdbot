@@ -515,24 +515,23 @@ struct ChatMarkdownBlockSegmenterTests {
             snapshot: snapshot,
             context: .assistant,
             variant: .standard,
-            font: OpenClawChatTypography.callout.italic(),
-            textColor: OpenClawChatTheme.assistantText,
-            inlineMathTypography: .callout)
+            typography: .thinking,
+            textColor: OpenClawChatTheme.assistantText)
         let listView = renderer.listView(list)
         let nestedListView = listView.nestedListView(nestedList)
 
-        #expect(renderer.inlineMathTypography == .callout)
-        #expect(listView.inlineMathTypography == .callout)
-        #expect(listView.markdownRenderer("Parent \\(x\\)").inlineMathTypography == .callout)
-        #expect(nestedListView.inlineMathTypography == .callout)
-        #expect(nestedListView.markdownRenderer("Child \\(y\\)").inlineMathTypography == .callout)
+        #expect(renderer.typography == .thinking)
+        #expect(listView.typography == .thinking)
+        #expect(listView.markdownRenderer("Parent \\(x\\)").typography == .thinking)
+        #expect(nestedListView.typography == .thinking)
+        #expect(nestedListView.markdownRenderer("Child \\(y\\)").typography == .thinking)
     }
 
     #if canImport(UIKit)
     @MainActor private func fittedHeight(
         _ view: some View,
         width: CGFloat,
-        maximumHeight: CGFloat = 10_000) -> CGFloat
+        maximumHeight: CGFloat = 10000) -> CGFloat
     {
         let controller = UIHostingController(rootView: view)
         return controller.sizeThatFits(in: CGSize(width: width, height: maximumHeight)).height
@@ -555,7 +554,6 @@ struct ChatMarkdownBlockSegmenterTests {
                 text: markdown,
                 context: .assistant,
                 variant: .standard,
-                font: OpenClawChatTypography.body,
                 textColor: OpenClawChatTheme.assistantText)
                 .environment(\.dynamicTypeSize, .accessibility2)
                 .preferredColorScheme(scheme)
@@ -580,14 +578,12 @@ struct ChatMarkdownBlockSegmenterTests {
                         text: sample,
                         context: .assistant,
                         variant: .standard,
-                        font: OpenClawChatTypography.body,
                         textColor: OpenClawChatTheme.assistantText)
                         .environment(\.dynamicTypeSize, typeSize)
                     let list = ChatMarkdownRenderer(
                         text: "- \(sample)",
                         context: .assistant,
                         variant: .standard,
-                        font: OpenClawChatTypography.body,
                         textColor: OpenClawChatTheme.assistantText)
                         .environment(\.dynamicTypeSize, typeSize)
 
