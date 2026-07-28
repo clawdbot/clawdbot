@@ -30,17 +30,13 @@ enum ExecApprovalsLegacyMigrationGate {
                     NSLocalizedDescriptionKey:
                         "Legacy exec approvals exist at \(sourceURL.path). " +
                         // Doctor repairs whichever state directory its own environment resolves to,
-                        // and an app store never shares the CLI's default root, so always scope the
-                        // command; a bare `doctor --fix` would repair a different directory.
-                        "Run `OPENCLAW_STATE_DIR=\(self.shellQuoted(stateDirectoryURL.path)) " +
-                        "openclaw doctor --fix` before using exec approvals.",
+                        // and an app store never shares the CLI's default root, so always name the
+                        // directory; a bare `doctor --fix` would repair a different one. Prose,
+                        // not a `VAR=value cmd` one-liner, so the path needs no shell quoting.
+                        "Run `openclaw doctor --fix` with OPENCLAW_STATE_DIR set to " +
+                        "\(stateDirectoryURL.path) before using exec approvals.",
                 ])
         }
-    }
-
-    /// POSIX single-quote so an app state directory under `Application Support` stays one shell word.
-    private static func shellQuoted(_ value: String) -> String {
-        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     private static func pathMayExist(_ url: URL) -> Bool {

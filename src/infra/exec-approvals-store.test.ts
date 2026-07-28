@@ -407,18 +407,11 @@ describe("exec approvals SQLite store", () => {
       path.join(stateDir, "exec-approvals.json"),
     );
 
-    expect(error.message).toContain(`OPENCLAW_STATE_DIR='${stateDir}' openclaw doctor --fix`);
-  });
-
-  it("keeps a spaced state directory one shell word", () => {
-    // macOS app state lives under "Application Support"; an unquoted path would
-    // word-split and make the prescribed command repair the wrong directory.
-    const stateDir = path.join(process.env.OPENCLAW_STATE_DIR ?? "", "Application Support");
-    const error = new ExecApprovalsMigrationRequiredError(
-      path.join(stateDir, "exec-approvals.json"),
+    // Prose, not `VAR=value cmd`: no Windows shell accepts that form, and a path
+    // containing spaces would need shell-specific quoting to survive a paste.
+    expect(error.message).toContain(
+      `Run \`openclaw doctor --fix\` with OPENCLAW_STATE_DIR set to ${stateDir}`,
     );
-
-    expect(error.message).toContain(`OPENCLAW_STATE_DIR='${stateDir}' openclaw doctor --fix`);
   });
 
   it.each([

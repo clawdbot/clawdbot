@@ -6,26 +6,23 @@ import { resolveExecApprovalsPath } from "./exec-approvals-config.js";
 const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
 const legacyPresenceCache = new Map<string, boolean>();
 
-/** POSIX single-quote so a state directory containing spaces stays one shell word. */
-function shellQuoteStateDir(stateDir: string): string {
-  return `'${stateDir.replaceAll("'", "'\\''")}'`;
-}
-
 /**
  * Doctor repairs whichever state directory its own environment resolves to, so a bare
  * `openclaw doctor --fix` repairs the default root while a scoped install stays blocked.
- * Name the directory whenever this process is scoped to a non-default one.
+ * Name the directory whenever this process is scoped to a non-default one. Say it in
+ * prose rather than as a `VAR=value cmd` one-liner, which no Windows shell accepts.
  */
-function formatDoctorFixCommand(filePath: string): string {
+function doctorFixInstruction(filePath: string): string {
+  const command = "Run `openclaw doctor --fix`";
   return process.env.OPENCLAW_STATE_DIR?.trim()
-    ? `OPENCLAW_STATE_DIR=${shellQuoteStateDir(path.dirname(filePath))} openclaw doctor --fix`
-    : "openclaw doctor --fix";
+    ? `${command} with OPENCLAW_STATE_DIR set to ${path.dirname(filePath)}`
+    : command;
 }
 
 export class ExecApprovalsMigrationRequiredError extends Error {
   constructor(filePath: string) {
     super(
-      `Legacy exec approvals exist at ${filePath}. Run \`${formatDoctorFixCommand(filePath)}\` before using exec approvals.`,
+      `Legacy exec approvals exist at ${filePath}. ${doctorFixInstruction(filePath)} before using exec approvals.`,
     );
     this.name = "ExecApprovalsMigrationRequiredError";
   }
