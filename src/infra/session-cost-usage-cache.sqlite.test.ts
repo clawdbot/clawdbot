@@ -109,8 +109,8 @@ describe("session cost usage SQLite cache", () => {
       const agentId = "worker-1";
       const databasePath = resolveOpenClawAgentSqlitePath({ agentId });
       // A supervised gateway restarts into the same PID, so the leaked row from the
-      // previous incarnation still points at a live PID -- ours. Only `startedAt`,
-      // which predates this process, reveals that we never owned it.
+      // previous incarnation still points at a live PID -- ours. Liveness cannot
+      // retire it; only the missing owner nonce proves this process never minted it.
       writeRefreshLockRow(agentId, {
         pid: process.pid,
         startedAt: Math.round(performance.timeOrigin) - 60_000,
