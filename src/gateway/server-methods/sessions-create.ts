@@ -87,7 +87,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     }
     const catalogTarget =
       catalogId && catalogAgentId
-        ? resolveSessionCatalogCreateTarget(catalogId, catalogAgentId)
+        ? resolveSessionCatalogCreateTarget(catalogId, catalogAgentId, cfg)
         : undefined;
     if (catalogTarget && !catalogTarget.ok) {
       respond(

@@ -4,6 +4,8 @@
 
 Fixes secondary Gateway sessions disconnecting during temporary discovery gaps and preserves manual TLS when reopening saved Gateways and Control UI pages.
 
+Prevents delayed Wear OS requests from a previous phone from blocking or corrupting the newly selected phone session.
+
 ## 2026.7.3 - 2026-07-20
 
 Adds a Wear OS companion for sessions, transcripts, text and voice replies, realtime Talk, Gateway controls, notifications, settings, and a launch Tile.

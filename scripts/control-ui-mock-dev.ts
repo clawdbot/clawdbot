@@ -6,6 +6,7 @@ import qrcode from "qrcode";
 import { createServer, type Plugin, type ViteDevServer } from "vite";
 import type { UserProfile } from "../packages/gateway-protocol/src/index.js";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { applySharedChannelFieldHelp } from "../src/config/schema.channel-field-help.js";
 import { applyConfigTierHints, applyResolvedConfigTierHints } from "../src/config/schema.tiers.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-contract.js";
 import {
@@ -755,7 +756,15 @@ function buildConfigMocks(options: { swarmEnabled?: boolean } = {}) {
                 title: "Group policy",
                 enum: ["allowlist", "open", "off"],
               },
-              selfChatMode: { type: "string", title: "Self chat mode", enum: ["off", "notes"] },
+              // Channel-specific leaves carry their help from the plugin's own
+              // uiHints in production; the fixture uses schema descriptions,
+              // which resolve through the same field-meta fallback.
+              selfChatMode: {
+                type: "string",
+                title: "Self chat mode",
+                description: "Same-phone setup (bot uses your personal WhatsApp number).",
+                enum: ["off", "notes"],
+              },
               configWrites: { type: "boolean", title: "Config writes" },
               streaming: {
                 type: "object",
@@ -770,15 +779,14 @@ function buildConfigMocks(options: { swarmEnabled?: boolean } = {}) {
                   },
                 },
               },
-              retry: {
+              healthMonitor: {
                 type: "object",
-                title: "Retry",
+                title: "Health monitor",
                 properties: {
-                  attempts: { type: "integer", title: "Attempts" },
-                  minDelayMs: { type: "integer", title: "Min delay (ms)" },
-                  maxDelayMs: { type: "integer", title: "Max delay (ms)" },
+                  enabled: { type: "boolean", title: "Enabled" },
                 },
               },
+              mediaMaxMb: { type: "number", title: "Media max MB" },
             },
           },
         },
@@ -798,11 +806,13 @@ function buildConfigMocks(options: { swarmEnabled?: boolean } = {}) {
     },
     schema: {
       schema,
-      // Resolve tiers the way the gateway does so the mock reproduces the
-      // real common/advanced split instead of a flat "everything advanced".
-      uiHints: applyResolvedConfigTierHints(
-        schema,
-        applyConfigTierHints({}, { includePluginOwnedChannels: true }),
+      // Resolve tiers and shared channel help the way the gateway does so the
+      // mock reproduces the real split and subtext instead of bare labels.
+      uiHints: applySharedChannelFieldHelp(
+        applyResolvedConfigTierHints(
+          schema,
+          applyConfigTierHints({}, { includePluginOwnedChannels: true }),
+        ),
       ),
       version: "mock-config-schema",
       generatedAt: new Date(0).toISOString(),

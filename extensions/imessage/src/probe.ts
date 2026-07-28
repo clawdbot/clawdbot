@@ -212,6 +212,22 @@ async function probeSendRichSupportsAttachment(
   }
 }
 
+async function probePollSendSupportsNoComment(
+  cliPath: string,
+  timeoutMs: number,
+): Promise<boolean> {
+  try {
+    const result = await runCommandWithTimeout([cliPath, "poll", "send", "--help"], { timeoutMs });
+    if (result.code !== 0) {
+      return false;
+    }
+    const combined = `${result.stdout}\n${result.stderr}`;
+    return /(?:^|\s)--no-comment\b/m.test(combined);
+  } catch {
+    return false;
+  }
+}
+
 export async function probeIMessagePrivateApi(
   cliPath: string,
   timeoutMs: number,
@@ -242,12 +258,16 @@ export async function probeIMessagePrivateApi(
     // the threaded send path. Treat any failure as "not supported" so
     // callers fall back to the legacy throw rather than silently dropping.
     const sendRichSupportsAttachment = await probeSendRichSupportsAttachment(key, timeoutMs);
+    // Caption suppression is required for approval polls because OpenClaw
+    // renders the details first. Published imsg 0.13.1 lacks --no-comment, so
+    // probe the exact CLI contract instead of inferring it from poll selectors.
+    const pollSendSupportsNoComment = await probePollSendSupportsNoComment(key, timeoutMs);
     const status: NonNullable<IMessageProbe["privateApi"]> = {
       available: result.code === 0 && advancedFeatures && v2Ready,
       v2Ready,
       selectors,
       rpcMethods,
-      cliCapabilities: { sendRichSupportsAttachment },
+      cliCapabilities: { sendRichSupportsAttachment, pollSendSupportsNoComment },
       ...(statusMessage ? { statusMessage } : {}),
       ...(result.code === 0
         ? !payload && firstLineSnippet
@@ -267,7 +287,10 @@ export async function probeIMessagePrivateApi(
       v2Ready: false,
       selectors: {},
       rpcMethods: [],
-      cliCapabilities: { sendRichSupportsAttachment: false },
+      cliCapabilities: {
+        sendRichSupportsAttachment: false,
+        pollSendSupportsNoComment: false,
+      },
       error: String(err),
     };
     cacheIMessagePrivateApiStatus(key, status);

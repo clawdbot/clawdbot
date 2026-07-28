@@ -159,6 +159,13 @@
  * Lives here rather than config.css because every schema-driven surface
  * (config pages and the channel detail forms) renders the same split. */
 
+.config-tier-groups {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
 .config-advanced-divider {
   display: flex;
   align-items: center;
