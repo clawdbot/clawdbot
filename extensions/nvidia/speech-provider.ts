@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import {
   isProviderAuthProfileConfigured,
   type OpenClawConfig,
@@ -12,7 +13,6 @@ import {
   NVIDIA_DEFAULT_LANGUAGE,
   NVIDIA_DEFAULT_TTS_MODEL,
   NVIDIA_DEFAULT_VOICE,
-  NVIDIA_TTS_BASE_URL,
   isNvidiaHostedTtsBaseUrl,
   normalizeNvidiaTtsConfig,
   resolveMagpieVoiceLanguage,
@@ -77,6 +77,7 @@ export function buildNvidiaSpeechProvider(): SpeechProviderPlugin {
         customConfiguration:
           trimToUndefined(overrides.customConfiguration) ?? config.customConfiguration,
         timeoutMs: req.timeoutMs,
+        maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
       });
       return {
         audioBuffer,

@@ -40,6 +40,14 @@ describe("NVIDIA audio transcription provider", () => {
       }),
     ).toEqual({ kind: "none", source: "nvidia-self-hosted" });
 
+    expect(
+      nvidiaMediaUnderstandingProvider.resolveAuth?.({
+        provider: "nvidia",
+        providerConfig: {},
+        effectiveBaseUrl: "http://127.0.0.1:9001/v1",
+      }),
+    ).toEqual({ kind: "none", source: "nvidia-self-hosted" });
+
     process.env.NVIDIA_ASR_BASE_URL = "https://speech.example/v1";
     expect(
       nvidiaMediaUnderstandingProvider.resolveAuth?.({

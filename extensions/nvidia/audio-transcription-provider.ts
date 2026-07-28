@@ -9,8 +9,8 @@ export const nvidiaMediaUnderstandingProvider: MediaUnderstandingProvider = {
   capabilities: ["audio"],
   defaultModels: { audio: NVIDIA_DEFAULT_ASR_MODEL },
   autoPriority: { audio: 55 },
-  resolveAuth: ({ providerConfig }) => {
-    const configuredBaseUrl = providerConfig?.baseUrl;
+  resolveAuth: ({ effectiveBaseUrl, providerConfig }) => {
+    const configuredBaseUrl = effectiveBaseUrl ?? providerConfig?.baseUrl;
     const envBaseUrl = process.env.NVIDIA_ASR_BASE_URL?.trim();
     const customConfiguredBaseUrl =
       typeof configuredBaseUrl === "string" &&

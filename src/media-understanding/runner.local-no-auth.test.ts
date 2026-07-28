@@ -209,7 +209,17 @@ describe("runCapability local no-auth audio providers", () => {
               text: "plugin local ok",
               model: req.model,
             }));
-            const cfg = createAudioCfg({ provider: "local-audio", model: "whisper-local" });
+            const baseUrl = "http://127.0.0.1:9000/v1";
+            const cfg = createAudioCfg({
+              provider: "local-audio",
+              model: "whisper-local",
+              entry: { baseUrl },
+            });
+            const resolveAuth = vi.fn((context: { effectiveBaseUrl?: string }) =>
+              context.effectiveBaseUrl === baseUrl
+                ? { kind: "none" as const, source: "local-audio plugin no-auth" }
+                : undefined,
+            );
 
             const result = await runCapability({
               capability: "audio",
@@ -220,10 +230,7 @@ describe("runCapability local no-auth audio providers", () => {
               agentDir,
               providerRegistry: buildProviderRegistry({
                 "local-audio": createAudioProvider("local-audio", transcribeAudio, {
-                  resolveAuth: () => ({
-                    kind: "none",
-                    source: "local-audio plugin no-auth",
-                  }),
+                  resolveAuth,
                 }),
               }),
             });
@@ -237,6 +244,10 @@ describe("runCapability local no-auth audio providers", () => {
             expect(result.decision.outcome).toBe("success");
             expect(result.outputs[0]?.text).toBe("plugin local ok");
             expect(transcribeAudio).toHaveBeenCalledTimes(1);
+            expect(resolveAuth).toHaveBeenCalledWith(
+              expect.objectContaining({ effectiveBaseUrl: baseUrl }),
+            );
+            expect(transcribeAudio.mock.calls[0]?.[0].baseUrl).toBe(baseUrl);
             expect(transcribeAudio.mock.calls[0]?.[0].apiKey).toBe(CUSTOM_LOCAL_AUTH_MARKER);
             expect(transcribeAudio.mock.calls[0]?.[0].auth).toEqual({
               kind: "none",

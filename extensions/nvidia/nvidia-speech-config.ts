@@ -56,7 +56,9 @@ export function normalizeNvidiaTtsConfig(rawConfig: Record<string, unknown>): Nv
 
 export function resolveMagpieVoiceLanguage(voice: string): string | undefined {
   const locale = /^Magpie-Multilingual\.([A-Za-z]{2})-([A-Za-z]{2})\./.exec(voice);
-  return locale ? `${locale[1].toLowerCase()}-${locale[2].toUpperCase()}` : undefined;
+  const language = locale?.[1];
+  const region = locale?.[2];
+  return language && region ? `${language.toLowerCase()}-${region.toUpperCase()}` : undefined;
 }
 
 export function isNvidiaHostedAsrBaseUrl(value: string): boolean {

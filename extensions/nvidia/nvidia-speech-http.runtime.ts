@@ -12,14 +12,15 @@ import {
   createProviderOperationDeadline,
   postMultipartRequest,
   postTranscriptionRequest,
+  readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
-  resolveProviderHttpRequestConfig,
+  resolveProviderHttpRequestConfigWithOriginTrust,
   requireTranscriptionText,
 } from "openclaw/plugin-sdk/provider-http";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { ssrfPolicyFromHttpBaseUrlAllowedOrigin } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   NVIDIA_ASR_BASE_URL,
-  NVIDIA_CHAT_BASE_URL,
   NVIDIA_DEFAULT_ASR_MODEL,
   isNvidiaHostedAsrBaseUrl,
   normalizeNvidiaBaseUrl,
@@ -40,6 +41,7 @@ const RIFF_HEADER = Buffer.from("RIFF");
 const WAVE_HEADER = Buffer.from("WAVE");
 const OGG_HEADER = Buffer.from("OggS");
 const OPUS_HEADER = Buffer.from("OpusHead");
+const DEFAULT_TTS_MAX_BYTES = 16 * 1024 * 1024;
 
 function toSnakeCase(value: string): string {
   return value.replace(/[A-Z]/g, (char) => `_${char.toLowerCase()}`);
@@ -194,8 +196,8 @@ async function transcribeAtEndpoint(
 ): Promise<AudioTranscriptionResult> {
   const fetchFn = req.fetchFn ?? fetch;
   const apiKey = endpoint.hosted && req.auth?.kind !== "none" ? req.apiKey?.trim() : undefined;
-  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy, requestConfig } =
-    resolveProviderHttpRequestConfig({
+  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy, trustConfiguredBaseUrlOrigin } =
+    resolveProviderHttpRequestConfigWithOriginTrust({
       baseUrl: endpoint.baseUrl,
       defaultBaseUrl: endpoint.baseUrl,
       headers: req.headers,
@@ -225,14 +227,14 @@ async function transcribeAtEndpoint(
     fetchFn,
     allowPrivateNetwork,
     dispatcherPolicy,
-    ssrfPolicy: requestConfig.privateNetworkExplicitlyDenied
-      ? undefined
-      : ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl),
+    ssrfPolicy: trustConfiguredBaseUrlOrigin
+      ? ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl)
+      : undefined,
     auditContext: `NVIDIA ${endpoint.model} ASR`,
   });
   try {
     await assertOkOrThrowHttpError(response, `NVIDIA ${endpoint.model} transcription failed`);
-    const payload = (await response.json()) as { text?: string };
+    const payload = await readProviderJsonResponse<{ text?: string }>(response, "nvidia.asr");
     return {
       text: requireTranscriptionText(payload.text, "NVIDIA ASR response missing text"),
       model: endpoint.model,
@@ -276,6 +278,7 @@ type MagpieSynthesizeParams = {
   customDictionary?: string;
   customConfiguration?: string;
   timeoutMs: number;
+  maxBytes?: number;
 };
 
 export async function magpieSynthesize(params: MagpieSynthesizeParams): Promise<Buffer> {
@@ -308,7 +311,20 @@ export async function magpieSynthesize(params: MagpieSynthesizeParams): Promise<
   });
   try {
     await assertOkOrThrowHttpError(response, "NVIDIA Magpie TTS failed");
-    return Buffer.from(await response.arrayBuffer());
+    const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+    if (!contentType.startsWith("audio/") && !contentType.startsWith("application/octet-stream")) {
+      throw new Error(
+        `NVIDIA Magpie TTS returned unexpected content type: ${contentType || "none"}`,
+      );
+    }
+    const audio = await readResponseWithLimit(response, params.maxBytes ?? DEFAULT_TTS_MAX_BYTES, {
+      onOverflow: ({ maxBytes }) =>
+        new Error(`NVIDIA Magpie TTS audio response exceeds ${maxBytes} bytes`),
+    });
+    if (audio.length === 0 || !audio.subarray(0, RIFF_HEADER.length).equals(RIFF_HEADER)) {
+      throw new Error("NVIDIA Magpie TTS returned an invalid WAV response");
+    }
+    return audio;
   } finally {
     await release();
   }

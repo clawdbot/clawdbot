@@ -302,4 +302,25 @@ describe("NVIDIA speech HTTP runtime", () => {
     expect(form.get("custom_configuration")).toBe("key:value");
     expect(form.get("encoding")).toBe("LINEAR_PCM");
   });
+
+  it("rejects a successful non-audio Magpie response", async () => {
+    mocks.postMultipartRequest.mockResolvedValue({
+      response: new Response(JSON.stringify({ error: "not audio" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      release: vi.fn(),
+    });
+
+    await expect(
+      magpieSynthesize({
+        text: "hello",
+        baseUrl: "http://10.0.0.5:9000/v1",
+        voice: "Magpie-Multilingual.EN-US.Aria",
+        language: "en-US",
+        sampleRateHz: 44_100,
+        timeoutMs: 30_000,
+      }),
+    ).rejects.toThrow("unexpected content type");
+  });
 });
