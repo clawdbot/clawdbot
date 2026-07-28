@@ -64,6 +64,27 @@ function getSessionsListDetails(result: { details?: unknown }): SessionsListDeta
   return result.details as SessionsListDetails;
 }
 
+function extractVisibleText(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  return content
+    .map((block) =>
+      block && typeof block === "object" && typeof (block as { text?: unknown }).text === "string"
+        ? (block as { text: string }).text
+        : undefined,
+    )
+    .filter((value): value is string => typeof value === "string")
+    .join("\n");
+}
+
 describe("sessions-list-tool", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -369,6 +390,151 @@ describe("sessions-list-tool", () => {
       pinned: false,
     });
     expect(getSessionsListDetails(result).sessions?.[0]).not.toHaveProperty("archivedAt");
+  });
+
+  it("projects visible WhatsApp group sends in hydrated messages", async () => {
+    const deliveredText = "Here is the Amazon link: https://example.test/item";
+    mocks.gatewayCall.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [
+            {
+              key: "agent:main:whatsapp:group:120363425559039020@g.us",
+              kind: "group",
+              sessionId: "sess-wa",
+            },
+          ],
+        };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            { role: "user", content: [{ type: "text", text: "Can you send the Amazon link?" }] },
+            {
+              role: "assistant",
+              provider: "openclaw",
+              model: "delivery-mirror",
+              content: [{ type: "text", text: deliveredText }],
+            },
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call-message-wa",
+                  name: "message",
+                  arguments: { action: "send", message: deliveredText },
+                },
+              ],
+            },
+            {
+              role: "toolResult",
+              toolName: "message",
+              toolCallId: "call-message-wa",
+              content: { ok: true, messageId: "wamid.1" },
+            },
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "Sent the Amazon link in WhatsApp." }],
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const result = await createSessionsListTool({ config: VALID_CONFIG }).execute("call-list-wa", {
+      messageLimit: 5,
+    });
+    const messages = getSessionsListDetails(result).sessions?.[0]?.messages ?? [];
+
+    expect(messages.map(extractVisibleText)).toEqual([
+      "Can you send the Amazon link?",
+      deliveredText,
+    ]);
+    expect(messages).not.toContainEqual(
+      expect.objectContaining({ provider: "openclaw", model: "delivery-mirror" }),
+    );
+    expect(JSON.stringify(messages)).not.toContain('"type":"toolCall"');
+    expect(JSON.stringify(messages)).not.toContain("Sent the Amazon link in WhatsApp.");
+  });
+
+  it("keeps repeated identical standalone delivery mirrors in hydrated messages", async () => {
+    const repeatedText = "Done.";
+    mocks.gatewayCall.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [
+            {
+              key: "agent:main:whatsapp:group:120363425559039020@g.us",
+              kind: "group",
+              sessionId: "sess-wa-repeated",
+            },
+          ],
+        };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            { role: "user", content: [{ type: "text", text: "Send the first redacted update." }] },
+            {
+              role: "assistant",
+              provider: "openclaw",
+              model: "delivery-mirror",
+              content: [{ type: "text", text: repeatedText }],
+            },
+            { role: "user", content: [{ type: "text", text: "Send the second redacted update." }] },
+            {
+              role: "assistant",
+              provider: "openclaw",
+              model: "delivery-mirror",
+              content: [{ type: "text", text: repeatedText }],
+            },
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call-message-repeated",
+                  name: "message",
+                  arguments: { action: "send", message: repeatedText },
+                },
+              ],
+            },
+            {
+              role: "toolResult",
+              toolName: "message",
+              toolCallId: "call-message-repeated",
+              content: { ok: true, messageId: "wamid.2" },
+            },
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "Sent the update in WhatsApp." }],
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const result = await createSessionsListTool({ config: VALID_CONFIG }).execute(
+      "call-list-wa-repeated",
+      { messageLimit: 7 },
+    );
+    const messages = getSessionsListDetails(result).sessions?.[0]?.messages ?? [];
+
+    expect(messages.map(extractVisibleText)).toEqual([
+      "Send the first redacted update.",
+      repeatedText,
+      "Send the second redacted update.",
+      repeatedText,
+    ]);
+    expect(JSON.stringify(messages)).not.toContain("delivery-mirror");
+    expect(JSON.stringify(messages)).not.toContain("openclawMessageToolMirror");
   });
 
   it.each([

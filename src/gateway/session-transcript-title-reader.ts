@@ -15,6 +15,7 @@ import {
   toTranscriptReadScope,
   type ResolvedTranscriptReadTarget,
 } from "./session-transcript-readers.js";
+import { projectVisibleChatTranscriptMessages } from "./visible-chat-transcript.js";
 
 type SessionTitleFields = {
   firstUserMessage: string | null;
@@ -84,10 +85,19 @@ function findFirstTitleUserMessage(
 }
 
 function findLastMessageText(entries: readonly SessionTranscriptMessageEvent[]): string | null {
-  return (
-    entries.toReversed().map(sqliteMessageEventWithSeq).map(extractMessageText).find(Boolean) ??
-    null
-  );
+  const messages = entries.map(sqliteMessageEventWithSeq);
+  const projected = projectVisibleChatTranscriptMessages(messages, { stripEnvelope: false });
+  for (const message of projected.toReversed()) {
+    const role = extractMessageRole(message);
+    if (role !== "user" && role !== "assistant") {
+      continue;
+    }
+    const text = extractMessageText(message);
+    if (text) {
+      return text;
+    }
+  }
+  return null;
 }
 
 function readSqliteTitleFields(

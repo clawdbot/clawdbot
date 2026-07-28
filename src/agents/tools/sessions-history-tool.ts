@@ -10,6 +10,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { capArrayByJsonBytes } from "../../gateway/session-transcript-readers.js";
+import { projectVisibleChatTranscriptMessages } from "../../gateway/visible-chat-transcript.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
 import { truncateUtf16Safe } from "../../utils.js";
@@ -19,7 +20,6 @@ import {
   describeSessionsHistoryTool,
   SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
-import { stripToolMessages } from "./chat-history-text.js";
 import type { AnyAgentTool } from "./common.js";
 import {
   jsonResult,
@@ -480,7 +480,9 @@ export function createSessionsHistoryTool(opts?: {
           }),
       });
       const rawMessages = Array.isArray(result?.messages) ? result.messages : [];
-      const selectedMessages = includeTools ? rawMessages : stripToolMessages(rawMessages);
+      const selectedMessages = includeTools
+        ? rawMessages
+        : projectVisibleChatTranscriptMessages(rawMessages);
       const sanitizedMessages = selectedMessages.map((message) => sanitizeHistoryMessage(message));
       const contentTruncated = sanitizedMessages.some((entry) => entry.truncated);
       const contentRedacted = sanitizedMessages.some((entry) => entry.redacted);

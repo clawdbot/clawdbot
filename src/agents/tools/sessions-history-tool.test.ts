@@ -105,6 +105,40 @@ function readMessageId(message: unknown): string | undefined {
   return typeof id === "string" ? id : undefined;
 }
 
+function createHistoryToolWithMessages(messages: unknown[]) {
+  return createSessionsHistoryTool({
+    agentSessionKey: "agent:alfred:whatsapp:group:120363425559039020@g.us",
+    config: {},
+    callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+      if (request.method === "chat.history") {
+        return { messages } as T;
+      }
+      return {} as T;
+    },
+  });
+}
+
+function extractVisibleText(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  return content
+    .map((block) =>
+      block && typeof block === "object" && typeof (block as { text?: unknown }).text === "string"
+        ? (block as { text: string }).text
+        : undefined,
+    )
+    .filter((value): value is string => typeof value === "string")
+    .join("\n");
+}
+
 describe("sessions_history redaction", () => {
   beforeAll(async () => {
     previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
@@ -434,6 +468,120 @@ describe("sessions_history redaction", () => {
       hasMore: true,
       totalMessages: 10,
     });
+  });
+
+  it("projects visible WhatsApp group sends without delivery artifacts by default", async () => {
+    const deliveredText = "Here is the Amazon link: https://example.test/item";
+    const tool = createHistoryToolWithMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "Can you send the Amazon link?" }],
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: deliveredText }],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-message-wa",
+            name: "message",
+            arguments: { action: "send", message: deliveredText },
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: "call-message-wa",
+        content: { ok: true, messageId: "wamid.1" },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Sent the Amazon link in WhatsApp." }],
+      },
+    ]);
+
+    const result = await tool.execute("call-wa-history", {
+      sessionKey: "agent:alfred:whatsapp:group:120363425559039020@g.us",
+    });
+    const details = result.details as { messages?: unknown[] };
+
+    expect(details.messages?.map(extractVisibleText)).toEqual([
+      "Can you send the Amazon link?",
+      deliveredText,
+    ]);
+    expect(details.messages).not.toContainEqual(
+      expect.objectContaining({ provider: "openclaw", model: "delivery-mirror" }),
+    );
+    expect(JSON.stringify(details.messages)).not.toContain('"type":"toolCall"');
+    expect(JSON.stringify(details.messages)).not.toContain("Sent the Amazon link in WhatsApp.");
+
+    const withTools = await tool.execute("call-wa-history-tools", {
+      sessionKey: "agent:alfred:whatsapp:group:120363425559039020@g.us",
+      includeTools: true,
+    });
+    const withToolsDetails = withTools.details as { messages?: unknown[] };
+    expect(withToolsDetails.messages).toContainEqual(
+      expect.objectContaining({ provider: "openclaw", model: "delivery-mirror" }),
+    );
+    expect(JSON.stringify(withToolsDetails.messages)).toContain("toolCall");
+  });
+
+  it("keeps standalone delivery mirrors when a later synthetic mirror has identical text", async () => {
+    const repeatedText = "Done.";
+    const tool = createHistoryToolWithMessages([
+      { role: "user", content: [{ type: "text", text: "Send the first redacted update." }] },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: repeatedText }],
+      },
+      { role: "user", content: [{ type: "text", text: "Send the second redacted update." }] },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: repeatedText }],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-message-repeated",
+            name: "message",
+            arguments: { action: "send", message: repeatedText },
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: "call-message-repeated",
+        content: { ok: true, messageId: "wamid.2" },
+      },
+      { role: "assistant", content: [{ type: "text", text: "Sent the update in WhatsApp." }] },
+    ]);
+
+    const result = await tool.execute("call-wa-history-repeated", {
+      sessionKey: "agent:alfred:whatsapp:group:120363425559039020@g.us",
+    });
+    const messages = ((result.details as { messages?: unknown[] }).messages ?? []) as unknown[];
+
+    expect(messages.map(extractVisibleText)).toEqual([
+      "Send the first redacted update.",
+      repeatedText,
+      "Send the second redacted update.",
+      repeatedText,
+    ]);
+    expect(JSON.stringify(messages)).not.toContain("delivery-mirror");
+    expect(JSON.stringify(messages)).not.toContain("openclawMessageToolMirror");
   });
 
   it("honors a scoped incarnation grant through the sandbox visibility clamp", async () => {

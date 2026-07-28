@@ -15,6 +15,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { readSessionTitleFieldsFromTranscriptAsync } from "../../gateway/session-transcript-title-reader.js";
 import { deriveSessionTitle } from "../../gateway/session-utils.js";
+import { projectVisibleChatTranscriptMessages } from "../../gateway/visible-chat-transcript.js";
 import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { getSessionStateVersions } from "../../sessions/session-state-events.js";
 import { resolveDefaultAgentId } from "../agent-scope-config.js";
@@ -27,7 +28,6 @@ import {
   describeSessionVisibilityScope,
   SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
-import { stripToolMessages } from "./chat-history-text.js";
 import type { AnyAgentTool } from "./common.js";
 import {
   jsonResult,
@@ -449,7 +449,7 @@ export function createSessionsListTool(opts?: {
               params: { sessionKey: target.resolvedKey, limit: messageLimit },
             });
             const rawMessages = Array.isArray(history?.messages) ? history.messages : [];
-            const filtered = stripToolMessages(rawMessages);
+            const filtered = projectVisibleChatTranscriptMessages(rawMessages);
             target.row.messages =
               filtered.length > messageLimit ? filtered.slice(-messageLimit) : filtered;
           },
