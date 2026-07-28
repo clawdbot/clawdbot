@@ -50,6 +50,10 @@ import { hasAgentRosterProperty, resolveAgentWorkspaceDir } from "../agent-scope
 import { resolveAgentConfig, resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { hasUsableOAuthCredential } from "../auth-profiles/credential-state.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
+import {
+  isSafeToUseExternalCliCredential,
+  readExternalCliBootstrapCredential,
+} from "../auth-profiles/external-cli-sync.js";
 import { buildOAuthRefreshFailureLoginCommand } from "../auth-profiles/oauth-refresh-failure.js";
 import { resolveApiKeyForProfile } from "../auth-profiles/oauth.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
@@ -165,6 +169,7 @@ const prepareDeps = {
   claudeCliSessionTranscriptHasContent,
   claudeCliSessionTranscriptHasOrphanedToolUse,
   getClaudeLiveSessionGenerationForOwner,
+  readExternalCliBootstrapCredential,
   resolveApiKeyForProfile,
 };
 
@@ -329,18 +334,38 @@ function shouldRefreshAuthProfileForExecution(params: {
   );
 }
 
+type CliAuthProfileResolutionFailure =
+  | { kind: "unmaterialized" }
+  | { kind: "resolved-as-other"; resolvedProfileId: string }
+  | { kind: "native-login-missing" }
+  | { kind: "native-login-identity-mismatch" };
+
+function describeCliAuthProfileResolutionFailure(
+  profileId: string,
+  failure: CliAuthProfileResolutionFailure,
+): string {
+  switch (failure.kind) {
+    case "resolved-as-other":
+      return `selected auth profile "${profileId}" resolved as "${failure.resolvedProfileId}"`;
+    case "native-login-missing":
+      return `selected auth profile "${profileId}" reuses the host's Claude CLI login, but no reusable Claude CLI login is available`;
+    case "native-login-identity-mismatch":
+      return `selected auth profile "${profileId}" reuses the host's Claude CLI login, but the current Claude CLI login belongs to a different account`;
+    case "unmaterialized":
+      return `could not materialize selected auth profile "${profileId}"`;
+  }
+}
+
 function buildCliAuthProfileResolutionError(params: {
   backendId: string;
   profileId: string;
   provider: string;
-  resolvedProfileId?: string;
+  failure: CliAuthProfileResolutionFailure;
 }): Error {
   const loginCommand = buildOAuthRefreshFailureLoginCommand(params.provider, {
     profileId: params.profileId,
   });
-  const reason = params.resolvedProfileId
-    ? `selected auth profile "${params.profileId}" resolved as "${params.resolvedProfileId}"`
-    : `could not materialize selected auth profile "${params.profileId}"`;
+  const reason = describeCliAuthProfileResolutionFailure(params.profileId, params.failure);
   return new Error(
     `CLI backend "${params.backendId}" ${reason}. Re-authenticate with: ${loginCommand}. OpenClaw did not start the run.`,
   );
@@ -524,7 +549,45 @@ export async function prepareCliRunContext(
       authCredential = authStore.profiles[effectiveAuthProfileId];
     }
   }
-  if (
+  // Claude CLI-provider OAuth credentials exist only as imports of the host's
+  // own `claude` login; Claude owns that single-use refresh-token family.
+  // Forwarding a snapshot goes stale within hours and blocks the subprocess
+  // from refreshing itself, so verify the live login matches the selected
+  // identity and let Claude authenticate natively (it refreshes in place).
+  const nativeClaudeCliCredential =
+    backendResolved.id === "claude-cli" &&
+    authCredential?.type === "oauth" &&
+    authCredential.provider === "claude-cli"
+      ? authCredential
+      : undefined;
+  if (effectiveAuthProfileId && authStore && nativeClaudeCliCredential) {
+    const authProfileId = effectiveAuthProfileId;
+    const liveNativeLogin = prepareDeps.readExternalCliBootstrapCredential({
+      store: authStore,
+      profileId: authProfileId,
+      credential: nativeClaudeCliCredential,
+    });
+    if (!liveNativeLogin) {
+      throw buildCliAuthProfileResolutionError({
+        backendId: backendResolved.id,
+        profileId: authProfileId,
+        provider: nativeClaudeCliCredential.provider,
+        failure: { kind: "native-login-missing" },
+      });
+    }
+    if (!isSafeToUseExternalCliCredential(nativeClaudeCliCredential, liveNativeLogin)) {
+      throw buildCliAuthProfileResolutionError({
+        backendId: backendResolved.id,
+        profileId: authProfileId,
+        provider: nativeClaudeCliCredential.provider,
+        failure: { kind: "native-login-identity-mismatch" },
+      });
+    }
+    // Spawn with no forwarded credential. The local-login auth epoch then keys
+    // the session to the host account (identity-hashed, rotation-stable), and
+    // the next store load re-adopts whatever Claude rotates.
+    authCredential = undefined;
+  } else if (
     effectiveAuthProfileId &&
     shouldRefreshAuthProfileForExecution({
       backendId: backendResolved.id,
@@ -548,6 +611,7 @@ export async function prepareCliRunContext(
         backendId: backendResolved.id,
         profileId: authProfileId,
         provider: writableAuthStore.profiles[authProfileId]?.provider ?? params.provider,
+        failure: { kind: "unmaterialized" },
       });
     }
     if (
@@ -559,7 +623,7 @@ export async function prepareCliRunContext(
         backendId: backendResolved.id,
         profileId: authProfileId,
         provider: writableAuthStore.profiles[authProfileId]?.provider ?? params.provider,
-        resolvedProfileId: resolvedAuth.profileId,
+        failure: { kind: "resolved-as-other", resolvedProfileId: resolvedAuth.profileId },
       });
     }
     const resolvedAuthProfileId = resolvedAuth?.profileId ?? authProfileId;
@@ -574,6 +638,7 @@ export async function prepareCliRunContext(
         backendId: backendResolved.id,
         profileId: authProfileId,
         provider: resolvedAuth?.provider ?? params.provider,
+        failure: { kind: "unmaterialized" },
       });
     }
     if (resolvedAuth && authCredential) {

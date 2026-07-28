@@ -73,6 +73,11 @@ function createClaudeCliAuthInput(params: {
 function resolveClaudeCliAuthInput(
   credential: ClaudeCliAuthCredential | undefined,
 ): ClaudeCliPreparedExecution | undefined {
+  // Forwarded OAuth here is OpenClaw-managed material (its refresh path is
+  // OpenClaw-owned). Imported native `claude` logins are never forwarded —
+  // core runs those as identity-verified passthrough — so an expired token
+  // reaching this point is a real fault worth failing loudly, not refreshable
+  // state this plugin could repair.
   if (credential?.type === "oauth" && "access" in credential) {
     const expires = "expires" in credential ? credential.expires : undefined;
     if (typeof expires !== "number" || !Number.isFinite(expires) || expires <= Date.now()) {
