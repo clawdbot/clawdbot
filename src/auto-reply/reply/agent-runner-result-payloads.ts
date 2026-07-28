@@ -175,8 +175,13 @@ export async function prepareReplyAgentPayloads(state: {
     });
     return recovery.kind === "diagnostic" ? recovery.payload : undefined;
   };
-  if (opts?.sourceReplyDeliveryMode === "message_tool_only" && completedSourceReplyDelivery) {
-    await opts.onObservedReplyDelivery?.();
+  // Completed source-reply evidence is already route-aware (the message tool
+  // delivered THIS conversation's reply), so it attests observed delivery in
+  // every mode; the followup runner applies the same contract. Without this, an
+  // automatic-mode turn answered via the message tool plus NO_REPLY draws the
+  // no-visible-reply fallback into the source conversation.
+  if (completedSourceReplyDelivery) {
+    await opts?.onObservedReplyDelivery?.();
   }
   const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
   // A terminal fallback is built separately after normal payload filtering.
