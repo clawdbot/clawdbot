@@ -29,9 +29,25 @@ enum ExecApprovalsLegacyMigrationGate {
                 userInfo: [
                     NSLocalizedDescriptionKey:
                         "Legacy exec approvals exist at \(sourceURL.path). " +
-                        "Run `openclaw doctor --fix` before using exec approvals.",
+                        "Run `\(self.doctorFixCommand(stateDirectoryURL: stateDirectoryURL))` " +
+                        "before using exec approvals.",
                 ])
         }
+    }
+
+    /// Doctor repairs whichever state directory its own environment resolves to, so a bare
+    /// `openclaw doctor --fix` repairs the default root while a scoped install stays blocked.
+    /// Name the directory whenever this store is scoped to a non-default one.
+    private static func doctorFixCommand(stateDirectoryURL: URL) -> String {
+        let defaultStateDirectory = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".openclaw", isDirectory: true)
+        guard
+            stateDirectoryURL.standardizedFileURL.path != defaultStateDirectory.standardizedFileURL
+                .path
+        else {
+            return "openclaw doctor --fix"
+        }
+        return "OPENCLAW_STATE_DIR=\(stateDirectoryURL.path) openclaw doctor --fix"
     }
 
     private static func pathMayExist(_ url: URL) -> Bool {

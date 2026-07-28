@@ -1,14 +1,26 @@
 // Blocks runtime use while retired exec approval state still awaits Doctor import.
 import fs from "node:fs";
+import path from "node:path";
 import { resolveExecApprovalsPath } from "./exec-approvals-config.js";
 
 const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
 const legacyPresenceCache = new Map<string, boolean>();
 
+/**
+ * Doctor repairs whichever state directory its own environment resolves to, so a bare
+ * `openclaw doctor --fix` repairs the default root while a scoped install stays blocked.
+ * Name the directory whenever this process is scoped to a non-default one.
+ */
+function formatDoctorFixCommand(filePath: string): string {
+  return process.env.OPENCLAW_STATE_DIR?.trim()
+    ? `OPENCLAW_STATE_DIR=${path.dirname(filePath)} openclaw doctor --fix`
+    : "openclaw doctor --fix";
+}
+
 export class ExecApprovalsMigrationRequiredError extends Error {
   constructor(filePath: string) {
     super(
-      `Legacy exec approvals exist at ${filePath}. Run \`openclaw doctor --fix\` before using exec approvals.`,
+      `Legacy exec approvals exist at ${filePath}. Run \`${formatDoctorFixCommand(filePath)}\` before using exec approvals.`,
     );
     this.name = "ExecApprovalsMigrationRequiredError";
   }

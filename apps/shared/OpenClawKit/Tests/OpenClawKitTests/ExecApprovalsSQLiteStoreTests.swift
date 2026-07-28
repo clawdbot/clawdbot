@@ -213,7 +213,10 @@ struct ExecApprovalsSQLiteStoreTests {
                 _ = try ExecApprovalsSQLiteStore.read(stateDirectoryURL: stateDirectoryURL)
                 Issue.record("Expected pending legacy approvals to refuse SQLite access")
             } catch {
-                #expect(error.localizedDescription.contains("Run `openclaw doctor --fix`"))
+                // A scoped state directory must be named; a bare command repairs the default root.
+                #expect(
+                    error.localizedDescription.contains(
+                        "Run `OPENCLAW_STATE_DIR=\(stateDirectoryURL.path) openclaw doctor --fix`"))
             }
         }
     }
