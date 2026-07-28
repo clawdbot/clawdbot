@@ -121,6 +121,7 @@ export type {
 } from "./session-accessor.entry-mutation.js";
 export {
   clearPluginOwnedSessionState,
+  listSessionChildEntriesReadOnly,
   listSessionEntries,
   listSessionEntriesReadOnly,
   listSessionEntryKeysReadOnly,
@@ -232,6 +233,10 @@ export type {
   SessionTranscriptMessageEvent,
   SessionTranscriptMessageEventPage,
 } from "./session-accessor.sqlite-active-events.js";
+export {
+  readSessionTranscriptWatermark,
+  type SessionTranscriptWatermark,
+} from "./session-accessor.sqlite-transcript-watermark.js";
 export {
   resolveConcreteSessionStorePath,
   resolveSessionTranscriptReadTarget,

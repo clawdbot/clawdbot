@@ -190,6 +190,34 @@ describe.sequential("TUI PTY harness", () => {
     STARTUP_TEST_TIMEOUT_MS,
   );
 
+  it.each([{ failures: 1 }, { failures: 2 }])(
+    "bounds session subscription recovery after $failures startup failures",
+    async ({ failures }) => {
+      const subscriptionFixture = await startTuiFixture({
+        env: { OPENCLAW_TUI_PTY_SUBSCRIBE_FAILURES: String(failures) },
+      });
+      try {
+        await subscriptionFixture.run.waitForOutput("local ready | idle", STARTUP_TIMEOUT_MS);
+        const entries = await readFixtureLog(subscriptionFixture.logPath);
+        expect(entries.filter((entry) => entry.method === "subscribeSessionEvents")).toHaveLength(
+          2,
+        );
+        expect(entries.filter((entry) => entry.method === "subscribeSessionFailure")).toHaveLength(
+          failures,
+        );
+
+        await subscriptionFixture.run.write("after subscription recovery proof\r");
+        await subscriptionFixture.run.waitForOutput(
+          "PTY_RESPONSE: after subscription recovery proof",
+          STARTUP_TIMEOUT_MS,
+        );
+      } finally {
+        await subscriptionFixture.cleanup();
+      }
+    },
+    STARTUP_TEST_TIMEOUT_MS,
+  );
+
   it("refreshes pending approvals before loading history", async () => {
     await fixture.waitForLogEntry((entry) => entry.method === "listPluginApprovals");
     await fixture.waitForLogEntry((entry) => entry.method === "listTaskSuggestions");
@@ -358,6 +386,30 @@ describe.sequential("TUI PTY harness", () => {
         expect(sent.payload).toMatchObject({ sessionKey: "agent:main:picker-target" });
       } finally {
         await compactPickerFixture.cleanup();
+      }
+    },
+    STARTUP_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "recovers the visible conversation from session history after a Gateway event gap",
+    async () => {
+      const gapFixture = await startTuiFixture();
+      try {
+        await gapFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+        await gapFixture.run.write("history gap proof\r");
+        await gapFixture.waitForLogEntry((entry) => entry.method === "gapHistoryRecovered");
+        await gapFixture.run.waitForOutput("PTY_GAP_RECOVERED");
+
+        await gapFixture.run.write("after gap recovery proof\r");
+        await gapFixture.waitForLogEntry(
+          (entry) =>
+            entry.method === "sendChat" &&
+            objectFieldEquals(entry, "message", "after gap recovery proof"),
+        );
+        await gapFixture.run.waitForOutput("PTY_RESPONSE: after gap recovery proof");
+      } finally {
+        await gapFixture.cleanup();
       }
     },
     STARTUP_TEST_TIMEOUT_MS,

@@ -445,5 +445,9 @@ export function clearSessionBoardAvailability(): boolean {
 export function sessionHasBoard(sessionKey: string): boolean {
   const key = boardProviderCacheKey(sessionKey);
   const provider = gatewayProviders.get(key)?.provider ?? mockProviders.get(key);
+  // An unloaded gateway provider holds a placeholder, not an authoritative empty board.
+  if (provider instanceof GatewayBoardProvider && !provider.hasLoadedSnapshot) {
+    return boardAvailability.get(key) ?? false;
+  }
   return provider ? boardExists(provider.snapshot$.value) : (boardAvailability.get(key) ?? false);
 }

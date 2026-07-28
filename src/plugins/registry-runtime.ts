@@ -514,15 +514,19 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             methodName:
               | "openBlobStore"
               | "openKeyedStore"
+              | "openSyncKeyedStore"
               | "withLease"
+              | "openChannelIngressQueue"
               | "openChannelIngressDrain",
           ) => {
             const record =
               pluginRuntimeRecordById.get(pluginId) ??
               registry.plugins.find((entry) => entry.id === pluginId);
             if (record?.origin !== "bundled" && record?.trustedOfficialInstall !== true) {
+              // Name the denied plugin and its origin: several plugins share this gate, and a
+              // bare capability name cannot tell an operator which install needs replacing.
               throw new Error(
-                `${methodName} is only available for trusted plugins in this release.`,
+                `${methodName} is only available for trusted plugins in this release. Plugin "${pluginId}" loaded with origin "${record?.origin ?? "unknown"}"; reinstall it from its official npm package or ClawHub listing to enable trusted plugin state.`,
               );
             }
           };
@@ -541,7 +545,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             openSyncKeyedStore: <T>(
               options: OpenKeyedStoreOptions,
             ): PluginStateSyncKeyedStore<T> => {
-              assertPluginStateAllowed("openKeyedStore");
+              assertPluginStateAllowed("openSyncKeyedStore");
               return createPluginStateSyncKeyedStore<T>(pluginId, options);
             },
             withLease: <T>(
@@ -554,7 +558,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
               options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
             ) => {
-              assertPluginStateAllowed("openKeyedStore");
+              assertPluginStateAllowed("openChannelIngressQueue");
               const stateDir = options?.stateDir ?? baseState.resolveStateDir();
               return createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>({
                 ...options,

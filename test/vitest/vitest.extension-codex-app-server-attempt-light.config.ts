@@ -10,6 +10,7 @@ function createExtensionCodexAppServerAttemptLightVitestConfig(
       "extensions/codex/src/app-server/attempt-diagnostics.test.ts",
       "extensions/codex/src/app-server/attempt-steering.test.ts",
       "extensions/codex/src/app-server/run-attempt-client-prewarm.test.ts",
+      "extensions/codex/src/app-server/run-attempt-connection.test.ts",
     ],
     {
       dir: "extensions",

@@ -2973,6 +2973,22 @@ describe("doctor legacy state migrations", () => {
   it("auto-migrates the plugin-state sidecar when custom agent dirs skip session migration", async () => {
     const root = await makeTempRoot();
     const sourcePath = writeLegacyPluginStateSidecar(root);
+    const storePath = path.join(root, "agents", "main", "sessions", "sessions.json");
+    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+    writeJson5(storePath, {
+      "agent:main:protected": {
+        sessionId: "protected-main",
+        updatedAt: 20,
+        acp: {
+          backend: "test",
+          agent: "main",
+          runtimeSessionName: "protected-runtime",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 20,
+        },
+      },
+    });
 
     const result = await autoMigrateLegacyState({
       cfg: {},
@@ -2987,6 +3003,12 @@ describe("doctor legacy state migrations", () => {
     expect(result.changes).toContain("Migrated 1 plugin-state sidecar entry → shared SQLite state");
     expect(fs.existsSync(sourcePath)).toBe(false);
     expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
+    expect(result.changes.some((change) => change.includes("ACP session metadata"))).toBe(false);
+    const sessionStore = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<
+      string,
+      { acp?: { runtimeSessionName: string } }
+    >;
+    expect(sessionStore["agent:main:protected"]?.acp?.runtimeSessionName).toBe("protected-runtime");
 
     await withStateDir(root, async () => {
       const store = createPluginStateKeyedStore<{ ok: boolean }>("discord", {

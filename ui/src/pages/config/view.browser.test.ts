@@ -138,7 +138,7 @@ describe("config view", () => {
     return container.textContent?.replace(/\s+/g, " ").trim() ?? "";
   }
 
-  it("uses one global advanced toggle while preserving deep-link reveals", () => {
+  it("uses one inline advanced disclosure without mutating config fields", () => {
     const schema = {
       type: "object",
       properties: {
@@ -170,6 +170,7 @@ describe("config view", () => {
     );
     ghost.click();
     expect(setShowAdvancedSettings).toHaveBeenCalledWith(true);
+    expect(collapsed.container.querySelector(".config-show-advanced")).toBeNull();
 
     const global = renderConfigView({
       schema,
@@ -179,9 +180,11 @@ describe("config view", () => {
       showAdvancedSettings: true,
     });
     expect(global.container.querySelector(".config-advanced-ghost")).toBeNull();
-    expect(global.container.querySelector(".config-advanced-divider")?.textContent?.trim()).toBe(
-      "Advanced",
-    );
+    const divider = queryRequired(global.container, ".config-advanced-divider", HTMLElement);
+    expect(divider.textContent?.replace(/\s+/g, " ").trim()).toBe("Advanced Hide Advanced");
+    const hide = queryRequired(divider, ".config-advanced-divider__toggle", HTMLButtonElement);
+    hide.click();
+    expect(global.props.setShowAdvancedSettings).toHaveBeenCalledWith(false);
     expect(normalizedText(global.container)).toContain("Reload mode");
 
     const searchHit = renderConfigView({
@@ -251,16 +254,15 @@ describe("config view", () => {
       },
     };
 
-    // Unhinted leaves default to the advanced tier: the toggle must show even
-    // though no hint carries advanced === true, or the ghost row's enable has
-    // no matching control to turn advanced back off.
+    // Unhinted leaves default to the advanced tier, so the inline disclosure
+    // must remain available even when no hint carries advanced === true.
     const unhinted = renderConfigView({
       schema,
       uiHints: {},
       formValue: { diagnostics: { flags: "all" } },
       activeSection: "diagnostics",
     });
-    expect(findOptionalButtonByText(unhinted.container, "Show advanced")).toBeDefined();
+    expect(findOptionalButtonByText(unhinted.container, "Show advanced")).toBeUndefined();
     expect(unhinted.container.querySelector(".config-advanced-ghost")).not.toBeNull();
 
     // An advanced hint in a different top-level section must not surface a
@@ -406,7 +408,7 @@ describe("config view", () => {
     expect(container.querySelector(".config-toolbar__status .settings-status")).toBeNull();
   });
 
-  it("renders the inline autosave status and retries failed saves", () => {
+  it("renders active and failed autosave status while keeping success quiet", () => {
     const onSave = vi.fn();
     const { container } = renderConfigView({ autoSaveStatus: "saving", onSave });
     const status = queryRequired(container, ".config-toolbar__status", HTMLElement);
@@ -416,11 +418,8 @@ describe("config view", () => {
     ).toBe(true);
 
     const saved = renderConfigView({ autoSaveStatus: "saved" });
-    expect([
-      ...queryRequired(saved.container, ".config-toolbar__status .settings-status", HTMLElement)
-        .classList,
-    ]).toContain("settings-status--ok");
-    expect(saved.container.textContent).toContain("Saved");
+    expect(saved.container.querySelector(".config-toolbar__status .settings-status")).toBeNull();
+    expect(saved.container.textContent).not.toContain("Saved");
 
     const failed = renderConfigView({ autoSaveStatus: "error", onSave });
     const failedStatus = queryRequired(failed.container, ".config-toolbar__status", HTMLElement);
@@ -676,22 +675,19 @@ describe("config view", () => {
     expect(onSectionChange).toHaveBeenCalledWith(null);
   });
 
-  it("renders the virtual Notifications tab in Communication settings", () => {
+  it("renders the virtual Notifications tab on Notifications settings", () => {
     const onSectionChange = vi.fn();
     const { container } = renderConfigView({
-      navRootLabel: "Communication",
-      includeSections: ["channels", "messages", "broadcast", "__notifications__", "talk", "audio"],
+      navRootLabel: "Notifications",
+      includeSections: ["__notifications__"],
       includeVirtualSections: true,
       onSectionChange,
       schema: {
         type: "object",
-        properties: {
-          channels: { type: "object", properties: {} },
-          messages: { type: "object", properties: {} },
-        },
+        properties: {},
       },
-      formValue: { channels: {}, messages: {} },
-      originalValue: { channels: {}, messages: {} },
+      formValue: {},
+      originalValue: {},
       webPush: {
         supported: true,
         permission: "default",
@@ -710,15 +706,15 @@ describe("config view", () => {
     const onWebPushSubscribe = vi.fn();
     const { container } = renderConfigView({
       activeSection: "__notifications__",
-      includeSections: ["channels", "messages", "__notifications__"],
+      autoSaveStatus: "saved",
+      includeSections: ["__notifications__"],
       includeVirtualSections: true,
+      showModeToggle: false,
+      showRootTab: false,
       onWebPushSubscribe,
       schema: {
         type: "object",
-        properties: {
-          channels: { type: "object", properties: {} },
-          messages: { type: "object", properties: {} },
-        },
+        properties: {},
       },
       webPush: {
         supported: true,
@@ -729,6 +725,8 @@ describe("config view", () => {
     });
 
     const card = queryRequired(container, "#settings-communications-notifications", HTMLElement);
+    expect(container.querySelector(".config-toolbar")).toBeNull();
+    expect(container.textContent).not.toContain("Saved");
     expect(
       card.querySelector(".settings-section__actions .settings-status")?.textContent?.trim(),
     ).toBe("Ready");
@@ -1741,6 +1739,53 @@ describe("config view", () => {
     expect(row?.querySelector<HTMLElement & { checked: boolean }>("wa-switch")?.checked).toBe(true);
     row?.click();
     expect(setSidebarLiveActivity).toHaveBeenCalledWith(false);
+  });
+
+  it("uses rich Lobsterdex lore tooltips and opens the full collection", () => {
+    const firstSeenAt = new Date("2026-07-10T12:00:00.000Z").getTime();
+    vi.stubGlobal("localStorage", window.localStorage);
+    localStorage.setItem(
+      "openclaw.control.lobsterdex.v1",
+      JSON.stringify({
+        crimson: { firstSeenAt, name: "Ruby", shinySeenAt: firstSeenAt },
+      }),
+    );
+    const onOpenLobsterdex = vi.fn();
+    try {
+      const { container } = renderConfigView({
+        activeSection: "__appearance__",
+        includeSections: ["__appearance__"],
+        lobsterPetVisits: true,
+        setLobsterPetVisits: vi.fn(),
+        lobsterPetSounds: true,
+        setLobsterPetSounds: vi.fn(),
+        lobsterdexHref: "/settings/lobsterdex",
+        onOpenLobsterdex,
+      });
+
+      const seen = container.querySelector(".lobster-pet--palette-crimson");
+      const seenTooltip = seen?.closest("openclaw-tooltip");
+      expect(seen?.hasAttribute("title")).toBe(false);
+      expect(seen?.getAttribute("aria-label")).toContain("Ruby ✦");
+      expect(seenTooltip?.querySelector('[slot="content"]')?.textContent).toContain(
+        "The classic red, first in every tide pool.",
+      );
+      expect(seenTooltip?.querySelector('[slot="content"]')?.textContent).toContain(
+        new Date(firstSeenAt).toLocaleDateString(),
+      );
+
+      const unseen = container.querySelector(".lobster-pet--palette-coral");
+      expect(unseen?.getAttribute("aria-label")).toContain("Blends in at the beach.");
+      expect(
+        unseen?.closest("openclaw-tooltip")?.querySelector('[slot="content"]')?.textContent,
+      ).toContain("Blends in at the beach.");
+
+      container.querySelector<HTMLAnchorElement>(".lobsterdex__open")?.click();
+      expect(onOpenLobsterdex).toHaveBeenCalledOnce();
+    } finally {
+      localStorage.removeItem("openclaw.control.lobsterdex.v1");
+      vi.unstubAllGlobals();
+    }
   });
 
   it("validates and changes the browser-local chat width", () => {

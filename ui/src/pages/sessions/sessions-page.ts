@@ -44,6 +44,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import { showToast } from "../../lib/toast.ts";
+import { isActiveWorkboardCard } from "../../lib/workboard/card-state.ts";
 import { captureSessionToWorkboard } from "../../lib/workboard/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -1183,6 +1184,7 @@ class SessionsPage extends OpenClawLightDomElement {
     const workboardState = context.workboard.state;
     const capturedSessionKeys = new Set(
       workboardState.cards
+        .filter(isActiveWorkboardCard)
         .flatMap((card) => [card.sessionKey, card.execution?.sessionKey])
         .filter((key): key is string => typeof key === "string" && key.length > 0),
     );
@@ -1217,7 +1219,7 @@ class SessionsPage extends OpenClawLightDomElement {
         .workboard=${canCapture && row.kind !== "global"
           ? {
               captured: capturedSessionKeys.has(row.key),
-              busy: [...workboardState.capturingSessionKeys][0] === row.key,
+              busy: workboardState.capturingSessionKeys.has(row.key),
             }
           : null}
         .onClose=${() => this.closeSessionMenu()}

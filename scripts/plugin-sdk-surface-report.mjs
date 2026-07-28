@@ -153,7 +153,10 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: focused media-local-roots replacement for the legacy agent-media facade.
       // +1: account-aware channel DM policy setup descriptors.
       // +1: dependency-light CLI argv parsing for machine-output metadata.
-      143,
+      // +1: bounded archive extraction and single-entry reads.
+      // +1: budgeted root-bounded directory walking.
+      // +1: pinned secret reads and first-writer-wins creation.
+      146,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -191,8 +194,11 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: logger file-transport flush for graceful shutdown drains.
       // +1: process-local sessions.changed plugin notification payload.
       // +1: loopback-only host classifier for plugin local-machine boundaries.
+      // +7: bounded archive extraction, entry reads, errors, and policy types.
+      // +3: root-bounded walk iterator, options, and entry contract.
+      // +5: pinned secret create/read functions and their options contract.
       // +1: resetSessionEntryLifecycle.
-      4741,
+      4756,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -224,7 +230,11 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: logger file-transport flush for graceful shutdown drains.
       // +1: resetSessionEntryLifecycle.
       // +1: loopback-only host classifier for plugin local-machine boundaries.
-      2870,
+      // +2: bounded archive extraction and single-entry reads.
+      // +1: root-bounded directory walk iterator.
+      // +4: pinned secret create and synchronous/asynchronous reads.
+      // +1: resetSessionEntryLifecycle.
+      2877,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -239,7 +249,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
-      83,
+      82,
       env,
     ),
   };

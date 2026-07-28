@@ -3012,6 +3012,47 @@ describe("workboard controller", () => {
     expect(state.cards).toEqual([archived, active]);
   });
 
+  it.each([
+    { name: "reuses the newest active captured session", inFlight: false },
+    {
+      name: "returns the newest active captured session while a capture is in flight",
+      inFlight: true,
+    },
+  ])("$name", async ({ inFlight }) => {
+    const archived = {
+      ...sampleCard,
+      id: "archived-newest-session-card",
+      sessionKey: sampleSession.key,
+      position: 0,
+      updatedAt: 30,
+      metadata: { archivedAt: 40 },
+    } satisfies WorkboardCard;
+    const older = {
+      ...sampleCard,
+      id: "older-active-session-card",
+      sessionKey: sampleSession.key,
+      position: 1000,
+      updatedAt: 10,
+    } satisfies WorkboardCard;
+    const newest = {
+      ...sampleCard,
+      id: "newest-active-session-card",
+      sessionKey: sampleSession.key,
+      position: 2000,
+      updatedAt: 20,
+    } satisfies WorkboardCard;
+    state.loaded = true;
+    state.cards = [archived, older, newest];
+    if (inFlight) {
+      state.capturingSessionKeys.add(sampleSession.key);
+    }
+    const client = createClient({});
+
+    await expect(captureSession(client, sampleSession)).resolves.toBe(newest);
+    expect(client.request).not.toHaveBeenCalled();
+    expect(state.cards).toEqual([archived, older, newest]);
+  });
+
   it("returns the active captured session while a duplicate capture is in flight", async () => {
     const archived = {
       ...sampleCard,

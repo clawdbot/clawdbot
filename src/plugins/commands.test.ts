@@ -851,23 +851,23 @@ describe("registerPluginCommand", () => {
       activateGlobalSideEffects: true,
     });
     let observedOwnerStatus: boolean | undefined;
-    pluginRegistry.registerCommand(createBundledPluginRecord("phone-control"), {
-      name: "phone",
-      description: "Phone command",
+    pluginRegistry.registerCommand(createBundledPluginRecord("device-pair"), {
+      name: "pair_test",
+      description: "Pair test command",
       exposeSenderIsOwner: true,
       handler: async (ctx) => {
         observedOwnerStatus = ctx.senderIsOwner;
         return { text: "ok" };
       },
     });
-    const match = requirePluginCommandMatch("/phone");
+    const match = requirePluginCommandMatch("/pair_test");
 
     await executePluginCommand({
       command: match.command,
       channel: "telegram",
       isAuthorizedSender: true,
       senderIsOwner: true,
-      commandBody: "/phone",
+      commandBody: "/pair_test",
       config: {},
     });
 

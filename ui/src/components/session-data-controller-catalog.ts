@@ -56,16 +56,14 @@ export interface SessionCatalogDataOwner {
   refreshSessionCatalogs(): Promise<void>;
 }
 
-export function visibleSessionCatalogClient(
-  owner: SessionCatalogDataOwner,
-): GatewayBrowserClient | null {
+function visibleSessionCatalogClient(owner: SessionCatalogDataOwner): GatewayBrowserClient | null {
   if (document.visibilityState === "hidden") {
     return null;
   }
   return sessionCatalogListClient(owner.context?.gateway.snapshot, owner.sessionDataHostConnected);
 }
 
-export function synchronizeSessionCatalogAgent(
+function synchronizeSessionCatalogAgent(
   owner: SessionCatalogDataOwner,
   agentId: string | null,
 ): void {
@@ -127,7 +125,7 @@ function resolveSessionCatalogAgentId(
   return selected && selected !== helloDefault ? null : helloDefault;
 }
 
-export function requestSessionCatalogRefresh(owner: SessionCatalogDataOwner): void {
+function requestSessionCatalogRefresh(owner: SessionCatalogDataOwner): void {
   const snapshot = owner.context?.gateway.snapshot;
   owner.sessionCatalogLive.requestRefresh({
     visible: document.visibilityState !== "hidden",
@@ -138,6 +136,32 @@ export function requestSessionCatalogRefresh(owner: SessionCatalogDataOwner): vo
     generation: owner.sessionCatalogGeneration,
     refresh: () => void owner.refreshSessionCatalogs(),
   });
+}
+
+export function scheduleSessionCatalogRefresh(owner: SessionCatalogDataOwner): void {
+  if (document.visibilityState === "hidden") {
+    owner.sessionCatalogLive.cancelScheduledRefreshes();
+    return;
+  }
+  owner.sessionCatalogLive.scheduleActivation(() => requestSessionCatalogRefresh(owner));
+}
+
+export function updateSessionCatalogData(owner: SessionCatalogDataOwner, defer = false): void {
+  if (owner.context) {
+    synchronizeSessionCatalogAgent(owner, owner.expandedAgentId());
+  }
+  if (
+    !visibleSessionCatalogClient(owner) ||
+    owner.sessionCatalogLive.timer ||
+    owner.sessionCatalogLive.requestGeneration === owner.sessionCatalogGeneration
+  ) {
+    return;
+  }
+  if (defer && owner.sessionCatalogLive.hasRequested) {
+    scheduleSessionCatalogRefresh(owner);
+    return;
+  }
+  void owner.refreshSessionCatalogs();
 }
 
 export function applySessionCatalogHostEvent(
@@ -158,7 +182,10 @@ export function applySessionCatalogHostEvent(
   owner.sessionCatalogRevision += owner.sessionCatalogLive.refetching ? 1 : 0;
   const catalogRevision = owner.sessionCatalogRevisions.get(update.catalogId) ?? 0;
   owner.sessionCatalogRevisions.set(update.catalogId, catalogRevision + 1);
-  if (owner.sessionCatalogLive.requestGeneration !== owner.sessionCatalogGeneration) {
+  if (
+    update.materialChange &&
+    owner.sessionCatalogLive.requestGeneration !== owner.sessionCatalogGeneration
+  ) {
     owner.sessionCatalogLive.schedule(
       SESSION_CATALOG_CHANGED_REFRESH_MS,
       owner.isSessionDataHostConnected,
