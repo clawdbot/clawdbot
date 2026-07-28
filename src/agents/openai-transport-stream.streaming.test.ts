@@ -90,7 +90,7 @@ describe("openai transport stream", () => {
     ).toBeUndefined();
     // Embedded prompt-lock release injects maxRetries: 0; the native transport must
     // forward it so the SDK does not retry into the released lock window.
-    expect(testing.buildOpenAISdkRequestOptions(model, signal, undefined, 0)).toEqual({
+    expect(testing.buildOpenAISdkRequestOptions(model, signal, { maxRetries: 0 })).toEqual({
       signal,
       timeout: 900_000,
       maxRetries: 0,
@@ -101,8 +101,7 @@ describe("openai transport stream", () => {
       testing.buildOpenAISdkRequestOptions(
         { ...model, requestTimeoutMs: -1 } as Model<"openai-completions">,
         undefined,
-        undefined,
-        0,
+        { maxRetries: 0 },
       ),
     ).toEqual({ maxRetries: 0 });
   });
