@@ -141,7 +141,7 @@ type ClawPackagePreflightResult =
       warning?: string;
     };
 
-export function resolveClawPluginSetupRequirements(params: {
+function resolveClawPluginSetupRequirements(params: {
   pluginId: string;
   setup?: PluginManifestSetup;
   env: NodeJS.ProcessEnv;
@@ -166,7 +166,10 @@ export function resolveClawPluginSetupRequirements(params: {
 export async function preflightClawPackage(
   pkg: ClawPackage,
   workspaceDir: string,
-  options: { env?: NodeJS.ProcessEnv } = {},
+  options: {
+    env?: NodeJS.ProcessEnv;
+    deps?: Pick<PackageInstallerDeps, "preflightPlugin" | "probePlugin">;
+  } = {},
 ): Promise<ClawPackagePreflightResult> {
   if (pkg.kind === "skill") {
     const result = await preflightSkillFromClawHub({
@@ -177,7 +180,7 @@ export async function preflightClawPackage(
     });
     return result.ok ? result : { ok: false, code: result.code, message: result.error };
   }
-  const result = await preflightPluginInstall({
+  const result = await (options.deps?.preflightPlugin ?? preflightPluginInstall)({
     clawhubPackage: pkg.ref,
     rawSpec: `clawhub:${pkg.ref}@${pkg.version}`,
     expectedVersion: pkg.version,
@@ -189,7 +192,7 @@ export async function preflightClawPackage(
       message: result.error,
     };
   }
-  const probe = await installPluginFromClawHub({
+  const probe = await (options.deps?.probePlugin ?? installPluginFromClawHub)({
     spec: `clawhub:${pkg.ref}@${pkg.version}`,
     dryRun: true,
     acknowledgeClawHubRisk: true,

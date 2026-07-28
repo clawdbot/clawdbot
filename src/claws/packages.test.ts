@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { installClawPackages, resolveClawPluginSetupRequirements } from "./packages.js";
+import { installClawPackages, preflightClawPackage } from "./packages.js";
 import type { PersistedClawPackageRef } from "./provenance.js";
 import type { ClawAddPlan, ResolvedClawPackage } from "./types.js";
 
@@ -117,7 +117,7 @@ const probePlugin = vi.fn(async ({ spec }: { spec: string }) => {
   };
 });
 
-describe("resolveClawPluginSetupRequirements", () => {
+describe("preflightClawPackage plugin setup requirements", () => {
   const setup = {
     providers: [
       {
@@ -127,27 +127,42 @@ describe("resolveClawPluginSetupRequirements", () => {
       },
     ],
   };
-
-  it("reports plugin setup when no declared environment credential is present", () => {
-    expect(resolveClawPluginSetupRequirements({ pluginId: "evidence", setup, env: {} })).toEqual([
-      {
-        kind: "plugin-setup",
-        plugin: "evidence",
-        provider: "evidence",
-        envVars: ["EVIDENCE_API_KEY", "EVIDENCE_TOKEN"],
-        authMethods: ["api-key"],
-      },
-    ]);
+  const preflightPlugin = vi.fn().mockResolvedValue({ ok: true, action: "install" });
+  const probePluginSetup = vi.fn().mockResolvedValue({
+    ok: true,
+    pluginId: "evidence",
+    setup,
+    clawhub: { integrity },
   });
 
-  it("accepts any declared environment credential", () => {
-    expect(
-      resolveClawPluginSetupRequirements({
-        pluginId: "evidence",
-        setup,
-        env: { EVIDENCE_TOKEN: "configured" },
+  it("reports plugin setup when no declared environment credential is present", async () => {
+    await expect(
+      preflightClawPackage(pluginPackage, "/tmp/workspace", {
+        env: {},
+        deps: { preflightPlugin, probePlugin: probePluginSetup },
       }),
-    ).toEqual([]);
+    ).resolves.toEqual(
+      expect.objectContaining({
+        requirements: [
+          {
+            kind: "plugin-setup",
+            plugin: "evidence",
+            provider: "evidence",
+            envVars: ["EVIDENCE_API_KEY", "EVIDENCE_TOKEN"],
+            authMethods: ["api-key"],
+          },
+        ],
+      }),
+    );
+  });
+
+  it("accepts any declared environment credential", async () => {
+    await expect(
+      preflightClawPackage(pluginPackage, "/tmp/workspace", {
+        env: { EVIDENCE_TOKEN: "configured" },
+        deps: { preflightPlugin, probePlugin: probePluginSetup },
+      }),
+    ).resolves.not.toHaveProperty("requirements");
   });
 });
 
