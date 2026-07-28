@@ -96,13 +96,13 @@ type SessionBackfillCollection = {
   scans: SessionBackfillScan[];
 };
 
-export type SessionBackfillDay = {
+type SessionBackfillDay = {
   day: string;
   candidateCount: number;
   topCandidates: string[];
 };
 
-export type SessionBackfillResult = {
+type SessionBackfillResult = {
   agentId: string;
   workspaceDir: string;
   applied: boolean;
@@ -118,7 +118,7 @@ export type SessionBackfillResult = {
   };
 };
 
-export type RunSessionBackfillParams = {
+type RunSessionBackfillParams = {
   agentId: string;
   workspaceDir: string;
   from?: string;
@@ -678,5 +678,3 @@ export async function runSessionBackfill(
     replacedDiaryEntries,
   };
 }
-
-export { DEFAULT_SESSION_BACKFILL_LIMIT_DAYS };
