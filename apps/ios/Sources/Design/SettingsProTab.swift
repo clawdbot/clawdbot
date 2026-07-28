@@ -327,7 +327,7 @@ struct SettingsProTab: View {
                         }
                     }),
                 titleVisibility: .visible,
-                // Dismissal clears `pendingForgetGateway` before the action runs, so hand it over instead.
+                // The action only schedules Task; dismissal clears state before that task resumes.
                 presenting: self.pendingForgetGateway)
             { entry in
                 Button(role: .destructive) {
