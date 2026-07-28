@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 // Exercises the serialized mock gateway exactly as a page would: the init
 // script installs MockWebSocket on window, and requests flow over it.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createControlUiMockGatewayInitScript } from "./control-ui-e2e.ts";
 
 type ResponseFrame = {
@@ -660,5 +660,42 @@ describe("mock gateway stateful sessions", () => {
       "agent:main:research",
     ]);
     socket.close();
+  });
+});
+
+describe("mock gateway transport liveness", () => {
+  it("ticks faster than the interval it advertises, and stops once the socket closes", async () => {
+    vi.useFakeTimers();
+    try {
+      const script = createControlUiMockGatewayInitScript({});
+      window.sessionStorage.clear();
+      // oxlint-disable-next-line typescript/no-implied-eval -- Executes the generated init script standalone, proving it captures no module closures.
+      new Function(script)();
+
+      const socket = new WebSocket("ws://mock-gateway");
+      const inboundAt: number[] = [];
+      socket.addEventListener("message", () => {
+        inboundAt.push(Date.now());
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      const connectedAt = Date.now();
+      await vi.advanceTimersByTimeAsync(90_000);
+
+      // The client closes a transport that has been silent for `tickIntervalMs * 2`, so the
+      // gap between inbound frames is the invariant this harness has to hold.
+      const gaps = inboundAt.map(
+        (at, index) => at - (index === 0 ? connectedAt : (inboundAt[index - 1] ?? at)),
+      );
+      expect(inboundAt.length).toBeGreaterThanOrEqual(9);
+      expect(Math.max(...gaps)).toBeLessThanOrEqual(30_000);
+
+      socket.close();
+      const afterClose = inboundAt.length;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(inboundAt.length).toBe(afterClose);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

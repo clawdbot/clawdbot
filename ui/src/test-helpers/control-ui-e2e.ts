@@ -431,6 +431,10 @@ function installControlUiMockGateway(input: {
   } catch {
     // Opaque initial documents may not expose storage; the target page will.
   }
+  // Advertised in `hello-ok`; the keepalive below ticks faster so a long-lived page never
+  // reaches the client's silent-transport threshold (`tickIntervalMs * 2`).
+  const MOCK_TICK_INTERVAL_MS = 30_000;
+  const MOCK_KEEPALIVE_INTERVAL_MS = 10_000;
   const deferredMethods: string[] = [...scenario.deferredMethods];
   const deferredResponses: DeferredResponse[] = [];
   const requests: BrowserRequest[] = [];
@@ -1008,7 +1012,7 @@ function installControlUiMockGateway(input: {
           policy: {
             maxPayload: 1_048_576,
             maxBufferedBytes: 1_048_576,
-            tickIntervalMs: 30_000,
+            tickIntervalMs: MOCK_TICK_INTERVAL_MS,
             allowedSessionVisibilities: scenario.allowedSessionVisibilities,
             hasMultipleSessionSharingIdentities: scenario.hasMultipleSessionSharingIdentities,
           },
@@ -1241,6 +1245,8 @@ function installControlUiMockGateway(input: {
     static readonly OPEN = 1;
     static latest: MockWebSocket | null = null;
 
+    private keepaliveTimer: number | undefined;
+
     binaryType: BinaryType = "blob";
     readonly bufferedAmount = 0;
     readonly extensions = "";
@@ -1268,11 +1274,33 @@ function installControlUiMockGateway(input: {
       }
       this.readyState = MockWebSocket.OPEN;
       this.dispatchEvent(new Event("open"));
+      this.startKeepalive();
       this.deliver({
         event: "connect.challenge",
         payload: { nonce: "control-ui-e2e-nonce" },
         type: "event",
       });
+    }
+
+    /**
+     * Mirrors the real Gateway's keepalive (`src/gateway/server-maintenance.ts`), which
+     * broadcasts `tick` to every connection on the interval it advertises in `hello-ok`.
+     * Clients treat prolonged inbound silence as a dead transport, so a mock that advertises
+     * `tickIntervalMs` and then never ticks is not a quiet gateway — it is a broken one.
+     * Ticking faster than advertised keeps long-lived e2e pages clear of that threshold.
+     */
+    private startKeepalive(): void {
+      this.stopKeepalive();
+      this.keepaliveTimer = window.setInterval(() => {
+        this.deliver({ event: "tick", payload: { ts: Date.now() }, type: "event" });
+      }, MOCK_KEEPALIVE_INTERVAL_MS);
+    }
+
+    private stopKeepalive(): void {
+      if (this.keepaliveTimer !== undefined) {
+        window.clearInterval(this.keepaliveTimer);
+        this.keepaliveTimer = undefined;
+      }
     }
 
     override dispatchEvent(event: Event): boolean {
@@ -1294,6 +1322,7 @@ function installControlUiMockGateway(input: {
         return;
       }
       this.readyState = MockWebSocket.CLOSED;
+      this.stopKeepalive();
       sessionMessageSubscriptions.clear();
       stopRepeatingSessionEvents();
       this.dispatchEvent(new CloseEvent("close", { code, reason }));
