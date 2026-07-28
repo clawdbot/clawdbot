@@ -13,6 +13,14 @@ import {
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
 import { DEFAULT_GATEWAY_PORT } from "../../../config/paths.js";
+import { DEFAULT_MAX_ATTEMPTS } from "../../../gateway/auth-rate-limit.js";
+
+const GATEWAY_AUTH_RATE_LIMIT_MAX_ATTEMPTS_OOB_RULE: LegacyConfigRule = {
+  path: ["gateway", "auth", "rateLimit", "maxAttempts"],
+  message:
+    'gateway.auth.rateLimit.maxAttempts must be a positive integer and will be removed to avoid startup failure. Run "openclaw doctor --fix".',
+  match: (value) => typeof value === "number" && (!Number.isInteger(value) || value <= 0),
+};
 
 const GATEWAY_PORT_OOB_RULE: LegacyConfigRule = {
   path: ["gateway", "port"],
@@ -180,6 +188,29 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
       changes.push(
         `Removed out-of-range gateway.port (${String(port)}). ` +
           `Valid TCP ports are 1–65535; the gateway will use the default port ${DEFAULT_GATEWAY_PORT}.`,
+      );
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "gateway.auth.rateLimit.max-attempts-oob-repair",
+    describe:
+      "Remove non-positive-integer gateway.auth.rateLimit.maxAttempts to avoid post-schema-tightening startup failures",
+    legacyRules: [GATEWAY_AUTH_RATE_LIMIT_MAX_ATTEMPTS_OOB_RULE],
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      const auth = getRecord(gateway?.auth);
+      const rateLimit = getRecord(auth?.rateLimit);
+      if (!rateLimit || !Object.hasOwn(rateLimit, "maxAttempts")) {
+        return;
+      }
+      const maxAttempts = rateLimit.maxAttempts;
+      if (typeof maxAttempts !== "number" || (Number.isInteger(maxAttempts) && maxAttempts > 0)) {
+        return;
+      }
+      delete rateLimit.maxAttempts;
+      changes.push(
+        `Removed invalid gateway.auth.rateLimit.maxAttempts (${String(maxAttempts)}). ` +
+          `It must be a positive integer; the gateway will use the default of ${DEFAULT_MAX_ATTEMPTS} attempts.`,
       );
     },
   }),

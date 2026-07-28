@@ -3448,6 +3448,76 @@ describe("gateway.port out-of-range repair migrate", () => {
   });
 });
 
+describe("gateway.auth.rateLimit.maxAttempts out-of-range repair migrate", () => {
+  it("removes non-positive gateway.auth.rateLimit.maxAttempts and records a change", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { auth: { rateLimit: { maxAttempts: 0 } } },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Removed invalid gateway.auth.rateLimit.maxAttempts (0). It must be a positive integer; the gateway will use the default of 10 attempts.",
+    ]);
+    expect(res.config?.gateway?.auth?.rateLimit).toStrictEqual({});
+  });
+
+  it("removes negative gateway.auth.rateLimit.maxAttempts and records a change", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { auth: { rateLimit: { maxAttempts: -1 } } },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Removed invalid gateway.auth.rateLimit.maxAttempts (-1). It must be a positive integer; the gateway will use the default of 10 attempts.",
+    ]);
+  });
+
+  it("removes fractional gateway.auth.rateLimit.maxAttempts and records a change", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { auth: { rateLimit: { maxAttempts: 2.5 } } },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Removed invalid gateway.auth.rateLimit.maxAttempts (2.5). It must be a positive integer; the gateway will use the default of 10 attempts.",
+    ]);
+  });
+
+  it("removes non-finite gateway.auth.rateLimit.maxAttempts and records a change", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { auth: { rateLimit: { maxAttempts: Number.NaN } } },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Removed invalid gateway.auth.rateLimit.maxAttempts (NaN). It must be a positive integer; the gateway will use the default of 10 attempts.",
+    ]);
+  });
+
+  it("preserves other gateway.auth.rateLimit keys when removing maxAttempts", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { auth: { rateLimit: { maxAttempts: 0, windowMs: 60_000 } } },
+    });
+
+    expect(res.config?.gateway?.auth?.rateLimit).toStrictEqual({ windowMs: 60_000 });
+  });
+
+  it("preserves valid gateway.auth.rateLimit.maxAttempts values", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { auth: { rateLimit: { maxAttempts: 5 } } },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toEqual([]);
+  });
+
+  it("is idempotent for out-of-range values", () => {
+    const first = migrateLegacyConfigForTest({
+      gateway: { auth: { rateLimit: { maxAttempts: 0 } } },
+    });
+    expect(first.changes.length).toBe(1);
+
+    const second = migrateLegacyConfigForTest(first.config);
+    expect(second.changes).toStrictEqual([]);
+  });
+});
+
 describe("legacy model compat migrate", () => {
   it("upgrades the retired xAI quality image slug without pinning active aliases", () => {
     const raw = {

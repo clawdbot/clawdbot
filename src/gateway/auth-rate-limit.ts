@@ -133,7 +133,7 @@ export function isAuthRateLimitClientExempt(
 // Defaults
 // ---------------------------------------------------------------------------
 
-const DEFAULT_MAX_ATTEMPTS = 10;
+export const DEFAULT_MAX_ATTEMPTS = 10;
 const DEFAULT_WINDOW_MS = 60_000; // 1 minute
 const DEFAULT_LOCKOUT_MS = 300_000; // 5 minutes
 const PRUNE_INTERVAL_MS = 60_000; // prune stale entries every minute
