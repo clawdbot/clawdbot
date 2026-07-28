@@ -8,11 +8,11 @@ import {
   TOOL_SEARCH_RAW_TOOL_NAME,
   type ToolSearchCatalogToolExecutor,
 } from "./tool-search.js";
-import {
-  applyAgentToolSurfaceCatalog,
-  resolveAgentToolSurfacePlan,
-  type AgentToolSurfacePlanParams,
-} from "./tool-surface-plan.js";
+import { applyAgentToolSurfaceCatalog, resolveAgentToolSurfacePlan } from "./tool-surface-plan.js";
+
+// Params type stays module-local in production; derive it so the test cannot
+// keep a public export alive that no production caller needs.
+type AgentToolSurfacePlanParams = Parameters<typeof resolveAgentToolSurfacePlan>[0];
 
 const controlsEnabledConfig: OpenClawConfig = {
   tools: { codeMode: true, toolSearch: true },

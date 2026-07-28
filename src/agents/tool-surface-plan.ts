@@ -1,13 +1,19 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getActiveAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
-import { isCodeModeEngagedForModel } from "./code-mode-runtime.js";
-import { applyCodeModeCatalog, resolveCodeModeConfig } from "./code-mode.js";
-import { applyToolSchemaDirectoryCatalog } from "./tool-search-directory.js";
+import {
+  applyCodeModeCatalog,
+  isCodeModeEngagedForModel,
+  resolveCodeModeConfig,
+} from "./code-mode.js";
 import { resolveAgentToolSearchRuntimeConfig } from "./tool-search-runtime-config.js";
 import type { ToolSearchConfig } from "./tool-search-types.js";
-import { applyToolSearchCatalog, resolveToolSearchConfig } from "./tool-search.js";
+import {
+  applyToolSchemaDirectoryCatalog,
+  applyToolSearchCatalog,
+  resolveToolSearchConfig,
+} from "./tool-search.js";
 
-export type AgentToolSurfacePlanParams = {
+type AgentToolSurfacePlanParams = {
   config?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
@@ -51,7 +57,7 @@ export function resolveAgentToolSurfacePlan(params: AgentToolSurfacePlanParams) 
 }
 
 type CodeModeCatalogParams = Parameters<typeof applyCodeModeCatalog>[0];
-export type ApplyAgentToolSurfaceCatalogParams = Omit<CodeModeCatalogParams, "directToolNames"> & {
+type ApplyAgentToolSurfaceCatalogParams = Omit<CodeModeCatalogParams, "directToolNames"> & {
   /** Required key (may be undefined for a config-less run): the tool-search
    * branches resolve their mode from this, so omitting it would silently
    * downgrade the run to schema defaults. */
