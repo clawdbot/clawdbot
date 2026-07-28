@@ -456,9 +456,10 @@ describe("GatewayConnection heartbeat liveness", () => {
     // queue open inside ingress.receive(), an Op 11 must still reset the counter.
     let releaseIngress!: () => void;
     const receive = vi.fn(
-      () => new Promise<void>((resolve) => {
-        releaseIngress = resolve;
-      }),
+      () =>
+        new Promise<void>((resolve) => {
+          releaseIngress = resolve;
+        }),
     );
     const { ws, controller, started } = await startConnection({
       createIngressMonitor: () => ({
@@ -474,11 +475,19 @@ describe("GatewayConnection heartbeat liveness", () => {
     // tick 1: send heartbeat 1.
     await vi.advanceTimersByTimeAsync(10_000);
     // A DISPATCH enters ingress.receive() and blocks the serialized queue.
-    ws.emit("message", JSON.stringify({
-      op: GatewayOp.DISPATCH,
-      t: GatewayEvent.C2C_MESSAGE_CREATE,
-      d: { id: "m1", content: "hi", timestamp: "2026-07-18T12:00:00Z", author: { user_openid: "u1" } },
-    }));
+    ws.emit(
+      "message",
+      JSON.stringify({
+        op: GatewayOp.DISPATCH,
+        t: GatewayEvent.C2C_MESSAGE_CREATE,
+        d: {
+          id: "m1",
+          content: "hi",
+          timestamp: "2026-07-18T12:00:00Z",
+          author: { user_openid: "u1" },
+        },
+      }),
+    );
     await vi.waitFor(() => expect(receive).toHaveBeenCalled());
     // tick 2: send heartbeat 2 while the queue is still blocked.
     await vi.advanceTimersByTimeAsync(10_000);
