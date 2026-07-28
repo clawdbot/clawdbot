@@ -24,7 +24,10 @@ import {
   buildRuntimeParityCacheDiagnostics,
   type RuntimeParityCacheDiagnostics,
 } from "./runtime-parity-cache-diagnostics.js";
+import type { RuntimeParityUsage } from "./runtime-parity-usage.js";
 import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
+
+export type { RuntimeParityUsage } from "./runtime-parity-usage.js";
 
 // These are the canonical QA comparison cells, not the extensible product
 // AgentHarness registry. Broader harness coverage needs its own explicit lane.
@@ -39,14 +42,6 @@ export type RuntimeParityToolCall = {
   argsHash: string;
   resultHash: string;
   errorClass?: string;
-};
-
-export type RuntimeParityUsage = {
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
-  cacheRead?: number;
-  cacheWrite?: number;
 };
 
 export type RuntimeParityUsagePolicy =
