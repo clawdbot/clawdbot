@@ -286,9 +286,10 @@ describe("evaluateChannelHealth", () => {
       expect(evaluation).toEqual({ healthy: false, reason: "ingress-unavailable" });
     });
 
-    it("leaves a stopped account on its lifecycle reason", () => {
-      // Readiness deliberately keeps a restart-backoff window green, so the ingress
-      // dimension must not shadow not-running and start flapping it.
+    it("keeps the ingress reason for the stopped state a failed start lands in", () => {
+      // server-channels records the verdict only after the start task rejects, so
+      // this is the shape the real failure has. Collapsing it into not-running
+      // would throw the cause away exactly where it matters.
       const evaluation = evaluateHealth({
         running: false,
         enabled: true,
@@ -296,7 +297,7 @@ describe("evaluateChannelHealth", () => {
         restartPending: true,
         ingressUnavailable: true,
       });
-      expect(evaluation).toEqual({ healthy: false, reason: "not-running" });
+      expect(evaluation).toEqual({ healthy: false, reason: "ingress-unavailable" });
     });
 
     it("outranks a busy short-circuit so an in-flight run cannot hide dead ingress", () => {
@@ -332,7 +333,7 @@ describe("evaluateChannelHealth", () => {
 
     it("stays healthy for a disabled account so unmanaged still wins", () => {
       const evaluation = evaluateHealth({
-        running: true,
+        running: false,
         enabled: false,
         configured: true,
         ingressUnavailable: true,

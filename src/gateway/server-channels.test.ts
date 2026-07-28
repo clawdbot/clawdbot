@@ -361,10 +361,8 @@ describe("server-channels auto restart", () => {
       { stepMs: 10, maxMs: 500 },
     );
 
-    // A stopped account keeps its lifecycle reason; the recorded dimension is what
-    // makes the running case call this out as dead inbound instead of healthy.
-    expect(healthOf(readAccount())).toEqual({ healthy: false, reason: "not-running" });
-    expect(healthOf({ ...readAccount(), accountId: DEFAULT_ACCOUNT_ID, running: true })).toEqual({
+    // Health must name this dead inbound rather than one more anonymous crash.
+    expect(healthOf(readAccount())).toEqual({
       healthy: false,
       reason: "ingress-unavailable",
     });

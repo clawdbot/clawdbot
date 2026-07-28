@@ -75,16 +75,17 @@ export function evaluateChannelHealth(
   if (!snapshot.running && snapshot.terminalDisconnect) {
     return { healthy: false, reason: "terminal-disconnect" };
   }
-  if (!snapshot.running) {
-    return { healthy: false, reason: "not-running" };
-  }
   // Transport liveness and inbound admission are independent failure domains: a
-  // running channel can hold a healthy socket and still admit nothing, which every
-  // check below reads as healthy. Deliberately scoped to running accounts so a
-  // stopped one keeps its lifecycle reason and readiness keeps its restart-backoff
-  // grace. Absence is "unknown", never "fine" -- see ChannelAccountSnapshot.
+  // channel can hold a healthy socket and still admit nothing. This outranks the
+  // lifecycle windows below -- including not-running, which is the state a failed
+  // ingress start actually lands in -- so the cause survives instead of collapsing
+  // into a generic crash. Absence is "unknown", never "fine"; readiness owns its
+  // own restart-backoff tolerance in server/readiness.ts.
   if (snapshot.ingressUnavailable === true) {
     return { healthy: false, reason: "ingress-unavailable" };
+  }
+  if (!snapshot.running) {
+    return { healthy: false, reason: "not-running" };
   }
   const activeRuns =
     typeof snapshot.activeRuns === "number" && Number.isFinite(snapshot.activeRuns)
