@@ -64,6 +64,16 @@ describe("evaluateChannelHealth", () => {
     expect(evaluation).toEqual({ healthy: true, reason: "unmanaged" });
   });
 
+  it("treats explicitly unlinked accounts as healthy unmanaged", () => {
+    const evaluation = evaluateHealth({
+      running: false,
+      enabled: true,
+      configured: true,
+      linked: false,
+    });
+    expect(evaluation).toEqual({ healthy: true, reason: "unmanaged" });
+  });
+
   it("uses channel connect grace before flagging disconnected", () => {
     const evaluation = evaluateHealth(
       runningAccount({

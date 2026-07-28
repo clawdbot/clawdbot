@@ -165,6 +165,7 @@ export type ChannelAccountSnapshot = {
   lastMessageAt?: number | null;
   lastEventAt?: number | null;
   lastTransportActivityAt?: number | null;
+  stateReason?: string;
   lastError?: string | null;
   healthState?: string;
   terminalDisconnect?: boolean;

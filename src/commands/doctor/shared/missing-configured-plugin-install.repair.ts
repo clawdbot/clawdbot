@@ -378,17 +378,13 @@ async function repairMissingPluginInstalls(params: {
     ) {
       continue;
     }
+    const hasRecord = Object.hasOwn(nextRecords, candidate.pluginId);
     const hasUsableRecord =
-      Object.hasOwn(nextRecords, candidate.pluginId) &&
-      !isInstalledRecordMissingOnDisk(nextRecords[candidate.pluginId], env);
+      hasRecord && !isInstalledRecordMissingOnDisk(nextRecords[candidate.pluginId], env);
     if (
       !shouldReplaceBrokenOfficialInstall &&
-      knownIds.has(candidate.pluginId) &&
-      hasUsableRecord
+      (hasUsableRecord || (knownIds.has(candidate.pluginId) && !hasRecord))
     ) {
-      continue;
-    }
-    if (!shouldReplaceBrokenOfficialInstall && hasUsableRecord) {
       continue;
     }
     const removalPath = shouldReplaceBrokenOfficialInstall

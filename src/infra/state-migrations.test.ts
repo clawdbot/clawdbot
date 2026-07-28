@@ -1537,7 +1537,7 @@ describe("state migrations", () => {
     const acpWarningPrefix =
       "Preserved ACP metadata for 3 ambiguous session key(s) in potentially shared store ";
     expect(result.warnings.filter((warning) => warning.startsWith(acpWarningPrefix))).toHaveLength(
-      2,
+      1,
     );
   });
 
@@ -1582,7 +1582,48 @@ describe("state migrations", () => {
     );
   });
 
-  it("canonicalizes imported ACP aliases with their session row owner", async () => {
+  it("migrates standalone ACP metadata through the automatic fast path", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        "agent:main:existing": {
+          sessionId: "existing-main",
+          updatedAt: 20,
+          acp: {
+            backend: "test",
+            agent: "main",
+            runtimeSessionName: "existing-runtime",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: 20,
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const result = await autoMigrateLegacyState({
+      cfg: { agents: { list: [{ id: "main", default: true }] } },
+      env,
+      homedir: () => root,
+    });
+
+    expect(result.changes).toContain("Migrated 1 ACP session metadata row → shared SQLite state");
+    expect(
+      readAcpSessionMetaForEntry({
+        sessionKey: "agent:main:existing",
+        entry: { sessionId: "existing-main", lifecycleRevision: undefined },
+        env,
+      })?.runtimeSessionName,
+    ).toBe("existing-runtime");
+  });
+
+  it("migrates existing and imported ACP metadata in one canonical session phase", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");
     const env = createEnv(stateDir);
@@ -1597,7 +1638,24 @@ describe("state migrations", () => {
     );
     const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
     await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(storePath, "{}\n", "utf8");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        "agent:main:existing": {
+          sessionId: "existing-main",
+          updatedAt: 20,
+          acp: {
+            backend: "test",
+            agent: "main",
+            runtimeSessionName: "existing-runtime",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: 20,
+          },
+        },
+      }),
+      "utf8",
+    );
     const legacyStorePath = path.join(stateDir, "sessions", "sessions.json");
     await fs.mkdir(path.dirname(legacyStorePath), { recursive: true });
     await fs.writeFile(
@@ -1627,6 +1685,13 @@ describe("state migrations", () => {
 
     expect(
       readAcpSessionMetaForEntry({
+        sessionKey: "agent:main:existing",
+        entry: { sessionId: "existing-main", lifecycleRevision: undefined },
+        env,
+      })?.runtimeSessionName,
+    ).toBe("existing-runtime");
+    expect(
+      readAcpSessionMetaForEntry({
         sessionKey: "agent:voice:desk",
         entry: { sessionId: "voice-main", lifecycleRevision: undefined },
         env,
@@ -1639,7 +1704,7 @@ describe("state migrations", () => {
         env,
       }),
     ).toBeUndefined();
-    expect(result.changes).toContain("Migrated 1 ACP session metadata row → shared SQLite state");
+    expect(result.changes).toContain("Migrated 2 ACP session metadata rows → shared SQLite state");
   });
 
   it("migrates legacy delivery queue files into shared SQLite state", async () => {

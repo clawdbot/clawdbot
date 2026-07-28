@@ -1,11 +1,8 @@
 import type { Api, Model, OpenAICompletionsCompat, Usage } from "@openclaw/llm-core";
 import { getAiTransportHost } from "../host.js";
+import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 /** Shared options, usage shape, cache identity, ordering, and stream scheduling for OpenAI APIs. */
-import {
-  clampOpenAIPromptCacheKey,
-  type OpenAICompletionsToolChoice,
-  type OpenAIReasoningEffort,
-} from "../internal/openai.js";
+import { clampOpenAIPromptCacheKey } from "../providers/openai-prompt-cache.js";
 import { transportAbortError } from "./transport-stream-shared.js";
 
 export { sortPromptCacheToolsByName as sortTransportToolsByName } from "../utils/prompt-cache-stability.js";
@@ -26,33 +23,7 @@ export const log = {
   },
 };
 
-export type BaseOpenAIStreamOptions = {
-  temperature?: number;
-  topP?: number;
-  maxTokens?: number;
-  stop?: string[];
-  signal?: AbortSignal;
-  apiKey?: string;
-  cacheRetention?: "none" | "short" | "long";
-  sessionId?: string;
-  promptCacheKey?: string;
-  authProfileId?: string;
-  onPayload?: (payload: unknown, model: Model) => unknown;
-  headers?: Record<string, string>;
-  firstEventTimeoutMs?: number;
-  onFirstEventTimeout?: (reason: Error) => void;
-  openclawCodeModeToolSurface?: boolean;
-  responseFormat?: Record<string, unknown>;
-  frequencyPenalty?: number;
-  presencePenalty?: number;
-  seed?: number;
-};
-
-export type OpenAICompletionsOptions = BaseOpenAIStreamOptions & {
-  toolChoice?: OpenAICompletionsToolChoice;
-  reasoning?: OpenAIReasoningEffort;
-  reasoningEffort?: OpenAIReasoningEffort;
-};
+export type { OpenAICompletionsOptions } from "../provider-options.js";
 
 type OpenAIModeCompatInput = Omit<OpenAICompletionsCompat, "thinkingFormat"> & {
   thinkingFormat?: string;

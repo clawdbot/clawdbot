@@ -133,7 +133,15 @@ export function buildQaGatewayConfig(params: {
     selectedPluginIds.map((pluginId) => [
       pluginId,
       params.forcedRuntime === "codex" && pluginId === "codex"
-        ? { enabled: true, config: { appServer: { sandbox: "workspace-write" } } }
+        ? {
+            enabled: true,
+            config: {
+              appServer: {
+                sandbox: "workspace-write",
+                ...(params.fastMode === true ? { serviceTier: "priority" } : {}),
+              },
+            },
+          }
         : { enabled: true },
     ]),
   );

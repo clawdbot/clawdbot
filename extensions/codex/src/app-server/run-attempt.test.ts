@@ -5129,6 +5129,7 @@ describe("runCodexAppServerAttempt", () => {
     params.provider = "anthropic";
     params.modelId = "claude-opus-4-6";
     params.model = createCodexTestModel("anthropic");
+    params.fastMode = true;
     setCodexTestModelSupportsTools(params, false);
     params.config = {
       ...params.config,
@@ -5155,11 +5156,13 @@ describe("runCodexAppServerAttempt", () => {
     expect(resumeParams).not.toHaveProperty("model");
     expect(resumeParams).not.toHaveProperty("modelProvider");
     expect(resumeParams?.approvalsReviewer).toBe("auto_review");
+    expect(resumeParams?.serviceTier).toBe("priority");
     const turnRequest = harness.requests.find((request) => request.method === "turn/start");
     const turnParams = turnRequest?.params as Record<string, unknown> | undefined;
     expect(turnParams).not.toHaveProperty("model");
     expect(turnParams).not.toHaveProperty("modelProvider");
     expect(turnParams?.approvalsReviewer).toBe("auto_review");
+    expect(turnParams?.serviceTier).toBe("priority");
   });
   it("fails before client startup when a successor generation hides a private supervision binding", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();

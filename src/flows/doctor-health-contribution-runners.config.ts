@@ -79,8 +79,22 @@ export async function runWriteConfigHealth(
       );
     }
   }
+  if (options.runPostWriteRepairs === false) {
+    return;
+  }
+  if (ctx.configResult.retiredPhoneControlStateCleanupPending === true) {
+    const { finalizeRetiredPhoneControlCleanup } =
+      await import("../commands/doctor-retired-phone-control.js");
+    const { note } = await import("../../packages/terminal-core/src/note.js");
+    const cleanup = await finalizeRetiredPhoneControlCleanup({ env: ctx.env ?? process.env });
+    if (cleanup.changes.length > 0) {
+      note(cleanup.changes.join("\n"), "Doctor changes");
+    }
+    if (cleanup.warnings.length > 0) {
+      note(cleanup.warnings.join("\n"), "Doctor warnings");
+    }
+  }
   if (
-    options.runPostWriteRepairs === false ||
     ctx.configResult.shouldRepairCronCodexModelRefsAfterConfigWrite !== true ||
     ctx.postConfigWriteRepairsCommitted === true
   ) {

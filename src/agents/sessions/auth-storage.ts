@@ -732,9 +732,13 @@ export class AuthStorage {
           return { result: null };
         }
 
+        const refreshedCredential: OAuthCredential = {
+          type: "oauth",
+          ...refreshed.newCredentials,
+        };
         const merged: AuthStorageData = {
           ...currentData,
-          [providerId]: { type: "oauth", ...refreshed.newCredentials },
+          [providerId]: refreshedCredential,
         };
         this.data = merged;
         this.loadError = null;

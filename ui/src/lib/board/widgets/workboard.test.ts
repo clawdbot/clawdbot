@@ -12,7 +12,7 @@ const cards = [
     status: "ready",
     priority: "high",
     labels: [],
-    position: 0,
+    position: 1000,
     createdAt: 1,
     updatedAt: 1,
     agentId: "agent-a",
@@ -24,7 +24,7 @@ const cards = [
     status: "running",
     priority: "normal",
     labels: [],
-    position: 1,
+    position: 2000,
     createdAt: 1,
     updatedAt: 1,
     metadata: { automation: { boardId: "ops" } },
@@ -35,7 +35,7 @@ const cards = [
     status: "done",
     priority: "low",
     labels: [],
-    position: 2,
+    position: 3000,
     createdAt: 1,
     updatedAt: 1,
     metadata: { automation: { boardId: "ops" } },
@@ -121,7 +121,7 @@ describe("Workboard plugin widgets", () => {
         return { cards, statuses: ["ready", "running", "done"] };
       }
       if (method === "workboard.cards.move") {
-        return { card: { ...cards[0], status: "running", position: 2 } };
+        return { card: { ...cards[0], status: "running", position: 3000 } };
       }
       throw new Error(`Unexpected method: ${method}`);
     });
@@ -140,9 +140,74 @@ describe("Workboard plugin widgets", () => {
       expect(request).toHaveBeenCalledWith("workboard.cards.move", {
         id: "card-ready",
         status: "running",
-        position: 2,
+        position: 3000,
       }),
     );
+  });
+
+  it.each([
+    {
+      name: "starts an empty destination at the canonical position",
+      listedCards: [cards[0], cards[2]],
+      position: 1000,
+    },
+    {
+      name: "ignores higher positions on another board",
+      listedCards: [
+        ...cards,
+        {
+          ...cards[1],
+          id: "product-running",
+          title: "Product run",
+          position: 9000,
+          metadata: { automation: { boardId: "product" } },
+        },
+      ],
+      position: 3000,
+    },
+    {
+      name: "preserves hidden archived positions on the same board",
+      listedCards: [
+        ...cards,
+        {
+          ...cards[1],
+          id: "archived-ops-running",
+          title: "Archived Operations run",
+          position: 9000,
+          metadata: { archivedAt: 10, automation: { boardId: "ops" } },
+        },
+      ],
+      position: 10000,
+    },
+  ])("$name", async ({ listedCards, position }) => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "workboard.cards.list") {
+        return { cards: listedCards, statuses: ["ready", "running", "done"] };
+      }
+      if (method === "workboard.cards.move") {
+        return { card: { ...cards[0], status: "running", position } };
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    const element = document.createElement("openclaw-workboard-card-widget");
+    element.widget = pluginWidget("workboard:card", { cardId: "card-ready" });
+    element.sessionKey = "agent:main:test";
+
+    await mount(element, createContext(request), request);
+
+    const select = element.querySelector("select");
+    expect(select).not.toBeNull();
+    select!.value = "running";
+    select!.dispatchEvent(new Event("change"));
+
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("workboard.cards.move", {
+        id: "card-ready",
+        status: "running",
+        position,
+      }),
+    );
+    expect(element.textContent).not.toContain("Archived Operations run");
   });
 
   it("does not offer or issue status changes for a read-only card widget", async () => {
@@ -186,7 +251,7 @@ describe("Workboard plugin widgets", () => {
         return { cards: [currentCard], statuses: ["ready", "running", "done"] };
       }
       if (method === "workboard.cards.move") {
-        return { card: { ...currentCard, status: "running", position: 0 } };
+        return { card: { ...currentCard, status: "running", position: 1000 } };
       }
       throw new Error(`Unexpected method: ${method}`);
     });
@@ -208,7 +273,7 @@ describe("Workboard plugin widgets", () => {
       expect(staleRequest).toHaveBeenCalledWith("workboard.cards.move", {
         id: "card-ready",
         status: "running",
-        position: 2,
+        position: 3000,
       }),
     );
     const moveCallIndex = staleRequest.mock.calls.findIndex(
@@ -228,11 +293,11 @@ describe("Workboard plugin widgets", () => {
       expect(currentRequest).toHaveBeenCalledWith("workboard.cards.move", {
         id: "card-ready",
         status: "running",
-        position: 0,
+        position: 1000,
       }),
     );
     staleMove.resolve({
-      card: { ...cards[0], title: "Stale connection card", status: "running", position: 2 },
+      card: { ...cards[0], title: "Stale connection card", status: "running", position: 3000 },
     });
     await pendingMove;
     await Promise.resolve();

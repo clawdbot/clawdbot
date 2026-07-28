@@ -22,9 +22,9 @@ import {
   readSessionMessagesAsync,
   readSessionMessagesPageWithStatsAsync,
   readLatestSessionUsageFromTranscriptAsync,
-  readSessionTitleFieldsFromTranscript,
   type SessionTranscriptReadScope,
 } from "./session-transcript-readers.js";
+import { readSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
 
 vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
@@ -396,6 +396,85 @@ describe("session transcript reader facade", () => {
 
     await expect(probeReadCount("reader-title-bounded-101", 101)).resolves.toBe(200);
     await expect(probeReadCount("reader-title-bounded-201", 201)).resolves.toBe(200);
+  });
+
+  test("reuses cached SQLite title fields while the transcript watermark is unchanged", async () => {
+    const scope = await writeSqliteMessages("reader-title-cache-warm", [
+      { role: "user", content: "cached prompt" },
+      { role: "assistant", content: "cached reply" },
+    ]);
+    expect(readSessionTitleFieldsFromTranscript(scope)).toEqual({
+      firstUserMessage: "cached prompt",
+      lastMessagePreview: "cached reply",
+    });
+    vi.clearAllMocks();
+
+    expect(readSessionTitleFieldsFromTranscript(scope)).toEqual({
+      firstUserMessage: "cached prompt",
+      lastMessagePreview: "cached reply",
+    });
+    expect(sessionAccessor.readSessionTranscriptMessageEventPage).not.toHaveBeenCalled();
+  });
+
+  test("invalidates cached SQLite title fields after an append advances max seq", async () => {
+    const sessionId = "reader-title-cache-append";
+    const scope = await writeSqliteMessages(sessionId, [
+      { role: "user", content: "append prompt" },
+      { role: "assistant", content: "first reply" },
+    ]);
+    expect(readSessionTitleFieldsFromTranscript(scope).lastMessagePreview).toBe("first reply");
+    await persistSessionTranscriptTurn(
+      { agentId: "main", sessionId, sessionKey: `agent:main:${sessionId}`, storePath },
+      {
+        messages: [{ message: { role: "assistant", content: "appended reply" } }],
+        touchSessionEntry: false,
+      },
+    );
+    vi.clearAllMocks();
+
+    expect(readSessionTitleFieldsFromTranscript(scope).lastMessagePreview).toBe("appended reply");
+    expect(sessionAccessor.readSessionTranscriptMessageEventPage).toHaveBeenCalled();
+  });
+
+  test("invalidates cached SQLite title fields after the rewrite generation changes", async () => {
+    const sessionId = "reader-title-cache-generation";
+    const scope = await writeSqliteMessages(sessionId, [
+      { role: "user", content: "generation prompt" },
+      { role: "assistant", content: "generation reply" },
+    ]);
+    expect(readSessionTitleFieldsFromTranscript(scope).firstUserMessage).toBe("generation prompt");
+    openOpenClawAgentDatabase({
+      agentId: "main",
+      path: path.join(tempDir, "openclaw-agent.sqlite"),
+    })
+      .db.prepare("UPDATE transcript_rewrite_watermarks SET generation = ? WHERE session_id = ?")
+      .run("f".repeat(32), sessionId);
+    vi.clearAllMocks();
+
+    expect(readSessionTitleFieldsFromTranscript(scope)).toEqual({
+      firstUserMessage: "generation prompt",
+      lastMessagePreview: "generation reply",
+    });
+    expect(sessionAccessor.readSessionTranscriptMessageEventPage).toHaveBeenCalled();
+  });
+
+  test("returns missing title fields when the bounded head and tail caps miss", async () => {
+    const scope = await writeSqliteMessages(
+      "reader-title-cap-miss",
+      Array.from({ length: 201 }, (_, index) =>
+        index === 100
+          ? { role: "user", content: "outside both probes" }
+          : { role: "assistant", content: " " },
+      ),
+    );
+    vi.clearAllMocks();
+
+    expect(readSessionTitleFieldsFromTranscript(scope)).toEqual({
+      firstUserMessage: null,
+      lastMessagePreview: null,
+    });
+    expect(sessionAccessor.readSessionTranscriptMessageEvents).not.toHaveBeenCalled();
+    expect(boundedPageEventReadCount()).toBe(200);
   });
 
   test("promotes SQLite message idempotency into transcript metadata", async () => {
