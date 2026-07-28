@@ -60,6 +60,34 @@ export function readUpdateAvailable(hello: GatewayHelloOk | null): UpdateAvailab
     : null;
 }
 
+/**
+ * Extracts the named prerelease identifier (e.g. "beta") from a version string.
+ * Numeric-only prereleases such as stable corrections ("2026.7.1-2") return null.
+ */
+export function resolveUpdatePrereleaseLabel(version: string): string | null {
+  const withoutBuild = version.trim().split("+", 1)[0];
+  const dashIndex = withoutBuild.indexOf("-");
+  if (dashIndex < 0) {
+    return null;
+  }
+  const named = withoutBuild
+    .slice(dashIndex + 1)
+    .split(".")
+    .find((identifier) => /[a-zA-Z]/.test(identifier));
+  return named ? named.toLowerCase() : null;
+}
+
+/**
+ * Formats the available-update version for banners, labeling prereleases so
+ * stable-channel users can tell a beta apart from a new stable release.
+ */
+export function formatUpdateAvailableVersion(
+  update: Pick<UpdateAvailable, "latestVersion">,
+): string {
+  const label = resolveUpdatePrereleaseLabel(update.latestVersion);
+  return label ? `v${update.latestVersion} (${label})` : `v${update.latestVersion}`;
+}
+
 export function resolveUpdateStatusBanner(params: {
   status?: string;
   reason?: string;

@@ -7,6 +7,7 @@ import {
   NATIVE_UPDATE_DECLINED_EVENT,
   postNativeUpdate,
 } from "../app/native-link-routing.ts";
+import { formatUpdateAvailableVersion } from "../app/update-overlay-helpers.ts";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
@@ -120,7 +121,9 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
           }}
         >
           <span class="sidebar-update-card__icon" aria-hidden="true">${icons.download}</span>
-          <span class="sidebar-update-card__text">${title} · v${update.latestVersion}</span>
+          <span class="sidebar-update-card__text"
+            >${title} · ${formatUpdateAvailableVersion(update)}</span
+          >
         </button>
         <button
           class="sidebar-update-card__dismiss"

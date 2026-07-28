@@ -77,6 +77,18 @@ describe("SidebarUpdateCard", () => {
     expect(onUpdate).toHaveBeenCalledOnce();
   });
 
+  it("labels a beta prerelease with its full version and channel", async () => {
+    const element = await mount({
+      currentVersion: "2026.7.1-2",
+      latestVersion: "2026.7.2-beta.5",
+      channel: "beta",
+    });
+
+    expect(element.querySelector(".sidebar-update-card__text")?.textContent?.trim()).toBe(
+      "Update Gateway · v2026.7.2-beta.5 (beta)",
+    );
+  });
+
   it.each([null, { currentVersion: "2.0.0", latestVersion: "2.0.0", channel: "stable" }] as const)(
     "renders nothing when no newer update is available",
     async (update) => {
