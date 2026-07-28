@@ -218,6 +218,70 @@ describe("TuiSessionRunCoordinator", () => {
     resolveHistory?.({ loaded: true, inFlightRunId: null });
   });
 
+  it("does not finalize a gap-recovery run when authoritative history fails", async () => {
+    const { coordinator, loadHistory, finalizeHistoryOwnedRun } = createCoordinator({
+      loadHistory: async () => {
+        throw new Error("history temporarily unavailable");
+      },
+    });
+
+    coordinator.queueGapHistoryReload(["run-gap"]);
+
+    await vi.waitFor(() => expect(loadHistory).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(coordinator.isHistoryReloadingRun("run-gap")).toBe(false));
+    expect(finalizeHistoryOwnedRun).not.toHaveBeenCalled();
+  });
+
+  it("reconciles every tracked run after a Gateway event gap", async () => {
+    const { coordinator, finalizeHistoryOwnedRun } = createCoordinator();
+
+    coordinator.queueGapHistoryReload(["run-first", "run-second"]);
+
+    await vi.waitFor(() => expect(finalizeHistoryOwnedRun).toHaveBeenCalledTimes(2));
+    expect(finalizeHistoryOwnedRun).toHaveBeenCalledWith({
+      runId: "run-first",
+      result: { loaded: true, inFlightRunId: null },
+      previouslyDisplayed: false,
+    });
+    expect(finalizeHistoryOwnedRun).toHaveBeenCalledWith({
+      runId: "run-second",
+      result: { loaded: true, inFlightRunId: null },
+      previouslyDisplayed: false,
+    });
+  });
+
+  it.each([
+    { firstHistory: "still streaming", inFlightRunId: "run-gap" },
+    { firstHistory: "already completed", inFlightRunId: null },
+  ])(
+    "defers overlapping gap finalization when the older history is $firstHistory",
+    async ({ inFlightRunId }) => {
+      let resolveHistory: ((result: TuiHistoryLoadResult) => void) | undefined;
+      const { coordinator, loadHistory, finalizeHistoryOwnedRun } = createCoordinator({
+        loadHistory: () =>
+          new Promise<TuiHistoryLoadResult>((resolve) => {
+            resolveHistory = resolve;
+          }),
+      });
+
+      coordinator.queueGapHistoryReload(["run-gap"]);
+      coordinator.queueGapHistoryReload(["run-gap"]);
+      expect(loadHistory).toHaveBeenCalledTimes(1);
+
+      resolveHistory?.({ loaded: true, inFlightRunId });
+      await vi.waitFor(() => expect(loadHistory).toHaveBeenCalledTimes(2));
+      expect(finalizeHistoryOwnedRun).not.toHaveBeenCalled();
+
+      resolveHistory?.({ loaded: true, inFlightRunId: null });
+      await vi.waitFor(() => expect(finalizeHistoryOwnedRun).toHaveBeenCalledTimes(1));
+      expect(finalizeHistoryOwnedRun).toHaveBeenCalledWith({
+        runId: "run-gap",
+        result: { loaded: true, inFlightRunId: null },
+        previouslyDisplayed: false,
+      });
+    },
+  );
+
   it("discards a stale in-flight reload when the selected session resets", async () => {
     let resolveHistory: ((result: TuiHistoryLoadResult) => void) | undefined;
     const { coordinator, finalizeHistoryOwnedRun, replayHistoryRunEvent } = createCoordinator({

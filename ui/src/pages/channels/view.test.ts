@@ -2,6 +2,7 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { WhatsAppStatus } from "../../api/types.ts";
+import { renderChannelDetail } from "./view.detail.ts";
 import {
   channelEnabled,
   resolveChannelConfigured,
@@ -213,6 +214,48 @@ describe("channel config advanced tier", () => {
     expect(collapse).toBeInstanceOf(HTMLButtonElement);
     collapse!.click();
     expect(onShowAdvancedSettings).toHaveBeenCalledWith(false);
+  });
+
+  it("renders field help from the resolved hints", () => {
+    const { container } = renderWhatsAppConfigForm(false, {
+      ...CHANNEL_TIER_HINTS,
+      "channels.whatsapp.enabled": { advanced: false, help: "Turn this channel on or off." },
+    } as typeof CHANNEL_TIER_HINTS);
+
+    const help = Array.from(container.querySelectorAll(".settings-row__desc")).map((node) =>
+      node.textContent?.trim(),
+    );
+    expect(help).toContain("Turn this channel on or off.");
+  });
+});
+
+describe("channel detail", () => {
+  it("links every channel to its docs page", () => {
+    const props = createProps({
+      ts: Date.now(),
+      channelOrder: ["telegram"],
+      channelLabels: { telegram: "Telegram" },
+      channels: { telegram: { configured: true } },
+      channelAccounts: {},
+      channelDefaultAccountId: {},
+    });
+
+    const container = document.createElement("div");
+    render(
+      renderChannelDetail({
+        channelId: "telegram",
+        label: "Telegram",
+        props,
+        data: {},
+        onClose: () => {},
+        onSetup: () => {},
+      }),
+      container,
+    );
+
+    const docs = container.querySelector<HTMLAnchorElement>(".channels-detail__header-actions a");
+    expect(docs?.href).toBe("https://docs.openclaw.ai/channels/telegram");
+    expect(docs?.textContent?.trim()).toBe("Docs");
   });
 });
 

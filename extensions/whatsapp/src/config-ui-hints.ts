@@ -21,6 +21,14 @@ export const whatsAppChannelConfigUiHints = {
     label: "WhatsApp Self-Phone Mode",
     help: "Same-phone setup (bot uses your personal WhatsApp number).",
   },
+  direct: {
+    label: "WhatsApp Direct Chat Overrides",
+    help: 'Per-conversation overrides keyed by WhatsApp DM id. Applied after a DM is already admitted by dmPolicy; "*" supplies a default without admitting anyone.',
+  },
+  pluginHooks: {
+    label: "WhatsApp Plugin Hooks",
+    help: "Opt in to broadcasting inbound WhatsApp events to plugins. Payloads carry personal content, so only enable it for plugins you trust.",
+  },
   ...createChannelConfigUiHints({ channelLabel: "WhatsApp", configWrites: true }),
   "actions.calls": {
     label: "WhatsApp Voice Calls",

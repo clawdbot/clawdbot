@@ -114,6 +114,7 @@
     <string name="native_1039e92fa05c1279" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"État du Gateway, disponibilité du nœud téléphonique et flux récent du journal."</string>
     <string name="native_106808530413298b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ouvrir les détails de l’automatisation"</string>
     <string name="native_1093115897879aa3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Environnement d’exécution"</string>
+    <string name="native_10d2f9ed07a13f84" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1 worker de plus"</string>
     <string name="native_1102bd820f68901b" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Agent %1$s"</string>
     <string name="native_11252dd2410324bc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Get Goal"</string>
     <string name="native_114c9789813fd2b0" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw %1$s (%2$s)"</string>
@@ -490,6 +491,7 @@
     <string name="native_4c2dd6654a535240" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Cette compétence nécessite %1$s éléments de configuration. Android indique ce qui est installé ; les modifications de configuration s’effectuent depuis l’application de bureau ou la CLI."</string>
     <string name="native_4c8346f441fa1651" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s récentes"</string>
     <string name="native_4c8906cf76f5740a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Canaux"</string>
+    <string name="native_4c9bba30fb790a4d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Non phasé"</string>
     <string name="native_4cb394d648628e4d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Actif sur ce téléphone"</string>
     <string name="native_4cdd7410d10bc106" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Vérification de l’accès au nœud"</string>
     <string name="native_4ceca1d52cede44d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Fuseau horaire"</string>
@@ -524,6 +526,7 @@
     <string name="native_52aadec039d80320" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Votre téléphone envoie ces informations à votre Gateway, et non à un serveur exploité par OpenClaw. Votre Gateway peut les inclure dans les requêtes adressées au fournisseur d\'IA que vous avez choisi."</string>
     <string name="native_52bfe584a5fc4505" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Livraison"</string>
     <string name="native_52d200a2d9f278ad" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Couper le haut-parleur"</string>
+    <string name="native_52d9f53cde594ded" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s en cours · %2$s terminés · %3$s échoués"</string>
     <string name="native_52dd413279b26d9c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ouverture de la connexion à la Gateway"</string>
     <string name="native_52fbec07af8ae846" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Surveillance · %1$s fils de discussion"</string>
     <string name="native_5309fee1f35f049b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"L’exécution de l’automatisation est terminée."</string>
@@ -894,6 +897,7 @@
     <string name="native_8ba5517fc10b3db5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Autoriser le contrôle d\'autres applications ?"</string>
     <string name="native_8bb7ec15b1e350a5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Inspection"</string>
     <string name="native_8bf253a125f66985" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Scannez ou collez un code de configuration pour ajouter un autre Gateway."</string>
+    <string name="native_8c13f73ba145c626" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Essaim"</string>
     <string name="native_8c4a3896e8f06d27" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Délai d’attente TLS dépassé"</string>
     <string name="native_8c55387fb6c584c0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Appareil appairé supprimé."</string>
     <string name="native_8c93c68056cde54d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway appairé. Vérification de l’approbation des fonctionnalités du nœud."</string>
@@ -1311,6 +1315,7 @@
     <string name="native_ce8bdd01ba43136f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Préparation de l\'audio…"</string>
     <string name="native_ceb6931ea57cc999" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Adaptatif"</string>
     <string name="native_cf0ee3547a4e51a5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bientôt"</string>
+    <string name="native_d0329dd25d4401f9" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s workers de plus"</string>
     <string name="native_d04fc7d7e19702f8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Web Search"</string>
     <string name="native_d053ba98d8bbcec1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Essayez Chat, Voix, Fils, Fournisseurs ou Paramètres."</string>
     <string name="native_d056177742e27cf5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw actif"</string>

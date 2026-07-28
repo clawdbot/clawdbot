@@ -206,7 +206,9 @@ type CliProcessFailure = Error & {
 };
 describe("CLI help process exit", () => {
   it("exits promptly after root --help", async () => {
-    const result = await runCliProcess({ args: ["--help"], forbidTlsImport: true });
+    // Keep this precomputed-help case off plugin discovery; plugin-sensitive root help is covered
+    // separately, so the shared child timeout remains a deadlock guard rather than a startup SLO.
+    const result = await runCliProcess({ args: ["--help"], config: {}, forbidTlsImport: true });
 
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Usage: openclaw [options] [command]");

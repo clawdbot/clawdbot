@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import {
   CombinedAutocompleteProvider,
@@ -101,6 +102,8 @@ const DIST_ENTRY_MJS_PATH = fileURLToPath(new URL("../../dist/entry.mjs", import
 
 const OPENAI_CODEX_PROVIDER = "openai";
 const CODEX_CLI_LOOKUP_TIMEOUT_MS = 5_000;
+const SESSION_SUBSCRIPTION_MAX_ATTEMPTS = 5;
+const SESSION_SUBSCRIPTION_RETRY_DELAY_MS = 25;
 
 type RunTuiOptions = TuiOptions & {
   backend?: TuiBackend;
@@ -1403,6 +1406,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     reconnectStreamingWatchdog,
     consumeCompletedRunForPendingSend,
     isRunObserved,
+    reconcileHistoryAfterGap,
     flushPendingHistoryRefreshIfIdle,
     dispose: disposeEventHandlers,
   } = createEventHandlers({
@@ -1673,13 +1677,30 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       setActivityStatus("starting up");
     }
     void (async () => {
-      try {
-        await client.subscribeSessionEvents?.();
-      } catch (err) {
-        if (!ownsConnection()) {
-          return;
+      for (let attempt = 0; attempt < SESSION_SUBSCRIPTION_MAX_ATTEMPTS; attempt += 1) {
+        try {
+          await client.subscribeSessionEvents?.();
+          break;
+        } catch (err) {
+          if (!ownsConnection()) {
+            return;
+          }
+          if (attempt + 1 === SESSION_SUBSCRIPTION_MAX_ATTEMPTS) {
+            chatLog.addSystem(`session event subscribe failed: ${formatTuiErrorMessage(err)}`);
+            if (activityStatus === "starting up") {
+              setActivityStatus("idle");
+            }
+            setConnectionStatus("session event subscription failed");
+            tui.requestRender();
+            return;
+          }
+          // A connected but unsubscribed TUI misses every peer's message. Wait
+          // between idempotent retries and abandon this generation on reconnect.
+          await delay(SESSION_SUBSCRIPTION_RETRY_DELAY_MS * (attempt + 1));
+          if (!ownsConnection()) {
+            return;
+          }
         }
-        chatLog.addSystem(`session event subscribe failed: ${formatTuiErrorMessage(err)}`);
       }
       if (!ownsConnection()) {
         return;
@@ -1790,6 +1811,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       return;
     }
     setConnectionStatus(`event gap: expected ${info.expected}, got ${info.received}`, 5000);
+    reconcileHistoryAfterGap();
     void (async () => {
       try {
         await pluginApprovals?.refresh();

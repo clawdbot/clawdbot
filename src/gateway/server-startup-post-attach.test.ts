@@ -65,7 +65,6 @@ const hoisted = vi.hoisted(() => {
   const refreshPreparedModelRuntimeSnapshots = vi.fn(async (_cfg?: unknown) => {});
   const ensureRuntimePluginsLoaded = vi.fn();
   const ensureContextWindowCacheLoaded = vi.fn(async () => {});
-  const scheduleGatewayHandlerPrewarm = vi.fn(() => ({ stop: vi.fn() }));
   const clearCurrentProviderAuthState = vi.fn();
   const warmCurrentProviderAuthStateOffMainThread = vi.fn(
     async (_cfg?: unknown, _options?: unknown) => {},
@@ -106,7 +105,6 @@ const hoisted = vi.hoisted(() => {
     refreshPreparedModelRuntimeSnapshots,
     ensureRuntimePluginsLoaded,
     ensureContextWindowCacheLoaded,
-    scheduleGatewayHandlerPrewarm,
     clearCurrentProviderAuthState,
     warmCurrentProviderAuthStateOffMainThread,
     setAuthProfileFailureHook,
@@ -222,10 +220,6 @@ vi.mock("../agents/context.js", () => ({
 
 vi.mock("../agents/model-provider-auth.js", () => ({
   warmCurrentProviderAuthStateOffMainThread: hoisted.warmCurrentProviderAuthStateOffMainThread,
-}));
-
-vi.mock("./server-startup-handler-prewarm.js", () => ({
-  scheduleGatewayHandlerPrewarm: hoisted.scheduleGatewayHandlerPrewarm,
 }));
 
 vi.mock("../agents/model-provider-auth-state.js", () => ({
@@ -1082,7 +1076,7 @@ describe("startGatewayPostAttachRuntime", () => {
       await vi.advanceTimersToNextTimerAsync();
       expect(postReadyRequestTurn).toHaveBeenCalledTimes(1);
       expect(onPostReadySidecars.mock.calls[0]?.[0]).toHaveLength(0);
-      expect(onGatewayLifetimeSidecars.mock.calls[0]?.[0]).toHaveLength(4);
+      expect(onGatewayLifetimeSidecars.mock.calls[0]?.[0]).toHaveLength(3);
       await vi.dynamicImportSettled();
       await waitForGatewayTestState(() => {
         expect(hoisted.setAuthProfileFailureHook).toHaveBeenCalledTimes(1);
@@ -1114,7 +1108,7 @@ describe("startGatewayPostAttachRuntime", () => {
       await waitForGatewayTestState(() => {
         expect(hoisted.setAuthProfileFailureHook).toHaveBeenCalledTimes(1);
       });
-      expect(onGatewayLifetimeSidecars.mock.calls[0]?.[0]).toHaveLength(4);
+      expect(onGatewayLifetimeSidecars.mock.calls[0]?.[0]).toHaveLength(3);
 
       await vi.advanceTimersByTimeAsync(10_000);
       expect(hoisted.warmCurrentProviderAuthStateOffMainThread).not.toHaveBeenCalled();
@@ -1238,7 +1232,7 @@ describe("startGatewayPostAttachRuntime", () => {
         | { stop: () => void }[]
         | undefined;
       expect(gmailSidecars).toHaveLength(1);
-      expect(lifetimeSidecars).toHaveLength(4);
+      expect(lifetimeSidecars).toHaveLength(3);
 
       for (const sidecar of gmailSidecars ?? []) {
         sidecar.stop();
@@ -1300,7 +1294,7 @@ describe("startGatewayPostAttachRuntime", () => {
       | Array<{ stop: () => Promise<void> | void }>
       | undefined;
     expect(gmailSidecars).toHaveLength(1);
-    expect(lifetimeSidecars).toHaveLength(4);
+    expect(lifetimeSidecars).toHaveLength(3);
 
     await waitForGatewayTestState(() => {
       expect(hoisted.transcriptsAutoStartService.start).toHaveBeenCalledTimes(1);
@@ -1795,7 +1789,7 @@ describe("startGatewayPostAttachRuntime", () => {
       name: "sidecars.ready",
       metrics: [
         ["loadedPluginCount", 2],
-        ["postReadySidecarCount", 3],
+        ["postReadySidecarCount", 2],
       ],
     });
   });

@@ -43,9 +43,10 @@ async function mountDashboard(
   element.connected = true;
   document.body.append(element);
   mounted.push(element);
-  await vi.waitFor(() =>
-    expect(element.querySelector(".workboard-card-dashboard__toggle")).not.toBeNull(),
-  );
+  // The provider is acquired in updated(), after the first DOM render.
+  // Await the real lifecycle so a loaded runner cannot observe the toggle early.
+  await element.updateComplete;
+  expect(element.querySelector(".workboard-card-dashboard__toggle")).not.toBeNull();
   return element;
 }
 

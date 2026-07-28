@@ -31,6 +31,7 @@ import {
   describe2BeforeEach0,
 } from "./dispatch-from-config.test-harness.js";
 import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "./provider-request-error-classifier.js";
+import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 beforeAll(globalBeforeAll0);
@@ -388,7 +389,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
   });
 
-  it("delivers core no-visible-reply fallback for disallowed empty group turns", async () => {
+  it("delivers core no-visible-reply fallback for disallowed empty mentioned group turns", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => undefined);
@@ -397,6 +398,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       Surface: "feishu",
       Provider: "feishu",
       SessionKey: "agent:main:feishu:group:oc_group",
+      WasMentioned: true,
     });
 
     const result = await dispatchReplyFromConfig({
@@ -422,6 +424,112 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       counts: { tool: 0, block: 0, final: 0 },
       noVisibleReplyFallbackDelivered: true,
     });
+    expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
+  });
+
+  it("keeps ambient group turns silent even when silence policy is disallow", async () => {
+    setNoAbort();
+    // The fallback exists for a user who asked and got nothing. An undirected
+    // group turn never draws a visible failure notice, regardless of silence
+    // policy (#114799: ambient HamVerBot group chatter drew fallback spam).
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => undefined);
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      Surface: "telegram",
+      Provider: "telegram",
+      SessionKey: "agent:main:telegram:group:oc_group",
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: {
+        agents: {
+          defaults: {
+            silentReply: {
+              group: "disallow",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+    expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
+  });
+
+  it("keeps room_event turns silent even when silence policy is disallow", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => undefined);
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      Surface: "telegram",
+      Provider: "telegram",
+      SessionKey: "agent:main:telegram:group:oc_group",
+      InboundEventKind: "room_event",
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: {
+        agents: {
+          defaults: {
+            silentReply: {
+              group: "disallow",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalledWith({
+      text: NO_VISIBLE_REPLY_FALLBACK_TEXT,
+    });
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+    expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
+  });
+
+  it("keeps room_event turns silent even when they carry a mention", async () => {
+    setNoAbort();
+    // A room_event is ambient by construction; a stray WasMentioned/direct
+    // classification must not promote it to a directed turn (only a command
+    // turn does, matching the room_event source-reply suppression bypass).
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => undefined);
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      Surface: "telegram",
+      Provider: "telegram",
+      SessionKey: "agent:main:telegram:group:oc_group",
+      InboundEventKind: "room_event",
+      WasMentioned: true,
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: {
+        agents: {
+          defaults: {
+            silentReply: {
+              group: "disallow",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalledWith({
+      text: NO_VISIBLE_REPLY_FALLBACK_TEXT,
+    });
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
     expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
   });
 
@@ -524,6 +632,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       Surface: "telegram",
       Provider: "telegram",
       SessionKey: "agent:main:telegram:group:oc_group",
+      WasMentioned: true,
     });
 
     const result = await dispatchReplyFromConfig({
@@ -635,6 +744,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       OriginatingChannel: "telegram",
       OriginatingTo: "telegram:999",
       SessionKey: "agent:main:slack:group:oc_group",
+      WasMentioned: true,
     });
 
     const result = await dispatchReplyFromConfig({
@@ -676,6 +786,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       OriginatingChannel: "telegram",
       OriginatingTo: "telegram:999",
       SessionKey: "agent:main:slack:group:oc_group",
+      WasMentioned: true,
     });
 
     const result = await dispatchReplyFromConfig({
@@ -711,6 +822,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       OriginatingChannel: "telegram",
       OriginatingTo: "telegram:999",
       SessionKey: "agent:main:slack:group:oc_group",
+      WasMentioned: true,
     });
 
     const result = await dispatchReplyFromConfig({
@@ -748,6 +860,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       OriginatingChannel: "telegram",
       OriginatingTo: "telegram:999",
       SessionKey: "agent:main:slack:group:oc_group",
+      WasMentioned: true,
     });
 
     const result = await dispatchReplyFromConfig({
@@ -789,6 +902,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       Surface: "telegram",
       Provider: "telegram",
       SessionKey: "agent:main:telegram:group:oc_group",
+      WasMentioned: true,
     });
 
     const result = await dispatchReplyFromConfig({
@@ -806,8 +920,8 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       replyResolver,
     });
 
-    // Routed streamed blocks never touch the mock dispatcher counts; blockCount
-    // alone must prove the turn was visible so no misleading fallback is sent.
+    // The stub dispatcher exposes no settlement, so the ledger keeps the block's
+    // admission as its visibility fact and no misleading fallback is sent.
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalledWith({
       text: NO_VISIBLE_REPLY_FALLBACK_TEXT,
     });
@@ -816,6 +930,8 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("does not deliver no-visible fallback when dispatcher already queued a block", async () => {
     setNoAbort();
+    // Channel-owned admissions outside the dispatch pipeline have unknown
+    // settlement; the foreign-admission backstop keeps the fallback quiet.
     const dispatcher = createDispatcher();
     dispatcher.getQueuedCounts = vi.fn(() => ({ tool: 0, block: 1, final: 0 }));
     const replyResolver = vi.fn(async () => undefined);
@@ -824,6 +940,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       Surface: "telegram",
       Provider: "telegram",
       SessionKey: "agent:main:telegram:group:oc_group",
+      WasMentioned: true,
     });
 
     const result = await dispatchReplyFromConfig({
@@ -858,6 +975,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       Surface: "telegram",
       Provider: "telegram",
       SessionKey: "agent:main:telegram:group:oc_group",
+      WasMentioned: true,
     });
 
     const result = await dispatchReplyFromConfig({
@@ -881,6 +999,177 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result.queuedFinal).toBe(false);
     expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
     expect(result.noVisibleReplyFallbackEligible).toBe(true);
+  });
+
+  it("delivers routed fallback when a suppressed contentful final settles invisible", async () => {
+    setNoAbort();
+    // A contentful routed final that reports ok+suppressed was never visible;
+    // admission-based gating used to end this turn silently (#114768 corner 1).
+    mocks.routeReply.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as { payload?: { text?: string } };
+      return params.payload?.text === NO_VISIBLE_REPLY_FALLBACK_TEXT
+        ? { ok: true, messageId: "fallback-1" }
+        : { ok: true, suppressed: true };
+    });
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "real answer" }));
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      Surface: "slack",
+      Provider: "slack",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:999",
+      SessionKey: "agent:main:slack:group:oc_group",
+      WasMentioned: true,
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: {
+        agents: {
+          defaults: {
+            silentReply: {
+              group: "disallow",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    const fallbackCall = mocks.routeReply.mock.calls.find(
+      (call) =>
+        (call[0] as { payload?: { text?: string } }).payload?.text ===
+        NO_VISIBLE_REPLY_FALLBACK_TEXT,
+    );
+    expect(fallbackCall).toBeDefined();
+    expect(result.noVisibleReplyFallbackDelivered).toBe(true);
+  });
+
+  it("delivers fallback when a queued streamed block is cancelled before delivery", async () => {
+    setNoAbort();
+    // A generated block only proves visibility once its delivery settles; a
+    // pre-transport cancellation used to suppress the fallback silently
+    // (#114768 corner 2). Started-then-failed sends stay conservative: they may
+    // have shown partial content, so they do not trigger the fallback.
+    const deliver = vi.fn(async (_payload: ReplyPayload) => {});
+    const dispatcher = createReplyDispatcher({
+      deliver,
+      beforeDeliver: async (payload, info) => (info.kind === "block" ? null : payload),
+    });
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onBlockReply?.({ text: "Streamed answer content." });
+      return undefined;
+    });
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      Surface: "telegram",
+      Provider: "telegram",
+      SessionKey: "agent:main:telegram:group:oc_group",
+      WasMentioned: true,
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: {
+        agents: {
+          defaults: {
+            silentReply: {
+              group: "disallow",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver,
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    const deliveredTexts = deliver.mock.calls.map((call) => call[0].text);
+    expect(deliveredTexts).toContain(NO_VISIBLE_REPLY_FALLBACK_TEXT);
+    expect(result.noVisibleReplyFallbackDelivered).toBe(true);
+  });
+
+  it("keeps eligibility when a beforeDeliver hook cancels the queued fallback", async () => {
+    setNoAbort();
+    // The fallback's own admission can still be cancelled by a beforeDeliver
+    // hook; the delivered flag must follow settlement so channel recovery stays
+    // eligible (#114768 corner 3).
+    const deliver = vi.fn(async () => {});
+    const dispatcher = createReplyDispatcher({
+      deliver,
+      beforeDeliver: async () => null,
+    });
+    const replyResolver = vi.fn(async () => undefined);
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      Surface: "telegram",
+      Provider: "telegram",
+      SessionKey: "agent:main:telegram:group:oc_group",
+      WasMentioned: true,
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: {
+        agents: {
+          defaults: {
+            silentReply: {
+              group: "disallow",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver,
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(deliver).not.toHaveBeenCalled();
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+    expect(result.noVisibleReplyFallbackEligible).toBe(true);
+  });
+
+  it("delivers fallback when a beforeDeliver hook cancels the model final", async () => {
+    setNoAbort();
+    const deliver = vi.fn(async (_payload: ReplyPayload) => {});
+    const dispatcher = createReplyDispatcher({
+      deliver,
+      beforeDeliver: async (payload) =>
+        payload.text === NO_VISIBLE_REPLY_FALLBACK_TEXT ? payload : null,
+    });
+    const replyResolver = vi.fn(async () => ({ text: "cancelled answer" }));
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      Surface: "telegram",
+      Provider: "telegram",
+      SessionKey: "agent:main:telegram:group:oc_group",
+      WasMentioned: true,
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: {
+        agents: {
+          defaults: {
+            silentReply: {
+              group: "disallow",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver,
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    const deliveredTexts = deliver.mock.calls.map((call) => call[0].text);
+    expect(deliveredTexts).toEqual([NO_VISIBLE_REPLY_FALLBACK_TEXT]);
+    expect(result.noVisibleReplyFallbackDelivered).toBe(true);
   });
 
   it("suppresses tool result delivery when sendPolicy is deny", async () => {

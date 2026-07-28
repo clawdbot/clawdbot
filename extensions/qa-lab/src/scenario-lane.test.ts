@@ -76,6 +76,7 @@ describe("QA scenario lane matching", () => {
       runtimePairLane: "core",
       config: {
         requiredProviderMode: "live-frontier",
+        requiredChannelDriver: "live",
         requiredProvider: "claude-cli",
         requiredModel: "claude-sonnet-4-6",
         authMode: "subscription",
@@ -93,6 +94,7 @@ describe("QA scenario lane matching", () => {
       }),
     ).toEqual([
       "providerMode=live-frontier",
+      "channelDriver=live",
       "channel=matrix",
       "provider=claude-cli",
       "model=claude-sonnet-4-6",
@@ -125,6 +127,32 @@ describe("QA scenario lane matching", () => {
         primaryModel: "openai/gpt-5.6-luna",
         channelDriver: "live",
         channel: "telegram",
+      }),
+    ).toBe(true);
+  });
+
+  it("enforces an explicit channel driver contract", () => {
+    const scenario = makeQaSuiteTestScenario("live-only", {
+      channel: "matrix",
+      config: { requiredChannelDriver: "live" },
+    });
+
+    expect(
+      describeQaProviderLaneMismatches({
+        scenario,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        channelDriver: "crabline",
+        channel: "matrix",
+      }),
+    ).toEqual(["channelDriver=live"]);
+    expect(
+      scenarioMatchesQaProviderLane({
+        scenario,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        channelDriver: "live",
+        channel: "matrix",
       }),
     ).toBe(true);
   });

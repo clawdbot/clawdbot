@@ -137,9 +137,14 @@ export async function prepareEmbeddedAttemptStreamRuntime(input: {
     prompt: string,
     options?: Parameters<typeof activeSession.prompt>[1],
   ): Promise<void> =>
-    withOwnedSessionTranscriptWrites(input.ownedTranscriptWriteContext, async () =>
-      abortable(input.trackPromptSettlePromise(activeSession.prompt(prompt, options))),
-    );
+    withOwnedSessionTranscriptWrites(input.ownedTranscriptWriteContext, async () => {
+      // Prompting starts its own agent loop; reject before creating a loop that
+      // an already-aborted attempt can no longer cancel.
+      if (input.runAbortController.signal.aborted) {
+        return abortable(Promise.resolve());
+      }
+      return abortable(input.trackPromptSettlePromise(activeSession.prompt(prompt, options)));
+    });
   const onBlockReply = attempt.onBlockReply
     ? bindOwnedSessionTranscriptWrites(input.ownedTranscriptWriteContext, attempt.onBlockReply)
     : undefined;

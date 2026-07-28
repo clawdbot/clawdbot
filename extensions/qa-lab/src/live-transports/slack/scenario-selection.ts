@@ -1,7 +1,14 @@
-import { listQaScenariosForExecutionProfile } from "../../scenario-catalog.js";
+import type { QaProviderModeInput } from "../../model-selection.js";
+import { resolveLiveTransportQaScenarioIds } from "../shared/scenario-selection.js";
 
-export function resolveSlackQaScenarioIds({ scenarioIds }: { scenarioIds?: readonly string[] }) {
-  return scenarioIds?.length
-    ? [...scenarioIds]
-    : listQaScenariosForExecutionProfile("slack:default").map((scenario) => scenario.id);
+export function resolveSlackQaScenarioIds(params: {
+  profile?: string;
+  providerMode?: QaProviderModeInput;
+  scenarioIds?: readonly string[];
+}) {
+  return resolveLiveTransportQaScenarioIds({
+    channelId: "slack",
+    ...params,
+    providerMode: params.providerMode ?? "live-frontier",
+  });
 }

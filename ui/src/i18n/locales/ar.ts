@@ -41,6 +41,7 @@ export const ar: TranslationMap = {
     unselect: "إلغاء التحديد",
     enabled: "مفعّل",
     disabled: "معطّل",
+    failed: "فشل",
     none: "لا شيء",
     na: "غير متوفر",
     never: "أبدًا",
@@ -238,11 +239,6 @@ export const ar: TranslationMap = {
       schemaUnavailable: "المخطط غير متاح. استخدم Raw.",
       channelSchemaUnavailable: "مخطط إعدادات القناة غير متاح.",
       loadingSchema: "جارٍ تحميل مخطط الإعدادات…",
-    },
-    health: {
-      title: "صحة القنوات",
-      subtitle: "لقطات حالة القنوات من Gateway.",
-      noSnapshotYet: "لا توجد لقطة بعد.",
     },
     generic: {
       subtitle: "حالة القناة وإعداداتها.",
@@ -587,7 +583,8 @@ export const ar: TranslationMap = {
     worktreeNameInvalid: "تستخدم أسماء شجرة العمل أحرفًا صغيرة وأرقامًا وشرطات.",
     incognito: "التصفح المتخفي",
     incognitoDescription: "احتفظ بهذه المحادثة حتى إعادة تشغيل Gateway فقط",
-    startAsDraft: "البدء كمسودة",
+    draft: "مسودة",
+    draftDescription: "احتفظ بهذه المحادثة لنفسك حتى تنشرها",
     messagePlaceholder: "على ماذا يجب أن تعمل هذه الجلسة؟",
     readingAttachment: "جارٍ قراءة المرفق",
     start: "بدء الجلسة",
@@ -596,6 +593,11 @@ export const ar: TranslationMap = {
     createOutcomeUnknown:
       "تغيّر Gateway أثناء بدء هذه الجلسة. تحقّق من الجلسات الأخيرة قبل بدء هذه المهمة مرة أخرى.",
     catalogUnavailable: "هدف هذه الجلسة غير متاح.",
+  },
+  dashboardsPage: {
+    emptyTitle: "لا توجد لوحات معلومات بعد",
+    emptyDescription: "افتح محادثة وانتقل إلى واجهة لوحة المعلومات لإضافتها هنا.",
+    loadError: "تعذّر تحميل لوحات المعلومات: {error}",
   },
   sessionsView: {
     deletePreservedWorktrees:
@@ -718,6 +720,7 @@ export const ar: TranslationMap = {
     runErrorTimedOut: "انتهت المهلة",
     runErrorUnknown: "خطأ غير معروف",
     attentionRequired: "الجلسة بحاجة إلى انتباه",
+    openSession: "فتح المحادثة",
     model: "النموذج",
     provider: "المزود",
     runtime: "وقت التشغيل",
@@ -974,6 +977,8 @@ export const ar: TranslationMap = {
       notCreatedYet: "لم يتم إنشاؤه بعد",
       updatedUnknown: "تحديث غير معروف",
       missingHint: "هذا الملف مفقود. سيؤدي الحفظ إلى إنشائه في مساحة عمل الوكيل.",
+      addFile: "إضافة ملف…",
+      createHint: "هذا الملف غير موجود بعد. سيؤدي الحفظ إلى إنشائه في مساحة عمل الوكيل.",
       content: "المحتوى",
       words: "{count} كلمة",
       lines: "أسطر",
@@ -1114,9 +1119,9 @@ export const ar: TranslationMap = {
         label: "البث",
         description: "إعدادات البث والإشعارات",
       },
-      audio: {
+      tts: {
         label: "الصوت",
-        description: "إعدادات إدخال الصوت وإخراجه",
+        description: "إخراج تحويل النص إلى كلام، والأصوات، والشخصيات",
       },
       session: {
         label: "الجلسة",
@@ -1126,17 +1131,9 @@ export const ar: TranslationMap = {
         label: "Cron",
         description: "المهام المجدولة والأتمتة",
       },
-      web: {
-        label: "الويب",
-        description: "إعدادات خادم الويب وواجهة API",
-      },
       discovery: {
         label: "الاكتشاف",
         description: "اكتشاف الخدمات والشبكات",
-      },
-      canvasHost: {
-        label: "مضيف Canvas",
-        description: "عرض Canvas وإظهاره",
       },
       talk: {
         label: "التحدث",
@@ -1201,6 +1198,8 @@ export const ar: TranslationMap = {
       lobsterdex: "Lobsterdex",
       lobsterdexSeen: "تمت زيارة {seen}/{total}",
       lobsterdexFirstVisited: "{name} · أول زيارة في {date}",
+      lobsterdexCardFirstVisited: "أول زيارة {date}",
+      lobsterdexOpen: "فتح Lobsterdex",
     },
     security: {
       title: "الأمان",
@@ -1298,7 +1297,7 @@ export const ar: TranslationMap = {
       broadcast: "البث",
       notifications: "الإشعارات",
       talk: "التحدث",
-      audio: "الصوت",
+      tts: "الصوت",
       commands: "الأوامر",
       hooks: "الخطافات",
       bindings: "الارتباطات",
@@ -1307,12 +1306,9 @@ export const ar: TranslationMap = {
       security: "سياسة الأمان",
       plugins: "الإضافات",
       gateway: "Gateway",
-      web: "الويب",
       browser: "المتصفح",
       nodeHost: "مضيف العقدة",
-      canvasHost: "مضيف اللوحة",
       discovery: "الاكتشاف",
-      media: "الوسائط",
       acp: "ACP",
       mcp: "MCP",
       theme: "السمة",
@@ -1441,7 +1437,6 @@ export const ar: TranslationMap = {
     open: "مفتوح",
     applying: "جارٍ التطبيق…",
     autoSaveSaving: "جارٍ الحفظ…",
-    autoSaveSaved: "تم الحفظ",
     autoSaveFailed: "فشل الحفظ",
     autoSaveConflict: "تم تغيير الإعدادات في مكان آخر",
     retry: "إعادة المحاولة",
@@ -1819,13 +1814,16 @@ export const ar: TranslationMap = {
     skillWorkshop: "ورشة Skills",
     nodes: "العقد",
     chat: "الدردشة",
+    dashboards: "لوحات المعلومات",
     custodian: "OpenClaw",
     config: "الإعدادات",
     profile: "الملف الشخصي",
     communications: "الاتصالات",
     appearance: "المظهر",
+    lobsterdex: "Lobsterdex",
     automation: "الأتمتة",
     mcp: "MCP",
+    memory: "الذاكرة",
     infrastructure: "البنية التحتية",
     labs: "المختبرات",
     about: "حول",
@@ -1855,13 +1853,16 @@ export const ar: TranslationMap = {
     skillWorkshop: "راجع المقترحات وحسّنها وطبّقها قبل أن تصبح مهارات نشطة.",
     nodes: "الأجهزة المقترنة والأوامر.",
     chat: "دردشة Gateway للتدخلات السريعة.",
+    dashboards: "المحادثات التي تُفتح على واجهة لوحة المعلومات الخاصة بها.",
     custodian: "إعداد النظام والعناية به.",
     config: "تعديل openclaw.json.",
     profile: "إحصاءات وكيلك، وسلاسل نشاطه، وحياته في الشعاب.",
     communications: "القنوات، والرسائل، وإعدادات الصوت.",
     appearance: "السمة، وواجهة المستخدم، وإعدادات معالج الإعداد.",
+    lobsterdex: "كل لوحة ألوان lobster زارت هذا المتصفح.",
     automation: "الأوامر، والخطافات، وcron، والمكونات الإضافية.",
     mcp: "خوادم MCP، والمصادقة، والأدوات، والتشخيصات.",
+    memory: "محرك الذاكرة والخلفية والبحث والحلم.",
     infrastructure: "إعدادات Gateway، والويب، والمتصفح، والوسائط.",
     labs: "قدرات تجريبية للوكيل والأدوات.",
     about: "هوية بناء Control UI وGateway المتصل.",
@@ -2126,6 +2127,151 @@ export const ar: TranslationMap = {
     tlsVerifyOff: "التحقق من TLS متوقف",
     mtls: "mTLS",
   },
+  memoryPage: {
+    tablistLabel: "أقسام الذاكرة",
+    tabs: {
+      overview: "نظرة عامة",
+      search: "بحث",
+      dreaming: "الحلم",
+    },
+    engine: {
+      title: "المحرك",
+      description: "إضافة ذاكرة واحدة فقط تملك خانة الذاكرة. اختيار محرك يُفعّله ويعطّل الآخرين.",
+      rowTitle: "محرك الذاكرة",
+      off: "إيقاف",
+      autoHint: "لا يوجد محرك مثبّت في الإعدادات، لذا تعود الخانة إلى مالكها الافتراضي.",
+      explicitHint: "هذا المحرك مثبّت في الإعدادات ضمن plugins.slots.memory.",
+      offHint: "الذاكرة معطّلة في الإعدادات: plugins.slots.memory مضبوط على none.",
+      catalogUnavailable: "اتصل بـ Gateway لتغيير محرك الذاكرة.",
+      changeFailed: "تعذّر تغيير محرك الذاكرة",
+      disabledTitle: "هذا المحرك معطّل",
+      disabledHint:
+        "تشير خانة الذاكرة إلى هذا المكوّن الإضافي، لكن المكوّن نفسه معطّل، لذا لا تعمل الذاكرة.",
+      enable: "فعّل",
+    },
+    backend: {
+      title: "الخلفية",
+      description: "كيفية تخزين الذاكرة واستردادها للمحرك المحدد.",
+      rowTitle: "خلفية الاسترداد",
+      builtin: "مدمجة",
+      qmd: "QMD",
+      builtinHint: "تتم فهرسة ملفات الذاكرة والبحث فيها بواسطة OpenClaw نفسه.",
+      qmdHint: "يتم تفويض الاسترداد إلى QMD. تظهر إعداداته أدناه.",
+    },
+    addons: {
+      title: "الإضافات",
+      description:
+        "تعمل هذه المكوّنات الإضافية فوق المحرك بدلاً من التنافس على الخانة، لذا يمكن تشغيل أي مجموعة منها في وقت واحد.",
+      activeMemory: {
+        title: "الذاكرة النشطة",
+      },
+      memoryWiki: {
+        title: "ويكي الذاكرة",
+      },
+      stateUnknown: "غير معروف",
+      manage: "تمكين الإضافات أو تعطيلها",
+      manageLink: "فتح الإضافات",
+    },
+    import: {
+      title: "استيراد",
+      description: "أحضر الذاكرة الموجودة من مساعدين آخرين إلى مساحة عمل الوكيل.",
+      link: "فتح استيراد الذاكرة",
+    },
+    search: {
+      intro: "إعدادات التضمين والاسترداد الافتراضية المشتركة بين كل وكيل ليس لديه تجاوز للذاكرة.",
+    },
+    dreaming: {
+      intro:
+        "يعمل Dreaming كمهمة cron واحدة مُدارة عبر كل مساحات عمل الوكلاء، لذا فهذه الإعدادات عامة. وهي مملوكة لإضافة {plugin}.",
+      schedule: {
+        title: "الجدولة",
+        description: "متى يتم تشغيل المسح الكامل وأي نموذج يرويه.",
+      },
+      frequency: {
+        label: "تكرار Dreaming",
+        help: "إيقاع cron للمسح الكامل لـ Dreaming (خفيف، REM، ثم عميق). اتركه فارغًا للإعداد الافتراضي للإضافة.",
+        placeholder: "0 3 * * *",
+      },
+      timezone: {
+        label: "المنطقة الزمنية",
+        help: "منطقة زمنية IANA المستخدمة لتفسير إيقاع cron.",
+        placeholder: "Europe/Vienna",
+      },
+      model: {
+        label: "نموذج Dreaming",
+        help: "تجاوز المزوّد/النموذج لسرد يوميات الأحلام. يتطلب السماح بتجاوزات نموذج الوكيل الفرعي.",
+        placeholder: "anthropic/claude-sonnet-4-6",
+      },
+      verboseLogging: {
+        label: "تسجيل مفصّل",
+        help: "سجّل كل مرحلة من Dreaming بالتفصيل. مفيد عند ضبط العتبات.",
+      },
+      storage: {
+        title: "التخزين",
+        description: "أين تُكتب الذكريات المُرقّاة وتقارير Dreaming.",
+        modeLabel: "وضع التخزين",
+        modeHelp: "يكتب الوضع المضمّن في ملف الذاكرة؛ ويحتفظ الوضع المنفصل بملف تقرير مخصص.",
+        modes: {
+          inline: "مضمّن",
+          separate: "منفصل",
+          both: "كلاهما",
+        },
+        separateReportsLabel: "تقارير منفصلة",
+        separateReportsHelp: "احتفظ بتقارير الحلم خارج ملف الذاكرة الرئيسي.",
+      },
+      phases: {
+        light: {
+          title: "المرحلة الخفيفة",
+          description: "تمريرة رخيصة للنشاط الأخير تُجهّز مرشّحي إعادة التشغيل.",
+        },
+        deep: {
+          title: "المرحلة العميقة",
+          description: "تمريرة ترقية مُقيّمة تنقل الإدخالات قصيرة الأمد إلى الذاكرة.",
+        },
+        rem: {
+          title: "مرحلة REM",
+          description: "تمريرة أنماط تبحث عن الموضوعات المتكررة عبر نافذة الاسترجاع.",
+        },
+      },
+      phaseFields: {
+        enabled: "مفعّل",
+        enabledHelp: "شغّل هذه المرحلة أثناء المسح.",
+        lookbackDays: "أيام الاسترجاع",
+        lookbackDaysHelp:
+          "إلى أي مدى تعود هذه المرحلة في القراءة. اتركه فارغًا للقيمة الافتراضية للإضافة.",
+        limit: "الحد",
+        limitHelp: "الحد الأقصى للإدخالات التي تعالجها هذه المرحلة في كل تشغيل.",
+        dedupeSimilarity: "تشابه إزالة التكرار",
+        dedupeSimilarityHelp: "التشابه الذي يُعامَل فوقه المرشّحان كتكرار.",
+        minScore: "الحد الأدنى للدرجة",
+        minScoreHelp: "درجة الترقية التي يجب أن يبلغها الإدخال.",
+        minRecallCount: "الحد الأدنى للاسترجاعات",
+        minRecallCountHelp: "عدد المرات التي يجب استرجاع الإدخال فيها قبل أن يمكن ترقيته.",
+        minUniqueQueries: "الحد الأدنى للاستعلامات الفريدة",
+        minUniqueQueriesHelp: "عدد الاستعلامات المميزة التي يجب أن تكون قد أظهرت الإدخال.",
+        recencyHalfLifeDays: "نصف عمر الحداثة (أيام)",
+        recencyHalfLifeDaysHelp: "مدى سرعة فقدان إشارات الاستدعاء الأقدم لوزنها.",
+        maxAgeDays: "العمر الأقصى (أيام)",
+        maxAgeDaysHelp: "تجاهل الإدخالات قصيرة المدى الأقدم من هذا.",
+        maxPromotedSnippetTokens: "الحد الأقصى لرموز المقتطف المُرقّى",
+        maxPromotedSnippetTokensHelp: "ميزانية الرموز لكل مقتطف مُرقّى. تبقى معلومات المصدر مرفقة.",
+        minPatternStrength: "الحد الأدنى لقوة النمط",
+        minPatternStrengthHelp: "القوة التي يجب أن يصل إليها النمط المتكرر ليتم الإبلاغ عنه.",
+      },
+      agentScope: {
+        title: "عرض الوكيل",
+        description:
+          "الإعدادات أعلاه عامة. أما مذكرات الأحلام وأعداد الذاكرة قصيرة المدى وإجراءات الصيانة أدناه فتخص وكيلاً واحداً.",
+        rowTitle: "الوكيل",
+      },
+      unsupported: {
+        title: "إعدادات الأحلام",
+        rowTitle: "غير متاح لهذا المحرك",
+        description:
+          "يمتلك المكوّن الإضافي {plugin} خانة الذاكرة، ولا يحتوي مخطط تكوينه على قسم للأحلام، لذا لا يمكن تخزين هذه الإعدادات. بدّل المحرك من علامة التبويب نظرة عامة لتحريرها.",
+      },
+    },
+  },
   sessionsPage: {
     hubTablistLabel: "أقسام المحادثات",
   },
@@ -2279,6 +2425,21 @@ export const ar: TranslationMap = {
       description: "دع وضع الشيفرة ينسّق مجموعات من الوكلاء الفرعيين على التوازي.",
       empty: "لا توجد أسراب نشطة.",
       defaultPhase: "بلا مرحلة",
+    },
+    toolSearch: {
+      title: "بحث الأدوات",
+      description:
+        "أبقِ دليل أدوات محدوداً مرئياً وأجّل البقية خلف البحث، حتى تتوقف كتالوجات MCP والمكوّنات الإضافية الكبيرة عن ازدحام الطلب.",
+    },
+    localModelLean: {
+      title: "أدوات مبسّطة للنماذج المحلية",
+      description:
+        "أسقط الأدوات الافتراضية الثقيلة التي تتعامل معها النماذج المحلية الأصغر بشكل ضعيف، مع الإبقاء على مجموعة أقصر يمكنها استخدامها بثبات.",
+    },
+    auditMessages: {
+      title: "بيانات تدقيق الرسائل الوصفية",
+      description:
+        "تسجيل بيانات وصفية خالية من المحتوى للمحادثات المباشرة في سجل التدقيق. لا يتم تخزين محتوى الرسائل أبدًا.",
     },
   },
   aboutPage: {
@@ -3052,7 +3213,6 @@ export const ar: TranslationMap = {
       title: "لقطة",
       subtitle: "أحدث معلومات مصافحة Gateway.",
       status: "الحالة",
-      uptime: "مدة التشغيل",
       tickInterval: "الفاصل الزمني للنبضات",
       lastChannelsRefresh: "آخر تحديث للقنوات",
       lastError: "آخر خطأ",
@@ -3069,6 +3229,7 @@ export const ar: TranslationMap = {
     },
   },
   attention: {
+    cronErrorUnknown: "خطأ غير معروف",
     cronFailed: "فشل عدد {count} من مهام cron",
     cronOverdue: "تأخر عدد {count} من مهام cron",
     modelAuthExpired: "انتهت صلاحية مصادقة النموذج: {providers}",
@@ -3164,14 +3325,18 @@ export const ar: TranslationMap = {
       on: "الحلم مفعّل",
       off: "الحلم متوقف",
     },
-    restartConfirmation: {
-      title: "أعد تشغيل Gateway لتطبيق التغيير",
-      subtitle: "يؤدي تغيير وضع الحلم إلى إعادة تشغيل Gateway.",
-      warning:
-        "سيؤدي هذا الإجراء إلى إعادة تشغيل Gateway وقد يقطع مؤقتًا الدردشات، والأتمتة، والقنوات المتصلة.",
-      confirm: "تأكيد إعادة التشغيل",
-      restarting: "جارٍ إعادة التشغيل…",
-      failed: "تعذر تطبيق التغيير. تحقق من اتصالك وحاول مرة أخرى.",
+    toggleConfirmation: {
+      subtitle: "الحلم إعداد عام؛ لا يقتصر على هذا الوكيل.",
+      enableTitle: "تشغيل الحلم لجميع الوكلاء",
+      enableDetail:
+        "سيتم تشغيل مسح الحلم الليلي عبر كل مساحة عمل وكيل مُعدّة، بترقية الاستدعاءات قصيرة المدى إلى ذاكرة طويلة المدى. يُطبّق هذا على الفور.",
+      enableConfirm: "تشغيل الحلم",
+      disableTitle: "إيقاف الحلم لجميع الوكلاء",
+      disableDetail:
+        "سيتوقف مسح الحلم الليلي لكل وكيل مُعدّ، وليس هذا الوكيل فقط. تبقى الذكريات المكتوبة بالفعل؛ ولن تتم ترقية أي شيء جديد. يُطبّق هذا على الفور.",
+      disableConfirm: "إيقاف الحلم",
+      saving: "جارٍ الحفظ…",
+      failed: "تعذّر تطبيق التغيير. تحقق من اتصالك وحاول مرة أخرى.",
     },
     status: {
       active: "الحلم نشط",
@@ -3808,6 +3973,11 @@ export const ar: TranslationMap = {
     },
     outputTokens: "{count} رمز إخراج",
     archivedSessionDisabled: "استعِد هذه الجلسة لإرسال الرسائل.",
+    sessionRoute: {
+      chooseTitle: "اختر جلسة",
+      multipleMatches: "أكثر من جلسة تطابق {shortId}.",
+      additionalMatches: "لا تزال هناك نتائج بحث. استخدم بادئة معرّف أطول.",
+    },
     sessionSharing: {
       menu: "مشاركة المسار",
       current: "رؤية المسار: {visibility}",
@@ -3859,6 +4029,15 @@ export const ar: TranslationMap = {
       oneMessage: "{count} رسالة",
       messages: "{count} رسالة",
       activeBranch: "الفرع النشط",
+      gatewayPicker: {
+        menuLabel: "Gateway: {gateway}",
+        primaryTag: "أساسي",
+        setPrimary: "تعيين كأساسي…",
+        openSettings: "إعدادات Gateway…",
+        connected: "متصل",
+        unreachable: "غير قابل للوصول",
+        unknown: "حالة غير معروفة",
+      },
     },
     board: {
       faceLabel: "واجهة المحادثة",
@@ -4049,7 +4228,9 @@ export const ar: TranslationMap = {
       threads: "المحادثات",
       groups: "المجموعات",
       coding: "البرمجة",
-      groupCatalogSessionsByProject: "التجميع حسب المشروع",
+      catalogViewOptions: "خيارات العرض",
+      catalogGroupByProject: "المشروع",
+      catalogGroupByPerson: "الشخص",
       openSessionMenu: "Open session menu",
       sortBy: "ترتيب حسب",
       sortCreated: "تاريخ الإنشاء",
@@ -4228,6 +4409,16 @@ export const ar: TranslationMap = {
       renderedMarkdownHint: "معاينة منقّحة للنص المنسّق لقراءته بسرعة.",
       noPreviewableMarkdown: "لا يوجد محتوى Markdown قابل للمعاينة.",
       noContent: "لا يتوفر محتوى",
+    },
+    sidebarColumns: {
+      chat: "المحادثة",
+      discussion: "المناقشة",
+      detail: "التفاصيل",
+      close: "إغلاق {panel}",
+      drag: "سحب {panel}",
+      dropOnEmptyLeft: "نقل {panel} إلى الشريط الجانبي الأيسر الفارغ",
+      dropOnEmptyRight: "نقل {panel} إلى الشريط الجانبي الأيمن الفارغ",
+      resize: "تغيير حجم {panel}",
     },
     thread: {
       search: "البحث في الرسائل",

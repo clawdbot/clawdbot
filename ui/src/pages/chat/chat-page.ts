@@ -54,6 +54,7 @@ export class ChatPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
   @property({ attribute: false }) data!: SessionChatRouteData;
+  @property({ attribute: false }) navDrawerOpen = false;
   @state() private layout: ChatSplitLayout | undefined;
   @state() private narrow = false;
   @state() private mergedChrome = false;
@@ -484,23 +485,17 @@ export class ChatPage extends OpenClawLightDomElement {
     }
   };
 
-  private readonly handleSplitRight = (paneId: string) => {
+  private handleSplit(paneId: string, direction: "right" | "down") {
     const layout = this.layout;
     const pane = layout ? findPane(layout, paneId)?.pane : null;
     if (!layout || !pane) {
       return;
     }
-    this.persistLayout(insertPane(layout, paneId, pane.sessionKey, "right"));
-  };
+    this.persistLayout(insertPane(layout, paneId, pane.sessionKey, direction));
+  }
 
-  private readonly handleSplitDown = (paneId: string) => {
-    const layout = this.layout;
-    const pane = layout ? findPane(layout, paneId)?.pane : null;
-    if (!layout || !pane) {
-      return;
-    }
-    this.persistLayout(insertPane(layout, paneId, pane.sessionKey, "down"));
-  };
+  private readonly handleSplitRight = (paneId: string) => this.handleSplit(paneId, "right");
+  private readonly handleSplitDown = (paneId: string) => this.handleSplit(paneId, "down");
 
   private readonly handleClosePane = (paneId: string) => {
     const layout = this.layout;
@@ -574,6 +569,7 @@ export class ChatPage extends OpenClawLightDomElement {
           .paneTitle=${title}
           .narrow=${this.narrow}
           .mergedChrome=${this.mergedChrome && active}
+          .navDrawerOpen=${this.navDrawerOpen && active}
           .nativeGateways=${showGatewayPicker ? nativeGateways : null}
           .gatewaysSnapshot=${showGatewayPicker ? (nativeGateways?.snapshot ?? null) : null}
           .onboarding=${this.closest(".shell--onboarding") !== null}

@@ -9,6 +9,7 @@ import {
   resolveLogicalVisibleModelCatalog,
 } from "./model-catalog-visibility.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
 import { openAIModelCatalogRoutePolicy } from "./openai-model-routes.js";
 
 describe("resolveLogicalVisibleModelCatalog", () => {
@@ -100,6 +101,16 @@ describe("resolveLogicalVisibleModelCatalog", () => {
         },
       },
     } as OpenClawConfig;
+    // This unit test covers configured-row retention, not runtime plugin
+    // discovery. Keep fake provider refs on the deterministic static path.
+    const policy = createModelVisibilityPolicy({
+      cfg,
+      catalog,
+      defaultProvider: "demo",
+      defaultModel: "primary",
+      allowManifestNormalization: false,
+      allowPluginNormalization: false,
+    });
 
     const result = await resolveLogicalVisibleModelCatalog({
       cfg,
@@ -107,6 +118,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
       defaultProvider: "demo",
       defaultModel: "primary",
       view: "configured",
+      policy,
       routePolicy: openAIModelCatalogRoutePolicy,
       evaluateEntry: evaluateAvailableEntry,
     });

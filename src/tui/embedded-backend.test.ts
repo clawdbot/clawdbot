@@ -936,7 +936,10 @@ describe("EmbeddedTuiBackend", () => {
       sessionId: "session-work-global",
       messages: [],
     });
-    expect(loadSessionEntryMock).toHaveBeenCalledWith("global", { agentId: "work" });
+    expect(loadSessionEntryMock).toHaveBeenCalledWith("global", {
+      agentId: "work",
+      includeStoreChildEntries: true,
+    });
   });
 
   it("uses reset-archive fallback for embedded TUI history reads", async () => {

@@ -10,7 +10,7 @@ import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   readSessionTitleFieldsFromTranscript,
   readSessionTitleFieldsFromTranscriptAsync,
-} from "./session-transcript-readers.js";
+} from "./session-transcript-title-reader.js";
 import { deriveSessionTitle } from "./session-utils-core.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

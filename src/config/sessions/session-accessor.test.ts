@@ -57,7 +57,9 @@ import {
   readSqliteSessionEntryKeys,
 } from "./session-accessor.sqlite-entry-store.js";
 import {
+  applySqliteSessionEntryLifecycleMutation,
   appendSqliteTranscriptEventSync,
+  deleteSqliteSessionEntryLifecycle,
   importSqliteSessionRows,
   loadExactSqliteSessionEntry,
   replaceSqliteSessionEntrySync,
@@ -122,6 +124,11 @@ describe("session accessor seam", () => {
 
   afterEach(() => {
     fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("exposes the canonical SQLite session lifecycle owners", () => {
+    expect(applySessionEntryLifecycleMutation).toBe(applySqliteSessionEntryLifecycleMutation);
+    expect(deleteSessionEntryLifecycle).toBe(deleteSqliteSessionEntryLifecycle);
   });
 
   it("loads, lists, and patches session entries without exposing the file store shape", async () => {

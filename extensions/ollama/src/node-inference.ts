@@ -22,6 +22,7 @@ import { Type } from "typebox";
 import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import {
   buildOllamaBaseUrlSsrFPolicy,
+  enrichOllamaCompletionModels,
   enrichOllamaModelsWithContext,
   fetchOllamaModels,
   isOllamaCloudModel,
@@ -41,7 +42,6 @@ const MAX_INFERENCE_TIMEOUT_MS = 10 * 60_000;
 const MAX_TOKENS = 8192;
 const MAX_PROMPT_CHARS = 128_000;
 const MAX_SYSTEM_PROMPT_CHARS = 32_000;
-const MAX_DISCOVERED_MODELS = 200;
 const MAX_ERROR_BODY_BYTES = 500;
 
 type NodeModel = {
@@ -185,17 +185,20 @@ async function discoverOllamaNodeModels(
   if (!discovered.reachable) {
     throw new Error(`Ollama is not running at ${apiBase}`);
   }
-  const localModels = discovered.models
-    .filter((model) => !model.remote_host?.trim() && !isOllamaCloudModel(model.name))
-    .slice(0, MAX_DISCOVERED_MODELS);
-  const [models, loadedNames] = await Promise.all([
-    enrichOllamaModelsWithContext(apiBase, localModels),
-    fetchLoadedModelNames(apiBase),
-  ]);
+  const localModels = discovered.models.filter(
+    (model) => !model.remote_host?.trim() && !isOllamaCloudModel(model.name),
+  );
+  const loadedNames = await fetchLoadedModelNames(apiBase);
+  // Probe loaded models before the bounded catalog can hide already-runnable node models.
+  const prioritizedModels = localModels.toSorted(
+    (left, right) => Number(loadedNames.has(right.name)) - Number(loadedNames.has(left.name)),
+  );
+  // Paired nodes must positively confirm completion; unlike provider catalogs,
+  // failed or legacy show probes must never expose unrunnable remote commands.
+  const models = await enrichOllamaCompletionModels(apiBase, prioritizedModels, {
+    requireCompletionCapability: true,
+  });
   const rows = models
-    // Nodes advertise only models Ollama positively identifies as chat-capable.
-    // Failed /api/show probes must not turn embedding models into runnable choices.
-    .filter((model) => model.capabilities?.includes("completion") === true)
     .map((model): NodeModel => {
       const details = model.details;
       const row: NodeModel = {

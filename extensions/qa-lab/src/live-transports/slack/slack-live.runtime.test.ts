@@ -139,7 +139,7 @@ describe("Slack live QA runtime helpers", () => {
     ]);
   });
 
-  it("selects opt-in native scenarios by id without changing standard scenario coverage", () => {
+  it("selects native scenarios by explicit id", () => {
     expect(
       testing
         .findScenario([
@@ -173,15 +173,6 @@ describe("Slack live QA runtime helpers", () => {
       "slack-codex-approval-exec-native",
       "slack-codex-approval-plugin-native",
     ]);
-    expect(testing.findScenario().map((scenario) => scenario.id)).not.toContain(
-      "slack-table-invalid-blocks-fallback",
-    );
-    expect(testing.findScenario().map((scenario) => scenario.id)).not.toContain(
-      "slack-progress-commentary-true",
-    );
-    expect(testing.findScenario().map((scenario) => scenario.id)).not.toContain(
-      "slack-channel-disabled-warning",
-    );
     expect(testing.findScenario(["slack-codex-approval-exec-native"])[0]?.forcedRuntime).toBe(
       "codex",
     );

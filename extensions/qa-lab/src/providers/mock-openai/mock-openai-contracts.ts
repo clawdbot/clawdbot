@@ -8,7 +8,11 @@ export type ResponsesInputItem = Record<string, unknown>;
 
 export type StreamEvent =
   | { type: "response.created"; response: { id: string } }
-  | { type: "response.output_item.added"; item: Record<string, unknown> }
+  | {
+      type: "response.output_item.added";
+      output_index?: number;
+      item: Record<string, unknown>;
+    }
   | {
       type: "response.output_text.delta";
       item_id: string;
@@ -23,14 +27,23 @@ export type StreamEvent =
       content_index: number;
       text: string;
     }
-  | { type: "response.function_call_arguments.delta"; delta: string }
+  | {
+      type: "response.function_call_arguments.delta";
+      item_id?: string;
+      output_index?: number;
+      delta: string;
+    }
   | {
       type: "response.custom_tool_call_input.delta";
       item_id: string;
       call_id: string;
       delta: string;
     }
-  | { type: "response.output_item.done"; item: Record<string, unknown> }
+  | {
+      type: "response.output_item.done";
+      output_index?: number;
+      item: Record<string, unknown>;
+    }
   | {
       type: "response.completed";
       response: {
@@ -265,7 +278,7 @@ const QA_MATRIX_VOICE_TRANSCRIPTION_TEXT =
 export const QA_MCP_CODE_MODE_API_FILE_PROMPT_RE = /mcp code mode api file qa check/i;
 
 export type MockScenarioState = {
-  anthropicThinkingErrorPhase: number;
+  anthropicThinkingErrorScenarioKeys: Set<string>;
   subagentFanoutPhase: number;
   subagentHandoffSpawned: boolean;
   toolLoopReadAttempts: number;

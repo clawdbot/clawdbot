@@ -3,9 +3,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import "../../test/helpers/session-manager-file-compat.js";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import {
+  createFileBackedSessionManagerForTest,
+  openFileBackedSessionManagerForTest,
+} from "../../test/helpers/session-manager-file-fixture.js";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import { estimateStringChars, estimateTokensFromChars } from "../utils/cjk-chars.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
@@ -133,7 +136,7 @@ function appendBlockedUserMessageWithSessionManager(params: {
   pluginId: string;
   idempotencyKey?: string;
 }): string {
-  const sessionManager = SessionManager.openFile(
+  const sessionManager = openFileBackedSessionManagerForTest(
     params.sessionFile,
     path.dirname(params.sessionFile),
   );
@@ -1293,7 +1296,7 @@ describe("readSessionMessages", () => {
 
   test("reads only the active SessionManager branch after a transcript rewrite", async () => {
     const sessionId = "branched-session";
-    const sessionManager = SessionManager.create(tmpDir, tmpDir);
+    const sessionManager = createFileBackedSessionManagerForTest(tmpDir, tmpDir);
     const decoratedPrompt = 'Sender:\n```json\n{"label":"ui"}\n```\n\nhello';
     const visiblePrompt = "hello";
     sessionManager.appendMessage({
@@ -1528,11 +1531,11 @@ describe("readSessionMessages", () => {
 
   test("keeps repeated blocked hook messages together in a new session", async () => {
     const sessionKey = "agent:main:explicit:repeated-blocked-hook";
-    const sessionManager = SessionManager.create(tmpDir, tmpDir);
+    const sessionManager = createFileBackedSessionManagerForTest(tmpDir, tmpDir);
     const sessionId = sessionManager.getSessionId();
     const sessionFile = sessionManager.getSessionFile();
     if (!sessionFile) {
-      throw new Error("expected SessionManager.create to return a session file");
+      throw new Error("expected a file-backed session manager");
     }
     fs.writeFileSync(
       storePath,

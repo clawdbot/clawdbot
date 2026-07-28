@@ -110,6 +110,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     suppressToolErrorWarnings,
     traceReplyPhase,
     trackDispatchLifecycleWork,
+    turnLedger,
     typing,
     waitForPendingDirectBlockReplyDelivery,
     wrapProgressCallback,
@@ -312,7 +313,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       await sendPayloadAsync(deliveryPayload, undefined, false);
                     } else {
                       markInboundDedupeReplayUnsafe();
-                      const delivered = dispatcher.sendToolResult(deliveryPayload);
+                      const delivered = turnLedger.sendQueued("tool", deliveryPayload).queued;
                       if (delivered && hasAskUserPayload(deliveryPayload)) {
                         // ask_user blocks until this callback resolves; drain its prompt now
                         // or the answerable UI can remain queued behind the blocked agent run.

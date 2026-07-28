@@ -257,6 +257,188 @@ describe("process supervisor", () => {
     expect(exit.exitSignal).toBe("SIGKILL");
   });
 
+  it.each(["child", "pty"] as const)(
+    "cancels a %s process by run ID while its adapter is starting",
+    async (mode) => {
+      const adapter = createStubChildAdapter({
+        onKill: (signal, current) => {
+          current.settle(null, signal ?? "SIGTERM");
+        },
+      });
+      const startup = createDeferred<StubChildAdapter>();
+      if (mode === "pty") {
+        createPtyAdapterMock.mockReturnValueOnce(startup.promise);
+      } else {
+        createChildAdapterMock.mockReturnValueOnce(startup.promise);
+      }
+
+      const supervisor = createProcessSupervisor();
+      const runId = `cancel-starting-${mode}`;
+      const pendingRun =
+        mode === "pty"
+          ? supervisor.spawn({
+              runId,
+              sessionId: "cancel-starting",
+              backendId: "test",
+              mode: "pty",
+              ptyCommand: "printf cancelled",
+              scopeKey: "scope:cancel-starting",
+            })
+          : spawnChild(supervisor, {
+              runId,
+              sessionId: "cancel-starting",
+              scopeKey: "scope:cancel-starting",
+              argv: createSilentIdleArgv(),
+            });
+
+      expect(supervisor.getRecord(runId)).toMatchObject({ state: "starting" });
+      supervisor.cancel(runId, "manual-cancel");
+      expect(supervisor.getRecord(runId)).toMatchObject({
+        state: "exiting",
+        terminationReason: "manual-cancel",
+      });
+
+      startup.resolve(adapter);
+      const run = await pendingRun;
+      expect(adapter.killMock).toHaveBeenCalledWith("SIGTERM");
+      await expect(run.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
+      expect(supervisor.getRecord(runId)).toMatchObject({
+        state: "exited",
+        terminationReason: "manual-cancel",
+      });
+    },
+  );
+
+  it("cancels every starting scoped process without canceling a later arrival", async () => {
+    const runCount = 16;
+    const startups = Array.from({ length: runCount }, () => createDeferred<StubChildAdapter>());
+    const adapters = Array.from({ length: runCount }, (_unused, index) =>
+      createStubChildAdapter({
+        pid: 7_000 + index,
+        onKill: (signal, current) => {
+          current.settle(null, signal ?? "SIGTERM");
+        },
+      }),
+    );
+    const laterAdapter = createStubChildAdapter({ pid: 8_000 });
+    let adapterIndex = 0;
+    createChildAdapterMock.mockImplementation(() => {
+      const index = adapterIndex++;
+      if (index === runCount) {
+        return Promise.resolve(laterAdapter);
+      }
+      const startup = startups[index];
+      if (!startup) {
+        throw new Error(`unexpected scope cancellation startup ${index}`);
+      }
+      return startup.promise;
+    });
+
+    const supervisor = createProcessSupervisor();
+    const pendingRuns = Array.from({ length: runCount }, (_unused, index) =>
+      spawnChild(supervisor, {
+        runId: `cancel-scope-starting-${index}`,
+        sessionId: "cancel-scope-starting",
+        scopeKey: "scope:cancel-every-start",
+        argv: createSilentIdleArgv(),
+      }),
+    );
+
+    expect(createChildAdapterMock).toHaveBeenCalledTimes(runCount);
+    supervisor.cancelScope("scope:cancel-every-start", "manual-cancel");
+    for (let index = 0; index < runCount; index += 1) {
+      expect(supervisor.getRecord(`cancel-scope-starting-${index}`)).toMatchObject({
+        state: "exiting",
+        terminationReason: "manual-cancel",
+      });
+    }
+
+    const laterRun = await spawnChild(supervisor, {
+      runId: "cancel-scope-later-arrival",
+      sessionId: "cancel-scope-starting",
+      scopeKey: "scope:cancel-every-start",
+      argv: createSilentIdleArgv(),
+    });
+    expect(laterAdapter.killMock).not.toHaveBeenCalled();
+
+    for (let index = runCount - 1; index >= 0; index -= 1) {
+      const startup = startups[index];
+      const adapter = adapters[index];
+      if (!startup || !adapter) {
+        throw new Error(`missing scope cancellation startup ${index}`);
+      }
+      startup.resolve(adapter);
+    }
+
+    const runs = await Promise.all(pendingRuns);
+    for (const adapter of adapters) {
+      expect(adapter.killMock).toHaveBeenCalledWith("SIGTERM");
+    }
+    await expect(Promise.all(runs.map((run) => run.wait()))).resolves.toEqual(
+      Array.from({ length: runCount }, () => expect.objectContaining({ reason: "manual-cancel" })),
+    );
+
+    expect(laterAdapter.killMock).not.toHaveBeenCalled();
+    laterAdapter.settle(0);
+    await expect(laterRun.wait()).resolves.toMatchObject({ reason: "exit" });
+  });
+
+  it("cancels a replacement that is fenced behind an earlier startup", async () => {
+    const first = createStubChildAdapter({
+      onKill: (signal, current) => {
+        current.settle(null, signal ?? "SIGTERM");
+      },
+    });
+    const later = createStubChildAdapter();
+    const firstStartup = createDeferred<StubChildAdapter>();
+    createChildAdapterMock.mockReturnValueOnce(firstStartup.promise).mockResolvedValueOnce(later);
+
+    const supervisor = createProcessSupervisor();
+    const firstRunPromise = spawnChild(supervisor, {
+      runId: "cancel-fenced-first",
+      sessionId: "cancel-fenced",
+      scopeKey: "scope:cancel-fenced",
+      argv: createSilentIdleArgv(),
+    });
+    const replacementPromise = spawnChild(supervisor, {
+      runId: "cancel-fenced-replacement",
+      sessionId: "cancel-fenced",
+      scopeKey: "scope:cancel-fenced",
+      replaceExistingScope: true,
+      argv: createSilentIdleArgv(),
+    });
+
+    expect(createChildAdapterMock).toHaveBeenCalledTimes(1);
+    supervisor.cancelScope("scope:cancel-fenced", "manual-cancel");
+
+    const laterPromise = spawnChild(supervisor, {
+      runId: "cancel-fenced-later",
+      sessionId: "cancel-fenced",
+      scopeKey: "scope:cancel-fenced",
+      argv: createSilentIdleArgv(),
+    });
+    firstStartup.resolve(first);
+
+    const [firstRun, replacementRun, laterRun] = await Promise.all([
+      firstRunPromise,
+      replacementPromise,
+      laterPromise,
+    ]);
+    expect(createChildAdapterMock).toHaveBeenCalledTimes(2);
+    expect(first.killMock).toHaveBeenCalledWith("SIGTERM");
+    expect(replacementRun.pid).toBeUndefined();
+    expect(later.killMock).not.toHaveBeenCalled();
+
+    later.settle(0);
+    await expect(
+      Promise.all([firstRun.wait(), replacementRun.wait(), laterRun.wait()]),
+    ).resolves.toEqual([
+      expect.objectContaining({ reason: "manual-cancel" }),
+      expect.objectContaining({ reason: "manual-cancel" }),
+      expect.objectContaining({ reason: "exit" }),
+    ]);
+  });
+
   it("cancels prior scoped run when replaceExistingScope is enabled", async () => {
     const first = createStubChildAdapter({
       onKill: (signal, current) => {

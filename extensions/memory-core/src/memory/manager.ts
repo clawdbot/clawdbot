@@ -17,6 +17,8 @@ import {
 import { extractKeywords } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
   readMemoryFile,
+  readCuratedMemoryTriggerCandidates,
+  readMemoryRecallMetadata,
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_PATHS_FTS_TABLE,
@@ -51,6 +53,7 @@ import {
   mergeHybridResults,
   scoreExactPathTieForTemporalDecay,
 } from "./hybrid.js";
+import { applyImportanceMultiplier } from "./importance.js";
 import { awaitPendingManagerWork, startAsyncSearchSync } from "./manager-async-state.js";
 import { MEMORY_BATCH_FAILURE_LIMIT } from "./manager-batch-state.js";
 import { getOrCreateManagedCacheEntry, resolveSingletonManagedCache } from "./manager-cache.js";
@@ -947,6 +950,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       maxResults?: number;
       minScore?: number;
       sessionKey?: string;
+      /** Keyword/FTS only: skip query embedding and vector search (reply-path contract). */
+      lexicalOnly?: boolean;
       qmdSearchModeOverride?: "query" | "search" | "vsearch";
       onDebug?: (debug: MemorySearchRuntimeDebug) => void;
       /** When set, only these chunk sources are considered (must be enabled for this manager). */
@@ -1109,6 +1114,16 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       const releaseSemanticProvider = this.acquireProviderUse(semanticProvider);
       try {
         keywordResults = await loadKeywordResults();
+        // lexicalOnly is a reply-path contract: no query embedding, no vector
+        // search, no network. Callers accept keyword-only recall quality.
+        if (opts?.lexicalOnly) {
+          return await this.finalizeKeywordOnlyResults({
+            results: keywordResults,
+            temporalDecay: hybrid.temporalDecay,
+            maxResults,
+            minScore,
+          });
+        }
         try {
           queryVec = await this.embedQueryWithRetry(
             cleaned,
@@ -1202,7 +1217,21 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         : [];
 
       if (!hybrid.enabled || !this.fts.enabled || !this.fts.available) {
-        return vectorResults.filter((entry) => entry.score >= minScore).slice(0, maxResults);
+        const decayed = await applyTemporalDecayToHybridResults({
+          results: vectorResults,
+          temporalDecay: hybrid.temporalDecay,
+          workspaceDir: this.workspaceDir,
+        });
+        return applyImportanceMultiplier(decayed)
+          .toSorted(
+            (left, right) =>
+              right.score - left.score ||
+              left.path.localeCompare(right.path) ||
+              left.startLine - right.startLine ||
+              left.endLine - right.endLine,
+          )
+          .filter((entry) => entry.score >= minScore)
+          .slice(0, maxResults);
       }
 
       const merged = await this.mergeHybridResults({
@@ -1252,6 +1281,27 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     return results.filter((entry) => entry.score >= relaxedMinScore).slice(0, maxResults);
   }
 
+  async listTriggerCandidates(opts?: { limit?: number }): Promise<MemorySearchResult[]> {
+    const limit = Math.max(1, Math.min(512, Math.floor(opts?.limit ?? 512)));
+    return readCuratedMemoryTriggerCandidates(this.db, limit).map((row) => {
+      const result: MemorySearchResult = {
+        path: row.path,
+        startLine: row.start_line,
+        endLine: row.end_line,
+        score: 0,
+        snippet: row.text,
+        source: "memory",
+      };
+      if (typeof row.importance === "number") {
+        result.importance = row.importance;
+      }
+      if (typeof row.triggers === "string" && row.triggers.trim()) {
+        result.triggers = row.triggers.trim();
+      }
+      return result;
+    });
+  }
+
   private rankKeywordOnlyResults(
     results: KeywordSearchHit[],
     preferExactBody = true,
@@ -1284,7 +1334,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       temporalDecay: params.temporalDecay,
       workspaceDir: this.workspaceDir,
     });
-    const ranked = this.rankKeywordOnlyResults(decayed, !appliesTemporalDecay);
+    const ranked = this.rankKeywordOnlyResults(
+      applyImportanceMultiplier(decayed),
+      !appliesTemporalDecay,
+    );
     return this.toMemorySearchResults(
       this.selectScoredResults(ranked, params.maxResults, params.minScore, 0),
     );
@@ -1328,7 +1381,29 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       sourceFilterVec: this.buildSourceFilter("c", sourceFilterList),
       sourceFilterChunks: this.buildSourceFilter(undefined, sourceFilterList),
     });
-    return results.map((entry) => entry as MemorySearchResult & { id: string });
+    return this.attachRecallMetadata(
+      results.map((entry) => entry as MemorySearchResult & { id: string }),
+    );
+  }
+
+  private attachRecallMetadata<T extends MemorySearchResult & { id: string }>(results: T[]): T[] {
+    if (results.length === 0) {
+      return results;
+    }
+    const metadataById = readMemoryRecallMetadata(
+      this.db,
+      results.map((entry) => entry.id),
+    );
+    return results.map((entry) => {
+      const row = metadataById.get(entry.id);
+      return {
+        ...entry,
+        ...(typeof row?.importance === "number" ? { importance: row.importance } : {}),
+        ...(typeof row?.triggers === "string" && row.triggers.trim()
+          ? { triggers: row.triggers.trim() }
+          : {}),
+      };
+    });
   }
 
   private buildFtsQuery(raw: string): string | null {
@@ -1389,7 +1464,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       ],
       exactPathQuery,
     );
-    return this.limitKeywordSearchHits(merged, limit);
+    return this.attachRecallMetadata(this.limitKeywordSearchHits(merged, limit));
   }
 
   private async searchKeywordWithFallback(
@@ -1545,7 +1620,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         source: r.source,
         snippet: r.snippet,
         vectorScore: r.score,
+        importance: r.importance,
+        triggers: r.triggers,
         exactPathSpecificity: resolveExactPathSpecificity(params.query, r.path),
+        ...(r.provenance ? { provenance: r.provenance } : {}),
       })),
       keyword: params.keyword.map((r) => ({
         id: r.id,
@@ -1555,9 +1633,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         source: r.source,
         snippet: r.snippet,
         textScore: r.textScore,
+        importance: r.importance,
+        triggers: r.triggers,
         rankingScore: r.score,
         pathScore: r.pathScore,
         exactPathSpecificity: r.exactPathSpecificity,
+        ...(r.provenance ? { provenance: r.provenance } : {}),
       })),
       vectorWeight: params.vectorWeight,
       textWeight: params.textWeight,

@@ -963,7 +963,13 @@ function createCodexDynamicToolSpecs(params: {
   const specs: CodexDynamicToolSpec[] = [];
   const namespaceTools: CodexDynamicToolFunctionSpec[] = [];
   const directOnlyNamespaceTools: CodexDynamicToolFunctionSpec[] = [];
-  for (const entry of params.entries) {
+  // Codex reuses its incremental websocket request only when the complete
+  // searchable surface is unchanged. Direct mode retains its compatibility order.
+  const entries =
+    params.loading === "direct"
+      ? params.entries
+      : params.entries.toSorted((left, right) => left.name.localeCompare(right.name));
+  for (const entry of entries) {
     const functionSpec = createCodexDynamicToolFunctionSpec({ entry });
     if (entry.name === "openclaw" && params.directToolNames.has(entry.name)) {
       // OpenClaw is ring-zero and its whole turn surface. Keep its canonical

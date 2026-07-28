@@ -4,7 +4,6 @@ import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { normalizeChatMessageMaxWidth } from "../../app/settings.ts";
 import { countSensitiveConfigValues } from "../../components/config-form.shared.ts";
-import { splitConfigSchemaByTier } from "../../components/config-form.tiers.ts";
 import { renderConfigForm } from "../../components/config-form.ts";
 import "../../components/tooltip.ts";
 import { icons } from "../../components/icons.ts";
@@ -112,28 +111,6 @@ export function renderConfig(props: ConfigProps) {
       configValueExistsAtPath(props.formValue, path),
   );
   const formUnsafe = unsupportedActivePaths.length > 0;
-  const schemaProperties = analysis.schema?.properties ?? {};
-  // Mirror the renderer's tier semantics (splitConfigSchemaByTier: unhinted
-  // leaves default to advanced) so the toolbar toggle appears exactly when the
-  // rendered scope can hide fields behind ghost rows; a mismatched predicate
-  // strands an enabled toggle with no control to turn it off. An active
-  // virtual section (__appearance__/__notifications__) renders no schema form,
-  // so it never offers the toggle.
-  const hasAdvancedInScope = () => {
-    const sectionKeys = props.activeSection
-      ? Object.hasOwn(schemaProperties, props.activeSection)
-        ? [props.activeSection]
-        : []
-      : Object.keys(schemaProperties);
-    return sectionKeys.some((key) => {
-      const node = schemaProperties[key];
-      if (!node) {
-        return false;
-      }
-      const split = splitConfigSchemaByTier({ schema: node, path: [key], hints: props.uiHints });
-      return split.advancedLeafCount > 0;
-    });
-  };
   const effectiveShowAdvanced = props.forceShowAdvanced === true || props.showAdvancedSettings;
   const rawAvailable = props.rawAvailable ?? true;
   // An unsaved raw draft stays authoritative in the capability; hiding the
@@ -403,10 +380,7 @@ export function renderConfig(props: ConfigProps) {
         },
       })
     : nothing;
-  const showAdvancedToggle =
-    formMode === "form" && props.forceShowAdvanced !== true && hasAdvancedInScope();
-  const showToolbar =
-    showModeToggle || showSectionTabs || showAdvancedToggle || autoSaveStatus !== nothing;
+  const showToolbar = showModeToggle || showSectionTabs || autoSaveStatus !== nothing;
   const applyBanner = renderConfigApplyBanner({
     needsApply: props.needsApply,
     applying: props.applying,
@@ -457,17 +431,6 @@ export function renderConfig(props: ConfigProps) {
               </div>`
             : nothing}
           ${sectionTabs}
-          ${showAdvancedToggle
-            ? html`<button
-                class="btn btn--sm config-show-advanced ${props.showAdvancedSettings
-                  ? "active"
-                  : ""}"
-                aria-pressed=${props.showAdvancedSettings ? "true" : "false"}
-                @click=${() => props.setShowAdvancedSettings(!props.showAdvancedSettings)}
-              >
-                ${t("configForm.showAdvanced")}
-              </button>`
-            : nothing}
           <div class="config-toolbar__status" role="status" aria-live="polite">
             ${autoSaveStatus}
           </div>
@@ -559,6 +522,9 @@ export function renderConfig(props: ConfigProps) {
                       showAdvanced: effectiveShowAdvanced,
                       forceAdvancedSection: props.forceAdvancedSection,
                       onShowAdvanced: () => props.setShowAdvancedSettings(true),
+                      onHideAdvanced: props.forceShowAdvanced
+                        ? undefined
+                        : () => props.setShowAdvancedSettings(false),
                       sectionActions:
                         props.activeSection === "env"
                           ? html`<button

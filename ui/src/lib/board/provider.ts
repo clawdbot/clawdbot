@@ -12,13 +12,14 @@ import {
 } from "../sessions/session-key.ts";
 import { GatewayBoardProvider } from "./gateway-provider.ts";
 import { applyMockBoardOp, normalizeMockBoardSnapshot } from "./mock-ops.ts";
+import { emptyBoardSnapshot, normalizeBoardWidgetTitle } from "./provider-helpers.ts";
 import {
   EventStream,
   ValueSignal,
   type BoardEventStream,
   type BoardSnapshotSignal,
 } from "./provider-signals.ts";
-import type { BoardProvider } from "./provider-types.ts";
+import type { BoardPinMcpAppInput, BoardPinWidgetInput, BoardProvider } from "./provider-types.ts";
 import type { BoardWidgetAppViewState } from "./view-types.ts";
 import { canvasWidgetNameForDocument, mcpAppWidgetNameForViewId } from "./widget-names.ts";
 export type { BoardCommandEvent };
@@ -28,26 +29,6 @@ export { canvasWidgetNameForDocument, mcpAppWidgetNameForViewId } from "./widget
 export { GatewayBoardProvider } from "./gateway-provider.ts";
 
 type BoardGatewayClient = Pick<GatewayBrowserClient, "request" | "addEventListener">;
-
-type BoardPinPlacement = {
-  title?: string;
-  name?: string;
-  tabId?: string;
-  size?: "sm" | "md" | "lg" | "xl" | "full";
-  after?: string;
-};
-
-type BoardPinWidgetInput = BoardPinPlacement & { docId: string };
-type BoardPinMcpAppInput = BoardPinPlacement & { viewId: string };
-
-function emptySnapshot(sessionKey: string): BoardSnapshot {
-  return { sessionKey, revision: 0, tabs: [], widgets: [] };
-}
-
-function boardWidgetTitle(title: string | undefined): string | undefined {
-  const normalized = title?.trim() ?? "";
-  return normalized ? Array.from(normalized).slice(0, 80).join("") : undefined;
-}
 
 function mockSnapshot(sessionKey: string): BoardSnapshot {
   return {
@@ -113,7 +94,7 @@ class NullProvider implements BoardProvider {
   readonly events: BoardEventStream<BoardCommandEvent> = new EventStream<BoardCommandEvent>();
 
   constructor(readonly sessionKey = "") {
-    this.snapshot$ = new ValueSignal(emptySnapshot(sessionKey));
+    this.snapshot$ = new ValueSignal(emptyBoardSnapshot(sessionKey));
   }
 
   async applyOps(_ops: BoardOp[]): Promise<void> {}
@@ -185,7 +166,7 @@ class MockBoardProvider implements BoardProvider {
   async pinWidget(input: BoardPinWidgetInput): Promise<void> {
     const snapshot = this.snapshotSignal.value;
     const name = input.name ?? canvasWidgetNameForDocument(input.docId);
-    const title = boardWidgetTitle(input.title);
+    const title = normalizeBoardWidgetTitle(input.title);
     const tabId = input.tabId ?? snapshot.tabs[0]?.tabId ?? "main";
     const tabs = snapshot.tabs.length
       ? snapshot.tabs
@@ -219,7 +200,7 @@ class MockBoardProvider implements BoardProvider {
   async pinMcpApp(input: BoardPinMcpAppInput): Promise<void> {
     const snapshot = this.snapshotSignal.value;
     const name = input.name ?? mcpAppWidgetNameForViewId(input.viewId);
-    const title = boardWidgetTitle(input.title);
+    const title = normalizeBoardWidgetTitle(input.title);
     const tabId = input.tabId ?? snapshot.tabs[0]?.tabId ?? "main";
     const tabs = snapshot.tabs.length
       ? snapshot.tabs
@@ -445,5 +426,9 @@ export function clearSessionBoardAvailability(): boolean {
 export function sessionHasBoard(sessionKey: string): boolean {
   const key = boardProviderCacheKey(sessionKey);
   const provider = gatewayProviders.get(key)?.provider ?? mockProviders.get(key);
+  // An unloaded gateway provider holds a placeholder, not an authoritative empty board.
+  if (provider instanceof GatewayBoardProvider && !provider.hasLoadedSnapshot) {
+    return boardAvailability.get(key) ?? false;
+  }
   return provider ? boardExists(provider.snapshot$.value) : (boardAvailability.get(key) ?? false);
 }

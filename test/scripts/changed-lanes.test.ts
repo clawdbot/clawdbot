@@ -653,6 +653,45 @@ describe("scripts/changed-lanes", () => {
     expectLanes(result.lanes, { liveDockerTooling: true });
   });
 
+  it.each([
+    "extensions/whatsapp/src/config-ui-hints.ts",
+    "extensions/mattermost/src/config-schema-core.ts",
+    "extensions/telegram/openclaw.plugin.json",
+    "extensions/discord/package.json",
+    "extensions/slack/security-contract-api.ts",
+    "src/config/zod-schema.core.ts",
+    "src/channels/plugins/config-schema.ts",
+    "scripts/load-channel-config-surface.ts",
+  ])("routes %s through the bundled channel config metadata lane", (changedPath) => {
+    const result = detectChangedLanes([changedPath]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes.bundledChannelConfigMetadata).toBe(true);
+    expect(plan.commands.map((command) => command.args[0])).toContain(
+      "check:bundled-channel-config-metadata",
+    );
+  });
+
+  it("keeps unrelated plugin runtime changes out of the bundled channel metadata lane", () => {
+    const result = detectChangedLanes(["extensions/whatsapp/src/monitor.ts"]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes.bundledChannelConfigMetadata).toBe(false);
+    expect(plan.commands.map((command) => command.args[0])).not.toContain(
+      "check:bundled-channel-config-metadata",
+    );
+  });
+
+  it("includes bundled channel metadata in the fail-safe all plan", () => {
+    const result = detectChangedLanes(["unknown-surface.foo"]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes.all).toBe(true);
+    expect(plan.commands.map((command) => command.args[0])).toContain(
+      "check:bundled-channel-config-metadata",
+    );
+  });
+
   it("exposes the shared changed-lane test path classifier", () => {
     expect(isChangedLaneTestPath("src/shared/string-normalization.test.ts")).toBe(true);
     expect(isChangedLaneTestPath("packages/foo/__tests__/helper.ts")).toBe(true);
@@ -696,6 +735,101 @@ describe("scripts/changed-lanes", () => {
         OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1",
       },
     });
+  });
+
+  it("targets mixed core, extension, and script lint without full-owner fan-out", () => {
+    const result = detectChangedLanes([
+      "src/gateway/node-registry.ts",
+      "extensions/lmstudio/src/models.fetch.ts",
+      "scripts/check-changed.mjs",
+    ]);
+    const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
+
+    expect(plan.commands).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "lint core changed file",
+          args: [
+            "scripts/run-oxlint.mjs",
+            "--tsconfig",
+            "config/tsconfig/oxlint.core.json",
+            "src/gateway/node-registry.ts",
+          ],
+        }),
+        expect.objectContaining({
+          name: "lint extension changed file",
+          args: [
+            "scripts/run-oxlint.mjs",
+            "--tsconfig",
+            "config/tsconfig/oxlint.extensions.json",
+            "extensions/lmstudio/src/models.fetch.ts",
+          ],
+        }),
+        expect.objectContaining({
+          name: "lint script changed file",
+          args: [
+            "scripts/run-oxlint.mjs",
+            "--tsconfig",
+            "config/tsconfig/oxlint.scripts.json",
+            "scripts/check-changed.mjs",
+          ],
+        }),
+      ]),
+    );
+    const commandNames = plan.commands.map((command) => command.args[0]);
+    for (const fullLane of ["lint:core", "lint:extensions", "lint:scripts"]) {
+      expect(commandNames).not.toContain(fullLane);
+    }
+  });
+
+  it.each([
+    {
+      owner: "core",
+      paths: [
+        "src/gateway/node-registry.ts",
+        "src/gateway/node-registry.invoke-stream.ts",
+        "src/gateway/server-methods/nodes.invoke.ts",
+        "src/gateway/server-methods/nodes.invoke-deadline.ts",
+        "src/node-host/runtime.ts",
+        "src/node-host/runner.ts",
+        "src/plugins/provider-self-hosted-setup.ts",
+        "packages/gateway-client/src/timeouts.ts",
+        "packages/normalization-core/src/number-coercion.ts",
+      ],
+      pluralName: "lint core changed files",
+      singularName: "lint core changed file",
+      fullLane: "lint:core",
+    },
+    {
+      owner: "extension",
+      paths: [
+        "extensions/lmstudio/src/embedding-provider.ts",
+        "extensions/lmstudio/src/stream.ts",
+        "extensions/lmstudio/src/api.ts",
+        "extensions/lmstudio/src/models.fetch.ts",
+        "extensions/lmstudio/src/setup.ts",
+        "extensions/lmstudio/src/defaults.ts",
+        "extensions/lmstudio/src/provider-auth.ts",
+        "extensions/lmstudio/src/runtime.ts",
+        "extensions/lmstudio/src/models.ts",
+      ],
+      pluralName: "lint extension changed files",
+      singularName: "lint extension changed file",
+      fullLane: "lint:extensions",
+    },
+  ])("batches broad $owner changes without falling back to full lint", (testCase) => {
+    const result = detectChangedLanes(testCase.paths);
+    const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
+    const commands = plan.commands.filter(
+      (command) => command.name === testCase.pluralName || command.name === testCase.singularName,
+    );
+
+    expect(commands).toHaveLength(2);
+    expect(commands.map((command) => command.args.slice(3).length)).toEqual([8, 1]);
+    expect(commands.flatMap((command) => command.args.slice(3)).toSorted()).toEqual(
+      testCase.paths.toSorted(),
+    );
+    expect(plan.commands.map((command) => command.args[0])).not.toContain(testCase.fullLane);
   });
 
   it.each([
@@ -2038,6 +2172,7 @@ describe("scripts/changed-lanes", () => {
       docs: false,
       tooling: false,
       liveDockerTooling: false,
+      bundledChannelConfigMetadata: false,
       releaseMetadata: false,
       all: false,
     });
