@@ -692,6 +692,131 @@ describe("gateway startup reconciliation", () => {
     }
   });
 
+  it("recovers on the runtime interval after startup cron reconciliation fails", async () => {
+    vi.useFakeTimers();
+    clearInternalHooks();
+    const logger = createLogger();
+    const harness = createCronHarness([], { listThrowsForFirstCalls: 1 });
+    const onMock = vi.fn();
+    const api: DreamingPluginApiTestDouble = {
+      config: {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  frequency: "15 4 * * *",
+                  timezone: "UTC",
+                },
+              },
+            },
+          },
+        },
+      },
+      pluginConfig: {},
+      logger,
+      runtime: {},
+      on: onMock,
+    };
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+      await triggerGatewayStart(onMock, {
+        config: api.config,
+        getCron: () => harness.cron,
+      });
+
+      expect(harness.listCalls).toBe(1);
+      expect(harness.addCalls).toHaveLength(0);
+      expectLogContains(logger.error, "dreaming startup reconciliation failed");
+
+      await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
+
+      expect(harness.listCalls).toBe(2);
+      expect(harness.addCalls).toHaveLength(1);
+      expectCronSchedule(requireAddCall(harness, 0).schedule, "15 4 * * *", "UTC");
+    } finally {
+      await triggerGatewayStop(onMock).catch(() => undefined);
+      vi.useRealTimers();
+      clearInternalHooks();
+    }
+  });
+
+  it("does not arm runtime recovery after gateway_stop wins the startup race", async () => {
+    vi.useFakeTimers();
+    clearInternalHooks();
+    const logger = createLogger();
+    let rejectStartupList: (reason?: unknown) => void = () => undefined;
+    const startupListPromise = new Promise<CronJobLike[]>((_resolve, reject) => {
+      rejectStartupList = reject;
+    });
+    let listCalls = 0;
+    const addCalls: CronAddInput[] = [];
+    const cron: CronParam = {
+      async list() {
+        listCalls += 1;
+        if (listCalls === 1) {
+          return startupListPromise;
+        }
+        return [];
+      },
+      async add(input) {
+        addCalls.push(input);
+        return {};
+      },
+      async update() {
+        return {};
+      },
+      async remove() {
+        return { removed: false };
+      },
+    };
+    const onMock = vi.fn();
+    const api: DreamingPluginApiTestDouble = {
+      config: {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  frequency: "15 4 * * *",
+                  timezone: "UTC",
+                },
+              },
+            },
+          },
+        },
+      },
+      pluginConfig: {},
+      logger,
+      runtime: {},
+      on: onMock,
+    };
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+      const startup = triggerGatewayStart(onMock, {
+        config: api.config,
+        getCron: () => cron,
+      });
+
+      await triggerGatewayStop(onMock);
+      rejectStartupList(new Error("startup list failed"));
+      await startup;
+      await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
+
+      expect(listCalls).toBe(1);
+      expect(addCalls).toHaveLength(0);
+      expectLogContains(logger.error, "dreaming startup reconciliation failed");
+    } finally {
+      await triggerGatewayStop(onMock).catch(() => undefined);
+      vi.useRealTimers();
+      clearInternalHooks();
+    }
+  });
+
   it("reconciles disabled->enabled config changes during runtime", async () => {
     clearInternalHooks();
     const logger = createLogger();

@@ -1774,11 +1774,11 @@ describe("config view", () => {
         new Date(firstSeenAt).toLocaleDateString(),
       );
 
-      const unseen = container.querySelector(".lobster-pet--palette-coral");
-      expect(unseen?.getAttribute("aria-label")).toContain("Blends in at the beach.");
+      const unseen = container.querySelector(".lobster-pet--palette-watermelon");
+      expect(unseen?.getAttribute("aria-label")).toContain("Ripe when thumped.");
       expect(
         unseen?.closest("openclaw-tooltip")?.querySelector('[slot="content"]')?.textContent,
-      ).toContain("Blends in at the beach.");
+      ).toContain("Ripe when thumped.");
 
       container.querySelector<HTMLAnchorElement>(".lobsterdex__open")?.click();
       expect(onOpenLobsterdex).toHaveBeenCalledOnce();

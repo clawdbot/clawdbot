@@ -2,11 +2,16 @@
  * Server channel lifecycle tests.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ChannelIngressUnavailableError } from "../channels/message/ingress-unavailable.js";
 import type {
   ChannelAccountLinkState,
   ChannelGatewayContext,
 } from "../channels/plugins/types.adapters.js";
-import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.public.js";
+import type {
+  ChannelAccountSnapshot,
+  ChannelId,
+  ChannelPlugin,
+} from "../channels/plugins/types.public.js";
 import { formatGatewayChannelsStatusLines } from "../commands/channels/status.js";
 import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
 import {
@@ -87,6 +92,15 @@ const CHANNEL_APPROVAL_GATEWAY_RUNTIME_CONTEXT_CAPABILITY = "approval.gateway";
 type ApprovalGatewayRequestRuntime = Pick<GatewayNativeApprovalRuntime, "request">;
 
 const createdManagers: Array<{ manager: ChannelManager; channelIds: ChannelId[] }> = [];
+
+function healthOf(account: ChannelAccountSnapshot | undefined) {
+  return evaluateChannelHealth(account ?? {}, {
+    channelId: "discord",
+    now: Date.now() + 60 * 60_000,
+    channelConnectGraceMs: 120_000,
+    staleEventThresholdMs: 30 * 60_000,
+  });
+}
 
 function createTestPlugin(params?: {
   id?: ChannelId;
@@ -329,6 +343,62 @@ describe("server-channels auto restart", () => {
 
     await vi.advanceTimersByTimeAsync(200);
     expect(startAccount).toHaveBeenCalledTimes(11);
+  });
+
+  it("records dead ingress when a channel start fails to arm its ingress monitor", async () => {
+    const startAccount = vi.fn(async () => {
+      throw new ChannelIngressUnavailableError("Channel ingress queue is unavailable: denied");
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannels();
+    const readAccount = () =>
+      manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    await advanceTimersUntil(
+      () => readAccount()?.ingressUnavailable === true,
+      "expected the failed ingress start to be recorded on the account",
+      { stepMs: 10, maxMs: 500 },
+    );
+
+    // Health must name this dead inbound rather than one more anonymous crash.
+    expect(healthOf(readAccount())).toEqual({
+      healthy: false,
+      reason: "ingress-unavailable",
+    });
+  });
+
+  it("clears a previous lifecycle's dead-ingress verdict once ingress starts again", async () => {
+    let failIngress = true;
+    const startAccount = vi.fn(async () => {
+      if (failIngress) {
+        throw new ChannelIngressUnavailableError("Channel ingress queue is unavailable: denied");
+      }
+      await new Promise(() => {});
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+    const readAccount = () =>
+      manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+
+    await manager.startChannels();
+    await advanceTimersUntil(
+      () => readAccount()?.ingressUnavailable === true,
+      "expected the first start to record dead ingress",
+      { stepMs: 10, maxMs: 500 },
+    );
+
+    // Runtime rows are patch-merged, so a sticky verdict would keep the channel
+    // unhealthy forever after the operator fixed the underlying capability. The
+    // supervisor's own backoff ladder supplies the next start here.
+    failIngress = false;
+    await advanceTimersUntil(
+      () => readAccount()?.running === true && readAccount()?.ingressUnavailable === undefined,
+      "expected a later start to clear the dead-ingress verdict",
+      { stepMs: 10, maxMs: 500 },
+    );
+
+    expect(healthOf(readAccount()).reason).not.toBe("ingress-unavailable");
   });
 
   it("claims auto-restart ownership between crash-loop attempts", async () => {

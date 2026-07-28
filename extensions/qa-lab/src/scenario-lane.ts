@@ -24,6 +24,10 @@ export function describeQaProviderLaneMismatches(params: {
     mismatches.push(`providerMode=${requiredProviderMode}`);
   }
   const effectiveChannelDriver = params.channelDriver ?? "qa-channel";
+  const requiredChannelDriver = normalizeQaConfigString(config.requiredChannelDriver);
+  if (requiredChannelDriver && effectiveChannelDriver !== requiredChannelDriver) {
+    mismatches.push(`channelDriver=${requiredChannelDriver}`);
+  }
   const effectiveChannel =
     effectiveChannelDriver === "qa-channel"
       ? "qa-channel"

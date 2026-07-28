@@ -226,9 +226,21 @@ const COMMUNICATION_SETTINGS_BLOCKS = {
   },
 } as const satisfies Record<string, StaticSettingsBlockDescriptor>;
 
-// Sessions-hub workspace pages have no schema-backed config section, so they
-// only surface in search through these static entries.
+// Workspace pages without a schema-backed config section only surface in
+// search through these static entries.
 const WORKSPACE_SETTINGS_BLOCKS = {
+  usage: {
+    routeId: "usage",
+    labelKey: "profilePage.usageStatistics",
+    hash: "",
+    searchKeys: [
+      "profilePage.usageStatisticsDescription",
+      "usage.heatmap.title",
+      "usage.heatmap.subtitle",
+      "usage.overview.title",
+    ],
+    aliases: "stats statistics analytics tokens costs activity streaks",
+  },
   sessions: {
     routeId: "sessions",
     labelKey: "sessionsView.title",

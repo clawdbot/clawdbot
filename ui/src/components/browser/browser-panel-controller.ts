@@ -435,6 +435,12 @@ export class BrowserPanelController implements ReactiveController {
         }
         return;
       }
+      // DELETE already committed; a failed tab snapshot must not resurrect its
+      // target or make the next screenshot address a tab that no longer exists.
+      this.setState(
+        "tabs",
+        this.tabs.filter((tab) => tab.id !== targetId),
+      );
       const snapshot = await this.refreshTabsOnly(client, () =>
         this.operations.isLive(epoch, client),
       );

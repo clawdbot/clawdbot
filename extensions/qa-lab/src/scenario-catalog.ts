@@ -453,6 +453,20 @@ export function readQaScenarioPack(): QaScenarioPack {
         parsedScenario.execution ?? {},
         relativePath,
       );
+      const requiredChannelDriver = qaScenarioModuleFlow.resolveRequiredChannelDriver(
+        parsedScenarioFile.flow,
+      );
+      const configuredChannelDriver =
+        execution.kind === "flow" ? execution.config?.requiredChannelDriver : undefined;
+      if (
+        requiredChannelDriver &&
+        configuredChannelDriver !== undefined &&
+        configuredChannelDriver !== requiredChannelDriver
+      ) {
+        throw new Error(
+          `${relativePath}: live transport module requires channelDriver=${requiredChannelDriver}`,
+        );
+      }
       const flow = qaScenarioModuleFlow.resolveFlow(
         parsedScenarioFile.flow,
         parsedScenarioFile.title,
@@ -463,6 +477,14 @@ export function readQaScenarioPack(): QaScenarioPack {
         sourcePath: relativePath,
         execution: {
           ...execution,
+          ...(requiredChannelDriver && execution.kind === "flow"
+            ? {
+                config: {
+                  ...execution.config,
+                  requiredChannelDriver,
+                },
+              }
+            : {}),
           ...(flow ? { flow } : {}),
         },
       } satisfies QaSeedScenarioWithSource;

@@ -1,4 +1,5 @@
 import { consume } from "@lit/context";
+import { initialState, Task, TaskStatus } from "@lit/task";
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
@@ -95,7 +96,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   @property({ attribute: false }) routeData: ModelProvidersRouteData | undefined;
 
   @state() private data: ModelProvidersData | null = null;
-  @state() private refreshing = false;
   @state() private busy: Record<string, boolean> = {};
   @state() private messages: Record<string, ModelProviderRowMessage> = {};
   @state() private probeResults: Record<string, ModelsProbeResult> = {};
@@ -113,9 +113,30 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   private dataClient: GatewayBrowserClient | null = null;
   private observedClient: GatewayBrowserClient | null = null;
   private clientEpoch = 0;
-  private refreshEpoch = 0;
-  private refreshQueue: Promise<void> = Promise.resolve();
   private probeEpochs = new Map<string, number>();
+  private readonly refreshTask = new Task(this, {
+    autoRun: false,
+    args: () =>
+      [
+        this.context?.gateway.snapshot.phase === "connected"
+          ? (this.context.gateway.snapshot.client ?? null)
+          : null,
+        this.selectedAgentId,
+        false as boolean,
+      ] as const,
+    task: ([client, agentId, force], { signal }) =>
+      client
+        ? loadModelProvidersData(client, {
+            agentId,
+            ...(force ? { refresh: true } : {}),
+            signal,
+          }).then((data) => ({ client, data }))
+        : initialState,
+    onComplete: ({ client, data }) => {
+      this.data = data;
+      this.dataClient = client;
+    },
+  });
   private readonly subscriptions = new SubscriptionsController(this)
     .watch(
       () => this.context?.gateway,
@@ -145,7 +166,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     );
 
   override disconnectedCallback() {
-    this.refreshEpoch += 1;
+    void this.refreshTask.run([null, this.selectedAgentId, false]);
     this.subscriptions.clear();
     super.disconnectedCallback();
   }
@@ -172,7 +193,11 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     if (!this.context.agents.state.agentsList && !this.context.agents.state.agentsLoading) {
       void this.context.agents.ensureList();
     }
-    if (snapshot.phase !== "connected" || !snapshot.client || this.refreshing) {
+    if (
+      snapshot.phase !== "connected" ||
+      !snapshot.client ||
+      this.refreshTask.status === TaskStatus.PENDING
+    ) {
       return;
     }
     const stale = this.data === null || this.data.updatedAt === null;
@@ -184,8 +209,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   private resetClientState(client: GatewayBrowserClient | null) {
     this.observedClient = client;
     this.clientEpoch += 1;
-    this.refreshEpoch += 1;
-    this.refreshing = false;
+    void this.refreshTask.run([null, this.selectedAgentId, false]);
     this.busy = {};
     this.messages = {};
     this.probeResults = {};
@@ -228,7 +252,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       return;
     }
     this.selectedAgentId = agentId;
-    this.refreshEpoch += 1;
+    void this.refreshTask.run([null, agentId, false]);
     this.data = null;
     this.busy = {};
     this.pendingLogoutProvider = null;
@@ -241,40 +265,11 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   }
 
   private refresh(opts: { force: boolean }): Promise<void> {
-    const task = this.refreshQueue.then(() => this.performRefresh(opts));
-    this.refreshQueue = task.catch(() => undefined);
-    return task;
-  }
-
-  private async performRefresh(opts: { force: boolean }) {
     const client = this.context.gateway.snapshot.client;
     if (!client) {
-      return;
+      return Promise.resolve();
     }
-    const agentId = this.selectedAgentId;
-    const epoch = ++this.refreshEpoch;
-    this.refreshing = true;
-    try {
-      const data = await loadModelProvidersData(client, {
-        agentId,
-        ...(opts.force ? { refresh: true } : {}),
-      });
-      if (
-        epoch === this.refreshEpoch &&
-        this.selectedAgentId === agentId &&
-        this.context.gateway.snapshot.client === client
-      ) {
-        this.data = data;
-        this.dataClient = client;
-      }
-    } finally {
-      // refreshQueue serializes performRefresh calls, so this is always the
-      // only in-flight refresh: clear unconditionally. An epoch-guarded clear
-      // orphans `refreshing` when a selection change invalidates us mid-await,
-      // permanently blocking maybeRefresh for the new agent.
-      this.refreshing = false;
-      this.requestUpdate();
-    }
+    return this.refreshTask.run([client, this.selectedAgentId, opts.force]);
   }
 
   private mutationBlockedReason(): string | null {
@@ -625,7 +620,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     const body = renderModelProviders({
       connected: gatewaySnapshot.phase === "connected",
       loading: gatewaySnapshot.phase === "connected" && this.data === null,
-      refreshing: this.refreshing,
+      refreshing: this.refreshTask.status === TaskStatus.PENDING,
       error: data.error,
       updatedAt: data.updatedAt,
       costDays: MODEL_PROVIDERS_COST_DAYS,

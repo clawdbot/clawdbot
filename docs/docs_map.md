@@ -3648,6 +3648,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Quick checks
   - H2: Deep diagnostics
   - H2: Health monitor config
+  - H2: Inbound ingress health
   - H2: Uptime monitoring
   - H3: Monitoring service setup examples
   - H2: When something fails

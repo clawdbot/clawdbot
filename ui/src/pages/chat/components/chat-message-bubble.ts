@@ -118,9 +118,9 @@ function renderReplyPill(replyTarget: NormalizedMessage["replyTarget"]) {
     <div class="chat-reply-pill">
       <span class="chat-reply-pill__icon">${icons.messageSquare}</span>
       <span class="chat-reply-pill__label">
-        ${replyTarget.kind === "current"
-          ? "Replying to current message"
-          : `Replying to ${replyTarget.id}`}
+        ${t("chat.messages.replyingTo", {
+          name: replyTarget.kind === "current" ? t("chat.messages.currentMessage") : replyTarget.id,
+        })}
       </span>
     </div>
   `;

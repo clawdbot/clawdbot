@@ -24,6 +24,27 @@ afterEach(() => {
 });
 
 describe("SessionPullRequestIndicatorsController", () => {
+  it("does not schedule a Task invalidation loop when no rows are eligible", async () => {
+    vi.useFakeTimers();
+    const host = new TestHost();
+    const controller = new SessionPullRequestIndicatorsController(host, {
+      getConnected: () => true,
+      getRows: () => [],
+      getSelectedAgentId: () => "main",
+      getSnapshot: () =>
+        ({
+          client: {} as GatewayBrowserClient,
+          hello: { features: { methods: ["controlUi.sessionPullRequests"] } },
+        }) as ApplicationGatewaySnapshot,
+    });
+
+    controller.hostConnected();
+    controller.hostUpdated();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(host.requestUpdate).not.toHaveBeenCalled();
+  });
+
   it("refreshes visible PR state and keeps the last value while rate limited", async () => {
     vi.useFakeTimers();
     const host = new TestHost();

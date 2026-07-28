@@ -314,6 +314,52 @@ describe("qa run config", () => {
     );
   });
 
+  it("excludes live-only and unsupported thread scenarios from Crabline plans", () => {
+    const catalog = readQaScenarioPack();
+    const scenarioIds = new Set([
+      "matrix-approval-channel-target-both",
+      "matrix-approval-deny-reaction",
+      "matrix-approval-exec-metadata-chunked",
+      "matrix-approval-exec-metadata-single-event",
+      "matrix-approval-plugin-metadata-single-event",
+      "matrix-approval-thread-target",
+      "matrix-mxid-prefixed-command-block",
+      "slack-codex-approval-exec-native",
+      "slack-codex-approval-plugin-native",
+      "thread-follow-up",
+      "thread-isolation",
+    ]);
+    const selected = catalog.scenarios.filter((scenario) => scenarioIds.has(scenario.id));
+
+    const execution = resolveQaRunProfileExecutionSelection({
+      scenarios: selected,
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      channelDriver: "crabline",
+      defaultChannel: "telegram",
+      supportsChannel: () => true,
+    });
+
+    expect(execution.selectedScenarios).toEqual([]);
+    expect(
+      Object.fromEntries(
+        execution.excludedScenarios.map(({ scenario, reasons }) => [scenario.id, reasons]),
+      ),
+    ).toEqual({
+      "matrix-approval-channel-target-both": ["channelDriver=live"],
+      "matrix-approval-deny-reaction": ["channelDriver=live"],
+      "matrix-approval-exec-metadata-chunked": ["channelDriver=live"],
+      "matrix-approval-exec-metadata-single-event": ["channelDriver=live"],
+      "matrix-approval-plugin-metadata-single-event": ["channelDriver=live"],
+      "matrix-approval-thread-target": ["channelDriver=live"],
+      "matrix-mxid-prefixed-command-block": ["channelDriver=live"],
+      "slack-codex-approval-exec-native": ["channelDriver=live"],
+      "slack-codex-approval-plugin-native": ["channelDriver=live"],
+      "thread-follow-up": ["channel=qa-channel|slack|matrix"],
+      "thread-isolation": ["channel=qa-channel|slack|matrix"],
+    });
+  });
+
   it("resolves mixed execution kinds and reports runtime-pair-lane exclusions", () => {
     const catalog = readQaScenarioPack();
     const scorecardReport = readQaScorecardTaxonomyReport(catalog.scenarios);

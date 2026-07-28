@@ -356,6 +356,66 @@ describe("createApplicationGateway connection phase", () => {
     expect(gateway.snapshot.phase).toBe("reconnecting");
   });
 
+  it("ignores presence and event-log callbacks from superseded clients", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+    current().opts.onHello?.(HELLO);
+    const stale = current();
+
+    gateway.connect();
+    const active = current();
+    active.opts.onHello?.({
+      ...HELLO,
+      snapshot: {
+        presence: [
+          {
+            instanceId: active.instanceId,
+            user: { id: "current-user", name: "Current user" },
+          },
+        ],
+      },
+    });
+
+    stale.opts.onEvent?.({
+      type: "event",
+      event: "presence",
+      payload: {
+        presence: [
+          {
+            instanceId: active.instanceId,
+            user: { id: "stale-user", name: "Stale user" },
+          },
+        ],
+      },
+      seq: 1,
+      stateVersion: { presence: 1, health: 1 },
+    });
+
+    expect(gateway.snapshot.selfUser).toEqual({ id: "current-user", name: "Current user" });
+    expect(gateway.eventLog).toEqual([]);
+
+    active.opts.onEvent?.({
+      type: "event",
+      event: "presence",
+      payload: {
+        presence: [
+          {
+            instanceId: active.instanceId,
+            user: { id: "current-user", name: "Updated current user" },
+          },
+        ],
+      },
+      seq: 2,
+      stateVersion: { presence: 2, health: 1 },
+    });
+
+    expect(gateway.snapshot.selfUser).toEqual({
+      id: "current-user",
+      name: "Updated current user",
+    });
+    expect(gateway.eventLog).toHaveLength(1);
+  });
+
   it("projects only this browser connection's optional presence identity", () => {
     const { gateway, current } = createStore();
     gateway.start();

@@ -57,7 +57,6 @@ export {
   requestSessionUsage,
   requestSessionUsageLogs,
   requestSessionUsageTimeSeries,
-  requestSessionsUsage,
 } from "./usage.ts";
 
 type SessionState = {
@@ -1923,9 +1922,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
           }
         }
       })();
-      return;
     }
-    void refresh();
+    // Gateway snapshots also change for recovery scope, presence, and canvas metadata.
+    // Only a connection transition owns list hydration; refreshing here duplicates startup work.
   });
   const stopEvents = gateway.subscribeEvents((event) => {
     if (isSessionStateEvent(event)) {

@@ -57,6 +57,12 @@ async function importFreshTranslate() {
   );
 }
 
+function stubDocumentLocaleMetadata() {
+  const documentElement = { lang: "", dir: "" };
+  vi.stubGlobal("document", { documentElement } as unknown as Document);
+  return documentElement;
+}
+
 describe("i18n", () => {
   function flatten(value: Record<string, string | Record<string, unknown>>, prefix = ""): string[] {
     return Object.entries(value).flatMap(([key, nested]) => {
@@ -133,6 +139,27 @@ describe("i18n", () => {
     });
     expect(fresh.i18n.getLocale()).toBe("zh-CN");
     expect(fresh.t("common.health")).toBe("健康状况");
+  });
+
+  it("syncs canonical document locale metadata on startup", async () => {
+    const documentElement = stubDocumentLocaleMetadata();
+    vi.stubGlobal("navigator", { language: "fa-IR" } as Navigator);
+    localStorage.removeItem("openclaw.i18n.locale");
+
+    const fresh = await importFreshTranslate();
+
+    await vi.waitFor(() => expect(fresh.i18n.getLocale()).toBe("fa"));
+    expect(documentElement).toEqual({ lang: "fa", dir: "rtl" });
+  });
+
+  it("syncs document locale metadata when the locale changes", async () => {
+    const documentElement = stubDocumentLocaleMetadata();
+
+    await translate.i18n.setLocale("ar");
+    expect(documentElement).toEqual({ lang: "ar", dir: "rtl" });
+
+    await translate.i18n.setLocale("de");
+    expect(documentElement).toEqual({ lang: "de", dir: "ltr" });
   });
 
   it.each([

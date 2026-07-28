@@ -387,8 +387,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
     - Persist `/home/node` with `OPENCLAW_HOME_VOLUME` so caches survive.
     - Bake system deps into the image with `OPENCLAW_IMAGE_APT_PACKAGES`.
-    - Install Playwright browsers via the bundled CLI: `node /app/node_modules/playwright-core/cli.js install chromium`.
-    - Set `PLAYWRIGHT_BROWSERS_PATH` and persist that path.
+    - Bake Playwright Chromium and its system dependencies into the image with `OPENCLAW_INSTALL_BROWSER=1`.
 
     Docs: [Docker](/install/docker), [Browser](/tools/browser).
 

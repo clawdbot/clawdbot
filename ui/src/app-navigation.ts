@@ -161,8 +161,8 @@ function settingsSearchHasWordPrefix(value: string, query: string): boolean {
 }
 
 export function settingsSearchTextMatches(value: string, query: string): boolean {
-  const candidate = normalizeLowercaseStringOrEmpty(value);
-  const normalizedQuery = normalizeLowercaseStringOrEmpty(query);
+  const candidate = normalizeLowercaseStringOrEmpty(value).normalize("NFC");
+  const normalizedQuery = normalizeLowercaseStringOrEmpty(query).normalize("NFC");
   if (!normalizedQuery) {
     return false;
   }
