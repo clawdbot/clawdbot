@@ -137,6 +137,19 @@ const APPEARANCE_SETTINGS_BLOCKS = {
     ],
     aliases: "scale",
   },
+  sidebar: {
+    routeId: "appearance",
+    labelKey: "configView.sidebarPrefs.title",
+    search: "?section=__appearance__",
+    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.sidebar}`,
+    searchKeys: [
+      "configView.sidebarPrefs.title",
+      "configView.sidebarPrefs.liveActivity",
+      "configView.sessionObserver.title",
+      "configView.sessionObserver.toggle",
+    ],
+    aliases: "sidebar session observer live activity utility nav customize pin",
+  },
   chat: {
     routeId: "appearance",
     labelKey: "configView.chatPrefs.title",
@@ -159,9 +172,14 @@ const APPEARANCE_SETTINGS_BLOCKS = {
       "chat.catalogOpenTargetTerminal",
       "chat.composer.microphoneInput",
       "chat.composer.systemDefaultMicrophone",
+      "chat.composer.cameraInput",
+      "chat.composer.systemDefaultCamera",
+      "chat.composer.noCameras",
+      "configView.chatPrefs.messageWidth",
+      "configView.chatPrefs.messageWidthHint",
     ],
     aliases:
-      "keyboard enter follow-up followup steer queue microphone voice audio input codex claude terminal viewer",
+      "keyboard enter follow-up followup steer queue microphone voice audio input camera dictation message width codex claude terminal viewer",
   },
   connection: {
     routeId: "appearance",

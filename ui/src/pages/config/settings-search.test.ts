@@ -31,6 +31,44 @@ describe("findSettingsSearchBlocks", () => {
     ]);
   });
 
+  it("finds sidebar and session-observer appearance controls", () => {
+    const matches = findSettingsSearchBlocks({
+      query: "session observer",
+      schema: { type: "object", properties: {} },
+      value: {},
+      uiHints: {},
+    });
+
+    expect(matches).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          routeId: "appearance",
+          hash: "#settings-appearance-sidebar",
+        }),
+      ]),
+    );
+  });
+
+  it("finds chat camera, dictation, and message-width appearance controls", () => {
+    for (const query of ["camera", "dictation", "message width"]) {
+      const matches = findSettingsSearchBlocks({
+        query,
+        schema: { type: "object", properties: {} },
+        value: {},
+        uiHints: {},
+      });
+
+      expect(matches).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            routeId: "appearance",
+            hash: "#settings-appearance-chat",
+          }),
+        ]),
+      );
+    }
+  });
+
   it("matches schema sections to their owning settings page", () => {
     const matches = findSettingsSearchBlocks({
       query: "mcp",
