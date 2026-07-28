@@ -657,8 +657,8 @@ private fun VoiceHomeMode(
               .size(layout.orbSize)
               .offset(y = voiceControlOffset)
               .combinedClickable(
-                // combinedClickable gates every gesture together; fall back to Dictate when Live is unavailable.
-                enabled = liveEnabled || dictateEnabled,
+                // combinedClickable gates every gesture together; keep preview exclusive and fall back to Dictate.
+                enabled = !dictatePreview && (liveEnabled || dictateEnabled),
                 onClickLabel = orbClickLabel,
                 role = Role.Button,
                 onClick = orbClick,
