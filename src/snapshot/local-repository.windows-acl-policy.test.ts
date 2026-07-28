@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OwnerAndDaclResult, WindowsAccessControlEntry } from "../infra/permissions.js";
-import { assertTrustedWindowsAcl } from "./local-repository.js";
+import { assertTrustedWindowsAcl } from "./windows-acl-policy.js";
 
 const CURRENT_USER_SID = "S-1-5-21-1000";
 
