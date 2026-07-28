@@ -507,7 +507,7 @@ export class GatewayConnection {
         return;
       }
       if (this.outstandingHeartbeats >= missedAckThreshold) {
-        log?.error(
+        this.ctx.log?.error(
           `Heartbeat ACK overdue (${this.outstandingHeartbeats} unanswered); terminating gateway socket`,
         );
         ws.terminate();
