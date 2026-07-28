@@ -138,7 +138,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "x_search",
     description: "Search X posts",
     sectionId: "web",
-    profiles: ["coding"],
+    profiles: ["productivity", "coding"],
     includeInOpenClawGroup: true,
   },
   {
@@ -425,7 +425,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "ask_user",
     description: ASK_USER_TOOL_DISPLAY_SUMMARY,
     sectionId: "agents",
-    profiles: ["coding", "messaging"],
+    profiles: ["productivity", "coding", "messaging"],
     includeInOpenClawGroup: true,
   },
   {

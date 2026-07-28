@@ -108,6 +108,7 @@ describe("tool-catalog", () => {
       "apply_patch",
       "web_search",
       "web_fetch",
+      "x_search",
       "memory_search",
       "memory_get",
       "sessions_list",
@@ -118,6 +119,7 @@ describe("tool-catalog", () => {
       "create_goal",
       "update_goal",
       "update_plan",
+      "ask_user",
       "image",
     ]);
   });
