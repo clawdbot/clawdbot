@@ -160,7 +160,7 @@ export async function prepareGatewayPluginBootstrap(params: {
             activationSourceConfig,
             env: process.env,
             includePersistedAuthState: false,
-            ...(pluginManifestRecords.length > 0 ? { manifestRecords: pluginManifestRecords } : {}),
+            manifestRecords: pluginManifestRecords,
           }),
         )
       : new Set<string>();

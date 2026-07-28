@@ -34,6 +34,7 @@ type StartupThinkLevel =
 export async function logGatewayStartup(params: {
   cfg: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
   manifestRecords: readonly PluginManifestRecord[];
   bindHost: string;
   bindHosts?: string[];
@@ -74,6 +75,7 @@ export async function logGatewayStartup(params: {
     cfg: params.cfg,
     activationSourceConfig: params.activationSourceConfig,
     ambientEnvTriggers: params.ambientEnvTriggers,
+    env: params.env,
     manifestRecords: params.manifestRecords,
   })) {
     params.log.warn(warning);
@@ -202,6 +204,7 @@ async function collectConfiguredChannelStartupWarnings(params: {
   cfg: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
+  env: NodeJS.ProcessEnv;
   manifestRecords: readonly PluginManifestRecord[];
 }): Promise<string[]> {
   const [blockerModule, presencePolicyModule] = await Promise.all([
@@ -210,7 +213,7 @@ async function collectConfiguredChannelStartupWarnings(params: {
   ]);
   const hits = blockerModule.scanConfiguredChannelPluginBlockers(
     params.cfg,
-    process.env,
+    params.env,
     params.activationSourceConfig,
     {
       manifestRecords: params.manifestRecords,
@@ -224,6 +227,7 @@ async function collectConfiguredChannelStartupWarnings(params: {
     .resolveConfiguredChannelPresencePolicy({
       config: params.cfg,
       activationSourceConfig: params.activationSourceConfig,
+      env: params.env,
       includePersistedAuthState: false,
       ambientEnvTriggers: params.ambientEnvTriggers,
       manifestRecords: params.manifestRecords,
@@ -235,7 +239,7 @@ async function collectConfiguredChannelStartupWarnings(params: {
       ? presencePolicyModule.listAmbientOnlyConfiguredChannelIds({
           config: params.cfg,
           activationSourceConfig: params.activationSourceConfig,
-          env: process.env,
+          env: params.env,
           includePersistedAuthState: false,
           manifestRecords: params.manifestRecords,
         })

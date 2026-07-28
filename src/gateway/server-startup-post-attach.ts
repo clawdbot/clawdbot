@@ -1099,6 +1099,7 @@ export async function startGatewayPostAttachRuntime(
     runtimeDeps.logGatewayStartup({
       cfg: params.cfgAtStart,
       activationSourceConfig: params.activationSourceConfig,
+      env: process.env,
       manifestRecords: params.pluginManifestRecords,
       ...(params.ambientEnvTriggers ? { ambientEnvTriggers: params.ambientEnvTriggers } : {}),
       bindHost: params.bindHost,

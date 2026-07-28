@@ -3,7 +3,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
-import { captureEnv, deleteTestEnvValue, withEnvAsync } from "../test-utils/env.js";
 import {
   formatAgentModelStartupDetails,
   formatAgentModelStartupLogLine,
@@ -13,14 +12,6 @@ import {
 const modelMocks = vi.hoisted(() => ({
   resolveThinkingDefault: vi.fn(() => "medium" as const),
 }));
-// Scrub the host's real reef guard env so ambient channel triggers cannot leak
-// warnings into these assertions. Names are built dynamically so secret scanners
-// do not mistake the identifiers for credential assignments; no values are set.
-const AMBIENT_REEF_ENV_NAMES = ["API", "OPENAI", "ANTHROPIC"].map(
-  (provider) => `REEF_GUARD_${provider}_KEY`,
-);
-const ambientChannelEnvSnapshot = captureEnv(AMBIENT_REEF_ENV_NAMES);
-
 function createManifestRecord(
   overrides: Partial<PluginManifestRecord> & Pick<PluginManifestRecord, "id">,
 ): PluginManifestRecord {
@@ -46,16 +37,12 @@ vi.mock("../agents/model-thinking-default.js", () => ({
 
 describe("gateway startup log", () => {
   beforeEach(() => {
-    for (const name of AMBIENT_REEF_ENV_NAMES) {
-      deleteTestEnvValue(name);
-    }
     modelMocks.resolveThinkingDefault.mockClear();
     modelMocks.resolveThinkingDefault.mockReturnValue("medium");
   });
 
   afterEach(() => {
     vi.useRealTimers();
-    ambientChannelEnvSnapshot.restore();
   });
 
   afterAll(() => {});
@@ -66,6 +53,7 @@ describe("gateway startup log", () => {
 
     await logGatewayStartup({
       cfg: { hooks: { gmail: { allowUnsafeExternalContent: true } } },
+      env: {},
       manifestRecords: [],
       bindHost: "127.0.0.1",
       loadedPluginIds: [],
@@ -87,6 +75,7 @@ describe("gateway startup log", () => {
 
     await logGatewayStartup({
       cfg: {},
+      env: {},
       manifestRecords: [],
       bindHost: "127.0.0.1",
       loadedPluginIds: [],
@@ -118,6 +107,7 @@ describe("gateway startup log", () => {
           },
         },
       },
+      env: {},
       manifestRecords,
       bindHost: "127.0.0.1",
       loadedPluginIds: [],
@@ -146,6 +136,7 @@ describe("gateway startup log", () => {
           },
         },
       },
+      env: {},
       manifestRecords: [],
       bindHost: "127.0.0.1",
       loadedPluginIds: [],
@@ -176,21 +167,20 @@ describe("gateway startup log", () => {
     const info = vi.fn();
     const warn = vi.fn();
 
-    await withEnvAsync({ DISCORD_FAKE_TEST_TRIGGER: "configured" }, async () => {
-      await logGatewayStartup({
-        cfg: {
-          plugins: {
-            entries: { discord: { enabled: true } },
-          },
+    await logGatewayStartup({
+      cfg: {
+        plugins: {
+          entries: { discord: { enabled: true } },
         },
-        manifestRecords,
-        ambientEnvTriggers: "suppress",
-        bindHost: "127.0.0.1",
-        loadedPluginIds: [],
-        port: 18789,
-        log: { info, warn },
-        isNixMode: false,
-      });
+      },
+      env: { DISCORD_FAKE_TEST_TRIGGER: "configured" },
+      manifestRecords,
+      ambientEnvTriggers: "suppress",
+      bindHost: "127.0.0.1",
+      loadedPluginIds: [],
+      port: 18789,
+      log: { info, warn },
+      isNixMode: false,
     });
 
     expect(warn.mock.calls).toEqual([
@@ -222,6 +212,7 @@ describe("gateway startup log", () => {
           },
         },
       },
+      env: {},
       manifestRecords,
       bindHost: "127.0.0.1",
       loadedPluginIds: [],
@@ -254,6 +245,7 @@ describe("gateway startup log", () => {
           },
         },
       },
+      env: {},
       manifestRecords,
       activationSourceConfig: {
         plugins: {
@@ -411,6 +403,7 @@ describe("gateway startup log", () => {
 
     await logGatewayStartup({
       cfg: {},
+      env: {},
       manifestRecords: [],
       bindHost: "127.0.0.1",
       bindHosts: ["127.0.0.1", "::1"],
