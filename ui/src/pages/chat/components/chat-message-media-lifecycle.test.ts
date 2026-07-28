@@ -5,6 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAssistantAttachmentAvailability } from "./chat-message-attachments.ts";
 import { renderMessageImages } from "./chat-message-images.ts";
 import {
+  isChatMediaResourceCurrent,
+  observeChatMediaResource,
+  readManagedImageBlobUrl,
   releaseChatMediaResourceSubscriber,
   type ImageRenderOptions,
   type RenderableImageBlock,
@@ -143,6 +146,51 @@ describe("chat media resource lifecycle", () => {
     expect(
       container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
     ).toBe(blobUrl);
+  });
+
+  it("evicts settled subscriber-free resources with their managed image blobs", async () => {
+    const NativeUrl = URL;
+    let blobIndex = 0;
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      class extends NativeUrl {
+        static override createObjectURL = vi.fn(() => `blob:bounded-managed-image-${blobIndex++}`);
+        static override revokeObjectURL = revokeObjectURL;
+      },
+    );
+    const fetchMock = vi.fn(async () => imageResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    const sources = Array.from({ length: 65 }, () => managedImageSource());
+    const resources = sources.map((source) => {
+      renderManagedImage(document.createElement("div"), source);
+      return observeChatMediaResource<string | null>("managed-image", `${source}::::`);
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(fetchMock).toHaveBeenCalledTimes(65);
+    expect(resources.filter((resource) => isChatMediaResourceCurrent(resource))).toHaveLength(64);
+    const oldestResource = resources[0];
+    const oldestSource = sources[0];
+    const latestSource = sources[64];
+    if (!oldestResource || !oldestSource || !latestSource) {
+      throw new Error("expected the oldest and newest managed images");
+    }
+    expect(isChatMediaResourceCurrent(oldestResource)).toBe(false);
+    expect(readManagedImageBlobUrl(`${oldestSource}::::`)).toBeUndefined();
+    expect(readManagedImageBlobUrl(`${latestSource}::::`)).toBe("blob:bounded-managed-image-64");
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:bounded-managed-image-0");
+
+    renderManagedImage(document.createElement("div"), latestSource);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledTimes(65);
+
+    renderManagedImage(document.createElement("div"), oldestSource);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledTimes(66);
+    expect(readManagedImageBlobUrl(`${oldestSource}::::`)).toBe("blob:bounded-managed-image-65");
   });
 
   it("shares a managed image retry and wakes both subscribed split panes", async () => {

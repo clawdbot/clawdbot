@@ -226,6 +226,13 @@ function trimManagedImageBlobUrlCache() {
     const evicted = managedImageBlobUrlResolvedCache.get(evictable);
     managedImageBlobUrlResolvedCache.delete(evictable);
     if (evicted) {
+      const resourceKey = chatMediaResourceKey("managed-image", evictable);
+      const resource = chatMediaResources.get(resourceKey);
+      // Subscriber-free successful resources share their blob's LRU lifetime.
+      // The promise finalizer may still be queued, but a matching value is settled.
+      if (resource?.value === evicted && resource.subscribers.size === 0) {
+        chatMediaResources.delete(resourceKey);
+      }
       URL.revokeObjectURL(evicted);
     }
   }
