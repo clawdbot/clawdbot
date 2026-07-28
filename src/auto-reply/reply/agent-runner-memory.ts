@@ -8,6 +8,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { isBenignCompactionSkipResult } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
@@ -255,32 +256,28 @@ function resolveMemoryFlushModelFallbackOptions(
   };
 }
 
-function followupUsesCliRuntime(params: {
+type FollowupRuntimeParams = {
   cfg: OpenClawConfig;
   followupRun: FollowupRun;
   sessionEntry?: Pick<
     SessionEntry,
-    "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked"
+    "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked" | "sessionId"
   >;
-}): boolean {
+  sessionKey?: string;
+  runtimePolicySessionKey?: string;
+};
+
+function followupUsesCliRuntime(params: FollowupRuntimeParams, runtimeId: string): boolean {
   const provider = params.followupRun.run.provider;
   if (isCliProvider(provider, params.cfg)) {
     return true;
   }
-  return isCliRuntimeAliasForProvider({
-    provider,
-    runtime: resolvePersistedSessionRuntimeId(params.sessionEntry),
-    cfg: params.cfg,
-  });
+  return [resolvePersistedSessionRuntimeId(params.sessionEntry), runtimeId].some((runtime) =>
+    isCliRuntimeAliasForProvider({ provider, runtime, cfg: params.cfg }),
+  );
 }
 
-function resolveFollowupContextConfigProvider(params: {
-  cfg: OpenClawConfig;
-  followupRun: FollowupRun;
-  sessionEntry?: SessionEntry;
-  sessionKey?: string;
-  runtimePolicySessionKey?: string;
-}): string {
+function resolveFollowupContextConfigProvider(params: FollowupRuntimeParams): string {
   const provider = params.followupRun.run.provider;
   return resolveContextConfigProviderForRuntime({
     provider,
@@ -289,13 +286,7 @@ function resolveFollowupContextConfigProvider(params: {
   });
 }
 
-function resolveFollowupAgentRuntimeId(params: {
-  cfg: OpenClawConfig;
-  followupRun: FollowupRun;
-  sessionEntry?: SessionEntry;
-  sessionKey?: string;
-  runtimePolicySessionKey?: string;
-}): string {
+function resolveFollowupAgentRuntimeId(params: FollowupRuntimeParams): string {
   const matchingSessionEntry =
     params.sessionEntry?.sessionId === params.followupRun.run.sessionId
       ? params.sessionEntry
@@ -314,14 +305,14 @@ function resolveFollowupAgentRuntimeId(params: {
   });
 }
 
-function followupUsesCodexRuntime(params: {
-  cfg: OpenClawConfig;
-  followupRun: FollowupRun;
-  sessionEntry?: SessionEntry;
-  sessionKey?: string;
-  runtimePolicySessionKey?: string;
-}): boolean {
-  return normalizeLowercaseStringOrEmpty(resolveFollowupAgentRuntimeId(params)) === "codex";
+function followupOwnsNativeCompaction(params: FollowupRuntimeParams, runtimeId: string): boolean {
+  // Backends that persist resumable native transcripts must remain the sole
+  // compaction owner; OpenClaw maintenance would corrupt that runtime state.
+  return (
+    resolveCliBackendConfig(runtimeId, params.cfg, {
+      agentId: params.followupRun.run.agentId,
+    })?.ownsNativeCompaction === true
+  );
 }
 
 function resolveVisibleMemoryFlushErrorPayloads(payloads?: ReplyPayload[]): ReplyPayload[] {
@@ -792,23 +783,20 @@ export async function runPreflightCompactionIfNeeded(params: {
     return entry ?? params.sessionEntry;
   }
 
-  const isCli = followupUsesCliRuntime({
+  const runtimeParams = {
     cfg: params.cfg,
     followupRun: params.followupRun,
     sessionEntry: entry,
-  });
-  if (params.isHeartbeat || isCli) {
+    sessionKey: params.sessionKey,
+    runtimePolicySessionKey: params.runtimePolicySessionKey,
+  };
+  const runtimeId = resolveFollowupAgentRuntimeId(runtimeParams);
+  const isCli = followupUsesCliRuntime(runtimeParams, runtimeId);
+  const ownsNativeCompaction = followupOwnsNativeCompaction(runtimeParams, runtimeId);
+  if (params.isHeartbeat || isCli || ownsNativeCompaction) {
     return entry ?? params.sessionEntry;
   }
-  if (
-    followupUsesCodexRuntime({
-      cfg: params.cfg,
-      followupRun: params.followupRun,
-      sessionEntry: entry,
-      sessionKey: params.sessionKey,
-      runtimePolicySessionKey: params.runtimePolicySessionKey,
-    })
-  ) {
+  if (normalizeLowercaseStringOrEmpty(runtimeId) === "codex") {
     // Codex runtime sessions should reach Codex with their real thread state.
     // Its harness owns automatic compaction; OpenClaw preflight compaction is
     // only for non-Codex embedded runtimes.
@@ -1170,11 +1158,17 @@ export async function runMemoryFlushIfNeeded(params: {
   if (entry?.incognito === true || isIncognitoSessionKey(params.sessionKey)) {
     return { sessionEntry: entry, outcome: "skipped" };
   }
-  const isCli = followupUsesCliRuntime({
+  const runtimeParams = {
     cfg: params.cfg,
     followupRun: params.followupRun,
     sessionEntry: entry,
-  });
+    sessionKey: params.sessionKey,
+    runtimePolicySessionKey: params.runtimePolicySessionKey,
+  };
+  const runtimeId = resolveFollowupAgentRuntimeId(runtimeParams);
+  const isCli =
+    followupUsesCliRuntime(runtimeParams, runtimeId) ||
+    followupOwnsNativeCompaction(runtimeParams, runtimeId);
   const canAttemptFlush = memoryFlushWritable && !params.isHeartbeat && !isCli;
   const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
     cfg: params.cfg,
