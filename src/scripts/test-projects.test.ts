@@ -122,6 +122,7 @@ describe("test-projects args", () => {
           "src/agents/openai-transport-stream.base.test.ts",
           "src/agents/openai-transport-stream.deepseek-and-shaping.test.ts",
           "src/agents/openai-transport-stream.incomplete-output.test.ts",
+          "src/agents/openai-transport-stream.incomplete-sse.test.ts",
           "src/agents/openai-transport-stream.inline-reasoning-and-tool-calls.test.ts",
           "src/agents/openai-transport-stream.reasoning-and-cache.test.ts",
           "src/agents/openai-transport-stream.replay-and-tools.test.ts",
