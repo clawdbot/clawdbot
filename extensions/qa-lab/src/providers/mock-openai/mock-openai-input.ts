@@ -135,7 +135,7 @@ export function isResponsesToolCallOutput(item: ResponsesInputItem) {
   return item.type === "function_call_output" || item.type === "custom_tool_call_output";
 }
 
-export function extractFunctionCallOutputText(item: ResponsesInputItem) {
+function extractFunctionCallOutputText(item: ResponsesInputItem) {
   if (!isResponsesToolCallOutput(item)) {
     return "";
   }

@@ -132,8 +132,11 @@ function sseToolCall(body: string, name: string) {
     }
     const event = requireRecord(JSON.parse(line.slice("data: ".length)) as unknown, "SSE event");
     const item = event.type === "response.output_item.done" ? event.item : undefined;
-    if (item && typeof item === "object" && !Array.isArray(item) && item.name === name) {
-      return item as Record<string, unknown>;
+    if (item && typeof item === "object" && !Array.isArray(item)) {
+      const itemRecord = item as Record<string, unknown>;
+      if (itemRecord.name === name) {
+        return itemRecord;
+      }
     }
   }
   throw new Error(`Expected ${name} SSE tool call`);
