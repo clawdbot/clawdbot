@@ -3,7 +3,11 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { captureEnv, deleteTestEnvValue, withEnvAsync } from "../test-utils/env.js";
-import { formatAgentModelStartupDetails, logGatewayStartup } from "./server-startup-log.js";
+import {
+  formatAgentModelStartupDetails,
+  formatAgentModelStartupLog,
+  logGatewayStartup,
+} from "./server-startup-log.js";
 
 const pluginRegistryMocks = vi.hoisted(() => ({
   loadPluginManifestRegistryForPluginRegistry: vi.fn(),
@@ -275,37 +279,26 @@ describe("gateway startup log", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("logs configured model thinking and fast mode defaults with the startup model", async () => {
-    const info = vi.fn();
-    const warn = vi.fn();
-
-    await logGatewayStartup({
-      cfg: {
-        agents: {
-          defaults: {
-            model: "openai/gpt-5.5",
-            models: {
-              "openai/gpt-5.5": {
-                params: {
-                  fastMode: true,
-                  thinking: "medium",
-                },
+  it("formats configured model thinking and fast mode defaults with the startup model", () => {
+    const modelLog = formatAgentModelStartupLog({
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+          models: {
+            "openai/gpt-5.5": {
+              params: {
+                fastMode: true,
+                thinking: "medium",
               },
             },
-            reasoningDefault: "stream",
           },
+          reasoningDefault: "stream",
         },
       },
-      bindHost: "127.0.0.1",
-      loadedPluginIds: [],
-      port: 18789,
-      log: { info, warn },
-      isNixMode: false,
     });
 
-    const firstInfoCall = info.mock.calls[0];
-    expect(firstInfoCall?.[0]).toBe("agent model: openai/gpt-5.5 (thinking=medium, fast=on)");
-    expect(stripAnsi(String(firstInfoCall?.[1]?.consoleMessage))).toBe(
+    expect(modelLog.message).toBe("agent model: openai/gpt-5.5 (thinking=medium, fast=on)");
+    expect(stripAnsi(modelLog.consoleMessage)).toBe(
       "agent model: openai/gpt-5.5 (thinking=medium, fast=on)",
     );
   });

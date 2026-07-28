@@ -43,19 +43,9 @@ export async function logGatewayStartup(params: {
   isNixMode: boolean;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }) {
-  const { provider: agentProvider, model: agentModel } = resolveConfiguredModelRef({
-    cfg: params.cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
-  const modelRef = `${agentProvider}/${agentModel}`;
-  const modelDetails = formatAgentModelStartupDetails({
-    cfg: params.cfg,
-    provider: agentProvider,
-    model: agentModel,
-  });
-  params.log.info(`agent model: ${modelRef} (${modelDetails})`, {
-    consoleMessage: `agent model: ${chalk.whiteBright(modelRef)} (${modelDetails})`,
+  const modelLog = formatAgentModelStartupLog(params.cfg);
+  params.log.info(modelLog.message, {
+    consoleMessage: modelLog.consoleMessage,
   });
   const startupDurationMs =
     typeof params.startupStartedAt === "number" ? Date.now() - params.startupStartedAt : null;
@@ -88,6 +78,24 @@ export async function logGatewayStartup(params: {
       "Run `openclaw security audit`.";
     params.log.warn(warning);
   }
+}
+
+/** Format the model banner without loading the asynchronous startup warning pipeline. */
+export function formatAgentModelStartupLog(cfg: OpenClawConfig): {
+  message: string;
+  consoleMessage: string;
+} {
+  const { provider, model } = resolveConfiguredModelRef({
+    cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
+  const modelRef = `${provider}/${model}`;
+  const modelDetails = formatAgentModelStartupDetails({ cfg, provider, model });
+  return {
+    message: `agent model: ${modelRef} (${modelDetails})`,
+    consoleMessage: `agent model: ${chalk.whiteBright(modelRef)} (${modelDetails})`,
+  };
 }
 
 /** Normalize model thinking values that are useful in the compact startup log. */
