@@ -9908,7 +9908,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What it does
   - H2: Why use it
   - H2: Quickstart
-  - H3: Enable Code Mode
+  - H3: Defaults and overrides
   - H3: What the model does
   - H3: Verify the active surface
   - H2: Use Swarm for agent fan-out
