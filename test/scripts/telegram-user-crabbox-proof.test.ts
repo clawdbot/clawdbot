@@ -197,7 +197,12 @@ describe("telegram user Crabbox proof log polling", () => {
         "openclaw-telegram-sut-test",
         "/tmp/openclaw-tg-crabbox-sut-test",
       ],
-      expect.objectContaining({ encoding: "utf8", stdio: "pipe" }),
+      expect.objectContaining({
+        encoding: "utf8",
+        killSignal: "SIGKILL",
+        stdio: "pipe",
+        timeout: 30_000,
+      }),
     );
 
     expect(() =>
