@@ -492,6 +492,8 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     const connectedStarted = connected && !this.gatewayConnected;
     const sourceOrClientChanged = gateway !== this.gatewaySource || client !== this.gatewayClient;
     const connectionChanged = connected !== this.gatewayConnected;
+    // Presence and auth snapshots must not retire this client's in-flight
+    // native or catalog pages unless its connection phase actually changes.
     if (!sourceOrClientChanged && !connectionChanged) {
       return;
     }

@@ -17,6 +17,58 @@ import {
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar session catalog pagination", () => {
+  it("keeps an in-flight catalog refresh across a stable same-client Gateway notification", async () => {
+    vi.useFakeTimers();
+    let provider: HTMLElement | undefined;
+    try {
+      // Shared UI workers retain real custom elements despite later module mocks.
+      await vi.importActual("../../components/sidebar-attention.ts");
+      const pendingPage = deferred<SessionsCatalogListResult>();
+      const request = vi.fn().mockReturnValue(pendingPage.promise);
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      expect(gateway.gateway.connection).toEqual({
+        gatewayUrl: "ws://gateway.test",
+        token: "",
+        bootstrapToken: "",
+        password: "",
+      });
+      gateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      const mounted = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+      );
+      const { sidebar } = mounted;
+      provider = mounted.provider;
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(request).toHaveBeenCalledTimes(1);
+      const generation = sidebar.sessionData.sessionScopeGeneration;
+
+      gateway.publish({ offlineStable: true });
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(sidebar.sessionData.sessionScopeGeneration).toBe(generation);
+      expect(request).toHaveBeenCalledTimes(1);
+
+      pendingPage.resolve(catalogPage([{ threadId: "thread-1", name: "Current session" }]));
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+
+      expect(sidebar.textContent).toContain("Current session");
+      expect(request).toHaveBeenCalledTimes(1);
+    } finally {
+      provider?.remove();
+      vi.useRealTimers();
+    }
+  });
+
   it("retires visible catalog rows and expanded cursors when the agent changes", async () => {
     vi.useFakeTimers();
     try {

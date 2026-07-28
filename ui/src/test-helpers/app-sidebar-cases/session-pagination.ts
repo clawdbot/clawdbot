@@ -14,6 +14,42 @@ import "../../components/app-sidebar.ts";
 
 describe("AppSidebar gateway session pagination", () => {
   it.each(["archived", "all"] as const)(
+    "keeps a pending %s first page across a stable same-client Gateway notification",
+    async (statusFilter) => {
+      const harness = createSessionsHarness("main", ["agent:main:canonical-active"]);
+      const result = createSessionState("main", ["agent:main:current-archive"]).result;
+      if (!result) {
+        throw new Error("expected a scoped session result");
+      }
+      const pendingPage = deferred<typeof result>();
+      harness.list.mockImplementation(async () => await pendingPage.promise);
+      const gateway = createGatewayHarness({} as GatewayBrowserClient);
+      const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
+      (sidebar as unknown as { sessionsStatusFilter: "archived" | "all" }).sessionsStatusFilter =
+        statusFilter;
+      sidebar.sessionData.resetForStatusFilter(statusFilter);
+
+      const pendingRefresh = sidebar.sessionData.refreshSidebarSessions("main");
+      const generation = sidebar.sessionData.sessionScopeGeneration;
+
+      gateway.publish({ offlineStable: true });
+      await sidebar.updateComplete;
+
+      expect(sidebar.sessionData.sessionScopeGeneration).toBe(generation);
+      expect(harness.list).toHaveBeenCalledTimes(1);
+
+      pendingPage.resolve(result);
+      await pendingRefresh;
+      await sidebar.updateComplete;
+
+      expect(sidebar.sessionData.sessionsAgentId).toBe("main");
+      expect(sidebar.sessionData.sessionsResult?.sessions.map((row) => row.key)).toEqual([
+        "agent:main:current-archive",
+      ]);
+    },
+  );
+
+  it.each(["archived", "all"] as const)(
     "retires a pending %s first page when the selected agent changes",
     async (statusFilter) => {
       const harness = createSessionsHarness("main", ["agent:main:canonical-active"]);
