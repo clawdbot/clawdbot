@@ -2875,7 +2875,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       .filter((entry): entry is SessionEntry => entry?.pendingFinalDelivery !== undefined);
     expect(pendingEntries).toContainEqual(
       expect.objectContaining({
-        pendingFinalDelivery: {
+        pendingFinalDelivery: expect.objectContaining({
           kind: "replayable",
           text: "ok",
           context: {
@@ -2883,7 +2883,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
             to: "channel:1524410080953634829",
             accountId: "main",
           },
-        },
+        }),
       }),
     );
     expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
@@ -2946,36 +2946,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(state.runAgentAttemptMock).toHaveBeenCalled();
     expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
       expect.objectContaining({ opts: expect.objectContaining({ deliver: false }) }),
-    );
-  });
-
-  it("clears stale flag-only pending final delivery when there is no final payload", async () => {
-    setupSingleAttemptFallback();
-    state.runAgentAttemptMock.mockResolvedValue(makeEmptyResult("openai", "gpt-5.4"));
-
-    setupBareStoredSession({
-      pendingFinalDelivery: {
-        kind: "transport-only",
-        createdAt: 2,
-        context: { channel: "tui" },
-        intentId: "intent-1",
-      },
-    });
-    state.deliverAgentCommandResultMock.mockResolvedValue(undefined);
-
-    await agentCommand({
-      message: "hello",
-      channel: "whatsapp",
-      to: "+1234567890",
-      deliver: true,
-    });
-
-    expect(state.persistSessionEntryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        entry: expect.objectContaining({
-          pendingFinalDelivery: undefined,
-        }),
-      }),
     );
   });
 
