@@ -264,6 +264,24 @@ describe("continuation tool registration", { timeout: 240000 }, () => {
     expect(properties).toHaveProperty("targetSessionKey");
     expect(properties).toHaveProperty("targetSessionKeys");
     expect(properties).toHaveProperty("fanoutMode");
+
+    const attachmentsProp = properties.attachments as {
+      type?: string;
+      items?: { properties?: Record<string, unknown> };
+    };
+    expect(attachmentsProp.type).toBe("array");
+    expect(attachmentsProp.items?.properties).toEqual(
+      expect.objectContaining({
+        name: expect.anything(),
+        content: expect.anything(),
+        encoding: expect.anything(),
+        mimeType: expect.anything(),
+      }),
+    );
+    const attachAsProp = properties.attachAs as {
+      properties?: Record<string, unknown>;
+    };
+    expect(attachAsProp.properties).toHaveProperty("mountPath");
   });
 
   // Truth-table coverage for request_compaction registration. Pins the

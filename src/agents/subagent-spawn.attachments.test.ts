@@ -350,6 +350,47 @@ describe("spawnSubagentDirect filename validation", () => {
     expect(callGatewayMock).not.toHaveBeenCalledWith(expect.objectContaining({ method: "agent" }));
   });
 
+  it("fails closed at child spawn if policy changes after a snapshot was accepted", async () => {
+    const attachmentContent = "POLICY_CHANGED_SNAPSHOT_MUST_NOT_ECHO";
+    const snapshot = [{ name: "handoff.txt", content: attachmentContent }];
+
+    const accepted = await subagentSpawnModule.spawnSubagentDirect(
+      {
+        task: "accept the snapshot under the original policy",
+        attachments: snapshot,
+      },
+      ctx,
+    );
+    expect(accepted.status).toBe("accepted");
+
+    configOverride = createSubagentSpawnTestConfig(workspaceDirOverride, {
+      tools: { sessions_spawn: { attachments: { enabled: false } } },
+    });
+    callGatewayMock.mockClear();
+
+    const result = await subagentSpawnModule.spawnSubagentDirect(
+      {
+        task: "materialize the previously accepted snapshot",
+        attachments: snapshot,
+      },
+      ctx,
+    );
+
+    expect(result).toMatchObject({
+      status: "forbidden",
+      error:
+        "attachments are disabled for sessions_spawn (enable tools.sessions_spawn.attachments.enabled)",
+    });
+    expect(JSON.stringify(result)).not.toContain(attachmentContent);
+    // The provisional child is deliberately cleaned up after the current
+    // policy rejects materialization; no child agent run begins.
+    expect(
+      callGatewayMock.mock.calls.filter(
+        ([request]) => (request as { method?: string }).method === "agent",
+      ),
+    ).toHaveLength(0);
+  });
+
   it("normalizes explicit cwd before materializing native subagent attachments", async () => {
     const homeDir = fs.mkdtempSync(
       path.join(os.tmpdir(), `openclaw-subagent-home-attachments-${process.pid}-${Date.now()}-`),

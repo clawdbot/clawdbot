@@ -1,5 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { createOpenClawTools } from "../../agents/openclaw-tools.js";
+import "../../agents/test-helpers/fast-openclaw-tools.js";
+import { createPerSenderSessionConfig } from "../../agents/test-helpers/session-config.js";
 import {
   extractContinuationSignal,
   parseContinuationSignal,
@@ -41,6 +44,51 @@ function makeReturnDeliveryDeps() {
 }
 
 describe("continuation RFC contract scenarios", () => {
+  describe("RFC §A.5 typed delegate input attachments", () => {
+    it("keeps attachment input on the typed child-spawn surface and out of fallback grammar", () => {
+      const tools = createOpenClawTools({
+        config: {
+          session: createPerSenderSessionConfig(),
+          agents: { defaults: { continuation: { enabled: true } } },
+        },
+        agentSessionKey: ROOT_SESSION,
+      });
+      const delegate = tools.find((tool) => tool.name === "continue_delegate");
+      if (!delegate) {
+        throw new Error("continue_delegate tool not registered");
+      }
+
+      const properties = (delegate.parameters as { properties?: Record<string, unknown> })
+        .properties;
+      expect(properties).toEqual(
+        expect.objectContaining({
+          attachments: expect.anything(),
+          attachAs: expect.anything(),
+        }),
+      );
+      expect(
+        (properties?.attachments as { items?: { properties?: Record<string, unknown> } })?.items
+          ?.properties,
+      ).toEqual(
+        expect.objectContaining({
+          name: expect.anything(),
+          content: expect.anything(),
+          encoding: expect.anything(),
+          mimeType: expect.anything(),
+        }),
+      );
+      expect(
+        (properties?.attachAs as { properties?: Record<string, unknown> })?.properties,
+      ).toHaveProperty("mountPath");
+
+      const token = parseContinuationSignal(
+        "[[CONTINUE_DELEGATE: inspect the existing workspace file | attachment=not-a-tool-field]]",
+      );
+      expect(token).toMatchObject({ kind: "delegate" });
+      expect(token?.kind === "delegate" && token.task).toContain("attachment=not-a-tool-field");
+    });
+  });
+
   describe("RFC §2.2/§2.6 interface and token fallback", () => {
     it("response-token fallback only covers continue_work and continue_delegate", () => {
       expect(parseContinuationSignal("done\nCONTINUE_WORK:30")).toEqual({
