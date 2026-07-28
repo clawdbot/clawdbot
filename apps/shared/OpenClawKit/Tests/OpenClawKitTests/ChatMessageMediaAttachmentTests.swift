@@ -35,7 +35,7 @@ struct ChatMessageMediaAttachmentTests {
         #expect(image.isInlineAttachment)
     }
 
-    @Test func `distinct images never reconcile as the same final message`() {
+    @Test @MainActor func `distinct images never reconcile as the same final message`() {
         let first = Self.message(artifactId: "artifact_managed_image_11111111-1111-4111-8111-111111111111")
         let second = Self.message(artifactId: "artifact_managed_image_22222222-2222-4222-8222-222222222222")
 
@@ -90,6 +90,7 @@ struct ChatMessageMediaAttachmentTests {
                     artifactId: artifactId,
                     url: "/api/chat/media/outgoing/main/\(artifactId)/full",
                     content: nil),
-            ])
+            ],
+            timestamp: nil)
     }
 }
