@@ -689,6 +689,36 @@ describe("OpenAI-compatible completions compatibility", () => {
       expected: proxyResolvedCompat,
     },
     {
+      name: "custom deployment id with an OpenAI display name on an Azure Foundry host",
+      model: createModel({
+        id: "prod-spud",
+        name: "GPT-5.5 (Azure)",
+        provider: "azure-openai",
+        baseUrl: "https://example.services.ai.azure.com/openai/v1",
+      }),
+      expected: { ...proxyResolvedCompat, supportsPromptCacheKey: true },
+    },
+    {
+      name: "custom deployment id with a bare OpenAI model name on an Azure Foundry host",
+      model: createModel({
+        id: "deployment-gpt5",
+        name: "gpt-5.4",
+        provider: "azure-openai",
+        baseUrl: "https://example.services.ai.azure.com/openai/v1",
+      }),
+      expected: { ...proxyResolvedCompat, supportsPromptCacheKey: true },
+    },
+    {
+      name: "gpt-oss display name on an Azure Foundry host",
+      model: createModel({
+        id: "serverless-oss-a1",
+        name: "GPT-OSS 120B",
+        provider: "azure-openai",
+        baseUrl: "https://example.services.ai.azure.com/openai/v1",
+      }),
+      expected: proxyResolvedCompat,
+    },
+    {
       name: "non-OpenAI deployment on a dedicated Azure OpenAI host",
       model: createModel({
         id: "my-custom-deployment",

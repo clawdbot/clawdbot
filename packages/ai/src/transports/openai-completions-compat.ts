@@ -20,6 +20,7 @@ type OpenAICompletionsSessionAffinity = "none" | "openai" | "openrouter";
 type OpenAICompletionsCompatDefaultsInput = {
   provider?: string;
   modelId?: string;
+  modelName?: string;
   baseUrl?: string;
   endpointClass: ProviderEndpointClass;
   knownProviderFamily: string;
@@ -69,23 +70,33 @@ function isDefaultRouteProvider(provider: string | undefined, ...ids: string[]) 
 /**
  * Azure AI Foundry resources front arbitrary model vendors, so on those hosts
  * the prompt-cache-key default only applies to deployments that look like
- * first-party OpenAI models. `gpt-oss` is the open-weight family served via
- * serverless inference, not an Azure OpenAI deployment, so it stays excluded.
+ * first-party OpenAI models. Foundry deployment ids are operator-chosen (for
+ * example `prod-spud`), so the display-name metadata counts as well. `gpt-oss`
+ * is the open-weight family served via serverless inference, not an Azure
+ * OpenAI deployment, so it stays excluded on both fields.
  */
-function isOpenAIFamilyFoundryDeployment(modelId: string | undefined): boolean {
-  if (!modelId) {
-    return false;
-  }
-  const tail = modelId.slice(modelId.lastIndexOf("/") + 1).toLowerCase();
-  if (tail.startsWith("gpt-oss")) {
+function isOpenAIFamilyFoundryDeployment(
+  modelId: string | undefined,
+  modelName: string | undefined,
+): boolean {
+  const idTail = modelId === undefined ? undefined : modelId.slice(modelId.lastIndexOf("/") + 1);
+  return matchesOpenAIFamilyModelToken(idTail) || matchesOpenAIFamilyModelToken(modelName);
+}
+
+/**
+ * Matches deployment ids and display names alike, so separators cover both id
+ * style (`o3-mini`) and name style (`GPT-5.5 (Azure)`, `Codex Mini`).
+ */
+function matchesOpenAIFamilyModelToken(token: string | undefined): boolean {
+  const normalized = token?.trim().toLowerCase();
+  if (!normalized || normalized.startsWith("gpt-oss")) {
     return false;
   }
   return (
-    tail.startsWith("gpt-") ||
-    tail.startsWith("chatgpt-") ||
-    tail === "codex" ||
-    tail.startsWith("codex-") ||
-    /^o\d+(?:[.-]|$)/.test(tail)
+    normalized.startsWith("gpt-") ||
+    normalized.startsWith("chatgpt-") ||
+    /^codex(?:[-\s(]|$)/.test(normalized) ||
+    /^o\d+(?:[-.\s(]|$)/.test(normalized)
   );
 }
 
@@ -112,6 +123,7 @@ function resolveOpenAICompletionsCompatDefaults(
   const {
     provider,
     modelId,
+    modelName,
     endpointClass,
     knownProviderFamily,
     supportsNativeStreamingUsageCompat = false,
@@ -176,7 +188,7 @@ function resolveOpenAICompletionsCompatDefaults(
     (baseUrlHostname !== undefined &&
       (isDedicatedAzureOpenAIHostname(baseUrlHostname) ||
         (isAzureFoundryMultiModelHostname(baseUrlHostname) &&
-          isOpenAIFamilyFoundryDeployment(modelId))));
+          isOpenAIFamilyFoundryDeployment(modelId, modelName))));
   const usesMaxTokens =
     endpointClass === "chutes-native" ||
     endpointClass === "mistral-public" ||
@@ -249,6 +261,7 @@ function resolveOpenAICompletionsCompatDefaultsFromCapabilities(
   > & {
     provider?: string;
     modelId?: string;
+    modelName?: string;
     baseUrl?: string;
   },
 ): OpenAICompletionsCompatDefaults {
@@ -258,6 +271,7 @@ function resolveOpenAICompletionsCompatDefaultsFromCapabilities(
 /** Detects endpoint capabilities and defaults for an OpenAI-completions model. */
 export function detectOpenAICompletionsCompat(
   model: Pick<Model<"openai-completions">, "provider" | "baseUrl" | "id"> & {
+    name?: string;
     compat?: { supportsStore?: boolean } | null;
   },
   resolveCapabilities?: (input: AiProviderRequestPolicyInput) => ProviderRequestCapabilities,
@@ -281,6 +295,7 @@ export function detectOpenAICompletionsCompat(
     defaults: resolveOpenAICompletionsCompatDefaultsFromCapabilities({
       provider: model.provider,
       modelId: model.id,
+      modelName: model.name,
       baseUrl: model.baseUrl,
       ...capabilities,
     }),
