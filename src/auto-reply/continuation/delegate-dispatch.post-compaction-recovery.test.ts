@@ -434,6 +434,9 @@ describe("recoverAndReleaseStagedPostCompactionDelegates", () => {
     expect(mockFlows.get(thrown?.flowId as string)).toMatchObject({ status: "running" });
     expect(removeUnacceptedDelegateArtifactPolicyMock).toHaveBeenCalledTimes(1);
     expect(removeUnacceptedDelegateArtifactPolicyMock).toHaveBeenCalledWith(forbidden?.flowId);
+    expect(spawnSubagentDirectMock.mock.calls[0]?.[0]).toMatchObject({
+      task: expect.stringContaining("[Managed delegate return]"),
+    });
   });
 
   it("requeues awaiting-next-compaction running rows on startup recovery", async () => {
@@ -550,6 +553,44 @@ describe("recoverAndReleaseStagedPostCompactionDelegates", () => {
     });
     // The accepted row is finalized (terminal) so it cannot replay.
     expect(mockFlows.get(flowId)).toMatchObject({ status: "succeeded" });
+    expect(listRecoverableStagedPostCompactionDelegates()).toHaveLength(0);
+  });
+
+  it("terminalizes a post-compaction delegate cancelled after claim but before direct spawn", async () => {
+    const sessionKey = "agent:main:subagent:pc-cancelled-before-spawn";
+    stagePostCompactionTaskFlowDelegate(sessionKey, {
+      task: "must not rehydrate after cancellation",
+      stagedAt: Date.now(),
+      returnOptions: { artifacts: "required" },
+    });
+    const claimed = claimStagedPostCompactionTaskFlowDelegates(sessionKey);
+    const flowId = claimed[0]?.flowId;
+    expect(flowId).toBeDefined();
+    const flow = expectDefined(mockFlows.get(flowId as string), "claimed flow");
+    flow.stateJson = {
+      ...(flow.stateJson as Record<string, unknown>),
+      attachments: [{ name: "private.md", content: "RECOVERY_CANCELLED_SECRET" }],
+      attachAs: { mountPath: "handoff" },
+    };
+    flow.cancelRequestedAt = Date.now();
+    flow.revision = Number(flow.revision) + 1;
+
+    const result = await dispatchStagedPostCompactionDelegates(claimed, sessionKey, {
+      agentSessionKey: sessionKey,
+    });
+
+    expect(result).toMatchObject({
+      dispatched: 0,
+      failed: 1,
+      terminalRejectedFlowIds: [flowId],
+      transientFailedFlowIds: [],
+    });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(flow).toMatchObject({ status: "failed" });
+    expect(flow.stateJson).not.toHaveProperty("attachments");
+    expect(flow.stateJson).not.toHaveProperty("attachAs");
+    expect(JSON.stringify(flow.stateJson)).not.toContain("RECOVERY_CANCELLED_SECRET");
+    expect(removeUnacceptedDelegateArtifactPolicyMock).toHaveBeenCalledWith(flowId);
     expect(listRecoverableStagedPostCompactionDelegates()).toHaveLength(0);
   });
 
