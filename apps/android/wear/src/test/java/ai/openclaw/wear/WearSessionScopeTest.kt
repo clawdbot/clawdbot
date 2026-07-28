@@ -102,6 +102,58 @@ class WearSessionScopeTest {
   }
 
   @Test
+  fun delayedSessionActionsRequireTheOriginalPhoneAndSession() {
+    val requested =
+      WearSession(
+        key = "agent:main",
+        title = "Main",
+        updatedAt = null,
+        hasActiveRun = false,
+        phoneNodeId = "phone-a",
+        modelRef = "openai/model-a",
+      )
+
+    assertTrue(
+      wearSessionActionIsCurrent(
+        requested,
+        WearUiState(phoneNodeId = "phone-a", selectedSession = requested),
+        requestedRouteGeneration = 3,
+        currentRouteGeneration = 3,
+      ),
+    )
+    assertFalse(
+      wearSessionActionIsCurrent(
+        requested,
+        WearUiState(
+          phoneNodeId = "phone-b",
+          selectedSession = requested.copy(phoneNodeId = "phone-b"),
+        ),
+        requestedRouteGeneration = 3,
+        currentRouteGeneration = 4,
+      ),
+    )
+    assertFalse(
+      wearSessionActionIsCurrent(
+        requested,
+        WearUiState(
+          phoneNodeId = "phone-a",
+          selectedSession = requested.copy(key = "agent:other"),
+        ),
+        requestedRouteGeneration = 3,
+        currentRouteGeneration = 3,
+      ),
+    )
+    assertFalse(
+      wearSessionActionIsCurrent(
+        requested,
+        WearUiState(phoneNodeId = "phone-a", selectedSession = requested),
+        requestedRouteGeneration = 3,
+        currentRouteGeneration = 5,
+      ),
+    )
+  }
+
+  @Test
   fun snapshotResponsesRequireTheSamePhoneAndEventStream() {
     assertEquals(true, wearSnapshotSourcesMatch("phone-a", "stream-a", "phone-a", "stream-a"))
     assertEquals(false, wearSnapshotSourcesMatch("phone-a", "stream-a", "phone-b", "stream-a"))

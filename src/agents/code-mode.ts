@@ -335,8 +335,6 @@ export function addClientToolsToCodeModeCatalog(params: {
 }
 
 /** Test-only hooks and state accessors for Code Mode worker orchestration. */
-
-/** Test-only hooks and state accessors for Code Mode worker orchestration. */
 const testing = {
   activeRuns,
   resumingRunIds,
