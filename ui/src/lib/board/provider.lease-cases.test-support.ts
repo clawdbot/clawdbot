@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { t } from "../../i18n/index.ts";
 import { acquireBoardProviderForSession, mcpAppWidgetNameForViewId } from "./provider.ts";
 
 export function registerBoardProviderLeaseCases(disableMockBoard: () => void): void {
@@ -83,7 +84,14 @@ export function registerBoardProviderLeaseCases(disableMockBoard: () => void): v
     const snapshot = {
       sessionKey,
       revision: 1,
-      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
+      tabs: [
+        {
+          tabId: "main",
+          title: t("chat.board.defaultTab"),
+          position: 0,
+          chatDock: "right" as const,
+        },
+      ],
       widgets: [
         {
           name: "pending-widget",
