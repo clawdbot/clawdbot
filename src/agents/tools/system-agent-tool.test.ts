@@ -326,6 +326,12 @@ describe("openclaw tool", () => {
     expect(toolText(search)).toContain("never ask for or repeat a credential");
     expect(directiveRef.current).toEqual({ kind: "search-setup" });
 
+    const gateway = await tool.execute("t5-gateway", { action: "configure_gateway" });
+    expect(toolText(gateway)).toContain("directive:");
+    expect(toolText(gateway)).toContain("local Gateway configuration");
+    expect(toolText(gateway)).toContain("never ask for or repeat a credential");
+    expect(directiveRef.current).toEqual({ kind: "gateway-config-setup" });
+
     const configureModel = await tool.execute("t6", {
       action: "configure_model_provider",
       workspace: "/tmp/work",
@@ -360,6 +366,13 @@ describe("openclaw tool", () => {
     expect(toolText(guidedSetup)).toContain("cannot run inside OpenClaw");
     expect(toolText(guidedSetup)).toContain("openclaw onboard");
     expect(directiveRef.current).toEqual({ kind: "open-setup", target: "guided" });
+
+    const gatewaySetup = await tool.execute("t9", {
+      action: "open_setup",
+      target: "gateway",
+    });
+    expect(toolText(gatewaySetup)).toContain("masked terminal Gateway setup");
+    expect(directiveRef.current).toEqual({ kind: "open-setup", target: "gateway" });
 
     // Directives are host handoffs, never operation executions.
     expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
@@ -400,6 +413,12 @@ describe("openclaw tool", () => {
     ).toEqual({ kind: "search-setup" });
     expect(
       resolveSystemAgentDirectiveTransition({
+        args: { action: "configure_gateway" },
+        resultText: "directive: the host chat starts local Gateway setup.",
+      }),
+    ).toEqual({ kind: "gateway-config-setup" });
+    expect(
+      resolveSystemAgentDirectiveTransition({
         args: { action: "open_agent" },
         resultText: "directive: the host now hands the user over.",
       }),
@@ -423,6 +442,12 @@ describe("openclaw tool", () => {
         resultText: "directive: the host opens masked search setup.",
       }),
     ).toEqual({ kind: "open-setup", target: "search" });
+    expect(
+      resolveSystemAgentDirectiveTransition({
+        args: { action: "open_setup", target: "gateway" },
+        resultText: "directive: the host opens masked Gateway setup.",
+      }),
+    ).toEqual({ kind: "open-setup", target: "gateway" });
     // Non-directive results and other actions never mirror.
     expect(
       resolveSystemAgentDirectiveTransition({ args: { action: "status" }, resultText: "ok" }),
