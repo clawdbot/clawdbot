@@ -44,7 +44,7 @@ export type CodeModeNamespaceDescriptor = {
   scope: SerializedCodeModeNamespaceValue;
 };
 
-export type CodeModeWorkerInput =
+type CodeModeWorkerInput =
   | {
       kind: "exec";
       source: string;
