@@ -5,6 +5,8 @@ import type { Model } from "../../types.js";
 import { githubCopilotOAuthProvider } from "./github-copilot.js";
 import type { OAuthCredentials } from "./types.js";
 
+type FetchImplementation = (...args: Parameters<typeof fetch>) => Promise<Response>;
+
 function startGitHubCopilotLogin(enterpriseUrl = "", signal?: AbortSignal) {
   return githubCopilotOAuthProvider.login({
     onAuth: vi.fn(),
@@ -58,7 +60,7 @@ async function finishGitHubCopilotLogin(login: Promise<OAuthCredentials>) {
 }
 
 function startGitHubCopilotLoginAtTokenExchange(
-  tokenExchangeFetch: (...args: Parameters<typeof fetch>) => Promise<Response>,
+  tokenExchangeFetch: FetchImplementation,
   enterpriseUrl = "",
 ): {
   fetchMock: ReturnType<typeof vi.fn>;
@@ -80,7 +82,7 @@ function abortListenerCount(signal: AbortSignal): number {
   return getEventListeners(signal, "abort").length;
 }
 
-function createHangingFetch(timeoutMs: number): ReturnType<typeof vi.fn> {
+function createHangingFetch(timeoutMs: number): FetchImplementation {
   vi.spyOn(AbortSignal, "timeout").mockImplementation((actualTimeoutMs) => {
     expect(actualTimeoutMs).toBe(timeoutMs);
     const controller = new AbortController();
