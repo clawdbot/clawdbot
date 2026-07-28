@@ -365,8 +365,9 @@ export class BrowserPanelController implements ReactiveController {
       }
       return "rejected";
     } catch {
-      // Tab strip staleness is tolerable; the next full refresh reconciles it.
-      return "failed";
+      // Best-effort tab reconciliation must not let an older failure settle
+      // loading or advance a document owned by a newer operation.
+      return current() && invocation.isCurrent() ? "failed" : "rejected";
     }
   }
 
@@ -407,7 +408,7 @@ export class BrowserPanelController implements ReactiveController {
         return;
       }
       if (this.activeTargetId !== targetId) {
-        if (snapshot === "accepted" && !this.operations.hasPendingCapture) {
+        if (snapshot !== "rejected" && !this.operations.hasPendingCapture) {
           this.setState("loading", false);
         }
         return;

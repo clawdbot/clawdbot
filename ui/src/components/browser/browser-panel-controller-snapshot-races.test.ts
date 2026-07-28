@@ -13,6 +13,123 @@ import {
 setupBrowserPanelTestCleanup();
 
 describe("BrowserPanelController superseded tab snapshots", () => {
+  it.each(["before", "after"] as const)(
+    "settles loading when a superseded refresh fails %s a background-close snapshot",
+    async (olderFailureOrder) => {
+      const activeUrl = "https://example.test/active";
+      const previousSnapshot = createDeferred<unknown>();
+      const closeSnapshot = createDeferred<unknown>();
+      let snapshotCount = 0;
+      const { client, request } = createBrowserClient(async (envelope) => {
+        if (envelope.method === "DELETE" && envelope.path === "/tabs/background-tab") {
+          return { ok: true };
+        }
+        if (envelope.path === "/tabs") {
+          snapshotCount += 1;
+          return await (snapshotCount === 1 ? previousSnapshot : closeSnapshot).promise;
+        }
+        throw new Error(`Unexpected browser route: ${envelope.method} ${envelope.path}`);
+      });
+      const controller = createBrowserPanelTestController(client, "active-tab", activeUrl);
+      const previousView = controller.view;
+      controller.tabs = [
+        {
+          id: "active-tab",
+          targetId: "raw-active",
+          title: "Active",
+          url: activeUrl,
+        },
+        {
+          id: "background-tab",
+          targetId: "raw-background",
+          title: "Background",
+          url: "https://example.test/background",
+        },
+      ];
+
+      const refresh = controller.refreshAll();
+      await flushBrowserResponses();
+      expect(controller.loading).toBe(true);
+
+      const close = controller.closeTab("background-tab");
+      await flushBrowserResponses();
+
+      if (olderFailureOrder === "before") {
+        previousSnapshot.reject(new Error("Superseded tab snapshot failed"));
+        await refresh;
+      }
+
+      closeSnapshot.reject(new Error("Background close tab snapshot failed"));
+      await close;
+
+      expect(controller.activeTargetId).toBe("active-tab");
+      expect(controller.view).toBe(previousView);
+      expect(controller.loading).toBe(false);
+      expect(controller.errorText).toBeNull();
+
+      if (olderFailureOrder === "after") {
+        previousSnapshot.reject(new Error("Superseded tab snapshot failed"));
+        await refresh;
+      }
+
+      expect(snapshotCount).toBe(2);
+      expect(controller.loading).toBe(false);
+      expect(controller.errorText).toBeNull();
+      expect(
+        request.mock.calls.some(([, envelope]) => {
+          return (envelope as { path?: string }).path === "/screenshot";
+        }),
+      ).toBe(false);
+    },
+  );
+
+  it("does not let a failed background close clear a newer full refresh", async () => {
+    const activeUrl = "https://example.test/active";
+    const previousSnapshot = createDeferred<unknown>();
+    const closeSnapshot = createDeferred<unknown>();
+    const latestSnapshot = createDeferred<unknown>();
+    let snapshotCount = 0;
+    const { client } = createBrowserClient(async (envelope) => {
+      if (envelope.method === "DELETE" && envelope.path === "/tabs/background-tab") {
+        return { ok: true };
+      }
+      if (envelope.path === "/tabs") {
+        const snapshot = [previousSnapshot, closeSnapshot, latestSnapshot][snapshotCount];
+        snapshotCount += 1;
+        if (!snapshot) {
+          throw new Error("Unexpected additional tab snapshot");
+        }
+        return await snapshot.promise;
+      }
+      throw new Error(`Unexpected browser route: ${envelope.method} ${envelope.path}`);
+    });
+    const controller = createBrowserPanelTestController(client, "active-tab", activeUrl);
+    const previousView = controller.view;
+
+    const previousRefresh = controller.refreshAll();
+    await flushBrowserResponses();
+    const close = controller.closeTab("background-tab");
+    await flushBrowserResponses();
+    const latestRefresh = controller.refreshAll();
+    await flushBrowserResponses();
+
+    closeSnapshot.reject(new Error("Superseded background close tab snapshot failed"));
+    await close;
+
+    expect(controller.loading).toBe(true);
+    expect(controller.view).toBe(previousView);
+    expect(controller.errorText).toBeNull();
+
+    latestSnapshot.resolve({ running: true, tabs: [] });
+    await latestRefresh;
+    previousSnapshot.reject(new Error("Superseded first tab snapshot failed"));
+    await previousRefresh;
+
+    expect(snapshotCount).toBe(3);
+    expect(controller.loading).toBe(false);
+    expect(controller.errorText).toBeNull();
+  });
+
   it.each(["reject", "resolve"] as const)(
     "does not let a stale snapshot start a capture that %ss during a new-tab mutation",
     async (completion) => {
