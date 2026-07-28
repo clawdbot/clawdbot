@@ -164,11 +164,9 @@ describe("chat media resource lifecycle", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const container = document.createElement("div");
-    const sources = Array.from({ length: 65 }, () => managedImageSource());
-    let currentSource = sources[0];
-    if (!currentSource) {
-      throw new Error("expected a managed image source");
-    }
+    const firstSource = managedImageSource();
+    const sources = [firstSource, ...Array.from({ length: 64 }, () => managedImageSource())];
+    let currentSource = firstSource;
     const rerender = observeSubscriber(() =>
       renderManagedImage(container, currentSource, { onRequestUpdate: rerender }),
     );
