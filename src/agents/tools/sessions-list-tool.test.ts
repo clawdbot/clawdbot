@@ -56,6 +56,7 @@ type SessionsListDetails = {
     archived?: boolean;
     pinned?: boolean;
     stateVersion?: number;
+    messages?: unknown[];
     [key: string]: unknown;
   }>;
 };

@@ -449,7 +449,9 @@ export function createSessionsListTool(opts?: {
               params: { sessionKey: target.resolvedKey, limit: messageLimit },
             });
             const rawMessages = Array.isArray(history?.messages) ? history.messages : [];
-            const filtered = projectVisibleChatTranscriptMessages(rawMessages);
+            const filtered = projectVisibleChatTranscriptMessages(rawMessages, {
+              stripDeliveryMirrorMetadata: true,
+            });
             target.row.messages =
               filtered.length > messageLimit ? filtered.slice(-messageLimit) : filtered;
           },

@@ -161,7 +161,7 @@ function stripDeliveryMirrorMetadata(message: Record<string, unknown>): Record<s
 
 export function projectVisibleChatTranscriptMessages(
   messages: unknown[],
-  options?: { maxChars?: number; stripEnvelope?: boolean },
+  options?: { maxChars?: number; stripEnvelope?: boolean; stripDeliveryMirrorMetadata?: boolean },
 ): Array<Record<string, unknown>> {
   const projected = projectChatDisplayMessages(messages, options);
   const replacedMirrorIndexes = replacedDeliveryMirrorIndexes(projected);
@@ -204,5 +204,7 @@ export function projectVisibleChatTranscriptMessages(
       }
       return true;
     })
-    .map(stripDeliveryMirrorMetadata);
+    .map((message) =>
+      options?.stripDeliveryMirrorMetadata === true ? stripDeliveryMirrorMetadata(message) : message,
+    );
 }
