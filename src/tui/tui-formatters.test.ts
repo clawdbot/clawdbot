@@ -60,6 +60,142 @@ describe("formatGoalFooter", () => {
 });
 
 describe("extractTextFromMessage", () => {
+  it.each([
+    {
+      name: "a browser image block",
+      content: [
+        {
+          type: "image",
+          url: "/persisted-image.png",
+          source: { type: "url", url: "/persisted-image.png" },
+        },
+      ],
+      expected: "Attached image",
+    },
+    {
+      name: "a persisted image block",
+      content: [{ type: "image", source: { type: "url", url: "/persisted-image.png" } }],
+      expected: "Attached image",
+    },
+    {
+      name: "a browser document block",
+      content: [
+        {
+          type: "attachment",
+          attachment: {
+            url: "/report.pdf",
+            kind: "document",
+            label: "report.pdf",
+            mimeType: "application/pdf",
+          },
+        },
+      ],
+      expected: "Attached file: report.pdf",
+    },
+    {
+      name: "a browser audio block",
+      content: [
+        {
+          type: "attachment",
+          attachment: {
+            url: "/voice.ogg",
+            kind: "audio",
+            label: "voice.ogg",
+            mimeType: "audio/ogg",
+          },
+        },
+      ],
+      expected: "Attached file: voice.ogg",
+    },
+    {
+      name: "a browser file with the default label",
+      content: [
+        {
+          type: "attachment",
+          attachment: { url: "/document", kind: "document", label: "Attached file" },
+        },
+      ],
+      expected: "Attached file",
+    },
+    {
+      name: "multiple ordered browser attachments",
+      content: [
+        { type: "image", source: { type: "url", url: "/image.png" } },
+        {
+          type: "attachment",
+          attachment: { url: "/report.pdf", kind: "document", label: "report.pdf" },
+        },
+      ],
+      expected: "Attached image\nAttached file: report.pdf",
+    },
+  ])("renders an attachment-only user turn containing $name", ({ content, expected }) => {
+    expect(extractTextFromMessage({ role: "user", content })).toBe(expected);
+  });
+
+  it.each([
+    {
+      name: "image",
+      media: [{ path: "/media/inbound/generated-image.png", contentType: "image/png" }],
+      expected: "Attached image",
+    },
+    {
+      name: "image inferred from its canonical path",
+      media: [{ path: "/media/inbound/media-only.png" }],
+      expected: "Attached image",
+    },
+    {
+      name: "file",
+      media: [{ path: "/media/inbound/generated-report.pdf", contentType: "application/pdf" }],
+      expected: "Attached file",
+    },
+    {
+      name: "ordered image and file",
+      media: [
+        { path: "/media/inbound/generated-image.png", contentType: "image/png" },
+        { path: "/media/inbound/generated-report.pdf", contentType: "application/pdf" },
+      ],
+      expected: "Attached image\nAttached file",
+    },
+  ])("renders an empty durable user turn with canonical $name media", ({ media, expected }) => {
+    expect(
+      extractTextFromMessage({
+        role: "user",
+        content: "",
+        __openclaw: { media },
+      }),
+    ).toBe(expected);
+  });
+
+  it("keeps an ordinary user prompt unchanged when it also has attachments", () => {
+    expect(
+      extractTextFromMessage({
+        role: "user",
+        content: [
+          { type: "text", text: "Describe this image" },
+          { type: "image", source: { type: "url", url: "/image.png" } },
+        ],
+      }),
+    ).toBe("Describe this image");
+  });
+
+  it("sanitizes the display name of an attachment-only user turn", () => {
+    expect(
+      extractTextFromMessage({
+        role: "user",
+        content: [
+          {
+            type: "attachment",
+            attachment: {
+              url: "/report.pdf",
+              kind: "document",
+              label: "\u001b[31mreport.pdf\u001b[0m\u0000",
+            },
+          },
+        ],
+      }),
+    ).toBe("Attached file: report.pdf");
+  });
+
   it("prefers final_answer text over commentary text for assistant messages", () => {
     const text = extractTextFromMessage({
       role: "assistant",

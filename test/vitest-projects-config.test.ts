@@ -3,6 +3,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createPatternFileHelper } from "./helpers/pattern-file.js";
 import { normalizeConfigPath, normalizeConfigPaths } from "./helpers/vitest-config-paths.js";
 import { createAgentsCoreVitestConfig } from "./vitest/vitest.agents-core.config.ts";
+import { createAgentsEmbeddedIncompleteTurnVitestConfig } from "./vitest/vitest.agents-embedded-agent-incomplete-turn.config.ts";
+import { createAgentsEmbeddedOverflowCompactionVitestConfig } from "./vitest/vitest.agents-embedded-agent-overflow-compaction.config.ts";
+import { createAgentsEmbeddedRunVitestConfig } from "./vitest/vitest.agents-embedded-agent-run.config.ts";
 import { createAgentsEmbeddedVitestConfig } from "./vitest/vitest.agents-embedded-agent.config.ts";
 import { createAgentsSupportVitestConfig } from "./vitest/vitest.agents-support.config.ts";
 import { createAgentsToolsVitestConfig } from "./vitest/vitest.agents-tools.config.ts";
@@ -112,6 +115,13 @@ describe("projects vitest config", () => {
     expect(requireTestConfig(createAgentsVitestConfig()).pool).toBe("threads");
     expect(requireTestConfig(createAgentsCoreVitestConfig()).pool).toBe("threads");
     expect(requireTestConfig(createAgentsEmbeddedVitestConfig()).pool).toBe("threads");
+    expect(requireTestConfig(createAgentsEmbeddedIncompleteTurnVitestConfig()).pool).toBe(
+      "threads",
+    );
+    expect(requireTestConfig(createAgentsEmbeddedOverflowCompactionVitestConfig()).pool).toBe(
+      "threads",
+    );
+    expect(requireTestConfig(createAgentsEmbeddedRunVitestConfig()).pool).toBe("threads");
     expect(requireTestConfig(createAgentsSupportVitestConfig()).pool).toBe("threads");
     expect(requireTestConfig(createAgentsToolsVitestConfig()).pool).toBe("threads");
     expect(requireTestConfig(createCommandsLightVitestConfig()).pool).toBe("threads");
@@ -121,6 +131,10 @@ describe("projects vitest config", () => {
     expect(requireTestConfig(createContractsVitestConfig(pluginContractPatterns)).pool).toBe(
       "threads",
     );
+  });
+
+  it("keeps the embedded-agent cold-hook budget explicit", () => {
+    expect(requireTestConfig(createAgentsEmbeddedVitestConfig()).hookTimeout).toBe(600_000);
   });
 
   it("honors explicit worker caps in CI vitest lanes", () => {

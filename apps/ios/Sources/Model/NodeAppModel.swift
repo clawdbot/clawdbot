@@ -619,11 +619,20 @@ final class NodeAppModel {
         if self.isAppleReviewDemoModeEnabled {
             return AppleReviewDemoChatTransport()
         }
+        let imageArtifactLoader = IOSImageArtifactLoader { [weak self] in
+            guard let config = self?.activeGatewayConnectConfig else { return nil }
+            return IOSImageArtifactLoader.Connection(
+                config: config,
+                gatewayID: config.nodeOptions.deviceAuthGatewayID ?? config.effectiveStableID,
+                customHeaders: GatewaySettingsStore.loadGatewayCustomHeaders(
+                    gatewayStableID: config.effectiveStableID))
+        }
         return IOSGatewayChatTransport(
             gateway: self.operatorSession,
             widgetGateway: self.nodeGateway,
             globalAgentId: self.chatDeliveryAgentId,
-            outboxGatewayID: outboxGatewayID)
+            outboxGatewayID: outboxGatewayID,
+            imageArtifactLoader: imageArtifactLoader)
     }
 
     /// Gateway identity the transcript cache is scoped to: the active

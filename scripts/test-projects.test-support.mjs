@@ -91,6 +91,12 @@ const DEFAULT_VITEST_CONFIG = "test/vitest/vitest.unit.config.ts";
 const AGENTS_CORE_ISOLATED_VITEST_CONFIG = "test/vitest/vitest.agents-core-isolated.config.ts";
 const AGENTS_CORE_VITEST_CONFIG = "test/vitest/vitest.agents-core.config.ts";
 const AGENTS_EMBEDDED_AGENT_VITEST_CONFIG = "test/vitest/vitest.agents-embedded-agent.config.ts";
+const AGENTS_EMBEDDED_AGENT_INCOMPLETE_TURN_VITEST_CONFIG =
+  "test/vitest/vitest.agents-embedded-agent-incomplete-turn.config.ts";
+const AGENTS_EMBEDDED_AGENT_OVERFLOW_COMPACTION_VITEST_CONFIG =
+  "test/vitest/vitest.agents-embedded-agent-overflow-compaction.config.ts";
+const AGENTS_EMBEDDED_AGENT_RUN_VITEST_CONFIG =
+  "test/vitest/vitest.agents-embedded-agent-run.config.ts";
 const AGENTS_SUPPORT_VITEST_CONFIG = "test/vitest/vitest.agents-support.config.ts";
 const AGENTS_TOOLS_VITEST_CONFIG = "test/vitest/vitest.agents-tools.config.ts";
 const AGENTS_VITEST_CONFIG = "test/vitest/vitest.agents.config.ts";
@@ -194,6 +200,9 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   [COMMANDS_VITEST_CONFIG, 175],
   [AGENTS_CORE_VITEST_CONFIG, 170],
   [AGENTS_EMBEDDED_AGENT_VITEST_CONFIG, 169],
+  [AGENTS_EMBEDDED_AGENT_INCOMPLETE_TURN_VITEST_CONFIG, 169],
+  [AGENTS_EMBEDDED_AGENT_OVERFLOW_COMPACTION_VITEST_CONFIG, 169],
+  [AGENTS_EMBEDDED_AGENT_RUN_VITEST_CONFIG, 169],
   [AGENTS_SUPPORT_VITEST_CONFIG, 168],
   [AGENTS_TOOLS_VITEST_CONFIG, 167],
   [EXTENSION_CODEX_VITEST_CONFIG, 168],
@@ -335,6 +344,9 @@ const VITEST_CONFIG_BY_KIND = {
   acp: ACP_VITEST_CONFIG,
   agentCore: AGENTS_CORE_VITEST_CONFIG,
   agentEmbedded: AGENTS_EMBEDDED_AGENT_VITEST_CONFIG,
+  agentEmbeddedIncompleteTurn: AGENTS_EMBEDDED_AGENT_INCOMPLETE_TURN_VITEST_CONFIG,
+  agentEmbeddedOverflowCompaction: AGENTS_EMBEDDED_AGENT_OVERFLOW_COMPACTION_VITEST_CONFIG,
+  agentEmbeddedRun: AGENTS_EMBEDDED_AGENT_RUN_VITEST_CONFIG,
   agentSupport: AGENTS_SUPPORT_VITEST_CONFIG,
   agentTools: AGENTS_TOOLS_VITEST_CONFIG,
   agent: AGENTS_VITEST_CONFIG,
@@ -4517,6 +4529,9 @@ export function buildVitestRunPlans(
     "autoReplyTopLevel",
     "agentCore",
     "agentEmbedded",
+    "agentEmbeddedIncompleteTurn",
+    "agentEmbeddedOverflowCompaction",
+    "agentEmbeddedRun",
     "agentSupport",
     "agentTools",
     "agent",

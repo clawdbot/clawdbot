@@ -7,6 +7,8 @@ import { artifactsHandlers } from "./artifacts.js";
 const hoisted = vi.hoisted(() => ({
   getTaskSessionLookupByIdForStatus: vi.fn(),
   loadSessionEntry: vi.fn(),
+  resolveManagedArtifactDownload: vi.fn(),
+  resolveManagedUrlDownload: vi.fn(),
   visitSessionMessagesAsync: vi.fn(),
   resolveSessionKeyForRun: vi.fn(),
 }));
@@ -41,6 +43,17 @@ vi.mock("../server-session-key.js", async () => {
   return {
     ...actual,
     resolveSessionKeyForRun: hoisted.resolveSessionKeyForRun,
+  };
+});
+
+vi.mock("../managed-image-attachments.js", async () => {
+  const actual = await vi.importActual<typeof import("../managed-image-attachments.js")>(
+    "../managed-image-attachments.js",
+  );
+  return {
+    ...actual,
+    resolveManagedOutgoingImageArtifactDownload: hoisted.resolveManagedArtifactDownload,
+    resolveManagedOutgoingImageUrlDownload: hoisted.resolveManagedUrlDownload,
   };
 });
 
@@ -211,6 +224,8 @@ describe("artifacts RPC handlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     hoisted.resolveSessionKeyForRun.mockReset();
+    hoisted.resolveManagedArtifactDownload.mockResolvedValue(null);
+    hoisted.resolveManagedUrlDownload.mockResolvedValue(null);
     hoisted.getTaskSessionLookupByIdForStatus.mockReturnValue(undefined);
     hoisted.loadSessionEntry.mockReturnValue({
       storePath: "/tmp/sessions.json",
@@ -358,6 +373,48 @@ describe("artifacts RPC handlers", () => {
       data: "aGVsbG8=",
     });
     expectFields(downloadPayload.artifact, { id: artifactId });
+  });
+
+  it("preserves managed artifact identity and returns a ticketed download URL", async () => {
+    const artifactId = "artifact_managed_image_11111111-1111-4111-8111-111111111111";
+    mockedMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "image",
+            artifactId,
+            url: "/api/chat/media/outgoing/agent%3Amain%3Amain/11111111-1111-4111-8111-111111111111/full",
+            alt: "chart.png",
+            mimeType: "image/png",
+            sizeBytes: 14,
+          },
+        ],
+        __openclaw: { seq: 2 },
+      },
+    ]);
+    hoisted.resolveManagedArtifactDownload.mockResolvedValue({
+      artifactId,
+      sessionKey: "agent:main:main",
+      title: "chart.png",
+      mimeType: "image/png",
+      sizeBytes: 14,
+      url: "/api/chat/media/outgoing/agent%3Amain%3Amain/id/full?mediaTicket=ticket",
+      expiresAt: "2026-07-28T05:00:00.000Z",
+    });
+
+    const listed = await listArtifacts({ sessionKey: "agent:main:main" });
+    expectFields(expectFirstArtifact(listed.calls), { id: artifactId, sizeBytes: 14 });
+
+    const downloaded = await downloadArtifact({ sessionKey: "agent:main:main", artifactId });
+    expectFields(expectOkPayload(downloaded.calls), {
+      url: "/api/chat/media/outgoing/agent%3Amain%3Amain/id/full?mediaTicket=ticket",
+      expiresAt: "2026-07-28T05:00:00.000Z",
+    });
+    expect(hoisted.resolveManagedArtifactDownload).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      artifactId,
+    });
   });
 
   it("can scan artifact summaries without retaining inline data", async () => {

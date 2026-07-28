@@ -13,8 +13,8 @@ describe("Code Mode master switch resolution", () => {
     { name: "boolean shorthand false", codeMode: false, enabled: false },
     { name: "auto shorthand", codeMode: "auto", enabled: "auto" },
     { name: "object enabled auto", codeMode: { enabled: "auto" }, enabled: "auto" },
-    { name: "object without enabled", codeMode: { timeoutMs: 5000 }, enabled: false },
-    { name: "omitted", codeMode: undefined, enabled: false },
+    { name: "object without enabled", codeMode: { timeoutMs: 5000 }, enabled: "auto" },
+    { name: "omitted", codeMode: undefined, enabled: "auto" },
   ])("resolves enabled for $name", ({ codeMode, enabled }) => {
     expect(resolveCodeModeConfig({ tools: { codeMode } } as never).enabled).toBe(enabled);
   });

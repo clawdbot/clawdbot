@@ -46,6 +46,13 @@ vi.mock("../runtime.js", () => ({
   defaultRuntime: mocks.defaultRuntime,
 }));
 
+vi.mock("../gateway/call.js", () => ({
+  callGateway: vi.fn(async () => {
+    throw Object.assign(new Error("gateway unavailable"), { kind: "closed", code: 1006 });
+  }),
+  isGatewayTransportError: () => true,
+}));
+
 vi.mock("../terminal/links.js", () => ({
   formatDocsLink: () => "docs.openclaw.ai/cli/skills",
 }));

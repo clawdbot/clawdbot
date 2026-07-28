@@ -27,10 +27,7 @@ import {
   mirrorTranscriptAfterDispatcherSettled,
   transcriptMirrorForDeliveredPayload,
 } from "./dispatch-from-config.transcript.js";
-import {
-  captureReplyDispatchDeliveryOutcome,
-  type ReplyDispatchDeliveryOutcome,
-} from "./reply-dispatcher.js";
+import type { ReplyDispatchDeliveryOutcome } from "./reply-dispatcher.js";
 
 export async function chooseDispatchRoute(state: PrepareDispatchOperationReadyState) {
   const {
@@ -84,6 +81,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     suppressHookUserDelivery,
     traceReplyPhase,
     trackDispatchLifecycleWork,
+    turnLedger,
   } = state;
   const shouldSuppressProgressDelivery = () =>
     sendPolicyDenied ||
@@ -179,7 +177,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       await sendPayloadAsync(payload, undefined, false);
     } else {
       markInboundDedupeReplayUnsafe();
-      dispatcher.sendToolResult(payload);
+      turnLedger.sendQueued("tool", payload);
     }
   };
   const flushPendingCommentaryProgress = async () => {
@@ -229,18 +227,17 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   >();
   const sendTrackedBlockReply = (payload: ReplyPayload): boolean => {
     const contentKey = createBlockReplyContentKey(payload);
-    const delivery = captureReplyDispatchDeliveryOutcome(payload);
-    const queued = dispatcher.sendBlockReply(payload);
-    if (!queued || !delivery.isTracked()) {
-      return queued;
+    const delivery = turnLedger.sendQueued("block", payload);
+    if (!delivery.queued || !delivery.outcome) {
+      return delivery.queued;
     }
     const outcomes = pendingBlockDeliveryOutcomes.get(contentKey);
     if (outcomes) {
-      outcomes.push(delivery.promise);
+      outcomes.push(delivery.outcome);
     } else {
-      pendingBlockDeliveryOutcomes.set(contentKey, [delivery.promise]);
+      pendingBlockDeliveryOutcomes.set(contentKey, [delivery.outcome]);
     }
-    return queued;
+    return delivery.queued;
   };
   const recordRoutedBlockReplyDelivery = (
     payload: ReplyPayload,
@@ -250,9 +247,6 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       deliveredBlockContentKeys.add(createBlockReplyContentKey(payload));
     }
   };
-  // Routed blocks bypass dispatcher queue counts entirely; this is the only
-  // settled-delivery fact for them (media-only blocks never touch blockCount).
-  const hasDeliveredRoutedBlockReply = (): boolean => deliveredBlockContentKeys.size > 0;
   const wasReplyDeliveredAsBlock = async (
     payload: ReplyPayload,
     abortSignal?: AbortSignal,
@@ -435,10 +429,10 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     if (finalDeliveryCapture) {
       setReplyPayloadMetadata(normalizedPayload, { finalDeliveryCapture });
     }
-    const deliveryOutcome = captureReplyDispatchDeliveryOutcome(normalizedPayload);
-    const queuedFinal = dispatcher.sendFinalReply(normalizedPayload);
-    const dispatcherOutcome =
-      queuedFinal && deliveryOutcome.isTracked() ? deliveryOutcome.promise : undefined;
+    const { queued: queuedFinal, outcome: dispatcherOutcome } = turnLedger.sendQueued(
+      "final",
+      normalizedPayload,
+    );
     if (queuedFinal && deliveredTranscriptMirror && finalOutcomeBefore) {
       // The common settle owner runs this after successful delivery or
       // cancellation. Keeping reconciliation out of the reply operation lets a
@@ -613,7 +607,6 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       sendTrackedBlockReply,
       recordRoutedBlockReplyDelivery,
       wasReplyDeliveredAsBlock,
-      hasDeliveredRoutedBlockReply,
       sendFinalPayload,
     },
     {

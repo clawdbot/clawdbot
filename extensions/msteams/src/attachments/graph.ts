@@ -120,6 +120,7 @@ async function fetchGraphCollection(params: {
   try {
     const status = response.status;
     if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
       return { status, items: [] };
     }
     try {

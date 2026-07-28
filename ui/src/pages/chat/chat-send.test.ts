@@ -73,7 +73,6 @@ type TestChatHost = Omit<ChatHost, "settings"> & {
   chatAvatarSource?: string | null;
   chatAvatarStatus?: "none" | "local" | "remote" | "data" | null;
   chatAvatarReason?: string | null;
-  chatModelsLoading: boolean;
   sessionsError?: string | null;
   sessionsResultAgentId?: string | null;
   sessionsArchivedFilter?: "active" | "archived" | "all";
@@ -662,32 +661,6 @@ describe("refreshChat", () => {
       expect.objectContaining({ includeArgs: true, scope: "text" }),
     );
     expect(host.request).toHaveBeenCalledWith("chat.metadata", { agentId: "main" });
-  });
-
-  it("runs metadata fallback and releases loading when startup history rejects", async () => {
-    const host = makeHost({
-      hello: {
-        features: { methods: ["chat.metadata", "chat.startup"] },
-      } as TestChatHost["hello"],
-      requestHandlers: {
-        "chat.metadata": { commands: [], models: [] },
-      },
-      resetChatInputHistoryNavigation: () => {
-        throw new Error("unexpected history failure");
-      },
-    });
-
-    const refresh = refreshPageChat(asChatPageHost(host), {
-      awaitHistory: true,
-      deferBranches: true,
-      startup: true,
-    });
-
-    await expect(refresh).rejects.toThrow("unexpected history failure");
-    await vi.waitFor(() =>
-      expect(host.request).toHaveBeenCalledWith("chat.metadata", { agentId: "main" }),
-    );
-    await vi.waitFor(() => expect(host.chatModelsLoading).toBe(false));
   });
 
   it.each([

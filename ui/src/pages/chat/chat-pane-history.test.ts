@@ -13,6 +13,8 @@ import type { SessionCapability } from "../../lib/sessions/index.ts";
 import "./chat-pane.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import type { AfterCommitEffect } from "./render-lifecycle.ts";
+import type { ChatSessionScrollPosition } from "./scroll.ts";
 
 type TestChatPane = HTMLElement & {
   catalogMessages: unknown[];
@@ -37,6 +39,13 @@ type TestChatPane = HTMLElement & {
   hasOlderMessages: () => boolean;
   loadingOlder: boolean;
   olderOffsetsSeen: Set<number>;
+  resetOlderMessagesViewport: (nextSessionKey?: string) => ChatSessionScrollPosition | null;
+  restoreOlderMessagesViewport: (sessionKey: string, scrollTop: number) => void;
+  transcriptScrollTop: number | null;
+  transcript: {
+    activeSessionKey: string | null;
+    pendingScrollOffsetFor: (sessionKey: string) => number | null;
+  };
 };
 
 function createDeferred<T>() {
@@ -99,6 +108,16 @@ function createTestChatPane(params: { client: GatewayBrowserClient; sessions: Se
     sidebarLayout: { columns: [] },
     chatScrollGeneration: 0,
     chatScrollCommitCleanup: null,
+    chatScrollFrame: null,
+    chatScrollGuardFrame: null,
+    chatLastScrollTop: 0,
+    chatLastScrollHeight: 0,
+    chatHasAutoScrolled: false,
+    chatUserNearBottom: true,
+    chatFollowLocked: false,
+    chatNewMessagesBelow: false,
+    chatIsProgrammaticScroll: false,
+    chatProgrammaticScrollTarget: 0,
     handleChatScroll: vi.fn(),
     renderLifecycle: { afterCommit: () => () => {}, invalidate: () => {} },
   } as unknown as ChatPageHost;
@@ -158,6 +177,83 @@ function nativeHistorySeq(message: unknown): number | undefined {
 }
 
 describe("chat pane native history pagination", () => {
+  it("restores a saved per-session viewport while first visits keep the end anchor", () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const thread = document.createElement("div");
+    thread.className = "chat-thread";
+    Object.defineProperty(thread, "scrollHeight", { configurable: true, value: 2_600 });
+    Object.defineProperty(thread, "clientHeight", { configurable: true, value: 500 });
+    thread.scrollTop = 420;
+    pane.append(thread);
+    pane.transcript.activeSessionKey = state.sessionKey;
+
+    expect(pane.resetOlderMessagesViewport("agent:main:session-b")).toBeNull();
+    state.sessionKey = "agent:main:session-b";
+    pane.transcript.activeSessionKey = state.sessionKey;
+    thread.scrollTop = 80;
+    expect(pane.resetOlderMessagesViewport("agent:main:current")).toEqual({
+      scrollTop: 420,
+      anchorToEnd: false,
+    });
+
+    state.sessionKey = "agent:main:current";
+    pane.transcript.activeSessionKey = state.sessionKey;
+    let commitEffect: AfterCommitEffect | undefined;
+    state.renderLifecycle.afterCommit = vi.fn((effect: AfterCommitEffect) => {
+      commitEffect = effect;
+      return vi.fn();
+    });
+    pane.restoreOlderMessagesViewport(state.sessionKey, 420);
+    commitEffect?.(vi.fn());
+
+    expect(thread.scrollTop).toBe(420);
+    expect(pane.transcriptScrollTop).toBe(420);
+    expect(state.chatHasAutoScrolled).toBe(true);
+    expect(state.chatFollowLocked).toBe(true);
+    expect(state.chatNewMessagesBelow).toBe(true);
+
+    // A rapid second switch sees a transient DOM top of zero while the
+    // logical restore is still pending; it must retain the logical 420px.
+    thread.scrollTop = 0;
+    const pendingScrollOffset = vi
+      .spyOn(pane.transcript, "pendingScrollOffsetFor")
+      .mockReturnValue(420);
+    expect(pane.resetOlderMessagesViewport("agent:main:session-b")).toEqual({
+      scrollTop: 80,
+      anchorToEnd: false,
+    });
+    pendingScrollOffset.mockRestore();
+    state.sessionKey = "agent:main:session-b";
+    pane.transcript.activeSessionKey = state.sessionKey;
+    expect(pane.resetOlderMessagesViewport("agent:main:current")).toEqual({
+      scrollTop: 420,
+      anchorToEnd: false,
+    });
+  });
+
+  it("restores through equivalent default-main session keys", () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    state.sessionKey = "agent:main:main";
+    const thread = document.createElement("div");
+    thread.className = "chat-thread";
+    Object.defineProperty(thread, "scrollHeight", { configurable: true, value: 2_600 });
+    Object.defineProperty(thread, "clientHeight", { configurable: true, value: 500 });
+    pane.append(thread);
+    let commitEffect: AfterCommitEffect | undefined;
+    state.renderLifecycle.afterCommit = vi.fn((effect: AfterCommitEffect) => {
+      commitEffect = effect;
+      return vi.fn();
+    });
+
+    pane.restoreOlderMessagesViewport("main", 420);
+    commitEffect?.(vi.fn());
+
+    expect(thread.scrollTop).toBe(420);
+    expect(pane.transcriptScrollTop).toBe(420);
+  });
+
   it("does not request older rows from a complete imported snapshot", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });

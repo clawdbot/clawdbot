@@ -22,6 +22,7 @@ import {
   type OAuthCredential,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { hasUsableOAuthCredential } from "openclaw/plugin-sdk/provider-auth";
+import { readSecretFile } from "openclaw/plugin-sdk/secret-file";
 import { resolveCodexAppServerHomeDir, withEphemeralCodexAuthStore } from "./auth-start-options.js";
 import type { CodexAppServerClient } from "./client.js";
 import { ensureCodexComputerUseSharedPluginCache } from "./computer-use-cache.js";
@@ -755,7 +756,9 @@ function parseCodexCliAuthFileApiKey(raw: string): string | undefined {
 
 async function readCodexCliAuthFileApiKey(env: NodeJS.ProcessEnv): Promise<string | undefined> {
   try {
-    return parseCodexCliAuthFileApiKey(await fs.readFile(resolveCodexCliAuthFilePath(env), "utf8"));
+    return parseCodexCliAuthFileApiKey(
+      await readSecretFile(resolveCodexCliAuthFilePath(env), "Codex CLI auth file"),
+    );
   } catch {
     return undefined;
   }

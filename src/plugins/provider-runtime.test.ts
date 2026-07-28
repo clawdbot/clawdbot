@@ -361,7 +361,6 @@ describe("provider-runtime", () => {
   beforeEach(() => {
     resetPluginRuntimeStateForTest();
     providerRuntimeTesting.clearProviderRuntimePluginCacheForTest();
-    providerRuntimeTesting.resetExternalAuthFallbackWarningCacheForTest();
     resolvePluginProvidersMock.mockReset();
     resolvePluginProvidersMock.mockReturnValue([]);
     isPluginProvidersLoadInFlightMock.mockReset();

@@ -90,6 +90,7 @@ export abstract class ChatPaneHeaderRender extends ChatPaneHeader {
       paneId: this.paneId,
       narrow: this.narrow,
       mergedChrome: this.mergedChrome,
+      navDrawerOpen: this.navDrawerOpen,
       title: this.paneTitle,
       session: row,
       showOwnerChip:

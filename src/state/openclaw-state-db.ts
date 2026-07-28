@@ -4,12 +4,16 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
+  enableNodeSqliteKyselyStatementCache,
   executeSqliteQuerySync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
-import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
+import {
+  repairCanonicalSqliteIndexes,
+  verifyAndRepairCanonicalSqliteIndexes,
+} from "../infra/sqlite-index-schema.js";
 import {
   assertSqliteIntegrity,
   confirmSqliteFileIntegrity,
@@ -174,6 +178,7 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
   const db = openNodeSqliteDatabase(pathname);
   const rebuiltIndexNames = new Set<string>();
   try {
+    db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     assertSupportedSchemaVersion(db, pathname);
     db.exec("PRAGMA foreign_keys = OFF;");
     const changes = runSqliteImmediateTransactionSync(
@@ -281,6 +286,7 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
     if (db.isOpen) {
       db.exec("PRAGMA foreign_keys = ON;");
     }
+    clearNodeSqliteKyselyCacheForDatabase(db);
     db.close();
     ensureOpenClawStatePermissions(pathname, env);
   }
@@ -402,6 +408,7 @@ export async function openExistingOpenClawStateDatabaseReadOnly(
     }
   } catch (error) {
     try {
+      clearNodeSqliteKyselyCacheForDatabase(db);
       db.close();
     } catch {
       // Preserve the verification failure that explains why the database was refused.
@@ -424,6 +431,7 @@ export async function openExistingOpenClawStateDatabaseReadOnly(
         }
         try {
           if (wasOpen) {
+            clearNodeSqliteKyselyCacheForDatabase(db);
             db.close();
           }
         } finally {
@@ -459,14 +467,12 @@ function assertStateDatabaseIntegrityBeforeMutation(
       toVersion: OPENCLAW_STATE_SCHEMA_VERSION,
     });
   }
-  const rebuiltIndexes =
-    userVersion === OPENCLAW_STATE_SCHEMA_VERSION
-      ? repairCanonicalSqliteIndexes(database, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
-          allowMissingColumns: true,
-          validateAfterRepair: () => assertCurrentStateRuntimeSchema(database, pathname),
-        })
-      : [];
-  if (rebuiltIndexes.length === 0) {
+  if (userVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
+    verifyAndRepairCanonicalSqliteIndexes(database, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
+      allowMissingColumns: true,
+      validateAfterRepair: () => assertCurrentStateRuntimeSchema(database, pathname),
+    });
+  } else {
     // Every physical open proves the full file before schema mutation or exposure.
     assertSqliteIntegrity(database, pathname);
   }
@@ -520,6 +526,7 @@ export function openOpenClawStateDatabase(
   }
   ensureOpenClawStatePermissions(pathname, env);
   const db = openNodeSqliteDatabase(pathname);
+  enableNodeSqliteKyselyStatementCache(db);
   const walMaintenance = (() => {
     let maintenance: SqliteWalMaintenance | undefined;
     try {
@@ -540,6 +547,7 @@ export function openOpenClawStateDatabase(
       return maintenance;
     } catch (err) {
       maintenance?.close();
+      clearNodeSqliteKyselyCacheForDatabase(db);
       db.close();
       if (
         err instanceof Error &&

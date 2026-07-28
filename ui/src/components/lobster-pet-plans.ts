@@ -260,8 +260,8 @@ export type LobsterLoadIdentity = {
 };
 
 // Rare per-load identities, resolved on top of the seeded look: the Elder
-// outranks an old-friend return, and retro looks (grail or anniversary dress
-// code) are never repainted. Lobsterdex completion is snapshotted here too,
+// outranks an old-friend return, and retro-geometry looks (grail or anniversary
+// dress code) are never repainted. Lobsterdex completion is snapshotted here too,
 // so the golden ledge trim appears between loads, never mid-visit.
 export function resolveLobsterLoadIdentity(
   seed: number,
@@ -291,7 +291,7 @@ export function resolveLobsterLoadIdentity(
       },
     };
   }
-  if (look.palette.id === "retro") {
+  if (look.palette.id === "retro" || look.palette.id === "goldenretro") {
     return base;
   }
   const known = [...seen]
