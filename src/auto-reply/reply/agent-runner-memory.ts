@@ -800,23 +800,13 @@ export async function runPreflightCompactionIfNeeded(params: {
   if (params.isHeartbeat || isCli) {
     return entry ?? params.sessionEntry;
   }
-  if (
-    followupUsesCodexRuntime({
-      cfg: params.cfg,
-      followupRun: params.followupRun,
-      sessionEntry: entry,
-      sessionKey: params.sessionKey,
-      runtimePolicySessionKey: params.runtimePolicySessionKey,
-    })
-  ) {
-    // Codex runtime sessions should reach Codex with their real thread state.
-    // Its harness owns automatic compaction; OpenClaw preflight compaction is
-    // only for non-Codex embedded runtimes.
-    logVerbose(
-      `preflightCompaction skipped: sessionKey=${params.sessionKey} runtime=codex reason=codex_native_auto_compaction`,
-    );
-    return entry ?? params.sessionEntry;
-  }
+  const usesCodexRuntime = followupUsesCodexRuntime({
+    cfg: params.cfg,
+    followupRun: params.followupRun,
+    sessionEntry: entry,
+    sessionKey: params.sessionKey,
+    runtimePolicySessionKey: params.runtimePolicySessionKey,
+  });
 
   const compactionSessionKey = params.sessionKey ?? params.followupRun.run.sessionKey;
   if (!compactionSessionKey) {
@@ -878,7 +868,7 @@ export async function runPreflightCompactionIfNeeded(params: {
   const maxActiveTranscriptBytes = resolveMaxActiveTranscriptBytes(params.cfg);
   const shouldCheckActiveTranscriptBytes = typeof maxActiveTranscriptBytes === "number";
   const transcriptUsageTokens =
-    typeof freshPersistedTokens === "number" && !freshNeedsOutputRead
+    usesCodexRuntime || (typeof freshPersistedTokens === "number" && !freshNeedsOutputRead)
       ? undefined
       : await estimatePromptTokensFromSessionTranscript({
           agentId: compactionAgentId,
@@ -905,6 +895,17 @@ export async function runPreflightCompactionIfNeeded(params: {
     typeof activeTranscriptBytes === "number" &&
     typeof maxActiveTranscriptBytes === "number" &&
     activeTranscriptBytes >= maxActiveTranscriptBytes;
+  if (usesCodexRuntime && !shouldCompactByTranscriptBytes) {
+    // Codex owns token-pressure compaction for its native thread, while
+    // OpenClaw still owns the host transcript file and its byte-size fuse.
+    logVerbose(
+      `preflightCompaction skipped: sessionKey=${params.sessionKey} runtime=codex ` +
+        `reason=codex_native_auto_compaction ` +
+        `activeTranscriptBytes=${activeTranscriptBytes ?? "undefined"} ` +
+        `maxActiveTranscriptBytes=${maxActiveTranscriptBytes ?? "undefined"}`,
+    );
+    return entry ?? params.sessionEntry;
+  }
   const stalePersistedPromptTokens =
     hasPersistedTotalTokens && entry.totalTokensFresh !== false
       ? Math.floor(persistedTotalTokens)
@@ -951,14 +952,16 @@ export async function runPreflightCompactionIfNeeded(params: {
       `sizeTrigger=${shouldCompactByTranscriptBytes}`,
   );
 
-  const shouldCompactByTokens = shouldRunPreflightCompaction({
-    entry,
-    tokenCount: tokenCountForCompaction,
-    contextWindowTokens,
-    reserveTokensFloor,
-    softThresholdTokens,
-    minimumThresholdTokens: serverCompactionThreshold,
-  });
+  const shouldCompactByTokens =
+    !usesCodexRuntime &&
+    shouldRunPreflightCompaction({
+      entry,
+      tokenCount: tokenCountForCompaction,
+      contextWindowTokens,
+      reserveTokensFloor,
+      softThresholdTokens,
+      minimumThresholdTokens: serverCompactionThreshold,
+    });
   const shouldCompact = shouldCompactByTokens || shouldCompactByTranscriptBytes;
   if (!shouldCompact) {
     return entry ?? params.sessionEntry;

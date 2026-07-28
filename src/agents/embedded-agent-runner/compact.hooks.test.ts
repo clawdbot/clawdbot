@@ -3944,6 +3944,73 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     });
   });
 
+  it("routes host transcript byte preflight through OpenClaw compaction for Codex sessions", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
+    contextEngineCompactMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "engine-summary",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 120,
+        tokensAfter: 50,
+        sessionId: "session-2",
+        sessionTarget: {
+          agentId: "main",
+          sessionId: "session-2",
+          sessionKey: TEST_SESSION_KEY,
+          storePath: "/tmp/sessions.json",
+        },
+      },
+    } as never);
+
+    const result = await compactEmbeddedAgentSession(
+      wrappedCompactionArgs({
+        provider: "openai",
+        model: "gpt-5.5",
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+        trigger: "budget",
+        forcePreflight: true,
+        preflightRequired: true,
+        preflightCompactionTrigger: "transcript_bytes",
+        config: {
+          agents: {
+            defaults: {
+              compaction: {
+                truncateAfterCompaction: true,
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.compacted).toBe(true);
+    expect(result.result).toMatchObject({
+      sessionId: "session-2",
+    });
+    expect(contextEngineCompactMock).toHaveBeenCalledTimes(1);
+    const compactArg = mockCallArg(contextEngineCompactMock) as {
+      runtimeContext?: Record<string, unknown>;
+    };
+    expectRecordFields(compactArg.runtimeContext, {
+      agentHarnessId: "codex",
+      preflightCompactionTrigger: "transcript_bytes",
+    });
+    expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
+    expect(hookRunner.runAfterCompaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionFile: TEST_SESSION_KEY,
+        previousSessionId: "session-1",
+      }),
+      expect.objectContaining({
+        sessionId: "session-2",
+      }),
+    );
+  });
+
   it("continues forcing engine-owned manual compaction with manual force reason", async () => {
     const result = await compactEmbeddedAgentSession(wrappedCompactionArgs({ trigger: "manual" }));
 

@@ -388,13 +388,21 @@ async function compactResolvedContextEngine(
     preparedRuntimePlan: params.runtimePlan,
     selectedHarnessRuntime: params.modelSelectionLocked === true ? lockedHarnessRuntime : undefined,
   });
+  // Native harness compaction cannot rotate OpenClaw's host transcript. Keep
+  // model locks authoritative for native compaction while letting a host-byte
+  // preflight reach the context engine and carry the binding to its successor.
+  const hostTranscriptBytePreflight = params.preflightCompactionTrigger === "transcript_bytes";
   const lockedNativeHarness =
-    params.modelSelectionLocked === true && selectedHarnessRuntime !== "openclaw";
-  const attemptNativeHarnessCompaction = shouldAttemptNativeHarnessCompaction({
-    provider: ceProvider,
-    nativeHarnessCompaction: resolvedCompactionTarget.nativeHarnessCompaction,
-    selectedHarnessRuntime,
-  });
+    !hostTranscriptBytePreflight &&
+    params.modelSelectionLocked === true &&
+    selectedHarnessRuntime !== "openclaw";
+  const attemptNativeHarnessCompaction =
+    !hostTranscriptBytePreflight &&
+    shouldAttemptNativeHarnessCompaction({
+      provider: ceProvider,
+      nativeHarnessCompaction: resolvedCompactionTarget.nativeHarnessCompaction,
+      selectedHarnessRuntime,
+    });
   let effectiveRuntimeModel: ProviderRuntimeModel | undefined;
   let preparedHarnessRuntime = selectedHarnessRuntime;
   let preparedParams = params;

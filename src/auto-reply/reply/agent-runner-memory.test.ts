@@ -2176,6 +2176,69 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
   });
 
+  it("enforces the active transcript byte fuse for persisted Codex runtime sessions", async () => {
+    const sessionFile = path.join(rootDir, "large-codex-session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({ message: { role: "user", content: "x".repeat(256) } })}\n`,
+      "utf8",
+    );
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      transcriptPath: sessionFile,
+      updatedAt: Date.now(),
+      totalTokens: 347_000,
+      totalTokensFresh: true,
+      agentHarnessId: "codex",
+      compactionCount: 0,
+    };
+    const sessionStore = { main: sessionEntry };
+
+    const entry = await runPreflightCompactionIfNeeded({
+      cfg: {
+        models: {
+          providers: {
+            openai: { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+          },
+        },
+        agents: {
+          defaults: {
+            compaction: {
+              truncateAfterCompaction: true,
+              maxActiveTranscriptBytes: "10b",
+            },
+          },
+        },
+      } as never,
+      followupRun: createTestFollowupRun({
+        provider: "openai",
+        model: "gpt-5.5",
+        sessionId: "session",
+        sessionFile,
+        sessionKey: "main",
+      }),
+      defaultModel: "gpt-5.5",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(entry?.compactionCount).toBe(1);
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
+    expect(requireCompactEmbeddedAgentSessionCall()).toMatchObject({
+      sessionId: "session",
+      sessionFile,
+      agentHarnessId: "codex",
+      trigger: "budget",
+      forcePreflight: true,
+      preflightRequired: true,
+      preflightCompactionTrigger: "transcript_bytes",
+    });
+  });
+
   it("skips preflight compaction for compatible CLI session runtime pins", async () => {
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [
