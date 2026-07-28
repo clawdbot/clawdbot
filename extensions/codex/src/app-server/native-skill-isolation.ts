@@ -79,7 +79,11 @@ async function collectPersonalSkillRealPaths(
   const skillPaths = new Set<string>();
   let complete = true;
   const seenDirectories = new Set<string>();
-  const queue = roots.map((root) => ({ ...root, depth: 0 }));
+  const queue = roots.map((root) => ({
+    dir: root.dir,
+    onlyEscapedStateTargets: root.onlyEscapedStateTargets,
+    depth: 0,
+  }));
   let entryCount = 0;
   const recordSkillFile = async (filePath: string, onlyEscapedStateTargets: boolean) => {
     try {
