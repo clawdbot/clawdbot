@@ -22,8 +22,9 @@ struct IOSImageArtifactLoaderTests {
                         "https://gateway.example/api/chat/media/outgoing/main/11111111-1111-4111-8111-111111111111/full?mediaTicket=ticket")
                     #expect(request.value(forHTTPHeaderField: "Authorization") == nil)
                     #expect(request.value(forHTTPHeaderField: "X-Proxy-Token") == "proxy")
+                    let responseURL = try #require(request.url)
                     let response = try #require(HTTPURLResponse(
-                        url: #require(request.url),
+                        url: responseURL,
                         statusCode: 200,
                         httpVersion: nil,
                         headerFields: ["Content-Type": "image/png"]))

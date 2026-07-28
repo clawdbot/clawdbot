@@ -3310,6 +3310,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Choose scopes and pair the device
   - H2: Advertise client capabilities
   - H2: Recover state after reconnect
+  - H2: Render generated image artifacts
   - H2: Use history metadata and stable anchors
   - H2: Subscribe instead of polling usage
   - H2: Backfill exec approvals
