@@ -189,12 +189,23 @@ function runtimeUsage(cell: RuntimeParityCell): TokenEfficiencyRuntimeUsage {
     cell.usage.cacheWrite === undefined ? null : normalizeTokenCount(cell.usage.cacheWrite);
   const cacheDiagnostics = cell.cacheDiagnostics;
   const baseProcessedTokens = inputTokens + outputTokens;
+  const completeCacheTelemetry =
+    cacheDiagnostics === undefined ||
+    cacheDiagnostics.cacheTelemetryTurns === cacheDiagnostics.assistantTurns;
+  const unaccountedCacheTokens =
+    totalTokens - baseProcessedTokens - (cacheReadTokens ?? 0) - (cacheWriteTokens ?? 0);
   let processedTokens = baseProcessedTokens;
   let processedTokenEvidence: ProcessedTokenEvidence = "unavailable";
-  if (cacheWriteTokens !== null) {
+  // Aggregate counters can omit an unmeasured turn. Only exact accounting
+  // proves that omitted nonnegative cache reads and writes were both zero.
+  if (
+    cacheWriteTokens !== null &&
+    unaccountedCacheTokens >= 0 &&
+    (completeCacheTelemetry || unaccountedCacheTokens === 0)
+  ) {
     processedTokens += cacheWriteTokens;
     processedTokenEvidence = "measured";
-  } else if (cacheReadTokens !== null) {
+  } else if (cacheReadTokens !== null && completeCacheTelemetry) {
     const derivedCacheWriteTokens = totalTokens - baseProcessedTokens - cacheReadTokens;
     if (derivedCacheWriteTokens >= 0) {
       processedTokens += derivedCacheWriteTokens;
@@ -462,7 +473,7 @@ export function buildTokenEfficiencyReport(
       "Token totals are read from RuntimeParityCell.usage, which is captured from normalized AssistantMessage.usage.",
       "Efficiency deltas and percentiles compare newly processed uncached input, cache-write input, and output; reused cached input remains separately reported and never masks a regression.",
       "Missing cache-write counts are derived only when measured cache reads and coherent usage totals prove the exact processed input; otherwise live efficiency proof fails.",
-      "Post-warm cache misses require measured zero cache reads and writes after the same conversation has already established a cache; unavailable telemetry is N/A.",
+      "Post-warm cache misses require measured zero cache reads and newly processed input after the same conversation has already established a cache; cache rewrites are included and unavailable telemetry is N/A.",
       "Codex savings are reported as savings and do not fail the gate; only positive Codex-over-OpenClaw live deltas exceed the threshold.",
       usageSource === "mock-estimate"
         ? "Mock-provider token totals are labeled as estimates and do not block the token-efficiency gate."

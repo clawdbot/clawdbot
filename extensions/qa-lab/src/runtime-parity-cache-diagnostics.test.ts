@@ -132,16 +132,31 @@ describe("runtime parity prompt-cache diagnostics", () => {
     expect(diagnostics.cacheMissInputTokens).toBe(2_150);
   });
 
-  it("does not classify partial cache hits or new cache writes as complete misses", () => {
+  it("counts a zero-read post-warm cache rewrite as a complete miss", () => {
     const diagnostics = buildRuntimeParityCacheDiagnostics([
       usage(3, { cacheRead: 0, cacheWrite: 1_000 }),
       usage(200, { cacheRead: 800, cacheWrite: 0 }),
       usage(20, { cacheRead: 0, cacheWrite: 1_100 }),
     ]);
 
-    expect(diagnostics.cacheMisses).toEqual([]);
+    expect(diagnostics.cacheMisses).toEqual([
+      { turn: 3, inputTokens: 1_120, cacheRead: 0, cacheWrite: 1_100 },
+    ]);
+    expect(diagnostics.cacheMissInputTokens).toBe(1_120);
     expect(diagnostics.cacheHitTurns).toBe(1);
     expect(diagnostics.cacheWriteTurns).toBe(2);
+  });
+
+  it("counts write-only processed input when a post-warm miss rewrites the cache", () => {
+    const diagnostics = buildRuntimeParityCacheDiagnostics([
+      usage(3, { cacheRead: 0, cacheWrite: 1_000 }),
+      usage(0, { cacheRead: 0, cacheWrite: 1_100 }),
+    ]);
+
+    expect(diagnostics.cacheMisses).toEqual([
+      { turn: 2, inputTokens: 1_100, cacheRead: 0, cacheWrite: 1_100 },
+    ]);
+    expect(diagnostics.cacheMissInputTokens).toBe(1_100);
   });
 
   it("does not mistake unavailable cache telemetry for a measured cache miss", () => {

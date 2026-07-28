@@ -390,6 +390,78 @@ describe("token efficiency report", () => {
     ]);
   });
 
+  it("does not derive cache writes from partially observed post-warm cache reads", () => {
+    const openclaw = makeCell("openclaw", {
+      inputTokens: 100,
+      outputTokens: 20,
+      totalTokens: 120,
+    });
+    const codex = makeCell("codex", {
+      inputTokens: 100,
+      outputTokens: 20,
+      totalTokens: 1_120,
+      cacheRead: 100,
+    });
+    codex.cacheDiagnostics = buildRuntimeParityCacheDiagnostics([
+      { inputTokens: 3, outputTokens: 11, totalTokens: 114, cacheRead: 100, cacheWrite: 0 },
+      { inputTokens: 97, outputTokens: 9, totalTokens: 1_006 },
+    ]);
+
+    const report = buildTokenEfficiencyReport({
+      summary: makeLiveSummary([
+        makeRuntimeParity("incomplete-cache-read-telemetry", openclaw, codex),
+      ]),
+    });
+
+    expect(report.pass).toBe(false);
+    expect(report.rows[0]?.codex).toMatchObject({
+      cacheReadTokens: 100,
+      cacheWriteTokens: null,
+      processedTokenEvidence: "unavailable",
+      unmeasuredPostWarmTurns: [2],
+    });
+    expect(report.rows[0]).toMatchObject({ classification: "neutral", flagged: false });
+    expect(report.failures).toEqual([
+      "incomplete-cache-read-telemetry codex live processed-token usage cannot be verified from cache-write telemetry or coherent cache-read totals",
+    ]);
+  });
+
+  it("does not certify incomplete cache-write telemetry with unaccounted cache input", () => {
+    const openclaw = makeCell("openclaw", {
+      inputTokens: 100,
+      outputTokens: 20,
+      totalTokens: 120,
+    });
+    const codex = makeCell("codex", {
+      inputTokens: 100,
+      outputTokens: 20,
+      totalTokens: 1_120,
+      cacheRead: 100,
+      cacheWrite: 200,
+    });
+    codex.cacheDiagnostics = buildRuntimeParityCacheDiagnostics([
+      { inputTokens: 3, outputTokens: 11, totalTokens: 314, cacheRead: 100, cacheWrite: 200 },
+      { inputTokens: 97, outputTokens: 9, totalTokens: 806 },
+    ]);
+
+    const report = buildTokenEfficiencyReport({
+      summary: makeLiveSummary([
+        makeRuntimeParity("incomplete-cache-write-telemetry", openclaw, codex),
+      ]),
+    });
+
+    expect(report.pass).toBe(false);
+    expect(report.rows[0]?.codex).toMatchObject({
+      cacheReadTokens: 100,
+      cacheWriteTokens: 200,
+      processedTokenEvidence: "unavailable",
+      unmeasuredPostWarmTurns: [2],
+    });
+    expect(report.failures).toEqual([
+      "incomplete-cache-write-telemetry codex live processed-token usage cannot be verified from cache-write telemetry or coherent cache-read totals",
+    ]);
+  });
+
   it("keeps mixed post-warm telemetry unknown without discarding measured misses", () => {
     const openclaw = makeCell("openclaw", {
       inputTokens: 100,

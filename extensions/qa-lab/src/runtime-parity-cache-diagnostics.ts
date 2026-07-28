@@ -51,14 +51,17 @@ export function buildRuntimeParityCacheDiagnostics(
       continue;
     }
     diagnostics.cacheTelemetryTurns += 1;
-    if (cacheWasWarmBeforeTurn && cacheRead === 0 && cacheWrite === 0 && usage.inputTokens > 0) {
+    const missedInputTokens = usage.inputTokens + cacheWrite;
+    // A zero-read rewrite still reprocesses the entire prefix; the write only
+    // repopulates the cache for a later turn and must not conceal this miss.
+    if (cacheWasWarmBeforeTurn && cacheRead === 0 && missedInputTokens > 0) {
       diagnostics.cacheMisses.push({
         turn: index + 1,
-        inputTokens: usage.inputTokens,
+        inputTokens: missedInputTokens,
         cacheRead,
         cacheWrite,
       });
-      diagnostics.cacheMissInputTokens += usage.inputTokens;
+      diagnostics.cacheMissInputTokens += missedInputTokens;
     }
   }
 
