@@ -306,8 +306,7 @@ function isUnsafeSearchSummaryPattern(pattern: string): boolean {
 
 // Match the two labels this formatter emits, without hiding normal prose such as
 // "search engine" or "search textual data".
-const GENERATED_SEARCH_SUMMARY_FRAGMENT_RE =
-  /^search\s+(?:["']|text(?:\s+in(?:\s|$)|$))/iu;
+const GENERATED_SEARCH_SUMMARY_FRAGMENT_RE = /^search\s+(?:["']|text(?:\s+in(?:\s|$)|$))/iu;
 
 function containsGeneratedSearchSummary(pattern: string): boolean {
   return pattern
