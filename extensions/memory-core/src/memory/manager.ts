@@ -712,7 +712,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
   private markEmbeddingBootstrapFailure(
     err: unknown,
-    options?: { retainProvider?: boolean },
+    options?: { retainProvider?: boolean; provider?: string },
   ): MemoryEmbeddingBootstrapDebug {
     const rawErrorName = readErrorName(err).trim();
     const errorName = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(rawErrorName) ? rawErrorName : "";
@@ -723,13 +723,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       errorName && errorName !== "Error" ? `${errorName}: ${message}` : message,
       { mode: "tools" },
     );
-    const errorProvider =
-      err && typeof err === "object" && typeof Reflect.get(err, "provider") === "string"
-        ? String(Reflect.get(err, "provider")).trim()
-        : "";
-    const provider = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(errorProvider)
-      ? errorProvider
-      : (this.provider?.id ?? this.settings.provider);
+    const provider = options?.provider ?? this.provider?.id ?? this.settings.provider;
     const debug: MemoryEmbeddingBootstrapDebug = {
       ok: false,
       provider,
@@ -1117,13 +1111,14 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           );
         } catch (err) {
           if (this.providerRequirement.mode === "optional" && this.shouldFallbackOnError(err)) {
+            const failedProvider = this.provider?.id ?? this.settings.provider;
             await this.retireCurrentProvider().catch((retireErr: unknown) => {
               const message = redactSensitiveText(formatErrorMessage(retireErr), {
                 mode: "tools",
               });
               log.warn(`memory search-bootstrap: failed to retire embedding provider: ${message}`);
             });
-            this.markEmbeddingBootstrapFailure(err);
+            this.markEmbeddingBootstrapFailure(err, { provider: failedProvider });
             await this.syncAdmitted({ reason: "search", force: true }).catch(
               (fallbackErr: unknown) => {
                 const message = redactSensitiveText(formatErrorMessage(fallbackErr), {

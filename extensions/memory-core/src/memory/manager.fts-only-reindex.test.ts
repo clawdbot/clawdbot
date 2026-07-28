@@ -243,6 +243,7 @@ describe("memory manager FTS-only reindex", () => {
         expect.objectContaining({
           embeddingBootstrap: expect.objectContaining({
             degradedTo: "keyword-only",
+            provider: "openai",
             reason: expect.stringContaining("embedding request failed during bootstrap"),
           }),
         }),
