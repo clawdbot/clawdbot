@@ -228,6 +228,8 @@ describe("tool display details", () => {
     for (const [command, expected] of [
       ['rg "foo|bar" src/agents', 'search "foo|bar" in src/agents'],
       ["rg 'search engine' src/agents", 'search "search engine" in src/agents'],
+      ["rg 'search textual data' src/agents", 'search "search textual data" in src/agents'],
+      ["rg 'research text in docs' src/agents", 'search "research text in docs" in src/agents'],
     ]) {
       expect(
         formatToolDetail(
@@ -242,6 +244,10 @@ describe("tool display details", () => {
       `rg 'search "foo" in src/agents' src`,
       `rg 'Bash failed: search "foo" in src|search "bar"' src`,
       `rg 'run printf -> search "foo" in src' src`,
+      "rg 'search text' src",
+      "rg 'search text in src/agents' src",
+      "rg 'foo|search text in src/agents' src",
+      "rg 'run printf -> search text' src",
       "rg 'line1\nline2' src",
       "rg 'line with trailing newline\n' src",
       "rg '`generated command`' src",

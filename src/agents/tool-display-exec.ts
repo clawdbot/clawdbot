@@ -300,8 +300,19 @@ function isUnsafeSearchSummaryPattern(pattern: string): boolean {
     pattern.length > 120 ||
     /[\r\n`]/u.test(pattern) ||
     /^Bash failed:/iu.test(trimmed) ||
-    /(?:^|(?:\||->)\s*)search\s+["']/iu.test(trimmed)
+    containsGeneratedSearchSummary(trimmed)
   );
+}
+
+// Match the two labels this formatter emits, without hiding normal prose such as
+// "search engine" or "search textual data".
+const GENERATED_SEARCH_SUMMARY_FRAGMENT_RE =
+  /^search\s+(?:["']|text(?:\s+in(?:\s|$)|$))/iu;
+
+function containsGeneratedSearchSummary(pattern: string): boolean {
+  return pattern
+    .split(/(?:\||->)/u)
+    .some((fragment) => GENERATED_SEARCH_SUMMARY_FRAGMENT_RE.test(fragment.trim()));
 }
 
 function summarizePipeline(stage: string): string {
