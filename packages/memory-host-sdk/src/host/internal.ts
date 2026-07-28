@@ -475,14 +475,16 @@ export function chunkMarkdown(
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i] ?? "";
     const lineNo = i + 1;
-    if (chunking.perEntry && line.startsWith("- ")) {
+    const startsEntry = line.startsWith("- ");
+    const startsHeading = /^#{1,6}(?:\s|$)/u.test(line);
+    if (chunking.perEntry && (startsEntry || startsHeading)) {
       if (current.length > 0) {
         flush();
       }
       finishEntry(lineNo - 1);
       current = [];
       currentChars = 0;
-      entryStartLine = lineNo;
+      entryStartLine = startsEntry ? lineNo : undefined;
       entryFirstChunk = chunks.length;
     }
     const segments: string[] = [];

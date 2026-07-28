@@ -39,7 +39,10 @@ async function resolveUncachedProjectKey(repoRoot: string): Promise<string> {
     );
     const source = parseGitUrl(`git:${stdout.trim()}`);
     if (source) {
-      return escapeProjectKeyForAnnotation(`${source.host}/${source.path}`.toLowerCase());
+      // Preserve remote path case so case-sensitive hosts fail closed. Providers
+      // with case-insensitive slugs may miss boosts/digests across casing variants,
+      // but folding paths could cross-inject memory between distinct repositories.
+      return escapeProjectKeyForAnnotation(`${source.host.toLowerCase()}/${source.path}`);
     }
   } catch {
     // Repositories without an origin intentionally use their canonical local root.

@@ -31,11 +31,20 @@ async function makeRepo(remote?: string): Promise<string> {
 
 describe("project memory scope", () => {
   it.each([
-    ["https://github.com/OpenClaw/OpenClaw.git", "github.com/openclaw/openclaw"],
-    ["git@github.com:OpenClaw/OpenClaw.git", "github.com/openclaw/openclaw"],
-    ["https://github.com/OpenClaw/Repo;Prod.git", "github.com/openclaw/repo%3bprod"],
+    ["https://GitHub.COM/OpenClaw/OpenClaw.git", "github.com/OpenClaw/OpenClaw"],
+    ["git@GITHUB.com:OpenClaw/OpenClaw.git", "github.com/OpenClaw/OpenClaw"],
+    ["https://github.com/OpenClaw/Repo;Prod.git", "github.com/OpenClaw/Repo%3bProd"],
   ])("normalizes origin %s", async (remote, expected) => {
     await expect(resolveProjectKey(await makeRepo(remote))).resolves.toBe(expected);
+  });
+
+  it("keeps case-distinct SSH repository paths isolated", async () => {
+    const upper = await makeRepo("ssh://git@example.com/srv/Foo.git");
+    const lower = await makeRepo("ssh://git@example.com/srv/foo.git");
+
+    await expect(
+      Promise.all([resolveProjectKey(upper), resolveProjectKey(lower)]),
+    ).resolves.toEqual(["example.com/srv/Foo", "example.com/srv/foo"]);
   });
 
   it("uses an absolute path key when origin is absent", async () => {
@@ -83,6 +92,6 @@ describe("project memory scope", () => {
     await git(repo, "worktree", "add", worktree, "-b", "test-worktree");
     await expect(
       Promise.all([resolveProjectKey(repo), resolveProjectKey(worktree)]),
-    ).resolves.toEqual(["github.com/openclaw/openclaw", "github.com/openclaw/openclaw"]);
+    ).resolves.toEqual(["github.com/OpenClaw/OpenClaw", "github.com/OpenClaw/OpenClaw"]);
   });
 });

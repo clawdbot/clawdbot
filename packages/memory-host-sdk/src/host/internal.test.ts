@@ -320,6 +320,29 @@ describe("memory host SDK package internals", () => {
     ]);
   });
 
+  it("keeps promotion headings and markers out of neighboring entries", () => {
+    const text = [
+      "- Alpha entry <!-- project: github.com/acme/alpha -->",
+      "### Project: github.com/acme/beta",
+      "",
+      "<!-- openclaw-memory-promotion:memory:beta -->",
+      "- Beta entry <!-- project: github.com/acme/beta -->",
+    ].join("\n");
+
+    const chunks = chunkMarkdown(text, { tokens: 400, overlap: 40, perEntry: true });
+
+    expect(chunks.map((chunk) => chunk.text)).toEqual([
+      "- Alpha entry <!-- project: github.com/acme/alpha -->",
+      "### Project: github.com/acme/beta\n\n<!-- openclaw-memory-promotion:memory:beta -->",
+      "- Beta entry <!-- project: github.com/acme/beta -->",
+    ]);
+    expect(chunks.map((chunk) => [chunk.entryStartLine, chunk.entryEndLine])).toEqual([
+      [1, 1],
+      [undefined, undefined],
+      [5, 5],
+    ]);
+  });
+
   it("remaps chunk lines using JSONL source line maps", () => {
     const lineMap = [4, 6, 7, 10, 13];
     const chunks = chunkMarkdown(
