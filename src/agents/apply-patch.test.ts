@@ -159,6 +159,29 @@ describe("applyPatch", () => {
     expect(result.summary.modified).toEqual(["source.txt"]);
   });
 
+  it("rejects non-UTF-8 files without touching a single byte", async () => {
+    await withTempDir(async (dir) => {
+      // Lossy decode + rewrite would turn every invalid byte into U+FFFD, so
+      // the patch must fail before anything is written.
+      const filePath = path.join(dir, "recette.txt");
+      const original = Buffer.from(
+        "2320436166e9206d656e750a70726963653a20350a6e61ef766520646573736572740a",
+        "hex",
+      );
+      await fs.writeFile(filePath, original);
+
+      const patch = `*** Begin Patch
+*** Update File: recette.txt
+@@
+-price: 5
++price: 7
+*** End Patch`;
+
+      await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(/not valid UTF-8/);
+      expect(await fs.readFile(filePath)).toEqual(original);
+    });
+  });
+
   it("returns a terminal no-op without rewriting unchanged update hunks", async () => {
     const memory = createMemoryPatchSandbox({
       "source.txt": "foo\nbar\n",

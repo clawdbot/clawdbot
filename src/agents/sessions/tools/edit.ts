@@ -437,6 +437,16 @@ export function createEditToolDefinition(
         }
 
         const buffer = await ops.readFile(absolutePath);
+        // buffer.toString("utf-8") silently rewrites invalid bytes to U+FFFD,
+        // and writing the decoded string back corrupts them permanently.
+        // Refuse the edit up front so the file stays byte-for-byte intact.
+        try {
+          new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+        } catch {
+          throw new Error(
+            `Could not edit file: ${path}. File is not valid UTF-8; edit it in an editor that supports its encoding.`,
+          );
+        }
         const rawContent = buffer.toString("utf-8");
         try {
           if (signal?.aborted) {

@@ -67,6 +67,31 @@ describe("edit tool", () => {
     ).rejects.toThrow(`${"a".repeat(799)}\n... (truncated)`);
   });
 
+  it("rejects non-UTF-8 files without touching a single byte", async () => {
+    // Lossy decode + rewrite would turn every invalid byte into U+FFFD, so
+    // the tool must refuse before writing anything.
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-tool-"));
+    const filePath = path.join(tmpDir, "recette.txt");
+    const original = Buffer.from(
+      "2320436166e9206d656e750a70726963653a20350a6e61ef766520646573736572740a",
+      "hex",
+    );
+    await fs.writeFile(filePath, original);
+    const tool = createEditTool(tmpDir);
+
+    await expect(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [{ oldText: "price: 5", newText: "price: 7" }],
+        },
+        undefined,
+      ),
+    ).rejects.toThrow(/not valid UTF-8/);
+    expect(await fs.readFile(filePath)).toEqual(original);
+  });
+
   it("recovers success after a post-write throw when the edit already applied", async () => {
     // Some backends throw after flushing content; a readback match is the
     // contract that lets the tool report success without duplicating edits.

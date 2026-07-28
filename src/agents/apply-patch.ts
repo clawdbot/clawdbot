@@ -285,13 +285,26 @@ type PatchFileOps = {
   mkdirp: (dir: string) => Promise<void>;
 };
 
+// Lossy decoding rewrites invalid bytes to U+FFFD, and writing the result
+// back makes the corruption permanent. Fail the patch before anything is
+// written so the file stays byte-for-byte intact.
+function decodeUtf8Strict(buffer: Buffer, filePath: string): string {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+  } catch {
+    throw new Error(
+      `Cannot apply patch to ${filePath}: file is not valid UTF-8; edit it in an editor that supports its encoding.`,
+    );
+  }
+}
+
 function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
   if (options.sandbox) {
     const { root, bridge } = options.sandbox;
     return {
       readFile: async (filePath) => {
         const buf = await bridge.readFile({ filePath, cwd: root });
-        return buf.toString("utf8");
+        return decodeUtf8Strict(buf, filePath);
       },
       writeFile: (filePath, content) => bridge.writeFile({ filePath, cwd: root, data: content }),
       remove: (filePath) => bridge.remove({ filePath, cwd: root, force: false }),
@@ -303,7 +316,7 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
   return {
     readFile: async (filePath) => {
       if (!workspaceOnly) {
-        return await fs.readFile(filePath, "utf8");
+        return decodeUtf8Strict(await fs.readFile(filePath), filePath);
       }
       const opened = await openRootFile({
         absolutePath: filePath,
@@ -312,7 +325,7 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
       });
       assertBoundaryRead(opened, filePath);
       try {
-        return syncFs.readFileSync(opened.fd, "utf8");
+        return decodeUtf8Strict(syncFs.readFileSync(opened.fd), filePath);
       } finally {
         syncFs.closeSync(opened.fd);
       }
