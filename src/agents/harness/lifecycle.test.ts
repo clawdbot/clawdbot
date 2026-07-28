@@ -21,7 +21,11 @@ import {
   runAgentHarnessLifecycleAttempt,
   runAgentHarnessLifecycleFinalization,
 } from "./lifecycle.js";
-import type { AgentHarness, AgentHarnessAttemptParams } from "./types.js";
+import type {
+  AgentHarness,
+  AgentHarnessAttemptParams,
+  AgentHarnessAttemptResult,
+} from "./types.js";
 
 function createAttemptParams(): AgentHarnessAttemptParams {
   return {
@@ -74,14 +78,7 @@ function createFinalAssistant(): NonNullable<EmbeddedRunAttemptResult["lastAssis
 
 function createAttemptResult(): EmbeddedRunAttemptResult {
   return {
-    aborted: false,
-    externalAbort: false,
-    timedOut: false,
-    idleTimedOut: false,
-    timedOutDuringCompaction: false,
-    timedOutDuringToolExecution: false,
-    promptError: null,
-    promptErrorSource: null,
+    terminal: { kind: "ok" },
     sessionIdUsed: "session-1",
     diagnosticTrace: createDiagnosticTrace(),
     messagesSnapshot: [],
@@ -324,6 +321,65 @@ describe("AgentHarness lifecycle runner", () => {
     expect(typeof completedEvent?.durationMs).toBe("number");
   });
 
+  it("reports canonical timeout attempts as timed out harness diagnostics", async () => {
+    resetDiagnosticEventsForTest();
+    const params = createAttemptParams();
+    const result = {
+      ...createAttemptResult(),
+      terminal: {
+        kind: "timeout",
+        phase: "prompt",
+        source: "runtime",
+        failure: { source: "prompt", error: new Error("request timed out") },
+      },
+    } as EmbeddedRunAttemptResult;
+    const harness: AgentHarness = {
+      id: "codex",
+      label: "Codex",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => result,
+    };
+    const diagnostics = captureDiagnosticEvents();
+    try {
+      await runAgentHarnessLifecycleAttempt(harness, params);
+      await flushDiagnosticEvents();
+    } finally {
+      diagnostics.unsubscribe();
+    }
+
+    expect(diagnostics.events[1]?.event).toMatchObject({
+      type: "harness.run.completed",
+      outcome: "timed_out",
+    });
+  });
+
+  it("reports failed terminals with falsy errors as errors", async () => {
+    resetDiagnosticEventsForTest();
+    const params = createAttemptParams();
+    const result = {
+      ...createAttemptResult(),
+      terminal: { kind: "failed", source: "prompt", error: "" },
+    } as EmbeddedRunAttemptResult;
+    const harness: AgentHarness = {
+      id: "codex",
+      label: "Codex",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => result,
+    };
+    const diagnostics = captureDiagnosticEvents();
+    try {
+      await runAgentHarnessLifecycleAttempt(harness, params);
+      await flushDiagnosticEvents();
+    } finally {
+      diagnostics.unsubscribe();
+    }
+
+    expect(diagnostics.events[1]?.event).toMatchObject({
+      type: "harness.run.completed",
+      outcome: "error",
+    });
+  });
+
   it("scopes plugin harness run diagnostics under a child run trace", async () => {
     resetDiagnosticEventsForTest();
     const params = createAttemptParams();
@@ -403,7 +459,7 @@ describe("AgentHarness lifecycle runner", () => {
     const harnessTrace = createDiagnosticTrace();
     const result = {
       ...createAttemptResult(),
-      promptError: new Error("provider stream failed"),
+      terminal: { kind: "failed", source: "prompt", error: new Error("provider stream failed") },
     } as EmbeddedRunAttemptResult;
     const harness: AgentHarness = {
       id: "codex",
@@ -439,8 +495,11 @@ describe("AgentHarness lifecycle runner", () => {
     const harnessTrace = createDiagnosticTrace();
     const result = {
       ...createAttemptResult(),
-      promptError: new Error("blocked by policy"),
-      promptErrorSource: "hook:before_agent_run",
+      terminal: {
+        kind: "failed",
+        source: "hook:before_agent_run",
+        error: new Error("blocked by policy"),
+      },
     } as EmbeddedRunAttemptResult;
     const harness: AgentHarness = {
       id: "codex",
@@ -526,6 +585,38 @@ describe("AgentHarness lifecycle runner", () => {
     expect(outcome.agentHarnessId).toBe("codex");
     expect(outcome.agentHarnessResultClassification).toBe("empty");
     expect(harness["classify"]).toHaveBeenCalledWith(result, params);
+  });
+
+  it("classifies the shipped legacy result before normalizing its terminal", async () => {
+    const params = createAttemptParams();
+    const failure = new Error("legacy provider failure");
+    const { terminal: _terminal, ...base } = createAttemptResult();
+    const result: AgentHarnessAttemptResult = {
+      ...base,
+      aborted: false,
+      externalAbort: false,
+      timedOut: false,
+      idleTimedOut: false,
+      timedOutDuringCompaction: false,
+      promptError: failure,
+      promptErrorSource: "prompt",
+    };
+    const classify = vi.fn<NonNullable<AgentHarness["classify"]>>((raw) =>
+      "promptError" in raw && raw.promptError ? "empty" : "ok",
+    );
+    const harness: AgentHarness = {
+      id: "legacy",
+      label: "Legacy",
+      supports: () => ({ supported: true }),
+      runAttempt: vi.fn(async () => result),
+      classify,
+    };
+
+    const outcome = await runAgentHarnessLifecycleAttempt(harness, params);
+
+    expect(classify.mock.calls[0]?.[0]).toHaveProperty("promptError", failure);
+    expect(outcome.agentHarnessResultClassification).toBe("empty");
+    expect(outcome.terminal).toEqual({ kind: "failed", source: "prompt", error: failure });
   });
 
   it("preserves harness-supplied classification when no classify hook is registered", async () => {

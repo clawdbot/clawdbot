@@ -5,6 +5,7 @@ import {
 // Gateway WebSocket broadcaster.
 // Applies event scope guards and slow-consumer handling before sending frames.
 import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
+import { queuePluginSessionsChanged } from "../plugins/gateway-events.js";
 import { isBrowserCopilotClient } from "../utils/message-channel.js";
 import {
   ADMIN_SCOPE,
@@ -74,6 +75,8 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "session.observer": [READ_SCOPE],
   "session.operation": [READ_SCOPE],
   "session.sharing": [READ_SCOPE],
+  "session.suggestion": [READ_SCOPE],
+  "session.typing": [READ_SCOPE],
   "session.tool": [READ_SCOPE],
   // Operator terminal byte/exit streams. Admin-gated to match the terminal.*
   // methods; also targeted to the owning connection at broadcast time.
@@ -185,6 +188,8 @@ export function createGatewayBroadcaster(params: {
     client: GatewayWsClient,
     sessionKeys: readonly string[],
     agentId?: string,
+    event?: string,
+    payload?: unknown,
   ) => boolean;
 }) {
   const clientSeq = new WeakMap<GatewayWsClient, number>();
@@ -197,6 +202,10 @@ export function createGatewayBroadcaster(params: {
     targetConnIds?: ReadonlySet<string>,
     explicitPluginScope?: GatewayPluginEventScope,
   ) => {
+    if (event === "sessions.changed") {
+      // Delivery is queued here so process-local handlers run after websocket fanout returns.
+      queuePluginSessionsChanged(payload);
+    }
     if (params.clients.size === 0) {
       return;
     }
@@ -254,21 +263,24 @@ export function createGatewayBroadcaster(params: {
       if (
         sessionKeys.length > 0 &&
         params.canReceiveSessionEvent &&
-        !params.canReceiveSessionEvent(c, sessionKeys, agentId)
+        !params.canReceiveSessionEvent(c, sessionKeys, agentId, event, payload)
       ) {
         continue;
       }
-      if (
-        (isBrowserCopilotClient(c.connect.client) ||
+      const requiresSessionSubscription =
+        event === "session.typing" ||
+        ((isBrowserCopilotClient(c.connect.client) ||
           hasGatewayClientCap(c.connect.caps, GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS)) &&
-        SESSION_SUBSCRIPTION_EVENTS.has(event) &&
-        (!opts?.sessionKeys?.length ||
-          !opts.sessionKeys.some((sessionKey) =>
+          SESSION_SUBSCRIPTION_EVENTS.has(event));
+      if (
+        requiresSessionSubscription &&
+        (!sessionKeys.length ||
+          !sessionKeys.some((sessionKey) =>
             params.sessionMessageSubscribers?.get(sessionKey).has(c.connId),
           ))
       ) {
-        // Scoped clients opt out of legacy broadcast fanout. The server-side
-        // subscription registry is the authority, so client filtering cannot leak a sibling tab.
+        // Scoped clients opt out of cross-session fanout, including critical observer announces.
+        // The registry is authoritative; for cap-gated events, unscoped Control UI clients keep full fanout.
         continue;
       }
       const nextSeq = (clientSeq.get(c) ?? 0) + 1;
@@ -317,9 +329,6 @@ export function createGatewayBroadcaster(params: {
     broadcastInternal(event, payload, opts);
 
   const broadcastToConnIds: GatewayBroadcastToConnIdsFn = (event, payload, connIds, opts) => {
-    if (connIds.size === 0) {
-      return;
-    }
     broadcastInternal(event, payload, opts, connIds);
   };
 

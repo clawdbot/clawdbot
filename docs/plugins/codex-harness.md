@@ -56,7 +56,7 @@ channel is the communication surface.
 
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
-- A stable Codex app-server from `0.143.0` through `0.144.6`. The plugin manages a compatible
+- A stable Codex app-server from `0.143.0` through `0.145.0`. The plugin manages a compatible
   binary by default, so a `codex` command on `PATH` does not affect normal
   startup.
 - Codex auth through `openclaw models auth login --provider openai`, an
@@ -141,7 +141,21 @@ user Codex home:
 User-home mode supports a local managed stdio process or the shared Unix-socket
 transport. It uses `$CODEX_HOME` when set and `~/.codex` otherwise, including
 that home's native Codex auth, config, plugins, and thread store. OpenClaw does
-not inject an OpenClaw auth profile into this app-server.
+not inject an OpenClaw auth profile into this app-server, even when the agent's
+model route has a stored OpenAI profile. The native account is verified against
+the route instead, in both directions:
+
+- A subscription route requires the native home to be signed in to ChatGPT. Run
+  `codex login` in that home if a turn reports missing subscription credentials.
+- A Platform (API-key) route refuses a native home signed in with a ChatGPT
+  subscription, so an API-billed route never silently spends the plan. Sign that
+  home in with `codex login --with-api-key`, or switch to `homeScope: "agent"`
+  and let OpenClaw inject the key it already holds.
+
+A stored OpenAI profile is fine alongside `homeScope: "user"`; OpenClaw keeps it
+for agent-scoped connections and simply does not hand it to the native home. Use
+`openclaw models auth list --provider openai` to inspect stored profiles and
+`openclaw models auth logout <profileId> --yes` to remove one you no longer want.
 
 Owner turns gain the `codex_threads` tool: list, search, read, fork, rename,
 archive, and restore native threads. Fork a thread to continue it in
@@ -1108,7 +1122,7 @@ Doctor rewrites legacy model refs to `openai/*`, removes stale session and
 whole-agent runtime pins, and preserves existing auth-profile overrides.
 
 **The app-server is rejected:** use a stable Codex app-server from `0.143.0`
-through the bundled `0.144.6`. Prereleases, build-suffixed versions, and newer
+through the bundled `0.145.0`. Prereleases, build-suffixed versions, and newer
 unvalidated releases are rejected because OpenClaw validates generated schemas
 against the bundled app-server version.
 

@@ -89,7 +89,12 @@ describe("noteClaudeCliHealth", () => {
       const resolveCommandPath = vi.fn(() => undefined);
 
       noteClaudeCliHealth(
-        { agents: { defaults: { model: "claude-cli/claude-sonnet-4-6" } } },
+        {
+          agents: {
+            defaults: { model: "claude-cli/claude-sonnet-4-6" },
+            entries: { main: { default: true } },
+          },
+        },
         {
           homeDir,
           workspaceDir,
@@ -129,6 +134,7 @@ describe("noteClaudeCliHealth", () => {
             defaults: {
               model: { primary: "claude-cli/claude-sonnet-4-6" },
             },
+            entries: { main: { default: true } },
           },
         },
         {
@@ -226,6 +232,7 @@ describe("noteClaudeCliHealth", () => {
             defaults: {
               model: { primary: "claude-cli/claude-sonnet-4-6" },
             },
+            entries: { main: { default: true } },
           },
         },
         {
@@ -260,6 +267,7 @@ describe("noteClaudeCliHealth", () => {
             defaults: {
               model: { primary: "claude-cli/claude-sonnet-4-6" },
             },
+            entries: { main: { default: true } },
           },
         },
         {
@@ -287,6 +295,7 @@ describe("noteClaudeCliHealth", () => {
             defaults: {
               model: { primary: "claude-cli/claude-sonnet-4-6" },
             },
+            entries: { main: { default: true } },
           },
         },
         {

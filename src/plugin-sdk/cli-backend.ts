@@ -12,11 +12,9 @@ export type {
   CliBackendPrepareExecutionContext,
   CliBackendResolveExecutionArgs,
   CliBackendResolveExecutionArgsContext,
-  CliBackendResolveRuntimeToolAvailability,
-  CliBackendResolveRuntimeToolAvailabilityContext,
-  CliBackendRuntimeToolAvailability,
   CliBackendSideQuestionToolMode,
   CliBackendToolAvailability,
+  CliBackendToolAvailabilityEnforcement,
   CliBackendThinkingLevel,
 } from "../plugins/types.js";
 export type { CliBackendRuntimeArtifactPolicy } from "../plugins/cli-backend.types.js";

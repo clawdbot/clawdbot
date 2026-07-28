@@ -6,6 +6,7 @@ import {
   createParams,
   createProjector,
   buildEmptyToolTelemetry,
+  readAttemptTerminal,
   expectUsageFields,
   forCurrentTurn,
   agentMessageDelta,
@@ -285,13 +286,13 @@ describe("CodexAppServerEventProjector usage projection", () => {
 
     projector.markTimedOut();
     const timedOut = projector.buildResult(buildEmptyToolTelemetry());
-    expect(timedOut.aborted).toBe(true);
+    expect(readAttemptTerminal(timedOut).aborted).toBe(true);
     expect(timedOut.attemptUsage?.contextUsage).toEqual({ state: "unavailable" });
 
     expect(projector.recoverCompletedTerminalAssistantAfterTurnWatchTimeout()).toBe(true);
     const recovered = projector.buildResult(buildEmptyToolTelemetry());
-    expect(recovered.aborted).toBe(false);
-    expect(recovered.promptError).toBeNull();
+    expect(readAttemptTerminal(recovered).aborted).toBe(false);
+    expect(readAttemptTerminal(recovered).promptError).toBeNull();
     expect(recovered.attemptUsage?.contextUsage).toEqual({
       state: "available",
       promptTokens: 5,

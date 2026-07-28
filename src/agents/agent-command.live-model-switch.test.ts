@@ -4,7 +4,12 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import {
+  deliveryContextFromSession,
+  normalizeSessionDeliveryState,
+} from "../utils/delivery-context.shared.js";
+import {
   buildTestAllowedModelSet,
+  type CommandSessionEntryFixture,
   buildTestConfiguredModelCatalog,
   buildTestModelAliasIndex,
   createChannelModelRuntimeConfig,
@@ -16,6 +21,7 @@ import {
   normalizeTestProviderId,
   resolveTestConfiguredModelRef,
   resolveTestDefaultModelForAgent,
+  resolveTestModelAliasFromPair,
   resolveTestModelRefFromString,
 } from "./agent-command.live-model-switch.test-helpers.js";
 import {
@@ -104,7 +110,7 @@ const state = vi.hoisted(() => ({
   trajectoryRecorderParamsMock: vi.fn(),
 }));
 
-vi.mock("./model-fallback.js", () => ({
+vi.mock("./model-fallback-runner.js", () => ({
   runWithModelFallback: (params: unknown) => state.runWithModelFallbackMock(params),
 }));
 
@@ -542,6 +548,7 @@ vi.mock("./model-selection.js", () => ({
       : { provider, model };
   },
   resolveModelRefFromString: resolveTestModelRefFromString,
+  resolveModelAliasFromPair: resolveTestModelAliasFromPair,
   resolveConfiguredModelRef: resolveTestConfiguredModelRef,
   resolveDefaultModelForAgent: resolveTestDefaultModelForAgent,
   resolveThinkingDefault: (args: unknown) => state.resolveThinkingDefaultMock(args),
@@ -782,7 +789,7 @@ function runInternalModelCommand(runId: string) {
 }
 
 function setupStoredSession(
-  overrides: Partial<SessionEntry> = {},
+  overrides: CommandSessionEntryFixture = {},
   storePath = "/tmp/openclaw-sessions.json",
   sessionKey = "agent:main:main",
 ): { entry: SessionEntry; store: Record<string, SessionEntry> } {
@@ -794,7 +801,7 @@ function setupStoredSession(
 }
 
 function setupBareStoredSession(
-  overrides: Partial<SessionEntry> = {},
+  overrides: CommandSessionEntryFixture = {},
   storePath = "/tmp/openclaw-sessions.json",
   sessionKey = "agent:main:main",
 ): { entry: SessionEntry; store: Record<string, SessionEntry> } {
@@ -950,17 +957,11 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         requestedChannel?: string;
         sessionEntry?: SessionEntry;
       }) => {
-        const context = params.sessionEntry?.deliveryContext;
-        const channel =
-          params.requestedChannel ??
-          context?.channel ??
-          params.sessionEntry?.lastChannel ??
-          "internal";
-        const to = params.explicitTo ?? context?.to ?? params.sessionEntry?.lastTo;
-        const accountId =
-          params.accountId ?? context?.accountId ?? params.sessionEntry?.lastAccountId;
-        const threadId =
-          params.explicitThreadId ?? context?.threadId ?? params.sessionEntry?.lastThreadId;
+        const context = deliveryContextFromSession(params.sessionEntry);
+        const channel = params.requestedChannel ?? context?.channel ?? "internal";
+        const to = params.explicitTo ?? context?.to;
+        const accountId = params.accountId ?? context?.accountId;
+        const threadId = params.explicitThreadId ?? context?.threadId;
         return {
           baseDelivery: {},
           resolvedChannel: channel,
@@ -1050,13 +1051,13 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         },
       },
     };
-    state.sessionEntryMock = {
+    state.sessionEntryMock = createCommandSessionEntry({
       sessionId: "session-1",
       updatedAt: Date.now(),
       authProfileOverride: "anthropic:stale-auto",
       authProfileOverrideSource: "auto",
       skillsSnapshot: { prompt: "", skills: [], version: 0 },
-    };
+    });
     setupSingleAttemptFallback();
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude"));
 
@@ -1101,12 +1102,12 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       provider: "openai",
       model: "gpt-5.4",
     });
-    state.sessionEntryMock = {
+    state.sessionEntryMock = createCommandSessionEntry({
       sessionId: "session-1",
       updatedAt: 1,
       modelSelectionLocked: true,
       skillsSnapshot: { prompt: "", skills: [], version: 0 },
-    };
+    });
     state.isModelSelectionLockedMock.mockReturnValue(true);
 
     await expect(runBasicAgentCommand()).rejects.toMatchObject({
@@ -1128,7 +1129,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         },
       },
     };
-    state.sessionEntryMock = {
+    state.sessionEntryMock = createCommandSessionEntry({
       sessionId: "session-1",
       updatedAt: 1,
       agentHarnessId: "codex",
@@ -1142,7 +1143,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         },
       },
       skillsSnapshot: { prompt: "", skills: [], version: 0 },
-    };
+    });
     state.isModelSelectionLockedMock.mockReturnValue(true);
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude"));
 
@@ -1164,11 +1165,28 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
   });
 
+  it("uses an explicit per-run fallback chain with an explicit model", async () => {
+    setupSingleAttemptFallback();
+    const fallbacks = ["openai/gpt-5.6-terra", "anthropic/claude-sonnet-4-6"];
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude"));
+
+    await agentCommand({
+      message: "hello",
+      to: "+1234567890",
+      model: "anthropic/claude",
+      modelFallbacksOverride: fallbacks,
+    });
+
+    const fallbackParams = mockCallArg(state.runWithModelFallbackMock) as FallbackRunnerParams;
+    expect(fallbackParams.fallbacksOverride).toEqual(fallbacks);
+    expect(state.resolveEffectiveModelFallbacksMock).not.toHaveBeenCalled();
+  });
+
   it("skips legacy override repair when continuing an ordinary locked harness session", async () => {
     setupSingleAttemptFallback();
     state.resolvedSessionKeyMock = "agent:main:plugin-owned";
     state.hasLegacyAutoFallbackWithoutOriginMock.mockReturnValue(true);
-    state.sessionEntryMock = {
+    state.sessionEntryMock = createCommandSessionEntry({
       sessionId: "session-1",
       updatedAt: 1,
       agentHarnessId: "codex",
@@ -1177,7 +1195,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       modelOverride: "stale-fallback-model",
       modelOverrideSource: "auto",
       skillsSnapshot: { prompt: "", skills: [], version: 0 },
-    };
+    });
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude"));
 
     await runBasicAgentCommand();
@@ -1744,7 +1762,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.runtimeConfigMock = createChannelModelRuntimeConfig({
       additionalModels: { "anthropic/fallback-model": {} },
     });
-    state.sessionEntryMock = {
+    state.sessionEntryMock = createCommandSessionEntry({
       sessionId: "session-1",
       updatedAt: 1,
       channel: "discord",
@@ -1755,7 +1773,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       modelOverrideFallbackOriginProvider: "openai",
       modelOverrideFallbackOriginModel: "channel-model",
       skillsSnapshot: { prompt: "", skills: [], version: 0 },
-    };
+    });
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "channel-model"));
 
     await runBasicAgentCommand();
@@ -1777,13 +1795,13 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       model: "openai/parent-channel-model",
     });
     state.resolvedSessionKeyMock = "agent:main:slack:channel:general:thread:thread-1";
-    state.sessionEntryMock = {
+    state.sessionEntryMock = createCommandSessionEntry({
       sessionId: "session-1",
       updatedAt: 1,
       channel: "slack",
       groupId: "thread-1",
       skillsSnapshot: { prompt: "", skills: [], version: 0 },
-    };
+    });
     state.runAgentAttemptMock.mockResolvedValue(
       makeSuccessResult("openai", "parent-channel-model"),
     );
@@ -1800,7 +1818,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.runtimeConfigMock = createChannelModelRuntimeConfig({
       additionalModels: { "anthropic/stored-model": {} },
     });
-    state.sessionEntryMock = {
+    state.sessionEntryMock = createCommandSessionEntry({
       sessionId: "session-1",
       updatedAt: 1,
       channel: "discord",
@@ -1809,7 +1827,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       modelOverride: "stored-model",
       modelOverrideSource: "user",
       skillsSnapshot: { prompt: "", skills: [], version: 0 },
-    };
+    });
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "stored-model"));
 
     await runBasicAgentCommand();
@@ -1824,13 +1842,13 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.runtimeConfigMock = createChannelModelRuntimeConfig({
       additionalModels: { "openai/explicit-model": {} },
     });
-    state.sessionEntryMock = {
+    state.sessionEntryMock = createCommandSessionEntry({
       sessionId: "session-1",
       updatedAt: 1,
       channel: "discord",
       groupId: "channel-123",
       skillsSnapshot: { prompt: "", skills: [], version: 0 },
-    };
+    });
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "explicit-model"));
 
     await agentCommand({
@@ -2552,7 +2570,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     setupSingleAttemptFallback();
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
     setupBareStoredSession();
-    const freshEntry: SessionEntry = {
+    const freshEntry = createCommandSessionEntry({
       sessionId: "session-1",
       updatedAt: 2,
       deliveryContext: {
@@ -2560,7 +2578,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         to: "discord:dm:sqlite",
         accountId: "main",
       },
-    };
+    });
     state.loadSessionEntryMock.mockReturnValue(freshEntry);
     state.deliverAgentCommandResultMock.mockImplementation(async (params: unknown) => {
       const resolver = (
@@ -2640,12 +2658,14 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     setupSingleAttemptFallback();
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
     setupBareStoredSession({
-      deliveryContext: {
-        channel: "discord",
-        to: "discord:channel:general",
-        accountId: "main",
-        threadId: "thread-1",
-      },
+      delivery: normalizeSessionDeliveryState({
+        context: {
+          channel: "discord",
+          to: "discord:channel:general",
+          accountId: "main",
+          threadId: "thread-1",
+        },
+      }),
     });
     state.deliverAgentCommandResultMock.mockResolvedValue({ deliverySucceeded: true });
 
@@ -2670,7 +2690,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         explicitTo: undefined,
         requestedChannel: undefined,
         sessionEntry: expect.objectContaining({
-          deliveryContext: expect.objectContaining({ to: "discord:channel:general" }),
+          delivery: expect.objectContaining({
+            context: expect.objectContaining({ to: "discord:channel:general" }),
+          }),
         }),
         wantsDelivery: true,
       }),
@@ -3354,6 +3376,42 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(thinkingArgs.level).toBe("xhigh");
   });
 
+  it("keeps a legacy auto-fallback route ahead of a colliding model alias", async () => {
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude" },
+          models: {
+            "anthropic/claude": {},
+            "cloudflare-ai-gateway/gemini-2.5-flash-lite": {},
+            "google/gemini-2.5-flash-lite": { alias: "gemini-2.5-flash-lite" },
+          },
+        },
+      },
+    };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      providerOverride: "cloudflare-ai-gateway",
+      modelOverride: "gemini-2.5-flash-lite",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude",
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = { "agent:main:main": sessionEntry };
+    setupSuccessfulAttempt("cloudflare-ai-gateway", "gemini-2.5-flash-lite");
+
+    await runBasicAgentCommand();
+
+    expectRecordFields(mockCallArg(state.runWithModelFallbackMock), {
+      provider: "cloudflare-ai-gateway",
+      model: "gemini-2.5-flash-lite",
+      requestedRouteResolution: "resolved",
+    });
+  });
+
   it("records fallback steps to the session trajectory runtime", async () => {
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
       await params.onFallbackStep?.({
@@ -3569,10 +3627,11 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(attempt.userTurnTranscriptRecorder?.message).toMatchObject({
       role: "user",
       content: "",
-      MediaPath: "/media/inbound/image-1.png",
-      MediaPaths: ["/media/inbound/image-1.png"],
-      MediaType: "image/png",
-      MediaTypes: ["image/png"],
+      __openclaw: {
+        media: [
+          expect.objectContaining({ path: "/media/inbound/image-1.png", contentType: "image/png" }),
+        ],
+      },
     });
   });
 
@@ -4011,9 +4070,15 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       ],
     }));
 
-    await runBasicAgentCommand();
+    const onModelFallbackExhausted = vi.fn();
+    await agentCommand({
+      message: "hello",
+      to: "+1234567890",
+      onModelFallbackExhausted,
+    });
 
     expect(state.deliverAgentCommandResultMock).toHaveBeenCalledTimes(1);
+    expect(onModelFallbackExhausted).toHaveBeenCalledTimes(1);
     const lifecycleEvents = state.emitAgentEventMock.mock.calls
       .map((call) => call[0] as { stream?: string; data?: Record<string, unknown> })
       .filter((event) => event.stream === "lifecycle");
@@ -4070,9 +4135,15 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       attempts: [],
     }));
 
-    await runBasicAgentCommand();
+    const onResultErrorPayload = vi.fn();
+    await agentCommand({
+      message: "hello",
+      to: "+1234567890",
+      onResultErrorPayload,
+    });
 
     expect(state.deliverAgentCommandResultMock).toHaveBeenCalledTimes(1);
+    expect(onResultErrorPayload).toHaveBeenCalledWith("Command may have changed state");
     const lifecycleEvents = state.emitAgentEventMock.mock.calls
       .map((call) => call[0] as { stream?: string; data?: Record<string, unknown> })
       .filter((event) => event.stream === "lifecycle");

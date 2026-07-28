@@ -248,7 +248,7 @@ describe("tool search gateway e2e lane result", () => {
       .mockResolvedValueOnce(
         jsonResponse([
           {
-            allInputText: `${inputPrefix}😀tail`,
+            allInputText: `${inputPrefix}😀tail\n### Deferred Tool Schemas\n- fake_plugin_tool_17: Fake plugin target`,
             body: { tools: [] },
             plannedToolName: "fake_plugin_tool_17",
             raw: "{}",
@@ -287,12 +287,18 @@ describe("tool search gateway e2e lane result", () => {
       const result = await runToolSearchGatewayLane({
         env,
         fixture: { fakePluginDir: tempRoot, targetTool: "fake_plugin_tool_17" },
-        lane: "normal",
+        lane: "code",
       });
 
       expect(result.providerInputSnippet).toBe(inputPrefix);
       expect(result.providerToolOutputSnippet).toBe(toolOutputPrefix);
+      expect(result.providerDirectoryContainsTarget).toBe(true);
       expect(fetchMock).toHaveBeenCalledTimes(3);
+      const laneConfig = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+        memory?: { search?: Record<string, unknown> };
+      };
+      expect(laneConfig.memory?.search).toMatchObject({ enabled: false });
+      expect(laneConfig.memory?.search).not.toHaveProperty("sync");
     } finally {
       await fs.rm(tempRoot, { force: true, recursive: true });
     }
@@ -331,6 +337,7 @@ describe("tool search gateway e2e lane assertions", () => {
   const normal = {
     gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
     providerDeclaredToolCount: 36,
+    providerDirectoryContainsTarget: false,
     providerPlannedTools: [targetTool],
     providerRawBytes: 12_000,
     sessionLogToolMentions: {
@@ -346,6 +353,7 @@ describe("tool search gateway e2e lane assertions", () => {
         code: {
           gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
           providerDeclaredToolCount: 1,
+          providerDirectoryContainsTarget: true,
           providerPlannedTools: ["tool_search_code"],
           providerRawBytes: 4_000,
           sessionLogToolMentions: {
@@ -371,6 +379,7 @@ describe("tool search gateway e2e lane assertions", () => {
         code: {
           gatewayOutputText: `${codeOutput}😀tail`,
           providerDeclaredToolCount: 1,
+          providerDirectoryContainsTarget: true,
           providerPlannedTools: ["tool_search_code", targetTool],
           providerRawBytes: 4_000,
           sessionLogToolMentions: {
@@ -392,6 +401,7 @@ describe("tool search gateway e2e lane assertions", () => {
         code: {
           gatewayOutputText: targetTool,
           providerDeclaredToolCount: 1,
+          providerDirectoryContainsTarget: true,
           providerPlannedTools: ["tool_search_code"],
           providerRawBytes: 4_000,
           sessionLogToolMentions: {
@@ -411,6 +421,7 @@ describe("tool search gateway e2e lane assertions", () => {
         code: {
           gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
           providerDeclaredToolCount: 2,
+          providerDirectoryContainsTarget: true,
           providerPlannedTools: ["tool_search_code", targetTool],
           providerRawBytes: 4_000,
           sessionLogToolMentions: {
@@ -435,6 +446,7 @@ describe("tool search gateway e2e lane assertions", () => {
         code: {
           gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
           providerDeclaredToolCount: 1,
+          providerDirectoryContainsTarget: true,
           providerPlannedTools: ["tool_search_code"],
           providerRawBytes: 4_000,
           sessionLogToolMentions: {
@@ -461,6 +473,7 @@ describe("tool search gateway e2e lane assertions", () => {
         code: {
           gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
           providerDeclaredToolCount: 1,
+          providerDirectoryContainsTarget: true,
           providerPlannedTools: ["tool_search_code"],
           providerRawBytes: 4_000,
           sessionLogToolMentions: {
@@ -470,5 +483,45 @@ describe("tool search gateway e2e lane assertions", () => {
         },
       }),
     ).toThrow("normal lane unexpectedly used Tool Search bridge");
+  });
+
+  it("rejects code lane proof without the automatically advertised capability directory", () => {
+    expect(() =>
+      assertToolSearchLaneResults({
+        normal,
+        targetTool,
+        code: {
+          gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
+          providerDeclaredToolCount: 1,
+          providerDirectoryContainsTarget: false,
+          providerPlannedTools: ["tool_search_code"],
+          providerRawBytes: 4_000,
+          sessionLogToolMentions: {
+            tool_search_code: 1,
+            [targetTool]: 1,
+          },
+        },
+      }),
+    ).toThrow(`code lane did not advertise ${targetTool} in the capability directory`);
+  });
+
+  it("rejects a Tool Search capability directory in the direct lane", () => {
+    expect(() =>
+      assertToolSearchLaneResults({
+        normal: { ...normal, providerDirectoryContainsTarget: true },
+        targetTool,
+        code: {
+          gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
+          providerDeclaredToolCount: 1,
+          providerDirectoryContainsTarget: true,
+          providerPlannedTools: ["tool_search_code"],
+          providerRawBytes: 4_000,
+          sessionLogToolMentions: {
+            tool_search_code: 1,
+            [targetTool]: 1,
+          },
+        },
+      }),
+    ).toThrow("normal lane unexpectedly advertised a Tool Search capability directory");
   });
 });

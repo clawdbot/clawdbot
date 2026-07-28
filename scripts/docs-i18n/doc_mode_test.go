@@ -891,6 +891,30 @@ func TestValidateDocChunkTranslationAcceptsReorderedInlineCode(t *testing.T) {
 	}
 }
 
+func TestUnwrapUnexpectedInlineCodeSpans(t *testing.T) {
+	t.Parallel()
+
+	source := "Use labels in ordinary prose.\n"
+	translated := "Verwende `Bezeichnungen` in `normalem Text`.\n"
+	want := "Verwende Bezeichnungen in normalem Text.\n"
+	if got := unwrapUnexpectedInlineCodeSpans(source, translated); got != want {
+		t.Fatalf("unexpected inline-code repair:\n%s\nwant:\n%s", got, want)
+	}
+	if err := validateDocChunkTranslation(source, want); err != nil {
+		t.Fatalf("expected repaired translation to validate: %v", err)
+	}
+}
+
+func TestUnwrapUnexpectedInlineCodeSpansPreservesSourceCodeContract(t *testing.T) {
+	t.Parallel()
+
+	source := "Use `--source`.\n"
+	translated := "Verwende `--target`.\n"
+	if got := unwrapUnexpectedInlineCodeSpans(source, translated); got != translated {
+		t.Fatalf("expected source inline-code contract to remain untouched: %q", got)
+	}
+}
+
 func TestMaskMarkdownDocSyntaxPreservesCanonicalNestedBackticks(t *testing.T) {
 	t.Parallel()
 
@@ -2697,8 +2721,8 @@ func TestValidateDocBodyRejectsChangedCompositeLiteral(t *testing.T) {
 func TestExtractNumericValuesKeepsLowAmbiguityComposites(t *testing.T) {
 	t.Parallel()
 
-	got := strings.Join(extractNumericValues("0xFF 0b101 0o755 1.5:1 24/7 1e-3 v1.2.3 v24/7 24/7z"), ",")
-	if want := "0xFF,0b101,0o755,1.5:1,24/7,1e-3"; got != want {
+	got := strings.Join(extractNumericValues("0xFF 0b101 0o755 1.5:1 24/7 1e-3 v1.2.3 v24/7 24/7z Hailuo-2.3/02"), ",")
+	if want := "0xFF,0b101,0o755,1.5:1,24/7,1e-3,2.3/02"; got != want {
 		t.Fatalf("unexpected composite literals: got=%q want=%q", got, want)
 	}
 	if err := validateDocChunkTranslation("Supports 1:1 conversations.\n", "Unterstützt 1:1-Unterhaltungen.\n"); err != nil {
@@ -2706,6 +2730,9 @@ func TestExtractNumericValuesKeepsLowAmbiguityComposites(t *testing.T) {
 	}
 	if err := validateDocChunkTranslation("Available 24/7.\n", "24/7 उपलब्ध।\n"); err != nil {
 		t.Fatalf("expected translated prose around exact slash ratio to pass: %v", err)
+	}
+	if err := validateDocChunkTranslation("Hailuo 2.3/02 models.\n", "Hailuo-2.3/02-Modelle.\n"); err != nil {
+		t.Fatalf("expected locale hyphen compound around exact ratio to pass: %v", err)
 	}
 }
 

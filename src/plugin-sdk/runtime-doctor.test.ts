@@ -1,12 +1,75 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "./config-contracts.js";
-import { normalizeChannelConfigEntries, stripRetiredChannelKeys } from "./runtime-doctor.js";
+import {
+  defineKeyMoveMigration,
+  normalizeChannelConfigEntries,
+  stripRetiredChannelKeys,
+} from "./runtime-doctor.js";
 
 function cfgWith(entry: Record<string, unknown>): OpenClawConfig {
   return { channels: { sample: entry } } as never;
 }
 
 describe("runtime-doctor channel helpers", () => {
+  it("moves nested keys across wildcard entries and preserves canonical values", () => {
+    const migration = defineKeyMoveMigration({
+      scope: ["groups", "*"],
+      from: ["allow"],
+      to: ["enabled"],
+    });
+    const entry = {
+      groups: {
+        first: { allow: true },
+        second: { allow: true, enabled: false },
+        invalid: "skip",
+      },
+    };
+    const changes: string[] = [];
+
+    expect(migration.hasLegacy(entry)).toBe(true);
+    expect(migration.normalize({ entry, pathPrefix: "channels.sample", changes })).toEqual({
+      entry: {
+        groups: {
+          first: { enabled: true },
+          second: { enabled: false },
+          invalid: "skip",
+        },
+      },
+      changed: true,
+    });
+    expect(changes).toEqual([
+      "Moved channels.sample.groups.first.allow → channels.sample.groups.first.enabled.",
+      "Removed channels.sample.groups.second.allow (channels.sample.groups.second.enabled already set).",
+    ]);
+  });
+
+  it("supports mapped values, invalid removal, and empty-parent pruning", () => {
+    const migration = defineKeyMoveMigration({
+      from: ["thread", "requireExplicitMention"],
+      to: ["implicitMentions", "threadParticipation"],
+      map: (value) => (typeof value === "boolean" ? { value: !value } : null),
+      pruneEmptySource: true,
+    });
+    const changes: string[] = [];
+    const moved = migration.normalize({
+      entry: { thread: { requireExplicitMention: true } },
+      pathPrefix: "channels.sample",
+      changes,
+    });
+    expect(moved.entry).toEqual({ implicitMentions: { threadParticipation: false } });
+    expect(
+      migration.normalize({
+        entry: { thread: { requireExplicitMention: "yes" } },
+        pathPrefix: "channels.sample",
+        changes,
+      }).entry,
+    ).toEqual({});
+    expect(changes).toEqual([
+      "Moved channels.sample.thread.requireExplicitMention → channels.sample.implicitMentions.threadParticipation.",
+      "Removed invalid channels.sample.thread.requireExplicitMention value.",
+    ]);
+  });
+
   it("normalizes the root and every object-shaped account in order", () => {
     const changeLog: string[] = [];
     const result = normalizeChannelConfigEntries({

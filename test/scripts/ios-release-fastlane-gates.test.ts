@@ -14,7 +14,6 @@ const snapshotUITestPath = path.join(
   "UITests",
   "OpenClawSnapshotUITests.swift",
 );
-const rootSidebarPath = path.join(process.cwd(), "apps", "ios", "Sources", "RootSidebar.swift");
 const rootTabsPath = path.join(process.cwd(), "apps", "ios", "Sources", "RootTabs.swift");
 const ciWorkflowPath = path.join(process.cwd(), ".github", "workflows", "ci.yml");
 
@@ -179,15 +178,20 @@ describe("iOS Fastlane release upload gates", () => {
     expect(uploadCall).toBeGreaterThan(validationCall);
   });
 
-  it("validates with Apple and rechecks the plan before the first remote mutation", () => {
-    const releaseUpload = laneBody(readFastfile(), "release_upload");
-    const binaryValidation = releaseUpload.indexOf("verify_app_store_binary!");
+  it("rechecks the plan after local validation and before the first App Store mutation", () => {
+    const fastfile = readFastfile();
+    const releaseUpload = laneBody(fastfile, "release_upload");
+    const build = releaseUpload.indexOf("build = build_app_store_release(context)");
     const planRecheck = releaseUpload.lastIndexOf("resolve_ios_release_plan!");
     const metadata = releaseUpload.indexOf("\n    metadata(");
+    const upload = releaseUpload.indexOf("upload_to_testflight(");
 
-    expect(binaryValidation).toBeGreaterThanOrEqual(0);
-    expect(planRecheck).toBeGreaterThan(binaryValidation);
+    expect(fastfile).not.toContain("def verify_app_store_binary!");
+    expect(releaseUpload).not.toContain("verify_only: true");
+    expect(build).toBeGreaterThanOrEqual(0);
+    expect(planRecheck).toBeGreaterThan(build);
     expect(metadata).toBeGreaterThan(planRecheck);
+    expect(upload).toBeGreaterThan(planRecheck);
   });
 
   it("waits for Apple build processing without submitting to TestFlight review", () => {
@@ -220,27 +224,33 @@ describe("iOS Fastlane release upload gates", () => {
   it("fails from authoritative Xcode results and keeps successful bundles outside screenshots", () => {
     const fastfile = readFastfile();
     const screenshots = laneBody(fastfile, "screenshots");
+    const capture = functionBody(fastfile, "capture_release_ios_screenshot!");
+    const archive = functionBody(fastfile, "archive_snapshot_test_result!");
     const verifier = functionBody(fastfile, "verify_snapshot_test_result!");
 
     expect(screenshots).toContain("devices = snapshot_devices");
-    expect(screenshots).toContain("devices.each_with_index");
+    expect(screenshots).toContain("build_for_testing: true");
+    expect(screenshots).toContain("RELEASE_IOS_SCREENSHOT_TESTS.each");
+    expect(screenshots).toContain("capture_release_ios_screenshot!(");
+    expect(capture).toContain("1.upto(2)");
     expect(screenshots).toContain(
-      'only_testing: ["OpenClawUITests/OpenClawSnapshotUITests/testConnectedGatewayTabs"]',
+      "result_bundle_archive_directory: result_bundle_archive_directory",
     );
-    expect(screenshots).toContain("result_bundle: true");
-    expect(screenshots).toContain("number_of_retries: 0");
-    expect(screenshots).toContain("stop_after_first_error: true");
+    expect(capture).toContain(
+      'only_testing: ["OpenClawUITests/OpenClawSnapshotUITests/#{test_name}"]',
+    );
+    expect(capture).toContain("test_without_building: true");
+    expect(capture).toContain("result_bundle: true");
+    expect(capture).toContain("number_of_retries: 0");
+    expect(capture).toContain("stop_after_first_error: true");
+    expect(capture).toContain("retrying once in a fresh simulator session");
+    expect(capture).toContain("verify_snapshot_test_result!");
+    expect(archive).toContain('"#{device}-#{screenshot_name}-attempt-#{attempt}.xcresult"');
     expect(screenshots).toContain("verify_release_ios_screenshot_manifest!(");
-    expect(screenshots).toContain("verify_snapshot_test_result!(result_bundle_path, device)");
     expect(screenshots).toContain(
       'result_bundle_archive_directory = File.join(ios_root, "build", "SnapshotTestResults")',
     );
-    expect(screenshots.indexOf("verify_snapshot_test_result!")).toBeLessThan(
-      screenshots.indexOf("FileUtils.mv(result_bundle_path, archived_result_bundle_path)"),
-    );
-    expect(
-      screenshots.indexOf("FileUtils.mv(result_bundle_path, archived_result_bundle_path)"),
-    ).toBeLessThan(
+    expect(screenshots.indexOf("capture_release_ios_screenshot!")).toBeLessThan(
       screenshots.indexOf('FileUtils.rm_rf(File.join(output_directory, "test_output"))'),
     );
     expect(verifier).toContain('"xcresulttool"');
@@ -248,29 +258,38 @@ describe("iOS Fastlane release upload gates", () => {
     expect(verifier).toContain("UI.test_failure!");
   });
 
-  it("captures all release screens from one app launch with targeted launch recovery", () => {
+  it("captures each release screen from an independent direct launch", () => {
     const snapshotUITest = readFileSync(snapshotUITestPath, "utf8");
-    const releaseTest = swiftFunctionBody(snapshotUITest, "testConnectedGatewayTabs");
+    const releaseTests = [
+      ["testReleaseControlScreenshot", "controlScreenshotTarget"],
+      ["testReleaseChatScreenshot", "chatScreenshotTarget"],
+      ["testReleaseAgentScreenshot", "agentScreenshotTarget"],
+      ["testReleaseSettingsScreenshot", "settingsScreenshotTarget"],
+    ] as const;
+    const captureHelper = swiftFunctionBody(snapshotUITest, "captureReleaseScreenshot");
     const launchHelper = swiftFunctionBody(snapshotUITest, "launchApp");
-    const rootSidebar = readFileSync(rootSidebarPath, "utf8");
+    const navigationTest = swiftFunctionBody(
+      snapshotUITest,
+      "testAgentsNavigateToSettingsThroughSidebar",
+    );
     const rootTabs = readFileSync(rootTabsPath, "utf8");
 
-    expect(releaseTest.match(/self\.launchApp\(/g)).toHaveLength(1);
-    expect(snapshotUITest).toContain(
-      'releaseScreenshotLaunchArguments = ["-sidebar.pinnedPages", "overview,agents"]',
-    );
-    expect(releaseTest).toContain("selectReleaseScreenshotDestination");
-    expect(releaseTest).toContain("waitForReleaseScreenshotTarget");
-    expect(launchHelper).toContain("screenshotLaunchRetryThreshold");
-    expect(launchHelper).toContain("Recover before making any element query");
-    expect(launchHelper).toContain("app.wait(for: .notRunning, timeout: 5)");
-    expect(snapshotUITest).toContain("Recover stalled screenshot transition");
-    expect(snapshotUITest).toContain("self.launchApp(for: target");
+    for (const [testName, targetName] of releaseTests) {
+      const releaseTest = swiftFunctionBody(snapshotUITest, testName);
+      expect(releaseTest).toContain(`self.captureReleaseScreenshot(Self.${targetName})`);
+    }
+    expect(captureHelper.match(/self\.launchApp\(/g)).toHaveLength(1);
+    expect(captureHelper).toContain("waitForReleaseScreenshotTarget");
+    expect(launchHelper).toContain("app.launch()");
+    expect(snapshotUITest).not.toContain("screenshotLaunchRetryThreshold");
+    expect(snapshotUITest).not.toContain("selectReleaseScreenshotDestination");
+    expect(navigationTest).toContain("self.launchApp(for: Self.agentScreenshotTarget)");
+    expect(navigationTest).toContain('self.selectSidebarDestination("Settings")');
+    expect(navigationTest).toContain('"settings-system-agent-row"');
+    expect(navigationTest).not.toContain("XCTExpectFailure");
+    expect(navigationTest).not.toContain("XCTExpectedFailure");
     expect(rootTabs).toContain("self.scenePhase == .active");
     expect(rootTabs).toContain("self.selectedSidebarDestination.rawValue");
-    expect(rootSidebar).toContain('"RootTabs.Sidebar.Destination.chat"');
-    expect(rootSidebar).toContain('"RootTabs.Sidebar.Destination.settings"');
-    expect(rootSidebar).toContain('"RootTabs.Sidebar.Destination.\\(destination.rawValue)"');
   });
 
   it("requires the exact nonempty PNG manifest before Watch capture", () => {
@@ -284,7 +303,7 @@ describe("iOS Fastlane release upload gates", () => {
     expect(verifier).toContain("File.size?(path)");
     expect(verifier).toContain("PNG_SIGNATURE");
     expect(screenshots.indexOf("verify_release_ios_screenshot_manifest!")).toBeGreaterThan(
-      screenshots.indexOf("devices.each_with_index"),
+      screenshots.indexOf("RELEASE_IOS_SCREENSHOT_TESTS.each"),
     );
     expect(screenshots.indexOf("verify_release_ios_screenshot_manifest!")).toBeLessThan(
       screenshots.indexOf("watch_screenshot("),
@@ -300,6 +319,7 @@ describe("iOS Fastlane release upload gates", () => {
     expect(iosJob).toContain("timeout-minutes: 75");
     expect(iosJob).toContain("Capture iOS release screenshots");
     expect(iosJob).toContain("github.event_name == 'workflow_dispatch'");
+    expect(iosJob).toContain("github.event_name == 'pull_request'");
     expect(iosJob).toContain("run: pnpm ios:screenshots");
     expect(iosJob).toContain("Upload iOS release screenshot evidence");
     expect(iosJob).toContain("apps/ios/build/SnapshotTestResults/*.xcresult");

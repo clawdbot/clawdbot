@@ -4,6 +4,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { toErrorObject } from "../infra/errors.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { asRecord } from "../record-shared.js";
 import { redactCdpUrl } from "./cdp.helpers.js";
@@ -14,7 +15,6 @@ import {
   type ChromeMcpStructuredPage,
   type ChromeMcpToolResult,
   type NormalizedChromeMcpProfileOptions,
-  toChromeMcpError,
 } from "./chrome-mcp-contracts.js";
 import {
   redactChromeMcpDiagnosticTextWithLocalPaths,
@@ -159,7 +159,7 @@ export function extractJsonMessage(result: ChromeMcpToolResult): unknown {
     }
   }
   if (lastError) {
-    throw toChromeMcpError(lastError, "Non-Error thrown");
+    throw toErrorObject(lastError, "Non-Error thrown");
   }
   return null;
 }

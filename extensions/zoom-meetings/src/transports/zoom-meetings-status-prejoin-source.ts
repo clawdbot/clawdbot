@@ -157,15 +157,14 @@ export function zoomMeetingStatusPreludeSource(params: MeetingStatusPreludeParam
   let microphoneState = identityVerified ? (toggleState(microphone, "microphone") || (devicesDisabled ? "off" : undefined)) : undefined;
   const camera = first(selectors.camera) || findTextButton(/camera|video/i);
   let cameraState = identityVerified ? (toggleState(camera, "camera") || (devicesDisabled ? "off" : undefined)) : undefined;
-  let controlManualActionReason;
-  let controlManualActionMessage;
+  let controlManualAction;
   ${zoomMeetingStatusAccessSource()}
   if (
     canMutateSession &&
     identityVerified &&
     camera &&
     cameraState === "on" &&
-    !controlManualActionReason
+    !controlManualAction
   ) {
     camera.click();
     await waitForUi();
@@ -186,12 +185,9 @@ export function zoomMeetingStatusPreludeSource(params: MeetingStatusPreludeParam
     identityVerified &&
     (inCall || join) &&
     cameraState !== "off" &&
-    !controlManualActionReason
+    !controlManualAction
   ) {
-    controlManualActionReason = "zoom-camera-required";
-    controlManualActionMessage = inCall
-      ? "Turn the Zoom camera off and verify the in-call camera control shows it is off."
-      : "Turn the Zoom camera off and verify the camera control shows it is off, then retry joining.";
+    controlManualAction = manualActionFor("zoom-camera-required", inCall ? "Turn the Zoom camera off and verify the in-call camera control shows it is off." : "Turn the Zoom camera off and verify the camera control shows it is off, then retry joining.");
   }
   const isBlackHole = (value) =>
     /^blackhole 2ch(?: \\(virtual\\))?$/i.test(String(value || "").replace(/\\s+/g, " ").trim());
@@ -343,12 +339,9 @@ export function zoomMeetingStatusPreludeSource(params: MeetingStatusPreludeParam
     (inCall || join) &&
     !allowMicrophone &&
     microphoneState !== "off" &&
-    !controlManualActionReason
+    !controlManualAction
   ) {
-    controlManualActionReason = "zoom-microphone-required";
-    controlManualActionMessage = inCall
-      ? "Mute the Zoom microphone and verify it stays muted for observe-only mode."
-      : "Mute the Zoom microphone and verify the microphone control shows it is off, then retry joining.";
+    controlManualAction = manualActionFor("zoom-microphone-required", inCall ? "Mute the Zoom microphone and verify it stays muted for observe-only mode." : "Mute the Zoom microphone and verify the microphone control shows it is off, then retry joining.");
   }`,
     manualActionSource: `  const signInControl = first(selectors.signIn);
   const tenantLoginRequired =
@@ -368,30 +361,20 @@ export function zoomMeetingStatusPreludeSource(params: MeetingStatusPreludeParam
   // A granted microphone plus the verified BlackHole input is sufficient for talk-back.
   const permissionRequired = devicePermissionPrompt &&
     (!allowMicrophone || microphonePermissionState !== "granted");
-  let manualActionReason;
-  let manualActionMessage;
+  let manualAction;
   if (committedOwnerConflict && !canMutateSession) {
-    manualActionReason = "zoom-session-conflict";
-    manualActionMessage = "This Zoom tab is owned by another active meeting session.";
+    manualAction = manualActionFor("zoom-session-conflict", "This Zoom tab is owned by another active meeting session.");
   } else if (!inCall && loginRequired) {
-    manualActionReason = "zoom-login-required";
-    manualActionMessage = tenantLoginRequired
-      ? "This Zoom tenant requires sign-in or email verification. Complete it in the OpenClaw browser profile, then retry."
-      : "Sign in to Zoom in the OpenClaw browser profile, then retry the meeting join.";
+    manualAction = manualActionFor("zoom-login-required", tenantLoginRequired ? "This Zoom tenant requires sign-in or email verification. Complete it in the OpenClaw browser profile, then retry." : "Sign in to Zoom in the OpenClaw browser profile, then retry the meeting join.");
   } else if (!inCall && lobbyWaiting) {
-    manualActionReason = "zoom-admission-required";
-    manualActionMessage = "Admit the OpenClaw guest from the Zoom lobby, then retry speech.";
+    manualAction = manualActionFor("zoom-admission-required", "Admit the OpenClaw guest from the Zoom lobby, then retry speech.");
   } else if (!inCall && permissionRequired) {
-    manualActionReason = "zoom-permission-required";
-    manualActionMessage = allowMicrophone
-      ? "Allow microphone permission for Zoom in the OpenClaw browser profile, then retry."
-      : "Dismiss the Zoom device-permission prompt or continue without devices, then retry.";
-  } else if (controlManualActionReason) {
-    manualActionReason = controlManualActionReason;
-    manualActionMessage = controlManualActionMessage;
+    manualAction = manualActionFor("zoom-permission-required", allowMicrophone ? "Allow microphone permission for Zoom in the OpenClaw browser profile, then retry." : "Dismiss the Zoom device-permission prompt or continue without devices, then retry.");
+  } else if (controlManualAction) {
+    manualAction = controlManualAction;
   }
   let clickedJoin = false;
-  if (canMutateSession && identityVerified && autoJoin && !inCall && join && !join.disabled && !manualActionReason) {
+  if (canMutateSession && identityVerified && autoJoin && !inCall && join && !join.disabled && !manualAction) {
     join.click();
     clickedJoin = true;
     notes.push("Clicked the Zoom guest join button.");

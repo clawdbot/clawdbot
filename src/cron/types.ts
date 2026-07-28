@@ -3,6 +3,7 @@ import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
 import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { HookExternalContentSource } from "../security/external-content.js";
+import type { CronScheduledToolPolicy } from "./scheduled-tool-policy.js";
 import type { CronJobBase, CronPacing } from "./types-shared.js";
 
 export type { CronPacing } from "./types-shared.js";
@@ -463,7 +464,11 @@ export type CronJob = CronJobBase<
   owner?: {
     agentId?: string;
     sessionKey?: string;
+    /** Authenticated account that created this scheduled authority envelope. */
+    accountId?: string;
   };
+  /** Server-authored provenance for requester-scoped scheduled tool authority. */
+  scheduledToolPolicy?: CronScheduledToolPolicy;
   trigger?: CronTrigger;
   state: CronJobState;
 };
@@ -477,7 +482,10 @@ export type CronStoreFile = {
 type CronJobStateInput = Partial<Omit<CronJobState, "streamSourceIdentity">>;
 
 /** Create input accepted by cron APIs before id/timestamps/state are assigned. */
-export type CronJobCreate = Omit<CronJob, "id" | "createdAtMs" | "updatedAtMs" | "state"> & {
+export type CronJobCreate = Omit<
+  CronJob,
+  "id" | "createdAtMs" | "updatedAtMs" | "state" | "scheduledToolPolicy"
+> & {
   /** Internal callers can reserve a durable id before creation; public cron.add omits this. */
   id?: string;
   state?: CronJobStateInput;
@@ -496,6 +504,7 @@ export type CronJobPatch = Partial<
     | "declarationKey"
     | "displayName"
     | "owner"
+    | "scheduledToolPolicy"
     | "pacing"
   >
 > & {

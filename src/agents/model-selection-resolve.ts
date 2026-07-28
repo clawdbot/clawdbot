@@ -17,11 +17,11 @@ import {
 } from "./model-selection-shared.js";
 
 export {
-  buildConfiguredAllowlistKeys,
   buildModelAliasIndex,
   normalizeModelSelection,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
+  resolveModelAliasFromPair,
   resolveModelRefFromString,
 } from "./model-selection-shared.js";
 

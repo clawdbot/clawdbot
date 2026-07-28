@@ -118,6 +118,8 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     'Image-tool media compression preference: "auto" adapts to provider/model limits and image count, "efficient" saves tokens and bytes, "balanced" keeps the current middle ground, and "high" preserves more detail for screenshots and document images.',
   "agents.defaults.compaction":
     "Compaction behavior for when context nears token limits, including strategy and pre-compaction memory flush behavior. Use this when long-running sessions need stable continuity under tight context windows.",
+  "agents.defaults.compaction.enabled":
+    "Enable embedded proactive auto-compaction (default: true). Set false to stop threshold-driven embedded compaction while preserving OpenClaw overflow recovery, preflight compaction, and manual /compact.",
   "agents.defaults.compaction.mode":
     'Compaction strategy mode: "default" uses baseline behavior, while "safeguard" applies stricter guardrails to preserve recent context. Keep "default" unless you observe aggressive history loss near limit boundaries.',
   "agents.defaults.compaction.provider":
@@ -180,11 +182,9 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.typingMode":
     'Controls when typing starts for agents: "never", "instant", "thinking", or "message". Per-agent typingMode overrides this default.',
   "agents.defaults.typingIntervalSeconds":
-    "Controls typing-indicator keepalive cadence in seconds. Per-agent typingIntervalSeconds overrides this default.",
+    "Controls typing-indicator keepalive cadence in seconds for every agent. Increase it to reduce update frequency across all typing-capable channels.",
   "agents.entries.*.typingMode":
     "Overrides the default typing start policy for one agent without changing other agents.",
-  "agents.entries.*.typingIntervalSeconds":
-    "Overrides the default typing-indicator keepalive cadence for one agent. Use this when one agent needs a different refresh interval from the shared default.",
   commands:
     "Controls chat command surfaces, owner gating, and elevated command access behavior across providers. Keep defaults unless you need stricter operator controls or broader command availability.",
   "commands.native":

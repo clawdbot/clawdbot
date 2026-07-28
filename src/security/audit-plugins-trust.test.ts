@@ -545,6 +545,19 @@ describe("security audit extension tool reachability findings", () => {
         },
       },
       {
+        name: "reports canonical agent paths for permissive tool policy",
+        cfg: {
+          plugins: { allow: ["some-plugin"] },
+          agents: { entries: { ops: { tools: { profile: "full" } } } },
+        } satisfies OpenClawConfig,
+        assert: (findings: Awaited<ReturnType<typeof runSharedExtensionsAudit>>) => {
+          const finding = findings.find(
+            (entry) => entry.checkId === "plugins.tools_reachable_permissive_policy",
+          );
+          expect(finding?.detail).toContain("- agents.entries.ops");
+        },
+      },
+      {
         name: "does not flag plugin tool reachability when profile is restrictive",
         cfg: {
           plugins: { allow: ["some-plugin"] },

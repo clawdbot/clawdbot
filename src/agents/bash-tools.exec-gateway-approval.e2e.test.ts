@@ -19,8 +19,8 @@ import {
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { withTimeout } from "../utils/with-timeout.js";
+import { createExecTool } from "./bash-tools.exec-run.js";
 import type { ExecApprovalFollowupOutcome } from "./bash-tools.exec-types.js";
-import { createExecTool } from "./bash-tools.exec.js";
 
 const TEST_ENV_KEYS = [
   "HOME",

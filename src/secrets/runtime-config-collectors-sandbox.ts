@@ -1,8 +1,9 @@
 /** Collects agent-scoped sandbox SSH SecretRefs during runtime preparation. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { listAgentEntriesWithSource, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { resolveSandboxScope } from "../agents/sandbox/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { runtimeSandboxSecretOwnerId } from "./runtime-sandbox-secret-owner.js";
 import {
   collectRuntimeSecretInputAssignment,
@@ -66,29 +67,25 @@ export function collectAgentSandboxAssignments(params: {
   const defaultsSandbox = isRecord(defaultsAgent?.sandbox) ? defaultsAgent.sandbox : undefined;
   const defaultsSsh = isRecord(defaultsSandbox?.ssh) ? defaultsSandbox.ssh : undefined;
   const defaultsBackend = normalizeOptionalLowercaseString(defaultsSandbox?.backend) ?? "docker";
-  const rawEntries = isRecord(agents.entries) ? agents.entries : {};
-  const configuredAgents: Array<{ entry: Record<string, unknown>; entryId: string }> = [];
-  Object.entries(rawEntries).forEach(([entryId, entry]) => {
-    if (isRecord(entry)) {
-      configuredAgents.push({ entry, entryId });
-    }
-  });
-  const candidates: Array<{
-    entry: Record<string, unknown> | undefined;
-    entryId: string | undefined;
-  }> = configuredAgents.length > 0 ? configuredAgents : [{ entry: undefined, entryId: undefined }];
+  const candidates = listAgentEntriesWithSource(params.config).map(({ entry, source }) => ({
+    entry,
+    entryId: entry.id,
+    agentPath:
+      source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list.${source.index}`,
+  }));
   const activeDefaultKeys = new Set<SandboxSshSecretKey>();
   const seenAgentIds = new Set<string>();
 
   for (const candidate of candidates) {
     const rawAgent = candidate.entry;
-    const agentId = normalizeAgentId(candidate.entryId ?? DEFAULT_AGENT_ID);
+    const rawAgentRecord = rawAgent as unknown as Record<string, unknown>;
+    const agentId = normalizeAgentId(candidate.entryId);
     if (seenAgentIds.has(agentId)) {
       continue;
     }
     seenAgentIds.add(agentId);
 
-    const sandbox = isRecord(rawAgent?.sandbox) ? rawAgent.sandbox : undefined;
+    const sandbox = isRecord(rawAgentRecord.sandbox) ? rawAgentRecord.sandbox : undefined;
     const ssh = isRecord(sandbox?.ssh) ? sandbox.ssh : undefined;
     const backend =
       normalizeOptionalLowercaseString(sandbox?.backend) ??
@@ -115,7 +112,7 @@ export function collectAgentSandboxAssignments(params: {
     const owner = sandboxSecretOwner(agentId, {
       defaults: defaultsSandbox,
       override: sandbox,
-      agentEnabled: rawAgent?.enabled,
+      agentEnabled: rawAgentRecord.enabled,
     });
 
     for (const key of SANDBOX_SSH_SECRET_KEYS) {
@@ -125,7 +122,7 @@ export function collectAgentSandboxAssignments(params: {
           collectAssignment({
             target: ssh,
             key,
-            path: `agents.entries.${candidate.entryId}.sandbox.ssh.${key}`,
+            path: `${candidate.agentPath}.sandbox.ssh.${key}`,
             defaults: params.defaults,
             context: params.context,
             active,
@@ -137,7 +134,7 @@ export function collectAgentSandboxAssignments(params: {
         collectAssignment({
           target: ssh,
           key,
-          path: `agents.entries.${candidate.entryId}.sandbox.ssh.${key}`,
+          path: `${candidate.agentPath}.sandbox.ssh.${key}`,
           defaults: params.defaults,
           context: params.context,
           active: false,
@@ -184,7 +181,9 @@ export function collectAgentSandboxAssignments(params: {
       context: params.context,
       active,
       inactiveReason: "no enabled agent uses the sandbox SSH material.",
-      owner: sandboxSecretOwner(DEFAULT_AGENT_ID, { defaults: defaultsSandbox }),
+      owner: sandboxSecretOwner(resolveDefaultAgentId(params.config), {
+        defaults: defaultsSandbox,
+      }),
     });
   }
 }

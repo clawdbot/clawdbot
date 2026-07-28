@@ -64,9 +64,11 @@ function openStorageMetaStore(rootDir: string): PluginStateSyncKeyedStore<Matrix
   );
 }
 
-function scoreStorageRoot(rootDir: string): number {
+function scoreStorageRoot(
+  rootDir: string,
+  metadata: MatrixStorageMetadata = readStoredRootMetadata(rootDir),
+): number {
   let score = 0;
-  const metadata = readStoredRootMetadata(rootDir);
   if (Object.keys(metadata).length > 0) {
     score += 1;
   }
@@ -217,8 +219,32 @@ function resolvePreferredMatrixStorageRoot(params: {
   rootDir: string;
   tokenHash: string;
 } {
+  const canonical = {
+    rootDir: params.canonicalRootDir,
+    tokenHash: params.canonicalTokenHash,
+  };
+  const deviceId = params.deviceId?.trim();
+
+  // Without a confirmed device identity, reusing a populated sibling root after
+  // token rotation can silently bind this run to the wrong Matrix device state.
+  if (!deviceId) {
+    return canonical;
+  }
+
+  const canonicalMetadata = readStoredRootMetadata(params.canonicalRootDir);
+  const canonicalRootOwnsCurrentToken =
+    canonicalMetadata.accessTokenHash === params.canonicalTokenHash &&
+    canonicalMetadata.deviceId?.trim() === deviceId &&
+    canonicalMetadata.currentTokenStateClaimed === true;
+
+  // A claimed canonical root is authoritative. Scanning token-history siblings
+  // would synchronously open and retain every per-root SQLite store during startup.
+  if (canonicalRootOwnsCurrentToken) {
+    return canonical;
+  }
+
   const parentDir = path.dirname(params.canonicalRootDir);
-  const bestCurrentScore = scoreStorageRoot(params.canonicalRootDir);
+  const bestCurrentScore = scoreStorageRoot(params.canonicalRootDir, canonicalMetadata);
   const bestCurrentMtimeMs = resolveStorageRootMtimeMs(params.canonicalRootDir);
   let best = {
     rootDir: params.canonicalRootDir,
@@ -226,15 +252,6 @@ function resolvePreferredMatrixStorageRoot(params: {
     score: bestCurrentScore,
     mtimeMs: bestCurrentMtimeMs,
   };
-
-  // Without a confirmed device identity, reusing a populated sibling root after
-  // token rotation can silently bind this run to the wrong Matrix device state.
-  if (!params.deviceId?.trim()) {
-    return {
-      rootDir: best.rootDir,
-      tokenHash: best.tokenHash,
-    };
-  }
 
   let siblingEntries: fs.Dirent[];
   try {
@@ -262,10 +279,10 @@ function resolvePreferredMatrixStorageRoot(params: {
         homeserver: params.homeserver,
         userId: params.userId,
         accountKey: params.accountKey,
-        deviceId: params.deviceId,
+        deviceId,
         // Once auth resolves a concrete device, only sibling roots that explicitly
         // declare that same device are safe to reuse across token rotations.
-        requireExplicitDeviceMatch: Boolean(params.deviceId),
+        requireExplicitDeviceMatch: true,
       })
     ) {
       continue;
@@ -283,27 +300,19 @@ function resolvePreferredMatrixStorageRoot(params: {
     });
   }
 
-  const canonicalMetadata = readStoredRootMetadata(params.canonicalRootDir);
-  const shouldKeepCanonicalCurrentRoot =
-    canonicalMetadata.accessTokenHash === params.canonicalTokenHash &&
-    canonicalMetadata.deviceId?.trim() === params.deviceId.trim() &&
-    canonicalMetadata.currentTokenStateClaimed === true;
-
-  if (!shouldKeepCanonicalCurrentRoot) {
-    for (const candidate of compatiblePopulatedSiblings) {
-      if (
-        candidate.score > best.score ||
-        (best.rootDir !== params.canonicalRootDir &&
-          candidate.score === best.score &&
-          candidate.mtimeMs > best.mtimeMs)
-      ) {
-        best = {
-          rootDir: candidate.rootDir,
-          tokenHash: candidate.tokenHash,
-          score: candidate.score,
-          mtimeMs: candidate.mtimeMs,
-        };
-      }
+  for (const candidate of compatiblePopulatedSiblings) {
+    if (
+      candidate.score > best.score ||
+      (best.rootDir !== params.canonicalRootDir &&
+        candidate.score === best.score &&
+        candidate.mtimeMs > best.mtimeMs)
+    ) {
+      best = {
+        rootDir: candidate.rootDir,
+        tokenHash: candidate.tokenHash,
+        score: candidate.score,
+        mtimeMs: candidate.mtimeMs,
+      };
     }
   }
 

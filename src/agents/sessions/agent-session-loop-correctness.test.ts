@@ -286,6 +286,33 @@ describe("AgentSession loop correctness", () => {
     );
   });
 
+  it("skips threshold maintenance when embedded auto-compaction is disabled", async () => {
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: false, reserveTokens: 0, keepRecentTokens: 1 },
+      retry: { enabled: false },
+    });
+    const compactionEvents: AgentSessionEvent[] = [];
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
+      createAssistantResultStream(
+        createAssistant(activeModel, [{ type: "text", text: "complete answer" }], "stop", 100),
+      ),
+    );
+    const { session } = await createTestSession({
+      settingsManager,
+      resourceLoader: createResourceLoader(createCompactionHandlers()),
+    });
+    session.subscribe((event) => {
+      if (event.type === "compaction_end") {
+        compactionEvents.push(event);
+      }
+    });
+
+    await session.prompt("new prompt");
+
+    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+    expect(compactionEvents).toEqual([]);
+  });
+
   it("does not retry a high-usage turn terminated by a tool result", async () => {
     const terminalTool: ToolDefinition = {
       name: "finish",

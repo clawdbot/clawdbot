@@ -43,31 +43,48 @@ enter_worktree() {
 
   cd "$root"
   ensure_gh_api_auth
-  git fetch origin main
+  git -C "$root" fetch origin main
 
-  local dir=".worktrees/pr-$pr"
-  if [ -d "$dir" ]; then
-    cd "$dir"
-    git fetch origin main
-    if [ "$reset_to_main" = "true" ]; then
-      git checkout -B "temp/pr-$pr" origin/main
-    fi
-  else
-    local resolved_parent=""
-    resolved_parent=$(resolve_existing_dir_path "$(dirname "$dir")" 2>/dev/null || true)
-    local resolved_dir=""
-    if [ -n "$resolved_parent" ]; then
-      resolved_dir="$resolved_parent/$(basename "$dir")"
-    fi
-    if [ ! -e "$dir" ] && [ -n "$resolved_dir" ] && worktree_is_registered "$resolved_dir"; then
-      echo "Pruning stale worktree registration for $dir"
-      git worktree prune
+  # Resolve through the parent, never through the leaf: a missing directory has
+  # no real path of its own, and resolving a leaf symlink would silently adopt
+  # whichever worktree it aliases.
+  local dir="$root/.worktrees/pr-$pr"
+  local resolved_parent resolved_dir=""
+  resolved_parent=$(resolve_existing_dir_path "$(dirname "$dir")" 2>/dev/null || true)
+  [ -z "$resolved_parent" ] || resolved_dir="$resolved_parent/pr-$pr"
+
+  if [ ! -d "$dir" ] || [ -z "$resolved_dir" ] || ! worktree_is_registered "$resolved_dir"; then
+    if [ -e "$dir" ] || { [ -n "$resolved_dir" ] && worktree_is_registered "$resolved_dir"; }; then
+      echo "Pruning stale worktree registration for .worktrees/pr-$pr"
+      git -C "$root" worktree prune
+      remove_worktree_if_present "$dir"
+      [ ! -e "$dir" ] || {
+        echo "Refusing scripts/pr operation for PR #$pr: $dir is not a registered worktree and could not be cleared; scripts/pr refuses to mutate the shared canonical checkout." >&2
+        return 1
+      }
     fi
     # Per-PR locking makes resetting this script-owned branch namespace safe.
-    git worktree add "$dir" -B "temp/pr-$pr" origin/main
-    cd "$dir"
+    git -C "$root" worktree add "$dir" -B "temp/pr-$pr" origin/main
+    resolved_dir="$(resolve_existing_dir_path "$(dirname "$dir")")/pr-$pr"
   fi
 
+  cd "$resolved_dir"
+
+  # Containment, not repair: every mutation below runs against ambient cwd, so
+  # prove Git resolves it to this worktree before any branch moves. A directory
+  # that is not a worktree lets discovery escape up into the shared canonical
+  # checkout, where a sibling session's branch would be clobbered.
+  local actual_toplevel
+  actual_toplevel=$(resolve_existing_dir_path "$(git rev-parse --path-format=absolute --show-toplevel 2>/dev/null)" 2>/dev/null || true)
+  if [ "$actual_toplevel" != "$resolved_dir" ]; then
+    echo "Refusing scripts/pr operation for PR #$pr: expected worktree $resolved_dir, Git resolved ${actual_toplevel:-no repository}; scripts/pr refuses to mutate the shared canonical checkout." >&2
+    return 1
+  fi
+
+  git fetch origin main
+  if [ "$reset_to_main" = "true" ]; then
+    git checkout -B "temp/pr-$pr" origin/main
+  fi
   mkdir -p .local
 }
 

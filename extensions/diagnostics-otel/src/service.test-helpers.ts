@@ -23,19 +23,6 @@ export const MODEL_FIXTURE = {
 } as const;
 export const RUN_FIXTURE = { runId: "run-1", ...MODEL_FIXTURE } as const;
 export const MODEL_CALL_FIXTURE = { ...RUN_FIXTURE, callId: "call-1" } as const;
-export const MODEL_CONTENT_CAPTURE = {
-  enabled: true,
-  inputMessages: true,
-  outputMessages: true,
-  systemPrompt: true,
-  toolDefinitions: true,
-} as const;
-export const INPUT_ONLY_CAPTURE = {
-  enabled: true,
-  inputMessages: true,
-  outputMessages: false,
-} as const;
-
 type OtelConfig = NonNullable<
   NonNullable<OpenClawPluginServiceContext["config"]["diagnostics"]>["otel"]
 >;

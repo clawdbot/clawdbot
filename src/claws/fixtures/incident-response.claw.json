@@ -7,35 +7,10 @@
     "identity": {
       "name": "Incident Response",
       "emoji": "siren"
-    },
-    "groupChat": {
-      "mentionPatterns": [
-        "@incident-response"
-      ]
-    },
-    "sandbox": {
-      "mode": "all",
-      "scope": "agent",
-      "workspaceAccess": "rw"
-    },
-    "tools": {
-      "allow": [
-        "read",
-        "write",
-        "web_fetch"
-      ],
-      "deny": [
-        "exec",
-        "browser"
-      ]
-    },
-    "heartbeat": {
-      "every": "30m",
-      "lightContext": true,
-      "isolatedSession": true,
-      "skipWhenBusy": true,
-      "timeoutSeconds": 120
     }
+  },
+  "metadata": {
+    "openclaw.config": "profiles/incident-response.openclaw.yml"
   },
   "workspace": {
     "bootstrapFiles": {

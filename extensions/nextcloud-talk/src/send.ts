@@ -5,7 +5,7 @@ import {
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
 import {
-  type FormatCapabilityProfile,
+  FormatCapabilityProfile,
   renderMarkdownWithMarkers,
 } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -31,29 +31,10 @@ const NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_BYTES = 8 * 1024;
 const NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_CHARS = 200;
 const NEXTCLOUD_TALK_SEND_TIMEOUT_MS = 30_000;
 
-const NEXTCLOUD_TALK_FORMAT_PROFILE = {
+const NEXTCLOUD_TALK_FORMAT_PROFILE = FormatCapabilityProfile.define({
   mechanism: "markdown",
-  constructs: {
-    bold: "native",
-    italic: "native",
-    underline: "native",
-    strikethrough: "native",
-    spoiler: "native",
-    codeInline: "native",
-    codeBlock: "native",
-    codeLanguage: "native",
-    linkLabel: "native",
-    heading: "native",
-    bulletList: "native",
-    orderedList: "native",
-    taskList: "native",
-    table: "native",
-    blockquote: "native",
-    image: "native",
-    mention: "native",
-  },
   chunk: { limit: 4000, unit: "chars", hardCap: 32_000 },
-} satisfies FormatCapabilityProfile;
+});
 
 function renderNextcloudTalkMarkdown(markdown: string): string {
   return renderMarkdownWithMarkers(

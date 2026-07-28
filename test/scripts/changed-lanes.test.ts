@@ -31,13 +31,14 @@ import {
   shouldRunPromptSnapshotCheck,
   shouldRunPromptSnapshotOwnerTest,
   shouldRunRuntimeSidecarBaselineCheck,
-  shouldRunShrinkwrapGuard,
+  shouldRunNpmLockGuard,
   shouldRunPluginSdkApiBaselineCheck,
   shouldRunDeprecationHygieneChecks,
   shouldRunPluginSdkSurfaceChecks,
   shouldRunSqliteSessionSchemaBaselineCheck,
   shouldRunTestTempCreationReport,
-  createShrinkwrapGuardCommand,
+  createNpmLockGuardCommand,
+  delegationFailedBeforeRunning,
 } from "../../scripts/check-changed.mjs";
 import { resolveOxfmtInvocation } from "../../scripts/format-docs.mjs";
 import { isDirectRunPath } from "../../scripts/lib/direct-run.mjs";
@@ -282,7 +283,7 @@ describe("scripts/changed-lanes", () => {
     commitAll(dir, "initial");
     const binDir = path.join(dir, "bin");
     mkdirSync(binDir, { recursive: true });
-    writeFileSync(path.join(binDir, "pnpm"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    writeFileSync(path.join(binDir, "node"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
 
     const result = spawnSync(process.execPath, [path.join(repoRoot, "scripts/check-changed.mjs")], {
       cwd: dir,
@@ -312,7 +313,7 @@ describe("scripts/changed-lanes", () => {
     writeRepoFile(dir, "node_modules/typescript/package.json", '{"name":"typescript"}\n');
     const binDir = path.join(dir, "bin");
     mkdirSync(binDir, { recursive: true });
-    writeFileSync(path.join(binDir, "pnpm"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    writeFileSync(path.join(binDir, "node"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
 
     const result = spawnSync(
       process.execPath,
@@ -652,6 +653,45 @@ describe("scripts/changed-lanes", () => {
     expectLanes(result.lanes, { liveDockerTooling: true });
   });
 
+  it.each([
+    "extensions/whatsapp/src/config-ui-hints.ts",
+    "extensions/mattermost/src/config-schema-core.ts",
+    "extensions/telegram/openclaw.plugin.json",
+    "extensions/discord/package.json",
+    "extensions/slack/security-contract-api.ts",
+    "src/config/zod-schema.core.ts",
+    "src/channels/plugins/config-schema.ts",
+    "scripts/load-channel-config-surface.ts",
+  ])("routes %s through the bundled channel config metadata lane", (changedPath) => {
+    const result = detectChangedLanes([changedPath]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes.bundledChannelConfigMetadata).toBe(true);
+    expect(plan.commands.map((command) => command.args[0])).toContain(
+      "check:bundled-channel-config-metadata",
+    );
+  });
+
+  it("keeps unrelated plugin runtime changes out of the bundled channel metadata lane", () => {
+    const result = detectChangedLanes(["extensions/whatsapp/src/monitor.ts"]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes.bundledChannelConfigMetadata).toBe(false);
+    expect(plan.commands.map((command) => command.args[0])).not.toContain(
+      "check:bundled-channel-config-metadata",
+    );
+  });
+
+  it("includes bundled channel metadata in the fail-safe all plan", () => {
+    const result = detectChangedLanes(["unknown-surface.foo"]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes.all).toBe(true);
+    expect(plan.commands.map((command) => command.args[0])).toContain(
+      "check:bundled-channel-config-metadata",
+    );
+  });
+
   it("exposes the shared changed-lane test path classifier", () => {
     expect(isChangedLaneTestPath("src/shared/string-normalization.test.ts")).toBe(true);
     expect(isChangedLaneTestPath("packages/foo/__tests__/helper.ts")).toBe(true);
@@ -939,8 +979,8 @@ describe("scripts/changed-lanes", () => {
     expect(changedCheckRequiresRemote(result)).toBe(true);
 
     expect(buildChangedCheckCrabboxArgs(["--base", "origin/main", "--head", "HEAD"])).toEqual([
-      "crabbox:run",
-      "--",
+      "scripts/crabbox-wrapper.mjs",
+      "run",
       "--provider",
       "blacksmith-testbox",
       "--blacksmith-org",
@@ -1092,7 +1132,7 @@ describe("scripts/changed-lanes", () => {
   it.each([
     {
       name: "routes core test-only changes to core test lanes only",
-      path: "packages/normalization-core/src/string-normalization.test.ts",
+      path: "packages/normalization-core/src/string-normalization.test-support.ts",
       expected: {
         lanes: { coreTests: true },
         includes: ["tsgo:core:test"],
@@ -1110,7 +1150,7 @@ describe("scripts/changed-lanes", () => {
     },
     {
       name: "routes extension test-only changes to extension test lanes only",
-      path: "extensions/discord/src/index.test.ts",
+      path: "extensions/discord/src/index.test-helpers.ts",
       expected: {
         lanes: { extensionTests: true },
         includes: ["tsgo:extensions:test"],
@@ -1417,7 +1457,7 @@ describe("scripts/changed-lanes", () => {
       "dup:check:coverage",
       "deps:pins:check",
       "format:check",
-      "scripts/generate-npm-shrinkwrap.mjs",
+      "scripts/generate-npm-package-lock.mjs",
       "check:deprecated-api-usage",
       "plugins:boundary-report:ci",
       "deps:patches:check",
@@ -1453,25 +1493,24 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.map((command) => command.args[0])).not.toContain("release-metadata:check");
   });
 
-  it("runs the npm shrinkwrap guard for dependency package surfaces", () => {
+  it("runs the npm package-lock guard for dependency package surfaces", () => {
     expect(
-      shouldRunShrinkwrapGuard([
-        "npm-shrinkwrap.json",
-        "extensions/slack/npm-shrinkwrap.json",
+      shouldRunNpmLockGuard([
         "extensions/slack/package.json",
-        "scripts/generate-npm-shrinkwrap.mjs",
+        "extensions/slack/deps/local-runtime/package.json",
+        "scripts/generate-npm-package-lock.mjs",
       ]),
     ).toBe(true);
 
     const result = detectChangedLanes(["extensions/slack/package.json"]);
     const plan = createChangedCheckPlan(result);
-    const shrinkwrapGuard = createShrinkwrapGuardCommand(["extensions/slack/package.json"]);
+    const npmLockGuard = createNpmLockGuardCommand(["extensions/slack/package.json"]);
 
     expect(
-      shrinkwrapGuard?.args.some((arg) => arg.replaceAll("\\", "/").endsWith("extensions/slack")),
+      npmLockGuard?.args.some((arg) => arg.replaceAll("\\", "/").endsWith("extensions/slack")),
     ).toBe(true);
-    expect(plan.commands.map((command) => command.name)).toContain("npm shrinkwrap guard");
-    expect(plan.commands.map((command) => command.args[0])).not.toContain("deps:shrinkwrap:check");
+    expect(plan.commands.map((command) => command.name)).toContain("npm package-lock guard");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("deps:npm-lock:check");
   });
 
   it.each([
@@ -2038,6 +2077,7 @@ describe("scripts/changed-lanes", () => {
       docs: false,
       tooling: false,
       liveDockerTooling: false,
+      bundledChannelConfigMetadata: false,
       releaseMetadata: false,
       all: false,
     });
@@ -2082,5 +2122,54 @@ describe("scripts/changed-lanes", () => {
       },
       { name: "package patch guard", args: ["deps:patches:check"] },
     ]);
+  });
+});
+
+describe("delegationFailedBeforeRunning", () => {
+  // The wrapper only prints a run summary once the command reached the box, so
+  // the summary is the evidence that a verdict exists at all.
+  it("treats a lease or network failure as never having run", () => {
+    const output = [
+      'request failed: Get "https://backend.blacksmith.sh/api/testbox/list?all=true": context deadline exceeded',
+      "blacksmith testbox run exited 1",
+    ].join("\n");
+
+    expect(delegationFailedBeforeRunning(output)).toBe(true);
+  });
+
+  it("treats a reported command exit as a real check failure", () => {
+    const output = [
+      "  64.95s  failed:1   typecheck core tests",
+      '{"provider":"blacksmith-testbox","runStatus":"failed","errorKind":"command-exit","exitCode":1}',
+    ].join("\n");
+
+    // Falling back locally here would re-run on macOS and could pass a lane
+    // whose truth is Linux, turning a red gate green.
+    expect(delegationFailedBeforeRunning(output)).toBe(false);
+  });
+
+  it("does not mistake an infrastructure error kind for a command verdict", () => {
+    const output = [
+      "failed to acquire lease for testbox",
+      '{"provider":"blacksmith-testbox","runStatus":"failed","errorKind":"lease-timeout","exitCode":1}',
+    ].join("\n");
+
+    expect(delegationFailedBeforeRunning(output)).toBe(true);
+  });
+
+  // A crash after dispatch produces no summary either, so absence of one cannot
+  // be read as "never ran" — that is how an unknown Linux result would go green.
+  it("fails closed when the wrapper dies without saying why", () => {
+    expect(delegationFailedBeforeRunning("node: killed\n")).toBe(false);
+    expect(delegationFailedBeforeRunning("")).toBe(false);
+  });
+
+  it("keeps a command verdict authoritative even alongside network noise", () => {
+    const output = [
+      'request failed: Get "https://backend.blacksmith.sh/api/testbox/list": context deadline exceeded',
+      '{"provider":"blacksmith-testbox","runStatus":"failed","errorKind":"command-exit","exitCode":1}',
+    ].join("\n");
+
+    expect(delegationFailedBeforeRunning(output)).toBe(false);
   });
 });

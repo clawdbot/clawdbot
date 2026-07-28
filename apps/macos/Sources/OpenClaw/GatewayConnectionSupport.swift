@@ -11,7 +11,15 @@ struct GatewayRouteChangedAfterDispatchError: LocalizedError, Sendable {
 }
 
 enum GatewayActivationBindingKeyStore {
+    // Dev builds carry a different code signature; creating the release item
+    // would poison its Keychain ACL and make the shipped app demand the login
+    // keychain password on every read. DEBUG is a config heuristic, not a
+    // signing check — same accepted tradeoff as MacGatewayProfileStore.service.
+    #if DEBUG
+    private static let service = "ai.openclaw.onboarding-route-binding.debug"
+    #else
     private static let service = "ai.openclaw.onboarding-route-binding"
+    #endif
     private static let account = "credential-binding-v1"
     private static let byteCount = 32
 

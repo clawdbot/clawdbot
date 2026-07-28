@@ -7,7 +7,6 @@ import {
   runAgentHarnessBeforeMessageWriteHook,
   type AgentMessage,
   type EmbeddedRunAttemptParams,
-  type EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
 import {
@@ -17,6 +16,7 @@ import {
   type SessionTranscriptWriteLockParams,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import type { CodexThread, JsonValue } from "./protocol.js";
 import {
   attachCodexMirrorAttestation,

@@ -65,17 +65,17 @@ function buildRemoteGatewayRelayUrl(raw: string): string {
   return url.toString();
 }
 
-function buildPairingString(gatewayUrl?: string): {
+async function buildPairingString(gatewayUrl?: string): Promise<{
   pairing: string;
   relayPort: number;
   remote: boolean;
-} {
+}> {
   const cfg = getRuntimeConfig();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   // Create the host-local relay secret if this host has not used the extension
   // driver yet, so pairing works on a fresh gateway or node host before the
   // relay has started. Pairing must run on the machine that hosts the browser.
-  const token = ensureExtensionRelayToken();
+  const token = await ensureExtensionRelayToken();
   const profile = firstExtensionProfile();
   const relayPort = profile?.relayPort ?? resolved.extensionRelayDefaultPort;
 
@@ -136,15 +136,13 @@ export function registerBrowserExtensionCommands(
       await runCommandWithRuntime(
         defaultRuntime,
         async () => {
-          const result = buildPairingString(opts.gatewayUrl);
+          const result = await buildPairingString(opts.gatewayUrl);
           if (opts.json === true) {
-            defaultRuntime.log(
-              JSON.stringify({
-                pairingString: result.pairing,
-                relayPort: result.relayPort,
-                remote: result.remote,
-              }),
-            );
+            defaultRuntime.writeJson({
+              pairingString: result.pairing,
+              relayPort: result.relayPort,
+              remote: result.remote,
+            });
             return;
           }
           const setupLine = result.remote

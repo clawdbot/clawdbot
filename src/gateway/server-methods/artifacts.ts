@@ -22,6 +22,11 @@ import {
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
 import { getTaskSessionLookupByIdForStatus } from "../../tasks/task-status-access.js";
+import {
+  parseManagedOutgoingImageArtifactId,
+  resolveManagedOutgoingImageArtifactDownload,
+  resolveManagedOutgoingImageUrlDownload,
+} from "../managed-image-attachments.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import {
   resolveSessionStoreAgentId,
@@ -411,13 +416,17 @@ function collectArtifactsFromMessage(params: {
       asNonEmptyString(block.filename) ??
       asNonEmptyString(block.alt) ??
       `${type} ${params.artifacts.length + 1}`;
-    const id = artifactId({
-      sessionKey: params.sessionKey,
-      messageSeq,
-      contentIndex,
-      title,
-      type,
-    });
+    const declaredArtifactId = asNonEmptyString(block.artifactId);
+    const id =
+      declaredArtifactId && parseManagedOutgoingImageArtifactId(declaredArtifactId)
+        ? declaredArtifactId
+        : artifactId({
+            sessionKey: params.sessionKey,
+            messageSeq,
+            contentIndex,
+            title,
+            type,
+          });
     const includeData = params.downloadArtifactId
       ? params.downloadArtifactId === id
       : params.includeDownloadData !== false;
@@ -639,6 +648,37 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     if (!requireQueryable(params, respond)) {
       return;
     }
+    if (
+      params.sessionKey &&
+      !params.runId &&
+      !params.taskId &&
+      parseManagedOutgoingImageArtifactId(params.artifactId)
+    ) {
+      const resolved = resolveQuerySession(params, context.getRuntimeConfig?.());
+      const managed = resolved
+        ? await resolveManagedOutgoingImageArtifactDownload({
+            sessionKey: resolved.sessionKey,
+            artifactId: params.artifactId,
+          })
+        : null;
+      if (managed) {
+        respond(true, {
+          artifact: {
+            id: managed.artifactId,
+            type: "image",
+            title: managed.title,
+            ...(managed.mimeType ? { mimeType: managed.mimeType } : {}),
+            ...(managed.sizeBytes !== undefined ? { sizeBytes: managed.sizeBytes } : {}),
+            sessionKey: managed.sessionKey,
+            source: "session-transcript",
+            download: { mode: "url" as const },
+          },
+          url: managed.url,
+          expiresAt: managed.expiresAt,
+        });
+        return;
+      }
+    }
     const { artifact } = await findArtifact(params, context.getRuntimeConfig?.(), {
       downloadArtifactId: params.artifactId,
     });
@@ -662,12 +702,24 @@ export const artifactsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const managedUrl =
+      artifact.download.mode === "url" && artifact.url && artifact.sessionKey
+        ? await resolveManagedOutgoingImageUrlDownload({
+            sessionKey: artifact.sessionKey,
+            url: artifact.url,
+          })
+        : null;
     respond(true, {
       artifact: toSummary(artifact),
       ...(artifact.download.mode === "bytes"
         ? { encoding: "base64" as const, data: artifact.data }
         : {}),
-      ...(artifact.download.mode === "url" ? { url: artifact.url } : {}),
+      ...(artifact.download.mode === "url"
+        ? {
+            url: managedUrl?.url ?? artifact.url,
+            ...(managedUrl ? { expiresAt: managedUrl.expiresAt } : {}),
+          }
+        : {}),
     });
   },
 };

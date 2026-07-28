@@ -176,19 +176,34 @@ describe("handleUsageCommand", () => {
     const args = expectSessionCostArgs();
     expect(args.agentId).toBe("target");
     expect(args.sessionId).toBe("session-1");
+    expect(loadCostUsageSummaryMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "target" }),
+    );
+  });
+
+  it("keeps the current agent for an unqualified global session key", async () => {
+    const params = buildUsageParams();
+    params.agentId = "other";
+    params.sessionKey = "global";
+
+    await handleUsageCommand(params, true);
+
+    const args = expectSessionCostArgs();
+    expect(args.agentId).toBe("other");
+    expect(args.sessionTarget).toMatchObject({ agentId: "other", sessionKey: "global" });
+    expect(resolveSessionAgentIdMock).not.toHaveBeenCalled();
   });
 
   it("prefers the target session entry from sessionStore for /usage cost", async () => {
     const params = buildUsageParams();
+    params.storePath = "/tmp/custom-session-store.sqlite";
     params.sessionEntry = {
       sessionId: "wrapper-session",
-      sessionFile: "/tmp/wrapper-session.jsonl",
       updatedAt: Date.now(),
     };
     params.sessionStore = {
       [params.sessionKey]: {
         sessionId: "target-session",
-        sessionFile: "/tmp/target-session.jsonl",
         updatedAt: Date.now(),
       },
     };
@@ -197,7 +212,12 @@ describe("handleUsageCommand", () => {
 
     const args = expectSessionCostArgs();
     expect(args.sessionId).toBe("target-session");
-    expect(args.sessionFile).toBe("/tmp/target-session.jsonl");
+    expect(args.sessionTarget).toMatchObject({
+      agentId: "target",
+      sessionId: "target-session",
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    });
   });
 
   it("prefers the target session entry from sessionStore for /usage footer mode", async () => {

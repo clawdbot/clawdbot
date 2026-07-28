@@ -10,7 +10,7 @@ import {
   listAgentIds,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
+  tryResolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import {
   hasAnyAuthProfileStoreSource,
@@ -398,7 +398,7 @@ export async function maybeRepairMemoryRecallHealth(params: {
           message: formatAgentMessage(
             scope.agentId,
             labelAgents,
-            "Normalize memory recall artifacts and remove stale promotion locks?",
+            "Remove dangling memory recalls, normalize recall artifacts, and remove stale promotion locks?",
           ),
           initialValue: true,
         });
@@ -409,6 +409,9 @@ export async function maybeRepairMemoryRecallHealth(params: {
             const details = [
               repair.removedInvalidEntries > 0
                 ? `-${repair.removedInvalidEntries} invalid entries`
+                : null,
+              (repair.removedDanglingEntries ?? 0) > 0
+                ? `-${repair.removedDanglingEntries} dangling entries`
                 : null,
               removedOverflowEntries > 0 ? `-${removedOverflowEntries} overflow entries` : null,
             ]
@@ -590,7 +593,7 @@ export async function noteMemorySearchHealth(
   opts?: MemorySearchHealthOptions,
 ): Promise<void> {
   const scopes = resolveMemoryDoctorAgentScopes(cfg);
-  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const labelAgents = scopes.length > 1;
   for (const scope of scopes) {
     if (opts?.includeWorkspaceMemoryHealth !== false) {

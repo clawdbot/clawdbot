@@ -84,9 +84,6 @@ export function buildExpectedTranscriptTurnSessionPatch(params: {
   return {
     ...(acceptedMessage ? params.sessionLifecyclePatch : undefined),
     ...(acceptedMessage && restartRecoveryTerminalRunIds ? { restartRecoveryTerminalRunIds } : {}),
-    ...(params.currentEntry.sessionFile === params.sessionFile
-      ? {}
-      : { sessionFile: params.sessionFile }),
     ...(touchUpdatedAt > 0
       ? {
           updatedAt: Math.max(

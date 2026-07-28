@@ -1,7 +1,15 @@
 // Control UI tests cover config form behavior.
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { analyzeConfigSchema, renderConfigForm } from "./config-form.ts";
+import { analyzeConfigSchema, renderConfigForm as renderConfigFormBase } from "./config-form.ts";
+
+function renderConfigForm(
+  props: Omit<Parameters<typeof renderConfigFormBase>[0], "onShowAdvanced"> & {
+    onShowAdvanced?: () => void;
+  },
+) {
+  return renderConfigFormBase({ showAdvanced: true, onShowAdvanced: () => {}, ...props });
+}
 
 const rootSchema = {
   type: "object",
@@ -440,10 +448,11 @@ describe("config form renderer", () => {
       renderConfigForm({
         schema: analysis.schema,
         uiHints: {
-          "gateway.auth.token": { tags: ["security", "secret"] },
+          "gateway.auth.token": { tags: ["security", "advanced", "secret"] },
         },
         unsupportedPaths: analysis.unsupportedPaths,
         value: {},
+        showAdvanced: true,
         onPatch,
       }),
       container,
@@ -458,11 +467,11 @@ describe("config form renderer", () => {
       renderConfigForm({
         schema: analysis.schema,
         uiHints: {
-          "gateway.auth.token": { tags: ["security"] },
+          "gateway.auth.token": { tags: ["security", "advanced"] },
         },
         unsupportedPaths: analysis.unsupportedPaths,
         value: {},
-        searchQuery: "tag:security",
+        searchQuery: "tag:advanced",
         onPatch,
       }),
       container,
@@ -649,7 +658,7 @@ describe("config form renderer", () => {
           type: "array",
           items: { type: "string" },
         },
-        chatMessageMaxWidth: {
+        displayWidth: {
           type: "string",
         },
       },
@@ -667,7 +676,7 @@ describe("config form renderer", () => {
           lastTouchedAt: "2026-05-05T00:00:00.000Z",
           setupCommand: "apt-get update",
           allowedDomains: ["example.com"],
-          chatMessageMaxWidth: "960px",
+          displayWidth: "960px",
         },
         onPatch: vi.fn(),
       }),
@@ -708,5 +717,27 @@ describe("config form renderer", () => {
     );
     removeButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["accounts"], {});
+  });
+
+  it("shows field help once instead of repeating it on every array item", () => {
+    const container = document.createElement("div");
+    const analysis = analyzeConfigSchema(rootSchema);
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        // Item paths collapse their numeric segment, so the item rows resolve
+        // this same hint; only the array header should render it.
+        uiHints: { allowFrom: { help: "Sender ids allowed to reach the agent." } },
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: { allowFrom: ["+15550001111", "+15550002222"] },
+        onPatch: vi.fn(),
+      }),
+      container,
+    );
+
+    const help = Array.from(container.querySelectorAll(".settings-row__desc")).filter(
+      (node) => node.textContent?.trim() === "Sender ids allowed to reach the agent.",
+    );
+    expect(help).toHaveLength(1);
   });
 });

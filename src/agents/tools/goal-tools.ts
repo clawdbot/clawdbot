@@ -99,7 +99,7 @@ export function createCreateGoalTool(options: GoalToolOptions): AnyAgentTool {
     name: "create_goal",
     displaySummary: "Create a thread goal",
     description:
-      "Create goal only explicit user/system request. Existing goal => fail; user-facing controls clear it.",
+      "Create goal only explicit user/system request. Optional token_budget caps goal token usage. Existing goal => fail; user-facing controls clear it.",
     parameters: CreateGoalToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -126,7 +126,7 @@ export function createUpdateGoalTool(options: GoalToolOptions): AnyAgentTool {
     name: "update_goal",
     displaySummary: "Complete or block a thread goal",
     description:
-      "complete only achieved. blocked only same blocker 3+ consecutive goal turns; never ordinary difficulty/polish.",
+      "Update the session goal status (complete | blocked) with an optional note. complete only achieved. blocked only same blocker 3+ consecutive goal turns; never ordinary difficulty/polish.",
     parameters: UpdateGoalToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

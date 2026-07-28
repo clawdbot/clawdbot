@@ -9,15 +9,12 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
-import {
-  formatSqliteSessionFileMarker,
-  sqliteSessionFileMarkerMatchesSession,
-} from "../../config/sessions/sqlite-marker.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import {
   type DeliveryContext,
   normalizeDeliveryContext,
@@ -133,7 +130,7 @@ export function resolveSourceReplyPolicy(params: {
       params.sessionCtx.OriginatingChannel ??
       params.sessionCtx.Surface ??
       params.sessionCtx.Provider ??
-      params.sessionEntry?.channel,
+      sessionDeliveryChannel(params.sessionEntry),
     chatType: params.sessionEntry?.chatType,
   });
   return resolveSourceReplyVisibilityPolicy({
@@ -289,14 +286,7 @@ export function enqueueCommitmentExtractionForTurn(params: {
   if (params.isHeartbeat) {
     return;
   }
-  const userText =
-    params.commandBody.trim() ||
-    params.sessionCtx.BodyStripped?.trim() ||
-    params.sessionCtx.BodyForCommands?.trim() ||
-    params.sessionCtx.CommandBody?.trim() ||
-    params.sessionCtx.RawBody?.trim() ||
-    params.sessionCtx.Body?.trim() ||
-    "";
+  const userText = params.commandBody.trim() || params.sessionCtx.agentText?.trim() || "";
   const assistantText = joinCommitmentAssistantText(params.payloads);
   const sessionKey = params.sessionKey ?? params.followupRun.run.sessionKey;
   const channel =
@@ -362,20 +352,11 @@ export function resolveAdmittedRunSessionFile(params: {
   agentId: string;
   sessionId: string;
   sessionFile?: string;
+  sessionKey?: string;
   storePath?: string;
 }): string | undefined {
-  if (
-    params.sessionFile &&
-    sqliteSessionFileMarkerMatchesSession(params.sessionFile, params.sessionId)
-  ) {
-    return params.sessionFile;
-  }
-  if (params.storePath) {
-    return formatSqliteSessionFileMarker({
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-      storePath: params.storePath,
-    });
+  if (params.sessionKey?.trim()) {
+    return params.sessionKey.trim();
   }
   return params.sessionFile;
 }

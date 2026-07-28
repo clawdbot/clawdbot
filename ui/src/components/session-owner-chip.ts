@@ -1,8 +1,11 @@
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import type { SessionCreatedActor as ProtocolSessionCreatedActor } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import type { ActorIdentityUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
+import { resolveAvatar } from "../lib/identity-avatar.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
+import "./viewer-facepile.ts";
 
 export type SessionCreatedActor = ProtocolSessionCreatedActor;
 export type SessionCreatorOption = SessionCreatedActor & { id: string };
@@ -36,10 +39,12 @@ export function renderSessionOwnerChip(
   createdActor: SessionCreatedActor | null | undefined,
   size: "row" | "header",
   attribution: "created" | "archived" = "created",
+  user?: ActorIdentityUser,
 ) {
   return createdActor?.id
     ? html`<openclaw-session-owner-chip
         .createdActor=${createdActor}
+        .user=${user ?? null}
         size=${size}
         attribution=${attribution}
       ></openclaw-session-owner-chip>`
@@ -73,9 +78,12 @@ function ownerHue(id: string): number {
  * this chip is solid and never pulses/expires, in deliberate contrast to the
  * translucent, ring-styled live-presence chips. Render only when the gateway
  * has 2+ distinct creator identities (solo mode shows no attribution chrome).
+ * Actors absent from the current self/presence identities keep their stable
+ * initials because provenance outlives presence.
  */
 class SessionOwnerChip extends OpenClawLightDomElement {
   @property({ attribute: false }) createdActor: SessionCreatedActor | null = null;
+  @property({ attribute: false }) user: ActorIdentityUser | null = null;
   @property({ type: String }) size: "row" | "header" = "row";
   @property({ type: String }) attribution: "created" | "archived" = "created";
 
@@ -93,6 +101,15 @@ class SessionOwnerChip extends OpenClawLightDomElement {
       this.attribution === "archived" ? "sessionsView.archivedBy" : "sessionsView.createdBy",
       { name: title },
     );
+    const user = this.user?.id.trim() === createdActor.id.trim() ? this.user : null;
+    const avatar = user
+      ? resolveAvatar({
+          id: user.id,
+          name: user.name,
+          username: user.email,
+          profileAvatarUrl: user.avatarUrl,
+        })
+      : null;
     return html`
       <span
         class="session-owner-chip session-owner-chip--${this.size}"
@@ -100,7 +117,13 @@ class SessionOwnerChip extends OpenClawLightDomElement {
         role="img"
         aria-label=${accessibleLabel}
         title=${accessibleLabel}
-        >${initials}</span
+        >${avatar?.kind === "profile" && user
+          ? html`<openclaw-viewer-avatar
+              .user=${{ ...user, watchedSessions: [] }}
+              variant="session"
+              aria-hidden="true"
+            ></openclaw-viewer-avatar>`
+          : initials}</span
       >
     `;
   }

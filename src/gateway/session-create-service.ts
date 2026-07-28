@@ -68,9 +68,11 @@ import {
 } from "../sessions/session-lifecycle-admission.js";
 import { recordSessionCreated } from "../sessions/session-state-events.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
 import { shouldPreserveSessionAuthProfileOverride } from "./session-model-patch-origin.js";
+import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
 import { isSessionVisibilityAllowed, resolveSessionVisibility } from "./session-sharing.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
 import { loadSessionEntryReadOnly, resolveGatewaySessionStoreTarget } from "./session-utils.js";
@@ -249,6 +251,7 @@ type TrustedInitialSessionEntry = {
   pluginOwnerId?: string;
   providerOverride?: string;
   modelOverride?: string;
+  modelOverrideRouteResolution?: "resolved";
   cliSessionBindings?: SessionEntry["cliSessionBindings"];
   initializationPending?: true;
   modelSelectionLocked?: true;
@@ -271,6 +274,8 @@ export async function createGatewaySession(params: {
   key?: string;
   agentId?: string;
   label?: string;
+  /** Trusted model-generated title, persisted with a newly created dashboard session. */
+  generatedDisplayName?: string;
   model?: string;
   thinkingLevel?: string;
   incognito?: boolean;
@@ -320,6 +325,7 @@ export async function createGatewaySession(params: {
 }): Promise<CreateGatewaySessionResult> {
   const requestedKey = normalizeOptionalString(params.key);
   const parentSessionKey = normalizeOptionalString(params.parentSessionKey);
+  const generatedDisplayName = normalizeOptionalString(params.generatedDisplayName);
   const agentId = normalizeAgentId(
     normalizeOptionalString(params.agentId) ?? resolveDefaultAgentId(params.cfg),
   );
@@ -522,6 +528,15 @@ export async function createGatewaySession(params: {
         ),
       };
     }
+    const parentOwnershipError = resolvePluginSessionOwnershipError({
+      action: params.fork === true ? "fork" : "link",
+      entry: parent.entry,
+      key: parent.canonicalKey,
+      pluginOwnerId: params.authorizedPluginId,
+    });
+    if (parentOwnershipError) {
+      return { ok: false, error: parentOwnershipError };
+    }
     if (isModelSelectionLocked(parent.entry)) {
       return {
         ok: false,
@@ -586,11 +601,34 @@ export async function createGatewaySession(params: {
   }
 
   const targetSessionKey = explicitTargetKey ?? buildDashboardSessionKey(agentId, { incognito });
+  const creationTarget = resolveGatewaySessionStoreTarget({
+    cfg: params.cfg,
+    key: targetSessionKey,
+    agentId,
+  });
+  if (explicitTargetKey && !params.initialEntry) {
+    // A trusted initializer holds the lifecycle fence through afterCreate. Waiting
+    // on that fence would deadlock callers that must reject its visible pending row.
+    const pendingEntry = resolveSessionEntryAccessTarget({
+      cfg: params.cfg,
+      sessionKey: creationTarget.canonicalKey,
+    }).entry;
+    if (pendingEntry?.initializationPending === true) {
+      return {
+        ok: false,
+        error: errorShape(
+          ErrorCodes.UNAVAILABLE,
+          `Session ${creationTarget.canonicalKey} is still initializing; retry creation later.`,
+        ),
+      };
+    }
+  }
   const agentMainSessionKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId });
   // Durable dashboard sessions parent to main for flow-up notices and sidebar threads.
   // Incognito roots omit durable lineage so notices cannot cross the storage boundary.
   const dashboardParentSessionKey =
     !parentSessionKey &&
+    !params.authorizedPluginId &&
     !incognito &&
     params.fork !== true &&
     (params.cfg.session?.dmScope ?? "main") === "main" &&
@@ -672,7 +710,9 @@ export async function createGatewaySession(params: {
     if (
       canonicalParentSessionKey &&
       parentSessionTarget &&
-      (params.emitCommandHooks === true || params.fork === true)
+      (params.emitCommandHooks === true ||
+        params.fork === true ||
+        params.authorizedPluginId !== undefined)
     ) {
       const currentParent = loadSessionEntryReadOnly(
         canonicalParentSessionKey,
@@ -692,18 +732,31 @@ export async function createGatewaySession(params: {
         };
       }
       currentParentSessionEntry = currentParentEntry;
-      if (isModelSelectionLocked(currentParentEntry)) {
+      const parentOwnershipError = resolvePluginSessionOwnershipError({
+        action: params.fork === true ? "fork" : "link",
+        entry: currentParentEntry,
+        key: canonicalParentSessionKey,
+        pluginOwnerId: params.authorizedPluginId,
+      });
+      if (parentOwnershipError) {
+        return { ok: false, error: parentOwnershipError };
+      }
+      if (
+        (params.emitCommandHooks === true || params.fork === true) &&
+        isModelSelectionLocked(currentParentEntry)
+      ) {
         return {
           ok: false,
           error: errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE),
         };
       }
       const parentHasActiveWork =
-        isEmbeddedAgentRunActive(currentParentEntry.sessionId) ||
-        isSessionWorkAdmissionActive(parentSessionTarget.storePath, [
-          canonicalParentSessionKey,
-          currentParentEntry.sessionId,
-        ]);
+        (params.emitCommandHooks === true || params.fork === true) &&
+        (isEmbeddedAgentRunActive(currentParentEntry.sessionId) ||
+          isSessionWorkAdmissionActive(parentSessionTarget.storePath, [
+            canonicalParentSessionKey,
+            currentParentEntry.sessionId,
+          ]));
       if (parentHasActiveWork) {
         return {
           ok: false,
@@ -745,8 +798,7 @@ export async function createGatewaySession(params: {
       });
     }
 
-    const key = targetSessionKey;
-    const target = resolveGatewaySessionStoreTarget({ cfg: params.cfg, key, agentId });
+    const target = creationTarget;
     const created = await createSessionEntryWithTranscript<ErrorShape>(
       {
         agentId: target.agentId,
@@ -756,6 +808,15 @@ export async function createGatewaySession(params: {
       async ({ existingEntry, sessionEntries }) => {
         // This callback owns generated and explicit keys alike; no existing row
         // is the canonical signal that this request will actually create one.
+        const existingOwnershipError = resolvePluginSessionOwnershipError({
+          action: "adopt",
+          entry: existingEntry,
+          key: target.canonicalKey,
+          pluginOwnerId: params.authorizedPluginId,
+        });
+        if (existingOwnershipError) {
+          return { ok: false, error: existingOwnershipError };
+        }
         if (
           isAgentHarnessSessionKey(target.canonicalKey) &&
           !authorizedHarnessCreation &&
@@ -910,16 +971,23 @@ export async function createGatewaySession(params: {
           : undefined;
         const initializedEntry: SessionEntry = {
           ...patched.entry,
+          // New rows must expose the same canonical delivery shape to callbacks
+          // that the SQLite writer persists, or guarded finalization sees its own write as drift.
+          ...(existingEntry === undefined && patched.entry.delivery === undefined
+            ? { delivery: normalizeSessionDeliveryState() }
+            : {}),
           // Stamp provenance only for genuinely new rows: adopting an existing key
           // must not restamp write-once node facts (this direct store write bypasses
           // the merge-level write-once guard), and legacy rows stay "unknown".
           ...(params.creation && createdNewEntry ? buildSessionCreationStamp(params.creation) : {}),
           ...(params.visibility && createdNewEntry ? { visibility: params.visibility } : {}),
+          ...(generatedDisplayName && createdNewEntry ? { displayName: generatedDisplayName } : {}),
           ...(catalogResolvedModel && catalogAgentRuntime
             ? {
                 providerOverride: catalogResolvedModel.provider,
                 modelOverride: catalogResolvedModel.model,
                 modelOverrideSource: "user" as const,
+                modelOverrideRouteResolution: "resolved" as const,
                 agentRuntimeOverride: catalogAgentRuntime,
                 modelSelectionLocked: true,
                 pluginOwnerId: catalogPluginOwnerId,
@@ -931,14 +999,17 @@ export async function createGatewaySession(params: {
           ...(params.worktree ? { worktree: params.worktree } : {}),
           ...(execNode ? { execHost: "node", execNode, ...(execCwd ? { execCwd } : {}) } : {}),
           ...(initialAgentHarnessId ? { agentHarnessId: initialAgentHarnessId } : {}),
-          ...(authorizedPluginCreation
-            ? { pluginOwnerId: params.initialEntry?.pluginOwnerId }
+          ...(createdNewEntry && params.authorizedPluginId && !params.catalogTarget
+            ? { pluginOwnerId: params.authorizedPluginId }
             : {}),
           ...(authorizedPluginCreation && params.initialEntry?.providerOverride
             ? { providerOverride: params.initialEntry.providerOverride }
             : {}),
           ...(authorizedPluginCreation && params.initialEntry?.modelOverride
             ? { modelOverride: params.initialEntry.modelOverride }
+            : {}),
+          ...(authorizedPluginCreation && params.initialEntry?.modelOverrideRouteResolution
+            ? { modelOverrideRouteResolution: params.initialEntry.modelOverrideRouteResolution }
             : {}),
           // Seeded CLI bindings ride only the plugin-authorized creation path;
           // harness creations must never smuggle pre-bound CLI session ids.
@@ -1071,7 +1142,7 @@ export async function createGatewaySession(params: {
           sessionKey: canonicalParentSessionKey,
           sessionId: parentEntry?.sessionId,
           storePath: parentSessionTarget.storePath,
-          sessionFile: parentEntry?.sessionFile,
+          sessionFile: canonicalParentSessionKey,
           agentId: parentSessionTarget.agentId,
           reason: "new",
           nextSessionId: created.entry.sessionId,
@@ -1084,7 +1155,7 @@ export async function createGatewaySession(params: {
         sessionId: created.entry.sessionId,
         resumedFrom: parentEntry?.sessionId,
         storePath: target.storePath,
-        sessionFile: created.entry.sessionFile,
+        sessionFile: target.canonicalKey,
         agentId: target.agentId,
       });
     }
@@ -1104,32 +1175,31 @@ export async function createGatewaySession(params: {
     };
   };
 
+  const lifecycleTargets = [
+    {
+      scope: creationTarget.storePath,
+      identities: [creationTarget.canonicalKey],
+    },
+  ];
   if (
     canonicalParentSessionKey &&
     parentSessionEntry?.sessionId &&
     parentSessionTarget &&
-    (params.emitCommandHooks === true || params.fork === true)
+    (params.emitCommandHooks === true ||
+      params.fork === true ||
+      params.authorizedPluginId !== undefined)
   ) {
-    const result = await runExclusiveSessionLifecycleMutation({
+    lifecycleTargets.push({
       scope: parentSessionTarget.storePath,
       identities: [canonicalParentSessionKey, parentSessionEntry.sessionId],
-      run: createChildSession,
     });
-    if (result.ok && !result.resetExisting && createdContext) {
-      // Adoption still runs post-create work (initial chat.send, plugin hooks);
-      // only the created journal event is reserved for genuinely new rows.
-      if (createdNewEntry) {
-        recordSessionCreated({
-          sessionKey: createdContext.key,
-          agentId: createdContext.agentId,
-          entry: createdContext.entry,
-        });
-      }
-      await params.afterCreate?.(createdContext);
-    }
-    return result;
   }
-  const result = await createChildSession();
+  // Generated, keyed, same-store, and cross-agent creations all share the
+  // lifecycle owner's canonical identity order and one active mutation fence.
+  const result = await runExclusiveSessionLifecycleMutation({
+    targets: lifecycleTargets,
+    run: createChildSession,
+  });
   if (result.ok && !result.resetExisting && createdContext) {
     if (createdNewEntry) {
       recordSessionCreated({

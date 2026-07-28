@@ -2335,7 +2335,7 @@ describe("callGateway password resolution", () => {
       expectedPassword: "secret",
     },
     {
-      label: "prefers env password over local config password",
+      label: "prefers local config password over env password",
       envPassword: "from-env",
       config: {
         gateway: {
@@ -2344,7 +2344,7 @@ describe("callGateway password resolution", () => {
           auth: { password: "from-config" },
         },
       },
-      expectedPassword: "from-env",
+      expectedPassword: "from-config",
     },
     {
       label: "uses remote password in remote mode when env is unset",
@@ -2392,7 +2392,7 @@ describe("callGateway password resolution", () => {
     expect(lastClientOptions?.password).toBe("resolved-local-ref-password");
   });
 
-  it("does not resolve local password ref when env password takes precedence", async () => {
+  it("does not let env password mask an unresolved local password ref", async () => {
     process.env.OPENCLAW_GATEWAY_PASSWORD = "from-env";
     getRuntimeConfig.mockReturnValue({
       gateway: {
@@ -2410,9 +2410,7 @@ describe("callGateway password resolution", () => {
       },
     } as unknown as OpenClawConfig);
 
-    await callGateway({ method: "health" });
-
-    expect(lastClientOptions?.password).toBe("from-env");
+    await expect(callGateway({ method: "health" })).rejects.toThrow("gateway.auth.password");
   });
 
   it("does not resolve local password ref when token auth can win", async () => {

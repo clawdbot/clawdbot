@@ -6,6 +6,7 @@ import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import type { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { createIMessageRpcClient } from "./client.js";
@@ -139,6 +140,7 @@ async function runChannelInboundEventForLastRouteTest(params: RunChannelInboundE
 
 describe("iMessage monitor last-route updates", () => {
   const tempDirs: string[] = [];
+  const openClawStates: OpenClawTestState[] = [];
 
   beforeEach(() => {
     vi.spyOn(channelInbound, "runChannelInboundEvent").mockImplementation(
@@ -154,9 +156,10 @@ describe("iMessage monitor last-route updates", () => {
     expireCachedPrivateApiStatus();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
     vi.useRealTimers();
+    await Promise.all(openClawStates.splice(0).map((state) => state.cleanup()));
     vi.unstubAllEnvs();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -1030,9 +1033,19 @@ describe("iMessage monitor last-route updates", () => {
     expect(runtimeErrorMock).not.toHaveBeenCalled();
     await vi.waitFor(() => {
       expect(getSessionEntry({ storePath, sessionKey })).toMatchObject({
-        lastChannel: "imessage",
-        lastTo: "imessage:+15550001111",
-        lastAccountId: "default",
+        delivery: {
+          kind: "external",
+          context: {
+            channel: "imessage",
+            to: "imessage:+15550001111",
+            accountId: "default",
+          },
+          route: {
+            channel: "imessage",
+            accountId: "default",
+            target: { to: "imessage:+15550001111" },
+          },
+        },
       });
     });
     expect(getSessionEntry({ storePath, sessionKey: "agent:main:main" })).toBeUndefined();
@@ -1663,9 +1676,12 @@ describe("iMessage monitor last-route updates", () => {
   });
 
   it("repairs anchorless group watch payloads before routing or cursor updates", async () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-anchor-repair-"));
-    tempDirs.push(stateDir);
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    openClawStates.push(
+      await createOpenClawTestState({
+        layout: "state-only",
+        prefix: "openclaw-imsg-anchor-repair-",
+      }),
+    );
 
     let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
     const client = {

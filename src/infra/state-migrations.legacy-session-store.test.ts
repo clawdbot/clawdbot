@@ -83,10 +83,15 @@ it("normalizes file-era rows and drops malformed entries", async () => {
     expect(store.malformed).toBeUndefined();
     expect(store["agent:main:main"]).toMatchObject({
       sessionId: "session-1",
-      channel: "slack",
-      lastChannel: "telegram",
+      delivery: {
+        kind: "external",
+        context: { channel: "telegram" },
+        origin: { provider: "telegram" },
+      },
       pluginExtensions: { demo: { valid: { ok: true } } },
     });
+    expect(store["agent:main:main"]).not.toHaveProperty("channel");
+    expect(store["agent:main:main"]).not.toHaveProperty("lastChannel");
     expect(store["agent:main:main"]?.pendingFinalDeliveryAttemptCount).toBeUndefined();
   });
 });
@@ -113,8 +118,13 @@ it("normalizes compatibility writes before persistence", async () => {
     expect(persisted.malformed).toBeUndefined();
     expect(persisted["agent:main:main"]).toMatchObject({
       sessionId: "session-1",
-      channel: "slack",
+      delivery: {
+        kind: "external",
+        context: { channel: "slack" },
+        origin: { provider: "slack" },
+      },
     });
+    expect(persisted["agent:main:main"]).not.toHaveProperty("channel");
     expect(persisted["agent:main:main"]?.pendingFinalDeliveryAttemptCount).toBeUndefined();
   });
 });

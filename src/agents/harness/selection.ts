@@ -153,6 +153,7 @@ type PluginHarnessToolPolicyContext = Pick<
   | "senderIsOwner"
   | "inputProvenance"
   | "trustedInternalHandoff"
+  | "scheduledToolPolicy"
 >;
 
 type PluginHarnessToolPolicy = { allow?: string[]; deny?: string[] };
@@ -682,20 +683,23 @@ function resolvePluginHarnessToolPolicies(
     senderIsOwner: params.senderIsOwner,
     inputProvenance: params.inputProvenance,
     trustedInternalHandoff: params.trustedInternalHandoff,
+    scheduledToolPolicy: params.scheduledToolPolicy,
   });
   const groupPolicyParams = {
     config: params.config,
-    sessionKey: params.sessionKey,
+    sessionKey: params.scheduledToolPolicy?.ownerSessionKey ?? params.sessionKey,
     spawnedBy: params.spawnedBy,
     messageProvider,
     groupId: params.groupId,
     groupChannel: params.groupChannel,
     groupSpace: params.groupSpace,
-    accountId: params.agentAccountId,
+    accountId: params.scheduledToolPolicy?.ownerAccountId ?? params.agentAccountId,
+    requireConfiguredAccount: params.scheduledToolPolicy?.mode === "account",
     senderId: params.senderId,
     senderName: params.senderName,
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
+    senderPolicyMode: params.scheduledToolPolicy ? ("never" as const) : ("always" as const),
   };
   const { policy } = capabilityProfile;
   const sandboxRuntime = resolveSandboxRuntimeStatus({

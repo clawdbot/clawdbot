@@ -4021,6 +4021,9 @@ describe("collectCodexRouteWarnings", () => {
     expect(expectDefined(store.main, "store.main test invariant").providerOverride).toBe("openai");
     expect(expectDefined(store.main, "store.main test invariant").modelOverride).toBe("gpt-5.4");
     expect(expectDefined(store.main, "store.main test invariant").modelOverrideSource).toBe("auto");
+    expect(
+      expectDefined(store.main, "store.main test invariant").modelOverrideRouteResolution,
+    ).toBe("resolved");
     expect(expectDefined(store.main, "store.main test invariant").authProfileOverride).toBe(
       "openai-codex:default",
     );
@@ -4422,6 +4425,7 @@ describe("collectCodexRouteWarnings", () => {
     expect(entry.providerOverride).toBe("openai");
     expect(entry.modelOverride).toBe("gpt-5.5");
     expect(entry.modelOverrideSource).toBe("auto");
+    expect(entry.modelOverrideRouteResolution).toBe("resolved");
     expect(entry.authProfileOverride).toBe("openai:work");
     expect(entry.authProfileOverrideSource).toBe("auto");
     expect(entry.agentHarnessId).toBeUndefined();
@@ -4472,6 +4476,9 @@ describe("collectCodexRouteWarnings", () => {
     expect(expectDefined(store.main, "store.main test invariant").providerOverride).toBe("openai");
     expect(expectDefined(store.main, "store.main test invariant").modelOverride).toBe("gpt-5.5");
     expect(expectDefined(store.main, "store.main test invariant").modelOverrideSource).toBe("auto");
+    expect(
+      expectDefined(store.main, "store.main test invariant").modelOverrideRouteResolution,
+    ).toBe("resolved");
     expect(expectDefined(store.main, "store.main test invariant").authProfileOverride).toBe(
       "openai-codex:default",
     );

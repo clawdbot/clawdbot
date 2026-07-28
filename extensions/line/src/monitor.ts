@@ -2,6 +2,7 @@
 import type { webhook } from "@line/bot-sdk";
 import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
 import {
   danger,
@@ -392,7 +393,7 @@ export async function monitorLineProvider(
             res.end(JSON.stringify({ error: requestBodyErrorToText("REQUEST_BODY_TIMEOUT") }));
             return;
           }
-          runtime.error?.(danger(`line webhook error: ${String(err)}`));
+          runtime.error?.(danger(`line webhook error: ${formatErrorMessage(err)}`));
           if (!res.headersSent) {
             res.statusCode = 500;
             res.setHeader("Content-Type", "application/json");

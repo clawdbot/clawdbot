@@ -7,7 +7,6 @@ import {
   hasConfiguredAccountValue,
 } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
 import { resolveNormalizedAccountEntry } from "openclaw/plugin-sdk/account-resolution-runtime";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { resolveDefaultSecretProviderAlias } from "openclaw/plugin-sdk/provider-auth";
@@ -28,8 +27,11 @@ const DEFAULT_DISCUSSIONS_SECTION = "Sessions";
 const {
   listAccountIds: listClickClackAccountIds,
   resolveDefaultAccountId: resolveDefaultClickClackAccountId,
-} = createAccountListHelpers("clickclack", {
+  resolveAccountConfig: resolveMergedClickClackAccountConfig,
+} = createAccountListHelpers<ClickClackAccountConfig>("clickclack", {
   normalizeAccountId,
+  omitKeys: ["defaultAccount"],
+  nestedObjectKeys: ["discussions"],
   hasImplicitDefaultAccount: (cfg) => {
     const channel = cfg.channels?.clickclack;
     return Boolean(
@@ -49,14 +51,7 @@ export function resolveClickClackAccountConfig(
   accountId: string,
 ): ClickClackAccountConfig {
   const channel = cfg.channels?.clickclack;
-  const merged = resolveMergedAccountConfig<ClickClackAccountConfig>({
-    channelConfig: cfg.channels?.clickclack as ClickClackAccountConfig | undefined,
-    accounts: channel?.accounts,
-    accountId,
-    omitKeys: ["defaultAccount"],
-    nestedObjectKeys: ["discussions"],
-    normalizeAccountId,
-  });
+  const merged = resolveMergedClickClackAccountConfig(cfg, accountId);
   const account = resolveNormalizedAccountEntry(channel?.accounts, accountId, normalizeAccountId);
   const accountTokenFile = account?.tokenFile?.trim();
   if (accountTokenFile) {

@@ -41,6 +41,18 @@ data class SessionBranch(
 
 data class SessionRewindResult(
   val editorText: String?,
+  val editorAttachments: List<SessionEditorAttachment>,
+)
+
+data class SessionForkResult(
+  val sessionKey: String,
+  val editorText: String?,
+  val editorAttachments: List<SessionEditorAttachment>,
+)
+
+data class SessionEditorAttachment(
+  val mimeType: String,
+  val data: String,
 )
 
 data class ChatTranscriptAnchorState(
@@ -51,13 +63,20 @@ data class ChatTranscriptAnchorState(
 )
 
 /**
- * One content part in a chat message; binary parts carry base64 plus their MIME metadata.
+ * One content part in a chat message; images carry either bounded base64 or a managed artifact reference.
  */
 data class ChatMessageContent(
   val type: String = "text",
   val text: String? = null,
   val mimeType: String? = null,
   val fileName: String? = null,
+  val artifactId: String? = null,
+  val url: String? = null,
+  val openUrl: String? = null,
+  val alt: String? = null,
+  val width: Int? = null,
+  val height: Int? = null,
+  val sizeBytes: Long? = null,
   val base64: String? = null,
   val durationMs: Long? = null,
   val widget: ChatWidgetPreview? = null,
@@ -171,6 +190,7 @@ data class ChatSessionEntry(
   val updatedAtMs: Long?,
   val ownerAgentId: String? = null,
   val displayName: String? = null,
+  val derivedTitle: String? = null,
   val label: String? = null,
   val category: String? = null,
   val pinned: Boolean? = null,
@@ -194,6 +214,14 @@ data class ChatSessionEntry(
   val hasActiveRun: Boolean? = null,
   val activeRunIds: List<String>? = null,
   val hasActiveRunMetadata: Boolean = hasActiveRun != null || activeRunIds != null,
+  val parentSessionKey: String? = null,
+  val spawnedBy: String? = null,
+  val hasActiveSubagentRun: Boolean? = null,
+  val subagentRunState: String? = null,
+  val swarmGroupId: String? = null,
+  val swarmPhase: String? = null,
+  val swarmPhaseRank: Int? = null,
+  val swarmLog: String? = null,
   val status: String? = null,
   val lastRunError: String? = null,
   val startedAt: Long? = null,

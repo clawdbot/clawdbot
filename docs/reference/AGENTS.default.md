@@ -21,7 +21,6 @@ mkdir -p ~/.openclaw/workspace
 ```bash
 cp docs/reference/templates/AGENTS.md ~/.openclaw/workspace/AGENTS.md
 cp docs/reference/templates/SOUL.md ~/.openclaw/workspace/SOUL.md
-cp docs/reference/templates/TOOLS.md ~/.openclaw/workspace/TOOLS.md
 ```
 
 3. Optional: use this file's personal-assistant skill roster instead of the generic template:
@@ -75,10 +74,12 @@ Before proposing or building a custom system, feature, workflow, tool, integrati
 - Capture: decisions, preferences, constraints, open loops.
 - Avoid secrets unless explicitly requested.
 
-## Tools and skills
+## Tools
+
+### Local notes
 
 - Tools live in skills; follow each skill's `SKILL.md` when you need it.
-- Keep environment-specific notes in `TOOLS.md` (notes for skills).
+- Keep environment-specific notes in this file's `## Tools` section.
 
 ## Backup tip (recommended)
 

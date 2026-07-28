@@ -12,12 +12,26 @@ export type LobsterPetPaletteId =
   | "ink"
   | "blue"
   | "gold"
+  | "tangerine"
   | "calico"
   | "abyss"
   | "lumen"
+  | "magma"
+  | "oilslick"
+  | "aurora"
+  | "nebula"
+  | "mood"
+  | "clawtron"
+  | "selene"
+  | "geode"
   | "ghost"
+  | "glass"
   | "split"
   | "cottoncandy"
+  | "pixel"
+  | "blueprint"
+  | "phosphor"
+  | "heisenbug"
   | "retro";
 
 // Pass-through ledge visitors. Strangers are other lobsters; everyone else
@@ -76,21 +90,12 @@ export type LobsterPetLook = {
   glint: string | null;
 };
 
-function fnv1a(value: string): number {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < value.length; i++) {
-    hash ^= value.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return hash >>> 0;
-}
-
 // One salt per page load: revisiting the UI re-rolls every session's lobster,
 // while re-renders within a load stay stable for a given session key.
 const LOAD_SALT = Math.trunc(Math.random() * 0xffffffff);
 
 export function lobsterPetSeed(sessionKey: string): number {
-  return (fnv1a(sessionKey) ^ LOAD_SALT) >>> 0;
+  return (fnv1aUtf16(sessionKey) ^ LOAD_SALT) >>> 0;
 }
 
 // The most recently active session with a terminal status decides how the
@@ -136,3 +141,4 @@ export function resolveLobsterPetMode(
   }
   return sessions?.some((row) => row.hasActiveRun === true) ? "busy" : "idle";
 }
+import { fnv1aUtf16 } from "../lib/fnv1a.ts";

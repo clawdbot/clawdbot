@@ -179,8 +179,26 @@ describe("qa suite runtime agent session helpers", () => {
         gateway: { tempRoot },
       } as never),
     ).resolves.toEqual({
-      "session-1": { sessionId: "session-1", status: "running", updatedAt: 10 },
+      "session-1": {
+        sessionId: "session-1",
+        status: "running",
+        updatedAt: 10,
+        delivery: { kind: "none" },
+      },
     });
+  });
+
+  it("reads a requested agent session store", async () => {
+    const readEntries = vi.fn(() => []);
+
+    await expect(
+      readRawQaSessionStore({ gateway: { tempRoot: "/tmp/qa-agent-store" } } as never, {
+        agentId: "alternate",
+        readEntries,
+        retryDelaysMs: [],
+      }),
+    ).resolves.toEqual({});
+    expect(readEntries).toHaveBeenCalledWith(expect.objectContaining({ agentId: "alternate" }));
   });
 
   it("retries transient FTS integrity mismatches while child transcripts settle", async () => {
@@ -351,6 +369,7 @@ describe("qa suite runtime agent session helpers", () => {
       ),
     ).resolves.toEqual({
       assistantToolCallCounts: { message: 1 },
+      completedToolCallCounts: {},
       eventCursor: 2,
       successfulToolCallCounts: {},
       finalText: "",
@@ -377,6 +396,7 @@ describe("qa suite runtime agent session helpers", () => {
       ),
     ).resolves.toEqual({
       assistantToolCallCounts: { message: 1 },
+      completedToolCallCounts: {},
       eventCursor: 3,
       successfulToolCallCounts: {},
       finalText: "Sent.",
@@ -431,6 +451,7 @@ describe("qa suite runtime agent session helpers", () => {
       ),
     ).resolves.toEqual({
       assistantToolCallCounts: { message: 1 },
+      completedToolCallCounts: {},
       eventCursor: 4,
       successfulToolCallCounts: {},
       finalText: "Sent.",
@@ -537,6 +558,7 @@ describe("qa suite runtime agent session helpers", () => {
       ),
     ).resolves.toMatchObject({
       assistantToolCallCounts: { update_plan: 2, write: 1 },
+      completedToolCallCounts: { update_plan: 2 },
       successfulToolCallCounts: { update_plan: 1 },
     });
   });
@@ -602,6 +624,7 @@ describe("qa suite runtime agent session helpers", () => {
       }),
     ).resolves.toEqual({
       assistantToolCallCounts: {},
+      completedToolCallCounts: {},
       eventCursor: 0,
       successfulToolCallCounts: {},
       finalText: "",
