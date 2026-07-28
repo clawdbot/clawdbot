@@ -201,6 +201,16 @@ export function canRunPlaywrightChromium(chromiumExecutablePath: string): boolea
   return spawnSync(chromiumExecutablePath, ["--version"], { stdio: "ignore" }).status === 0;
 }
 
+// Pause an installed virtual clock slightly ahead of its current time so
+// elapsed time advances only through clock.runFor/fastForward. Without this,
+// page.clock.install() keeps ticking at real-time rate, and slow runners break
+// assertions that a virtual deadline has or has not elapsed yet (#115187). The
+// headroom keeps the pauseAt target ahead of the still-ticking clock between
+// the Date.now() read and the pause; jumping to it fires nothing relevant.
+export async function pauseVirtualClock(page: Page): Promise<void> {
+  await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 5_000);
+}
+
 export async function startControlUiE2eServer(
   buildInfo: ControlUiBuildInfo = {
     version: "2026.7.10",
