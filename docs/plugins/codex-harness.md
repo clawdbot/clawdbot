@@ -721,11 +721,17 @@ model or Codex runtime.
 
 When native Codex plugins are configured, OpenClaw installs or refreshes
 those plugins through the connected app-server before exposing plugin-owned
-apps to the Codex thread. `app/list` remains the source of truth for app
-ids, accessibility, and metadata, but OpenClaw owns the per-thread
-enablement decision: if policy allows a listed accessible app, OpenClaw
-sends `thread/start.config.apps[appId].enabled = true` even when `app/list`
-currently reports that app disabled. This path does not invent app
+apps to the Codex thread. `app/installed` supplies app IDs and runtime
+accessibility; `app/read` supplies app metadata. Callable apps with authorized
+metadata can be enabled directly. When a modern `app/installed` response marks
+an explicitly configured plugin-owned app base-disabled, OpenClaw may enable
+it provisionally in `thread/start`, then immediately re-read thread-scoped
+inventory. The thread is discarded before its first turn unless that app is
+enabled and callable there. Account-wide disabled apps and revoked,
+unauthenticated, policy-blocked, or missing apps remain excluded. Supported
+older app-server versions use `app/list` when they do not implement
+`app/installed`; that fallback never enables a disabled app provisionally.
+This path does not invent app
 installation for unknown ids; OpenClaw only activates marketplace plugins
 with `plugin/install` and then refreshes inventory.
 

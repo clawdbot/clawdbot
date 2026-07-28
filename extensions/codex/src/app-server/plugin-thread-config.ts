@@ -30,6 +30,7 @@ import {
   type CodexPluginRuntimeRequest,
 } from "./plugin-inventory.js";
 import type { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
+import type { CodexAppServerRequestResult } from "./protocol.js";
 import { isJsonObject, type JsonObject, type JsonValue, type v2 } from "./protocol.js";
 
 /** Policy context for one app id exposed by a configured Codex plugin. */
@@ -80,6 +81,7 @@ type CodexPluginThreadConfigDiagnostic =
 export type CodexPluginThreadConfig = {
   enabled: boolean;
   configPatch?: JsonObject;
+  provisionalAppIds?: readonly string[];
   fingerprint: string;
   inputFingerprint: string;
   policyContext: PluginAppPolicyContext;
@@ -267,14 +269,15 @@ export async function buildCodexPluginThreadConfig(
     });
   }
 
-  const accountAppsResult: Awaited<ReturnType<typeof readAccessibleAccountApps>> =
-    policy.allowAllPlugins ? await readAccessibleAccountApps(params, appCache) : { apps: [] };
+  const accountAppsResult: Awaited<ReturnType<typeof readThreadAdmissibleAccountApps>> =
+    policy.allowAllPlugins ? await readThreadAdmissibleAccountApps(params, appCache) : { apps: [] };
 
   const diagnostics: CodexPluginThreadConfigDiagnostic[] = [
     ...inventory.diagnostics,
     ...activationDiagnostics,
     ...(accountAppsResult.diagnostic ? [accountAppsResult.diagnostic] : []),
   ];
+  const provisionalAppIds = new Set<string>();
   const apps: JsonObject = {
     _default: {
       enabled: false,
@@ -284,6 +287,7 @@ export async function buildCodexPluginThreadConfig(
   };
   const policyApps: Record<string, CodexAppPolicyContextEntry> = {};
   const pluginAppIds: Record<string, string[]> = {};
+  let configLayersForAppAdmission: Promise<readonly JsonObject[] | undefined> | undefined;
   const pluginOwnedAppIds = new Set(
     inventory.records.flatMap((record) =>
       record.appOwnership === "proven" ? record.ownedAppIds : [],
@@ -301,7 +305,15 @@ export async function buildCodexPluginThreadConfig(
     }
     pluginAppIds[record.policy.configKey] = [...record.ownedAppIds].toSorted();
     for (const app of resolveThreadConfigAppsForRecord({ record, inventory })) {
-      if (!isPluginAppReadyForThreadStart(app)) {
+      let admission = resolvePluginAppThreadAdmission(app, inventory);
+      if (admission === "provisional") {
+        configLayersForAppAdmission ??= readConfigLayersForAppAdmission(params);
+        const layers = await configLayersForAppAdmission;
+        if (layers === undefined || resolveExplicitAppEnablement(layers, app.id) === false) {
+          admission = "blocked";
+        }
+      }
+      if (admission === "blocked") {
         diagnostics.push({
           code: "app_not_ready",
           plugin: record.policy,
@@ -320,6 +332,9 @@ export async function buildCodexPluginThreadConfig(
         }))
       ) {
         continue;
+      }
+      if (admission === "provisional") {
+        provisionalAppIds.add(app.id);
       }
       apps[app.id] = buildEnabledAppConfig(record.policy);
       policyApps[app.id] = {
@@ -340,6 +355,7 @@ export async function buildCodexPluginThreadConfig(
     if (pluginOwnedAppIds.has(app.id)) {
       continue;
     }
+    const admission = resolveAppInfoThreadAdmission(app, accountAppsResult.source);
     const accountApp = toOwnedAccountApp(app);
     if (
       policy.destructiveApprovalMode === "ask" &&
@@ -351,6 +367,9 @@ export async function buildCodexPluginThreadConfig(
       }))
     ) {
       continue;
+    }
+    if (admission === "provisional") {
+      provisionalAppIds.add(app.id);
     }
     apps[app.id] = buildEnabledAppConfig(policy);
     policyApps[app.id] = {
@@ -367,6 +386,9 @@ export async function buildCodexPluginThreadConfig(
   return {
     enabled: true,
     configPatch,
+    ...(provisionalAppIds.size > 0
+      ? { provisionalAppIds: Array.from(provisionalAppIds).toSorted() }
+      : {}),
     fingerprint: fingerprintJson({
       version: CODEX_PLUGIN_THREAD_CONFIG_FINGERPRINT_VERSION,
       inputFingerprint,
@@ -584,7 +606,7 @@ function shouldWaitForInitialAppInventory(
   policy: ResolvedCodexPluginsPolicy,
   inventory: CodexPluginInventory,
 ): boolean {
-  // Install/enable first so the initial app/list can observe newly activated plugin apps.
+  // Install/enable first so the initial app snapshot observes newly activated plugin apps.
   if (inventory.records.some((record) => record.activationRequired)) {
     return false;
   }
@@ -613,7 +635,7 @@ async function refreshAppInventoryNow(
     return undefined;
   }
   const request: CodexAppInventoryRequest = async (method, requestParams) =>
-    (await params.request(method, requestParams)) as Awaited<ReturnType<CodexAppInventoryRequest>>;
+    (await params.request(method, requestParams)) as CodexAppServerRequestResult<typeof method>;
   try {
     const snapshot = await appCache.refreshNow({
       key: appCacheKey,
@@ -648,15 +670,16 @@ function emptyCodexPluginInventory(policy: ResolvedCodexPluginsPolicy): CodexPlu
   };
 }
 
-async function readAccessibleAccountApps(
+async function readThreadAdmissibleAccountApps(
   params: BuildCodexPluginThreadConfigParams,
   appCache: CodexAppInventoryCache,
 ): Promise<{
   apps: v2.AppInfo[];
+  source?: CodexAppInventorySnapshot["source"];
   diagnostic?: CodexPluginThreadConfigDiagnostic;
 }> {
-  // Account-wide mode needs a complete inventory. A plugin-targeted cache fill can
-  // stop once its known app ids are found, so always traverse all app/list pages here.
+  // Account-wide mode needs metadata for every installed app, not only the
+  // configured plugin-owned app ids used by targeted startup refreshes.
   const snapshot = await refreshAppInventoryNow(params, appCache, {
     forceRefetch: false,
     reason: "account_apps_all",
@@ -673,8 +696,11 @@ async function readAccessibleAccountApps(
   }
   return {
     apps: snapshot.apps
-      .filter((app) => app.isAccessible)
+      // Account-wide discovery must preserve Codex's effective enablement policy.
+      // Only an explicitly configured plugin may provisionally enable its owned app.
+      .filter((app) => resolveAppInfoThreadAdmission(app, snapshot.source) === "ready")
       .toSorted((left, right) => left.id.localeCompare(right.id)),
+    source: snapshot.source,
   };
 }
 
@@ -698,11 +724,81 @@ function resolveThreadConfigAppsForRecord(params: {
   return params.record.apps;
 }
 
-function isPluginAppReadyForThreadStart(app: CodexPluginOwnedApp): boolean {
-  // `app/list` is the source of truth for inventory and access posture, but
-  // OpenClaw owns the per-thread enablement decision. A listed app that is
-  // accessible can be re-enabled for this thread via `config.apps[app.id]`.
-  return app.accessible;
+type CodexPluginAppThreadAdmission = "ready" | "provisional" | "blocked";
+
+function resolvePluginAppThreadAdmission(
+  app: CodexPluginOwnedApp,
+  inventory: CodexPluginInventory,
+): CodexPluginAppThreadAdmission {
+  if (app.accessible) {
+    return "ready";
+  }
+  const snapshot = inventory.appInventory?.snapshot;
+  const appInfo = snapshot?.apps.find((candidate) => candidate.id === app.id);
+  return appInfo ? resolveAppInfoThreadAdmission(appInfo, snapshot.source) : "blocked";
+}
+
+function resolveAppInfoThreadAdmission(
+  app: v2.AppInfo,
+  source: CodexAppInventorySnapshot["source"] | undefined,
+): CodexPluginAppThreadAdmission {
+  if (app.isAccessible) {
+    return "ready";
+  }
+  // The explicit OpenClaw plugin entry is the unmanaged enablement decision.
+  // Codex still applies feature/workspace gates and managed app requirements
+  // after this thread override; thread-scoped attestation fails closed if they win.
+  return source === "installed" && !app.isEnabled ? "provisional" : "blocked";
+}
+
+async function readConfigLayersForAppAdmission(
+  params: BuildCodexPluginThreadConfigParams,
+): Promise<readonly JsonObject[] | undefined> {
+  try {
+    const response = await params.request("config/read", {
+      includeLayers: true,
+      ...(params.configCwd ? { cwd: params.configCwd } : {}),
+    });
+    if (!isJsonObject(response) || !Array.isArray(response.layers)) {
+      throw new Error("Codex config/read omitted config layers");
+    }
+    return response.layers.flatMap((layer) => {
+      if (!isJsonObject(layer)) {
+        throw new Error("Codex config/read returned an invalid config layer");
+      }
+      if (layer.disabledReason !== undefined && layer.disabledReason !== null) {
+        if (typeof layer.disabledReason !== "string") {
+          throw new Error("Codex config/read returned an invalid disabled layer");
+        }
+        return [];
+      }
+      if (!isJsonObject(layer.config)) {
+        throw new Error("Codex config/read returned an invalid layer config");
+      }
+      return [layer.config];
+    });
+  } catch (error) {
+    embeddedAgentLog.warn("codex plugin app admission config read failed", { error });
+    return undefined;
+  }
+}
+
+function resolveExplicitAppEnablement(
+  layersHighestPrecedenceFirst: readonly JsonObject[],
+  appId: string,
+): boolean | undefined {
+  // Codex includes disabled layers and orders active config from highest to lowest.
+  // The first app-specific value wins; ignoring `_default` preserves the deny-all
+  // service-account baseline while preventing SessionFlags from undoing an explicit opt-out.
+  for (const layer of layersHighestPrecedenceFirst) {
+    const apps = layer.apps;
+    const app = isJsonObject(apps) ? apps[appId] : undefined;
+    if (!isJsonObject(app) || !Object.hasOwn(app, "enabled")) {
+      continue;
+    }
+    return app.enabled === true;
+  }
+  return undefined;
 }
 
 function shouldForceRefreshForNotReadyPluginApps(
