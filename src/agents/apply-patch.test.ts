@@ -47,6 +47,14 @@ function createMemoryPatchSandbox(initialFiles: Record<string, string | Buffer> 
   const writeFile = vi.fn(async ({ filePath, data }) => {
     files.set(filePath, Buffer.isBuffer(data) ? Buffer.from(data) : data);
   });
+  const createFile = vi.fn(async ({ filePath, data }) => {
+    if (files.has(filePath)) {
+      return "exists" as const;
+    }
+    files.set(filePath, Buffer.isBuffer(data) ? data.toString("utf8") : data);
+    return "created" as const;
+  });
+  const mkdirp = vi.fn(async () => {});
   const bridge: SandboxFsBridge = {
     resolvePath: ({ filePath }) => ({
       relativePath: filePath,
@@ -59,6 +67,7 @@ function createMemoryPatchSandbox(initialFiles: Record<string, string | Buffer> 
         : Buffer.from(contents ?? "");
     },
     writeFile,
+    createFile,
     remove: async ({ filePath }) => {
       files.delete(filePath);
     },
@@ -75,12 +84,14 @@ function createMemoryPatchSandbox(initialFiles: Record<string, string | Buffer> 
         ? null
         : { type: "file", size: Buffer.byteLength(contents), mtimeMs: 0 };
     },
-    mkdirp: async () => {},
+    mkdirp,
   };
   return {
     files,
     bridge,
     writeFile,
+    createFile,
+    mkdirp,
     options: {
       cwd: "/local/workspace",
       sandbox: {
@@ -216,6 +227,44 @@ describe("applyPatch", () => {
       );
       expect(await fs.readFile(target, "utf8")).toBe("IMPORTANT USER DATA\nsecond line\n");
     });
+  });
+
+  it("refuses an add hunk when a competing writer creates the target mid-patch", async () => {
+    const memory = createMemoryPatchSandbox();
+    memory.mkdirp.mockImplementation(async () => {
+      memory.files.set("/sandbox/notes.txt", "written by another writer\n");
+    });
+    const patch = `*** Begin Patch
+*** Add File: notes.txt
++replacement
+*** End Patch`;
+
+    await expect(applyPatch(patch, memory.options)).rejects.toThrow(
+      /Cannot create notes\.txt: the file already exists/,
+    );
+    expect(memory.files.get("/sandbox/notes.txt")).toBe("written by another writer\n");
+    expect(memory.writeFile.mock.calls).toHaveLength(0);
+  });
+
+  it("refuses a move hunk when a competing writer creates the destination mid-patch", async () => {
+    const memory = createMemoryPatchSandbox({ "source.txt": "foo\nbar\n" });
+    memory.mkdirp.mockImplementation(async () => {
+      memory.files.set("/sandbox/dest.txt", "written by another writer\n");
+    });
+    const patch = `*** Begin Patch
+*** Update File: source.txt
+*** Move to: dest.txt
+@@
+ foo
+-bar
++baz
+*** End Patch`;
+
+    await expect(applyPatch(patch, memory.options)).rejects.toThrow(
+      /Cannot create dest\.txt: the file already exists/,
+    );
+    expect(memory.files.get("/sandbox/dest.txt")).toBe("written by another writer\n");
+    expect(memory.files.get("/sandbox/source.txt")).toBe("foo\nbar\n");
   });
 
   it("allows an add hunk after the same path is deleted in the patch", async () => {

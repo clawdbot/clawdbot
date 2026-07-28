@@ -18,7 +18,13 @@ const SANDBOX_PINNED_MUTATION_PYTHON_CANDIDATES = [
   "/bin/python3",
 ] as const;
 
+// Exit code the pinned helper reserves for "create target already exists" so
+// callers can tell a lost exclusive-create race from a real failure. Any other
+// nonzero exit stays an error.
+export const SANDBOX_CREATE_EXISTS_EXIT_CODE = 17;
+
 export const SANDBOX_PINNED_MUTATION_PYTHON = [
+  `SANDBOX_CREATE_EXISTS_EXIT_CODE = ${SANDBOX_CREATE_EXISTS_EXIT_CODE}`,
   "import errno",
   "import os",
   "import secrets",
@@ -200,6 +206,19 @@ export const SANDBOX_PINNED_MUTATION_PYTHON = [
   "                os.unlink(temp_name, dir_fd=parent_fd)",
   "            except FileNotFoundError:",
   "                pass",
+  "",
+  "def create_exclusive(parent_fd, basename, stdin_buffer):",
+  "    file_fd = os.open(basename, WRITE_FLAGS, 0o600, dir_fd=parent_fd)",
+  "    try:",
+  "        while True:",
+  "            chunk = stdin_buffer.read(65536)",
+  "            if not chunk:",
+  "                break",
+  "            write_all(file_fd, chunk)",
+  "        os.fsync(file_fd)",
+  "    finally:",
+  "        os.close(file_fd)",
+  "    os.fsync(parent_fd)",
   "",
   "def read_file(parent_fd, basename):",
   "    file_fd = os.open(basename, READ_FLAGS, dir_fd=parent_fd)",
@@ -410,6 +429,19 @@ export const SANDBOX_PINNED_MUTATION_PYTHON = [
   "        if parent_fd is not None:",
   "            os.close(parent_fd)",
   "        os.close(root_fd)",
+  "elif operation == 'create':",
+  "    root_fd = open_dir(sys.argv[2])",
+  "    parent_fd = None",
+  "    try:",
+  "        parent_fd = walk_dir(root_fd, sys.argv[3], sys.argv[5] == '1')",
+  "        try:",
+  "            create_exclusive(parent_fd, sys.argv[4], sys.stdin.buffer)",
+  "        except FileExistsError:",
+  "            sys.exit(SANDBOX_CREATE_EXISTS_EXIT_CODE)",
+  "    finally:",
+  "        if parent_fd is not None:",
+  "            os.close(parent_fd)",
+  "        os.close(root_fd)",
   "elif operation == 'read':",
   "    root_fd = open_dir(sys.argv[2])",
   "    parent_fd = None",
@@ -510,6 +542,23 @@ export function buildPinnedWritePlan(params: {
     checks: [params.check],
     args: [
       "write",
+      params.pinned.mountRootPath,
+      params.pinned.relativeParentPath,
+      params.pinned.basename,
+      params.mkdir ? "1" : "0",
+    ],
+  });
+}
+
+export function buildPinnedCreatePlan(params: {
+  check: PathSafetyCheck;
+  pinned: PinnedSandboxEntry;
+  mkdir: boolean;
+}): SandboxFsCommandPlan {
+  return buildPinnedMutationPlan({
+    checks: [params.check],
+    args: [
+      "create",
       params.pinned.mountRootPath,
       params.pinned.relativeParentPath,
       params.pinned.basename,

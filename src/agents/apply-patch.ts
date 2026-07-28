@@ -9,7 +9,7 @@ import path from "node:path";
 import { Type } from "typebox";
 import { createAbortError } from "../infra/abort-signal.js";
 import { openRootFile, type RootFileOpenResult } from "../infra/boundary-file-read.js";
-import { root as fsRoot, pathExists } from "../infra/fs-safe.js";
+import { FsSafeError, root as fsRoot } from "../infra/fs-safe.js";
 import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../infra/path-alias-guards.js";
 import { applyUpdateHunk } from "./apply-patch-update.js";
 import { toRelativeSandboxPath, resolvePathFromInput } from "./path-policy.js";
@@ -180,13 +180,13 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
     if (hunk.kind === "add") {
       const target = await resolvePatchPath(hunk.path, options);
       await assertPatchParentPath(hunk.path, options);
-      await assertPatchTargetAbsent({
+      await ensureDir(target.resolved, fileOps);
+      await createPatchTarget({
         target,
+        contents: hunk.contents,
         ops: fileOps,
         hint: `Use "*** Update File: ${target.display}" to change it, or delete it earlier in the same patch.`,
       });
-      await ensureDir(target.resolved, fileOps);
-      await fileOps.writeFile(target.resolved, hunk.contents);
       recordSummary(summary, seen, "added", target.display);
       continue;
     }
@@ -208,28 +208,23 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
       await assertPatchParentPath(hunk.movePath, options);
       const moveResolvesToSource =
         path.resolve(moveTarget.resolved) === path.resolve(target.resolved);
-      if (!moveResolvesToSource) {
-        await assertPatchTargetAbsent({
-          target: moveTarget,
-          ops: fileOps,
-          hint: "Delete it earlier in the same patch to replace it.",
-        });
-      }
       await ensureDir(moveTarget.resolved, fileOps);
-      const destination = moveResolvesToSource ? target.resolved : moveTarget.resolved;
       if (moveResolvesToSource) {
         const existing = await fileOps.readFile(target.resolved);
         if (normalizeUpdateComparison(existing) === normalizeUpdateComparison(applied)) {
           noOpPaths.add(target.display);
         } else {
           noOpPaths.delete(target.display);
-          await fileOps.writeFile(destination, applied);
+          await fileOps.writeFile(target.resolved, applied);
         }
       } else {
         noOpPaths.delete(target.display);
-        await fileOps.writeFile(destination, applied);
-      }
-      if (!moveResolvesToSource) {
+        await createPatchTarget({
+          target: moveTarget,
+          contents: applied,
+          ops: fileOps,
+          hint: "Delete it earlier in the same patch to replace it.",
+        });
         await fileOps.remove(target.resolved);
       }
       if (!noOpPaths.has(target.display)) {
@@ -291,25 +286,28 @@ function formatSummary(summary: ApplyPatchSummary): string {
   return lines.join("\n");
 }
 
+type PatchCreateOutcome = "created" | "exists";
+
 type PatchFileOps = {
   readFile: (filePath: string) => Promise<string>;
   writeFile: (filePath: string, content: string) => Promise<void>;
+  createFile: (filePath: string, content: string) => Promise<PatchCreateOutcome>;
   remove: (filePath: string) => Promise<void>;
   mkdirp: (dir: string) => Promise<void>;
-  exists: (filePath: string) => Promise<boolean>;
 };
 
-async function assertPatchTargetAbsent(params: {
+async function createPatchTarget(params: {
   target: { resolved: string; display: string };
+  contents: string;
   ops: PatchFileOps;
   hint: string;
 }) {
-  if (!(await params.ops.exists(params.target.resolved))) {
-    return;
+  const outcome = await params.ops.createFile(params.target.resolved, params.contents);
+  if (outcome === "exists") {
+    throw new Error(
+      `Cannot create ${params.target.display}: the file already exists. ${params.hint}`,
+    );
   }
-  throw new Error(
-    `Cannot create ${params.target.display}: the file already exists. ${params.hint}`,
-  );
 }
 
 function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
@@ -321,18 +319,39 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
         return decodeUtf8File(buf, filePath);
       },
       writeFile: (filePath, content) => bridge.writeFile({ filePath, cwd: root, data: content }),
+      createFile: (filePath, content) => bridge.createFile({ filePath, cwd: root, data: content }),
       remove: (filePath) => bridge.remove({ filePath, cwd: root, force: false }),
       mkdirp: (dir) => bridge.mkdirp({ filePath: dir, cwd: root }),
-      exists: async (filePath) => (await bridge.stat({ filePath, cwd: root })) !== null,
     };
   }
-  const workspaceOnly = options.workspaceOnly !== false;
-  const rootPromise = workspaceOnly ? fsRoot(options.cwd) : undefined;
+
+  if (options.workspaceOnly === false) {
+    return {
+      readFile: (filePath) => fs.readFile(filePath, "utf8"),
+      writeFile: async (filePath, content) => {
+        await fs.writeFile(filePath, content, "utf8");
+      },
+      createFile: async (filePath, content) => {
+        try {
+          await fs.writeFile(filePath, content, { encoding: "utf8", flag: "wx" });
+          return "created";
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+            return "exists";
+          }
+          throw error;
+        }
+      },
+      remove: (filePath) => fs.rm(filePath),
+      mkdirp: async (dir) => {
+        await fs.mkdir(dir, { recursive: true });
+      },
+    };
+  }
+
+  const rootPromise = fsRoot(options.cwd);
   return {
     readFile: async (filePath) => {
-      if (!workspaceOnly) {
-        return decodeUtf8File(await fs.readFile(filePath), filePath);
-      }
       const opened = await openRootFile({
         absolutePath: filePath,
         rootPath: options.cwd,
@@ -346,43 +365,33 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
       }
     },
     writeFile: async (filePath, content) => {
-      if (!workspaceOnly) {
-        await fs.writeFile(filePath, content, "utf8");
-        return;
-      }
       const relative = toRelativeSandboxPath(options.cwd, filePath);
-      await (await rootPromise)?.write(relative, content, { encoding: "utf8" });
+      await (await rootPromise).write(relative, content, { encoding: "utf8" });
+    },
+    createFile: async (filePath, content) => {
+      const relative = toRelativeSandboxPath(options.cwd, filePath);
+      try {
+        await (await rootPromise).create(relative, content, { encoding: "utf8" });
+        return "created";
+      } catch (error) {
+        if (error instanceof FsSafeError && error.code === "already-exists") {
+          return "exists";
+        }
+        throw error;
+      }
     },
     remove: async (filePath) => {
-      if (!workspaceOnly) {
-        await fs.rm(filePath);
-        return;
-      }
       const relative = toRelativeSandboxPath(options.cwd, filePath);
-      await (await rootPromise)?.remove(relative);
+      await (await rootPromise).remove(relative);
     },
     mkdirp: async (dir) => {
-      if (!workspaceOnly) {
-        await fs.mkdir(dir, { recursive: true });
-        return;
-      }
       const relative = toRelativeSandboxPath(options.cwd, dir, { allowRoot: true });
       const root = await rootPromise;
-      if (!root) {
-        return;
-      }
       if (relative === "" || relative === ".") {
         await root.ensureRoot();
         return;
       }
       await root.mkdir(relative);
-    },
-    exists: async (filePath) => {
-      if (!workspaceOnly) {
-        return await pathExists(filePath);
-      }
-      const relative = toRelativeSandboxPath(options.cwd, filePath);
-      return (await (await rootPromise)?.exists(relative)) ?? false;
     },
   };
 }

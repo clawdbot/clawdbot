@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import {
   buildPinnedWritePlan,
+  SANDBOX_CREATE_EXISTS_EXIT_CODE,
   SANDBOX_PINNED_MUTATION_PYTHON,
 } from "./fs-bridge-mutation-helper.js";
 
@@ -125,6 +126,34 @@ describe("sandbox pinned mutation helper", () => {
       await expect(
         fs.readFile(path.join(workspace, "nested", "deeper", "note.txt"), "utf8"),
       ).resolves.toBe("hello");
+    });
+  });
+
+  it("creates a new file through a pinned directory fd", async () => {
+    await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+      const workspace = path.join(root, "workspace");
+      await fs.mkdir(workspace, { recursive: true });
+
+      const result = runMutation(["create", workspace, "nested", "note.txt", "1"], "hello");
+
+      expect(result.status).toBe(0);
+      await expect(fs.readFile(path.join(workspace, "nested", "note.txt"), "utf8")).resolves.toBe(
+        "hello",
+      );
+    });
+  });
+
+  it("refuses to create over an existing file and leaves it untouched", async () => {
+    await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+      const workspace = path.join(root, "workspace");
+      const filePath = path.join(workspace, "note.txt");
+      await fs.mkdir(workspace, { recursive: true });
+      await fs.writeFile(filePath, "keep me", "utf8");
+
+      const result = runMutation(["create", workspace, "", "note.txt", "0"], "replacement");
+
+      expect(result.status).toBe(SANDBOX_CREATE_EXISTS_EXIT_CODE);
+      await expect(fs.readFile(filePath, "utf8")).resolves.toBe("keep me");
     });
   });
 

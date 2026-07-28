@@ -38,6 +38,14 @@ export type SandboxFsBridge = {
     mkdir?: boolean;
     signal?: AbortSignal;
   }): Promise<void>;
+  createFile(params: {
+    filePath: string;
+    cwd?: string;
+    data: Buffer | string;
+    encoding?: BufferEncoding;
+    mkdir?: boolean;
+    signal?: AbortSignal;
+  }): Promise<"created" | "exists">;
   mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void>;
   remove(params: {
     filePath: string;
