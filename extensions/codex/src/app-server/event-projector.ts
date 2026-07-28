@@ -334,9 +334,8 @@ export class CodexAppServerEventProjector {
     // A terminal timeout must not publish exact usage, but the timeout watcher
     // can still recover a completed assistant. Keep the snapshot masked until
     // recovery clears the abort instead of destroying it in markTimedOut().
-    const projectedUsage = this.aborted
-      ? this.tokenUsage
-      : (this.responseCompletions.usage ?? this.tokenUsage);
+    const completedUsage = this.responseCompletions.usage ?? this.tokenUsage;
+    const projectedUsage = this.aborted ? this.tokenUsage : completedUsage;
     const hasAssistantItemText = this.assistantProjection.hasAssistantItemTextForSynthesis();
     const legacyFailClosed =
       !this.completedTurn || this.completedTurn.status !== "completed" || hasAssistantItemText;
