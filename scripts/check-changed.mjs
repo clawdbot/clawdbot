@@ -152,12 +152,9 @@ export function changedCheckLocalDependenciesReady(cwd = process.cwd()) {
   );
 }
 
-export function changedCheckRequiresRemote(result, options = {}) {
+export function changedCheckRequiresRemote(result) {
   if (!result || result.paths.length === 0) {
     return false;
-  }
-  if (options.exportSignatureChanged) {
-    return true;
   }
   if (
     shouldRunSqliteSessionSchemaBaselineCheck(result.paths) ||
@@ -199,7 +196,7 @@ export function shouldDelegateChangedCheckToCrabbox(argv = [], env = process.env
     return true;
   }
   return (
-    changedCheckRequiresRemote(result, options) ||
+    changedCheckRequiresRemote(result) ||
     !changedCheckLocalDependenciesReady(options.cwd ?? process.cwd())
   );
 }
@@ -1103,7 +1100,6 @@ if (isDirectRun()) {
         shouldDelegateChangedCheckToCrabbox(argv, process.env, {
           cwd: process.cwd(),
           result,
-          exportSignatureChanged,
           diffRefsReady: result.lanes.releaseMetadata
             ? args.staged ||
               changedCheckDiffRefsReady({

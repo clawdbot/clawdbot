@@ -8,7 +8,10 @@ import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
 const GIT_OUTPUT_MAX_BUFFER = 64 * 1024 * 1024;
 const IMPLAUSIBLE_NO_MERGE_BASE_DIFF_PATHS = 200;
 const RAW_SYNC_CHANGED_LANES_ENV = "OPENCLAW_CHANGED_LANES_RAW_SYNC";
-const DEADCODE_EXPORT_PATH_RE = /^(?:src|extensions|ui|packages)\//u;
+// Scope to the source files knip's production scan actually reads. Matching the
+// tree alone would let a docs file under `src/` with `export` in a code sample
+// trip the dead-export scan and drag a docs-only change onto the heavy route.
+const DEADCODE_EXPORT_PATH_RE = /^(?:src|extensions|ui|packages)\/.*\.(?:[cm]?tsx?|[cm]?js)$/u;
 const CHANGED_EXPORT_LINE_RE = /^[+-](?![+-]).*\bexport\b/mu;
 
 const SCRIPTS_TYPECHECK_PATH_RE =

@@ -691,6 +691,24 @@ describe("scripts/changed-lanes", () => {
     ).toBe(false);
   });
 
+  it("ignores non-source files inside production scan trees", () => {
+    // A docs file under `src/` can carry `export` in a code sample; knip never
+    // reads it, so it must not drag a docs-only change onto the heavy route.
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-nonsource-export-signature-");
+    git(dir, ["init", "-q", "--initial-branch=main"]);
+    writeRepoFile(dir, "src/README.md", "example\n");
+    commitAll(dir, "initial");
+    writeRepoFile(dir, "src/README.md", "```ts\nexport const value = 1;\n```\n");
+
+    expect(
+      hasChangedExportSignature({
+        base: "HEAD",
+        changedPaths: ["src/README.md"],
+        cwd: dir,
+      }),
+    ).toBe(false);
+  });
+
   it("ignores the explicit path separator", () => {
     const result = detectChangedLanes(["--", "scripts/test-live-acp-bind-docker.sh"]);
 
@@ -1064,13 +1082,13 @@ describe("scripts/changed-lanes", () => {
     ]);
   });
 
-  it("keeps a changed export signature on the heavy remote route", () => {
-    const result = detectChangedLanes(["docs/reference/test.md"]);
+  it("routes a changed export signature remotely through its own source lane", () => {
+    // Detection only fires for source files, and any such file already enables a
+    // non-docs lane, so the dead export scan needs no special routing branch.
+    const result = detectChangedLanes(["src/config/config.ts"]);
 
-    expect(changedCheckRequiresRemote(result, { exportSignatureChanged: true })).toBe(true);
-    expect(
-      shouldDelegateChangedCheckToCrabbox([], {}, { result, exportSignatureChanged: true }),
-    ).toBe(true);
+    expect(changedCheckRequiresRemote(result)).toBe(true);
+    expect(shouldDelegateChangedCheckToCrabbox([], {}, { result })).toBe(true);
   });
 
   it("adds the dead export scan only for changed export signatures", () => {
