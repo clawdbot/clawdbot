@@ -1158,19 +1158,36 @@ async function buildResponsesPayload(
   if (
     QA_IMAGE_GENERATION_PROMPT_RE.test(allInputText) &&
     !toolOutput &&
-    hasToolDefinition(body, "image_generate") &&
-    (!input.some((item) => item.type === "function_call" && item.name === "image_generate") ||
-      (QA_IMAGE_GENERATION_PROMPT_RE.test(prompt) &&
-        !extractCompletedImageGenerationMediaPath(input)))
+    !extractCompletedImageGenerationMediaPath(input) &&
+    (!input.some(
+      (item) =>
+        item.type === "function_call" &&
+        (item.name === "image_generate" ||
+          (item.name === "exec" &&
+            typeof item.arguments === "string" &&
+            item.arguments.includes("image_generate"))),
+    ) ||
+      QA_IMAGE_GENERATION_PROMPT_RE.test(prompt))
   ) {
-    const events = buildToolCallEventsWithArgs("image_generate", {
+    const imageArgs = {
       prompt: "A QA lighthouse on a dark sea with a tiny protocol droid silhouette.",
       filename: "qa-lighthouse.png",
       size: "1024x1024",
-    });
+    };
+    const events = hasDeclaredTool(body, "image_generate")
+      ? buildToolCallEventsWithArgs("image_generate", imageArgs)
+      : hasDeclaredTool(body, "exec")
+        ? buildToolCallEventsWithArgs("exec", {
+            language: "javascript",
+            code: [
+              'const matches = await tools.search("image_generate");',
+              `return await tools.call(matches[0].id, ${JSON.stringify(imageArgs)});`,
+            ].join("\n"),
+          })
+        : buildToolCallEventsWithArgs("image_generate", imageArgs);
     const callId = extractPlannedToolCallId(events);
     if (callId) {
-      scenarioState.pendingImageGenerationCallIds.add(callId);
+      scenarioState.pendingImageGenerationCalls.set(callId, imageArgs.prompt);
     }
     return events;
   }
@@ -1351,7 +1368,7 @@ export async function startQaMockOpenAiServer(params?: {
   const finalOnlyMarkerPauseMs = params?.finalOnlyMarkerPauseMs ?? 1_500;
   const scenarioState: MockScenarioState = {
     anthropicThinkingErrorScenarioKeys: new Set<string>(),
-    pendingImageGenerationCallIds: new Set(),
+    pendingImageGenerationCalls: new Map(),
     // A suite process reuses this server across isolated scenarios. Session-keyed
     // phases let a retry replay both spawns without corrupting an in-flight peer.
     subagentFanoutPhaseByNamespace: new Map(),

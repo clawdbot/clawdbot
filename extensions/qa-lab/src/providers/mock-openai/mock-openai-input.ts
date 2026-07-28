@@ -43,11 +43,11 @@ function isInternalRuntimeContextCarrierText(text: string) {
 
 const MAX_INTERNAL_MEDIA_PATH_CHARS = 4_096;
 
-/** Reads a completed image artifact only from a protected internal event. */
-export function extractCompletedImageGenerationMediaPath(input: ResponsesInputItem[]) {
+/** Reads a completed image artifact only from the current protected internal event. */
+export function extractCompletedImageGenerationEvent(input: ResponsesInputItem[]) {
   const item = input.at(-1);
   if (!item || !Array.isArray(item.content)) {
-    return "";
+    return null;
   }
   const text = extractInputText(item.content as unknown[]);
   if (
@@ -55,16 +55,21 @@ export function extractCompletedImageGenerationMediaPath(input: ResponsesInputIt
     !/(?:^|\n)source: image_generation(?:\r?$)/m.test(text) ||
     !/(?:^|\n)status: completed successfully(?:\r?$)/m.test(text)
   ) {
-    return "";
+    return null;
   }
+  const taskLabel = /(?:^|\n)task:([^\r\n]{1,4096})(?:\r?$)/m.exec(text)?.[1]?.trim();
   const mediaPath = new RegExp(
     `(?:^|\\n)MEDIA:([^\\r\\n]{1,${MAX_INTERNAL_MEDIA_PATH_CHARS}})(?:\\r?$)`,
     "m",
   ).exec(text)?.[1];
-  if (mediaPath?.trim()) {
-    return mediaPath.trim();
+  if (taskLabel && mediaPath?.trim()) {
+    return { mediaPath: mediaPath.trim(), taskLabel };
   }
-  return "";
+  return null;
+}
+
+export function extractCompletedImageGenerationMediaPath(input: ResponsesInputItem[]) {
+  return extractCompletedImageGenerationEvent(input)?.mediaPath ?? "";
 }
 
 function isToolOutputContinuationText(text: string) {

@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => {
 
   return {
     resolveSessionAgentId: vi.fn(() => "agent-from-key"),
+    isEmbeddedAgentRunActive: vi.fn(() => false),
     get queuedSessionDelivery() {
       return state.queuedSessionDeliveries.values().next().value ?? null;
     },
@@ -251,6 +252,10 @@ vi.mock("../infra/restart-sentinel.js", () => ({
   clearRestartSentinelIfRevision: mocks.clearRestartSentinelIfRevision,
   formatRestartSentinelMessage: mocks.formatRestartSentinelMessage,
   summarizeRestartSentinel: mocks.summarizeRestartSentinel,
+}));
+
+vi.mock("../agents/embedded-agent.js", () => ({
+  isEmbeddedAgentRunActive: mocks.isEmbeddedAgentRunActive,
 }));
 
 vi.mock("../infra/session-delivery-queue.js", () => ({
@@ -597,6 +602,8 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.withActiveDeliveryClaim.mockClear();
     mocks.enqueueSystemEvent.mockClear();
     mocks.requestHeartbeat.mockClear();
+    mocks.isEmbeddedAgentRunActive.mockReset();
+    mocks.isEmbeddedAgentRunActive.mockReturnValue(false);
     mocks.enqueueSessionDelivery.mockClear();
     mocks.ackSessionDelivery.mockClear();
     mocks.advanceSessionDeliveryAgentRun.mockClear();
@@ -1146,6 +1153,25 @@ describe("scheduleRestartSentinelWake", () => {
       expect.objectContaining({ id: "session-delivery-media-pre-accept" }),
     );
     expect(mocks.markSessionDeliverySettlement).not.toHaveBeenCalled();
+  });
+
+  it("waits for the tool-owning turn before starting generated-media completion", async () => {
+    mocks.isEmbeddedAgentRunActive.mockReturnValue(true);
+
+    await expect(
+      deliverGeneratedMedia({
+        id: "session-delivery-media-active-owner",
+        messageId: "image:task-active-owner:agent-loop",
+        expectedMediaUrls: ["/tmp/proof.png"],
+      }),
+    ).rejects.toThrow("waiting for the owning turn to finish");
+
+    expect(mocks.deferSessionDelivery).toHaveBeenCalledWith(
+      "session-delivery-media-active-owner",
+      1_000,
+    );
+    expect(mocks.markSessionDeliveryAttemptStarted).not.toHaveBeenCalled();
+    expect(mocks.dispatchGatewayMethodInProcess).not.toHaveBeenCalled();
   });
 
   it("authorizes queued media replay for an active cron continuation", async () => {

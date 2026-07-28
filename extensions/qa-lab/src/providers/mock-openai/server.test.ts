@@ -3950,7 +3950,7 @@ describe("qa mock openai server", () => {
       "session_key: image_generate:qa-capability-flip",
       "session_id: qa-capability-flip",
       "type: image generation task",
-      "task: QA lighthouse",
+      "task: A QA lighthouse on a dark sea with a tiny protocol droid silhouette.",
       "status: completed successfully",
       "",
       "Generated media:",
@@ -5076,6 +5076,78 @@ describe("qa mock openai server", () => {
     const debugPayload = requireRecord(await debugResponse.json(), "debug request");
     expect(debugPayload.model).toBe("claude-opus-4-8");
     expect(debugPayload.plannedToolName).toBe("read");
+  });
+
+  it("finishes Anthropic code-mode image generation from the async completion carrier", async () => {
+    const server = await startMockServer();
+    const prompt =
+      "Capability flip image check: generate a QA lighthouse image in this turn right now.";
+    const mediaPath = "/tmp/openclaw-qa/anthropic-capability-flip.png";
+    const tools = [
+      { name: "exec", input_schema: { type: "object", properties: {} } },
+      { name: "wait", input_schema: { type: "object", properties: {} } },
+    ];
+
+    const planResponse = await postJson(server, "/v1/messages", {
+      model: "claude-opus-4-8",
+      max_tokens: 256,
+      tools,
+      messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+    });
+    expect(planResponse.status).toBe(200);
+    const plan = requireRecord(await planResponse.json(), "Anthropic image plan");
+    const toolUse = requireArray(plan.content, "Anthropic image plan content")
+      .map((block, index) => requireRecord(block, `Anthropic image plan block ${index}`))
+      .find((block) => block.type === "tool_use");
+    if (!toolUse) {
+      throw new Error("expected Anthropic image plan tool_use");
+    }
+    expect(toolUse).toMatchObject({ type: "tool_use", name: "exec" });
+    expect(JSON.stringify(toolUse.input)).toContain("image_generate");
+    const toolUseId = String(toolUse.id ?? "");
+    expect(toolUseId).not.toBe("");
+
+    const completionCarrier = [
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+      "OpenClaw runtime context (internal):",
+      "",
+      "[Internal task completion event]",
+      "source: image_generation",
+      "task: A QA lighthouse on a dark sea with a tiny protocol droid silhouette.",
+      "status: completed successfully",
+      "",
+      "Generated media:",
+      `MEDIA:${mediaPath}`,
+      "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+    ].join("\n");
+    const finalResponse = await postJson(server, "/v1/messages", {
+      model: "claude-opus-4-8",
+      max_tokens: 256,
+      tools,
+      messages: [
+        { role: "user", content: [{ type: "text", text: prompt }] },
+        { role: "assistant", content: [toolUse] },
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: toolUseId,
+              content: JSON.stringify({
+                content: [{ type: "text", text: "Background image generation started." }],
+                details: { async: true, status: "started" },
+              }),
+            },
+          ],
+        },
+        { role: "user", content: [{ type: "text", text: completionCarrier }] },
+      ],
+    });
+
+    expect(finalResponse.status).toBe(200);
+    const final = requireRecord(await finalResponse.json(), "Anthropic image final");
+    expect(final.stop_reason).toBe("end_turn");
+    expect(JSON.stringify(final.content)).toContain(`MEDIA:${mediaPath}`);
   });
 
   it("preserves Anthropic /v1/messages declared tools for explicit sessions_spawn prompts", async () => {

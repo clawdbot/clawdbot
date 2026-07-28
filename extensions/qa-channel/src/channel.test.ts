@@ -165,6 +165,7 @@ async function startQaChannelTestHarness(params?: {
   return {
     state,
     baseUrl: bus.baseUrl,
+    cfg,
     async stop() {
       abort.abort();
       await task;
@@ -174,6 +175,38 @@ async function startQaChannelTestHarness(params?: {
 }
 
 describe("qa-channel plugin", () => {
+  it("records generated media attachments in the deterministic QA bus", async () => {
+    const harness = await startQaChannelTestHarness();
+    const sendMedia = qaChannelPlugin.outbound?.sendMedia;
+    if (!sendMedia) {
+      throw new Error("expected qa-channel media sender");
+    }
+    try {
+      await sendMedia({
+        cfg: harness.cfg,
+        to: "dm:qa-operator",
+        text: "QA image ready",
+        mediaUrl: "/tmp/qa-lighthouse.png",
+      } as never);
+
+      const outbound = await harness.state.waitFor({
+        kind: "message-text",
+        textIncludes: "QA image ready",
+        direction: "outbound",
+        timeoutMs: 2_000,
+      });
+      expect("attachments" in outbound ? outbound.attachments : undefined).toEqual([
+        expect.objectContaining({
+          kind: "image",
+          fileName: "qa-lighthouse.png",
+          url: "/tmp/qa-lighthouse.png",
+        }),
+      ]);
+    } finally {
+      await harness.stop();
+    }
+  });
+
   it("derives thread-aware outbound session routes from explicit thread targets", async () => {
     const route = await qaChannelPlugin.messaging?.resolveOutboundSessionRoute?.({
       cfg: {},

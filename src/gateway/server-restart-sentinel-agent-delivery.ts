@@ -9,6 +9,7 @@ import {
   hasVisibleAgentPayload,
   type AgentDeliveryEvidence,
 } from "../agents/embedded-agent-runner/delivery-evidence.js";
+import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
 import { formatGeneratedMediaDeliveryRetryForPrompt } from "../agents/internal-events.js";
 import { resolveDurableCompletionDeliveryMode } from "../auto-reply/reply/completion-delivery-policy.js";
 import {
@@ -403,6 +404,20 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
     );
     throw new SessionDeliveryDeferredError(
       "queued generated-media agent turn is still owned by agent recovery",
+    );
+  }
+  const owningSessionId = params.sessionEntry?.sessionId?.trim();
+  if (owningSessionId && isEmbeddedAgentRunActive(owningSessionId)) {
+    // Detached generation can finish before the tool-owning turn releases its
+    // session. Wait for that turn instead of racing a second provider run into
+    // the same session lease; the durable queue will retry this handoff.
+    await deferSessionDelivery(
+      entry.id,
+      AGENT_DELIVERY_OWNERSHIP_RETRY_MS,
+      ...sessionDeliveryStateDirArgs(params.stateDir),
+    );
+    throw new SessionDeliveryDeferredError(
+      "queued generated-media agent turn is waiting for the owning turn to finish",
     );
   }
   if (entry.deliveryStartedAt !== undefined) {
