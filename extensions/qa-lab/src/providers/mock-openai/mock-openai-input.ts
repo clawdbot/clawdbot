@@ -183,6 +183,86 @@ function parseFunctionCallArguments(item: ResponsesInputItem) {
   }
 }
 
+function functionCallPlansWrite(item: ResponsesInputItem, canonicalExpectedPath: string): boolean {
+  if (item.type !== "function_call") {
+    return false;
+  }
+  const args = parseFunctionCallArguments(item);
+  if (item.name === "write") {
+    return normalizeToolPath(args?.path) === canonicalExpectedPath;
+  }
+  if (item.name !== "exec") {
+    return false;
+  }
+  const code =
+    typeof args?.code === "string"
+      ? args.code
+      : typeof args?.command === "string"
+        ? args.command
+        : "";
+  const writeCall =
+    /\btools\.call(?:Value)?\s*\(\s*["'](?:openclaw:core:)?write["']\s*,\s*\{([\s\S]*?)\}\s*\)/u.exec(
+      code,
+    );
+  const pathValue = /\bpath\s*:\s*(["'])(.*?)\1/su.exec(writeCall?.[1] ?? "")?.[2];
+  return normalizeToolPath(pathValue) === canonicalExpectedPath;
+}
+
+function parseFunctionCallOutputObject(item: ResponsesInputItem): Record<string, unknown> | null {
+  const output = extractFunctionCallOutputText(item).trim();
+  if (!output) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(output) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function codeModeWriteResultCompleted(
+  input: ResponsesInputItem[],
+  execCallIndex: number,
+  execOutput: ResponsesInputItem,
+): boolean {
+  const state = parseFunctionCallOutputObject(execOutput);
+  if (state?.status === "completed") {
+    return true;
+  }
+  const runId = state?.status === "waiting" && typeof state.runId === "string" ? state.runId : "";
+  if (!runId) {
+    return false;
+  }
+  for (const [waitOffset, candidate] of input.slice(execCallIndex + 1).entries()) {
+    if (
+      candidate.type !== "function_call" ||
+      candidate.name !== "wait" ||
+      typeof candidate.call_id !== "string" ||
+      parseFunctionCallArguments(candidate)?.runId !== runId
+    ) {
+      continue;
+    }
+    const waitOutput = input
+      .slice(execCallIndex + waitOffset + 2)
+      .find(
+        (result) =>
+          isResponsesToolCallOutput(result) &&
+          extractFunctionCallOutputCallId(result) === candidate.call_id,
+      );
+    if (
+      waitOutput &&
+      !functionCallOutputIsStructuredError(waitOutput) &&
+      parseFunctionCallOutputObject(waitOutput)?.status === "completed"
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function extractSuccessfulWriteOutputPath(item: ResponsesInputItem) {
   const output = extractFunctionCallOutputText(item).trim();
   const match = /^Successfully wrote \d+ bytes to (.+)$/u.exec(output);
@@ -268,6 +348,35 @@ export function hasSuccessfulWriteToolOutput(input: ResponsesInputItem[], expect
       : false;
     if (matchingOutput && !functionCallOutputIsStructuredError(matchingOutput) && outputMatches) {
       return true;
+    }
+  }
+  return false;
+}
+
+export function hasCompletedWriteToolResult(input: ResponsesInputItem[], expectedPath: string) {
+  const canonicalExpectedPath = normalizeToolPath(expectedPath);
+  if (!canonicalExpectedPath) {
+    return false;
+  }
+  for (const [callIndex, item] of input.entries()) {
+    if (
+      !functionCallPlansWrite(item, canonicalExpectedPath) ||
+      typeof item.call_id !== "string" ||
+      !item.call_id.trim()
+    ) {
+      continue;
+    }
+    const matchingOutput = input
+      .slice(callIndex + 1)
+      .find(
+        (candidate) =>
+          isResponsesToolCallOutput(candidate) &&
+          extractFunctionCallOutputCallId(candidate) === item.call_id,
+      );
+    if (matchingOutput && !functionCallOutputIsStructuredError(matchingOutput)) {
+      if (item.name !== "exec" || codeModeWriteResultCompleted(input, callIndex, matchingOutput)) {
+        return true;
+      }
     }
   }
   return false;

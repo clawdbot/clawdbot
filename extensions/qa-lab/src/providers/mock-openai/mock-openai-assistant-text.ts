@@ -37,6 +37,7 @@ import {
   extractAllUserTexts,
   extractAllRequestTexts,
   extractCompletedImageGenerationMediaPath,
+  hasCompletedWriteToolResult,
   hasSuccessfulWriteToolOutput,
   extractLatestImageUserTurn,
   extractToolOutputCallId,
@@ -67,12 +68,6 @@ function readCompletedImageGenerationMediaPath(prompt: string): string | undefin
 }
 
 export const QA_COMPACTION_RETRY_FINAL_MARKER = "Protocol note: replay unsafe after write.";
-
-export function isCanonicalCompactionRetryWriteResult(toolOutput: string): boolean {
-  return /^Successfully wrote \d+ bytes to compaction-retry-summary\.txt\.?$/i.test(
-    toolOutput.trim(),
-  );
-}
 
 export function buildAssistantText(
   input: ResponsesInputItem[],
@@ -361,12 +356,17 @@ export function buildAssistantText(
     }
     return `Protocol note: Lobster Invaders built at lobster-invaders.html.`;
   }
+  const hasCompletedCompactionRetryWrite = hasCompletedWriteToolResult(
+    input,
+    "compaction-retry-summary.txt",
+  );
   if (
-    toolOutput &&
-    (/compaction retry mutating tool check/i.test(allInputText) ||
-      /compaction-retry-summary\.txt/i.test(toolOutput))
+    hasCompletedCompactionRetryWrite ||
+    (toolOutput &&
+      (/compaction retry mutating tool check/i.test(allInputText) ||
+        /compaction-retry-summary\.txt/i.test(toolOutput)))
   ) {
-    if (isCanonicalCompactionRetryWriteResult(toolOutput)) {
+    if (hasCompletedCompactionRetryWrite) {
       return QA_COMPACTION_RETRY_FINAL_MARKER;
     }
     return "";

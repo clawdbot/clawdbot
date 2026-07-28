@@ -11,7 +11,6 @@ import {
 import { buildMessagesPayload } from "./mock-anthropic-messages.js";
 import {
   buildAssistantText,
-  isCanonicalCompactionRetryWriteResult,
   QA_COMPACTION_RETRY_FINAL_MARKER,
 } from "./mock-openai-assistant-text.js";
 import {
@@ -142,6 +141,7 @@ import {
   buildWhatsAppGroupDispatchReply,
   buildWhatsAppBatchedReply,
   countImageInputs,
+  hasCompletedWriteToolResult,
   hasSuccessfulWriteToolOutput,
   extractLatestImageUserTurn,
   parseToolOutputJson,
@@ -952,18 +952,44 @@ async function buildResponsesPayload(
       });
     }
   }
+  const hasCompletedCompactionRetryWrite = hasCompletedWriteToolResult(
+    input,
+    "compaction-retry-summary.txt",
+  );
   if (
+    hasCompletedCompactionRetryWrite ||
     /compaction retry mutating tool check/i.test(allInputText) ||
     /compaction retry evidence/i.test(toolOutput) ||
     /compaction-retry-summary\.txt/i.test(toolOutput)
   ) {
-    if (isCanonicalCompactionRetryWriteResult(toolOutput)) {
+    if (hasCompletedCompactionRetryWrite) {
       return buildAssistantEvents(QA_COMPACTION_RETRY_FINAL_MARKER);
     }
     if (!toolOutput) {
+      if (providerVariant === "anthropic" && hasDeclaredTool(body, "exec")) {
+        return buildToolCallEventsWithArgs("exec", {
+          language: "javascript",
+          code: [
+            'return await tools.callValue("openclaw:core:read", {',
+            '  path: "COMPACTION_RETRY_CONTEXT.md",',
+            "});",
+          ].join("\n"),
+        });
+      }
       return buildToolCallEventsWithArgs("read", { path: "COMPACTION_RETRY_CONTEXT.md" });
     }
     if (toolOutput.includes("compaction retry evidence")) {
+      if (providerVariant === "anthropic" && hasDeclaredTool(body, "exec")) {
+        return buildToolCallEventsWithArgs("exec", {
+          language: "javascript",
+          code: [
+            'return await tools.callValue("openclaw:core:write", {',
+            '  path: "compaction-retry-summary.txt",',
+            '  content: "Replay safety: unsafe after write.\\n",',
+            "});",
+          ].join("\n"),
+        });
+      }
       return buildToolCallEventsWithArgs("write", {
         path: "compaction-retry-summary.txt",
         content: "Replay safety: unsafe after write.\n",

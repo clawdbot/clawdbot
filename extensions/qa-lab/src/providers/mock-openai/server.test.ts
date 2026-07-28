@@ -5372,6 +5372,127 @@ describe("qa mock openai server", () => {
     expect(finalText).toContain("Status: complete");
   });
 
+  it("finishes an Anthropic compaction retry from the matched non-error write result", async () => {
+    const server = await startMockServer();
+    const prompt =
+      "Compaction retry mutating tool check: read COMPACTION_RETRY_CONTEXT.md, then write compaction-retry-summary.txt and keep replay safety explicit.";
+    const tools = [
+      {
+        name: "exec",
+        input_schema: {
+          type: "object",
+          properties: {
+            code: { type: "string" },
+          },
+          required: ["code"],
+        },
+      },
+    ];
+    const promptMessage = {
+      role: "user",
+      content: [{ type: "text", text: prompt }],
+    };
+
+    const readResponse = await postJson(server, "/v1/messages", {
+      model: "claude-opus-4-8",
+      max_tokens: 256,
+      tools,
+      messages: [promptMessage],
+    });
+    expect(readResponse.status).toBe(200);
+    const readBody = (await readResponse.json()) as {
+      stop_reason: string;
+      content: Array<Record<string, unknown>>;
+    };
+    expect(readBody.stop_reason).toBe("tool_use");
+    const readToolUse = requireRecord(
+      readBody.content.find((block) => block.type === "tool_use"),
+      "compaction read tool use",
+    );
+    expect(readToolUse.name).toBe("exec");
+    expect(requireRecord(readToolUse.input, "compaction read input").code).toContain(
+      "COMPACTION_RETRY_CONTEXT.md",
+    );
+
+    const writeResponse = await postJson(server, "/v1/messages", {
+      model: "claude-opus-4-8",
+      max_tokens: 256,
+      tools,
+      messages: [
+        promptMessage,
+        { role: "assistant", content: [readToolUse] },
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: readToolUse.id,
+              content: "compaction retry evidence block 0000\ncompaction retry evidence block 0001",
+            },
+          ],
+        },
+      ],
+    });
+    expect(writeResponse.status).toBe(200);
+    const writeBody = (await writeResponse.json()) as {
+      stop_reason: string;
+      content: Array<Record<string, unknown>>;
+    };
+    expect(writeBody.stop_reason).toBe("tool_use");
+    const writeToolUse = requireRecord(
+      writeBody.content.find((block) => block.type === "tool_use"),
+      "compaction write tool use",
+    );
+    expect(writeToolUse.name).toBe("exec");
+    expect(requireRecord(writeToolUse.input, "compaction write input").code).toContain(
+      "compaction-retry-summary.txt",
+    );
+
+    const response = await postJson(server, "/v1/messages", {
+      model: "claude-opus-4-8",
+      max_tokens: 256,
+      tools,
+      messages: [
+        promptMessage,
+        { role: "assistant", content: [readToolUse] },
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: readToolUse.id,
+              content: "compaction retry evidence block 0000\ncompaction retry evidence block 0001",
+            },
+          ],
+        },
+        { role: "assistant", content: [writeToolUse] },
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: writeToolUse.id,
+              content: JSON.stringify({
+                status: "completed",
+                value: "Datei wurde erfolgreich gespeichert.",
+              }),
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      stop_reason: string;
+      content: Array<{ type: string; text?: string }>;
+    };
+    expect(body.stop_reason).toBe("end_turn");
+    expect(body.content).toEqual([
+      { type: "text", text: "Protocol note: replay unsafe after write." },
+    ]);
+  });
+
   it("places tool_result after the parent user message even in mixed-content turns", async () => {
     // Regression for the loop-6 Copilot / Greptile finding: a user message
     // that mixes a tool_result block with fresh text blocks must still land

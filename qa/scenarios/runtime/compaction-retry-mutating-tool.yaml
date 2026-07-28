@@ -82,10 +82,17 @@ flow:
         - if:
             expr: "Boolean(env.mock)"
             then:
+              - call: fetchJson
+                saveAs: mockRequests
+                args:
+                  - expr: "`${env.mock.baseUrl}/debug/requests`"
+              - set: writeRequest
+                value:
+                  expr: "[...mockRequests].toReversed().find((request) => String(request.allInputText ?? '').includes(config.promptSnippet) && String(request.toolOutput ?? '').includes('compaction retry evidence block'))"
               - assert:
-                  expr: "!env.mock || ([...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].toReversed().find((request) => String(request.allInputText ?? '').includes(config.promptSnippet) && String(request.toolOutput ?? '').includes('compaction retry evidence block'))?.plannedToolName === 'write')"
+                  expr: "writeRequest?.plannedToolName === 'write' || (writeRequest?.plannedToolName === 'exec' && JSON.stringify(writeRequest.plannedToolArgs ?? {}).includes(config.outputFile))"
                   message:
-                    expr: "`expected write after seeded context read, got ${String(([...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].toReversed().find((request) => String(request.allInputText ?? '').includes(config.promptSnippet) && String(request.toolOutput ?? '').includes('compaction retry evidence block'))?.plannedToolName ?? '')}`"
+                    expr: "`expected direct or code-mode write after seeded context read, got ${String(writeRequest?.plannedToolName ?? '')} ${JSON.stringify(writeRequest?.plannedToolArgs ?? {})}`"
         - call: readRawQaSessionStore
           saveAs: store
           args:
