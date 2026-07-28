@@ -681,6 +681,10 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
 
   it("keeps the lobster on the footer ledge across desktop and drawer layouts", async () => {
     const { context, page } = await openSidebarTestPage();
+    // This spec asserts the startle act, which prefers-reduced-motion
+    // suppresses; the shared mock-Gateway install emulates reduced motion
+    // (#115297), so restore full motion before poking the pet.
+    await page.emulateMedia({ reducedMotion: "no-preference" });
 
     try {
       const sidebar = page.locator("openclaw-app-sidebar");

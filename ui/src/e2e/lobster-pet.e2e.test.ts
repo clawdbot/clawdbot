@@ -61,6 +61,10 @@ describeControlUiE2e("Control UI lobster pet", () => {
     page = await context.newPage();
     await page.clock.install({ time: new Date("2026-07-09T12:00:00") });
     await installMockGateway(page);
+    // These specs assert motion-driven pet acts (startle/droop), which the
+    // reduced-motion emulation in installMockGateway suppresses (#115297);
+    // restore full motion for this file.
+    await page.emulateMedia({ reducedMotion: "no-preference" });
     await page.goto(server.baseUrl);
     await page.waitForFunction(() => Boolean(customElements.get("openclaw-lobster-pet")));
     const loadedAt = await page.evaluate(() => Date.now());
