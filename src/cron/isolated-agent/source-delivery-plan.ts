@@ -1,8 +1,6 @@
 import { createSourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
 import type { SourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
-import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import type { CronDeliveryPlan } from "../delivery-plan.js";
-import type { CronJob } from "../types.js";
 
 type CronSourceDeliveryResolvedTarget = {
   channel?: string;
@@ -54,12 +52,4 @@ export function resolveCronSourceDeliveryPlan(params: {
     directFallback: true,
     skipFallbackWhenMessageToolSentToTarget: params.resolvedDelivery.ok ?? true,
   });
-}
-
-export function resolveFallbackCronSourceDeliveryPlan(
-  job: CronJob,
-  resolvedDelivery: CronSourceDeliveryResolvedTarget,
-): SourceDeliveryPlan {
-  const deliveryPlan = resolveCronDeliveryPlan(job);
-  return resolveCronSourceDeliveryPlan({ deliveryPlan, resolvedDelivery });
 }
