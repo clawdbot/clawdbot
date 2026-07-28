@@ -4,10 +4,7 @@ import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
 import type { BoardFace } from "./lib/board/settings.ts";
 export const INTERNAL_SESSION_PATH_PARAM = "__openclawSessionPath";
 
-// Exported for the app-routes tree-consistency test: page definitions in
-// ui/src/pages/*/route.ts hand-duplicate these paths/aliases, and a drift
-// would desync routeIdFromPath/base-path inference from actual router matching.
-export const APP_ROUTE_DEFINITIONS = {
+const APP_ROUTE_DEFINITIONS = {
   chat: { path: "/chat" },
   dashboard: { path: "/dashboard" },
   dashboards: { path: "/dashboards" },
@@ -59,6 +56,18 @@ export const APP_ROUTE_IDS = Object.keys(APP_ROUTE_DEFINITIONS) as RouteId[];
 
 export function isRouteId(routeId: string): routeId is RouteId {
   return routeId in APP_ROUTE_DEFINITIONS;
+}
+
+// Single source for page definitions: ui/src/pages/*/route.ts spreads this
+// into definePage so router matching can never drift from the table that
+// drives routeIdFromPath and base-path inference.
+export function routePageSpec<Id extends RouteId>(
+  routeId: Id,
+): { id: Id; path: string; aliases?: readonly string[] } {
+  const definition = APP_ROUTE_DEFINITIONS[routeId];
+  return "aliases" in definition
+    ? { id: routeId, path: definition.path, aliases: definition.aliases }
+    : { id: routeId, path: definition.path };
 }
 
 export function normalizeBasePath(basePath: string): string {
