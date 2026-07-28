@@ -111,8 +111,6 @@ function contentParts(value: unknown): Record<string, unknown>[] {
     const text = textPartContent(part);
     if (text !== undefined) {
       parts.push(textPart(text));
-    } else if (part.type === "thinking" && typeof part.thinking === "string") {
-      parts.push({ type: "reasoning", content: part.thinking });
     } else if (part.type === "toolCall" && typeof part.name === "string") {
       parts.push({
         type: "tool_call",
@@ -141,6 +139,40 @@ function contentParts(value: unknown): Record<string, unknown>[] {
     }
   }
   return parts;
+}
+
+function redactInternalReasoningParts(value: unknown): unknown {
+  if (!Array.isArray(value)) {
+    return value;
+  }
+  return value.map((part) => {
+    if (isRecord(part) && (part.type === "thinking" || part.type === "redacted_thinking")) {
+      return { type: "reasoning", redacted: true };
+    }
+    return part;
+  });
+}
+
+function redactInternalReasoningFromMessage(value: unknown): unknown {
+  if (!isRecord(value)) {
+    return value;
+  }
+  const hasContentParts = Array.isArray(value.content);
+  const hasExplicitParts = Array.isArray(value.parts);
+  if (!hasContentParts && !hasExplicitParts) {
+    return value;
+  }
+  return {
+    ...value,
+    ...(hasContentParts ? { content: redactInternalReasoningParts(value.content) } : {}),
+    ...(hasExplicitParts ? { parts: redactInternalReasoningParts(value.parts) } : {}),
+  };
+}
+
+function redactInternalReasoningFromMessages(value: unknown): unknown {
+  return Array.isArray(value)
+    ? value.map((message) => redactInternalReasoningFromMessage(message))
+    : redactInternalReasoningFromMessage(value);
 }
 
 function normalizeGenAiMessage(
@@ -294,12 +326,22 @@ export function assignOtelModelContentAttributes(
   content: OtelModelCallContent | undefined,
   policy: OtelContentCapturePolicy,
 ): void {
-  assignGenAiModelContentAttributes(attributes, content, policy);
+  // Provider-native thinking blocks are not user-visible model output. Keep only
+  // a structural marker on compatibility attributes and omit them from semconv
+  // message parts, whose reasoning schema requires exportable content.
+  const redactedContent = content
+    ? {
+        ...content,
+        inputMessages: redactInternalReasoningFromMessages(content.inputMessages),
+        outputMessages: redactInternalReasoningFromMessages(content.outputMessages),
+      }
+    : undefined;
+  assignGenAiModelContentAttributes(attributes, redactedContent, policy);
   if (policy.inputMessages) {
     assignOtelContentAttribute(
       attributes,
       "openclaw.content.input_messages",
-      content?.inputMessages,
+      redactedContent?.inputMessages,
     );
   }
   if (policy.toolDefinitions) {
@@ -313,7 +355,7 @@ export function assignOtelModelContentAttributes(
     assignOtelContentAttribute(
       attributes,
       "openclaw.content.output_messages",
-      content?.outputMessages,
+      redactedContent?.outputMessages,
     );
   }
   if (policy.systemPrompt) {
