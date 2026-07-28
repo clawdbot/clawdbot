@@ -238,12 +238,7 @@ describe("voice-call CLI status fallback", () => {
       Buffer.byteLength(initial, "utf8") + Buffer.byteLength(appended, "utf8"),
     );
 
-    const result = await runCustomLogTailShortRead(
-      appended,
-      firstReadBytes,
-      initial,
-      replacement,
-    );
+    const result = await runCustomLogTailShortRead(appended, firstReadBytes, initial, replacement);
 
     expect(result.shortened).toBe(true);
     expect(result.output).toBe(replacement);
