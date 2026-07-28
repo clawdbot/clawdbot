@@ -132,14 +132,9 @@ async function sendTraceRequest(
   id: string,
   traceparent?: string,
 ): Promise<{ ok: boolean }> {
-  const response = onceMessage<{ type: "res"; id: string; ok: boolean }>(ws, (value) =>
-    Boolean(
-      value &&
-      typeof value === "object" &&
-      !Array.isArray(value) &&
-      value.type === "res" &&
-      value.id === id,
-    ),
+  const response = onceMessage<{ type: "res"; id: string; ok: boolean }>(
+    ws,
+    (value) => value.type === "res" && value.id === id,
   );
   ws.send(
     JSON.stringify({
