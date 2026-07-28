@@ -5,11 +5,8 @@ import type { Root as FsSafeRoot } from "@openclaw/fs-safe/root";
 // Process-local file lock manager used by code that needs explicit lifecycle
 // control instead of a one-shot withFileLock call.
 export {
-  acquireFileLock,
   acquireFileLockSync,
   createFileLockManager,
-  type FileLockAcquireOptions,
-  type FileLockHandle,
   type FileLockSyncAcquireOptions,
   type FileLockSyncHandle,
 } from "@openclaw/fs-safe/file-lock";

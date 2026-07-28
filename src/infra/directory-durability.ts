@@ -22,7 +22,6 @@ export {
   type DirectoryReceipt,
   type DurableDirectoryReceipt,
   type PinnedDirectory,
-  type PublishFileExclusiveFailureDetails,
 } from "@openclaw/fs-safe/durability";
 
 type DirectoryDurabilityOutcome = DirectorySyncOutcome | { status: "not-needed" };

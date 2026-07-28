@@ -44,7 +44,7 @@ export {
   type OpenResult,
   type ReadResult,
 } from "@openclaw/fs-safe/root";
-export { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
+export { sanitizeUntrustedFileName } from "./fs-safe-advanced.js";
 export {
   readSecureFile,
   type SecureFileReadOptions,

@@ -4,8 +4,8 @@ import {
   type RootWalkOptions,
 } from "openclaw/plugin-sdk/root-walk";
 
-export const MEMORY_WIKI_WALK_MAX_DEPTH = 128;
-export const MEMORY_WIKI_WALK_MAX_ENTRIES = 20_000;
+const MEMORY_WIKI_WALK_MAX_DEPTH = 128;
+const MEMORY_WIKI_WALK_MAX_ENTRIES = 20_000;
 
 type MemoryWikiWalkLimits = {
   maxDepth?: number;

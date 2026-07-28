@@ -1,12 +1,11 @@
 // Imessage plugin module implements media staging behavior.
 import fs, { type FileHandle } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { ChannelInboundMediaInput } from "openclaw/plugin-sdk/channel-inbound";
 import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { openLocalFileSafely } from "openclaw/plugin-sdk/security-runtime";
-import { withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
+import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import type { IMessageAttachment } from "./types.js";
 
@@ -120,7 +119,7 @@ async function readAttachmentBuffer(params: {
       try {
         const convert = params.deps.convertHeicToJpeg;
         const converted = await withTempWorkspace(
-          { rootDir: os.tmpdir(), prefix: "openclaw-imessage-heic-" },
+          { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-imessage-heic-" },
           async (workspace) => {
             const pinnedPath = await workspace.write("attachment.heic", buffer);
             return convert

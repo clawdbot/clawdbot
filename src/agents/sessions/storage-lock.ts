@@ -17,12 +17,12 @@ export function acquireLockSyncWithRetry(path: string): () => void {
   return () => lock.release();
 }
 
-export function acquireStorageLockSyncWithRetry(path: string): FileLockSyncHandle {
+function acquireStorageLockSyncWithRetry(path: string): FileLockSyncHandle {
   prepareStorageLockPathForFsSafe(path);
   return acquireFileLockSync(path, createStorageLockOptions());
 }
 
-export function createStorageLockPayload(): Record<string, unknown> {
+function createStorageLockPayload(): Record<string, unknown> {
   currentProcessStartTime ??= getFileLockProcessStartTime(process.pid);
   return {
     pid: process.pid,
@@ -31,7 +31,7 @@ export function createStorageLockPayload(): Record<string, unknown> {
   };
 }
 
-export function storageLockOwnerIsStale(payload: unknown): boolean {
+function storageLockOwnerIsStale(payload: unknown): boolean {
   return isLockOwnerDefinitelyStale({
     payload:
       payload && typeof payload === "object" && !Array.isArray(payload)
@@ -40,7 +40,7 @@ export function storageLockOwnerIsStale(payload: unknown): boolean {
   });
 }
 
-export function prepareStorageLockPathForFsSafe(targetPath: string): void {
+function prepareStorageLockPathForFsSafe(targetPath: string): void {
   const lockPath = `${targetPath}.lock`;
   let observed: fs.Stats;
   try {
@@ -65,7 +65,7 @@ export function prepareStorageLockPathForFsSafe(targetPath: string): void {
   );
 }
 
-export function createStorageLockOptions(): FileLockSyncAcquireOptions<Record<string, unknown>> {
+function createStorageLockOptions(): FileLockSyncAcquireOptions<Record<string, unknown>> {
   return {
     staleMs: STORAGE_LOCK_STALE_MS,
     retry: {
