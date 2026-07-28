@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { getIMessageApprovalApprovers, imessageApprovalAuth } from "./approval-auth.js";
+import type { IMessageApprovalGatewayRuntime } from "./approval-resolver.js";
 import {
   buildIMessageApprovalConversationKeyForInbound,
   enumerateApprovalTargetKeys,
@@ -273,15 +274,6 @@ function enumeratePollTargetKeys(params: {
   ];
 }
 
-/**
- * Apple prefixes poll participants by handle class (`e:` email, `p:` phone).
- * normalizeIMessageHandle does not know those, so strip them here rather than
- * widening the shared normalizer used for config and routing.
- */
-export function normalizeIMessagePollParticipant(raw: string): string {
-  return normalizeIMessageHandle(raw.trim().replace(/^[ep]:/iu, ""));
-}
-
 type ApprovalPollVoteEvent = {
   conversation: IMessageApprovalConversationKey;
   pollGuid: string;
@@ -289,7 +281,7 @@ type ApprovalPollVoteEvent = {
   actorHandle: string;
   votes: Array<{
     optionId: string;
-    claimedParticipant: string;
+    participantKey: string;
     selected: boolean;
   }>;
   malformedVotes: boolean;
@@ -327,9 +319,12 @@ function readPollVoteEvent(message: IMessagePayload): ApprovalPollVoteEvent | nu
   // retained by imsg for compatibility, so use it only when the full set is
   // absent (older bridge versions).
   const rawVotes = Array.isArray(poll.votes) ? poll.votes : poll.vote ? [poll.vote] : [];
+  // The transport sender remains the authorization identity. participantHandle
+  // may be a different active-account alias, but it can still prove whether a
+  // complete multi-record set belongs to one participant or mixes users.
   let malformedVotes = false;
   const votes = rawVotes.flatMap((vote) => {
-    if (!vote || typeof vote.option_id !== "string" || typeof vote.participant !== "string") {
+    if (!vote || typeof vote.option_id !== "string") {
       malformedVotes = true;
       return [];
     }
@@ -341,7 +336,10 @@ function readPollVoteEvent(message: IMessagePayload): ApprovalPollVoteEvent | nu
     return [
       {
         optionId,
-        claimedParticipant: normalizeIMessagePollParticipant(vote.participant),
+        participantKey:
+          typeof vote.participant === "string"
+            ? normalizeIMessageHandle(vote.participant.trim().replace(/^[ep]:/iu, ""))
+            : "",
         selected: vote.event_type === "selected",
       },
     ];
@@ -439,6 +437,7 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
   accountId: string;
   message: IMessagePayload;
   gatewayUrl?: string;
+  gatewayRuntime?: IMessageApprovalGatewayRuntime;
 }): Promise<boolean> {
   const event = readPollVoteEvent(params.message);
   if (!event) {
@@ -464,12 +463,18 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
     });
     return true;
   }
-  const actorVotes = event.votes.filter((vote) => vote.claimedParticipant === event.actorHandle);
-  const mismatchedParticipant = event.votes.some(
-    (vote) => vote.claimedParticipant && vote.claimedParticipant !== event.actorHandle,
+  const directlyAttributedVotes = event.votes.filter(
+    (vote) => vote.participantKey === event.actorHandle,
   );
-  if (actorVotes.length === 0 && mismatchedParticipant) {
-    warn("approval poll vote participant did not match transport sender", {
+  const participantKeys = new Set(event.votes.map((vote) => vote.participantKey).filter(Boolean));
+  const actorVotes =
+    directlyAttributedVotes.length > 0
+      ? directlyAttributedVotes
+      : event.votes.length === 1 || participantKeys.size === 1
+        ? event.votes
+        : [];
+  if (actorVotes.length === 0) {
+    warn("approval poll vote participants did not identify the transport actor", {
       approvalId: target.approvalId,
       actorHandle: event.actorHandle,
     });
@@ -537,6 +542,7 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
       decision,
       senderId: event.actorHandle,
       gatewayUrl: params.gatewayUrl,
+      ...(params.gatewayRuntime ? { gatewayRuntime: params.gatewayRuntime } : {}),
     });
     unregisterIMessageApprovalPollTarget({
       ...lookupKey,

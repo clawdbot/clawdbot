@@ -21,6 +21,7 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { getIMessageApprovalApprovers, imessageApprovalAuth } from "./approval-auth.js";
+import type { IMessageApprovalGatewayRuntime } from "./approval-resolver.js";
 import {
   buildIMessageApprovalConversationKeyForInbound,
   buildIMessageApprovalConversationKeyForTarget,
@@ -789,6 +790,7 @@ export async function handleIMessageApprovalReaction(params: {
   message: IMessagePayload;
   bodyText: string;
   gatewayUrl?: string;
+  gatewayRuntime?: IMessageApprovalGatewayRuntime;
   logVerboseMessage?: (message: string) => void;
 }): Promise<IMessageApprovalReactionHandleResult> {
   const event = readApprovalReactionEvent(params.message, params.bodyText);
@@ -851,6 +853,7 @@ export async function handleIMessageApprovalReaction(params: {
       decision: target.decision,
       senderId: event.actorHandle,
       gatewayUrl: params.gatewayUrl,
+      ...(params.gatewayRuntime ? { gatewayRuntime: params.gatewayRuntime } : {}),
     });
     // Every terminal result clears the binding. Losing surfaces receive applied:false
     // without a new event, so retaining their controls would keep polling stale state.
@@ -907,6 +910,7 @@ export async function maybeResolveIMessageApprovalReaction(params: {
   message: IMessagePayload;
   bodyText: string;
   gatewayUrl?: string;
+  gatewayRuntime?: IMessageApprovalGatewayRuntime;
   logVerboseMessage?: (message: string) => void;
 }): Promise<boolean> {
   return (await handleIMessageApprovalReaction(params)).handled;

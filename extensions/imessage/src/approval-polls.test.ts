@@ -6,7 +6,6 @@ import {
   clearIMessageApprovalPollTargetsForTest,
   mapSentPollOptionsToDecisions,
   maybeResolveIMessageApprovalPollVote,
-  normalizeIMessagePollParticipant,
   registerIMessageApprovalPollTombstone,
   registerIMessageApprovalPollTarget,
   unregisterIMessageApprovalPollTarget,
@@ -156,20 +155,18 @@ describe("mapSentPollOptionsToDecisions", () => {
   });
 });
 
-describe("normalizeIMessagePollParticipant", () => {
-  it("strips Apple handle-class prefixes", () => {
-    expect(normalizeIMessagePollParticipant("e:person@example.com")).toBe("person@example.com");
-    expect(normalizeIMessagePollParticipant("p:+15551230000")).toBe("+15551230000");
-    expect(normalizeIMessagePollParticipant("+15551230000")).toBe("+15551230000");
-  });
-});
-
 describe("maybeResolveIMessageApprovalPollVote", () => {
   it("resolves a pending approval from an authorized vote", async () => {
     expect(bind()).toBe(true);
+    const gatewayRuntime = { request: vi.fn() } as never;
 
     await expect(
-      maybeResolveIMessageApprovalPollVote({ cfg, accountId: "default", message: buildVote() }),
+      maybeResolveIMessageApprovalPollVote({
+        cfg,
+        accountId: "default",
+        message: buildVote(),
+        gatewayRuntime,
+      }),
     ).resolves.toBe(true);
 
     expect(resolverMocks.resolveIMessageApproval).toHaveBeenCalledWith(
@@ -177,11 +174,12 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
         approvalId: "exec-1",
         decision: "allow-once",
         senderId: APPROVER,
+        gatewayRuntime,
       }),
     );
   });
 
-  it("uses the complete vote set instead of the compatibility first vote", async () => {
+  it("selects the transport actor from a multi-participant complete vote set", async () => {
     expect(bind()).toBe(true);
 
     await expect(
@@ -216,7 +214,73 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
     ).resolves.toBe(true);
 
     expect(resolverMocks.resolveIMessageApproval).toHaveBeenCalledWith(
-      expect.objectContaining({ decision: "deny", senderId: APPROVER }),
+      expect.objectContaining({ approvalId: "exec-1", decision: "deny" }),
+    );
+  });
+
+  it("fails closed when a multi-participant set does not identify the transport actor", async () => {
+    expect(bind()).toBe(true);
+
+    await expect(
+      maybeResolveIMessageApprovalPollVote({
+        cfg,
+        accountId: "default",
+        message: {
+          sender: APPROVER,
+          poll: {
+            kind: "vote",
+            original_guid: POLL_GUID,
+            votes: [
+              {
+                option_id: ALLOW_ONCE_OPTION,
+                participant: "+15559999998",
+                event_type: "selected",
+              },
+              {
+                option_id: DENY_OPTION,
+                participant: "+15559999999",
+                event_type: "selected",
+              },
+            ],
+          },
+        } as IMessagePayload,
+      }),
+    ).resolves.toBe(true);
+
+    expect(resolverMocks.resolveIMessageApproval).not.toHaveBeenCalled();
+  });
+
+  it("accepts a complete multi-record set for one participant alias", async () => {
+    expect(bind()).toBe(true);
+
+    await expect(
+      maybeResolveIMessageApprovalPollVote({
+        cfg,
+        accountId: "default",
+        message: {
+          sender: APPROVER,
+          poll: {
+            kind: "vote",
+            original_guid: POLL_GUID,
+            votes: [
+              {
+                option_id: ALLOW_ONCE_OPTION,
+                participant: "e:active-account-alias@example.com",
+                event_type: "selected",
+              },
+              {
+                option_id: DENY_OPTION,
+                participant: "e:active-account-alias@example.com",
+                event_type: "removed",
+              },
+            ],
+          },
+        } as IMessagePayload,
+      }),
+    ).resolves.toBe(true);
+
+    expect(resolverMocks.resolveIMessageApproval).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalId: "exec-1", decision: "allow-once" }),
     );
   });
 
@@ -408,7 +472,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
     );
   });
 
-  it("accepts an e:-prefixed participant that matches the sender", async () => {
+  it("authorizes an email sender when Apple reports another active-account alias", async () => {
     const emailCfg = { channels: { imessage: { allowFrom: ["person@example.com"] } } };
     registerIMessageApprovalPollTarget({
       accountId: "default",
@@ -426,7 +490,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
         accountId: "default",
         message: buildVote({
           sender: "person@example.com",
-          participant: "e:person@example.com",
+          participant: "another-alias@example.com",
           optionId: DENY_OPTION,
         }),
       }),

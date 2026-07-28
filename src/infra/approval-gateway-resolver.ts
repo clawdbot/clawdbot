@@ -19,6 +19,13 @@ type ResolveApprovalOverGatewayBaseParams = {
   senderId?: string | null;
   gatewayUrl?: string;
   clientDisplayName?: string;
+  gatewayRuntime?: {
+    request: (
+      method: "approval.resolve",
+      params: ApprovalResolveParams,
+      options?: { clientDisplayName?: string },
+    ) => Promise<ApprovalResolveResult>;
+  };
 };
 
 type CanonicalResolveApprovalOverGatewayParams = ResolveApprovalOverGatewayBaseParams & {
@@ -134,7 +141,7 @@ export async function resolveApprovalOverGateway(
     return undefined;
   };
 
-  const gatewayRuntime = getGatewayNativeApprovalRuntime();
+  const gatewayRuntime = params.gatewayRuntime ?? getGatewayNativeApprovalRuntime();
   const result = gatewayRuntime
     ? await requestWithClient({
         request: async <T>(

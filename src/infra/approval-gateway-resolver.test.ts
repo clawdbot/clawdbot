@@ -124,6 +124,26 @@ describe("resolveApprovalOverGateway", () => {
     expect(hoisted.withOperatorApprovalsGatewayClient).not.toHaveBeenCalled();
   });
 
+  it("uses an explicitly injected channel approval runtime", async () => {
+    const request = vi.fn(async () => ({ applied: true, approval: recordedApproval }));
+    await expect(
+      resolveApprovalOverGateway({
+        cfg: {} as never,
+        approvalId: "approval-1",
+        approvalKind: "exec",
+        decision: "deny",
+        gatewayRuntime: { request },
+      }),
+    ).resolves.toEqual({ applied: true, approval: recordedApproval });
+
+    expect(request).toHaveBeenCalledWith(
+      "approval.resolve",
+      { id: "approval-1", kind: "exec", decision: "deny" },
+      { clientDisplayName: "Approval (unknown)" },
+    );
+    expect(hoisted.withOperatorApprovalsGatewayClient).not.toHaveBeenCalled();
+  });
+
   it("preserves protocol-valid boundary whitespace in canonical approval ids", async () => {
     const approvalId = "\uFEFF";
 

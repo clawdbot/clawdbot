@@ -48,9 +48,12 @@ import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
+import { waitForIMessageApprovalControlBinding } from "../approval-control-binding-window.js";
 import { maybeResolveIMessageApprovalPollVote } from "../approval-polls.js";
 import { pollPendingIMessageApprovalReactions } from "../approval-reaction-poller.js";
 import { maybeResolveIMessageApprovalReaction } from "../approval-reactions.js";
+import type { IMessageApprovalGatewayRuntime } from "../approval-resolver.js";
+import { buildIMessageApprovalConversationKeyForInbound } from "../approval-target-keys.js";
 import { markIMessageChatRead, sendIMessageTyping } from "../chat.js";
 import { resolveIMessageHomeDir } from "../cli-path.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "../client.js";
@@ -116,6 +119,8 @@ import { sanitizeIMessageWatchErrorPayload } from "./watch-error-log.js";
 
 const WATCH_SUBSCRIBE_MAX_ATTEMPTS = 3;
 const WATCH_SUBSCRIBE_RETRY_DELAY_MS = 1_000;
+// Host-private context installed through the generic channel runtime registry.
+const CHANNEL_APPROVAL_GATEWAY_RUNTIME_CONTEXT_CAPABILITY = "approval.gateway";
 const APPROVAL_REACTION_POLL_INTERVAL_MS = 2_000;
 const APPROVAL_REACTION_DISCOVERY_INTERVAL_MS = 60_000;
 const IMESSAGE_TYPING_KEEPALIVE_INTERVAL_MS = 8_000;
@@ -366,6 +371,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     cfg,
     accountId: opts.accountId,
   });
+  const approvalGatewayRuntime =
+    opts.channelRuntime?.runtimeContexts.get<IMessageApprovalGatewayRuntime>({
+      channelId: "imessage",
+      accountId: accountInfo.accountId,
+      capability: CHANNEL_APPROVAL_GATEWAY_RUNTIME_CONTEXT_CAPABILITY,
+    });
   const imessageCfg = accountInfo.config;
   const historyLimit = Math.max(
     0,
@@ -762,24 +773,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       return;
     }
 
-    // Approval poll shortcut: a vote on an approval poll we sent resolves the
-    // approval instead of reaching the agent. Runs before body rendering so a
-    // vote never becomes "Poll vote: ..." prose, and bypasses allowFrom/dmPolicy
-    // because approval-polls authorizes the transport sender itself.
-    // Transient resolver failures intentionally reach dispatchUnit's catch,
-    // which abandons the durable claim so ingress replay can retry this vote.
-    if (
-      await maybeResolveIMessageApprovalPollVote({
-        cfg,
-        accountId: accountInfo.accountId,
-        message,
-      })
-    ) {
-      // Returning normally lets dispatchUnit settle the durable claim. Only a
-      // resolver error abandons it for replay; a handled vote must not retry.
-      return;
-    }
-
     const {
       messageText,
       bodyText,
@@ -788,24 +781,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       rawMediaAttachments,
       effectiveAttachmentRoots,
     } = resolveIMessageInboundBodyText(message);
-
-    // Approval reaction shortcut: if the inbound tapback resolves a pending
-    // approval prompt, route it through the gateway and skip the normal
-    // dispatch pipeline. This bypasses reactionNotifications gating so
-    // approvals still work when general reaction surfacing is off, and it
-    // bypasses allowFrom/dmPolicy because the approval-reactions module
-    // enforces its own actor authorization via channels.imessage.allowFrom.
-    if (
-      await maybeResolveIMessageApprovalReaction({
-        cfg,
-        accountId: accountInfo.accountId,
-        message,
-        bodyText,
-        logVerboseMessage: logVerbose,
-      })
-    ) {
-      return;
-    }
 
     const storeAllowFrom = await readChannelAllowFromStore(
       "imessage",
@@ -1321,9 +1296,112 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     });
   }
 
+  const suppressStaleIngress = (
+    message: IMessagePayload,
+    receivedAt: number,
+    provenance?: { catchup?: boolean },
+  ): boolean => {
+    const isRecoveryReplay =
+      recoveryCursorRowid !== null &&
+      recoveryBoundaryRowid !== null &&
+      typeof message.id === "number" &&
+      message.id <= recoveryBoundaryRowid;
+    const staleThresholdMs = isRecoveryReplay
+      ? IMESSAGE_RECOVERY_MAX_AGE_MS
+      : IMESSAGE_STALE_INBOUND_THRESHOLD_MS;
+    if (provenance?.catchup || !isStaleIMessageBacklog(message, receivedAt, staleThresholdMs)) {
+      return false;
+    }
+    staleBacklogSuppressed += 1;
+    runtime.log?.(
+      warn(
+        `imessage: suppressed stale inbound backlog account=${accountInfo.accountId} ` +
+          `sent=${message.created_at ?? "unknown"} recovery=${isRecoveryReplay} ` +
+          `(${staleBacklogSuppressed} suppressed since start)`,
+      ),
+    );
+    return true;
+  };
+
+  const maybeHandleApprovalControl = async (message: IMessagePayload): Promise<boolean> => {
+    if (
+      await maybeResolveIMessageApprovalPollVote({
+        cfg,
+        accountId: accountInfo.accountId,
+        message,
+        gatewayRuntime: approvalGatewayRuntime,
+      })
+    ) {
+      return true;
+    }
+    return await maybeResolveIMessageApprovalReaction({
+      cfg,
+      accountId: accountInfo.accountId,
+      message,
+      bodyText: resolveIMessageInboundBodyText(message).bodyText,
+      gatewayRuntime: approvalGatewayRuntime,
+      logVerboseMessage: logVerbose,
+    });
+  };
+
+  const resolveApprovalControlConversation = (message: IMessagePayload) => {
+    const sender = normalizeIMessageHandle((message.sender ?? "").trim());
+    const destination = normalizeIMessageHandle((message.destination_caller_id ?? "").trim());
+    const receivedSenderIsLocalFallback =
+      message.is_from_me !== true && Boolean(sender) && sender === destination;
+    const actorHandle =
+      (receivedSenderIsLocalFallback ? "" : sender) ||
+      (message.is_from_me === true ? destination : "");
+    return actorHandle
+      ? buildIMessageApprovalConversationKeyForInbound({
+          chatGuid: message.chat_guid,
+          chatIdentifier: message.chat_identifier,
+          chatId: message.chat_id,
+          isGroup: message.is_group,
+          actorHandle,
+        })
+      : null;
+  };
+
   const ingress = createIMessageDurableIngress({
     accountId: accountInfo.accountId,
     runtime,
+    dispatchPriority: async (message, lifecycle, receivedAt, provenance) => {
+      const bodyText = (message.text ?? "").trim();
+      const isCandidate =
+        message.poll?.kind === "vote" || Boolean(resolveIMessageReactionContext(message, bodyText));
+      if (!isCandidate) {
+        return;
+      }
+      if (suppressStaleIngress(message, receivedAt, provenance)) {
+        return { kind: "completed" };
+      }
+      const repairedMessage = await repairMessageConversationAnchor(message);
+      if (!repairedMessage) {
+        return { kind: "completed" };
+      }
+      const conversation = resolveApprovalControlConversation(repairedMessage);
+      while (true) {
+        if (await maybeHandleApprovalControl(repairedMessage)) {
+          return { kind: "completed" };
+        }
+        if (!conversation) {
+          return;
+        }
+        const waited = await waitForIMessageApprovalControlBinding({
+          accountId: accountInfo.accountId,
+          conversation,
+          abortSignal: lifecycle.abortSignal,
+        });
+        if (!waited) {
+          // The binding may have completed between the ownership check and
+          // window lookup. Close that check-then-wait race before queueing.
+          return (await maybeHandleApprovalControl(repairedMessage))
+            ? { kind: "completed" }
+            : undefined;
+        }
+      }
+    },
     dispatch: async (message, ingressLifecycle, receivedAt, provenance) => {
       // Age fence with two windows, split on the recovery boundary:
       //  - rows at/below recoveryBoundaryRowid are the downtime-recovery replay
@@ -1333,27 +1411,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       //    threshold, which is where #89237's Push-flush backlog (old send date,
       //    fresh rowid) appears.
       // Logged at default level so suppressed traffic is never silent (#89237).
-      const isRecoveryReplay =
-        recoveryCursorRowid !== null &&
-        recoveryBoundaryRowid !== null &&
-        typeof message.id === "number" &&
-        message.id <= recoveryBoundaryRowid;
-      const staleThresholdMs = isRecoveryReplay
-        ? IMESSAGE_RECOVERY_MAX_AGE_MS
-        : IMESSAGE_STALE_INBOUND_THRESHOLD_MS;
       // Catchup rows are operator-requested history: the catchup query's own
       // maxAge window is their age gate. Running them through the live fence
       // would suppress AND tombstone rows older than 15 minutes — losing
       // messages the operator explicitly asked to replay.
-      if (!provenance?.catchup && isStaleIMessageBacklog(message, receivedAt, staleThresholdMs)) {
-        staleBacklogSuppressed += 1;
-        runtime.log?.(
-          warn(
-            `imessage: suppressed stale inbound backlog account=${accountInfo.accountId} ` +
-              `sent=${message.created_at ?? "unknown"} recovery=${isRecoveryReplay} ` +
-              `(${staleBacklogSuppressed} suppressed since start)`,
-          ),
-        );
+      if (suppressStaleIngress(message, receivedAt, provenance)) {
         // Returning completes the durable GUID claim. A later restart cannot
         // reinterpret this live-fence suppression under the wider replay fence.
         // Accepted overlap: a legacy-catchup redelivery of this GUID stays
@@ -1365,6 +1427,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       }
       const repairedMessage = await repairMessageConversationAnchor(message);
       if (!repairedMessage) {
+        return { kind: "completed" };
+      }
+      // A candidate can arrive during the narrow send-to-binding window. If it
+      // initially proved unowned and waited in the chat lane, recheck before
+      // rendering it as ordinary inbound content.
+      if (await maybeHandleApprovalControl(repairedMessage)) {
         return { kind: "completed" };
       }
       await inboundDebouncer.enqueue({
@@ -1569,6 +1637,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         cfg,
         accountId: accountInfo.accountId,
         allowRecentChatDiscovery,
+        gatewayRuntime: approvalGatewayRuntime,
         logVerboseMessage: logVerbose,
       });
     } catch (err) {

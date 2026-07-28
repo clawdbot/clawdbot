@@ -14,7 +14,10 @@ import { withGatewayNativeApprovalRuntime } from "../infra/approval-gateway-runt
 import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
 import { startChannelApprovalHandlerBootstrap } from "../infra/approval-handler-bootstrap.js";
 import { type BackoffPolicy, sleepWithAbort } from "../infra/backoff.js";
-import { createTaskScopedChannelRuntime } from "../infra/channel-runtime-context.js";
+import {
+  createTaskScopedChannelRuntime,
+  registerChannelRuntimeContext,
+} from "../infra/channel-runtime-context.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatGatewayCrashLoopManualChannelStartHint } from "../infra/gateway-boot-lifecycle.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
@@ -55,6 +58,9 @@ const MAX_RESTARTS = 10;
 const CHANNEL_STABLE_RUN_MS = RESTART_POLICY.maxMs;
 const CHANNEL_STOP_ABORT_TIMEOUT_MS = 5_000;
 const CHANNEL_STARTUP_CONCURRENCY = 4;
+// Private context key carried through the generic Plugin SDK registry. This is
+// not a new public capability surface; only the host installs its authority.
+const CHANNEL_APPROVAL_GATEWAY_RUNTIME_CONTEXT_CAPABILITY = "approval.gateway";
 function waitForChannelStartupHandoff(): Promise<void> {
   return new Promise((resolve) => {
     const handle = setImmediate(resolve);
@@ -706,6 +712,29 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             }
             if (abort.signal.aborted || manuallyStopped.has(rKey)) {
               return;
+            }
+            const gatewayApprovalRuntime = opts.getNativeApprovalRuntime?.();
+            if (channelRuntimeForTask && gatewayApprovalRuntime) {
+              const approvalRuntime: Pick<GatewayNativeApprovalRuntime, "request"> = {
+                request: async <T>(method, requestParams, requestOptions) => {
+                  if (method !== "approval.resolve") {
+                    throw new Error(`channel approval runtime cannot dispatch ${method}`);
+                  }
+                  return await gatewayApprovalRuntime.request<T>(
+                    "approval.resolve",
+                    requestParams,
+                    requestOptions,
+                  );
+                },
+              };
+              registerChannelRuntimeContext({
+                channelRuntime: channelRuntimeForTask,
+                channelId,
+                accountId: id,
+                capability: CHANNEL_APPROVAL_GATEWAY_RUNTIME_CONTEXT_CAPABILITY,
+                context: approvalRuntime,
+                abortSignal: abort.signal,
+              });
             }
             let startAccountTask: ReturnType<typeof startAccount> | undefined;
             await measureStartup(`channels.${channelId}.start-account-handoff`, () => {

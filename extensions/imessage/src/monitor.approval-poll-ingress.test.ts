@@ -29,15 +29,13 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
   return {
     ...actual,
-    createChannelInboundDebouncer: vi.fn(
-      (opts: { onFlush: (entries: unknown[]) => Promise<void> }) => ({
-        debouncer: {
-          enqueue: async (entry: unknown) => {
-            await opts.onFlush([entry]);
-          },
+    createChannelInboundDebouncer: vi.fn(() => ({
+      debouncer: {
+        enqueue: async () => {
+          throw new Error("approval vote entered the conversation debounce lane");
         },
-      }),
-    ),
+      },
+    })),
   };
 });
 
@@ -64,6 +62,12 @@ vi.mock("./monitor/abort-handler.js", () => ({
 vi.mock("./monitor/ingress.js", () => ({
   createIMessageDurableIngress: vi.fn(
     (opts: {
+      dispatchPriority?: (
+        message: unknown,
+        lifecycle: unknown,
+        receivedAt: number,
+        provenance: object,
+      ) => Promise<unknown>;
       dispatch: (
         message: unknown,
         lifecycle: unknown,
@@ -73,15 +77,24 @@ vi.mock("./monitor/ingress.js", () => ({
     }) => ({
       receive: async (raw: { message: unknown }) => {
         try {
-          await opts.dispatch(
+          const lifecycle = {
+            abortSignal: new AbortController().signal,
+            ...ingressLifecycleMocks,
+          };
+          const priorityResult = await opts.dispatchPriority?.(
             raw.message,
-            {
-              abortSignal: new AbortController().signal,
-              ...ingressLifecycleMocks,
-            },
+            lifecycle,
             Date.now(),
             {},
           );
+          const result =
+            priorityResult ?? (await opts.dispatch(raw.message, lifecycle, Date.now(), {}));
+          if ((result as { kind?: string } | undefined)?.kind === "completed") {
+            await ingressLifecycleMocks.onAdopted();
+          }
+        } catch (error) {
+          await ingressLifecycleMocks.onAbandoned();
+          throw error;
         } finally {
           ingressHarness.resolveDone();
         }
@@ -113,7 +126,7 @@ describe("iMessage approval poll durable ingress", () => {
     });
   });
 
-  function arrangeNotification() {
+  function arrangeNotification(createdAt = new Date().toISOString()) {
     let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
     createIMessageRpcClientMock.mockImplementation(async (params) => {
       onNotification = params?.onNotification;
@@ -132,7 +145,7 @@ describe("iMessage approval poll durable ingress", () => {
                 sender: "redacted-peer",
                 is_from_me: false,
                 is_group: false,
-                created_at: new Date().toISOString(),
+                created_at: createdAt,
                 poll: {
                   kind: "vote",
                   original_guid: "approval-poll-guid",
@@ -173,8 +186,19 @@ describe("iMessage approval poll durable ingress", () => {
 
     expect(ingressLifecycleMocks.onAdopted).not.toHaveBeenCalled();
     expect(ingressLifecycleMocks.onAbandoned).toHaveBeenCalledTimes(1);
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("imessage: inbound dispatch failed: Error: gateway unavailable"),
-    );
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("gateway unavailable"));
+  });
+
+  it("applies the live age fence before resolving an approval vote", async () => {
+    arrangeNotification(new Date(Date.now() - 60 * 60 * 1_000).toISOString());
+    maybeResolveIMessageApprovalPollVoteMock.mockResolvedValue(true);
+
+    await monitorIMessageProvider({
+      config: { channels: { imessage: {} } } as never,
+      runtime: createRuntime() as never,
+    });
+
+    expect(maybeResolveIMessageApprovalPollVoteMock).not.toHaveBeenCalled();
+    expect(ingressLifecycleMocks.onAdopted).toHaveBeenCalledTimes(1);
   });
 });
