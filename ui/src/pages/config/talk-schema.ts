@@ -2,10 +2,21 @@
 // memory-schema.ts, settings search evaluates these facts from the startup
 // chunk and must not pull settings UI code in with them.
 
-export type TalkRealtimeSelection = {
-  provider: string | null;
+/** Normalized model/voice pair from one `talk.realtime.providers.<id>` entry. */
+export type TalkProviderEntryValues = {
   model: string | null;
   speakerVoice: string | null;
+};
+
+export type TalkRealtimeSelection = {
+  /** Raw configured `talk.realtime.provider`, possibly an alias. */
+  provider: string | null;
+  /** Top-level `talk.realtime.model` override only; provider fallback is resolved in the view. */
+  model: string | null;
+  /** Top-level `speakerVoice` / `speakerVoiceId` override only. */
+  speakerVoice: string | null;
+  /** Per-provider fallback values keyed by the raw config map key. */
+  providerEntries: Record<string, TalkProviderEntryValues>;
 };
 
 function readRecord(value: unknown): Record<string, unknown> | undefined {
@@ -23,29 +34,34 @@ function readTrimmedString(value: unknown): string | null {
 }
 
 /**
- * Effective talk.realtime picks as the gateway resolves them: top-level keys
- * override, then the selected provider's own entry supplies the fallback
- * (mirrors buildTalkRealtimeConfig's precedence). Without the fallback an
- * existing provider-level GPT-Live config would render as "Provider default"
- * and hide the GPT-Live row.
+ * Raw talk.realtime picks plus each provider entry's fallback values. Which
+ * entry is effective depends on the catalog's active provider and alias map,
+ * so that resolution lives in the view (talk.ts), not here.
  */
 export function resolveTalkRealtimeSelection(
   configObject: Record<string, unknown>,
 ): TalkRealtimeSelection {
   const realtime = readRecord(readRecord(configObject.talk)?.realtime);
   const providerConfigs = readRecord(realtime?.providers) ?? {};
-  const providerIds = Object.keys(providerConfigs);
-  const provider =
-    readTrimmedString(realtime?.provider) ?? (providerIds.length === 1 ? providerIds[0] : null);
-  const providerEntry = provider ? readRecord(providerConfigs[provider]) : undefined;
+  const providerEntries: Record<string, TalkProviderEntryValues> = {};
+  for (const [key, value] of Object.entries(providerConfigs)) {
+    const entry = readRecord(value);
+    if (!entry) {
+      continue;
+    }
+    providerEntries[key] = {
+      model: readTrimmedString(entry.model),
+      // Provider-level `voice` is a provider-owned legacy alias for
+      // speakerVoice (each provider normalizes it); read both for display.
+      speakerVoice: readTrimmedString(entry.speakerVoice) ?? readTrimmedString(entry.voice),
+    };
+  }
   return {
     provider: readTrimmedString(realtime?.provider),
-    model: readTrimmedString(realtime?.model) ?? readTrimmedString(providerEntry?.model),
+    model: readTrimmedString(realtime?.model),
     speakerVoice:
-      readTrimmedString(realtime?.speakerVoice) ??
-      readTrimmedString(realtime?.speakerVoiceId) ??
-      readTrimmedString(providerEntry?.speakerVoice) ??
-      readTrimmedString(providerEntry?.voice),
+      readTrimmedString(realtime?.speakerVoice) ?? readTrimmedString(realtime?.speakerVoiceId),
+    providerEntries,
   };
 }
 

@@ -64,15 +64,55 @@ function findProviderOption(
   );
 }
 
-/** The provider whose models/voices the pickers should offer. */
-function selectedProviderOption(props: TalkViewProps): TalkRealtimeProviderOption | undefined {
-  if (props.catalog.kind !== "ready") {
+/**
+ * The provider whose models/voices the pickers offer: the explicitly
+ * configured one, else the catalog's credential-based auto-selection.
+ */
+export function selectedTalkProviderOption(
+  catalog: TalkCatalogState,
+  selection: TalkRealtimeSelection,
+): TalkRealtimeProviderOption | undefined {
+  if (catalog.kind !== "ready") {
     return undefined;
   }
   return (
-    findProviderOption(props.catalog.providers, props.selection.provider) ??
-    findProviderOption(props.catalog.providers, props.catalog.activeProvider)
+    findProviderOption(catalog.providers, selection.provider) ??
+    findProviderOption(catalog.providers, catalog.activeProvider)
   );
+}
+
+/**
+ * Raw config keys under talk.realtime.providers that belong to the selected
+ * provider: the configured spelling plus the canonical id and its aliases.
+ * Used both to read effective fallback values and to clear them on reset.
+ */
+export function talkProviderConfigKeys(
+  selection: TalkRealtimeSelection,
+  option: TalkRealtimeProviderOption | undefined,
+): string[] {
+  const candidates = [selection.provider, option?.id, ...(option?.aliases ?? [])];
+  const keys: string[] = [];
+  for (const candidate of candidates) {
+    if (candidate && candidate in selection.providerEntries && !keys.includes(candidate)) {
+      keys.push(candidate);
+    }
+  }
+  return keys;
+}
+
+/** Effective model/voice: top-level override, else the provider entry value. */
+function effectiveTalkValues(
+  selection: TalkRealtimeSelection,
+  option: TalkRealtimeProviderOption | undefined,
+): { model: string | null; speakerVoice: string | null } {
+  let model = selection.model;
+  let speakerVoice = selection.speakerVoice;
+  for (const key of talkProviderConfigKeys(selection, option)) {
+    const entry = selection.providerEntries[key];
+    model ??= entry?.model ?? null;
+    speakerVoice ??= entry?.speakerVoice ?? null;
+  }
+  return { model, speakerVoice };
 }
 
 function renderTalkSelectRow(params: {
@@ -144,17 +184,21 @@ function renderProviderRow(props: TalkViewProps) {
     });
   }
   const selected = findProviderOption(props.catalog.providers, props.selection.provider);
+  // A configured provider missing from the catalog (for example a disabled
+  // plugin) must stay visible as itself, not silently render as Auto.
+  const unknownConfigured = props.selection.provider && !selected ? props.selection.provider : null;
   return renderSettingsRow({
     title: t("talkPage.provider.title"),
     description: t("talkPage.provider.description"),
     stacked: true,
     control: renderSettingsSegmented({
-      value: selected?.id ?? TALK_PICKER_UNSET,
+      value: selected?.id ?? unknownConfigured ?? TALK_PICKER_UNSET,
       options: [
         ...props.catalog.providers.map((provider) => ({
           value: provider.id,
           label: provider.label,
         })),
+        ...(unknownConfigured ? [{ value: unknownConfigured, label: unknownConfigured }] : []),
         { value: TALK_PICKER_UNSET, label: t("talkPage.provider.auto") },
       ],
       disabled: props.configBusy,
@@ -165,8 +209,8 @@ function renderProviderRow(props: TalkViewProps) {
 }
 
 function renderModelRow(props: TalkViewProps) {
-  const provider = selectedProviderOption(props);
-  const model = props.selection.model;
+  const provider = selectedTalkProviderOption(props.catalog, props.selection);
+  const { model } = effectiveTalkValues(props.selection, provider);
   if (!provider) {
     return renderSettingsRow({
       title: t("talkPage.model.title"),
@@ -201,8 +245,8 @@ function renderModelRow(props: TalkViewProps) {
 }
 
 function renderVoiceRow(props: TalkViewProps) {
-  const provider = selectedProviderOption(props);
-  const voice = props.selection.speakerVoice;
+  const provider = selectedTalkProviderOption(props.catalog, props.selection);
+  const { speakerVoice: voice } = effectiveTalkValues(props.selection, provider);
   if (!provider || provider.voices.length === 0) {
     return renderSettingsRow({
       title: t("talkPage.voice.title"),
@@ -231,8 +275,9 @@ function renderVoiceRow(props: TalkViewProps) {
  * explainer row instead of a footnote in the provider description.
  */
 function renderGptLiveRow(props: TalkViewProps) {
-  const provider = selectedProviderOption(props);
-  if (provider?.id !== "openai" || !isTalkGptLiveModel(props.selection.model)) {
+  const provider = selectedTalkProviderOption(props.catalog, props.selection);
+  const { model } = effectiveTalkValues(props.selection, provider);
+  if (provider?.id !== "openai" || !isTalkGptLiveModel(model)) {
     return nothing;
   }
   // `configured` is a generic readiness boolean: false can also mean a broken

@@ -9,7 +9,13 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { resolveTalkRealtimeSelection } from "./talk-schema.ts";
-import { renderTalk, type TalkCatalogState, type TalkRealtimeProviderOption } from "./talk.ts";
+import {
+  renderTalk,
+  selectedTalkProviderOption,
+  talkProviderConfigKeys,
+  type TalkCatalogState,
+  type TalkRealtimeProviderOption,
+} from "./talk.ts";
 
 type GatewayClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
 
@@ -139,10 +145,10 @@ class TalkSettingsPage extends OpenClawLightDomElement {
    * the durable ack signal; transient saving flags can be skipped entirely by
    * a fast save.
    */
-  private refreshCatalogOnConfigChange(state: {
+  private refreshCatalogOnConfigChange(configState: {
     configSnapshot?: { hash?: string | null } | null;
   }) {
-    const hash = state.configSnapshot?.hash ?? null;
+    const hash = configState.configSnapshot?.hash ?? null;
     if (this.lastCatalogConfigHash === undefined) {
       this.lastCatalogConfigHash = hash;
       return;
@@ -157,13 +163,43 @@ class TalkSettingsPage extends OpenClawLightDomElement {
     }
   }
 
-  private patchRealtimeValue(key: "provider" | "model" | "speakerVoice", value: string | null) {
+  /**
+   * The pickers advertise "Provider default", so a null pick must clear every
+   * key that could keep supplying the old value: the top-level override, the
+   * legacy speakerVoiceId spelling, and the selected provider's own entry
+   * (matched by configured spelling, canonical id, and aliases). Removing only
+   * the top-level key would make Default a no-op over provider-level config.
+   */
+  private changeModel(model: string | null) {
     const runtimeConfig = this.context.runtimeConfig;
-    if (value === null) {
-      runtimeConfig.removeFormValue(["talk", "realtime", key]);
+    if (model !== null) {
+      runtimeConfig.patchForm(["talk", "realtime", "model"], model);
       return;
     }
-    runtimeConfig.patchForm(["talk", "realtime", key], value);
+    runtimeConfig.removeFormValue(["talk", "realtime", "model"]);
+    for (const key of this.selectedProviderConfigKeys()) {
+      runtimeConfig.removeFormValue(["talk", "realtime", "providers", key, "model"]);
+    }
+  }
+
+  private changeVoice(voice: string | null) {
+    const runtimeConfig = this.context.runtimeConfig;
+    if (voice !== null) {
+      runtimeConfig.patchForm(["talk", "realtime", "speakerVoice"], voice);
+      return;
+    }
+    runtimeConfig.removeFormValue(["talk", "realtime", "speakerVoice"]);
+    runtimeConfig.removeFormValue(["talk", "realtime", "speakerVoiceId"]);
+    for (const key of this.selectedProviderConfigKeys()) {
+      runtimeConfig.removeFormValue(["talk", "realtime", "providers", key, "speakerVoice"]);
+      runtimeConfig.removeFormValue(["talk", "realtime", "providers", key, "voice"]);
+    }
+  }
+
+  private selectedProviderConfigKeys(): string[] {
+    const selection = resolveTalkRealtimeSelection(this.configObject);
+    const option = selectedTalkProviderOption(this.catalog, selection);
+    return talkProviderConfigKeys(selection, option);
   }
 
   /**
@@ -178,7 +214,11 @@ class TalkSettingsPage extends OpenClawLightDomElement {
     for (const key of ["model", "speakerVoice", "speakerVoiceId", "transport"]) {
       runtimeConfig.removeFormValue(["talk", "realtime", key]);
     }
-    this.patchRealtimeValue("provider", providerId);
+    if (providerId === null) {
+      runtimeConfig.removeFormValue(["talk", "realtime", "provider"]);
+      return;
+    }
+    runtimeConfig.patchForm(["talk", "realtime", "provider"], providerId);
   }
 
   override render() {
@@ -189,8 +229,8 @@ class TalkSettingsPage extends OpenClawLightDomElement {
       configBusy:
         runtimeState.configLoading || runtimeState.configSaving || runtimeState.configApplying,
       onProviderChange: (providerId) => this.changeProvider(providerId),
-      onModelChange: (model) => this.patchRealtimeValue("model", model),
-      onVoiceChange: (voice) => this.patchRealtimeValue("speakerVoice", voice),
+      onModelChange: (model) => this.changeModel(model),
+      onVoiceChange: (voice) => this.changeVoice(voice),
       editor: this.buildEditor(),
     });
   }
