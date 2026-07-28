@@ -58,6 +58,10 @@ class CronPage extends OpenClawLightDomElement {
 
   private modelSuggestionsState: CronState | null = null;
   private gatewaySource?: ApplicationContext["gateway"];
+  private get canManageCron(): boolean {
+    return hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null);
+  }
+
   private readonly subscriptions = new SubscriptionsController(this)
     .watch(
       () => this.context?.agents,
@@ -268,6 +272,9 @@ class CronPage extends OpenClawLightDomElement {
   }
 
   private patchForm(patch: Partial<CronFormState>) {
+    if (!this.canManageCron) {
+      return;
+    }
     this.cron.cronForm = normalizeCronFormState({ ...this.cron.cronForm, ...patch });
     this.cron.cronFieldErrors = validateCronForm(this.cron.cronForm);
     this.requestCronUpdate();
@@ -401,6 +408,7 @@ class CronPage extends OpenClawLightDomElement {
           detailTab: this.detailTab,
           error: this.cron.cronError,
           busy: this.cron.cronBusy,
+          canManage: this.canManageCron,
           form: this.cron.cronForm,
           channels: channels.channelsSnapshot?.channelMeta?.length
             ? channels.channelsSnapshot.channelMeta.map((entry) => entry.id)

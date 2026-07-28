@@ -45,6 +45,7 @@ function createProps(overrides: Partial<CronProps> = {}): CronProps {
     jobsSortDir: "asc",
     error: null,
     busy: false,
+    canManage: true,
     form: { ...DEFAULT_CRON_FORM },
     fieldErrors: {},
     canSubmit: true,
@@ -137,6 +138,54 @@ function findToggleByLabel(container: Element, label: string) {
     ) ?? null
   );
 }
+
+describe("cron view operator access", () => {
+  it.each([
+    { scenario: "administrator", canManage: true },
+    { scenario: "non-administrator", canManage: false },
+  ])("gates $scenario task mutations while preserving task selection", ({ canManage }) => {
+    const job = createJob("access-job");
+    const onSelectJob = vi.fn();
+    const onRefresh = vi.fn();
+    const container = renderView({ canManage, jobs: [job], onSelectJob, onRefresh });
+
+    expect(Boolean(container.querySelector('[data-test-id="cron-new-task"]'))).toBe(canManage);
+    expect(Boolean(container.querySelector(".cron-suggestion"))).toBe(canManage);
+    expect(Boolean(container.querySelector('[data-test-id="cron-row-run-access-job"]'))).toBe(
+      canManage,
+    );
+    expect(Boolean(container.querySelector('[data-test-id="cron-row-toggle-access-job"]'))).toBe(
+      canManage,
+    );
+    expect(Boolean(container.querySelector("wa-dropdown.cron-job-menu"))).toBe(canManage);
+
+    getElement(container, '[data-test-id="cron-row-access-job"]', HTMLElement).click();
+    expect(onSelectJob).toHaveBeenCalledWith(job);
+    getElement(container, ".cron-refresh", HTMLButtonElement).click();
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps non-administrator task settings and history readable", () => {
+    const job = createJob("read-only-job");
+    const onClosePanel = vi.fn();
+    const container = renderView({
+      canManage: false,
+      jobs: [job],
+      editingJobId: job.id,
+      onClosePanel,
+    });
+
+    expect(container.querySelector('[data-test-id="cron-run-now"]')).toBeNull();
+    expect(container.querySelector('[data-test-id="cron-toggle-enabled"]')).toBeNull();
+    expect(container.querySelector("wa-dropdown.cron-job-menu")).toBeNull();
+    expect(getElement(container, "fieldset.cron-editor", HTMLFieldSetElement).disabled).toBe(true);
+    expect(container.querySelector('[data-test-id="cron-submit"]')).toBeNull();
+    expect(container.querySelector('[data-test-id="cron-detail-tab-history"]')).not.toBeNull();
+
+    getElement(container, '[data-test-id="cron-back"]', HTMLButtonElement).click();
+    expect(onClosePanel).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("cron view list pane", () => {
   it("uses agent-scoped summary values", () => {

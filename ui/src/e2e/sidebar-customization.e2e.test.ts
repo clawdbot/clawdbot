@@ -422,6 +422,45 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await expect.poll(() => page.locator("#config-section-browser").isVisible()).toBe(true);
       await captureSettingsSidebarProof(settingsSidebar, "01c-settings-search-deep-link.png");
       await holdUiProof(page);
+
+      await settingsSearch.fill("session observer");
+      const sidebarPreferencesResult = settingsSidebar.getByRole("link", {
+        exact: true,
+        name: "Sidebar",
+      });
+      await expect.poll(() => sidebarPreferencesResult.isVisible()).toBe(true);
+      await sidebarPreferencesResult.click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/appearance");
+      await expect.poll(() => new URL(page.url()).search).toBe("?section=__appearance__");
+      await expect.poll(() => new URL(page.url()).hash).toBe("#settings-appearance-sidebar");
+      await expect
+        .poll(() =>
+          page
+            .locator("#settings-appearance-sidebar")
+            .getByRole("heading", { name: "Session observer" })
+            .isVisible(),
+        )
+        .toBe(true);
+
+      await settingsSearch.fill("message width");
+      const chatPreferencesResult = settingsSidebar.getByRole("link", {
+        exact: true,
+        name: "Chat",
+      });
+      await expect.poll(() => chatPreferencesResult.isVisible()).toBe(true);
+      await chatPreferencesResult.click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/appearance");
+      await expect.poll(() => new URL(page.url()).search).toBe("?section=__appearance__");
+      await expect.poll(() => new URL(page.url()).hash).toBe("#settings-appearance-chat");
+      await expect
+        .poll(() =>
+          page
+            .locator("#settings-appearance-chat")
+            .getByText("Message width", { exact: true })
+            .isVisible(),
+        )
+        .toBe(true);
+
       await settingsSearch.fill("does-not-exist");
       await expect.poll(() => settingsLinks.count()).toBe(0);
       await expect

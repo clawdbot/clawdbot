@@ -73,6 +73,7 @@ import {
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
+import type { ChatPage } from "../pages/chat/chat-page.ts";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
 import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/location.ts";
 import { renderDevicePairSetup } from "../pages/nodes/view-pairing.ts";
@@ -1422,6 +1423,10 @@ class OpenClawShell extends OpenClawLightDomElement {
 
   override updated() {
     this.syncDocumentTitle();
+    const chatPage = this.querySelector<ChatPage>("openclaw-chat-page");
+    if (chatPage) {
+      chatPage.navDrawerOpen = this.navDrawerOpen && !this.onboardingMode;
+    }
     const context = this.context;
     if (!context) {
       return;
@@ -1795,6 +1800,7 @@ class OpenClawShell extends OpenClawLightDomElement {
           type="button"
           class="shell-nav-backdrop"
           aria-label=${t("nav.close")}
+          ?inert=${!mobileNavLayout || !navDrawerOpen}
           @click=${() => this.closeNavDrawer({ restoreFocus: true })}
         ></button>
         ${isNativeWebChromeHost() && !onboarding
@@ -1866,7 +1872,7 @@ class OpenClawShell extends OpenClawLightDomElement {
               </div>
             `
           : nothing}
-        <div class="shell-nav">
+        <div class="shell-nav" ?inert=${navigationSurfaceHidden}>
           ${settingsTakeover
             ? renderSettingsSidebar({
                 basePath: context.basePath,
