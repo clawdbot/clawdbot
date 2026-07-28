@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/beam",
-  "version": "2026.7.2-beta.5",
+  "version": "2026.7.2-beta.6",
   "private": true,
   "description": "Read-only coding-session Beam receiver",
   "type": "module",

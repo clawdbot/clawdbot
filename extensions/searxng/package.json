@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/searxng-plugin",
-  "version": "2026.7.2-beta.5",
+  "version": "2026.7.2-beta.6",
   "description": "OpenClaw SearXNG plugin",
   "type": "module",
   "devDependencies": {
@@ -18,10 +18,10 @@
       "allowInvalidConfigRecovery": true
     },
     "compat": {
-      "pluginApi": ">=2026.7.2-beta.5"
+      "pluginApi": ">=2026.7.2-beta.6"
     },
     "build": {
-      "openclawVersion": "2026.7.2-beta.5",
+      "openclawVersion": "2026.7.2-beta.6",
       "bundledDist": false
     },
     "release": {
