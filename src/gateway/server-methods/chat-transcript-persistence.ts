@@ -6,6 +6,7 @@ import {
   patchSessionEntry,
   publishTranscriptUpdate,
   readSessionTranscriptWatermark,
+  rewriteTranscriptEventRowsExact,
   withTranscriptWriteLock,
   type SessionTranscriptWriteScope,
   type TranscriptEvent,
@@ -456,55 +457,56 @@ export async function rewriteAssistantTranscriptMessageByTurnIndexAndMedia(param
   expectedGeneration: string | null;
   mediaUrls: readonly string[];
   scope: ResolvedAssistantTranscriptScope;
-}): Promise<{ messageId: string } | null> {
+}): Promise<{ generation: string; messageId: string } | null> {
   if (params.content.length === 0 || params.mediaUrls.length === 0) {
     return null;
   }
-  return await withTranscriptWriteLock(params.scope, async (transcript) => {
-    const currentWatermark = readSessionTranscriptWatermark(params.scope);
-    const initialGenerationMaterialized =
-      params.expectedGeneration === null && params.afterSeq === 0;
-    if (
-      currentWatermark.generation !== params.expectedGeneration &&
-      !initialGenerationMaterialized
-    ) {
-      return null;
-    }
-    const events = await transcript.readEvents();
-    // The pre-dispatch SQLite sequence is the exact turn boundary; timestamps can collide.
-    // Later generation changes invalidate it. A new transcript instead materializes its first
-    // generation during this turn, and exact message index plus media still identifies the row.
-    const currentTurnEvents = loadTranscriptEventRowsAfterSeqSync(
-      params.scope,
-      params.afterSeq,
-    ).map((row) => row.event);
-    const target = findAssistantTranscriptMessageByTurnIndexAndMediaInEvents(
-      currentTurnEvents,
-      params,
-    );
-    if (!target) {
-      return null;
-    }
-    const mergedContent = mergeManagedMediaIntoAssistantContent({
-      message: target.message,
-      replacement: params.content,
-    });
-    if (!mergedContent) {
-      return null;
-    }
-    const rewrittenEvents = events.map((event) =>
-      transcriptEventId(event) === target.messageId
-        ? Object.assign({}, event as Record<string, unknown>, {
-            message: {
-              ...target.message,
-              content: mergedContent,
-            },
-          })
-        : event,
-    );
-    await transcript.replaceEvents(rewrittenEvents);
-    return { messageId: target.messageId };
+  const currentWatermark = readSessionTranscriptWatermark(params.scope);
+  const initialGenerationMaterialized = params.expectedGeneration === null && params.afterSeq === 0;
+  if (currentWatermark.generation !== params.expectedGeneration && !initialGenerationMaterialized) {
+    return null;
+  }
+  // The pre-dispatch SQLite sequence is the exact turn boundary; timestamps can collide.
+  // Exact-row rewrites preserve that sequence while rotating the generation returned to callers.
+  const currentTurnRows = loadTranscriptEventRowsAfterSeqSync(params.scope, params.afterSeq);
+  const target = findAssistantTranscriptMessageByTurnIndexAndMediaInEvents(
+    currentTurnRows.map((row) => row.event),
+    params,
+  );
+  if (!target) {
+    return null;
+  }
+  const targetRow = currentTurnRows.find(
+    (row) => transcriptEventId(row.event) === target.messageId,
+  );
+  if (!targetRow) {
+    return null;
+  }
+  const mergedContent = mergeManagedMediaIntoAssistantContent({
+    message: target.message,
+    replacement: params.content,
   });
+  if (!mergedContent) {
+    return null;
+  }
+  const rewrittenEvent = Object.assign({}, targetRow.event as Record<string, unknown>, {
+    message: {
+      ...target.message,
+      content: mergedContent,
+    },
+  });
+  const rewritten = await rewriteTranscriptEventRowsExact(params.scope, {
+    allowInitialGenerationMaterialization: initialGenerationMaterialized,
+    expectedGeneration: params.expectedGeneration,
+    rows: [
+      {
+        event: rewrittenEvent,
+        expectedEventJson: JSON.stringify(targetRow.event),
+        seq: targetRow.seq,
+      },
+    ],
+  });
+  return rewritten ? { generation: rewritten.generation, messageId: target.messageId } : null;
 }
 
 export async function publishAssistantTranscriptRewrite(params: {

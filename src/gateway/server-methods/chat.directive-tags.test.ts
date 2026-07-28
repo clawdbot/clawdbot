@@ -1968,6 +1968,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         const secondMediaUrl = path.join(fixtureDir, "second.png");
         fs.writeFileSync(firstMediaUrl, Buffer.from(TINY_PNG_BASE64, "base64"));
         fs.writeFileSync(secondMediaUrl, Buffer.from(TINY_PNG_BASE64, "base64"));
+        await appendSourceReplyMirrorEntry({
+          text: "Older assistant reply",
+          provider: "openai",
+          model: "gpt-5.6-luna",
+          now: Date.now(),
+        });
         mockState.savedMediaResults = [
           { path: firstMediaUrl, contentType: "image/png" },
           { path: secondMediaUrl, contentType: "image/png" },
@@ -2008,10 +2014,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         });
 
         const messages = await readActiveAssistantTranscriptMessages();
-        expect(messages).toHaveLength(2);
+        expect(messages).toHaveLength(3);
+        expect(messages[0]?.content).toEqual([{ type: "text", text: "Older assistant reply" }]);
         for (const [index, expectedText] of ["First image", "Second image"].entries()) {
-          const content = Array.isArray(messages[index]?.content)
-            ? (messages[index].content as Array<Record<string, unknown>>)
+          const message = messages[index + 1];
+          const content = Array.isArray(message?.content)
+            ? (message.content as Array<Record<string, unknown>>)
             : [];
           expect(content.filter((block) => block.type === "text")).toEqual([
             { type: "text", text: expectedText },

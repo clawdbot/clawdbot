@@ -106,21 +106,27 @@ export function createChatSendReplyDispatch(params: {
 }) {
   const { accountId, isAgentRunStarted, logGateway, session, userTurnRecorder } = params;
   const { agentId, backingSessionId, cfg, clientRunId, sessionKey, sessionLoadOptions } = session;
-  let assistantTranscriptStartSessionId: string | undefined;
-  let assistantTranscriptStartWatermark = { generation: null, maxSeq: null } as ReturnType<
-    typeof readSessionTranscriptWatermark
-  >;
+  let assistantTranscriptRewriteState = {
+    sessionId: undefined as string | undefined,
+    generation: null as string | null,
+    afterSeq: 0,
+  };
   const captureAgentTranscriptStart = () => {
     const current = loadSessionEntry(sessionKey, sessionLoadOptions);
-    assistantTranscriptStartSessionId = current.entry?.sessionId ?? backingSessionId;
-    assistantTranscriptStartWatermark = assistantTranscriptStartSessionId
+    const sessionId = current.entry?.sessionId ?? backingSessionId;
+    const watermark = sessionId
       ? readSessionTranscriptWatermark({
           agentId,
-          sessionId: assistantTranscriptStartSessionId,
+          sessionId,
           sessionKey,
           storePath: current.storePath,
         })
       : { generation: null, maxSeq: null };
+    assistantTranscriptRewriteState = {
+      sessionId,
+      generation: watermark.generation,
+      afterSeq: watermark.maxSeq ?? 0,
+    };
     return true;
   };
   const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
@@ -265,21 +271,23 @@ export function createChatSendReplyDispatch(params: {
               ],
         ),
       );
+      if (assistantTranscriptRewriteState.sessionId !== sessionId) {
+        assistantTranscriptRewriteState = {
+          sessionId,
+          generation: null,
+          afterSeq: 0,
+        };
+      }
       const rewritten = await rewriteAssistantTranscriptMessageByTurnIndexAndMedia({
-        afterSeq:
-          assistantTranscriptStartSessionId === sessionId
-            ? (assistantTranscriptStartWatermark.maxSeq ?? 0)
-            : 0,
+        afterSeq: assistantTranscriptRewriteState.afterSeq,
         assistantMessageIndex,
         content: persistedContentForAppend,
-        expectedGeneration:
-          assistantTranscriptStartSessionId === sessionId
-            ? assistantTranscriptStartWatermark.generation
-            : null,
+        expectedGeneration: assistantTranscriptRewriteState.generation,
         mediaUrls: sourceMediaUrls,
         scope: transcriptScope,
       });
       if (rewritten) {
+        assistantTranscriptRewriteState.generation = rewritten.generation;
         appendedWebchatAgentMedia = true;
         finalizedAgentMediaTranscriptKeys.add(finalizationKey);
         await publishAssistantTranscriptRewrite({
