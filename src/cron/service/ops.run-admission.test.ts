@@ -22,6 +22,7 @@ import { stop } from "./ops-lifecycle.js";
 import { update } from "./ops-mutations.js";
 import { list } from "./ops-read.js";
 import { enqueueRun, run } from "./ops-run.js";
+import { runWithCronAdmission } from "./run-admission.js";
 import { createCronServiceState } from "./state.js";
 import { onTimer } from "./timer.test-support.js";
 
@@ -51,6 +52,49 @@ function expectQueuedRunAck(result: unknown) {
 }
 
 describe("cron service run admission", () => {
+  it("releases immediate and queued admission slots in FIFO order after failures", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const releaseFirst = createDeferred<void>();
+    const executionOrder: string[] = [];
+    const state = createAdmissionTestState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      testAdmissionLimit: 1,
+      log: noopLogger,
+      nowMs: () => 0,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    const immediate = runWithCronAdmission(state, async () => {
+      executionOrder.push("immediate");
+      await releaseFirst.promise;
+      return "immediate";
+    });
+    const failed = runWithCronAdmission(state, async () => {
+      executionOrder.push("failed");
+      throw new Error("queued admission failed");
+    });
+    const failure = expect(failed).rejects.toThrow("queued admission failed");
+    const queued = runWithCronAdmission(state, async () => {
+      executionOrder.push("queued");
+      return "queued";
+    });
+
+    expect(state.runAdmission.active).toBe(DEFAULT_CRON_MAX_CONCURRENT_RUNS);
+    expect(state.runAdmission.waiters).toHaveLength(2);
+
+    releaseFirst.resolve();
+
+    await expect(immediate).resolves.toEqual({ kind: "admitted", value: "immediate" });
+    await failure;
+    await expect(queued).resolves.toEqual({ kind: "admitted", value: "queued" });
+    expect(executionOrder).toEqual(["immediate", "failed", "queued"]);
+    expect(state.runAdmission.active).toBe(DEFAULT_CRON_MAX_CONCURRENT_RUNS - 1);
+    expect(state.runAdmission.waiters).toHaveLength(0);
+  });
+
   it("rechecks a queued manual run after the job is disabled", async () => {
     vi.useRealTimers();
     clearCommandLane(CommandLane.Cron);
