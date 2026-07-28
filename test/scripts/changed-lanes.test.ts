@@ -737,6 +737,101 @@ describe("scripts/changed-lanes", () => {
     });
   });
 
+  it("targets mixed core, extension, and script lint without full-owner fan-out", () => {
+    const result = detectChangedLanes([
+      "src/gateway/node-registry.ts",
+      "extensions/lmstudio/src/models.fetch.ts",
+      "scripts/check-changed.mjs",
+    ]);
+    const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
+
+    expect(plan.commands).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "lint core changed file",
+          args: [
+            "scripts/run-oxlint.mjs",
+            "--tsconfig",
+            "config/tsconfig/oxlint.core.json",
+            "src/gateway/node-registry.ts",
+          ],
+        }),
+        expect.objectContaining({
+          name: "lint extension changed file",
+          args: [
+            "scripts/run-oxlint.mjs",
+            "--tsconfig",
+            "config/tsconfig/oxlint.extensions.json",
+            "extensions/lmstudio/src/models.fetch.ts",
+          ],
+        }),
+        expect.objectContaining({
+          name: "lint script changed file",
+          args: [
+            "scripts/run-oxlint.mjs",
+            "--tsconfig",
+            "config/tsconfig/oxlint.scripts.json",
+            "scripts/check-changed.mjs",
+          ],
+        }),
+      ]),
+    );
+    const commandNames = plan.commands.map((command) => command.args[0]);
+    for (const fullLane of ["lint:core", "lint:extensions", "lint:scripts"]) {
+      expect(commandNames).not.toContain(fullLane);
+    }
+  });
+
+  it.each([
+    {
+      owner: "core",
+      paths: [
+        "src/gateway/node-registry.ts",
+        "src/gateway/node-registry.invoke-stream.ts",
+        "src/gateway/server-methods/nodes.invoke.ts",
+        "src/gateway/server-methods/nodes.invoke-deadline.ts",
+        "src/node-host/runtime.ts",
+        "src/node-host/runner.ts",
+        "src/plugins/provider-self-hosted-setup.ts",
+        "packages/gateway-client/src/timeouts.ts",
+        "packages/normalization-core/src/number-coercion.ts",
+      ],
+      pluralName: "lint core changed files",
+      singularName: "lint core changed file",
+      fullLane: "lint:core",
+    },
+    {
+      owner: "extension",
+      paths: [
+        "extensions/lmstudio/src/embedding-provider.ts",
+        "extensions/lmstudio/src/stream.ts",
+        "extensions/lmstudio/src/api.ts",
+        "extensions/lmstudio/src/models.fetch.ts",
+        "extensions/lmstudio/src/setup.ts",
+        "extensions/lmstudio/src/defaults.ts",
+        "extensions/lmstudio/src/provider-auth.ts",
+        "extensions/lmstudio/src/runtime.ts",
+        "extensions/lmstudio/src/models.ts",
+      ],
+      pluralName: "lint extension changed files",
+      singularName: "lint extension changed file",
+      fullLane: "lint:extensions",
+    },
+  ])("batches broad $owner changes without falling back to full lint", (testCase) => {
+    const result = detectChangedLanes(testCase.paths);
+    const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
+    const commands = plan.commands.filter(
+      (command) => command.name === testCase.pluralName || command.name === testCase.singularName,
+    );
+
+    expect(commands).toHaveLength(2);
+    expect(commands.map((command) => command.args.slice(3).length)).toEqual([8, 1]);
+    expect(commands.flatMap((command) => command.args.slice(3)).toSorted()).toEqual(
+      testCase.paths.toSorted(),
+    );
+    expect(plan.commands.map((command) => command.args[0])).not.toContain(testCase.fullLane);
+  });
+
   it.each([
     {
       name: "routes UI production changes to UI prod and core test lanes",
