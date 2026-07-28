@@ -148,20 +148,23 @@ describe("session cost usage SQLite cache", () => {
     });
   });
 
-  it("treats a refresh lock predating the last boot as stale", () => {
-    const stateDir = makeTempDir(tempDirs, "openclaw-usage-cache-preboot-lock-");
+  it("keeps a live foreign PID's refresh lock however old its timestamp looks", () => {
+    const stateDir = makeTempDir(tempDirs, "openclaw-usage-cache-foreign-lock-");
 
     withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
       const agentId = "worker-1";
       const databasePath = resolveOpenClawAgentSqlitePath({ agentId });
-      // PID 1 is always running, so liveness alone cannot retire this row.
+      // Our parent is live and is not us, so this stands in for a lock another
+      // gateway still holds. `startedAt` of 0 is what a forward wall-clock step
+      // does to a fresh lock; retiring on that would run two refreshes at once.
       writeRefreshLockRow(agentId, {
-        pid: 1,
+        pid: process.ppid,
         startedAt: 0,
-        ownerNonce: "pre-boot-nonce",
+        ownerNonce: "foreign-owner-nonce",
       });
 
-      expect(isSessionCostUsageRefreshRunning(agentId, databasePath)).toBe(false);
+      expect(isSessionCostUsageRefreshRunning(agentId, databasePath)).toBe(true);
+      expect(acquireSessionCostUsageRefreshLock(agentId, databasePath).acquired).toBe(false);
     });
   });
 

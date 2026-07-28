@@ -1,4 +1,3 @@
-import os from "node:os";
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
@@ -12,8 +11,6 @@ const LEGACY_CACHE_SCOPE = "session-cost-usage";
 const LEGACY_CACHE_KEY = "cache";
 const REFRESH_LOCK_KEY = "refresh-lock";
 const ROLLUP_SCOPE = "session-cost-usage-rollup-v1";
-// Absorbs wall-clock adjustments between writing `startedAt` and comparing it.
-const REFRESH_LOCK_CLOCK_TOLERANCE_MS = 2_000;
 
 type AgentCacheDatabase = Pick<OpenClawAgentKyselyDatabase, "cache_entries">;
 
@@ -247,18 +244,6 @@ function isProcessRunning(pid: number): boolean {
   }
 }
 
-function systemBootTimeMs(): number | undefined {
-  try {
-    const uptimeSeconds = os.uptime();
-    if (!Number.isFinite(uptimeSeconds) || uptimeSeconds < 0) {
-      return undefined;
-    }
-    return Date.now() - uptimeSeconds * 1000;
-  } catch {
-    return undefined;
-  }
-}
-
 // Nonces minted by this process for locks it currently holds. Only an entry here
 // proves a lock on our own PID is ours; a timestamp cannot, because a supervisor
 // can restart a crashed gateway into the same PID within milliseconds.
@@ -267,22 +252,21 @@ const ownedRefreshLockNonces = new Set<string>();
 // A live PID is not proof of ownership. Supervised gateways restart into the same
 // low PID (PID 1/9 under a container init), so a lock leaked by a previous
 // incarnation keeps matching `process.kill(pid, 0)` and would pin refreshes off
-// forever. Fail toward "held" whenever a check is inconclusive.
+// forever. Our own nonce settles that case; every other live PID stays held.
+// `startedAt` cannot retire a foreign PID -- it is wall-clock, so a forward NTP
+// step makes a lock a live owner still holds look arbitrarily old, and reclaiming
+// it would run two refreshes at once. Fail closed and accept that a lock stranded
+// on a recycled foreign PID waits for the next restart.
 function isRefreshLockOwnerAlive(lock: SessionCostUsageRefreshLock): boolean {
   if (!isProcessRunning(lock.pid)) {
     return false;
   }
-  if (lock.pid === process.pid) {
-    // Our own PID: only a nonce we minted proves we are the owner. An earlier
-    // incarnation that happened to hold this PID cannot have produced one.
-    return ownedRefreshLockNonces.has(lock.ownerNonce);
-  }
-  // Another PID: an owner that predates the last boot cannot still hold the lock.
-  const bootTimeMs = systemBootTimeMs();
-  if (bootTimeMs === undefined) {
+  if (lock.pid !== process.pid) {
     return true;
   }
-  return lock.startedAt >= bootTimeMs - REFRESH_LOCK_CLOCK_TOLERANCE_MS;
+  // Our own PID: only a nonce we minted proves we are the owner. An earlier
+  // incarnation that happened to hold this PID cannot have produced one.
+  return ownedRefreshLockNonces.has(lock.ownerNonce);
 }
 
 export function isSessionCostUsageRefreshRunning(agentId?: string, databasePath?: string): boolean {
