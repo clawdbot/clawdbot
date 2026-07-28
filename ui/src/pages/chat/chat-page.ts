@@ -1,5 +1,4 @@
 import { consume } from "@lit/context";
-import type { RouteLocation } from "@openclaw/uirouter";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
@@ -20,6 +19,7 @@ import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { persistSessionBoardFace } from "./chat-board-face-persistence.ts";
+import { stillOwnsCanonicalLocation } from "./chat-canonical-location.ts";
 import "../../styles/chat.css";
 import "./chat-pane.ts";
 import { locationWithoutDraft, type SessionChatRouteData } from "./route-loader.ts";
@@ -47,41 +47,6 @@ import {
 } from "./split-layout.ts";
 
 const NARROW_SPLIT_QUERY = "(max-width: 1099px)";
-
-function currentRouteLocation(): RouteLocation {
-  return {
-    pathname: window.location.pathname,
-    search: window.location.search,
-    hash: window.location.hash,
-  };
-}
-
-function routeLocationsMatch(left: RouteLocation, right: RouteLocation): boolean {
-  return (
-    left.pathname === right.pathname && left.search === right.search && left.hash === right.hash
-  );
-}
-
-function stillOwnsCanonicalLocation(
-  source: RouteLocation | undefined,
-  consumedSourceDraft: boolean,
-): boolean {
-  if (!source) {
-    return false;
-  }
-  const current = currentRouteLocation();
-  if (routeLocationsMatch(current, source)) {
-    return true;
-  }
-  const sourceHasDraft = new URLSearchParams(source.search).has("draft");
-  const currentHasDraft = new URLSearchParams(current.search).has("draft");
-  return (
-    consumedSourceDraft &&
-    sourceHasDraft &&
-    !currentHasDraft &&
-    routeLocationsMatch(locationWithoutDraft(current), locationWithoutDraft(source))
-  );
-}
 
 type DropIndicator = { paneId: string; zone: SplitDropZone; rect: SplitDropRect };
 type ChatPaneElement = HTMLElement & { paneId?: string; sessionKey?: string };
