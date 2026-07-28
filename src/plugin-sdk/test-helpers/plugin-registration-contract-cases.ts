@@ -220,6 +220,7 @@ export const pluginRegistrationContractCases = {
   },
   senseaudio: {
     pluginId: "senseaudio",
+    webSearchProviderIds: ["senseaudio"],
     mediaUnderstandingProviderIds: ["senseaudio"],
   },
   tavily: {

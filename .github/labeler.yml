@@ -581,6 +581,7 @@
       - any-glob-to-any-file:
           - "extensions/senseaudio/**"
           - "docs/providers/senseaudio.md"
+          - "docs/tools/senseaudio-search.md"
 "extensions: synthetic":
   - changed-files:
       - any-glob-to-any-file:

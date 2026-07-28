@@ -97,6 +97,9 @@ xAI Responses.
   <Card title="SearXNG" icon="server" href="/tools/searxng-search">
     Self-hosted meta-search. No API key needed. Aggregates Google, Bing, DuckDuckGo, and more.
   </Card>
+  <Card title="SenseAudio" icon="globe" href="/tools/senseaudio-search">
+    AI-synthesized answers with citations via SenseAudio web search grounding; ungrounded replies fail explicitly.
+  </Card>
   <Card title="Tavily" icon="globe" href="/tools/tavily">
     Structured results with search depth, topic filtering, and `tavily_extract` for URL extraction.
   </Card>
@@ -120,6 +123,7 @@ xAI Responses.
 | [Parallel Search (Free)](/tools/parallel-search) | Dense excerpts ranked for LLM context                          | --                                               | None (free Search MCP)                                                                  |
 | [Perplexity](/tools/perplexity-search)           | Structured snippets                                            | Country, language, time, domains, content limits | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY`                                             |
 | [SearXNG](/tools/searxng-search)                 | Structured snippets                                            | Categories, language                             | None (self-hosted)                                                                      |
+| [SenseAudio](/tools/senseaudio-search)           | AI-synthesized + citations; fails on ungrounded responses      | --                                               | `SENSEAUDIO_API_KEY`                                                                    |
 | [Tavily](/tools/tavily)                          | Structured snippets                                            | Via `tavily_search` tool                         | `TAVILY_API_KEY`                                                                        |
 
 ## Result shape

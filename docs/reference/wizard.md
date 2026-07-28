@@ -120,7 +120,7 @@ behavior and outputs, see [CLI setup reference](/start/wizard-cli-reference).
 
   </Step>
   <Step title="Web search">
-    - Pick a supported provider such as Brave, Codex (Hosted Search), DuckDuckGo, Exa, Firecrawl, Gemini, Grok, Kimi, MiniMax Search, Ollama Web Search, Parallel, Perplexity, SearXNG, or Tavily (or skip).
+    - Pick a supported provider such as Brave, Codex (Hosted Search), DuckDuckGo, Exa, Firecrawl, Gemini, Grok, Kimi, MiniMax Search, Ollama Web Search, Parallel, Perplexity, SearXNG, SenseAudio, or Tavily (or skip).
     - API-backed providers can use env vars or existing config for quick setup; key-free providers use their provider-specific prerequisites instead.
     - Skip with `--skip-search`.
     - Configure later: `openclaw configure --section web`.

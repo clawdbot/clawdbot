@@ -10445,6 +10445,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Notes
   - H2: Related
 
+## tools/senseaudio-search.md
+
+- Route: /tools/senseaudio-search
+- Headings:
+  - H2: Get an API key
+  - H2: Config
+  - H3: Custom endpoints
+  - H2: How it works
+  - H2: Supported parameters
+  - H2: Related
+
 ## tools/self-learning.md
 
 - Route: /tools/self-learning

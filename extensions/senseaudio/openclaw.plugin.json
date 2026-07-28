@@ -12,12 +12,47 @@
       }
     ]
   },
+  "uiHints": {
+    "webSearch.apiKey": {
+      "label": "SenseAudio Search API Key",
+      "help": "SenseAudio API key (fallback: SENSEAUDIO_API_KEY env var).",
+      "sensitive": true
+    },
+    "webSearch.baseUrl": {
+      "label": "SenseAudio Search Base URL",
+      "help": "SenseAudio base URL override. Private or loopback endpoints are allowed and use the self-hosted network policy."
+    },
+    "webSearch.model": {
+      "label": "SenseAudio Search Model",
+      "help": "SenseAudio model override."
+    }
+  },
   "contracts": {
-    "mediaUnderstandingProviders": ["senseaudio"]
+    "mediaUnderstandingProviders": ["senseaudio"],
+    "webSearchProviders": ["senseaudio"]
+  },
+  "configContracts": {
+    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
   },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          }
+        }
+      }
+    }
   }
 }
