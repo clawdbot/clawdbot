@@ -1,11 +1,11 @@
 import { vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { t } from "../../i18n/index.ts";
 import type {
   ApplicationContext,
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import { t } from "../../i18n/index.ts";
 import type {
   PluginCatalogItem,
   PluginListResult,
