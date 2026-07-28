@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 
-export const ANDROID_SIGNING_TIMEOUT_MS = 120_000;
+const ANDROID_SIGNING_TIMEOUT_MS = 120_000;
 
 export function runAndroidSigningCommandSync(command, args, options = {}) {
   const timeoutMs = options.timeoutMs ?? ANDROID_SIGNING_TIMEOUT_MS;

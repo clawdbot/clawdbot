@@ -6,8 +6,6 @@ export interface AndroidSigningCommandOptions {
   timeoutMs?: number;
 }
 
-export const ANDROID_SIGNING_TIMEOUT_MS: number;
-
 export function runAndroidSigningCommandSync(
   command: string,
   args: readonly string[],
