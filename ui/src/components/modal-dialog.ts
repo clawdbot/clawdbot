@@ -73,10 +73,19 @@ export class OpenClawModalDialog extends OpenClawLitElement {
       margin: 0 auto 0 0;
     }
 
+    :host(.nav-drawer) wa-dialog::part(body) {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+
     ::slotted(.shell-nav-modal__content) {
-      display: block;
+      display: flex;
+      flex: 1 1 auto;
+      flex-direction: column;
       height: 100%;
       min-height: 0;
+      min-width: 0;
     }
 
     @media (max-width: 640px) {
@@ -187,7 +196,10 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     }
   }
 
-  private handleAfterShow = () => {
+  private handleAfterShow = (event?: Event) => {
+    if (event && event.target !== event.currentTarget) {
+      return;
+    }
     if (!this.isConnected) {
       return;
     }
@@ -203,12 +215,18 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     autofocusTarget?.focus({ preventScroll: true });
   };
 
-  private handleShow = () => {
+  private handleShow = (event: Event) => {
+    if (event.target !== event.currentTarget) {
+      return;
+    }
     // Web Awesome cannot see autofocus targets through this adapter's slot.
     queueMicrotask(() => requestAnimationFrame(() => this.handleAfterShow()));
   };
 
-  private handleAfterHide = () => {
+  private handleAfterHide = (event: Event) => {
+    if (event.target !== event.currentTarget) {
+      return;
+    }
     const returnFocus = this.returnFocusOverride;
     const originalReturnFocus = this.returnFocus;
     this.returnFocusOverride = undefined;
@@ -231,6 +249,11 @@ export class OpenClawModalDialog extends OpenClawLitElement {
   };
 
   private handleHide = (event: Event) => {
+    // Nested overlay lifecycle events bubble through the slot; only the
+    // dialog's own hide may dismiss or steal focus from its owner.
+    if (event.target !== event.currentTarget) {
+      return;
+    }
     if (this.suppressNextCancel) {
       this.suppressNextCancel = false;
       return;
