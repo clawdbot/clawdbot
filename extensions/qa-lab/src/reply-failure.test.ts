@@ -17,10 +17,17 @@ describe("extractQaFailureReplyText", () => {
     ).toContain("Something went wrong while processing your request.");
   });
 
+  it.each([
+    "⚠️ Agent couldn't generate a response. Please try again.",
+    "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying.",
+  ])("classifies the canonical incomplete-turn warning as a failure: %s", (reply) => {
+    expect(extractQaFailureReplyText(reply)).toBe(reply);
+  });
+
   it("classifies explicit provider auth guidance as a failure", () => {
     expect(
       extractQaFailureReplyText(
-        '⚠️ No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai/gpt-5.5 with the Codex OAuth profile, or set OPENAI_API_KEY for direct OpenAI API access.',
+        '⚠️ No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai/gpt-5.6-luna with the Codex OAuth profile, or set OPENAI_API_KEY for direct OpenAI API access.',
       ),
     ).toContain('No API key found for provider "openai".');
   });
@@ -28,7 +35,7 @@ describe("extractQaFailureReplyText", () => {
   it("classifies curated missing-key guidance as a failure", () => {
     expect(
       extractQaFailureReplyText(
-        "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.5` with the Codex OAuth profile, or set `OPENAI_API_KEY`, then try again.",
+        "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.6-luna` with the Codex OAuth profile, or set `OPENAI_API_KEY`, then try again.",
       ),
     ).toContain("Missing API key for OpenAI on the gateway.");
   });

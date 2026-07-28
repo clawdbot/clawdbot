@@ -66,7 +66,11 @@ vi.mock("../infra/exec-approvals.js", async () => {
   const mod = await vi.importActual<typeof import("../infra/exec-approvals.js")>(
     "../infra/exec-approvals.js",
   );
-  return { ...mod, resolveExecApprovals: () => createExecApprovals() };
+  return {
+    ...mod,
+    resolveExecApprovals: () => createExecApprovals(),
+    resolveExecApprovalsLocked: async () => createExecApprovals(),
+  };
 });
 
 vi.mock("../process/supervisor/index.js", () => ({
@@ -107,12 +111,11 @@ vi.mock("../process/supervisor/index.js", () => ({
     },
     cancel: vi.fn(),
     cancelScope: vi.fn(),
-    reconcileOrphans: vi.fn(),
     getRecord: vi.fn(),
   }),
 }));
 
-let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
+let createExecTool: typeof import("./bash-tools.exec-run.js").createExecTool;
 
 function createExecApprovals(): ExecApprovalsResolved {
   return {
@@ -172,7 +175,7 @@ describe("exec PATH login shell merge", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeAll(async () => {
-    ({ createExecTool } = await import("./bash-tools.exec.js"));
+    ({ createExecTool } = await import("./bash-tools.exec-run.js"));
   });
 
   afterAll(() => {
@@ -215,6 +218,29 @@ describe("exec PATH login shell merge", () => {
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("fails without running when an explicit workdir is unavailable", async () => {
+    const missingWorkdir = path.join(
+      os.tmpdir(),
+      `openclaw-missing-workdir-${process.pid}-${Date.now()}`,
+    );
+    fs.rmSync(missingWorkdir, { recursive: true, force: true });
+
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+    const result = await tool.execute("call-missing-workdir", {
+      command: "echo ok",
+      workdir: missingWorkdir,
+      yieldMs: FOREGROUND_TEST_YIELD_MS,
+    });
+    const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
+
+    expect(result.details?.status).toBe("failed");
+    expect(value).toContain(`workdir "${missingWorkdir}" is unavailable or not a directory`);
+    expect(value).toContain("command was not executed");
+    expect(value).toContain("workdir is treated as a literal path");
+    expect(value).toContain('shell expansions such as "~" are not applied');
+    expect(value).not.toMatch(/^ok/);
   });
 
   it("merges login-shell PATH for host=gateway", async () => {

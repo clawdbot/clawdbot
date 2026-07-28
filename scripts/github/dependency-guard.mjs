@@ -3,15 +3,32 @@
 // GitHub dependency-change guard: detects dependency files, manages override
 // comments/labels, and can autoscrub lockfile-only PR changes.
 import { appendFile, readFile } from "node:fs/promises";
-import { readBoundedResponseText } from "../lib/bounded-response.mjs";
+import {
+  GITHUB_API_REQUEST_TIMEOUT_MS,
+  GITHUB_ERROR_BODY_MAX_BYTES,
+  GITHUB_RESPONSE_BODY_MAX_BYTES,
+  createGitHubApi,
+  createGuardApproverChecks,
+  createIssueMutationHelpers,
+  guardCommentHeadSha,
+  guardTrustedActorCandidates,
+  isCommentNewerThan,
+  readBoundedGitHubErrorText,
+  readBoundedGitHubJson,
+} from "./guard-shared.mjs";
 
 /** Marker used to identify dependency guard comments. */
-export const dependencyChangeMarker = "<!-- openclaw:dependency-guard -->";
-export const dependencyGraphGuardMarker = "<!-- openclaw:dependency-graph-guard -->";
+const dependencyChangeMarker = "<!-- openclaw:dependency-guard -->";
+const dependencyGraphGuardMarker = "<!-- openclaw:dependency-graph-guard -->";
 export const dependencyChangedLabel = "dependencies-changed";
-export const allowDependenciesCommand = "/allow-dependencies-change";
-export const GITHUB_ERROR_BODY_MAX_BYTES = 64 * 1024;
-export const GITHUB_API_REQUEST_TIMEOUT_MS = 30_000;
+const allowDependenciesCommand = "/allow-dependencies-change";
+export {
+  GITHUB_API_REQUEST_TIMEOUT_MS,
+  GITHUB_ERROR_BODY_MAX_BYTES,
+  GITHUB_RESPONSE_BODY_MAX_BYTES,
+  readBoundedGitHubErrorText,
+  readBoundedGitHubJson,
+};
 
 const maxListedFiles = 25;
 const autoscrubCommitMessage = "chore: remove dependency lockfile change";
@@ -41,7 +58,6 @@ const dependencyManifestFields = [
 export function isDependencyFile(filename) {
   return (
     filename.endsWith("package-lock.json") ||
-    filename.endsWith("npm-shrinkwrap.json") ||
     filename.endsWith("pnpm-lock.yaml") ||
     filename === "pnpm-workspace.yaml" ||
     filename.startsWith("patches/")
@@ -53,11 +69,7 @@ export function isDependencyManifest(filename) {
 }
 
 export function isPackageLockfile(filename) {
-  return (
-    filename.endsWith("pnpm-lock.yaml") ||
-    filename.endsWith("package-lock.json") ||
-    filename.endsWith("npm-shrinkwrap.json")
-  );
+  return filename.endsWith("pnpm-lock.yaml") || filename.endsWith("package-lock.json");
 }
 
 export function dependencyFieldChanges(baseManifest, headManifest) {
@@ -181,29 +193,8 @@ export async function findDependencyOverrideCommandAsync(input) {
   return null;
 }
 
-function isCommentNewerThan(comment, newerThan) {
-  if (!newerThan) {
-    return false;
-  }
-  const commentTime = Date.parse(comment.created_at ?? "");
-  const barrierTime = Date.parse(newerThan);
-  return Number.isFinite(commentTime) && Number.isFinite(barrierTime) && commentTime > barrierTime;
-}
-
 export function dependencyGuardCommentHeadSha(comment) {
-  const body = comment?.body ?? "";
-  const patterns = [
-    /Approved SHA:\s+`([a-f0-9]{40})`/iu,
-    /current head SHA\s+\(`([a-f0-9]{40})`\)/iu,
-    /Current SHA:\s+`([a-f0-9]{40})`/iu,
-  ];
-  for (const pattern of patterns) {
-    const match = body.match(pattern);
-    if (match?.[1]) {
-      return match[1];
-    }
-  }
-  return null;
+  return guardCommentHeadSha(comment);
 }
 
 export function dependencyOverrideExpectedSha(existingGuardComment, currentHeadSha) {
@@ -257,7 +248,7 @@ export function isDependencyGuardMarkerComment(comment, marker, trustedAuthors) 
   return Boolean(login && trustedAuthors.has(login) && comment.body?.includes(marker));
 }
 
-export function renderDependencyAwarenessComment(dependencyFiles) {
+function renderDependencyAwarenessComment(dependencyFiles) {
   const listedFiles = dependencyFiles.slice(0, maxListedFiles);
   const omittedCount = dependencyFiles.length - listedFiles.length;
   const fileLines = listedFiles.map((filename) => `- ${markdownCode(filename)}`);
@@ -277,8 +268,8 @@ export function renderDependencyAwarenessComment(dependencyFiles) {
     "",
     "Maintainer follow-up:",
     "- Review whether the dependency changes are intentional.",
-    "- Inspect resolved package deltas when lockfile, shrinkwrap, or workspace dependency policy changes are present.",
-    "- Treat `package-lock.json` and `npm-shrinkwrap.json` diffs as security-review surfaces.",
+    "- Inspect resolved package deltas when lockfiles or workspace dependency policy changes are present.",
+    "- Treat `pnpm-lock.yaml` and `package-lock.json` diffs as dependency security-review surfaces.",
     "- Run `pnpm deps:changes:report -- --base-ref origin/main --markdown /tmp/dependency-changes.md --json /tmp/dependency-changes.json` locally for detailed release-style evidence.",
   ].join("\n");
 }
@@ -444,28 +435,7 @@ function renderAutoscrubStatusLines(status) {
 }
 
 export function dependencyGuardTrustedActorCandidates({ pullRequest, event, currentHeadSha }) {
-  const eventHeadSha = event?.pull_request?.head?.sha;
-  const eventAfterSha = event?.after;
-  const eventMatchesCurrentHead =
-    Boolean(currentHeadSha) &&
-    (eventHeadSha === currentHeadSha || eventAfterSha === currentHeadSha);
-  if (!eventMatchesCurrentHead) {
-    return [];
-  }
-  const candidates = [];
-  const seen = new Set();
-  for (const [source, login] of [["pull request author", pullRequest?.user?.login]]) {
-    if (typeof login !== "string" || login.length === 0) {
-      continue;
-    }
-    const normalizedLogin = login.toLowerCase();
-    if (seen.has(normalizedLogin)) {
-      continue;
-    }
-    seen.add(normalizedLogin);
-    candidates.push({ login, source });
-  }
-  return candidates;
+  return guardTrustedActorCandidates({ pullRequest, event, currentHeadSha });
 }
 
 export async function findTrustedDependencyGuardActor({ candidates, isDependencyApprover }) {
@@ -485,84 +455,12 @@ function renderManifestChangeLine(change) {
   return `- ${markdownCode(change.path)} changed ${change.fields.map(markdownCode).join(", ")}.`;
 }
 
-function githubErrorBodyTooLarge(maxBytes) {
-  return new Error(`GitHub error response body exceeded ${maxBytes} bytes`);
-}
-
-export async function readBoundedGitHubErrorText(response, maxBytes = GITHUB_ERROR_BODY_MAX_BYTES) {
-  return await readBoundedResponseText(response, "GitHub error", maxBytes, {
-    createTooLargeError: () => githubErrorBodyTooLarge(maxBytes),
-  });
-}
-
-function timeoutError(path, method, timeoutMs) {
-  return new Error(`GitHub API ${method} ${path} exceeded timeout ${timeoutMs}ms`);
-}
-
-function combineAbortSignals(signals) {
-  const activeSignals = signals.filter(Boolean);
-  if (activeSignals.length === 0) {
-    return undefined;
-  }
-  if (activeSignals.length === 1) {
-    return activeSignals[0];
-  }
-  return AbortSignal.any(activeSignals);
-}
-
 export function githubApi(token, options = {}) {
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const timeoutMs = options.timeoutMs ?? GITHUB_API_REQUEST_TIMEOUT_MS;
-  const baseHeaders = {
-    accept: "application/vnd.github+json",
-    authorization: `Bearer ${token}`,
-    "user-agent": "openclaw-dependency-guard",
-    "x-github-api-version": "2022-11-28",
-  };
-  const request = async (path, requestOptions = {}) => {
-    const method = requestOptions.method ?? "GET";
-    const timeoutController = new AbortController();
-    let timeout;
-    const timeoutPromise = new Promise((_, reject) => {
-      timeout = setTimeout(() => {
-        timeoutController.abort();
-        reject(timeoutError(path, method, timeoutMs));
-      }, timeoutMs);
-      timeout.unref?.();
-    });
-    const operationPromise = (async () => {
-      const response = await fetchImpl(`https://api.github.com${path}`, {
-        ...requestOptions,
-        signal: combineAbortSignals([requestOptions.signal, timeoutController.signal]),
-        headers: { ...baseHeaders, ...requestOptions.headers },
-      });
-      if (response.status === 204) {
-        return null;
-      }
-      if (!response.ok) {
-        let errorText;
-        try {
-          errorText = await readBoundedGitHubErrorText(response);
-        } catch (bodyError) {
-          errorText = bodyError instanceof Error ? bodyError.message : String(bodyError);
-        }
-        const error = new Error(`${response.status} ${response.statusText}: ${errorText}`);
-        error.status = response.status;
-        throw error;
-      }
-      return response.json();
-    })();
-    operationPromise.catch(() => {});
-    try {
-      return await Promise.race([operationPromise, timeoutPromise]);
-    } finally {
-      clearTimeout(timeout);
-    }
-  };
+  const api = createGitHubApi(token, { ...options, userAgent: "openclaw-dependency-guard" });
   return {
-    request,
+    ...api,
     graphql: async (query, variables) => {
-      const result = await request("/graphql", {
+      const result = await api.request("/graphql", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ query, variables }),
@@ -575,17 +473,6 @@ export function githubApi(token, options = {}) {
         throw error;
       }
       return result.data;
-    },
-    paginate: async (path) => {
-      const items = [];
-      for (let page = 1; ; page += 1) {
-        const separator = path.includes("?") ? "&" : "?";
-        const pageItems = await request(`${path}${separator}per_page=100&page=${page}`);
-        items.push(...pageItems);
-        if (pageItems.length < 100) {
-          return items;
-        }
-      }
     },
   };
 }
@@ -795,66 +682,8 @@ async function main() {
   const existingGuardComment = findDependencyGuardComment(dependencyGraphGuardMarker);
   const labelNames = new Set(labels.map((label) => label.name));
 
-  const ignoreUnavailableWritePermission = (action) => (error) => {
-    if (error?.status === 403) {
-      console.warn(`Skipping ${action}; token does not have write permission.`);
-      return;
-    }
-    if (error?.status === 404 || error?.status === 422) {
-      console.warn(`${action} is unavailable.`);
-      return;
-    }
-    throw error;
-  };
-  const removeLabelIfPresent = async (label) => {
-    if (!labelNames.has(label)) {
-      return;
-    }
-    await api
-      .request(`${issuePath}/labels/${encodeURIComponent(label)}`, {
-        method: "DELETE",
-      })
-      .catch(ignoreUnavailableWritePermission(`label "${label}" removal`));
-    labelNames.delete(label);
-  };
-  const addLabelIfMissing = async (label) => {
-    if (labelNames.has(label)) {
-      return;
-    }
-    await api
-      .request(`${issuePath}/labels`, {
-        method: "POST",
-        body: JSON.stringify({ labels: [label] }),
-      })
-      .catch(ignoreUnavailableWritePermission(`label "${label}" update`));
-    labelNames.add(label);
-  };
-  const deleteCommentIfPresent = async (comment) => {
-    if (!comment) {
-      return;
-    }
-    await api
-      .request(`/repos/${owner}/${repo}/issues/comments/${comment.id}`, {
-        method: "DELETE",
-      })
-      .catch(ignoreUnavailableWritePermission("comment deletion"));
-  };
-  const upsertComment = async (comment, body) => {
-    if (comment) {
-      return await api
-        .request(`/repos/${owner}/${repo}/issues/comments/${comment.id}`, {
-          method: "PATCH",
-          body: JSON.stringify({ body }),
-        })
-        .catch(ignoreUnavailableWritePermission("comment update"));
-    }
-    return await api
-      .request(`${issuePath}/comments`, {
-        method: "POST",
-        body: JSON.stringify({ body }),
-      })
-      .catch(ignoreUnavailableWritePermission("comment creation"));
-  };
+  const { removeLabelIfPresent, addLabelIfMissing, deleteCommentIfPresent, upsertComment } =
+    createIssueMutationHelpers({ api, issuePath, owner, repo, labelNames });
 
   if (dependencyGraphFiles.length === 0) {
     await removeLabelIfPresent(dependencyChangedLabel);
@@ -896,51 +725,13 @@ async function main() {
     return;
   }
 
-  const membershipCache = new Map();
-  const permissionCache = new Map();
-  const isSecurityMember = async (login) => {
-    const normalizedLogin = login.toLowerCase();
-    if (explicitSecurityApprovers.has(normalizedLogin)) {
-      return true;
-    }
-    if (membershipCache.has(normalizedLogin)) {
-      return membershipCache.get(normalizedLogin);
-    }
-    try {
-      const membership = await api.request(
-        `/orgs/${owner}/teams/${securityTeamSlug}/memberships/${encodeURIComponent(login)}`,
-      );
-      const allowed = membership?.state === "active";
-      membershipCache.set(normalizedLogin, allowed);
-      return allowed;
-    } catch (error) {
-      if (error?.status !== 404) {
-        console.warn(`Could not verify ${login} against ${securityTeamSlug}: ${error.message}`);
-      }
-      membershipCache.set(normalizedLogin, false);
-      return false;
-    }
-  };
-  const isRepositoryAdmin = async (login) => {
-    const normalizedLogin = login.toLowerCase();
-    if (permissionCache.has(normalizedLogin)) {
-      return permissionCache.get(normalizedLogin);
-    }
-    try {
-      const result = await api.request(
-        `/repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
-      );
-      const allowed = result?.permission === "admin";
-      permissionCache.set(normalizedLogin, allowed);
-      return allowed;
-    } catch (error) {
-      if (error?.status !== 404) {
-        console.warn(`Could not verify repository permission for ${login}: ${error.message}`);
-      }
-      permissionCache.set(normalizedLogin, false);
-      return false;
-    }
-  };
+  const { isSecurityMember, isRepositoryAdmin } = createGuardApproverChecks({
+    api,
+    owner,
+    repo,
+    securityTeamSlug,
+    explicitSecurityApprovers,
+  });
   const isDependencyApprover = async (login) => {
     if (await isSecurityMember(login)) {
       return securityTeamSlug;

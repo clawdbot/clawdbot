@@ -1,6 +1,9 @@
 /**
  * Waits for completion-required async tasks before finalizing an attempt.
  */
+import { createAbortError as createNamedAbortError } from "../../../infra/abort-signal.js";
+import { isFastTestRuntimeEnv } from "../../../infra/env.js";
+import { toErrorObject } from "../../../infra/errors.js";
 import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
 import { isTerminalTaskStatus } from "../../../tasks/task-executor-policy.js";
 import type { TaskRecord } from "../../../tasks/task-registry.types.js";
@@ -31,7 +34,7 @@ const COMPLETION_REQUIRED_TASK_KINDS = new Set([
 ]);
 
 function resolveAsyncTaskPollIntervalMs(): number {
-  return process.env.OPENCLAW_TEST_FAST === "1" ? 10 : DEFAULT_ASYNC_TASK_POLL_INTERVAL_MS;
+  return isFastTestRuntimeEnv() ? 10 : DEFAULT_ASYNC_TASK_POLL_INTERVAL_MS;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -41,11 +44,9 @@ function sleep(ms: number): Promise<void> {
 }
 
 function createAbortError(signal: AbortSignal): Error {
-  const err = new Error("aborted", {
+  return createNamedAbortError("aborted", {
     cause: "reason" in signal ? (signal as { reason?: unknown }).reason : undefined,
   });
-  err.name = "AbortError";
-  return err;
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
@@ -77,7 +78,7 @@ async function sleepWithAbort(
       },
       (err: unknown) => {
         signal.removeEventListener("abort", onAbort);
-        reject(toLintErrorObject(err, "Non-Error rejection"));
+        reject(toErrorObject(err, "Non-Error rejection"));
       },
     );
   });
@@ -244,18 +245,4 @@ export async function waitForCompletionRequiredAsyncTasks(params: {
       await sleepWithAbort(Math.min(pollIntervalMs, remainingMs), params.abortSignal, sleepFn);
     }
   }
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

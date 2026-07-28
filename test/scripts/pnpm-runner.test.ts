@@ -328,6 +328,26 @@ describe("resolvePnpmRunner", () => {
     });
   });
 
+  it("ignores ambient ComSpec when defaulting the Windows cmd shim launcher", () => {
+    expect(
+      resolvePnpmRunner({
+        env: {
+          ComSpec: "C:\\Users\\test\\bin\\cmd.exe",
+          PATH: "",
+          SystemRoot: "D:\\Windows",
+        },
+        npmExecPath: "",
+        pnpmArgs: ["exec", "vitest", "run"],
+        platform: "win32",
+      }),
+    ).toEqual({
+      command: "D:\\Windows\\System32\\cmd.exe",
+      args: ["/d", "/s", "/c", "pnpm.cmd exec vitest run"],
+      shell: false,
+      windowsVerbatimArguments: true,
+    });
+  });
+
   it("uses Corepack on Windows when no pnpm shim is available", () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "pnpm-runner-corepack-"));
     const corepackPath = path.join(tempDir, "corepack.cmd");

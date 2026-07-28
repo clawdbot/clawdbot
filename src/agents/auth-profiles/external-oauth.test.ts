@@ -1,24 +1,24 @@
 /**
  * Tests runtime external OAuth overlays.
  * Covers provider plugin profiles, external CLI scoped discovery, persistence
- * rules, and compatibility aliases.
+ * rules, and external CLI bootstrap policy.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderExternalAuthProfile } from "../../plugins/types.js";
-import {
-  testing,
-  overlayExternalOAuthProfiles,
-  shouldPersistExternalOAuthProfile,
-} from "./external-auth.js";
-import { readManagedExternalCliCredential } from "./external-cli-sync.js";
+import { resolveAgentCredentialMapFromStore } from "../agent-auth-credentials.js";
+import { addEnvBackedAgentCredentials } from "../agent-auth-discovery-core.js";
+import { overlayExternalAuthProfiles } from "./external-auth.js";
+import { testing } from "./external-auth.test-support.js";
+import { readExternalCliBootstrapCredential } from "./external-cli-sync.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 const resolveExternalAuthProfilesWithPluginsMock = vi.fn<
   (params: unknown) => ProviderExternalAuthProfile[]
 >(() => []);
-const readCodexCliCredentialsCachedMock = vi.hoisted(() =>
-  vi.fn<(_options?: unknown) => OAuthCredential | null>(() => null),
-);
+const readCodexCliCredentialsCachedMock = vi.hoisted(() => {
+  vi.resetModules();
+  return vi.fn<(_options?: unknown) => OAuthCredential | null>(() => null);
+});
 
 vi.mock("../cli-credentials.js", () => ({
   readClaudeCliCredentialsCached: () => null,
@@ -78,7 +78,7 @@ describe("auth external oauth helpers", () => {
       },
     ]);
 
-    const store = overlayExternalOAuthProfiles(createStore());
+    const store = overlayExternalAuthProfiles(createStore());
 
     const profile = requireProfile(store, "openai:default");
     expect(profile.type).toBe("oauth");
@@ -94,7 +94,7 @@ describe("auth external oauth helpers", () => {
     };
     readCodexCliCredentialsCachedMock.mockReturnValueOnce(createCredential());
 
-    overlayExternalOAuthProfiles(createStore(), {
+    overlayExternalAuthProfiles(createStore(), {
       allowKeychainPrompt: false,
       config: cfg,
       externalCliProviderIds: ["openai"],
@@ -107,6 +107,54 @@ describe("auth external oauth helpers", () => {
     expect(resolveParams.config).toBe(cfg);
     expect(requireRecord(resolveParams.context, "resolve context").config).toBe(cfg);
     expect(readCodexCliCredentialsCachedMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps ambient Codex OAuth from outranking an env key under an api-key pin", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openai: { auth: "api-key" as const, baseUrl: "https://api.openai.com/v1", models: [] },
+        },
+      },
+    };
+    readCodexCliCredentialsCachedMock.mockReturnValueOnce(
+      createCredential({ expires: createUsableOAuthExpiry() }),
+    );
+
+    const store = overlayExternalAuthProfiles(createStore(), {
+      config: cfg,
+      externalCliProviderIds: ["openai"],
+    });
+    const ambientOnly = resolveAgentCredentialMapFromStore(store, { config: cfg });
+    const credentials = addEnvBackedAgentCredentials(ambientOnly, {
+      config: cfg,
+      env: { OPENAI_API_KEY: "env-api-key" },
+    });
+
+    expect(readCodexCliCredentialsCachedMock).toHaveBeenCalledTimes(1);
+    expect(store.profiles["openai:default"]).toBeUndefined();
+    expect(ambientOnly.openai).toBeUndefined();
+    expect(credentials.openai).toEqual({ type: "api_key", key: "env-api-key" });
+  });
+
+  it("keeps explicitly requested external profiles outside the ambient pin", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openai: { auth: "api-key" as const, baseUrl: "https://api.openai.com/v1", models: [] },
+        },
+      },
+    };
+    readCodexCliCredentialsCachedMock.mockReturnValueOnce(
+      createCredential({ expires: createUsableOAuthExpiry() }),
+    );
+
+    const store = overlayExternalAuthProfiles(createStore(), {
+      config: cfg,
+      externalCliProfileIds: ["openai:default"],
+    });
+
+    expect(store.profiles["openai:default"]?.type).toBe("oauth");
   });
 
   it("does not bootstrap arbitrary named OpenAI OAuth profiles from the Codex CLI account", () => {
@@ -128,65 +176,10 @@ describe("auth external oauth helpers", () => {
       }),
     });
 
-    const overlaid = overlayExternalOAuthProfiles(store);
+    const overlaid = overlayExternalAuthProfiles(store);
 
     expect(readCodexCliCredentialsCachedMock).not.toHaveBeenCalled();
     expect(overlaid.profiles["openai:work"]).toEqual(store.profiles["openai:work"]);
-  });
-
-  it("omits exact runtime-only overlays from persisted store writes", () => {
-    const credential = createCredential();
-    resolveExternalAuthProfilesWithPluginsMock.mockReturnValueOnce([
-      {
-        profileId: "openai:default",
-        credential,
-      },
-    ]);
-
-    const shouldPersist = shouldPersistExternalOAuthProfile({
-      store: createStore({ "openai:default": credential }),
-      profileId: "openai:default",
-      credential,
-    });
-
-    expect(shouldPersist).toBe(false);
-  });
-
-  it("keeps persisted copies when the external overlay is marked persisted", () => {
-    const credential = createCredential();
-    resolveExternalAuthProfilesWithPluginsMock.mockReturnValueOnce([
-      {
-        profileId: "openai:default",
-        credential,
-        persistence: "persisted",
-      },
-    ]);
-
-    const shouldPersist = shouldPersistExternalOAuthProfile({
-      store: createStore({ "openai:default": credential }),
-      profileId: "openai:default",
-      credential,
-    });
-
-    expect(shouldPersist).toBe(true);
-  });
-
-  it("keeps stale local copies when runtime overlay no longer matches", () => {
-    const credential = createCredential();
-    resolveExternalAuthProfilesWithPluginsMock.mockReturnValueOnce([
-      {
-        profileId: "openai:default",
-        credential: createCredential({ access: "fresh-access-token" }),
-      },
-    ]);
-
-    const shouldPersist = shouldPersistExternalOAuthProfile({
-      store: createStore({ "openai:default": credential }),
-      profileId: "openai:default",
-      credential,
-    });
-
-    expect(shouldPersist).toBe(true);
   });
 
   it("keeps Codex CLI OAuth from replacing stored inline token material", () => {
@@ -199,7 +192,7 @@ describe("auth external oauth helpers", () => {
       }),
     );
 
-    const overlaid = overlayExternalOAuthProfiles(
+    const overlaid = overlayExternalAuthProfiles(
       createStore({
         "openai:default": createCredential({
           access: "stale-store-access-token",
@@ -231,10 +224,23 @@ describe("auth external oauth helpers", () => {
     } as OAuthCredential;
     readCodexCliCredentialsCachedMock.mockReturnValue(cliCredential);
 
-    const overlaid = overlayExternalOAuthProfiles(
+    const overlaid = overlayExternalAuthProfiles(
       createStore({
         "openai:default": tokenlessCredential,
       }),
+      {
+        config: {
+          models: {
+            providers: {
+              openai: {
+                auth: "api-key",
+                baseUrl: "https://api.openai.com/v1",
+                models: [],
+              },
+            },
+          },
+        },
+      },
     );
 
     const overlaidProfile = overlaid.profiles["openai:default"];
@@ -245,7 +251,10 @@ describe("auth external oauth helpers", () => {
     expect(overlaidProfile.access).toBe("fresh-cli-access-token");
     expect(overlaidProfile.refresh).toBe("fresh-cli-refresh-token");
     expect(overlaidProfile.accountId).toBe("acct-cli");
-    const managedCredential = readManagedExternalCliCredential({
+    const managedCredential = readExternalCliBootstrapCredential({
+      store: createStore({
+        "openai:default": tokenlessCredential,
+      }),
       profileId: "openai:default",
       credential: tokenlessCredential,
     });
@@ -263,7 +272,7 @@ describe("auth external oauth helpers", () => {
       }),
     );
 
-    const overlaid = overlayExternalOAuthProfiles(
+    const overlaid = overlayExternalAuthProfiles(
       createStore({
         "openai:default": createCredential({
           access: "healthy-local-access-token",
@@ -287,7 +296,7 @@ describe("auth external oauth helpers", () => {
       }),
     );
 
-    const overlaid = overlayExternalOAuthProfiles(
+    const overlaid = overlayExternalAuthProfiles(
       createStore({
         "openai:default": {
           type: "api_key",
@@ -313,7 +322,7 @@ describe("auth external oauth helpers", () => {
       }),
     );
 
-    const overlaid = overlayExternalOAuthProfiles(
+    const overlaid = overlayExternalAuthProfiles(
       createStore({
         "openai:default": createCredential({
           access: "expired-local-access-token",

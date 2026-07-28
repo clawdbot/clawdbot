@@ -8,7 +8,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import type { FailoverReason } from "../embedded-agent-helpers/types.js";
 import { buildProviderAuthRecoveryHint } from "../provider-auth-recovery-hint.js";
 
-export type AuthProfileFailureCopyParams = {
+type AuthProfileFailureCopyParams = {
   reason: FailoverReason;
   provider: string;
   /**
@@ -81,8 +81,10 @@ function shouldIncludeRecoveryHint(reason: FailoverReason): boolean {
     case "rate_limit":
     case "overloaded":
     case "timeout":
+    case "tls_certificate":
     case "server_error":
     case "model_not_found":
+    case "format":
       return false;
     default:
       return true;

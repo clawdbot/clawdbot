@@ -7,30 +7,6 @@ export function shouldBypassConfigGuardForCommandPath(commandPath: string[]): bo
   return resolveCliCommandPathPolicy(commandPath).bypassConfigGuard;
 }
 
-export function shouldSkipRouteConfigGuardForCommandPath(params: {
-  commandPath: string[];
-  suppressDoctorStdout: boolean;
-}): boolean {
-  const routeConfigGuard = resolveCliCommandPathPolicy(params.commandPath).routeConfigGuard;
-  return (
-    routeConfigGuard === "always" ||
-    (routeConfigGuard === "when-suppressed" && params.suppressDoctorStdout)
-  );
-}
-
-export function shouldLoadPluginsForCommandPath(params: {
-  argv?: string[];
-  commandPath: string[];
-  jsonOutputMode: boolean;
-}): boolean {
-  return shouldLoadPlugins({
-    loadPlugins: resolveCliCommandPathPolicy(params.commandPath).loadPlugins,
-    argv: params.argv,
-    commandPath: params.commandPath,
-    jsonOutputMode: params.jsonOutputMode,
-  });
-}
-
 function shouldLoadPlugins(params: {
   argv?: string[];
   commandPath: string[];
@@ -49,29 +25,22 @@ function shouldLoadPlugins(params: {
   return loadPlugins === "always" || (loadPlugins === "text-only" && !params.jsonOutputMode);
 }
 
-export function shouldHideCliBannerForCommandPath(
-  commandPath: string[],
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return (
-    isTruthyEnvValue(env.OPENCLAW_HIDE_BANNER) ||
-    resolveCliCommandPathPolicy(commandPath).hideBanner
-  );
-}
-
-export function shouldEnsureCliPathForCommandPath(commandPath: string[]): boolean {
-  return commandPath.length === 0 || resolveCliCommandPathPolicy(commandPath).ensureCliPath;
-}
-
 export function resolveCliStartupPolicy(params: {
   argv?: string[];
   commandPath: string[];
+  protocolCommandPath?: string[];
   jsonOutputMode: boolean;
   env?: NodeJS.ProcessEnv;
   routeMode?: boolean;
 }) {
-  const suppressDoctorStdout = params.jsonOutputMode;
   const commandPolicy = resolveCliCommandPathPolicy(params.commandPath);
+  // Commander resolves required option values before selecting the action command, so this path
+  // remains authoritative when a protocol option value itself begins with "-".
+  const ownsProtocolStdout = params.protocolCommandPath
+    ? resolveCliCommandPathPolicy(params.protocolCommandPath).ownsProtocolStdout
+    : commandPolicy.ownsProtocolStdout;
+  // Protocol commands own stdout from process startup, before their action installs later routing.
+  const suppressDoctorStdout = params.jsonOutputMode || ownsProtocolStdout;
   const env = params.env ?? process.env;
   return {
     suppressDoctorStdout,

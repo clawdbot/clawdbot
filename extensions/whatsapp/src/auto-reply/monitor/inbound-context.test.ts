@@ -20,10 +20,19 @@ const makeBlockedQuotedReplyMessage = (id: string): ReplyContextParams["msg"] =>
       senderE164: "+111",
       selfE164: "+999",
     },
-    from: "123@g.us",
-    conversationId: "123@g.us",
-    accountId: "default",
-    chatType: "group",
+    admission: {
+      accountId: "default",
+      conversation: {
+        kind: "group",
+        id: "123@g.us",
+      },
+      sender: {
+        id: "111@s.whatsapp.net",
+      },
+      senderAccess: {
+        reasonCode: "group_policy_allowed",
+      },
+    },
     quote: {
       id: "blocked-reply",
       body: "Blocked quoted text",
@@ -92,5 +101,27 @@ describe("whatsapp inbound context visibility", () => {
         label: "Mallory (+999)",
       },
     });
+  });
+
+  it("renders structured quoted media only at the visible preview boundary", () => {
+    const msg = makeBlockedQuotedReplyMessage("msg-reply-media");
+    msg.quote = {
+      context: {
+        id: "quoted-sticker",
+        body: "",
+        media: { contentType: "image/webp", kind: "sticker" },
+        sender: { jid: "111@s.whatsapp.net", label: "Alice (+111)" },
+      },
+    };
+
+    const reply = resolveVisibleWhatsAppReplyContext({
+      msg,
+      mode: "allowlist",
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["+111"],
+    });
+
+    expect(reply?.body).toBe("<media:sticker>");
+    expect(reply?.media).toEqual({ contentType: "image/webp", kind: "sticker" });
   });
 });

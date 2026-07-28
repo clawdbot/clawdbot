@@ -8,6 +8,41 @@ import { parsePositiveInt } from "../lib/numeric-options.mjs";
 
 const DEFAULT_LIMIT = 30;
 
+function usage() {
+  return "Usage: scripts/perf/summarize-cpuprofile.mjs [--limit N] <profile...>";
+}
+
+export function shouldPrintHelp(argv) {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--") {
+      return false;
+    }
+    if (arg === "--limit") {
+      const value = argv[index + 1];
+      try {
+        parsePositiveInt(value, "--limit");
+      } catch {
+        return false;
+      }
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--limit=")) {
+      try {
+        parsePositiveInt(arg.slice("--limit=".length), "--limit");
+      } catch {
+        return false;
+      }
+      continue;
+    }
+    if (arg === "--help" || arg === "-h") {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Parses CPU profile file paths and --limit.
  */
@@ -23,6 +58,13 @@ export function parseArgs(argv) {
     if (arg.startsWith("--limit=")) {
       limit = parsePositiveInt(arg.slice("--limit=".length), "--limit");
       continue;
+    }
+    if (arg === "--") {
+      files.push(...argv.slice(index + 1));
+      break;
+    }
+    if (arg.startsWith("-")) {
+      throw new Error(`Unknown option: ${arg}`);
     }
     files.push(arg);
   }
@@ -78,7 +120,7 @@ function validateProfile(profile, file) {
   }
 }
 
-export function summarizeProfile(file, limit) {
+function summarizeProfile(file, limit) {
   const profile = JSON.parse(fs.readFileSync(file, "utf8"));
   validateProfile(profile, file);
   const nodes = new Map(profile.nodes.map((node) => [node.id, node]));
@@ -125,6 +167,10 @@ export function summarizeProfile(file, limit) {
 }
 
 function main() {
+  if (shouldPrintHelp(process.argv.slice(2))) {
+    console.log(usage());
+    return;
+  }
   let options;
   try {
     options = parseArgs(process.argv.slice(2));
@@ -133,7 +179,7 @@ function main() {
     process.exit(1);
   }
   if (options.files.length === 0) {
-    console.error("usage: scripts/perf/summarize-cpuprofile.mjs [--limit N] <profile...>");
+    console.error(usage());
     process.exit(2);
   }
   try {

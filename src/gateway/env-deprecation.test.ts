@@ -1,28 +1,26 @@
 // Env deprecation tests ensure legacy prefixed variables warn once without
 // leaking secret-shaped names or values.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  resetLegacyOpenClawEnvWarningForTest,
-  warnLegacyOpenClawEnvVars,
-} from "./env-deprecation.js";
+import { captureEnv, deleteTestEnvValue, withEnv } from "../test-utils/env.js";
+
+let warnLegacyOpenClawEnvVars: typeof import("./env-deprecation.js").warnLegacyOpenClawEnvVars;
 
 describe("warnLegacyOpenClawEnvVars", () => {
-  const originalNodeEnv = process.env.NODE_ENV;
-  const originalVitest = process.env.VITEST;
+  let envSnapshot: ReturnType<typeof captureEnv>;
   let emitWarning: ReturnType<typeof vi.spyOn>;
 
-  beforeEach(() => {
-    resetLegacyOpenClawEnvWarningForTest();
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ warnLegacyOpenClawEnvVars } = await import("./env-deprecation.js"));
+    envSnapshot = captureEnv(["NODE_ENV", "VITEST"]);
     emitWarning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
-    delete process.env.NODE_ENV;
-    delete process.env.VITEST;
+    deleteTestEnvValue("NODE_ENV");
+    deleteTestEnvValue("VITEST");
   });
 
   afterEach(() => {
     emitWarning.mockRestore();
-    resetLegacyOpenClawEnvWarningForTest();
-    restoreEnv("NODE_ENV", originalNodeEnv);
-    restoreEnv("VITEST", originalVitest);
+    envSnapshot.restore();
   });
 
   it("warns with counts and prefixes instead of secret-shaped env names", () => {
@@ -87,18 +85,10 @@ describe("warnLegacyOpenClawEnvVars", () => {
   });
 
   it("does not let process.env test flags suppress a synthetic env", () => {
-    process.env.VITEST = "true";
+    withEnv({ VITEST: "true" }, () => {
+      warnLegacyOpenClawEnvVars({ CLAWDBOT_GATEWAY_TOKEN: "old-token" });
 
-    warnLegacyOpenClawEnvVars({ CLAWDBOT_GATEWAY_TOKEN: "old-token" });
-
-    expect(emitWarning).toHaveBeenCalledOnce();
+      expect(emitWarning).toHaveBeenCalledOnce();
+    });
   });
 });
-
-function restoreEnv(name: string, value: string | undefined): void {
-  if (value === undefined) {
-    delete process.env[name];
-    return;
-  }
-  process.env[name] = value;
-}

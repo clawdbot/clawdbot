@@ -26,14 +26,36 @@ function findSkill(skills: QaSkillStatusEntry[], name: string) {
   return skills.find((skill) => skill.name === name);
 }
 
+function resolveWorkspaceSkillPath(workspaceDir: string, name: string) {
+  const trimmed = name.trim();
+  if (
+    !trimmed ||
+    trimmed !== name ||
+    trimmed === "." ||
+    trimmed === ".." ||
+    trimmed.includes("\0") ||
+    /[\\/]/u.test(trimmed)
+  ) {
+    throw new Error(`invalid QA workspace skill name: ${JSON.stringify(name)}`);
+  }
+
+  const skillsDir = path.resolve(workspaceDir, "skills");
+  const skillDir = path.resolve(skillsDir, trimmed);
+  const relative = path.relative(skillsDir, skillDir);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error(`invalid QA workspace skill name: ${JSON.stringify(name)}`);
+  }
+  return path.join(skillDir, "SKILL.md");
+}
+
 async function writeWorkspaceSkill(params: {
   env: Pick<QaSuiteRuntimeEnv, "gateway">;
   name: string;
   body: string;
 }) {
-  const skillDir = path.join(params.env.gateway.workspaceDir, "skills", params.name);
+  const skillPath = resolveWorkspaceSkillPath(params.env.gateway.workspaceDir, params.name);
+  const skillDir = path.dirname(skillPath);
   await fs.mkdir(skillDir, { recursive: true });
-  const skillPath = path.join(skillDir, "SKILL.md");
   await fs.writeFile(skillPath, `${params.body.trim()}\n`, "utf8");
   return skillPath;
 }

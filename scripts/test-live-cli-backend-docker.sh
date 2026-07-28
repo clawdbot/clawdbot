@@ -21,7 +21,7 @@ CLI_MODEL="${OPENCLAW_LIVE_CLI_BACKEND_MODEL:-}"
 CLI_PROVIDER="${CLI_MODEL%%/*}"
 CLI_DISABLE_MCP_CONFIG="${OPENCLAW_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG:-}"
 CLI_AUTH_MODE="${OPENCLAW_LIVE_CLI_BACKEND_AUTH:-auto}"
-CLI_SETUP_TIMEOUT_SECONDS="${OPENCLAW_LIVE_CLI_BACKEND_SETUP_TIMEOUT_SECONDS:-180}"
+CLI_SETUP_TIMEOUT_SECONDS="$(openclaw_live_read_positive_int_env OPENCLAW_LIVE_CLI_BACKEND_SETUP_TIMEOUT_SECONDS 180)"
 TEMP_DIRS=()
 DOCKER_USER="${OPENCLAW_DOCKER_USER:-node}"
 DOCKER_HOME_MOUNT=()
@@ -122,7 +122,10 @@ if [[ "$CLI_PROVIDER" == "claude-cli" && "$CLI_AUTH_MODE" == "subscription" ]]; 
   CLAUDE_CREDS_FILE="$HOME/.claude/.credentials.json"
   CLAUDE_SUBSCRIPTION_AUTH_SOURCE=""
   CLAUDE_SUBSCRIPTION_TYPE=""
-  if [[ -f "$CLAUDE_CREDS_FILE" ]]; then
+  if [[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
+    CLAUDE_SUBSCRIPTION_TYPE="oauth-token"
+    CLAUDE_SUBSCRIPTION_AUTH_SOURCE="env-token"
+  elif [[ -f "$CLAUDE_CREDS_FILE" ]]; then
     CLAUDE_SUBSCRIPTION_TYPE="$(
       node -e '
         const fs = require("node:fs");
@@ -138,9 +141,6 @@ if [[ "$CLI_PROVIDER" == "claude-cli" && "$CLI_AUTH_MODE" == "subscription" ]]; 
       exit 1
     }
     CLAUDE_SUBSCRIPTION_AUTH_SOURCE="credentials-file"
-  elif [[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
-    CLAUDE_SUBSCRIPTION_TYPE="oauth-token"
-    CLAUDE_SUBSCRIPTION_AUTH_SOURCE="env-token"
   else
     echo "ERROR: Claude subscription auth requires either:" >&2
     echo "  - $CLAUDE_CREDS_FILE with claudeAiOauth.subscriptionType, or" >&2
@@ -200,6 +200,16 @@ else
     AUTH_FILES+=("$auth_file")
   done < <(openclaw_live_collect_auth_files_from_csv "$CLI_PROVIDER")
 fi
+if [[ "${CLAUDE_SUBSCRIPTION_AUTH_SOURCE:-}" == "env-token" ]]; then
+  retained_auth_files=()
+  for auth_file in "${AUTH_FILES[@]}"; do
+    case "$auth_file" in
+      .claude.json | .claude/.credentials.json) ;;
+      *) retained_auth_files+=("$auth_file") ;;
+    esac
+  done
+  AUTH_FILES=("${retained_auth_files[@]}")
+fi
 AUTH_DIRS_CSV=""
 if ((${#AUTH_DIRS[@]} > 0)); then
   AUTH_DIRS_CSV="$(openclaw_live_join_csv "${AUTH_DIRS[@]}")"
@@ -247,7 +257,7 @@ mkdir -p "$NPM_CONFIG_PREFIX" "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CA
 chmod 700 "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CACHE" || true
 export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
 run_setup_command() {
-  local timeout_value="${OPENCLAW_LIVE_CLI_BACKEND_SETUP_TIMEOUT_SECONDS:-180}s"
+  local timeout_value="${OPENCLAW_LIVE_CLI_BACKEND_SETUP_TIMEOUT_SECONDS:?missing live CLI backend setup timeout seconds}s"
   local timeout_bin=""
   if command -v timeout >/dev/null 2>&1; then
     timeout_bin="timeout"
@@ -327,15 +337,15 @@ if [ "$provider" = "claude-cli" ]; then
     node - <<'NODE'
 const fs = require("node:fs");
 const file = `${process.env.HOME}/.claude/.credentials.json`;
-if (fs.existsSync(file)) {
+if (process.env.CLAUDE_CODE_OAUTH_TOKEN?.trim()) {
+  console.error("[claude-subscription] using CLAUDE_CODE_OAUTH_TOKEN from environment");
+} else if (fs.existsSync(file)) {
   const data = JSON.parse(fs.readFileSync(file, "utf8"));
   const subscriptionType = String(data?.claudeAiOauth?.subscriptionType ?? "").trim();
   if (!subscriptionType || subscriptionType === "unknown") {
     throw new Error("Claude subscription OAuth credentials are missing subscriptionType.");
   }
   console.error(`[claude-subscription] subscriptionType=${subscriptionType}`);
-} else if (process.env.CLAUDE_CODE_OAUTH_TOKEN?.trim()) {
-  console.error("[claude-subscription] using CLAUDE_CODE_OAUTH_TOKEN from environment");
 } else {
   throw new Error("Claude subscription OAuth token or credentials file is required.");
 }
@@ -364,23 +374,38 @@ WRAP
   fi
   if [ "$auth_mode" = "subscription" ]; then
     claude --version
-    direct_token="OPENCLAW-CLAUDE-SUBSCRIPTION-DIRECT"
-    direct_output="$(
-      claude \
-        -p "Reply exactly: $direct_token" \
-        --output-format text \
-        --model sonnet \
-        --permission-mode bypassPermissions \
-        --setting-sources user \
-        --strict-mcp-config \
-        --mcp-config '{"mcpServers":{}}' \
-        --no-session-persistence
-    )"
-    if [[ "$direct_output" != *"$direct_token"* ]]; then
-      echo "ERROR: direct Claude subscription probe did not return expected token." >&2
-      echo "$direct_output" >&2
+    direct_probe_log="$(mktemp)"
+    set +e
+    claude \
+      -p "This is a local CLI smoke test. What is two plus two? Reply with only the result." \
+      --output-format text \
+      --model sonnet \
+      --permission-mode bypassPermissions \
+      --setting-sources user \
+      --strict-mcp-config \
+      --mcp-config '{"mcpServers":{}}' \
+      --no-session-persistence >"$direct_probe_log" 2>&1
+    direct_probe_status=$?
+    set -e
+    print_redacted_direct_probe_log() {
+      sed -E \
+        -e 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/<redacted-email>/g' \
+        -e 's/(sk-ant-|sk-)[A-Za-z0-9_-]+/<redacted-secret>/g' \
+        "$direct_probe_log" >&2
+    }
+    if [ "$direct_probe_status" -ne 0 ]; then
+      echo "ERROR: direct Claude subscription probe exited with status $direct_probe_status." >&2
+      print_redacted_direct_probe_log
+      rm -f "$direct_probe_log"
+      exit "$direct_probe_status"
+    fi
+    if ! grep -Eiq '(^|[^[:alnum:]])(4|four)([^[:alnum:]]|$)' "$direct_probe_log"; then
+      echo "ERROR: direct Claude subscription probe did not return the expected arithmetic result." >&2
+      print_redacted_direct_probe_log
+      rm -f "$direct_probe_log"
       exit 1
     fi
+    rm -f "$direct_probe_log"
     echo "[claude-subscription] direct claude -p probe ok"
   else
     claude auth status || true
@@ -464,6 +489,8 @@ DOCKER_RUN_ARGS+=(--rm -t \
   -e OPENCLAW_LIVE_TEST=1 \
   -e OPENCLAW_LIVE_CLI_BACKEND=1 \
   -e OPENCLAW_LIVE_CLI_BACKEND_DEBUG="${OPENCLAW_LIVE_CLI_BACKEND_DEBUG:-}" \
+  -e OPENCLAW_LIVE_CLI_BACKEND_ADVISORY="${OPENCLAW_LIVE_CLI_BACKEND_ADVISORY:-}" \
+  -e OPENCLAW_LIVE_CLI_BACKEND_ALLOW_PROVIDER_SKIP="${OPENCLAW_LIVE_CLI_BACKEND_ALLOW_PROVIDER_SKIP:-}" \
   -e OPENCLAW_CLI_BACKEND_LOG_OUTPUT="${OPENCLAW_CLI_BACKEND_LOG_OUTPUT:-}" \
   -e OPENCLAW_TEST_CONSOLE="${OPENCLAW_TEST_CONSOLE:-}" \
   -e OPENCLAW_LIVE_CLI_BACKEND_MODEL="$CLI_MODEL" \

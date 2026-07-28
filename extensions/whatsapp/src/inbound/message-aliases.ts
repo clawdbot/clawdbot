@@ -1,4 +1,7 @@
+import { buildDeprecatedFlatWhatsAppInboundAdmission } from "./admission.js";
+import { resolveWhatsAppGroupConversationId } from "./group-conversation.js";
 import type {
+  DeprecatedWebInboundAdmissionTopLevelFields,
   DeprecatedWebInboundMessageFlatAliases,
   LegacyFlatWebInboundMessage,
   WebInboundCallbackMessage,
@@ -105,10 +108,10 @@ function setMediaField<K extends keyof NonNullable<WebInboundCallbackMessage["pa
   ensureMedia(msg)[key] = value;
 }
 
-function defineDeprecatedAliasAccessors<T extends WebInboundCallbackMessage>(
+function defineDeprecatedAccessors<T extends object>(
   msg: T,
-  descriptors: Record<keyof DeprecatedWebInboundMessageFlatAliases, AliasDescriptor>,
-): T & WebInboundMessage {
+  descriptors: Record<string, AliasDescriptor>,
+): T {
   Object.defineProperties(
     msg,
     Object.fromEntries(
@@ -123,14 +126,102 @@ function defineDeprecatedAliasAccessors<T extends WebInboundCallbackMessage>(
       ]),
     ),
   );
+  return msg;
+}
+
+function defineDeprecatedAliasAccessors<T extends WebInboundCallbackMessage>(
+  msg: T,
+  descriptors: Record<keyof DeprecatedWebInboundMessageFlatAliases, AliasDescriptor>,
+): T & WebInboundMessage {
+  defineDeprecatedAccessors(msg, descriptors);
   return msg as T & WebInboundMessage;
+}
+
+function defineDeprecatedStructuredContextPayloadAlias(msg: WebInboundCallbackMessage): void {
+  const channelStructuredContext =
+    msg.payload.channelStructuredContext ?? msg.payload.untrustedStructuredContext;
+  if (channelStructuredContext !== undefined) {
+    msg.payload.channelStructuredContext = channelStructuredContext;
+  }
+  Object.defineProperty(msg.payload, "untrustedStructuredContext", {
+    configurable: true,
+    enumerable: true,
+    get: () => msg.payload.channelStructuredContext,
+    set: (value) => {
+      msg.payload.channelStructuredContext = value;
+    },
+  });
+}
+
+function defineDeprecatedAdmissionTopLevelAccessors<T extends WebInboundCallbackMessage>(
+  msg: T,
+): T {
+  let fallbackConversationId = msg.conversationId || msg.from;
+  let fallbackAccountId = msg.accountId;
+  let fallbackAccessControlPassed = msg.accessControlPassed;
+  let fallbackChatType = msg.chatType;
+
+  const conversationId = () => msg.admission?.conversation.id ?? fallbackConversationId;
+  const setConversationId = (value: unknown) => {
+    const next = value as string;
+    fallbackConversationId = next;
+    if (msg.admission) {
+      msg.admission.conversation.id = next;
+      msg.admission.conversation.groupSessionId = resolveWhatsAppGroupConversationId(next);
+    }
+  };
+
+  const descriptors: Record<keyof DeprecatedWebInboundAdmissionTopLevelFields, AliasDescriptor> = {
+    from: {
+      get: conversationId,
+      set: setConversationId,
+    },
+    conversationId: {
+      get: conversationId,
+      set: setConversationId,
+    },
+    accountId: {
+      get: () => msg.admission?.accountId ?? fallbackAccountId,
+      set: (value) => {
+        const next = value as string;
+        fallbackAccountId = next;
+        if (msg.admission) {
+          msg.admission.accountId = next;
+          msg.admission.account.accountId = next;
+        }
+      },
+    },
+    accessControlPassed: {
+      get: () =>
+        msg.admission ? msg.admission.ingress.decision === "allow" : fallbackAccessControlPassed,
+      set: (value) => {
+        // The legacy boolean is derived from the ingress graph; writes only preserve
+        // no-admission legacy inputs instead of fabricating a partial graph update.
+        fallbackAccessControlPassed = value as boolean | undefined;
+      },
+    },
+    chatType: {
+      get: () => msg.admission?.conversation.kind ?? fallbackChatType,
+      set: (value) => {
+        const next = value as "direct" | "group";
+        fallbackChatType = next;
+        if (msg.admission) {
+          msg.admission.conversation.kind = next;
+        }
+      },
+    },
+  };
+
+  return defineDeprecatedAccessors(msg, descriptors);
 }
 
 export function withDeprecatedWebInboundMessageFlatAliases<T extends WebInboundCallbackMessage>(
   msg: T,
 ): T & WebInboundMessage {
-  // Keep the shipped callback shape alive while nested contexts remain canonical.
-  return defineDeprecatedAliasAccessors(msg, {
+  // Keep the shipped callback shape alive while nested/admission contexts remain canonical.
+  defineDeprecatedStructuredContextPayloadAlias(msg);
+  const withAdmissionAliases = defineDeprecatedAdmissionTopLevelAccessors(msg);
+  return defineDeprecatedAliasAccessors(withAdmissionAliases, {
     id: { get: () => msg.event.id, set: (value) => (msg.event.id = value as string | undefined) },
     to: {
       get: () => msg.platform.recipientJid,
@@ -275,11 +366,17 @@ export function withDeprecatedWebInboundMessageFlatAliases<T extends WebInboundC
       get: () => msg.payload.media?.url,
       set: (value) => setMediaField(msg, "url", value as string | undefined),
     },
-    untrustedStructuredContext: {
-      get: () => msg.payload.untrustedStructuredContext,
+    channelStructuredContext: {
+      get: () => msg.payload.channelStructuredContext,
       set: (value) =>
-        (msg.payload.untrustedStructuredContext =
-          value as typeof msg.payload.untrustedStructuredContext),
+        (msg.payload.channelStructuredContext =
+          value as typeof msg.payload.channelStructuredContext),
+    },
+    untrustedStructuredContext: {
+      get: () => msg.payload.channelStructuredContext,
+      set: (value) =>
+        (msg.payload.channelStructuredContext =
+          value as typeof msg.payload.channelStructuredContext),
     },
     isBatched: {
       get: () => msg.event.isBatched,
@@ -300,6 +397,7 @@ function normalizeLegacyFlatWebInboundMessage(msg: LegacyFlatWebInboundMessage):
       : undefined;
   return withDeprecatedWebInboundMessageFlatAliases({
     ...msg,
+    admission: msg.admission ?? buildDeprecatedFlatWhatsAppInboundAdmission(msg),
     event: {
       id: msg.id,
       timestamp: msg.timestamp,
@@ -309,7 +407,7 @@ function normalizeLegacyFlatWebInboundMessage(msg: LegacyFlatWebInboundMessage):
       body: msg.body,
       media,
       location: msg.location,
-      untrustedStructuredContext: msg.untrustedStructuredContext,
+      channelStructuredContext: msg.channelStructuredContext ?? msg.untrustedStructuredContext,
     },
     platform: {
       chatJid: msg.chatId,

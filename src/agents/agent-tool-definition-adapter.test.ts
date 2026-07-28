@@ -3,11 +3,13 @@
  * Exercises result coercion, error wrapping, client delegation, and conflict
  * detection at the ToolDefinition boundary.
  */
+import os from "node:os";
+import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import {
-  CLIENT_TOOL_NAME_CONFLICT_PREFIX,
   createClientToolNameConflictError,
   findClientToolNameConflicts,
   isClientToolNameConflictError,
@@ -15,10 +17,12 @@ import {
   toToolDefinitions,
 } from "./agent-tool-definition-adapter.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import { createExecTool } from "./bash-tools.exec-run.js";
 import type { ClientToolDefinition } from "./embedded-agent-runner/run/params.js";
 
 type ToolExecute = ReturnType<typeof toToolDefinitions>[number]["execute"];
 const extensionContext = {} as Parameters<ToolExecute>[4];
+const CLIENT_TOOL_NAME_CONFLICT_PREFIX = "client tool name conflict:";
 
 async function executeThrowingTool(name: string, callId: string) {
   const tool = {
@@ -91,6 +95,186 @@ describe("agent tool definition adapter", () => {
     expect(details?.status).toBe("error");
     expect(details?.tool).toBe("exec");
     expect(details?.error).toBe("nope");
+  });
+
+  it("preserves exec deny before prepared workdir failures", async () => {
+    const tool = createExecTool({
+      security: "deny",
+      ask: "off",
+    });
+    const [definition] = toToolDefinitions([tool]);
+    const missingWorkdir = path.join(os.tmpdir(), `openclaw-missing-denied-cwd-${Date.now()}`);
+
+    const existing = await expectDefined(definition, "definition test invariant").execute(
+      "call-denied-existing-cwd",
+      {
+        command: "echo denied",
+        workdir: process.cwd(),
+      },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+    const missing = await expectDefined(definition, "definition test invariant").execute(
+      "call-denied-missing-cwd",
+      {
+        command: "echo denied",
+        workdir: missingWorkdir,
+      },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    const expected = {
+      status: "error",
+      error: "exec denied: host=gateway security=deny",
+    };
+    expect(existing.details).toMatchObject(expected);
+    expect(missing.details).toMatchObject(expected);
+    expect(JSON.stringify(missing)).not.toContain("unavailable or not a directory");
+  });
+
+  it("does not validate backend sandbox workdirs before exec deny", async () => {
+    const validateWorkdir = vi.fn(async (workdir: string) => workdir);
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "deny",
+      ask: "off",
+      sandbox: {
+        containerName: "remote-sandbox-workdir-test",
+        workspaceDir: process.cwd(),
+        containerWorkdir: "/remote/workspace",
+        workdirValidation: "backend",
+        validateWorkdir,
+      },
+    });
+    const [definition] = toToolDefinitions([tool]);
+
+    const result = await expectDefined(definition, "definition test invariant").execute(
+      "call-denied-backend-cwd",
+      {
+        command: "echo denied",
+        workdir: "/remote/workspace/generated",
+      },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      error: "exec denied: host=sandbox security=deny",
+    });
+    expect(validateWorkdir).not.toHaveBeenCalled();
+  });
+
+  it("does not throw WeakMap errors when preparing malformed exec params", async () => {
+    const tool = createExecTool({
+      security: "full",
+      ask: "off",
+    });
+    const [definition] = toToolDefinitions([tool]);
+
+    const result = await expectDefined(definition, "definition test invariant").execute(
+      "call-malformed-exec-params",
+      "not-an-object",
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      error: "Provide a command to start.",
+    });
+  });
+
+  it("does not throw WeakMap errors when preparing malformed backend sandbox exec params", async () => {
+    const validateWorkdir = vi.fn(async (workdir: string) => workdir);
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "full",
+      ask: "off",
+      sandbox: {
+        containerName: "remote-sandbox-workdir-test",
+        workspaceDir: process.cwd(),
+        containerWorkdir: "/remote/workspace",
+        workdirValidation: "backend",
+        validateWorkdir,
+      },
+    });
+    const [definition] = toToolDefinitions([tool]);
+
+    const result = await expectDefined(definition, "definition test invariant").execute(
+      "call-malformed-backend-sandbox-exec-params",
+      "not-an-object",
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      error: "Provide a command to start.",
+    });
+    expect(JSON.stringify(result)).not.toContain("WeakMap");
+    expect(validateWorkdir).not.toHaveBeenCalled();
+  });
+
+  it("reports malformed exec params when elevated logging is enabled", async () => {
+    const tool = createExecTool({
+      security: "full",
+      ask: "off",
+      elevated: { enabled: true, allowed: true, defaultLevel: "on" },
+    });
+    const [definition] = toToolDefinitions([tool]);
+
+    const result = await expectDefined(definition, "definition test invariant").execute(
+      "call-malformed-elevated-exec-params",
+      {},
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      error: "Provide a command to start.",
+    });
+  });
+
+  it("does not validate backend sandbox workdirs before malformed exec params fail", async () => {
+    const validateWorkdir = vi.fn(async (workdir: string) => workdir);
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "full",
+      ask: "off",
+      sandbox: {
+        containerName: "remote-sandbox-workdir-test",
+        workspaceDir: process.cwd(),
+        containerWorkdir: "/remote/workspace",
+        workdirValidation: "backend",
+        validateWorkdir,
+      },
+    });
+    const [definition] = toToolDefinitions([tool]);
+
+    const result = await expectDefined(definition, "definition test invariant").execute(
+      "call-malformed-backend-sandbox-exec-params",
+      {
+        workdir: "/remote/workspace/generated",
+      },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      error: "Provide a command to start.",
+    });
+    expect(validateWorkdir).not.toHaveBeenCalled();
   });
 
   it("coerces details-only tool results to include content", async () => {

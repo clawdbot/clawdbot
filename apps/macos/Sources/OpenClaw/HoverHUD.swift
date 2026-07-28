@@ -35,7 +35,7 @@ final class HoverHUDController {
         if suppressed {
             self.showTask?.cancel()
             self.showTask = nil
-            self.dismiss(reason: "suppressed")
+            self.dismiss()
         }
     }
 
@@ -79,14 +79,14 @@ final class HoverHUDController {
 
     func openChat() {
         guard let anchorProvider = self.anchorProvider else { return }
-        self.dismiss(reason: "openChat")
+        self.dismiss()
         Task { @MainActor in
             let sessionKey = await WebChatManager.shared.preferredSessionKey()
             WebChatManager.shared.togglePanel(sessionKey: sessionKey, anchorProvider: anchorProvider)
         }
     }
 
-    func dismiss(reason: String = "explicit") {
+    func dismiss() {
         self.dismissTask?.cancel()
         self.dismissTask = nil
         self.removeDismissMonitor()
@@ -114,7 +114,7 @@ final class HoverHUDController {
             await MainActor.run {
                 guard let self else { return }
                 if self.model.hoveringStatusItem || self.model.hoveringPanel { return }
-                self.dismiss(reason: "hoverExit")
+                self.dismiss()
             }
         }
     }
@@ -186,7 +186,7 @@ final class HoverHUDController {
             guard let self, self.model.isVisible else { return }
             let pt = NSEvent.mouseLocation
             if !window.frame.contains(pt) {
-                Task { @MainActor in self.dismiss(reason: "outsideClick") }
+                Task { @MainActor in self.dismiss() }
             }
         }
     }

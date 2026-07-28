@@ -48,6 +48,23 @@ describe("scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs", () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("max memory MiB must be a finite non-negative number");
+
+    const exponent = runAssert(
+      writeStats('{"MemUsage":"128MiB / 2GiB","CPUPerc":"25.0%"}\n'),
+      "1e3",
+    );
+
+    expect(exponent.status).not.toBe(0);
+    expect(exponent.stderr).toContain("max memory MiB must be a finite non-negative number");
+
+    const cpuExponent = runAssert(
+      writeStats('{"MemUsage":"128MiB / 2GiB","CPUPerc":"25.0%"}\n'),
+      "512",
+      "1e3",
+    );
+
+    expect(cpuExponent.status).not.toBe(0);
+    expect(cpuExponent.stderr).toContain("max CPU percent must be a finite non-negative number");
   });
 
   it("rejects JSON samples without parseable Docker resource fields", () => {
@@ -60,13 +77,18 @@ describe("scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs", () => {
 
     expect(malformed.status).not.toBe(0);
     expect(malformed.stderr).toContain("had invalid MemUsage");
+
+    const looseCpu = runAssert(writeStats('{"MemUsage":"128MiB / 2GiB","CPUPerc":"1e3%"}\n'));
+
+    expect(looseCpu.status).not.toBe(0);
+    expect(looseCpu.stderr).toContain("had invalid CPUPerc");
   });
 
   it("reports and enforces parsed Docker resource peaks", () => {
     const result = runAssert(
       writeStats('{"MemUsage":"128MiB / 2GiB","CPUPerc":"25.0%"}\n'),
-      "256",
-      "50",
+      "256.5",
+      "50.5",
     );
 
     expect(result.status).toBe(0);

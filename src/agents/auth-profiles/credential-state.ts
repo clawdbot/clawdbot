@@ -13,7 +13,8 @@ export type AuthCredentialReasonCode =
   | "missing_credential"
   | "invalid_expires"
   | "expired"
-  | "unresolved_ref";
+  | "unresolved_ref"
+  | "malformed_api_key";
 
 /** Default OAuth access-token refresh margin before expiry. */
 export const DEFAULT_OAUTH_REFRESH_MARGIN_MS = 5 * 60 * 1000;
@@ -82,6 +83,14 @@ function hasConfiguredSecretString(value: unknown): boolean {
   return normalizeSecretInputString(value) !== undefined;
 }
 
+export function isMalformedApiKeyInput(value: unknown): boolean {
+  const normalized = normalizeSecretInputString(value);
+  return (
+    normalized !== undefined &&
+    /^openclaw\s+onboard(?:\s+.*)?\s+--auth-choice(?:\s|=|$)/i.test(normalized)
+  );
+}
+
 /** Classifies whether a stored credential is eligible for auth selection. */
 export function evaluateStoredCredentialEligibility(params: {
   credential: AuthProfileCredential;
@@ -93,6 +102,9 @@ export function evaluateStoredCredentialEligibility(params: {
   if (credential.type === "api_key") {
     const hasKey = hasConfiguredSecretString(credential.key);
     const hasKeyRef = hasConfiguredSecretRef(credential.keyRef);
+    if (isMalformedApiKeyInput(credential.key)) {
+      return { eligible: false, reasonCode: "malformed_api_key" };
+    }
     if (!hasKey && !hasKeyRef) {
       return { eligible: false, reasonCode: "missing_credential" };
     }

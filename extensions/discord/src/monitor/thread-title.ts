@@ -6,6 +6,7 @@ import {
   extractAssistantText,
   prepareSimpleCompletionModelForAgent,
 } from "openclaw/plugin-sdk/simple-completion-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { withAbortTimeout } from "./timeouts.js";
 
 const DEFAULT_THREAD_TITLE_TIMEOUT_MS = 60_000;
@@ -39,6 +40,7 @@ export async function generateThreadTitle(params: {
     cfg: params.cfg,
     agentId: params.agentId,
     ...(params.modelRef ? { modelRef: params.modelRef } : {}),
+    useUtilityModel: true,
     allowMissingApiKeyModes: ["aws-sdk"],
   });
   if ("error" in prepared) {
@@ -50,9 +52,8 @@ export async function generateThreadTitle(params: {
   }
 
   try {
-    const promptText = truncateThreadTitleSourceText(sourceText);
-    const userMessage = buildThreadTitleUserMessage({
-      sourceText: promptText,
+    const userMessage = buildThreadTitleCompletionUserMessage({
+      sourceText,
       channelName: params.channelName,
       channelDescription: params.channelDescription,
     });
@@ -103,11 +104,12 @@ async function completeThreadTitle(params: {
   });
 }
 
-function buildThreadTitleUserMessage(params: {
+function buildThreadTitleCompletionUserMessage(params: {
   sourceText: string;
   channelName?: string;
   channelDescription?: string;
 }): string {
+  const sourceText = truncateThreadTitleSourceText(params.sourceText);
   const channelName = normalizeTitleContextField(
     params.channelName,
     MAX_THREAD_TITLE_CHANNEL_NAME_CHARS,
@@ -123,7 +125,7 @@ function buildThreadTitleUserMessage(params: {
   if (channelDescription) {
     messageLines.push(`Channel description: ${channelDescription}`);
   }
-  messageLines.push(`Message:\n${params.sourceText}`);
+  messageLines.push(`Message:\n${sourceText}`);
   return messageLines.join("\n\n");
 }
 
@@ -131,14 +133,14 @@ function truncateThreadTitleSourceText(sourceText: string): string {
   if (sourceText.length <= MAX_THREAD_TITLE_SOURCE_CHARS) {
     return sourceText;
   }
-  return `${sourceText.slice(0, MAX_THREAD_TITLE_SOURCE_CHARS)}...`;
+  return `${truncateUtf16Safe(sourceText, MAX_THREAD_TITLE_SOURCE_CHARS)}...`;
 }
 
 function resolveThreadTitleTimeoutMs(timeoutMs: number | undefined): number {
   return Math.max(100, Math.floor(timeoutMs ?? DEFAULT_THREAD_TITLE_TIMEOUT_MS));
 }
 
-export function normalizeGeneratedThreadTitle(raw: string): string {
+function normalizeGeneratedThreadTitle(raw: string): string {
   const lines = raw.replace(/\r/g, "").split("\n");
   let firstLine = "";
   for (const line of lines) {
@@ -161,13 +163,34 @@ function stripThreadTitleWrappers(raw: string): string {
   while (current && current !== previous) {
     previous = current;
     current = current.replace(/^["'`]+|["'`]+$/g, "").trim();
-    current = current.replace(/^\*\*(.+)\*\*$/u, "$1").trim();
-    current = current.replace(/^__(.+)__$/u, "$1").trim();
-    current = current.replace(/^\*(.+)\*$/u, "$1").trim();
-    current = current.replace(/^_(.+)_$/u, "$1").trim();
-    current = current.replace(/^~~(.+)~~$/u, "$1").trim();
+    // Unwrap only a title that is a SINGLE wrapped span. The inner content
+    // must not contain the same marker, so a title with two separate spans
+    // (e.g. "*Plan* for *project*") is left intact instead of having its
+    // outer markers stripped and stray ones left mid-string. For two-char
+    // bold markers (`**`, `__`), a single nested emphasis marker is allowed
+    // inside (e.g. `**Release *plan***` -> `Release *plan*`), because bold
+    // legitimately wraps italic/underscore but never itself.
+    current = stripBalancedWrapper(current, "**");
+    current = stripBalancedWrapper(current, "__");
+    current = stripBalancedWrapper(current, "*");
+    current = stripBalancedWrapper(current, "_");
+    current = stripBalancedWrapper(current, "~~");
   }
   return current;
+}
+
+function stripBalancedWrapper(text: string, marker: string): string {
+  if (text.length < marker.length * 2 + 1) {
+    return text;
+  }
+  if (!text.startsWith(marker) || !text.endsWith(marker)) {
+    return text;
+  }
+  const inner = text.slice(marker.length, text.length - marker.length);
+  if (!inner || inner.includes(marker)) {
+    return text;
+  }
+  return inner;
 }
 
 function normalizeTitleContextField(raw: string | undefined, maxChars: number): string | undefined {
@@ -179,5 +202,5 @@ function normalizeTitleContextField(raw: string | undefined, maxChars: number): 
   if (singleLine.length <= maxChars) {
     return singleLine;
   }
-  return `${singleLine.slice(0, maxChars)}...`;
+  return `${truncateUtf16Safe(singleLine, maxChars)}...`;
 }

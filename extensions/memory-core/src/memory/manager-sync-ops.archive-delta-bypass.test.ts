@@ -83,6 +83,10 @@ class SessionDeltaHarness extends MemoryManagerSyncOps {
     return "test";
   }
 
+  protected resolveProviderIndexIdentities() {
+    return [];
+  }
+
   protected async sync(params?: SyncParams): Promise<void> {
     this.syncCalls.push(params ?? {});
   }

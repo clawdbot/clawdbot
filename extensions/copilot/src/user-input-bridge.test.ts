@@ -1,231 +1,204 @@
-// Copilot tests cover user input bridge plugin behavior.
-import type { SessionConfig } from "@github/copilot-sdk";
-import { describe, expect, it, vi } from "vitest";
-
-type UserInputHandler = NonNullable<SessionConfig["onUserInputRequest"]>;
-type SdkUserInputRequest = Parameters<UserInputHandler>[0];
-type SdkUserInputResponse = Awaited<ReturnType<UserInputHandler>>;
-
+// Copilot tests cover SDK ask_user gateway behavior.
 import {
-  composeUserInputPolicies,
-  createUserInputBridge,
-  delegatingUserInputPolicy,
-  denyAllUserInputPolicy,
-  firstChoicePolicy,
-  staticAnswerPolicy,
-  DENY_ALL_ANSWER,
-  type CopilotUserInputContext,
-  type CopilotUserInputPolicy,
-} from "./user-input-bridge.js";
+  claimPendingAgentQuestionAnswer,
+  type AgentHarnessQuestionGatewayCall,
+  type EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { describe, expect, it, vi } from "vitest";
+import { createCopilotUserInputBridge } from "./user-input-bridge.js";
 
-function makeRequest(overrides: Partial<SdkUserInputRequest> = {}): SdkUserInputRequest {
+type GatewayCallRecord = { method: string; opts: unknown; params: unknown };
+
+function createParams(): EmbeddedRunAttemptParams {
   return {
-    question: "what is your name?",
-    ...overrides,
-  };
+    sessionId: "session-1",
+    sessionKey: "agent:main:session-1",
+    agentId: "main",
+    timeoutMs: 75_000,
+    onBlockReply: vi.fn(),
+  } as unknown as EmbeddedRunAttemptParams;
 }
 
-function makeCtx(overrides: Partial<CopilotUserInputContext> = {}): CopilotUserInputContext {
-  return {
-    request: makeRequest(),
-    sessionId: "sess-1",
-    ...overrides,
-  };
-}
-
-describe("denyAllUserInputPolicy", () => {
-  it("returns the fail-closed DENY_ALL_ANSWER as a freeform answer", async () => {
-    const result = await denyAllUserInputPolicy(makeCtx());
-    expect(result).toEqual({ answer: DENY_ALL_ANSWER, wasFreeform: true });
+function createGatewayStub() {
+  const calls: GatewayCallRecord[] = [];
+  let settleWait: ((value: unknown) => void) | undefined;
+  const wait = new Promise<unknown>((resolve) => {
+    settleWait = resolve;
   });
-});
-
-describe("firstChoicePolicy", () => {
-  it("returns the first choice (wasFreeform: false) when choices are present", async () => {
-    const result = await firstChoicePolicy(
-      makeCtx({ request: makeRequest({ choices: ["yes", "no"] }) }),
-    );
-    expect(result).toEqual({ answer: "yes", wasFreeform: false });
-  });
-
-  it("falls back to DENY_ALL_ANSWER when choices are empty", async () => {
-    const result = await firstChoicePolicy(makeCtx({ request: makeRequest({ choices: [] }) }));
-    expect(result).toEqual({ answer: DENY_ALL_ANSWER, wasFreeform: true });
-  });
-
-  it("falls back to DENY_ALL_ANSWER when choices are absent", async () => {
-    const result = await firstChoicePolicy(makeCtx());
-    expect(result).toEqual({ answer: DENY_ALL_ANSWER, wasFreeform: true });
-  });
-});
-
-describe("staticAnswerPolicy", () => {
-  it("returns the configured answer for every request", async () => {
-    const policy = staticAnswerPolicy({ answer: "Alice" });
-    for (const question of ["a?", "b?", "c?"]) {
-      const result = await policy(makeCtx({ request: makeRequest({ question }) }));
-      expect(result).toEqual({ answer: "Alice", wasFreeform: true });
+  const call: AgentHarnessQuestionGatewayCall = async (method, opts, params) => {
+    calls.push({ method, opts, params });
+    if (method === "question.request") {
+      return { id: (params as { id: string }).id, expiresAtMs: Date.now() + 75_000 };
     }
-  });
+    if (method === "question.waitAnswer") {
+      return await wait;
+    }
+    if (method === "question.resolve") {
+      const resolved = params as {
+        answers?: { answers: Record<string, string[]> };
+        cancel?: boolean;
+      };
+      const result = resolved.cancel
+        ? { status: "cancelled" as const }
+        : { status: "answered" as const, answers: resolved.answers! };
+      settleWait?.(result);
+      return result;
+    }
+    throw new Error(`unexpected gateway method: ${method}`);
+  };
+  return { call, calls };
+}
 
-  it("respects wasFreeform=false override", async () => {
-    const policy = staticAnswerPolicy({ answer: "yes", wasFreeform: false });
-    const result = await policy(makeCtx());
-    expect(result).toEqual({ answer: "yes", wasFreeform: false });
-  });
-});
-
-describe("delegatingUserInputPolicy", () => {
-  it("forwards the request and returns the host response", async () => {
-    const onRequest = vi
-      .fn<CopilotUserInputPolicy>()
-      .mockResolvedValue({ answer: "Bob", wasFreeform: true } satisfies SdkUserInputResponse);
-    const policy = delegatingUserInputPolicy({ onRequest });
-    const ctx = makeCtx({ sessionId: "sess-xyz" });
-    const result = await policy(ctx);
-    expect(result).toEqual({ answer: "Bob", wasFreeform: true });
-    expect(onRequest).toHaveBeenCalledTimes(1);
-    expect(onRequest).toHaveBeenCalledWith(ctx);
-  });
-
-  it("returns DENY_ALL_ANSWER when host callback returns undefined", async () => {
-    const onRequest = vi.fn<CopilotUserInputPolicy>().mockResolvedValue(undefined);
-    const policy = delegatingUserInputPolicy({ onRequest });
-    const result = await policy(makeCtx());
-    expect(result).toEqual({ answer: DENY_ALL_ANSWER, wasFreeform: true });
-  });
-
-  it("converts thrown errors into a DENY_ALL_ANSWER with the error message appended", async () => {
-    const policy = delegatingUserInputPolicy({
-      onRequest: () => {
-        throw new Error("prompt timeout");
-      },
+describe("Copilot user input bridge", () => {
+  it("registers, presents, claims, and returns a selected option", async () => {
+    const params = createParams();
+    const gateway = createGatewayStub();
+    const bridge = createCopilotUserInputBridge({
+      paramsForRun: params,
+      gatewayCall: gateway.call,
     });
-    const result = await policy(makeCtx());
-    expect(result).toBeDefined();
-    expect(result!.wasFreeform).toBe(true);
-    expect(result!.answer).toContain(DENY_ALL_ANSWER);
-    expect(result!.answer).toContain("prompt timeout");
-  });
-
-  it("falls back to onError policy when onRequest throws", async () => {
-    const onError = vi
-      .fn<CopilotUserInputPolicy>()
-      .mockResolvedValue({ answer: "fallback", wasFreeform: true });
-    const policy = delegatingUserInputPolicy({
-      onRequest: () => {
-        throw new Error("host boom");
-      },
-      onError,
-    });
-    const result = await policy(makeCtx());
-    expect(result).toEqual({ answer: "fallback", wasFreeform: true });
-    expect(onError).toHaveBeenCalledTimes(1);
-  });
-
-  it("falls through to error-message response when onError also throws", async () => {
-    const policy = delegatingUserInputPolicy({
-      onRequest: () => {
-        throw new Error("host boom");
-      },
-      onError: () => {
-        throw new Error("fallback boom");
-      },
-    });
-    const result = await policy(makeCtx());
-    expect(result).toBeDefined();
-    expect(result!.answer).toContain("host boom");
-  });
-
-  it("formats non-Error throws via JSON.stringify", async () => {
-    const policy = delegatingUserInputPolicy({
-      onRequest: () => {
-        throw { code: 7, msg: "weird" } as unknown as Error;
-      },
-    });
-    const result = await policy(makeCtx());
-    expect(result).toBeDefined();
-    expect(result!.answer).toContain('"code":7');
-  });
-});
-
-describe("composeUserInputPolicies", () => {
-  it("returns the first non-undefined result and skips subsequent policies", async () => {
-    const a: CopilotUserInputPolicy = () => undefined;
-    const b: CopilotUserInputPolicy = () => ({ answer: "from-b", wasFreeform: true });
-    const c = vi.fn<CopilotUserInputPolicy>(() => ({ answer: "from-c", wasFreeform: true }));
-    const policy = composeUserInputPolicies(a, b, c);
-    const result = await policy(makeCtx());
-    expect(result).toEqual({ answer: "from-b", wasFreeform: true });
-    expect(c).not.toHaveBeenCalled();
-  });
-
-  it("falls through to DENY_ALL_ANSWER when all policies return undefined", async () => {
-    const policy = composeUserInputPolicies(
-      () => undefined,
-      () => undefined,
+    const response = bridge.onUserInputRequest(
+      { question: "Pick a mode", choices: ["Fast", "Deep"], allowFreeform: false },
+      { sessionId: "sdk-session-1" },
     );
-    const result = await policy(makeCtx());
-    expect(result).toEqual({ answer: DENY_ALL_ANSWER, wasFreeform: true });
-  });
+    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
+    const request = gateway.calls[0];
+    if (!request) {
+      throw new Error("expected question.request");
+    }
 
-  it("short-circuits to error-message response when any policy throws", async () => {
-    const later = vi.fn<CopilotUserInputPolicy>(() => ({ answer: "later", wasFreeform: true }));
-    const policy = composeUserInputPolicies(() => {
-      throw new Error("compose boom");
-    }, later);
-    const result = await policy(makeCtx());
-    expect(result).toBeDefined();
-    expect(result!.answer).toContain("compose boom");
-    expect(later).not.toHaveBeenCalled();
-  });
-});
-
-describe("createUserInputBridge", () => {
-  it("adapts a policy to the SDK UserInputHandler shape", async () => {
-    const handler = createUserInputBridge(staticAnswerPolicy({ answer: "Alice" }));
-    const result = await handler(makeRequest(), { sessionId: "sess-1" });
-    expect(result).toEqual({ answer: "Alice", wasFreeform: true });
-  });
-
-  it("defaults to denyAllUserInputPolicy when no policy is passed", async () => {
-    const handler = createUserInputBridge();
-    const result = await handler(makeRequest(), { sessionId: "sess-1" });
-    expect(result).toEqual({ answer: DENY_ALL_ANSWER, wasFreeform: true });
-  });
-
-  it("forwards the SDK sessionId into the policy context", async () => {
-    const policy = vi.fn<CopilotUserInputPolicy>(() => ({ answer: "x", wasFreeform: true }));
-    const handler = createUserInputBridge(policy);
-    await handler(makeRequest({ question: "q?", choices: ["a"] }), { sessionId: "sess-xyz" });
-    expect(policy).toHaveBeenCalledTimes(1);
-    expect(policy.mock.calls[0]?.[0]).toEqual({
-      sessionId: "sess-xyz",
-      request: { question: "q?", choices: ["a"] },
+    expect(request.params).toMatchObject({
+      sessionKey: "agent:main:session-1",
+      agentId: "main",
+      timeoutMs: 75_000,
+      questions: [
+        expect.objectContaining({
+          questionId: "answer",
+          options: [{ label: "Fast" }, { label: "Deep" }],
+        }),
+      ],
     });
-  });
-
-  it("never throws when policy throws; returns DENY_ALL_ANSWER with the error message", async () => {
-    const handler = createUserInputBridge(() => {
-      throw new Error("policy boom");
+    const payload = vi.mocked(params.onBlockReply!).mock.calls[0]![0];
+    expect(payload.channelData).toEqual({
+      askUser: { questionId: (request.params as { id: string }).id },
     });
-    const result = await handler(makeRequest(), { sessionId: "sess-1" });
-    expect(result.answer).toContain(DENY_ALL_ANSWER);
-    expect(result.answer).toContain("policy boom");
-    expect(result.wasFreeform).toBe(true);
+    expect(payload.presentationTextMode).toBe("fallback");
+    expect(payload.text).toContain("Reply with the number or option text.");
+    expect(payload.text).not.toContain("your own answer");
+
+    await expect(
+      claimPendingAgentQuestionAnswer({ sessionKey: params.sessionKey, text: "2" }),
+    ).resolves.toBe(true);
+    await expect(response).resolves.toEqual({ answer: "Deep", wasFreeform: false });
   });
 
-  it("never returns undefined: a policy returning undefined yields fail-closed answer", async () => {
-    const handler = createUserInputBridge(() => undefined);
-    const result = await handler(makeRequest(), { sessionId: "sess-1" });
-    expect(result).toEqual({ answer: DENY_ALL_ANSWER, wasFreeform: true });
-  });
-
-  it("preserves wasFreeform=false from a policy that picked from choices", async () => {
-    const handler = createUserInputBridge(firstChoicePolicy);
-    const result = await handler(makeRequest({ choices: ["one", "two"], allowFreeform: false }), {
-      sessionId: "sess-1",
+  it("supports option-less free-form questions", async () => {
+    const params = createParams();
+    const gateway = createGatewayStub();
+    const bridge = createCopilotUserInputBridge({
+      paramsForRun: params,
+      gatewayCall: gateway.call,
     });
-    expect(result).toEqual({ answer: "one", wasFreeform: false });
+    const response = bridge.onUserInputRequest(
+      { question: "Which branch?", allowFreeform: true },
+      { sessionId: "sdk-session-1" },
+    );
+    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
+    expect(gateway.calls[0]?.params).toMatchObject({
+      questions: [expect.objectContaining({ options: [] })],
+    });
+    expect(vi.mocked(params.onBlockReply!).mock.calls[0]![0].presentation).toBeUndefined();
+
+    await claimPendingAgentQuestionAnswer({
+      sessionKey: params.sessionKey,
+      text: "fix/harness-parity",
+    });
+    await expect(response).resolves.toEqual({ answer: "fix/harness-parity", wasFreeform: true });
+  });
+
+  it("escapes SDK-controlled prompt text before delivery", async () => {
+    const params = createParams();
+    const gateway = createGatewayStub();
+    const bridge = createCopilotUserInputBridge({
+      paramsForRun: params,
+      gatewayCall: gateway.call,
+    });
+    const response = bridge.onUserInputRequest(
+      {
+        question: "Pick [trusted](https://evil) <@U123> @here\u202e",
+        choices: ["One @everyone", "Two `code`"],
+        allowFreeform: false,
+      },
+      { sessionId: "sdk-session-1" },
+    );
+    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
+    const text = vi.mocked(params.onBlockReply!).mock.calls[0]![0].text ?? "";
+    expect(text).not.toContain("@here");
+    expect(text).not.toContain("@everyone");
+    expect(text).not.toContain("<@U123>");
+    expect(text).not.toContain("[trusted](https://evil)");
+    expect(text).not.toContain("`code`");
+    expect(text).toContain("\uff20here");
+    expect(text).toContain("\uff3btrusted\uff3d");
+    const presentation = vi.mocked(params.onBlockReply!).mock.calls[0]![0].presentation;
+    const visiblePresentation = presentation?.blocks.map((block) =>
+      block.type === "text"
+        ? block.text
+        : block.type === "buttons"
+          ? block.buttons.map((button) => button.label).join(" ")
+          : "",
+    );
+    expect(JSON.stringify(visiblePresentation)).not.toContain("@here");
+    expect(JSON.stringify(visiblePresentation)).not.toContain("@everyone");
+    expect(JSON.stringify(visiblePresentation)).not.toContain("<@U123>");
+    expect(JSON.stringify(visiblePresentation)).not.toContain("[trusted](https://evil)");
+    bridge.cancelPending();
+    await response;
+  });
+
+  it("cancels the gateway record and returns an empty answer on abort", async () => {
+    const params = createParams();
+    const controller = new AbortController();
+    const gateway = createGatewayStub();
+    const bridge = createCopilotUserInputBridge({
+      paramsForRun: params,
+      signal: controller.signal,
+      gatewayCall: gateway.call,
+    });
+    const response = bridge.onUserInputRequest(
+      { question: "Continue?", choices: ["Yes", "No"], allowFreeform: false },
+      { sessionId: "sdk-session-1" },
+    );
+    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
+    controller.abort();
+
+    await expect(response).resolves.toEqual({ answer: "", wasFreeform: true });
+    expect(gateway.calls).toContainEqual(
+      expect.objectContaining({
+        method: "question.resolve",
+        params: expect.objectContaining({ cancel: true, resolvedBy: "run-abort" }),
+      }),
+    );
+  });
+
+  it("does not register a gateway question after the run already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const params = createParams();
+    const gateway = createGatewayStub();
+    const bridge = createCopilotUserInputBridge({
+      paramsForRun: params,
+      signal: controller.signal,
+      gatewayCall: gateway.call,
+    });
+
+    await expect(
+      bridge.onUserInputRequest(
+        { question: "Continue?", choices: ["Yes", "No"], allowFreeform: false },
+        { sessionId: "sdk-session-1" },
+      ),
+    ).resolves.toEqual({ answer: "", wasFreeform: true });
+    expect(gateway.calls).toEqual([]);
+    expect(params.onBlockReply).not.toHaveBeenCalled();
   });
 });

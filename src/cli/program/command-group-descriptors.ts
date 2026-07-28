@@ -1,11 +1,14 @@
 // Descriptor-to-lazy-command-group adapters used by core and sub-CLI registration.
 import type { Command } from "commander";
+import type { MachineOutputResolver } from "../machine-output-argv.js";
 
 /** Descriptor for one root command placeholder. */
 export type NamedCommandDescriptor = {
   name: string;
   description: string;
   hasSubcommands: boolean;
+  machineOutput?: MachineOutputResolver;
+  hidden?: boolean;
   parentDefaultHelp?: boolean;
 };
 
@@ -15,15 +18,8 @@ export type CommandGroupDescriptorSpec<TRegister> = {
   register: TRegister;
 };
 
-/** Import-backed command group definition. */
-export type ImportedCommandGroupDefinition<TRegisterArgs, TModule> = {
-  commandNames: readonly string[];
-  loadModule: () => Promise<TModule>;
-  register: (module: TModule, args: TRegisterArgs) => Promise<void> | void;
-};
-
 /** Resolved group entry after descriptor lookup. */
-export type ResolvedCommandGroupEntry<TDescriptor extends NamedCommandDescriptor, TRegister> = {
+type ResolvedCommandGroupEntry<TDescriptor extends NamedCommandDescriptor, TRegister> = {
   placeholders: TDescriptor[];
   register: TRegister;
 };
@@ -40,7 +36,7 @@ function buildDescriptorIndex<TDescriptor extends NamedCommandDescriptor>(
 }
 
 /** Resolve named command-group specs into descriptor-backed entries. */
-export function resolveCommandGroupEntries<TDescriptor extends NamedCommandDescriptor, TRegister>(
+function resolveCommandGroupEntries<TDescriptor extends NamedCommandDescriptor, TRegister>(
   descriptors: readonly TDescriptor[],
   specs: readonly CommandGroupDescriptorSpec<TRegister>[],
 ): ResolvedCommandGroupEntry<TDescriptor, TRegister>[] {
@@ -84,48 +80,11 @@ export function defineImportedCommandGroupSpec<TRegisterArgs, TModule>(
   };
 }
 
-/** Map multiple import-backed command group definitions to lazy specs. */
-export function defineImportedCommandGroupSpecs<TRegisterArgs, TModule>(
-  definitions: readonly ImportedCommandGroupDefinition<TRegisterArgs, TModule>[],
-): CommandGroupDescriptorSpec<(args: TRegisterArgs) => Promise<void>>[] {
-  return definitions.map((definition) =>
-    defineImportedCommandGroupSpec(
-      definition.commandNames,
-      definition.loadModule,
-      definition.register,
-    ),
-  );
-}
-
-type ProgramCommandRegistrar = (program: Command) => Promise<void> | void;
 type AnyImportedProgramCommandGroupDefinition = {
   commandNames: readonly string[];
   loadModule: () => Promise<Record<string, unknown>>;
   exportName: string;
 };
-
-export type ImportedProgramCommandGroupDefinition<
-  TModule extends Record<TKey, ProgramCommandRegistrar>,
-  TKey extends keyof TModule & string,
-> = {
-  commandNames: readonly string[];
-  loadModule: () => Promise<TModule>;
-  exportName: TKey;
-};
-
-/** Define a program-level command group from a module export name. */
-export function defineImportedProgramCommandGroupSpec<
-  TModule extends Record<TKey, ProgramCommandRegistrar>,
-  TKey extends keyof TModule & string,
->(
-  definition: ImportedProgramCommandGroupDefinition<TModule, TKey>,
-): CommandGroupDescriptorSpec<(program: Command) => Promise<void>> {
-  return defineImportedCommandGroupSpec(
-    definition.commandNames,
-    definition.loadModule,
-    (module, program: Command) => module[definition.exportName](program),
-  );
-}
 
 /** Map program-level imported command definitions to lazy specs with export validation. */
 export function defineImportedProgramCommandGroupSpecs(

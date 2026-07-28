@@ -1,28 +1,39 @@
+export interface PromptTemplate {
+  name: string;
+  description?: string;
+  content: string;
+}
+
 /** Parse an argument string using simple shell-style single and double quotes. */
 export function parseCommandArgs(argsString: string): string[] {
   const args: string[] = [];
   let current = "";
   let inQuote: string | null = null;
+  let hasToken = false;
 
   for (const char of argsString) {
     if (inQuote) {
       if (char === inQuote) {
         inQuote = null;
       } else {
+        hasToken = true;
         current += char;
       }
     } else if (char === '"' || char === "'") {
+      hasToken = true;
       inQuote = char;
     } else if (/\s/.test(char)) {
-      if (current) {
+      if (hasToken) {
         args.push(current);
         current = "";
+        hasToken = false;
       }
     } else {
+      hasToken = true;
       current += char;
     }
   }
-  if (current) {
+  if (hasToken) {
     args.push(current);
   }
   return args;

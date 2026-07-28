@@ -1,9 +1,18 @@
 // Standalone runtime registry loader tests cover registry loading outside gateway startup.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearPluginLoaderCache, testing } from "../loader.js";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  cleanupPluginLoaderFixturesForTest,
+  clearPluginLoaderCache,
+} from "../loader.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import type { PluginRegistry } from "../registry-types.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../runtime.js";
+import {
+  getActivePluginChannelRegistry,
+  getActivePluginRegistry,
+  pinActivePluginChannelRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../runtime.js";
 
 const loaderMocks = vi.hoisted(() => ({
   loadOpenClawPlugins: vi.fn<typeof import("../loader.js").loadOpenClawPlugins>(),
@@ -39,79 +48,96 @@ afterEach(() => {
   resetPluginRuntimeStateForTest();
 });
 
-describe("ensureStandaloneRuntimePluginRegistryLoaded", () => {
-  it("reuses a compatible gateway startup registry for gateway-bindable dispatch load options", () => {
-    const activeRegistry = createRegistryWithPlugin("telegram");
-    activeRegistry.coreGatewayMethodNames = ["sessions.get", "sessions.list"];
-    const config = { plugins: { allow: ["telegram"] } };
-    const startupLoadOptions = {
-      config,
-      activationSourceConfig: config,
-      autoEnabledReasons: {},
-      workspaceDir: "/tmp/ws",
-      onlyPluginIds: ["telegram"],
-      coreGatewayMethodNames: ["sessions.get", "sessions.list"],
-      runtimeOptions: {
-        allowGatewaySubagentBinding: true,
-      },
-      preferBuiltPluginArtifacts: true,
-    };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(startupLoadOptions);
-    setActivePluginRegistry(activeRegistry, cacheKey, "gateway-bindable", "/tmp/ws");
+afterAll(() => {
+  cleanupPluginLoaderFixturesForTest();
+});
 
-    const result = ensureStandaloneRuntimePluginRegistryLoaded({
+describe("ensureStandaloneRuntimePluginRegistryLoaded tool-discovery installs", () => {
+  it("does not replace active or pinned channel registries during tool discovery", () => {
+    const activeRegistry = createRegistryWithPlugin("provider-only");
+    setActivePluginRegistry(activeRegistry, "active-key", "default", "/tmp/ws");
+    const channelRegistry = createRegistryWithPlugin("channel-plugin");
+    pinActivePluginChannelRegistry(channelRegistry);
+    const toolRegistry = createRegistryWithPlugin("tool-plugin");
+    loaderMocks.loadOpenClawPlugins.mockReturnValue(toolRegistry);
+
+    ensureStandaloneRuntimePluginRegistryLoaded({
+      surface: "channel",
+      forceLoad: true,
       loadOptions: {
-        config,
-        onlyPluginIds: ["telegram"],
-        runtimeOptions: {
-          allowGatewaySubagentBinding: true,
-        },
+        onlyPluginIds: ["tool-plugin"],
+        activate: false,
+        toolDiscovery: true,
         workspaceDir: "/tmp/ws",
       },
     });
 
-    expect(result).toBe(activeRegistry);
-    expect(loaderMocks.loadOpenClawPlugins).not.toHaveBeenCalled();
+    expect(getActivePluginRegistry()).toBe(activeRegistry);
+    expect(getActivePluginChannelRegistry()).toBe(channelRegistry);
   });
 
-  it("loads a fresh registry when dispatch config is not startup-compatible", () => {
-    const activeRegistry = createRegistryWithPlugin("telegram");
-    activeRegistry.coreGatewayMethodNames = ["sessions.get", "sessions.list"];
-    const config = { plugins: { allow: ["telegram"] } };
-    const startupLoadOptions = {
-      config,
-      activationSourceConfig: config,
-      autoEnabledReasons: {},
-      workspaceDir: "/tmp/ws",
-      onlyPluginIds: ["telegram"],
-      coreGatewayMethodNames: ["sessions.get", "sessions.list"],
-      runtimeOptions: {
-        allowGatewaySubagentBinding: true,
-      },
-      preferBuiltPluginArtifacts: true,
-    };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(startupLoadOptions);
-    setActivePluginRegistry(activeRegistry, cacheKey, "gateway-bindable", "/tmp/ws");
-    const loadedRegistry = createRegistryWithPlugin("telegram");
-    loaderMocks.loadOpenClawPlugins.mockReturnValue(loadedRegistry);
+  it("does not replace the active registry for a tool-discovery active load", () => {
+    const activeRegistry = createRegistryWithPlugin("provider-only");
+    setActivePluginRegistry(activeRegistry, "active-key", "default", "/tmp/ws");
+    const toolRegistry = createRegistryWithPlugin("tool-plugin");
+    loaderMocks.loadOpenClawPlugins.mockReturnValue(toolRegistry);
 
     const result = ensureStandaloneRuntimePluginRegistryLoaded({
+      surface: "active",
+      forceLoad: true,
+      installRegistry: true,
       loadOptions: {
-        config: {
-          plugins: {
-            allow: ["telegram"],
-            load: { paths: ["/tmp/changed.js"] },
-          },
-        },
-        onlyPluginIds: ["telegram"],
-        runtimeOptions: {
-          allowGatewaySubagentBinding: true,
-        },
+        onlyPluginIds: ["tool-plugin"],
+        activate: false,
+        toolDiscovery: true,
         workspaceDir: "/tmp/ws",
       },
     });
 
-    expect(result).toBe(loadedRegistry);
-    expect(loaderMocks.loadOpenClawPlugins).toHaveBeenCalledOnce();
+    expect(result).toBe(toolRegistry);
+    expect(getActivePluginRegistry()).toBe(activeRegistry);
+  });
+
+  it("still installs a non-tool-discovery active load (migration provider path)", () => {
+    const activeRegistry = createRegistryWithPlugin("provider-only");
+    setActivePluginRegistry(activeRegistry, "active-key", "default", "/tmp/ws");
+    const migrationRegistry = createRegistryWithPlugin("migration-plugin");
+    loaderMocks.loadOpenClawPlugins.mockReturnValue(migrationRegistry);
+
+    ensureStandaloneRuntimePluginRegistryLoaded({
+      surface: "active",
+      forceLoad: true,
+      installRegistry: true,
+      loadOptions: {
+        onlyPluginIds: ["migration-plugin"],
+        activate: false,
+        workspaceDir: "/tmp/ws",
+      },
+    });
+
+    // Without toolDiscovery the load must still become the active registry, since the migration
+    // provider resolver reads migrationProviders off the active registry.
+    expect(getActivePluginRegistry()).toBe(migrationRegistry);
+  });
+
+  it("keeps runtime surfaces empty for a cold tool-discovery load", () => {
+    // Establish the cold-start precondition deterministically (no active registry).
+    resetPluginRuntimeStateForTest();
+    const toolRegistry = createRegistryWithPlugin("tool-plugin");
+    loaderMocks.loadOpenClawPlugins.mockReturnValue(toolRegistry);
+
+    const result = ensureStandaloneRuntimePluginRegistryLoaded({
+      surface: "channel",
+      forceLoad: true,
+      loadOptions: {
+        onlyPluginIds: ["tool-plugin"],
+        activate: false,
+        toolDiscovery: true,
+        workspaceDir: "/tmp/ws",
+      },
+    });
+
+    expect(result).toBe(toolRegistry);
+    expect(getActivePluginRegistry()).toBeNull();
   });
 });

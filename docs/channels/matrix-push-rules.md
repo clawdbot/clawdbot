@@ -6,9 +6,11 @@ read_when:
 title: "Matrix push rules for quiet previews"
 ---
 
-When `channels.matrix.streaming` is `"quiet"`, OpenClaw edits a single preview event in place and marks the finalized edit with a custom content flag. Matrix clients notify on the final edit only if a per-user push rule matches that flag. This page is for operators who self-host Matrix and want to install that rule for each recipient account.
+When `channels.matrix.streaming.mode` is `"quiet"`, OpenClaw streams the reply by editing a single preview event in place. Previews are sent as non-notifying `m.notice` events, and the finalized edit is marked with `content["com.openclaw.finalized_preview"] = true`. Matrix clients notify on that final edit only if a per-user push rule matches the marker. This page is for operators who self-host Matrix and want to install that rule for each recipient account.
 
-If you only want stock Matrix notification behavior, use `streaming: "partial"` or leave streaming off. See [Matrix channel setup](/channels/matrix#streaming-previews).
+`streaming.mode: "progress"` finalizes its drafts through the same path, so the same rule also fires for progress-mode finalized edits.
+
+If you only want stock Matrix notification behavior, use `streaming.mode: "partial"` or leave streaming off. See [Matrix channel setup](/channels/matrix#streaming-previews).
 
 ## Prerequisites
 
@@ -16,7 +18,7 @@ If you only want stock Matrix notification behavior, use `streaming: "partial"` 
 - bot user = the OpenClaw Matrix account that sends the reply
 - use the recipient user's access token for the API calls below
 - match `sender` in the push rule against the bot user's full MXID
-- the recipient account must already have working pushers — quiet preview rules only work when normal Matrix push delivery is healthy
+- the recipient account must already have working pushers; quiet preview rules only work when normal Matrix push delivery is healthy
 
 ## Steps
 
@@ -27,7 +29,7 @@ If you only want stock Matrix notification behavior, use `streaming: "partial"` 
 {
   channels: {
     matrix: {
-      streaming: "quiet",
+      streaming: { mode: "quiet" },
     },
   },
 }
@@ -64,7 +66,7 @@ If no pushers come back, fix normal Matrix push delivery for this account before
   </Step>
 
   <Step title="Install the override push rule">
-    OpenClaw marks finalized text-only preview edits with `content["com.openclaw.finalized_preview"] = true`. Install a rule that matches that marker plus the bot MXID as sender:
+    Install a rule that matches the finalized-preview marker plus the bot MXID as sender:
 
 ```bash
 curl -sS -X PUT \
@@ -122,7 +124,7 @@ To remove the rule later, `DELETE` the same rule URL with the recipient's token.
 
 Push rules are keyed by `ruleId`: re-running `PUT` against the same ID updates a single rule. For multiple OpenClaw bots notifying the same recipient, create one rule per bot with a distinct sender match.
 
-New user-defined `override` rules are inserted ahead of default suppress rules, so no extra ordering parameter is needed. The rule only affects text-only preview edits that can be finalized in place; media fallbacks and stale-preview fallbacks use normal Matrix delivery.
+New user-defined `override` rules are inserted ahead of server-default suppress rules, so no extra ordering parameter is needed. The rule only affects text-only preview edits that can be finalized in place; media replies, stale-preview fallbacks, and final texts that would activate Matrix mentions are delivered as normal notifying messages instead.
 
 ## Homeserver notes
 

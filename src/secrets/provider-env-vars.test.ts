@@ -29,6 +29,12 @@ describe("provider env vars", () => {
     }
     expect(providerAuthNames).toContain("MINIMAX_CODE_PLAN_KEY");
     expect(providerAuthNames).toContain("MINIMAX_CODING_API_KEY");
+    expect(providerAuthNames).toContain("OPENAI_ADMIN_KEY");
+    expect(providerAuthNames).toContain("ANTHROPIC_ADMIN_KEY");
+    expect(providerAuthNames).toContain("ANTHROPIC_ADMIN_API_KEY");
+    expect(secretNames).toContain("OPENAI_ADMIN_KEY");
+    expect(secretNames).toContain("ANTHROPIC_ADMIN_KEY");
+    expect(secretNames).toContain("ANTHROPIC_ADMIN_API_KEY");
     expect(listKnownSecretEnvVarNames()).not.toContain("OPENCLAW_API_KEY");
   });
 

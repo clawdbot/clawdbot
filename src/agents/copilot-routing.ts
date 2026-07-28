@@ -6,12 +6,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
 import { parseModelRefProvider } from "./openai-routing.js";
 
-export const GITHUB_COPILOT_PROVIDER_ID = "github-copilot";
+const GITHUB_COPILOT_PROVIDER_ID = "github-copilot";
 
 /**
  * Canonical id of the Copilot agent runtime plugin.
  */
-export const COPILOT_RUNTIME_ID = "copilot";
+const COPILOT_RUNTIME_ID = "copilot";
 
 function parseModelRefId(model: string | undefined): string | undefined {
   if (typeof model !== "string") {

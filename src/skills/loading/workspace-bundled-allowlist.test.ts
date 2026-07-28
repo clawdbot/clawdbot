@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { captureEnv } from "../../test-utils/env.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { buildWorkspaceSkillsPrompt } from "./workspace.js";
 
@@ -12,10 +12,10 @@ describe("buildWorkspaceSkillsPrompt", () => {
     const env = captureEnv(["HOME", "USERPROFILE", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
     try {
-      process.env.HOME = workspaceDir;
-      process.env.USERPROFILE = workspaceDir;
-      delete process.env.OPENCLAW_HOME;
-      delete process.env.OPENCLAW_STATE_DIR;
+      setTestEnvValue("HOME", workspaceDir);
+      setTestEnvValue("USERPROFILE", workspaceDir);
+      deleteTestEnvValue("OPENCLAW_HOME");
+      deleteTestEnvValue("OPENCLAW_STATE_DIR");
       const bundledDir = path.join(workspaceDir, ".bundled");
       const bundledSkillDir = path.join(bundledDir, "peekaboo");
       const workspaceSkillDir = path.join(workspaceDir, "skills", "demo-skill");

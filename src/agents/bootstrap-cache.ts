@@ -68,16 +68,6 @@ export async function getOrLoadBootstrapFiles(params: {
   return files;
 }
 
-/** Test helper exposing the bounded snapshot cache size. */
-export function getBootstrapSnapshotCacheSizeForTest(): number {
-  return cache.size;
-}
-
-/** Test helper for asserting one session snapshot is cached. */
-export function hasBootstrapSnapshotForTest(sessionKey: string): boolean {
-  return cache.has(sessionKey);
-}
-
 /** Drop one cached bootstrap snapshot. */
 export function clearBootstrapSnapshot(sessionKey: string): void {
   cache.delete(sessionKey);
@@ -95,7 +85,13 @@ export function clearBootstrapSnapshotOnSessionRollover(params: {
   clearBootstrapSnapshot(params.sessionKey);
 }
 
-/** Clear all cached bootstrap snapshots. */
-export function clearAllBootstrapSnapshots(): void {
-  cache.clear();
+/** Clear bootstrap state after an in-log lifecycle boundary is durably appended. */
+export function clearBootstrapSnapshotOnSessionBoundary(params: {
+  boundaryAppended: boolean;
+  sessionKey?: string;
+}): void {
+  if (!params.boundaryAppended || !params.sessionKey) {
+    return;
+  }
+  clearBootstrapSnapshot(params.sessionKey);
 }

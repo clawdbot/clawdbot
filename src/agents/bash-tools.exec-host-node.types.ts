@@ -10,6 +10,7 @@ import type { ExecElevatedDefaults } from "./bash-tools.exec-types.js";
 /** Full parameter bundle for Node-hosted exec command execution. */
 export type ExecuteNodeHostCommandParams = {
   command: string;
+  toolCallId?: string;
   workdir: string | undefined;
   env: Record<string, string>;
   requestedEnv?: Record<string, string>;
@@ -21,6 +22,8 @@ export type ExecuteNodeHostCommandParams = {
   /** Session-store template, so the direct/denied followup can detect a rebind. */
   sessionStore?: string;
   bashElevated?: ExecElevatedDefaults;
+  approvalReviewerDeviceId?: string;
+  nonInteractiveApproval?: boolean;
   turnSourceChannel?: string;
   turnSourceTo?: string;
   turnSourceAccountId?: string;
@@ -31,12 +34,15 @@ export type ExecuteNodeHostCommandParams = {
   ask: ExecAsk;
   autoReview?: boolean;
   autoReviewer?: ExecAutoReviewer;
+  signal?: AbortSignal;
   strictInlineEval?: boolean;
   commandHighlighting?: boolean;
   timeoutSec?: number;
   defaultTimeoutSec: number;
   approvalRunningNoticeMs: number;
   warnings: string[];
+  /** Warnings that apply only when the command runs inline, never while approval is pending. */
+  foregroundWarnings?: string[];
   notifySessionKey?: string;
   notifyOnExit?: boolean;
   trustedSafeBinDirs?: ReadonlySet<string>;

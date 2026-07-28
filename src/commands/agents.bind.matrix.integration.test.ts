@@ -33,6 +33,32 @@ describe("agents bind matrix integration", () => {
     ]);
   });
 
+  it("rejects a binding spec with extra colon segments instead of silently truncating", () => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "matrix", plugin: matrixBindingPlugin, source: "test" }]),
+    );
+
+    const parsed = parseBindingSpecs({ agentId: "main", specs: ["matrix:work:extra"], config: {} });
+
+    expect(parsed.bindings).toEqual([]);
+    expect(parsed.errors).toEqual([
+      'Invalid binding "matrix:work:extra". Account id cannot contain ":". Use <channel>:<account>, for example telegram:default.',
+    ]);
+  });
+
+  it("still accepts a single channel:account binding", () => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "matrix", plugin: matrixBindingPlugin, source: "test" }]),
+    );
+
+    const parsed = parseBindingSpecs({ agentId: "main", specs: ["matrix:work"], config: {} });
+
+    expect(parsed.errors).toStrictEqual([]);
+    expect(parsed.bindings).toEqual([
+      { type: "route", agentId: "main", match: { channel: "matrix", accountId: "work" } },
+    ]);
+  });
+
   afterEach(() => {
     setActivePluginRegistry(createTestRegistry());
   });

@@ -19,18 +19,12 @@ const { getUnhandledRejectionHandlers, registerUnhandledRejectionHandlerMock, re
   });
 
 const {
-  ensureExtensionRelayForProfilesMock,
-  getPwAiModuleMock,
-  isPwAiLoadedMock,
   startTrackedBrowserTabCleanupTimerMock,
   stopKnownBrowserProfilesMock,
   trackedTabCleanupMock,
 } = vi.hoisted(() => {
   const trackedTabCleanupMockLocal = vi.fn();
   return {
-    ensureExtensionRelayForProfilesMock: vi.fn(async () => {}),
-    getPwAiModuleMock: vi.fn(),
-    isPwAiLoadedMock: vi.fn(() => false),
     startTrackedBrowserTabCleanupTimerMock: vi.fn(() => trackedTabCleanupMockLocal),
     stopKnownBrowserProfilesMock: vi.fn(async () => {}),
     trackedTabCleanupMock: trackedTabCleanupMockLocal,
@@ -42,7 +36,6 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
 }));
 
 vi.mock("./server-lifecycle.js", () => ({
-  ensureExtensionRelayForProfiles: ensureExtensionRelayForProfilesMock,
   stopKnownBrowserProfiles: stopKnownBrowserProfilesMock,
 }));
 
@@ -50,30 +43,24 @@ vi.mock("./session-tab-cleanup.js", () => ({
   startTrackedBrowserTabCleanupTimer: startTrackedBrowserTabCleanupTimerMock,
 }));
 
-vi.mock("./pw-ai-state.js", () => ({
-  isPwAiLoaded: isPwAiLoadedMock,
-}));
-
-vi.mock("./pw-ai-module.js", () => ({
-  getPwAiModule: getPwAiModuleMock,
-}));
-
 const { createBrowserRuntimeState, stopBrowserRuntime } = await import("./runtime-lifecycle.js");
-const { isPlaywrightDialogRaceUnhandledRejection } = await import("./unhandled-rejections.js");
 
 beforeEach(() => {
   resetHandlers();
   registerUnhandledRejectionHandlerMock.mockClear();
-  ensureExtensionRelayForProfilesMock.mockClear();
-  getPwAiModuleMock.mockClear();
-  isPwAiLoadedMock.mockReset().mockReturnValue(false);
   startTrackedBrowserTabCleanupTimerMock.mockClear();
   stopKnownBrowserProfilesMock.mockClear();
   trackedTabCleanupMock.mockClear();
 });
 
 describe("browser unhandled rejection lifecycle", () => {
-  it("matches direct and nested Playwright dialog-race protocol errors", () => {
+  it("matches direct and nested Playwright dialog-race protocol errors", async () => {
+    const state = await createBrowserRuntimeState({
+      resolved: { profiles: {} } as never,
+      port: 18791,
+      onWarn: vi.fn(),
+    });
+    const handler = getUnhandledRejectionHandlers()[0];
     const direct = Object.assign(
       new Error("Protocol error (Page.handleJavaScriptDialog): No dialog is showing"),
       { method: "Page.handleJavaScriptDialog" },
@@ -87,23 +74,37 @@ describe("browser unhandled rejection lifecycle", () => {
       error: new Error("Protocol error (Dialog.handleJavaScriptDialog): No dialog is showing"),
     };
 
-    expect(isPlaywrightDialogRaceUnhandledRejection(direct)).toBe(true);
-    expect(isPlaywrightDialogRaceUnhandledRejection(nested)).toBe(true);
-    expect(isPlaywrightDialogRaceUnhandledRejection(wrapped)).toBe(true);
+    expect(handler?.(direct)).toBe(true);
+    expect(handler?.(nested)).toBe(true);
+    expect(handler?.(wrapped)).toBe(true);
+    await stopBrowserRuntime({
+      current: state,
+      getState: () => state,
+      clearState: vi.fn(),
+      onWarn: vi.fn(),
+    });
   });
 
-  it("keeps non-dialog and non-race Playwright errors unhandled", () => {
+  it("keeps non-dialog and non-race Playwright errors unhandled", async () => {
+    const state = await createBrowserRuntimeState({
+      resolved: { profiles: {} } as never,
+      port: 18791,
+      onWarn: vi.fn(),
+    });
+    const handler = getUnhandledRejectionHandlers()[0];
     expect(
-      isPlaywrightDialogRaceUnhandledRejection(
-        Object.assign(new Error("No dialog is showing"), { method: "Page.navigate" }),
-      ),
+      handler?.(Object.assign(new Error("No dialog is showing"), { method: "Page.navigate" })),
     ).toBe(false);
     expect(
-      isPlaywrightDialogRaceUnhandledRejection(
-        new Error("Protocol error (Page.handleJavaScriptDialog): Target closed"),
-      ),
+      handler?.(new Error("Protocol error (Page.handleJavaScriptDialog): Target closed")),
     ).toBe(false);
-    expect(isPlaywrightDialogRaceUnhandledRejection(new Error("No dialog is showing"))).toBe(false);
+    expect(handler?.(new Error("No dialog is showing"))).toBe(false);
+    await stopBrowserRuntime({
+      current: state,
+      getState: () => state,
+      clearState: vi.fn(),
+      onWarn: vi.fn(),
+    });
   });
 
   it("registers during startup and unregisters during shutdown", async () => {
@@ -136,5 +137,40 @@ describe("browser unhandled rejection lifecycle", () => {
     expect(stopKnownBrowserProfilesMock).toHaveBeenCalledTimes(1);
     expect(clearState).toHaveBeenCalledTimes(1);
     expect(getUnhandledRejectionHandlers()).toStrictEqual([]);
+  });
+
+  it("drains profiles when a custom tab-cleanup disposer throws synchronously", async () => {
+    let releaseProfiles!: () => void;
+    const profileGate = new Promise<void>((resolve) => {
+      releaseProfiles = resolve;
+    });
+    let profilesDrained = false;
+    stopKnownBrowserProfilesMock.mockImplementationOnce(async () => {
+      await profileGate;
+      profilesDrained = true;
+    });
+    const state = {
+      port: 18_791,
+      resolved: { profiles: {} },
+      profiles: new Map(),
+      stopTrackedTabCleanup: () => {
+        throw new Error("tab cleanup failed");
+      },
+    } as never;
+    const clearState = vi.fn();
+
+    const stopping = stopBrowserRuntime({
+      current: state,
+      getState: () => state,
+      clearState,
+      onWarn: vi.fn(),
+    });
+    await Promise.resolve();
+    expect(profilesDrained).toBe(false);
+    releaseProfiles();
+
+    await expect(stopping).rejects.toThrow("tab cleanup failed");
+    expect(profilesDrained).toBe(true);
+    expect(clearState).not.toHaveBeenCalled();
   });
 });

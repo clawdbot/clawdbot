@@ -39,10 +39,17 @@ export function createTypingController(params: {
   onCleanup?: () => void;
   typingIntervalSeconds?: number;
   typingTtlMs?: number;
+  keepalive?: boolean;
   silentToken?: string;
   log?: (message: string) => void;
 }): TypingController {
-  const { onReplyStart, onCleanup, silentToken = SILENT_REPLY_TOKEN, log } = params;
+  const {
+    onReplyStart,
+    onCleanup,
+    keepalive = true,
+    silentToken = SILENT_REPLY_TOKEN,
+    log,
+  } = params;
   if (!onReplyStart && !onCleanup) {
     return {
       onReplyStart: async () => {},
@@ -200,6 +207,10 @@ export function createTypingController(params: {
     // This keeps typing alive during long tool executions.
     refreshTypingTtl();
     if (!onReplyStart) {
+      return;
+    }
+    if (!keepalive) {
+      await ensureStart();
       return;
     }
     if (typingLoop.isRunning()) {

@@ -241,10 +241,13 @@ describe("broadcast groups", () => {
           reply,
           sendMedia,
         },
-        from: "+1000",
-        conversationId: "+1000",
-        accountId: "default",
-        chatType: "direct",
+        admission: {
+          accountId: "default",
+          conversation: {
+            kind: "direct",
+            id: "+1000",
+          },
+        },
       }),
     );
 

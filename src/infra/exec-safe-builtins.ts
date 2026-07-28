@@ -28,7 +28,7 @@ export function isSafeBuiltinSegment(params: {
     return false;
   }
   if (head === "[") {
-    return params.segment.argv.at(-1) === "]";
+    return params.segment.argv.at(-1) === "]" || params.segment.raw.trim().endsWith("]");
   }
   return DEFAULT_SAFE_BUILTINS.has(head);
 }

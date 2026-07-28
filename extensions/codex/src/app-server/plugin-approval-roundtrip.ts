@@ -6,13 +6,15 @@ import {
   callGatewayTool,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveCodexGatewayTimeoutWithGraceMs } from "./attempt-timeouts.js";
 
 const DEFAULT_CODEX_APPROVAL_TIMEOUT_MS = 120_000;
 const MAX_PLUGIN_APPROVAL_TITLE_LENGTH = 80;
 const MAX_PLUGIN_APPROVAL_DESCRIPTION_LENGTH = 256;
 
-type ExecApprovalDecision = "allow-once" | "allow-always" | "deny";
+export type ExecApprovalDecision = "allow-once" | "allow-always" | "deny";
 
 /** Normalized Codex app-server approval outcome after a gateway decision. */
 export type AppServerApprovalOutcome =
@@ -40,6 +42,7 @@ export async function requestPluginApproval(params: {
   severity: "info" | "warning";
   toolName: string;
   toolCallId?: string;
+  allowedDecisions?: ExecApprovalDecision[];
 }): Promise<ApprovalRequestResult | undefined> {
   const timeoutMs = DEFAULT_CODEX_APPROVAL_TIMEOUT_MS;
   return callGatewayTool(
@@ -60,6 +63,7 @@ export async function requestPluginApproval(params: {
       turnSourceThreadId: params.paramsForRun.currentThreadTs,
       timeoutMs,
       twoPhase: true,
+      ...(params.allowedDecisions ? { allowedDecisions: params.allowedDecisions } : {}),
     },
     { expectFinal: false },
   ) as Promise<ApprovalRequestResult | undefined>;
@@ -85,13 +89,24 @@ export async function waitForPluginApprovalDecision(params: {
   signal?: AbortSignal;
 }): Promise<ExecApprovalDecision | null | undefined> {
   const timeoutMs = DEFAULT_CODEX_APPROVAL_TIMEOUT_MS;
-  const waitPromise: Promise<ApprovalWaitResult | undefined> = callGatewayTool(
+  const waitPromise: Promise<ApprovalWaitResult | null | undefined> = callGatewayTool(
     "plugin.approval.waitDecision",
     { timeoutMs: resolveCodexGatewayTimeoutWithGraceMs(timeoutMs) },
     { id: params.approvalId },
-  );
+  ).catch((error: unknown) => {
+    if (isApprovalNotFoundError(error)) {
+      return null;
+    }
+    throw error;
+  });
+  // Bind the verdict to the approval that parked this prompt. A stale or
+  // misrouted reply maps to "unavailable" instead of releasing another gate.
+  const bindDecision = (
+    result: ApprovalWaitResult | null | undefined,
+  ): ExecApprovalDecision | null | undefined =>
+    result === null ? null : result?.id === params.approvalId ? result.decision : undefined;
   if (!params.signal) {
-    return (await waitPromise)?.decision;
+    return bindDecision(await waitPromise);
   }
   let onAbort: (() => void) | undefined;
   const abortPromise = new Promise<never>((_, reject) => {
@@ -103,7 +118,7 @@ export async function waitForPluginApprovalDecision(params: {
     params.signal!.addEventListener("abort", onAbort, { once: true });
   });
   try {
-    return (await Promise.race([waitPromise, abortPromise]))?.decision;
+    return bindDecision(await Promise.race([waitPromise, abortPromise]));
   } finally {
     if (onAbort) {
       params.signal.removeEventListener("abort", onAbort);
@@ -128,7 +143,7 @@ export function mapExecDecisionToOutcome(
 }
 
 function truncateForGateway(value: string, maxLength: number): string {
-  return value.length <= maxLength ? value : `${value.slice(0, Math.max(0, maxLength - 3))}...`;
+  return value.length <= maxLength ? value : `${truncateUtf16Safe(value, maxLength - 3)}...`;
 }
 
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {

@@ -4,10 +4,8 @@ import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  setFalVideoFetchGuardForTesting,
-  buildFalVideoGenerationProvider,
-} from "./video-generation-provider.js";
+import { setFalVideoFetchGuardForTesting } from "./test-support.js";
+import { buildFalVideoGenerationProvider } from "./video-generation-provider.js";
 
 function createMockRequestConfig() {
   return {} as ReturnType<typeof providerHttp.resolveProviderHttpRequestConfig>["requestConfig"];
@@ -37,9 +35,7 @@ describe("fal video generation provider", () => {
 
   function releasedJson(value: unknown) {
     return {
-      response: {
-        json: async () => value,
-      },
+      response: Response.json(value),
       release: vi.fn(async () => {}),
     };
   }
@@ -254,11 +250,10 @@ describe("fal video generation provider", () => {
   it("wraps non-JSON successful fal submit responses", async () => {
     mockFalProviderRuntime();
     fetchGuardMock.mockResolvedValueOnce({
-      response: {
-        json: async () => {
-          throw new SyntaxError("Unexpected token < in JSON");
-        },
-      },
+      response: new Response("<html><body>Bad Gateway</body></html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      }),
       release: vi.fn(async () => {}),
     });
 

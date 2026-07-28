@@ -8,13 +8,15 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { loadSessionStore } from "../config/sessions/store-load.js";
+import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import {
   resolveExternalBestEffortDeliveryTarget,
   type ExternalBestEffortDeliveryTarget,
 } from "../infra/outbound/best-effort-delivery.js";
 import { sendMessage } from "../infra/outbound/message.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { isGatewayMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
@@ -82,7 +84,7 @@ function formatUnknownError(error: unknown): string {
 }
 
 /** Builds the prompt used to resume an agent after an approved async exec completes. */
-export function buildExecApprovalFollowupPrompt(resultText: string): string {
+function buildExecApprovalFollowupPrompt(resultText: string): string {
   const trimmed = resultText.trim();
   if (isExecDeniedResultText(trimmed)) {
     return buildExecDeniedFollowupPrompt(trimmed);
@@ -108,10 +110,10 @@ function shouldSuppressExecDeniedFollowup(sessionKey: string | undefined): boole
 
 /**
  * Direct/denied followups bypass the gateway agent dispatch, so the gateway
- * rebind guard never sees them. Resolve the session key's current sessionId
- * from the on-disk store and report whether it was rebound away from the
- * approval-time session by `/new` or `/reset` (#59349). Failure to resolve is
- * treated as "not rebound" so a real result is never suppressed by accident.
+ * rebind guard never sees them. Resolve the session key's current sessionId and
+ * report whether it was rebound away from the approval-time session by `/new`
+ * or `/reset` (#59349). Failure to resolve is treated as "not rebound" so a
+ * real result is never suppressed by accident.
  */
 function isExecApprovalFollowupDirectDeliveryStale(params: {
   sessionKey: string | undefined;
@@ -128,7 +130,11 @@ function isExecApprovalFollowupDirectDeliveryStale(params: {
       agentId: resolveAgentIdFromSessionKey(sessionKey),
     });
     const resolvedSessionId = normalizeOptionalString(
-      loadSessionStore(storePath)?.[sessionKey]?.sessionId,
+      loadSessionEntryReadOnly({
+        storePath,
+        sessionKey,
+        clone: false,
+      })?.sessionId,
     );
     return isExecApprovalFollowupSessionRebound({ expectedSessionId, resolvedSessionId });
   } catch (err) {
@@ -271,21 +277,11 @@ function buildAgentFollowupArgs(params: {
     deliver: deliveryTarget.deliver,
     ...(deliveryTarget.deliver ? { bestEffortDeliver: true as const } : {}),
     channel: deliveryTarget.deliver ? deliveryTarget.channel : fallbackChannel,
-    to: deliveryTarget.deliver
-      ? deliveryTarget.to
-      : sessionOnlyOriginChannel
-        ? params.turnSourceTo
-        : undefined,
-    accountId: deliveryTarget.deliver
-      ? deliveryTarget.accountId
-      : sessionOnlyOriginChannel
-        ? params.turnSourceAccountId
-        : undefined,
+    to: deliveryTarget.deliver ? deliveryTarget.to : params.turnSourceTo,
+    accountId: deliveryTarget.deliver ? deliveryTarget.accountId : params.turnSourceAccountId,
     threadId: deliveryTarget.deliver
       ? deliveryTarget.threadId
-      : sessionOnlyOriginChannel
-        ? params.turnSourceThreadId
-        : undefined,
+      : stringifyRouteThreadId(params.turnSourceThreadId),
     idempotencyKey:
       params.idempotencyKey ??
       buildExecApprovalFollowupIdempotencyKey({
@@ -403,6 +399,12 @@ export async function sendExecApprovalFollowup(
         sessionStore: params.sessionStore,
       })
     ) {
+      emitDiagnosticEvent({
+        type: "exec.approval.followup_suppressed",
+        approvalId: params.approvalId,
+        reason: "session_rebound",
+        phase: "direct_delivery",
+      });
       log.info(
         `Dropping stale denied exec approval followup ${params.approvalId}: session ${sessionKey ?? ""} was rebound before the approval resolved`,
       );
@@ -432,6 +434,12 @@ export async function sendExecApprovalFollowup(
       sessionStore: params.sessionStore,
     })
   ) {
+    emitDiagnosticEvent({
+      type: "exec.approval.followup_suppressed",
+      approvalId: params.approvalId,
+      reason: "session_rebound",
+      phase: "direct_delivery",
+    });
     log.info(
       `Dropping stale exec approval followup ${params.approvalId} direct fallback: session ${sessionKey ?? ""} was rebound before the approval resolved`,
     );

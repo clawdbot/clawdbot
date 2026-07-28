@@ -2,9 +2,10 @@
 import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
 import { resetConfiguredBindingTargetInPlace } from "../../channels/plugins/binding-targets.js";
-import { updateSessionStoreEntry } from "../../config/sessions/store.js";
+import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { isAcpSessionKey } from "../../routing/session-key.js";
+import { applyCommandTextToContext } from "./command-context-rewrite.js";
 import { resolveBoundAcpThreadSessionKey } from "./commands-acp/targets.js";
 import { emitResetCommandHooks, type ResetCommandAction } from "./commands-reset-hooks.js";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
@@ -17,15 +18,9 @@ type InternalResetCommandOptions = NonNullable<HandleCommandsParams["opts"]> & {
 };
 
 function applyAcpResetTailContext(ctx: HandleCommandsParams["ctx"], resetTail: string): void {
-  const mutableCtx = ctx as Record<string, unknown>;
-  mutableCtx.Body = resetTail;
-  mutableCtx.RawBody = resetTail;
-  mutableCtx.CommandBody = resetTail;
-  mutableCtx.BodyForCommands = resetTail;
-  mutableCtx.BodyForAgent = resetTail;
-  mutableCtx.BodyStripped = resetTail;
+  applyCommandTextToContext(ctx, resetTail);
   // Mark the context so ACP dispatch continues with the post-reset tail, not the reset command.
-  mutableCtx.AcpDispatchTailAfterReset = true;
+  ctx.AcpDispatchTailAfterReset = true;
 }
 
 function isResetAuthorized(params: HandleCommandsParams): boolean {
@@ -81,10 +76,12 @@ export async function maybeHandleResetCommand(
         params.sessionStore[params.sessionKey] = targetSessionEntry;
       }
       if (params.storePath && params.sessionKey) {
-        await updateSessionStoreEntry({
-          storePath: params.storePath,
-          sessionKey: params.sessionKey,
-          update: async (entry) => {
+        await updateSessionEntry(
+          {
+            storePath: params.storePath,
+            sessionKey: params.sessionKey,
+          },
+          async (entry) => {
             const next = { ...entry };
             clearAllCliSessions(next);
             return {
@@ -95,16 +92,18 @@ export async function maybeHandleResetCommand(
               lastInteractionAt: now,
             };
           },
-        });
+        );
       }
     }
 
     await emitResetCommandHooks({
       action: "reset",
+      agentId: params.agentId,
       ctx: params.ctx,
       cfg: params.cfg,
       command: params.command,
       sessionKey: params.sessionKey,
+      storePath: params.storePath,
       sessionEntry: targetSessionEntry,
       previousSessionEntry,
       workspaceDir: params.workspaceDir,
@@ -174,10 +173,12 @@ export async function maybeHandleResetCommand(
 
   const hookResult = await emitResetCommandHooks({
     action: commandAction,
+    agentId: params.agentId,
     ctx: params.ctx,
     cfg: params.cfg,
     command: params.command,
     sessionKey: params.sessionKey,
+    storePath: params.storePath,
     sessionEntry: targetSessionEntry,
     previousSessionEntry: params.previousSessionEntry,
     workspaceDir: params.workspaceDir,

@@ -11,9 +11,11 @@ type ZaloJsMocks = {
   listZaloGroupsMock: Mock<ZaloJsModule["listZaloGroups"]>;
   listZaloGroupsMatchingMock: Mock<ZaloJsModule["listZaloGroupsMatching"]>;
   logoutZaloProfileMock: Mock<ZaloJsModule["logoutZaloProfile"]>;
+  normalizeZaloInboundMessageMock: Mock<ZaloJsModule["normalizeZaloInboundMessage"]>;
   resolveZaloAllowFromEntriesMock: Mock<ZaloJsModule["resolveZaloAllowFromEntries"]>;
   resolveZaloGroupContextMock: Mock<ZaloJsModule["resolveZaloGroupContext"]>;
   resolveZaloGroupsByEntriesMock: Mock<ZaloJsModule["resolveZaloGroupsByEntries"]>;
+  resolveZaloOwnUserIdMock: Mock<ZaloJsModule["resolveZaloOwnUserId"]>;
   startZaloListenerMock: Mock<ZaloJsModule["startZaloListener"]>;
   startZaloQrLoginMock: Mock<ZaloJsModule["startZaloQrLogin"]>;
   waitForZaloQrLoginMock: Mock<ZaloJsModule["waitForZaloQrLogin"]>;
@@ -33,6 +35,12 @@ const zaloJsMocks = vi.hoisted(
       loggedOut: true,
       message: "Logged out and cleared local session.",
     })),
+    normalizeZaloInboundMessageMock: vi.fn((message) => {
+      const normalized = message.data.testNormalizedMessage;
+      return normalized && typeof normalized === "object"
+        ? (normalized as ReturnType<ZaloJsModule["normalizeZaloInboundMessage"]>)
+        : null;
+    }),
     resolveZaloAllowFromEntriesMock: vi.fn(async ({ entries }: { entries: string[] }) =>
       entries.map((entry) => ({ input: entry, resolved: true, id: entry, note: undefined })),
     ),
@@ -44,6 +52,7 @@ const zaloJsMocks = vi.hoisted(
     resolveZaloGroupsByEntriesMock: vi.fn(async ({ entries }: { entries: string[] }) =>
       entries.map((entry) => ({ input: entry, resolved: true, id: entry, note: undefined })),
     ),
+    resolveZaloOwnUserIdMock: vi.fn(async () => "owner-1"),
     startZaloListenerMock: vi.fn(async () => ({ stop: vi.fn() })),
     startZaloQrLoginMock: vi.fn(async () => ({
       message: "qr pending",
@@ -56,16 +65,13 @@ const zaloJsMocks = vi.hoisted(
   }),
 );
 
-export const checkZaloAuthenticatedMock = zaloJsMocks.checkZaloAuthenticatedMock;
-export const getZaloUserInfoMock = zaloJsMocks.getZaloUserInfoMock;
 export const listZaloFriendsMock = zaloJsMocks.listZaloFriendsMock;
 export const listZaloFriendsMatchingMock = zaloJsMocks.listZaloFriendsMatchingMock;
 export const listZaloGroupMembersMock = zaloJsMocks.listZaloGroupMembersMock;
 export const listZaloGroupsMock = zaloJsMocks.listZaloGroupsMock;
-export const listZaloGroupsMatchingMock = zaloJsMocks.listZaloGroupsMatchingMock;
+export const checkZaloAuthenticatedMock = zaloJsMocks.checkZaloAuthenticatedMock;
 export const logoutZaloProfileMock = zaloJsMocks.logoutZaloProfileMock;
 export const resolveZaloAllowFromEntriesMock = zaloJsMocks.resolveZaloAllowFromEntriesMock;
-export const resolveZaloGroupContextMock = zaloJsMocks.resolveZaloGroupContextMock;
 export const resolveZaloGroupsByEntriesMock = zaloJsMocks.resolveZaloGroupsByEntriesMock;
 export const startZaloListenerMock: Mock<ZaloJsModule["startZaloListener"]> =
   zaloJsMocks.startZaloListenerMock;
@@ -73,17 +79,19 @@ export const startZaloQrLoginMock = zaloJsMocks.startZaloQrLoginMock;
 export const waitForZaloQrLoginMock = zaloJsMocks.waitForZaloQrLoginMock;
 
 vi.mock("./zalo-js.js", () => ({
-  checkZaloAuthenticated: checkZaloAuthenticatedMock,
-  getZaloUserInfo: getZaloUserInfoMock,
+  checkZaloAuthenticated: zaloJsMocks.checkZaloAuthenticatedMock,
+  getZaloUserInfo: zaloJsMocks.getZaloUserInfoMock,
   listZaloFriends: listZaloFriendsMock,
   listZaloFriendsMatching: listZaloFriendsMatchingMock,
   listZaloGroupMembers: listZaloGroupMembersMock,
   listZaloGroups: listZaloGroupsMock,
-  listZaloGroupsMatching: listZaloGroupsMatchingMock,
-  logoutZaloProfile: logoutZaloProfileMock,
-  resolveZaloAllowFromEntries: resolveZaloAllowFromEntriesMock,
-  resolveZaloGroupContext: resolveZaloGroupContextMock,
-  resolveZaloGroupsByEntries: resolveZaloGroupsByEntriesMock,
+  listZaloGroupsMatching: zaloJsMocks.listZaloGroupsMatchingMock,
+  logoutZaloProfile: zaloJsMocks.logoutZaloProfileMock,
+  normalizeZaloInboundMessage: zaloJsMocks.normalizeZaloInboundMessageMock,
+  resolveZaloAllowFromEntries: zaloJsMocks.resolveZaloAllowFromEntriesMock,
+  resolveZaloGroupContext: zaloJsMocks.resolveZaloGroupContextMock,
+  resolveZaloGroupsByEntries: zaloJsMocks.resolveZaloGroupsByEntriesMock,
+  resolveZaloOwnUserId: zaloJsMocks.resolveZaloOwnUserIdMock,
   startZaloListener: startZaloListenerMock,
   startZaloQrLogin: startZaloQrLoginMock,
   waitForZaloQrLogin: waitForZaloQrLoginMock,

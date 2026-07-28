@@ -55,6 +55,7 @@ git_root="/tmp/openclaw-git"
 mkdir -p "$git_root"
 # Build the fake git install from the packed package contents, not the checkout.
 tar -xzf "$package_tgz" -C "$git_root" --strip-components=1
+node scripts/e2e/lib/package-git-fixture.mjs prepare "$git_root"
 # The package-derived fixture can carry patchedDependencies whose targets are
 # absent from the trimmed tarball install; that should not block update preflight.
 node scripts/e2e/lib/update-channel-switch/assertions.mjs prepare-git-fixture "$git_root"

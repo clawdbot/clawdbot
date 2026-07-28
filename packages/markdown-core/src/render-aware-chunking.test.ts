@@ -72,6 +72,19 @@ describe("renderMarkdownIRChunksWithinLimit", () => {
     expect(chunks.map((chunk) => chunk.source.text)).toEqual(["README.md", "<"]);
   });
 
+  it("preserves separator whitespace in the initial rendered-size split", () => {
+    const ir = markdownToIR("alpha beta gamma");
+    const chunks = renderMarkdownIRChunksWithinLimit({
+      ir,
+      limit: 10,
+      renderChunk: (chunk) => chunk.text,
+      measureRendered: (rendered) => rendered.length,
+    });
+
+    expect(chunks.map((chunk) => chunk.source.text)).toEqual(["alpha ", "beta gamma"]);
+    expect(chunks.map((chunk) => chunk.source.text).join("")).toBe(ir.text);
+  });
+
   it("normalizes non-finite limits before chunking", () => {
     const ir = markdownToIR("abc");
     const chunks = renderMarkdownIRChunksWithinLimit({
@@ -83,6 +96,41 @@ describe("renderMarkdownIRChunksWithinLimit", () => {
 
     expect(chunks.map((chunk) => chunk.source.text)).toEqual(["a", "b", "c"]);
     expect(chunks.every((chunk) => chunk.rendered.length <= 1)).toBe(true);
+  });
+
+  it("keeps astral characters whole when a positive limit reaches their pair", () => {
+    const chunks = renderMarkdownIRChunksWithinLimit({
+      ir: markdownToIR("A😀B"),
+      limit: 1,
+      renderChunk: (chunk) => chunk.text,
+      measureRendered: (rendered) => rendered.length,
+    });
+
+    expect(chunks.map((chunk) => chunk.source.text)).toEqual(["A", "😀", "B"]);
+  });
+
+  it("keeps astral characters whole when rendered size requires a retry split", () => {
+    const chunks = renderMarkdownIRChunksWithinLimit({
+      ir: markdownToIR("A😀"),
+      limit: 3,
+      renderChunk: (chunk) => (chunk.text === "A😀" ? "too long" : chunk.text),
+      measureRendered: (rendered) => rendered.length,
+    });
+
+    expect(chunks.map((chunk) => chunk.source.text)).toEqual(["A", "😀"]);
+  });
+
+  it("keeps split order while processing the worklist as a stack", () => {
+    const text = "abcdefghijklmnopqrstuvwx";
+    const chunks = renderMarkdownIRChunksWithinLimit({
+      ir: markdownToIR(text),
+      limit: 5,
+      renderChunk: (chunk) => chunk.text,
+      measureRendered: (rendered) => rendered.length,
+    });
+
+    expect(chunks.map((chunk) => chunk.source.text).join("")).toBe(text);
+    expect(chunks.every((chunk) => chunk.rendered.length <= 5)).toBe(true);
   });
 
   it("treats Infinity as no size cap and returns a single chunk", () => {

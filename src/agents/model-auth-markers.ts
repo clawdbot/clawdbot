@@ -14,9 +14,9 @@ import { listKnownProviderEnvApiKeyNames } from "./model-auth-env-vars.js";
 /** @deprecated MiniMax provider-owned marker; do not use from third-party plugins. */
 export const MINIMAX_OAUTH_MARKER = "minimax-oauth";
 /** Prefix for persisted OAuth-backed API-key marker values. */
-export const OAUTH_API_KEY_MARKER_PREFIX = "oauth:";
+const OAUTH_API_KEY_MARKER_PREFIX = "oauth:";
 /** Marker for local Ollama auth that does not use a real API key. */
-export const OLLAMA_LOCAL_AUTH_MARKER = "ollama-local";
+const OLLAMA_LOCAL_AUTH_MARKER = "ollama-local";
 /** @deprecated Bundled local-provider marker; do not use from third-party plugins. */
 export const CUSTOM_LOCAL_AUTH_MARKER = "custom-local";
 /** @deprecated Codex provider-owned marker; do not use from third-party plugins. */
@@ -65,7 +65,7 @@ function listKnownEnvApiKeyMarkers(): Set<string> {
 }
 
 /** List non-secret auth markers known from core and bundled plugin manifests. */
-export function listKnownNonSecretApiKeyMarkers(): string[] {
+function listKnownNonSecretApiKeyMarkers(): string[] {
   knownNonSecretApiKeyMarkersCache ??= uniqueStrings([
     ...CORE_NON_SECRET_API_KEY_MARKERS,
     ...listOpenClawPluginManifestMetadata().flatMap((plugin) =>
@@ -78,7 +78,7 @@ export function listKnownNonSecretApiKeyMarkers(): string[] {
 }
 
 /** Return true for AWS SDK env marker values that represent ambient auth. */
-export function isAwsSdkAuthMarker(value: string): boolean {
+function isAwsSdkAuthMarker(value: string): boolean {
   return AWS_SDK_ENV_MARKERS.has(value.trim());
 }
 
@@ -133,7 +133,8 @@ export function isNonSecretApiKeyMarker(
   const isKnownMarker =
     isOAuthApiKeyMarker(trimmed) ||
     listKnownNonSecretApiKeyMarkers().includes(trimmed) ||
-    isAwsSdkAuthMarker(trimmed);
+    isAwsSdkAuthMarker(trimmed) ||
+    isSecretRefHeaderValueMarker(trimmed);
   if (isKnownMarker) {
     return true;
   }

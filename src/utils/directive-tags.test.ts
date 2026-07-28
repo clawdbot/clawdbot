@@ -2,10 +2,29 @@
 import { describe, expect, test } from "vitest";
 import {
   parseInlineDirectives,
+  sanitizeReplyDirectiveId,
   stripInlineDirectiveTagsForDelivery,
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
 } from "./directive-tags.js";
+
+function hasUnpairedSurrogate(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      // High surrogate must be followed by a low surrogate. charCodeAt past end
+      // returns NaN; NaN comparisons are always false, so guard bounds explicitly.
+      const next = i + 1 < value.length ? value.charCodeAt(i + 1) : -1;
+      if (next < 0xdc00 || next > 0xdfff) {
+        return true;
+      }
+      i += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
 
 describe("stripInlineDirectiveTagsForDisplay", () => {
   test("removes reply and audio directives", () => {
@@ -54,6 +73,15 @@ describe("stripInlineDirectiveTagsForDelivery", () => {
 });
 
 describe("parseInlineDirectives", () => {
+  test("sanitizes explicit reply directive ids", () => {
+    const result = parseInlineDirectives("hello [[reply_to: abc\u0000\r\u0085def ]]");
+
+    expect(result.hasReplyTag).toBe(true);
+    expect(result.replyToExplicitId).toBe("abcdef");
+    expect(result.replyToId).toBe("abcdef");
+    expect(result.text).toBe("hello");
+  });
+
   test("preserves leading spaces after stripping a reply tag", () => {
     const input = "[[reply_to_current]]    keep this indent\n        and this one";
     const result = parseInlineDirectives(input);
@@ -207,6 +235,32 @@ describe("parseInlineDirectives", () => {
     expect(result.text).toBe(
       [`literal ${sentinelLikeText} text`, "```ts", "    const value = 1;", "```"].join("\n"),
     );
+  });
+});
+
+describe("sanitizeReplyDirectiveId", () => {
+  test("strips bracket and control characters from explicit reply ids", () => {
+    expect(sanitizeReplyDirectiveId(" [abc]\u0000\r\u0085def ")).toBe("abcdef");
+  });
+
+  test("truncates long ids without splitting surrogate pairs", () => {
+    const prefix = "a".repeat(255);
+    const result = sanitizeReplyDirectiveId(`${prefix}😊tail`);
+
+    expect(result).toBe(`${prefix}😊`);
+    expect(hasUnpairedSurrogate(result ?? "")).toBe(false);
+  });
+
+  test("hasUnpairedSurrogate catches a lone trailing high surrogate", () => {
+    // Proves the helper itself reports the failure mode the production fix prevents.
+    // Pre-fix helper: charCodeAt(out-of-bounds) returned NaN, NaN < 0xdc00 was false,
+    // so a trailing high surrogate was missed and the assertion above was vacuous.
+    expect(hasUnpairedSurrogate("a\ud83d")).toBe(true);
+    expect(hasUnpairedSurrogate(`${"a".repeat(255)}\ud83d`)).toBe(true);
+  });
+
+  test("hasUnpairedSurrogate accepts a properly paired emoji", () => {
+    expect(hasUnpairedSurrogate("a😊b")).toBe(false);
   });
 });
 

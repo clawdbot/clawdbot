@@ -1,7 +1,13 @@
 // Discord plugin module implements send.webhook behavior.
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
+import { recordOutboundMessageIdentity } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveDiscordClientAccountContext } from "./client.js";
 import {
   DiscordError,
@@ -13,6 +19,8 @@ import {
 import { rewriteDiscordKnownMentions } from "./mentions.js";
 import { createDiscordSendResult } from "./send.receipt.js";
 import type { DiscordSendResult } from "./send.types.js";
+
+const DISCORD_WEBHOOK_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 
 type DiscordWebhookSendOpts = {
   cfg: OpenClawConfig;
@@ -49,12 +57,14 @@ function coerceWebhookErrorBody(raw: string): unknown {
   try {
     return JSON.parse(raw);
   } catch {
-    return { message: raw.slice(0, 200) };
+    return { message: truncateUtf16Safe(raw, 200) };
   }
 }
 
 async function throwWebhookResponseError(response: Response): Promise<never> {
-  const raw = await response.text().catch(() => "");
+  const raw = await readResponseTextLimited(response, DISCORD_WEBHOOK_ERROR_BODY_LIMIT_BYTES).catch(
+    () => "",
+  );
   const parsed = coerceWebhookErrorBody(raw);
   if (response.status === 429) {
     throw new RateLimitError(response, {
@@ -90,6 +100,17 @@ export async function sendWebhookMessageDiscord(
     accountId: account.accountId,
     mentionAliases: account.config.mentionAliases,
   });
+  const threadConversationId = opts.threadId == null ? "" : String(opts.threadId).trim();
+  if (threadConversationId) {
+    // Reserve the webhook source before the request so an immediate gateway echo
+    // cannot outrun the response that supplies the concrete message id.
+    recordOutboundMessageIdentity({
+      channel: "discord",
+      accountId: account.accountId,
+      conversationId: threadConversationId,
+      sourceId: webhookId,
+    });
+  }
 
   const response = await (proxyFetch ?? fetch)(
     resolveWebhookExecutionUrl({
@@ -115,10 +136,16 @@ export async function sendWebhookMessageDiscord(
     await throwWebhookResponseError(response);
   }
 
-  const payload = (await response.json().catch(() => ({}))) as {
+  const payload: {
     id?: string;
     channel_id?: string;
-  };
+  } =
+    response.status === 204
+      ? {}
+      : await readProviderJsonResponse<{ id?: string; channel_id?: string }>(
+          response,
+          "Discord webhook send",
+        ).catch(() => ({}));
   try {
     recordChannelActivity({
       channel: "discord",
@@ -128,11 +155,22 @@ export async function sendWebhookMessageDiscord(
   } catch {
     // Best-effort telemetry only.
   }
-  return createDiscordSendResult({
+  const result = createDiscordSendResult({
     result: payload,
     fallbackChannelId: opts.threadId ? String(opts.threadId) : "",
     kind: "text",
     ...(opts.threadId != null ? { threadId: opts.threadId } : {}),
     ...(replyTo ? { replyToId: replyTo } : {}),
   });
+  const resultConversationId = result.channelId.trim();
+  if (result.messageId !== "unknown" && resultConversationId) {
+    recordOutboundMessageIdentity({
+      channel: "discord",
+      accountId: account.accountId,
+      conversationId: resultConversationId,
+      messageId: result.messageId,
+      sourceId: webhookId,
+    });
+  }
+  return result;
 }

@@ -5,11 +5,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { DeviceAuthEntry } from "../shared/device-auth.js";
-import { captureEnv } from "../test-utils/env.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   loadConfigMock as getRuntimeConfig,
@@ -17,6 +18,13 @@ import {
   pickPrimaryTailnetIPv4Mock as pickPrimaryTailnetIPv4,
   resolveGatewayPortMock as resolveGatewayPort,
 } from "./gateway-connection.test-mocks.js";
+
+function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
 
 const deviceIdentityState = vi.hoisted(() => ({
   value: {
@@ -72,10 +80,11 @@ let lastClientOptions: {
   clientDisplayName?: string;
   mode?: string;
   approvalRuntimeToken?: string;
+  agentRuntimeIdentityToken?: string;
   scopes?: string[];
   deviceIdentity?: unknown;
   onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
-  onClose?: (code: number, reason: string) => void;
+  onClose?: (code: number, reason: string, info?: StubGatewayClientCloseInfo) => void;
   onConnectError?: (err: Error) => void;
 } | null = null;
 let lastRequestOptions: {
@@ -88,7 +97,18 @@ let lastRequestOptions: {
     onAccepted?: (payload: unknown) => void;
   };
 } | null = null;
-type StartMode = "hello" | "close" | "connect-error" | "silent" | "startup-retry-then-hello";
+type StartMode =
+  | "hello"
+  | "close"
+  | "connect-error"
+  | "silent"
+  | "startup-retry-then-hello"
+  | "clean-prehello-close-then-hello"
+  | "repeated-clean-prehello-close";
+type StubGatewayClientCloseInfo = {
+  phase: "pre-hello" | "post-hello";
+  transientPreHelloCleanClose: boolean;
+};
 let startMode: StartMode = "hello";
 let startCalls = 0;
 let closeCode = 1006;
@@ -96,16 +116,49 @@ let closeReason = "";
 let helloMethods: string[] | undefined = ["health", "secrets.resolve"];
 let connectError: Error | null = null;
 
+function startStubGatewayClient() {
+  startCalls += 1;
+  if (startMode === "hello") {
+    void lastClientOptions?.onHelloOk?.({
+      features: {
+        methods: helloMethods,
+      },
+    });
+  } else if (startMode === "startup-retry-then-hello") {
+    void lastClientOptions?.onHelloOk?.({
+      features: {
+        methods: helloMethods,
+      },
+    });
+  } else if (startMode === "clean-prehello-close-then-hello") {
+    lastClientOptions?.onClose?.(1000, "", {
+      phase: "pre-hello",
+      transientPreHelloCleanClose: true,
+    });
+    void lastClientOptions?.onHelloOk?.({
+      features: {
+        methods: helloMethods,
+      },
+    });
+  } else if (startMode === "repeated-clean-prehello-close") {
+    lastClientOptions?.onClose?.(1000, "", {
+      phase: "pre-hello",
+      transientPreHelloCleanClose: true,
+    });
+    lastClientOptions?.onClose?.(1000, "", {
+      phase: "pre-hello",
+      transientPreHelloCleanClose: true,
+    });
+  } else if (startMode === "connect-error") {
+    lastClientOptions?.onConnectError?.(
+      connectError ?? connectAssemblyErrorState.create("device private key invalid"),
+    );
+  } else if (startMode === "close") {
+    lastClientOptions?.onClose?.(closeCode, closeReason);
+  }
+}
+
 vi.mock("./client.js", () => ({
-  describeGatewayCloseCode: (code: number) => {
-    if (code === 1000) {
-      return "normal closure";
-    }
-    if (code === 1006) {
-      return "abnormal closure (no close frame)";
-    }
-    return undefined;
-  },
   isGatewayConnectAssemblyError: (value: unknown) => connectAssemblyErrorState.has(value),
   GatewayClient: class {
     constructor(opts: {
@@ -117,9 +170,10 @@ vi.mock("./client.js", () => ({
       clientDisplayName?: string;
       mode?: string;
       approvalRuntimeToken?: string;
+      agentRuntimeIdentityToken?: string;
       scopes?: string[];
       onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
-      onClose?: (code: number, reason: string) => void;
+      onClose?: (code: number, reason: string, info?: StubGatewayClientCloseInfo) => void;
       onConnectError?: (err: Error) => void;
     }) {
       lastClientOptions = opts;
@@ -133,26 +187,7 @@ vi.mock("./client.js", () => ({
       return { ok: true };
     }
     start() {
-      startCalls += 1;
-      if (startMode === "hello") {
-        void lastClientOptions?.onHelloOk?.({
-          features: {
-            methods: helloMethods,
-          },
-        });
-      } else if (startMode === "startup-retry-then-hello") {
-        void lastClientOptions?.onHelloOk?.({
-          features: {
-            methods: helloMethods,
-          },
-        });
-      } else if (startMode === "connect-error") {
-        lastClientOptions?.onConnectError?.(
-          connectError ?? connectAssemblyErrorState.create("device private key invalid"),
-        );
-      } else if (startMode === "close") {
-        lastClientOptions?.onClose?.(closeCode, closeReason);
-      }
+      startStubGatewayClient();
     }
     stop() {}
   },
@@ -174,7 +209,7 @@ const {
   buildGatewayProbeConnectionDetails,
   callGateway,
   callGatewayCli,
-  callGatewayScoped,
+  formatGatewayClientRequestErrorJson,
   formatGatewayTransportErrorJson,
   isGatewayTransportError,
 } = await import("./call.js");
@@ -188,9 +223,11 @@ class StubGatewayClient {
     clientName?: string;
     clientDisplayName?: string;
     mode?: string;
+    approvalRuntimeToken?: string;
+    agentRuntimeIdentityToken?: string;
     scopes?: string[];
     onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
-    onClose?: (code: number, reason: string) => void;
+    onClose?: (code: number, reason: string, info?: StubGatewayClientCloseInfo) => void;
     onConnectError?: (err: Error) => void;
   }) {
     lastClientOptions = opts;
@@ -209,26 +246,7 @@ class StubGatewayClient {
     return { ok: true };
   }
   start() {
-    startCalls += 1;
-    if (startMode === "hello") {
-      void lastClientOptions?.onHelloOk?.({
-        features: {
-          methods: helloMethods,
-        },
-      });
-    } else if (startMode === "startup-retry-then-hello") {
-      void lastClientOptions?.onHelloOk?.({
-        features: {
-          methods: helloMethods,
-        },
-      });
-    } else if (startMode === "connect-error") {
-      lastClientOptions?.onConnectError?.(
-        connectError ?? connectAssemblyErrorState.create("device private key invalid"),
-      );
-    } else if (startMode === "close") {
-      lastClientOptions?.onClose?.(closeCode, closeReason);
-    }
+    startStubGatewayClient();
   }
   stop() {}
   async stopAndWait() {}
@@ -315,17 +333,19 @@ describe("callGateway url resolution", () => {
   ]);
 
   beforeEach(() => {
+    resetConfigRuntimeState();
     envSnapshot.restore();
-    delete process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS;
-    delete process.env.OPENCLAW_CONFIG_PATH;
-    delete process.env.OPENCLAW_GATEWAY_PORT;
-    delete process.env.OPENCLAW_GATEWAY_URL;
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    delete process.env.OPENCLAW_STATE_DIR;
+    deleteTestEnvValue("OPENCLAW_ALLOW_INSECURE_PRIVATE_WS");
+    deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
+    deleteTestEnvValue("OPENCLAW_GATEWAY_PORT");
+    deleteTestEnvValue("OPENCLAW_GATEWAY_URL");
+    deleteTestEnvValue("OPENCLAW_GATEWAY_TOKEN");
+    deleteTestEnvValue("OPENCLAW_STATE_DIR");
     resetGatewayCallMocks();
   });
 
   afterEach(() => {
+    resetConfigRuntimeState();
     envSnapshot.restore();
     testing.resetDepsForTests();
   });
@@ -533,7 +553,7 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.password).toBeUndefined();
   });
 
-  it("keeps device identity enabled for explicit CLI loopback shared-token auth", async () => {
+  it("omits device identity for explicit CLI loopback shared-token auth", async () => {
     setLocalLoopbackGatewayConfig();
 
     await callGateway({
@@ -545,6 +565,19 @@ describe("callGateway url resolution", () => {
 
     expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18789");
     expect(lastClientOptions?.token).toBe("explicit-token");
+    expect(lastClientOptions?.deviceIdentity).toBeNull();
+  });
+
+  it("keeps CLI device identity when an ambient token is inactive under auth mode none", async () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback", auth: { mode: "none" } },
+    });
+    setGatewayNetworkDefaults();
+    process.env.OPENCLAW_GATEWAY_TOKEN = "inactive-env-token";
+
+    await callGatewayCli({ method: "health" });
+
+    expect(lastClientOptions?.token).toBe("inactive-env-token");
     expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
   });
 
@@ -609,6 +642,29 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.url).toBe("wss://gateway-in-container.internal:9443/ws");
     expect(lastClientOptions?.token).toBe("env-token");
     expect(lastClientOptions?.password).toBeUndefined();
+  });
+
+  it("lets an explicit local port override bypass gateway env URL and port", async () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback" },
+    });
+    resolveGatewayPort.mockImplementation((_config?: unknown, env?: unknown) => {
+      const candidateEnv = env as NodeJS.ProcessEnv | undefined;
+      return Number(candidateEnv?.OPENCLAW_GATEWAY_PORT ?? 18789);
+    });
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    process.env.OPENCLAW_GATEWAY_URL = "wss://gateway-in-container.internal:9443/ws";
+    process.env.OPENCLAW_GATEWAY_PORT = "19001";
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
+
+    await callGateway({
+      method: "health",
+      token: "explicit-token",
+      localPortOverride: 19082,
+    });
+
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:19082");
+    expect(lastClientOptions?.token).toBe("explicit-token");
   });
 
   it("uses env URL override credentials without resolving local password SecretRefs", async () => {
@@ -711,6 +767,7 @@ describe("callGateway url resolution", () => {
       "operator.read",
       "operator.write",
       "operator.approvals",
+      "operator.questions",
       "operator.pairing",
       "operator.talk.secrets",
     ]);
@@ -733,6 +790,7 @@ describe("callGateway url resolution", () => {
       "operator.read",
       "operator.write",
       "operator.approvals",
+      "operator.questions",
       "operator.pairing",
       "operator.talk.secrets",
     ]);
@@ -741,10 +799,10 @@ describe("callGateway url resolution", () => {
   it("passes explicit scopes through, including empty arrays", async () => {
     setLocalLoopbackGatewayConfig();
 
-    await callGatewayScoped({ method: "health", scopes: ["operator.read"] });
+    await callGateway({ method: "health", scopes: ["operator.read"] });
     expect(lastClientOptions?.scopes).toEqual(["operator.read"]);
 
-    await callGatewayScoped({ method: "health", scopes: [] });
+    await callGateway({ method: "health", scopes: [] });
     expect(lastClientOptions?.scopes).toStrictEqual([]);
   });
 
@@ -1040,7 +1098,7 @@ describe("callGateway url resolution", () => {
       clientName: GATEWAY_CLIENT_NAMES.CLI,
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(eventLoopReadyState.calls).toHaveLength(1);
     });
     expect(eventLoopReadyState.calls[0]?.maxWaitMs).toBe(10_000);
@@ -1084,7 +1142,6 @@ describe("buildGatewayConnectionDetails", () => {
         mode: "local",
         bind: "loopback",
         tls: { enabled: true },
-        handshakeTimeoutMs: 4321,
       },
     } satisfies OpenClawConfig;
     resolveGatewayPort.mockReturnValue(18800);
@@ -1102,7 +1159,77 @@ describe("buildGatewayConnectionDetails", () => {
 
     expect(details.url).toBe("wss://127.0.0.1:18800");
     expect(details.tlsFingerprint).toBe("sha256:test-local-gateway-fingerprint");
-    expect(details.preauthHandshakeTimeoutMs).toBe(4321);
+    expect(details.preauthHandshakeTimeoutMs).toBeUndefined();
+  });
+
+  it("lets probe details local port override bypass gateway env URL and port", async () => {
+    const config = {
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+      },
+    } satisfies OpenClawConfig;
+    resolveGatewayPort.mockImplementation((_config?: unknown, env?: unknown) => {
+      const candidateEnv = env as NodeJS.ProcessEnv | undefined;
+      return Number(candidateEnv?.OPENCLAW_GATEWAY_PORT ?? 18789);
+    });
+    testing.setDepsForTests({
+      getRuntimeConfig: () => config,
+      resolveGatewayPort: (_config?: unknown, env?: NodeJS.ProcessEnv) =>
+        Number(env?.OPENCLAW_GATEWAY_PORT ?? 18789),
+    });
+    const prevUrl = process.env.OPENCLAW_GATEWAY_URL;
+    const prevPort = process.env.OPENCLAW_GATEWAY_PORT;
+    try {
+      process.env.OPENCLAW_GATEWAY_URL = "wss://env-gateway.example/ws";
+      process.env.OPENCLAW_GATEWAY_PORT = "19001";
+
+      const details = await buildGatewayProbeConnectionDetails({
+        config,
+        localPortOverride: 19082,
+      });
+
+      expect(details.url).toBe("ws://127.0.0.1:19082");
+      expect(details.urlSource).toBe("local loopback");
+    } finally {
+      if (prevUrl === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_URL;
+      } else {
+        process.env.OPENCLAW_GATEWAY_URL = prevUrl;
+      }
+      if (prevPort === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_PORT;
+      } else {
+        process.env.OPENCLAW_GATEWAY_PORT = prevPort;
+      }
+    }
+  });
+
+  it("lets a bound remote call keep its config URL over the gateway env override", async () => {
+    const config = {
+      gateway: {
+        mode: "remote",
+        remote: { url: "wss://selected-gateway.example/ws" },
+      },
+    } satisfies OpenClawConfig;
+    const prevUrl = process.env.OPENCLAW_GATEWAY_URL;
+    try {
+      process.env.OPENCLAW_GATEWAY_URL = "wss://unrelated-gateway.example/ws";
+
+      const details = await buildGatewayProbeConnectionDetails({
+        config,
+        ignoreEnvUrlOverride: true,
+      });
+
+      expect(details.url).toBe("wss://selected-gateway.example/ws");
+      expect(details.urlSource).toBe("config gateway.remote.url");
+    } finally {
+      if (prevUrl === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_URL;
+      } else {
+        process.env.OPENCLAW_GATEWAY_URL = prevUrl;
+      }
+    }
   });
 
   it("redacts credential-bearing target URLs from connection messages", () => {
@@ -1203,10 +1330,42 @@ describe("buildGatewayConnectionDetails", () => {
     }
   });
 
+  it("lets a local port override bypass gateway env URL and port in connection details", () => {
+    getRuntimeConfig.mockReturnValue({ gateway: { mode: "local", bind: "loopback" } });
+    resolveGatewayPort.mockImplementation((_config?: unknown, env?: unknown) => {
+      const candidateEnv = env as NodeJS.ProcessEnv | undefined;
+      return Number(candidateEnv?.OPENCLAW_GATEWAY_PORT ?? 18789);
+    });
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    const prevUrl = process.env.OPENCLAW_GATEWAY_URL;
+    const prevPort = process.env.OPENCLAW_GATEWAY_PORT;
+    try {
+      process.env.OPENCLAW_GATEWAY_URL = "wss://browser-gateway.local:9443/ws";
+      process.env.OPENCLAW_GATEWAY_PORT = "19001";
+
+      const details = buildGatewayConnectionDetails({ localPortOverride: 19082 });
+
+      expect(details.url).toBe("ws://127.0.0.1:19082");
+      expect(details.urlSource).toBe("local loopback");
+      expect(details.bindDetail).toBe("Bind: loopback");
+    } finally {
+      if (prevUrl === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_URL;
+      } else {
+        process.env.OPENCLAW_GATEWAY_URL = prevUrl;
+      }
+      if (prevPort === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_PORT;
+      } else {
+        process.env.OPENCLAW_GATEWAY_PORT = prevPort;
+      }
+    }
+  });
+
   it("falls back to the default config loader when test deps drift", () => {
     const tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-call-"));
-    process.env.OPENCLAW_STATE_DIR = tempStateDir;
-    process.env.OPENCLAW_CONFIG_PATH = path.join(tempStateDir, "missing-config.json");
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
+    setTestEnvValue("OPENCLAW_CONFIG_PATH", path.join(tempStateDir, "missing-config.json"));
     try {
       getRuntimeConfig.mockReturnValue({ gateway: { mode: "local", bind: "loopback" } });
       resolveGatewayPort.mockReturnValue(18800);
@@ -1220,6 +1379,79 @@ describe("buildGatewayConnectionDetails", () => {
       expect(details.url).toBe("ws://127.0.0.1:18789");
       expect(details.urlSource).toBe("local loopback");
     } finally {
+      fs.rmSync(tempStateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the reduced dispatch config for default RPC loading", async () => {
+    resetConfigRuntimeState();
+    const tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-call-"));
+    const configPath = path.join(tempStateDir, "openclaw.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        gateway: { mode: "local", bind: "loopback", port: 18800, auth: { mode: "none" } },
+        channels: { telegram: { dmPolicy: 42 } },
+      }),
+    );
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
+    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+    try {
+      testing.setDepsForTests({
+        createGatewayClient: (opts) =>
+          new StubGatewayClient(
+            opts as ConstructorParameters<typeof StubGatewayClient>[0],
+          ) as never,
+        loadOrCreateDeviceIdentity: () => {
+          throw new Error("auth mode none should not load a device identity");
+        },
+        loadDeviceAuthToken: () => null,
+        resolveGatewayPort: (config) => config?.gateway?.port ?? 18789,
+      });
+
+      await expect(callGateway({ method: "health" })).resolves.toEqual({ ok: true });
+
+      expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18800");
+      expect(lastClientOptions?.deviceIdentity).toBeNull();
+    } finally {
+      resetConfigRuntimeState();
+      fs.rmSync(tempStateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the active runtime snapshot authoritative for default RPC loading", async () => {
+    resetConfigRuntimeState();
+    const tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-call-"));
+    const configPath = path.join(tempStateDir, "openclaw.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        gateway: { mode: "local", bind: "loopback", port: 18800, auth: { mode: "none" } },
+      }),
+    );
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
+    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+    setRuntimeConfigSnapshot({
+      gateway: { mode: "local", bind: "loopback", port: 18801, auth: { mode: "none" } },
+    });
+    try {
+      testing.setDepsForTests({
+        createGatewayClient: (opts) =>
+          new StubGatewayClient(
+            opts as ConstructorParameters<typeof StubGatewayClient>[0],
+          ) as never,
+        loadOrCreateDeviceIdentity: () => {
+          throw new Error("auth mode none should not load a device identity");
+        },
+        loadDeviceAuthToken: () => null,
+        resolveGatewayPort: (config) => config?.gateway?.port ?? 18789,
+      });
+
+      await expect(callGateway({ method: "health" })).resolves.toEqual({ ok: true });
+
+      expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18801");
+    } finally {
+      resetConfigRuntimeState();
       fs.rmSync(tempStateDir, { recursive: true, force: true });
     }
   });
@@ -1361,6 +1593,30 @@ describe("callGateway error details", () => {
     expect(lastRequestOptions?.method).toBe("health");
   });
 
+  it("keeps the request alive through one transient pre-hello clean close", async () => {
+    startMode = "clean-prehello-close-then-hello";
+    setLocalLoopbackGatewayConfig();
+
+    await expect(callGateway({ method: "health" })).resolves.toEqual({ ok: true });
+
+    expect(lastRequestOptions?.method).toBe("health");
+  });
+
+  it("surfaces repeated transient pre-hello clean closes", async () => {
+    startMode = "repeated-clean-prehello-close";
+    setLocalLoopbackGatewayConfig();
+
+    let err: Error | null = null;
+    try {
+      await callGateway({ method: "health" });
+    } catch (caught) {
+      err = caught as Error;
+    }
+
+    expect(err?.message).toContain("gateway closed (1000 normal closure): no close reason");
+    expect(lastRequestOptions).toBeNull();
+  });
+
   it("rejects immediately when the client reports a connect error", async () => {
     startMode = "connect-error";
     setLocalLoopbackGatewayConfig();
@@ -1372,6 +1628,27 @@ describe("callGateway error details", () => {
 
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toBe("device private key invalid");
+    expect(lastRequestOptions).toBeNull();
+  });
+
+  it("surfaces agent runtime identity connect request errors", async () => {
+    startMode = "connect-error";
+    connectError = new Error(
+      "gateway rejected required agent runtime identity auth field; refusing to retry without it",
+    );
+    setLocalLoopbackGatewayConfig();
+
+    await expect(
+      callGateway({
+        method: "cron.remove",
+        token: "explicit-token",
+        agentRuntimeIdentityToken: "identity-token",
+      }),
+    ).rejects.toThrow(
+      "gateway rejected required agent runtime identity auth field; refusing to retry without it",
+    );
+
+    expect(lastClientOptions?.agentRuntimeIdentityToken).toBe("identity-token");
     expect(lastRequestOptions).toBeNull();
   });
 
@@ -1466,6 +1743,66 @@ describe("callGateway error details", () => {
     });
   });
 
+  it("does not over-claim a gateway crash on a 1006 abnormal close", async () => {
+    startMode = "close";
+    closeCode = 1006;
+    closeReason = "";
+    setLocalLoopbackGatewayConfig();
+
+    let err: unknown;
+    await callGateway({ method: "health" }).catch((caught: unknown) => {
+      err = caught;
+    });
+
+    const message = (err as { message: string }).message;
+    expect(message).toContain(
+      "Connection dropped without a close frame (retry; check network and gateway load)",
+    );
+    expect(message).not.toContain("crashed or was terminated unexpectedly");
+    expect(message).toContain("Run `openclaw doctor`");
+  });
+
+  it("formats typed request errors for CLI JSON output", () => {
+    const error = Object.assign(new Error("unauthorized role: operator"), {
+      name: "GatewayClientRequestError",
+      gatewayCode: "INVALID_REQUEST",
+      details: { method: "skills.bins" },
+      retryable: false,
+      retryAfterMs: 250,
+    });
+
+    expect(formatGatewayClientRequestErrorJson(error)).toEqual({
+      ok: false,
+      error: {
+        type: "gateway_request_error",
+        code: "INVALID_REQUEST",
+        message: "unauthorized role: operator",
+        details: { method: "skills.bins" },
+        retryable: false,
+        retryAfterMs: 250,
+      },
+    });
+    expect(
+      formatGatewayClientRequestErrorJson(
+        Object.assign(new Error("unauthorized role: operator"), {
+          name: "GatewayClientRequestError",
+          gatewayCode: "INVALID_REQUEST",
+          retryable: "no",
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      formatGatewayClientRequestErrorJson(
+        Object.assign(new Error("unauthorized role: operator"), {
+          name: "GatewayClientRequestError",
+          gatewayCode: "INVALID_REQUEST",
+          retryable: false,
+          retryAfterMs: -1,
+        }),
+      ),
+    ).toBeNull();
+  });
+
   it("charges event-loop readiness against the wrapper timeout", async () => {
     startMode = "silent";
     setLocalLoopbackGatewayConfig();
@@ -1477,7 +1814,7 @@ describe("callGateway error details", () => {
       errMessage = caught instanceof Error ? caught.message : String(caught);
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(eventLoopReadyState.calls).toHaveLength(1);
     });
     expect(eventLoopReadyState.calls[0]?.maxWaitMs).toBe(5);
@@ -1513,27 +1850,6 @@ describe("callGateway error details", () => {
     expect(eventLoopReadyState.calls[0]?.maxWaitMs).toBe(5);
     expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18789");
     expect(startCalls).toBe(0);
-  });
-
-  it("keeps the default wrapper timeout aligned with configured handshake timeout", async () => {
-    startMode = "silent";
-    getRuntimeConfig.mockReturnValue({
-      gateway: { mode: "local", bind: "loopback", handshakeTimeoutMs: 30_000 },
-    });
-    setGatewayNetworkDefaults();
-
-    vi.useFakeTimers();
-    let errMessage = "";
-    const promise = callGateway({ method: "health" }).catch((caught: unknown) => {
-      errMessage = caught instanceof Error ? caught.message : String(caught);
-    });
-
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(errMessage).toBe("");
-    await vi.advanceTimersByTimeAsync(20_000);
-    await promise;
-
-    expect(errMessage).toContain("gateway timeout after 30000ms");
   });
 
   it("keeps the default wrapper timeout aligned with env handshake timeout", async () => {
@@ -1588,6 +1904,82 @@ describe("callGateway error details", () => {
 
     expect(lastRequestOptions?.method).toBe("health");
     expect(lastRequestOptions?.opts?.timeoutMs).toBe(45_000);
+  });
+
+  it("keeps the startup deadline when the request timeout is disabled", async () => {
+    startMode = "silent";
+    setLocalLoopbackGatewayConfig();
+    vi.useFakeTimers();
+    let err: unknown;
+
+    const promise = callGateway({ method: "health", timeoutMs: null }).catch((caught: unknown) => {
+      err = caught;
+    });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await promise;
+
+    expect(isGatewayTransportError(err)).toBe(true);
+    expect(err).toMatchObject({ kind: "timeout", timeoutMs: 10_000 });
+    expect(lastRequestOptions).toBeNull();
+  });
+
+  it("disables the request and wrapper deadline when timeout is null", async () => {
+    setLocalLoopbackGatewayConfig();
+    vi.useFakeTimers();
+    let releaseRequest: (() => void) | undefined;
+
+    testing.setDepsForTests({
+      createGatewayClient: (opts) =>
+        ({
+          async request(
+            method: string,
+            params: unknown,
+            requestOpts?: { expectFinal?: boolean; timeoutMs?: number | null },
+          ) {
+            lastRequestOptions = { method, params, opts: requestOpts };
+            await new Promise<void>((resolve) => {
+              releaseRequest = resolve;
+            });
+            return { ok: true };
+          },
+          start() {
+            opts.onHelloOk?.({
+              features: {
+                methods: helloMethods ?? [],
+                events: [],
+              },
+            } as unknown as Parameters<NonNullable<typeof opts.onHelloOk>>[0]);
+          },
+          stop() {},
+          async stopAndWait() {},
+        }) as never,
+      getRuntimeConfig: getRuntimeConfig as unknown as () => OpenClawConfig,
+      loadOrCreateDeviceIdentity: () => deviceIdentityState.value,
+      loadDeviceAuthToken: loadDeviceAuthTokenMock,
+      resolveGatewayPort: resolveGatewayPort as unknown as (
+        cfg?: OpenClawConfig,
+        env?: NodeJS.ProcessEnv,
+      ) => number,
+    });
+
+    let settled = false;
+    const promise = callGateway({ method: "health", timeoutMs: null }).then((result) => {
+      settled = true;
+      return result;
+    });
+
+    await waitForFast(() => {
+      expect(lastRequestOptions?.opts?.timeoutMs).toBeNull();
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(settled).toBe(false);
+
+    if (!releaseRequest) {
+      throw new Error("Expected request release callback to be initialized");
+    }
+    releaseRequest();
+    await expect(promise).resolves.toEqual({ ok: true });
   });
 
   it("forwards caller abort signal and accepted callback to client requests", async () => {
@@ -1678,7 +2070,7 @@ describe("callGateway error details", () => {
       },
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(lastRequestOptions?.method).toBe("agent");
     });
     controller.abort();
@@ -1741,7 +2133,7 @@ describe("callGateway error details", () => {
       onSignalAbort,
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(startCalled).toBe(true);
     });
     controller.abort();
@@ -1750,17 +2142,6 @@ describe("callGateway error details", () => {
     expect(onSignalAbort).not.toHaveBeenCalled();
     expect(lastRequestOptions).toBeNull();
     expect(stopStarted).toBe(true);
-  });
-
-  it("passes configured gateway handshake timeout to the client watchdog", async () => {
-    getRuntimeConfig.mockReturnValue({
-      gateway: { mode: "local", bind: "loopback", handshakeTimeoutMs: 30_000 },
-    });
-    setGatewayNetworkDefaults();
-
-    await callGateway({ method: "health" });
-
-    expect(lastClientOptions?.preauthHandshakeTimeoutMs).toBe(30_000);
   });
 
   it("does not inject wrapper timeout defaults into expectFinal requests", async () => {
@@ -1824,7 +2205,7 @@ describe("callGateway error details", () => {
       callResolved = true;
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(stopStarted).toBe(true);
     });
     expect(callResolved).toBe(false);
@@ -1884,7 +2265,7 @@ describe("callGateway error details", () => {
 
     const promise = callGateway<{ ok: true }>({ method: "health", timeoutMs: 5 });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(stopStarted).toBe(true);
     });
 
@@ -1918,7 +2299,9 @@ describe("callGateway error details", () => {
         method: "secrets.resolve",
         requiredMethods: ["secrets.resolve"],
       }),
-    ).rejects.toThrow(/does not support required method "secrets\.resolve"/i);
+    ).rejects.toThrow(
+      /does not support required method "secrets\.resolve".*update or restart the active gateway/i,
+    );
   });
 });
 
@@ -1954,7 +2337,7 @@ describe("callGateway url override auth requirements", () => {
 
     await expect(
       callGateway({ method: "health", url: "wss://override.example/ws" }),
-    ).rejects.toThrow("explicit credentials");
+    ).rejects.toThrow(/remove --url to use the configured target/i);
   });
 
   it("throws when env URL override is set without env credentials", async () => {
@@ -1966,7 +2349,9 @@ describe("callGateway url override auth requirements", () => {
       },
     });
 
-    await expect(callGateway({ method: "health" })).rejects.toThrow("explicit credentials");
+    await expect(callGateway({ method: "health" })).rejects.toThrow(
+      /OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD/i,
+    );
   });
 });
 
@@ -2028,7 +2413,7 @@ describe("callGateway password resolution", () => {
       expectedPassword: "secret",
     },
     {
-      label: "prefers env password over local config password",
+      label: "prefers local config password over env password",
       envPassword: "from-env",
       config: {
         gateway: {
@@ -2037,7 +2422,7 @@ describe("callGateway password resolution", () => {
           auth: { password: "from-config" },
         },
       },
-      expectedPassword: "from-env",
+      expectedPassword: "from-config",
     },
     {
       label: "uses remote password in remote mode when env is unset",
@@ -2085,7 +2470,7 @@ describe("callGateway password resolution", () => {
     expect(lastClientOptions?.password).toBe("resolved-local-ref-password");
   });
 
-  it("does not resolve local password ref when env password takes precedence", async () => {
+  it("does not let env password mask an unresolved local password ref", async () => {
     process.env.OPENCLAW_GATEWAY_PASSWORD = "from-env";
     getRuntimeConfig.mockReturnValue({
       gateway: {
@@ -2103,9 +2488,7 @@ describe("callGateway password resolution", () => {
       },
     } as unknown as OpenClawConfig);
 
-    await callGateway({ method: "health" });
-
-    expect(lastClientOptions?.password).toBe("from-env");
+    await expect(callGateway({ method: "health" })).rejects.toThrow("gateway.auth.password");
   });
 
   it("does not resolve local password ref when token auth can win", async () => {
@@ -2472,7 +2855,7 @@ describe("callGateway password resolution", () => {
   });
 
   it.each(explicitAuthCases)("uses explicit $label when url override is set", async (testCase) => {
-    process.env[testCase.envKey] = testCase.envValue;
+    setTestEnvValue(testCase.envKey, testCase.envValue);
     const auth = { [testCase.authKey]: testCase.configValue } as {
       password?: string;
       token?: string;
@@ -2493,3 +2876,4 @@ describe("callGateway password resolution", () => {
     expect(lastClientOptions?.[testCase.authKey]).toBe(testCase.explicitValue);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

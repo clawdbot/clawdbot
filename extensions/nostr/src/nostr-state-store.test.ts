@@ -97,6 +97,21 @@ describe("nostr bus state store", () => {
       expect(stateB?.lastProcessedAt).toBe(2000);
     });
   });
+
+  it("preserves legacy account key bytes for state lookup", async () => {
+    await withTempStateDir(async () => {
+      await writeNostrBusState({
+        accountId: " Team.A ",
+        lastProcessedAt: 1234,
+        gatewayStartedAt: 1200,
+      });
+
+      await expect(readNostrBusState({ accountId: "Team.A" })).resolves.toMatchObject({
+        lastProcessedAt: 1234,
+      });
+      await expect(readNostrBusState({ accountId: "team-a" })).resolves.toBeNull();
+    });
+  });
 });
 
 describe("nostr profile state store", () => {

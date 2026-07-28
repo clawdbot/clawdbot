@@ -2,10 +2,11 @@
 import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it } from "vitest";
 import {
+  MEMORY_INDEX_PROVENANCE_VERSION,
   resolveConfiguredScopeHash,
   resolveConfiguredSourcesForMeta,
+  resolveMemoryIndexProviderIdentities,
   resolveMemoryIndexIdentityState,
-  isMemoryIndexIdentityDirty,
   type MemoryIndexMeta,
 } from "./manager-reindex-state.js";
 
@@ -19,6 +20,7 @@ function createMeta(overrides: Partial<MemoryIndexMeta> = {}): MemoryIndexMeta {
     chunkTokens: 4000,
     chunkOverlap: 0,
     ftsTokenizer: "unicode61",
+    provenanceVersion: MEMORY_INDEX_PROVENANCE_VERSION,
     ...overrides,
   };
 }
@@ -28,6 +30,7 @@ function createIdentityParams(
     meta?: MemoryIndexMeta | null;
     provider?: { id: string; model: string } | null;
     providerKey?: string;
+    providerAliases?: Array<{ model: string; providerKey: string }>;
     providerKeyKnown?: boolean;
     configuredSources?: MemorySource[];
     configuredScopeHash?: string;
@@ -53,7 +56,32 @@ function createIdentityParams(
   };
 }
 
+function isMemoryIndexIdentityDirty(
+  params: Parameters<typeof resolveMemoryIndexIdentityState>[0],
+): boolean {
+  return resolveMemoryIndexIdentityState(params).status !== "valid";
+}
+
 describe("memory reindex state", () => {
+  it("invalidates indexes written before path provenance classification was versioned", () => {
+    expect(
+      resolveMemoryIndexIdentityState(
+        createIdentityParams({ meta: createMeta({ provenanceVersion: undefined }) }),
+      ),
+    ).toEqual({
+      status: "mismatched",
+      reason: "index provenance classifier changed",
+    });
+  });
+
+  it("retains the primary provider identity when its model is empty", () => {
+    expect(
+      resolveMemoryIndexProviderIdentities({
+        provider: { id: "empty-model-provider", model: "" },
+      }),
+    ).toMatchObject([{ provider: "empty-model-provider", model: "" }]);
+  });
+
   it("marks identity dirty when the embedding model changes", () => {
     expect(
       isMemoryIndexIdentityDirty(
@@ -103,6 +131,70 @@ describe("memory reindex state", () => {
         }),
       ),
     ).toEqual({ status: "valid" });
+  });
+
+  it("keeps model identity strict when paths share a basename", () => {
+    const indexedModel = "/models/default/model.gguf";
+    const currentModel = "/models/custom/model.gguf";
+
+    expect(
+      resolveMemoryIndexIdentityState(
+        createIdentityParams({
+          provider: { id: "local", model: currentModel },
+          providerKey: "provider-key-current",
+          meta: createMeta({
+            provider: "local",
+            model: indexedModel,
+            providerKey: "provider-key-indexed",
+            vectorDims: 768,
+          }),
+          vectorReady: true,
+        }),
+      ),
+    ).toEqual({
+      status: "mismatched",
+      reason: `index was built for model ${indexedModel}, expected ${currentModel}`,
+    });
+  });
+
+  it("accepts only provider-declared model and provider-key alias pairs", () => {
+    const alias = {
+      model: "/models/default/model.gguf",
+      providerKey: "provider-key-alias",
+    };
+
+    expect(
+      resolveMemoryIndexIdentityState(
+        createIdentityParams({
+          provider: { id: "local", model: "hf:owner/default/model.gguf" },
+          providerKey: "provider-key-current",
+          providerAliases: [alias],
+          meta: createMeta({
+            provider: "local",
+            model: alias.model,
+            providerKey: alias.providerKey,
+          }),
+        }),
+      ),
+    ).toEqual({ status: "valid" });
+
+    expect(
+      resolveMemoryIndexIdentityState(
+        createIdentityParams({
+          provider: { id: "local", model: "hf:owner/default/model.gguf" },
+          providerKey: "provider-key-current",
+          providerAliases: [alias],
+          meta: createMeta({
+            provider: "local",
+            model: alias.model,
+            providerKey: "provider-key-arbitrary",
+          }),
+        }),
+      ),
+    ).toEqual({
+      status: "mismatched",
+      reason: "index provider settings changed",
+    });
   });
 
   it("does not mark identity dirty for vector dimensions before chunks exist", () => {
@@ -198,5 +290,40 @@ describe("memory reindex state", () => {
         }),
       ),
     ).toBe(false);
+  });
+
+  it("falls back to fts-only when provider.model is an empty string", () => {
+    expect(
+      resolveMemoryIndexIdentityState(
+        createIdentityParams({
+          provider: { id: "openai", model: "" },
+          meta: createMeta({ model: "fts-only" }),
+        }),
+      ),
+    ).toEqual({ status: "valid" });
+  });
+
+  it("reports mismatch when empty-string expected model is compared to a non-fts index", () => {
+    const state = resolveMemoryIndexIdentityState(
+      createIdentityParams({
+        provider: { id: "openai", model: "" },
+        meta: createMeta({ model: "text-embedding-3-small" }),
+      }),
+    );
+    expect(state.status).toBe("mismatched");
+    if (state.status === "mismatched") {
+      expect(state.reason).toContain("expected fts-only");
+    }
+  });
+
+  it("falls back to fts-only when provider.model is whitespace-only", () => {
+    expect(
+      resolveMemoryIndexIdentityState(
+        createIdentityParams({
+          provider: { id: "openai", model: "  " },
+          meta: createMeta({ model: "fts-only" }),
+        }),
+      ),
+    ).toEqual({ status: "valid" });
   });
 });

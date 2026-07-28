@@ -6,8 +6,12 @@ import type {
   OpenKeyedStoreOptions,
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
+import pMap, { pMapSkip } from "p-map";
+import { walkMemoryWikiDirectory } from "./bounded-walk.js";
 
-export type ChatGptImportRunEntry = {
+const LEGACY_IMPORT_RUN_READ_CONCURRENCY = 16;
+
+type ChatGptImportRunEntry = {
   path: string;
   snapshotPath?: string;
 };
@@ -66,10 +70,6 @@ export function resolveMemoryWikiImportRunsDir(vaultRoot: string): string {
   return path.join(vaultRoot, ".openclaw-wiki", "import-runs");
 }
 
-export function resolveMemoryWikiImportRunRecordPath(vaultRoot: string, runId: string): string {
-  return path.join(resolveMemoryWikiImportRunsDir(vaultRoot), `${runId}.json`);
-}
-
 function resolveVaultRootKey(vaultRoot: string): string {
   return createHash("sha256").update(path.resolve(vaultRoot), "utf8").digest("hex").slice(0, 32);
 }
@@ -121,7 +121,7 @@ function asNonNegativeInteger(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
 }
 
-export function normalizeMemoryWikiImportRunRecord(raw: unknown): ChatGptImportRunRecord | null {
+function normalizeMemoryWikiImportRunRecord(raw: unknown): ChatGptImportRunRecord | null {
   const record = asRecord(raw);
   if (!record) {
     return null;
@@ -466,22 +466,27 @@ export async function readLegacyMemoryWikiImportRunRecords(
   vaultRoot: string,
 ): Promise<ChatGptImportRunRecord[]> {
   const importRunsDir = resolveMemoryWikiImportRunsDir(vaultRoot);
-  const entries = await fs
-    .readdir(importRunsDir, { withFileTypes: true })
-    .catch((error: unknown) => {
-      const code = asRecord(error)?.code;
-      if (code === "ENOENT") {
-        return [];
-      }
-      throw error;
-    });
-  const records = await Promise.all(
-    entries
-      .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
-      .map(async (entry) => {
-        const raw = await fs.readFile(path.join(importRunsDir, entry.name), "utf8");
-        return normalizeMemoryWikiImportRunRecord(JSON.parse(raw) as unknown);
-      }),
+  const entries = await walkMemoryWikiDirectory(importRunsDir, "", {
+    maxDepth: 1,
+    entryFilter: (entry) =>
+      entry.kind === "directory"
+        ? "skip-subtree"
+        : entry.kind === "file" && entry.relativePath.endsWith(".json")
+          ? "include"
+          : "skip",
+  }).catch((error: unknown) => {
+    const code = asRecord(error)?.code;
+    if (code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  });
+  return await pMap(
+    entries.filter((entry) => entry.kind === "file"),
+    async (entry) => {
+      const raw = await fs.readFile(path.join(importRunsDir, entry.relativePath), "utf8");
+      return normalizeMemoryWikiImportRunRecord(JSON.parse(raw) as unknown) ?? pMapSkip;
+    },
+    { concurrency: LEGACY_IMPORT_RUN_READ_CONCURRENCY, stopOnError: true },
   );
-  return records.filter((entry): entry is ChatGptImportRunRecord => entry !== null);
 }

@@ -15,6 +15,7 @@ import {
   SqliteBackedMatrixSyncStore,
   type MatrixSyncCacheRecord,
 } from "./file-sync-store.js";
+import { openMatrixStorageMetaStoreOptions } from "./storage.js";
 
 function createSyncResponse(nextBatch: string): ISyncResponse {
   return {
@@ -188,26 +189,26 @@ describe("SqliteBackedMatrixSyncStore", () => {
 
   it("claims current-token storage ownership when sync state is persisted", async () => {
     const storageRoot = createStorageRoot();
-    fs.writeFileSync(
-      path.join(storageRoot, "storage-meta.json"),
-      JSON.stringify({
-        homeserver: "https://matrix.example.org",
-        userId: "@bot:example.org",
-        accountId: "default",
-        accessTokenHash: "token-hash",
-        deviceId: null,
-      }),
-      "utf8",
-    );
+    createPluginStateSyncKeyedStoreForTests<Record<string, unknown>>(
+      "matrix",
+      openMatrixStorageMetaStoreOptions(storageRoot),
+    ).register("current", {
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      accountId: "default",
+      accessTokenHash: "token-hash",
+      deviceId: null,
+    });
 
     const store = new SqliteBackedMatrixSyncStore(storageRoot);
     await store.setSyncData(createSyncResponse("claimed-token"));
     await store.flush();
 
-    const meta = JSON.parse(
-      fs.readFileSync(path.join(storageRoot, "storage-meta.json"), "utf8"),
-    ) as { currentTokenStateClaimed?: boolean };
-    expect(meta.currentTokenStateClaimed).toBe(true);
+    const meta = createPluginStateSyncKeyedStoreForTests<Record<string, unknown>>(
+      "matrix",
+      openMatrixStorageMetaStoreOptions(storageRoot),
+    ).lookup("current");
+    expect(meta).toMatchObject({ currentTokenStateClaimed: true });
   });
 
   it("only treats sync state as restart-safe after a clean shutdown persist", async () => {

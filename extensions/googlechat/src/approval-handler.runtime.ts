@@ -9,6 +9,7 @@ import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approva
 import type { ExecApprovalDecision } from "openclaw/plugin-sdk/approval-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveGoogleChatAccount, type ResolvedGoogleChatAccount } from "./accounts.js";
 import { sendGoogleChatMessage, updateGoogleChatMessage } from "./api.js";
 import {
@@ -76,7 +77,11 @@ function resolveHandlerAccount(
       cfg: params.cfg,
       accountId: params.accountId,
     });
-  if (!account.enabled || account.credentialSource === "none") {
+  if (
+    !account.enabled ||
+    account.credentialSource === "none" ||
+    account.tokenStatus === "configured_unavailable"
+  ) {
     return null;
   }
   return account;
@@ -87,7 +92,7 @@ function escapeGoogleChatText(text: string): string {
 }
 
 function truncateText(text: string, maxChars = MAX_TEXT_PARAGRAPH_CHARS): string {
-  return text.length <= maxChars ? text : `${text.slice(0, maxChars - 3)}...`;
+  return text.length <= maxChars ? text : `${truncateUtf16Safe(text, maxChars - 3)}...`;
 }
 
 function buildMetadataText(metadata: readonly { label: string; value: string }[]): string {
@@ -299,8 +304,8 @@ export const googleChatApprovalNativeRuntime = createChannelApprovalNativeRuntim
   availability: {
     isConfigured: ({ cfg, accountId }) =>
       isGoogleChatNativeApprovalClientEnabled({ cfg, accountId }),
-    shouldHandle: ({ cfg, accountId, request }) =>
-      shouldHandleGoogleChatNativeApprovalRequest({ cfg, accountId, request }),
+    shouldHandle: ({ cfg, accountId, approvalKind, request }) =>
+      shouldHandleGoogleChatNativeApprovalRequest({ cfg, accountId, approvalKind, request }),
   },
   presentation: {
     buildPendingPayload: ({ cfg, accountId, context, nowMs, view }) =>

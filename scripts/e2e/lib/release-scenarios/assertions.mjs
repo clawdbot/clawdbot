@@ -7,81 +7,23 @@ import {
   assertOpenAiRequestLogUsed,
 } from "../agent-turn-output.mjs";
 import { assertOpenAiEnvAuthProfileStore } from "../auth-profile-store-assertions.mjs";
-import { applyMockOpenAiModelConfig } from "../fixtures/mock-openai-config.mjs";
+import {
+  applyMockOpenAiModelConfig,
+  parseMockOpenAiPort,
+} from "../fixtures/mock-openai-config.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
+import {
+  ERROR_DETAIL_TAIL_BYTES,
+  fileContainsText,
+  readJson,
+} from "../release-assertion-files.mjs";
 import { readTextFileTail } from "../text-file-utils.mjs";
 
 const command = process.argv[2];
 
-const SCAN_CHUNK_BYTES = 64 * 1024;
-const SCAN_CARRY_CHARS = 256;
-const ERROR_DETAIL_TAIL_BYTES = 16 * 1024;
-const JSON_ARTIFACT_MAX_BYTES = 2 * 1024 * 1024;
-
 function assert(condition, message) {
   if (!condition) {
     throw new Error(message);
-  }
-}
-
-function readJson(file, maxBytes = JSON_ARTIFACT_MAX_BYTES) {
-  const stat = fs.statSync(file);
-  if (!stat.isFile()) {
-    throw new Error(`${file} is not a file`);
-  }
-  if (stat.size > maxBytes) {
-    throw new Error(
-      `JSON artifact exceeded ${maxBytes} bytes: ${file} (${stat.size} bytes). Tail: ${readTextFileTail(
-        file,
-        ERROR_DETAIL_TAIL_BYTES,
-      )}`,
-    );
-  }
-  const text = fs.readFileSync(file, "utf8");
-  const bytes = Buffer.byteLength(text, "utf8");
-  if (bytes > maxBytes) {
-    throw new Error(
-      `JSON artifact exceeded ${maxBytes} bytes: ${file} (${bytes} bytes). Tail: ${readTextFileTail(
-        file,
-        ERROR_DETAIL_TAIL_BYTES,
-      )}`,
-    );
-  }
-  return JSON.parse(text);
-}
-
-function fileContainsText(file, needle) {
-  let stat;
-  try {
-    stat = fs.statSync(file);
-  } catch {
-    return false;
-  }
-  if (!stat.isFile() || stat.size <= 0) {
-    return false;
-  }
-
-  const fd = fs.openSync(file, "r");
-  try {
-    const buffer = Buffer.alloc(Math.min(SCAN_CHUNK_BYTES, stat.size));
-    let carry = "";
-    let offset = 0;
-    while (offset < stat.size) {
-      const bytesToRead = Math.min(buffer.length, stat.size - offset);
-      const bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, offset);
-      if (bytesRead <= 0) {
-        break;
-      }
-      offset += bytesRead;
-      const text = carry + buffer.subarray(0, bytesRead).toString("utf8");
-      if (text.includes(needle)) {
-        return true;
-      }
-      carry = text.slice(-Math.max(SCAN_CARRY_CHARS, needle.length - 1));
-    }
-    return false;
-  } finally {
-    fs.closeSync(fd);
   }
 }
 
@@ -145,7 +87,7 @@ function readStateText() {
 }
 
 function configureMockOpenAi() {
-  const mockPort = Number(process.argv[3]);
+  const mockPort = parseMockOpenAiPort(process.argv[3]);
   const cfg = readJson(configPath());
   applyMockOpenAiModelConfig(cfg, { mockPort, includeImageDefaults: true });
   writeConfig(cfg);
@@ -161,6 +103,14 @@ function assertOpenAiEnvRef() {
     rawKeyNeedle: rawKey,
   });
   assert(!readStateText().includes(rawKey), "raw OpenAI key was persisted");
+}
+
+function assertSessionMemoryHookEnabled() {
+  const cfg = readJson(configPath());
+  assert(
+    cfg.hooks?.internal?.entries?.["session-memory"]?.enabled === true,
+    "session-memory hook was not enabled",
+  );
 }
 
 function assertAgentTurn() {
@@ -257,6 +207,7 @@ function assertPluginUninstalled() {
 const commands = {
   "configure-mock-openai": configureMockOpenAi,
   "assert-openai-env-ref": assertOpenAiEnvRef,
+  "assert-session-memory-hook-enabled": assertSessionMemoryHookEnabled,
   "assert-agent-turn": assertAgentTurn,
   "assert-file-contains": assertFileContains,
   "assert-package-version": assertPackageVersion,

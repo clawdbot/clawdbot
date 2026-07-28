@@ -3,12 +3,34 @@ import { describe, expect, it } from "vitest";
 import {
   collectPluginNpmPublishedRuntimeErrors,
   findPackedPackageReadmePath,
+  parseVerifyPublishedPluginRuntimeArgs,
   parseNpmReadmeMetadata,
   readPluginNpmCommandOptions,
   readPositiveIntEnv,
   resolveNpmPackFilename,
   runPluginNpmCommand,
+  usage,
 } from "../../scripts/verify-plugin-npm-published-runtime.mjs";
+
+describe("plugin npm publish verifier args", () => {
+  it("parses help and package specs before npm calls", () => {
+    expect(parseVerifyPublishedPluginRuntimeArgs(["--help"])).toEqual({ help: true, spec: "" });
+    expect(parseVerifyPublishedPluginRuntimeArgs(["--", "@openclaw/discord@2026.5.2"])).toEqual({
+      help: false,
+      spec: "@openclaw/discord@2026.5.2",
+    });
+  });
+
+  it("rejects unknown and extra args before npm calls", () => {
+    expect(() => parseVerifyPublishedPluginRuntimeArgs([])).toThrow(usage());
+    expect(() => parseVerifyPublishedPluginRuntimeArgs(["--wat"])).toThrow(
+      "Unknown plugin npm verifier option: --wat",
+    );
+    expect(() =>
+      parseVerifyPublishedPluginRuntimeArgs(["@openclaw/discord@2026.5.2", "extra"]),
+    ).toThrow("Unexpected plugin npm verifier argument: extra");
+  });
+});
 
 describe("plugin npm publish verifier retry limits", () => {
   it("rejects loose numeric retry env values instead of parsing prefixes", () => {
@@ -117,7 +139,7 @@ describe("collectPluginNpmPublishedRuntimeErrors", () => {
             extensions: ["./index.ts"],
           },
         },
-        files: ["package.json", "index.ts"],
+        files: ["package.json", "openclaw.plugin.json", "index.ts"],
       }),
     ).toEqual([
       "@openclaw/discord@2026.5.2 requires compiled runtime output for TypeScript entry ./index.ts: expected ./dist/index.js, ./dist/index.mjs, ./dist/index.cjs, ./index.js, ./index.mjs, ./index.cjs",
@@ -135,9 +157,42 @@ describe("collectPluginNpmPublishedRuntimeErrors", () => {
             runtimeExtensions: ["./dist/index.js"],
           },
         },
-        files: ["package.json", "index.ts", "dist/index.js"],
+        files: ["package.json", "openclaw.plugin.json", "index.ts", "dist/index.js"],
       }),
     ).toStrictEqual([]);
+  });
+
+  it("flags plugin npm packages without an OpenClaw plugin manifest", () => {
+    expect(
+      collectPluginNpmPublishedRuntimeErrors({
+        packageJson: {
+          name: "@openclaw/searxng-plugin",
+          version: "2026.6.11",
+          openclaw: {
+            extensions: ["./index.ts"],
+            runtimeExtensions: ["./dist/index.js"],
+          },
+        },
+        files: ["package.json", "dist/index.js"],
+      }),
+    ).toEqual([
+      "@openclaw/searxng-plugin@2026.6.11 plugin npm package must include openclaw.plugin.json",
+    ]);
+  });
+
+  it("flags reservation packages before they can pass plugin runtime verification", () => {
+    expect(
+      collectPluginNpmPublishedRuntimeErrors({
+        packageJson: {
+          name: "@openclaw/tavily-plugin",
+          version: "0.0.0",
+          description: "Bootstrap reservation",
+        },
+        files: ["package.json", "README.md"],
+      }),
+    ).toEqual([
+      "@openclaw/tavily-plugin@0.0.0 plugin npm package must include openclaw.plugin.json",
+    ]);
   });
 
   it("flags missing explicit runtimeExtensions outputs", () => {
@@ -151,7 +206,7 @@ describe("collectPluginNpmPublishedRuntimeErrors", () => {
             runtimeExtensions: ["./dist/index.js"],
           },
         },
-        files: ["package.json", "src/index.ts"],
+        files: ["package.json", "openclaw.plugin.json", "src/index.ts"],
       }),
     ).toEqual(["@openclaw/line@2026.5.3 runtime extension entry not found: ./dist/index.js"]);
   });
@@ -167,7 +222,7 @@ describe("collectPluginNpmPublishedRuntimeErrors", () => {
             runtimeExtensions: ["./dist/index.js"],
           },
         },
-        files: ["package.json", "dist/index.js"],
+        files: ["package.json", "openclaw.plugin.json", "dist/index.js"],
       }),
     ).toEqual([
       "@openclaw/acpx@2026.5.3 package.json openclaw.runtimeExtensions length (1) must match openclaw.extensions length (2)",
@@ -185,7 +240,7 @@ describe("collectPluginNpmPublishedRuntimeErrors", () => {
             runtimeExtensions: [" "],
           },
         },
-        files: ["package.json", "src/index.ts", "dist/index.js"],
+        files: ["package.json", "openclaw.plugin.json", "src/index.ts", "dist/index.js"],
       }),
     ).toEqual([
       "@openclaw/whatsapp@2026.5.3 package.json openclaw.runtimeExtensions[0] must be a non-empty string",
@@ -204,7 +259,13 @@ describe("collectPluginNpmPublishedRuntimeErrors", () => {
             setupEntry: "./setup-entry.ts",
           },
         },
-        files: ["package.json", "index.ts", "dist/index.js", "setup-entry.ts"],
+        files: [
+          "package.json",
+          "openclaw.plugin.json",
+          "index.ts",
+          "dist/index.js",
+          "setup-entry.ts",
+        ],
       }),
     ).toEqual([
       "@openclaw/line@2026.5.3 requires compiled runtime output for TypeScript entry ./setup-entry.ts: expected ./dist/setup-entry.js, ./dist/setup-entry.mjs, ./dist/setup-entry.cjs, ./setup-entry.js, ./setup-entry.mjs, ./setup-entry.cjs",
@@ -224,7 +285,7 @@ describe("collectPluginNpmPublishedRuntimeErrors", () => {
             runtimeSetupEntry: "./dist/setup-entry.js",
           },
         },
-        files: ["package.json", "dist/index.js", "dist/setup-entry.js"],
+        files: ["package.json", "openclaw.plugin.json", "dist/index.js", "dist/setup-entry.js"],
       }),
     ).toStrictEqual([]);
   });
@@ -242,7 +303,7 @@ describe("collectPluginNpmPublishedRuntimeErrors", () => {
             runtimeSetupEntry: "./dist/setup-entry.js",
           },
         },
-        files: ["package.json", "dist/index.js"],
+        files: ["package.json", "openclaw.plugin.json", "dist/index.js"],
       }),
     ).toEqual(["@openclaw/matrix@2026.5.3 runtime setup entry not found: ./dist/setup-entry.js"]);
   });
@@ -259,7 +320,7 @@ describe("collectPluginNpmPublishedRuntimeErrors", () => {
             runtimeSetupEntry: "./dist/setup-entry.js",
           },
         },
-        files: ["package.json", "dist/index.js", "dist/setup-entry.js"],
+        files: ["package.json", "openclaw.plugin.json", "dist/index.js", "dist/setup-entry.js"],
       }),
     ).toEqual([
       "@openclaw/twitch@2026.5.3 package.json openclaw.runtimeSetupEntry requires openclaw.setupEntry",
@@ -277,6 +338,23 @@ describe("resolveNpmPackFilename", () => {
     ].join("\n");
 
     expect(resolveNpmPackFilename(noisyOutput)).toBe("openclaw-msteams-2026.5.24-beta.1.tgz");
+  });
+
+  it("rejects path-like tarball output instead of reading outside the pack directory", () => {
+    const unsafeOutputs = [
+      "../openclaw-msteams.tgz",
+      "nested/openclaw-msteams.tgz",
+      "nested\\openclaw-msteams.tgz",
+      "/tmp/openclaw-msteams.tgz",
+      "C:\\temp\\openclaw-msteams.tgz",
+      "openclaw-msteams\u0000.tgz",
+    ];
+
+    for (const output of unsafeOutputs) {
+      expect(() => resolveNpmPackFilename(output)).toThrow(
+        "npm pack did not report a tarball filename",
+      );
+    }
   });
 });
 

@@ -6,7 +6,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 /** Legacy OAuth ref source persisted by older credential stores. */
-export const LEGACY_OAUTH_REF_SOURCE = "openclaw-credentials";
+const LEGACY_OAUTH_REF_SOURCE = "openclaw-credentials";
 /** Legacy OAuth ref provider persisted by older credential stores. */
 export const LEGACY_OAUTH_REF_PROVIDER = "openai-codex";
 

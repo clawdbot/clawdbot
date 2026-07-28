@@ -111,7 +111,7 @@ function mergeVideoGenerationModeCapabilities<
   } as T;
 }
 
-export function mergeVideoGenerationProviderCapabilities(
+function mergeVideoGenerationProviderCapabilities(
   base: VideoGenerationProviderCapabilities,
   overlay: VideoGenerationProviderCapabilities,
 ): VideoGenerationProviderCapabilities {

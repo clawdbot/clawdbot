@@ -6,12 +6,8 @@ import * as tar from "tar";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withRealpathSymlinkRebindRace } from "../test-utils/symlink-rebind-race.js";
-import type { ArchiveSecurityError } from "./archive.js";
-import {
-  extractArchive,
-  readZipCentralDirectoryEntryCount,
-  resolvePackedRootDir,
-} from "./archive.js";
+import { createZipCentralDirectoryArchive } from "../test-utils/zip-central-directory-fixture.js";
+import { extractArchive, resolvePackedRootDir } from "./archive.js";
 
 const fixtureRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-archive-" });
 const directorySymlinkType = process.platform === "win32" ? "junction" : undefined;
@@ -60,7 +56,7 @@ async function expectRejectedCode(promise: Promise<unknown>, expected: string | 
   try {
     await promise;
   } catch (error) {
-    const code = (error as Partial<ArchiveSecurityError>).code;
+    const code = (error as { code?: unknown }).code;
     if (typeof expected === "string") {
       expect(code).toBe(expected);
       return;
@@ -89,31 +85,6 @@ async function expectExtractedSizeBudgetExceeded(params: {
       limits: { maxExtractedBytes: params.maxExtractedBytes },
     }),
   ).rejects.toThrow("archive extracted size exceeds limit");
-}
-
-function createZipCentralDirectoryArchive(params: {
-  actualEntryCount: number;
-  declaredEntryCount?: number;
-  declaredCentralDirectorySize?: number;
-}): Buffer {
-  const centralDirectory = Buffer.concat(
-    Array.from({ length: params.actualEntryCount }, (_, index) => {
-      const name = Buffer.from(`file-${index}.txt`);
-      const header = Buffer.alloc(46 + name.byteLength);
-      header.writeUInt32LE(0x02014b50, 0);
-      header.writeUInt16LE(name.byteLength, 28);
-      name.copy(header, 46);
-      return header;
-    }),
-  );
-  const declaredEntryCount = params.declaredEntryCount ?? params.actualEntryCount;
-  const eocd = Buffer.alloc(22);
-  eocd.writeUInt32LE(0x06054b50, 0);
-  eocd.writeUInt16LE(Math.min(declaredEntryCount, 0xffff), 8);
-  eocd.writeUInt16LE(Math.min(declaredEntryCount, 0xffff), 10);
-  eocd.writeUInt32LE(params.declaredCentralDirectorySize ?? centralDirectory.byteLength, 12);
-  eocd.writeUInt32LE(0, 16);
-  return Buffer.concat([centralDirectory, eocd]);
 }
 
 beforeAll(async () => {
@@ -222,7 +193,7 @@ describe("archive utils", () => {
     });
   });
 
-  it("does not clobber out-of-destination file when parent dir is symlink-rebound during zip extract", async () => {
+  it("does not clobber an out-of-destination file during a zip symlink-rebind race", async () => {
     await withArchiveCase("zip", async ({ workDir, archivePath, extractDir }) => {
       const outsideDir = path.join(workDir, "outside");
       await fs.mkdir(outsideDir, { recursive: true });
@@ -253,7 +224,7 @@ describe("archive utils", () => {
         });
       } catch (error) {
         rejected = true;
-        const code = (error as Partial<ArchiveSecurityError>).code;
+        const code = (error as { code?: unknown }).code;
         expect(String(code)).toMatch(/destination-symlink-traversal|not-file/);
       }
 
@@ -305,7 +276,9 @@ describe("archive utils", () => {
           lstatSpy.mockRestore();
         }
 
-        await expect(fs.readFile(outsideAlias, "utf8")).resolves.toBe("");
+        // The raced alias points at attacker-supplied archive bytes. Cleanup unlinks the owned
+        // destination; truncating the inode would instead mutate a path outside that boundary.
+        await expect(fs.readFile(outsideAlias, "utf8")).resolves.toBe("owned");
         await expectPathMissing(extractedPath);
       });
     },
@@ -407,7 +380,6 @@ describe("archive utils", () => {
       });
       await fs.writeFile(archivePath, archiveBytes);
 
-      expect(readZipCentralDirectoryEntryCount(archiveBytes)).toBe(2);
       await expect(
         extractArchive({
           archivePath,

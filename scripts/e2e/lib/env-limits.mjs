@@ -11,3 +11,13 @@ export function readPositiveIntEnv(name, fallback, env = process.env) {
   }
   return value;
 }
+
+export function readTcpPortEnv(name, fallback, env = process.env) {
+  const value = readPositiveIntEnv(name, fallback, env);
+  if (value > 65_535) {
+    const raw = env[name] ?? fallback;
+    const text = raw == null ? "unset" : String(raw).trim();
+    throw new Error(`invalid ${name}: ${text}`);
+  }
+  return value;
+}

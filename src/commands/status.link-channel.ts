@@ -7,7 +7,7 @@ import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDefaultChannelAccountContext } from "./channel-account-context.js";
 
-export type LinkChannelContext = {
+type LinkChannelContext = {
   linked: boolean;
   authAgeMs: number | null;
   account?: unknown;

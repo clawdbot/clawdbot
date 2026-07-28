@@ -11,6 +11,7 @@ vi.mock("./runtime-api.js", () => ({
 
 describe("mattermost monitor auth", () => {
   let authorizeMattermostCommandInvocation: typeof import("./monitor-auth.js").authorizeMattermostCommandInvocation;
+  let formatMattermostDirectMessageDropLog: typeof import("./monitor-auth.js").formatMattermostDirectMessageDropLog;
   let isMattermostSenderAllowed: typeof import("./monitor-auth.js").isMattermostSenderAllowed;
   let normalizeMattermostAllowEntry: typeof import("./monitor-auth.js").normalizeMattermostAllowEntry;
   let normalizeMattermostAllowList: typeof import("./monitor-auth.js").normalizeMattermostAllowList;
@@ -18,6 +19,7 @@ describe("mattermost monitor auth", () => {
   beforeAll(async () => {
     ({
       authorizeMattermostCommandInvocation,
+      formatMattermostDirectMessageDropLog,
       isMattermostSenderAllowed,
       normalizeMattermostAllowEntry,
       normalizeMattermostAllowList,
@@ -56,6 +58,18 @@ describe("mattermost monitor auth", () => {
       senderName: "alice",
       allowNameMatching: true,
     });
+  });
+
+  it("formats direct-message drops with the ingress reason and open-policy hint", () => {
+    expect(
+      formatMattermostDirectMessageDropLog({
+        senderId: "alice-id",
+        dmPolicy: "open",
+        reasonCode: "dm_policy_not_allowlisted",
+      }),
+    ).toBe(
+      "mattermost: drop dm sender=alice-id (dmPolicy=open reason=dm_policy_not_allowlisted hint=add-allowFrom-wildcard)",
+    );
   });
 
   it("resolves direct command authorization from shared ingress", async () => {

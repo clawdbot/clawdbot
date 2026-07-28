@@ -61,7 +61,7 @@ We prioritize secure defaults, but also expose clear knobs for trusted high-powe
 ## Plugins & Memory
 
 OpenClaw has an extensive plugin API.
-Core stays lean; optional capability should usually ship as plugins.
+Core stays lean; optional capabilities should usually ship as plugins.
 We are generally slimming down core while expanding what plugins can do.
 If a useful feature cannot be built as a plugin yet, we welcome PRs and design discussions that extend the plugin API instead of adding one-off core behavior.
 

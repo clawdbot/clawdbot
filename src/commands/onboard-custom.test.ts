@@ -108,6 +108,27 @@ describe("promptCustomApiConfig", () => {
     expect(prompter.confirm).not.toHaveBeenCalled();
   });
 
+  it("cancels custom provider verification response bodies", async () => {
+    const prompter = createTestPrompter({
+      text: ["http://localhost:11434/v1", "", "llama3", "custom", ""],
+      select: ["plaintext", "openai"],
+    });
+    const cancel = vi.fn(async () => undefined);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-type": "application/json; charset=utf-8" }),
+        body: { cancel },
+      })),
+    );
+
+    await runPromptCustomApi(prompter);
+
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
   it("handles explicit OpenAI Responses flow", async () => {
     const prompter = createTestPrompter({
       text: ["https://proxy.example.com/v1", "test-key", "gpt-5.4", "custom", ""],

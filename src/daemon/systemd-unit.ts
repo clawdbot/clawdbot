@@ -81,6 +81,10 @@ export function buildSystemdUnit({
     "TimeoutStopSec=30",
     "TimeoutStartSec=30",
     "SuccessExitStatus=0 143",
+    // Transient child processes may be selected by the OOM killer before the
+    // gateway. Keep the service running when that happens; the child surface is
+    // already responsible for reporting the failed command/session.
+    "OOMPolicy=continue",
     // Keep service children in the same lifecycle so restarts do not leave
     // orphan ACP/runtime workers behind.
     "KillMode=control-group",

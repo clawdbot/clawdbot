@@ -3,11 +3,27 @@
 import { describe, expect, it } from "vitest";
 import {
   buildCurrentInboundPrompt,
-  buildCurrentInboundPromptContextPrefix,
   buildRuntimeContextCustomMessage,
-  buildRuntimeContextSystemContext,
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
+
+function withModelPromptBuildContext(params: {
+  promptBeforeHooks: string;
+  transcriptPrompt: string;
+  promptBeforeAnnotation?: string;
+  prependContext?: string;
+  appendContext?: string;
+}) {
+  return {
+    modelPromptBuildContext: {
+      promptBeforeHooks: params.promptBeforeHooks,
+      transcriptPromptBeforeTransforms: params.transcriptPrompt,
+      promptBeforeAnnotation: params.promptBeforeAnnotation ?? params.promptBeforeHooks,
+      prependContext: params.prependContext ?? "",
+      appendContext: params.appendContext ?? "",
+    },
+  };
+}
 
 describe("runtime context prompt submission", () => {
   it("keeps unchanged prompts as a normal user prompt", () => {
@@ -22,8 +38,9 @@ describe("runtime context prompt submission", () => {
   it("moves hidden runtime context out of the visible prompt", () => {
     // Hidden context is provider input, not user-authored transcript text; it
     // must be split before persistence and display.
+    const visiblePrompt = "[media attached: /tmp/a.png (image/png)]\nvisible ask";
     const effectivePrompt = [
-      "visible ask",
+      visiblePrompt,
       "",
       "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
       "secret runtime context",
@@ -33,10 +50,10 @@ describe("runtime context prompt submission", () => {
     expect(
       resolveRuntimeContextPromptParts({
         effectivePrompt,
-        transcriptPrompt: "visible ask",
+        transcriptPrompt: visiblePrompt,
       }),
     ).toEqual({
-      prompt: "visible ask",
+      prompt: visiblePrompt,
       runtimeContext:
         "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nsecret runtime context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
     });
@@ -98,6 +115,260 @@ describe("runtime context prompt submission", () => {
       modelPrompt: prompt,
       runtimeContext:
         "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nsecret runtime context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+    });
+  });
+
+  it("strips system-event prefix from modelPrompt when hooks add prepend context", () => {
+    // Regression: before_prompt_build hooks that add prependContext set hasPromptBuildContext=true,
+    // causing modelPrompt=effectivePrompt (with system-event prefix). Without this fix the event
+    // appeared in both runtimeContext (Message A) and modelPrompt (Message B). #95323
+    const systemEvent = "System: [2026-06-20 13:59:51] Slack DM from Alice";
+    const userText = "Hello, what can you do?";
+    const prependContext = "Hook injected context";
+    const queuedBody = [systemEvent, "", userText].join("\n");
+
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt: queuedBody,
+        transcriptPrompt: userText,
+        modelPrompt: [prependContext, "", queuedBody].join("\n"),
+        ...withModelPromptBuildContext({
+          promptBeforeHooks: queuedBody,
+          transcriptPrompt: userText,
+          prependContext,
+        }),
+      }),
+    ).toEqual({
+      prompt: userText,
+      modelPrompt: [prependContext, "", userText].join("\n"),
+      runtimeContext: systemEvent,
+    });
+  });
+
+  it("strips system-event prefix from modelPrompt when hooks add append context", () => {
+    const systemEvent = "System: [2026-06-20 13:59:51] Slack DM from Alice";
+    const userText = "Hello";
+    const appendContext = "Hook tail context";
+    const queuedBody = [systemEvent, "", userText].join("\n");
+
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt: queuedBody,
+        transcriptPrompt: userText,
+        modelPrompt: [queuedBody, "", appendContext].join("\n"),
+        ...withModelPromptBuildContext({
+          promptBeforeHooks: queuedBody,
+          transcriptPrompt: userText,
+          appendContext,
+        }),
+      }),
+    ).toEqual({
+      prompt: userText,
+      modelPrompt: [userText, "", appendContext].join("\n"),
+      runtimeContext: systemEvent,
+    });
+  });
+
+  it("strips hidden prompt context on both sides without removing repeated hook text", () => {
+    const systemEvent = "System: [2026-06-20 13:59:51] Slack DM from Alice";
+    const userText = "Hello";
+    const channelMetadata = "Untrusted channel metadata";
+    const hookContext = systemEvent;
+    const effectivePrompt = [systemEvent, userText, channelMetadata].join("\n\n");
+    const modelPrompt = [hookContext, effectivePrompt, hookContext].join("\n\n");
+
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt,
+        transcriptPrompt: userText,
+        modelPrompt,
+        ...withModelPromptBuildContext({
+          promptBeforeHooks: effectivePrompt,
+          transcriptPrompt: userText,
+          prependContext: hookContext,
+          appendContext: hookContext,
+        }),
+      }),
+    ).toEqual({
+      prompt: userText,
+      modelPrompt: [hookContext, userText, hookContext].join("\n\n"),
+      runtimeContext: [systemEvent, channelMetadata].join("\n\n"),
+    });
+  });
+
+  it("anchors hidden-context removal before append hooks that repeat the prompt", () => {
+    const systemEvent = "System: [2026-06-20 13:59:51] Slack DM from Alice";
+    const userText = "Hello";
+    const appendContext = "Hook summary: Hello";
+
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt: [systemEvent, userText].join("\n\n"),
+        transcriptPrompt: userText,
+        modelPrompt: [systemEvent, userText, appendContext].join("\n\n"),
+        ...withModelPromptBuildContext({
+          promptBeforeHooks: [systemEvent, userText].join("\n\n"),
+          transcriptPrompt: userText,
+          appendContext,
+        }),
+      }),
+    ).toEqual({
+      prompt: userText,
+      modelPrompt: [userText, appendContext].join("\n\n"),
+      runtimeContext: systemEvent,
+    });
+  });
+
+  it("strips the last matching prompt occurrence when prepend hooks quote the body", () => {
+    const systemEvent = "System: [2026-06-20 13:59:51] Slack DM from Alice";
+    const userText = "Hello";
+    const channelMetadata = "Untrusted channel metadata";
+    const effectivePrompt = [systemEvent, userText, channelMetadata].join("\n\n");
+
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt,
+        transcriptPrompt: userText,
+        modelPrompt: [effectivePrompt, effectivePrompt].join("\n\n"),
+        ...withModelPromptBuildContext({
+          promptBeforeHooks: effectivePrompt,
+          transcriptPrompt: userText,
+          prependContext: effectivePrompt,
+        }),
+      }),
+    ).toEqual({
+      prompt: userText,
+      modelPrompt: [effectivePrompt, userText].join("\n\n"),
+      runtimeContext: [systemEvent, channelMetadata].join("\n\n"),
+    });
+  });
+
+  it("strips the active prompt before append hooks that quote the body", () => {
+    const systemEvent = "System: [2026-06-20 13:59:51] Slack DM from Alice";
+    const userText = "Hello";
+    const effectivePrompt = [systemEvent, userText].join("\n\n");
+
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt,
+        transcriptPrompt: userText,
+        modelPrompt: [effectivePrompt, effectivePrompt].join("\n\n"),
+        ...withModelPromptBuildContext({
+          promptBeforeHooks: effectivePrompt,
+          transcriptPrompt: userText,
+          appendContext: effectivePrompt,
+        }),
+      }),
+    ).toEqual({
+      prompt: userText,
+      modelPrompt: [userText, effectivePrompt].join("\n\n"),
+      runtimeContext: systemEvent,
+    });
+  });
+
+  it("normalizes quoted hook prompts before locating the active prompt", () => {
+    const systemEvent = "System: [2026-06-20 13:59:51] Slack DM from Alice";
+    const userText = "Hello";
+    const internalContext = [
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+      "private runtime note",
+      "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+    ].join("\n");
+    const effectivePrompt = [systemEvent, userText, internalContext].join("\n\n");
+
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt,
+        transcriptPrompt: userText,
+        modelPrompt: [effectivePrompt, effectivePrompt].join("\n\n"),
+        ...withModelPromptBuildContext({
+          promptBeforeHooks: effectivePrompt,
+          transcriptPrompt: userText,
+          appendContext: effectivePrompt,
+        }),
+      }),
+    ).toEqual({
+      prompt: userText,
+      modelPrompt: [userText, systemEvent, userText].join("\n\n"),
+      runtimeContext: [systemEvent, internalContext].join("\n\n"),
+    });
+  });
+
+  it("preserves user prompt edge whitespace while removing hidden context", () => {
+    const systemEvent = "System: [2026-06-20 13:59:51] Slack DM from Alice";
+    const userText = " leading text ";
+    const appendContext = "Hook tail";
+    const effectivePrompt = [systemEvent, userText].join("\n\n");
+
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt,
+        transcriptPrompt: userText,
+        modelPrompt: [effectivePrompt, appendContext].join("\n\n"),
+        ...withModelPromptBuildContext({
+          promptBeforeHooks: effectivePrompt,
+          transcriptPrompt: userText,
+          appendContext,
+        }),
+      }),
+    ).toEqual({
+      prompt: userText,
+      modelPrompt: `${userText}\n\n${appendContext}`,
+      runtimeContext: systemEvent,
+    });
+  });
+
+  it("strips hidden context after prompt transforms decorate the active hook body", () => {
+    const systemEvent = "System: [2026-06-20 13:59:51] Slack DM from Alice";
+    const userText = "Hello";
+    const prependContext = "Hook injected context";
+    const queuedContext = "[Queued messages while agent was busy]";
+    const promptBeforeHooks = [systemEvent, userText].join("\n\n");
+    const promptBeforeAnnotation = [queuedContext, promptBeforeHooks].join("\n\n");
+    const transcriptPrompt = [queuedContext, userText].join("\n\n");
+    const modelPrompt = [queuedContext, prependContext, promptBeforeHooks].join("\n\n");
+
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt: promptBeforeAnnotation,
+        transcriptPrompt,
+        modelPrompt,
+        ...withModelPromptBuildContext({
+          promptBeforeHooks,
+          transcriptPrompt: userText,
+          promptBeforeAnnotation,
+          prependContext,
+        }),
+      }),
+    ).toEqual({
+      prompt: transcriptPrompt,
+      modelPrompt: [queuedContext, prependContext, userText].join("\n\n"),
+      runtimeContext: systemEvent,
+    });
+  });
+
+  it("keeps outer provenance context ahead of source runtime context", () => {
+    const provenance = "[Inter-session message] sourceTool=sessions_send isUser=false";
+    const systemEvent = "System: [2026-06-20 13:59:51] Slack DM from Alice";
+    const userText = "Hello";
+    const promptBeforeHooks = [systemEvent, userText].join("\n\n");
+    const prependContext = "Hook injected context";
+
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt: [provenance, promptBeforeHooks].join("\n"),
+        transcriptPrompt: userText,
+        modelPrompt: [prependContext, promptBeforeHooks].join("\n\n"),
+        ...withModelPromptBuildContext({
+          promptBeforeHooks,
+          transcriptPrompt: userText,
+          prependContext,
+        }),
+      }),
+    ).toEqual({
+      prompt: userText,
+      modelPrompt: [prependContext, userText].join("\n\n"),
+      runtimeContext: [provenance, systemEvent].join("\n\n"),
     });
   });
 
@@ -180,6 +451,25 @@ describe("runtime context prompt submission", () => {
     expect(parts.runtimeContext).toBe(
       "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nsecret runtime context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
     );
+  });
+
+  it("preserves repeated hook text when there is no hidden runtime context", () => {
+    const modelPrompt = "Hello\n\nHook summary: Hello";
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt: "Hello",
+        transcriptPrompt: "Hello",
+        modelPrompt,
+        ...withModelPromptBuildContext({
+          promptBeforeHooks: "Hello",
+          transcriptPrompt: "Hello",
+          appendContext: "Hook summary: Hello",
+        }),
+      }),
+    ).toEqual({
+      prompt: "Hello",
+      modelPrompt,
+    });
   });
 
   it("fails closed for unterminated hidden runtime context blocks", () => {
@@ -283,31 +573,6 @@ describe("runtime context prompt submission", () => {
     });
   });
 
-  it("uses current-turn context as prompt-local text", () => {
-    expect(
-      buildCurrentInboundPromptContextPrefix({
-        text: "Conversation info (untrusted metadata):\n```json\n{}\n```",
-      }),
-    ).toBe("Conversation info (untrusted metadata):\n```json\n{}\n```");
-  });
-
-  it("can use compact current-turn context for resumable backends", () => {
-    expect(
-      buildCurrentInboundPromptContextPrefix(
-        {
-          text: "Room context:\nAlice: lunch?\n\nCurrent event:\nBob: yes",
-          resumableText: "Current event:\nBob: yes",
-        },
-        { preferResumableText: true },
-      ),
-    ).toBe("Current event:\nBob: yes");
-  });
-
-  it("omits empty current-turn context", () => {
-    expect(buildCurrentInboundPromptContextPrefix(undefined)).toBe("");
-    expect(buildCurrentInboundPromptContextPrefix({ text: "   " })).toBe("");
-  });
-
   it("joins current-turn context and prompt with the requested separator", () => {
     expect(
       buildCurrentInboundPrompt({
@@ -333,6 +598,13 @@ describe("runtime context prompt submission", () => {
         preferResumableText: true,
       }),
     ).toBe("Current event:\nBob: yes\n\n[OpenClaw room event]");
+
+    expect(
+      buildCurrentInboundPrompt({
+        context: { text: "   " },
+        prompt: "visible ask",
+      }),
+    ).toBe("visible ask");
   });
 
   it("builds runtime context as prompt-local custom context before the current user prompt", () => {
@@ -352,20 +624,14 @@ describe("runtime context prompt submission", () => {
     });
   });
 
-  it("labels next-turn runtime context only when used as prompt-local system context", () => {
-    const systemContext = buildRuntimeContextSystemContext("secret runtime context");
+  it("labels runtime-only events as system context", () => {
+    const parts = resolveRuntimeContextPromptParts({
+      effectivePrompt: "internal event",
+      transcriptPrompt: "",
+    });
 
-    expect(systemContext).toContain(
-      "OpenClaw runtime context for the immediately preceding user message.",
-    );
-    expect(systemContext).toContain("not user-authored");
-    expect(systemContext).toContain("secret runtime context");
-  });
-
-  it("labels runtime-only events as system context", async () => {
-    const { buildRuntimeEventSystemContext } = await import("./runtime-context-prompt.js");
-
-    expect(buildRuntimeEventSystemContext("internal event")).toContain("OpenClaw runtime event.");
-    expect(buildRuntimeEventSystemContext("internal event")).toContain("not user-authored");
+    expect(parts.runtimeSystemContext).toContain("OpenClaw runtime event.");
+    expect(parts.runtimeSystemContext).toContain("not user-authored");
+    expect(parts.runtimeSystemContext).toContain("internal event");
   });
 });

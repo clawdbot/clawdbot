@@ -8,17 +8,20 @@ import {
   getActivePluginHttpRouteRegistryVersion,
   getActivePluginRegistryVersion,
   getActivePluginRegistry,
+  getActivePluginSessionExtensionRegistry,
   listImportedRuntimePluginIds,
   pinActivePluginChannelRegistry,
   pinActivePluginHttpRouteRegistry,
+  pinActivePluginSessionExtensionRegistry,
   recordImportedPluginId,
   releasePinnedPluginChannelRegistry,
   releasePinnedPluginHttpRouteRegistry,
+  releasePinnedPluginSessionExtensionRegistry,
   resetPluginRuntimeStateForTest,
   resolveActivePluginHttpRouteRegistry,
   setActivePluginRegistry,
 } from "./runtime.js";
-import { createPluginRecord } from "./status.test-helpers.js";
+import { createPluginRecord } from "./status.test-fixtures.js";
 
 function createRegistryWithRoute(path: string) {
   const registry = createEmptyPluginRegistry();
@@ -28,6 +31,19 @@ function createRegistryWithRoute(path: string) {
     match: path === "/plugins/diffs" ? "prefix" : "exact",
     handler: () => true,
     pluginId: path === "/plugins/diffs" ? "diffs" : "demo",
+    source: "test",
+  });
+  return registry;
+}
+
+function createRegistryWithSessionExtension(pluginId = "demo-plugin", namespace = "demo") {
+  const registry = createEmptyPluginRegistry();
+  registry.sessionExtensions.push({
+    pluginId,
+    extension: {
+      namespace,
+      description: "Demo session extension",
+    },
     source: "test",
   });
   return registry;
@@ -93,6 +109,7 @@ describe("plugin runtime route registry", () => {
   afterEach(() => {
     releasePinnedPluginChannelRegistry();
     releasePinnedPluginHttpRouteRegistry();
+    releasePinnedPluginSessionExtensionRegistry();
     resetPluginRuntimeStateForTest();
   });
 
@@ -151,6 +168,47 @@ describe("plugin runtime route registry", () => {
 
     expect(resolveActivePluginHttpRouteRegistry(laterRegistry)).toBe(laterRegistry);
     expect(isPluginRegistryRetired(startupRegistry)).toBe(true);
+  });
+
+  it("keeps pinned session extension registries across active registry churn", () => {
+    const startupRegistry = createRegistryWithSessionExtension("startup", "presence");
+    const laterRegistry = createRegistryWithSessionExtension("later", "presence");
+
+    setActivePluginRegistry(startupRegistry);
+    pinActivePluginSessionExtensionRegistry(startupRegistry);
+    setActivePluginRegistry(laterRegistry);
+
+    expect(getActivePluginSessionExtensionRegistry()).toBe(startupRegistry);
+    expect(
+      getActivePluginSessionExtensionRegistry()?.sessionExtensions.map((entry) => entry.pluginId),
+    ).toEqual(["startup"]);
+    expect(isPluginRegistryRetired(startupRegistry)).toBe(false);
+  });
+
+  it("releases pinned session extension registries back to the active registry", () => {
+    const startupRegistry = createRegistryWithSessionExtension("startup", "presence");
+    const laterRegistry = createRegistryWithSessionExtension("later", "presence");
+
+    setActivePluginRegistry(startupRegistry);
+    pinActivePluginSessionExtensionRegistry(startupRegistry);
+    setActivePluginRegistry(laterRegistry);
+
+    releasePinnedPluginSessionExtensionRegistry(startupRegistry);
+
+    expect(getActivePluginSessionExtensionRegistry()).toBe(laterRegistry);
+    expect(isPluginRegistryRetired(startupRegistry)).toBe(true);
+  });
+
+  it("keeps empty pinned session extension registries authoritative over active extensions", () => {
+    const startupRegistry = createEmptyPluginRegistry();
+    const laterRegistry = createRegistryWithSessionExtension("later", "presence");
+
+    setActivePluginRegistry(startupRegistry);
+    pinActivePluginSessionExtensionRegistry(startupRegistry);
+    setActivePluginRegistry(laterRegistry);
+
+    expect(getActivePluginSessionExtensionRegistry()).toBe(startupRegistry);
+    expect(getActivePluginSessionExtensionRegistry()?.sessionExtensions).toHaveLength(0);
   });
 
   it("resolves the gateway command registry from pinned startup surfaces before active churn", () => {

@@ -1,4 +1,6 @@
 // Transitive Manifest Risk Report tests cover transitive manifest risk report script behavior.
+import { spawnSync } from "node:child_process";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   createTransitiveManifestRiskReport,
@@ -7,7 +9,27 @@ import {
   renderTransitiveManifestRiskMarkdownReport,
 } from "../../scripts/transitive-manifest-risk-report.mjs";
 
+function runCli(...args: string[]) {
+  return spawnSync(process.execPath, ["scripts/transitive-manifest-risk-report.mjs", ...args], {
+    cwd: path.resolve("."),
+    encoding: "utf8",
+  });
+}
+
+function expectNoNodeStack(stderr: string) {
+  expect(stderr).not.toContain("Node.js");
+  expect(stderr).not.toContain("\n    at ");
+}
+
 describe("transitive-manifest-risk-report", () => {
+  it("reports CLI argument errors without a Node stack trace", () => {
+    const unknownArg = runCli("--wat");
+    expect(unknownArg.status).toBe(1);
+    expect(unknownArg.stdout).toBe("");
+    expect(unknownArg.stderr.trim()).toBe("Unsupported argument: --wat");
+    expectNoNodeStack(unknownArg.stderr);
+  });
+
   it("reports floating transitive specs, lifecycle scripts, exotic sources, and recently published versions", async () => {
     const report = await createTransitiveManifestRiskReport({
       packageVersions: [
@@ -179,7 +201,8 @@ describe("transitive-manifest-risk-report", () => {
   });
 
   it("fetches full npm packuments for the requested manifest version", async () => {
-    const fetchCalls: Array<{ url: string; accept: string | null }> = [];
+    const fetchCalls: Array<{ url: string; accept: string | null; signal: AbortSignal | null }> =
+      [];
     const manifest = await fetchNpmManifest({
       packageName: "@scope/package",
       version: "1.0.0",
@@ -188,6 +211,7 @@ describe("transitive-manifest-risk-report", () => {
         fetchCalls.push({
           url: String(url),
           accept: new Headers(init?.headers).get("accept"),
+          signal: init?.signal instanceof AbortSignal ? init.signal : null,
         });
         return new Response(
           JSON.stringify({
@@ -214,8 +238,9 @@ describe("transitive-manifest-risk-report", () => {
 
     expect(fetchCalls).toEqual([
       {
-        url: "https://registry.example.test/@scope%2fpackage",
+        url: "https://registry.example.test/@scope%2Fpackage",
         accept: "application/json",
+        signal: expect.any(AbortSignal),
       },
     ]);
     expect(manifest).toEqual({
@@ -229,6 +254,37 @@ describe("transitive-manifest-risk-report", () => {
         },
       },
     });
+  });
+
+  it("cancels stalled npm registry body reads when the request aborts", async () => {
+    const controller = new AbortController();
+    let canceled = false;
+    const response = {
+      headers: new Headers(),
+      body: {
+        getReader() {
+          return {
+            read() {
+              return new Promise<ReadableStreamReadResult<Uint8Array>>(() => {});
+            },
+            async cancel() {
+              canceled = true;
+            },
+            releaseLock() {
+              throw new Error("releaseLock should not run while a read is pending");
+            },
+          };
+        },
+      },
+    } as unknown as Response;
+
+    const readPromise = readBoundedNpmRegistryText(response, 8, {
+      signal: controller.signal,
+    });
+    controller.abort(new Error("npm registry request timed out"));
+
+    await expect(readPromise).rejects.toThrow("npm registry request timed out");
+    expect(canceled).toBe(true);
   });
 
   it("rejects npm registry bodies that exceed the content-length cap", async () => {
@@ -247,7 +303,7 @@ describe("transitive-manifest-risk-report", () => {
     );
 
     await expect(readBoundedNpmRegistryText(response, 8)).rejects.toThrow(
-      "npm registry response exceeded 8 bytes (content-length 12)",
+      "npm registry response exceeded 8 bytes",
     );
     expect(canceled).toBe(true);
   });
@@ -260,8 +316,36 @@ describe("transitive-manifest-risk-report", () => {
     });
 
     await expect(readBoundedNpmRegistryText(response, 8)).rejects.toThrow(
-      "npm registry response exceeded 8 bytes (content-length 12)",
+      "npm registry response exceeded 8 bytes",
     );
+  });
+
+  it("streams non-decimal npm registry content-length values through the body cap", async () => {
+    const encoder = new TextEncoder();
+    let readStarted = false;
+    let canceled = false;
+    const response = new Response(
+      new ReadableStream({
+        pull(controller) {
+          readStarted = true;
+          controller.enqueue(encoder.encode("123456789"));
+        },
+        cancel() {
+          canceled = true;
+        },
+      }),
+      {
+        headers: {
+          "content-length": "1e3",
+        },
+      },
+    );
+
+    await expect(readBoundedNpmRegistryText(response, 8)).rejects.toThrow(
+      "npm registry response exceeded 8 bytes",
+    );
+    expect(readStarted).toBe(true);
+    expect(canceled).toBe(true);
   });
 
   it("rejects npm registry bodies that grow past the stream cap", async () => {
@@ -278,7 +362,7 @@ describe("transitive-manifest-risk-report", () => {
     );
 
     await expect(readBoundedNpmRegistryText(response, 8)).rejects.toThrow(
-      "npm registry response exceeded 8 bytes while reading response body",
+      "npm registry response exceeded 8 bytes",
     );
   });
 });

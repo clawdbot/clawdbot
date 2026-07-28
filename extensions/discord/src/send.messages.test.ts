@@ -43,6 +43,14 @@ describe("readMessagesDiscord", () => {
     expect(result).toEqual(messages);
     expect(restMock.get).toHaveBeenCalledWith("/channels/C1/messages", { limit: 5 });
   });
+
+  it("throws a clear error when Discord returns a non-array message read response", async () => {
+    restMock.get.mockResolvedValueOnce("\u001f\ufffd\u0008raw gzip bytes");
+
+    await expect(readMessagesDiscord("C1", {}, { cfg: {} as never })).rejects.toThrow(
+      "Unexpected Discord response for message read: expected array.",
+    );
+  });
 });
 
 describe("searchMessagesDiscord", () => {
@@ -56,5 +64,13 @@ describe("searchMessagesDiscord", () => {
     );
 
     expect(result).toEqual(results);
+  });
+
+  it("throws a clear error when Discord returns a non-object search response", async () => {
+    restMock.get.mockResolvedValueOnce("\u001f\ufffd\u0008raw gzip bytes");
+
+    await expect(
+      searchMessagesDiscord({ guildId: "G1", content: "test" }, { cfg: {} as never }),
+    ).rejects.toThrow("Unexpected Discord response for message search: expected object.");
   });
 });

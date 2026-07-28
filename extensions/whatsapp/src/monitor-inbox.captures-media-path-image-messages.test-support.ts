@@ -8,8 +8,6 @@ import {
   getSock,
   installWebMonitorInboxUnitTestHooks,
   mockLoadConfig,
-  settleInboundWork,
-  waitForMessageCalls,
 } from "./monitor-inbox.test-harness.js";
 let monitorWebInbox: typeof import("./inbound.js").monitorWebInbox;
 const inboundLoggerInfoMock = vi.hoisted(() => vi.fn());
@@ -37,23 +35,45 @@ describe("web monitor inbox", () => {
     monitorWebInbox = getMonitorWebInbox();
   });
 
-  async function openMonitor(onMessage = vi.fn()) {
+  async function openMonitor(
+    onMessage = vi.fn(),
+    extraOptions: Partial<Parameters<typeof monitorWebInbox>[0]> = {},
+  ) {
     return await monitorWebInbox({
       cfg: mockLoadConfig() as never,
       verbose: false,
       accountId: DEFAULT_ACCOUNT_ID,
       authDir: getAuthDir(),
       onMessage,
+      ...extraOptions,
     });
   }
 
   async function runSingleUpsertAndCapture(upsert: unknown) {
     const onMessage = vi.fn();
-    const listener = await openMonitor(onMessage);
+    let armed = false;
+    let observedPendingWork = false;
+    let resolvePendingWorkDrained!: () => void;
+    const pendingWorkDrained = new Promise<void>((resolve) => {
+      resolvePendingWorkDrained = resolve;
+    });
+    const listener = await openMonitor(onMessage, {
+      onPendingWorkChanged: (pendingWorkCount) => {
+        if (!armed) {
+          return;
+        }
+        if (pendingWorkCount > 0) {
+          observedPendingWork = true;
+        } else if (observedPendingWork) {
+          resolvePendingWorkDrained();
+        }
+      },
+    });
     const sock = getSock();
+    // The monitor owns async media and delivery work; wait for its drain signal instead of polling.
+    armed = true;
     sock.ev.emit("messages.upsert", upsert);
-    await waitForMessageCalls(onMessage, 1);
-    await settleInboundWork();
+    await pendingWorkDrained;
     return { onMessage, listener, sock };
   }
 
@@ -84,7 +104,8 @@ describe("web monitor inbox", () => {
     });
 
     expect(onMessage).toHaveBeenCalledTimes(1);
-    expect(onMessage.mock.calls[0]?.[0]?.payload.body).toBe("<media:image>");
+    expect(onMessage.mock.calls[0]?.[0]?.payload.body).toBe("");
+    expect(onMessage.mock.calls[0]?.[0]?.payload.media?.kind).toBe("image");
     expect(sock.readMessages).toHaveBeenCalledWith([
       {
         remoteJid: "888@s.whatsapp.net",
@@ -222,8 +243,12 @@ describe("web monitor inbox", () => {
     });
 
     expectSingleGroupMessage(onMessage, {
-      chatType: "group",
-      conversationId: "99999@g.us",
+      admission: expect.objectContaining({
+        conversation: expect.objectContaining({
+          kind: "group",
+          id: "99999@g.us",
+        }),
+      }),
       group: expect.objectContaining({
         mentions: expect.objectContaining({
           jids: ["123@s.whatsapp.net"],
@@ -261,8 +286,12 @@ describe("web monitor inbox", () => {
       ],
     });
     expectSingleGroupMessage(onMessage, {
-      chatType: "group",
-      conversationId: "424242@g.us",
+      admission: expect.objectContaining({
+        conversation: expect.objectContaining({
+          kind: "group",
+          id: "424242@g.us",
+        }),
+      }),
       group: expect.objectContaining({
         mentions: expect.objectContaining({
           jids: ["123@s.whatsapp.net"],
@@ -313,8 +342,12 @@ describe("web monitor inbox", () => {
       ],
     });
     expectSingleGroupMessage(onMessage, {
-      chatType: "group",
-      from: "55555@g.us",
+      admission: expect.objectContaining({
+        conversation: expect.objectContaining({
+          kind: "group",
+          id: "55555@g.us",
+        }),
+      }),
       group: expect.objectContaining({
         mentions: expect.objectContaining({
           jids: ["123@s.whatsapp.net"],

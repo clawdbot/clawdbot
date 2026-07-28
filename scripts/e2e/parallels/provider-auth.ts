@@ -7,7 +7,7 @@ import { die, run } from "./host-command.ts";
 import type { Mode, Platform, Provider, ProviderAuth } from "./types.ts";
 
 type ResolveLatestVersionDeps = {
-  createTempDir?: typeof mkdtempSync;
+  createTempDir?: (prefix: string) => string;
   removeDir?: typeof rmSync;
   runCommand?: typeof run;
   tempDir?: typeof tmpdir;
@@ -20,7 +20,7 @@ export function parseBoolEnv(value: string | undefined): boolean {
 
 export function ensureValue(args: string[], index: number, flag: string): string {
   const value = args[index + 1];
-  if (value == null || value === "") {
+  if (value == null || value === "" || value.startsWith("-")) {
     die(`${flag} requires a value`);
   }
   return value;
@@ -52,7 +52,8 @@ export function resolveProviderAuth(input: {
       apiKeyEnv: input.apiKeyEnv || "OPENAI_API_KEY",
       authChoice: "openai-api-key",
       authKeyFlag: "openai-api-key",
-      modelId: input.modelId || process.env.OPENCLAW_PARALLELS_OPENAI_MODEL || "openai/gpt-5.5",
+      modelId:
+        input.modelId || process.env.OPENCLAW_PARALLELS_OPENAI_MODEL || "openai/gpt-5.6-luna",
     },
   };
   const resolved = providerDefaults[input.provider];
@@ -79,7 +80,7 @@ export function resolveWindowsProviderAuth(input: {
   if (process.env.OPENCLAW_PARALLELS_OPENAI_MODEL?.trim()) {
     return auth;
   }
-  return { ...auth, modelId: "openai/gpt-5.5" };
+  return { ...auth, modelId: "openai/gpt-5.6-luna" };
 }
 
 export function providerIdFromModelId(modelId: string): string {
@@ -100,7 +101,7 @@ export function resolveParallelsModelTimeoutSeconds(platform?: Platform): number
   return readPositiveIntEnv("OPENCLAW_PARALLELS_MODEL_TIMEOUT_S", defaultSeconds);
 }
 
-export function providerTimeoutConfigJson(
+function providerTimeoutConfigJson(
   modelId: string,
   platform: Platform,
   timeoutSeconds = resolveParallelsModelTimeoutSeconds(platform),
@@ -128,7 +129,7 @@ export function providerTimeoutConfigJson(
   });
 }
 
-export function modelTransportConfigJson(modelId: string): string {
+function modelTransportConfigJson(modelId: string): string {
   if (providerIdFromModelId(modelId) !== "openai") {
     return "";
   }
@@ -140,7 +141,7 @@ export function modelTransportConfigJson(modelId: string): string {
   });
 }
 
-export function configPathMapKey(key: string): string {
+function configPathMapKey(key: string): string {
   return `[${JSON.stringify(key)}]`;
 }
 
@@ -190,6 +191,9 @@ export function parsePlatformList(value: string): Set<Platform> {
   const result = new Set<Platform>();
   for (const entry of normalized.split(",")) {
     if (entry === "macos" || entry === "windows" || entry === "linux") {
+      if (result.has(entry)) {
+        die(`duplicate --platform entry: ${entry}`);
+      }
       result.add(entry);
     } else {
       die(`invalid --platform entry: ${entry}`);

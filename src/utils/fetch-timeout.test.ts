@@ -13,6 +13,17 @@ vi.mock("../logging/subsystem.js", () => ({
 import { buildTimeoutAbortSignal, fetchWithTimeout } from "./fetch-timeout.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS } from "./timer-delay.js";
 
+function captureTimeoutLogUrl(url: string): Promise<Record<string, unknown>> {
+  const { cleanup } = buildTimeoutAbortSignal({ timeoutMs: 25, operation: "unit-test", url });
+  return vi.advanceTimersByTimeAsync(25).then(() => {
+    const record = requireWarnRecord(0);
+    cleanup();
+    return record;
+  });
+}
+
+const SYNTHETIC_TELEGRAM_BOT_TOKEN = "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd";
+
 function requireWarnCall(callIndex: number): [string, Record<string, unknown>] {
   const call = warn.mock.calls[callIndex];
   if (!call) {
@@ -144,6 +155,74 @@ describe("buildTimeoutAbortSignal", () => {
     cleanup();
   });
 
+  it("redacts Telegram bot tokens from parseable timeout URLs", async () => {
+    const record = await captureTimeoutLogUrl(
+      `https://api.telegram.org/bot${SYNTHETIC_TELEGRAM_BOT_TOKEN}/sendMessage?chat_id=1`,
+    );
+
+    expect(record.url).toBe("https://api.telegram.org/bot***/sendMessage");
+    expect(JSON.stringify(record)).not.toContain(SYNTHETIC_TELEGRAM_BOT_TOKEN);
+  });
+
+  it("redacts Telegram bot tokens from custom self-hosted API root timeout URLs", async () => {
+    const record = await captureTimeoutLogUrl(
+      `https://telegram.internal/bot${SYNTHETIC_TELEGRAM_BOT_TOKEN}/getMe?chat_id=1`,
+    );
+
+    expect(record.url).toBe("https://telegram.internal/bot***/getMe");
+    expect(JSON.stringify(record)).not.toContain(SYNTHETIC_TELEGRAM_BOT_TOKEN);
+  });
+
+  it("redacts Telegram bot tokens from proxy API root timeout URLs", async () => {
+    const record = await captureTimeoutLogUrl(
+      `https://tg-proxy.example.com/bot${SYNTHETIC_TELEGRAM_BOT_TOKEN}/sendMessage?foo=bar`,
+    );
+
+    expect(record.url).toBe("https://tg-proxy.example.com/bot***/sendMessage");
+    expect(JSON.stringify(record)).not.toContain(SYNTHETIC_TELEGRAM_BOT_TOKEN);
+  });
+
+  it("redacts Telegram bot tokens from unparseable (fallback) timeout URL strings", async () => {
+    const record = await captureTimeoutLogUrl(
+      `/bot${SYNTHETIC_TELEGRAM_BOT_TOKEN}/sendMessage?chat_id=1`,
+    );
+
+    expect(record.url).toBe("/bot***/sendMessage");
+    expect(JSON.stringify(record)).not.toContain(SYNTHETIC_TELEGRAM_BOT_TOKEN);
+  });
+
+  it("does not split surrogate pairs at the fallback timeout URL boundary", async () => {
+    const visiblePrefix = "x".repeat(499);
+    const record = await captureTimeoutLogUrl(`${visiblePrefix}🚀tail`);
+    const expectedUrl = `${visiblePrefix}...`;
+
+    expect(record.url).toBe(expectedUrl);
+    expect(record.consoleMessage).toBe(
+      `fetch timeout after 25ms (elapsed 25ms) operation=unit-test url=${expectedUrl}`,
+    );
+  });
+
+  it("keeps the full ASCII budget in fallback timeout URL logs", async () => {
+    const visiblePrefix = "x".repeat(500);
+    const record = await captureTimeoutLogUrl(`${visiblePrefix}tail`);
+    const expectedUrl = `${visiblePrefix}...`;
+
+    expect(record.url).toBe(expectedUrl);
+    expect(record.consoleMessage).toBe(
+      `fetch timeout after 25ms (elapsed 25ms) operation=unit-test url=${expectedUrl}`,
+    );
+  });
+
+  it.each([
+    ["https://example.com/bot/settings?safe=1", "https://example.com/bot/settings"],
+    ["https://example.com/bots/chat?safe=1", "https://example.com/bots/chat"],
+    ["https://example.com/robot/test?safe=1", "https://example.com/robot/test"],
+    ["/bot123:status?safe=1", "/bot123:status"],
+    ["/bot123456:short/status?safe=1", "/bot123456:short/status"],
+  ])("keeps ordinary bot-like timeout path %s visible", async (input, expected) => {
+    expect((await captureTimeoutLogUrl(input)).url).toBe(expected);
+  });
+
   it("tags fetch timeout aborts so callers can distinguish them from parent aborts", async () => {
     const fetchFn = vi.fn<typeof fetch>(
       async (_input, init) =>
@@ -171,6 +250,84 @@ describe("buildTimeoutAbortSignal", () => {
     await assertion;
   });
 
+  it("preserves caller abort reasons before response headers", async () => {
+    const parent = new AbortController();
+    const reason = new Error("caller stopped before headers");
+    const fetchFn = vi.fn<typeof fetch>(
+      async (_input, init) =>
+        await new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          if (!signal) {
+            reject(new Error("missing signal"));
+            return;
+          }
+          signal.addEventListener(
+            "abort",
+            () => reject(toLintErrorObject(signal.reason, "Non-Error rejection")),
+            { once: true },
+          );
+        }),
+    );
+
+    const result = fetchWithTimeout(
+      "https://example.com/v1/audio",
+      { signal: parent.signal },
+      25,
+      fetchFn,
+    );
+    parent.abort(reason);
+
+    await expect(result).rejects.toBe(reason);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("keeps following caller aborts while the returned body is consumed", async () => {
+    const parent = new AbortController();
+    const reason = new Error("caller stopped after headers");
+    let fetchSignal: AbortSignal | null | undefined;
+    const fetchFn = vi.fn<typeof fetch>(async (_input, init) => {
+      fetchSignal = init?.signal;
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            fetchSignal?.addEventListener("abort", () => controller.error(fetchSignal?.reason), {
+              once: true,
+            });
+          },
+        }),
+      );
+    });
+
+    const response = await fetchWithTimeout(
+      "https://example.com/v1/audio",
+      { signal: parent.signal },
+      25,
+      fetchFn,
+    );
+    const body = response.text();
+
+    await vi.advanceTimersByTimeAsync(25);
+    expect(fetchSignal?.aborted).toBe(false);
+    expect(warn).not.toHaveBeenCalled();
+
+    parent.abort(reason);
+
+    await expect(body).rejects.toBe(reason);
+    expect(fetchSignal?.reason).toBe(reason);
+  });
+
+  it("accepts a null RequestInit signal", async () => {
+    const response = new Response("ok");
+    const fetchFn = vi.fn<typeof fetch>(async (_input, init) => {
+      expect(init?.signal).toBeInstanceOf(AbortSignal);
+      return response;
+    });
+
+    await expect(
+      fetchWithTimeout("https://example.com/v1/audio", { signal: null }, 25, fetchFn),
+    ).resolves.toBe(response);
+  });
+
   it("clamps oversized fetchWithTimeout delays before fetch starts", async () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const response = new Response("ok");
@@ -192,19 +349,38 @@ describe("buildTimeoutAbortSignal", () => {
     }
   });
 
-  it("does not log when a parent signal aborts first", async () => {
+  it("preserves the parent reason when a parent signal aborts first", async () => {
     const parent = new AbortController();
+    const reason = new Error("parent stopped");
     const { signal, cleanup } = buildTimeoutAbortSignal({
       timeoutMs: 25,
       signal: parent.signal,
       operation: "unit-test",
     });
 
-    parent.abort();
+    parent.abort(reason);
     await vi.advanceTimersByTimeAsync(25);
 
     expect(signal?.aborted).toBe(true);
-    expect(signal?.reason).not.toMatchObject({ name: "TimeoutError" });
+    expect(signal?.reason).toBe(reason);
+    expect(warn).not.toHaveBeenCalled();
+
+    cleanup();
+  });
+
+  it("preserves an already-aborted parent reason", () => {
+    const parent = new AbortController();
+    const reason = new Error("parent already stopped");
+    parent.abort(reason);
+
+    const { signal, cleanup } = buildTimeoutAbortSignal({
+      timeoutMs: 25,
+      signal: parent.signal,
+      operation: "unit-test",
+    });
+
+    expect(signal?.aborted).toBe(true);
+    expect(signal?.reason).toBe(reason);
     expect(warn).not.toHaveBeenCalled();
 
     cleanup();

@@ -1,42 +1,19 @@
 // Tool-call argument decoding tests cover HTML entity repair for model-emitted
 // tool arguments without corrupting invalid numeric entities.
 import { describe, expect, it } from "vitest";
-import {
-  createHtmlEntityToolCallArgumentDecodingWrapper,
-  decodeHtmlEntitiesInObject,
-} from "./tool-call-argument-decoding.js";
-
-describe("decodeHtmlEntitiesInObject", () => {
-  it("decodes valid HTML entities in nested tool arguments", () => {
-    expect(
-      decodeHtmlEntitiesInObject({
-        query: "Rock &amp; Roll &#65; &#39;ok&#39;",
-      }),
-    ).toEqual({
-      query: "Rock & Roll A 'ok'",
-    });
-  });
-
-  it("preserves invalid numeric HTML entities", () => {
-    expect(
-      decodeHtmlEntitiesInObject({
-        query: "bad &#x110000; and &#9999999999;",
-      }),
-    ).toEqual({
-      query: "bad &#x110000; and &#9999999999;",
-    });
-  });
-});
+import { createHtmlEntityToolCallArgumentDecodingWrapper } from "./tool-call-argument-decoding.js";
 
 describe("createHtmlEntityToolCallArgumentDecodingWrapper", () => {
-  type DecodedMessage = { content: Array<{ arguments: { content: string } }> };
+  type DecodedMessage = { content: Array<{ arguments: Record<string, unknown> }> };
 
-  const buildSharedArgumentsAssistant = () => {
+  const buildSharedArgumentsAssistant = (
+    args: Record<string, unknown> = { content: "&amp;amp;" },
+  ) => {
     const toolCall = {
       type: "toolCall" as const,
       id: "call_1",
       name: "write",
-      arguments: { content: "&amp;amp;" },
+      arguments: args,
     };
     const assistant = { role: "assistant" as const, content: [toolCall] };
     const events = [
@@ -67,6 +44,26 @@ describe("createHtmlEntityToolCallArgumentDecodingWrapper", () => {
     }
     return stream.result();
   };
+
+  it("decodes nested valid entities while preserving primitive and invalid numeric arguments", async () => {
+    const { baseStreamFn } = buildSharedArgumentsAssistant({
+      query: "Rock &amp; Roll &#65; &#39;ok&#39; &#x27;hex&#x27;",
+      emoji: "ok &#x1F600;",
+      args: ["--flag=&quot;value&quot;", "&lt;input&gt;", 42, true, null],
+      nested: { deep: "a &amp; b &mdash; &copy;" },
+      invalid: "bad &#x110000; and &#9999999999; and &#xD800; and &#55296;",
+    });
+
+    const finalMessage = await drive(baseStreamFn);
+
+    expect(finalMessage.content[0]?.arguments).toEqual({
+      query: "Rock & Roll A 'ok' 'hex'",
+      emoji: "ok 😀",
+      args: ['--flag="value"', "<input>", 42, true, null],
+      nested: { deep: "a & b — ©" },
+      invalid: "bad &#x110000; and &#9999999999; and &#xD800; and &#55296;",
+    });
+  });
 
   it("decodes a shared tool-call arguments object exactly once, keyed by object identity, across its partial, message, and result()", async () => {
     const { baseStreamFn } = buildSharedArgumentsAssistant();

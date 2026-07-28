@@ -23,15 +23,71 @@ describe("openai default models", () => {
     expect(next.agents?.defaults?.models?.[OPENAI_DEFAULT_MODEL]?.alias).toBe("My GPT");
   });
 
+  it("does not move the GPT alias from an existing model", () => {
+    const next = applyOpenAIProviderConfig({
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.5": { alias: "GPT" },
+            "custom/model": { alias: "Custom" },
+          },
+        },
+      },
+    });
+
+    expect(next.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.5": { alias: "GPT" },
+      "custom/model": { alias: "Custom" },
+      [OPENAI_DEFAULT_MODEL]: {},
+    });
+  });
+
+  it("does not duplicate a case-insensitive custom GPT alias", () => {
+    const next = applyOpenAIProviderConfig({
+      agents: {
+        defaults: {
+          models: {
+            "custom/model": { alias: "gPt" },
+          },
+        },
+      },
+    });
+
+    expect(next.agents?.defaults?.models?.["custom/model"]?.alias).toBe("gPt");
+    expect(next.agents?.defaults?.models?.[OPENAI_DEFAULT_MODEL]).toEqual({});
+  });
+
   it("sets the default model when it is unset", () => {
     const next = applyOpenAIConfig({});
     expect(next.agents?.defaults?.model).toEqual({ primary: OPENAI_DEFAULT_MODEL });
   });
 
-  it("overrides model.primary while preserving fallbacks", () => {
+  it("preserves an explicit primary and its fallbacks", () => {
     const next = applyOpenAIConfig({
       agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6", fallbacks: [] } } },
     } as OpenClawConfig);
-    expect(next.agents?.defaults?.model).toEqual({ primary: OPENAI_DEFAULT_MODEL, fallbacks: [] });
+    expect(next.agents?.defaults?.model).toEqual({
+      primary: "anthropic/claude-opus-4-6",
+      fallbacks: [],
+    });
+    expect(next.agents?.defaults?.models).toEqual({
+      "anthropic/claude-opus-4-6": {},
+      [OPENAI_DEFAULT_MODEL]: { alias: "GPT" },
+    });
+  });
+
+  it("fills a missing object-form primary while preserving fallbacks", () => {
+    const next = applyOpenAIConfig({
+      agents: { defaults: { model: { fallbacks: ["anthropic/claude-opus-4-6"] } } },
+    } as OpenClawConfig);
+
+    expect(next.agents?.defaults?.model).toEqual({
+      primary: OPENAI_DEFAULT_MODEL,
+      fallbacks: ["anthropic/claude-opus-4-6"],
+    });
+    expect(next.agents?.defaults?.models).toEqual({
+      "anthropic/claude-opus-4-6": {},
+      [OPENAI_DEFAULT_MODEL]: { alias: "GPT" },
+    });
   });
 });

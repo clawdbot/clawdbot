@@ -1,11 +1,12 @@
 // Subagent announce flow tests cover the seam-level orchestration between wait
 // outcomes, requester lookup, delivery, and cleanup.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import type { EmbeddedAgentQueueMessageOutcome } from "./embedded-agent-runner/runs.js";
 import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
 
 type AgentCallRequest = { method?: string; params?: Record<string, unknown> };
-type AgentCallResponse = { runId?: string; status: string; error?: string };
+type AgentCallResponse = { runId?: string; status: string; error?: string; terminal?: boolean };
 
 const agentSpy = vi.fn(
   async (_req: AgentCallRequest): Promise<AgentCallResponse> => ({
@@ -21,7 +22,6 @@ const resolveAgentIdFromSessionKeyMock = vi.fn((sessionKey: string) => {
 });
 const resolveStorePathMock = vi.fn((_store: unknown, _options: unknown) => "/tmp/sessions.json");
 const resolveMainSessionKeyMock = vi.fn((_cfg: unknown) => "agent:main:main");
-const readLatestAssistantReplyMock = vi.fn(async (_params?: unknown) => "raw subagent reply");
 const isEmbeddedAgentRunActiveMock = vi.fn((_sessionId: string) => false);
 const queueEmbeddedAgentMessageWithOutcomeMock = vi.fn(
   (sessionId: string, _text: string, _options?: unknown): EmbeddedAgentQueueMessageOutcome => ({
@@ -73,10 +73,6 @@ vi.mock("./subagent-announce.runtime.js", () => ({
   resolveStorePath: (store: unknown, options: unknown) => resolveStorePathMock(store, options),
   waitForEmbeddedAgentRunEnd: (sessionId: string, timeoutMs?: number) =>
     waitForEmbeddedAgentRunEndMock(sessionId, timeoutMs),
-}));
-
-vi.mock("./tools/agent-step.js", () => ({
-  readLatestAssistantReply: (params?: unknown) => readLatestAssistantReplyMock(params),
 }));
 
 vi.mock("./subagent-announce-delivery.runtime.js", () =>
@@ -154,10 +150,15 @@ vi.mock("./subagent-announce-delivery.js", () => ({
               threadId: effectiveOrigin?.threadId,
             }),
       },
-    })) as { status?: string; error?: string };
+    })) as { status?: string; error?: string; terminal?: boolean };
 
     if (response.status === "error") {
-      return { delivered: false, path: "direct", error: response.error ?? "agent delivery failed" };
+      return {
+        delivered: false,
+        path: "direct",
+        error: response.error ?? "agent delivery failed",
+        ...(response.terminal === true ? { terminal: true } : {}),
+      };
     }
 
     return { delivered: true, path: "direct" };
@@ -259,9 +260,6 @@ describe("subagent announce seam flow", () => {
       if (typed.method === "chat.history") {
         return { messages: [] as Array<unknown> };
       }
-      if (typed.method === "sessions.patch") {
-        return {};
-      }
       if (typed.method === "sessions.delete") {
         sessionsDeleteSpy(typed);
         return {};
@@ -272,7 +270,6 @@ describe("subagent announce seam flow", () => {
     resolveAgentIdFromSessionKeyMock.mockReset().mockImplementation(() => "main");
     resolveStorePathMock.mockReset().mockImplementation(() => "/tmp/sessions.json");
     resolveMainSessionKeyMock.mockReset().mockImplementation(() => "agent:main:main");
-    readLatestAssistantReplyMock.mockReset().mockResolvedValue("raw subagent reply");
     isEmbeddedAgentRunActiveMock.mockReset().mockReturnValue(false);
     queueEmbeddedAgentMessageWithOutcomeMock
       .mockReset()
@@ -337,6 +334,75 @@ describe("subagent announce seam flow", () => {
     });
   });
 
+  it("skips delete cleanup when the lifecycle owner invalidates the attempt", async () => {
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-invalidated-delete",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      timeoutMs: 10,
+      cleanup: "delete",
+      waitForCompletion: false,
+      outcome: { status: "ok" },
+      roundOneReply: "ANNOUNCE_SKIP",
+      onBeforeDeleteChildSession: () => false,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sessionsDeleteSpy).not.toHaveBeenCalled();
+  });
+
+  it("warns when ANNOUNCE_SKIP suppresses a cron job completion", async () => {
+    const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:cron-worker",
+      childRunId: "run-cron-announce-skip",
+      requesterSessionKey: "agent:main:cron:daily-report",
+      requesterDisplayKey: "cron:daily-report",
+      task: "cron job",
+      timeoutMs: 10,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "ANNOUNCE_SKIP",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining("cron job completion for session=agent:main:cron:daily-report"),
+    );
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("suppressed by ANNOUNCE_SKIP"));
+    logSpy.mockRestore();
+  });
+
+  it("does not warn when fallback reply is delivered for a cron ANNOUNCE_SKIP", async () => {
+    const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:cron-worker",
+      childRunId: "run-cron-announce-skip-fallback",
+      requesterSessionKey: "agent:main:cron:daily-report",
+      requesterDisplayKey: "cron:daily-report",
+      task: "cron job",
+      timeoutMs: 10,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "ANNOUNCE_SKIP",
+      fallbackReply: "an actual fallback result",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(logSpy).not.toHaveBeenCalled();
+    logSpy.mockRestore();
+  });
+
   it("keeps lifecycle hooks enabled when deleting a completed session-mode child session", async () => {
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
@@ -368,7 +434,7 @@ describe("subagent announce seam flow", () => {
     });
   });
 
-  it("uses origin.provider for channel-specific queue settings in active announce delivery", async () => {
+  it("steers active announcements despite channel-specific followup mode", async () => {
     mockConfig = {
       session: {
         mainKey: "main",
@@ -386,7 +452,7 @@ describe("subagent announce seam flow", () => {
       "agent:main:main": {
         sessionId: "session-origin-provider-steer",
         updatedAt: Date.now(),
-        origin: { provider: "discord" },
+        delivery: { kind: "none" },
       },
     }));
     isEmbeddedAgentRunActiveMock.mockReturnValue(true);
@@ -402,6 +468,7 @@ describe("subagent announce seam flow", () => {
       childRunId: "run-origin-provider-steer",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
+      requesterOrigin: { channel: "discord" },
       task: "do thing",
       timeoutMs: 10,
       cleanup: "keep",
@@ -488,14 +555,18 @@ describe("subagent announce seam flow", () => {
     expect(params.threadId).toBeUndefined();
   });
 
-  it("falls back to stored delivery target when mocked completion origins omit to", async () => {
+  it("uses the stored canonical delivery target when mocked completion origins omit to", async () => {
     loadSessionStoreMock.mockImplementation(() => ({
       "agent:main:main": {
         sessionId: "session-tg-group",
         updatedAt: Date.now(),
-        lastChannel: "telegram",
-        lastTo: "-1001234567890",
-        lastAccountId: "bot:123",
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            channel: "telegram",
+            to: "-1001234567890",
+            accountId: "bot:123",
+          },
+        }),
       },
     }));
 
@@ -554,5 +625,52 @@ describe("subagent announce seam flow", () => {
       "[warn] Subagent completion direct announce failed for run run-direct-failure-log: Outbound not configured for slack",
     );
     logSpy.mockRestore();
+  });
+
+  it("treats terminal direct completion failures as announced for cleanup", async () => {
+    let deliveryResult:
+      | {
+          delivered: boolean;
+          path: string;
+          error?: string;
+          terminal?: boolean;
+        }
+      | undefined;
+    agentSpy.mockResolvedValueOnce({
+      status: "error",
+      error: "prompt lock failed after visible send",
+      terminal: true,
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:slack",
+      childRunId: "run-terminal-direct-failure",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: {
+        channel: "slack",
+        to: "C123",
+      },
+      task: "deliver completion",
+      timeoutMs: 10,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "done",
+      expectsCompletionMessage: true,
+      onDeliveryResult: (delivery) => {
+        deliveryResult = delivery;
+      },
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(deliveryResult).toMatchObject({
+      delivered: false,
+      path: "direct",
+      error: "prompt lock failed after visible send",
+      terminal: true,
+    });
   });
 });

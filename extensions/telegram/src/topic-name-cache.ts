@@ -37,8 +37,6 @@ type TopicNamePersistentStore = {
   clear(): Promise<void>;
 };
 
-let topicNameStoreFactoryForTest: ((namespace: string) => TopicNamePersistentStore) | undefined;
-
 function createTopicNameStore(): TopicNameStore {
   return new Map<string, TopicEntry>();
 }
@@ -85,13 +83,10 @@ export function resolveTopicNameCacheNamespace(scope: string): string {
 }
 
 function openTopicNamePersistentStore(namespace: string): TopicNamePersistentStore {
-  return (
-    topicNameStoreFactoryForTest?.(namespace) ??
-    getTelegramRuntime().state.openKeyedStore<TopicEntry>({
-      namespace,
-      maxEntries: TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES,
-    })
-  );
+  return getTelegramRuntime().state.openKeyedStore<TopicEntry>({
+    namespace,
+    maxEntries: TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES,
+  });
 }
 
 function evictOldest(store: TopicNameStore): string | undefined {
@@ -163,12 +158,6 @@ async function hydrateTopicStoreState(state: TopicNameStoreState): Promise<void>
   await state.hydratePromise;
 }
 
-async function getTopicStore(scope?: string): Promise<TopicNameStore> {
-  const state = getTopicStoreState(scope);
-  await hydrateTopicStoreState(state);
-  return state.store;
-}
-
 function nextUpdatedAt(scope?: string): number {
   const state = getTopicStoreState(scope);
   const now = Date.now();
@@ -223,14 +212,6 @@ export async function getTopicName(
   return entry?.name;
 }
 
-export async function getTopicEntry(
-  chatId: number | string,
-  threadId: number | string,
-  scope?: string,
-): Promise<TopicEntry | undefined> {
-  return (await getTopicStore(scope)).get(cacheKey(chatId, threadId));
-}
-
 export async function listTelegramLegacyTopicNameCacheEntries(params: {
   persistedPath: string;
   maxEntries?: number;
@@ -244,26 +225,4 @@ export async function listTelegramLegacyTopicNameCacheEntries(params: {
     .toSorted(([, left], [, right]) => right.updatedAt - left.updatedAt)
     .slice(0, params.maxEntries ?? TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES)
     .map(([key, entry]) => ({ key, value: entry }));
-}
-
-export async function clearTopicNameCache(): Promise<void> {
-  const state = getTopicNameCacheState();
-  await Promise.all(
-    [...state.stores.values()].map((storeState) => storeState.persistentStore.clear()),
-  );
-  state.stores.clear();
-}
-
-export function topicNameCacheSize(scope?: string): number {
-  return getTopicStoreState(scope).store.size;
-}
-
-export function resetTopicNameCacheForTest(): void {
-  getTopicNameCacheState().stores.clear();
-}
-
-export function setTelegramTopicNameStoreFactoryForTest(
-  factory: ((namespace: string) => TopicNamePersistentStore) | undefined,
-): void {
-  topicNameStoreFactoryForTest = factory;
 }

@@ -2,10 +2,9 @@
 import { vi } from "vitest";
 import { resetAdjustedParamsByToolCallIdForTests } from "../../../agents/agent-tools.before-tool-call.state.js";
 import type { AgentToolResult } from "../../../agents/runtime/index.js";
-import type {
-  CodexAppServerExtensionFactory,
-  CodexAppServerToolResultEvent,
-} from "../../../plugins/codex-app-server-extension-types.js";
+import { setToolTerminalPresentation } from "../../../agents/tool-terminal-presentation.js";
+import type { AnyAgentTool } from "../../../agents/tools/common.js";
+import type { AgentToolResultMiddlewareEvent } from "../../../plugins/agent-tool-result-middleware-types.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -40,6 +39,26 @@ export function mediaToolResult(
   });
 }
 
+export function createTerminalPresentationContractTool(params: {
+  name: string;
+  result: AgentToolResult<unknown>;
+  format: (params: unknown, result: AgentToolResult<unknown>) => string | undefined;
+}): AnyAgentTool {
+  return setToolTerminalPresentation(
+    {
+      name: params.name,
+      label: `${params.name} contract tool`,
+      description: `${params.name} contract tool`,
+      parameters: {},
+      execute: vi.fn(async () => params.result),
+    } as AnyAgentTool,
+    (toolParams, result) => {
+      const text = params.format(toolParams, result);
+      return text ? { text } : undefined;
+    },
+  );
+}
+
 export function installOpenClawOwnedToolHooks(params?: {
   adjustedParams?: Record<string, unknown>;
   blockReason?: string;
@@ -68,20 +87,18 @@ export function installOpenClawOwnedToolHooks(params?: {
  * Pair with `installOpenClawOwnedToolHooks()` when a test asserts before/after hook behavior.
  */
 export function installCodexToolResultMiddleware(
-  handler: (event: CodexAppServerToolResultEvent) => AgentToolResult<unknown>,
+  handler: (event: AgentToolResultMiddlewareEvent) => AgentToolResult<unknown>,
 ) {
-  const middleware = vi.fn(async (event: CodexAppServerToolResultEvent) => ({
+  const middleware = vi.fn(async (event: AgentToolResultMiddlewareEvent) => ({
     result: handler(event),
   }));
   const registry = createEmptyPluginRegistry();
-  const factory: CodexAppServerExtensionFactory = async (codex) => {
-    codex.on("tool_result", middleware);
-  };
-  registry.codexAppServerExtensionFactories.push({
+  registry.agentToolResultMiddlewares.push({
     pluginId: "runtime-contract",
     pluginName: "Runtime Contract",
-    rawFactory: factory,
-    factory,
+    rawHandler: middleware,
+    handler: middleware,
+    runtimes: ["codex"],
     source: "test",
   });
   setActivePluginRegistry(registry);

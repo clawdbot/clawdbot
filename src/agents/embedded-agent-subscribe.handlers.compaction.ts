@@ -5,9 +5,11 @@
  */
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { recordSessionCompacted } from "../sessions/session-state-events.js";
+import { stripStaleAssistantUsageBeforeLatestCompaction } from "./compaction-usage.js";
+import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
-import { makeZeroUsageSnapshot } from "./usage.js";
 
 type SessionCompactionStartEvent = Extract<AgentSessionEvent, { type: "compaction_start" }>;
 type SessionCompactionEndEvent = Extract<AgentSessionEvent, { type: "compaction_end" }>;
@@ -63,9 +65,14 @@ export function handleCompactionStart(
     stream: "compaction",
     data: { phase: "start" },
   });
-  void ctx.params.onAgentEvent?.({
-    stream: "compaction",
-    data: { phase: "start" },
+  runBestEffortCallback({
+    label: "compaction agent event",
+    log: ctx.log,
+    callback: () =>
+      ctx.params.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "start" },
+      }),
   });
 
   // Hooks are fire-and-forget so compaction state updates and liveness pauses
@@ -108,6 +115,12 @@ export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: Com
         : undefined;
     ctx.noteCompactionTokensAfter(tokensAfter);
     const observedCompactionCount = ctx.getCompactionCount();
+    recordSessionCompacted({
+      sessionKey: ctx.params.sessionKey,
+      operationId: `${ctx.params.runId}:${observedCompactionCount}`,
+      agentId: ctx.params.agentId,
+      runId: ctx.params.runId,
+    });
     ctx.log.info(`embedded run ${kind} complete`, {
       event: "embedded_run_compaction_end",
       runId: ctx.params.runId,
@@ -153,9 +166,14 @@ export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: Com
     stream: "compaction",
     data: { phase: "end", willRetry, completed: hasResult && !wasAborted },
   });
-  void ctx.params.onAgentEvent?.({
-    stream: "compaction",
-    data: { phase: "end", willRetry, completed: hasResult && !wasAborted },
+  runBestEffortCallback({
+    label: "compaction agent event",
+    log: ctx.log,
+    callback: () =>
+      ctx.params.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "end", willRetry, completed: hasResult && !wasAborted },
+      }),
   });
 
   // after_compaction runs only once the run will not retry, matching the visible
@@ -180,33 +198,28 @@ export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: Com
 }
 
 /** Lazily reconciles persisted compaction count after a successful compaction. */
-export async function reconcileSessionStoreCompactionCountAfterSuccess(params: {
+async function reconcileSessionStoreCompactionCountAfterSuccess(params: {
   sessionKey?: string;
   agentId?: string;
   configStore?: string;
   observedCompactionCount: number;
   now?: number;
 }): Promise<number | undefined> {
-  const { reconcileSessionStoreCompactionCountAfterSuccess: reconcile } =
+  const { default: reconcile } =
     await import("./embedded-agent-subscribe.handlers.compaction.runtime.js");
   return reconcile(params);
 }
 
-// Compaction rewrites history, so assistant usage snapshots can refer to the
-// old context. Keep the usage field shape but zero it for fresh accounting.
 function clearStaleAssistantUsageOnSessionMessages(ctx: EmbeddedAgentSubscribeContext): void {
   const messages = ctx.params.session.messages;
   if (!Array.isArray(messages)) {
     return;
   }
-  for (const message of messages) {
-    if (!message || typeof message !== "object") {
-      continue;
-    }
-    const candidate = message as { role?: unknown; usage?: unknown };
-    if (candidate.role !== "assistant") {
-      continue;
-    }
-    candidate.usage = makeZeroUsageSnapshot();
-  }
+  // Marker-free final compaction has no fresh boundary to compare against.
+  // Clear all assistant usage or stale pre-compaction totals keep driving the
+  // context counter after cleanup.
+  stripStaleAssistantUsageBeforeLatestCompaction(messages, {
+    mutate: true,
+    whenMissingCompactionSummary: "zeroAssistantUsage",
+  });
 }

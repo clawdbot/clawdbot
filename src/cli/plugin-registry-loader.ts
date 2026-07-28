@@ -10,11 +10,6 @@ function loadPluginRegistryModule() {
   return pluginRegistryModuleLoader.load();
 }
 
-/** Plugin registry loading scope selected by command policy. */
-export type CliPluginRegistryLoadPolicy = {
-  scope: CliPluginRegistryScope;
-};
-
 /** Load the CLI plugin registry and optionally route activation logs to stderr. */
 export async function ensureCliPluginRegistryLoaded(params: {
   scope: CliPluginRegistryScope;

@@ -12,10 +12,7 @@ import {
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveClaudeCliAnthropicModelRefs } from "./claude-model-refs.js";
-import {
-  readClaudeCliCredentialsForSetup,
-  readClaudeCliCredentialsForSetupNonInteractive,
-} from "./cli-auth-seam.js";
+import type { readClaudeCliCredentialsForSetup } from "./cli-auth-seam.js";
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS } from "./cli-shared.js";
 
 type AgentDefaultsModel = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["model"];
@@ -122,8 +119,13 @@ function rewriteModelEntryMap(models: Record<string, unknown> | undefined): {
     if (converted === rawKey) {
       continue;
     }
-    if (!(converted in next)) {
-      next[converted] = value;
+    if (!Object.hasOwn(next, converted)) {
+      Object.defineProperty(next, converted, {
+        value,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      });
     }
     if (normalizeLowercaseStringOrEmpty(rawKey).startsWith(`${CLAUDE_CLI_BACKEND_ID}/`)) {
       delete next[rawKey];
@@ -152,7 +154,13 @@ function seedClaudeCliAllowlist(
     runtimeRefs.add(ref);
   }
   for (const ref of runtimeRefs) {
-    next[ref] = modelEntryWithClaudeCliRuntime(next[ref]);
+    const current = Object.hasOwn(next, ref) ? next[ref] : undefined;
+    Object.defineProperty(next, ref, {
+      value: modelEntryWithClaudeCliRuntime(current),
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
   }
   return next;
 }
@@ -170,15 +178,6 @@ function modelEntryWithClaudeCliRuntime(entry: unknown): Record<string, unknown>
     id: CLAUDE_CLI_BACKEND_ID,
   };
   return base;
-}
-
-/** Return whether Claude CLI credentials are available for setup migration. */
-export function hasClaudeCliAuth(options?: { allowKeychainPrompt?: boolean }): boolean {
-  return Boolean(
-    options?.allowKeychainPrompt === false
-      ? readClaudeCliCredentialsForSetupNonInteractive()
-      : readClaudeCliCredentialsForSetup(),
-  );
 }
 
 function buildClaudeCliAuthProfiles(
@@ -200,6 +199,9 @@ function buildClaudeCliAuthProfiles(
         },
       },
     ];
+  }
+  if (credential.type === "api_key_helper") {
+    return [];
   }
   return [
     {
@@ -230,7 +232,7 @@ export function buildAnthropicCliMigrationResult(
     ...rewrittenModels.runtimeRefs,
     ...rewrittenModels.migrated,
   ]);
-  const defaultModel = rewrittenModel.primary ?? "anthropic/claude-opus-4-8";
+  const defaultModel = rewrittenModel.primary ?? "anthropic/claude-opus-5";
 
   return {
     profiles: buildClaudeCliAuthProfiles(credential),

@@ -30,7 +30,10 @@ export const directChatConfig = {
   },
 } as OpenClawConfig;
 
-export const directOutbound: ChannelOutboundAdapter = { deliveryMode: "direct" };
+export const directOutbound: ChannelOutboundAdapter = {
+  deliveryMode: "direct",
+  sendText: async () => ({ channel: "test", messageId: "test" }),
+};
 
 // Test plugins model token-gated workspace sends without booting real channel runtimes.
 function hasChannelBotToken(channelConfig: unknown): boolean {

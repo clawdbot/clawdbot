@@ -1,18 +1,18 @@
 /** Timing for one named stage, including both stage duration and run-relative elapsed time. */
-export type EmbeddedRunStageTiming = {
+type EmbeddedRunStageTiming = {
   name: string;
   durationMs: number;
   elapsedMs: number;
 };
 
 /** Snapshot of all marked stages plus total elapsed time at snapshot creation. */
-export type EmbeddedRunStageSummary = {
+type EmbeddedRunStageSummary = {
   totalMs: number;
   stages: EmbeddedRunStageTiming[];
 };
 
 /** Lightweight monotonic-ish stage tracker used for embedded run startup diagnostics. */
-export type EmbeddedRunStageTracker = {
+type EmbeddedRunStageTracker = {
   mark: (name: string) => void;
   snapshot: () => EmbeddedRunStageSummary;
 };
@@ -76,6 +76,40 @@ export function shouldWarnEmbeddedRunStageSummary(
     summary.totalMs >= totalThresholdMs ||
     summary.stages.some((stage) => stage.durationMs >= stageThresholdMs)
   );
+}
+
+/**
+ * Builds the shared "emit stage summary" closure used by run startup and
+ * attempt prep: warn when thresholds trip, trace otherwise, stay silent when
+ * neither applies.
+ */
+export function createEmbeddedRunStageSummaryEmitter(options: {
+  label: string;
+  log: {
+    isEnabled: (level: "trace") => boolean;
+    warn: (message: string) => void;
+    trace: (message: string) => void;
+  };
+  runId: string;
+  sessionId?: string;
+  tracker: EmbeddedRunStageTracker;
+}): (phase: string) => void {
+  return (phase) => {
+    const summary = options.tracker.snapshot();
+    const shouldWarn = shouldWarnEmbeddedRunStageSummary(summary);
+    if (!shouldWarn && !options.log.isEnabled("trace")) {
+      return;
+    }
+    const message = formatEmbeddedRunStageSummary(
+      `[trace:embedded-run] ${options.label}: runId=${options.runId} sessionId=${options.sessionId} phase=${phase}`,
+      summary,
+    );
+    if (shouldWarn) {
+      options.log.warn(message);
+    } else {
+      options.log.trace(message);
+    }
+  };
 }
 
 /** Formats stage timing into compact log text for startup/attempt diagnostics. */

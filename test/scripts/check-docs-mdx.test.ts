@@ -20,11 +20,13 @@ describe("scripts/check-docs-mdx", () => {
     expect(() => parseArgs(["--max-errors", "0"])).toThrow(
       "--max-errors must be a positive integer",
     );
-    expect(() => parseArgs(["--max-errors"])).toThrow("--max-errors must be a positive integer");
+    expect(() => parseArgs(["--max-errors"])).toThrow("--max-errors requires a value");
+    expect(() => parseArgs(["--max-errors", "-h"])).toThrow("--max-errors requires a value");
   });
 
   it("rejects missing JSON report output paths", () => {
     expect(() => parseArgs(["--json-out"])).toThrow("--json-out requires a value");
+    expect(() => parseArgs(["--json-out", "-h"])).toThrow("--json-out requires a value");
     expect(() => parseArgs(["--json-out", "--max-errors", "3"])).toThrow(
       "--json-out requires a value",
     );

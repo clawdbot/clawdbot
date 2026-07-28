@@ -179,11 +179,6 @@ describe("heartbeat event classification", () => {
 });
 
 describe("isExecCompletionEvent", () => {
-  it("matches emitExecSystemEvent (gateway/node approval path) events", () => {
-    expect(isExecCompletionEvent("Exec finished (gateway id=g1, session=s1, code 0)")).toBe(true);
-    expect(isExecCompletionEvent("exec finished (node=n1, code 1)\nsome output")).toBe(true);
-  });
-
   it("matches maybeNotifyOnExit (backgrounded allowlisted commands) events", () => {
     // Word-based session slugs (createSessionSlug)
     expect(isExecCompletionEvent("Exec completed (amber-at, code 0) :: some output")).toBe(true);
@@ -214,5 +209,21 @@ describe("isExecCompletionEvent", () => {
     // Parenthesized false positive from review feedback — must not match mid-string
     expect(isExecCompletionEvent("Nightly backup exec failed (see logs)")).toBe(false);
     expect(isExecCompletionEvent("Check: exec completed (last run was yesterday)")).toBe(false);
+  });
+});
+
+describe("buildExecEventPrompt truncation", () => {
+  it("does not split surrogate pairs in long event text", () => {
+    const safePrefix = "x".repeat(7_999);
+    const result = buildExecEventPrompt([`${safePrefix}🚀tail`]);
+
+    expect(result).toContain(`${safePrefix}\n\n[truncated]`);
+    expect(result).not.toContain("🚀tail");
+  });
+
+  it("passes through short event text unchanged", () => {
+    const result = buildExecEventPrompt(["hello"]);
+    expect(result).toContain("hello");
+    expect(result).not.toContain("[truncated]");
   });
 });

@@ -1,17 +1,28 @@
 // Model config helper tests cover provider auth detection across config and
 // stored agent auth profiles for reusable media tools.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import {
-  hasDirectProviderApiKeyAuthForTool,
   hasProviderAuthForTool,
   resolveOpenAiImageMediaCandidate,
 } from "./model-config.helpers.js";
+import { hasDirectProviderApiKeyAuthForTool } from "./model-config.helpers.test-support.js";
 
 vi.mock("../auth-profiles/external-cli-sync.js", () => ({
   resolveExternalCliAuthProfiles: () => [],
 }));
+
+// Env-key candidates for plugin providers are resolved from the metadata
+// snapshot keyed by config/workspace. Stub the env resolver so a provider is
+// only "env-authed" when config/workspaceDir actually reach it, mirroring a
+// config-scoped (non-bundled) provider plugin without loading plugin runtime.
+const authMocks = vi.hoisted(() => ({ resolveEnvApiKey: vi.fn() }));
+
+vi.mock("../model-auth.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return { ...actual, resolveEnvApiKey: authMocks.resolveEnvApiKey };
+});
 
 const AGENT_DIR = "/tmp/openclaw-model-config-helper";
 const MODEL = "gpt-5.5";
@@ -68,7 +79,7 @@ const resolveMedia = (
     agentDir: AGENT_DIR,
     authStore: store({}),
     openAiModel: MODEL,
-    codexModel: MODEL,
+    resolveCodexMediaRoute: () => ({ model: MODEL }),
     ...overrides,
   });
 
@@ -83,11 +94,41 @@ const hasDirectOpenAiKey = (
     ...overrides,
   });
 
+beforeEach(() => {
+  authMocks.resolveEnvApiKey.mockReset();
+  authMocks.resolveEnvApiKey.mockImplementation(
+    (provider: string, _env?: unknown, options?: { config?: unknown }) =>
+      provider === "acme" && options?.config
+        ? { apiKey: "sk-acme-env", source: "env: ACME_API_KEY" }
+        : null,
+  );
+});
+
 afterEach(() => {
   vi.unstubAllEnvs();
 });
 
 describe("hasProviderAuthForTool", () => {
+  it("threads cfg/workspaceDir into config-aware env-key resolution", () => {
+    // Regression: hasProviderAuthForTool used to call the env resolver without
+    // cfg/workspaceDir, so config-scoped (non-bundled) provider plugins whose
+    // env candidates are only visible with config were reported as unauthed.
+    const cfg = { models: { providers: {} } } as OpenClawConfig;
+    hasProviderAuthForTool({ provider: "acme", cfg, workspaceDir: "/ws" });
+    expect(authMocks.resolveEnvApiKey).toHaveBeenCalledWith("acme", undefined, {
+      config: cfg,
+      workspaceDir: "/ws",
+    });
+  });
+
+  it("accepts env-key plugin provider auth only when config reaches env resolution", () => {
+    // "acme" is not in models.json, so custom-provider auth is false; the only
+    // path to true is the config-aware env lookup.
+    const cfg = { models: { providers: {} } } as OpenClawConfig;
+    expect(hasProviderAuthForTool({ provider: "acme", cfg })).toBe(true);
+    expect(hasProviderAuthForTool({ provider: "acme" })).toBe(false);
+  });
+
   it("accepts config-backed custom provider auth", () => {
     const cfg = {
       models: {
@@ -102,6 +143,23 @@ describe("hasProviderAuthForTool", () => {
     } as OpenClawConfig;
 
     expect(hasProviderAuthForTool({ provider: "hatchery", cfg })).toBe(true);
+  });
+
+  it("accepts AWS SDK auth without a static credential", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "amazon-bedrock": {
+            baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+            auth: "aws-sdk",
+            api: "bedrock-converse-stream",
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(hasProviderAuthForTool({ provider: "amazon-bedrock", cfg })).toBe(true);
   });
 
   it("keeps auth-store profiles as valid tool auth", () => {

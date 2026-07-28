@@ -5,7 +5,7 @@ export type MatrixManagedDeviceInfo = {
   current: boolean;
 };
 
-export type MatrixDeviceHealthSummary = {
+type MatrixDeviceHealthSummary = {
   currentDeviceId: string | null;
   staleOpenClawDevices: MatrixManagedDeviceInfo[];
   currentOpenClawDevices: MatrixManagedDeviceInfo[];

@@ -112,11 +112,14 @@ function normalizeAgentEventType(payload: JsonObject): OpenClawEventType {
     if (phase === "delta" || phase === "update") {
       return "tool.call.delta";
     }
-    if (phase === "end" || status === "completed") {
-      return "tool.call.completed";
-    }
+    // Terminal tool/item events carry phase:"end" together with the real status, so a failed or
+    // blocked tool must be classified before the end/completed branch — otherwise phase:"end" wins
+    // and failures are reported as tool.call.completed.
     if (status === "failed" || status === "blocked") {
       return "tool.call.failed";
+    }
+    if (phase === "end" || status === "completed") {
+      return "tool.call.completed";
     }
     return "tool.call.delta";
   }
@@ -174,7 +177,9 @@ export function normalizeGatewayEvent(event: GatewayEvent): OpenClawEvent {
   const taskId = readString(payload.taskId);
   const agentId = readString(payload.agentId);
   const ts = readNumber(payload.ts) ?? Date.now();
-  const idParts = [event.seq ?? "local", event.event, runId, sessionKey, ts].filter(Boolean);
+  const idParts = [event.seq ?? "local", event.event, runId, sessionKey, ts].filter(
+    (part) => part !== undefined,
+  );
 
   return {
     version: 1,

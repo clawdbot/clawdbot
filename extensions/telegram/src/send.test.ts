@@ -1,6 +1,7 @@
 // Telegram tests cover send plugin behavior.
 import fs from "node:fs";
 import type { Bot } from "grammy";
+import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
@@ -8,14 +9,21 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { markdownToTelegramHtml } from "./format.js";
+import { markdownToTelegramHtml, telegramHtmlToPlainTextFallback } from "./format.js";
 import {
   buildTelegramConversationContext,
   createTelegramMessageCache,
+  hasProviderObservedTelegramThreadBinding,
   resolveTelegramMessageCacheScope,
-  resetTelegramMessageCacheBucketsForTest,
 } from "./message-cache.js";
-import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
+import { createTelegramPromptContextProjectionCursor } from "./prompt-context-projection.js";
+import { inputRichBlocksToPlainText, type InputRichBlock } from "./rich-block-model.js";
+import { setTelegramRuntime } from "./runtime.js";
+import {
+  clearTelegramRuntimeForTest as clearTelegramRuntime,
+  resetTelegramMessageCacheForTest as resetTelegramMessageCacheBucketsForTest,
+  resetTelegramSentMessageCacheForTest,
+} from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 import type { TelegramApiOverride } from "./send.js";
 import {
@@ -26,10 +34,7 @@ import {
 import {
   TELEGRAM_SENT_MESSAGE_CACHE_MAX_ENTRIES,
   TELEGRAM_SENT_MESSAGE_CACHE_NAMESPACE,
-  clearSentMessageCache,
   recordSentMessage,
-  resetSentMessageCacheForTest,
-  setTelegramSentMessageStoreForTest,
   wasSentByBot,
 } from "./sent-message-cache.js";
 
@@ -47,16 +52,19 @@ const {
   probeVideoDimensions,
 } = getTelegramSendTestMocks();
 const telegramSendModule = await importTelegramSendModule();
-const { resetLogger, setLoggerOverride } = await import("openclaw/plugin-sdk/runtime-env");
+const { getChildLogger, resetLogger, setLoggerOverride } =
+  await import("openclaw/plugin-sdk/runtime-env");
 const {
   buildInlineKeyboard,
   createForumTopicTelegram,
   deleteMessageTelegram,
   editForumTopicTelegram,
+  editMessageReplyMarkupTelegram,
   editMessageTelegram,
   pinMessageTelegram,
   reactMessageTelegram,
   renameForumTopicTelegram,
+  sendLocationTelegram,
   sendMessageTelegram: sendMessageTelegramImported,
   sendTypingTelegram,
   sendPollTelegram,
@@ -65,16 +73,16 @@ const {
 } = telegramSendModule;
 const sendMessageTelegramImpl = sendMessageTelegramImported;
 
-type RichSendCallParams = {
-  rich_message?: { markdown?: string; html?: string };
-  reply_markup?: unknown;
-};
-
 type RichRawTextTestApi = Omit<TelegramApiOverride, "raw" | "sendMessage"> & {
   raw?: {
     sendRichMessage?: (params: {
       chat_id: number | string;
-      rich_message: { markdown?: string; html?: string; skip_entity_detection?: boolean };
+      rich_message: {
+        blocks?: InputRichBlock[];
+        markdown?: string;
+        html?: string;
+        skip_entity_detection?: boolean;
+      };
       [key: string]: unknown;
     }) => Promise<unknown>;
   };
@@ -85,14 +93,21 @@ type RichRawTextTestApi = Omit<TelegramApiOverride, "raw" | "sendMessage"> & {
   ) => Promise<unknown>;
 };
 
-function richTextForTest(richMessage: { markdown?: string; html?: string }): string {
+function richTextForTest(richMessage: {
+  blocks?: InputRichBlock[];
+  markdown?: string;
+  html?: string;
+}): string {
+  if (richMessage.blocks) {
+    return inputRichBlocksToPlainText(richMessage.blocks);
+  }
   return richMessage.markdown != null
     ? markdownToTelegramHtml(richMessage.markdown)
     : (richMessage.html ?? "");
 }
 
-function richSendCallParams(): RichSendCallParams[] {
-  return botRawApi.sendRichMessage.mock.calls.map(([params]) => params);
+function sendMessageTexts(mockFn: typeof botApi.sendMessage): string[] {
+  return mockFn.mock.calls.map((call) => String(call[1] ?? ""));
 }
 
 function withRichRawTextTestApi(
@@ -130,7 +145,13 @@ const sendMessageTelegram: typeof sendMessageTelegramImpl = async (to, text, opt
   );
 
 const TELEGRAM_TEST_CFG = {};
-let sentMessageStore: NonNullable<Parameters<typeof setTelegramSentMessageStoreForTest>[0]>;
+type PersistedSentMessageForTest = {
+  scopeKey: string;
+  chatId: string;
+  messageId: string;
+  timestamp: number;
+};
+let sentMessageStore: PluginStateSyncKeyedStore<PersistedSentMessageForTest>;
 
 function markdownTable(columns: number): string {
   return [
@@ -142,18 +163,24 @@ function markdownTable(columns: number): string {
     .join("\n");
 }
 
+function countTelegramRichBlocks(blocks: readonly InputRichBlock[] | undefined): number {
+  return blocks?.length ?? 0;
+}
+
 beforeEach(() => {
   resetPluginStateStoreForTests({ closeDatabase: false });
-  installTelegramStateRuntimeForTest();
   sentMessageStore = createPluginStateSyncKeyedStoreForTests("telegram", {
     namespace: TELEGRAM_SENT_MESSAGE_CACHE_NAMESPACE,
     maxEntries: TELEGRAM_SENT_MESSAGE_CACHE_MAX_ENTRIES,
   });
   sentMessageStore.clear();
-  setTelegramSentMessageStoreForTest(sentMessageStore);
+  installTelegramStateRuntimeForTest(sentMessageStore);
+  resetTelegramSentMessageCacheForTest();
 });
 
-function installTelegramStateRuntimeForTest(): void {
+function installTelegramStateRuntimeForTest(
+  syncStore: PluginStateSyncKeyedStore<PersistedSentMessageForTest>,
+): void {
   setTelegramRuntime({
     state: {
       openKeyedStore: ((options) =>
@@ -161,15 +188,74 @@ function installTelegramStateRuntimeForTest(): void {
           "telegram",
           options,
         )) as TelegramRuntime["state"]["openKeyedStore"],
-      openSyncKeyedStore: ((options) =>
-        createPluginStateSyncKeyedStoreForTests(
-          "telegram",
-          options,
-        )) as TelegramRuntime["state"]["openSyncKeyedStore"],
+      openSyncKeyedStore: (() => syncStore) as TelegramRuntime["state"]["openSyncKeyedStore"],
     },
     channel: {},
   } as TelegramRuntime);
 }
+
+describe("Telegram send Promise contract", () => {
+  const contextFailureCalls: ReadonlyArray<readonly [string, () => Promise<unknown>]> = [
+    [
+      "sendMessageTelegram",
+      () => sendMessageTelegramImported("123", "hello", { cfg: TELEGRAM_TEST_CFG }),
+    ],
+    ["sendTypingTelegram", () => sendTypingTelegram("123", { cfg: TELEGRAM_TEST_CFG })],
+    [
+      "reactMessageTelegram",
+      () => reactMessageTelegram("123", 1, "👍", { cfg: TELEGRAM_TEST_CFG }),
+    ],
+    ["deleteMessageTelegram", () => deleteMessageTelegram("123", 1, { cfg: TELEGRAM_TEST_CFG })],
+    ["pinMessageTelegram", () => pinMessageTelegram("123", 1, { cfg: TELEGRAM_TEST_CFG })],
+    [
+      "unpinMessageTelegram",
+      () => unpinMessageTelegram("123", undefined, { cfg: TELEGRAM_TEST_CFG }),
+    ],
+    [
+      "editForumTopicTelegram",
+      () => editForumTopicTelegram("123", 1, { cfg: TELEGRAM_TEST_CFG, name: "topic" }),
+    ],
+    [
+      "editMessageReplyMarkupTelegram",
+      () => editMessageReplyMarkupTelegram("123", 1, [], { cfg: TELEGRAM_TEST_CFG }),
+    ],
+    [
+      "editMessageTelegram",
+      () => editMessageTelegram("123", 1, "hello", { cfg: TELEGRAM_TEST_CFG }),
+    ],
+    [
+      "sendStickerTelegram",
+      () => sendStickerTelegram("123", "file-id", { cfg: TELEGRAM_TEST_CFG }),
+    ],
+    [
+      "sendPollTelegram",
+      () =>
+        sendPollTelegram(
+          "123",
+          { question: "Question?", options: ["A", "B"] },
+          { cfg: TELEGRAM_TEST_CFG },
+        ),
+    ],
+    [
+      "createForumTopicTelegram",
+      () => createForumTopicTelegram("123", "topic", { cfg: TELEGRAM_TEST_CFG }),
+    ],
+  ];
+
+  it.each(contextFailureCalls)(
+    "%s reports context failures as Promise rejections",
+    async (_name, invoke) => {
+      let operation: Promise<unknown> | undefined;
+      expect(() => {
+        operation = invoke();
+      }).not.toThrow();
+      if (!operation) {
+        throw new Error("expected Telegram operation promise");
+      }
+      await expect(operation).rejects.toThrow(/Telegram bot token missing/i);
+    },
+  );
+});
 
 async function expectChatNotFoundWithChatId(
   action: Promise<unknown>,
@@ -275,6 +361,30 @@ function expectMediaSendCall(
   expect(actualParams).toEqual(expectedParams);
 }
 
+function createRichEntityInvalidError(entity = "EMAIL", operation = "sendRichMessage"): Error {
+  return new Error(
+    `GrammyError: Call to '${operation}' failed! (400: Bad Request: RICH_MESSAGE_${entity}_INVALID)`,
+  );
+}
+
+function createRichContentRequiredError(operation = "sendRichMessage"): Error {
+  return new Error(
+    `GrammyError: Call to '${operation}' failed! (400: Bad Request: RICH_MESSAGE_CONTENT_REQUIRED)`,
+  );
+}
+
+function createHtmlParseError(operation = "sendMessage"): Error {
+  return new Error(
+    `GrammyError: Call to '${operation}' failed! (400: Bad Request: can't parse entities: Can't find end of the entity)`,
+  );
+}
+
+function createQuoteNotFoundError(operation = "sendMessage"): Error {
+  return new Error(
+    `GrammyError: Call to '${operation}' failed! (400: Bad Request: quote not found)`,
+  );
+}
+
 function expectPersistedTarget(fields: Record<string, unknown>): void {
   const [target] = requireMockCall(
     mockCall(maybePersistResolvedTelegramTarget, -1, "persisted Telegram target"),
@@ -296,14 +406,22 @@ function captureInfoLogs(): string {
   return logFile;
 }
 
-function capturedLogText(logFile: string): string {
-  return fs.existsSync(logFile) ? fs.readFileSync(logFile, "utf8") : "";
+async function capturedLogText(logFile: string): Promise<string> {
+  const marker = `telegram-send-log-capture-ready=${logCaptureCounter}`;
+  getChildLogger({ module: "telegram-send-test" }).info(marker);
+  let content = "";
+  // File logging is FIFO but asynchronous. Seeing this later marker proves all
+  // records from the send attempt are durable before positive or negative checks.
+  await vi.waitFor(() => {
+    content = fs.existsSync(logFile) ? fs.readFileSync(logFile, "utf8") : "";
+    expect(content).toContain(marker);
+  });
+  return content;
 }
 
 afterEach(() => {
+  resetTelegramSentMessageCacheForTest();
   clearTelegramRuntime();
-  clearSentMessageCache();
-  setTelegramSentMessageStoreForTest(undefined);
   resetPluginStateStoreForTests();
   setLoggerOverride(null);
   resetLogger();
@@ -334,16 +452,8 @@ describe("sent-message-cache", () => {
     expect(wasSentByBot(123, 1)).toBe(true);
   });
 
-  it("clears cache", () => {
-    recordSentMessage(123, 1);
-    expect(wasSentByBot(123, 1)).toBe(true);
-
-    clearSentMessageCache();
-    expect(wasSentByBot(123, 1)).toBe(false);
-  });
-
   it("keeps sent-message cache storage failures best-effort", () => {
-    setTelegramSentMessageStoreForTest({
+    installTelegramStateRuntimeForTest({
       ...sentMessageStore,
       entries() {
         throw new Error("read boom");
@@ -357,11 +467,28 @@ describe("sent-message-cache", () => {
     expect(wasSentByBot(123, 1)).toBe(true);
   });
 
-  it("persists sent-message rows with their remaining logical ttl", () => {
+  it("persists only the newly recorded sent-message row", () => {
+    const persistedMessageIds: string[] = [];
+    installTelegramStateRuntimeForTest({
+      ...sentMessageStore,
+      register(key, value, options) {
+        sentMessageStore.register(key, value, options);
+        persistedMessageIds.push(value.messageId);
+      },
+    });
+
+    recordSentMessage(123, 1);
+    recordSentMessage(123, 2);
+    recordSentMessage(456, 10);
+
+    expect(persistedMessageIds).toEqual(["1", "2", "10"]);
+  });
+
+  it("persists sent-message rows with a per-entry ttl", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-26T12:00:00.000Z"));
     const ttlByMessageId = new Map<string, number>();
-    setTelegramSentMessageStoreForTest({
+    installTelegramStateRuntimeForTest({
       ...sentMessageStore,
       register(key, value, options) {
         sentMessageStore.register(key, value, options);
@@ -373,7 +500,7 @@ describe("sent-message-cache", () => {
     vi.advanceTimersByTime(60 * 60 * 1000);
     recordSentMessage(123, 2);
 
-    expect(ttlByMessageId.get("1")).toBe(23 * 60 * 60 * 1000);
+    expect(ttlByMessageId.get("1")).toBe(24 * 60 * 60 * 1000);
     expect(ttlByMessageId.get("2")).toBe(24 * 60 * 60 * 1000);
   });
 
@@ -384,20 +511,13 @@ describe("sent-message-cache", () => {
     recordSentMessage(123, 1, sentMessageCfg);
     expect(wasSentByBot(123, 1, sentMessageCfg)).toBe(true);
 
-    resetSentMessageCacheForTest();
+    resetTelegramSentMessageCacheForTest();
 
     const restartedCache = await importFreshModule<typeof import("./sent-message-cache.js")>(
       import.meta.url,
       "./sent-message-cache.js?scope=restart",
     );
-    restartedCache.setTelegramSentMessageStoreForTest(sentMessageStore);
-
-    try {
-      expect(restartedCache.wasSentByBot(123, 1, sentMessageCfg)).toBe(true);
-    } finally {
-      restartedCache.clearSentMessageCache();
-      restartedCache.setTelegramSentMessageStoreForTest(undefined);
-    }
+    expect(restartedCache.wasSentByBot(123, 1, sentMessageCfg)).toBe(true);
   });
 
   it("keeps expired custom-store cleanup away from the default store", () => {
@@ -448,21 +568,13 @@ describe("sent-message-cache", () => {
       import.meta.url,
       "./sent-message-cache.js?scope=shared-b",
     );
-    cacheA.setTelegramSentMessageStoreForTest(sentMessageStore);
-    cacheB.setTelegramSentMessageStoreForTest(sentMessageStore);
-
-    cacheA.clearSentMessageCache();
+    resetTelegramSentMessageCacheForTest();
 
     try {
       cacheA.recordSentMessage(123, 1);
       expect(cacheB.wasSentByBot(123, 1)).toBe(true);
-
-      cacheB.clearSentMessageCache();
-      expect(cacheA.wasSentByBot(123, 1)).toBe(false);
     } finally {
-      cacheA.clearSentMessageCache();
-      cacheA.setTelegramSentMessageStoreForTest(undefined);
-      cacheB.setTelegramSentMessageStoreForTest(undefined);
+      resetTelegramSentMessageCacheForTest();
     }
   });
 });
@@ -592,6 +704,28 @@ describe("sendMessageTelegram", () => {
     });
   });
 
+  it("retries snippet-only network errors when sending typing", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          botToken: "tok",
+        },
+      },
+    });
+    botApi.sendChatAction
+      .mockRejectedValueOnce(new Error("socket hang up"))
+      .mockResolvedValue(true);
+
+    await sendTypingTelegram("telegram:group:-1001234567890", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      accountId: "default",
+      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+    });
+
+    expect(botApi.sendChatAction).toHaveBeenCalledTimes(2);
+  });
+
   it("pins and unpins Telegram messages", async () => {
     loadConfig.mockReturnValue({
       channels: {
@@ -709,29 +843,34 @@ describe("sendMessageTelegram", () => {
     });
   });
 
-  it("rejects empty topic edits", async () => {
+  it("rejects empty topic edits before creating a Telegram client", async () => {
+    botCtorSpy.mockClear();
+
     await expect(
       editForumTopicTelegram("-1001234567890", 271, {
         cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
         accountId: "default",
       }),
     ).rejects.toThrow("Telegram forum topic update requires a name or iconCustomEmojiId");
     await expect(
       editForumTopicTelegram("-1001234567890", 271, {
         cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
         accountId: "default",
         iconCustomEmojiId: "   ",
       }),
     ).rejects.toThrow("Telegram forum topic icon custom emoji ID is required");
+    expect(botCtorSpy).not.toHaveBeenCalled();
   });
 
-  it("applies timeoutSeconds config precedence", async () => {
+  it("ignores removed timeoutSeconds config", async () => {
     const cases = [
       {
         name: "global telegram timeout",
         cfg: { channels: { telegram: { timeoutSeconds: 60 } } },
         opts: { cfg: TELEGRAM_TEST_CFG, token: "tok" },
-        expectedTimeout: 60,
+        expectedTimeout: undefined,
       },
       {
         name: "per-account timeout override",
@@ -744,7 +883,7 @@ describe("sendMessageTelegram", () => {
           },
         },
         opts: { cfg: TELEGRAM_TEST_CFG, token: "tok", accountId: "foo" },
-        expectedTimeout: 61,
+        expectedTimeout: undefined,
       },
     ] as const;
     for (const testCase of cases) {
@@ -854,6 +993,114 @@ describe("sendMessageTelegram", () => {
     );
   });
 
+  it("records a successful General-topic send when the response omits the thread id", async () => {
+    const storePath = `/tmp/openclaw-telegram-general-context-${process.pid}-${Date.now()}.json`;
+    const chatId = "-1003966283270";
+    botApi.sendMessage.mockResolvedValueOnce({
+      message_id: 1498,
+      date: 1_779_394_741,
+      chat: { id: chatId, type: "supergroup", title: "QA forum" },
+      from: { id: 42, is_bot: true, first_name: "OpenClaw" },
+      text: "Reply in General",
+    });
+
+    await sendMessageTelegram(`${chatId}:topic:1`, "Reply in General", {
+      cfg: { session: { store: storePath } },
+      token: "tok",
+    });
+
+    expect(firstMockCall(botApi.sendMessage, "General-topic send")[2]).not.toHaveProperty(
+      "message_thread_id",
+    );
+    const cached = await createTelegramMessageCache({
+      scope: resolveTelegramMessageCacheScope(storePath),
+    }).get({
+      accountId: "default",
+      chatId,
+      messageId: "1498",
+    });
+    expect(hasProviderObservedTelegramThreadBinding(cached, 1)).toBe(true);
+  });
+
+  it("records transcript projection metadata without replacing Telegram time", async () => {
+    const storePath = `/tmp/openclaw-telegram-send-context-override-${process.pid}-${Date.now()}.json`;
+    const cfg = { session: { store: storePath } };
+    const cursor = createTelegramPromptContextProjectionCursor({
+      transcriptMessageId: "assistant-final",
+    });
+    botApi.sendMessage.mockResolvedValueOnce({
+      message_id: 1497,
+      date: 1_779_394_745,
+      chat: { id: "123", type: "private" },
+      from: { id: 42, is_bot: true, first_name: "Kelaw" },
+      text: "Final answer",
+    });
+
+    await sendMessageTelegram("123", "Final answer", {
+      cfg,
+      token: "tok",
+      promptContextProjectionPlan: { cursor, finalPart: true },
+    });
+
+    const cache = createTelegramMessageCache({
+      scope: resolveTelegramMessageCacheScope(storePath),
+    });
+    const node = await cache.get({
+      accountId: "default",
+      chatId: "123",
+      messageId: "1497",
+    });
+
+    expect(node?.timestamp).toBe(1_779_394_745_000);
+    expect(node?.promptContextProjectionMarker).toEqual({
+      kind: "valid",
+      projection: { ...cursor.source, partIndex: 0, finalPart: true },
+    });
+    expect(cursor.nextPartIndex).toBe(1);
+  });
+
+  it("records transcript projection metadata for native locations", async () => {
+    const storePath = `/tmp/openclaw-telegram-location-context-${process.pid}-${Date.now()}.json`;
+    const cfg = { session: { store: storePath } };
+    const cursor = createTelegramPromptContextProjectionCursor({
+      transcriptMessageId: "assistant-location",
+    });
+    const sendLocation = vi.fn().mockResolvedValue({
+      message_id: 1498,
+      date: 1_779_394_746,
+      chat: { id: "123", type: "private" },
+      from: { id: 42, is_bot: true, first_name: "Kelaw" },
+      location: { latitude: 48.858844, longitude: 2.294351 },
+    });
+
+    await sendLocationTelegram(
+      "123",
+      { latitude: 48.858844, longitude: 2.294351 },
+      {
+        cfg,
+        token: "tok",
+        api: { sendLocation } as unknown as TelegramApiOverride,
+        promptContextProjectionPlan: { cursor, finalPart: true },
+      },
+    );
+
+    const cache = createTelegramMessageCache({
+      scope: resolveTelegramMessageCacheScope(storePath),
+    });
+    const node = await cache.get({
+      accountId: "default",
+      chatId: "123",
+      messageId: "1498",
+    });
+
+    expect(node?.timestamp).toBe(1_779_394_746_000);
+    expect(node?.promptContextProjectionMarker).toEqual({
+      kind: "valid",
+      projection: { ...cursor.source, partIndex: 0, finalPart: true },
+    });
+    expect(cursor.nextPartIndex).toBe(1);
+  });
+
   it("normalizes raw code language HTML before sending", async () => {
     const chatId = "123";
     const text = [
@@ -882,13 +1129,15 @@ describe("sendMessageTelegram", () => {
     expect(res.messageId).toBe("44");
   });
 
-  it("skips rich entity detection when link previews are disabled", async () => {
+  it("disables link previews on the text send path", async () => {
     const cases = [
       {
         name: "html send succeeds",
         text: "hi",
         sendMessage: vi.fn().mockResolvedValue({ message_id: 7, chat: { id: "123" } }),
-        expectedCalls: [["123", "hi", { parse_mode: "HTML", skip_entity_detection: true }]],
+        expectedCalls: [
+          ["123", "hi", { parse_mode: "HTML", link_preview_options: { is_disabled: true } }],
+        ],
       },
     ] as const;
     for (const testCase of cases) {
@@ -908,7 +1157,7 @@ describe("sendMessageTelegram", () => {
     }
   });
 
-  it("sends raw rich markdown for durable text", async () => {
+  it("sends formatted HTML for durable text", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
 
     await sendMessageTelegram("123", "**hi**", {
@@ -916,13 +1165,280 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
-      chat_id: "123",
-      rich_message: { markdown: "**hi**" },
+    expect(botApi.sendMessage).toHaveBeenCalledWith("123", "<b>hi</b>", {
+      parse_mode: "HTML",
+    });
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
+  });
+
+  it("sends native rich tables when explicitly enabled", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
+    const markdown = markdownTable(3);
+
+    await sendMessageTelegram("123", markdown, {
+      cfg: {
+        channels: {
+          telegram: {
+            richMessages: true,
+            markdown: { tables: "block" },
+          },
+        },
+      },
+      token: "tok",
+    });
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    const richMessage = botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message;
+    expect(richMessage?.blocks?.some((block: InputRichBlock) => block.type === "table")).toBe(true);
+  });
+
+  it("degrades wide markdown tables to ASCII pre blocks on rich sends", async () => {
+    const logFile = captureInfoLogs();
+    botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
+
+    await sendMessageTelegram("123", markdownTable(21), {
+      cfg: {
+        channels: {
+          telegram: {
+            richMessages: true,
+            markdown: { tables: "block" },
+          },
+        },
+      },
+      token: "tok",
+    });
+
+    const richMessage = botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message;
+    expect(richMessage?.blocks?.some((block: InputRichBlock) => block.type === "pre")).toBe(true);
+    expect(await capturedLogText(logFile)).toContain("rich-degrade=table-ascii");
+  });
+
+  it("skips rich entity detection for provider-prefixed email text", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
+    const oauthProfileText =
+      "OAuth profile: openai:keshavbotagent@gmail.com (keshavbotagent@gmail.com)";
+
+    await sendMessageTelegram("123", oauthProfileText, {
+      cfg: {
+        channels: {
+          telegram: {
+            richMessages: true,
+          },
+        },
+      },
+      token: "tok",
+    });
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    const richMessage = botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message;
+    expect(richMessage).toEqual({
+      blocks: [{ type: "paragraph", text: oauthProfileText }],
+      skip_entity_detection: true,
     });
   });
 
-  it("keeps complex markdown raw for rich message text", async () => {
+  it("falls back to plain text when durable rich sends reject an invalid entity", async () => {
+    const text = "Status includes openai:owner@example.com";
+    botRawApi.sendRichMessage.mockRejectedValueOnce(createRichEntityInvalidError("EMAIL"));
+    botApi.sendMessage.mockResolvedValueOnce({ message_id: 46, chat: { id: "123" } });
+
+    const result = await sendMessageTelegram("123", text, {
+      cfg: { channels: { telegram: { richMessages: true } } },
+      token: "tok",
+    });
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(botApi.sendMessage).toHaveBeenCalledWith("123", text);
+    expect(result).toEqual({ messageId: "46", chatId: "123" });
+  });
+
+  it("falls back to plain text when durable rich sends require nonempty content", async () => {
+    const text = "still visible after rich content rejection";
+    botRawApi.sendRichMessage.mockRejectedValueOnce(createRichContentRequiredError());
+    botApi.sendMessage.mockResolvedValueOnce({ message_id: 55, chat: { id: "123" } });
+
+    const result = await sendMessageTelegram("123", text, {
+      cfg: { channels: { telegram: { richMessages: true } } },
+      token: "tok",
+    });
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(botApi.sendMessage).toHaveBeenCalledWith("123", text);
+    expect(result).toEqual({ messageId: "55", chatId: "123" });
+  });
+
+  it("routes caller HTML through the legacy HTML transport on rich accounts", async () => {
+    // Rich HTML treats literal newlines as insignificant; parse_mode HTML keeps
+    // them, so caller-authored HTML must stay on the legacy transport.
+    const html = "<b>one</b>\ntwo";
+    botApi.sendMessage.mockResolvedValueOnce({ message_id: 46, chat: { id: "123" } });
+
+    await sendMessageTelegram("123", html, {
+      cfg: { channels: { telegram: { richMessages: true } } },
+      token: "tok",
+      textMode: "html",
+    });
+
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
+    expect(botApi.sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.stringContaining("<b>one</b>\ntwo"),
+      expect.objectContaining({ parse_mode: "HTML" }),
+    );
+  });
+
+  it("chunks long plain text when durable rich sends reject an invalid entity", async () => {
+    const text = `Status includes openai:owner@example.com ${"A".repeat(5000)}`;
+    const storePath = `/tmp/openclaw-telegram-projection-rich-fallback-${process.pid}-${Date.now()}.json`;
+    const cursor = createTelegramPromptContextProjectionCursor({
+      transcriptMessageId: "assistant-rich",
+    });
+    botRawApi.sendRichMessage.mockRejectedValueOnce(createRichEntityInvalidError("EMAIL"));
+    botApi.sendMessage
+      .mockResolvedValueOnce({ message_id: 47, chat: { id: "123" } })
+      .mockResolvedValueOnce({ message_id: 48, chat: { id: "123" } });
+
+    const result = await sendMessageTelegram("123", text, {
+      cfg: {
+        channels: { telegram: { richMessages: true } },
+        session: { store: storePath },
+      },
+      token: "tok",
+      replyToMessageId: 100,
+      replyToIdSource: "implicit",
+      replyToMode: "first",
+      promptContextProjectionPlan: { cursor, finalPart: true },
+    });
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(botApi.sendMessage).toHaveBeenCalledTimes(2);
+    expect(sendMessageTexts(botApi.sendMessage).every((chunk) => chunk.length <= 4000)).toBe(true);
+    for (const call of botApi.sendMessage.mock.calls) {
+      expect(call[2]).toBeUndefined();
+    }
+    expect(result.messageId).toBe("48");
+    const cache = createTelegramMessageCache({
+      scope: resolveTelegramMessageCacheScope(storePath),
+    });
+    const first = await cache.get({ accountId: "default", chatId: "123", messageId: "47" });
+    const second = await cache.get({ accountId: "default", chatId: "123", messageId: "48" });
+    expect([first?.promptContextProjectionMarker, second?.promptContextProjectionMarker]).toEqual([
+      {
+        kind: "valid",
+        projection: { ...cursor.source, partIndex: 0, finalPart: false },
+      },
+      { kind: "valid", projection: { ...cursor.source, partIndex: 1, finalPart: true } },
+    ]);
+    expect(cursor.nextPartIndex).toBe(2);
+    expect(result.receipt?.platformMessageIds).toEqual(["47", "48"]);
+  });
+
+  it("chunks rich paragraph output at Telegram's block limit", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
+    const text = Array.from({ length: 501 }, (_, index) => `paragraph ${index}`).join("\n\n");
+
+    await sendMessageTelegram("123", text, {
+      cfg: {
+        channels: {
+          telegram: {
+            richMessages: true,
+          },
+        },
+      },
+      token: "tok",
+    });
+
+    expect(botRawApi.sendRichMessage.mock.calls.length).toBeGreaterThan(1);
+    for (const call of botRawApi.sendRichMessage.mock.calls) {
+      expect(countTelegramRichBlocks(call[0]?.rich_message.blocks)).toBeLessThanOrEqual(500);
+    }
+    const plain = botRawApi.sendRichMessage.mock.calls
+      .map((call) => inputRichBlocksToPlainText(call[0]?.rich_message.blocks ?? []))
+      .join("\n");
+    expect(plain).toContain("paragraph 500");
+  });
+
+  it("applies rich entity detection skip to every chunk of the document", async () => {
+    // The whole document renders with one linkify decision, so a skip trigger
+    // anywhere (the email) must set the wire flag on every chunk; a chunk-local
+    // flag would let Telegram re-linkify unprotected file refs in other chunks.
+    botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
+    const firstChunk = Array.from(
+      { length: 700 },
+      (_, index) => `[link ${index}](https://example.com/${index})`,
+    ).join("\n\n");
+    const text = `${firstChunk}\n\nOAuth profile: openai:owner@example.com`;
+
+    await sendMessageTelegram("123", text, {
+      cfg: { channels: { telegram: { richMessages: true } } },
+      token: "tok",
+    });
+
+    expect(botRawApi.sendRichMessage.mock.calls.length).toBeGreaterThan(1);
+    const richMessages = botRawApi.sendRichMessage.mock.calls.map((call) => call[0]?.rich_message);
+    expect(richMessages.every((richMessage) => richMessage?.skip_entity_detection === true)).toBe(
+      true,
+    );
+  });
+
+  it("keeps newlines inside rich paragraph blocks", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 60, chat: { id: "123" } });
+
+    await sendMessageTelegram(
+      "123",
+      "Start here:\n\n• Florist - Red Bird\n• Tomberlin - Seventeen",
+      { cfg: { channels: { telegram: { richMessages: true } } }, token: "tok" },
+    );
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    const blocks = botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message.blocks ?? [];
+    expect(inputRichBlocksToPlainText(blocks)).toContain("• Florist - Red Bird");
+    expect(inputRichBlocksToPlainText(blocks)).toContain("• Tomberlin - Seventeen");
+  });
+
+  it("preserves nonempty Markdown when rich rendering is empty", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
+    const markdown = "[reference]: https://example.com";
+
+    await sendMessageTelegram("123", markdown, {
+      cfg: { channels: { telegram: { richMessages: true } } },
+      token: "tok",
+    });
+
+    // Link-definition-only markdown may render empty blocks; plain fallback or skip is ok.
+    if (botRawApi.sendRichMessage.mock.calls.length > 0) {
+      const blocks = botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message.blocks ?? [];
+      expect(Array.isArray(blocks)).toBe(true);
+    }
+  });
+
+  it.each([
+    {
+      name: "local path",
+      markdown:
+        "See [scripts/yougile.py](/home/user/.openclaw/workspace/scripts/yougile.py#L41) and [docs](https://example.com/docs)",
+    },
+    {
+      name: "relative path",
+      markdown: "Edit [config](./openclaw.json) or see [docs](https://example.com/docs)",
+    },
+  ])("keeps rich delivery when a markdown link targets a $name", async (testCase) => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 48, chat: { id: "123" } });
+
+    await sendMessageTelegram("123", testCase.markdown, {
+      cfg: { channels: { telegram: { richMessages: true } } },
+      token: "tok",
+    });
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    const blocks = botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message.blocks ?? [];
+    const serialized = JSON.stringify(blocks);
+    expect(serialized).not.toContain('"/home');
+    expect(serialized).not.toContain('"./"');
+    expect(serialized).toContain("https://example.com/docs");
+  });
+
+  it("renders complex markdown into HTML text", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 46, chat: { id: "123" } });
     const markdown = [
       "# Heading",
@@ -941,13 +1457,17 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
-      chat_id: "123",
-      rich_message: { markdown },
-    });
+    expect(botApi.sendMessage).toHaveBeenCalledTimes(1);
+    const [chatId, sentText, sentOptions] = botApi.sendMessage.mock.calls.at(-1) ?? [];
+    expect(chatId).toBe("123");
+    expect(String(sentText)).toContain("<blockquote>");
+    expect(String(sentText)).toContain("<tg-spoiler>spoiler</tg-spoiler>");
+    expect(String(sentText)).toContain('<a href="https://example.com">link</a>');
+    expect(sentOptions).toEqual({ parse_mode: "HTML" });
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
   });
 
-  it("keeps markdown media syntax on the text-only rich path", async () => {
+  it("renders markdown media syntax on the text path", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 47, chat: { id: "123" } });
 
     await sendMessageTelegram("123", "See ![diagram](https://example.com/diagram.png)", {
@@ -955,13 +1475,27 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
-      chat_id: "123",
-      rich_message: { markdown: "See [diagram](https://example.com/diagram.png)" },
-    });
+    expect(botApi.sendMessage).toHaveBeenCalledWith("123", "See diagram", { parse_mode: "HTML" });
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
   });
 
-  it("escapes HTML media tags on the text-only rich path", async () => {
+  it("escapes literal reasoning-looking tags on the text path", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 47, chat: { id: "123" } });
+
+    await sendMessageTelegram("123", "Before <think>literal tag text after", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+    });
+
+    expect(botApi.sendMessage).toHaveBeenCalledWith(
+      "123",
+      "Before &lt;think&gt;literal tag text after",
+      { parse_mode: "HTML" },
+    );
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
+  });
+
+  it("escapes HTML media tags on the text path", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 48, chat: { id: "123" } });
 
     await sendMessageTelegram("123", '<b>See</b><img src="https://example.com/diagram.png">', {
@@ -970,15 +1504,15 @@ describe("sendMessageTelegram", () => {
       textMode: "html",
     });
 
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
-      chat_id: "123",
-      rich_message: {
-        html: "<b>See</b>&lt;img src=&quot;https://example.com/diagram.png&quot;&gt;",
-      },
-    });
+    expect(botApi.sendMessage).toHaveBeenCalledWith(
+      "123",
+      '<b>See</b>&lt;img src="https://example.com/diagram.png"&gt;',
+      { parse_mode: "HTML" },
+    );
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
   });
 
-  it("keeps native rich markdown tables within Telegram's column limit", async () => {
+  it("keeps markdown tables within Telegram's HTML text path", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 49, chat: { id: "123" } });
     const markdown = markdownTable(20);
 
@@ -987,13 +1521,12 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
-      chat_id: "123",
-      rich_message: { markdown },
-    });
+    expect(botApi.sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessageTexts(botApi.sendMessage).join("")).toContain("| H1 | H2 |");
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
   });
 
-  it("wraps wide rich markdown tables that exceed Telegram's column limit", async () => {
+  it("wraps wide markdown tables for the HTML text path", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 50, chat: { id: "123" } });
     const markdown = markdownTable(21);
 
@@ -1002,13 +1535,14 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
-      chat_id: "123",
-      rich_message: { markdown: `\`\`\`\n${markdown}\n\`\`\`` },
-    });
+    expect(botApi.sendMessage).toHaveBeenCalledTimes(1);
+    const sent = sendMessageTexts(botApi.sendMessage).join("");
+    expect(sent).toContain("<pre><code>");
+    expect(sent).toContain("| H21 |");
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
   });
 
-  it("leaves wide rich markdown tables alone inside fences", async () => {
+  it("leaves wide fenced tables intact on the HTML text path", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 51, chat: { id: "123" } });
     const markdown = `~~~\n${markdownTable(25)}\n~~~`;
 
@@ -1017,13 +1551,12 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
-      chat_id: "123",
-      rich_message: { markdown },
-    });
+    expect(botApi.sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessageTexts(botApi.sendMessage).join("")).toContain(markdownTable(25));
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
   });
 
-  it("wraps only wide rich markdown tables outside fences", async () => {
+  it("wraps only wide markdown tables outside fences on the HTML text path", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 52, chat: { id: "123" } });
     const fencedTable = markdownTable(25);
     const outsideTable = markdownTable(21);
@@ -1034,17 +1567,16 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
-      chat_id: "123",
-      rich_message: {
-        markdown: ["Before", "~~~", fencedTable, "~~~", "After", "```", outsideTable, "```"].join(
-          "\n",
-        ),
-      },
-    });
+    expect(botApi.sendMessage).toHaveBeenCalledTimes(1);
+    const sent = sendMessageTexts(botApi.sendMessage).join("");
+    expect(sent).toContain("Before");
+    expect(sent).toContain(fencedTable);
+    expect(sent).toContain("<pre><code>");
+    expect(sent).toContain("| H21 |");
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
   });
 
-  it("sends long rich markdown as one message", async () => {
+  it("sends medium markdown text as one HTML message", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 53, chat: { id: "123" } });
     const markdown = `# Long\n\n${"**section** with _style_ and `code`\n".repeat(800)}`;
 
@@ -1053,14 +1585,12 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
-      chat_id: "123",
-      rich_message: { markdown },
-    });
+    expect(botApi.sendMessage.mock.calls.length).toBeGreaterThan(1);
+    expect(sendMessageTexts(botApi.sendMessage).join("")).toContain("section");
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
   });
 
-  it("chunks rich markdown above the Bot API rich message limit", async () => {
+  it("chunks markdown above the Telegram text-message limit", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 54, chat: { id: "123" } });
     const markdown = `# Long\n\n${"**section** with _style_ and `code`\n".repeat(3000)}`;
 
@@ -1069,15 +1599,175 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    expect(botRawApi.sendRichMessage.mock.calls.length).toBeGreaterThan(1);
-    const chunks = richSendCallParams().map((params) => params.rich_message?.markdown ?? "");
-    const joinedChunks = chunks.join("\n");
-    expect(joinedChunks.startsWith("# Long")).toBe(true);
-    expect(joinedChunks.match(/\*\*section\*\* with _style_ and `code`/g)?.length).toBe(3000);
-    expect(chunks.every((chunk) => chunk.length <= 32_768)).toBe(true);
+    expect(botApi.sendMessage.mock.calls.length).toBeGreaterThan(1);
+    const chunks = sendMessageTexts(botApi.sendMessage);
+    const joinedChunks = chunks.join("");
+    expect(joinedChunks).toContain("Long");
+    expect(joinedChunks).toContain("section");
+    expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
   });
 
-  it("chunks long inline rich markdown without converting to HTML", async () => {
+  it("indexes every successful text chunk and marks only the last one final", async () => {
+    const storePath = `/tmp/openclaw-telegram-projection-chunks-${process.pid}-${Date.now()}.json`;
+    const cfg = { session: { store: storePath } };
+    const cursor = createTelegramPromptContextProjectionCursor({
+      transcriptMessageId: "assistant-chunks",
+    });
+    botApi.sendMessage
+      .mockResolvedValueOnce({ message_id: 154, date: 2, chat: { id: "123" } })
+      .mockResolvedValueOnce({ message_id: 155, date: 3, chat: { id: "123" } });
+
+    await sendMessageTelegram("123", "A".repeat(5_000), {
+      cfg,
+      token: "tok",
+      promptContextProjectionPlan: { cursor, finalPart: true },
+    });
+
+    const cache = createTelegramMessageCache({
+      scope: resolveTelegramMessageCacheScope(storePath),
+    });
+    const first = await cache.get({ accountId: "default", chatId: "123", messageId: "154" });
+    const second = await cache.get({ accountId: "default", chatId: "123", messageId: "155" });
+    expect([first?.promptContextProjectionMarker, second?.promptContextProjectionMarker]).toEqual([
+      {
+        kind: "valid",
+        projection: { ...cursor.source, partIndex: 0, finalPart: false },
+      },
+      { kind: "valid", projection: { ...cursor.source, partIndex: 1, finalPart: true } },
+    ]);
+    expect(cursor.nextPartIndex).toBe(2);
+  });
+
+  it("records each HTML chunk using that message's visible text", async () => {
+    const storePath = `/tmp/openclaw-telegram-projection-html-chunks-${process.pid}-${Date.now()}.json`;
+    const cfg = { session: { store: storePath } };
+    const cursor = createTelegramPromptContextProjectionCursor({
+      transcriptMessageId: "assistant-html-chunks",
+    });
+    botApi.sendMessage
+      .mockResolvedValueOnce({ message_id: 254, date: 2, chat: { id: "123" } })
+      .mockResolvedValueOnce({ message_id: 255, date: 3, chat: { id: "123" } });
+
+    await sendMessageTelegram("123", "<".repeat(1_000) + "y".repeat(3_000), {
+      cfg,
+      token: "tok",
+      textMode: "html",
+      promptContextProjectionPlan: { cursor, finalPart: true },
+    });
+
+    const visibleChunks = sendMessageTexts(botApi.sendMessage).map((html) =>
+      telegramHtmlToPlainTextFallback(html),
+    );
+    expect(visibleChunks).toHaveLength(2);
+    const cache = createTelegramMessageCache({
+      scope: resolveTelegramMessageCacheScope(storePath),
+    });
+    const cached = await Promise.all(
+      [254, 255].map((messageId) =>
+        cache.get({ accountId: "default", chatId: "123", messageId: String(messageId) }),
+      ),
+    );
+    expect(cached.map((node) => node?.body)).toEqual(visibleChunks);
+    expect(cached.map((node) => node?.promptContextProjectionMarker)).toEqual([
+      {
+        kind: "valid",
+        projection: { ...cursor.source, partIndex: 0, finalPart: false },
+      },
+      {
+        kind: "valid",
+        projection: { ...cursor.source, partIndex: 1, finalPart: true },
+      },
+    ]);
+  });
+
+  it("does not consume a projection part for a rejected HTML attempt", async () => {
+    const storePath = `/tmp/openclaw-telegram-projection-html-fallback-${process.pid}-${Date.now()}.json`;
+    const cfg = { session: { store: storePath } };
+    const cursor = createTelegramPromptContextProjectionCursor({
+      transcriptMessageId: "assistant-html",
+    });
+    botApi.sendMessage
+      .mockRejectedValueOnce(createHtmlParseError())
+      .mockResolvedValueOnce({ message_id: 156, date: 2, chat: { id: "123" } });
+
+    await sendMessageTelegram("123", "**hello**", {
+      cfg,
+      token: "tok",
+      promptContextProjectionPlan: { cursor, finalPart: true },
+    });
+
+    const cache = createTelegramMessageCache({
+      scope: resolveTelegramMessageCacheScope(storePath),
+    });
+    const node = await cache.get({ accountId: "default", chatId: "123", messageId: "156" });
+    expect(botApi.sendMessage).toHaveBeenCalledTimes(2);
+    expect(node?.promptContextProjectionMarker).toEqual({
+      kind: "valid",
+      projection: { ...cursor.source, partIndex: 0, finalPart: true },
+    });
+    expect(cursor.nextPartIndex).toBe(1);
+  });
+
+  it("preserves markdown link targets when Telegram rejects HTML", async () => {
+    botApi.sendMessage
+      .mockRejectedValueOnce(createHtmlParseError())
+      .mockResolvedValueOnce({ message_id: 157, chat: { id: "123" } });
+
+    await sendMessageTelegram("123", "Read [docs](https://example.com/guide)", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+    });
+
+    expect(botApi.sendMessage).toHaveBeenNthCalledWith(
+      1,
+      "123",
+      'Read <a href="https://example.com/guide">docs</a>',
+      { parse_mode: "HTML" },
+    );
+    expect(botApi.sendMessage).toHaveBeenNthCalledWith(
+      2,
+      "123",
+      "Read docs (https://example.com/guide)",
+    );
+  });
+
+  it("reports the first Telegram chunk before a later chunk fails", async () => {
+    const storePath = `/tmp/openclaw-telegram-projection-partial-${process.pid}-${Date.now()}.json`;
+    const cursor = createTelegramPromptContextProjectionCursor({
+      transcriptMessageId: "assistant-partial",
+    });
+    botApi.sendMessage
+      .mockResolvedValueOnce({ message_id: 54, chat: { id: "123" } })
+      .mockRejectedValueOnce(new Error("second chunk failed"));
+    const onDeliveryResult = vi.fn();
+    const markdown = `# Long\n\n${"**section** with _style_ and `code`\n".repeat(3000)}`;
+
+    await expect(
+      sendMessageTelegram("123", markdown, {
+        cfg: { session: { store: storePath } },
+        token: "tok",
+        onDeliveryResult,
+        promptContextProjectionPlan: { cursor, finalPart: true },
+      }),
+    ).rejects.toThrow("second chunk failed");
+
+    expect(onDeliveryResult.mock.calls.map((call) => call[0]?.messageId)).toEqual(["54"]);
+    const cached = await createTelegramMessageCache({
+      scope: resolveTelegramMessageCacheScope(storePath),
+    }).get({ accountId: "default", chatId: "123", messageId: "54" });
+    expect(cached?.promptContextProjectionMarker).toEqual({
+      kind: "valid",
+      projection: {
+        transcriptMessageId: "assistant-partial",
+        partIndex: 0,
+        finalPart: false,
+      },
+    });
+    expect(cursor.nextPartIndex).toBe(1);
+    expect(cursor.complete).toBe(false);
+  });
+
+  it("chunks long inline markdown through the HTML text path", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 52, chat: { id: "123" } });
     const markdown = `**${"A".repeat(70_000)}**`;
 
@@ -1086,14 +1776,13 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    const chunks = richSendCallParams().map((params) => params.rich_message);
+    const chunks = sendMessageTexts(botApi.sendMessage);
     expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.every((chunk) => chunk?.html === undefined)).toBe(true);
-    expect(chunks.every((chunk) => (chunk?.markdown ?? "").length <= 32_768)).toBe(true);
-    expect(chunks.map((chunk) => chunk?.markdown ?? "").join("")).toBe(markdown);
+    expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
+    expect(chunks.join("")).toContain("A");
   });
 
-  it("chunks rich markdown above Telegram's rich block limit", async () => {
+  it("chunks long markdown paragraphs on the text path", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 53, chat: { id: "123" } });
     const markdown = Array.from({ length: 900 }, (_, index) => `Paragraph ${index + 1}`).join(
       "\n\n",
@@ -1104,17 +1793,34 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    const chunks = richSendCallParams().map((params) => params.rich_message?.markdown ?? "");
-    expect(chunks).toHaveLength(2);
-    expect(
-      chunks.every(
-        (chunk) => chunk.split(/\n[\t ]*\n+/).filter((block) => block.trim()).length <= 500,
-      ),
-    ).toBe(true);
-    expect(chunks.join("\n\n")).toBe(markdown);
+    const chunks = sendMessageTexts(botApi.sendMessage);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
   });
 
-  it("chunks rich markdown headings above Telegram's rich block limit", async () => {
+  it("preserves word boundaries when rendered markdown exceeds the text limit", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 53, chat: { id: "123" } });
+    const visibleText = Array.from({ length: 260 }, () => "alpha beta gamma").join(" ");
+    const markdown = `**${visibleText}**`;
+
+    await sendMessageTelegram("123", markdown, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+    });
+
+    const chunks = sendMessageTexts(botApi.sendMessage);
+    const visibleChunks = chunks.map((chunk) => telegramHtmlToPlainTextFallback(chunk));
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
+    expect(visibleChunks.join("")).toBe(visibleText);
+    for (let index = 0; index < visibleChunks.length - 1; index += 1) {
+      const left = visibleChunks[index] ?? "";
+      const right = visibleChunks[index + 1] ?? "";
+      expect(`${left.at(-1) ?? ""}${right.at(0) ?? ""}`).not.toMatch(/^[A-Za-z]{2}$/);
+    }
+  });
+
+  it("chunks long markdown headings on the text path", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 54, chat: { id: "123" } });
     const markdown = Array.from({ length: 600 }, (_, index) => `# Heading ${index + 1}`).join("\n");
 
@@ -1123,14 +1829,12 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    const chunks = richSendCallParams().map((params) => params.rich_message?.markdown ?? "");
-    expect(chunks).toHaveLength(2);
-    expect(chunks.at(0)?.match(/^# /gm)).toHaveLength(500);
-    expect(chunks.at(1)?.match(/^# /gm)).toHaveLength(100);
-    expect(chunks.join("\n")).toBe(markdown);
+    const chunks = sendMessageTexts(botApi.sendMessage);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.join("")).toContain("Heading 600");
   });
 
-  it("keeps long rich markdown lists intact", async () => {
+  it("keeps long markdown lists on the text path", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 55, chat: { id: "123" } });
     const markdown = Array.from({ length: 600 }, (_, index) => `- Item ${index + 1}`).join("\n");
 
@@ -1139,14 +1843,12 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
-      chat_id: "123",
-      rich_message: { markdown },
-    });
+    expect(botApi.sendMessage.mock.calls.length).toBeGreaterThan(1);
+    expect(sendMessageTexts(botApi.sendMessage).join("")).toContain("Item 600");
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
   });
 
-  it("keeps tall rich markdown tables intact", async () => {
+  it("keeps tall markdown tables on the text path", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 56, chat: { id: "123" } });
     const markdown = [
       "| Name | Value |",
@@ -1159,14 +1861,12 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
-      chat_id: "123",
-      rich_message: { markdown },
-    });
+    expect(botApi.sendMessage.mock.calls.length).toBeGreaterThan(1);
+    expect(sendMessageTexts(botApi.sendMessage).join("")).toContain("Row 600");
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
   });
 
-  it("does not split rich block chunks on blank lines inside fences", async () => {
+  it("does not split fenced blocks unnecessarily on the text path", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 57, chat: { id: "123" } });
     const markdown = `~~~txt\n${Array.from({ length: 900 }, (_, index) => `line ${index + 1}`).join(
       "\n\n",
@@ -1177,14 +1877,12 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
-      chat_id: "123",
-      rich_message: { markdown },
-    });
+    expect(botApi.sendMessage.mock.calls.length).toBeGreaterThan(1);
+    expect(sendMessageTexts(botApi.sendMessage).join("")).toContain("line 900");
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
   });
 
-  it("does not split rich heading chunks inside fences", async () => {
+  it("does not split fenced headings unnecessarily on the text path", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 58, chat: { id: "123" } });
     const markdown = `~~~md\n${Array.from(
       { length: 600 },
@@ -1196,14 +1894,12 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
-      chat_id: "123",
-      rich_message: { markdown },
-    });
+    expect(botApi.sendMessage.mock.calls.length).toBeGreaterThan(1);
+    expect(sendMessageTexts(botApi.sendMessage).join("")).toContain("Literal heading 600");
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
   });
 
-  it("chunks long rich markdown fences into bounded markdown chunks", async () => {
+  it("chunks long fenced markdown into bounded text chunks", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 59, chat: { id: "123" } });
     const markdown = `~~~ts\n${"const value = 1;\n".repeat(5000)}~~~`;
 
@@ -1212,14 +1908,12 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    const chunks = richSendCallParams().map((params) => params.rich_message?.markdown ?? "");
+    const chunks = sendMessageTexts(botApi.sendMessage);
     expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.every((chunk) => chunk.length <= 32_768)).toBe(true);
-    expect(chunks.every((chunk) => chunk.startsWith("~~~ts\n"))).toBe(true);
-    expect(chunks.every((chunk) => chunk.endsWith("\n~~~") || chunk.endsWith("~~~"))).toBe(true);
+    expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
   });
 
-  it("chunks explicit rich HTML above the Bot API rich message limit", async () => {
+  it("chunks explicit HTML above the Telegram text-message limit", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 60, chat: { id: "123" } });
     const html = `<b>${"A".repeat(70_000)}</b>`;
 
@@ -1230,13 +1924,10 @@ describe("sendMessageTelegram", () => {
       buttons: [[{ text: "OK", callback_data: "ok" }]],
     });
 
-    expect(botRawApi.sendRichMessage.mock.calls.length).toBeGreaterThan(1);
-    const calls = richSendCallParams();
-    expect(calls.every((params) => (params.rich_message?.html ?? "").length <= 32_768)).toBe(true);
-    expect(calls.at(0)?.rich_message?.html).toMatch(/^<b>A/);
-    expect(calls.at(-1)?.rich_message?.html).toMatch(/A<\/b>$/);
-    expect(calls.slice(0, -1).every((params) => params.reply_markup === undefined)).toBe(true);
-    expect(calls.at(-1)?.reply_markup).toEqual({
+    expect(botApi.sendMessage.mock.calls.length).toBeGreaterThan(1);
+    const lastParams = botApi.sendMessage.mock.calls.at(-1)?.[2];
+    expect(sendMessageTexts(botApi.sendMessage).every((chunk) => chunk.length <= 4000)).toBe(true);
+    expect(requireRecord(lastParams, "last sendMessage params").reply_markup).toEqual({
       inline_keyboard: [[{ text: "OK", callback_data: "ok" }]],
     });
   });
@@ -1466,15 +2157,67 @@ describe("sendMessageTelegram", () => {
     expect(res.messageId).toBe("71");
   });
 
+  it("does not reuse first-mode reply-to on media caption follow-up text", async () => {
+    const chatId = "123";
+    const longText = "A".repeat(1100);
+
+    const sendPhoto = vi.fn().mockResolvedValue({
+      message_id: 70,
+      chat: { id: chatId },
+    });
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 71,
+      chat: { id: chatId },
+    });
+    const api = { sendPhoto, sendMessage } as unknown as {
+      sendPhoto: typeof sendPhoto;
+      sendMessage: typeof sendMessage;
+    };
+
+    mockLoadedMedia({
+      buffer: Buffer.from("fake-image"),
+      contentType: "image/jpeg",
+      fileName: "photo.jpg",
+    });
+
+    await sendMessageTelegram(chatId, longText, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/photo.jpg",
+      replyToMessageId: 500,
+      replyToIdSource: "implicit",
+      replyToMode: "first",
+    });
+
+    expectMediaSendCall(firstMockCall(sendPhoto, "send photo call"), "send photo call", chatId, {
+      caption: undefined,
+      reply_to_message_id: 500,
+      allow_sending_without_reply: true,
+    });
+    expect(sendMessage).toHaveBeenCalledWith(chatId, longText, {
+      parse_mode: "HTML",
+    });
+  });
+
   it("chunks long default markdown media follow-up text", async () => {
     const chatId = "123";
     const longText = `**${"A".repeat(5000)}**`;
+    const storePath = `/tmp/openclaw-telegram-projection-media-${process.pid}-${Date.now()}.json`;
+    const cfg = { session: { store: storePath } };
+    const cursor = createTelegramPromptContextProjectionCursor({
+      transcriptMessageId: "assistant-media",
+    });
 
     const sendPhoto = vi.fn().mockResolvedValue({
       message_id: 72,
       chat: { id: chatId },
     });
-    const sendMessage = vi.fn().mockResolvedValue({ message_id: 74, chat: { id: chatId } });
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ message_id: 73, chat: { id: chatId } })
+      .mockResolvedValueOnce({ message_id: 74, chat: { id: chatId } })
+      .mockResolvedValueOnce({ message_id: 75, chat: { id: chatId } });
     const api = { sendPhoto, sendMessage } as unknown as {
       sendPhoto: typeof sendPhoto;
       sendMessage: typeof sendMessage;
@@ -1487,19 +2230,49 @@ describe("sendMessageTelegram", () => {
     });
 
     const res = await sendMessageTelegram(chatId, longText, {
-      cfg: TELEGRAM_TEST_CFG,
+      cfg,
       token: "tok",
       api,
       mediaUrl: "https://example.com/photo.jpg",
+      promptContextProjectionPlan: { cursor, finalPart: true },
     });
 
     expectMediaSendCall(firstMockCall(sendPhoto, "send photo call"), "send photo call", chatId, {
       caption: undefined,
     });
-    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledTimes(3);
     expect(sendMessage.mock.calls.every((call) => call[2]?.parse_mode === "HTML")).toBe(true);
     expect(sendMessage.mock.calls.map((call) => String(call[1] ?? "")).join("")).toContain("A");
-    expect(res.messageId).toBe("74");
+    expect(res.messageId).toBe("75");
+    expect(res.receipt?.primaryPlatformMessageId).toBe("73");
+    expect(res.receipt?.platformMessageIds).toEqual(["73", "74", "75"]);
+    expect(res.receipt?.parts.map((part) => part.kind)).toEqual(["text", "text", "text"]);
+    const cache = createTelegramMessageCache({
+      scope: resolveTelegramMessageCacheScope(storePath),
+    });
+    const projections = await Promise.all(
+      ["72", "73", "74", "75"].map(
+        async (messageId) =>
+          (await cache.get({ accountId: "default", chatId, messageId }))
+            ?.promptContextProjectionMarker,
+      ),
+    );
+    expect(projections).toEqual([
+      {
+        kind: "valid",
+        projection: { ...cursor.source, partIndex: 0, finalPart: false },
+      },
+      {
+        kind: "valid",
+        projection: { ...cursor.source, partIndex: 1, finalPart: false },
+      },
+      {
+        kind: "valid",
+        projection: { ...cursor.source, partIndex: 2, finalPart: false },
+      },
+      { kind: "valid", projection: { ...cursor.source, partIndex: 3, finalPart: true } },
+    ]);
+    expect(cursor.nextPartIndex).toBe(4);
   });
 
   it("uses caption when text is within 1024 char limit", async () => {
@@ -1566,6 +2339,53 @@ describe("sendMessageTelegram", () => {
       caption: "hi <b>boss</b>",
       parse_mode: "HTML",
     });
+  });
+
+  it("falls back to a plain media caption when Telegram rejects caption HTML", async () => {
+    const chatId = "123";
+    const caption = "hi **boss**";
+    const sendPhoto = vi
+      .fn()
+      .mockRejectedValueOnce(createHtmlParseError("sendPhoto"))
+      .mockResolvedValueOnce({
+        message_id: 91,
+        chat: { id: chatId },
+      });
+    const api = { sendPhoto } as unknown as {
+      sendPhoto: typeof sendPhoto;
+    };
+
+    mockLoadedMedia({
+      buffer: Buffer.from("fake-image"),
+      contentType: "image/jpeg",
+      fileName: "photo.jpg",
+    });
+
+    const result = await sendMessageTelegram(chatId, caption, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/photo.jpg",
+    });
+
+    expectMediaSendCall(
+      firstMockCall(sendPhoto, "first send photo call"),
+      "send photo call",
+      chatId,
+      {
+        caption: "hi <b>boss</b>",
+        parse_mode: "HTML",
+      },
+    );
+    expectMediaSendCall(
+      mockCall(sendPhoto, 1, "second send photo call"),
+      "send photo retry call",
+      chatId,
+      {
+        caption,
+      },
+    );
+    expect(result).toEqual({ messageId: "91", chatId });
   });
 
   it("sends video notes when requested and regular videos otherwise", async () => {
@@ -1647,6 +2467,100 @@ describe("sendMessageTelegram", () => {
       expect(Object.keys(params).toSorted()).toEqual(["caption", "parse_mode"]);
       expect(res.messageId).toBe("201");
     }
+  });
+
+  it.each([
+    {
+      name: "non-video media",
+      contentType: "image/png",
+      fileName: "photo.png",
+      forceDocument: false,
+    },
+    {
+      name: "forced documents",
+      contentType: "video/mp4",
+      fileName: "video.mp4",
+      forceDocument: true,
+    },
+  ])("rejects video notes backed by $name", async (testCase) => {
+    mockLoadedMedia({
+      buffer: Buffer.from("fake-media"),
+      contentType: testCase.contentType,
+      fileName: testCase.fileName,
+    });
+
+    await expect(
+      sendMessageTelegram("123", "", {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api: {},
+        mediaUrl: `https://example.com/${testCase.fileName}`,
+        asVideoNote: true,
+        forceDocument: testCase.forceDocument,
+      }),
+    ).rejects.toThrow("Telegram video notes require video media.");
+  });
+
+  it("sends native locations and venues with bounded accuracy", async () => {
+    const chatId = "123";
+    const sendLocation = vi.fn().mockResolvedValue({ message_id: 301, chat: { id: chatId } });
+    const sendVenue = vi.fn().mockResolvedValue({ message_id: 302, chat: { id: chatId } });
+    const api = { sendLocation, sendVenue } as unknown as TelegramApiOverride;
+
+    await sendLocationTelegram(
+      chatId,
+      { latitude: 48.858844, longitude: 2.294351, accuracy: 12 },
+      {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api,
+        replyToMessageId: 77,
+        quoteText: "quoted location",
+      },
+    );
+    await sendLocationTelegram(
+      chatId,
+      {
+        latitude: 48.858844,
+        longitude: 2.294351,
+        name: "Eiffel Tower",
+        address: "Champ de Mars",
+      },
+      { cfg: TELEGRAM_TEST_CFG, token: "tok", api },
+    );
+
+    expect(sendLocation).toHaveBeenCalledWith(
+      chatId,
+      48.858844,
+      2.294351,
+      expect.objectContaining({
+        horizontal_accuracy: 12,
+        reply_parameters: expect.objectContaining({
+          message_id: 77,
+          quote: "quoted location",
+        }),
+      }),
+    );
+    expect(sendVenue).toHaveBeenCalledWith(
+      chatId,
+      48.858844,
+      2.294351,
+      "Eiffel Tower",
+      "Champ de Mars",
+      expect.any(Object),
+    );
+    expect(wasSentByBot(chatId, 301)).toBe(true);
+    expect(wasSentByBot(chatId, 302)).toBe(true);
+  });
+
+  it("rejects incomplete Telegram venues", async () => {
+    await expect(
+      sendLocationTelegram(
+        "123",
+        { latitude: 1, longitude: 2, name: "Unnamed address" },
+        { cfg: TELEGRAM_TEST_CFG, token: "tok", api: {} },
+      ),
+    ).rejects.toThrow(/require both/i);
   });
 
   it("passes probed dimensions to regular video sends", async () => {
@@ -1802,7 +2716,16 @@ describe("sendMessageTelegram", () => {
         chatId,
         testCase.expectedVideoNote,
       );
-      expect(sendMessage).toHaveBeenCalledWith(chatId, testCase.text, testCase.expectedMessage);
+      expect(sendMessage).toHaveBeenCalledWith(chatId, testCase.text, {
+        ...testCase.expectedMessage,
+        ...(testCase.expectedMessage?.reply_parameters
+          ? {
+              reply_to_message_id: 999,
+              allow_sending_without_reply: true,
+              reply_parameters: undefined,
+            }
+          : {}),
+      });
     }
   });
 
@@ -1839,11 +2762,48 @@ describe("sendMessageTelegram", () => {
     vi.useRealTimers();
   });
 
-  it("retries wrapped pre-connect HttpError sends", async () => {
+  it("honors long Telegram retry_after hints above the default send retry cap", async () => {
     vi.useFakeTimers();
     const chatId = "123";
-    const root = Object.assign(new Error("connect ECONNREFUSED api.telegram.org"), {
-      code: "ECONNREFUSED",
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce({
+        message: "429 Too Many Requests",
+        response: { parameters: { retry_after: 45 } },
+      })
+      .mockResolvedValueOnce({
+        message_id: 2,
+        chat: { id: chatId },
+      });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+    const setTimeoutSpy = vi.spyOn(global, "setTimeout");
+
+    const promise = sendMessageTelegram(chatId, "hi", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 30_000, jitter: 0 },
+    });
+
+    await vi.advanceTimersByTimeAsync(44_999);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(promise).resolves.toEqual({ messageId: "2", chatId });
+    expect(firstMockCall(setTimeoutSpy, "setTimeout call")[1]).toBe(45_000);
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    setTimeoutSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it("retries wrapped Undici connect timeout sends", async () => {
+    vi.useFakeTimers();
+    const chatId = "123";
+    const root = Object.assign(new Error("Connect Timeout Error"), {
+      name: "ConnectTimeoutError",
+      code: "UND_ERR_CONNECT_TIMEOUT",
     });
     const fetchError = Object.assign(new TypeError("fetch failed"), { cause: root });
     const err = Object.assign(new Error("Network request for 'sendMessage' failed!"), {
@@ -2306,6 +3266,95 @@ describe("sendMessageTelegram", () => {
     }
   });
 
+  it("returns a multipart receipt and avoids native replies for chunked first-mode text", async () => {
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ message_id: 101, chat: { id: "-1001234567890" } })
+      .mockResolvedValueOnce({ message_id: 102, chat: { id: "-1001234567890" } })
+      .mockResolvedValueOnce({ message_id: 103, chat: { id: "-1001234567890" } });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    const result = await sendMessageTelegram("-1001234567890", `BEGIN ${"A".repeat(4100)} END`, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+      messageThreadId: 271,
+      replyToMessageId: 500,
+      replyToIdSource: "implicit",
+      replyToMode: "first",
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(3);
+    expect(sendMessage.mock.calls.every((call) => call[2]?.parse_mode === "HTML")).toBe(true);
+    expect(sendMessage.mock.calls.every((call) => call[2]?.message_thread_id === 271)).toBe(true);
+    expect(result.messageId).toBe("103");
+    expect(result.receipt?.primaryPlatformMessageId).toBe("101");
+    expect(result.receipt?.platformMessageIds).toEqual(["101", "102", "103"]);
+    expect(result.receipt?.threadId).toBe("271");
+    expect(result.receipt?.replyToId).toBeUndefined();
+    expect(
+      result.receipt?.parts.map(({ platformMessageId, kind, index, threadId, replyToId }) => ({
+        platformMessageId,
+        kind,
+        index,
+        threadId,
+        replyToId,
+      })),
+    ).toEqual([
+      {
+        platformMessageId: "101",
+        kind: "text",
+        index: 0,
+        threadId: "271",
+        replyToId: undefined,
+      },
+      {
+        platformMessageId: "102",
+        kind: "text",
+        index: 1,
+        threadId: "271",
+        replyToId: undefined,
+      },
+      {
+        platformMessageId: "103",
+        kind: "text",
+        index: 2,
+        threadId: "271",
+        replyToId: undefined,
+      },
+    ]);
+  });
+
+  it("keeps explicit native replies for chunked first-mode text", async () => {
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ message_id: 101, chat: { id: "-1001234567890" } })
+      .mockResolvedValueOnce({ message_id: 102, chat: { id: "-1001234567890" } })
+      .mockResolvedValueOnce({ message_id: 103, chat: { id: "-1001234567890" } });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await sendMessageTelegram("-1001234567890", `BEGIN ${"A".repeat(4100)} END`, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+      replyToMessageId: 500,
+      replyToIdSource: "explicit",
+      replyToMode: "first",
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(3);
+    for (const call of sendMessage.mock.calls) {
+      expect(call[2]).toMatchObject({
+        reply_to_message_id: 500,
+        allow_sending_without_reply: true,
+      });
+    }
+  });
+
   it("fails topic sends instead of retrying without message_thread_id", async () => {
     const cases = [{ name: "forum", chatId: "-100123", text: "hello forum" }] as const;
     const threadErr = new Error("400: Bad Request: message thread not found");
@@ -2472,12 +3521,12 @@ describe("sendMessageTelegram", () => {
       silent: true,
     });
 
-    const logs = capturedLogText(logFile);
+    const logs = await capturedLogText(logFile);
     expect(logs).toContain("outbound send ok");
     expect(logs).toContain("accountId=ops");
     expect(logs).toContain(`chatId=${chatId}`);
     expect(logs).toContain("messageId=321");
-    expect(logs).toContain("operation=sendRichMessage");
+    expect(logs).toContain("operation=sendMessage");
     expect(logs).toContain("threadId=271");
     expect(logs).toContain("replyToMessageId=123");
     expect(logs).toContain("silent=true");
@@ -2509,7 +3558,7 @@ describe("sendMessageTelegram", () => {
       parse_mode: "HTML",
       message_thread_id: 271,
     });
-    const logs = capturedLogText(logFile);
+    const logs = await capturedLogText(logFile);
     expect(logs).not.toContain("outbound send ok");
     expect(logs).not.toContain(body);
   });
@@ -2543,7 +3592,7 @@ describe("sendMessageTelegram", () => {
       messageThreadId: 45,
     });
 
-    const logs = capturedLogText(logFile);
+    const logs = await capturedLogText(logFile);
     expect(logs).toContain("outbound send ok");
     expect(logs).toContain("accountId=ops");
     expect(logs).toContain(`chatId=${chatId}`);
@@ -2592,7 +3641,7 @@ describe("sendMessageTelegram", () => {
         message_thread_id: 271,
       },
     );
-    const logs = capturedLogText(logFile);
+    const logs = await capturedLogText(logFile);
     expect(logs).not.toContain("outbound send ok");
   });
 
@@ -2681,10 +3730,10 @@ describe("sendMessageTelegram", () => {
       buttons: [[{ text: "OK", callback_data: "ok" }]],
     });
 
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    const firstCall = firstMockCall(sendMessage, "first sendMessage call");
-    const firstParams = requireRecord(firstCall[2], "first sendMessage params");
-    expect(firstParams.reply_markup).toEqual({
+    expect(sendMessage.mock.calls.length).toBeGreaterThan(1);
+    const lastCall = sendMessage.mock.calls.at(-1);
+    const lastParams = requireRecord(lastCall?.[2], "last sendMessage params");
+    expect(lastParams.reply_markup).toEqual({
       inline_keyboard: [[{ text: "OK", callback_data: "ok" }]],
     });
     expect(res.messageId).toBe("91");
@@ -2704,13 +3753,15 @@ describe("sendMessageTelegram", () => {
       buttons: [[{ text: "OK", callback_data: "ok" }]],
     });
 
-    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls.length).toBeGreaterThan(1);
     const firstCall = firstMockCall(sendMessage, "first sendMessage call");
     const firstParams = requireRecord(firstCall[2], "first sendMessage params");
     const firstText = requireString(firstCall[1], "first sendMessage text");
     expect(firstParams.parse_mode).toBe("HTML");
     expect(firstText).toContain("A");
-    expect(firstParams.reply_markup).toEqual({
+    const lastCall = sendMessage.mock.calls.at(-1);
+    const lastParams = requireRecord(lastCall?.[2], "last sendMessage params");
+    expect(lastParams.reply_markup).toEqual({
       inline_keyboard: [[{ text: "OK", callback_data: "ok" }]],
     });
     expect(res.messageId).toBe("91");
@@ -2872,15 +3923,46 @@ describe("sendStickerTelegram", () => {
       expect(sendSticker).toHaveBeenCalledWith(chatId, testCase.expectedFileId, undefined);
       expect(res.messageId).toBe(String(testCase.expectedMessageId));
       expect(res.chatId).toBe(chatId);
+      expect(wasSentByBot(chatId, testCase.expectedMessageId)).toBe(true);
     });
   }
 
-  it("throws error when fileId is blank", async () => {
+  it("records a successful topic sticker for later message mutations", async () => {
+    const storePath = `/tmp/openclaw-telegram-sticker-context-${process.pid}-${Date.now()}.json`;
+    const chatId = "-100123";
+    const sendSticker = vi.fn().mockResolvedValue({
+      message_id: 107,
+      chat: { id: chatId, type: "supergroup" },
+      message_thread_id: 77,
+      sticker: { file_id: "fileId123", file_unique_id: "unique", type: "regular" },
+    });
+    const api = { sendSticker } as unknown as { sendSticker: typeof sendSticker };
+
+    await sendStickerTelegram(`${chatId}:topic:77`, "fileId123", {
+      cfg: { session: { store: storePath } },
+      token: "tok",
+      api,
+    });
+
+    const cached = await createTelegramMessageCache({
+      scope: resolveTelegramMessageCacheScope(storePath),
+    }).get({
+      accountId: "default",
+      chatId,
+      messageId: "107",
+    });
+    expect(hasProviderObservedTelegramThreadBinding(cached, 77)).toBe(true);
+  });
+
+  it("rejects a blank fileId before creating a Telegram client", async () => {
+    botCtorSpy.mockClear();
+
     for (const fileId of ["", "   "]) {
       await expect(
         sendStickerTelegram("123", fileId, { cfg: TELEGRAM_TEST_CFG, token: "tok" }),
       ).rejects.toThrow(/file_id is required/i);
     }
+    expect(botCtorSpy).not.toHaveBeenCalled();
   });
 
   it("fails sticker sends instead of retrying without message_thread_id", async () => {
@@ -3000,10 +4082,8 @@ describe("shared send behaviors", () => {
           });
           expect(sendMessage).toHaveBeenCalledWith(chatId, "reply text", {
             parse_mode: "HTML",
-            reply_parameters: {
-              message_id: 100,
-              allow_sending_without_reply: true,
-            },
+            reply_to_message_id: 100,
+            allow_sending_without_reply: true,
           });
         },
       },
@@ -3062,6 +4142,104 @@ describe("shared send behaviors", () => {
         message_id: 100,
         quote: " quoted text\n",
         allow_sending_without_reply: true,
+      },
+    });
+  });
+
+  it("retries durable text sends with legacy reply id when native quotes are rejected", async () => {
+    const chatId = "123";
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(createQuoteNotFoundError())
+      .mockResolvedValueOnce({
+        message_id: 57,
+        chat: { id: chatId },
+      });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await sendMessageTelegram(chatId, "reply text", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+      replyToMessageId: 100,
+      quoteText: "model paraphrase",
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(sendMessage).toHaveBeenNthCalledWith(1, chatId, "reply text", {
+      parse_mode: "HTML",
+      reply_parameters: {
+        message_id: 100,
+        quote: "model paraphrase",
+        allow_sending_without_reply: true,
+      },
+    });
+    expect(sendMessage).toHaveBeenNthCalledWith(2, chatId, "reply text", {
+      parse_mode: "HTML",
+      reply_to_message_id: 100,
+      allow_sending_without_reply: true,
+    });
+  });
+
+  it("retries media native quotes with a legacy reply before recording projection", async () => {
+    const chatId = "123";
+    const storePath = `/tmp/openclaw-telegram-media-quote-${process.pid}-${Date.now()}.json`;
+    const cursor = createTelegramPromptContextProjectionCursor({
+      transcriptMessageId: "assistant-media-quote",
+    });
+    const sendPhoto = vi
+      .fn()
+      .mockRejectedValueOnce(createQuoteNotFoundError())
+      .mockResolvedValueOnce({
+        message_id: 58,
+        date: 1_779_425_460,
+        chat: { id: chatId, type: "private" },
+        photo: [{ file_id: "photo-file", file_unique_id: "photo-unique", width: 10, height: 10 }],
+      });
+    const api = { sendPhoto } as unknown as { sendPhoto: typeof sendPhoto };
+    mockLoadedMedia({
+      buffer: Buffer.from("fake-image"),
+      contentType: "image/jpeg",
+      fileName: "photo.jpg",
+    });
+
+    await sendMessageTelegram(chatId, "caption", {
+      cfg: { session: { store: storePath } },
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/photo.jpg",
+      replyToMessageId: 100,
+      quoteText: "model paraphrase",
+      promptContextProjectionPlan: { cursor, finalPart: true },
+    });
+
+    expect(sendPhoto).toHaveBeenCalledTimes(2);
+    expectMediaSendCall(sendPhoto.mock.calls[0]!, "native quote photo", chatId, {
+      caption: "caption",
+      parse_mode: "HTML",
+      reply_parameters: {
+        message_id: 100,
+        quote: "model paraphrase",
+        allow_sending_without_reply: true,
+      },
+    });
+    expectMediaSendCall(sendPhoto.mock.calls[1]!, "legacy quote photo", chatId, {
+      caption: "caption",
+      parse_mode: "HTML",
+      reply_to_message_id: 100,
+      allow_sending_without_reply: true,
+    });
+    const cached = await createTelegramMessageCache({
+      scope: resolveTelegramMessageCacheScope(storePath),
+    }).get({ accountId: "default", chatId, messageId: "58" });
+    expect(cached?.promptContextProjectionMarker).toEqual({
+      kind: "valid",
+      projection: {
+        transcriptMessageId: "assistant-media-quote",
+        partIndex: 0,
+        finalPart: true,
       },
     });
   });
@@ -3318,6 +4496,22 @@ describe("editMessageTelegram", () => {
     expect(captionParams.parse_mode).toBe("HTML");
   });
 
+  it("falls back to plain text when rich edits reject an invalid entity", async () => {
+    const text = "Status includes openai:owner@example.com";
+    botRawApi.editMessageText.mockRejectedValueOnce(
+      createRichEntityInvalidError("EMAIL", "editMessageText"),
+    );
+    botApi.editMessageText.mockResolvedValueOnce({ message_id: 1, chat: { id: "123" } });
+
+    await editMessageTelegram("123", 1, text, {
+      token: "tok",
+      cfg: { channels: { telegram: { richMessages: true } } },
+    });
+
+    expect(botRawApi.editMessageText).toHaveBeenCalledTimes(1);
+    expect(botApi.editMessageText).toHaveBeenCalledWith("123", 1, text);
+  });
+
   it("retries editMessageTelegram on Telegram 5xx errors", async () => {
     botApi.editMessageText
       .mockRejectedValueOnce(Object.assign(new Error("502: Bad Gateway"), { error_code: 502 }))
@@ -3334,7 +4528,7 @@ describe("editMessageTelegram", () => {
     expect(botApi.editMessageText).toHaveBeenCalledTimes(2);
   });
 
-  it("edits text with raw rich markdown", async () => {
+  it("edits text with formatted HTML", async () => {
     botApi.editMessageText.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
 
     await editMessageTelegram("123", 1, "**edited**", {
@@ -3342,14 +4536,13 @@ describe("editMessageTelegram", () => {
       cfg: {},
     });
 
-    expect(botRawApi.editMessageText).toHaveBeenCalledWith({
-      chat_id: "123",
-      message_id: 1,
-      rich_message: { markdown: "**edited**" },
+    expect(botApi.editMessageText).toHaveBeenCalledWith("123", 1, "<b>edited</b>", {
+      parse_mode: "HTML",
     });
+    expect(botRawApi.editMessageText).not.toHaveBeenCalled();
   });
 
-  it("edits complex text as raw rich markdown", async () => {
+  it("edits complex text as formatted HTML", async () => {
     botApi.editMessageText.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
     const markdown = ["## Updated", "", "- **bold**", "- _italic_", "", "`code`"].join("\n");
 
@@ -3358,14 +4551,19 @@ describe("editMessageTelegram", () => {
       cfg: {},
     });
 
-    expect(botRawApi.editMessageText).toHaveBeenCalledWith({
-      chat_id: "123",
-      message_id: 1,
-      rich_message: { markdown },
-    });
+    expect(botApi.editMessageText).toHaveBeenCalledTimes(1);
+    const [chatId, messageId, sentText, sentOptions] =
+      botApi.editMessageText.mock.calls.at(-1) ?? [];
+    expect(chatId).toBe("123");
+    expect(messageId).toBe(1);
+    expect(String(sentText)).toContain("Updated");
+    expect(String(sentText)).toContain("<b>bold</b>");
+    expect(String(sentText)).toContain("<i>italic</i>");
+    expect(sentOptions).toEqual({ parse_mode: "HTML" });
+    expect(botRawApi.editMessageText).not.toHaveBeenCalled();
   });
 
-  it("skips rich entity detection for rich text edits when link previews are disabled", async () => {
+  it("disables link previews for text edits", async () => {
     botApi.editMessageText.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
 
     await editMessageTelegram("123", 1, "https://example.com", {
@@ -3374,19 +4572,61 @@ describe("editMessageTelegram", () => {
       linkPreview: false,
     });
 
-    expect(botRawApi.editMessageText).toHaveBeenCalledTimes(1);
-    expect(botRawApi.editMessageText).toHaveBeenCalledWith({
-      chat_id: "123",
-      message_id: 1,
-      rich_message: {
-        markdown: "https://example.com",
-        skip_entity_detection: true,
+    expect(botApi.editMessageText).toHaveBeenCalledWith(
+      "123",
+      1,
+      '<a href="https://example.com">https://example.com</a>',
+      {
+        parse_mode: "HTML",
+        link_preview_options: { is_disabled: true },
       },
-    });
+    );
+    expect(botRawApi.editMessageText).not.toHaveBeenCalled();
   });
 });
 
 describe("sendPollTelegram", () => {
+  it("sends polls with 12 options", async () => {
+    const api = {
+      sendPoll: vi.fn(async () => ({ message_id: 123, chat: { id: 555 }, poll: { id: "p1" } })),
+    };
+    const options = Array.from({ length: 12 }, (_, index) => `Option ${index + 1}`);
+
+    await sendPollTelegram(
+      "123",
+      { question: "Q", options },
+      { cfg: TELEGRAM_TEST_CFG, token: "t", api: api as unknown as Bot["api"] },
+    );
+
+    expect(firstMockCall(api.sendPoll, "send poll call")[2]).toEqual(options);
+  });
+
+  it("records a successful General-topic poll for later message mutations", async () => {
+    const storePath = `/tmp/openclaw-telegram-poll-context-${process.pid}-${Date.now()}.json`;
+    const chatId = "-100123";
+    const sendPoll = vi.fn().mockResolvedValue({
+      message_id: 124,
+      chat: { id: chatId, type: "supergroup" },
+      poll: { id: "p2", question: "Q", options: [] },
+    });
+    const api = { sendPoll } as unknown as Bot["api"];
+
+    await sendPollTelegram(
+      `${chatId}:topic:1`,
+      { question: "Q", options: ["A", "B"] },
+      { cfg: { session: { store: storePath } }, token: "t", api },
+    );
+
+    const cached = await createTelegramMessageCache({
+      scope: resolveTelegramMessageCacheScope(storePath),
+    }).get({
+      accountId: "default",
+      chatId,
+      messageId: "124",
+    });
+    expect(hasProviderObservedTelegramThreadBinding(cached, 1)).toBe(true);
+  });
+
   it("propagates gateway client scopes when resolving legacy poll targets", async () => {
     const api = {
       getChat: vi.fn(async () => ({ id: -100321 })),
@@ -3431,6 +4671,7 @@ describe("sendPollTelegram", () => {
     expect(sendPollCall[1]).toBe("Q");
     expect(sendPollCall[2]).toEqual(["A", "B"]);
     expect(requireRecord(sendPollCall[3], "send poll params").open_period).toBe(60);
+    expect(wasSentByBot("123", 123)).toBe(true);
   });
 
   it("fails poll sends instead of retrying without message_thread_id", async () => {
@@ -3541,4 +4782,17 @@ describe("createForumTopicTelegram", () => {
       expect(result).toEqual(testCase.expectedResult);
     });
   }
+
+  it("rejects an invalid topic name before creating a Telegram client", async () => {
+    botCtorSpy.mockClear();
+
+    await expect(
+      createForumTopicTelegram("-1001234567890", "   ", {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+      }),
+    ).rejects.toThrow("Forum topic name is required");
+    expect(botCtorSpy).not.toHaveBeenCalled();
+  });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

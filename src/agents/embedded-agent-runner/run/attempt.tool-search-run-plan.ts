@@ -24,60 +24,13 @@ export const TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES = [
 type CollectAllowedToolNamesParams = Parameters<typeof collectAllowedToolNames>[0];
 
 /** Derived tool allowlists used for visible prompt tools, replay tools, and empty-allowlist checks. */
-export type ToolSearchRunPlan = {
+type ToolSearchRunPlan = {
   visibleAllowedToolNames: Set<string>;
   replayAllowedToolNames: Set<string>;
   liveAllowedToolNames: Set<string>;
   capabilityToolNames: Set<string>;
-  autoAddedControlNames?: Set<string>;
   emptyAllowlistCallableNames: string[];
 };
-
-/**
- * Builds the callable-name list used to decide whether an allowlist is empty.
- * Auto-added tool-search controls are excluded so they do not make an otherwise
- * empty user/tool allowlist look populated.
- */
-export function buildCallableToolNamesForEmptyAllowlistCheck(params: {
-  effectiveToolNames: string[];
-  autoAddedToolSearchControlNames?: Set<string>;
-  toolSearchCatalogToolCount: number;
-}): string[] {
-  return [
-    ...params.effectiveToolNames.filter(
-      (toolName) => !params.autoAddedToolSearchControlNames?.has(toolName),
-    ),
-    ...Array.from(
-      { length: params.toolSearchCatalogToolCount },
-      (_, index) => `tool-search:${index}`,
-    ),
-  ];
-}
-
-/**
- * Identifies tool-search control names that were added by policy rather than
- * explicitly allowed by the user. Explicit controls stay visible to empty
- * allowlist checks because the user selected them.
- */
-export function buildAutoAddedToolSearchControlNamesForAllowlistCheck(params: {
-  toolSearchControlsEnabled: boolean;
-  explicitAllowlistSources: Array<{ entries: string[] }>;
-  controlNames?: readonly string[];
-}): Set<string> | undefined {
-  if (!params.toolSearchControlsEnabled) {
-    return undefined;
-  }
-  const explicitlyAllowed = new Set(
-    params.explicitAllowlistSources.flatMap((source) =>
-      source.entries.map((entry) => normalizeToolName(entry)),
-    ),
-  );
-  return new Set(
-    (params.controlNames ?? TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES).filter(
-      (controlName) => !explicitlyAllowed.has(normalizeToolName(controlName)),
-    ),
-  );
-}
 
 function collectExplicitlyAllowedClientToolNames(params: {
   clientTools?: CollectAllowedToolNamesParams["clientTools"];
@@ -153,11 +106,17 @@ export function buildToolSearchRunPlan(params: {
       liveAllowedToolNames.add(visibleName);
     }
   }
-  const autoAddedControlNames = buildAutoAddedToolSearchControlNamesForAllowlistCheck({
-    toolSearchControlsEnabled: params.controlsEnabled,
-    explicitAllowlistSources: params.explicitAllowlistSources,
-    controlNames: params.controlNames,
-  });
+  const explicitControlAllowlistNames = new Set(
+    params.explicitAllowlistSources.flatMap((source) =>
+      source.entries.map((entry) => normalizeToolName(entry)),
+    ),
+  );
+  const autoAddedControlNames = new Set(
+    (params.controlsEnabled
+      ? (params.controlNames ?? TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES)
+      : []
+    ).filter((controlName) => !explicitControlAllowlistNames.has(normalizeToolName(controlName))),
+  );
   const explicitlyAllowedClientToolNames = collectExplicitlyAllowedClientToolNames({
     clientTools: params.clientTools,
     explicitAllowlistSources: params.explicitAllowlistSources,
@@ -175,13 +134,11 @@ export function buildToolSearchRunPlan(params: {
     replayAllowedToolNames,
     liveAllowedToolNames,
     capabilityToolNames,
-    autoAddedControlNames,
     emptyAllowlistCallableNames: [
-      ...buildCallableToolNamesForEmptyAllowlistCheck({
-        effectiveToolNames: [...emptyAllowlistVisibleToolNames],
-        autoAddedToolSearchControlNames: autoAddedControlNames,
-        toolSearchCatalogToolCount: params.catalogToolCount,
-      }),
+      ...[...emptyAllowlistVisibleToolNames].filter(
+        (toolName) => !autoAddedControlNames.has(toolName),
+      ),
+      ...Array.from({ length: params.catalogToolCount }, (_, index) => `tool-search:${index}`),
       ...explicitClientCallableNames,
     ],
   };

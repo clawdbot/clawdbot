@@ -1,10 +1,12 @@
 // Vydra provider module implements model/runtime integration.
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
   postJsonRequest,
+  readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
 import type { VideoGenerationProvider } from "openclaw/plugin-sdk/video-generation";
@@ -13,7 +15,6 @@ import {
   downloadVydraAsset,
   extractVydraResultUrls,
   resolveCompletedVydraPayload,
-  resolveVydraGeneratedMediaMaxBytes,
   resolveVydraResponseJobId,
   resolveVydraResponseStatus,
   resolveVydraRequestContext,
@@ -84,13 +85,12 @@ export function buildVydraVideoGenerationProvider(): VideoGenerationProvider {
         throw new Error("Vydra video generation does not support video reference inputs.");
       }
 
-      const { fetchFn, baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        await resolveVydraRequestContext({
-          cfg: req.cfg,
-          agentDir: req.agentDir,
-          authStore: req.authStore,
-          capability: "video",
-        });
+      const { fetchFn, baseUrl, requestPolicy } = await resolveVydraRequestContext({
+        cfg: req.cfg,
+        agentDir: req.agentDir,
+        authStore: req.authStore,
+        capability: "video",
+      });
       const deadline = createProviderOperationDeadline({
         timeoutMs: req.timeoutMs ?? DEFAULT_VYDRA_VIDEO_TIMEOUT_MS,
         label: "Vydra video generation",
@@ -98,28 +98,31 @@ export function buildVydraVideoGenerationProvider(): VideoGenerationProvider {
       const { model, body } = resolveVydraVideoRequestBody(req);
       const { response, release } = await postJsonRequest({
         url: `${baseUrl}/models/${model}`,
-        headers,
+        headers: requestPolicy.headers,
         body,
         timeoutMs: resolveProviderOperationTimeoutMs({
           deadline,
           defaultTimeoutMs: DEFAULT_VYDRA_VIDEO_TIMEOUT_MS,
         }),
         fetchFn,
-        allowPrivateNetwork,
-        dispatcherPolicy,
+        allowPrivateNetwork: requestPolicy.allowPrivateNetwork,
+        dispatcherPolicy: requestPolicy.dispatcherPolicy,
       });
 
       try {
         await assertOkOrThrowHttpError(response, "Vydra video generation failed");
-        const submitted = await response.json();
+        const submitted = await readProviderJsonResponse<unknown>(
+          response,
+          "Vydra video generation",
+        );
         const completedPayload = await resolveCompletedVydraPayload({
           submitted,
           baseUrl,
-          headers,
           deadline,
           fetchFn,
           kind: "video",
           missingJobIdMessage: "Vydra video generation response missing job id",
+          requestPolicy,
         });
         const videoUrl = extractVydraResultUrls(completedPayload, "video")[0];
         if (!videoUrl) {
@@ -133,7 +136,8 @@ export function buildVydraVideoGenerationProvider(): VideoGenerationProvider {
             defaultTimeoutMs: DEFAULT_VYDRA_VIDEO_TIMEOUT_MS,
           }),
           fetchFn,
-          maxBytes: resolveVydraGeneratedMediaMaxBytes({ cfg: req.cfg, kind: "video" }),
+          maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "video"),
+          requestPolicy,
         });
         return {
           videos: [

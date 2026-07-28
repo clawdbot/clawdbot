@@ -1,14 +1,8 @@
-// Media-understanding resolve tests cover timeout clamping, capability filtering,
-// and active-model fallback behavior.
+// Media-understanding resolve tests cover timeout clamping and capability filtering.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
-import {
-  resolveEntriesWithActiveFallback,
-  resolveMediaRuntimeTimeoutMs,
-  resolveModelEntries,
-  resolveTimeoutMs,
-} from "./resolve.js";
+import { resolveMediaRuntimeTimeoutMs, resolveModelEntries, resolveTimeoutMs } from "./resolve.js";
 import type { MediaUnderstandingCapability } from "./types.js";
 
 const providerRegistry = new Map<string, { capabilities: MediaUnderstandingCapability[] }>([
@@ -44,6 +38,10 @@ describe("resolveModelEntries", () => {
       providerRegistry,
     });
     expect(imageEntries).toHaveLength(1);
+    expect(imageEntries[0]).toMatchObject({
+      entry: { provider: "openai", model: "gpt-5.4" },
+      secretOwnerId: "media-model:shared:0",
+    });
 
     const audioEntries = resolveModelEntries({
       cfg,
@@ -53,13 +51,15 @@ describe("resolveModelEntries", () => {
     expect(audioEntries).toHaveLength(0);
   });
 
-  it("keeps per-capability entries even without explicit caps", () => {
+  it("orders capability-tagged shared entries by the per-capability preference", () => {
     const cfg: OpenClawConfig = {
       tools: {
         media: {
-          image: {
-            models: [{ provider: "openai", model: "gpt-5.4" }],
-          },
+          models: [
+            { provider: "openai", model: "gpt-5.4-mini", capabilities: ["image"] },
+            { provider: "openai", model: "gpt-5.4", capabilities: ["image"] },
+          ],
+          image: { preferredModel: "openai/gpt-5.4" },
         },
       },
     };
@@ -70,7 +70,55 @@ describe("resolveModelEntries", () => {
       config: cfg.tools?.media?.image,
       providerRegistry,
     });
-    expect(imageEntries).toHaveLength(1);
+    expect(imageEntries).toHaveLength(2);
+    expect(imageEntries[0]).toMatchObject({
+      entry: { model: "gpt-5.4" },
+      secretOwnerId: "media-model:shared:1",
+    });
+  });
+
+  it("ranks an exact provider-qualified preference above a matching bare model id", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          models: [
+            { provider: "openrouter", model: "openai/gpt-5.4", capabilities: ["image"] },
+            { provider: "openai", model: "gpt-5.4", capabilities: ["image"] },
+          ],
+          image: { preferredModel: "openai/gpt-5.4" },
+        },
+      },
+    };
+
+    const entries = resolveModelEntries({
+      cfg,
+      capability: "image",
+      config: cfg.tools?.media?.image,
+      providerRegistry,
+    });
+    expect(entries[0]?.entry).toMatchObject({ provider: "openai", model: "gpt-5.4" });
+  });
+
+  it("prefers a provider-default entry without requiring a model id", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          models: [
+            { provider: "groq", model: "whisper-large-v3", capabilities: ["audio"] },
+            { provider: "openai", capabilities: ["audio"] },
+          ],
+          audio: { preferredModel: "provider:openai" },
+        },
+      },
+    };
+
+    const entries = resolveModelEntries({
+      cfg,
+      capability: "audio",
+      config: cfg.tools?.media?.audio,
+      providerRegistry,
+    });
+    expect(entries[0]?.entry.provider).toBe("openai");
   });
 
   it("skips shared CLI entries without capabilities", () => {
@@ -86,91 +134,6 @@ describe("resolveModelEntries", () => {
       cfg,
       capability: "image",
       providerRegistry,
-    });
-    expect(entries).toHaveLength(0);
-  });
-});
-
-describe("resolveEntriesWithActiveFallback", () => {
-  type ResolveWithFallbackInput = Parameters<typeof resolveEntriesWithActiveFallback>[0];
-  const defaultActiveModel = { provider: "groq", model: "whisper-large-v3" } as const;
-
-  function resolveWithActiveFallback(params: {
-    cfg: ResolveWithFallbackInput["cfg"];
-    capability: ResolveWithFallbackInput["capability"];
-    config: ResolveWithFallbackInput["config"];
-  }) {
-    return resolveEntriesWithActiveFallback({
-      cfg: params.cfg,
-      capability: params.capability,
-      config: params.config,
-      providerRegistry,
-      activeModel: defaultActiveModel,
-    });
-  }
-
-  function expectResolvedProviders(params: {
-    cfg: OpenClawConfig;
-    capability: ResolveWithFallbackInput["capability"];
-    config: ResolveWithFallbackInput["config"];
-    providers: string[];
-  }) {
-    const entries = resolveWithActiveFallback({
-      cfg: params.cfg,
-      capability: params.capability,
-      config: params.config,
-    });
-    expect(entries).toHaveLength(params.providers.length);
-    expect(entries.map((entry) => entry.provider)).toEqual(params.providers);
-  }
-
-  it("uses active model when enabled and no models are configured", () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        media: {
-          audio: { enabled: true },
-        },
-      },
-    };
-
-    expectResolvedProviders({
-      cfg,
-      capability: "audio",
-      config: cfg.tools?.media?.audio,
-      providers: ["groq"],
-    });
-  });
-
-  it("ignores active model when configured entries exist", () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        media: {
-          audio: { enabled: true, models: [{ provider: "openai", model: "whisper-1" }] },
-        },
-      },
-    };
-
-    expectResolvedProviders({
-      cfg,
-      capability: "audio",
-      config: cfg.tools?.media?.audio,
-      providers: ["openai"],
-    });
-  });
-
-  it("skips active model when provider lacks capability", () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        media: {
-          video: { enabled: true },
-        },
-      },
-    };
-
-    const entries = resolveWithActiveFallback({
-      cfg,
-      capability: "video",
-      config: cfg.tools?.media?.video,
     });
     expect(entries).toHaveLength(0);
   });

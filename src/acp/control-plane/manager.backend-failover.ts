@@ -11,7 +11,7 @@ export type BackendAttempt = {
 };
 
 /** Ordered backend candidates plus display helper for diagnostics. */
-export type BackendCandidatePlan = {
+type BackendCandidatePlan = {
   candidateBackends: string[];
   describeBackendCandidate: (backend: string) => string;
 };

@@ -1,9 +1,9 @@
 // Runtime plugin tests cover plugin availability during isolated cron runs.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import {
-  makeIsolatedAgentTurnParams,
-  setupRunCronIsolatedAgentTurnSuite,
-} from "./run.suite-helpers.js";
+import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
+import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
   loadRunCronIsolatedAgentTurn,
   ensureRuntimePluginsLoadedMock,
@@ -17,7 +17,7 @@ describe("runCronIsolatedAgentTurn runtime plugins loading", () => {
   setupRunCronIsolatedAgentTurnSuite();
 
   it("loads runtime plugins eagerly using the lazily loaded module", async () => {
-    const params = makeIsolatedAgentTurnParams();
+    const params = makeIsolatedAgentParamsFixture();
 
     const result = await runCronIsolatedAgentTurn(params);
 
@@ -33,10 +33,16 @@ describe("runCronIsolatedAgentTurn runtime plugins loading", () => {
       allowGatewaySubagentBinding: true,
     });
     expect(ensureRuntimePluginsLoadedMock.mock.invocationCallOrder[0]).toBeLessThan(
-      resolveConfiguredModelRefMock.mock.invocationCallOrder[0],
+      expectDefined(
+        resolveConfiguredModelRefMock.mock.invocationCallOrder[0],
+        "resolveConfiguredModelRefMock.mock.invocationCallOrder[0] test invariant",
+      ),
     );
     expect(ensureRuntimePluginsLoadedMock.mock.invocationCallOrder[0]).toBeLessThan(
-      resolveCronDeliveryPlanMock.mock.invocationCallOrder[0],
+      expectDefined(
+        resolveCronDeliveryPlanMock.mock.invocationCallOrder[0],
+        "resolveCronDeliveryPlanMock.mock.invocationCallOrder[0] test invariant",
+      ),
     );
   });
 });

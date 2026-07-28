@@ -1,9 +1,23 @@
 // Mattermost tests cover client plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+
+const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
+  };
+});
+
 import {
   createMattermostClient,
+  createMattermostDirectChannelWithRetry,
   createMattermostPost,
   normalizeMattermostBaseUrl,
+  readMattermostError,
   updateMattermostPost,
 } from "./client.js";
 
@@ -49,6 +63,62 @@ function parseRequestJson(init: RequestInit | undefined): Record<string, unknown
   return parsed as Record<string, unknown>;
 }
 
+function requireRequestCall(
+  calls: readonly { url: string; init?: RequestInit }[],
+  index = 0,
+): { url: string; init?: RequestInit } {
+  return expectDefined(calls[index], `Mattermost request call ${index}`);
+}
+
+function streamingMattermostResponse(body: unknown): {
+  response: Response;
+  arrayBuffer: ReturnType<typeof vi.fn>;
+} {
+  const encoded = new TextEncoder().encode(JSON.stringify(body));
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoded);
+      controller.close();
+    },
+  });
+  const arrayBuffer = vi.fn(async () => {
+    throw new Error("guarded Mattermost responses must stay streaming");
+  });
+  return {
+    response: {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      headers: new Headers({ "content-type": "application/json" }),
+      body: stream,
+      arrayBuffer,
+    } as unknown as Response,
+    arrayBuffer,
+  };
+}
+
+function cancelTrackedResponse(
+  text: string,
+  init: ResponseInit,
+): {
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, init),
+    wasCanceled: () => canceled,
+  };
+}
+
 function createTestClient(response?: { status?: number; body?: unknown; contentType?: string }) {
   const { mockFetch, calls } = createMockFetch(response);
   const client = createMattermostClient({
@@ -67,7 +137,7 @@ async function updatePostAndCapture(
   await updateMattermostPost(client, "post1", update);
   return {
     calls,
-    body: parseRequestJson(calls[0].init),
+    body: parseRequestJson(requireRequestCall(calls).init),
   };
 }
 
@@ -95,9 +165,192 @@ describe("normalizeMattermostBaseUrl", () => {
   });
 });
 
+// ── readMattermostError ───────────────────────────────────────────────
+
+describe("readMattermostError", () => {
+  it("bounds null-body JSON errors without response.json/text", async () => {
+    const response = new Response(null, {
+      status: 401,
+      headers: { "content-type": "application/json" },
+    });
+    const jsonSpy = vi.spyOn(response, "json").mockRejectedValue(new Error("unbounded"));
+    const textSpy = vi.spyOn(response, "text").mockRejectedValue(new Error("unbounded"));
+
+    await expect(readMattermostError(response)).resolves.toBe("");
+
+    expect(jsonSpy).not.toHaveBeenCalled();
+    expect(textSpy).not.toHaveBeenCalled();
+  });
+
+  it("parses bounded JSON error messages from response bodies", async () => {
+    const response = new Response(JSON.stringify({ message: "invalid token", id: "app.error" }), {
+      status: 401,
+      headers: { "content-type": "application/json" },
+    });
+    const jsonSpy = vi.spyOn(response, "json").mockRejectedValue(new Error("unbounded"));
+    const textSpy = vi.spyOn(response, "text").mockRejectedValue(new Error("unbounded"));
+
+    await expect(readMattermostError(response)).resolves.toBe("invalid token");
+
+    expect(jsonSpy).not.toHaveBeenCalled();
+    expect(textSpy).not.toHaveBeenCalled();
+  });
+});
+
 // ── createMattermostClient ───────────────────────────────────────────
 
 describe("createMattermostClient", () => {
+  it("keeps guarded Mattermost responses streaming until callers consume them", async () => {
+    const release = vi.fn(async () => {});
+    const { response, arrayBuffer } = streamingMattermostResponse({ id: "u1" });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({ response, release });
+    const client = createMattermostClient({
+      baseUrl: "https://chat.example.com",
+      botToken: "test-token",
+    });
+
+    await expect(client.request("/users/me")).resolves.toEqual({ id: "u1" });
+
+    expect(arrayBuffer).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads guarded null-body Mattermost errors without response.json/text", async () => {
+    const release = vi.fn(async () => {});
+    const response = new Response(null, {
+      status: 503,
+      statusText: "Service Unavailable",
+      headers: { "content-type": "application/json" },
+    });
+    const jsonSpy = vi.spyOn(response, "json").mockRejectedValue(new Error("unbounded"));
+    const textSpy = vi.spyOn(response, "text").mockRejectedValue(new Error("unbounded"));
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({ response, release });
+    const client = createMattermostClient({
+      baseUrl: "https://chat.example.com",
+      botToken: "test-token",
+    });
+
+    await expect(client.request("/users/me")).rejects.toThrow(
+      "Mattermost API 503 Service Unavailable: unknown error",
+    );
+    expect(jsonSpy).not.toHaveBeenCalled();
+    expect(textSpy).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds and cancels guarded Mattermost error bodies", async () => {
+    const release = vi.fn(async () => {});
+    const tracked = cancelTrackedResponse(`${"upstream unavailable ".repeat(512)}tail`, {
+      status: 503,
+      statusText: "Service Unavailable",
+      headers: { "content-type": "text/plain" },
+    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({ response: tracked.response, release });
+    const client = createMattermostClient({
+      baseUrl: "https://chat.example.com",
+      botToken: "test-token",
+    });
+
+    let caught: Error | undefined;
+    try {
+      await client.request("/users/me");
+    } catch (error) {
+      caught = error as Error;
+    }
+
+    expect(caught?.message).toContain("Mattermost API 503 Service Unavailable");
+    expect(caught?.message).toContain("upstream unavailable");
+    expect(caught?.message).not.toContain("tail");
+    expect(caught?.message.length).toBeLessThan(8_300);
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds and cancels oversized guarded Mattermost success JSON bodies", async () => {
+    const release = vi.fn(async () => {});
+    let canceled = false;
+    let pulled = 0;
+    const oversizeChunk = new Uint8Array(2 * 1024 * 1024).fill(0x7b); // 2 MiB of '{'
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1;
+        // Flood far past the 16 MiB JSON cap; an unbounded reader would buffer
+        // the whole stream before parsing.
+        controller.enqueue(oversizeChunk);
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(stream, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      release,
+    });
+    const client = createMattermostClient({
+      baseUrl: "https://chat.example.com",
+      botToken: "test-token",
+    });
+
+    let caught: Error | undefined;
+    try {
+      await client.request("/users/me");
+    } catch (error) {
+      caught = error as Error;
+    }
+
+    expect(caught?.message).toContain("JSON response exceeds 16777216 bytes");
+    // The reader is cancelled at the cap instead of draining the flood: ~8
+    // chunks of 2 MiB reach the 16 MiB ceiling, never the unbounded tail.
+    expect(canceled).toBe(true);
+    expect(pulled).toBeLessThanOrEqual(12);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects oversized guarded Mattermost success text bodies instead of truncating", async () => {
+    const release = vi.fn(async () => {});
+    const tracked = cancelTrackedResponse(`${"plain success ".repeat(7000)}tail`, {
+      status: 200,
+      headers: { "content-type": "text/plain" },
+    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({ response: tracked.response, release });
+    const client = createMattermostClient({
+      baseUrl: "https://chat.example.com",
+      botToken: "test-token",
+    });
+
+    await expect(client.request("/users/me")).rejects.toThrow(
+      "Mattermost API /users/me: text response exceeds 65536 bytes",
+    );
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases guarded Mattermost responses when upstream body reads fail", async () => {
+    const release = vi.fn(async () => {});
+    const stream = new ReadableStream<Uint8Array>({
+      pull() {
+        throw new Error("upstream body failed");
+      },
+    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(stream, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      release,
+    });
+    const client = createMattermostClient({
+      baseUrl: "https://chat.example.com",
+      botToken: "test-token",
+    });
+
+    await expect(client.request("/users/me")).rejects.toThrow("upstream body failed");
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("creates a client with normalized baseUrl", () => {
     const { mockFetch } = createMockFetch();
     const client = createMattermostClient({
@@ -115,6 +368,45 @@ describe("createMattermostClient", () => {
     );
   });
 
+  it("rejects relative API path segments before fetch", async () => {
+    const { client, calls } = createTestClient();
+
+    await expect(client.request("/posts/../users/me")).rejects.toThrow(
+      "Mattermost API path must not contain unsafe path segments",
+    );
+
+    expect(calls).toEqual([]);
+  });
+
+  it("rejects encoded relative API path segments before fetch", async () => {
+    const { client, calls } = createTestClient();
+
+    await expect(client.request("/posts/%2e%2e/users/me")).rejects.toThrow(
+      "Mattermost API path must not contain unsafe path segments",
+    );
+
+    expect(calls).toEqual([]);
+  });
+
+  it("rejects URL-normalized relative API path bypasses before fetch", async () => {
+    const { client, calls } = createTestClient();
+
+    for (const path of [
+      "/posts/..?x=1",
+      "/posts/%2e%2e?x=1",
+      "/posts\\..\\users/me",
+      "/posts/.\n./users/me",
+      "/posts/.%0a./users/me",
+      "/posts/%2e%2e%2fusers%80%2f..%2fme",
+    ]) {
+      await expect(client.request(path)).rejects.toThrow(
+        "Mattermost API path must not contain unsafe path segments",
+      );
+    }
+
+    expect(calls).toEqual([]);
+  });
+
   it("sends Authorization header with Bearer token", async () => {
     const { mockFetch, calls } = createMockFetch({ body: { id: "u1" } });
     const client = createMattermostClient({
@@ -123,7 +415,7 @@ describe("createMattermostClient", () => {
       fetchImpl: mockFetch,
     });
     await client.request("/users/me");
-    const headers = new Headers(calls[0].init?.headers);
+    const headers = new Headers(requireRequestCall(calls).init?.headers);
     expect(headers.get("Authorization")).toBe("Bearer my-secret-token");
   });
 
@@ -135,7 +427,7 @@ describe("createMattermostClient", () => {
       fetchImpl: mockFetch,
     });
     await client.request("/posts", { method: "POST", body: JSON.stringify({ message: "hi" }) });
-    const headers = new Headers(calls[0].init?.headers);
+    const headers = new Headers(requireRequestCall(calls).init?.headers);
     expect(headers.get("Content-Type")).toBe("application/json");
   });
 
@@ -182,7 +474,7 @@ describe("createMattermostPost", () => {
       message: "Hello world",
     });
 
-    const body = parseRequestJson(calls[0].init);
+    const body = parseRequestJson(requireRequestCall(calls).init);
     expect(body.channel_id).toBe("ch123");
     expect(body.message).toBe("Hello world");
   });
@@ -201,7 +493,7 @@ describe("createMattermostPost", () => {
       rootId: "root456",
     });
 
-    const body = parseRequestJson(calls[0].init);
+    const body = parseRequestJson(requireRequestCall(calls).init);
     expect(body.root_id).toBe("root456");
   });
 
@@ -219,7 +511,7 @@ describe("createMattermostPost", () => {
       fileIds: ["file1", "file2"],
     });
 
-    const body = parseRequestJson(calls[0].init);
+    const body = parseRequestJson(requireRequestCall(calls).init);
     expect(body.file_ids).toEqual(["file1", "file2"]);
   });
 
@@ -246,7 +538,7 @@ describe("createMattermostPost", () => {
       props,
     });
 
-    const body = parseRequestJson(calls[0].init);
+    const body = parseRequestJson(requireRequestCall(calls).init);
     expect(body).toEqual({
       channel_id: "ch123",
       message: "Pick an option",
@@ -267,7 +559,7 @@ describe("createMattermostPost", () => {
       message: "No props",
     });
 
-    const body = parseRequestJson(calls[0].init);
+    const body = parseRequestJson(requireRequestCall(calls).init);
     expect(body.props).toBeUndefined();
   });
 });
@@ -278,10 +570,7 @@ describe("updateMattermostPost", () => {
   it("sends PUT to /posts/{id}", async () => {
     const { calls } = await updatePostAndCapture({ message: "Updated" });
 
-    const firstCall = calls[0];
-    if (!firstCall) {
-      throw new Error("expected Mattermost update post request");
-    }
+    const firstCall = requireRequestCall(calls);
     expect(firstCall.url).toContain("/posts/post1");
     if (!firstCall.init) {
       throw new Error("expected Mattermost update post request init");
@@ -318,5 +607,42 @@ describe("updateMattermostPost", () => {
     expect(body.id).toBe("post1");
     expect(body.message).toBeUndefined();
     expect(body.props).toEqual({ attachments: [] });
+  });
+});
+
+describe("createMattermostDirectChannelWithRetry delay cap", () => {
+  it("keeps maxDelayMs authoritative when initialDelayMs exceeds it", async () => {
+    vi.useFakeTimers();
+    try {
+      const mockFetch = vi
+        .fn<typeof fetch>()
+        .mockRejectedValueOnce(new Error("Mattermost API 503 Service Unavailable"))
+        .mockRejectedValueOnce(new Error("Mattermost API 503 Service Unavailable"))
+        .mockResolvedValueOnce(Response.json({ id: "dm-channel-cap" }, { status: 201 }));
+      const client = createMattermostClient({
+        baseUrl: "https://mattermost.example.com",
+        botToken: "test-token",
+        fetchImpl: mockFetch,
+      });
+      const delays: number[] = [];
+      // The config schema allows initialDelayMs above the defaulted 10s
+      // maxDelayMs cap; the cap must still bound every retry delay instead of
+      // the base delay overriding it (regression guard for the core-retry
+      // migration, which raises maxDelayMs to the minDelayMs floor).
+      const promise = createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
+        maxRetries: 3,
+        initialDelayMs: 60_000,
+        onRetry: (_attempt, delayMs) => {
+          delays.push(delayMs);
+        },
+      });
+      await vi.runAllTimersAsync();
+      const result = await promise;
+      expect(result.id).toBe("dm-channel-cap");
+      expect(delays).toEqual([10_000, 10_000]);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 });

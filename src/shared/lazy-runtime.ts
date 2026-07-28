@@ -1,19 +1,30 @@
+import { createLazyPromiseLoader } from "./lazy-promise.js";
+
+export { createLazyPromise, createLazyPromiseLoader } from "./lazy-promise.js";
+
+type LazyRuntimeLoader<T> = (() => Promise<T>) & {
+  peek: () => Promise<T> | undefined;
+  clear: () => void;
+};
+
 // Lazy runtime helpers expose dynamic imports through cached runtime surfaces.
 export function createLazyRuntimeSurface<TModule, TSurface>(
   importer: () => Promise<TModule>,
   select: (module: TModule) => TSurface,
-): () => Promise<TSurface> {
-  let cached: Promise<TSurface> | null = null;
-  return () => {
-    cached ??= importer().then(select);
-    return cached;
-  };
+): LazyRuntimeLoader<TSurface> {
+  const loader = createLazyPromiseLoader(() => importer().then(select), {
+    cacheRejections: true,
+  });
+  const load = loader.load as LazyRuntimeLoader<TSurface>;
+  load.peek = loader.peek;
+  load.clear = loader.clear;
+  return load;
 }
 
 /** Cache the raw dynamically imported runtime module behind a stable loader. */
 export function createLazyRuntimeModule<TModule>(
   importer: () => Promise<TModule>,
-): () => Promise<TModule> {
+): LazyRuntimeLoader<TModule> {
   return createLazyRuntimeSurface(importer, (module) => module);
 }
 

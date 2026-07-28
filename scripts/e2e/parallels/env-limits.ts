@@ -15,6 +15,14 @@ export function parsePositiveInt(value: string, label: string): number {
   return parsed;
 }
 
+export function parseTcpPort(value: string, label: string): number {
+  const parsed = parsePositiveInt(value, label);
+  if (parsed > 65_535) {
+    die(`invalid ${label}: ${value}`);
+  }
+  return parsed;
+}
+
 export function readPositiveIntEnv(name: string, fallback: number): number {
   const raw = process.env[name];
   if (raw == null || raw.trim() === "") {

@@ -9,10 +9,12 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { JsonValue, v2 } from "./protocol.js";
 
 /** Default app inventory cache freshness window. */
-export const CODEX_APP_INVENTORY_CACHE_TTL_MS = 60 * 60 * 1_000;
+const CODEX_APP_INVENTORY_CACHE_TTL_MS = 60 * 60 * 1_000;
+const CODEX_TARGETED_APP_INVENTORY_LIMIT = 1_000;
 const MAX_SERIALIZED_ERROR_MESSAGE_LENGTH = 500;
 
 /** App-server request function used to list installed/available apps. */
@@ -25,6 +27,7 @@ export type CodexAppInventoryRequest = (
 export type CodexAppInventoryCacheKeyInput = {
   codexHome?: string;
   endpoint?: string;
+  runtimeIdentity?: Record<string, string | undefined>;
   authProfileId?: string;
   accountId?: string;
   envApiKeyFingerprint?: string;
@@ -32,7 +35,7 @@ export type CodexAppInventoryCacheKeyInput = {
 };
 
 /** Last refresh diagnostic stored with a cache key or snapshot. */
-export type CodexAppInventoryCacheDiagnostic = {
+type CodexAppInventoryCacheDiagnostic = {
   message: string;
   atMs: number;
 };
@@ -48,7 +51,7 @@ export type CodexAppInventorySnapshot = {
 };
 
 /** Freshness state for a cache read. */
-export type CodexAppInventoryReadState = "fresh" | "stale" | "missing";
+type CodexAppInventoryReadState = "fresh" | "stale" | "missing";
 
 /** Cache read result plus refresh scheduling state. */
 export type CodexAppInventoryCacheRead = {
@@ -70,6 +73,7 @@ type RefreshParams = {
   nowMs?: number;
   forceRefetch?: boolean;
   suppressRefresh?: boolean;
+  targetAppIds?: readonly string[];
 };
 
 /** In-memory app inventory cache with coalesced refreshes per key. */
@@ -189,7 +193,11 @@ export class CodexAppInventoryCache {
   ): Promise<CodexAppInventorySnapshot> {
     const nowMs = resolveDateTimestampMs(params.nowMs);
     try {
-      const apps = await listAllApps(params.request, params.forceRefetch ?? false);
+      const apps = await listAllApps(
+        params.request,
+        params.forceRefetch ?? false,
+        params.targetAppIds,
+      );
       this.revision += 1;
       const expiresAtMs = resolveExpiresAtMsFromDurationMs(this.ttlMs, { nowMs }) ?? 0;
       const snapshot: CodexAppInventorySnapshot = {
@@ -246,11 +254,18 @@ export function serializeCodexAppInventoryError(error: unknown): Record<string, 
 /** Shared app inventory cache used by Codex app-server runtime paths. */
 export const defaultCodexAppInventoryCache = new CodexAppInventoryCache();
 
-/** Builds a stable cache key from runtime identity fields. */
-export function buildCodexAppInventoryCacheKey(input: CodexAppInventoryCacheKeyInput): string {
+/** Builds a stable cache key from build versions and runtime identity fields. */
+export function buildCodexAppInventoryCacheKey(
+  input: CodexAppInventoryCacheKeyInput,
+  openClawVersion: string,
+  codexPluginVersion: string,
+): string {
   return JSON.stringify({
+    openClawVersion,
+    codexPluginVersion,
     codexHome: input.codexHome ?? null,
     endpoint: input.endpoint ?? null,
+    runtimeIdentity: normalizeRuntimeIdentityForCacheKey(input.runtimeIdentity),
     authProfileId: input.authProfileId ?? null,
     accountId: input.accountId ?? null,
     envApiKeyFingerprint: input.envApiKeyFingerprint ?? null,
@@ -258,20 +273,54 @@ export function buildCodexAppInventoryCacheKey(input: CodexAppInventoryCacheKeyI
   });
 }
 
+function normalizeRuntimeIdentityForCacheKey(
+  value: Record<string, string | undefined> | undefined,
+): Record<string, string> | null {
+  if (!value) {
+    return null;
+  }
+  const entries = Object.entries(value)
+    .flatMap(([key, rawValue]) => {
+      const normalized = rawValue?.trim();
+      return normalized ? ([[key, normalized]] as const) : [];
+    })
+    .toSorted(([left], [right]) => left.localeCompare(right));
+  return entries.length > 0 ? Object.fromEntries(entries) : null;
+}
+
 async function listAllApps(
   request: CodexAppInventoryRequest,
   forceRefetch: boolean,
+  targetAppIds: readonly string[] = [],
 ): Promise<v2.AppInfo[]> {
   const apps: v2.AppInfo[] = [];
+  const targetIds = new Set(targetAppIds.filter(Boolean));
+  const remainingTargetIds = new Set(targetIds);
+  const seenCursors = new Set<string>();
   let cursor: string | null | undefined;
   do {
     const response = await request("app/list", {
       cursor,
-      limit: 100,
+      // Thread startup only needs to recover the configured plugin-owned apps.
+      // Large pages minimize startup latency while pagination still proves an
+      // absent target instead of publishing a known-incomplete lookup.
+      limit: targetIds.size > 0 ? CODEX_TARGETED_APP_INVENTORY_LIMIT : 100,
       forceRefetch,
     });
     apps.push(...response.data);
+    for (const app of response.data) {
+      remainingTargetIds.delete(app.id);
+    }
+    if (targetIds.size > 0 && remainingTargetIds.size === 0) {
+      break;
+    }
     cursor = response.nextCursor;
+    if (cursor && seenCursors.has(cursor)) {
+      throw new Error(`app/list returned repeated cursor ${cursor}`);
+    }
+    if (cursor) {
+      seenCursors.add(cursor);
+    }
   } while (cursor);
   return apps;
 }
@@ -287,6 +336,12 @@ function fingerprintInventoryCacheKey(key: string): string {
     hash = (hash * 31 + key.charCodeAt(index)) >>> 0;
   }
   return hash.toString(16).padStart(8, "0");
+}
+
+function truncateSerializedErrorText(value: string): string {
+  return value.length > MAX_SERIALIZED_ERROR_MESSAGE_LENGTH
+    ? `${truncateUtf16Safe(value, MAX_SERIALIZED_ERROR_MESSAGE_LENGTH)}...`
+    : value;
 }
 
 function redactErrorData(value: unknown, depth = 0): JsonValue | undefined {
@@ -311,11 +366,8 @@ function redactErrorData(value: unknown, depth = 0): JsonValue | undefined {
     }
     return redacted;
   }
-  if (typeof value === "string" && value.length > 500) {
-    return `${value.slice(0, 500)}...`;
-  }
   if (typeof value === "string") {
-    return value;
+    return truncateSerializedErrorText(value);
   }
   if (typeof value === "bigint") {
     return value.toString();
@@ -339,9 +391,7 @@ function sanitizeErrorMessage(message: string): string {
     /([?&][^=\s"'<>]*(?:api[_-]?key|authorization|cookie|credential|password|secret|token|tk)[^=\s"'<>]*=)[^&\s"'<>]+/gi,
     "$1<redacted>",
   );
-  return redacted.length > MAX_SERIALIZED_ERROR_MESSAGE_LENGTH
-    ? `${redacted.slice(0, MAX_SERIALIZED_ERROR_MESSAGE_LENGTH)}...`
-    : redacted;
+  return truncateSerializedErrorText(redacted);
 }
 
 function isSensitiveErrorDataKey(key: string): boolean {

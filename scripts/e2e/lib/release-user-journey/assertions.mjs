@@ -7,14 +7,17 @@ import {
   assertOpenAiRequestLogUsed,
 } from "../agent-turn-output.mjs";
 import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "../bounded-response-text.mjs";
-import { applyMockOpenAiModelConfig } from "../fixtures/mock-openai-config.mjs";
+import {
+  applyMockOpenAiModelConfig,
+  parseMockOpenAiPort,
+} from "../fixtures/mock-openai-config.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
+import {
+  ERROR_DETAIL_TAIL_BYTES,
+  fileContainsText,
+  readJson,
+} from "../release-assertion-files.mjs";
 import { readTextFileTail } from "../text-file-utils.mjs";
-
-const SCAN_CHUNK_BYTES = 64 * 1024;
-const SCAN_CARRY_CHARS = 256;
-const ERROR_DETAIL_TAIL_BYTES = 16 * 1024;
-const JSON_ARTIFACT_MAX_BYTES = 2 * 1024 * 1024;
 
 function clickClackHttpTimeoutMs() {
   return readPositiveInt(
@@ -32,32 +35,6 @@ function clickClackHttpBodyMaxBytes() {
   );
 }
 
-function readJson(file, maxBytes = JSON_ARTIFACT_MAX_BYTES) {
-  const stat = fs.statSync(file);
-  if (!stat.isFile()) {
-    throw new Error(`${file} is not a file`);
-  }
-  if (stat.size > maxBytes) {
-    throw new Error(
-      `JSON artifact exceeded ${maxBytes} bytes: ${file} (${stat.size} bytes). Tail: ${readTextFileTail(
-        file,
-        ERROR_DETAIL_TAIL_BYTES,
-      )}`,
-    );
-  }
-  const text = fs.readFileSync(file, "utf8");
-  const bytes = Buffer.byteLength(text, "utf8");
-  if (bytes > maxBytes) {
-    throw new Error(
-      `JSON artifact exceeded ${maxBytes} bytes: ${file} (${bytes} bytes). Tail: ${readTextFileTail(
-        file,
-        ERROR_DETAIL_TAIL_BYTES,
-      )}`,
-    );
-  }
-  return JSON.parse(text);
-}
-
 function readPositiveInt(raw, fallback, label) {
   const text = String(raw ?? "").trim();
   if (!text) {
@@ -73,64 +50,44 @@ function readPositiveInt(raw, fallback, label) {
   return parsed;
 }
 
-function fileContainsText(file, needle) {
-  let stat;
-  try {
-    stat = fs.statSync(file);
-  } catch {
-    return false;
-  }
-  if (!stat.isFile() || stat.size <= 0) {
-    return false;
-  }
-
-  const fd = fs.openSync(file, "r");
-  try {
-    const buffer = Buffer.alloc(Math.min(SCAN_CHUNK_BYTES, stat.size));
-    let carry = "";
-    let offset = 0;
-    while (offset < stat.size) {
-      const bytesToRead = Math.min(buffer.length, stat.size - offset);
-      const bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, offset);
-      if (bytesRead <= 0) {
-        break;
-      }
-      offset += bytesRead;
-      const text = carry + buffer.subarray(0, bytesRead).toString("utf8");
-      if (text.includes(needle)) {
-        return true;
-      }
-      carry = text.slice(-Math.max(SCAN_CARRY_CHARS, needle.length - 1));
-    }
-    return false;
-  } finally {
-    fs.closeSync(fd);
-  }
-}
-
 async function withClickClackFixtureResponse(url, init, consume, options = {}) {
   const timeoutMs = options.timeoutMs ?? clickClackHttpTimeoutMs();
   const controller = new AbortController();
-  const timer = setTimeout(() => {
-    controller.abort();
-  }, timeoutMs);
+  const timeoutError = new Error(`${url} timed out after ${timeoutMs}ms`);
+  let timer;
+  let response;
+  const timeoutPromise = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, timeoutMs);
+  });
   try {
-    const response = await fetch(url, {
-      ...init,
-      signal: controller.signal,
-    });
-    return await consume(response);
+    response = await Promise.race([
+      fetch(url, {
+        ...init,
+        signal: controller.signal,
+      }),
+      timeoutPromise,
+    ]);
+    return await consume(response, { timeoutPromise });
   } finally {
     clearTimeout(timer);
+    await response?.body?.cancel?.().catch(() => undefined);
   }
 }
 
-async function readBoundedResponseText(response, label, byteLimit = clickClackHttpBodyMaxBytes()) {
-  return await readBoundedResponseTextWithLimit(response, label, byteLimit);
+async function readBoundedResponseText(
+  response,
+  label,
+  byteLimit = clickClackHttpBodyMaxBytes(),
+  options = {},
+) {
+  return await readBoundedResponseTextWithLimit(response, label, byteLimit, options.timeoutPromise);
 }
 
-async function readBoundedResponseJson(response, label) {
-  return JSON.parse(await readBoundedResponseText(response, label));
+async function readBoundedResponseJson(response, label, options = {}) {
+  return JSON.parse(await readBoundedResponseText(response, label, undefined, options));
 }
 
 function resolveHomePath(value) {
@@ -192,7 +149,7 @@ function assertOnboard() {
 }
 
 function configureMockModel() {
-  const mockPort = Number(process.argv[3]);
+  const mockPort = parseMockOpenAiPort(process.argv[3]);
   const cfg = readJson(configPath());
   applyMockOpenAiModelConfig(cfg, { mockPort });
   writeConfig(cfg);
@@ -292,7 +249,7 @@ function configureClickClack() {
           ...cfg.plugins?.entries?.clickclack?.llm,
           allowAgentIdOverride: true,
           allowModelOverride: true,
-          allowedModels: ["openai/gpt-5.5"],
+          allowedModels: ["openai/gpt-5.6-luna"],
         },
       },
     },
@@ -307,7 +264,7 @@ function configureClickClack() {
       workspace: "release",
       defaultTo: "channel:general",
       replyMode: "model",
-      model: "openai/gpt-5.5",
+      model: "openai/gpt-5.6-luna",
       reconnectMs: 250,
     },
   };
@@ -336,8 +293,10 @@ async function postClickClackInbound() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ body }),
     },
-    async (response) => {
-      const text = response.ok ? "" : await readBoundedResponseText(response, "ClickClack inbound");
+    async (response, options) => {
+      const text = response.ok
+        ? ""
+        : await readBoundedResponseText(response, "ClickClack inbound", undefined, options);
       assert(response.ok, `fixture inbound failed: ${response.status} ${text}`);
     },
   );
@@ -345,16 +304,24 @@ async function postClickClackInbound() {
 
 async function waitClickClackSocket() {
   const baseUrl = process.argv[3];
-  const timeoutSeconds = Number(process.argv[4] ?? 30);
-  const deadline = Date.now() + timeoutSeconds * 1000;
+  const timeoutSeconds = readPositiveInt(
+    process.argv[4],
+    30,
+    "ClickClack websocket timeout seconds",
+  );
+  await waitForClickClackSocket({ baseUrl, timeoutMs: timeoutSeconds * 1000 });
+}
+
+export async function waitForClickClackSocket({ baseUrl, timeoutMs, pollIntervalMs = 250 }) {
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const remainingMs = Math.max(1, deadline - Date.now());
     const state = await withClickClackFixtureResponse(
       `${baseUrl}/fixture/state`,
       {},
-      async (response) =>
+      async (response, options) =>
         response.ok
-          ? await readBoundedResponseJson(response, "ClickClack fixture state")
+          ? await readBoundedResponseJson(response, "ClickClack fixture state", options)
           : undefined,
       {
         timeoutMs: Math.min(clickClackHttpTimeoutMs(), remainingMs),
@@ -366,7 +333,7 @@ async function waitClickClackSocket() {
       }
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 250);
+      setTimeout(resolve, Math.min(pollIntervalMs, Math.max(0, deadline - Date.now())));
     });
   }
   throw new Error(`Timed out waiting for ClickClack websocket connection at ${baseUrl}`);
@@ -384,7 +351,7 @@ function assertClickClackState() {
 async function waitClickClackReply() {
   const statePath = process.argv[3];
   const marker = process.argv[4];
-  const timeoutSeconds = Number(process.argv[5] ?? 30);
+  const timeoutSeconds = readPositiveInt(process.argv[5], 30, "ClickClack reply timeout seconds");
   const deadline = Date.now() + timeoutSeconds * 1000;
   while (Date.now() < deadline) {
     if (fs.existsSync(statePath)) {

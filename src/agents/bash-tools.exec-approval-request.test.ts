@@ -4,10 +4,7 @@
  * and lazy command highlighting for host/node approval payloads.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS,
-  DEFAULT_APPROVAL_TIMEOUT_MS,
-} from "./bash-tools.exec-runtime.js";
+import { DEFAULT_APPROVAL_TIMEOUT_MS } from "./bash-tools.exec-runtime.js";
 
 const commandExplainerMock = vi.hoisted(() => ({
   importCount: 0,
@@ -41,9 +38,9 @@ vi.mock("./tools/gateway.js", () => ({
 }));
 
 let callGatewayTool: typeof import("./tools/gateway.js").callGatewayTool;
-let registerExecApprovalRequest: typeof import("./bash-tools.exec-approval-request.js").registerExecApprovalRequest;
-let requestExecApprovalDecision: typeof import("./bash-tools.exec-approval-request.js").requestExecApprovalDecision;
-let registerExecApprovalRequestForHost: typeof import("./bash-tools.exec-approval-request.js").registerExecApprovalRequestForHost;
+let registerExecApprovalRequestForHostOrThrow: typeof import("./bash-tools.exec-approval-request.js").registerExecApprovalRequestForHostOrThrow;
+let resolveRegisteredExecApprovalDecision: typeof import("./bash-tools.exec-approval-request.js").resolveRegisteredExecApprovalDecision;
+let isExecApprovalRunAbortedError: typeof import("./bash-tools.exec-approval-request.js").isExecApprovalRunAbortedError;
 
 const initialProcessPlatform = Object.getOwnPropertyDescriptor(process, "platform");
 
@@ -62,7 +59,11 @@ function restoreProcessPlatformForTest(): void {
 }
 
 type ApprovalRequestPayload = {
+  approvalReviewerDeviceIds?: string[];
   commandSpans?: Array<{ startIndex: number; endIndex: number }>;
+  sessionId?: string;
+  runId?: string;
+  toolCallId?: string;
 };
 
 function requireApprovalRequestPayload(callIndex: number): ApprovalRequestPayload {
@@ -75,13 +76,13 @@ function requireApprovalRequestPayload(callIndex: number): ApprovalRequestPayloa
   return payload as ApprovalRequestPayload;
 }
 
-describe("requestExecApprovalDecision", () => {
+describe("exec approval requests", () => {
   beforeAll(async () => {
     ({ callGatewayTool } = await import("./tools/gateway.js"));
     ({
-      registerExecApprovalRequest,
-      requestExecApprovalDecision,
-      registerExecApprovalRequestForHost,
+      registerExecApprovalRequestForHostOrThrow,
+      resolveRegisteredExecApprovalDecision,
+      isExecApprovalRunAbortedError,
     } = await import("./bash-tools.exec-approval-request.js"));
   });
 
@@ -100,188 +101,45 @@ describe("requestExecApprovalDecision", () => {
     expect(commandExplainerMock.importCount).toBe(0);
   });
 
-  it("returns string decisions", async () => {
-    vi.mocked(callGatewayTool)
-      .mockResolvedValueOnce({
-        status: "accepted",
-        id: "approval-id",
-        expiresAtMs: DEFAULT_APPROVAL_TIMEOUT_MS,
-      })
-      .mockResolvedValueOnce({ decision: "allow-once" });
+  it("binds approval registrations to their run and tool call", async () => {
+    vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id" });
 
-    const result = await requestExecApprovalDecision({
-      id: "approval-id",
+    await registerExecApprovalRequestForHostOrThrow({
+      approvalId: "approval-id",
       command: "echo hi",
-      cwd: "/tmp",
-      host: "gateway",
-      security: "allowlist",
-      ask: "always",
-      agentId: "main",
-      resolvedPath: "/usr/bin/echo",
-      sessionKey: "session",
-      turnSourceChannel: "whatsapp",
-      turnSourceTo: "+15555550123",
-      turnSourceAccountId: "work",
-      turnSourceThreadId: "1739201675.123",
-    });
-
-    expect(result).toBe("allow-once");
-    expect(callGatewayTool).toHaveBeenCalledWith(
-      "exec.approval.request",
-      { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
-      {
-        id: "approval-id",
-        command: "echo hi",
-        cwd: "/tmp",
-        nodeId: undefined,
-        host: "gateway",
-        security: "allowlist",
-        ask: "always",
-        agentId: "main",
-        resolvedPath: "/usr/bin/echo",
-        sessionKey: "session",
-        turnSourceChannel: "whatsapp",
-        turnSourceTo: "+15555550123",
-        turnSourceAccountId: "work",
-        turnSourceThreadId: "1739201675.123",
-        timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
-        twoPhase: true,
-      },
-      { expectFinal: false },
-    );
-    expect(callGatewayTool).toHaveBeenNthCalledWith(
-      2,
-      "exec.approval.waitDecision",
-      { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
-      { id: "approval-id" },
-    );
-  });
-
-  it("returns null for missing or non-string decisions", async () => {
-    vi.mocked(callGatewayTool)
-      .mockResolvedValueOnce({ status: "accepted", id: "approval-id", expiresAtMs: 1234 })
-      .mockResolvedValueOnce({});
-    await expect(
-      requestExecApprovalDecision({
-        id: "approval-id",
-        command: "echo hi",
-        cwd: "/tmp",
-        nodeId: "node-1",
-        host: "node",
-        security: "allowlist",
-        ask: "on-miss",
-      }),
-    ).resolves.toBeNull();
-
-    vi.mocked(callGatewayTool)
-      .mockResolvedValueOnce({ status: "accepted", id: "approval-id-2", expiresAtMs: 1234 })
-      .mockResolvedValueOnce({ decision: 123 });
-    await expect(
-      requestExecApprovalDecision({
-        id: "approval-id-2",
-        command: "echo hi",
-        cwd: "/tmp",
-        nodeId: "node-1",
-        host: "node",
-        security: "allowlist",
-        ask: "on-miss",
-      }),
-    ).resolves.toBeNull();
-  });
-
-  it("uses registration response id when waiting for decision", async () => {
-    vi.mocked(callGatewayTool)
-      .mockResolvedValueOnce({
-        status: "accepted",
-        id: "server-assigned-id",
-        expiresAtMs: DEFAULT_APPROVAL_TIMEOUT_MS,
-      })
-      .mockResolvedValueOnce({ decision: "allow-once" });
-
-    await expect(
-      requestExecApprovalDecision({
-        id: "client-id",
-        command: "echo hi",
-        cwd: "/tmp",
-        host: "gateway",
-        security: "allowlist",
-        ask: "on-miss",
-      }),
-    ).resolves.toBe("allow-once");
-
-    expect(callGatewayTool).toHaveBeenNthCalledWith(
-      2,
-      "exec.approval.waitDecision",
-      { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
-      { id: "server-assigned-id" },
-    );
-  });
-
-  it("treats expired-or-missing waitDecision as null decision", async () => {
-    vi.mocked(callGatewayTool)
-      .mockResolvedValueOnce({
-        status: "accepted",
-        id: "approval-id",
-        expiresAtMs: DEFAULT_APPROVAL_TIMEOUT_MS,
-      })
-      .mockRejectedValueOnce(new Error("approval expired or not found"));
-
-    await expect(
-      requestExecApprovalDecision({
-        id: "approval-id",
-        command: "echo hi",
-        cwd: "/tmp",
-        host: "gateway",
-        security: "allowlist",
-        ask: "on-miss",
-      }),
-    ).resolves.toBeNull();
-  });
-
-  it("returns final decision directly when gateway already replies with decision", async () => {
-    vi.mocked(callGatewayTool).mockResolvedValue({ decision: "deny", id: "approval-id" });
-
-    const result = await requestExecApprovalDecision({
-      id: "approval-id",
-      command: "echo hi",
-      cwd: "/tmp",
+      workdir: "/tmp",
       host: "gateway",
       security: "allowlist",
       ask: "on-miss",
+      sessionId: "session-1",
+      runId: "run-1",
+      toolCallId: "tool-1",
     });
 
-    expect(result).toBe("deny");
-    expect(vi.mocked(callGatewayTool).mock.calls).toStrictEqual([
-      [
-        "exec.approval.request",
-        { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
-        {
-          ask: "on-miss",
-          command: "echo hi",
-          commandSpans: undefined,
-          cwd: "/tmp",
-          env: undefined,
-          host: "gateway",
-          id: "approval-id",
-          nodeId: undefined,
-          requireDeliveryRoute: undefined,
-          resolvedPath: undefined,
-          security: "allowlist",
-          sessionKey: undefined,
-          suppressDelivery: undefined,
-          systemRunPlan: undefined,
-          timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
-          twoPhase: true,
-          turnSourceAccountId: undefined,
-          turnSourceChannel: undefined,
-          turnSourceThreadId: undefined,
-          turnSourceTo: undefined,
-          warningText: undefined,
-          agentId: undefined,
-        },
-        { expectFinal: false },
-      ],
-    ]);
+    expect(requireApprovalRequestPayload(0)).toMatchObject({
+      sessionId: "session-1",
+      runId: "run-1",
+      toolCallId: "tool-1",
+    });
+  });
+
+  it("distinguishes run abort cancellation from unchanged timeout fallback", async () => {
+    vi.mocked(callGatewayTool)
+      .mockResolvedValueOnce({ decision: null, terminalReason: "timeout" })
+      .mockResolvedValueOnce({ decision: null, terminalReason: "run-aborted" });
+
+    await expect(
+      resolveRegisteredExecApprovalDecision({
+        approvalId: "timeout-approval",
+        preResolvedDecision: undefined,
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      resolveRegisteredExecApprovalDecision({
+        approvalId: "aborted-approval",
+        preResolvedDecision: undefined,
+      }),
+    ).rejects.toSatisfy(isExecApprovalRunAbortedError);
   });
 
   it("bounds missing registration expiries when the process clock is invalid", async () => {
@@ -290,10 +148,10 @@ describe("requestExecApprovalDecision", () => {
 
     try {
       await expect(
-        registerExecApprovalRequest({
-          id: "approval-id",
+        registerExecApprovalRequestForHostOrThrow({
+          approvalId: "approval-id",
           command: "echo hi",
-          cwd: "/tmp",
+          workdir: "/tmp",
           host: "gateway",
           security: "allowlist",
           ask: "on-miss",
@@ -314,10 +172,10 @@ describe("requestExecApprovalDecision", () => {
 
     try {
       await expect(
-        registerExecApprovalRequest({
-          id: "approval-id",
+        registerExecApprovalRequestForHostOrThrow({
+          approvalId: "approval-id",
           command: "echo hi",
-          cwd: "/tmp",
+          workdir: "/tmp",
           host: "gateway",
           security: "allowlist",
           ask: "on-miss",
@@ -331,7 +189,7 @@ describe("requestExecApprovalDecision", () => {
   it("adds command spans to host approval registration payloads", async () => {
     vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
 
-    await registerExecApprovalRequestForHost({
+    await registerExecApprovalRequestForHostOrThrow({
       approvalId: "approval-id",
       command: 'ls | grep "stuff" | python -c \'print("hi")\'',
       commandHighlighting: true,
@@ -350,10 +208,27 @@ describe("requestExecApprovalDecision", () => {
     ]);
   });
 
+  it("passes approval reviewer devices into host approval registration payloads", async () => {
+    vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
+
+    await registerExecApprovalRequestForHostOrThrow({
+      approvalId: "approval-id",
+      command: "echo hi",
+      approvalReviewerDeviceIds: ["device-ios-reviewer"],
+      workdir: "/tmp/project",
+      host: "node",
+      security: "allowlist",
+      ask: "always",
+    });
+
+    const payload = requireApprovalRequestPayload(0);
+    expect(payload?.approvalReviewerDeviceIds).toEqual(["device-ios-reviewer"]);
+  });
+
   it("does not generate command spans by default", async () => {
     vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
 
-    await registerExecApprovalRequestForHost({
+    await registerExecApprovalRequestForHostOrThrow({
       approvalId: "approval-id",
       command: 'ls | grep "stuff" | python -c \'print("hi")\'',
       workdir: "/tmp/project",
@@ -371,7 +246,7 @@ describe("requestExecApprovalDecision", () => {
   it("does not generate command spans when command highlighting is disabled", async () => {
     vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
 
-    await registerExecApprovalRequestForHost({
+    await registerExecApprovalRequestForHostOrThrow({
       approvalId: "approval-id",
       command: 'ls | grep "stuff" | python -c \'print("hi")\'',
       commandHighlighting: false,
@@ -390,7 +265,7 @@ describe("requestExecApprovalDecision", () => {
   it("uses system run plan command text for host approval explanations", async () => {
     vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
 
-    await registerExecApprovalRequestForHost({
+    await registerExecApprovalRequestForHostOrThrow({
       approvalId: "approval-id",
       systemRunPlan: {
         argv: ["node", "-e", "console.log(1)"],
@@ -413,7 +288,7 @@ describe("requestExecApprovalDecision", () => {
   it("omits generated command spans for unsupported shell wrapper languages", async () => {
     vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
 
-    await registerExecApprovalRequestForHost({
+    await registerExecApprovalRequestForHostOrThrow({
       approvalId: "approval-id-powershell",
       command: 'pwsh -Command "Get-ChildItem"',
       workdir: "/tmp/project",
@@ -421,7 +296,7 @@ describe("requestExecApprovalDecision", () => {
       security: "allowlist",
       ask: "always",
     });
-    await registerExecApprovalRequestForHost({
+    await registerExecApprovalRequestForHostOrThrow({
       approvalId: "approval-id-cmd",
       command: 'cmd.exe /d /s /c "dir"',
       workdir: "/tmp/project",
@@ -439,7 +314,7 @@ describe("requestExecApprovalDecision", () => {
     setProcessPlatformForTest("win32");
     vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
 
-    await registerExecApprovalRequestForHost({
+    await registerExecApprovalRequestForHostOrThrow({
       approvalId: "approval-id-powershell",
       command:
         'Set-Content -Path "windows-agent-proof.txt" -Value "WINDOWS_AGENT_EXEC_OK" -NoNewline',
@@ -457,7 +332,7 @@ describe("requestExecApprovalDecision", () => {
   it("omits generated command spans for unsupported shell wrappers through system run carriers", async () => {
     vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
 
-    await registerExecApprovalRequestForHost({
+    await registerExecApprovalRequestForHostOrThrow({
       approvalId: "approval-id-carrier",
       systemRunPlan: {
         argv: ["timeout", "5", "pwsh", "-Command", "Get-ChildItem"],
@@ -480,7 +355,7 @@ describe("requestExecApprovalDecision", () => {
   it("keeps explicit command spans", async () => {
     vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
 
-    await registerExecApprovalRequestForHost({
+    await registerExecApprovalRequestForHostOrThrow({
       approvalId: "approval-id",
       command: "echo hi",
       commandSpans: [{ startIndex: 0, endIndex: 4 }],

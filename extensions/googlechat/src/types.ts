@@ -3,6 +3,10 @@ export type GoogleChatSpace = {
   name?: string;
   displayName?: string;
   type?: string;
+  /** Current Google Chat field that replaces the deprecated `type` field. */
+  spaceType?: string;
+  /** True when the space is a 1:1 DM between a user and the Chat app. */
+  singleUserBotDm?: boolean;
 };
 
 export type GoogleChatUser = {
@@ -87,19 +91,13 @@ export type GoogleChatEvent = {
   };
 };
 
-export type GoogleChatReaction = {
-  name?: string;
-  user?: GoogleChatUser;
-  emoji?: { unicode?: string };
-};
-
-export type GoogleChatTextParagraphWidget = {
+type GoogleChatTextParagraphWidget = {
   textParagraph: {
     text: string;
   };
 };
 
-export type GoogleChatButtonWidget = {
+type GoogleChatButtonWidget = {
   buttonList: {
     buttons: Array<{
       text: string;
@@ -114,9 +112,9 @@ export type GoogleChatButtonWidget = {
   };
 };
 
-export type GoogleChatDividerWidget = { divider: Record<string, never> };
+type GoogleChatDividerWidget = { divider: Record<string, never> };
 
-export type GoogleChatWidget =
+type GoogleChatWidget =
   | GoogleChatTextParagraphWidget
   | GoogleChatButtonWidget
   | GoogleChatDividerWidget;

@@ -5,7 +5,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeHttpWebhookUrl } from "../../../cron/webhook-url.js";
 
-export type LegacyNotifyMigrationOutcome = {
+type LegacyNotifyMigrationOutcome = {
   changed: boolean;
   warnings: string[];
 };
@@ -21,14 +21,6 @@ export function migrateLegacyNotifyFallback(params: {
   const legacyWebhook = configuredLegacyWebhook
     ? normalizeHttpWebhookUrl(configuredLegacyWebhook)
     : undefined;
-
-  const warnMissingLegacyWebhook = (jobName: string) => {
-    warnings.push(
-      configuredLegacyWebhook
-        ? `Cron job "${jobName}" still uses legacy notify fallback, but cron.webhook is not a valid HTTP(S) URL so doctor cannot migrate it automatically.`
-        : `Cron job "${jobName}" still uses legacy notify fallback, but cron.webhook is unset so doctor cannot migrate it automatically.`,
-    );
-  };
 
   for (const raw of params.jobs) {
     if (!("notify" in raw)) {
@@ -77,11 +69,21 @@ export function migrateLegacyNotifyFallback(params: {
       continue;
     }
 
+    if (configuredLegacyWebhook && !legacyWebhook) {
+      // Keep the marker so doctor can retry after the operator fixes the target.
+      warnings.push(
+        `Cron job "${jobName}" still uses legacy notify fallback, but cron.webhook is not a valid HTTP(S) URL so doctor cannot migrate it automatically.`,
+      );
+      continue;
+    }
+    if (!legacyWebhook) {
+      // Without a configured target, the top-level marker cannot affect delivery.
+      delete raw.notify;
+      changed = true;
+      continue;
+    }
+
     if ((mode === undefined && !hasLegacyChatDelivery) || mode === "none" || mode === "webhook") {
-      if (!legacyWebhook) {
-        warnMissingLegacyWebhook(jobName);
-        continue;
-      }
       raw.delivery = {
         ...delivery,
         mode: "webhook",
@@ -92,22 +94,17 @@ export function migrateLegacyNotifyFallback(params: {
       continue;
     }
 
-    if (legacyWebhook) {
-      raw.delivery = {
-        ...delivery,
-        ...(hasLegacyChatDelivery ? { mode: "announce" } : {}),
-        completionDestination: {
-          ...completionDestination,
-          mode: "webhook",
-          to: legacyWebhook,
-        },
-      };
-      delete raw.notify;
-      changed = true;
-      continue;
-    }
-
-    warnMissingLegacyWebhook(jobName);
+    raw.delivery = {
+      ...delivery,
+      ...(hasLegacyChatDelivery ? { mode: "announce" } : {}),
+      completionDestination: {
+        ...completionDestination,
+        mode: "webhook",
+        to: legacyWebhook,
+      },
+    };
+    delete raw.notify;
+    changed = true;
   }
 
   return { changed, warnings };

@@ -5,10 +5,11 @@
  */
 import * as os from "node:os";
 import { getCapabilities, getImageDimensions, imageFallback } from "@earendil-works/pi-tui";
-import type { ImageContent, TextContent } from "../../../llm/types.js";
+import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import type { Theme } from "../../modes/interactive/theme/theme.js";
 import { sanitizeBinaryOutput } from "../../shell-utils.js";
-import { stripAnsi } from "../../utils/ansi.js";
+import type { ToolRenderResultOptions } from "../extensions/types.js";
+import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult } from "./truncate.js";
 
 /** Shortens paths under the current home directory for display. */
 export function shortenPath(path: unknown): string {
@@ -16,7 +17,10 @@ export function shortenPath(path: unknown): string {
     return "";
   }
   const home = os.homedir();
-  if (path.startsWith(home)) {
+  if (path === home) {
+    return "~";
+  }
+  if (path.startsWith(`${home}/`) || path.startsWith(`${home}\\`)) {
     return `~${path.slice(home.length)}`;
   }
   return path;
@@ -58,7 +62,7 @@ export function getTextOutput(
   const imageBlocks = result.content.filter((c) => c.type === "image");
 
   let output = textBlocks
-    .map((c) => sanitizeBinaryOutput(stripAnsi(c.text || "")).replace(/\r/g, ""))
+    .map((c) => sanitizeBinaryOutput(c.text || "", { ansiMode: "compat" }).replace(/\r/g, ""))
     .join("\n");
 
   const caps = getCapabilities();
@@ -80,11 +84,52 @@ export function getTextOutput(
   return output;
 }
 
-/** Minimal shape shared by renderers that carry typed tool details. */
-export type ToolRenderResultLike<TDetails> = {
-  content: (TextContent | ImageContent)[];
-  details: TDetails;
-};
+/** Renders bounded text output with the shared TUI expansion hint. */
+export function formatSessionToolOutput(
+  result: { content: Array<{ type: string; text?: string; data?: string; mimeType?: string }> },
+  options: ToolRenderResultOptions,
+  theme: Pick<Theme, "fg">,
+  showImages: boolean,
+  collapsedLineLimit: number,
+): string {
+  const output = getTextOutput(result, showImages).trim();
+  if (!output) {
+    return "";
+  }
+
+  const lines = output.split("\n");
+  const maxLines = options.expanded ? lines.length : collapsedLineLimit;
+  const displayLines = lines.slice(0, maxLines);
+  const remaining = lines.length - maxLines;
+  let text = `\n${displayLines.map((line) => theme.fg("toolOutput", line)).join("\n")}`;
+  if (remaining > 0) {
+    text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${keyHint("app.tools.expand", "to expand")})`;
+  }
+  return text;
+}
+
+export function appendSessionToolTruncationWarning(
+  text: string,
+  theme: Pick<Theme, "fg">,
+  options: {
+    limit?: { count: number; noun: string };
+    truncation?: Pick<TruncationResult, "truncated" | "maxBytes">;
+    additionalWarnings?: readonly string[];
+  },
+): string {
+  const warnings: string[] = [];
+  if (options.limit) {
+    warnings.push(`${options.limit.count} ${options.limit.noun} limit`);
+  }
+  if (options.truncation?.truncated) {
+    warnings.push(`${formatSize(options.truncation.maxBytes ?? DEFAULT_MAX_BYTES)} limit`);
+  }
+  warnings.push(...(options.additionalWarnings ?? []));
+  if (warnings.length === 0) {
+    return text;
+  }
+  return `${text}\n${theme.fg("warning", `[Truncated: ${warnings.join(", ")}]`)}`;
+}
 
 /** Formats the invalid-argument marker with the active theme. */
 export function invalidArgText(theme: Pick<Theme, "fg">): string {

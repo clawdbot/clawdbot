@@ -24,6 +24,13 @@ const DEFAULT_QA_SCENARIOS = [
   "memory-failure-fallback",
   "gateway-restart-inflight-run",
 ];
+const SINGLE_VALUE_FLAGS = new Set([
+  "--cpu-core-warn",
+  "--hot-wall-warn-ms",
+  "--output-dir",
+  "--runs",
+  "--warmup",
+]);
 const DEFAULT_CPU_CORE_WARN = 0.9;
 const DEFAULT_HOT_WALL_WARN_MS = 30_000;
 const PRIVATE_QA_REQUIRED_DIST_ENTRIES = [
@@ -49,11 +56,18 @@ function parseArgs(argv) {
     cpuCoreWarn: DEFAULT_CPU_CORE_WARN,
     hotWallWarnMs: DEFAULT_HOT_WALL_WARN_MS,
   };
+  const seenSingleValueFlags = new Set();
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
+    if (SINGLE_VALUE_FLAGS.has(arg)) {
+      if (seenSingleValueFlags.has(arg)) {
+        throw new Error(`${arg} was provided more than once`);
+      }
+      seenSingleValueFlags.add(arg);
+    }
     const readValue = () => {
       const value = args[index + 1];
-      if (!value || value.startsWith("--")) {
+      if (!value || value.startsWith("-")) {
         throw new Error(`Missing value for ${arg}`);
       }
       index += 1;
@@ -247,6 +261,7 @@ function buildPrivateQaEnv(env, qaState) {
     OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
     OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD ?? "1",
     OPENCLAW_TEST_DISABLE_UPDATE_CHECK: env.OPENCLAW_TEST_DISABLE_UPDATE_CHECK ?? "1",
+    PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
   };
 }
 
@@ -264,7 +279,11 @@ function createQaState(outputDir) {
 
 async function runGatewayCpuScenarios(options, params = {}) {
   const repoRoot = params.cwd ?? process.cwd();
-  const baseEnv = params.env ?? process.env;
+  const inputEnv = params.env ?? process.env;
+  const baseEnv = {
+    ...inputEnv,
+    PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
+  };
   fs.mkdirSync(options.outputDir, { recursive: true });
 
   const startupOutput = path.join(options.outputDir, "gateway-startup-bench.json");
@@ -284,7 +303,7 @@ async function runGatewayCpuScenarios(options, params = {}) {
       "startup build",
       process.execPath,
       ["scripts/ensure-cli-startup-build.mjs"],
-      {},
+      { env: baseEnv },
       params,
     );
     steps.push(startupBuild);
@@ -305,7 +324,7 @@ async function runGatewayCpuScenarios(options, params = {}) {
               startupOutput,
               ...options.startupCases.flatMap((id) => ["--case", id]),
             ],
-            {},
+            { env: baseEnv },
             params,
           )
         : { name: "startup bench", signal: null, status: 1 },
@@ -444,7 +463,7 @@ export const testing = {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch(
     /** @param {unknown} error */ (error) => {
-      console.error(error instanceof Error ? error.stack : String(error));
+      console.error(error instanceof Error ? error.message : String(error));
       process.exitCode = 1;
     },
   );

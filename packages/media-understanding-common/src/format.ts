@@ -1,22 +1,6 @@
 // Media Understanding Common helper module supports format behavior.
 import type { MediaUnderstandingOutput } from "./types.js";
 
-const MEDIA_PLACEHOLDER_RE = /^<media:[^>]+>(\s*\([^)]*\))?$/i;
-const MEDIA_PLACEHOLDER_TOKEN_RE = /^<media:[^>]+>(\s*\([^)]*\))?\s*/i;
-
-/** Extracts user-authored text while ignoring synthetic media placeholder tokens. */
-export function extractMediaUserText(body?: string): string | undefined {
-  const trimmed = body?.trim() ?? "";
-  if (!trimmed) {
-    return undefined;
-  }
-  if (MEDIA_PLACEHOLDER_RE.test(trimmed)) {
-    return undefined;
-  }
-  const cleaned = trimmed.replace(MEDIA_PLACEHOLDER_TOKEN_RE, "").trim();
-  return cleaned || undefined;
-}
-
 function formatSection(
   title: string,
   kind: "Transcript" | "Description",
@@ -41,7 +25,7 @@ export function formatMediaUnderstandingBody(params: {
     return params.body ?? "";
   }
 
-  const userText = extractMediaUserText(params.body);
+  const userText = params.body?.trim() || undefined;
   const sections: string[] = [];
   if (userText && outputs.length > 1) {
     sections.push(`User text:\n${userText}`);
@@ -96,7 +80,11 @@ export function formatMediaUnderstandingBody(params: {
 /** Formats one or more audio transcript outputs for legacy transcript-only callers. */
 export function formatAudioTranscripts(outputs: MediaUnderstandingOutput[]): string {
   if (outputs.length === 1) {
-    return outputs[0].text;
+    const [output] = outputs;
+    if (output) {
+      return output.text;
+    }
+    throw new Error("expected single audio transcript to be defined");
   }
   return outputs.map((output, index) => `Audio ${index + 1}:\n${output.text}`).join("\n\n");
 }

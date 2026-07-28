@@ -125,6 +125,10 @@ import fs from "node:fs";
 import path from "node:path";
 const [configPath, skillDir, originPath, lockPath, infoPath, slug] = process.argv.slice(2);
 const read = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
+function isPathInside(parentPath, childPath) {
+  const relative = path.relative(path.resolve(parentPath), path.resolve(childPath));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
 const config = read(configPath);
 if (config.skills?.install?.allowUploadedArchives !== false) {
   throw new Error("skills.install.allowUploadedArchives must remain false during ClawHub install proof");
@@ -142,7 +146,7 @@ const infoFilePath = info.filePath ?? info.skill?.filePath;
 const infoBaseDir = info.baseDir ?? info.skill?.baseDir;
 if (
   info.skillKey !== slug &&
-  (!infoFilePath || !path.resolve(infoFilePath).startsWith(path.resolve(skillDir)))
+  (!infoFilePath || !isPathInside(skillDir, infoFilePath))
 ) {
   throw new Error(`skills info did not report installed skill ${slug}: ${JSON.stringify(info)}`);
 }

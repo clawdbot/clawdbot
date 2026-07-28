@@ -1,6 +1,7 @@
-// Microsoft Foundry image provider routes MAI image deployments to the MAI API.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/core";
+// Microsoft Foundry image provider routes MAI image deployments to the MAI API.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type {
   ImageGenerationProvider,
   ImageGenerationRequest,
@@ -10,7 +11,9 @@ import type {
 import {
   imageSourceUploadFileName,
   parseOpenAiCompatibleImageResponse,
+  resolveInlineImageJsonResponseMaxBytes,
 } from "openclaw/plugin-sdk/image-generation";
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -18,6 +21,7 @@ import {
   createProviderOperationDeadline,
   postJsonRequest,
   postMultipartRequest,
+  readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
   resolveProviderOperationTimeoutMs,
   sanitizeConfiguredModelProviderRequest,
@@ -40,6 +44,7 @@ const DEFAULT_IMAGE_SIZE = { width: 1024, height: 1024 };
 const MAI_MIN_IMAGE_SIDE_PX = 768;
 const MAI_MAX_IMAGE_PIXELS = 1_048_576;
 const MAI_IMAGE_BASE_PATH = "/mai/v1";
+const MAI_IMAGE_MAX_RESULTS = 1;
 const MAI_IMAGE_OUTPUT_MIME = "image/png";
 const MAI_IMAGE_UPLOAD_MIME_TYPES = new Set(["image/jpeg", "image/jpg", "image/png"]);
 
@@ -53,7 +58,7 @@ function resolveConfiguredModelName(
   providerConfig: ModelProviderConfig | undefined,
   model: string,
 ): { modelName: string; hasMetadata: boolean } {
-  const configuredName = providerConfig?.models.find((candidate) => candidate.id === model)?.name;
+  const configuredName = providerConfig?.models?.find((candidate) => candidate.id === model)?.name;
   const hasDistinctModelMetadata =
     normalizeOptionalLowercaseString(configuredName) !== normalizeOptionalLowercaseString(model);
   return configuredName
@@ -256,12 +261,12 @@ export function buildMicrosoftFoundryImageGenerationProvider(): ImageGenerationP
       }),
     capabilities: {
       generate: {
-        maxCount: 1,
+        maxCount: MAI_IMAGE_MAX_RESULTS,
         supportsSize: true,
       },
       edit: {
         enabled: true,
-        maxCount: 1,
+        maxCount: MAI_IMAGE_MAX_RESULTS,
         maxInputImages: 1,
         supportsSize: false,
       },
@@ -336,7 +341,7 @@ export function buildMicrosoftFoundryImageGenerationProvider(): ImageGenerationP
               })(),
               body: buildEditFormData({
                 req,
-                image: inputImages[0],
+                image: expectDefined(inputImages[0], "Microsoft Foundry edit source image"),
                 model,
               }),
               timeoutMs,
@@ -367,8 +372,18 @@ export function buildMicrosoftFoundryImageGenerationProvider(): ImageGenerationP
       const { response, release } = await request;
       try {
         await assertOkOrThrowHttpError(response, `${label} failed`);
+        const payload = await readProviderJsonResponse(
+          response,
+          "microsoft-foundry.image-generation",
+          {
+            maxBytes: resolveInlineImageJsonResponseMaxBytes(
+              MAI_IMAGE_MAX_RESULTS,
+              resolveGeneratedMediaMaxBytes(req.cfg, "image"),
+            ),
+          },
+        );
         return {
-          images: parseMaiImageResponse(await response.json(), label),
+          images: parseMaiImageResponse(payload, label),
           model,
         };
       } finally {

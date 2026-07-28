@@ -1,7 +1,7 @@
 // OpenClaw test instance tests cover spawned test instance lifecycle.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createOpenClawTestInstance, testing } from "./openclaw-test-instance.js";
 
 async function expectPathMissing(targetPath: string): Promise<void> {
@@ -42,6 +42,24 @@ describe("openclaw test instance", () => {
     await expect(
       testing.waitForPortOpen({ exitCode: null, signalCode: "SIGTERM" }, [], [], 1, 10_000),
     ).rejects.toThrow("gateway exited before listening");
+  });
+
+  it("signals test instance process groups on POSIX", () => {
+    const child = {
+      pid: 1234,
+      kill: vi.fn(() => true),
+    };
+    const killProcess = vi.fn(() => true);
+
+    testing.signalOpenClawTestProcess(child, "SIGKILL", killProcess);
+
+    if (process.platform === "win32") {
+      expect(killProcess).not.toHaveBeenCalled();
+      expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+    } else {
+      expect(killProcess).toHaveBeenCalledWith(-1234, "SIGKILL");
+      expect(child.kill).not.toHaveBeenCalled();
+    }
   });
 
   it("creates isolated config and spawn env without mutating process env", async () => {

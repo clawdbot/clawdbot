@@ -1,13 +1,21 @@
 /** Shared bundle MCP catalog, runtime, and manager types. */
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type {
+  CallToolResult,
+  ListResourceTemplatesResult,
+  ListToolsResult,
+} from "@modelcontextprotocol/sdk/types.js";
 import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 /** Materialized MCP tools plus diagnostics and cleanup handle for one run. */
 export type BundleMcpToolRuntime = {
   tools: AnyAgentTool[];
+  /** All MCP tool-call projections, including App-only tools, for policy evaluation. */
+  appTools?: AnyAgentTool[];
   diagnostics?: readonly McpToolCatalogDiagnostic[];
+  restrictAppTools?: (tools: readonly AnyAgentTool[]) => void;
   dispose: () => Promise<void>;
 };
 
@@ -44,6 +52,8 @@ export type McpCatalogTool = {
   description?: string;
   inputSchema: TSchema;
   fallbackDescription: string;
+  uiResourceUri?: string;
+  uiVisibility?: Array<"app" | "model">;
 };
 
 /** Complete tool catalog for a session-scoped MCP runtime. */
@@ -62,12 +72,37 @@ export type McpToolCatalogDiagnostic = {
   message: string;
 };
 
+export type McpRequestOptions = {
+  failureBackoff?: "track" | "ignore";
+};
+
+/** Trusted requester identity used to scope per-user MCP connections. */
+export type SessionMcpRequesterScope = {
+  requesterSenderId: string;
+  agentAccountId?: string;
+  messageChannel?: string;
+};
+
 /** Live MCP runtime bound to one session/workspace. */
 export type SessionMcpRuntime = {
   sessionId: string;
   sessionKey?: string;
   workspaceDir: string;
+  agentDir?: string;
   configFingerprint: string;
+  /** Present when this runtime is keyed by requester-scoped connection identity. */
+  requesterScope?: SessionMcpRequesterScope;
+  /**
+   * True when the named server's connection is requester-scoped. App views for
+   * such servers stay fail-closed: views outlive the requester-authenticated
+   * run and the gateway view boundary carries no requester identity.
+   */
+  isRequesterScopedServer?: (serverName: string) => boolean;
+  mcpAppsEnabled?: boolean;
+  /** Latest non-persisted App context, owned by the exact live view that supplied it. */
+  pendingMcpAppModelContext?: { owner: object; text: string; leased?: boolean };
+  /** Blocks a deferred-retirement view from restoring context across reset. */
+  mcpAppModelContextRevoked?: boolean;
   createdAt: number;
   lastUsedAt: number;
   activeLeases?: number;
@@ -78,8 +113,13 @@ export type SessionMcpRuntime = {
   peekCatalog: () => McpToolCatalog | null;
   markUsed: () => void;
   callTool: (serverName: string, toolName: string, input: unknown) => Promise<CallToolResult>;
-  listResources?: (serverName: string) => Promise<unknown>;
-  readResource?: (serverName: string, uri: string) => Promise<unknown>;
+  listTools?: (serverName: string, params?: { cursor?: string }) => Promise<ListToolsResult>;
+  listResources?: (serverName: string, options?: McpRequestOptions) => Promise<unknown>;
+  readResource?: (serverName: string, uri: string, options?: McpRequestOptions) => Promise<unknown>;
+  listResourceTemplates?: (
+    serverName: string,
+    params?: { cursor?: string },
+  ) => Promise<ListResourceTemplatesResult>;
   listPrompts?: (serverName: string) => Promise<unknown>;
   getPrompt?: (serverName: string, name: string, args?: Record<string, string>) => Promise<unknown>;
   dispose: () => Promise<void>;
@@ -91,8 +131,35 @@ export type SessionMcpRuntimeManager = {
     sessionId: string;
     sessionKey?: string;
     workspaceDir: string;
+    agentDir?: string;
     cfg?: OpenClawConfig;
+    manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+    /** Trusted sender id; required to materialize requester-scoped MCP servers. */
+    requesterSenderId?: string | null;
+    agentAccountId?: string | null;
+    messageChannel?: string | null;
   }) => Promise<SessionMcpRuntime>;
+  /**
+   * Requester-scoped partition only — never creates static transports.
+   * Undefined when no scoped servers, no senderId, or nothing resolves.
+   */
+  getOrCreateRequesterScoped: (params: {
+    sessionId: string;
+    sessionKey?: string;
+    workspaceDir: string;
+    agentDir?: string;
+    cfg?: OpenClawConfig;
+    manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+    requesterSenderId?: string | null;
+    agentAccountId?: string | null;
+    messageChannel?: string | null;
+  }) => Promise<SessionMcpRuntime | undefined>;
+  /**
+   * Session-stable advertised catalog for scoped servers. Used by shared-thread
+   * harnesses so dynamic tool specs do not rotate per sender.
+   */
+  rememberAdvertisedScopedCatalog: (sessionId: string, catalog: McpToolCatalog) => void;
+  getAdvertisedScopedCatalog: (sessionId: string) => McpToolCatalog | null;
   bindSessionKey: (sessionKey: string, sessionId: string) => void;
   resolveSessionId: (sessionKey: string) => string | undefined;
   /** Looks up an existing runtime only; must not create runtimes or connect transports. */
@@ -101,7 +168,14 @@ export type SessionMcpRuntimeManager = {
     sessionKey?: string;
   }) => SessionMcpRuntime | undefined;
   disposeSession: (sessionId: string) => Promise<void>;
+  /** Required retirement stays armed when a stopping run creates or reuses a runtime. */
+  deferRetirement: (sessionId: string, opts?: { retainAcrossReuse?: boolean }) => boolean;
+  completeDeferredRetirement: (sessionId: string, runtime?: SessionMcpRuntime) => Promise<boolean>;
   disposeAll: () => Promise<void>;
   sweepIdleRuntimes: () => Promise<number>;
   listSessionIds: () => string[];
+  /** All managed cache keys (session ids and requester composite keys). */
+  listRuntimeKeys: () => string[];
+  /** Sum of active leases across every runtime key for this session. */
+  totalActiveLeasesForSession: (sessionId: string) => number;
 };

@@ -1,7 +1,7 @@
 // Resolves additional CA certificate settings for Node child processes.
 import fs from "node:fs";
 
-export const LINUX_CA_BUNDLE_PATHS = [
+const LINUX_CA_BUNDLE_PATHS = [
   "/etc/ssl/certs/ca-certificates.crt",
   "/etc/pki/tls/certs/ca-bundle.crt",
   "/etc/ssl/ca-bundle.pem",
@@ -10,7 +10,7 @@ export const LINUX_CA_BUNDLE_PATHS = [
 export type EnvMap = Record<string, string | undefined>;
 type AccessSyncFn = (path: string, mode?: number) => void;
 
-export function resolveLinuxSystemCaBundle(
+function resolveLinuxSystemCaBundle(
   params: {
     platform?: NodeJS.Platform;
     accessSync?: AccessSyncFn;
@@ -54,7 +54,7 @@ const VERSION_MANAGER_PATH_MARKERS: readonly string[] = [
   "/.nvs/",
 ];
 
-export function isNodeVersionManagerRuntime(
+function isNodeVersionManagerRuntime(
   env: EnvMap = process.env as EnvMap,
   execPath: string = process.execPath,
 ): boolean {

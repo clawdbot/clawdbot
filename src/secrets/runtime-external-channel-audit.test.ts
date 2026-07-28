@@ -107,8 +107,7 @@ function createGoogleChatSecretContractApi() {
       targetTypeAliases: ["channels.googlechat.accounts.*.serviceAccount"],
       configFile: "openclaw.json",
       pathPattern: "channels.googlechat.accounts.*.serviceAccount",
-      refPathPattern: "channels.googlechat.accounts.*.serviceAccountRef",
-      secretShape: "sibling_ref",
+      secretShape: "secret_input",
       expectedResolvedValue: "string-or-object",
       includeInPlan: true,
       includeInConfigure: true,
@@ -120,8 +119,7 @@ function createGoogleChatSecretContractApi() {
       targetType: "channels.googlechat.serviceAccount",
       configFile: "openclaw.json",
       pathPattern: "channels.googlechat.serviceAccount",
-      refPathPattern: "channels.googlechat.serviceAccountRef",
-      secretShape: "sibling_ref",
+      secretShape: "secret_input",
       expectedResolvedValue: "string-or-object",
       includeInPlan: true,
       includeInConfigure: true,
@@ -145,7 +143,7 @@ function createGoogleChatSecretContractApi() {
       return;
     }
     const collect = (target: Record<string, unknown>, pathKey: string, active: boolean) => {
-      const refValue = target.serviceAccountRef;
+      const refValue = target.serviceAccount;
       if (!refValue) {
         return;
       }
@@ -280,14 +278,14 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
             },
           },
           googlechat: {
-            serviceAccountRef: ref("GOOGLECHAT_SERVICE_ACCOUNT"),
+            serviceAccount: ref("GOOGLECHAT_SERVICE_ACCOUNT"),
             accounts: {
               inherited: {
                 enabled: true,
               },
               work: {
                 enabled: true,
-                serviceAccountRef: ref("GOOGLECHAT_WORK_SERVICE_ACCOUNT"),
+                serviceAccount: ref("GOOGLECHAT_WORK_SERVICE_ACCOUNT"),
               },
             },
           },
@@ -416,7 +414,9 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
             enabled: true,
             tts: {
               providers: {
-                openai: { apiKey: inactiveExecRef("DISCORD_DISABLED_VOICE_TTS_API_KEY") },
+                openai: {
+                  apiKey: inactiveExecRef("DISCORD_DISABLED_VOICE_TTS_API_KEY"),
+                },
               },
             },
           },
@@ -459,11 +459,11 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
         },
         googlechat: {
           enabled: false,
-          serviceAccountRef: inactiveExecRef("GOOGLECHAT_DISABLED_SERVICE_ACCOUNT"),
+          serviceAccount: inactiveExecRef("GOOGLECHAT_DISABLED_SERVICE_ACCOUNT"),
           accounts: {
             disabled: {
               enabled: false,
-              serviceAccountRef: inactiveExecRef("GOOGLECHAT_DISABLED_ACCOUNT_SERVICE_ACCOUNT"),
+              serviceAccount: inactiveExecRef("GOOGLECHAT_DISABLED_ACCOUNT_SERVICE_ACCOUNT"),
             },
           },
         },
@@ -540,5 +540,37 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
       "channels.zalo.accounts.disabled.webhookSecret",
     ]);
     expectMetadataBackedContractsWereUsed();
+  });
+
+  it("resolves Feishu top-level appSecret SecretRef for the implicit default account", async () => {
+    const records = configureExternalChannelRecords(["feishu"]);
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        channels: {
+          feishu: {
+            enabled: true,
+            appId: "cli_default",
+            appSecret: ref("FEISHU_APP_SECRET"),
+            accounts: {
+              "resource-shrimp": {
+                enabled: true,
+                appId: "cli_resource",
+                appSecret: "inline-secret-here", // pragma: allowlist secret
+              },
+            },
+          },
+        },
+      }),
+      env: { FEISHU_APP_SECRET: "default-secret" },
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: externalChannelOrigins(records),
+    });
+
+    expectResolvedPaths(snapshot.config, {
+      "channels.feishu.appSecret": "default-secret",
+      "channels.feishu.accounts.resource-shrimp.appSecret": "inline-secret-here",
+    });
+    expect(snapshot.warnings).toStrictEqual([]);
+    expectMetadataBackedContractsWereUsed(["feishu"]);
   });
 });

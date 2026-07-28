@@ -4,18 +4,15 @@ import SwiftUI
 
 struct AgentProTab: View {
     @Environment(NodeAppModel.self) var appModel
-    @Environment(\.colorScheme) var colorScheme
     @Environment(\.scenePhase) var scenePhase
-    let initialRoute: AgentRoute?
     let directRoute: AgentRoute?
-    let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let headerSidebarAction: OpenClawSidebarHeaderAction?
     let headerTitle: String
     let openSettings: (() -> Void)?
-    @State var navigationPath: [AgentRoute] = []
     @State var overview: AgentOverviewSnapshot?
     @State var overviewErrorText: String?
     @State var overviewLoading: Bool = false
-    @State var overviewRefreshNonce: Int = 0
+    @State var overviewRefreshGate = AgentOverviewRefreshGate()
     @State var agentRosterFilter: AgentRosterFilter = .all
     @State var agentSearchPresented = false
     @State var agentSearchText = ""
@@ -34,7 +31,11 @@ struct AgentProTab: View {
     @State var clawHubErrorText: String?
     @State var clawHubInstallSlug: String?
     @State var cronActionBusyIDs: Set<String> = []
+    @State var pendingCronRuns = AgentAutomationPendingRunRegistry()
     @State var cronActionStatusText: String?
+    @State var automationQuery = ""
+    @State var automationListFilter: AutomationListFilter = .all
+    @State var automationEditorSelection: AutomationEditorSelection?
 
     enum AgentRoute: Hashable {
         case agents
@@ -43,6 +44,7 @@ struct AgentProTab: View {
         case cron
         case usage
         case dreaming
+        case files
     }
 
     enum SkillStatusFilter: String, CaseIterable, Identifiable {
@@ -58,11 +60,11 @@ struct AgentProTab: View {
 
         var title: String {
             switch self {
-            case .all: "All"
-            case .enabled: "Enabled"
-            case .off: "Off"
-            case .setup: "Setup"
-            case .blocked: "Blocked"
+            case .all: String(localized: "All")
+            case .enabled: String(localized: "Enabled")
+            case .off: String(localized: "Off")
+            case .setup: String(localized: "Setup")
+            case .blocked: String(localized: "Blocked")
             }
         }
     }
@@ -78,42 +80,68 @@ struct AgentProTab: View {
 
         var title: String {
             switch self {
-            case .all: "All"
-            case .online: "Online"
-            case .ready: "Ready"
+            case .all: String(localized: "All")
+            case .online: String(localized: "Online")
+            case .ready: String(localized: "Ready")
+            }
+        }
+
+        var systemImage: String {
+            switch self {
+            case .all: "person.2"
+            case .online: "antenna.radiowaves.left.and.right"
+            case .ready: "checkmark.circle"
+            }
+        }
+    }
+
+    enum AutomationListFilter: String, CaseIterable, Identifiable {
+        case all
+        case active
+        case paused
+
+        var id: Self {
+            self
+        }
+
+        var title: String {
+            switch self {
+            case .all: String(localized: "All")
+            case .active: String(localized: "Active")
+            case .paused: String(localized: "Paused")
             }
         }
     }
 
     enum AgentLayout {
-        static let cardRadius: CGFloat = 12
+        static let cardRadius: CGFloat = OpenClawProMetric.cardRadius
         static let filterHeight: CGFloat = 34
-        static let rowMinHeight: CGFloat = 104
         static let metricTileHeight: CGFloat = 94
-        static let actionButtonSize: CGFloat = 34
     }
 
     enum AgentRosterState: Equatable {
         case online
         case ready
 
-        var title: String {
-            switch self {
-            case .online: "Online"
-            case .ready: "Ready"
-            }
-        }
-
         var color: Color {
             switch self {
             case .online: OpenClawBrand.ok
-            case .ready: Color(red: 0 / 255.0, green: 122 / 255.0, blue: 255 / 255.0)
+            case .ready: OpenClawBrand.info
             }
         }
     }
 
     struct SkillEditorSelection: Identifiable {
         let id: String
+    }
+
+    struct AutomationEditorSelection: Identifiable {
+        let initialJob: CronJob
+        let sourceGatewayID: String
+
+        var id: String {
+            self.initialJob.id
+        }
     }
 
     struct SkillEditorMessage {
@@ -127,15 +155,13 @@ struct AgentProTab: View {
     }
 
     init(
-        initialRoute: AgentRoute? = nil,
         directRoute: AgentRoute? = nil,
-        headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
+        headerSidebarAction: OpenClawSidebarHeaderAction? = nil,
         headerTitle: String = "Agents",
         openSettings: (() -> Void)? = nil)
     {
-        self.initialRoute = initialRoute
         self.directRoute = directRoute
-        self.headerLeadingAction = headerLeadingAction
+        self.headerSidebarAction = headerSidebarAction
         self.headerTitle = headerTitle
         self.openSettings = openSettings
     }
@@ -158,10 +184,26 @@ struct AgentProTab: View {
                 self.missingSkillEditorSheet
             }
         }
+        .sheet(item: self.$automationEditorSelection) { selection in
+            AgentAutomationDetailScreen(
+                initialJob: selection.initialJob,
+                sourceGatewayID: selection.sourceGatewayID,
+                pendingRunRegistry: self.pendingCronRuns,
+                onRunQueued: { runID, processInstanceID in
+                    self.reservePendingCronRun(
+                        jobID: selection.initialJob.id,
+                        runID: runID,
+                        processInstanceID: processInstanceID,
+                        sourceGatewayID: selection.sourceGatewayID)
+                },
+                onChanged: {
+                    Task { await self.refreshOverview(force: true) }
+                })
+        }
     }
 
     private var overviewNavigation: some View {
-        NavigationStack(path: self.$navigationPath) {
+        NavigationStack {
             ZStack {
                 OpenClawProBackground()
                 ScrollView {
@@ -184,22 +226,12 @@ struct AgentProTab: View {
                 self.destination(for: route)
             }
         }
-        .onAppear {
-            self.applyInitialRouteIfNeeded()
-        }
     }
 
     private func directDestination(for route: AgentRoute) -> some View {
         self.destination(for: route)
             .toolbar(
-                self.directHeaderLeadingAction(for: route) == nil ? .visible : .hidden,
+                route != .agents && self.directHeaderSidebarAction(for: route) != nil ? .hidden : .visible,
                 for: .navigationBar)
-    }
-
-    private func applyInitialRouteIfNeeded() {
-        guard self.directRoute == nil else { return }
-        guard let initialRoute else { return }
-        guard self.navigationPath != [initialRoute] else { return }
-        self.navigationPath = [initialRoute]
     }
 }

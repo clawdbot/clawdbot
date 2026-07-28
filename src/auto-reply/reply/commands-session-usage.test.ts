@@ -33,8 +33,18 @@ const loadCostUsageSummaryMock = vi.hoisted(() =>
     },
   })),
 );
+type FastModeStateMockResult = {
+  mode: boolean | "auto" | undefined;
+  enabled: boolean;
+  source: "session" | "agent" | "config" | "default";
+  fastAutoOnSeconds?: number;
+};
 const resolveFastModeStateMock = vi.hoisted(() =>
-  vi.fn(() => ({ enabled: true, source: "agent" })),
+  vi.fn<() => FastModeStateMockResult>(() => ({
+    mode: true,
+    enabled: true,
+    source: "agent",
+  })),
 );
 
 vi.mock("../../agents/agent-scope.js", async () => {
@@ -52,9 +62,15 @@ vi.mock("../../infra/session-cost-usage.js", () => ({
   loadCostUsageSummary: loadCostUsageSummaryMock,
 }));
 
-vi.mock("../../agents/fast-mode.js", () => ({
-  resolveFastModeState: resolveFastModeStateMock,
-}));
+vi.mock("../../agents/fast-mode.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/fast-mode.js")>(
+    "../../agents/fast-mode.js",
+  );
+  return {
+    ...actual,
+    resolveFastModeState: resolveFastModeStateMock,
+  };
+});
 
 function buildUsageParams(): HandleCommandsParams {
   return {
@@ -160,19 +176,34 @@ describe("handleUsageCommand", () => {
     const args = expectSessionCostArgs();
     expect(args.agentId).toBe("target");
     expect(args.sessionId).toBe("session-1");
+    expect(loadCostUsageSummaryMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "target" }),
+    );
+  });
+
+  it("keeps the current agent for an unqualified global session key", async () => {
+    const params = buildUsageParams();
+    params.agentId = "other";
+    params.sessionKey = "global";
+
+    await handleUsageCommand(params, true);
+
+    const args = expectSessionCostArgs();
+    expect(args.agentId).toBe("other");
+    expect(args.sessionTarget).toMatchObject({ agentId: "other", sessionKey: "global" });
+    expect(resolveSessionAgentIdMock).not.toHaveBeenCalled();
   });
 
   it("prefers the target session entry from sessionStore for /usage cost", async () => {
     const params = buildUsageParams();
+    params.storePath = "/tmp/custom-session-store.sqlite";
     params.sessionEntry = {
       sessionId: "wrapper-session",
-      sessionFile: "/tmp/wrapper-session.jsonl",
       updatedAt: Date.now(),
     };
     params.sessionStore = {
       [params.sessionKey]: {
         sessionId: "target-session",
-        sessionFile: "/tmp/target-session.jsonl",
         updatedAt: Date.now(),
       },
     };
@@ -181,7 +212,12 @@ describe("handleUsageCommand", () => {
 
     const args = expectSessionCostArgs();
     expect(args.sessionId).toBe("target-session");
-    expect(args.sessionFile).toBe("/tmp/target-session.jsonl");
+    expect(args.sessionTarget).toMatchObject({
+      agentId: "target",
+      sessionId: "target-session",
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    });
   });
 
   it("prefers the target session entry from sessionStore for /usage footer mode", async () => {
@@ -205,13 +241,137 @@ describe("handleUsageCommand", () => {
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toBe("⚙️ Usage footer: full.");
   });
+
+  it("updates usage footer mode as a session preference", async () => {
+    const params = buildUsageParams();
+    params.command.commandBodyNormalized = "/usage tokens";
+    params.sessionEntry = {
+      sessionId: "target-session",
+      updatedAt: Date.now(),
+      responseUsage: "full",
+    };
+    params.sessionStore = { [params.sessionKey]: params.sessionEntry };
+
+    const result = await handleUsageCommand(params, true);
+
+    expect(result?.reply?.text).toBe("⚙️ Usage footer: tokens.");
+    expect(params.sessionEntry.responseUsage).toBe("tokens");
+  });
+
+  it("persists an explicit /usage off so a configured default cannot re-enable it", async () => {
+    const params = buildUsageParams();
+    params.command.commandBodyNormalized = "/usage off";
+    params.sessionStore = {
+      [params.sessionKey]: {
+        sessionId: "target-session",
+        updatedAt: Date.now(),
+        responseUsage: "tokens",
+      },
+    };
+
+    const result = await handleUsageCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toBe("⚙️ Usage footer: off.");
+    expect(params.sessionStore[params.sessionKey]?.responseUsage).toBe("off");
+  });
+
+  it("no-arg toggle uses the effective mode (config default) when session is unset", async () => {
+    // When session has no override, the effective mode is the config default.
+    // The toggle should cycle from that effective value, not from "off".
+    const params = buildUsageParams();
+    params.command.commandBodyNormalized = "/usage";
+    params.cfg = {
+      ...params.cfg,
+      messages: { responseUsage: "tokens" },
+    } as OpenClawConfig;
+    params.sessionStore = {
+      [params.sessionKey]: {
+        sessionId: "target-session",
+        updatedAt: Date.now(),
+        // responseUsage is absent — session inherits config default "tokens"
+      },
+    };
+
+    const result = await handleUsageCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    // Effective current = "tokens" (from config), so cycle → "full"
+    expect(result?.reply?.text).toBe("⚙️ Usage footer: full.");
+    expect(params.sessionStore[params.sessionKey]?.responseUsage).toBe("full");
+  });
+
+  it("/usage reset clears the session override so the config default takes over", async () => {
+    const params = buildUsageParams();
+    params.command.commandBodyNormalized = "/usage reset";
+    params.sessionStore = {
+      [params.sessionKey]: {
+        sessionId: "target-session",
+        updatedAt: Date.now(),
+        responseUsage: "off",
+      },
+    };
+
+    const result = await handleUsageCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toBe("⚙️ Usage footer: reset to default.");
+    // responseUsage is deleted (undefined) — session now inherits the config default
+    expect(params.sessionStore[params.sessionKey]?.responseUsage).toBeUndefined();
+  });
+
+  it("/usage inherit (alias) clears the session override", async () => {
+    const params = buildUsageParams();
+    params.command.commandBodyNormalized = "/usage inherit";
+    params.sessionStore = {
+      [params.sessionKey]: {
+        sessionId: "target-session",
+        updatedAt: Date.now(),
+        responseUsage: "full",
+      },
+    };
+
+    const result = await handleUsageCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toBe("⚙️ Usage footer: reset to default.");
+    expect(params.sessionStore[params.sessionKey]?.responseUsage).toBeUndefined();
+  });
+
+  it("explicit off is stored and not treated as unset — config default cannot override it", async () => {
+    // This verifies the three-state distinction: "off" vs undefined.
+    // When session has explicit "off", the effective value is "off" regardless of config.
+    const params = buildUsageParams();
+    params.command.commandBodyNormalized = "/usage";
+    params.cfg = {
+      ...params.cfg,
+      messages: { responseUsage: "tokens" },
+    } as OpenClawConfig;
+    params.sessionStore = {
+      [params.sessionKey]: {
+        sessionId: "target-session",
+        updatedAt: Date.now(),
+        responseUsage: "off", // explicit off — stays off despite config default "tokens"
+      },
+    };
+
+    const result = await handleUsageCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    // Effective current = "off" (explicit, not inherited), so cycle → "tokens"
+    expect(result?.reply?.text).toBe("⚙️ Usage footer: tokens.");
+  });
 });
 
 describe("handleFastCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resolveSessionAgentIdMock.mockReturnValue("target");
-    resolveFastModeStateMock.mockReturnValue({ enabled: true, source: "agent" });
+    resolveFastModeStateMock.mockReturnValue({
+      mode: true,
+      enabled: true,
+      source: "agent",
+    });
   });
 
   it("uses the canonical target session agent for /fast status", async () => {
@@ -228,6 +388,23 @@ describe("handleFastCommand", () => {
     expect(args.provider).toBe("openai");
     expect(args.model).toBe("gpt-5.4");
     expect(result?.reply?.text).toContain("Current fast mode: on");
+  });
+
+  it("shows the resolved auto threshold for /fast status", async () => {
+    resolveFastModeStateMock.mockReturnValue({
+      mode: "auto",
+      enabled: true,
+      source: "config",
+      fastAutoOnSeconds: 30,
+    });
+    const params = buildUsageParams();
+    params.command.commandBodyNormalized = "/fast status";
+    params.provider = "openai-codex";
+    params.model = "gpt-5.5";
+
+    const result = await handleFastCommand(params, true);
+
+    expect(result?.reply?.text).toContain("Current fast mode: auto (30 sec) (default: model)");
   });
 
   it("prefers the target session entry from sessionStore for /fast status", async () => {

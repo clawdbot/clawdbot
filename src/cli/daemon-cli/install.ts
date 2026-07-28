@@ -12,12 +12,23 @@ import { resolveFutureConfigActionBlock } from "../../config/future-version-guar
 import { readConfigFileSnapshotForWrite } from "../../config/io.js";
 import { replaceConfigFile } from "../../config/mutate.js";
 import { resolveGatewayPort } from "../../config/paths.js";
+import type { GatewayBindMode } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { OPENCLAW_WRAPPER_ENV_KEY, resolveOpenClawWrapperPath } from "../../daemon/program-args.js";
 import { readEmbeddedGatewayToken } from "../../daemon/service-audit.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service.js";
 import { isNonFatalSystemdInstallProbeError } from "../../daemon/systemd.js";
+import { resolveGatewayAuth } from "../../gateway/auth.js";
+import {
+  defaultGatewayBindMode,
+  isLoopbackHost,
+  resolveGatewayBindHost,
+} from "../../gateway/net.js";
+import {
+  formatExternalSupervisorActionRequired,
+  isGatewayExternallySupervised,
+} from "../../infra/gateway-supervision.js";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
@@ -34,13 +45,64 @@ import {
 } from "./shared.js";
 import type { DaemonInstallOptions } from "./types.js";
 
+function resolveGatewayInstallBindMode(cfg: OpenClawConfig): GatewayBindMode {
+  return cfg.gateway?.bind ?? defaultGatewayBindMode(cfg.gateway?.tailscale?.mode ?? "off");
+}
+
+function formatNoAuthNonLoopbackInstallBlock(params: {
+  bind: GatewayBindMode;
+  bindHost: string;
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): string | undefined {
+  const auth = resolveGatewayAuth({
+    authConfig: params.config.gateway?.auth,
+    env: params.env,
+    tailscaleMode: params.config.gateway?.tailscale?.mode ?? "off",
+  });
+  const bindCanExposeNetwork = params.bind === "tailnet" || !isLoopbackHost(params.bindHost);
+  if (auth.mode !== "none" || !bindCanExposeNetwork) {
+    return undefined;
+  }
+  const bindReason =
+    params.bind === "tailnet" && isLoopbackHost(params.bindHost)
+      ? `gateway.bind=tailnet currently resolves to ${params.bindHost} but can later resolve to a Tailnet interface`
+      : `gateway.bind=${params.bind} resolves to ${params.bindHost}`;
+  const hints: string[] = [`${bindReason}, but gateway.auth.mode=none disables Gateway auth.`];
+  if (normalizeOptionalString(auth.token)) {
+    hints.push(
+      `This config already has gateway.auth.token; run ${formatCliCommand("openclaw config set gateway.auth.mode token")} and then rerun ${formatCliCommand("openclaw gateway install --force")}.`,
+    );
+  } else if (normalizeOptionalString(auth.password)) {
+    hints.push(
+      `This config already has gateway.auth.password; run ${formatCliCommand("openclaw config set gateway.auth.mode password")} and then rerun ${formatCliCommand("openclaw gateway install --force")}.`,
+    );
+  } else {
+    hints.push(
+      `Configure token/password auth, use trusted-proxy auth, or set ${formatCliCommand("openclaw config set gateway.bind loopback")} before installing the managed service.`,
+    );
+  }
+  return hints.join(" ");
+}
+
 /** Merge safe existing service environment into the current install invocation environment. */
 export function mergeInstallInvocationEnv(params: {
   env: NodeJS.ProcessEnv;
   existingServiceEnv?: Record<string, string>;
+  platform?: NodeJS.Platform;
 }): NodeJS.ProcessEnv {
+  const platform = params.platform ?? process.platform;
+  const normalizeInstallEnvKey = (key: string) => (platform === "win32" ? key.toUpperCase() : key);
+  const currentEnv: NodeJS.ProcessEnv = {};
+  for (const [rawKey, rawValue] of Object.entries(params.env)) {
+    const key = normalizeEnvVarKey(rawKey, { portable: true });
+    if (!key || isDangerousHostEnvVarName(key)) {
+      continue;
+    }
+    currentEnv[normalizeInstallEnvKey(key)] = rawValue;
+  }
   if (!params.existingServiceEnv || Object.keys(params.existingServiceEnv).length === 0) {
-    return params.env;
+    return currentEnv;
   }
   const preservedServiceEnv: NodeJS.ProcessEnv = {};
   for (const [rawKey, rawValue] of Object.entries(params.existingServiceEnv)) {
@@ -52,7 +114,7 @@ export function mergeInstallInvocationEnv(params: {
     if (upper === OPENCLAW_WRAPPER_ENV_KEY) {
       const value = rawValue.trim();
       if (value) {
-        preservedServiceEnv[OPENCLAW_WRAPPER_ENV_KEY] = value;
+        preservedServiceEnv[normalizeInstallEnvKey(OPENCLAW_WRAPPER_ENV_KEY)] = value;
       }
       continue;
     }
@@ -73,11 +135,11 @@ export function mergeInstallInvocationEnv(params: {
     if (!value) {
       continue;
     }
-    preservedServiceEnv[key] = value;
+    preservedServiceEnv[normalizeInstallEnvKey(key)] = value;
   }
   return {
     ...preservedServiceEnv,
-    ...params.env,
+    ...currentEnv,
   };
 }
 
@@ -85,6 +147,12 @@ export function mergeInstallInvocationEnv(params: {
 export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const { json, stdout, warnings, emit, fail } = createDaemonInstallActionContext(opts.json);
   if (failIfNixDaemonInstallMode(fail)) {
+    return;
+  }
+  if (isGatewayExternallySupervised()) {
+    fail(
+      `Gateway install blocked: ${formatExternalSupervisorActionRequired("install or rewrite the gateway service")}`,
+    );
     return;
   }
 
@@ -111,7 +179,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   }
   const runtimeRaw = opts.runtime ? opts.runtime : DEFAULT_GATEWAY_DAEMON_RUNTIME;
   if (!isGatewayDaemonRuntime(runtimeRaw)) {
-    fail('Invalid --runtime (use "node" or "bun")');
+    fail('Invalid --runtime (use "node"; Bun lacks the required node:sqlite API)');
     return;
   }
   let wrapperPath: string | undefined;
@@ -183,6 +251,18 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       fail(`Invalid ${OPENCLAW_WRAPPER_ENV_KEY}: ${String(err)}`);
       return;
     }
+  }
+  const installBind = resolveGatewayInstallBindMode(cfg);
+  const installBindHost = await resolveGatewayBindHost(installBind, cfg.gateway?.customBindHost);
+  const noAuthNonLoopbackBlock = formatNoAuthNonLoopbackInstallBlock({
+    bind: installBind,
+    bindHost: installBindHost,
+    config: cfg,
+    env: installEnv,
+  });
+  if (noAuthNonLoopbackBlock) {
+    fail(`Gateway install blocked: ${noAuthNonLoopbackBlock}`);
+    return;
   }
   if (loaded) {
     if (!opts.force) {
@@ -259,6 +339,13 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       },
       config: cfg,
     });
+  const warn = (message: string) => {
+    if (json) {
+      warnings.push(message);
+    } else {
+      defaultRuntime.log(message);
+    }
+  };
 
   await installDaemonServiceAndEmit({
     serviceNoun: "Gateway",
@@ -270,6 +357,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       await service.install({
         env: installEnv,
         stdout,
+        warn,
         programArguments,
         workingDirectory,
         environment,

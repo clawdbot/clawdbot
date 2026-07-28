@@ -24,7 +24,7 @@ import { normalizeAlias } from "./models/alias-name.js";
  * Mirrors the generic persisted custom-model catalog fallback and leaves enough
  * room above the default compaction reserve floor in `agent-settings.ts`.
  */
-export const CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000;
+const CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000;
 const DEFAULT_CONTEXT_WINDOW = CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS;
 const DEFAULT_MAX_TOKENS = 4096;
 // Azure OpenAI uses the Responses API, which supports larger generated defaults.
@@ -33,7 +33,7 @@ const AZURE_DEFAULT_MAX_TOKENS = 16_384;
 type CustomModelInput = "text" | "image";
 
 /** Result of best-effort image-input inference for custom model ids. */
-export type CustomModelImageInputInference = {
+type CustomModelImageInputInference = {
   supportsImageInput: boolean;
   confidence: "known" | "unknown";
 };
@@ -81,11 +81,6 @@ export function resolveCustomModelImageInputInference(
   }
 
   return { supportsImageInput: false, confidence: "unknown" };
-}
-
-/** Returns whether a custom model id is known to support image input. */
-export function inferCustomModelSupportsImageInput(modelId: string): boolean {
-  return resolveCustomModelImageInputInference(modelId).supportsImageInput;
 }
 
 function resolveCustomModelSupportsImageInput(params: {
@@ -189,7 +184,7 @@ export type CustomApiResult = {
 };
 
 /** Inputs used to persist a custom provider in the OpenClaw config. */
-export type ApplyCustomApiConfigParams = {
+type ApplyCustomApiConfigParams = {
   config: OpenClawConfig;
   baseUrl: string;
   modelId: string;
@@ -201,7 +196,7 @@ export type ApplyCustomApiConfigParams = {
 };
 
 /** Raw CLI flag values for non-interactive custom API setup. */
-export type ParseNonInteractiveCustomApiFlagsParams = {
+type ParseNonInteractiveCustomApiFlagsParams = {
   baseUrl?: string;
   modelId?: string;
   compatibility?: string;
@@ -211,7 +206,7 @@ export type ParseNonInteractiveCustomApiFlagsParams = {
 };
 
 /** Validated non-interactive custom API setup flags. */
-export type ParsedNonInteractiveCustomApiFlags = {
+type ParsedNonInteractiveCustomApiFlags = {
   baseUrl: string;
   modelId: string;
   compatibility: CustomApiCompatibility;
@@ -220,7 +215,7 @@ export type ParsedNonInteractiveCustomApiFlags = {
   supportsImageInput?: boolean;
 };
 
-export type CustomApiErrorCode =
+type CustomApiErrorCode =
   | "missing_required"
   | "invalid_compatibility"
   | "invalid_base_url"
@@ -239,14 +234,14 @@ export class CustomApiError extends Error {
   }
 }
 
-export type ResolveCustomProviderIdParams = {
+type ResolveCustomProviderIdParams = {
   config: OpenClawConfig;
   baseUrl: string;
   providerId?: string;
 };
 
 /** Provider id selected for a custom endpoint, with collision rename metadata. */
-export type ResolvedCustomProviderId = {
+type ResolvedCustomProviderId = {
   providerId: string;
   providerIdRenamedFrom?: string;
 };

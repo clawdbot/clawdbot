@@ -1,10 +1,16 @@
 {
   "id": "vercel-ai-gateway",
+  "icon": "https://cdn.simpleicons.org/vercel",
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
   "providers": ["vercel-ai-gateway"],
+  "modelCatalog": {
+    "discovery": {
+      "vercel-ai-gateway": "refreshable"
+    }
+  },
   "modelIdNormalization": {
     "providers": {
       "vercel-ai-gateway": {
@@ -46,6 +52,7 @@
       "provider": "vercel-ai-gateway",
       "method": "api-key",
       "choiceId": "ai-gateway-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "Vercel AI Gateway API key",
       "groupId": "ai-gateway",
       "groupLabel": "Vercel AI Gateway",

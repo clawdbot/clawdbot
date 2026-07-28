@@ -54,6 +54,51 @@ class FakeTransport implements OpenClawTransport {
   }
 }
 
+class DelayedConnectTransport extends FakeTransport {
+  connectCalls = 0;
+  private finishConnectCurrent: (() => void) | null = null;
+
+  async connect(): Promise<void> {
+    this.connectCalls += 1;
+    await new Promise<void>((resolve) => {
+      this.finishConnectCurrent = resolve;
+    });
+  }
+
+  finishConnect(): void {
+    const finish = this.finishConnectCurrent;
+    if (!finish) {
+      throw new Error("expected pending connect");
+    }
+    this.finishConnectCurrent = null;
+    finish();
+  }
+}
+
+class ClosingEventPumpTransport extends FakeTransport {
+  onFirstEventPoll?: () => void;
+
+  override events(): AsyncIterable<GatewayEvent> {
+    return {
+      [Symbol.asyncIterator]: (): AsyncIterator<GatewayEvent> => {
+        let firstPoll = true;
+        return {
+          next: async (): Promise<IteratorResult<GatewayEvent>> => {
+            if (firstPoll) {
+              firstPoll = false;
+              this.onFirstEventPoll?.();
+              await new Promise<void>((resolve) => {
+                setTimeout(resolve, 0);
+              });
+            }
+            return { done: true, value: undefined as never };
+          },
+        };
+      },
+    };
+  }
+}
+
 class EventsOnlyTransport implements OpenClawTransport {
   constructor(private readonly eventSource: AsyncIterable<GatewayEvent>) {}
 
@@ -400,6 +445,11 @@ describe("OpenClaw SDK", () => {
       timeoutMs: 1_500,
       idempotencyKey: "timeout-test",
     });
+    await oc.runs.create({
+      input: "run without SDK watchdog",
+      timeoutMs: 0,
+      idempotencyKey: "no-watchdog-test",
+    });
 
     expect(requireTransportCall(transport.calls, 0)).toEqual({
       method: "agent",
@@ -408,6 +458,15 @@ describe("OpenClaw SDK", () => {
         message: "short run",
         timeout: 2,
         idempotencyKey: "timeout-test",
+      },
+    });
+    expect(requireTransportCall(transport.calls, 1)).toEqual({
+      method: "agent",
+      options: { expectFinal: false, timeoutMs: null },
+      params: {
+        message: "run without SDK watchdog",
+        timeout: 0,
+        idempotencyKey: "no-watchdog-test",
       },
     });
     await expect(
@@ -483,19 +542,6 @@ describe("OpenClaw SDK", () => {
     expect(transport.calls).toStrictEqual([]);
   });
 
-  it("throws explicit unsupported errors for SDK namespaces without Gateway RPCs", async () => {
-    const transport = new FakeTransport({});
-    const oc = new OpenClaw({ transport });
-
-    await expect(oc.environments.create({ provider: "testbox" })).rejects.toThrow(
-      "oc.environments.create is not supported by the current OpenClaw Gateway yet",
-    );
-    await expect(oc.environments.delete("environment_123")).rejects.toThrow(
-      "oc.environments.delete is not supported by the current OpenClaw Gateway yet",
-    );
-    expect(transport.calls).toStrictEqual([]);
-  });
-
   it("invokes tools through the Gateway tools.invoke method", async () => {
     const transport = new FakeTransport({
       "tools.invoke": { ok: true, toolName: "demo", output: { value: 1 }, source: "core" },
@@ -516,6 +562,7 @@ describe("OpenClaw SDK", () => {
         method: "tools.invoke",
         params: {
           name: "demo",
+          conversationReadOrigin: "direct-operator",
           args: { mode: "test" },
           sessionKey: "agent:main:main",
           confirm: false,
@@ -601,7 +648,7 @@ describe("OpenClaw SDK", () => {
     ]);
   });
 
-  it("lists and reads environment status through current Gateway methods", async () => {
+  it("manages environments through current Gateway methods", async () => {
     const gatewayEnvironment = {
       id: "gateway",
       type: "local",
@@ -609,9 +656,25 @@ describe("OpenClaw SDK", () => {
       status: "available",
       capabilities: ["agent.run"],
     };
+    const workerEnvironment = {
+      id: "worker_123",
+      type: "worker",
+      status: "available",
+      worker: {
+        providerId: "static-ssh",
+        leaseId: "lease_123",
+        state: "ready",
+        ageMs: 1000,
+        idleMs: 250,
+        attachedSessionIds: [],
+        tunnelStatus: "stopped",
+      },
+    };
     const transport = new FakeTransport({
       "environments.list": { environments: [gatewayEnvironment] },
       "environments.status": gatewayEnvironment,
+      "environments.create": workerEnvironment,
+      "environments.destroy": { ...workerEnvironment, status: "unavailable" },
     });
     const oc = new OpenClaw({ transport });
 
@@ -619,16 +682,173 @@ describe("OpenClaw SDK", () => {
       environments: [gatewayEnvironment],
     });
     await expect(oc.environments.status("gateway")).resolves.toEqual(gatewayEnvironment);
-    await expect(oc.environments.create({ provider: "testbox" })).rejects.toThrow(
-      "oc.environments.create is not supported by the current OpenClaw Gateway yet",
-    );
-    await expect(oc.environments.delete("gateway")).rejects.toThrow(
+    await expect(
+      oc.environments.create({ profileId: "development", idempotencyKey: "request_123" }),
+    ).resolves.toEqual(workerEnvironment);
+    await expect(oc.environments.destroy("worker_123")).resolves.toEqual({
+      ...workerEnvironment,
+      status: "unavailable",
+    });
+    await expect(oc.environments.delete("worker_123")).rejects.toThrow(
       "oc.environments.delete is not supported by the current OpenClaw Gateway yet",
     );
     expect(transport.calls).toEqual([
       { method: "environments.list", params: {}, options: undefined },
       { method: "environments.status", params: { environmentId: "gateway" }, options: undefined },
+      {
+        method: "environments.create",
+        params: { profileId: "development", idempotencyKey: "request_123" },
+        options: undefined,
+      },
+      {
+        method: "environments.destroy",
+        params: { environmentId: "worker_123" },
+        options: undefined,
+      },
     ]);
+  });
+
+  it("sends empty params for no-arg Gateway list helpers", async () => {
+    const transport = new FakeTransport({
+      "agents.list": { agents: [] },
+      "sessions.list": { sessions: [] },
+      "tasks.list": { tasks: [] },
+      "models.list": { models: [] },
+      "tools.catalog": { tools: [] },
+      "exec.approval.list": { approvals: [] },
+      "environments.list": { environments: [] },
+    });
+    const oc = new OpenClaw({ transport });
+
+    await expect(oc.agents.list()).resolves.toEqual({ agents: [] });
+    await expect(oc.sessions.list()).resolves.toEqual({ sessions: [] });
+    await expect(oc.tasks.list()).resolves.toEqual({ tasks: [] });
+    await expect(oc.models.list()).resolves.toEqual({ models: [] });
+    await expect(oc.tools.list()).resolves.toEqual({ tools: [] });
+    await expect(oc.approvals.list()).resolves.toEqual({ approvals: [] });
+    await expect(oc.environments.list()).resolves.toEqual({ environments: [] });
+
+    expect(transport.calls).toEqual([
+      { method: "agents.list", params: {}, options: undefined },
+      { method: "sessions.list", params: {}, options: undefined },
+      { method: "tasks.list", params: {}, options: undefined },
+      { method: "models.list", params: {}, options: undefined },
+      { method: "tools.catalog", params: {}, options: undefined },
+      { method: "exec.approval.list", params: {}, options: undefined },
+      { method: "environments.list", params: {}, options: undefined },
+    ]);
+  });
+
+  it("preserves explicit null params for Gateway list validation", async () => {
+    type ListMethod = (this: unknown, params: unknown) => Promise<unknown>;
+    const transport = new FakeTransport({
+      "agents.list": { agents: [] },
+      "sessions.list": { sessions: [] },
+      "tasks.list": { tasks: [] },
+      "models.list": { models: [] },
+      "tools.catalog": { tools: [] },
+      "exec.approval.list": { approvals: [] },
+      "environments.list": { environments: [] },
+    });
+    const oc = new OpenClaw({ transport });
+
+    await (oc.agents.list as unknown as ListMethod).call(oc.agents, null);
+    await (oc.sessions.list as unknown as ListMethod).call(oc.sessions, null);
+    await (oc.tasks.list as unknown as ListMethod).call(oc.tasks, null);
+    await oc.models.list(null);
+    await oc.tools.list(null);
+    await oc.approvals.list(null);
+    await oc.environments.list(null);
+
+    expect(transport.calls).toEqual([
+      { method: "agents.list", params: null, options: undefined },
+      { method: "sessions.list", params: null, options: undefined },
+      { method: "tasks.list", params: null, options: undefined },
+      { method: "models.list", params: null, options: undefined },
+      { method: "tools.catalog", params: null, options: undefined },
+      { method: "exec.approval.list", params: null, options: undefined },
+      { method: "environments.list", params: null, options: undefined },
+    ]);
+  });
+
+  it("rejects tools.effective without a session key before RPC", async () => {
+    type EffectiveMethod = (this: unknown, params?: unknown) => Promise<unknown>;
+    const transport = new FakeTransport({
+      "tools.effective": { tools: [] },
+    });
+    const oc = new OpenClaw({ transport });
+
+    await expect((oc.tools.effective as unknown as EffectiveMethod).call(oc.tools)).rejects.toThrow(
+      "oc.tools.effective requires sessionKey",
+    );
+    await expect(
+      (oc.tools.effective as unknown as EffectiveMethod).call(oc.tools, {}),
+    ).rejects.toThrow("oc.tools.effective requires sessionKey");
+
+    expect(transport.calls).toEqual([]);
+  });
+
+  it("keeps close terminal when it races a pending connect", async () => {
+    const transport = new DelayedConnectTransport({
+      "agents.list": { agents: [] },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const connect = oc.connect();
+    const close = oc.close();
+    transport.finishConnect();
+
+    await expect(connect).rejects.toThrow("OpenClaw SDK client is closed");
+    await close;
+    await expect(oc.agents.list()).rejects.toThrow("OpenClaw SDK client is closed");
+    await expect(oc.events()[Symbol.asyncIterator]().next()).rejects.toThrow(
+      "OpenClaw SDK client is closed",
+    );
+    expect(() => oc.rawEvents()).toThrow("OpenClaw SDK client is closed");
+    expect(transport.connectCalls).toBe(1);
+    expect(transport.calls).toEqual([]);
+  });
+
+  it("calls exec approval Gateway RPCs with protocol params", async () => {
+    const transport = new FakeTransport({
+      "exec.approval.list": { approvals: [] },
+      "exec.approval.resolve": { ok: true },
+    });
+    const oc = new OpenClaw({ transport });
+
+    await expect(oc.approvals.list()).resolves.toEqual({ approvals: [] });
+    const staleDecision = { id: "stale-approval", decision: "allow-once" as const };
+    await expect(oc.approvals.respond("approval-123", staleDecision)).resolves.toEqual({
+      ok: true,
+    });
+
+    expect(transport.calls).toEqual([
+      {
+        method: "exec.approval.list",
+        options: undefined,
+        params: {},
+      },
+      {
+        method: "exec.approval.resolve",
+        options: undefined,
+        params: { id: "approval-123", decision: "allow-once" },
+      },
+    ]);
+  });
+
+  it("does not request after close races event pump startup", async () => {
+    const transport = new ClosingEventPumpTransport({
+      "agents.list": { agents: [] },
+    });
+    const oc = new OpenClaw({ transport });
+    let closePromise: Promise<void> | undefined;
+    transport.onFirstEventPoll = () => {
+      closePromise = oc.close();
+    };
+
+    await expect(oc.agents.list()).rejects.toThrow("OpenClaw SDK client is closed");
+    await closePromise;
+    expect(transport.calls).toEqual([]);
   });
 
   it("cancels runs and checks model auth status through current Gateway methods", async () => {
@@ -1147,25 +1367,68 @@ describe("OpenClaw SDK", () => {
     const transport = new FakeTransport({
       "sessions.create": { key: "session-main", label: "Main" },
       "sessions.send": { status: "accepted", runId: "run_session" },
+      "sessions.compact": { ok: true, compacted: true },
     });
     const oc = new OpenClaw({ transport });
 
-    const session = await oc.sessions.create({ key: "session-main" });
-    const run = await session.send({ message: "continue", thinking: "medium" });
+    const session = await oc.sessions.create({
+      key: "session-main",
+      thinkingLevel: "high",
+      parentSessionKey: "main",
+      emitCommandHooks: true,
+      succeedsParent: false,
+    });
+    const run = await session.send({ message: "continue", thinking: "medium", timeoutMs: 1_500 });
+    const noTimeoutRun = await session.send({ message: "continue without timeout", timeoutMs: 0 });
+    await session.compact();
 
     expect(run.id).toBe("run_session");
+    expect(noTimeoutRun.id).toBe("run_session");
     expect(transport.calls).toEqual([
       {
         method: "sessions.create",
         options: undefined,
-        params: { key: "session-main" },
+        params: {
+          key: "session-main",
+          thinkingLevel: "high",
+          parentSessionKey: "main",
+          emitCommandHooks: true,
+          succeedsParent: false,
+        },
       },
       {
         method: "sessions.send",
-        options: { expectFinal: true },
-        params: { key: "session-main", message: "continue", thinking: "medium" },
+        options: { expectFinal: true, timeoutMs: 1_500 },
+        params: { key: "session-main", message: "continue", thinking: "medium", timeoutMs: 1_500 },
+      },
+      {
+        method: "sessions.send",
+        options: { expectFinal: true, timeoutMs: null },
+        params: { key: "session-main", message: "continue without timeout", timeoutMs: 0 },
+      },
+      {
+        method: "sessions.compact",
+        options: { timeoutMs: null },
+        params: { key: "session-main" },
       },
     ]);
+  });
+
+  it("keeps key-only Session.abort compatible by omitting clearQueued", async () => {
+    const transport = new FakeTransport({
+      "sessions.create": { key: "session-main", label: "Main" },
+      "sessions.abort": { ok: true, abortedRunId: null, status: "no-active-run" },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const session = await oc.sessions.create({ key: "session-main" });
+    await session.abort();
+
+    expect(transport.calls.at(-1)).toEqual({
+      method: "sessions.abort",
+      options: undefined,
+      params: { key: "session-main" },
+    });
   });
 
   it("normalizes Gateway agent stream events into SDK events", () => {
@@ -1421,3 +1684,4 @@ describe("OpenClaw SDK", () => {
     expect(timedOut.data).toEqual({ phase: "end", stopReason: "timeout" });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

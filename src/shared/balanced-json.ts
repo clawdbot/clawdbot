@@ -1,8 +1,8 @@
 /** JSON opening delimiters supported by the balanced-fragment scanner. */
-export type JsonOpeningDelimiter = "{" | "[";
+type JsonOpeningDelimiter = "{" | "[";
 
 /** One balanced JSON object/array fragment found inside arbitrary text. */
-export type BalancedJsonFragment = {
+type BalancedJsonFragment = {
   json: string;
   startIndex: number;
   endIndex: number;
@@ -39,9 +39,6 @@ export function extractBalancedJsonPrefix(
   let escaped = false;
   for (let i = start; i < raw.length; i += 1) {
     const char = raw[i];
-    if (char === undefined) {
-      break;
-    }
     if (inString) {
       // Delimiters inside strings are data, not structure. Track escapes so an
       // escaped quote does not prematurely end string mode.

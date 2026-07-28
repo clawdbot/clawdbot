@@ -152,7 +152,7 @@ vi.mock("./model-auth-env-vars.js", () => {
     bedrock: "amazon-bedrock",
     "aws-bedrock": "amazon-bedrock",
   };
-  const resolveProviderEnvAuthEvidence = (params?: { config?: OpenClawConfig }) => {
+  const resolveMockProviderAuthEvidence = (params?: { config?: OpenClawConfig }) => {
     const evidence = {
       "google-vertex": [
         {
@@ -186,12 +186,10 @@ vi.mock("./model-auth-env-vars.js", () => {
   };
   return {
     listKnownProviderEnvApiKeyNames: () => [...new Set(Object.values(candidates).flat())],
-    resolveProviderEnvApiKeyCandidates: () => candidates,
-    resolveProviderEnvAuthEvidence,
     resolveProviderEnvAuthLookupMaps: (params?: { config?: OpenClawConfig }) => ({
       aliasMap,
       envCandidateMap: candidates,
-      authEvidenceMap: resolveProviderEnvAuthEvidence(params),
+      authEvidenceMap: resolveMockProviderAuthEvidence(params),
       setupProviderFallbackRefs: ["anthropic-vertex"],
     }),
   };
@@ -513,6 +511,32 @@ describe("getApiKeyForModel", () => {
     ).rejects.toThrow(/requires an OpenAI API key profile/);
   });
 
+  it("rejects an explicit OpenAI API-key profile for the Codex transport", async () => {
+    const store = {
+      version: 1 as const,
+      profiles: {
+        "openai:api-key": {
+          type: "api_key" as const,
+          provider: "openai",
+          key: "direct-openai-key",
+        },
+      },
+    };
+
+    await expect(
+      getApiKeyForModel({
+        model: {
+          id: "gpt-5.5",
+          provider: "openai",
+          api: "openai-chatgpt-responses",
+        } as Model,
+        profileId: "openai:api-key",
+        lockedProfile: true,
+        store,
+      }),
+    ).rejects.toThrow(/requires a ChatGPT subscription \(OAuth or token\) profile/);
+  });
+
   it("uses the config default agent dir when resolving provider profiles", async () => {
     await withOpenClawTestState(
       {
@@ -731,6 +755,33 @@ describe("getApiKeyForModel", () => {
         });
         expect(resolved.apiKey).toBe("zai-test-key");
         expect(resolved.source).toContain("Z_AI_API_KEY");
+      },
+    );
+  });
+
+  it("skips malformed stored ZAI command profiles and uses current env auth", async () => {
+    await withEnvAsync(
+      {
+        ZAI_API_KEY: "zai-current-key", // pragma: allowlist secret
+        Z_AI_API_KEY: undefined,
+      },
+      async () => {
+        const resolved = await resolveApiKeyForProvider({
+          provider: "zai",
+          store: {
+            version: 1,
+            profiles: {
+              "zai:default": {
+                type: "api_key",
+                provider: "zai",
+                key: "openclaw onboard --auth-choice zai-coding-global",
+              },
+            },
+          },
+        });
+        expect(resolved.apiKey).toBe("zai-current-key");
+        expect(resolved.source).toContain("ZAI_API_KEY");
+        expect(resolved.profileId).toBeUndefined();
       },
     );
   });
@@ -1936,3 +1987,4 @@ describe("resolveApiKeyForProvider — per-entry apiKey as profile ID reference"
     ).rejects.toThrow(/matched a stored profile but failed to resolve/);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -15,15 +15,19 @@ import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasNonEmptyString } from "../infra/outbound/channel-target.js";
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
+import { listOfficialExternalChannelEnvVars } from "../plugins/official-external-plugin-catalog.js";
 import { isRecord } from "../utils.js";
 import { listBundledChannelIds } from "./plugins/bundled-ids.js";
 
 const IGNORED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
 
+export type AmbientEnvTriggerPolicy = "allow" | "suppress";
+
 type ChannelPresenceOptions = {
   channelIds?: readonly string[];
   discovery?: PluginDiscoveryResult;
   includePersistedAuthState?: boolean;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
   persistedAuthStateProbe?: {
     listChannelIds: () => readonly string[];
     hasState: (params: {
@@ -146,6 +150,16 @@ export function listPotentialConfiguredChannelPresenceSignals(
   const configuredChannelIds = new Set<string>();
   const channelIds = options.channelIds ?? listBundledChannelIds(env, options.discovery);
   const channelEnvPrefixes = listChannelEnvPrefixes(channelIds);
+  const scopedChannelIds = options.channelIds
+    ? new Set(
+        options.channelIds
+          .map((channelId) => normalizeOptionalLowercaseString(channelId))
+          .filter((channelId): channelId is string => Boolean(channelId)),
+      )
+    : undefined;
+  const officialExternalChannelEnvVars = listOfficialExternalChannelEnvVars().filter(
+    ({ channelId }) => !scopedChannelIds || scopedChannelIds.has(channelId),
+  );
   const channels = isRecord(cfg.channels) ? cfg.channels : null;
   if (channels) {
     for (const [key, value] of Object.entries(channels)) {
@@ -161,14 +175,22 @@ export function listPotentialConfiguredChannelPresenceSignals(
     }
   }
 
-  for (const [key, value] of Object.entries(env)) {
-    if (!hasNonEmptyString(value)) {
-      continue;
-    }
-    for (const [prefix, channelId] of channelEnvPrefixes) {
-      if (key.startsWith(prefix)) {
-        configuredChannelIds.add(channelId);
-        addSignal(channelId, "env");
+  if (options.ambientEnvTriggers !== "suppress") {
+    for (const [key, value] of Object.entries(env)) {
+      if (!hasNonEmptyString(value)) {
+        continue;
+      }
+      for (const [prefix, channelId] of channelEnvPrefixes) {
+        if (key.startsWith(prefix)) {
+          configuredChannelIds.add(channelId);
+          addSignal(channelId, "env");
+        }
+      }
+      for (const { channelId, envVars } of officialExternalChannelEnvVars) {
+        if (envVars.includes(key)) {
+          configuredChannelIds.add(channelId);
+          addSignal(channelId, "env");
+        }
       }
     }
   }
@@ -185,47 +207,4 @@ export function listPotentialConfiguredChannelPresenceSignals(
   }
 
   return signals.filter((signal) => configuredChannelIds.has(signal.channelId));
-}
-
-function hasEnvConfiguredChannel(
-  cfg: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
-  options: ChannelPresenceOptions = {},
-): boolean {
-  const channelIds = options.channelIds ?? listBundledChannelIds(env, options.discovery);
-  const channelEnvPrefixes = listChannelEnvPrefixes(channelIds);
-  for (const [key, value] of Object.entries(env)) {
-    if (!hasNonEmptyString(value)) {
-      continue;
-    }
-    if (channelEnvPrefixes.some(([prefix]) => key.startsWith(prefix))) {
-      return true;
-    }
-  }
-  if (options.includePersistedAuthState === false || !hasPersistedChannelState(env)) {
-    return false;
-  }
-  return listPersistedAuthStateChannelIds(options).some((channelId) =>
-    hasPersistedAuthState({ channelId, cfg, env, options }),
-  );
-}
-
-/** Returns true when any channel appears configured from config, env, or persisted auth state. */
-export function hasPotentialConfiguredChannels(
-  cfg: OpenClawConfig | null | undefined,
-  env: NodeJS.ProcessEnv = process.env,
-  options: ChannelPresenceOptions = {},
-): boolean {
-  const channels = isRecord(cfg?.channels) ? cfg.channels : null;
-  if (channels) {
-    for (const [key, value] of Object.entries(channels)) {
-      if (IGNORED_CHANNEL_CONFIG_KEYS.has(key)) {
-        continue;
-      }
-      if (hasMeaningfulChannelConfig(value)) {
-        return true;
-      }
-    }
-  }
-  return hasEnvConfiguredChannel(cfg ?? {}, env, options);
 }

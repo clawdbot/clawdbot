@@ -9,23 +9,28 @@ import {
   isGatewayCredentialsRequiredError,
 } from "../gateway/call.js";
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
-import type { DoctorMemoryStatusPayload } from "../gateway/server-methods/doctor.js";
+import type {
+  DoctorMemoryEmbeddingRuntimePayload,
+  DoctorMemoryStatusPayload,
+} from "../gateway/server-methods/doctor.js";
 import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { redactSecretDegradationReason } from "../secrets/runtime-degraded-state.js";
 import { VERSION } from "../version.js";
 import {
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
   gatewayProbeResultSawGateway,
 } from "./gateway-health-auth-diagnostic.js";
-import { formatHealthCheckFailure } from "./health-format.js";
+import { formatGatewayClosedDiagnostic, formatHealthCheckFailure } from "./health-format.js";
 import type { StatusSummary } from "./status.types.js";
 
-export type GatewayMemoryProbe = {
+type GatewayMemoryProbe = {
   checked: boolean;
   ready: boolean;
   error?: string;
+  runtimeFacts?: DoctorMemoryEmbeddingRuntimePayload;
   /**
    * True when the probe was intentionally skipped by the gateway (probe: false
    * path). Distinct from checked: false caused by a network timeout or
@@ -82,6 +87,29 @@ export async function checkGatewayHealth(params: {
     });
     healthOk = true;
     noteCliGatewayVersionSkew(status);
+    if (status.degradedSecretOwners && status.degradedSecretOwners.length > 0) {
+      note(
+        status.degradedSecretOwners
+          .map(
+            (owner) =>
+              `- ${owner.degradationState ?? "cold"} ${owner.ownerKind}:${owner.ownerId} (${owner.paths.join(", ")}): ${redactSecretDegradationReason(owner.reason)}` +
+              "\n  Retry: openclaw secrets reload",
+          )
+          .join("\n"),
+        "Secret runtime degradation",
+      );
+    }
+    if (status.degradedPlugins && status.degradedPlugins.length > 0) {
+      note(
+        status.degradedPlugins
+          .map(
+            (plugin) =>
+              `- ${plugin.pluginId} (${plugin.diagnostic.reason}): ${plugin.diagnostic.detail}`,
+          )
+          .join("\n"),
+        "Plugins configured unavailable",
+      );
+    }
     try {
       const statusLocal = await callGateway({
         method: "channels.status",
@@ -129,7 +157,12 @@ export async function checkGatewayHealth(params: {
     const message = String(err);
     if (message.includes("gateway closed")) {
       const gatewayDetails = buildGatewayConnectionDetails({ config: params.cfg });
-      note("Gateway not running.", "Gateway");
+      const closedDiagnostic = formatGatewayClosedDiagnostic(err);
+      if (closedDiagnostic) {
+        note(closedDiagnostic, "Gateway");
+      } else {
+        note("Gateway not running.", "Gateway");
+      }
       note(gatewayDetails.message, "Gateway connection");
     } else {
       params.runtime.error(formatHealthCheckFailure(err));
@@ -165,6 +198,7 @@ export async function probeGatewayMemoryStatus(params: {
       checked: gatewayChecked,
       ready: payload.embedding.ok,
       error: payload.embedding.error,
+      ...(payload.embeddingRuntime ? { runtimeFacts: payload.embeddingRuntime } : {}),
       skipped: !gatewayChecked,
     };
   } catch (err) {

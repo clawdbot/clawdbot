@@ -1,9 +1,6 @@
 // Covers provider error text classifiers used by live model validation.
 import { describe, expect, it } from "vitest";
-import {
-  isMiniMaxModelNotFoundErrorMessage,
-  isModelNotFoundErrorMessage,
-} from "./live-model-errors.js";
+import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
 
 describe("live model error helpers", () => {
   it("detects generic model-not-found messages", () => {
@@ -15,12 +12,19 @@ describe("live model error helpers", () => {
     expect(isModelNotFoundErrorMessage("Model not found: openai/gpt-6")).toBe(true);
     expect(isModelNotFoundErrorMessage("model_not_found")).toBe(true);
     expect(isModelNotFoundErrorMessage("The model gpt-foo does not exist.")).toBe(true);
+    expect(
+      isModelNotFoundErrorMessage(
+        "FailoverError: The selected model was not found by the provider. Check the model id or choose a different model.",
+      ),
+    ).toBe(true);
     expect(isModelNotFoundErrorMessage('{"code":404,"message":"model not found"}')).toBe(true);
     expect(isModelNotFoundErrorMessage(openRouterJson404Payload)).toBe(true);
     expect(isModelNotFoundErrorMessage("model: MiniMax-M2.7-highspeed not found")).toBe(true);
     expect(
       isModelNotFoundErrorMessage("404 No endpoints found for deepseek/deepseek-r1:free."),
     ).toBe(true);
+    expect(isModelNotFoundErrorMessage("404 page not found")).toBe(true);
+    expect(isModelNotFoundErrorMessage("Error: 404 404 page not found")).toBe(true);
     expect(
       isModelNotFoundErrorMessage(
         '400 Provider returned error {"code":400,"msg":"model[Alibaba-NLP/Tongyi-DeepResearch-30B-A3B] router not found"}',
@@ -37,6 +41,18 @@ describe("live model error helpers", () => {
       ),
     ).toBe(true);
     expect(isModelNotFoundErrorMessage("Not supported model some-model-id")).toBe(true);
+    // #104490: account/plan-restricted model rejections (Codex + ChatGPT
+    // account) are model-unavailable, including the raw JSON envelope shape.
+    expect(
+      isModelNotFoundErrorMessage(
+        "The 'gpt-5.5-pro' model is not supported when using Codex with a ChatGPT account.",
+      ),
+    ).toBe(true);
+    expect(
+      isModelNotFoundErrorMessage(
+        '{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The \'gpt-5.5-pro\' model is not supported when using Codex with a ChatGPT account."}}',
+      ),
+    ).toBe(true);
     expect(
       isModelNotFoundErrorMessage(
         "404 The free model has been deprecated. Transition to qwen/qwen3.6-plus for continued paid access.",
@@ -56,18 +72,16 @@ describe("live model error helpers", () => {
     expect(isModelNotFoundErrorMessage("This model is not supported for tool calling.")).toBe(
       false,
     );
+    expect(
+      isModelNotFoundErrorMessage("This model is not supported when using tool calling."),
+    ).toBe(false);
     expect(isModelNotFoundErrorMessage("This model does not support image inputs.")).toBe(false);
+    expect(
+      isModelNotFoundErrorMessage("HTTP 404: No endpoints found that support image input"),
+    ).toBe(false);
     expect(isModelNotFoundErrorMessage("Reasoning effort is not supported for this model.")).toBe(
       false,
     );
     expect(isModelNotFoundErrorMessage("request ended without sending any chunks")).toBe(false);
-  });
-
-  it("detects bare minimax 404 page-not-found responses", () => {
-    expect(isMiniMaxModelNotFoundErrorMessage("404 page not found")).toBe(true);
-    expect(isMiniMaxModelNotFoundErrorMessage("Error: 404 404 page not found")).toBe(true);
-    expect(isMiniMaxModelNotFoundErrorMessage("request ended without sending any chunks")).toBe(
-      false,
-    );
   });
 });

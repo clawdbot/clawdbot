@@ -38,4 +38,32 @@ describe("subscribeEmbeddedAgentSession lifecycle billing errors", () => {
     expect(lifecycleError?.data?.phase).toBe("error");
     expect(lifecycleError?.data?.error).toContain("Anthropic (claude-3-5-sonnet)");
   });
+
+  it("defers error terminal ownership while preserving diagnostics", () => {
+    const onAgentEvent = vi.fn();
+    const { emit } = createSubscribedSessionHarness({
+      runId: "run-deferred-error",
+      onAgentEvent,
+      terminalLifecyclePhase: "finishing",
+    });
+
+    emitAssistantLifecycleErrorAndEnd({
+      emit,
+      errorMessage: "insufficient credits",
+      provider: "Anthropic",
+      model: "claude-3-5-sonnet",
+    });
+
+    const lifecycleEvents = onAgentEvent.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.stream === "lifecycle");
+    expect(lifecycleEvents).toEqual([
+      expect.objectContaining({
+        data: expect.objectContaining({
+          phase: "finishing",
+          error: expect.stringContaining("Anthropic (claude-3-5-sonnet)"),
+        }),
+      }),
+    ]);
+  });
 });

@@ -46,13 +46,22 @@ function runSuccessTail(scriptPath: string) {
 }
 
 describe("Docker E2E observability", () => {
-  it.each(["scripts/e2e/mcp-channels-docker.sh", "scripts/e2e/cron-mcp-cleanup-docker.sh"])(
-    "prints successful MCP client proof logs from %s",
-    (scriptPath) => {
-      const result = runSuccessTail(scriptPath);
+  it("feeds the cron CLI Docker proof body through container stdin", () => {
+    const script = readFileSync("scripts/e2e/cron-cli-docker.sh", "utf8");
 
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout.trim().split("\n")).toEqual(["LOG:client proof log", "OK"]);
-    },
-  );
+    expect(script).toMatch(
+      /docker_e2e_run_with_harness[\s\S]*\n  -i \\\n  "\$IMAGE_NAME" \\\n  bash -s >"\$CLIENT_LOG" 2>&1 <<'INNER'/u,
+    );
+  });
+
+  it.each([
+    "scripts/e2e/mcp-channels-docker.sh",
+    "scripts/e2e/cron-cli-docker.sh",
+    "scripts/e2e/cron-mcp-cleanup-docker.sh",
+  ])("prints successful MCP client proof logs from %s", (scriptPath) => {
+    const result = runSuccessTail(scriptPath);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim().split("\n")).toEqual(["LOG:client proof log", "OK"]);
+  });
 });

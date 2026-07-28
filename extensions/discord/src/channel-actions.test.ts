@@ -140,7 +140,7 @@ describe("discordMessageActions", () => {
     ]);
   });
 
-  it("requires trusted requester sender for privileged guild admin actions only from Discord turns", () => {
+  it("requires trusted requester sender for privileged guild admin actions from tool contexts", () => {
     for (const action of ["channel-delete", "timeout", "kick", "ban"] as const) {
       expect(
         discordMessageActions.requiresTrustedRequesterSender?.({
@@ -148,13 +148,18 @@ describe("discordMessageActions", () => {
           toolContext: { currentChannelProvider: "discord" },
         }),
       ).toBe(true);
+      expect(
+        discordMessageActions.requiresTrustedRequesterSender?.({
+          action,
+        }),
+      ).toBe(false);
     }
     expect(
       discordMessageActions.requiresTrustedRequesterSender?.({
         action: "channel-delete",
         toolContext: { currentChannelProvider: "telegram" },
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       discordMessageActions.requiresTrustedRequesterSender?.({
         action: "read",
@@ -512,11 +517,14 @@ describe("discordMessageActions", () => {
       params: { to: "channel:123", message: "hello" },
       cfg,
       accountId: "ops",
+      requesterAccountId: "ops",
       requesterSenderId: "user-1",
+      senderIsOwner: true,
       toolContext,
       mediaAccess,
       mediaLocalRoots,
       mediaReadFile,
+      conversationReadOrigin: "delegated",
     });
 
     expect(handleDiscordMessageActionMock).toHaveBeenCalledWith({
@@ -524,11 +532,14 @@ describe("discordMessageActions", () => {
       params: { to: "channel:123", message: "hello" },
       cfg,
       accountId: "ops",
+      requesterAccountId: "ops",
       requesterSenderId: "user-1",
+      senderIsOwner: true,
       toolContext,
       mediaAccess,
       mediaLocalRoots,
       mediaReadFile,
+      conversationReadOrigin: "delegated",
     });
   });
 });

@@ -28,7 +28,7 @@ import {
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 
 /** Dependency hook for resolving implicit model providers while planning models.json. */
-export type ResolveImplicitProvidersForModelsJson = (params: {
+type ResolveImplicitProvidersForModelsJson = (params: {
   agentDir: string;
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -41,7 +41,7 @@ export type ResolveImplicitProvidersForModelsJson = (params: {
 }) => Promise<Record<string, ProviderConfig>>;
 
 /** Planned models.json write/noop/skip result plus plugin catalog sidecar writes. */
-export type ModelsJsonPlan =
+type ModelsJsonPlan =
   | {
       action: "skip";
       pluginCatalogWrites?: Record<string, string>;
@@ -92,7 +92,7 @@ function buildPluginCatalogWrites(
 }
 
 /** Resolves providers for models.json with injectable implicit-provider discovery. */
-export async function resolveProvidersForModelsJsonWithDeps(
+async function resolveProvidersForModelsJsonWithDeps(
   params: {
     cfg: OpenClawConfig;
     agentDir: string;
@@ -112,6 +112,12 @@ export async function resolveProvidersForModelsJsonWithDeps(
   const cfg = params.cfg.models?.providers
     ? { ...params.cfg, models: { ...params.cfg.models, providers: explicitProviders } }
     : params.cfg;
+  // When models.mode is "replace" the user opts out of provider discovery, so
+  // skip the (potentially slow) implicit-provider resolver entirely and return
+  // only the explicit providers. See openclaw#66957.
+  if (cfg.models?.mode === "replace") {
+    return mergeProviders({ implicit: {}, explicit: explicitProviders });
+  }
   const resolveImplicitProvidersImpl = deps?.resolveImplicitProviders ?? resolveImplicitProviders;
   const implicitProviders = await resolveImplicitProvidersImpl({
     agentDir,
@@ -194,7 +200,7 @@ function filterWritableProviders(
 }
 
 /** Plans root and plugin-owned model catalog writes with injectable provider discovery. */
-export async function planOpenClawModelsJsonWithDeps(
+async function planOpenClawModelsJsonWithDeps(
   params: {
     cfg: OpenClawConfig;
     sourceConfigForSecrets?: OpenClawConfig;
@@ -309,4 +315,11 @@ export async function planOpenClawModelsJson(
   params: Parameters<typeof planOpenClawModelsJsonWithDeps>[0],
 ): Promise<ModelsJsonPlan> {
   return planOpenClawModelsJsonWithDeps(params);
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.modelsConfigPlanTestApi")] = {
+    planOpenClawModelsJsonWithDeps,
+    resolveProvidersForModelsJsonWithDeps,
+  };
 }

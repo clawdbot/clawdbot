@@ -5,14 +5,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getAcpSessionManager } from "./control-plane/manager.js";
-import { resolveConfiguredAcpBindingSpecBySessionKey } from "./persistent-bindings.resolve.js";
 import {
   buildConfiguredAcpSessionKey,
   normalizeText,
   type ConfiguredAcpBindingSpec,
   type ResolvedConfiguredAcpBinding,
 } from "./persistent-bindings.types.js";
-import { readAcpSessionEntry } from "./runtime/session-meta.js";
 
 // Binding lifecycle keeps configured channel conversations attached to matching ACP sessions.
 function sessionMatchesConfiguredBinding(params: {
@@ -137,62 +135,4 @@ export async function ensureConfiguredAcpBindingReady(params: {
     ok: false,
     error: ensured.error ?? "unknown error",
   };
-}
-
-/** Resets a configured ACP binding session without changing the bound conversation key. */
-export async function resetAcpSessionInPlace(params: {
-  cfg: OpenClawConfig;
-  sessionKey: string;
-  reason: "new" | "reset";
-  clearMeta?: boolean;
-}): Promise<{ ok: true } | { ok: false; skipped?: boolean; error?: string }> {
-  const sessionKey = params.sessionKey.trim();
-  if (!sessionKey) {
-    return {
-      ok: false,
-      skipped: true,
-    };
-  }
-
-  const meta = readAcpSessionEntry({
-    cfg: params.cfg,
-    sessionKey,
-  })?.acp;
-  const configuredBinding = resolveConfiguredAcpBindingSpecBySessionKey({
-    cfg: params.cfg,
-    sessionKey,
-  });
-  const clearMeta = params.clearMeta ?? Boolean(configuredBinding);
-  if (!meta) {
-    if (clearMeta) {
-      return { ok: true };
-    }
-    return {
-      ok: false,
-      skipped: true,
-    };
-  }
-
-  const acpManager = getAcpSessionManager();
-
-  try {
-    await acpManager.closeSession({
-      cfg: params.cfg,
-      sessionKey,
-      reason: `${params.reason}-in-place-reset`,
-      discardPersistentState: true,
-      clearMeta,
-      allowBackendUnavailable: true,
-      requireAcpSession: false,
-    });
-
-    return { ok: true };
-  } catch (error) {
-    const message = formatErrorMessage(error);
-    logVerbose(`acp-configured-binding: failed reset for ${sessionKey}: ${message}`);
-    return {
-      ok: false,
-      error: message,
-    };
-  }
 }

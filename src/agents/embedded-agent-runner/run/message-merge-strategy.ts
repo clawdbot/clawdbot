@@ -5,14 +5,14 @@ import { mergeOrphanedTrailingUserPrompt } from "./attempt.prompt-helpers.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 /** Inputs required to reconcile an active session leaf with the prompt about to be sent. */
-export type OrphanedTrailingUserPromptMergeParams = {
+type OrphanedTrailingUserPromptMergeParams = {
   prompt: string;
   trigger: EmbeddedRunAttemptParams["trigger"];
-  leafMessage: { content?: unknown };
+  leafMessage: { content?: unknown; provenance?: unknown };
 };
 
 /** Result of merging or dropping a trailing user leaf before provider submission. */
-export type OrphanedTrailingUserPromptMergeResult = {
+type OrphanedTrailingUserPromptMergeResult = {
   prompt: string;
   merged: boolean;
   /**
@@ -24,7 +24,7 @@ export type OrphanedTrailingUserPromptMergeResult = {
 };
 
 /** Registry id for the transcript message merge behavior currently supported by embedded runs. */
-export type MessageMergeStrategyId = "orphan-trailing-user-prompt";
+type MessageMergeStrategyId = "orphan-trailing-user-prompt";
 
 /** Strategy seam for tests and future runtime variants that alter prompt/leaf reconciliation. */
 export type MessageMergeStrategy = {
@@ -34,31 +34,15 @@ export type MessageMergeStrategy = {
   ) => OrphanedTrailingUserPromptMergeResult;
 };
 
-/** Default strategy used by embedded attempts when no test override is installed. */
-export const DEFAULT_MESSAGE_MERGE_STRATEGY_ID: MessageMergeStrategyId =
-  "orphan-trailing-user-prompt";
+/** Strategy used by embedded attempts. */
+const DEFAULT_MESSAGE_MERGE_STRATEGY_ID: MessageMergeStrategyId = "orphan-trailing-user-prompt";
 
 const defaultMessageMergeStrategy: MessageMergeStrategy = {
   id: DEFAULT_MESSAGE_MERGE_STRATEGY_ID,
   mergeOrphanedTrailingUserPrompt,
 };
 
-let activeMessageMergeStrategy = defaultMessageMergeStrategy;
-
-/** Returns the active merge strategy for the current process. */
+/** Returns the transcript merge strategy used by embedded attempts. */
 export function resolveMessageMergeStrategy(): MessageMergeStrategy {
-  return activeMessageMergeStrategy;
-}
-
-function registerMessageMergeStrategy(strategy: MessageMergeStrategy): () => void {
-  const previous = activeMessageMergeStrategy;
-  activeMessageMergeStrategy = strategy;
-  return () => {
-    activeMessageMergeStrategy = previous;
-  };
-}
-
-/** Installs a process-local merge strategy override and returns a restore callback. */
-export function registerMessageMergeStrategyForTest(strategy: MessageMergeStrategy): () => void {
-  return registerMessageMergeStrategy(strategy);
+  return defaultMessageMergeStrategy;
 }

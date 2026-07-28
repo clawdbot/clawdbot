@@ -1,8 +1,7 @@
 // Doctor lint tests cover health-check registry integration and lint warning output.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resetCoreHealthChecksForTest } from "../flows/doctor-core-checks.js";
-import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
+import { clearHealthChecksForTest, registerHealthCheck } from "../flows/health-check-registry.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
 
 const mocks = vi.hoisted(() => ({
@@ -24,7 +23,6 @@ describe("runDoctorLintCli", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     clearHealthChecksForTest();
-    resetCoreHealthChecksForTest();
   });
 
   it("bases exit code on the selected severity threshold", async () => {
@@ -77,6 +75,39 @@ describe("runDoctorLintCli", () => {
     }
   });
 
+  it("does not expose deep mode to extension health check context", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {},
+      path: "/tmp/openclaw.json",
+    });
+    const detect = vi.fn(async (_ctx: unknown) => []);
+    registerHealthCheck({
+      id: "test/deep-context",
+      kind: "plugin",
+      description: "test extension context",
+      detect,
+    });
+
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      await runDoctorLintCli(runtime, {
+        deep: true,
+        onlyIds: ["test/deep-context"],
+      });
+
+      expect(detect).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mode: "lint",
+        }),
+      );
+      expect(detect.mock.calls[0]?.[0]).not.toHaveProperty("deep");
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
   it("emits structured JSON for invalid config snapshots", async () => {
     mocks.readConfigFileSnapshot.mockResolvedValue({
       exists: true,
@@ -122,7 +153,7 @@ describe("runDoctorLintCli", () => {
     try {
       const exitCode = await runDoctorLintCli(runtime, {
         json: true,
-        onlyIds: ["core/doctor/session-locks"],
+        onlyIds: ["core/doctor/not-a-check"],
       });
 
       expect(exitCode).toBe(1);
@@ -134,7 +165,7 @@ describe("runDoctorLintCli", () => {
           {
             checkId: "core/doctor/lint-selection",
             severity: "error",
-            path: "core/doctor/session-locks",
+            path: "core/doctor/not-a-check",
           },
         ],
       });
@@ -186,10 +217,183 @@ describe("runDoctorLintCli", () => {
         ],
       });
       expect(payload.findings[0].message).toContain("Codex plugin is disabled by config");
-      expect(payload.findings[0].fixHint).toContain("openclaw doctor --fix");
+      // Explicit plugins.entries.codex.enabled=false blocks auto-repair, so the
+      // hint names the manual action instead of promising doctor --fix.
+      expect(payload.findings[0].fixHint).toContain("Enable plugins.entries.codex");
     } finally {
       stdout.mockRestore();
     }
+  });
+
+  it("runs core contribution checks plus registered extension checks", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {},
+      path: "/tmp/openclaw.json",
+    });
+    registerHealthCheck({
+      id: "plugin/example/lint",
+      kind: "plugin",
+      description: "example plugin lint check",
+      async detect() {
+        return [
+          {
+            checkId: "plugin/example/lint",
+            severity: "info",
+            message: "plugin finding",
+            fixHint: "Review the plugin finding.",
+          },
+        ];
+      },
+    });
+
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      const exitCode = await runDoctorLintCli(runtime, {
+        json: true,
+        onlyIds: ["core/doctor/final-config-validation", "plugin/example/lint"],
+      });
+
+      expect(exitCode).toBe(0);
+      const payload = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+      expect(payload.ok).toBe(true);
+      expect(payload.checksRun).toBe(2);
+      expect(payload.findings).toEqual([]);
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
+  it("fails informational findings when severity-min is explicit", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {},
+      path: "/tmp/openclaw.json",
+    });
+    registerHealthCheck({
+      id: "plugin/example/lint",
+      kind: "plugin",
+      description: "example plugin lint check",
+      async detect() {
+        return [
+          {
+            checkId: "plugin/example/lint",
+            severity: "info",
+            message: "plugin finding",
+            fixHint: "Review the plugin finding.",
+          },
+        ];
+      },
+    });
+
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      const exitCode = await runDoctorLintCli(runtime, {
+        json: true,
+        severityMin: "info",
+        onlyIds: ["plugin/example/lint"],
+      });
+
+      expect(exitCode).toBe(1);
+      const payload = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+      expect(payload.ok).toBe(false);
+      expect(payload.findings).toEqual([
+        {
+          checkId: "plugin/example/lint",
+          severity: "info",
+          message: "plugin finding",
+          fixHint: "Review the plugin finding.",
+        },
+      ]);
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
+  it("rejects extension checks that reuse ordered core check ids", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {},
+      path: "/tmp/openclaw.json",
+    });
+    registerHealthCheck({
+      id: "core/doctor/final-config-validation",
+      kind: "plugin",
+      description: "colliding plugin lint check",
+      async detect() {
+        return [];
+      },
+    });
+
+    await expect(runDoctorLintCli(runtime, { json: true })).rejects.toThrow(
+      "health check already registered: core/doctor/final-config-validation",
+    );
+  });
+
+  it("rejects registered core-kind checks that reuse ordered core check ids", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {},
+      path: "/tmp/openclaw.json",
+    });
+    registerHealthCheck({
+      id: "core/doctor/final-config-validation",
+      kind: "core",
+      description: "colliding core-kind lint check",
+      async detect() {
+        return [];
+      },
+    });
+
+    await expect(runDoctorLintCli(runtime, { json: true })).rejects.toThrow(
+      "health check already registered: core/doctor/final-config-validation",
+    );
+  });
+
+  it("rejects extension checks that claim unused reserved core doctor ids", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {},
+      path: "/tmp/openclaw.json",
+    });
+    registerHealthCheck({
+      id: "core/doctor/not-yet-owned",
+      kind: "plugin",
+      description: "reserved plugin lint check",
+      async detect() {
+        return [];
+      },
+    });
+
+    await expect(runDoctorLintCli(runtime, { json: true })).rejects.toThrow(
+      "health check already registered: core/doctor/not-yet-owned",
+    );
+  });
+
+  it("rejects registered core-kind checks that claim unused reserved core doctor ids", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {},
+      path: "/tmp/openclaw.json",
+    });
+    registerHealthCheck({
+      id: "core/doctor/not-yet-owned",
+      kind: "core",
+      description: "reserved core-kind lint check",
+      async detect() {
+        return [];
+      },
+    });
+
+    await expect(runDoctorLintCli(runtime, { json: true })).rejects.toThrow(
+      "health check already registered: core/doctor/not-yet-owned",
+    );
   });
 
   it("rejects invalid severity thresholds", async () => {

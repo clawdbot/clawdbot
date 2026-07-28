@@ -7,7 +7,7 @@ import type { TypingPolicy } from "../types.js";
 import type { TypingController } from "./typing.js";
 
 /** Inputs that decide when a channel typing indicator should be shown. */
-export type TypingModeContext = {
+type TypingModeContext = {
   configured?: TypingMode;
   isGroupChat: boolean;
   wasMentioned: boolean;
@@ -18,7 +18,7 @@ export type TypingModeContext = {
 };
 
 /** Group chats default to message-triggered typing to avoid noisy indicators. */
-export const DEFAULT_GROUP_TYPING_MODE: TypingMode = "message";
+const DEFAULT_GROUP_TYPING_MODE: TypingMode = "message";
 
 /** Resolves the effective typing mode for the current auto-reply turn. */
 export function resolveTypingMode({
@@ -63,6 +63,7 @@ export type TypingSignaler = {
   signalTextDelta: (text?: string) => Promise<void>;
   signalReasoningDelta: () => Promise<void>;
   signalToolStart: () => Promise<void>;
+  signalExecutionActivity?: () => Promise<void>;
 };
 
 /** Creates a typing signaler that starts or refreshes typing from stream events. */
@@ -132,10 +133,8 @@ export function createTypingSignaler(params: {
     if (disabled || !shouldStartOnReasoning) {
       return;
     }
-    // Reasoning-only streams should not expose typing until visible text exists.
-    if (!hasRenderableText) {
-      return;
-    }
+    // Reasoning deltas are the signal to show typing in thinking mode,
+    // even before any visible assistant text has arrived.
     await typing.startTypingLoop();
     typing.refreshTypingTtl();
   };
@@ -158,6 +157,16 @@ export function createTypingSignaler(params: {
     typing.refreshTypingTtl();
   };
 
+  const signalExecutionActivity = async () => {
+    if (disabled) {
+      return;
+    }
+    if (!typing.isActive()) {
+      await typing.startTypingLoop();
+    }
+    typing.refreshTypingTtl();
+  };
+
   return {
     mode,
     shouldStartImmediately,
@@ -169,5 +178,6 @@ export function createTypingSignaler(params: {
     signalTextDelta,
     signalReasoningDelta,
     signalToolStart,
+    signalExecutionActivity,
   };
 }

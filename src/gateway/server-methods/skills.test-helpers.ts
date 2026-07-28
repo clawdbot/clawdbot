@@ -5,7 +5,7 @@ import { vi } from "vitest";
 import type { GatewayClient, GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
 /** Captured JSON-RPC response tuple emitted by a gateway request handler. */
-export type CapturedGatewayResponse = {
+type CapturedGatewayResponse = {
   ok: boolean | null;
   response: unknown;
   error: unknown;
@@ -14,7 +14,12 @@ export type CapturedGatewayResponse = {
 function makeGatewayHandlerTestContext(): GatewayRequestContext {
   return {
     getRuntimeConfig: () => ({}),
-    logGateway: vi.fn(),
+    logGateway: {
+      debug: vi.fn(),
+      error: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+    },
   } as unknown as GatewayRequestContext;
 }
 

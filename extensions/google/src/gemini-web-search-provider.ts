@@ -1,5 +1,6 @@
 // Google provider module implements model/runtime integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   createWebSearchProviderContractFields,
   mergeScopedSearchConfig,
@@ -8,23 +9,13 @@ import {
   type WebSearchProviderToolDefinition,
 } from "openclaw/plugin-sdk/provider-web-search-config-contract";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  resolveGeminiApiKey,
-  resolveGeminiBaseUrl,
-  resolveGeminiModel,
-} from "./gemini-web-search-provider.shared.js";
 
 const GEMINI_CREDENTIAL_PATH = "plugins.entries.google.config.webSearch.apiKey";
 const GOOGLE_PROVIDER_CREDENTIAL_PATH = "models.providers.google.apiKey";
 
-type GeminiWebSearchRuntime = typeof import("./gemini-web-search-provider.runtime.js");
-
-let geminiWebSearchRuntimePromise: Promise<GeminiWebSearchRuntime> | undefined;
-
-function loadGeminiWebSearchRuntime(): Promise<GeminiWebSearchRuntime> {
-  geminiWebSearchRuntimePromise ??= import("./gemini-web-search-provider.runtime.js");
-  return geminiWebSearchRuntimePromise;
-}
+const loadGeminiWebSearchRuntime = createLazyRuntimeModule(
+  () => import("./gemini-web-search-provider.runtime.js"),
+);
 
 const GEMINI_TOOL_PARAMETERS = {
   type: "object",
@@ -40,7 +31,8 @@ const GEMINI_TOOL_PARAMETERS = {
     language: { type: "string", description: "Not supported by Gemini." },
     freshness: {
       type: "string",
-      description: "Limit Google Search grounding to recent results: day, week, month, or year.",
+      description:
+        "Filter Gemini search freshness: week, month, and year use hard Google Search time ranges; day prioritizes the last 24 hours as a recency hint.",
     },
     date_after: {
       type: "string",
@@ -148,11 +140,3 @@ export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
       ),
   };
 }
-
-export const testing = {
-  resolveGeminiApiKey,
-  resolveGeminiBaseUrl,
-  resolveGeminiModel,
-  withGoogleModelProviderFallbacks,
-} as const;
-export { testing as __testing };

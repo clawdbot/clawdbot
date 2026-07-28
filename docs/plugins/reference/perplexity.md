@@ -12,11 +12,11 @@ Adds web search provider support.
 ## Distribution
 
 - Package: `@openclaw/perplexity-plugin`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/perplexity-plugin`
 
 ## Surface
 
-contracts: webSearchProviders
+contracts: `webSearchProviders`
 
 ## Related docs
 

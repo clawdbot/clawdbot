@@ -16,30 +16,47 @@ vi.mock("../infra/outbound/message.js", () => ({
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { writeSessionStoreForTest } from "../config/sessions/test-helpers.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
-import { sendMessage } from "../infra/outbound/message.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import {
-  buildExecApprovalFollowupPrompt,
-  sendExecApprovalFollowup,
-} from "./bash-tools.exec-approval-followup.js";
+  onDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "../infra/diagnostic-events.js";
+import { sendMessage } from "../infra/outbound/message.js";
+import { sendExecApprovalFollowup } from "./bash-tools.exec-approval-followup.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 const tempStoreDirs: string[] = [];
 
-// Seed the same JSON session store path the runtime reads; mocking this
-// boundary would hide stale-session regressions in shared workers.
-function writeTempSessionStore(entries: Record<string, { sessionId: string }>): string {
+// Seed the same session store path the runtime reads; mocking this boundary
+// would hide stale-session regressions in shared workers.
+async function writeTempSessionStore(
+  entries: Record<string, { sessionId: string }>,
+): Promise<string> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "exec-approval-followup-store-"));
   tempStoreDirs.push(dir);
   const storePath = path.join(dir, "sessions.json");
-  writeSessionStoreForTest(storePath, entries);
+  await Promise.all(
+    Object.entries(entries).map(([sessionKey, entry]) =>
+      replaceSessionEntry(
+        {
+          storePath,
+          sessionKey,
+        },
+        {
+          sessionId: entry.sessionId,
+          updatedAt: Date.now(),
+        },
+      ),
+    ),
+  );
   return storePath;
 }
 
 afterEach(() => {
   vi.resetAllMocks();
-  clearSessionStoreCacheForTest();
+  resetDiagnosticEventsForTest();
   while (tempStoreDirs.length > 0) {
     const dir = tempStoreDirs.pop();
     if (dir) {
@@ -99,29 +116,43 @@ function expectDirectSend(expected: Record<string, unknown>) {
 }
 
 describe("exec approval followup", () => {
-  it("uses an explicit denial prompt when the command did not run", () => {
-    const prompt = buildExecApprovalFollowupPrompt(
-      "Exec denied (gateway id=req-1, user-denied): uname -a",
-    );
+  it("uses an explicit denial prompt when the command did not run", async () => {
+    await sendExecApprovalFollowup({
+      approvalId: "req-1",
+      sessionKey: "agent:main:main",
+      resultText: "Exec denied (gateway id=req-1, user-denied): uname -a",
+    });
 
+    const prompt = expectGatewayAgentFollowup({ sessionKey: "agent:main:main" }).message;
+    expect(prompt).toBeTypeOf("string");
     expect(prompt).toContain("did not run");
     expect(prompt).toContain("Do not mention, summarize, or reuse output");
     expect(prompt).not.toContain("already approved has completed");
   });
 
-  it("uses the denied followup branch for nested-parentheses denial metadata", () => {
-    const prompt = buildExecApprovalFollowupPrompt(
-      "Exec denied (gateway id=req-1, approval-timeout (allowlist-miss)): uname -a",
-    );
+  it("uses the denied followup branch for nested-parentheses denial metadata", async () => {
+    await sendExecApprovalFollowup({
+      approvalId: "req-1",
+      sessionKey: "agent:main:main",
+      resultText: "Exec denied (gateway id=req-1, approval-timeout (allowlist-miss)): uname -a",
+    });
 
+    const prompt = expectGatewayAgentFollowup({ sessionKey: "agent:main:main" }).message;
+    expect(prompt).toBeTypeOf("string");
     expect(prompt).toContain("did not run");
     expect(prompt).toContain("Do not mention, summarize, or reuse output");
     expect(prompt).not.toContain("already approved has completed");
   });
 
-  it("tells the agent to continue the task before replying when the command succeeds", () => {
-    const prompt = buildExecApprovalFollowupPrompt("Exec finished (gateway id=req-1, code 0)\nok");
+  it("tells the agent to continue the task before replying when the command succeeds", async () => {
+    await sendExecApprovalFollowup({
+      approvalId: "req-1",
+      sessionKey: "agent:main:main",
+      resultText: "Exec finished (gateway id=req-1, code 0)\nok",
+    });
 
+    const prompt = expectGatewayAgentFollowup({ sessionKey: "agent:main:main" }).message;
+    expect(prompt).toBeTypeOf("string");
     expect(prompt).toContain("continue from this result before replying to the user");
     expect(prompt).toContain("Continue the task if needed, then reply to the user");
   });
@@ -168,8 +199,12 @@ describe("exec approval followup", () => {
   });
 
   it("drops a denied direct followup when the session key was rebound by /new or /reset", async () => {
-    const sessionStore = writeTempSessionStore({
+    const sessionStore = await writeTempSessionStore({
       "agent:main:main": { sessionId: "session-after-reset" },
+    });
+    const diagnostics: DiagnosticEventPayload[] = [];
+    onDiagnosticEvent((event) => {
+      diagnostics.push(event);
     });
 
     const result = await sendExecApprovalFollowup({
@@ -184,12 +219,21 @@ describe("exec approval followup", () => {
     });
 
     expect(result).toBe(false);
+    await waitForDiagnosticEventsDrained();
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({
+        type: "exec.approval.followup_suppressed",
+        approvalId: "req-denied-rebound",
+        reason: "session_rebound",
+        phase: "direct_delivery",
+      }),
+    );
     expect(sendMessage).not.toHaveBeenCalled();
     expect(callGatewayTool).not.toHaveBeenCalled();
   });
 
   it("delivers a denied direct followup when the key still resolves to the approval-time session", async () => {
-    const sessionStore = writeTempSessionStore({
+    const sessionStore = await writeTempSessionStore({
       "agent:main:main": { sessionId: "session-original" },
     });
 
@@ -209,8 +253,12 @@ describe("exec approval followup", () => {
   });
 
   it("drops a non-denied direct fallback when the session key was rebound", async () => {
-    const sessionStore = writeTempSessionStore({
+    const sessionStore = await writeTempSessionStore({
       "agent:main:main": { sessionId: "session-after-reset" },
+    });
+    const diagnostics: DiagnosticEventPayload[] = [];
+    onDiagnosticEvent((event) => {
+      diagnostics.push(event);
     });
 
     const result = await sendExecApprovalFollowup({
@@ -225,6 +273,15 @@ describe("exec approval followup", () => {
     });
 
     expect(result).toBe(false);
+    await waitForDiagnosticEventsDrained();
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({
+        type: "exec.approval.followup_suppressed",
+        approvalId: "req-finished-rebound",
+        reason: "session_rebound",
+        phase: "direct_delivery",
+      }),
+    );
     expect(sendMessage).not.toHaveBeenCalled();
     expect(callGatewayTool).not.toHaveBeenCalled();
   });
@@ -295,6 +352,30 @@ describe("exec approval followup", () => {
       threadId: target.threadId,
       idempotencyKey: `exec-approval-followup:req-${target.channel}`,
     });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("preserves the originating routing target for non-built-in plugin channels", async () => {
+    await sendExecApprovalFollowup({
+      approvalId: "req-plugin",
+      sessionKey: "agent:main:lansenger:dm:U1",
+      turnSourceChannel: "lansenger",
+      turnSourceTo: "dm:U1",
+      turnSourceAccountId: "acct-1",
+      turnSourceThreadId: 42,
+      resultText: "Exec finished (gateway id=req-plugin, code 0)\nhello",
+    });
+
+    const agentArgs = expectGatewayAgentFollowup({
+      sessionKey: "agent:main:lansenger:dm:U1",
+      deliver: false,
+      channel: "lansenger",
+      to: "dm:U1",
+      accountId: "acct-1",
+      threadId: "42",
+      idempotencyKey: "exec-approval-followup:req-plugin",
+    });
+    expect(agentArgs.message).toContain("already approved has completed");
     expect(sendMessage).not.toHaveBeenCalled();
   });
 

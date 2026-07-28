@@ -1,13 +1,17 @@
 // Msteams tests cover inbound media plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../attachments.js", () => ({
   downloadMSTeamsAttachments: vi.fn(async () => []),
   downloadMSTeamsGraphMedia: vi.fn(async () => ({ media: [] })),
   downloadMSTeamsBotFrameworkAttachments: vi.fn(async () => ({ media: [], attachmentCount: 0 })),
-  buildMSTeamsGraphMessageUrls: vi.fn(() => [
-    "https://graph.microsoft.com/v1.0/chats/c/messages/m",
-  ]),
+  buildMSTeamsGraphMessageUrl: vi.fn(
+    (params: { conversationType: string; teamAadGroupId?: string }) =>
+      params.conversationType.toLowerCase() === "channel" && params.teamAadGroupId === undefined
+        ? undefined
+        : "https://graph.microsoft.com/v1.0/teams/team-aad-guid/channels/chan/messages/m",
+  ),
   extractMSTeamsHtmlAttachmentIds: vi.fn(() => ["att-0", "att-1"]),
   isBotFrameworkPersonalChatId: vi.fn((id: string | null | undefined) => {
     if (typeof id !== "string") {
@@ -18,21 +22,45 @@ vi.mock("../attachments.js", () => ({
 }));
 
 import {
-  buildMSTeamsGraphMessageUrls,
+  buildMSTeamsGraphMessageUrl,
   downloadMSTeamsAttachments,
   downloadMSTeamsBotFrameworkAttachments,
   downloadMSTeamsGraphMedia,
   extractMSTeamsHtmlAttachmentIds,
 } from "../attachments.js";
-import { resolveMSTeamsInboundMedia } from "./inbound-media.js";
+import {
+  mergeMSTeamsMediaFacts,
+  resolveMSTeamsInboundMedia,
+  resolveMSTeamsInboundMediaBody,
+} from "./inbound-media.js";
 
+// Channel context by default: the Graph fallback is a channel/group code path,
+// so its trigger tests must run against a channel conversation, not a DM.
 const baseParams = {
   maxBytes: 1024 * 1024,
   tokenProvider: { getAccessToken: vi.fn(async () => "token") },
-  conversationType: "personal",
-  conversationId: "19:user_bot@unq.gbl.spaces",
-  activity: { id: "msg-1", replyToId: undefined, channelData: {} },
+  conversationType: "channel",
+  conversationId: "19:channel-thread@thread.tacv2",
+  teamAadGroupId: "team-aad-guid",
+  activity: {
+    id: "msg-1",
+    replyToId: undefined,
+    channelData: {
+      team: { id: "19:team-general@thread.tacv2", aadGroupId: "team-aad-guid" },
+      channel: { id: "19:channel-thread@thread.tacv2" },
+    },
+  },
   log: { debug: vi.fn() },
+};
+
+const htmlSummary = {
+  htmlAttachments: 1,
+  imgTags: 0,
+  dataImages: 0,
+  cidImages: 0,
+  srcHosts: [],
+  attachmentTags: 0,
+  attachmentIds: [],
 };
 
 function firstGraphMediaCall() {
@@ -52,11 +80,236 @@ function firstBotFrameworkAttachmentCall() {
 }
 
 describe("resolveMSTeamsInboundMedia graph fallback trigger", () => {
+  it("adds an unavailable notice from structured media counts", () => {
+    expect(
+      resolveMSTeamsInboundMediaBody({
+        body: "",
+        nativeMedia: [{ kind: "document" }],
+        materializedMedia: [{ kind: "document" }],
+      }),
+    ).toBe("[msteams attachment unavailable]");
+    expect(
+      resolveMSTeamsInboundMediaBody({
+        body: "hello",
+        nativeMedia: [],
+        materializedMedia: [],
+      }),
+    ).toBe("hello");
+  });
+
+  it("preserves successful media while exposing partial download failures", () => {
+    expect(
+      resolveMSTeamsInboundMediaBody({
+        body: "",
+        nativeMedia: [{ kind: "document" }, { kind: "document" }],
+        materializedMedia: [
+          { path: "/tmp/report.pdf", contentType: "application/pdf", kind: "document" },
+          { kind: "document" },
+        ],
+      }),
+    ).toBe("[msteams attachment unavailable]");
+  });
+
+  it("counts availability from the final identity-merged fact slots", () => {
+    expect(
+      resolveMSTeamsInboundMediaBody({
+        body: "",
+        nativeMedia: [{ kind: "image" }, { kind: "document" }],
+        materializedMedia: [
+          { kind: "image" },
+          {
+            path: "/tmp/report.pdf",
+            contentType: "application/pdf",
+            kind: "document",
+          },
+        ],
+      }),
+    ).toBe("[msteams attachment unavailable]");
+  });
+
+  it("replaces aligned facts positionally and retains Graph-discovered failures", () => {
+    expect(
+      mergeMSTeamsMediaFacts(
+        [{ kind: "document" }],
+        [
+          { path: "/tmp/report.pdf", contentType: "application/pdf", kind: "document" },
+          { kind: "image" },
+        ],
+      ),
+    ).toEqual([
+      { path: "/tmp/report.pdf", contentType: "application/pdf", kind: "document" },
+      { kind: "image" },
+    ]);
+  });
+
+  it("matches fallback results by resource identity instead of unrelated array position", () => {
+    expect(
+      mergeMSTeamsMediaFacts(
+        [{ kind: "image" }, { kind: "document", sourceId: "attachment-1" }],
+        [
+          {
+            path: "/tmp/report.pdf",
+            contentType: "application/pdf",
+            kind: "document",
+            sourceId: "attachment-1",
+          },
+        ],
+        { positionallyAligned: false },
+      ),
+    ).toEqual([
+      { kind: "image" },
+      {
+        path: "/tmp/report.pdf",
+        contentType: "application/pdf",
+        kind: "document",
+        sourceId: "attachment-1",
+      },
+    ]);
+  });
+
+  it("replaces an unambiguous id-less fallback slot", () => {
+    expect(
+      mergeMSTeamsMediaFacts(
+        [{ kind: "document" }],
+        [
+          {
+            path: "/tmp/report.pdf",
+            contentType: "application/pdf",
+            kind: "document",
+            sourceId: "graph-attachment-1",
+          },
+        ],
+        { positionallyAligned: false },
+      ),
+    ).toEqual([
+      {
+        path: "/tmp/report.pdf",
+        contentType: "application/pdf",
+        kind: "document",
+        sourceId: "graph-attachment-1",
+      },
+    ]);
+  });
+
+  it("consumes multiple id-less fallback slots in stable same-kind order", () => {
+    expect(
+      mergeMSTeamsMediaFacts(
+        [{ kind: "document" }, { kind: "document" }],
+        [
+          {
+            path: "/tmp/first.pdf",
+            contentType: "application/pdf",
+            kind: "document",
+            sourceId: "graph-attachment-1",
+          },
+          {
+            path: "/tmp/second.pdf",
+            contentType: "application/pdf",
+            kind: "document",
+            sourceId: "graph-attachment-2",
+          },
+        ],
+        { positionallyAligned: false },
+      ),
+    ).toEqual([
+      {
+        path: "/tmp/first.pdf",
+        contentType: "application/pdf",
+        kind: "document",
+        sourceId: "graph-attachment-1",
+      },
+      {
+        path: "/tmp/second.pdf",
+        contentType: "application/pdf",
+        kind: "document",
+        sourceId: "graph-attachment-2",
+      },
+    ]);
+  });
+
+  it("keeps an explicitly distinct fallback resource separate", () => {
+    expect(
+      mergeMSTeamsMediaFacts(
+        [{ kind: "document", sourceId: "activity-attachment-1" }],
+        [
+          {
+            path: "/tmp/other.pdf",
+            contentType: "application/pdf",
+            kind: "document",
+            sourceId: "graph-attachment-2",
+          },
+        ],
+        { positionallyAligned: false },
+      ),
+    ).toEqual([
+      { kind: "document", sourceId: "activity-attachment-1" },
+      {
+        path: "/tmp/other.pdf",
+        contentType: "application/pdf",
+        kind: "document",
+        sourceId: "graph-attachment-2",
+      },
+    ]);
+  });
+
+  it("refines an appended fallback fact with the same identity", () => {
+    expect(
+      mergeMSTeamsMediaFacts(
+        [],
+        [
+          { kind: "image", sourceId: "graph-image-1" },
+          {
+            path: "/tmp/image.png",
+            contentType: "image/png",
+            kind: "image",
+            sourceId: "graph-image-1",
+          },
+        ],
+        { positionallyAligned: false },
+      ),
+    ).toEqual([
+      {
+        path: "/tmp/image.png",
+        contentType: "image/png",
+        kind: "image",
+        sourceId: "graph-image-1",
+      },
+    ]);
+  });
+
+  it("preserves multiple id-less fallback facts when there are no native slots", () => {
+    expect(
+      mergeMSTeamsMediaFacts([], [{ kind: "image" }, { kind: "image" }], {
+        positionallyAligned: false,
+      }),
+    ).toEqual([{ kind: "image" }, { kind: "image" }]);
+  });
+
+  it("applies a pathless fallback refinement to an unresolved slot", () => {
+    expect(
+      mergeMSTeamsMediaFacts(
+        [{ kind: "document" }],
+        [{ kind: "image", contentType: "image/png", sourceId: "graph-image-1" }],
+        { positionallyAligned: false },
+      ),
+    ).toEqual([{ kind: "image", contentType: "image/png", sourceId: "graph-image-1" }]);
+  });
+
+  it("preserves the advertised kind when a pathless fallback has no type evidence", () => {
+    expect(
+      mergeMSTeamsMediaFacts(
+        [{ kind: "image", sourceId: "hosted-image-1" }],
+        [{ kind: "document", sourceId: "hosted-image-1" }],
+        { positionallyAligned: false },
+      ),
+    ).toEqual([{ kind: "image", sourceId: "hosted-image-1" }]);
+  });
+
   it("triggers Graph fallback when HTML contains <attachment> tags", async () => {
     vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([]);
     vi.mocked(extractMSTeamsHtmlAttachmentIds).mockReturnValueOnce(["att-0"]);
     vi.mocked(downloadMSTeamsGraphMedia).mockResolvedValue({
-      media: [{ path: "/tmp/img.png", contentType: "image/png", placeholder: "[image]" }],
+      media: [{ path: "/tmp/img.png", contentType: "image/png", kind: "image" }],
     });
 
     await resolveMSTeamsInboundMedia({
@@ -69,30 +322,93 @@ describe("resolveMSTeamsInboundMedia graph fallback trigger", () => {
       ],
     });
 
-    expect(buildMSTeamsGraphMessageUrls).toHaveBeenCalled();
+    expect(buildMSTeamsGraphMessageUrl).toHaveBeenCalled();
     expect(downloadMSTeamsGraphMedia).toHaveBeenCalled();
   });
 
-  it("does NOT trigger Graph fallback for mention-only HTML (no <attachment> tags)", async () => {
+  it("triggers opted-in Graph fallback for text plus a tagless channel file stub", async () => {
     vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([]);
-    // Mention cards include `<at>` markers but no `<attachment id="...">`,
-    // so the extractor returns an empty ID list. The fallback must skip.
     vi.mocked(extractMSTeamsHtmlAttachmentIds).mockReturnValueOnce([]);
     vi.mocked(downloadMSTeamsGraphMedia).mockClear();
-    vi.mocked(buildMSTeamsGraphMessageUrls).mockClear();
+    vi.mocked(buildMSTeamsGraphMessageUrl).mockClear();
 
     await resolveMSTeamsInboundMedia({
       ...baseParams,
+      graphMediaFallback: true,
+      htmlSummary,
       attachments: [
         {
-          contentType: "text/html",
-          content: '<div><at id="0">Bot</at> hello there</div>',
+          contentType: "Text/HTML; charset=utf-8",
+          content: '<div><at id="0">Bot</at></div>',
         },
       ],
     });
 
+    expect(buildMSTeamsGraphMessageUrl).toHaveBeenCalled();
+    expect(downloadMSTeamsGraphMedia).toHaveBeenCalled();
+  });
+
+  it("keeps marker-free Graph fallback disabled by default", async () => {
+    vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([]);
+    vi.mocked(extractMSTeamsHtmlAttachmentIds).mockReturnValueOnce([]);
+    vi.mocked(downloadMSTeamsGraphMedia).mockClear();
+    vi.mocked(buildMSTeamsGraphMessageUrl).mockClear();
+
+    await resolveMSTeamsInboundMedia({
+      ...baseParams,
+      htmlSummary,
+      attachments: [
+        {
+          contentType: "text/html",
+          content: '<div><at id="0">Bot</at> Describe the attached image file</div>',
+        },
+      ],
+    });
+
+    expect(buildMSTeamsGraphMessageUrl).not.toHaveBeenCalled();
     expect(downloadMSTeamsGraphMedia).not.toHaveBeenCalled();
-    expect(buildMSTeamsGraphMessageUrls).not.toHaveBeenCalled();
+  });
+
+  it("triggers Graph fallback for a tagless group-chat HTML attachment", async () => {
+    vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([]);
+    vi.mocked(extractMSTeamsHtmlAttachmentIds).mockReturnValueOnce([]);
+    vi.mocked(downloadMSTeamsGraphMedia).mockClear();
+    vi.mocked(buildMSTeamsGraphMessageUrl).mockClear();
+
+    await resolveMSTeamsInboundMedia({
+      ...baseParams,
+      graphMediaFallback: true,
+      conversationType: "groupChat",
+      conversationId: "19:group-chat@thread.v2",
+      teamAadGroupId: undefined,
+      activity: { id: "msg-1", replyToId: undefined, channelData: {} },
+      htmlSummary,
+      attachments: [{ contentType: "text/html", content: "<div>file stub</div>" }],
+    });
+
+    expect(buildMSTeamsGraphMessageUrl).toHaveBeenCalled();
+    expect(downloadMSTeamsGraphMedia).toHaveBeenCalled();
+  });
+
+  it("does not widen marker-free fallback to a Graph-compatible personal chat", async () => {
+    vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([]);
+    vi.mocked(extractMSTeamsHtmlAttachmentIds).mockReturnValueOnce([]);
+    vi.mocked(downloadMSTeamsGraphMedia).mockClear();
+    vi.mocked(buildMSTeamsGraphMessageUrl).mockClear();
+
+    await resolveMSTeamsInboundMedia({
+      ...baseParams,
+      graphMediaFallback: true,
+      conversationType: "personal",
+      conversationId: "19:real-graph-chat@unq.gbl.spaces",
+      teamAadGroupId: undefined,
+      activity: { id: "msg-1", replyToId: undefined, channelData: {} },
+      htmlSummary,
+      attachments: [{ contentType: "text/html", content: "<div>mention only</div>" }],
+    });
+
+    expect(buildMSTeamsGraphMessageUrl).not.toHaveBeenCalled();
+    expect(downloadMSTeamsGraphMedia).not.toHaveBeenCalled();
   });
 
   it("does NOT trigger Graph fallback when no attachments are text/html", async () => {
@@ -100,10 +416,11 @@ describe("resolveMSTeamsInboundMedia graph fallback trigger", () => {
     // No HTML attachments at all → extractor returns [].
     vi.mocked(extractMSTeamsHtmlAttachmentIds).mockReturnValueOnce([]);
     vi.mocked(downloadMSTeamsGraphMedia).mockClear();
-    vi.mocked(buildMSTeamsGraphMessageUrls).mockClear();
+    vi.mocked(buildMSTeamsGraphMessageUrl).mockClear();
 
     await resolveMSTeamsInboundMedia({
       ...baseParams,
+      graphMediaFallback: true,
       attachments: [
         { contentType: "image/png", contentUrl: "https://example.com/img.png" },
         { contentType: "application/pdf", contentUrl: "https://example.com/doc.pdf" },
@@ -113,9 +430,88 @@ describe("resolveMSTeamsInboundMedia graph fallback trigger", () => {
     expect(downloadMSTeamsGraphMedia).not.toHaveBeenCalled();
   });
 
+  it("does not resolve Graph team identity when direct media succeeds", async () => {
+    vi.mocked(downloadMSTeamsAttachments).mockResolvedValueOnce([
+      { path: "/tmp/direct.png", contentType: "image/png", kind: "image" },
+    ]);
+    const resolveTeamAadGroupId = vi.fn(async () => "team-aad-guid");
+
+    await resolveMSTeamsInboundMedia({
+      ...baseParams,
+      teamAadGroupId: undefined,
+      resolveTeamAadGroupId,
+      attachments: [{ contentType: "image/png", contentUrl: "https://example.com/direct.png" }],
+    });
+
+    expect(resolveTeamAadGroupId).not.toHaveBeenCalled();
+    expect(downloadMSTeamsGraphMedia).not.toHaveBeenCalled();
+  });
+
+  it("forwards canonical channel reply identifiers to the URL builder", async () => {
+    vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([]);
+    vi.mocked(extractMSTeamsHtmlAttachmentIds).mockReturnValueOnce(["att-0"]);
+    vi.mocked(buildMSTeamsGraphMessageUrl).mockClear();
+    vi.mocked(downloadMSTeamsGraphMedia).mockResolvedValue({ media: [] });
+
+    await resolveMSTeamsInboundMedia({
+      ...baseParams,
+      conversationMessageId: "conversation-root",
+      teamAadGroupId: "entra-team-id",
+      activity: {
+        id: "reply-id",
+        replyToId: "activity-root",
+        channelData: {
+          team: { id: "bot-framework-team-id", aadGroupId: "stale-activity-value" },
+          channel: { id: "channel-id" },
+        },
+      },
+      attachments: [
+        {
+          contentType: "text/html",
+          content: '<attachment id="att-0"></attachment>',
+        },
+      ],
+    });
+
+    expect(buildMSTeamsGraphMessageUrl).toHaveBeenCalledWith({
+      conversationType: "channel",
+      conversationId: "19:channel-thread@thread.tacv2",
+      messageId: "reply-id",
+      threadRootMessageId: "conversation-root",
+      teamAadGroupId: "entra-team-id",
+      channelId: "channel-id",
+    });
+  });
+
+  it("fails closed when a channel AAD group ID could not be resolved", async () => {
+    vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([]);
+    vi.mocked(extractMSTeamsHtmlAttachmentIds).mockReturnValueOnce(["att-0"]);
+    vi.mocked(buildMSTeamsGraphMessageUrl).mockClear();
+    vi.mocked(downloadMSTeamsGraphMedia).mockClear();
+
+    await resolveMSTeamsInboundMedia({
+      ...baseParams,
+      teamAadGroupId: undefined,
+      attachments: [
+        {
+          contentType: "text/html",
+          content: '<attachment id="att-0"></attachment>',
+        },
+      ],
+    });
+
+    expect(buildMSTeamsGraphMessageUrl).toHaveBeenCalledWith(
+      expect.objectContaining({
+        teamAadGroupId: undefined,
+        channelId: "19:channel-thread@thread.tacv2",
+      }),
+    );
+    expect(downloadMSTeamsGraphMedia).not.toHaveBeenCalled();
+  });
+
   it("does NOT trigger Graph fallback when direct download succeeds", async () => {
     vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([
-      { path: "/tmp/img.png", contentType: "image/png", placeholder: "[image]" },
+      { path: "/tmp/img.png", contentType: "image/png", kind: "image" },
     ]);
     vi.mocked(downloadMSTeamsGraphMedia).mockClear();
 
@@ -155,16 +551,12 @@ describe("resolveMSTeamsInboundMedia graph fallback trigger", () => {
     // message fetch failures instead of swallowing them (#51749).
     expect(call?.logger).toBe(log);
     expect(log.debug).toHaveBeenCalledWith("graph media fetch empty", {
-      attempts: [
-        {
-          url: "https://graph.microsoft.com/v1.0/chats/c/messages/m",
-          hostedStatus: undefined,
-          attachmentStatus: undefined,
-          hostedCount: undefined,
-          attachmentCount: undefined,
-          tokenError: undefined,
-        },
-      ],
+      messageUrl: "https://graph.microsoft.com/v1.0/teams/team-aad-guid/channels/chan/messages/m",
+      hostedStatus: undefined,
+      attachmentStatus: undefined,
+      hostedCount: undefined,
+      attachmentCount: undefined,
+      tokenError: undefined,
       attachmentIdCount: 1,
     });
   });
@@ -176,6 +568,7 @@ describe("resolveMSTeamsInboundMedia bot framework DM routing", () => {
     conversationType: "personal",
     conversationId: "a:1dRsHCobZ1AxURzY05Dc",
     serviceUrl: "https://smba.trafficmanager.net/amer/",
+    activity: { id: "msg-1", replyToId: undefined, channelData: {} },
   };
 
   it("routes 'a:' conversation IDs through the Bot Framework attachment endpoint", async () => {
@@ -186,7 +579,7 @@ describe("resolveMSTeamsInboundMedia bot framework DM routing", () => {
         {
           path: "/tmp/report.pdf",
           contentType: "application/pdf",
-          placeholder: "<media:document>",
+          kind: "document",
         },
       ],
       attachmentCount: 1,
@@ -209,10 +602,10 @@ describe("resolveMSTeamsInboundMedia bot framework DM routing", () => {
     expect(call?.attachmentIds).toEqual(["att-0", "att-1"]);
     expect(downloadMSTeamsGraphMedia).not.toHaveBeenCalled();
     expect(mediaList).toHaveLength(1);
-    expect(mediaList[0].path).toBe("/tmp/report.pdf");
+    expect(expectDefined(mediaList[0], "MSTeams inbound media").path).toBe("/tmp/report.pdf");
   });
 
-  it("skips the Graph fallback entirely for 'a:' conversation IDs", async () => {
+  it("skips Graph fallback for an 'a:' conversation without an exact Graph chat ID", async () => {
     vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([]);
     vi.mocked(downloadMSTeamsBotFrameworkAttachments).mockClear();
     vi.mocked(downloadMSTeamsBotFrameworkAttachments).mockResolvedValue({
@@ -220,7 +613,7 @@ describe("resolveMSTeamsInboundMedia bot framework DM routing", () => {
       attachmentCount: 1,
     });
     vi.mocked(downloadMSTeamsGraphMedia).mockClear();
-    vi.mocked(buildMSTeamsGraphMessageUrls).mockClear();
+    vi.mocked(buildMSTeamsGraphMessageUrl).mockClear();
 
     await resolveMSTeamsInboundMedia({
       ...dmParams,
@@ -233,7 +626,7 @@ describe("resolveMSTeamsInboundMedia bot framework DM routing", () => {
     });
 
     expect(downloadMSTeamsBotFrameworkAttachments).toHaveBeenCalled();
-    expect(buildMSTeamsGraphMessageUrls).not.toHaveBeenCalled();
+    expect(buildMSTeamsGraphMessageUrl).not.toHaveBeenCalled();
     expect(downloadMSTeamsGraphMedia).not.toHaveBeenCalled();
   });
 
@@ -244,8 +637,10 @@ describe("resolveMSTeamsInboundMedia bot framework DM routing", () => {
 
     await resolveMSTeamsInboundMedia({
       ...baseParams,
+      conversationType: "personal",
       conversationId: "19:abc@thread.tacv2",
       serviceUrl: "https://smba.trafficmanager.net/amer/",
+      activity: { id: "msg-1", replyToId: undefined, channelData: {} },
       attachments: [
         {
           contentType: "text/html",
@@ -285,7 +680,7 @@ describe("resolveMSTeamsInboundMedia bot framework DM routing", () => {
     vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([]);
     vi.mocked(downloadMSTeamsBotFrameworkAttachments).mockClear();
     vi.mocked(downloadMSTeamsGraphMedia).mockClear();
-    vi.mocked(buildMSTeamsGraphMessageUrls).mockClear();
+    vi.mocked(buildMSTeamsGraphMessageUrl).mockClear();
     const log = { debug: vi.fn() };
 
     await resolveMSTeamsInboundMedia({
@@ -293,6 +688,7 @@ describe("resolveMSTeamsInboundMedia bot framework DM routing", () => {
       log,
       conversationType: "personal",
       conversationId: "a:bf-dm-id",
+      activity: { id: "msg-1", replyToId: undefined, channelData: {} },
       attachments: [
         {
           contentType: "text/html",

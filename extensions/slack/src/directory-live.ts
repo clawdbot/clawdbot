@@ -1,4 +1,5 @@
 // Slack plugin module implements directory live behavior.
+import type { ConversationsListResponse, UsersListResponse } from "@slack/web-api";
 import type {
   ChannelDirectoryEntry,
   DirectoryConfigParams,
@@ -9,50 +10,15 @@ import {
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveSlackAccount } from "./accounts.js";
-import { createSlackWebClient } from "./client.js";
+import { createSlackLookupClient } from "./client.js";
 
-type SlackUser = {
-  id?: string;
-  name?: string;
-  real_name?: string;
-  is_bot?: boolean;
-  is_app_user?: boolean;
-  deleted?: boolean;
-  profile?: {
-    display_name?: string;
-    real_name?: string;
-    email?: string;
-  };
-};
+type SlackUser = NonNullable<UsersListResponse["members"]>[number];
+type SlackChannel = NonNullable<ConversationsListResponse["channels"]>[number];
 
-type SlackChannel = {
-  id?: string;
-  name?: string;
-  is_archived?: boolean;
-  is_private?: boolean;
-};
-
-type SlackListUsersResponse = {
-  members?: SlackUser[];
-  response_metadata?: { next_cursor?: string };
-};
-
-type SlackListChannelsResponse = {
-  channels?: SlackChannel[];
-  response_metadata?: { next_cursor?: string };
-};
-
-type SlackAuthTestResponse = {
-  ok?: boolean;
-  user_id?: string;
-  user?: string;
-  team_id?: string;
-  team?: string;
-};
-
-function resolveReadToken(params: DirectoryConfigParams): string | undefined {
+function createSlackDirectoryClient(params: DirectoryConfigParams) {
   const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
-  return account.userToken ?? account.botToken?.trim();
+  const token = account.userToken ?? account.botToken?.trim();
+  return token ? createSlackLookupClient(token) : null;
 }
 
 function normalizeQuery(value?: string | null): string {
@@ -101,18 +67,17 @@ function slackUserToDirectoryEntry(
 export async function getSlackDirectorySelfLive(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry | null> {
-  const token = resolveReadToken(params);
-  if (!token) {
+  const client = createSlackDirectoryClient(params);
+  if (!client) {
     return null;
   }
-  const client = createSlackWebClient(token);
-  const auth = (await client.auth.test()) as SlackAuthTestResponse;
+  const auth = await client.auth.test();
   const userId = normalizeOptionalString(auth.user_id);
   if (!userId) {
     return null;
   }
   try {
-    const info = (await client.users.info({ user: userId })) as { user?: SlackUser };
+    const info = await client.users.info({ user: userId });
     return slackUserToDirectoryEntry(info.user ?? {}, { id: userId, name: auth.user });
   } catch {
     return slackUserToDirectoryEntry(
@@ -125,20 +90,19 @@ export async function getSlackDirectorySelfLive(
 export async function listSlackDirectoryPeersLive(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
-  const token = resolveReadToken(params);
-  if (!token) {
+  const client = createSlackDirectoryClient(params);
+  if (!client) {
     return [];
   }
-  const client = createSlackWebClient(token);
   const query = normalizeQuery(params.query);
   const members: SlackUser[] = [];
   let cursor: string | undefined;
 
   do {
-    const res = (await client.users.list({
+    const res = await client.users.list({
       limit: 200,
       cursor,
-    })) as SlackListUsersResponse;
+    });
     if (Array.isArray(res.members)) {
       members.push(...res.members);
     }
@@ -172,22 +136,21 @@ export async function listSlackDirectoryPeersLive(
 export async function listSlackDirectoryGroupsLive(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
-  const token = resolveReadToken(params);
-  if (!token) {
+  const client = createSlackDirectoryClient(params);
+  if (!client) {
     return [];
   }
-  const client = createSlackWebClient(token);
   const query = normalizeQuery(params.query);
   const channels: SlackChannel[] = [];
   let cursor: string | undefined;
 
   do {
-    const res = (await client.conversations.list({
+    const res = await client.conversations.list({
       types: "public_channel,private_channel",
       exclude_archived: false,
       limit: 1000,
       cursor,
-    })) as SlackListChannelsResponse;
+    });
     if (Array.isArray(res.channels)) {
       channels.push(...res.channels);
     }

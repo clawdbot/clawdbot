@@ -1,10 +1,11 @@
+import type { AgentMessage } from "@openclaw/agent-core";
 /**
  * Tool call id normalization and extraction helpers.
  *
  * Keeps provider-specific id formats replay-safe while preserving allowed native ids.
  */
-import { createHash } from "node:crypto";
-import type { AgentMessage } from "./runtime/index.js";
+import { sha256HexPrefix } from "../infra/crypto-digest.js";
+import { isThinkingLikeBlock } from "./thinking-block.js";
 import { isAllowedToolCallName, normalizeAllowedToolNames } from "./tool-call-shared.js";
 
 export type ToolCallIdMode = "strict" | "strict9";
@@ -34,7 +35,7 @@ type ReplaySafeToolCallBlock = {
  * - "strict" mode: only [a-zA-Z0-9]
  * - "strict9" mode: only [a-zA-Z0-9], length 9 (Mistral tool call requirement)
  */
-export function sanitizeToolCallId(id: string, mode: ToolCallIdMode = "strict"): string {
+function sanitizeToolCallId(id: string, mode: ToolCallIdMode = "strict"): string {
   if (!id || typeof id !== "string") {
     if (mode === "strict9") {
       return "defaultid";
@@ -124,14 +125,6 @@ export function extractToolResultIds(msg: Extract<AgentMessage, { role: "toolRes
   return ids;
 }
 
-function isThinkingLikeBlock(block: unknown): boolean {
-  if (!block || typeof block !== "object") {
-    return false;
-  }
-  const type = (block as { type?: unknown }).type;
-  return type === "thinking" || type === "redacted_thinking";
-}
-
 function hasToolCallInput(block: ReplaySafeToolCallBlock): boolean {
   const hasInput = "input" in block ? block.input !== undefined && block.input !== null : false;
   const hasArguments =
@@ -212,20 +205,8 @@ function collectReplaySafeThinkingToolIds(
   return { reservedIds: reserved, preservedIndexes };
 }
 
-export function isValidCloudCodeAssistToolId(id: string, mode: ToolCallIdMode = "strict"): boolean {
-  if (!id || typeof id !== "string") {
-    return false;
-  }
-  if (mode === "strict9") {
-    return /^[a-zA-Z0-9]{9}$/.test(id);
-  }
-  // Strictly alphanumeric for providers with tighter tool ID constraints,
-  // plus native IDs we intentionally preserve for replay compatibility.
-  return /^[a-zA-Z0-9]+$/.test(id) || isNativeKimiToolCallId(id);
-}
-
 function shortHash(text: string, length = 8): string {
-  return createHash("sha256").update(text).digest("hex").slice(0, length);
+  return sha256HexPrefix(text, length);
 }
 
 function isNativeAnthropicToolUseId(id: string): boolean {
@@ -436,29 +417,56 @@ function rewriteToolResultIds(params: {
   message: Extract<AgentMessage, { role: "toolResult" }>;
   resolveId: (id: string) => string;
 }): Extract<AgentMessage, { role: "toolResult" }> {
-  const toolCallId =
-    typeof params.message.toolCallId === "string" && params.message.toolCallId
-      ? params.message.toolCallId
-      : undefined;
-  const toolUseId = (params.message as { toolUseId?: unknown }).toolUseId;
-  const toolUseIdStr = typeof toolUseId === "string" && toolUseId ? toolUseId : undefined;
-  const sharedRawId =
-    toolCallId && toolUseIdStr && toolCallId === toolUseIdStr ? toolCallId : undefined;
+  const idFields = [
+    "toolCallId",
+    "toolUseId",
+    "tool_call_id",
+    "tool_use_id",
+    "callId",
+    "call_id",
+  ] as const;
+  const record = params.message as Extract<AgentMessage, { role: "toolResult" }> &
+    Record<(typeof idFields)[number], unknown>;
+  const rawIds = new Map<(typeof idFields)[number], string>();
+  for (const field of idFields) {
+    const rawId = record[field];
+    if (typeof rawId === "string" && rawId) {
+      rawIds.set(field, rawId);
+    }
+  }
 
-  const sharedResolvedId = sharedRawId ? params.resolveId(sharedRawId) : undefined;
-  const nextToolCallId =
-    sharedResolvedId ?? (toolCallId ? params.resolveId(toolCallId) : undefined);
-  const nextToolUseId =
-    sharedResolvedId ?? (toolUseIdStr ? params.resolveId(toolUseIdStr) : undefined);
+  const primaryRawId =
+    rawIds.get("call_id") ??
+    rawIds.get("callId") ??
+    rawIds.get("tool_call_id") ??
+    rawIds.get("tool_use_id") ??
+    rawIds.get("toolCallId") ??
+    rawIds.get("toolUseId");
 
-  if (nextToolCallId === toolCallId && nextToolUseId === toolUseIdStr) {
+  if (!primaryRawId) {
+    return params.message;
+  }
+
+  const resolvedId = params.resolveId(primaryRawId);
+  const updates: Partial<Record<(typeof idFields)[number], string>> = {};
+
+  for (const [field, rawId] of rawIds) {
+    if (resolvedId !== rawId) {
+      updates[field] = resolvedId;
+    }
+  }
+
+  if (typeof record.toolCallId !== "string" && resolvedId) {
+    updates.toolCallId = resolvedId;
+  }
+
+  if (Object.keys(updates).length === 0) {
     return params.message;
   }
 
   return {
     ...params.message,
-    ...(nextToolCallId && { toolCallId: nextToolCallId }),
-    ...(nextToolUseId && { toolUseId: nextToolUseId }),
+    ...updates,
   } as Extract<AgentMessage, { role: "toolResult" }>;
 }
 

@@ -1,6 +1,7 @@
 // Browser tests cover browser cli.lazy plugin behavior.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isBrowserMachineOutput } from "../../cli-output-mode.js";
 
 const manageMocks = vi.hoisted(() => {
   const doctorAction = vi.fn();
@@ -81,6 +82,31 @@ function requireTrailingCommand(args: unknown[], label: string): Command {
 }
 
 describe("registerBrowserCli lazy browser subcommands", () => {
+  it.each([
+    ["evaluate", ["browser", "evaluate", "--fn", "return 1"]],
+    ["console", ["browser", "console"]],
+    ["cookies", ["browser", "cookies"]],
+    ["local storage", ["browser", "storage", "local", "get"]],
+    ["session storage", ["browser", "storage", "session", "get", "key"]],
+  ])("declares default JSON output for %s", (_name, args) => {
+    expect(isBrowserMachineOutput({ argv: ["node", "openclaw", ...args] })).toBe(true);
+  });
+
+  it("keeps human browser commands out of machine-output mode", () => {
+    expect(isBrowserMachineOutput({ argv: ["node", "openclaw", "browser", "status"] })).toBe(false);
+    expect(
+      isBrowserMachineOutput({ argv: ["node", "openclaw", "browser", "cookies", "set"] }),
+    ).toBe(false);
+  });
+
+  it("accepts supported root options after browser", () => {
+    expect(
+      isBrowserMachineOutput({
+        argv: ["node", "openclaw", "browser", "--log-level", "debug", "evaluate"],
+      }),
+    ).toBe(true);
+  });
+
   beforeEach(() => {
     vi.unstubAllEnvs();
     manageMocks.registerBrowserManageCommands.mockClear();
@@ -178,6 +204,28 @@ describe("registerBrowserCli lazy browser subcommands", () => {
       "tabs action",
     );
     expect(tabsCommand.parent?.opts().json).toBe(true);
+  });
+
+  it("accepts the shipped trailing browser profile order after lazy loading", async () => {
+    const program = new Command().name("openclaw").enablePositionalOptions();
+    registerBrowserCli(program, [
+      "node",
+      "openclaw",
+      "browser",
+      "tabs",
+      "--browser-profile",
+      "remote",
+    ]);
+
+    await program.parseAsync(["browser", "tabs", "--browser-profile", "remote"], {
+      from: "user",
+    });
+
+    const tabsCommand = requireTrailingCommand(
+      requireFirstCall(manageMocks.tabsAction, "tabs action call"),
+      "tabs action",
+    );
+    expect(tabsCommand.parent?.opts().browserProfile).toBe("remote");
   });
 
   it("skips browser option values when selecting the lazy command group", async () => {

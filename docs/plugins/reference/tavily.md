@@ -12,11 +12,11 @@ Adds agent-callable tools. Adds web search provider support.
 ## Distribution
 
 - Package: `@openclaw/tavily-plugin`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/tavily-plugin`
 
 ## Surface
 
-contracts: tools, webSearchProviders; skills
+contracts: `tools`, `webSearchProviders`; skills
 
 ## Related docs
 

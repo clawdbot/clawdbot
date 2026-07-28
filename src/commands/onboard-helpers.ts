@@ -6,26 +6,36 @@ import { cancel, isCancel } from "@clack/prompts";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
-  decorativeEmoji,
-  supportsDecorativeEmoji,
-} from "../../packages/terminal-core/src/decorative-emoji.js";
+  ConnectErrorDetailCodes,
+  readConnectErrorDetailCode,
+} from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
+import { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
-  DEFAULT_AGENT_WORKSPACE_DIR,
-  ensureAgentWorkspace,
-  resolveWorkspaceAttestationPaths,
-  shouldRemoveWorkspaceAttestation,
-} from "../agents/workspace.js";
+  prepareLegacyWorkspaceStateReset,
+  removeLegacyWorkspaceStateForReset,
+} from "../agents/workspace-legacy-state.js";
+import {
+  deleteWorkspaceState,
+  prepareWorkspaceStateDeletion,
+} from "../agents/workspace-state-store.js";
+import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
+import { printClawBanner } from "../cli/claw-banner.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
-import { resolveConfigPath } from "../config/paths.js";
+import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
+import type { GatewayAuthMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveControlUiLinks } from "../gateway/control-ui-links.js";
+import {
+  resolveAdvertisedControlUiLinks,
+  resolveControlUiLinks,
+  resolveLocalControlUiProbeLinks,
+} from "../gateway/control-ui-links.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
-import { probeGateway } from "../gateway/probe.js";
+import { probeGateway, type GatewayProbeResult } from "../gateway/probe.js";
 import {
   detectBrowserOpenSupport,
   openUrl,
@@ -36,18 +46,31 @@ import { movePathToTrash } from "../infra/fs-safe.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveConfigDir, shortenHomeInString, shortenHomePath, sleep } from "../utils.js";
 import { VERSION } from "../version.js";
-import type { NodeManagerChoice, OnboardMode, ResetScope } from "./onboard-types.js";
+import { listAgentSessionDirs } from "./cleanup-utils.js";
+import type { OnboardMode, ResetScope } from "./onboard-types.js";
 export { randomToken } from "./random-token.js";
 
 export { detectBinary };
 export { detectBrowserOpenSupport, openUrl, resolveBrowserOpenCommand };
-export { resolveControlUiLinks };
+export { resolveAdvertisedControlUiLinks, resolveControlUiLinks, resolveLocalControlUiProbeLinks };
+
+/** Builds the token-authenticated Control UI URL shown by onboarding surfaces. */
+export function buildOnboardingControlUiUrl(params: {
+  httpUrl: string;
+  authMode?: GatewayAuthMode;
+  token?: string;
+  suppressTokenOutput?: boolean;
+}): string {
+  return params.authMode === "token" && params.token && !params.suppressTokenOutput
+    ? `${params.httpUrl}#token=${encodeURIComponent(params.token)}`
+    : params.httpUrl;
+}
 
 /** Handles Clack cancellation by exiting through the runtime. */
-export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
+export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv, exitCode = 0): T {
   if (isCancel(value)) {
     cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.");
-    runtime.exit(0);
+    runtime.exit(exitCode);
     throw new Error("unreachable");
   }
   return value;
@@ -159,23 +182,9 @@ export function validateGatewayPasswordInput(value: unknown): string | undefined
   return undefined;
 }
 
-/** Prints the onboarding banner. */
-export function printWizardHeader(runtime: RuntimeEnv) {
-  const bannerWidth = 54;
-  const icon = decorativeEmoji("🦞");
-  const title = supportsDecorativeEmoji() && icon ? `${icon} OPENCLAW ${icon}` : "OPENCLAW";
-  const pad = Math.max(0, bannerWidth - visibleWidth(title));
-  const titleLine = `${" ".repeat(Math.floor(pad / 2))}${title}${" ".repeat(Math.ceil(pad / 2))}`;
-  const header = [
-    "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
-    "██░▄▄▄░██░▄▄░██░▄▄▄██░▀██░██░▄▄▀██░████░▄▄▀██░███░██",
-    "██░███░██░▀▀░██░▄▄▄██░█░█░██░█████░████░▀▀░██░█░█░██",
-    "██░▀▀▀░██░█████░▀▀▀██░██▄░██░▀▀▄██░▀▀░█░██░██▄▀▄▀▄██",
-    "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
-    titleLine,
-    " ",
-  ].join("\n");
-  runtime.log(header);
+/** Prints the onboarding banner: pixel mascot beside the OPENCLAW wordmark. */
+export async function printWizardHeader(runtime: RuntimeEnv): Promise<void> {
+  await printClawBanner(runtime);
 }
 
 /** Records wizard provenance metadata on config writes. */
@@ -238,44 +247,33 @@ function resolveSshTargetHint(): string {
 export async function ensureWorkspaceAndSessions(
   workspaceDir: string,
   runtime: RuntimeEnv,
-  options?: {
+  options: {
     skipBootstrap?: boolean;
     skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
-    agentId?: string;
+    agentId: string;
   },
-) {
+): Promise<{ bootstrapPending: boolean }> {
   const ws = await ensureAgentWorkspace({
     dir: workspaceDir,
     ensureBootstrapFiles: !options?.skipBootstrap,
     skipOptionalBootstrapFiles: options?.skipOptionalBootstrapFiles,
   });
   runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
-  const sessionsDir = resolveSessionTranscriptsDirForAgent(options?.agentId);
+  const sessionsDir = resolveSessionTranscriptsDirForAgent(options.agentId);
   await fs.mkdir(sessionsDir, { recursive: true });
   runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
-}
-
-/** Returns package manager choices offered by onboarding. */
-export function resolveNodeManagerOptions(): Array<{
-  value: NodeManagerChoice;
-  label: string;
-}> {
-  return [
-    { value: "npm", label: "npm" },
-    { value: "pnpm", label: "pnpm" },
-    { value: "bun", label: "bun" },
-  ];
+  return { bootstrapPending: ws.bootstrapPending === true };
 }
 
 /** Moves a path to Trash when it exists, logging a manual-delete fallback on failure. */
-export async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promise<void> {
+export async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promise<boolean> {
   if (!pathname) {
-    return;
+    return false;
   }
   try {
-    await fs.access(pathname);
-  } catch {
-    return;
+    await fs.lstat(pathname);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT";
   }
   try {
     const targetPath = path.resolve(pathname);
@@ -284,8 +282,10 @@ export async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promis
       allowedRoots: await resolveMoveToTrashAllowedRoots(sourcePath),
     });
     runtime.log(`Moved to Trash: ${shortenHomePath(pathname)}`);
+    return true;
   } catch {
     runtime.log(`Failed to move to Trash (manual delete): ${shortenHomePath(pathname)}`);
+    return false;
   }
 }
 
@@ -315,41 +315,134 @@ export async function handleReset(scope: ResetScope, workspaceDir: string, runti
     return;
   }
   await moveToTrash(path.join(resolveConfigDir(), "credentials"), runtime);
-  await moveToTrash(resolveSessionTranscriptsDirForAgent(), runtime);
+  const sessionDirs = await listAgentSessionDirs(resolveStateDir());
+  for (const sessionDir of sessionDirs) {
+    await moveToTrash(sessionDir, runtime);
+  }
   if (scope === "full") {
-    await moveToTrash(workspaceDir, runtime);
-    for (const [index, attestationPath] of resolveWorkspaceAttestationPaths(
-      workspaceDir,
-    ).entries()) {
-      if (await shouldRemoveWorkspaceAttestation(attestationPath, { trustUnknown: index === 0 })) {
-        await moveToTrash(attestationPath, runtime);
+    const legacyPlan = prepareLegacyWorkspaceStateReset(workspaceDir);
+    const statePlan = prepareWorkspaceStateDeletion(workspaceDir);
+    const workspaceRemoved = await moveToTrash(workspaceDir, runtime);
+    if (workspaceRemoved) {
+      const legacyCleanup = await removeLegacyWorkspaceStateForReset(legacyPlan);
+      for (const warning of legacyCleanup.warnings) {
+        runtime.log(warning);
       }
+      deleteWorkspaceState(statePlan);
     }
   }
 }
 
-/** Runs a single lightweight gateway probe for onboarding readiness checks. */
-export async function probeGatewayReachable(params: {
+type OnboardingGatewayProbeParams = {
   url: string;
   token?: string;
   password?: string;
+  tlsFingerprint?: string;
+  preauthHandshakeTimeoutMs?: number;
   timeoutMs?: number;
-}): Promise<{ ok: boolean; detail?: string }> {
+};
+
+function runOnboardingGatewayProbe(
+  params: OnboardingGatewayProbeParams,
+  detailLevel: "none" | "config",
+): Promise<GatewayProbeResult> {
   const url = params.url.trim();
-  const timeoutMs = params.timeoutMs ?? 1500;
+  const timeoutMs = params.timeoutMs ?? Math.max(1500, params.preauthHandshakeTimeoutMs ?? 0);
+  return probeGateway({
+    url,
+    timeoutMs,
+    auth: {
+      token: params.token,
+      password: params.password,
+    },
+    ...(params.tlsFingerprint ? { tlsFingerprint: params.tlsFingerprint } : {}),
+    ...(params.preauthHandshakeTimeoutMs
+      ? { preauthHandshakeTimeoutMs: params.preauthHandshakeTimeoutMs }
+      : {}),
+    detailLevel,
+  });
+}
+
+/** Runs a single lightweight gateway probe for onboarding readiness checks. */
+export async function probeGatewayReachable(
+  params: OnboardingGatewayProbeParams,
+): Promise<{ ok: boolean; detail?: string }> {
   try {
-    const probe = await probeGateway({
-      url,
-      timeoutMs,
-      auth: {
-        token: params.token,
-        password: params.password,
-      },
-      detailLevel: "none",
-    });
-    return probe.ok ? { ok: true } : { ok: false, detail: probe.error ?? undefined };
+    const probe = await runOnboardingGatewayProbe(params, "none");
+    if (!probe.ok) {
+      return { ok: false, detail: probe.error ?? undefined };
+    }
+    return { ok: true };
   } catch (err) {
     return { ok: false, detail: summarizeError(err) };
+  }
+}
+
+export type GatewayConfiguredModelProbeResult =
+  | { kind: "configured" }
+  | { kind: "missing-configured-model"; detail: string }
+  | { kind: "reachable-unverified"; detail?: string }
+  | { kind: "unreachable"; detail?: string };
+
+const RECOGNIZED_GATEWAY_CONNECT_ERROR_CODES: ReadonlySet<string> = new Set(
+  Object.values(ConnectErrorDetailCodes),
+);
+
+function didProbeReachGateway(probe: GatewayProbeResult): boolean {
+  const connectErrorCode = readConnectErrorDetailCode(probe.connectErrorDetails);
+  const recognizedConnectError =
+    connectErrorCode !== null && RECOGNIZED_GATEWAY_CONNECT_ERROR_CODES.has(connectErrorCode);
+  const serverVersion = probe.server?.version?.trim();
+  const serverConnectionId = probe.server?.connId?.trim();
+  // Opening a WebSocket proves only that something is listening. A Gateway is
+  // established by a hello-ok server identity or its typed connect rejection.
+  return recognizedConnectError || Boolean(serverVersion && serverConnectionId);
+}
+
+/** Reads only Gateway config and classifies whether its default agent has inference. */
+export async function probeGatewayConfiguredModel(
+  params: OnboardingGatewayProbeParams,
+): Promise<GatewayConfiguredModelProbeResult> {
+  let probe: GatewayProbeResult;
+  try {
+    probe = await runOnboardingGatewayProbe(params, "config");
+  } catch (err) {
+    return { kind: "unreachable", detail: summarizeError(err) };
+  }
+  const detail = probe.error ?? undefined;
+  if (!didProbeReachGateway(probe)) {
+    return { kind: "unreachable", ...(detail ? { detail } : {}) };
+  }
+  if (!probe.ok) {
+    return { kind: "reachable-unverified", detail };
+  }
+  const snapshot = probe.configSnapshot as {
+    valid?: unknown;
+    runtimeConfig?: unknown;
+    config?: unknown;
+  } | null;
+  const configCandidate =
+    snapshot?.valid === true ? (snapshot.runtimeConfig ?? snapshot.config) : null;
+  if (!configCandidate || typeof configCandidate !== "object" || Array.isArray(configCandidate)) {
+    return {
+      kind: "reachable-unverified",
+      detail: "Gateway returned an invalid config snapshot",
+    };
+  }
+  try {
+    const config = configCandidate as OpenClawConfig;
+    const model = resolveAgentEffectiveModelPrimary(config, resolveDefaultAgentId(config));
+    return model
+      ? { kind: "configured" }
+      : {
+          kind: "missing-configured-model",
+          detail: "Gateway default agent has no configured model",
+        };
+  } catch {
+    return {
+      kind: "reachable-unverified",
+      detail: "Gateway returned an invalid config snapshot",
+    };
   }
 }
 
@@ -406,8 +499,10 @@ function summarizeError(err: unknown): string {
       .split("\n")
       .map((s) => s.trim())
       .find(Boolean) ?? raw;
-  return line.length > 120 ? `${line.slice(0, 119)}…` : line;
+  return line.length > 120 ? `${truncateUtf16Safe(line, 119)}…` : line;
 }
+
+export const testing = { summarizeError };
 
 /** Default workspace path shown by onboarding prompts. */
 export const DEFAULT_WORKSPACE = DEFAULT_AGENT_WORKSPACE_DIR;

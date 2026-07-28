@@ -8,6 +8,7 @@ export type RegisteredInteractiveHandler = PluginInteractiveHandlerRegistration 
   pluginId: string;
   pluginName?: string;
   pluginRoot?: string;
+  registryOwned?: true;
 };
 
 type InteractiveState = {

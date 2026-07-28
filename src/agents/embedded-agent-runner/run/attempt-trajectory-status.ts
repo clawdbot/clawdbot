@@ -6,23 +6,21 @@ import {
   type AcceptedSessionSpawn,
 } from "../../accepted-session-spawn.js";
 
-export type AttemptTrajectoryTerminalStatus = "success" | "error" | "interrupted";
+type AttemptTrajectoryTerminalStatus = "success" | "error" | "interrupted";
 
 /** Terminal error marker for runs that produced no user-visible delivery or durable progress. */
-export const NON_DELIVERABLE_TERMINAL_TURN_REASON = "non_deliverable_terminal_turn";
+const NON_DELIVERABLE_TERMINAL_TURN_REASON = "non_deliverable_terminal_turn";
 
 /** Normalized terminal status recorded for an embedded run attempt trajectory. */
-export type AttemptTrajectoryTerminal = {
+type AttemptTrajectoryTerminal = {
   status: AttemptTrajectoryTerminalStatus;
   terminalError?: typeof NON_DELIVERABLE_TERMINAL_TURN_REASON;
 };
 
 /** Signals that decide whether a completed run attempt has deliverable output. */
-export type ResolveAttemptTrajectoryTerminalParams = {
-  promptError?: unknown;
-  aborted: boolean;
-  externalAbort: boolean;
-  timedOut: boolean;
+type ResolveAttemptTrajectoryTerminalParams = {
+  failed: boolean;
+  interrupted: boolean;
   assistantTexts: string[];
   toolMetas: Array<{
     toolName: string;
@@ -46,6 +44,7 @@ export type ResolveAttemptTrajectoryTerminalParams = {
   silentExpected?: boolean;
   emptyAssistantReplyIsSilent?: boolean;
   lastAssistantStopReason?: string;
+  hasTerminalOutput?: boolean;
 };
 
 /**
@@ -102,11 +101,11 @@ function hasAsyncStartedToolActivity(toolMetas?: readonly { asyncStarted?: boole
 export function resolveAttemptTrajectoryTerminal(
   params: ResolveAttemptTrajectoryTerminalParams,
 ): AttemptTrajectoryTerminal {
-  if (params.promptError) {
-    return { status: "error" };
-  }
-  if ((params.aborted && params.externalAbort) || params.timedOut) {
+  if (params.interrupted) {
     return { status: "interrupted" };
+  }
+  if (params.failed) {
+    return { status: "error" };
   }
 
   // Messaging/tool-use attempts may not have assistant text; only committed
@@ -118,7 +117,6 @@ export function resolveAttemptTrajectoryTerminal(
     params.didSendDeterministicApprovalPrompt ||
     hasCommittedMessagingDeliveryEvidence(params) ||
     hasAcceptedSessionSpawn(params.acceptedSessionSpawns) ||
-    params.synthesizedPayloadCount > 0 ||
     params.heartbeatToolResponse !== undefined ||
     (params.clientToolCalls?.length ?? 0) > 0 ||
     params.yieldDetected === true ||
@@ -131,9 +129,21 @@ export function resolveAttemptTrajectoryTerminal(
       terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON,
     };
   }
+  if (
+    params.lastAssistantStopReason === "length" &&
+    !params.hasTerminalOutput &&
+    !hasExplicitTerminalDelivery
+  ) {
+    return {
+      status: "error",
+      terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON,
+    };
+  }
 
   const hasDeliverableOrProgress =
     hasExplicitTerminalDelivery ||
+    params.hasTerminalOutput ||
+    params.synthesizedPayloadCount > 0 ||
     hasNonEmptyAssistantText(params.assistantTexts) ||
     params.successfulCronAdds > 0;
 

@@ -13,27 +13,12 @@ import {
   buildMediaGenerationTaskStatusText,
   findActiveMediaGenerationTaskForSession,
   findDuplicateGuardMediaGenerationTaskForSession,
-  getMediaGenerationTaskProviderId,
-  isActiveMediaGenerationTask,
   listActiveMediaGenerationTasksForSession,
 } from "./media-generation-task-status-shared.js";
 
 export const IMAGE_GENERATION_TASK_KIND = "image_generation";
 const IMAGE_GENERATION_SOURCE_PREFIX = "image_generate";
 const RECENT_IMAGE_GENERATION_DUPLICATE_GUARD_MS = 2 * 60_000;
-
-/** Returns whether a task is an active image generation task. */
-export function isActiveImageGenerationTask(task: TaskRecord): boolean {
-  return isActiveMediaGenerationTask({
-    task,
-    taskKind: IMAGE_GENERATION_TASK_KIND,
-  });
-}
-
-/** Extracts the provider id from an image generation task source. */
-export function getImageGenerationTaskProviderId(task: TaskRecord): string | undefined {
-  return getMediaGenerationTaskProviderId(task, IMAGE_GENERATION_SOURCE_PREFIX);
-}
 
 /** Finds the active image generation task for a session and optional prompt. */
 export function findActiveImageGenerationTaskForSession(

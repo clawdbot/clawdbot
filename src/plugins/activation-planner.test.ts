@@ -69,6 +69,30 @@ describe("activation planner", () => {
           origin: "bundled",
         },
         {
+          id: "custom-harness-plugin",
+          providers: [],
+          channels: [],
+          cliBackends: [],
+          skills: [],
+          hooks: [],
+          activation: {
+            onAgentHarnesses: ["custom-harness"],
+          },
+          origin: "workspace",
+        },
+        {
+          id: "load-path-harness-plugin",
+          providers: [],
+          channels: [],
+          cliBackends: [],
+          skills: [],
+          hooks: [],
+          activation: {
+            onAgentHarnesses: ["load-path-harness"],
+          },
+          origin: "config",
+        },
+        {
           id: "demo-channel",
           channels: ["telegram"],
           providers: [],
@@ -141,6 +165,92 @@ describe("activation planner", () => {
           kind: "command",
           command: "memory",
         },
+      }),
+    ).toEqual([]);
+  });
+
+  it("plans manifest-owned custom harnesses and respects their activation policy", () => {
+    expect(
+      resolveManifestActivationPluginIds({
+        trigger: {
+          kind: "agentHarness",
+          runtime: "custom-harness",
+        },
+      }),
+    ).toEqual(["custom-harness-plugin"]);
+
+    expect(
+      resolveManifestActivationPluginIds({
+        config: {
+          plugins: {
+            entries: {
+              "custom-harness-plugin": { enabled: false },
+            },
+          },
+        },
+        trigger: {
+          kind: "agentHarness",
+          runtime: "custom-harness",
+        },
+      }),
+    ).toEqual([]);
+  });
+
+  it("requires canonical ids for explicit manifest owner trust", () => {
+    expect(
+      resolveManifestActivationPluginIds({
+        config: {
+          plugins: {
+            allow: ["legacy-custom-harness-plugin"],
+          },
+        },
+        trigger: {
+          kind: "agentHarness",
+          runtime: "custom-harness",
+        },
+        requireExplicitManifestOwnerTrust: true,
+      }),
+    ).toEqual([]);
+
+    expect(
+      resolveManifestActivationPluginIds({
+        config: {
+          plugins: {
+            allow: ["custom-harness-plugin"],
+          },
+        },
+        trigger: {
+          kind: "agentHarness",
+          runtime: "custom-harness",
+        },
+        requireExplicitManifestOwnerTrust: true,
+      }),
+    ).toEqual(["custom-harness-plugin"]);
+  });
+
+  it("treats load-path manifest owners as explicitly trusted for activation planning", () => {
+    expect(
+      resolveManifestActivationPluginIds({
+        trigger: {
+          kind: "agentHarness",
+          runtime: "load-path-harness",
+        },
+        requireExplicitManifestOwnerTrust: true,
+      }),
+    ).toEqual(["load-path-harness-plugin"]);
+
+    expect(
+      resolveManifestActivationPluginIds({
+        config: {
+          plugins: {
+            deny: ["load-path-harness-plugin"],
+          },
+        },
+        trigger: {
+          kind: "agentHarness",
+          runtime: "load-path-harness",
+        },
+        requireExplicitManifestOwnerTrust: true,
       }),
     ).toEqual([]);
   });

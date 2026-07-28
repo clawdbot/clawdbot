@@ -6,7 +6,23 @@ import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import type { ChannelUiMetadata, PluginUiMetadata } from "./schema.js";
 
-type ChannelMetadataRecord = ChannelUiMetadata & {
+type ChannelSchemaMetadataWithOwnership = ChannelUiMetadata & {
+  schemaPluginId?: string;
+  schemaPluginOrigin?: PluginOrigin;
+};
+
+type ChannelMetadataRecord = ChannelSchemaMetadataWithOwnership & {
+  originRank: number;
+};
+
+type ChannelDmAllowFromMode = "topOnly" | "topOrNested" | "nestedOnly";
+
+type ChannelDmPolicyMetadata = {
+  id: string;
+  dmAllowFromMode?: ChannelDmAllowFromMode;
+};
+
+type ChannelDmPolicyMetadataRecord = ChannelDmPolicyMetadata & {
   originRank: number;
 };
 
@@ -49,10 +65,10 @@ export function collectPluginSchemaMetadata(registry: PluginManifestRegistry): P
     .map(({ originRank: _originRank, ...record }) => record);
 }
 
-/** Collects per-channel config UI metadata from plugin manifests and channel config blocks. */
-export function collectChannelSchemaMetadata(
+/** Collects per-channel config metadata with the plugin that supplied the selected schema. */
+export function collectChannelSchemaMetadataWithOwnership(
   registry: PluginManifestRegistry,
-): ChannelUiMetadata[] {
+): ChannelSchemaMetadataWithOwnership[] {
   const byChannelId = new Map<string, ChannelMetadataRecord>();
 
   for (const record of registry.plugins) {
@@ -71,6 +87,8 @@ export function collectChannelSchemaMetadata(
           description: rootDescription ?? current?.description,
           configSchema: current?.configSchema,
           configUiHints: current?.configUiHints,
+          schemaPluginId: current?.schemaPluginId,
+          schemaPluginOrigin: current?.schemaPluginOrigin,
           originRank,
         });
       }
@@ -93,8 +111,64 @@ export function collectChannelSchemaMetadata(
         description: channelConfig.description ?? rootDescription ?? current?.description,
         configSchema: channelConfig.schema,
         configUiHints: channelConfig.uiHints as ChannelUiMetadata["configUiHints"],
+        schemaPluginId: channelConfig.schema === undefined ? undefined : record.id,
+        schemaPluginOrigin: channelConfig.schema === undefined ? undefined : record.origin,
         originRank,
       });
+    }
+  }
+
+  return [...byChannelId.values()]
+    .toSorted((left, right) => left.id.localeCompare(right.id))
+    .map(({ originRank: _originRank, ...entry }) => entry);
+}
+
+/** Collects public per-channel config UI metadata without internal schema ownership. */
+export function collectChannelSchemaMetadata(
+  registry: PluginManifestRegistry,
+): ChannelUiMetadata[] {
+  return collectChannelSchemaMetadataWithOwnership(registry).map(
+    ({ schemaPluginId: _schemaPluginId, schemaPluginOrigin: _schemaPluginOrigin, ...entry }) =>
+      entry,
+  );
+}
+
+/** Collects channel DM policy metadata without importing doctor/runtime command modules. */
+export function collectChannelDmPolicyMetadata(
+  registry: PluginManifestRegistry,
+): ChannelDmPolicyMetadata[] {
+  const byChannelId = new Map<string, ChannelDmPolicyMetadataRecord>();
+
+  const put = (
+    channelId: string | undefined,
+    originRank: number,
+    dmAllowFromMode?: ChannelDmAllowFromMode,
+  ): void => {
+    const id = channelId?.trim();
+    if (!id) {
+      return;
+    }
+    const current = byChannelId.get(id);
+    if (current && current.originRank < originRank) {
+      return;
+    }
+    byChannelId.set(id, {
+      id,
+      ...(dmAllowFromMode ? { dmAllowFromMode } : {}),
+      originRank,
+    });
+  };
+
+  for (const record of registry.plugins) {
+    const originRank = PLUGIN_ORIGIN_RANK[record.origin] ?? Number.MAX_SAFE_INTEGER;
+    const packageChannelId = record.packageChannel?.id?.trim();
+    const dmAllowFromMode = record.packageChannel?.doctorCapabilities?.dmAllowFromMode;
+    for (const channelId of record.channels) {
+      put(channelId, originRank, channelId === packageChannelId ? dmAllowFromMode : undefined);
+    }
+    put(packageChannelId, originRank, dmAllowFromMode);
+    for (const channelId of Object.keys(record.channelConfigs ?? {})) {
+      put(channelId, originRank, channelId === packageChannelId ? dmAllowFromMode : undefined);
     }
   }
 

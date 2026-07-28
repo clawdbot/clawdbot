@@ -1,3 +1,4 @@
+import { createServer } from "node:net";
 /**
  * Tests QA runtime command loading and private CLI gating.
  */
@@ -24,17 +25,64 @@ vi.mock("../infra/openclaw-root.js", () => ({
 describe("plugin-sdk qa-runtime", () => {
   const tempDirs: string[] = [];
   const originalPrivateQaCli = process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
+  const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 
   beforeEach(() => {
+    vi.resetModules();
     loadBundledPluginPublicSurfaceModuleSync.mockReset();
     resolveOpenClawPackageRootSync.mockReset().mockReturnValue(null);
     delete process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     cleanupTempDirs(tempDirs);
     restorePrivateQaCliEnv(originalPrivateQaCli);
+    if (originalBundledPluginsDir === undefined) {
+      delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    } else {
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
+    }
   });
+
+  async function occupyLoopbackPort(): Promise<{ close: () => Promise<void>; port: number }> {
+    const server = createServer();
+    const port = await new Promise<number>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          reject(new Error("test server address unavailable"));
+          return;
+        }
+        resolve(address.port);
+      });
+    });
+    return {
+      port,
+      close: async () => {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      },
+    };
+  }
+
+  function cancelTrackedFetchResponse(ok = true) {
+    let canceled = false;
+    return {
+      response: {
+        ok,
+        body: {
+          cancel: vi.fn(async () => {
+            canceled = true;
+          }),
+        },
+      },
+      wasCanceled: () => canceled,
+    };
+  }
 
   it("stays cold until the runtime seam is used", async () => {
     const module = await import("./qa-runtime.js");
@@ -68,87 +116,6 @@ describe("plugin-sdk qa-runtime", () => {
     const module = await import("./qa-runtime.js");
 
     expect(module.isQaRuntimeAvailable()).toBe(false);
-  });
-
-  it("renders shared QA markdown reports with multiline details", async () => {
-    const module = await import("./qa-runtime.js");
-
-    const report = module.renderQaMarkdownReport({
-      title: "QA Report",
-      startedAt: new Date("2026-01-01T00:00:00.000Z"),
-      finishedAt: new Date("2026-01-01T00:00:02.000Z"),
-      checks: [{ name: "preflight", status: "pass" }],
-      scenarios: [
-        {
-          name: "transport reply",
-          status: "fail",
-          details: "line one\nline two",
-          steps: [{ name: "send", status: "pass", details: "ok" }],
-        },
-      ],
-      timeline: ["sent request"],
-      notes: ["kept artifacts"],
-    });
-
-    expect(report).toContain("# QA Report");
-    expect(report).toContain("- Duration ms: 2000");
-    expect(report).toContain("- Passed: 1");
-    expect(report).toContain("- Failed: 1");
-    expect(report).toContain("```text\nline one\nline two\n```");
-    expect(report).toContain("- [x] send");
-    expect(report).toContain("## Timeline");
-  });
-
-  it("keeps shared live transport scenario coverage helpers ordered and strict", async () => {
-    const module = await import("./qa-runtime.js");
-
-    expect(module.LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS).toEqual([
-      "canary",
-      "mention-gating",
-      "allowlist-block",
-      "top-level-reply-shape",
-      "restart-resume",
-    ]);
-
-    const definitions = [
-      { id: "alpha", timeoutMs: 1_000, title: "alpha" },
-      { id: "beta", timeoutMs: 1_000, title: "beta" },
-    ] as const;
-    expect(
-      module.selectLiveTransportScenarios({
-        ids: ["beta"],
-        laneLabel: "Demo",
-        scenarios: definitions,
-      }),
-    ).toEqual([definitions[1]]);
-    expect(() =>
-      module.selectLiveTransportScenarios({
-        ids: ["missing"],
-        laneLabel: "Demo",
-        scenarios: definitions,
-      }),
-    ).toThrow("unknown Demo QA scenario id(s): missing");
-
-    const covered = module.collectLiveTransportStandardScenarioCoverage({
-      alwaysOnStandardScenarioIds: ["canary"],
-      scenarios: [
-        { id: "scenario-1", standardId: "mention-gating", timeoutMs: 1_000, title: "mention" },
-        {
-          id: "scenario-2",
-          standardId: "mention-gating",
-          timeoutMs: 1_000,
-          title: "mention again",
-        },
-        { id: "scenario-3", standardId: "restart-resume", timeoutMs: 1_000, title: "restart" },
-      ],
-    });
-    expect(covered).toEqual(["canary", "mention-gating", "restart-resume"]);
-    expect(
-      module.findMissingLiveTransportStandardScenarios({
-        coveredStandardScenarioIds: covered,
-        expectedStandardScenarioIds: module.LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
-      }),
-    ).toEqual(["allowlist-block", "top-level-reply-shape"]);
   });
 
   it("registers shared live transport QA CLI options", async () => {
@@ -272,5 +239,170 @@ describe("plugin-sdk qa-runtime", () => {
 
     expect(runCommand).toHaveBeenCalledTimes(2);
     expect(sleepImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("normalizes multiline Docker compose service lookup output", async () => {
+    const module = await import("./qa-runtime.js");
+    const runtime = module.createQaDockerRuntime({ auditContext: "qa-test" });
+    const runCommand = vi.fn(async (command: string, args: string[], cwd: string) => {
+      expect(command).toBe("docker");
+      expect(cwd).toBe("/repo");
+
+      if (args.includes("ps") && args.includes("-q")) {
+        return {
+          stdout: "\nqa-gateway-one\nqa-gateway-two\n",
+          stderr: "",
+        };
+      }
+
+      if (args[0] === "inspect") {
+        expect(args.at(-1)).toBe("qa-gateway-one");
+        return {
+          stdout: "\n172.18.0.4\n172.19.0.4\n",
+          stderr: "",
+        };
+      }
+
+      throw new Error(`unexpected docker args: ${args.join(" ")}`);
+    });
+    const fetchImpl = vi.fn(async (url: string) => ({
+      ok: url === "http://172.18.0.4:18789/healthz",
+    }));
+
+    await expect(
+      runtime.resolveComposeServiceUrl(
+        "gateway",
+        18789,
+        "/tmp/docker-compose.yml",
+        "/repo",
+        runCommand,
+        fetchImpl,
+      ),
+    ).resolves.toBe("http://172.18.0.4:18789/");
+
+    expect(runCommand).toHaveBeenCalledTimes(2);
+    expect(fetchImpl).toHaveBeenCalledWith("http://172.18.0.4:18789/healthz", {
+      signal: expect.any(AbortSignal),
+    });
+  });
+
+  it("cancels compose service health probe response bodies", async () => {
+    const module = await import("./qa-runtime.js");
+    const runtime = module.createQaDockerRuntime({ auditContext: "qa-test" });
+    const runCommand = vi.fn(async (_command: string, args: string[]) => {
+      if (args.includes("ps")) {
+        return { stdout: "qa-gateway-one\n", stderr: "" };
+      }
+      return { stdout: "172.18.0.4\n", stderr: "" };
+    });
+    const probe = cancelTrackedFetchResponse(true);
+    const fetchImpl = vi.fn(async () => probe.response);
+
+    await expect(
+      runtime.resolveComposeServiceUrl(
+        "gateway",
+        18789,
+        "/tmp/docker-compose.yml",
+        "/repo",
+        runCommand,
+        fetchImpl,
+      ),
+    ).resolves.toBe("http://172.18.0.4:18789/");
+    expect(probe.wasCanceled()).toBe(true);
+  });
+
+  it("cancels the guarded default health response before stripping its body", async () => {
+    const cancel = vi.fn();
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        cancel,
+      }),
+      { status: 503 },
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => response),
+    );
+    const module = await import("./qa-runtime.js");
+    const runtime = module.createQaDockerRuntime({ auditContext: "qa-test" });
+
+    await expect(runtime.fetchHealthUrl("http://127.0.0.1:18789/healthz")).resolves.toEqual({
+      ok: false,
+    });
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("cancels waitForHealth response bodies after each probe", async () => {
+    const module = await import("./qa-runtime.js");
+    const runtime = module.createQaDockerRuntime({ auditContext: "qa-test" });
+    const first = cancelTrackedFetchResponse(false);
+    const second = cancelTrackedFetchResponse(true);
+    const responses = [first.response, second.response];
+    const fetchImpl = vi.fn(async () => responses.shift() ?? second.response);
+    const sleepImpl = vi.fn(async () => {});
+
+    await runtime.waitForHealth("http://127.0.0.1:18789/healthz", {
+      fetchImpl,
+      sleepImpl,
+      timeoutMs: 1000,
+      pollMs: 1,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(first.wasCanceled()).toBe(true);
+    expect(second.wasCanceled()).toBe(true);
+  });
+
+  it("bounds a stalled waitForHealth probe by the remaining overall deadline", async () => {
+    const module = await import("./qa-runtime.js");
+    const runtime = module.createQaDockerRuntime({ auditContext: "qa-test" });
+    let probeSignal: AbortSignal | undefined;
+    const fetchImpl = vi.fn(
+      async (_input: string, init?: Pick<RequestInit, "signal">) =>
+        await new Promise<never>((_resolve, reject) => {
+          probeSignal = init?.signal ?? undefined;
+          if (!probeSignal) {
+            reject(new Error("health probe signal missing"));
+            return;
+          }
+          const rejectAborted = () => reject(new Error("health probe aborted"));
+          if (probeSignal.aborted) {
+            rejectAborted();
+            return;
+          }
+          probeSignal.addEventListener("abort", rejectAborted, { once: true });
+        }),
+    );
+    const sleepImpl = vi.fn(async () => {});
+    const startedAt = Date.now();
+
+    await expect(
+      runtime.waitForHealth("http://127.0.0.1:18789/healthz", {
+        fetchImpl,
+        sleepImpl,
+        timeoutMs: 25,
+        pollMs: 1_000,
+      }),
+    ).rejects.toThrow("did not become healthy");
+
+    expect(Date.now() - startedAt).toBeLessThan(500);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(probeSignal?.aborted).toBe(true);
+    expect(sleepImpl).not.toHaveBeenCalled();
+  });
+
+  it("resolves an unpinned QA Docker host port away from an occupied loopback default", async () => {
+    const module = await import("./qa-runtime.js");
+    const reservation = await occupyLoopbackPort();
+    try {
+      await expect(module.resolveQaDockerHostPort(reservation.port, true)).resolves.toBe(
+        reservation.port,
+      );
+      const fallbackPort = await module.resolveQaDockerHostPort(reservation.port, false);
+      expect(fallbackPort).toBeGreaterThan(0);
+      expect(fallbackPort).not.toBe(reservation.port);
+    } finally {
+      await reservation.close();
+    }
   });
 });

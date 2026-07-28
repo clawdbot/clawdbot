@@ -7,10 +7,8 @@ import {
   isProxyReasoningUnsupported,
 } from "../llm/providers/stream-wrappers/proxy.js";
 import { runExtraParamsPayloadCase } from "./embedded-agent-runner-extraparams.test-support.js";
-import {
-  applyExtraParamsToAgent,
-  testing as extraParamsTesting,
-} from "./embedded-agent-runner/extra-params.js";
+import { applyExtraParamsToAgent } from "./embedded-agent-runner/extra-params.js";
+import { testing as extraParamsTesting } from "./embedded-agent-runner/extra-params.test-support.js";
 
 beforeEach(() => {
   // OpenRouter behavior is supplied through the provider-runtime seam so tests
@@ -163,6 +161,54 @@ describe("applyExtraParamsToAgent OpenRouter reasoning", () => {
     expect(headers?.["X-OpenRouter-Cache"]).toBe("true");
     expect(headers?.["X-OpenRouter-Cache-Clear"]).toBe("true");
     expect(headers?.["X-OpenRouter-Cache-TTL"]).toBe("600");
+  });
+
+  it("forwards Fusion plugin config through extraBody", () => {
+    const payload = runExtraParamsPayloadCase({
+      provider: "openrouter",
+      modelId: "openrouter/fusion",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/openrouter/fusion": {
+                params: {
+                  extraBody: {
+                    plugins: [
+                      {
+                        id: "fusion",
+                        analysis_models: [
+                          "google/gemini-3.5-flash",
+                          "moonshotai/kimi-k2.6",
+                          "deepseek/deepseek-v4-pro",
+                        ],
+                        model: "google/gemini-3.5-flash",
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      payload: { model: "openrouter/fusion" },
+    });
+
+    expect(payload).toEqual({
+      model: "openrouter/fusion",
+      plugins: [
+        {
+          id: "fusion",
+          analysis_models: [
+            "google/gemini-3.5-flash",
+            "moonshotai/kimi-k2.6",
+            "deepseek/deepseek-v4-pro",
+          ],
+          model: "google/gemini-3.5-flash",
+        },
+      ],
+    });
   });
 
   it("uses configured long retention for OpenRouter Anthropic cache markers", () => {

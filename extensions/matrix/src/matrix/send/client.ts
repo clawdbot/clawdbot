@@ -1,20 +1,11 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Matrix plugin module implements client behavior.
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { CoreConfig } from "../../types.js";
 import { resolveMatrixAccountConfig } from "../account-config.js";
 import type { MatrixClient } from "../sdk.js";
 
-type MatrixSendClientRuntime = Pick<
-  typeof import("../client-bootstrap.js"),
-  "withResolvedRuntimeMatrixClient"
->;
-
-let matrixSendClientRuntimePromise: Promise<MatrixSendClientRuntime> | null = null;
-
-async function loadMatrixSendClientRuntime(): Promise<MatrixSendClientRuntime> {
-  matrixSendClientRuntimePromise ??= import("../client-bootstrap.js");
-  return await matrixSendClientRuntimePromise;
-}
+const loadMatrixSendClientRuntime = createLazyRuntimeModule(() => import("../client-bootstrap.js"));
 
 export function resolveMediaMaxBytes(
   accountId?: string | null,

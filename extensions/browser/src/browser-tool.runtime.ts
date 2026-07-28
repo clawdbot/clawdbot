@@ -17,14 +17,21 @@ export function resolveRuntimeImageSanitization(): { maxDimensionPx: number } | 
 }
 export {
   callGatewayTool,
+  completeWithPreparedSimpleCompletionModel,
   describeImageFile,
+  extractAssistantText,
+  htmlToMarkdown,
   imageResultFromFile,
   jsonResult,
   listNodes,
   readPositiveIntegerParam,
   readStringParam,
+  normalizeWhitespace,
+  prepareSimpleCompletionModelForAgent,
+  validateJsonSchemaValue,
   resolveNodeIdFromList,
   saveMediaBuffer,
+  sanitizeHtml,
   selectDefaultNodeFromList,
 } from "./sdk-setup-tools.js";
 export type { AnyAgentTool, NodeListNode } from "./sdk-setup-tools.js";
@@ -33,33 +40,40 @@ export {
   normalizeOptionalString,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-export { BrowserToolSchema } from "./browser-tool.schema.js";
+export { BrowserToolOutputSchema, BrowserToolSchema } from "./browser-tool.schema.js";
 export {
   browserAct,
   browserArmDialog,
   browserArmFileChooser,
   browserConsoleMessages,
+  browserDownload,
   browserNavigate,
+  browserPageContent,
   browserPdfSave,
   browserScreenshotAction,
+  browserWaitForDownload,
 } from "./browser/client-actions.js";
 export {
   browserCloseTab,
   browserDoctor,
   browserFocusTab,
+  browserImportProfile,
   browserOpenTab,
   browserProfiles,
+  browserSystemProfiles,
   browserSnapshot,
   browserStart,
   browserStatus,
   browserStop,
   browserTabs,
 } from "./browser/client.js";
+export { fetchBrowserJson } from "./browser/client-fetch.js";
 export { resolveBrowserConfig, resolveProfile } from "./browser/config.js";
 export { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "./browser/constants.js";
 export { resolveExistingUploadPaths } from "./browser/paths.js";
 export { getBrowserProfileCapabilities } from "./browser/profile-capabilities.js";
 export { applyBrowserProxyPaths, persistBrowserProxyFiles } from "./browser/proxy-files.js";
+export { stageBrowserScreenshotForSharing } from "./browser/screenshot-sharing.js";
 export {
   touchSessionBrowserTab,
   trackSessionBrowserTab,

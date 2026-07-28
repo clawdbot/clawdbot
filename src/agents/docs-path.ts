@@ -24,7 +24,7 @@ function isGitCheckout(rootDir: string): boolean {
 }
 
 /** Resolve a usable local docs directory, preferring the active workspace. */
-export async function resolveOpenClawDocsPath(params: {
+async function resolveOpenClawDocsPath(params: {
   workspaceDir?: string;
   argv1?: string;
   cwd?: string;
@@ -52,7 +52,7 @@ export async function resolveOpenClawDocsPath(params: {
 }
 
 /** Resolve the package root only when it is a Git checkout. */
-export async function resolveOpenClawSourcePath(
+async function resolveOpenClawSourcePath(
   params: ResolveOpenClawReferencePathParams,
 ): Promise<string | null> {
   const packageRoot = await resolveOpenClawPackageRoot({

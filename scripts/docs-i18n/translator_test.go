@@ -64,6 +64,15 @@ func TestDocsI18nCommandWaitDelayUsesEnvOverride(t *testing.T) {
 	}
 }
 
+func TestNormalizeThinkingDefaultsToXHighAndAcceptsMax(t *testing.T) {
+	if got := normalizeThinking(""); got != "xhigh" {
+		t.Fatalf("expected xhigh default, got %q", got)
+	}
+	if got := normalizeThinking("MAX"); got != "max" {
+		t.Fatalf("expected max normalization, got %q", got)
+	}
+}
+
 func TestIsRetryableTranslateErrorRejectsDeadlineExceeded(t *testing.T) {
 	t.Parallel()
 
@@ -176,6 +185,8 @@ func TestBuildCodexTranslationPromptIncludesGuardrailsAndInput(t *testing.T) {
 	for _, want := range []string{
 		"System prompt.",
 		"Return only the translated text",
+		"Do not wrap the response in an additional code fence",
+		"preserve every code fence already present in the input exactly",
 		"<openclaw_docs_i18n_input>",
 		"Hello\nworld",
 		"</openclaw_docs_i18n_input>",
@@ -183,6 +194,9 @@ func TestBuildCodexTranslationPromptIncludesGuardrailsAndInput(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("expected %q in prompt:\n%s", want, prompt)
 		}
+	}
+	if strings.Contains(prompt, "with no code fences") {
+		t.Fatalf("prompt must not instruct the translator to remove input fences:\n%s", prompt)
 	}
 }
 
@@ -336,7 +350,7 @@ sleep 10
 }
 
 func TestPreviewCommandOutputFlattensAndTruncates(t *testing.T) {
-	input := "line one\n\nline   two\tline three " + strings.Repeat("x", 600)
+	input := "line one\n\nline   two\tline three " + strings.Repeat("x", 1200) + " final api error 429"
 	preview := previewCommandOutput(input, "")
 	if strings.Contains(preview, "\n") {
 		t.Fatalf("expected flattened whitespace, got %q", preview)
@@ -344,7 +358,22 @@ func TestPreviewCommandOutputFlattensAndTruncates(t *testing.T) {
 	if !strings.HasPrefix(preview, "line one line two line three ") {
 		t.Fatalf("unexpected preview prefix: %q", preview)
 	}
-	if !strings.HasSuffix(preview, "...") {
-		t.Fatalf("expected truncation suffix, got %q", preview)
+	if !strings.Contains(preview, "... [truncated] ...") {
+		t.Fatalf("expected truncation marker, got %q", preview)
+	}
+	if !strings.HasSuffix(preview, "final api error 429") {
+		t.Fatalf("expected retained error tail, got %q", preview)
+	}
+}
+
+func TestPreviewCommandOutputRetainsStderrTail(t *testing.T) {
+	stdout := "startup banner " + strings.Repeat("x", 1200)
+	stderr := "provider api error 429"
+	preview := previewCommandOutput(stdout, stderr)
+	if !strings.HasPrefix(preview, "startup banner ") {
+		t.Fatalf("unexpected preview prefix: %q", preview)
+	}
+	if !strings.HasSuffix(preview, stderr) {
+		t.Fatalf("expected retained stderr tail, got %q", preview)
 	}
 }

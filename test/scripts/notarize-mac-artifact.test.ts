@@ -21,6 +21,44 @@ afterEach(() => {
 });
 
 describe("notarize-mac-artifact input validation", () => {
+  it("prints help without checking artifact or notary tools", () => {
+    const result = spawnSync("bash", [scriptPath, "--help"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Usage: scripts/notarize-mac-artifact.sh <artifact>");
+    expect(result.stdout).toContain("NOTARYTOOL_PROFILE");
+    expect(result.stderr).toBe("");
+  });
+
+  it("rejects unknown options before artifact validation", () => {
+    const result = spawnSync("bash", [scriptPath, "--wat"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("Error: unknown notarization option: --wat");
+  });
+
+  it("rejects extra artifact arguments before notarization", () => {
+    const tempRoot = makeTempDir("openclaw-notary-extra-");
+    const artifact = path.join(tempRoot, "OpenClaw.zip");
+    writeFileSync(artifact, "placeholder", "utf8");
+
+    const result = spawnSync("bash", [scriptPath, artifact, "extra"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("Error: unexpected notarization argument: extra");
+  });
+
   it("fails before notarization when an explicit staple app path is missing", () => {
     const tempRoot = makeTempDir("openclaw-notary-staple-");
     const artifact = path.join(tempRoot, "OpenClaw.zip");

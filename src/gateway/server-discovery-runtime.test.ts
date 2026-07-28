@@ -2,6 +2,7 @@
 // wide-area DNS records, Bonjour naming, and shutdown cleanup.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginGatewayDiscoveryServiceRegistration } from "../plugins/registry-types.js";
+import { captureFullEnv } from "../test-utils/env.js";
 
 type WriteWideAreaGatewayZone = typeof import("../infra/widearea-dns.js").writeWideAreaGatewayZone;
 type ResolveWideAreaDiscoveryDomain =
@@ -118,19 +119,11 @@ function startStuckDiscovery(timeoutMs: string) {
 }
 
 describe("startGatewayDiscovery", () => {
-  const prevEnv = { ...process.env };
+  const envSnapshot = captureFullEnv();
 
   afterEach(() => {
     vi.useRealTimers();
-    for (const key of Object.keys(process.env)) {
-      if (!(key in prevEnv)) {
-        delete process.env[key];
-      }
-    }
-    for (const [key, value] of Object.entries(prevEnv)) {
-      process.env[key] = value;
-    }
-
+    envSnapshot.restore();
     vi.clearAllMocks();
   });
 
@@ -337,7 +330,7 @@ describe("startGatewayDiscovery", () => {
     expect(mocks.writeWideAreaGatewayZone).not.toHaveBeenCalled();
     expect(logs.warn.mock.calls).toEqual([
       [
-        "discovery.wideArea.enabled is true, but no domain was configured; set discovery.wideArea.domain to enable unicast DNS-SD",
+        "wide-area discovery was requested without a domain; set discovery.wideArea.domain to enable unicast DNS-SD",
       ],
     ]);
     expect(result.bonjourStop).toBeNull();

@@ -1,5 +1,4 @@
 // Release-era repair for configs that imply official plugin installs before install records existed.
-import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { normalizeNullableString as normalizeId } from "@openclaw/normalization-core/string-coerce";
 import { collectConfiguredAgentHarnessRuntimes } from "../../../agents/harness-runtimes.js";
 import { listPotentialConfiguredChannelPresenceSignals } from "../../../channels/config-presence.js";
@@ -12,15 +11,23 @@ import {
   createDeferredConfiguredPluginRepairDoctorResult,
   type UpdatePostInstallDoctorResult,
 } from "../../../infra/update-doctor-result.js";
-import { getOfficialExternalPluginCatalogEntry } from "../../../plugins/official-external-plugin-catalog.js";
-import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
-import { resolveWebSearchInstallCatalogEntry } from "../../../plugins/web-search-install-catalog.js";
+import { collectConfiguredSpeechProviderIds } from "../../../plugins/gateway-startup-speech-providers.js";
+import {
+  getOfficialExternalPluginCatalogEntry,
+  resolveOfficialExternalProviderContractPluginIds,
+  resolveOfficialExternalWebProviderContractPluginIdsForEnv,
+} from "../../../plugins/official-external-plugin-catalog.js";
+import {
+  resolveWebSearchInstallCatalogEntriesForEnv,
+  resolveWebSearchInstallCatalogEntry,
+} from "../../../plugins/web-search-install-catalog.js";
 import { VERSION } from "../../../version.js";
+import { collectConfiguredProviderPluginIds } from "./configured-provider-plugin-installs.js";
 import { repairMissingPluginInstallsForIds } from "./missing-configured-plugin-install.js";
 import { asObjectRecord } from "./object.js";
 import { shouldDeferConfiguredPluginInstallRepair } from "./update-phase.js";
 
-export const CONFIGURED_PLUGIN_INSTALL_RELEASE_VERSION = "2026.5.2-beta.1";
+const CONFIGURED_PLUGIN_INSTALL_RELEASE_VERSION = "2026.5.2-beta.1";
 
 const AGENT_HARNESS_RUNTIME_PLUGIN_IDS: Readonly<Record<string, string>> = {
   // Codex can be selected as a harness for OpenAI models without a plugin entry.
@@ -143,62 +150,6 @@ function collectConfiguredChannelIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv
   return [...ids].toSorted((left, right) => left.localeCompare(right));
 }
 
-function collectConfiguredProviderIds(cfg: OpenClawConfig): Set<string> {
-  const ids = new Set<string>();
-  const add = (value: unknown) => {
-    const id = normalizeId(value);
-    if (id) {
-      ids.add(id.toLowerCase());
-    }
-  };
-  for (const profile of Object.values(asObjectRecord(cfg.auth?.profiles) ?? {})) {
-    add(asObjectRecord(profile)?.provider);
-  }
-  for (const providerId of Object.keys(asObjectRecord(cfg.models?.providers) ?? {})) {
-    add(providerId);
-  }
-  const modelByChannel = asObjectRecord(cfg.channels?.modelByChannel);
-  for (const [providerId, channelMap] of Object.entries(modelByChannel ?? {})) {
-    add(providerId);
-    for (const modelRef of Object.values(asObjectRecord(channelMap) ?? {})) {
-      if (typeof modelRef !== "string") {
-        continue;
-      }
-      const slash = modelRef.indexOf("/");
-      if (slash > 0) {
-        add(modelRef.slice(0, slash));
-      }
-    }
-  }
-  for (const { value } of collectConfiguredModelRefs(cfg, {
-    includeChannelModelOverrides: false,
-  })) {
-    const slash = value.indexOf("/");
-    if (slash > 0) {
-      add(value.slice(0, slash));
-    }
-  }
-  return ids;
-}
-
-function collectProviderPluginIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
-  const configuredProviders = collectConfiguredProviderIds(cfg);
-  if (configuredProviders.size === 0) {
-    return [];
-  }
-  const ids = new Set<string>();
-  for (const entry of resolveProviderInstallCatalogEntries({
-    config: cfg,
-    env,
-    includeUntrustedWorkspacePlugins: false,
-  })) {
-    if (configuredProviders.has(entry.providerId.toLowerCase())) {
-      ids.add(entry.pluginId);
-    }
-  }
-  return [...ids].toSorted((left, right) => left.localeCompare(right));
-}
-
 function collectAgentHarnessRuntimePluginIds(
   cfg: OpenClawConfig,
   _env: NodeJS.ProcessEnv,
@@ -210,12 +161,54 @@ function collectAgentHarnessRuntimePluginIds(
 }
 
 function collectWebSearchPluginIds(cfg: OpenClawConfig): string[] {
+  if (cfg.tools?.web?.search?.enabled === false) {
+    return [];
+  }
   const providerId = cfg.tools?.web?.search?.provider;
   if (typeof providerId !== "string") {
     return [];
   }
   const entry = resolveWebSearchInstallCatalogEntry({ providerId });
   return entry?.pluginId ? [entry.pluginId] : [];
+}
+
+function collectEnvWebSearchPluginIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
+  if (cfg.tools?.web?.search?.enabled === false) {
+    return [];
+  }
+  return resolveWebSearchInstallCatalogEntriesForEnv(env).map((entry) => entry.pluginId);
+}
+
+function collectWebFetchPluginIds(cfg: OpenClawConfig): string[] {
+  const webFetch = cfg.tools?.web?.fetch;
+  if (webFetch?.enabled === false) {
+    return [];
+  }
+  const providerId = normalizeId(webFetch?.provider)?.toLowerCase();
+  if (!providerId) {
+    return [];
+  }
+  return resolveOfficialExternalProviderContractPluginIds({
+    contract: "webFetchProviders",
+    providerIds: new Set([providerId]),
+  });
+}
+
+function collectEnvWebFetchPluginIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
+  if (cfg.tools?.web?.fetch?.enabled === false) {
+    return [];
+  }
+  return resolveOfficialExternalWebProviderContractPluginIdsForEnv({
+    contract: "webFetchProviders",
+    env,
+  });
+}
+
+function collectSpeechPluginIds(cfg: OpenClawConfig): string[] {
+  return resolveOfficialExternalProviderContractPluginIds({
+    contract: "speechProviders",
+    providerIds: collectConfiguredSpeechProviderIds(cfg),
+  });
 }
 
 function collectAcpRuntimePluginIds(cfg: OpenClawConfig): string[] {
@@ -262,7 +255,7 @@ function addEligiblePluginId(cfg: OpenClawConfig, pluginIds: Set<string>, plugin
 }
 
 /** Return true when this config has not yet crossed the configured-plugin install release gate. */
-export function shouldRunConfiguredPluginInstallReleaseStep(params: {
+function shouldRunConfiguredPluginInstallReleaseStep(params: {
   currentVersion?: string | null;
   touchedVersion?: string | null;
   releaseVersion?: string;
@@ -280,7 +273,7 @@ export function shouldRunConfiguredPluginInstallReleaseStep(params: {
 }
 
 /** Collect plugin/channel ids implied by config for the release install backfill step. */
-export function collectReleaseConfiguredPluginIds(params: {
+function collectReleaseConfiguredPluginIds(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): ReleaseConfiguredPluginIds {
@@ -303,13 +296,25 @@ export function collectReleaseConfiguredPluginIds(params: {
   for (const pluginId of collectSlotPluginIds(params.cfg)) {
     addEligiblePluginId(params.cfg, pluginIds, pluginId);
   }
-  for (const pluginId of collectProviderPluginIds(params.cfg, env)) {
+  for (const pluginId of collectConfiguredProviderPluginIds({ cfg: params.cfg, env })) {
     addEligiblePluginId(params.cfg, pluginIds, pluginId);
   }
   for (const pluginId of collectAgentHarnessRuntimePluginIds(params.cfg, env)) {
     addEligiblePluginId(params.cfg, pluginIds, pluginId);
   }
   for (const pluginId of collectWebSearchPluginIds(params.cfg)) {
+    addEligiblePluginId(params.cfg, pluginIds, pluginId);
+  }
+  for (const pluginId of collectEnvWebSearchPluginIds(params.cfg, env)) {
+    addEligiblePluginId(params.cfg, pluginIds, pluginId);
+  }
+  for (const pluginId of collectWebFetchPluginIds(params.cfg)) {
+    addEligiblePluginId(params.cfg, pluginIds, pluginId);
+  }
+  for (const pluginId of collectEnvWebFetchPluginIds(params.cfg, env)) {
+    addEligiblePluginId(params.cfg, pluginIds, pluginId);
+  }
+  for (const pluginId of collectSpeechPluginIds(params.cfg)) {
     addEligiblePluginId(params.cfg, pluginIds, pluginId);
   }
   for (const pluginId of collectAcpRuntimePluginIds(params.cfg)) {
@@ -365,6 +370,7 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
       blockedPluginIds: collectBlockedPluginIds(params.cfg),
       env,
     });
+    const warnings = [...repaired.warnings, ...(repaired.notices ?? [])];
     const postInstallDoctorResult = createPostInstallDoctorResultForDeferredRepair({
       updateInProgress,
       details: repaired.deferredRepairDetails ?? [],
@@ -372,7 +378,7 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
     });
     return {
       changes: repaired.changes,
-      warnings: repaired.warnings,
+      warnings,
       completed: repaired.warnings.length === 0,
       touchedConfig: false,
       ...(postInstallDoctorResult ? { postInstallDoctorResult } : {}),
@@ -389,6 +395,7 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
     env,
   });
   const completed = repaired.warnings.length === 0 && !updateInProgress;
+  const warnings = [...repaired.warnings, ...(repaired.notices ?? [])];
   const postInstallDoctorResult = createPostInstallDoctorResultForDeferredRepair({
     updateInProgress,
     details: repaired.deferredRepairDetails ?? [],
@@ -396,7 +403,7 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
   });
   return {
     changes: repaired.changes,
-    warnings: repaired.warnings,
+    warnings,
     completed,
     touchedConfig: completed,
     ...(postInstallDoctorResult ? { postInstallDoctorResult } : {}),

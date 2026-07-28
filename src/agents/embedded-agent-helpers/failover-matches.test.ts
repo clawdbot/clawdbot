@@ -5,9 +5,12 @@ import {
   isAuthErrorMessage,
   isBillingErrorMessage,
   isOverloadedErrorMessage,
+  isProviderCompletedErrorFinishReasonMessage,
   isRateLimitErrorMessage,
   isServerErrorMessage,
+  isTimeoutErrorMessage,
 } from "./failover-matches.js";
+import { formatRateLimitOrOverloadedErrorCopy } from "./sanitize-user-facing-text.js";
 
 describe("Z.ai vendor error codes (#48988)", () => {
   describe("error 1311 — model not included in subscription plan", () => {
@@ -103,6 +106,48 @@ describe("Z.ai vendor error codes (#48988)", () => {
   });
 });
 
+describe("Google invalid API key errors (#114784)", () => {
+  it("classifies Google Generative AI's invalid-key response as auth", () => {
+    const raw =
+      "Google Generative AI API error (400): API key not valid. Please pass a valid API key. [code=INVALID_ARGUMENT]";
+
+    expect(isAuthErrorMessage(raw)).toBe(true);
+    expect(classifyFailoverReason(raw)).toBe("auth");
+  });
+
+  it.each([
+    "invalid_api_key_error",
+    "API key is invalid",
+    '{"code":"API_KEY_INVALID"}',
+    '{"code":"API_KEY_INVALID_ERROR"}',
+  ])("classifies the %s variant as auth", (raw) => {
+    expect(isAuthErrorMessage(raw)).toBe(true);
+    expect(classifyFailoverReason(raw)).toBe("auth");
+  });
+
+  it("does not treat unrelated Google invalid arguments as auth", () => {
+    const raw =
+      "Google Generative AI API error (400): Request contains an invalid argument. [code=INVALID_ARGUMENT]";
+
+    expect(isAuthErrorMessage(raw)).toBe(false);
+    expect(classifyFailoverReason(raw)).toBeNull();
+    expect(isAuthErrorMessage("API key invalidation policy updated")).toBe(false);
+    expect(isAuthErrorMessage("INVALID API KEYSTORE configuration")).toBe(false);
+  });
+});
+describe("Chinese provider overload messages", () => {
+  const ZHIPU_OVERLOAD = "[1305][该模型当前访问量过大，请您稍后再试]";
+
+  it("classifies the Zhipu GLM overload body as overloaded", () => {
+    expect(isOverloadedErrorMessage(ZHIPU_OVERLOAD)).toBe(true);
+  });
+
+  it("does not misclassify the GLM overload body as rate limit or auth", () => {
+    expect(isRateLimitErrorMessage(ZHIPU_OVERLOAD)).toBe(false);
+    expect(isAuthErrorMessage(ZHIPU_OVERLOAD)).toBe(false);
+  });
+});
+
 describe("Volcengine Coding Plan subscription errors", () => {
   it("classifies InvalidSubscription JSON body as billing", () => {
     const raw =
@@ -162,5 +207,78 @@ describe("server error status classification", () => {
 
   it("does not classify prefixed plain internal server error status prose", () => {
     expect(isServerErrorMessage("Proxy notice: Status: Internal Server Error")).toBe(false);
+  });
+});
+
+describe("provider-completed finish_reason error (#109218)", () => {
+  it("matches bare finish/stop error reasons as provider-completed failures", () => {
+    expect(isProviderCompletedErrorFinishReasonMessage("Provider finish_reason: error")).toBe(true);
+    expect(isTimeoutErrorMessage("Provider finish_reason: error")).toBe(false);
+    expect(classifyFailoverReason("Provider finish_reason: error")).toBe("server_error");
+  });
+
+  it("keeps abort/network/malformed finish reasons in the timeout lane", () => {
+    for (const sample of [
+      "Provider finish_reason: abort",
+      "Provider finish_reason: network_error",
+      "Provider finish_reason: malformed_response",
+    ]) {
+      expect(isProviderCompletedErrorFinishReasonMessage(sample)).toBe(false);
+      expect(isTimeoutErrorMessage(sample)).toBe(true);
+      expect(classifyFailoverReason(sample)).toBe("timeout");
+    }
+  });
+});
+
+describe("generic assistant error text classification (#93931)", () => {
+  it("classifies the generic 'LLM request failed.' as a timeout (transient)", () => {
+    // The generic error text wraps provider availability failures (model not
+    // loaded, endpoint unreachable) that should engage retry/fallback.
+    expect(classifyFailoverReason("LLM request failed.")).toBe("timeout");
+  });
+
+  it("classifies lowercase 'llm request failed.' as a timeout", () => {
+    expect(classifyFailoverReason("llm request failed.")).toBe("timeout");
+  });
+
+  it("does NOT match 'LLM request failed:' variants as timeout via this pattern", () => {
+    // Variants with specific reasons should be classified by their own patterns,
+    // not by the generic LLM request failed match. The schema rejection variant
+    // is a format error, not a transient timeout.
+    expect(
+      isTimeoutErrorMessage(
+        "LLM request failed: provider rejected the request schema or tool payload.",
+      ),
+    ).toBe(false);
+  });
+
+  it("does NOT match 'LLM request failed: connection refused' as timeout via this exact-match pattern", () => {
+    // The connection-refused variant is a sanitized user-facing string, not
+    // the raw error that cron/failover classifiers see. The exact-match regex
+    // /^llm request failed\.$/i should NOT match it because of the colon suffix.
+    expect(
+      isTimeoutErrorMessage("LLM request failed: connection refused by the provider endpoint."),
+    ).toBe(false);
+  });
+});
+
+describe("HTTP 429 overload wording (#98101)", () => {
+  it("keeps Z.AI code 1305 in rate-limit backoff while preserving overload copy", () => {
+    const message =
+      "429 status code (exceeded limit)\n" +
+      '{"code":1305,"message":"The service may be temporarily overloaded, please try again later."}';
+    expect(classifyFailoverReason(message)).toBe("rate_limit");
+    expect(classifyFailoverReason(`HTTP 429: ${message}`)).toBe("rate_limit");
+    expect(formatRateLimitOrOverloadedErrorCopy(message)).toBe(
+      "The AI service is temporarily overloaded. Please try again in a moment.",
+    );
+  });
+
+  it("preserves actionable retry details when a rate limit also mentions overload", () => {
+    expect(
+      formatRateLimitOrOverloadedErrorCopy(
+        "429 rate limit: service overloaded, try again in 30 seconds",
+      ),
+    ).toBe("⚠️ rate limit: service overloaded, try again in 30 seconds");
   });
 });

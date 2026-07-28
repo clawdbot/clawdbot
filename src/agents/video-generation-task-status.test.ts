@@ -1,14 +1,12 @@
 // Video generation task-status tests cover active background task detection and
 // prompt/status text that prevents duplicate media generation requests.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resetRecentMediaGenerationDuplicateGuardsForTests } from "./media-generation-task-status-shared.js";
+import { resetRecentMediaGenerationDuplicateGuardsForTests } from "./media-generation-task-status-shared.test-support.js";
 import {
   buildActiveVideoGenerationTaskPromptContextForSession,
   buildVideoGenerationTaskStatusDetails,
   buildVideoGenerationTaskStatusText,
   findActiveVideoGenerationTaskForSession,
-  getVideoGenerationTaskProviderId,
-  isActiveVideoGenerationTask,
   VIDEO_GENERATION_TASK_KIND,
 } from "./video-generation-task-status.js";
 
@@ -48,8 +46,8 @@ describe("video generation task status", () => {
   });
 
   it("recognizes active session-backed video generation tasks", () => {
-    expect(
-      isActiveVideoGenerationTask({
+    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
+      {
         taskId: "task-1",
         runtime: "cli",
         taskKind: VIDEO_GENERATION_TASK_KIND,
@@ -62,10 +60,8 @@ describe("video generation task status", () => {
         deliveryStatus: "not_applicable",
         notifyPolicy: "silent",
         createdAt: Date.now(),
-      }),
-    ).toBe(true);
-    expect(
-      isActiveVideoGenerationTask({
+      },
+      {
         taskId: "task-2",
         runtime: "cron",
         taskKind: VIDEO_GENERATION_TASK_KIND,
@@ -78,8 +74,10 @@ describe("video generation task status", () => {
         deliveryStatus: "not_applicable",
         notifyPolicy: "silent",
         createdAt: Date.now(),
-      }),
-    ).toBe(false);
+      },
+    ]);
+
+    expect(findActiveVideoGenerationTaskForSession("agent:main")?.taskId).toBe("task-1");
   });
 
   it("prefers a running task over queued session siblings", () => {
@@ -121,7 +119,6 @@ describe("video generation task status", () => {
 
     expect(task?.taskId).toBe("task-running");
     const activeTask = expectActiveVideoGenerationTask(task);
-    expect(getVideoGenerationTaskProviderId(activeTask)).toBe("openai");
     expect(buildVideoGenerationTaskStatusText(activeTask, { duplicateGuard: true })).toContain(
       "Do not call video_generate again for this request.",
     );

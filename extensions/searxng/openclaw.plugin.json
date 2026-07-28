@@ -1,5 +1,6 @@
 {
   "id": "searxng",
+  "icon": "https://cdn.simpleicons.org/searxng",
   "activation": {
     "onStartup": false
   },

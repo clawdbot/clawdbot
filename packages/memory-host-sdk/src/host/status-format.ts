@@ -42,11 +42,3 @@ export function resolveMemoryCacheSummary(cache: { enabled: boolean; entries?: n
   const suffix = typeof cache.entries === "number" ? ` (${cache.entries})` : "";
   return { tone: "ok", text: `cache on${suffix}` };
 }
-
-/** Resolve cache enabled state without count text. */
-export function resolveMemoryCacheState(cache: { enabled: boolean }): {
-  tone: Tone;
-  state: "enabled" | "disabled";
-} {
-  return cache.enabled ? { tone: "ok", state: "enabled" } : { tone: "muted", state: "disabled" };
-}

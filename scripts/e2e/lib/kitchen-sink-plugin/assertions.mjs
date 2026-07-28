@@ -636,6 +636,10 @@ function assertInstalled() {
   if (!fs.existsSync(installPath)) {
     throw new Error(`kitchen-sink install path missing: ${record.installPath}`);
   }
+  if (source === "clawhub") {
+    const extensionsRoot = path.join(process.env.HOME, ".openclaw", "extensions");
+    assertRealPathInside(extensionsRoot, installPath, "kitchen-sink ClawHub install path");
+  }
   if (source === "clawhub" && record.artifactKind === "npm-pack") {
     assertClawHubExternalInstallContract(installPath);
   }

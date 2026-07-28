@@ -23,7 +23,7 @@ export const FILE_WRITE_HARD_MAX_BYTES = 16 * 1024 * 1024;
 const PAIRED_NODE_DESCRIPTION =
   "Existing paired node id, display name, or IP shown by nodes status. Do not use local, host, gateway, or auto; use local file/exec tools for local workspace paths.";
 
-export const FileFetchToolSchema = Type.Object({
+const FileFetchToolSchema = Type.Object({
   node: Type.String({
     description: PAIRED_NODE_DESCRIPTION,
   }),
@@ -46,7 +46,7 @@ export const FILE_FETCH_TOOL_DESCRIPTOR: FileTransferToolDescriptor = {
   parameters: FileFetchToolSchema,
 };
 
-export const DirListToolSchema = Type.Object({
+const DirListToolSchema = Type.Object({
   node: Type.String({
     description: PAIRED_NODE_DESCRIPTION,
   }),
@@ -75,7 +75,7 @@ export const DIR_LIST_TOOL_DESCRIPTOR: FileTransferToolDescriptor = {
   parameters: DirListToolSchema,
 };
 
-export const DirFetchToolSchema = Type.Object({
+const DirFetchToolSchema = Type.Object({
   node: Type.String({
     description: PAIRED_NODE_DESCRIPTION,
   }),
@@ -104,7 +104,7 @@ export const DIR_FETCH_TOOL_DESCRIPTOR: FileTransferToolDescriptor = {
   parameters: DirFetchToolSchema,
 };
 
-export const FileWriteToolSchema = Type.Object({
+const FileWriteToolSchema = Type.Object({
   node: Type.String({ description: PAIRED_NODE_DESCRIPTION }),
   path: Type.String({
     description: "Absolute path on the node to write. Canonicalized server-side.",

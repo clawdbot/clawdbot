@@ -5,14 +5,16 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { auditDreamingArtifacts, repairDreamingArtifacts } from "./dreaming-repair.js";
 import {
-  configureMemoryCoreDreamingStateForTests,
   DREAMING_DAILY_INGESTION_NAMESPACE,
   DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
   DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
   readMemoryCoreWorkspaceEntries,
-  resetMemoryCoreDreamingStateForTests,
   writeMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
+import {
+  configureMemoryCoreDreamingStateForTests,
+  resetMemoryCoreDreamingStateForTests,
+} from "./test-helpers.js";
 
 const tempDirs: string[] = [];
 
@@ -199,6 +201,10 @@ describe("dreaming artifact repair", () => {
       }),
     ]);
 
+    await expect(
+      auditDreamingArtifacts({ workspaceDir }).then((audit) => audit.sessionIngestionExists),
+    ).resolves.toBe(true);
+
     const repair = await repairDreamingArtifacts({ workspaceDir });
 
     expect(repair.archivedSessionCorpus).toBe(true);
@@ -214,6 +220,41 @@ describe("dreaming artifact repair", () => {
         workspaceDir,
       }),
     ).resolves.toEqual([]);
+    await expect(
+      auditDreamingArtifacts({ workspaceDir }).then((audit) => audit.sessionIngestionExists),
+    ).resolves.toBe(false);
+  });
+
+  it("preserves sqlite daily ingestion state when archiving session corpus", async () => {
+    const workspaceDir = await createWorkspace();
+    const sessionCorpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
+    await fs.mkdir(sessionCorpusDir, { recursive: true });
+    await fs.writeFile(path.join(sessionCorpusDir, "2026-04-11.txt"), "corpus\n", "utf-8");
+    await writeMemoryCoreWorkspaceEntries({
+      namespace: DREAMING_DAILY_INGESTION_NAMESPACE,
+      workspaceDir,
+      entries: [
+        {
+          key: "2026-06-10",
+          value: { ingestedAt: 1_000, lastDreamingDayIngested: "2026-06-10" },
+        },
+      ],
+    });
+
+    const repair = await repairDreamingArtifacts({ workspaceDir });
+
+    expect(repair.archivedSessionCorpus).toBe(true);
+    await expect(
+      readMemoryCoreWorkspaceEntries({
+        namespace: DREAMING_DAILY_INGESTION_NAMESPACE,
+        workspaceDir,
+      }),
+    ).resolves.toEqual([
+      {
+        key: "2026-06-10",
+        value: { ingestedAt: 1_000, lastDreamingDayIngested: "2026-06-10" },
+      },
+    ]);
   });
 
   it("reports ingestion state present from SQLite when legacy JSON is absent", async () => {
@@ -235,7 +276,7 @@ describe("dreaming artifact repair", () => {
     expect(audit.sessionIngestionExists).toBe(true);
   });
 
-  it("reports ingestion state present from SQLite daily namespace", async () => {
+  it("does not report session ingestion from the SQLite daily namespace", async () => {
     const workspaceDir = await createWorkspace();
     // Only daily ingestion namespace has rows
     await writeMemoryCoreWorkspaceEntries({
@@ -251,6 +292,6 @@ describe("dreaming artifact repair", () => {
 
     const audit = await auditDreamingArtifacts({ workspaceDir });
 
-    expect(audit.sessionIngestionExists).toBe(true);
+    expect(audit.sessionIngestionExists).toBe(false);
   });
 });

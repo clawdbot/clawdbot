@@ -8,6 +8,7 @@ import {
   normalizeSingleOrTrimmedStringList,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { walkMemoryWikiDirectory } from "./bounded-walk.js";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
@@ -20,6 +21,7 @@ import {
   WIKI_RELATED_START_MARKER,
 } from "./markdown.js";
 import { resolveMemoryWikiTimestamp } from "./time.js";
+import { isRegularFileStat, writeGuardedVaultPage } from "./vault-page-write.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
 const OKF_RESERVED_FILENAMES = new Set(["index.md", "log.md"]);
@@ -31,11 +33,6 @@ const OKF_RELATED_SECTION_PATTERN = new RegExp(
 );
 const OKF_VOLATILE_TIMESTAMP_LINE_PATTERN = /^(?:importedAt|updatedAt): .*\n/gm;
 const OKF_HASH_CHARS = 8;
-
-type FileStatLike = {
-  isFile?: unknown;
-  nlink?: unknown;
-};
 
 type OkfConceptDocument = {
   conceptId: string;
@@ -60,13 +57,13 @@ type OkfImportedPage = {
   created: boolean;
 };
 
-export type ImportMemoryWikiOkfWarning = {
+type ImportMemoryWikiOkfWarning = {
   code: "invalid-concept" | "missing-type" | "unreadable-entry";
   path: string;
   message: string;
 };
 
-export type ImportMemoryWikiOkfResult = {
+type ImportMemoryWikiOkfResult = {
   bundlePath: string;
   bundleName: string;
   okfVersion?: string;
@@ -86,18 +83,6 @@ function toPosixPath(value: string): string {
 
 function trimMarkdownExtension(value: string): string {
   return value.replace(/\.md$/i, "");
-}
-
-function isRegularFileStat(value: unknown): value is FileStatLike & { nlink: number } {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const stat = value as FileStatLike;
-  const isFile =
-    typeof stat.isFile === "function"
-      ? (stat.isFile as () => boolean).call(stat)
-      : stat.isFile === true;
-  return isFile && typeof stat.nlink === "number";
 }
 
 type OkfBundleMetadata = {
@@ -146,34 +131,30 @@ async function collectOkfMarkdownFiles(
   rootDir: string,
   warnings: ImportMemoryWikiOkfWarning[],
 ): Promise<string[]> {
-  async function walk(relativeDir: string): Promise<string[]> {
-    const absoluteDir = path.join(rootDir, relativeDir);
-    const entries = await fs.readdir(absoluteDir, { withFileTypes: true }).catch((err: unknown) => {
+  const entries = await walkMemoryWikiDirectory(rootDir, "", {
+    entryFilter: (entry) =>
+      entry.kind === "directory" &&
+      [".git", "node_modules"].includes(path.basename(entry.relativePath))
+        ? "skip-subtree"
+        : "include",
+    onDirectoryError: "skip-and-report",
+  });
+  const files: string[] = [];
+  for (const entry of entries) {
+    if (entry.kind === "directory-error") {
       warnings.push({
         code: "unreadable-entry",
-        path: toPosixPath(relativeDir) || ".",
-        message: err instanceof Error ? err.message : "Unable to read OKF directory.",
+        path: toPosixPath(entry.relativePath) || ".",
+        message:
+          entry.error instanceof Error ? entry.error.message : "Unable to read OKF directory.",
       });
-      return [];
-    });
-    const files: string[] = [];
-    for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
-      if (entry.name === ".git" || entry.name === "node_modules") {
-        continue;
-      }
-      const relativePath = path.join(relativeDir, entry.name);
-      if (entry.isDirectory()) {
-        files.push(...(await walk(relativePath)));
-        continue;
-      }
-      if (entry.isFile() && entry.name.endsWith(".md")) {
-        files.push(relativePath);
-      }
+      continue;
     }
-    return files;
+    if (entry.kind === "file" && entry.relativePath.endsWith(".md")) {
+      files.push(toPosixPath(entry.relativePath));
+    }
   }
-
-  return (await walk("")).map(toPosixPath).toSorted((left, right) => left.localeCompare(right));
+  return files.toSorted((left, right) => left.localeCompare(right));
 }
 
 function parseOkfMarkdown(
@@ -344,11 +325,12 @@ function safeDecodeOkfLinkPath(value: string | undefined): string {
 function getMarkdownDestinationSuffix(destination: string): string {
   const queryIndex = destination.indexOf("?");
   const fragmentIndex = destination.indexOf("#");
-  const suffixIndex = queryIndex === -1
-    ? fragmentIndex
-    : fragmentIndex === -1
-      ? queryIndex
-      : Math.min(queryIndex, fragmentIndex);
+  const suffixIndex =
+    queryIndex === -1
+      ? fragmentIndex
+      : fragmentIndex === -1
+        ? queryIndex
+        : Math.min(queryIndex, fragmentIndex);
   return suffixIndex === -1 ? "" : destination.slice(suffixIndex);
 }
 
@@ -481,25 +463,13 @@ async function writeOkfConceptPage(params: {
   ) {
     return { changed: false, created: !pageStat };
   }
-  try {
-    if (isRegularFileStat(pageStat) && pageStat.nlink > 1) {
-      await vault.remove(params.pagePath);
-    }
-    await vault.write(params.pagePath, params.content);
-  } catch (error) {
-    if (error instanceof FsSafeError) {
-      if (error.code !== "symlink" && error.code !== "path-alias") {
-        throw new Error(
-          `Refusing to write OKF concept page (${error.code}): ${params.pagePath}: ${error.message}`,
-          { cause: error },
-        );
-      }
-      throw new Error(`Refusing to write OKF concept page through symlink: ${params.pagePath}`, {
-        cause: error,
-      });
-    }
-    throw error;
-  }
+  await writeGuardedVaultPage({
+    vault,
+    pagePath: params.pagePath,
+    content: params.content,
+    pageStat,
+    pageLabel: "OKF concept page",
+  });
   return { changed: true, created: !pageStat };
 }
 
@@ -509,14 +479,18 @@ async function removeStaleOkfConceptPages(params: {
   currentPagePaths: Set<string>;
 }): Promise<string[]> {
   const vault = await fsRoot(params.vaultRoot);
-  const conceptsDir = path.join(params.vaultRoot, "concepts");
-  const entries = await fs.readdir(conceptsDir, { withFileTypes: true }).catch(() => []);
+  const entries = await walkMemoryWikiDirectory(params.vaultRoot, "concepts", {
+    maxDepth: 0,
+    entryFilter: (entry) => (entry.kind === "directory" ? "skip-subtree" : "include"),
+    onDirectoryError: "skip-and-report",
+  });
   const removedPagePaths: string[] = [];
   for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith(".md") || entry.name === "index.md") {
+    const entryName = path.basename(entry.relativePath);
+    if (entry.kind !== "file" || !entryName.endsWith(".md") || entryName === "index.md") {
       continue;
     }
-    const pagePath = `concepts/${entry.name}`;
+    const pagePath = `concepts/${entryName}`;
     if (params.currentPagePaths.has(pagePath)) {
       continue;
     }

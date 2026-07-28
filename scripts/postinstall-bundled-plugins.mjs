@@ -8,6 +8,7 @@ import {
   closeSync,
   existsSync,
   lstatSync,
+  opendirSync,
   openSync,
   readdirSync,
   readFileSync,
@@ -19,7 +20,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as pathResolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { expandPackageDistImportClosure } from "./lib/package-dist-imports.mjs";
@@ -27,8 +28,13 @@ import { expandPackageDistImportClosure } from "./lib/package-dist-imports.mjs";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PACKAGE_ROOT = join(scriptDir, "..");
 const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
-const DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV = "OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION";
 const DIST_INVENTORY_PATH = "dist/postinstall-inventory.json";
+// One budget covers all three prune walks (legacy-deps prepass, file listing,
+// empty-dir sweep). npm upgrades transiently hold old+new content-hashed dist
+// files, so a real upgrade scan totals ~24k entries today (2026.6.x); keep ~4x
+// headroom so dist growth cannot fail `npm install -g` while still refusing
+// pathological/unbounded trees.
+export const MAX_INSTALLED_DIST_SCAN_ENTRIES = 100_000;
 const LEGACY_PLUGIN_RUNTIME_DEPS_DIR = "plugin-runtime-deps";
 const BAILEYS_MEDIA_FILE = join("node_modules", "baileys", "lib", "Utils", "messages-media.js");
 const BAILEYS_MEDIA_HOTFIX_NEEDLE = [
@@ -105,12 +111,7 @@ const BAILEYS_MEDIA_UPLOAD_WITH_FETCH_DISPATCHER_REPLACEMENT = [
 const BAILEYS_MEDIA_ONCE_IMPORT_RE = /import\s+\{\s*once\s*\}\s+from\s+['"]events['"]/u;
 const BAILEYS_MEDIA_ASYNC_CONTEXT_RE =
   /async\s+function\s+encryptedStream|encryptedStream\s*=\s*async/u;
-const NODE_COMPILE_CACHE_VERSION_DIR_RE = /^v\d+\.\d+\.\d+-/u;
-
-function hasEnvFlag(env, key) {
-  const value = env?.[key]?.trim().toLowerCase();
-  return Boolean(value && value !== "0" && value !== "false" && value !== "no");
-}
+class InstalledDistScanLimitError extends Error {}
 
 function normalizeRelativePath(filePath) {
   return filePath.replace(/\\/g, "/");
@@ -197,8 +198,57 @@ function assertSafeInstalledDistPath(relativePath, params) {
   return candidatePath;
 }
 
+function createInstalledDistScanBudget(params = {}) {
+  return {
+    entries: 0,
+    limit: params.maxDistScanEntries ?? MAX_INSTALLED_DIST_SCAN_ENTRIES,
+  };
+}
+
+function resolveInstalledDistScanBudget(params = {}) {
+  return params.distScanBudget ?? createInstalledDistScanBudget(params);
+}
+
+function countInstalledDistScanEntry(budget) {
+  budget.entries += 1;
+  if (budget.entries > budget.limit) {
+    throw new InstalledDistScanLimitError(
+      `installed dist scan exceeded ${budget.limit} filesystem entries; refusing to scan unbounded package contents`,
+    );
+  }
+}
+
+function* iterateInstalledDistEntries(currentDir, params = {}) {
+  if (params.readdirSync) {
+    yield* params.readdirSync(currentDir, { withFileTypes: true });
+    return;
+  }
+
+  const dir = opendirSync(currentDir);
+  try {
+    while (true) {
+      const entry = dir.readSync();
+      if (!entry) {
+        break;
+      }
+      yield entry;
+    }
+  } finally {
+    dir.closeSync();
+  }
+}
+
+function* iterateOptionalInstalledDistEntries(currentDir, params = {}) {
+  try {
+    yield* iterateInstalledDistEntries(currentDir, params);
+  } catch (error) {
+    if (error instanceof InstalledDistScanLimitError) {
+      throw error;
+    }
+  }
+}
+
 function listInstalledDistFiles(params = {}) {
-  const readDir = params.readdirSync ?? readdirSync;
   const distRoot = resolveInstalledDistRoot(params);
   if (distRoot === null) {
     return [];
@@ -206,12 +256,14 @@ function listInstalledDistFiles(params = {}) {
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
   const pending = [distRoot.distDir];
   const files = [];
+  const budget = resolveInstalledDistScanBudget(params);
   while (pending.length > 0) {
     const currentDir = pending.pop();
     if (!currentDir) {
       continue;
     }
-    for (const entry of readDir(currentDir, { withFileTypes: true })) {
+    for (const entry of iterateInstalledDistEntries(currentDir, params)) {
+      countInstalledDistScanEntry(budget);
       const entryPath = join(currentDir, entry.name);
       if (entry.isSymbolicLink()) {
         throw new Error(
@@ -236,7 +288,6 @@ function listInstalledDistFiles(params = {}) {
 }
 
 function pruneEmptyDistDirectories(params = {}) {
-  const readDir = params.readdirSync ?? readdirSync;
   const removeDirectory = params.rmdirSync ?? rmdirSync;
   const distRoot = resolveInstalledDistRoot(params);
   if (distRoot === null) {
@@ -244,9 +295,21 @@ function pruneEmptyDistDirectories(params = {}) {
   }
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
   const pathLstat = params.lstatSync ?? lstatSync;
+  const budget = resolveInstalledDistScanBudget(params);
+
+  function isDirectoryEmpty(currentDir) {
+    for (const entry of iterateInstalledDistEntries(currentDir, params)) {
+      void entry;
+      countInstalledDistScanEntry(budget);
+      return false;
+    }
+    return true;
+  }
 
   function prune(currentDir) {
-    for (const entry of readDir(currentDir, { withFileTypes: true })) {
+    const childDirs = [];
+    for (const entry of iterateInstalledDistEntries(currentDir, params)) {
+      countInstalledDistScanEntry(budget);
       if (entry.isSymbolicLink()) {
         throw new Error(
           `unsafe dist entry: ${normalizeRelativePath(relative(packageRoot, join(currentDir, entry.name)))}`,
@@ -255,7 +318,10 @@ function pruneEmptyDistDirectories(params = {}) {
       if (!entry.isDirectory()) {
         continue;
       }
-      prune(join(currentDir, entry.name));
+      childDirs.push(join(currentDir, entry.name));
+    }
+    for (const childDir of childDirs) {
+      prune(childDir);
     }
     if (currentDir === distRoot.distDir) {
       return;
@@ -266,7 +332,7 @@ function pruneEmptyDistDirectories(params = {}) {
         `unsafe dist directory: ${normalizeRelativePath(relative(packageRoot, currentDir))}`,
       );
     }
-    if (readDir(currentDir).length === 0) {
+    if (isDirectoryEmpty(currentDir)) {
       removeDirectory(
         assertSafeInstalledDistPath(normalizeRelativePath(relative(packageRoot, currentDir)), {
           packageRoot,
@@ -285,45 +351,42 @@ function isLegacyInstalledPluginDependencyDirName(name) {
 }
 
 function pruneLegacyInstalledPluginDependencyDirs(params) {
-  const readDir = params.readdirSync ?? readdirSync;
   const removePath = params.rmSync ?? rmSync;
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
   const extensionsDir = join(packageRoot, "dist", "extensions");
+  const budget = resolveInstalledDistScanBudget(params);
   const removed = [];
-  let pluginEntries;
-  try {
-    pluginEntries = readDir(extensionsDir, { withFileTypes: true });
-  } catch {
-    return removed;
-  }
 
-  for (const pluginEntry of pluginEntries) {
+  for (const pluginEntry of iterateOptionalInstalledDistEntries(extensionsDir, params)) {
+    countInstalledDistScanEntry(budget);
     if (!pluginEntry.isDirectory() || pluginEntry.isSymbolicLink()) {
       continue;
     }
     const pluginDir = join(extensionsDir, pluginEntry.name);
-    let pluginChildren;
-    try {
-      pluginChildren = readDir(pluginDir, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const childEntry of pluginChildren) {
+    const dependencyDirNames = [];
+    for (const childEntry of iterateOptionalInstalledDistEntries(pluginDir, params)) {
+      countInstalledDistScanEntry(budget);
       if (!isLegacyInstalledPluginDependencyDirName(childEntry.name)) {
         continue;
       }
-      const safePluginDir = assertSafeInstalledDistPath(
-        normalizeRelativePath(relative(packageRoot, pluginDir)),
-        {
-          packageRoot,
-          distDirReal: params.distDirReal,
-          realpathSync: params.realpathSync,
-        },
-      );
+      dependencyDirNames.push(childEntry.name);
+    }
+    if (dependencyDirNames.length === 0) {
+      continue;
+    }
+    const safePluginDir = assertSafeInstalledDistPath(
+      normalizeRelativePath(relative(packageRoot, pluginDir)),
+      {
+        packageRoot,
+        distDirReal: params.distDirReal,
+        realpathSync: params.realpathSync,
+      },
+    );
+    for (const dependencyDirName of dependencyDirNames) {
       const relativePath = normalizeRelativePath(
-        relative(packageRoot, join(pluginDir, childEntry.name)),
+        relative(packageRoot, join(pluginDir, dependencyDirName)),
       );
-      removePath(join(safePluginDir, childEntry.name), { recursive: true, force: true });
+      removePath(join(safePluginDir, dependencyDirName), { recursive: true, force: true });
       removed.push(relativePath);
     }
   }
@@ -502,11 +565,13 @@ export function pruneInstalledPackageDist(params = {}) {
   if (distRoot === null) {
     return [];
   }
+  const distScanBudget = createInstalledDistScanBudget(params);
+  const distScanParams = { ...params, distScanBudget };
   const removedLegacyDependencyDirs = pruneLegacyInstalledPluginDependencyDirs({
+    ...distScanParams,
     packageRoot,
     distDirReal: distRoot.distDirReal,
     realpathSync: params.realpathSync,
-    readdirSync: params.readdirSync,
     rmSync: params.rmSync,
   });
   let expectedFiles = params.expectedFiles ?? null;
@@ -521,7 +586,7 @@ export function pruneInstalledPackageDist(params = {}) {
       return [];
     }
   }
-  const installedFiles = listInstalledDistFiles(params);
+  const installedFiles = listInstalledDistFiles(distScanParams);
   const readFile = params.readFileSync ?? readFileSync;
   expectedFiles = new Set(
     expandPackageDistImportClosure({
@@ -555,7 +620,7 @@ export function pruneInstalledPackageDist(params = {}) {
     removed.push(relativePath);
   }
 
-  pruneEmptyDistDirectories(params);
+  pruneEmptyDistDirectories(distScanParams);
 
   if (removed.length > 0) {
     log.log(`[postinstall] pruned stale dist files: ${removed.join(", ")}`);
@@ -756,14 +821,17 @@ export async function runPluginRegistryPostinstallMigration(params = {}) {
   const log = params.log ?? console;
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
   const env = params.env ?? process.env;
+  const pathExists = params.existsSync ?? existsSync;
 
-  if (hasEnvFlag(env, DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV)) {
-    return { status: "disabled", migrated: false, reason: "disabled-env" };
+  // Registry migration belongs to installed-package upgrades. Source checkouts
+  // can contain stale dist from a different build and must not touch operator state.
+  if (isSourceCheckoutRoot({ packageRoot, existsSync: pathExists })) {
+    return { status: "skipped", reason: "source-checkout" };
   }
 
   try {
     const migrationModule = await importInstalledDistModule(
-      params,
+      { ...params, existsSync: pathExists },
       "dist/commands/doctor/shared/plugin-registry-migration.js",
     );
     if (!migrationModule) {
@@ -777,9 +845,6 @@ export async function runPluginRegistryPostinstallMigration(params = {}) {
       env,
       packageRoot,
     });
-    for (const warning of result.preflight?.deprecationWarnings ?? []) {
-      log.warn(`[postinstall] ${warning}`);
-    }
     if (result.migrated) {
       log.log(
         `[postinstall] migrated plugin registry: ${result.current.plugins.length} plugin(s) indexed`,
@@ -838,53 +903,6 @@ function shouldRunBundledPluginPostinstall(params) {
   return true;
 }
 
-function isCompileCachePrunePermissionDenied(error) {
-  return error?.code === "EACCES" || error?.code === "EPERM";
-}
-
-export function pruneOpenClawCompileCache(params = {}) {
-  const env = params.env ?? process.env;
-  const pathExists = params.existsSync ?? existsSync;
-  const readDir = params.readdirSync ?? readdirSync;
-  const remove = params.rmSync ?? rmSync;
-  const log = params.log ?? console;
-  const baseDirs = [
-    env.NODE_DISABLE_COMPILE_CACHE ? "" : env.NODE_COMPILE_CACHE,
-    join(tmpdir(), "node-compile-cache"),
-  ].filter((value, index, values) => value && values.indexOf(value) === index);
-
-  for (const baseDir of baseDirs) {
-    if (!pathExists(baseDir)) {
-      continue;
-    }
-    try {
-      for (const entry of readDir(baseDir, { withFileTypes: true })) {
-        if (!entry.isDirectory() || !NODE_COMPILE_CACHE_VERSION_DIR_RE.test(entry.name)) {
-          continue;
-        }
-        try {
-          remove(join(baseDir, entry.name), {
-            recursive: true,
-            force: true,
-            maxRetries: 2,
-            retryDelay: 100,
-          });
-        } catch (error) {
-          if (isCompileCachePrunePermissionDenied(error)) {
-            continue;
-          }
-          log.warn?.(`[postinstall] could not prune OpenClaw compile cache: ${String(error)}`);
-        }
-      }
-    } catch (error) {
-      if (isCompileCachePrunePermissionDenied(error)) {
-        continue;
-      }
-      log.warn?.(`[postinstall] could not prune OpenClaw compile cache: ${String(error)}`);
-    }
-  }
-}
-
 export function runBundledPluginPostinstall(params = {}) {
   const env = params.env ?? process.env;
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
@@ -894,12 +912,6 @@ export function runBundledPluginPostinstall(params = {}) {
   if (env?.[DISABLE_POSTINSTALL_ENV]?.trim()) {
     return;
   }
-  pruneOpenClawCompileCache({
-    env,
-    existsSync: pathExists,
-    rmSync: params.rmSync,
-    log,
-  });
   if (isSourceCheckoutRoot({ packageRoot, existsSync: pathExists })) {
     try {
       pruneBundledPluginSourceNodeModules({

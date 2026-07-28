@@ -2,7 +2,7 @@
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 
 /** Decision returned for a handshake auth log attempt. */
-export type HandshakeAuthLogDecision = {
+type HandshakeAuthLogDecision = {
   shouldLog: boolean;
   suppressedSinceLastLog: number;
 };

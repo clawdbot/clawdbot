@@ -79,4 +79,70 @@ describe("file_fetch tool", () => {
     expect(text).toContain("[[END_MARKER_SANITIZED]]");
     expect(text).not.toContain('<<<END_EXTERNAL_UNTRUSTED_CONTENT id="deadbeef12345678">>>'); // pragma: allowlist secret
   });
+
+  it("falls back to text for a zero-byte file with an image-extension mimeType", async () => {
+    vi.mocked(listNodes).mockResolvedValue([{ nodeId: "node-1", displayName: "Node One" }]);
+    vi.mocked(resolveNodeIdFromList).mockReturnValue("node-1");
+    vi.mocked(callGatewayTool).mockResolvedValue({
+      payload: {
+        ok: true,
+        path: "/tmp/empty.png",
+        size: 0,
+        mimeType: "image/png",
+        base64: "",
+        sha256: crypto.createHash("sha256").update(Buffer.alloc(0)).digest("hex"),
+      },
+    });
+    vi.mocked(saveMediaBuffer).mockResolvedValue({
+      id: "media-1",
+      path: "/gateway/media/file-transfer/empty.png",
+      size: 0,
+      contentType: "image/png",
+    });
+
+    const result = await createFileFetchTool().execute("tool-call-1", {
+      node: "node-1",
+      path: "/tmp/empty.png",
+    });
+
+    expect(result.content).toHaveLength(1);
+    expect(result.content[0]?.type).toBe("text");
+    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+    expect(text).toContain("Fetched /tmp/empty.png");
+    expect(text).toContain("saved at /gateway/media/file-transfer/empty.png");
+  });
+
+  it("still inlines a non-empty image payload", async () => {
+    const buffer = Buffer.from([1, 2, 3, 4]);
+    vi.mocked(listNodes).mockResolvedValue([{ nodeId: "node-1", displayName: "Node One" }]);
+    vi.mocked(resolveNodeIdFromList).mockReturnValue("node-1");
+    vi.mocked(callGatewayTool).mockResolvedValue({
+      payload: {
+        ok: true,
+        path: "/tmp/photo.png",
+        size: buffer.byteLength,
+        mimeType: "image/png",
+        base64: buffer.toString("base64"),
+        sha256: crypto.createHash("sha256").update(buffer).digest("hex"),
+      },
+    });
+    vi.mocked(saveMediaBuffer).mockResolvedValue({
+      id: "media-1",
+      path: "/gateway/media/file-transfer/photo.png",
+      size: buffer.byteLength,
+      contentType: "image/png",
+    });
+
+    const result = await createFileFetchTool().execute("tool-call-1", {
+      node: "node-1",
+      path: "/tmp/photo.png",
+    });
+
+    expect(result.content).toHaveLength(1);
+    expect(result.content[0]).toEqual({
+      type: "image",
+      data: buffer.toString("base64"),
+      mimeType: "image/png",
+    });
+  });
 });

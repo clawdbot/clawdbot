@@ -1,11 +1,12 @@
 // Memory Core plugin module implements manager sync control behavior.
 import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  createSubsystemLogger,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import type { MemorySyncProgressUpdate } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import type {
+  MemorySessionSyncTarget,
+  MemorySyncParams,
+  MemorySyncProgressUpdate,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
 const log = createSubsystemLogger("memory");
 
@@ -22,7 +23,8 @@ export type MemoryReadonlyRecoveryState = {
   runSync: (params?: {
     reason?: string;
     force?: boolean;
-    sessionFiles?: string[];
+    sessions?: MemorySessionSyncTarget[];
+    archiveFiles?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) => Promise<void>;
   openDatabase: () => DatabaseSync;
@@ -32,7 +34,7 @@ export type MemoryReadonlyRecoveryState = {
   readMeta: () => { vectorDims?: number } | undefined;
 };
 
-export function isMemoryReadonlyDbError(err: unknown): boolean {
+function isMemoryReadonlyDbError(err: unknown): boolean {
   const readonlyPattern =
     /attempt to write a readonly database|database is read-only|SQLITE_READONLY/i;
   const messages = new Set<string>();
@@ -65,7 +67,7 @@ export function isMemoryReadonlyDbError(err: unknown): boolean {
   return [...messages].some((value) => readonlyPattern.test(value));
 }
 
-export function extractMemoryErrorReason(err: unknown): string {
+function extractMemoryErrorReason(err: unknown): string {
   if (err instanceof Error && err.message.trim()) {
     return err.message;
   }
@@ -83,12 +85,7 @@ export function extractMemoryErrorReason(err: unknown): string {
 
 export async function runMemorySyncWithReadonlyRecovery(
   state: MemoryReadonlyRecoveryState,
-  params?: {
-    reason?: string;
-    force?: boolean;
-    sessionFiles?: string[];
-    progress?: (update: MemorySyncProgressUpdate) => void;
-  },
+  params?: MemorySyncParams,
 ): Promise<void> {
   try {
     await state.runSync(params);
@@ -123,26 +120,29 @@ export function enqueueMemoryTargetedSessionSync(
   state: {
     isClosed: () => boolean;
     getSyncing: () => Promise<void> | null;
-    getQueuedSessionFiles: () => Set<string>;
+    getQueuedArchiveFiles: () => Set<string>;
+    getQueuedSessions: () => Map<string, MemorySessionSyncTarget>;
     getQueuedSessionSync: () => Promise<void> | null;
     setQueuedSessionSync: (value: Promise<void> | null) => void;
-    sync: (params?: {
-      reason?: string;
-      force?: boolean;
-      sessionFiles?: string[];
-      progress?: (update: MemorySyncProgressUpdate) => void;
-    }) => Promise<void>;
+    sync: (params?: MemorySyncParams) => Promise<void>;
   },
-  sessionFiles?: string[],
+  targets?: Pick<MemorySyncParams, "sessions" | "archiveFiles">,
 ): Promise<void> {
-  const queuedSessionFiles = state.getQueuedSessionFiles();
-  for (const sessionFile of sessionFiles ?? []) {
+  const queuedArchiveFiles = state.getQueuedArchiveFiles();
+  for (const sessionFile of targets?.archiveFiles ?? []) {
     const trimmed = sessionFile.trim();
     if (trimmed) {
-      queuedSessionFiles.add(trimmed);
+      queuedArchiveFiles.add(trimmed);
     }
   }
-  if (queuedSessionFiles.size === 0) {
+  const queuedSessions = state.getQueuedSessions();
+  for (const session of targets?.sessions ?? []) {
+    const normalized = normalizeQueuedMemorySessionSyncTarget(session);
+    if (normalized) {
+      queuedSessions.set(memorySessionSyncTargetKey(normalized), normalized);
+    }
+  }
+  if (queuedArchiveFiles.size === 0 && queuedSessions.size === 0) {
     return state.getSyncing() ?? Promise.resolve();
   }
   if (!state.getQueuedSessionSync()) {
@@ -150,12 +150,18 @@ export function enqueueMemoryTargetedSessionSync(
       (async () => {
         try {
           await state.getSyncing()?.catch(() => undefined);
-          while (!state.isClosed() && state.getQueuedSessionFiles().size > 0) {
-            const pendingSessionFiles = Array.from(state.getQueuedSessionFiles());
-            state.getQueuedSessionFiles().clear();
+          while (
+            !state.isClosed() &&
+            (state.getQueuedArchiveFiles().size > 0 || state.getQueuedSessions().size > 0)
+          ) {
+            const pendingArchiveFiles = Array.from(state.getQueuedArchiveFiles());
+            const pendingSessions = Array.from(state.getQueuedSessions().values());
+            state.getQueuedArchiveFiles().clear();
+            state.getQueuedSessions().clear();
             await state.sync({
-              reason: "queued-session-files",
-              sessionFiles: pendingSessionFiles,
+              reason: "queued-sessions",
+              sessions: pendingSessions,
+              archiveFiles: pendingArchiveFiles,
             });
           }
         } finally {
@@ -167,24 +173,22 @@ export function enqueueMemoryTargetedSessionSync(
   return state.getQueuedSessionSync() ?? Promise.resolve();
 }
 
-export function createMemorySyncControlConfigForTests(
-  workspaceDir: string,
-  indexPath: string,
-): OpenClawConfig {
+function normalizeQueuedMemorySessionSyncTarget(
+  target: MemorySessionSyncTarget,
+): MemorySessionSyncTarget | null {
+  const sessionId = target.sessionId.trim();
+  if (!sessionId) {
+    return null;
+  }
+  const agentId = target.agentId?.trim();
+  const sessionKey = target.sessionKey?.trim();
   return {
-    agents: {
-      defaults: {
-        workspace: workspaceDir,
-        memorySearch: {
-          provider: "openai",
-          model: "mock-embed",
-          store: { path: indexPath, vector: { enabled: false } },
-          cache: { enabled: false },
-          query: { minScore: 0, hybrid: { enabled: false } },
-          sync: { watch: false, onSessionStart: false, onSearch: false },
-        },
-      },
-      list: [{ id: "main", default: true }],
-    },
-  } as OpenClawConfig;
+    ...(agentId ? { agentId } : {}),
+    sessionId,
+    ...(sessionKey ? { sessionKey } : {}),
+  };
+}
+
+function memorySessionSyncTargetKey(target: MemorySessionSyncTarget): string {
+  return [target.agentId ?? "", target.sessionId, target.sessionKey ?? ""].join("\0");
 }

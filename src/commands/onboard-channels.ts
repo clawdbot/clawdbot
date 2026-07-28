@@ -2,7 +2,7 @@
 export {
   createChannelOnboardingPostWriteHook,
   createChannelOnboardingPostWriteHookCollector,
-  noteChannelStatus,
   runCollectedChannelOnboardingPostWriteHooks,
   setupChannels,
 } from "../flows/channel-setup.js";
+export { noteChannelStatus } from "../flows/channel-setup.status.js";

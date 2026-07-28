@@ -76,7 +76,6 @@ export function expectChannelSurfaceContract(params: {
         messaging?.parseExplicitTarget,
         messaging?.inferTargetChatType,
         messaging?.buildCrossContextPresentation,
-        messaging?.enableInteractiveReplies,
         messaging?.hasStructuredReplyPayload,
         messaging?.formatTargetDisplay,
         messaging?.resolveOutboundSessionRoute,
@@ -91,6 +90,14 @@ export function expectChannelSurfaceContract(params: {
       if (messaging.targetResolver.hint !== undefined) {
         expect(typeof messaging.targetResolver.hint).toBe("string");
         expect(messaging.targetResolver.hint.trim()).not.toBe("");
+      }
+      if (messaging.targetResolver.reservedLiterals !== undefined) {
+        expect(Array.isArray(messaging.targetResolver.reservedLiterals)).toBe(true);
+        expect(
+          messaging.targetResolver.reservedLiterals.every(
+            (value) => typeof value === "string" && value.trim(),
+          ),
+        ).toBe(true);
       }
       if (messaging.targetResolver.resolveTarget) {
         expect(typeof messaging.targetResolver.resolveTarget).toBe("function");

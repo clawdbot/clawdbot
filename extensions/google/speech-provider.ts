@@ -1,8 +1,9 @@
 // Google provider module implements model/runtime integration.
-import { transcodeAudioBufferToOpus } from "openclaw/plugin-sdk/media-runtime";
+import { canonicalizeBase64, transcodeAudioBufferToOpus } from "openclaw/plugin-sdk/media-runtime";
 import {
   assertOkOrThrowProviderError,
   postJsonRequest,
+  readProviderJsonResponse,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
@@ -12,6 +13,7 @@ import type {
   SpeechProviderConfig,
   SpeechProviderOverrides,
   SpeechProviderPlugin,
+  SpeechSynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
 import { asObject, trimToUndefined } from "openclaw/plugin-sdk/speech-core";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -203,7 +205,7 @@ function normalizeGoogleTtsProviderConfig(
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
-      path: "messages.tts.providers.google.apiKey",
+      path: "tts.providers.google.apiKey",
     }),
     baseUrl: trimToUndefined(raw?.baseUrl),
     model: normalizeGoogleTtsModel(raw?.model),
@@ -295,7 +297,11 @@ function extractGoogleSpeechPcm(payload: GoogleGenerateSpeechResponse): Buffer {
       if (!data) {
         continue;
       }
-      return Buffer.from(data, "base64");
+      const canonicalAudio = canonicalizeBase64(data);
+      if (!canonicalAudio) {
+        throw new Error("Google TTS response returned malformed base64 audio data");
+      }
+      return Buffer.from(canonicalAudio, "base64");
     }
   }
   throw new Error("Google TTS response missing audio data");
@@ -323,12 +329,6 @@ function normalizePromptSectionText(value: string | undefined): string | undefin
   return sanitized;
 }
 
-function normalizePromptList(values: readonly string[] | undefined): string[] {
-  return (values ?? [])
-    .map((value) => normalizePromptSectionText(value))
-    .filter((value): value is string => Boolean(value));
-}
-
 function isOpenClawGoogleAudioProfilePrompt(text: string): boolean {
   return (
     text.includes("# AUDIO PROFILE:") &&
@@ -342,27 +342,10 @@ function renderGoogleAudioProfilePrompt(params: {
   persona?: {
     id: string;
     label?: string;
-    prompt?: {
-      profile?: string;
-      scene?: string;
-      sampleContext?: string;
-      style?: string;
-      accent?: string;
-      pacing?: string;
-      constraints?: string[];
-    };
   };
   personaPrompt?: string;
 }): string {
   const transcript = params.text.replace(/\r\n?/g, "\n").trim();
-  const prompt = params.persona?.prompt;
-  const profile = normalizePromptSectionText(prompt?.profile);
-  const scene = normalizePromptSectionText(prompt?.scene);
-  const sampleContext = normalizePromptSectionText(prompt?.sampleContext);
-  const style = normalizePromptSectionText(prompt?.style);
-  const accent = normalizePromptSectionText(prompt?.accent);
-  const pacing = normalizePromptSectionText(prompt?.pacing);
-  const constraints = normalizePromptList(prompt?.constraints);
   const personaPrompt = normalizePromptSectionText(params.personaPrompt);
   const label =
     normalizePromptSectionText(params.persona?.label) ??
@@ -376,35 +359,16 @@ function renderGoogleAudioProfilePrompt(params: {
     ].join("\n"),
   ];
 
-  if (label || profile) {
-    sections.push([`# AUDIO PROFILE: ${label ?? "voice"}`, profile].filter(Boolean).join("\n"));
-  }
-  if (scene) {
-    sections.push(["## THE SCENE", scene].join("\n"));
+  if (label) {
+    sections.push(`# AUDIO PROFILE: ${label}`);
   }
 
   const directorNotes: string[] = [];
-  if (style) {
-    directorNotes.push(`Style: ${style}`);
-  }
-  if (accent) {
-    directorNotes.push(`Accent: ${accent}`);
-  }
-  if (pacing) {
-    directorNotes.push(`Pacing: ${pacing}`);
-  }
-  if (constraints.length > 0) {
-    directorNotes.push(["Constraints:", ...constraints.map((item) => `- ${item}`)].join("\n"));
-  }
   if (personaPrompt) {
     directorNotes.push(["Provider notes:", personaPrompt].join("\n"));
   }
   if (directorNotes.length > 0) {
     sections.push(["### DIRECTOR'S NOTES", ...directorNotes].join("\n"));
-  }
-
-  if (sampleContext) {
-    sections.push(["### SAMPLE CONTEXT", sampleContext].join("\n"));
   }
 
   sections.push(["### TRANSCRIPT", transcript].join("\n"));
@@ -502,7 +466,11 @@ async function synthesizeGoogleTtsPcmOnce(params: {
       }
     }
     try {
-      return extractGoogleSpeechPcm((await res.json()) as GoogleGenerateSpeechResponse);
+      const payload = await readProviderJsonResponse<GoogleGenerateSpeechResponse>(
+        res,
+        "Google TTS response",
+      );
+      return extractGoogleSpeechPcm(payload);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       throw new GoogleTtsRetryableError(message);
@@ -535,6 +503,34 @@ async function synthesizeGoogleTtsPcm(params: {
     }
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+type GoogleTtsSynthesisRequest = Pick<
+  SpeechSynthesisRequest,
+  "cfg" | "providerConfig" | "providerOverrides" | "text" | "timeoutMs"
+>;
+
+async function synthesizeConfiguredGoogleTts(req: GoogleTtsSynthesisRequest): Promise<Buffer> {
+  const config = readGoogleTtsProviderConfig(req.providerConfig);
+  const overrides = readGoogleTtsOverrides(req.providerOverrides);
+  const apiKey = resolveGoogleTtsApiKey({
+    cfg: req.cfg,
+    providerConfig: req.providerConfig,
+  });
+  if (!apiKey) {
+    throw new Error("Google API key missing");
+  }
+  return synthesizeGoogleTtsPcm({
+    text: req.text,
+    apiKey,
+    baseUrl: resolveGoogleTtsBaseUrl({ cfg: req.cfg, providerConfig: config }),
+    request: sanitizeConfiguredModelProviderRequest(req.cfg?.models?.providers?.google?.request),
+    model: normalizeGoogleTtsModel(overrides.model ?? config.model),
+    voiceName: normalizeGoogleTtsVoiceName(overrides.voiceName ?? config.voiceName),
+    audioProfile: overrides.audioProfile ?? config.audioProfile,
+    speakerName: overrides.speakerName ?? config.speakerName,
+    timeoutMs: req.timeoutMs,
+  });
 }
 
 export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
@@ -598,28 +594,7 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
       };
     },
     synthesize: async (req) => {
-      const config = readGoogleTtsProviderConfig(req.providerConfig);
-      const overrides = readGoogleTtsOverrides(req.providerOverrides);
-      const apiKey = resolveGoogleTtsApiKey({
-        cfg: req.cfg,
-        providerConfig: req.providerConfig,
-      });
-      if (!apiKey) {
-        throw new Error("Google API key missing");
-      }
-      const pcm = await synthesizeGoogleTtsPcm({
-        text: req.text,
-        apiKey,
-        baseUrl: resolveGoogleTtsBaseUrl({ cfg: req.cfg, providerConfig: config }),
-        request: sanitizeConfiguredModelProviderRequest(
-          req.cfg?.models?.providers?.google?.request,
-        ),
-        model: normalizeGoogleTtsModel(overrides.model ?? config.model),
-        voiceName: normalizeGoogleTtsVoiceName(overrides.voiceName ?? config.voiceName),
-        audioProfile: overrides.audioProfile ?? config.audioProfile,
-        speakerName: overrides.speakerName ?? config.speakerName,
-        timeoutMs: req.timeoutMs,
-      });
+      const pcm = await synthesizeConfiguredGoogleTts(req);
       if (req.target === "voice-note") {
         return {
           audioBuffer: await transcodeAudioBufferToOpus({
@@ -641,28 +616,7 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
       };
     },
     synthesizeTelephony: async (req) => {
-      const config = readGoogleTtsProviderConfig(req.providerConfig);
-      const overrides = readGoogleTtsOverrides(req.providerOverrides);
-      const apiKey = resolveGoogleTtsApiKey({
-        cfg: req.cfg,
-        providerConfig: req.providerConfig,
-      });
-      if (!apiKey) {
-        throw new Error("Google API key missing");
-      }
-      const pcm = await synthesizeGoogleTtsPcm({
-        text: req.text,
-        apiKey,
-        baseUrl: resolveGoogleTtsBaseUrl({ cfg: req.cfg, providerConfig: config }),
-        request: sanitizeConfiguredModelProviderRequest(
-          req.cfg?.models?.providers?.google?.request,
-        ),
-        model: normalizeGoogleTtsModel(overrides.model ?? config.model),
-        voiceName: normalizeGoogleTtsVoiceName(overrides.voiceName ?? config.voiceName),
-        audioProfile: overrides.audioProfile ?? config.audioProfile,
-        speakerName: overrides.speakerName ?? config.speakerName,
-        timeoutMs: req.timeoutMs,
-      });
+      const pcm = await synthesizeConfiguredGoogleTts(req);
       return {
         audioBuffer: pcm,
         outputFormat: "pcm",
@@ -671,15 +625,3 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
     },
   };
 }
-
-export const testing = {
-  DEFAULT_GOOGLE_TTS_MODEL,
-  DEFAULT_GOOGLE_TTS_VOICE,
-  GOOGLE_AUDIO_PROFILE_PROMPT_TEMPLATE,
-  GOOGLE_TTS_MODELS,
-  GOOGLE_TTS_SAMPLE_RATE,
-  normalizeGoogleTtsModel,
-  renderGoogleAudioProfilePrompt,
-  wrapPcm16MonoToWav,
-};
-export { testing as __testing };

@@ -16,8 +16,7 @@ OpenClaw loads skills from several roots in a defined [precedence order](/tools/
 
 <Steps>
   <Step title="Create the skill directory">
-    Skills live in your workspace `skills/` folder. Create a directory for your
-    new skill:
+    Skills live in your workspace `skills/` folder:
 
     ```bash
     mkdir -p ~/.openclaw/workspace/skills/hello-world
@@ -34,8 +33,7 @@ OpenClaw loads skills from several roots in a defined [precedence order](/tools/
   </Step>
 
   <Step title="Write SKILL.md">
-    Create `SKILL.md` inside the directory. The frontmatter defines metadata;
-    the body gives the agent instructions.
+    The frontmatter defines metadata; the body gives the agent instructions.
 
     ```markdown
     ---
@@ -80,8 +78,6 @@ OpenClaw loads skills from several roots in a defined [precedence order](/tools/
   </Step>
 
   <Step title="Test it">
-    Send a message that should trigger the skill:
-
     ```bash
     openclaw agent --message "give me a greeting"
     ```
@@ -117,8 +113,8 @@ For gating fields (`requires.bins`, `requires.env`, etc.) see
 
 ### Using `{baseDir}`
 
-Use `{baseDir}` in the skill body to reference files inside the skill
-directory without hardcoding paths:
+Reference files inside the skill directory without hardcoding paths — the
+agent resolves `{baseDir}` against the skill's own directory:
 
 ```markdown
 Run the helper script at `{baseDir}/scripts/run.sh`.
@@ -201,8 +197,8 @@ openclaw skills workshop propose-create \
   --proposal-dir ./hello-world-proposal/
 ```
 
-The directory must contain `PROPOSAL.md`. Support files can go in `assets/`,
-`examples/`, `references/`, `scripts/`, or `templates/`.
+The directory must contain `PROPOSAL.md` at its root. Support files go under
+`assets/`, `examples/`, `references/`, `scripts/`, or `templates/`.
 
 After review:
 
@@ -220,21 +216,22 @@ See [Skill Workshop](/tools/skill-workshop) for the full proposal lifecycle.
     Make sure `name`, `description`, and any `metadata.openclaw` gating fields
     are set. Add a `homepage` URL if you have a project page.
   </Step>
-  <Step title="Install the ClawHub skill">
-    The ClawHub skill documents the current publish command shape and required
-    metadata:
-
+  <Step title="Install the standalone ClawHub CLI and log in">
     ```bash
-    openclaw skills install clawhub-publish
+    npm i -g clawhub
+    clawhub login
     ```
-
   </Step>
   <Step title="Publish">
     ```bash
-    clawhub publish
+    clawhub skill publish ./path/to/hello-world
     ```
 
-    See [ClawHub — Publishing](/clawhub/publishing) for the full flow.
+    Add `--version <version>` or `--owner <owner>` to override the inferred
+    version or publish under a specific owner. See
+    [ClawHub — Publishing](/clawhub/publishing) and
+    [ClawHub CLI](/clawhub/cli) for the full flow, owner scoping, and other
+    maintenance commands (`clawhub sync`, `clawhub skill rename`, ...).
 
   </Step>
 </Steps>

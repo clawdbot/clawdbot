@@ -44,6 +44,17 @@ export async function startGoogleChatGatewayAccount(ctx: {
     audienceType: account.config.audienceType,
     audience: account.config.audience,
   });
+  let stopped = false;
+  const markStopped = () => {
+    if (stopped) {
+      return;
+    }
+    stopped = true;
+    statusSink({
+      running: false,
+      lastStopAt: Date.now(),
+    });
+  };
   if (
     isGoogleChatNativeApprovalClientEnabled({
       cfg: ctx.cfg,
@@ -59,26 +70,28 @@ export async function startGoogleChatGatewayAccount(ctx: {
       abortSignal: ctx.abortSignal,
     });
   }
-  await runPassiveAccountLifecycle({
-    abortSignal: ctx.abortSignal,
-    start: async () =>
-      await startGoogleChatMonitor({
-        account,
-        config: ctx.cfg,
-        runtime: ctx.runtime,
-        abortSignal: ctx.abortSignal,
-        webhookPath: account.config.webhookPath,
-        webhookUrl: account.config.webhookUrl,
-        statusSink,
-      }),
-    stop: async (unregister) => {
-      unregister?.();
-    },
-    onStop: async () => {
-      statusSink({
-        running: false,
-        lastStopAt: Date.now(),
-      });
-    },
-  });
+  try {
+    await runPassiveAccountLifecycle({
+      abortSignal: ctx.abortSignal,
+      start: async () =>
+        await startGoogleChatMonitor({
+          account,
+          config: ctx.cfg,
+          runtime: ctx.runtime,
+          abortSignal: ctx.abortSignal,
+          webhookPath: account.config.webhookPath,
+          webhookUrl: account.config.webhookUrl,
+          statusSink,
+        }),
+      stop: async (unregister) => {
+        await unregister?.();
+      },
+      onStop: async () => {
+        markStopped();
+      },
+    });
+  } catch (error) {
+    markStopped();
+    throw error;
+  }
 }

@@ -12,7 +12,7 @@ import type {
 } from "./subagent-registry.types.js";
 
 /** Legacy flat fields accepted while restoring older subagent registry rows. */
-export type LegacySubagentRunRecord = SubagentRunRecord & {
+type LegacySubagentRunRecord = SubagentRunRecord & {
   announceRetryCount?: number;
   lastAnnounceRetryAt?: number;
   lastAnnounceDeliveryError?: string;
@@ -48,6 +48,49 @@ type LegacyDeliveryState = SubagentCompletionDeliveryState & {
 /** Normalizes legacy subagent run fields into nested execution/completion/delivery state. */
 export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRunRecord {
   const legacy = entry as LegacySubagentRunRecord;
+  const taskRunId = typeof entry.taskRunId === "string" ? entry.taskRunId.trim() : "";
+  entry.taskRunId = taskRunId || undefined;
+  const requesterTurnRunId =
+    typeof entry.requesterTurnRunId === "string" ? entry.requesterTurnRunId.trim() : "";
+  entry.requesterTurnRunId = requesterTurnRunId || undefined;
+  entry.requesterTurnYielded =
+    requesterTurnRunId && entry.requesterTurnYielded === true ? true : undefined;
+  entry.retireAfterRequesterTurn =
+    requesterTurnRunId && entry.retireAfterRequesterTurn === true ? true : undefined;
+  entry.generation =
+    typeof entry.generation === "number" &&
+    Number.isSafeInteger(entry.generation) &&
+    entry.generation > 0
+      ? entry.generation
+      : undefined;
+  entry.deleteCleanupDispatchedAt = Number.isFinite(entry.deleteCleanupDispatchedAt)
+    ? entry.deleteCleanupDispatchedAt
+    : undefined;
+  entry.suppressCompletionDelivery = entry.suppressCompletionDelivery === true ? true : undefined;
+  entry.terminalOwner =
+    entry.terminalOwner === "interrupted-recovery" &&
+    Number.isFinite(entry.endedAt) &&
+    entry.outcome?.status === "error" &&
+    entry.endedReason === "subagent-error" &&
+    entry.pauseReason !== "sessions_yield"
+      ? "interrupted-recovery"
+      : undefined;
+  const killReconciliation = entry.killReconciliation;
+  if (
+    !killReconciliation ||
+    typeof killReconciliation !== "object" ||
+    !Number.isFinite(killReconciliation.killedAt)
+  ) {
+    delete entry.killReconciliation;
+  } else {
+    entry.killReconciliation = {
+      killedAt: killReconciliation.killedAt,
+      suppressTaskDelivery: killReconciliation.suppressTaskDelivery === true ? true : undefined,
+      supersededAt: Number.isFinite(killReconciliation.supersededAt)
+        ? killReconciliation.supersededAt
+        : undefined,
+    };
+  }
   entry.execution = mergeExecutionState(entry.execution, buildExecutionState(entry));
   entry.completion = mergeCompletionState(entry.completion, buildCompletionState(entry, legacy));
   entry.delivery = mergeDeliveryState(entry, entry.delivery, buildDeliveryState(entry, legacy));

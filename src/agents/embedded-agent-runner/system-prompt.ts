@@ -6,6 +6,7 @@ import type { ChatType } from "../../channels/chat-type.js";
 import type { SubagentDelegationMode } from "../../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PreparedMemoryPromptSection } from "../../plugins/memory-state.js";
 import type { AgentPromptSurfaceKind } from "../../plugins/types.js";
 import type { ActiveProcessSessionReference } from "../bash-process-references.js";
 import type { BootstrapMode } from "../bootstrap-mode.js";
@@ -32,6 +33,7 @@ export function buildEmbeddedSystemPrompt(params: {
   reasoningTagHint: boolean;
   heartbeatPrompt?: string;
   skillsPrompt?: string;
+  codeModeActive?: boolean;
   docsPath?: string;
   sourcePath?: string;
   ttsHint?: string;
@@ -47,6 +49,8 @@ export function buildEmbeddedSystemPrompt(params: {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   /** Prompt-only strength for delegating non-trivial work through sub-agents. */
   subagentDelegationMode?: SubagentDelegationMode;
+  /** Run-scoped Ultra behavior; independent from configured delegation preference. */
+  proactiveSubagentOrchestration?: boolean;
   /** Whether ACP-specific routing guidance should be included. Defaults to true. */
   acpEnabled?: boolean;
   /** Prompt surface controls runtime-specific fallback fragments. Defaults to OpenClaw main. */
@@ -71,6 +75,7 @@ export function buildEmbeddedSystemPrompt(params: {
     /** Supported message actions for the current channel (e.g., react, edit, unsend) */
     channelActions?: string[];
     activeProcessSessions?: ActiveProcessSessionReference[];
+    activeNode?: string;
   };
   messageToolHints?: string[];
   toolSchemaDirectoryPrompt?: string;
@@ -87,6 +92,7 @@ export function buildEmbeddedSystemPrompt(params: {
   bootstrapTruncationNotice?: string;
   includeMemorySection?: boolean;
   memoryCitationsMode?: MemoryCitationsMode;
+  preparedMemoryPrompt?: PreparedMemoryPromptSection;
   promptContribution?: ProviderSystemPromptContribution;
 }): string {
   return buildConfiguredAgentSystemPrompt({
@@ -102,6 +108,7 @@ export function buildEmbeddedSystemPrompt(params: {
     reasoningTagHint: params.reasoningTagHint,
     heartbeatPrompt: params.heartbeatPrompt,
     skillsPrompt: params.skillsPrompt,
+    codeModeActive: params.codeModeActive,
     docsPath: params.docsPath,
     sourcePath: params.sourcePath,
     ttsHint: params.ttsHint,
@@ -111,6 +118,7 @@ export function buildEmbeddedSystemPrompt(params: {
     silentReplyPromptMode: params.silentReplyPromptMode,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     subagentDelegationMode: params.subagentDelegationMode,
+    proactiveSubagentOrchestration: params.proactiveSubagentOrchestration,
     acpEnabled: params.acpEnabled,
     promptSurface: params.promptSurface,
     nativeCommandNames: params.nativeCommandNames,
@@ -130,6 +138,7 @@ export function buildEmbeddedSystemPrompt(params: {
     bootstrapTruncationNotice: params.bootstrapTruncationNotice,
     includeMemorySection: params.includeMemorySection,
     memoryCitationsMode: params.memoryCitationsMode,
+    preparedMemoryPrompt: params.preparedMemoryPrompt,
     promptContribution: params.promptContribution,
   });
 }

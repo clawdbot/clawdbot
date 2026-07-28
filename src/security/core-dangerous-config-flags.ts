@@ -4,14 +4,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 /** List enabled core config flags that intentionally weaken security posture. */
 export function collectCoreInsecureOrDangerousFlags(cfg: OpenClawConfig): string[] {
   const enabledFlags: string[] = [];
-  if (cfg.gateway?.controlUi?.allowInsecureAuth === true) {
-    enabledFlags.push("gateway.controlUi.allowInsecureAuth=true");
-  }
   if (cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true) {
     enabledFlags.push("gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true");
-  }
-  if (cfg.gateway?.controlUi?.dangerouslyDisableDeviceAuth === true) {
-    enabledFlags.push("gateway.controlUi.dangerouslyDisableDeviceAuth=true");
   }
   if (cfg.hooks?.gmail?.allowUnsafeExternalContent === true) {
     enabledFlags.push("hooks.gmail.allowUnsafeExternalContent=true");

@@ -43,6 +43,17 @@ send() {
   printf "%b" "$payload" >&3 2>/dev/null || true
 }
 
+log_contains() {
+  local needle="$1"
+  if [ -z "${WIZARD_LOG_PATH:-}" ] || [ ! -f "$WIZARD_LOG_PATH" ]; then
+    return 1
+  fi
+  if grep -a -F -q "$needle" "$WIZARD_LOG_PATH"; then
+    return 0
+  fi
+  node scripts/e2e/lib/onboard/log-contains.mjs "$WIZARD_LOG_PATH" "$needle"
+}
+
 wait_for_log() {
   local needle="$1"
   local timeout_s="${2:-45}"
@@ -50,13 +61,8 @@ wait_for_log() {
   local start_s
   start_s="$(date +%s)"
   while true; do
-    if [ -n "${WIZARD_LOG_PATH:-}" ] && [ -f "$WIZARD_LOG_PATH" ]; then
-      if grep -a -F -q "$needle" "$WIZARD_LOG_PATH"; then
-        return 0
-      fi
-      if node scripts/e2e/lib/onboard/log-contains.mjs "$WIZARD_LOG_PATH" "$needle"; then
-        return 0
-      fi
+    if log_contains "$needle"; then
+      return 0
     fi
     if [ $(($(date +%s) - start_s)) -ge "$timeout_s" ]; then
       if [ "$quiet_on_timeout" = "true" ]; then
@@ -72,12 +78,35 @@ wait_for_log() {
   done
 }
 
+wait_for_skills_prompt_or_ready() {
+  local timeout_s="${1:-45}"
+  local start_s
+  start_s="$(date +%s)"
+  while true; do
+    if log_contains "Configure skills now?"; then
+      return 0
+    fi
+    if log_contains "All skills ready"; then
+      return 2
+    fi
+    if [ $(($(date +%s) - start_s)) -ge "$timeout_s" ]; then
+      echo "Timeout waiting for skills prompt or ready state"
+      if [ -n "${WIZARD_LOG_PATH:-}" ] && [ -f "$WIZARD_LOG_PATH" ]; then
+        tail -n 140 "$WIZARD_LOG_PATH" || true
+      fi
+      return 1
+    fi
+    sleep 0.2
+  done
+}
+
 start_gateway() {
   GATEWAY_PID="$(openclaw_e2e_start_gateway "$OPENCLAW_ENTRY" 18789 "$GATEWAY_LOG_PATH")"
 }
 
 wait_for_gateway() {
-  local wait_attempts="${OPENCLAW_ONBOARD_GATEWAY_WAIT_ATTEMPTS:-20}"
+  local wait_attempts
+  wait_attempts="$(openclaw_e2e_read_positive_int_env OPENCLAW_ONBOARD_GATEWAY_WAIT_ATTEMPTS 20)" || return $?
   local wait_interval_s="${OPENCLAW_ONBOARD_GATEWAY_WAIT_INTERVAL_S:-1}"
   local saw_listening_log="false"
   for _ in $(seq 1 "$wait_attempts"); do
@@ -102,7 +131,7 @@ stop_gateway() {
 }
 
 cleanup_wizard_case() {
-  exec 3>&- 2>/dev/null || true
+  { exec 3>&-; } 2>/dev/null || true
   openclaw_e2e_stop_process "${wizard_pid:-}"
   stop_gateway "${gw_pid:-}"
   rm -rf "${input_fifo_dir:-}"
@@ -176,16 +205,6 @@ run_wizard_cmd() {
   fi
 }
 
-run_wizard() {
-  local case_name="$1"
-  local state_ref="$2"
-  local send_fn="$3"
-  local validate_fn="${4:-}"
-
-  # Default onboarding command wrapper.
-  run_wizard_cmd "$case_name" "$state_ref" "node \"$OPENCLAW_ENTRY\" onboard $ONBOARD_FLAGS" "$send_fn" true "$validate_fn"
-}
-
 assert_onboard_config() {
   local scenario="$1"
   shift
@@ -196,35 +215,6 @@ assert_onboard_config() {
 set_isolated_openclaw_env() {
   local state_ref="$1"
   openclaw_test_state_create "$state_ref" empty
-}
-
-select_skip_hooks() {
-  # Hooks multiselect: pick "Skip for now".
-  wait_for_log "Enable hooks?" 60
-  send $' \r' 0.6
-}
-
-send_local_basic() {
-  # Risk acknowledgement (default is "No").
-  wait_for_log "Continue?" 60
-  send $'y\r' 0.6
-  # Non-interactive flow; no gateway-location prompt.
-  select_skip_hooks
-}
-
-send_reset_config_only() {
-  # Risk acknowledgement (default is "No").
-  wait_for_log "Continue?" 40
-  send $'y\r' 0.8
-  # Select reset flow for existing config.
-  wait_for_log "Config handling" 40
-  send $'\e[B' 0.3
-  send $'\e[B' 0.3
-  send $'\r' 0.4
-  # Reset scope -> Config only (default).
-  wait_for_log "Reset scope" 40
-  send $'\r' 0.4
-  select_skip_hooks
 }
 
 send_channels_flow() {
@@ -240,8 +230,14 @@ send_channels_flow() {
 send_skills_flow() {
   # configure --section skills still runs the configure wizard, without the
   # gateway run-mode prompt used by the full wizard.
-  wait_for_log "Configure skills now?" 120
-  send $'n\r' 0.8
+  if wait_for_skills_prompt_or_ready 120; then
+    send $'n\r' 0.8
+  else
+    local status="$?"
+    if [ "$status" -ne 2 ]; then
+      return "$status"
+    fi
+  fi
   send "" 2.0
 }
 
@@ -265,7 +261,7 @@ run_case_local_basic() {
   sessions_dir="$OPENCLAW_STATE_DIR/agents/main/sessions"
 
   openclaw_e2e_assert_dir "$sessions_dir"
-  for file in AGENTS.md BOOTSTRAP.md IDENTITY.md SOUL.md TOOLS.md USER.md; do
+  for file in AGENTS.md BOOTSTRAP.md IDENTITY.md SOUL.md USER.md; do
     openclaw_e2e_assert_file "$workspace_dir/$file"
   done
 

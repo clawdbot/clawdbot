@@ -34,6 +34,9 @@ const channelPluginIdsModuleLoader = createLazyImportLoader(
   () => import("../plugins/channel-plugin-ids.js"),
 );
 const configModuleLoader = createLazyImportLoader(() => import("../config/config.js"));
+const controlUiLinksModuleLoader = createLazyImportLoader(
+  () => import("../gateway/control-ui-links.js"),
+);
 const commandConfigResolutionModuleLoader = createLazyImportLoader(
   () => import("../cli/command-config-resolution.js"),
 );
@@ -71,6 +74,10 @@ function loadChannelPluginIdsModule() {
 
 function loadConfigModule() {
   return configModuleLoader.load();
+}
+
+function loadControlUiLinksModule() {
+  return controlUiLinksModuleLoader.load();
 }
 
 function loadCommandConfigResolutionModule() {
@@ -116,6 +123,7 @@ export type StatusScanOverviewResult = {
   tailscaleMode: string;
   tailscaleDns: string | null;
   tailscaleHttpsUrl: string | null;
+  advertisedControlUiLinks?: { httpUrl: string; wsUrl: string };
   update: UpdateCheckResult;
   gatewaySnapshot: Pick<
     GatewayProbeSnapshot,
@@ -158,6 +166,7 @@ export async function collectStatusScanOverview(params: {
   useGatewayCallOverridesForChannelsStatus?: boolean;
   includeChannelSecretTargets?: boolean;
   skipConfigPluginValidation?: boolean;
+  includeAdvertisedControlUiLinks?: boolean;
   progress?: {
     setLabel(label: string): void;
     tick(): void;
@@ -185,6 +194,7 @@ export async function collectStatusScanOverview(params: {
     allowMissingConfigFastPath: params.allowMissingConfigFastPath,
     readConfigSnapshot: async () =>
       (await loadConfigModule()).readBestEffortConfigSnapshot({
+        observe: false,
         skipPluginValidation: params.skipConfigPluginValidation,
       }),
     resolveConfig: async (loadedConfig) =>
@@ -228,10 +238,11 @@ export async function collectStatusScanOverview(params: {
     includeRegistryUpdate: params.includeRegistryUpdate,
     includeLocalStatusRpcFallback: params.includeLocalStatusRpcFallback,
     gatewayProbeTimeoutMs,
-    getTailnetHostname: async (runner) =>
-      await loadStatusScanDepsRuntimeModule().then(({ getTailnetHostname }) =>
+    getTailnetHostname: async (runner) => {
+      return await loadStatusScanDepsRuntimeModule().then(({ getTailnetHostname }) =>
         getTailnetHostname(runner),
-      ),
+      );
+    },
     getUpdateCheckResult: async (updateParams) =>
       await loadStatusUpdateModule().then(({ getUpdateCheckResult }) =>
         getUpdateCheckResult(updateParams),
@@ -267,6 +278,18 @@ export async function collectStatusScanOverview(params: {
   params.progress?.tick();
 
   const tailscaleHttpsUrl = await bootstrap.resolveTailscaleHttpsUrl();
+  const advertisedControlUiLinks =
+    params.includeAdvertisedControlUiLinks === true && cfg.gateway?.controlUi?.enabled !== false
+      ? await loadControlUiLinksModule().then(async ({ resolveAdvertisedControlUiLinks }) =>
+          resolveAdvertisedControlUiLinks({
+            port: (await loadConfigModule()).resolveGatewayPort(cfg),
+            bind: cfg.gateway?.bind,
+            customBindHost: cfg.gateway?.customBindHost,
+            basePath: cfg.gateway?.controlUi?.basePath,
+            tlsEnabled: cfg.gateway?.tls?.enabled === true,
+          }),
+        )
+      : undefined;
   const includeChannelsData = params.includeChannelsData !== false;
   const includeLiveChannelStatus = params.includeLiveChannelStatus !== false;
   const { channelsStatus, channelIssues, channels } = includeChannelsData
@@ -327,6 +350,7 @@ export async function collectStatusScanOverview(params: {
     tailscaleMode: bootstrap.tailscaleMode,
     tailscaleDns,
     tailscaleHttpsUrl,
+    ...(advertisedControlUiLinks ? { advertisedControlUiLinks } : {}),
     update,
     gatewaySnapshot,
     channelsStatus,
@@ -339,7 +363,6 @@ export async function collectStatusScanOverview(params: {
 /** Resolves the summary object from overview data, preserving cold-start fast-path behavior. */
 export async function resolveStatusSummaryFromOverview(params: {
   overview: Pick<StatusScanOverviewResult, "skipColdStartNetworkChecks" | "cfg" | "sourceConfig">;
-  includeChannelSummary?: boolean;
 }) {
   if (params.overview.skipColdStartNetworkChecks) {
     return buildColdStartStatusSummary();
@@ -348,7 +371,8 @@ export async function resolveStatusSummaryFromOverview(params: {
     getStatusSummary({
       config: params.overview.cfg,
       sourceConfig: params.overview.sourceConfig,
-      includeChannelSummary: params.includeChannelSummary,
+      // CLI scans own channel output separately; skip duplicate plugin discovery in the summary.
+      includeChannelSummary: false,
     }),
   );
 }

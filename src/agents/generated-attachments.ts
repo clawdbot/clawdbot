@@ -17,10 +17,7 @@ export type AgentGeneratedAttachment = {
   name?: string;
 };
 
-/** Resolve the first usable path or URL reference for a generated attachment. */
-export function generatedAttachmentReference(
-  attachment: AgentGeneratedAttachment,
-): string | undefined {
+function generatedAttachmentReference(attachment: AgentGeneratedAttachment): string | undefined {
   return normalizeOptionalString(
     attachment.path ?? attachment.url ?? attachment.mediaUrl ?? attachment.filePath,
   );
@@ -35,10 +32,7 @@ export function mediaUrlsFromGeneratedAttachments(
   );
 }
 
-/** Resolve a display name from attachment metadata or path basename. */
-export function nameFromGeneratedAttachment(
-  attachment: AgentGeneratedAttachment,
-): string | undefined {
+function nameFromGeneratedAttachment(attachment: AgentGeneratedAttachment): string | undefined {
   return (
     normalizeOptionalString(attachment.name) ??
     basenameFromAnyPath(generatedAttachmentReference(attachment) ?? "")

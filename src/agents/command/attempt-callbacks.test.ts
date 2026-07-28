@@ -1,10 +1,13 @@
 // Verifies the small lifecycle callback adapter used during agent attempts.
 import { describe, expect, it } from "vitest";
-import { createAgentAttemptLifecycleCallbacks } from "./attempt-callbacks.js";
+import {
+  createAgentAttemptLifecycleCallbacks,
+  type AgentAttemptLifecycleState,
+} from "./attempt-callbacks.js";
 
 describe("createAgentAttemptLifecycleCallbacks", () => {
   it("tracks user-message persistence without closing over the agent command scope", () => {
-    const state = {
+    const state: AgentAttemptLifecycleState = {
       currentTurnUserMessagePersisted: false,
       lifecycleFinishing: false,
       lifecycleEnded: false,
@@ -36,5 +39,42 @@ describe("createAgentAttemptLifecycleCallbacks", () => {
 
     callbacks.onAgentEvent({ stream: "lifecycle", data: { phase: "end" } });
     expect(state.lifecycleEnded).toBe(true);
+  });
+
+  it("retains deferred lifecycle errors without marking the attempt terminal", () => {
+    const state: AgentAttemptLifecycleState = {
+      currentTurnUserMessagePersisted: false,
+      lifecycleFinishing: false,
+      lifecycleEnded: false,
+    };
+    const callbacks = createAgentAttemptLifecycleCallbacks(state);
+
+    callbacks.onAgentEvent({
+      stream: "lifecycle",
+      data: { phase: "finishing", error: "provider failed" },
+    });
+
+    expect(state.lifecycleError).toBe("provider failed");
+    expect(state.lifecycleFinishing).toBe(true);
+    expect(state.lifecycleEnded).toBe(false);
+  });
+
+  it("replaces a failed candidate lifecycle when a retry starts", () => {
+    const state: AgentAttemptLifecycleState = {
+      currentTurnUserMessagePersisted: true,
+      lifecycleError: "provider failed",
+      lifecycleFinishing: true,
+      lifecycleEnded: false,
+    };
+    const callbacks = createAgentAttemptLifecycleCallbacks(state);
+
+    callbacks.onAgentEvent({ stream: "lifecycle", data: { phase: "start" } });
+
+    expect(state).toEqual({
+      currentTurnUserMessagePersisted: true,
+      lifecycleError: undefined,
+      lifecycleFinishing: false,
+      lifecycleEnded: false,
+    });
   });
 });

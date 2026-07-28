@@ -1,11 +1,11 @@
 /** Context passed to fatal-error hooks before the process exits. */
-export type FatalErrorHookContext = {
+type FatalErrorHookContext = {
   reason: string;
   error?: unknown;
 };
 
 /** Hook that can return one extra diagnostic line for fatal error output. */
-export type FatalErrorHook = (context: FatalErrorHookContext) => string | undefined | void;
+type FatalErrorHook = (context: FatalErrorHookContext) => string | undefined | void;
 
 const hooks = new Set<FatalErrorHook>();
 

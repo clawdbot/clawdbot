@@ -1,6 +1,5 @@
 /**
- * Shared inbound reply dispatch helpers for channel message adapters and
- * deprecated SDK compatibility facades.
+ * Shared inbound reply dispatch helpers for channel message adapters.
  */
 
 import { withReplyDispatcher } from "../../auto-reply/dispatch.js";
@@ -21,6 +20,7 @@ import {
   hasFinalChannelTurnDispatch,
   hasVisibleChannelTurnDispatch,
   deliverInboundReplyWithMessageSendContext,
+  dispatchChannelInboundTurn as dispatchChannelInboundTurnCore,
   dispatchChannelInboundReply as dispatchChannelInboundReplyCore,
   isDurableInboundReplyDeliveryHandled,
   resolveChannelTurnDispatchCounts,
@@ -29,13 +29,13 @@ import {
   runPreparedInboundReply as runPreparedInboundReplyCore,
   throwIfDurableInboundReplyDeliveryFailed,
 } from "../turn/kernel.js";
-import type {
-  ChannelTurnResult,
-  DispatchedChannelTurnResult,
-  DurableInboundReplyDeliveryOptions,
-} from "../turn/kernel.js";
+import type { ChannelTurnResult, DurableInboundReplyDeliveryOptions } from "../turn/kernel.js";
 import type {
   AssembledChannelTurn,
+  ChannelCoreManagedTurnDeliveryAdapter,
+  ChannelProviderOwnedMessageSendingDeliveryAdapter,
+  ChannelTurnDeliveryAdapter,
+  ChannelTurnPlan,
   PreparedChannelTurn,
   RunChannelTurnParams,
 } from "../turn/types.js";
@@ -63,73 +63,63 @@ export type ChannelInboundEventRunnerParams<
 > = RunChannelTurnParams<TRaw, TDispatchResult>;
 export type PreparedInboundReply<TDispatchResult> = PreparedChannelTurn<TDispatchResult>;
 export type AssembledInboundReply = AssembledChannelTurn;
+export type ChannelInboundTurnPlan<
+  TOwnership extends "core" | "provider_message_sending" = "core",
+> = ChannelTurnPlan<
+  TOwnership extends "provider_message_sending"
+    ? ChannelProviderOwnedMessageSendingDeliveryAdapter
+    : ChannelCoreManagedTurnDeliveryAdapter
+>;
 export type InboundReplyDispatchResult<TDispatchResult> = ChannelTurnResult<TDispatchResult>;
 
 /** Run an already prepared inbound reply through shared session-record + dispatch ordering. */
-type PreparedInboundReplyTurnWithBotLoopProtection<TDispatchResult> =
-  PreparedChannelTurn<TDispatchResult> & {
-    botLoopProtection: NonNullable<PreparedChannelTurn<TDispatchResult>["botLoopProtection"]>;
-  };
-
-type PreparedInboundReplyTurnWithoutBotLoopProtection<TDispatchResult> = Omit<
-  PreparedChannelTurn<TDispatchResult>,
-  "botLoopProtection"
-> & {
-  botLoopProtection?: undefined;
-};
-
-export function runPreparedInboundReply<TDispatchResult>(
-  params: PreparedInboundReplyTurnWithBotLoopProtection<TDispatchResult>,
-): Promise<ChannelTurnResult<TDispatchResult>>;
-export function runPreparedInboundReply<TDispatchResult>(
-  params: PreparedInboundReplyTurnWithoutBotLoopProtection<TDispatchResult>,
-): Promise<DispatchedChannelTurnResult<TDispatchResult>>;
-export function runPreparedInboundReply<TDispatchResult>(
-  params: PreparedChannelTurn<TDispatchResult>,
-): Promise<ChannelTurnResult<TDispatchResult>>;
 export async function runPreparedInboundReply<TDispatchResult>(
   params: PreparedChannelTurn<TDispatchResult>,
 ): Promise<ChannelTurnResult<TDispatchResult>> {
   return await runPreparedInboundReplyCore(params);
 }
 
-/** @deprecated Use `runPreparedInboundReply`. */
-export function runPreparedInboundReplyTurn<TDispatchResult>(
-  params: PreparedInboundReplyTurnWithBotLoopProtection<TDispatchResult>,
+export function runChannelInboundEvent<TRaw, TDispatchResult = DispatchFromConfigResult>(
+  params: RunChannelTurnParams<
+    TRaw,
+    TDispatchResult,
+    ChannelProviderOwnedMessageSendingDeliveryAdapter
+  >,
 ): Promise<ChannelTurnResult<TDispatchResult>>;
-export function runPreparedInboundReplyTurn<TDispatchResult>(
-  params: PreparedInboundReplyTurnWithoutBotLoopProtection<TDispatchResult>,
-): Promise<DispatchedChannelTurnResult<TDispatchResult>>;
-export function runPreparedInboundReplyTurn<TDispatchResult>(
-  params: PreparedChannelTurn<TDispatchResult>,
+export function runChannelInboundEvent<TRaw, TDispatchResult = DispatchFromConfigResult>(
+  params: ChannelInboundEventRunnerParams<TRaw, TDispatchResult>,
 ): Promise<ChannelTurnResult<TDispatchResult>>;
-export async function runPreparedInboundReplyTurn<TDispatchResult>(
-  params: PreparedChannelTurn<TDispatchResult>,
-): Promise<ChannelTurnResult<TDispatchResult>> {
-  return await runPreparedInboundReply(params);
-}
-
 export async function runChannelInboundEvent<TRaw, TDispatchResult = DispatchFromConfigResult>(
-  params: ChannelInboundEventRunnerParams<TRaw, TDispatchResult>,
+  params: RunChannelTurnParams<TRaw, TDispatchResult, ChannelTurnDeliveryAdapter>,
 ) {
-  return await runChannelInboundEventCore(params);
-}
-
-/** @deprecated Use `runChannelInboundEvent`. */
-export async function runInboundReplyTurn<TRaw, TDispatchResult = DispatchFromConfigResult>(
-  params: ChannelInboundEventRunnerParams<TRaw, TDispatchResult>,
-) {
-  return await runChannelInboundEvent(params);
+  const run = runChannelInboundEventCore as (
+    value: RunChannelTurnParams<TRaw, TDispatchResult, ChannelTurnDeliveryAdapter>,
+  ) => Promise<ChannelTurnResult<TDispatchResult>>;
+  return await run(params);
 }
 
 export async function dispatchChannelInboundReply(params: AssembledInboundReply) {
   return await dispatchChannelInboundReplyCore(params);
 }
 
+export function dispatchChannelInboundTurn(
+  params: ChannelInboundTurnPlan<"provider_message_sending">,
+): Promise<ChannelTurnResult>;
+export function dispatchChannelInboundTurn(
+  params: ChannelInboundTurnPlan,
+): Promise<ChannelTurnResult>;
+export async function dispatchChannelInboundTurn(
+  params: ChannelTurnPlan<ChannelTurnDeliveryAdapter>,
+) {
+  const dispatch = dispatchChannelInboundTurnCore as (
+    value: ChannelTurnPlan<ChannelTurnDeliveryAdapter>,
+  ) => Promise<ChannelTurnResult>;
+  return await dispatch(params);
+}
+
 export {
   hasFinalChannelTurnDispatch as hasFinalInboundReplyDispatch,
   hasVisibleChannelTurnDispatch as hasVisibleInboundReplyDispatch,
-  deliverInboundReplyWithMessageSendContext as deliverDurableInboundReplyPayload,
   deliverInboundReplyWithMessageSendContext,
   recordDroppedChannelInboundHistory as recordDroppedChannelTurnHistory,
   recordDroppedChannelInboundHistory,
@@ -196,7 +186,7 @@ export function buildInboundReplyDispatchBase(params: {
 }
 
 type BuildInboundReplyDispatchBaseParams = Parameters<typeof buildInboundReplyDispatchBase>[0];
-type RecordChannelMessageReplyDispatchParams = {
+type RecordInboundSessionAndDispatchReplyParams = {
   cfg: OpenClawConfig;
   channel: string;
   accountId?: string;
@@ -221,15 +211,15 @@ type RecordChannelMessageReplyDispatchParams = {
  * sends through `deliverInboundReplyWithMessageSendContext(...)` or
  * `sendDurableMessageBatch(...)`.
  */
-export async function dispatchChannelMessageReplyWithBase(
+export async function dispatchInboundReplyWithBase(
   params: BuildInboundReplyDispatchBaseParams &
     Pick<
-      RecordChannelMessageReplyDispatchParams,
+      RecordInboundSessionAndDispatchReplyParams,
       "deliver" | "durable" | "onRecordError" | "onDispatchError" | "replyOptions"
     >,
 ): Promise<void> {
   const dispatchBase = buildInboundReplyDispatchBase(params);
-  await recordChannelMessageReplyDispatch({
+  await recordInboundSessionAndDispatchReply({
     ...dispatchBase,
     deliver: params.deliver,
     durable: params.durable,
@@ -240,20 +230,6 @@ export async function dispatchChannelMessageReplyWithBase(
 }
 
 /**
- * Resolve the shared dispatch base and immediately record + dispatch one inbound reply turn.
- *
- * @deprecated Legacy inbound reply helper. New channel plugins should expose a
- * `message` adapter via `defineChannelMessageAdapter(...)` and use
- * `dispatchChannelMessageReplyWithBase` only for compatibility dispatchers that
- * have not moved to the message lifecycle yet.
- */
-export async function dispatchInboundReplyWithBase(
-  params: Parameters<typeof dispatchChannelMessageReplyWithBase>[0],
-): Promise<void> {
-  await dispatchChannelMessageReplyWithBase(params);
-}
-
-/**
  * Record the inbound session first, then dispatch the reply using normalized outbound delivery.
  *
  * @deprecated Compatibility reply-dispatch bridge. New channel plugins should
@@ -261,8 +237,8 @@ export async function dispatchInboundReplyWithBase(
  * sends through `deliverInboundReplyWithMessageSendContext(...)` or
  * `sendDurableMessageBatch(...)`.
  */
-export async function recordChannelMessageReplyDispatch(
-  params: RecordChannelMessageReplyDispatchParams,
+export async function recordInboundSessionAndDispatchReply(
+  params: RecordInboundSessionAndDispatchReplyParams,
 ): Promise<void> {
   await dispatchChannelInboundReplyCore({
     cfg: params.cfg,
@@ -275,7 +251,7 @@ export async function recordChannelMessageReplyDispatch(
     recordInboundSession: params.recordInboundSession,
     dispatchReplyWithBufferedBlockDispatcher: params.dispatchReplyWithBufferedBlockDispatcher,
     delivery: {
-      preparePayload: (payload) =>
+      preparePayload: (payload): OutboundReplyPayload =>
         payload && typeof payload === "object" ? normalizeOutboundReplyPayload(payload) : {},
       deliver: async (payload, info) => {
         if (params.durable) {
@@ -305,26 +281,3 @@ export async function recordChannelMessageReplyDispatch(
     },
   });
 }
-
-/**
- * Record the inbound session first, then dispatch the reply using normalized outbound delivery.
- *
- * @deprecated Legacy inbound reply helper. New channel plugins should expose a
- * `message` adapter via `defineChannelMessageAdapter(...)` and use
- * `recordChannelMessageReplyDispatch` only for compatibility dispatchers that
- * have not moved to the message lifecycle yet.
- */
-export async function recordInboundSessionAndDispatchReply(
-  params: RecordChannelMessageReplyDispatchParams,
-): Promise<void> {
-  await recordChannelMessageReplyDispatch(params);
-}
-
-/** @deprecated Compatibility helper for legacy reply dispatch bridges. */
-export const buildChannelMessageReplyDispatchBase = buildInboundReplyDispatchBase;
-/** @deprecated Compatibility helper for legacy reply dispatch results. */
-export const hasFinalChannelMessageReplyDispatch = hasFinalChannelTurnDispatch;
-/** @deprecated Compatibility helper for legacy reply dispatch results. */
-export const hasVisibleChannelMessageReplyDispatch = hasVisibleChannelTurnDispatch;
-/** @deprecated Compatibility helper for legacy reply dispatch results. */
-export const resolveChannelMessageReplyDispatchCounts = resolveChannelTurnDispatchCounts;

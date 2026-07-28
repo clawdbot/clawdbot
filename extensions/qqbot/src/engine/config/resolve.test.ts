@@ -93,6 +93,31 @@ describe("engine/config/resolve", () => {
     expect(base.enabled).toBe(true);
   });
 
+  it("merges accounts.default into the default account config", () => {
+    const cfg = {
+      channels: {
+        qqbot: {
+          appId: "123456",
+          name: "Top Bot",
+          groups: { G1: { commandLevel: "all" } },
+          accounts: {
+            default: {
+              appId: "654321",
+              name: "Default Bot",
+              groups: { G1: { commandLevel: "safety" } },
+            },
+          },
+        },
+      },
+    };
+
+    const base = resolveAccountBase(cfg, DEFAULT_ACCOUNT_ID);
+
+    expect(base.name).toBe("Default Bot");
+    expect(base.appId).toBe("654321");
+    expect(base.config.groups).toEqual({ G1: { commandLevel: "safety" } });
+  });
+
   it("resolves base account info for named account", () => {
     const cfg = {
       channels: {

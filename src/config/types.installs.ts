@@ -16,6 +16,14 @@ export type InstallRecordBase = {
   clawhubPackage?: string;
   clawhubFamily?: "code-plugin" | "bundle-plugin";
   clawhubChannel?: "official" | "community" | "private";
+  clawhubTrustDisposition?: "clean" | "review-recommended" | "review-required" | "blocked";
+  clawhubTrustScanStatus?: string;
+  clawhubTrustModerationState?: string;
+  clawhubTrustReasons?: string[];
+  clawhubTrustPending?: boolean;
+  clawhubTrustStale?: boolean;
+  clawhubTrustCheckedAt?: string;
+  clawhubTrustAcknowledgedAt?: string;
   artifactKind?: "legacy-zip" | "npm-pack";
   artifactFormat?: "zip" | "tgz";
   npmIntegrity?: string;

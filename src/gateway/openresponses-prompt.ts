@@ -6,6 +6,8 @@ import {
 } from "./agent-prompt.js";
 import type { ContentPart, ItemParam } from "./open-responses.schema.js";
 
+const FILE_ONLY_USER_MESSAGE = "User sent file(s) with no text.";
+
 function extractTextContent(content: string | ContentPart[]): string {
   if (typeof content === "string") {
     return content;
@@ -26,6 +28,20 @@ function extractTextContent(content: string | ContentPart[]): string {
 
 function hasImageContent(content: string | ContentPart[]): boolean {
   return typeof content !== "string" && content.some((part) => part.type === "input_image");
+}
+
+function hasFileContent(content: string | ContentPart[]): boolean {
+  return typeof content !== "string" && content.some((part) => part.type === "input_file");
+}
+
+function placeholderForActiveTurn(content: string | ContentPart[]): string {
+  if (hasImageContent(content)) {
+    return IMAGE_ONLY_USER_MESSAGE;
+  }
+  if (hasFileContent(content)) {
+    return FILE_ONLY_USER_MESSAGE;
+  }
+  return "";
 }
 
 /** Index of the last user message item, or -1 when there is none. */
@@ -55,14 +71,15 @@ export function buildAgentPrompt(input: string | ItemParam[]): {
   for (const [i, item] of input.entries()) {
     if (item.type === "message") {
       const content = extractTextContent(item.content).trim();
-      // Substitute a placeholder for an image-only active user turn so the turn
-      // is not dropped and the downstream agent command (which requires non-empty
-      // message text) still runs with the attached image, matching /v1/chat/completions.
-      // Historical image-only turns stay skipped because their bytes are not replayed.
+      // Substitute a placeholder for an image-only or file-only active user turn
+      // so the turn is not dropped and the downstream agent command (which requires
+      // non-empty message text) still runs with the attached image or file context,
+      // matching /v1/chat/completions. Historical media-only turns stay skipped
+      // because their bytes are not replayed.
       const body =
         content ||
-        (item.role === "user" && i === activeUserMessageIndex && hasImageContent(item.content)
-          ? IMAGE_ONLY_USER_MESSAGE
+        (item.role === "user" && i === activeUserMessageIndex
+          ? placeholderForActiveTurn(item.content)
           : "");
       if (!body) {
         continue;

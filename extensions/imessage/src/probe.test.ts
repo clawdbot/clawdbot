@@ -1,7 +1,6 @@
 // Imessage tests cover probe plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  clearCachedIMessagePrivateApiStatus,
   getCachedIMessagePrivateApiStatus,
   setCachedIMessagePrivateApiStatus,
 } from "./private-api-status.js";
@@ -9,7 +8,6 @@ import { imessageRpcSupportsMethod } from "./probe.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
-  clearCachedIMessagePrivateApiStatus();
 });
 
 describe("imessageRpcSupportsMethod", () => {
@@ -113,7 +111,6 @@ describe("iMessage private API status cache", () => {
   };
 
   it("drops expiring private API status when the current clock is not a valid date timestamp", () => {
-    clearCachedIMessagePrivateApiStatus();
     setCachedIMessagePrivateApiStatus(
       "imsg-invalid-private-clock",
       availableStatus,
@@ -125,7 +122,6 @@ describe("iMessage private API status cache", () => {
   });
 
   it("does not cache private API status with an invalid expiry timestamp", () => {
-    clearCachedIMessagePrivateApiStatus();
     setCachedIMessagePrivateApiStatus(
       "imsg-overflow-private-clock",
       availableStatus,

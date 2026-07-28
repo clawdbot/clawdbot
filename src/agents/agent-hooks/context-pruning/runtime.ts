@@ -3,7 +3,7 @@ import { createSessionManagerRuntimeRegistry } from "../session-manager-runtime-
 import type { EffectiveContextPruningSettings } from "./settings.js";
 
 /** Runtime inputs consumed by the context-pruning extension. */
-export type ContextPruningRuntimeValue = {
+type ContextPruningRuntimeValue = {
   settings: EffectiveContextPruningSettings;
   contextWindowTokens?: number | null;
   isToolPrunable: (toolName: string) => boolean;

@@ -41,7 +41,7 @@ type SkillArchiveInstallPolicy = {
 };
 
 /** Result shape for installing a skill archive into a workspace skills dir. */
-export type SkillArchiveInstallResult =
+type SkillArchiveInstallResult =
   | { ok: true; targetDir: string }
   | { ok: false; error: string; failureKind: SkillArchiveInstallFailureKind };
 

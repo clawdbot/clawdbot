@@ -31,6 +31,7 @@ import {
   formatBtwTextForExternalDelivery,
   shouldSuppressReasoningPayload,
 } from "./reply-payloads.js";
+import type { ResponsePrefixContext } from "./response-prefix-template.js";
 
 const messageRuntimeLoader = createLazyImportLoader(
   () => import("../../channels/message/runtime.js"),
@@ -62,7 +63,7 @@ function replyDeliverySourceMatchesRoute(params: {
   );
 }
 
-export type RouteReplyParams = {
+type RouteReplyParams = {
   /** The reply payload to send. */
   payload: ReplyPayload;
   /** The originating channel type. */
@@ -103,9 +104,11 @@ export type RouteReplyParams = {
   replyKind: ReplyDispatchKind;
   /** Agent run id for hook context. */
   runId?: string;
+  /** Model/session context for response-prefix template interpolation. */
+  responsePrefixContext?: ResponsePrefixContext;
 };
 
-export type RouteReplyResult = {
+type RouteReplyResult = {
   /** Whether the reply was sent successfully. */
   ok: boolean;
   /** True when a hook intentionally suppressed provider delivery. */
@@ -146,17 +149,14 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     : undefined;
 
   // Debug: `pnpm test src/auto-reply/reply/route-reply.test.ts`
-  const responsePrefix = params.sessionKey
-    ? resolveEffectiveMessagesConfig(
-        cfg,
-        resolvedAgentId ?? resolveSessionAgentId({ config: cfg }),
-        { channel: normalizedChannel, accountId },
-      ).responsePrefix
-    : cfg.messages?.responsePrefix === "auto"
-      ? undefined
-      : cfg.messages?.responsePrefix;
+  const responsePrefix = resolveEffectiveMessagesConfig(
+    cfg,
+    resolvedAgentId ?? resolveSessionAgentId({ config: cfg }),
+    { channel: normalizedChannel, accountId },
+  ).responsePrefix;
   const normalized = normalizeReplyPayload(payload, {
     responsePrefix,
+    responsePrefixContext: params.responsePrefixContext,
     transformReplyPayload: messaging?.transformReplyPayload
       ? (nextPayload) =>
           messaging.transformReplyPayload?.({

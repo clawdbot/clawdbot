@@ -1,5 +1,5 @@
 // Gateway Protocol tests cover index behavior.
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import { TALK_TEST_PROVIDER_ID } from "../../../src/test-utils/talk-test-provider.js";
 import * as protocol from "./index.js";
 import {
@@ -8,34 +8,47 @@ import {
   validateChatHistoryParams,
   validateChatMetadataParams,
   validateChatSendParams,
-  validateChatEvent,
   validateCommandsListParams,
   validateConnectParams,
   validateModelsListParams,
-  validateNodeEventResult,
-  validateNodePairRequestParams,
-  validateNodePresenceAlivePayload,
+  validateModelsProbeParams,
+  validateNodePluginToolsUpdateParams,
+  validateNodeSkillsUpdateParams,
+  validateNodePresenceActivityPayload,
+  validateSessionsListParams,
+  validateSessionsCompanionAskParams,
+  validateSessionsCompanionResetParams,
+  validateSessionsCompanionStateParams,
+  validateSessionsObserverVisibilityParams,
+  validateSessionsPatchParams,
+  validateSessionsSearchParams,
+  validateSessionsUsageParams,
   validateTasksCancelParams,
   validateTasksListParams,
   validateTalkConfigResult,
-  validateTalkEvent,
   validateTalkClientCreateParams,
   validateTalkClientSteerParams,
   validateTalkClientToolCallParams,
-  validateTalkAgentControlResult,
   validateTalkSessionAppendAudioParams,
   validateTalkSessionCancelOutputParams,
   validateTalkSessionCancelTurnParams,
   validateTalkSessionCreateParams,
   validateTalkSessionJoinParams,
-  validateTalkSessionJoinResult,
   validateTalkSessionSubmitToolResultParams,
   validateTalkSessionSteerParams,
   validateTalkSessionTurnParams,
-  validateTalkSessionTurnResult,
   validateWakeParams,
   type ValidationError,
 } from "./index.js";
+import type {
+  ConfigSchemaLookupParams,
+  ModelsListParams,
+  SessionsCatalogListParams,
+  TalkEvent,
+} from "./index.js";
+import * as schemaExportRegistry from "./schema-export-registry.js";
+import type * as Schema from "./schema.js";
+import * as validatorRegistry from "./validator-registry.js";
 
 /**
  * Broad protocol validator smoke tests.
@@ -58,12 +71,87 @@ const makeError = (overrides: Partial<ValidationError>): ValidationError => ({
 /** Runtime shape shared by all exported lazy protocol validator functions. */
 type ProtocolValidator = (value: unknown) => boolean;
 
+describe("protocol export registries", () => {
+  it("re-exports every runtime registry symbol by identity", () => {
+    for (const registry of [schemaExportRegistry, validatorRegistry]) {
+      for (const [name, value] of Object.entries(registry)) {
+        expect((protocol as Record<string, unknown>)[name], name).toBe(value);
+      }
+    }
+  });
+
+  it("re-exports schema-backed protocol types from the package root", () => {
+    expectTypeOf<ConfigSchemaLookupParams>().toEqualTypeOf<Schema.ConfigSchemaLookupParams>();
+    expectTypeOf<ModelsListParams>().toEqualTypeOf<Schema.ModelsListParams>();
+    expectTypeOf<SessionsCatalogListParams>().toEqualTypeOf<Schema.SessionsCatalogListParams>();
+    expectTypeOf<TalkEvent>().toEqualTypeOf<Schema.TalkEvent>();
+  });
+});
+
 describe("lazy protocol validators", () => {
+  it("accepts bounded request-frame trace context metadata", () => {
+    const request = {
+      type: "req",
+      id: "request-1",
+      method: "status.summary",
+      params: {},
+    };
+
+    expect(protocol.validateRequestFrame(request)).toBe(true);
+    expect(
+      protocol.validateRequestFrame({
+        ...request,
+        traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+      }),
+    ).toBe(true);
+    expect(protocol.validateRequestFrame({ ...request, traceparent: "x".repeat(129) })).toBe(false);
+  });
+
   it("validates through exported lazy validators", () => {
     expect(validateCommandsListParams({})).toBe(true);
     expect(validateCommandsListParams({ includeArgs: true })).toBe(true);
     expect(validateCommandsListParams({ includeArgs: "yes" })).toBe(false);
     expect(formatValidationErrors(validateCommandsListParams.errors)).toContain("must be boolean");
+  });
+
+  it("accepts every sessions.list archive filter mode", () => {
+    expect(validateSessionsListParams({})).toBe(true);
+    expect(validateSessionsListParams({ archived: false })).toBe(true);
+    expect(validateSessionsListParams({ archived: true })).toBe(true);
+    expect(validateSessionsListParams({ archived: "all" })).toBe(true);
+    expect(validateSessionsListParams({ archived: "archived" })).toBe(false);
+  });
+
+  it("validates session board face list and patch values", () => {
+    expect(validateSessionsListParams({ boardFace: "dashboard" })).toBe(true);
+    expect(validateSessionsListParams({ boardFace: "grid" })).toBe(false);
+    expect(validateSessionsPatchParams({ key: "agent:main:main", boardFace: "chat" })).toBe(true);
+    expect(validateSessionsPatchParams({ key: "agent:main:main", boardFace: "grid" })).toBe(false);
+    // The schemas are closed objects; the pre-rename name must not slip back in.
+    expect(validateSessionsListParams({ face: "dashboard" })).toBe(false);
+  });
+
+  it("validates session patch compare-and-swap identity", () => {
+    expect(
+      validateSessionsPatchParams({
+        key: "agent:main:self-archive",
+        archived: true,
+        expectedSessionId: "session-self-archive",
+        expectedLifecycleRevision: "revision-self-archive",
+      }),
+    ).toBe(true);
+    expect(
+      validateSessionsPatchParams({
+        key: "agent:main:self-archive",
+        expectedSessionId: "",
+      }),
+    ).toBe(false);
+    expect(
+      validateSessionsPatchParams({
+        key: "agent:main:self-archive",
+        expectedLifecycleRevision: "",
+      }),
+    ).toBe(false);
   });
 
   it("keeps validation errors readable on the exported validator", () => {
@@ -85,27 +173,132 @@ describe("lazy protocol validators", () => {
     expect(validateConnectParams.errors).toBeNull();
   });
 
+  it("rejects the removed connect-time node plugin tools surface", () => {
+    expect(
+      validateConnectParams({
+        minProtocol: 1,
+        maxProtocol: 1,
+        client: {
+          id: "test",
+          version: "1.0.0",
+          platform: "test",
+          mode: "test",
+        },
+        nodePluginTools: [],
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects provider-unsafe node plugin tool names", () => {
+    expect(
+      validateNodePluginToolsUpdateParams({
+        tools: [
+          {
+            pluginId: "demo",
+            name: "demo_echo",
+            description: "Echo through a node",
+            command: "demo.echo",
+          },
+        ],
+      }),
+    ).toBe(true);
+
+    expect(
+      validateNodePluginToolsUpdateParams({
+        tools: [
+          {
+            pluginId: "demo",
+            name: "demo.echo",
+            description: "Invalid tool name",
+            command: "demo.echo",
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it("validates bounded node skill updates", () => {
+    expect(
+      validateNodeSkillsUpdateParams({
+        skills: [
+          {
+            name: "release-helper",
+            description: "Prepare a release",
+            content: "---\nname: release-helper\ndescription: Prepare a release\n---\n\n# Release",
+          },
+        ],
+      }),
+    ).toBe(true);
+
+    expect(
+      validateNodeSkillsUpdateParams({
+        skills: [{ name: "Release Helper", description: "Invalid", content: "invalid" }],
+      }),
+    ).toBe(false);
+    expect(
+      validateNodeSkillsUpdateParams({
+        skills: [
+          {
+            name: "oversized",
+            description: "Too large",
+            content: "x".repeat(64 * 1024 + 1),
+          },
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      validateNodeSkillsUpdateParams({
+        skills: Array.from({ length: 65 }, (_, index) => ({
+          name: `skill-${index}`,
+          description: "Too many",
+          content: "content",
+        })),
+      }),
+    ).toBe(false);
+  });
+
   it("accepts selected-agent scope on chat send, history, and abort params", () => {
     expect(
       validateChatHistoryParams({
         sessionKey: "global",
         agentId: "work",
         limit: 50,
+        offset: 100,
+      }),
+    ).toBe(true);
+    expect(
+      validateChatHistoryParams({
+        sessionKey: "global",
+        agentId: "work",
+        limit: 11,
+        messageId: "matching-message",
+        sessionId: "matching-session",
       }),
     ).toBe(true);
     expect(
       validateChatSendParams({
         sessionKey: "global",
         agentId: "work",
+        sessionId: "session-work",
         message: "hello",
         idempotencyKey: "run-global-work",
       }),
     ).toBe(true);
     expect(
+      validateChatSendParams({
+        sessionKey: "global",
+        sessionId: "session-work",
+        resumeSession: true,
+        message: "hello",
+        idempotencyKey: "run-global-work",
+      }),
+    ).toBe(false);
+    expect(
       validateChatAbortParams({
         sessionKey: "global",
         agentId: "work",
         runId: "run-global-work",
+        preserveSideRuns: true,
       }),
     ).toBe(true);
     expect(
@@ -121,6 +314,78 @@ describe("lazy protocol validators", () => {
     expect(validateChatMetadataParams({ agentId: "work" })).toBe(true);
     expect(validateChatMetadataParams({ agentId: "" })).toBe(false);
     expect(validateChatMetadataParams({ agentId: "work", view: "configured" })).toBe(false);
+  });
+
+  it("accepts an IANA time zone for session usage while retaining UTC offsets", () => {
+    expect(validateSessionsUsageParams({ mode: "specific", timeZone: "Europe/Vienna" })).toBe(true);
+    expect(validateSessionsUsageParams({ mode: "specific", utcOffset: "UTC+2" })).toBe(true);
+    expect(validateSessionsUsageParams({ mode: "specific", timeZone: "" })).toBe(false);
+    expect(validateSessionsUsageParams({ mode: "specific", timeZone: 2 })).toBe(false);
+  });
+
+  it("validates bounded session transcript search params", () => {
+    expect(validateSessionsSearchParams({ query: "deployment failure" })).toBe(true);
+    expect(
+      validateSessionsSearchParams({
+        agentId: "work",
+        sessionKeys: ["agent:work:main", "agent:work:other"],
+        query: "deployment failure",
+        limit: 25,
+      }),
+    ).toBe(true);
+    expect(validateSessionsSearchParams({ agentId: "", query: "deployment failure" })).toBe(false);
+    expect(
+      validateSessionsSearchParams({
+        sessionKey: "agent:work:main",
+        query: "deployment failure",
+      }),
+    ).toBe(false);
+    expect(validateSessionsSearchParams({ query: "deployment failure", sessionKeys: [] })).toBe(
+      false,
+    );
+    expect(
+      validateSessionsSearchParams({
+        query: "deployment failure",
+        sessionKeys: Array.from({ length: 201 }, (_, index) => `session-${index}`),
+      }),
+    ).toBe(false);
+    expect(validateSessionsSearchParams({ query: "deployment failure", limit: 26 })).toBe(false);
+    expect(validateSessionsSearchParams({ query: "" })).toBe(false);
+    expect(validateSessionsSearchParams({ query: "x".repeat(4097) })).toBe(false);
+  });
+
+  it("validates closed bounded session companion params", () => {
+    expect(
+      validateSessionsCompanionAskParams({
+        sessionKey: "agent:main:current",
+        question: "What changed in the project?",
+      }),
+    ).toBe(true);
+    expect(
+      validateSessionsCompanionAskParams({
+        sessionKey: "agent:main:current",
+        question: "x".repeat(401),
+      }),
+    ).toBe(false);
+    expect(validateSessionsCompanionAskParams({ sessionKey: "", question: "why" })).toBe(false);
+    expect(
+      validateSessionsCompanionAskParams({
+        sessionKey: "agent:main:current",
+        question: "why",
+        extra: true,
+      }),
+    ).toBe(false);
+    expect(validateSessionsCompanionStateParams({ sessionKey: "agent:main:current" })).toBe(true);
+    expect(validateSessionsCompanionStateParams({ sessionKey: "" })).toBe(false);
+    expect(validateSessionsCompanionResetParams({ sessionKey: "agent:main:current" })).toBe(true);
+    expect(validateSessionsCompanionResetParams({})).toBe(false);
+  });
+
+  it("validates closed session observer visibility declarations", () => {
+    expect(validateSessionsObserverVisibilityParams({ visible: true })).toBe(true);
+    expect(validateSessionsObserverVisibilityParams({})).toBe(false);
+    expect(validateSessionsObserverVisibilityParams({ visible: "true" })).toBe(false);
+    expect(validateSessionsObserverVisibilityParams({ visible: false, extra: true })).toBe(false);
   });
 
   it("validates chat sends that suppress command interpretation", () => {
@@ -309,7 +574,12 @@ describe("validateTalkConfigResult", () => {
               instructions: "Speak with crisp diction.",
               mode: "realtime",
               transport: "gateway-relay",
+              vadThreshold: 0.45,
+              silenceDurationMs: 650,
+              prefixPaddingMs: 250,
+              reasoningEffort: "low",
               brain: "agent-consult",
+              consultRouting: "force-agent-consult",
             },
           },
         },
@@ -329,6 +599,7 @@ describe("validateTalkClientCreateParams", () => {
         mode: "realtime",
         transport: "webrtc",
         brain: "agent-consult",
+        capabilities: ["camera-frame"],
       }),
     ).toBe(true);
   });
@@ -344,79 +615,14 @@ describe("validateTalkClientCreateParams", () => {
       "unexpected property 'instructions'",
     );
   });
-});
 
-describe("validateTalkEvent", () => {
-  it("pins the common Talk event envelope used by relay and surface adapters", () => {
+  it("rejects unknown browser capabilities", () => {
     expect(
-      validateTalkEvent({
-        id: "talk-session:1",
-        type: "capture.started",
-        sessionId: "talk-session",
-        turnId: "turn-1",
-        captureId: "capture-1",
-        seq: 1,
-        timestamp: "2026-05-05T12:00:00.000Z",
-        mode: "stt-tts",
-        transport: "managed-room",
-        brain: "agent-consult",
-        provider: "openai",
-        final: false,
-        callId: "call-1",
-        itemId: "item-1",
-        parentId: "parent-1",
-        payload: { source: "ptt" },
-      }),
-    ).toBe(true);
-  });
-
-  it("rejects stale or vendor-shaped event payloads without required correlation", () => {
-    expect(
-      validateTalkEvent({
-        type: "output.audio.delta",
-        sessionId: "talk-session",
-        seq: 0,
-        timestamp: "2026-05-05T12:00:00.000Z",
-        mode: "realtime-duplex",
-        transport: "webrtc-sdp",
-        brain: "agent-consult",
-        payload: { byteLength: 12 },
+      validateTalkClientCreateParams({
+        sessionKey: "agent:main:main",
+        capabilities: ["screen-frame"],
       }),
     ).toBe(false);
-    expect(formatValidationErrors(validateTalkEvent.errors)).toContain("must have required");
-  });
-
-  it("requires turnId and captureId for scoped Talk events", () => {
-    expect(
-      validateTalkEvent({
-        id: "talk-session:1",
-        type: "turn.started",
-        sessionId: "talk-session",
-        seq: 1,
-        timestamp: "2026-05-05T12:00:00.000Z",
-        mode: "stt-tts",
-        transport: "managed-room",
-        brain: "agent-consult",
-        payload: {},
-      }),
-    ).toBe(false);
-    expect(formatValidationErrors(validateTalkEvent.errors)).toContain("must have required");
-
-    expect(
-      validateTalkEvent({
-        id: "talk-session:2",
-        type: "capture.started",
-        sessionId: "talk-session",
-        turnId: "turn-1",
-        seq: 2,
-        timestamp: "2026-05-05T12:00:01.000Z",
-        mode: "stt-tts",
-        transport: "managed-room",
-        brain: "agent-consult",
-        payload: {},
-      }),
-    ).toBe(false);
-    expect(formatValidationErrors(validateTalkEvent.errors)).toContain("must have required");
   });
 });
 
@@ -429,41 +635,10 @@ describe("validateTalkSession", () => {
         provider: "openai",
         model: "gpt-realtime-2",
         voice: "alloy",
+        language: "de",
         mode: "realtime",
         transport: "managed-room",
         brain: "agent-consult",
-      }),
-    ).toBe(true);
-    expect(
-      validateTalkSessionJoinResult({
-        id: "session-1",
-        roomId: "talk_room-1",
-        roomUrl: "/talk/rooms/talk_handoff-1",
-        sessionKey: "agent:main:main",
-        provider: "openai",
-        model: "gpt-realtime-2",
-        voice: "alloy",
-        mode: "realtime",
-        transport: "managed-room",
-        brain: "agent-consult",
-        createdAt: 1,
-        expiresAt: 2,
-        room: {
-          activeClientId: "conn-1",
-          recentTalkEvents: [
-            {
-              id: "talk_handoff-1:1",
-              type: "session.ready",
-              sessionId: "talk_handoff-1",
-              seq: 1,
-              timestamp: "2026-05-05T12:00:00.000Z",
-              mode: "realtime",
-              transport: "managed-room",
-              brain: "agent-consult",
-              payload: {},
-            },
-          ],
-        },
       }),
     ).toBe(true);
   });
@@ -478,9 +653,10 @@ describe("validateTalkSession", () => {
     expect(formatValidationErrors(validateTalkSessionCreateParams.errors)).toContain(
       "unexpected property 'instructionsOverride'",
     );
+    expect(validateTalkSessionCreateParams({ mode: "realtime", language: "de-DE" })).toBe(false);
   });
 
-  it("accepts managed-room join, turn lifecycle params, and results", () => {
+  it("accepts managed-room join and turn lifecycle params", () => {
     expect(
       validateTalkSessionJoinParams({
         sessionId: "session-1",
@@ -498,26 +674,6 @@ describe("validateTalkSession", () => {
         sessionId: "session-1",
         turnId: "turn-1",
         reason: "barge-in",
-      }),
-    ).toBe(true);
-    expect(
-      validateTalkSessionTurnResult({
-        ok: true,
-        turnId: "turn-1",
-        events: [
-          {
-            id: "talk_handoff-1:2",
-            type: "turn.started",
-            sessionId: "talk_handoff-1",
-            turnId: "turn-1",
-            seq: 2,
-            timestamp: "2026-05-05T12:00:00.000Z",
-            mode: "realtime",
-            transport: "managed-room",
-            brain: "agent-consult",
-            payload: {},
-          },
-        ],
       }),
     ).toBe(true);
   });
@@ -538,7 +694,7 @@ describe("validateTalkClientToolCallParams", () => {
 });
 
 describe("validateTalkAgentControlParams", () => {
-  it("accepts client and session steering params plus structured outcomes", () => {
+  it("accepts client and session steering params", () => {
     expect(
       validateTalkClientSteerParams({
         sessionKey: "agent:main:main",
@@ -552,24 +708,6 @@ describe("validateTalkAgentControlParams", () => {
         sessionKey: "agent:main:main",
         text: "status",
         mode: "status",
-      }),
-    ).toBe(true);
-    expect(
-      validateTalkAgentControlResult({
-        ok: true,
-        mode: "cancel",
-        sessionKey: "agent:main:main",
-        sessionId: "session-1",
-        active: true,
-        aborted: true,
-        message: "Cancelled the active OpenClaw run.",
-        speak: true,
-        show: true,
-        suppress: false,
-        providerResult: {
-          status: "cancelled",
-          message: "Cancelled the active OpenClaw run.",
-        },
       }),
     ).toBe(true);
   });
@@ -668,63 +806,37 @@ describe("validateWakeParams", () => {
   });
 });
 
-describe("validateChatEvent", () => {
-  it("accepts v4 chat delta text and replacement markers", () => {
+describe("validateChatSendParams", () => {
+  it("accepts one-turn fast:auto cutoff seconds", () => {
+    const base = {
+      sessionKey: "agent:main:main",
+      message: "hello",
+      fastMode: "auto",
+      idempotencyKey: "run-1",
+    };
+
+    expect(validateChatSendParams(base)).toBe(true);
     expect(
-      validateChatEvent({
-        runId: "run-chat",
-        sessionKey: "agent:main:main",
-        seq: 1,
-        state: "delta",
-        deltaText: "hello",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "hello" }],
-        },
+      validateChatSendParams({
+        ...base,
+        expectedSessionRoutingContract: "per-sender|main|main",
       }),
     ).toBe(true);
-    expect(
-      validateChatEvent({
-        runId: "run-chat",
-        sessionKey: "agent:main:main",
-        seq: 2,
-        state: "delta",
-        deltaText: "replacement",
-        replace: true,
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "replacement" }],
-        },
-      }),
-    ).toBe(true);
+    expect(validateChatSendParams({ ...base, fastAutoOnSeconds: 2 })).toBe(true);
+    expect(validateChatSendParams({ ...base, fastAutoOnSeconds: 0 })).toBe(false);
   });
 
-  it("accepts selected-agent chat events", () => {
-    expect(
-      validateChatEvent({
-        runId: "run-chat",
-        sessionKey: "global",
-        agentId: "work",
-        seq: 1,
-        state: "delta",
-        deltaText: "hello",
-      }),
-    ).toBe(true);
-  });
+  it("accepts one-turn queue mode overrides", () => {
+    const base = {
+      sessionKey: "agent:main:main",
+      message: "hello",
+      idempotencyKey: "run-1",
+    };
 
-  it("rejects v3-style chat deltas without deltaText", () => {
-    expect(
-      validateChatEvent({
-        runId: "run-chat",
-        sessionKey: "agent:main:main",
-        seq: 1,
-        state: "delta",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "hello" }],
-        },
-      }),
-    ).toBe(false);
+    for (const queueMode of ["steer", "followup", "collect", "interrupt"] as const) {
+      expect(validateChatSendParams({ ...base, queueMode })).toBe(true);
+    }
+    expect(validateChatSendParams({ ...base, queueMode: "invalid" })).toBe(false);
   });
 });
 
@@ -739,6 +851,27 @@ describe("validateModelsListParams", () => {
   it("rejects unknown model catalog views and extra fields", () => {
     expect(validateModelsListParams({ view: "available" })).toBe(false);
     expect(validateModelsListParams({ view: "configured", provider: "minimax" })).toBe(false);
+  });
+});
+
+describe("validateModelsProbeParams", () => {
+  it("accepts one provider with optional profile and timeout", () => {
+    expect(validateModelsProbeParams({ provider: "openai" })).toBe(true);
+    expect(
+      validateModelsProbeParams({
+        provider: "OpenAI",
+        profileId: "work",
+        timeoutMs: 20_000,
+        agentId: "writer",
+      }),
+    ).toBe(true);
+    expect(validateModelsProbeParams({ provider: "openai", agentId: "" })).toBe(true);
+  });
+
+  it("rejects missing providers, invalid timeouts, and extra fields", () => {
+    expect(validateModelsProbeParams({})).toBe(false);
+    expect(validateModelsProbeParams({ provider: "openai", timeoutMs: 0 })).toBe(false);
+    expect(validateModelsProbeParams({ provider: "openai", extra: true })).toBe(false);
   });
 });
 
@@ -761,63 +894,20 @@ describe("validateTasksListParams", () => {
   });
 });
 
-describe("validateNodePresenceAlivePayload", () => {
-  it("accepts a closed trigger and known metadata fields", () => {
-    expect(
-      validateNodePresenceAlivePayload({
-        trigger: "silent_push",
-        sentAtMs: 123,
-        displayName: "Peter's iPhone",
-        version: "2026.4.28",
-        platform: "iOS 18.4.0",
-        deviceFamily: "iPhone",
-        modelIdentifier: "iPhone17,1",
-        pushTransport: "relay",
-      }),
-    ).toBe(true);
+describe("validateNodePresenceActivityPayload", () => {
+  it("accepts bounded input idle time", () => {
+    expect(validateNodePresenceActivityPayload({ idleSeconds: 12 })).toBe(true);
+    expect(validateNodePresenceActivityPayload({ idleSeconds: 2_592_000, saturated: true })).toBe(
+      true,
+    );
+    expect(validateNodePresenceActivityPayload({ action: "clear" })).toBe(true);
   });
 
-  it("rejects unknown triggers and extra fields", () => {
-    expect(validateNodePresenceAlivePayload({ trigger: "push", sentAtMs: 123 })).toBe(false);
-    expect(
-      validateNodePresenceAlivePayload({
-        trigger: "silent_push",
-        arbitrary: true,
-      }),
-    ).toBe(false);
-  });
-});
-
-describe("validateNodePairRequestParams", () => {
-  it("accepts node pairing permissions", () => {
-    expect(
-      validateNodePairRequestParams({
-        nodeId: "ios-node-1",
-        commands: ["canvas.snapshot"],
-        permissions: { camera: true, notifications: false },
-      }),
-    ).toBe(true);
-  });
-
-  it("rejects non-boolean node pairing permissions", () => {
-    expect(
-      validateNodePairRequestParams({
-        nodeId: "ios-node-1",
-        permissions: { camera: "yes" },
-      }),
-    ).toBe(false);
-  });
-});
-
-describe("validateNodeEventResult", () => {
-  it("accepts structured handled results", () => {
-    expect(
-      validateNodeEventResult({
-        ok: true,
-        event: "node.presence.alive",
-        handled: true,
-        reason: "persisted",
-      }),
-    ).toBe(true);
+  it("rejects negative, unbounded, and extra fields", () => {
+    expect(validateNodePresenceActivityPayload({ idleSeconds: -1 })).toBe(false);
+    expect(validateNodePresenceActivityPayload({ idleSeconds: 2_592_001 })).toBe(false);
+    expect(validateNodePresenceActivityPayload({ idleSeconds: 1, active: true })).toBe(false);
+    expect(validateNodePresenceActivityPayload({ action: "clear", idleSeconds: 1 })).toBe(false);
+    expect(validateNodePresenceActivityPayload({ action: "disable" })).toBe(false);
   });
 });

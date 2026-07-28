@@ -21,7 +21,7 @@ export async function resolveCronChannelOutputPolicy(
 }> {
   const channelId = normalizeOptionalLowercaseString(channel);
   if (!channelId) {
-    return { preferFinalAssistantVisibleText: opts?.deliveryRequested === false };
+    return { preferFinalAssistantVisibleText: opts?.deliveryRequested !== true };
   }
   const { getChannelPlugin } = await loadChannelPluginRuntime();
   return {

@@ -7,7 +7,10 @@ import {
   normalizeTrimmedStringList,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSandboxPath } from "../../agents/sandbox-paths.js";
+import { canonicalizePath } from "../../agents/utils/paths.js";
+import { isDefaultStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { walkDirectorySync } from "../../infra/fs-safe.js";
 import { resolveOsHomeDir } from "../../infra/home-dir.js";
@@ -20,21 +23,38 @@ import {
 } from "../discovery/agent-filter.js";
 import { normalizeSkillFilter } from "../discovery/filter.js";
 import { filterPromptVisibleSkillEntries } from "../discovery/skill-index.js";
+import { mergeRemoteNodeSkillEntries } from "../runtime/remote-skills.js";
 import type {
   OpenClawSkillMetadata,
   ParsedSkillFrontmatter,
   SkillEligibilityContext,
   SkillEntry,
   SkillSnapshot,
+  SkillUsagePath,
 } from "../types.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
+import { getArchivedSkillFiles } from "../workshop/curator.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
-import { resolveBundledAllowlist, shouldIncludeSkill } from "./config.js";
-import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "./frontmatter.js";
-import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "./local-loader.js";
+import {
+  hasUnavailableSkillSecretOwners,
+  isSkillSecretOwnerUnavailable,
+  resolveBundledAllowlist,
+  shouldIncludeSkill,
+} from "./config.js";
+import {
+  resolveOpenClawMetadata,
+  resolveSkillInvocationPolicy,
+  resolveSkillKey,
+} from "./frontmatter.js";
+import {
+  loadSkillsFromDirSafe,
+  readSkillFrontmatterSafe,
+  type LocalSkillLoadDiagnostic,
+} from "./local-loader.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
 import { formatSkillsForPrompt, type Skill } from "./skill-contract.js";
+import { resolveSkillTelemetrySource } from "./source.js";
 import { resolveAllowedSkillSymlinkTargetRealPaths, tryRealpath } from "./symlink-targets.js";
 
 const fsp = fs.promises;
@@ -64,8 +84,8 @@ function resolveNativeUserHomeDir(): string | undefined {
 }
 
 function resolveCompactHomePrefixes(): string[] {
-  const homes = [resolveUserHomeDir(), resolveNativeUserHomeDir()].filter(
-    (home): home is string => Boolean(home),
+  const homes = [resolveUserHomeDir(), resolveNativeUserHomeDir()].filter((home): home is string =>
+    Boolean(home),
   );
   const resolvedHomes = homes.map((home) => path.resolve(home));
   const realHomes = resolvedHomes
@@ -111,15 +131,15 @@ function resolvePromptTildeRoots(): string[] {
     return [];
   }
   const realNativeHome = tryRealpath(resolvedNativeHome);
-  return uniqueStrings([
-    resolvedNativeHome,
-    ...(realNativeHome ? [realNativeHome] : []),
-  ]);
+  return uniqueStrings([resolvedNativeHome, ...(realNativeHome ? [realNativeHome] : [])]);
 }
 
 function isContainerStateHomeWherePromptTildeEscapes(home: string): boolean {
   const configDir = path.resolve(resolveConfigDir());
-  return home === "/data" && (configDir === "/data/.openclaw" || isPathInside("/data/.openclaw", configDir));
+  return (
+    home === "/data" &&
+    (configDir === "/data/.openclaw" || isPathInside("/data/.openclaw", configDir))
+  );
 }
 
 function shouldPreservePromptSkillPath(
@@ -164,6 +184,17 @@ function normalizeCompactedSkillPath(filePath: string, matchedHomePrefix: string
 
 function compactPathForConsoleMessage(filePath: string): string {
   return compactHomePath(filePath, resolveCompactHomePrefixes());
+}
+
+function warnInvalidSkillFrontmatter(source: string, diagnostic: LocalSkillLoadDiagnostic): void {
+  skillsLogger.warn("Skipping skill with invalid frontmatter.", {
+    source,
+    filePath: diagnostic.path,
+    error: diagnostic.message,
+    consoleMessage:
+      `Skipping skill with invalid frontmatter: ` +
+      `file=${compactPathForConsoleMessage(diagnostic.path)} error=${diagnostic.message}`,
+  });
 }
 
 function filterSkillEntries(
@@ -254,10 +285,6 @@ function resolveSkillsLimits(config?: OpenClawConfig, agentId?: string): Resolve
       DEFAULT_MAX_SKILLS_PROMPT_CHARS,
     maxSkillFileBytes: limits?.maxSkillFileBytes ?? DEFAULT_MAX_SKILL_FILE_BYTES,
   };
-}
-
-export function resolveSkillRootScanLimit(config?: OpenClawConfig): number {
-  return config?.skills?.limits?.maxCandidatesPerRoot ?? DEFAULT_MAX_CANDIDATES_PER_ROOT;
 }
 
 function listChildDirectories(
@@ -530,7 +557,7 @@ function resolveContainedSkillPath(params: {
   return null;
 }
 
-export function resolveNestedSkillsRoot(
+function resolveNestedSkillsRoot(
   dir: string,
   opts?: {
     maxEntriesToScan?: number;
@@ -620,6 +647,7 @@ function loadContainedSkillRecords(params: {
     dir: params.skillDir,
     source: params.source,
     maxBytes: params.maxSkillFileBytes,
+    onDiagnostic: (diagnostic) => warnInvalidSkillFrontmatter(params.source, diagnostic),
   });
   const records = unwrapLoadedSkillRecords(loaded).filter(
     (record) => path.resolve(record.skill.baseDir) === expectedBaseDir,
@@ -891,6 +919,7 @@ function loadSkillEntries(
     bundledSkillsDir?: string;
     pluginSkillsDir?: string;
     workspaceOnly?: boolean;
+    includeArchived?: boolean;
   },
 ): SkillEntry[] {
   const limits = resolveSkillsLimits(opts?.config, opts?.agentId);
@@ -1199,12 +1228,13 @@ function loadSkillEntries(
   const personalAgentsSkillsDir = osHomeDir
     ? path.resolve(osHomeDir, ".agents", "skills")
     : path.resolve(".agents", "skills");
-  const personalAgentsSkills = workspaceOnly
-    ? []
-    : loadSkills({
-        dir: personalAgentsSkillsDir,
-        source: "agents-skills-personal",
-      });
+  const personalAgentsSkills =
+    workspaceOnly || !isDefaultStateDir()
+      ? []
+      : loadSkills({
+          dir: personalAgentsSkillsDir,
+          source: "agents-skills-personal",
+        });
   const projectAgentsSkillsDir = path.resolve(workspaceDir, ".agents", "skills");
   const projectAgentsSkills = workspaceOnly
     ? []
@@ -1218,24 +1248,31 @@ function loadSkillEntries(
   });
 
   const merged = new Map<string, LoadedSkillRecord>();
+  const archivedSkillFiles = opts?.includeArchived ? null : getArchivedSkillFiles();
+  const mergeRecord = (record: LoadedSkillRecord) => {
+    if (archivedSkillFiles?.has(canonicalizePath(record.skill.filePath))) {
+      return;
+    }
+    merged.set(record.skill.name, record);
+  };
   // Precedence: extra < bundled < managed < agents-skills-personal < agents-skills-project < workspace
   for (const record of extraSkills) {
-    merged.set(record.skill.name, record);
+    mergeRecord(record);
   }
   for (const record of bundledSkills) {
-    merged.set(record.skill.name, record);
+    mergeRecord(record);
   }
   for (const record of managedSkills) {
-    merged.set(record.skill.name, record);
+    mergeRecord(record);
   }
   for (const record of personalAgentsSkills) {
-    merged.set(record.skill.name, record);
+    mergeRecord(record);
   }
   for (const record of projectAgentsSkills) {
-    merged.set(record.skill.name, record);
+    mergeRecord(record);
   }
   for (const record of workspaceSkills) {
-    merged.set(record.skill.name, record);
+    mergeRecord(record);
   }
 
   const skillEntries: SkillEntry[] = Array.from(merged.values())
@@ -1276,6 +1313,12 @@ function loadSkillEntries(
   return skillEntries;
 }
 
+function filterArchivedSkillEntries(entries: SkillEntry[]): SkillEntry[] {
+  // One discovery-level query covers prompts, commands, runtime entries, and sandbox sync.
+  const archivedSkillFiles = getArchivedSkillFiles();
+  return entries.filter((entry) => !archivedSkillFiles.has(canonicalizePath(entry.skill.filePath)));
+}
+
 function escapeXml(str: string): string {
   return str
     .replace(/&/g, "&amp;")
@@ -1285,18 +1328,40 @@ function escapeXml(str: string): string {
     .replace(/'/g, "&apos;");
 }
 
+const COMPACT_DESCRIPTION_MAX_CHARS = 220;
+const COMPACT_DESCRIPTION_MIN_CHARS = 4;
+
+function truncateSkillDescription(description: string, maxChars: number): string {
+  const normalized = description.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+  if (maxChars <= 3) {
+    return truncateUtf16Safe(normalized, maxChars);
+  }
+  return `${truncateUtf16Safe(normalized, maxChars - 3).trimEnd()}...`;
+}
+
 /**
- * Compact skill catalog: name + location only (no description).
- * Used as a fallback when the full format exceeds the char budget,
- * preserving awareness of all skills before resorting to dropping.
+ * Compact skill catalog with descriptions bounded independently from identities.
+ * A zero description budget preserves the previous name/location-only format.
  */
-export function formatSkillsCompact(skills: Skill[]): string {
+export function formatSkillsCompact(
+  skills: Skill[],
+  opts?: { descriptionMaxChars?: number },
+): string {
   if (skills.length === 0) {
     return "";
   }
+  const descriptionMaxChars = Math.max(
+    0,
+    Math.floor(opts?.descriptionMaxChars ?? COMPACT_DESCRIPTION_MAX_CHARS),
+  );
   const lines = [
     "\n\nThe following skills provide specialized instructions for specific tasks.",
-    "Use the read tool to load a skill's file when the task matches its name.",
+    descriptionMaxChars > 0
+      ? "Use the read tool to load a skill's file when the task matches its name or description."
+      : "Use the read tool to load a skill's file when the task matches its name.",
     "If a skill's <version> differs from a previous turn, re-read its SKILL.md before using it.",
     "When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
     "",
@@ -1305,7 +1370,16 @@ export function formatSkillsCompact(skills: Skill[]): string {
   for (const skill of skills) {
     lines.push("  <skill>");
     lines.push(`    <name>${escapeXml(skill.name)}</name>`);
+    if (descriptionMaxChars > 0) {
+      const description = truncateSkillDescription(skill.description, descriptionMaxChars);
+      if (description) {
+        lines.push(`    <description>${escapeXml(description)}</description>`);
+      }
+    }
     lines.push(`    <location>${escapeXml(skill.filePath)}</location>`);
+    if (skill.locationNote) {
+      lines.push(`    <location_note>${escapeXml(skill.locationNote)}</location_note>`);
+    }
     if (skill.promptVersion) {
       lines.push(`    <version>${escapeXml(skill.promptVersion)}</version>`);
     }
@@ -1315,17 +1389,25 @@ export function formatSkillsCompact(skills: Skill[]): string {
   return lines.join("\n");
 }
 
+type SkillsPromptFormat = { kind: "full" } | { kind: "compact"; descriptionMaxChars: number };
+
 function buildSkillsLimitNote(params: {
   truncated: boolean;
-  compact: boolean;
+  format: SkillsPromptFormat;
   included: number;
   total: number;
 }): string {
   if (params.truncated) {
-    return `⚠️ Skills truncated: included ${params.included} of ${params.total}${params.compact ? " (compact format, descriptions omitted)" : ""}. Run \`openclaw skills check\` to audit.`;
+    const compactDetails =
+      params.format.kind === "compact"
+        ? ` (compact format, ${params.format.descriptionMaxChars > 0 ? "descriptions shortened" : "descriptions omitted"})`
+        : "";
+    return `⚠️ Skills truncated: included ${params.included} of ${params.total}${compactDetails}. Run \`openclaw skills check\` to audit.`;
   }
-  if (params.compact) {
-    return `⚠️ Skills catalog using compact format (descriptions omitted). Run \`openclaw skills check\` to audit.`;
+  if (params.format.kind === "compact") {
+    const compactDetails =
+      params.format.descriptionMaxChars > 0 ? "descriptions shortened" : "descriptions omitted";
+    return `⚠️ Skills catalog using compact format (${compactDetails}). Run \`openclaw skills check\` to audit.`;
   }
   return "";
 }
@@ -1334,18 +1416,23 @@ function buildRenderedSkillsPrompt(params: {
   remoteNote?: string;
   skills: Skill[];
   total: number;
-  compact: boolean;
+  format: SkillsPromptFormat;
 }): string {
+  // resolveCodeModeSkills in src/agents/code-mode-skills.ts parses this exact format; update both together.
+  // The production-renderer parity test in src/agents/code-mode.test.ts enforces this coupling.
   const truncated = params.skills.length < params.total;
   const limitNote = buildSkillsLimitNote({
     truncated,
-    compact: params.compact,
+    format: params.format,
     included: params.skills.length,
     total: params.total,
   });
-  const catalog = params.compact
-    ? formatSkillsCompact(params.skills)
-    : formatSkillsForPrompt(params.skills);
+  const catalog =
+    params.format.kind === "compact"
+      ? formatSkillsCompact(params.skills, {
+          descriptionMaxChars: params.format.descriptionMaxChars,
+        })
+      : formatSkillsForPrompt(params.skills);
   return [params.remoteNote, limitNote, catalog].filter(Boolean).join("\n");
 }
 
@@ -1356,44 +1443,40 @@ function applySkillsPromptLimits(params: {
   remoteNote?: string;
 }): {
   skillsForPrompt: Skill[];
-  compact: boolean;
+  format: SkillsPromptFormat;
 } {
   const limits = resolveSkillsLimits(params.config, params.agentId);
   const total = params.skills.length;
   const byCount = params.skills.slice(0, Math.max(0, limits.maxSkillsInPrompt));
 
   let skillsForPrompt = byCount;
-  let compact = false;
 
   const fitsFull = (skills: Skill[]): boolean =>
     buildRenderedSkillsPrompt({
       remoteNote: params.remoteNote,
       skills,
       total,
-      compact: false,
+      format: { kind: "full" },
     }).length <= limits.maxSkillsPromptChars;
 
-  const fitsCompact = (skills: Skill[]): boolean =>
+  const fitsCompact = (skills: Skill[], descriptionMaxChars: number): boolean =>
     buildRenderedSkillsPrompt({
       remoteNote: params.remoteNote,
       skills,
       total,
-      compact: true,
+      format: { kind: "compact", descriptionMaxChars },
     }).length <= limits.maxSkillsPromptChars;
 
   if (!fitsFull(skillsForPrompt)) {
-    // Full format exceeds budget. Try compact (name + location, no description)
-    // to preserve awareness of all skills before dropping any.
-    if (fitsCompact(skillsForPrompt)) {
-      compact = true;
-    } else {
-      // Compact still too large — binary search the largest prefix that fits.
-      compact = true;
+    // Identity coverage takes priority over descriptions. Find the same largest
+    // name/location/version prefix as the previous compact format before using
+    // any leftover budget for trigger guidance.
+    if (!fitsCompact(skillsForPrompt, 0)) {
       let lo = 0;
       let hi = skillsForPrompt.length;
       while (lo < hi) {
         const mid = Math.ceil((lo + hi) / 2);
-        if (fitsCompact(skillsForPrompt.slice(0, mid))) {
+        if (fitsCompact(skillsForPrompt.slice(0, mid), 0)) {
           lo = mid;
         } else {
           hi = mid - 1;
@@ -1401,9 +1484,25 @@ function applySkillsPromptLimits(params: {
       }
       skillsForPrompt = skillsForPrompt.slice(0, lo);
     }
+
+    let descriptionMaxChars = 0;
+    if (skillsForPrompt.length > 0 && fitsCompact(skillsForPrompt, COMPACT_DESCRIPTION_MIN_CHARS)) {
+      let lo = COMPACT_DESCRIPTION_MIN_CHARS;
+      let hi = COMPACT_DESCRIPTION_MAX_CHARS;
+      while (lo < hi) {
+        const mid = Math.ceil((lo + hi) / 2);
+        if (fitsCompact(skillsForPrompt, mid)) {
+          lo = mid;
+        } else {
+          hi = mid - 1;
+        }
+      }
+      descriptionMaxChars = lo;
+    }
+    return { skillsForPrompt, format: { kind: "compact", descriptionMaxChars } };
   }
 
-  return { skillsForPrompt, compact };
+  return { skillsForPrompt, format: { kind: "full" } };
 }
 
 export function buildWorkspaceSkillSnapshot(
@@ -1416,10 +1515,14 @@ export function buildWorkspaceSkillSnapshot(
     prompt,
     skills: eligible.map((entry) => ({
       name: entry.skill.name,
+      skillKey: resolveSkillKey(entry.skill, entry),
       primaryEnv: entry.metadata?.primaryEnv,
       requiredEnv: entry.metadata?.requires?.env?.slice(),
     })),
     ...(skillFilter === undefined ? {} : { skillFilter }),
+    ...(opts?.eligibility?.nodeSkills
+      ? { nodeSkillsEligibility: opts.eligibility.nodeSkills }
+      : {}),
     resolvedSkills,
     version: opts?.snapshotVersion,
     promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
@@ -1472,7 +1575,12 @@ function resolveWorkspaceSkillPromptState(
   if (effectiveSkillFilter !== undefined && effectiveSkillFilter.length === 0) {
     return { eligible: [], prompt: "", resolvedSkills: [] };
   }
-  const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
+  const skillEntries = opts?.entries
+    ? filterArchivedSkillEntries(opts.entries)
+    : mergeRemoteNodeSkillEntries(loadSkillEntries(workspaceDir, opts), {
+        canExec: opts?.eligibility?.nodeSkills?.canExec,
+        node: opts?.eligibility?.nodeSkills?.node,
+      });
   const eligible = filterSkillEntries(
     skillEntries,
     opts?.config,
@@ -1489,7 +1597,7 @@ function resolveWorkspaceSkillPromptState(
   const promptSkills = compactSkillPaths(resolvedSkills).toSorted((a, b) =>
     a.name.localeCompare(b.name, "en"),
   );
-  const { skillsForPrompt, compact } = applySkillsPromptLimits({
+  const { skillsForPrompt, format } = applySkillsPromptLimits({
     skills: promptSkills,
     config: opts?.config,
     agentId: opts?.agentId,
@@ -1499,7 +1607,7 @@ function resolveWorkspaceSkillPromptState(
     remoteNote,
     skills: skillsForPrompt,
     total: resolvedSkills.length,
-    compact,
+    format,
   });
   return { eligible, prompt, resolvedSkills };
 }
@@ -1513,8 +1621,72 @@ export function resolveSkillsPromptForRun(params: {
   eligibility?: SkillEligibilityContext;
 }): string {
   const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
+  if (params.skillsSnapshot && !snapshotPrompt) {
+    return "";
+  }
+  const snapshotHasLegacySkillIdentity = params.skillsSnapshot?.skills.some(
+    (skill) => !skill.skillKey,
+  );
   if (snapshotPrompt) {
-    return snapshotPrompt;
+    const snapshotHasUnavailableSkill =
+      params.skillsSnapshot?.skills.some((skill) =>
+        isSkillSecretOwnerUnavailable(skill.skillKey ?? skill.name),
+      ) ||
+      (snapshotHasLegacySkillIdentity && hasUnavailableSkillSecretOwners());
+    if (
+      snapshotHasUnavailableSkill &&
+      params.skillsSnapshot?.promptFormatVersion !== WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION
+    ) {
+      return "";
+    }
+    if (snapshotHasLegacySkillIdentity && hasUnavailableSkillSecretOwners()) {
+      return "";
+    }
+    const unavailableNames = new Set(
+      params.skillsSnapshot?.skills
+        .filter(
+          (skill) => skill.skillKey !== undefined && isSkillSecretOwnerUnavailable(skill.skillKey),
+        )
+        .map((skill) => escapeXml(skill.name)),
+    );
+    if (unavailableNames.size === 0) {
+      return snapshotPrompt;
+    }
+    const catalogOpen = "<available_skills>";
+    const catalogClose = "</available_skills>";
+    const catalogStart = snapshotPrompt.indexOf(catalogOpen);
+    const catalogEnd = snapshotPrompt.indexOf(catalogClose, catalogStart + catalogOpen.length);
+    if (
+      catalogStart < 0 ||
+      catalogEnd < 0 ||
+      snapshotPrompt.includes(catalogOpen, catalogStart + catalogOpen.length) ||
+      snapshotPrompt.includes(catalogClose, catalogEnd + catalogClose.length)
+    ) {
+      return "";
+    }
+    const bodyStart = catalogStart + catalogOpen.length;
+    const catalogBody = snapshotPrompt.slice(bodyStart, catalogEnd);
+    const blockPattern = /\n[ ]{2}<skill>\n[\s\S]*?\n[ ]{2}<\/skill>/g;
+    let cursor = 0;
+    let filteredBody = "";
+    for (const match of catalogBody.matchAll(blockPattern)) {
+      const gap = catalogBody.slice(cursor, match.index);
+      const block = match[0];
+      const name = /^[ ]{4}<name>(.*)<\/name>$/m.exec(block)?.[1];
+      if (gap.trim() || !name) {
+        return "";
+      }
+      filteredBody += gap;
+      if (!unavailableNames.has(name)) {
+        filteredBody += block;
+      }
+      cursor = (match.index ?? 0) + block.length;
+    }
+    const tail = catalogBody.slice(cursor);
+    if (tail.trim()) {
+      return "";
+    }
+    return `${snapshotPrompt.slice(0, bodyStart)}${filteredBody}${tail}${snapshotPrompt.slice(catalogEnd)}`.trim();
   }
   if (params.entries && params.entries.length > 0) {
     const prompt = buildWorkspaceSkillsPrompt(params.workspaceDir, {
@@ -1539,9 +1711,13 @@ export function loadWorkspaceSkillEntries(
     agentId?: string;
     eligibility?: SkillEligibilityContext;
     workspaceOnly?: boolean;
+    includeArchived?: boolean;
   },
 ): SkillEntry[] {
-  const entries = loadSkillEntries(workspaceDir, opts);
+  const entries = mergeRemoteNodeSkillEntries(loadSkillEntries(workspaceDir, opts), {
+    canExec: opts?.eligibility?.nodeSkills?.canExec,
+    node: opts?.eligibility?.nodeSkills?.node,
+  });
   const effectiveSkillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
   if (effectiveSkillFilter === undefined && opts?.eligibility === undefined) {
     return entries;
@@ -1560,7 +1736,10 @@ export function loadVisibleWorkspaceSkillEntries(
     eligibility?: SkillEligibilityContext;
   },
 ): SkillEntry[] {
-  const entries = loadSkillEntries(workspaceDir, opts);
+  const entries = mergeRemoteNodeSkillEntries(loadSkillEntries(workspaceDir, opts), {
+    canExec: opts?.eligibility?.nodeSkills?.canExec,
+    node: opts?.eligibility?.nodeSkills?.node,
+  });
   const effectiveSkillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
   return filterSkillEntries(entries, opts?.config, effectiveSkillFilter, opts?.eligibility);
 }
@@ -1639,14 +1818,14 @@ export async function syncSkillsToWorkspace(params: {
   managedSkillsDir?: string;
   bundledSkillsDir?: string;
   pluginSkillsDir?: string;
-}) {
+}): Promise<SkillUsagePath[]> {
   const sourceDir = resolveUserPath(params.sourceWorkspaceDir);
   const targetDir = resolveUserPath(params.targetWorkspaceDir);
   if (sourceDir === targetDir) {
-    return;
+    return [];
   }
 
-  await serializeByKey(`syncSkills:${targetDir}`, async () => {
+  return await serializeByKey(`syncSkills:${targetDir}`, async () => {
     const targetSkillsDir = path.join(targetDir, "skills");
 
     const entries = loadWorkspaceSkillEntries(sourceDir, {
@@ -1662,6 +1841,7 @@ export async function syncSkillsToWorkspace(params: {
     await prepareSyncedSkillsDirectory(targetSkillsDir);
 
     const usedDirNames = new Set<string>();
+    const skillUsagePaths: SkillUsagePath[] = [];
     for (const entry of entries) {
       let dest: string | null;
       try {
@@ -1682,7 +1862,8 @@ export async function syncSkillsToWorkspace(params: {
         continue;
       }
       try {
-        await fsp.cp(entry.syncSourceDir ?? entry.skill.baseDir, dest, {
+        const syncSourceDir = entry.syncSourceDir ?? entry.skill.baseDir;
+        await fsp.cp(syncSourceDir, dest, {
           recursive: true,
           force: true,
           filter: (src) => {
@@ -1690,19 +1871,19 @@ export async function syncSkillsToWorkspace(params: {
             return !(name === ".git" || name === "node_modules");
           },
         });
+        skillUsagePaths.push({
+          readPath: path.join(dest, path.relative(entry.skill.baseDir, entry.skill.filePath)),
+          skillFile: canonicalizePath(entry.skill.filePath),
+          skillName: entry.skill.name,
+          skillSource: resolveSkillTelemetrySource(entry.skill),
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : JSON.stringify(error);
         skillsLogger.warn(`Failed to copy ${entry.skill.name} to sandbox: ${message}`);
       }
     }
+    return skillUsagePaths;
   });
-}
-
-export function filterWorkspaceSkillEntries(
-  entries: SkillEntry[],
-  config?: OpenClawConfig,
-): SkillEntry[] {
-  return filterSkillEntries(entries, config);
 }
 
 export function filterWorkspaceSkillEntriesWithOptions(
@@ -1715,4 +1896,4 @@ export function filterWorkspaceSkillEntriesWithOptions(
 ): SkillEntry[] {
   return filterSkillEntries(entries, opts?.config, opts?.skillFilter, opts?.eligibility);
 }
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

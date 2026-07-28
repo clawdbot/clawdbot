@@ -8,7 +8,7 @@ import {
   type PluginRegistrySnapshotSource,
 } from "./plugin-registry.js";
 import { createEmptyPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
-import { buildSnapshotPluginDependencyStatus } from "./status-snapshot-dependencies.js";
+import { buildPluginDependencyStatus } from "./status-dependencies-core.js";
 import type { PluginLogger } from "./types.js";
 
 /** Control-plane plugin status shape used by `openclaw plugins status` style surfaces. */
@@ -118,7 +118,7 @@ function buildPluginRecordFromInstalledIndex(
     hookCount: 0,
     configSchema: false,
     contracts: manifest?.contracts,
-    dependencyStatus: buildSnapshotPluginDependencyStatus({
+    dependencyStatus: buildPluginDependencyStatus({
       rootDir: plugin.rootDir,
       dependencies: manifest?.packageDependencies,
       optionalDependencies: manifest?.packageOptionalDependencies,

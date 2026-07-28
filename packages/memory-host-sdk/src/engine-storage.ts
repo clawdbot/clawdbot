@@ -32,15 +32,39 @@ export type {
 } from "./host/backend-config.js";
 export type {
   MemoryEmbeddingProbeResult,
+  MemoryEntryProvenance,
+  MemoryOriginClass,
   MemoryProviderStatus,
   MemorySearchManager,
   MemorySearchRuntimeDebug,
   MemorySearchResult,
+  MemorySessionSyncTarget,
+  MemorySessionKind,
   MemorySource,
+  MemorySyncParams,
   MemorySyncProgressUpdate,
 } from "./host/types.js";
-export { ensureMemoryIndexSchema } from "./host/memory-schema.js";
+export {
+  dropMemoryPathFtsTriggers,
+  ensureMemoryChunkProvenance,
+  ensureMemoryIndexSchema,
+  ensureMemoryRecallMetadataColumns,
+  ensureMemoryPathFtsTriggers,
+  MEMORY_EMBEDDING_CACHE_TABLE,
+  MEMORY_INDEX_CHUNKS_TABLE,
+  MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
+  MEMORY_INDEX_FTS_TABLE,
+  MEMORY_INDEX_META_TABLE,
+  MEMORY_INDEX_PATHS_FTS_TABLE,
+  MEMORY_INDEX_SOURCES_TABLE,
+  MEMORY_INDEX_STATE_TABLE,
+  MEMORY_INDEX_VECTOR_TABLE,
+} from "./host/memory-schema.js";
 export { loadSqliteVecExtension } from "./host/sqlite-vec.js";
+export {
+  readCuratedMemoryTriggerCandidates,
+  readMemoryRecallMetadata,
+} from "./host/memory-recall-metadata.js";
 export {
   closeMemorySqliteWalMaintenance,
   configureMemorySqliteWalMaintenance,

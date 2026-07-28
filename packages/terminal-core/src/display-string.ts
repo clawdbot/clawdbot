@@ -73,11 +73,46 @@ function resolveHomeDisplayPrefix(): { home: string; prefix: string } | undefine
   return explicitHome ? { home, prefix: "$OPENCLAW_HOME" } : { home, prefix: "~" };
 }
 
+/** Replace a whole-value home or child path without clipping sibling path prefixes. */
+function replaceHomePath(input: string, display: { home: string; prefix: string }): string {
+  let output = "";
+  let cursor = 0;
+
+  while (cursor < input.length) {
+    const index = input.indexOf(display.home, cursor);
+    if (index < 0) {
+      return `${output}${input.slice(cursor)}`;
+    }
+
+    const before = input[index - 1];
+    const homeEnd = index + display.home.length;
+    const after = input[homeEnd];
+    const startsToken = before === undefined || /[\s("'`:=[{,]/u.test(before);
+    let punctuationEnd = homeEnd;
+    while (punctuationEnd < input.length && /[)"'`:,;.\]}]/u.test(input.charAt(punctuationEnd))) {
+      punctuationEnd += 1;
+    }
+    const punctuationEndsToken =
+      punctuationEnd > homeEnd &&
+      (punctuationEnd === input.length || /\s/u.test(input.charAt(punctuationEnd)));
+    const endsTokenOrContinuesPath =
+      after === undefined || after === "/" || after === "\\" || punctuationEndsToken;
+    if (startsToken && endsTokenOrContinuesPath) {
+      output += `${input.slice(cursor, index)}${display.prefix}`;
+    } else {
+      output += input.slice(cursor, index + display.home.length);
+    }
+    cursor = index + display.home.length;
+  }
+
+  return output;
+}
+
 /** Replace the effective home path with "~" or "$OPENCLAW_HOME" for terminal display. */
 export function displayString(input: string): string {
   if (!input) {
     return input;
   }
   const display = resolveHomeDisplayPrefix();
-  return display ? input.split(display.home).join(display.prefix) : input;
+  return display ? replaceHomePath(input, display) : input;
 }

@@ -64,6 +64,9 @@ final class VoiceWakeTester {
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "Speech recognition unavailable"])
         }
+        guard recognizer.supportsOnDeviceRecognition else {
+            throw SpeechRecognitionRequestPolicy.PolicyError.onDeviceRecognitionUnavailable
+        }
         recognizer.defaultTaskHint = .dictation
 
         guard Self.hasPrivacyStrings else {
@@ -101,9 +104,12 @@ final class VoiceWakeTester {
         self.audioEngine = engine
 
         self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-        self.recognitionRequest?.shouldReportPartialResults = true
-        self.recognitionRequest?.taskHint = .dictation
         let request = self.recognitionRequest
+        if let request {
+            try SpeechRecognitionRequestPolicy.configurePassiveVoiceWake(
+                request,
+                supportsOnDeviceRecognition: recognizer.supportsOnDeviceRecognition)
+        }
 
         let inputNode = engine.inputNode
         let format = inputNode.outputFormat(forBus: 0)
@@ -365,31 +371,6 @@ final class VoiceWakeTester {
                 normalized: normalized,
                 start: segment.start,
                 end: segment.end)
-        }
-    }
-
-    private func holdUntilSilence(onUpdate: @escaping @Sendable (VoiceWakeTestState) -> Void) {
-        Task { [weak self] in
-            guard let self else { return }
-            let detectedAt = Date()
-            let hardStop = detectedAt.addingTimeInterval(6) // cap overall listen after trigger
-
-            while !self.isStopping {
-                let now = Date()
-                if now >= hardStop { break }
-                if let last = self.lastHeard, now.timeIntervalSince(last) >= silenceWindow {
-                    break
-                }
-                try? await Task.sleep(nanoseconds: 200_000_000)
-            }
-            if !self.isStopping {
-                self.stop()
-                await MainActor.run { AppStateStore.shared.stopVoiceEars() }
-                if let detectedText {
-                    self.logger.info("voice wake hold finished; len=\(detectedText.count)")
-                    Task { @MainActor in onUpdate(.detected(detectedText)) }
-                }
-            }
         }
     }
 

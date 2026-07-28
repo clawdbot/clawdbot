@@ -1,6 +1,6 @@
 // Lazily resolves optional service modules without eager runtime imports.
 import { isTruthyEnvValue } from "../infra/env.js";
-import { toSafeImportPath } from "./import-specifier.js";
+import { toSafeImportPath } from "../shared/import-specifier.js";
 
 type LazyServiceModule = Record<string, unknown>;
 
@@ -19,7 +19,7 @@ function resolveExport<T>(mod: LazyServiceModule, names: string[]): T | null {
   return null;
 }
 
-export async function defaultLoadOverrideModule(
+async function defaultLoadOverrideModule(
   specifier: string,
   importModule: (specifier: string) => Promise<LazyServiceModule> = async (source: string) =>
     await import(source),

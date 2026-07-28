@@ -34,19 +34,24 @@ PLUGIN_CLI_AFTER_LOG="$LOG_DIR/plugin-cli-after.log"
 AGENT_LOG="$LOG_DIR/agent.log"
 STATUS_JSON="$LOG_DIR/status.json"
 STATUS_ERR="$LOG_DIR/status.err"
+CLICKCLACK_PLUGIN_INSTALL_LOG="$LOG_DIR/clickclack-plugin-install.log"
 CLICKCLACK_OUTBOUND_JSON="$LOG_DIR/clickclack-outbound.json"
 CLICKCLACK_OUTBOUND_ERR="$LOG_DIR/clickclack-outbound.err"
 CLICKCLACK_SERVER_LOG="$LOG_DIR/clickclack-server.log"
 GATEWAY_LOG="$LOG_DIR/gateway.log"
 MOCK_REQUEST_LOG="$scenario_tmp/openai-requests.jsonl"
 CLICKCLACK_STATE="$scenario_tmp/clickclack.json"
-BASELINE_SPEC="${OPENCLAW_RELEASE_UPGRADE_BASELINE_SPEC:-openclaw@latest}"
 export SUCCESS_MARKER MOCK_REQUEST_LOG CLICKCLACK_STATE
 
 candidate_version="$(
   tar -xOf "${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}" package/package.json |
     node -e 'let raw = ""; process.stdin.setEncoding("utf8"); process.stdin.on("data", (chunk) => { raw += chunk; }); process.stdin.on("end", () => { process.stdout.write(JSON.parse(raw).version); });'
 )"
+if [ -n "${OPENCLAW_RELEASE_UPGRADE_BASELINE_SPEC:-}" ]; then
+  BASELINE_SPEC="$OPENCLAW_RELEASE_UPGRADE_BASELINE_SPEC"
+else
+  BASELINE_SPEC="$(node scripts/lib/release-upgrade-baseline.mjs --candidate-version "$candidate_version")"
+fi
 
 mock_pid=""
 clickclack_pid=""
@@ -73,6 +78,7 @@ dump_debug_logs() {
     "$PLUGIN_CLI_AFTER_LOG" \
     "$AGENT_LOG" \
     "$STATUS_JSON" \
+    "$CLICKCLACK_PLUGIN_INSTALL_LOG" \
     "$CLICKCLACK_OUTBOUND_JSON" \
     "$CLICKCLACK_SERVER_LOG" \
     "$GATEWAY_LOG" \
@@ -136,7 +142,7 @@ node scripts/e2e/lib/release-scenarios/write-cli-plugin.mjs \
   "Release Upgrade Plugin" \
   release-upgrade \
   "release-upgrade-plugin:pong"
-openclaw plugins install "$plugin_dir" >"$PLUGIN_INSTALL_LOG" 2>&1
+openclaw plugins install "$plugin_dir" --force >"$PLUGIN_INSTALL_LOG" 2>&1
 openclaw release-upgrade ping >"$PLUGIN_CLI_BEFORE_LOG" 2>&1
 node scripts/e2e/lib/release-scenarios/assertions.mjs assert-file-contains "$PLUGIN_CLI_BEFORE_LOG" "release-upgrade-plugin:pong"
 node scripts/e2e/lib/release-user-journey/assertions.mjs configure-clickclack "http://127.0.0.1:$CLICKCLACK_PORT"
@@ -157,6 +163,10 @@ node scripts/e2e/lib/release-scenarios/assertions.mjs assert-agent-turn "$SUCCES
 
 openclaw release-upgrade ping >"$PLUGIN_CLI_AFTER_LOG" 2>&1
 node scripts/e2e/lib/release-scenarios/assertions.mjs assert-file-contains "$PLUGIN_CLI_AFTER_LOG" "release-upgrade-plugin:pong"
+
+clickclack_plugin_dir="$(mktemp -d "$scenario_tmp/clickclack-plugin.XXXXXX")"
+node scripts/e2e/lib/release-user-journey/write-clickclack-plugin.mjs "$clickclack_plugin_dir"
+openclaw plugins install "$clickclack_plugin_dir" --force >"$CLICKCLACK_PLUGIN_INSTALL_LOG" 2>&1
 
 openclaw channels status --json >"$STATUS_JSON" 2>"$STATUS_ERR"
 node scripts/e2e/lib/release-user-journey/assertions.mjs assert-channel-status clickclack "$STATUS_JSON"

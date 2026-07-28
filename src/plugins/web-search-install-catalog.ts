@@ -74,13 +74,23 @@ function buildProviderEntry(params: {
   const providerId = normalizeString(params.provider.id);
   const label = normalizeString(params.provider.label);
   const hint = normalizeString(params.provider.hint);
+  const configuredCredentialPath = normalizeString(params.provider.credentialPath);
   const credentialPath =
-    normalizeString(params.provider.credentialPath) ??
-    `plugins.entries.${params.pluginId}.config.webSearch.apiKey`;
+    params.provider.credentialPath === ""
+      ? ""
+      : (configuredCredentialPath ?? `plugins.entries.${params.pluginId}.config.webSearch.apiKey`);
+  const requiresCredential = params.provider.requiresCredential !== false;
   const envVars = normalizeTrimmedStringList(params.provider.envVars);
   const placeholder = normalizeString(params.provider.placeholder);
   const signupUrl = normalizeString(params.provider.signupUrl);
-  if (!providerId || !label || !hint || envVars.length === 0 || !placeholder || !signupUrl) {
+  if (
+    !providerId ||
+    !label ||
+    !hint ||
+    (requiresCredential && envVars.length === 0) ||
+    !placeholder ||
+    !signupUrl
+  ) {
     return null;
   }
   return {
@@ -148,6 +158,17 @@ export function resolveWebSearchInstallCatalogEntries(): WebSearchInstallCatalog
     (left, right) =>
       left.provider.label.localeCompare(right.provider.label) ||
       left.provider.id.localeCompare(right.provider.id),
+  );
+}
+
+/** Lists credential-backed web provider plugins selected by documented environment variables. */
+export function resolveWebSearchInstallCatalogEntriesForEnv(
+  env: NodeJS.ProcessEnv,
+): WebSearchInstallCatalogEntry[] {
+  return resolveWebSearchInstallCatalogEntries().filter(
+    (entry) =>
+      entry.provider.requiresCredential !== false &&
+      entry.provider.envVars.some((envVar) => Boolean(env[envVar]?.trim())),
   );
 }
 

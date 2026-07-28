@@ -1,6 +1,7 @@
 // Fetches and normalizes DeepSeek provider usage records.
 import {
   buildUsageHttpErrorSnapshot,
+  discardUsageResponseBody,
   fetchJson,
   parseFiniteNumber,
   readUsageJson,
@@ -73,6 +74,7 @@ export async function fetchDeepSeekUsage(
   );
 
   if (!res.ok) {
+    await discardUsageResponseBody(res);
     return buildUsageHttpErrorSnapshot({
       provider: "deepseek",
       status: res.status,
@@ -90,6 +92,19 @@ export async function fetchDeepSeekUsage(
     .map((info) => buildBalanceSummary(info))
     .filter((entry): entry is string => Boolean(entry))
     .join(" · ");
+  const billing = balances.flatMap((info) => {
+    const amount = parseBalanceAmount(info.total_balance);
+    if (amount === undefined || amount < 0) {
+      return [];
+    }
+    return [
+      {
+        type: "balance" as const,
+        amount,
+        unit: info.currency?.trim().toUpperCase() || "credits",
+      },
+    ];
+  });
   if (!summary) {
     return {
       provider: "deepseek",
@@ -103,6 +118,7 @@ export async function fetchDeepSeekUsage(
     provider: "deepseek",
     displayName: PROVIDER_LABELS.deepseek,
     windows: [],
+    billing,
     summary,
     ...(data.is_available === false ? { plan: "Unavailable" } : {}),
   };

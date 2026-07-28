@@ -4,7 +4,6 @@
 import { execFileSync } from "node:child_process";
 import { resolveDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 
-export type TimeFormatPreference = "auto" | "12" | "24";
 export type ResolvedTimeFormat = "12" | "24";
 
 let cachedTimeFormat: ResolvedTimeFormat | undefined;
@@ -35,7 +34,7 @@ export function resolveUserTimezone(configured?: string): string {
 }
 
 /** Resolve 12/24-hour display preference, detecting the host for `auto`. */
-export function resolveUserTimeFormat(preference?: TimeFormatPreference): ResolvedTimeFormat {
+export function resolveUserTimeFormat(preference?: "auto" | "12" | "24"): ResolvedTimeFormat {
   if (preference === "12" || preference === "24") {
     return preference;
   }
@@ -66,7 +65,7 @@ export function formatDateStamp(nowMs: number, timeZone: string): string {
 }
 
 /** Normalize Date, second, millisecond, or parseable string timestamps. */
-export function normalizeTimestamp(
+function normalizeTimestamp(
   raw: unknown,
 ): { timestampMs: number; timestampUtc: string } | undefined {
   if (raw == null) {

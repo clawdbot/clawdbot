@@ -113,7 +113,7 @@ runs:
 
     - name: Download OpenClaw Docker E2E package
       if: inputs.hydrate-artifacts == 'true' && steps.plan.outputs.needs_package == '1'
-      uses: actions/download-artifact@v8
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
       with:
         name: ${{ inputs.package-artifact-name }}
         path: .artifacts/docker-e2e-package

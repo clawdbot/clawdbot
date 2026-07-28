@@ -12,10 +12,10 @@ import {
   makePersistedCall,
   writeLegacyCallsJsonl,
 } from "../manager.test-harness.js";
-import { clearVoiceCallStateRuntime, setVoiceCallStateRuntime } from "../runtime-state.js";
+import { setVoiceCallStateRuntime } from "../runtime-state.js";
 import { CallRecordSchema } from "../types.js";
 import {
-  flushPendingCallRecordWritesForTest,
+  findCallMatchesInStore,
   getCallHistoryFromStore,
   loadActiveCallsFromStore,
   persistCallRecord,
@@ -33,6 +33,9 @@ function installStateRuntime(): void {
       openChannelIngressQueue: (() => {
         throw new Error("openChannelIngressQueue is not used by voice-call store tests");
       }) as never,
+      openChannelIngressDrain: (() => {
+        throw new Error("openChannelIngressDrain is not used by voice-call store tests");
+      }) as never,
     },
   });
 }
@@ -45,7 +48,6 @@ describe("voice-call call record store", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    clearVoiceCallStateRuntime();
     resetPluginStateStoreForTests();
   });
 
@@ -72,7 +74,6 @@ describe("voice-call call record store", () => {
     );
 
     persistCallRecord(storePath, call);
-    await flushPendingCallRecordWritesForTest();
 
     expect(fs.existsSync(path.join(storePath, "calls.jsonl"))).toBe(false);
     const restored = loadActiveCallsFromStore(storePath);
@@ -94,6 +95,9 @@ describe("voice-call call record store", () => {
         }) as never,
         openChannelIngressQueue: (() => {
           throw new Error("openChannelIngressQueue is not used by voice-call store tests");
+        }) as never,
+        openChannelIngressDrain: (() => {
+          throw new Error("openChannelIngressDrain is not used by voice-call store tests");
         }) as never,
       },
     });
@@ -121,7 +125,6 @@ describe("voice-call call record store", () => {
     );
 
     persistCallRecord(storePath, call);
-    await flushPendingCallRecordWritesForTest();
 
     const restored = loadActiveCallsFromStore(storePath);
     const restoredCall = restored.activeCalls.get("call-large");
@@ -150,5 +153,49 @@ describe("voice-call call record store", () => {
 
     const restored = loadActiveCallsFromStore(storePath);
     expect(restored.activeCalls.get("call-order")?.state).toBe("answered");
+  });
+
+  it("finds retained snapshots outside recent history and preserves internal-id precedence", async () => {
+    const storePath = createTestStorePath();
+    persistCallRecord(
+      storePath,
+      CallRecordSchema.parse(
+        makePersistedCall({ callId: "call-target", providerCallId: "provider-target" }),
+      ),
+    );
+    persistCallRecord(
+      storePath,
+      CallRecordSchema.parse(
+        makePersistedCall({
+          callId: "call-target",
+          providerCallId: "provider-target",
+          state: "completed",
+        }),
+      ),
+    );
+    for (let index = 0; index < 101; index += 1) {
+      persistCallRecord(
+        storePath,
+        CallRecordSchema.parse(
+          makePersistedCall({
+            callId: `noise-${index}`,
+            providerCallId: index === 100 ? "call-target" : `provider-noise-${index}`,
+          }),
+        ),
+      );
+    }
+    expect(await getCallHistoryFromStore(storePath, 100)).toHaveLength(100);
+    const internalMatches = await findCallMatchesInStore(storePath, "call-target");
+    expect(internalMatches.byCallId).toMatchObject({
+      callId: "call-target",
+      state: "completed",
+    });
+    expect(internalMatches.byProviderCallId).toMatchObject({ callId: "noise-100" });
+
+    const providerMatches = await findCallMatchesInStore(storePath, "provider-target");
+    expect(providerMatches.byProviderCallId).toMatchObject({
+      callId: "call-target",
+      state: "completed",
+    });
   });
 });

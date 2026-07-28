@@ -24,7 +24,7 @@
     },
     "webFetch.apiKey": {
       "label": "Firecrawl Fetch API Key",
-      "help": "Firecrawl API key for web fetch fallback (fallback: FIRECRAWL_API_KEY env var).",
+      "help": "Optional for hosted keyless scraping; add a key for higher limits (fallback: FIRECRAWL_API_KEY env var).",
       "sensitive": true,
       "placeholder": "fc-..."
     },
@@ -35,11 +35,8 @@
   },
   "contracts": {
     "webFetchProviders": ["firecrawl"],
-    "webSearchProviders": ["firecrawl"],
+    "webSearchProviders": ["firecrawl", "firecrawl-free"],
     "tools": ["firecrawl_search", "firecrawl_scrape"]
-  },
-  "configContracts": {
-    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
   },
   "configSchema": {
     "type": "object",

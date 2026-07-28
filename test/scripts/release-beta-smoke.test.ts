@@ -6,8 +6,8 @@ import {
   parseWorkflowRunIdFromOutput,
   pollRun,
   readPositiveInt,
+  requireWorkflowRunIdFromOutput,
   run,
-  selectNewestDispatchedRunId,
 } from "../../scripts/release-beta-smoke.ts";
 
 describe("release-beta-smoke", () => {
@@ -54,34 +54,10 @@ describe("release-beta-smoke", () => {
     ).toBe("1234567890");
   });
 
-  it("selects the newest workflow_dispatch run not present before dispatch", () => {
-    const beforeIds = new Set(["100", "101"]);
-
-    expect(
-      selectNewestDispatchedRunId({
-        beforeIds,
-        runs: [
-          { databaseId: 100, createdAt: "2026-05-04T10:00:00Z" },
-          { databaseId: 102, createdAt: "2026-05-04T10:01:00Z" },
-          { databaseId: 103, createdAt: "2026-05-04T10:02:00Z" },
-        ],
-      }),
-    ).toBe("103");
-  });
-
-  it("selects runs returned by the actions workflow runs API", () => {
-    const beforeIds = new Set(["200"]);
-
-    expect(
-      selectNewestDispatchedRunId({
-        beforeIds,
-        runs: [
-          { id: 200, created_at: "2026-05-04T10:00:00Z" },
-          { id: 201, created_at: "2026-05-04T10:02:00Z" },
-          { id: 202, created_at: "2026-05-04T10:01:00Z" },
-        ],
-      }),
-    ).toBe("201");
+  it("fails closed when gh dispatch output does not include the run url", () => {
+    expect(() =>
+      requireWorkflowRunIdFromOutput("✓ Created workflow_dispatch event", "npm-telegram.yml"),
+    ).toThrow("refusing to guess from recent workflow_dispatch runs");
   });
 
   it("replaces stale Telegram proof placeholders", () => {

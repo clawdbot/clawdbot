@@ -1,8 +1,25 @@
 // Codex tests cover native execution policy plugin behavior.
-import { describe, expect, it } from "vitest";
+import type { getSessionEntry as getSessionEntryType } from "openclaw/plugin-sdk/session-store-runtime";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveCodexNativeExecutionPolicy } from "./native-execution-policy.js";
 
+const sessionStoreMocks = vi.hoisted(() => ({
+  getSessionEntry: vi.fn<typeof getSessionEntryType>(),
+}));
+
+vi.mock("openclaw/plugin-sdk/session-store-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/session-store-runtime")>();
+  return {
+    ...actual,
+    getSessionEntry: sessionStoreMocks.getSessionEntry,
+  };
+});
+
 describe("resolveCodexNativeExecutionPolicy", () => {
+  beforeEach(() => {
+    sessionStoreMocks.getSessionEntry.mockReset();
+  });
+
   it("allows Codex native execution for gateway exec hosts", () => {
     expect(
       resolveCodexNativeExecutionPolicy({
@@ -85,6 +102,65 @@ describe("resolveCodexNativeExecutionPolicy", () => {
       requestedExecHost: "node",
       effectiveExecHost: "node",
       node: "worker-3",
+    });
+  });
+
+  it("honors persisted default-session exec hosts with explicit main agent policy", () => {
+    sessionStoreMocks.getSessionEntry.mockReturnValue({
+      sessionId: "session-1",
+      updatedAt: 1,
+      execHost: "node",
+      execNode: "worker-5",
+    });
+
+    expect(
+      resolveCodexNativeExecutionPolicy({
+        config: { tools: { exec: { host: "gateway" } } },
+        sessionKey: "main",
+        agentId: "main",
+        readRuntimeSessionEntry: true,
+      }),
+    ).toMatchObject({
+      nativeToolSurfaceAllowed: false,
+      requestedExecHost: "node",
+      effectiveExecHost: "node",
+      node: "worker-5",
+    });
+    expect(sessionStoreMocks.getSessionEntry).toHaveBeenCalledWith({
+      sessionKey: "main",
+      agentId: "main",
+      hydrateSkillPromptRefs: false,
+    });
+  });
+
+  it("honors persisted unscoped exec hosts for the configured default agent", () => {
+    sessionStoreMocks.getSessionEntry.mockReturnValue({
+      sessionId: "session-1",
+      updatedAt: 1,
+      execHost: "node",
+      execNode: "worker-6",
+    });
+
+    expect(
+      resolveCodexNativeExecutionPolicy({
+        config: {
+          tools: { exec: { host: "gateway" } },
+          agents: { list: [{ id: "bot-a", default: true }] },
+        },
+        sessionKey: "node-session",
+        agentId: "bot-a",
+        readRuntimeSessionEntry: true,
+      }),
+    ).toMatchObject({
+      nativeToolSurfaceAllowed: false,
+      requestedExecHost: "node",
+      effectiveExecHost: "node",
+      node: "worker-6",
+    });
+    expect(sessionStoreMocks.getSessionEntry).toHaveBeenCalledWith({
+      sessionKey: "node-session",
+      agentId: "bot-a",
+      hydrateSkillPromptRefs: false,
     });
   });
 

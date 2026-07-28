@@ -13,6 +13,32 @@ openclaw_e2e_eval_test_state_from_b64() {
   fi
   eval "$decoded"
 }
+openclaw_e2e_read_positive_int_env() {
+  local name="${1:?missing environment variable name}"
+  local fallback="${2:?missing fallback value}"
+  local value="${!name-}"
+  if [ -z "${!name+x}" ]; then
+    value="$fallback"
+  fi
+  if [[ ! "$value" =~ ^[0-9]+$ ]] || (( 10#$value < 1 )); then
+    echo "invalid $name: $value" >&2
+    return 2
+  fi
+  printf '%s\n' "$value"
+}
+openclaw_e2e_read_nonnegative_int_env() {
+  local name="${1:?missing environment variable name}"
+  local fallback="${2:?missing fallback value}"
+  local value="${!name-}"
+  if [ -z "${!name+x}" ]; then
+    value="$fallback"
+  fi
+  if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+    echo "invalid $name: $value" >&2
+    return 2
+  fi
+  printf '%s\n' "$value"
+}
 openclaw_e2e_resolve_entrypoint() {
   local entry
   for entry in dist/index.mjs dist/index.js; do
@@ -176,8 +202,9 @@ NODE
 }
 openclaw_e2e_print_log() {
   local path="$1"
-  local max_bytes="${OPENCLAW_E2E_LOG_TAIL_BYTES:-262144}"
-  local max_lines="${OPENCLAW_E2E_LOG_TAIL_LINES:-120}"
+  local max_bytes max_lines
+  max_bytes="$(openclaw_e2e_read_nonnegative_int_env OPENCLAW_E2E_LOG_TAIL_BYTES 262144)" || return $?
+  max_lines="$(openclaw_e2e_read_nonnegative_int_env OPENCLAW_E2E_LOG_TAIL_LINES 120)" || return $?
   [ -f "$path" ] || return 0
   echo "--- $path ---"
   tail -c "$max_bytes" "$path" 2>/dev/null | tail -n "$max_lines" || tail -n "$max_lines" "$path" || true
@@ -215,17 +242,6 @@ openclaw_e2e_install_package() {
     fi
     exit 1
   fi
-}
-openclaw_e2e_assert_package_extensions() {
-  local root="$1"
-  shift
-  local extension
-  for extension in "$@"; do
-    [ -d "$root/dist/extensions/$extension" ] || {
-      echo "Missing packaged extension: $extension" >&2
-      exit 1
-    }
-  done
 }
 openclaw_e2e_find_dep_package() {
   local dep_path="$1"
@@ -363,19 +379,17 @@ openclaw_e2e_terminate_gateways() {
 openclaw_e2e_start_mock_openai() { openclaw_e2e_start_tracked_process "$2" env "MOCK_PORT=$1" node scripts/e2e/mock-openai-server.mjs; }
 openclaw_e2e_wait_mock_openai() {
   local port="$1" attempts="${2:-80}" timeout_ms="${3:-400}" _
+  local base_url="${4:-http://127.0.0.1:${port}}"
   for _ in $(seq 1 "$attempts"); do
-    openclaw_e2e_probe_http "http://127.0.0.1:${port}/health" ok "$timeout_ms" && return 0
+    openclaw_e2e_probe_http "${base_url}/health" ok "$timeout_ms" && return 0
     sleep 0.1
   done
-  openclaw_e2e_probe_http "http://127.0.0.1:${port}/health" ok "$timeout_ms"
+  openclaw_e2e_probe_http "${base_url}/health" ok "$timeout_ms"
 }
 openclaw_e2e_start_gateway() { openclaw_e2e_start_tracked_process "$3" node "$1" gateway --port "$2" --bind loopback --allow-unconfigured; }
 openclaw_e2e_exec_gateway() { exec node "$1" gateway --port "$2" --bind "${3:-loopback}" --allow-unconfigured >"$4" 2>&1; }
 openclaw_e2e_gateway_log_port_from_text() {
   sed -nE 's/.*(127\.0\.0\.1|localhost):([0-9]+).*/\2/p' | tail -n 1
-}
-openclaw_e2e_gateway_log_port() {
-  grep '\[gateway\] ready' "$1" 2>/dev/null | openclaw_e2e_gateway_log_port_from_text
 }
 openclaw_e2e_wait_gateway_ready() {
   local pid="$1" log="$2" attempts="${3:-300}" ready_port="${4:-}" readiness_mode="${5:-strict}" _ saw_ready_log=false
@@ -447,14 +461,16 @@ openclaw_e2e_probe_http() {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     let exitCode = 1;
+    let response;
     try {
-      const response = await fetch(process.argv[1], { signal: controller.signal });
+      response = await fetch(process.argv[1], { signal: controller.signal });
       const passed = expected === "ok" ? response.ok : response.status === Number(expected);
       exitCode = passed ? 0 : 1;
     } catch {
       exitCode = 1;
     } finally {
       clearTimeout(timer);
+      await response?.body?.cancel?.().catch(() => undefined);
     }
     process.exit(exitCode);
   ' "$1" "${2:-ok}" "${3:-400}"

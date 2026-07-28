@@ -2,11 +2,9 @@
 import {
   DEFAULT_LOCAL_MODEL,
   listMemoryEmbeddingProviders,
-  listRegisteredMemoryEmbeddingProviderAdapters,
   type MemoryEmbeddingProviderAdapter,
 } from "openclaw/plugin-sdk/memory-core-host-embedding-registry";
 import { getProviderEnvVars } from "openclaw/plugin-sdk/provider-env-vars";
-import { filterUnregisteredMemoryEmbeddingProviderAdapters } from "./provider-adapter-registration.js";
 
 export type BuiltinMemoryEmbeddingProviderDoctorMetadata = {
   providerId: string;
@@ -16,28 +14,12 @@ export type BuiltinMemoryEmbeddingProviderDoctorMetadata = {
   autoSelectPriority?: number;
 };
 
-const builtinMemoryEmbeddingProviderAdapters = [] as const;
-
 export { DEFAULT_LOCAL_MODEL };
 
 function getBuiltinMemoryEmbeddingProviderAdapter(
   id: string,
 ): MemoryEmbeddingProviderAdapter | undefined {
   return listMemoryEmbeddingProviders().find((adapter) => adapter.id === id);
-}
-
-export function registerBuiltInMemoryEmbeddingProviders(register: {
-  registerMemoryEmbeddingProvider: (adapter: MemoryEmbeddingProviderAdapter) => void;
-}): void {
-  // Only inspect providers already registered in the current load. Falling back
-  // to capability discovery here can recursively trigger plugin loading while
-  // memory-core itself is still registering.
-  for (const adapter of filterUnregisteredMemoryEmbeddingProviderAdapters({
-    builtinAdapters: builtinMemoryEmbeddingProviderAdapters,
-    registeredAdapters: listRegisteredMemoryEmbeddingProviderAdapters(),
-  })) {
-    register.registerMemoryEmbeddingProvider(adapter);
-  }
 }
 
 export function getBuiltinMemoryEmbeddingProviderDoctorMetadata(

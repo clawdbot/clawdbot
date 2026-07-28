@@ -1,18 +1,21 @@
 // Whatsapp plugin module implements peer behavior.
 import { getSenderIdentity } from "../../identity.js";
-import type { WebInboundMessage } from "../../inbound/types.js";
+import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
+import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { jidToE164, normalizeE164 } from "../../text-runtime.js";
 
-export function resolvePeerId(msg: WebInboundMessage) {
-  if (msg.chatType === "group") {
-    return msg.conversationId ?? msg.from;
+export function resolvePeerId(msg: AdmittedWebInboundMessage) {
+  const admission = requireWhatsAppInboundAdmission(msg);
+  if (admission.conversation.kind === "group") {
+    return admission.conversation.id;
   }
   const sender = getSenderIdentity(msg);
   if (sender.e164) {
     return normalizeE164(sender.e164) ?? sender.e164;
   }
-  if (msg.from.includes("@")) {
-    return jidToE164(msg.from) ?? msg.from;
+  const conversationId = admission.conversation.id;
+  if (conversationId.includes("@")) {
+    return jidToE164(conversationId) ?? conversationId;
   }
-  return normalizeE164(msg.from) ?? msg.from;
+  return normalizeE164(conversationId) ?? conversationId;
 }

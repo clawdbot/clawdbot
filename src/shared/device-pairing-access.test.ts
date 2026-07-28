@@ -58,4 +58,56 @@ describe("resolvePendingDeviceApprovalState", () => {
       },
     });
   });
+
+  it("drops non-string role entries from malformed pairing records instead of crashing", () => {
+    // Legacy/malformed on-disk pairing records can carry non-string roles/role (blind-cast JSON);
+    // before the shared-normalizer guard these crashed normalizeRoleList on .trim().
+    type PendingArg = Parameters<typeof resolvePendingDeviceApprovalState>[0];
+    type PairedArg = NonNullable<Parameters<typeof resolvePendingDeviceApprovalState>[1]>;
+    expect(
+      resolvePendingDeviceApprovalState(
+        {
+          roles: [123, "operator", null, "  admin  "],
+          role: 5,
+          scopes: ["operator.read"],
+        } as unknown as PendingArg,
+        {
+          roles: [null, "operator"],
+          role: 9,
+          scopes: ["operator.read"],
+        } as unknown as PairedArg,
+      ),
+    ).toEqual({
+      kind: "role-upgrade",
+      requested: {
+        roles: ["admin", "operator"],
+        scopes: ["operator.read"],
+      },
+      approved: {
+        roles: ["operator"],
+        scopes: ["operator.read"],
+      },
+    });
+  });
+
+  it("drops a non-string token role without crashing", () => {
+    type PairedArg = NonNullable<Parameters<typeof resolvePendingDeviceApprovalState>[1]>;
+    expect(
+      resolvePendingDeviceApprovalState({ role: "operator", scopes: ["operator.read"] }, {
+        roles: ["operator"],
+        scopes: ["operator.read"],
+        tokens: { t1: { role: 7, revokedAtMs: null } },
+      } as unknown as PairedArg),
+    ).toEqual({
+      kind: "role-upgrade",
+      requested: {
+        roles: ["operator"],
+        scopes: ["operator.read"],
+      },
+      approved: {
+        roles: [],
+        scopes: ["operator.read"],
+      },
+    });
+  });
 });

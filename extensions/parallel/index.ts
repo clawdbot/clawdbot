@@ -7,8 +7,8 @@ export default definePluginEntry({
   name: "Parallel Plugin",
   description: "Bundled Parallel web search plugin",
   register(api) {
-    // Free hosted Search MCP (keyless, zero-config default) and the paid v1 REST
-    // API (requires PARALLEL_API_KEY) are registered as two distinct providers.
+    // Free hosted Search MCP (keyless, opt-in) and the paid v1 REST API
+    // (requires PARALLEL_API_KEY) are registered as two distinct providers.
     api.registerWebSearchProvider(createParallelFreeWebSearchProvider());
     api.registerWebSearchProvider(createParallelWebSearchProvider());
   },

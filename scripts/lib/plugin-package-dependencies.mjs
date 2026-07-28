@@ -27,7 +27,10 @@ export function packageNameFromSpecifier(specifier) {
   if (!first) {
     return null;
   }
-  return first.startsWith("@") && second ? `${first}/${second}` : first;
+  if (first.startsWith("@")) {
+    return second ? `${first}/${second}` : null;
+  }
+  return first;
 }
 
 /** Collect runtime dependency specs across bundled plugin packages and note conflicts. */
@@ -47,6 +50,11 @@ export function collectBundledPluginPackageDependencySpecs(bundledPluginsDir) {
 
   for (const packageJsonPath of packageJsonPaths) {
     const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+    // External official plugins own isolated npm projects, so their dependency
+    // specs do not need to match packages bundled into the root distribution.
+    if (packageJson.openclaw?.build?.bundledDist === false) {
+      continue;
+    }
     const pluginId = path.basename(path.dirname(packageJsonPath));
     for (const [name, spec] of collectRuntimeDependencySpecs(packageJson)) {
       const existing = specs.get(name);

@@ -36,6 +36,8 @@ function extractMessageId(payload: unknown): string | null {
 
 type FormatOpts = {
   width: number;
+  /** Max rows to render. Defaults to 25 when omitted. */
+  displayLimit?: number;
 };
 
 function renderObjectSummary(payload: unknown, opts: FormatOpts): string[] {
@@ -87,7 +89,8 @@ function renderObjectSummary(payload: unknown, opts: FormatOpts): string[] {
 }
 
 function renderMessageList(messages: unknown[], opts: FormatOpts, emptyLabel: string): string[] {
-  const rows = messages.slice(0, 25).map((m) => {
+  const cap = opts.displayLimit ?? 25;
+  const rows = messages.slice(0, cap).map((m) => {
     const msg = m as Record<string, unknown>;
     const id =
       (typeof msg.id === "string" && msg.id) ||
@@ -238,16 +241,47 @@ function renderReactions(payload: unknown, opts: FormatOpts): string[] | null {
   ];
 }
 
-export function formatMessageCliText(result: MessageActionRunResult): string[] {
+/**
+ * Emit a muted hint when the provider payload signals more results are available
+ * beyond the current page (e.g. hasMore, nextBatch, @odata.nextLink).
+ */
+function renderPaginationHint(payload: unknown, muted: (text: string) => string): string | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  const obj = payload as Record<string, unknown>;
+  if (obj.hasMore === true) {
+    return muted(
+      "More results available. Use --limit to fetch more, or --json for the raw cursor.",
+    );
+  }
+  if (typeof obj.nextBatch === "string" && obj.nextBatch) {
+    return muted(
+      "More results available. Use --limit to fetch more, or --json for the raw cursor.",
+    );
+  }
+  if (typeof obj["@odata.nextLink"] === "string" && obj["@odata.nextLink"]) {
+    return muted(
+      "More results available. Use --limit to fetch more, or --json for the raw cursor.",
+    );
+  }
+  return null;
+}
+
+export function formatMessageCliText(
+  result: MessageActionRunResult,
+  opts?: { displayLimit?: number },
+): string[] {
   const rich = isRich();
   const ok = (text: string) => (rich ? theme.success(text) : text);
   const muted = (text: string) => (rich ? theme.muted(text) : text);
   const heading = (text: string) => (rich ? theme.heading(text) : text);
 
   const width = getTerminalTableWidth();
-  const opts: FormatOpts = { width };
+  const displayLimit = opts?.displayLimit;
+  const formatOpts: FormatOpts = { width, displayLimit };
 
-  if (result.handledBy === "dry-run") {
+  if (result.dryRun) {
     return [muted(`[dry-run] would run ${result.action} via ${result.channel}`)];
   }
 
@@ -267,7 +301,7 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
     return [
       headingLine,
       renderTable({
-        width: opts.width,
+        width: formatOpts.width,
         columns: [
           { key: "Channel", header: "Channel", minWidth: 10 },
           { key: "Target", header: "Target", minWidth: 12, flex: true },
@@ -307,6 +341,22 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
       const poll = result.pollResult;
       const pollId = (poll.result as { pollId?: string } | undefined)?.pollId;
       const msgId = poll.result?.messageId ?? null;
+      if (poll.via === "direct") {
+        const directResult = poll.result
+          ? ({ ...poll.result, channel: poll.channel } satisfies OutboundDeliveryResult)
+          : undefined;
+        const lines = [
+          ok(
+            formatOutboundDeliverySummary(poll.channel, directResult, {
+              action: "Poll sent",
+            }),
+          ),
+        ];
+        if (pollId) {
+          lines.push(ok(`Poll id: ${pollId}`));
+        }
+        return lines;
+      }
       const lines = [
         ok(
           formatGatewaySummary({
@@ -352,7 +402,7 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
     return lines;
   }
 
-  const reactionsTable = renderReactions(payload, opts);
+  const reactionsTable = renderReactions(payload, formatOpts);
   if (reactionsTable && result.action === "reactions") {
     lines.push(heading("Reactions"));
     lines.push(reactionsTable[0] ?? "");
@@ -360,19 +410,27 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
   }
 
   if (result.action === "read") {
-    const messagesTable = renderMessagesFromPayload(payload, opts);
+    const messagesTable = renderMessagesFromPayload(payload, formatOpts);
     if (messagesTable) {
       lines.push(heading("Messages"));
       lines.push(messagesTable[0] ?? "");
+      const hint = renderPaginationHint(payload, muted);
+      if (hint) {
+        lines.push(hint);
+      }
       return lines;
     }
   }
 
   if (result.action === "list-pins") {
-    const pinsTable = renderPinsFromPayload(payload, opts);
+    const pinsTable = renderPinsFromPayload(payload, formatOpts);
     if (pinsTable) {
       lines.push(heading("Pinned messages"));
       lines.push(pinsTable[0] ?? "");
+      const hint = renderPaginationHint(payload, muted);
+      if (hint) {
+        lines.push(hint);
+      }
       return lines;
     }
   }
@@ -382,14 +440,36 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
     const list = extractDiscordSearchResultsMessages(results);
     if (list) {
       lines.push(heading("Search results"));
-      lines.push(renderMessageList(list, opts, "No results.")[0] ?? "");
+      lines.push(renderMessageList(list, formatOpts, "No results.")[0] ?? "");
+      // Discord search nests cursor signals (hasMore, total_results) inside
+      // results rather than at the payload top level. Try payload first, then
+      // the nested results object, then a total_results-vs-count comparison
+      // so completed searches (total_results === returned) show no hint.
+      const hint =
+        renderPaginationHint(payload, muted) ??
+        renderPaginationHint(results, muted) ??
+        (() => {
+          if (!results || typeof results !== "object") {
+            return null;
+          }
+          const r = results as Record<string, unknown>;
+          if (typeof r.total_results === "number" && r.total_results > list.length) {
+            return muted(
+              "More results available. Use --limit to fetch more, or --json for the raw cursor.",
+            );
+          }
+          return null;
+        })();
+      if (hint) {
+        lines.push(hint);
+      }
       return lines;
     }
   }
 
   // Generic success + compact details table.
   lines.push(ok(`✅ ${result.action} via ${resolveChannelLabel(result.channel)}.`));
-  const summary = renderObjectSummary(payload, opts);
+  const summary = renderObjectSummary(payload, formatOpts);
   if (summary.length) {
     lines.push("");
     lines.push(...summary);

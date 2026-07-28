@@ -26,7 +26,7 @@ function resolveDraftPreviewOptions(mode: MatrixDraftPreviewMode): {
   };
 }
 
-export type MatrixDraftStream = {
+type MatrixDraftStream = {
   /** Update the draft with the latest accumulated text for the current block. */
   update: (text: string) => void;
   /** Ensure the last pending update has been sent. */

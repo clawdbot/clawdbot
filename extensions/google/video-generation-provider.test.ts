@@ -94,6 +94,39 @@ function fetchInputUrl(fetchMock: ReturnType<typeof vi.fn>, index: number): stri
   return input.url;
 }
 
+function oversizedJsonResponse(params: { chunkCount: number; chunkSize: number }): {
+  response: Response;
+  getReadCount: () => number;
+  wasCanceled: () => boolean;
+} {
+  const chunk = new Uint8Array(params.chunkSize);
+  let readCount = 0;
+  let canceled = false;
+  return {
+    response: new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (readCount >= params.chunkCount) {
+            controller.close();
+            return;
+          }
+          readCount += 1;
+          controller.enqueue(chunk);
+        },
+        cancel() {
+          canceled = true;
+        },
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      },
+    ),
+    getReadCount: () => readCount,
+    wasCanceled: () => canceled,
+  };
+}
+
 let ssrfMock: { mockRestore: () => void } | undefined;
 
 describe("google video generation provider", () => {
@@ -176,6 +209,33 @@ describe("google video generation provider", () => {
     const httpOptions = recordField(clientOptions.httpOptions, "httpOptions");
     expect(httpOptions).not.toHaveProperty("baseUrl");
     expect(httpOptions).not.toHaveProperty("apiVersion");
+  });
+
+  it.each([
+    ["invalid alphabet", "not-base64!"],
+    ["non-canonical pad bits", "ZE=="],
+  ])("rejects %s in inline video bytes", async (_scenario, videoBytes) => {
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-key",
+      source: "env",
+      mode: "api-key",
+    });
+    generateVideosMock.mockResolvedValue({
+      done: true,
+      response: {
+        generatedVideos: [{ video: { videoBytes, mimeType: "video/mp4" } }],
+      },
+    });
+
+    await expect(
+      buildGoogleVideoGenerationProvider().generateVideo({
+        provider: "google",
+        model: "veo-3.1-fast-generate-preview",
+        prompt: "A tiny robot watering a windowsill garden",
+        cfg: {},
+        durationSeconds: 3,
+      }),
+    ).rejects.toThrow("Google video generation returned malformed base64 video data");
   });
 
   it("rejects inline video bytes that exceed the configured media cap", async () => {
@@ -484,6 +544,33 @@ describe("google video generation provider", () => {
     );
     expect(downloadMock).not.toHaveBeenCalled();
     expect(result.videos[0]?.buffer).toEqual(Buffer.from("rest-video"));
+  });
+
+  it("bounds successful Google REST operation JSON bodies instead of buffering the whole response", async () => {
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-key",
+      source: "env",
+      mode: "api-key",
+    });
+    generateVideosMock.mockRejectedValue(Object.assign(new Error("sdk 404"), { status: 404 }));
+    const streamed = oversizedJsonResponse({ chunkCount: 64, chunkSize: 1024 * 1024 });
+    const fetchMock = vi.fn(async () => streamed.response);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = buildGoogleVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "google",
+        model: "veo-3.1-fast-generate-preview",
+        prompt: "A tiny robot watering a windowsill garden",
+        cfg: {},
+        durationSeconds: 3,
+      }),
+    ).rejects.toThrow("Google video operation response exceeds 16777216 bytes");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(streamed.getReadCount()).toBeLessThan(64);
+    expect(streamed.wasCanceled()).toBe(true);
   });
 
   it("retries transient Google REST poll failures with empty bodies", async () => {

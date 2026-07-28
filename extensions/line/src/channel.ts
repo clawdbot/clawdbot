@@ -1,5 +1,12 @@
 // Line plugin module implements channel behavior.
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import {
+  buildDmGroupAccountAllowlistAdapter,
+  createFlatAllowlistOverrideResolver,
+} from "openclaw/plugin-sdk/allowlist-config-edit";
+import {
+  buildChannelOutboundSessionRoute,
+  createChatChannelPlugin,
+} from "openclaw/plugin-sdk/channel-core";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channel-policy";
 import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
@@ -8,12 +15,14 @@ import { resolveLineAccount } from "./accounts.js";
 import { lineBindingsAdapter } from "./bindings.js";
 import type { ChannelPlugin, ResolvedLineAccount } from "./channel-api.js";
 import { lineChannelPluginCommon } from "./channel-shared.js";
+import { lineConfigAdapter } from "./config-adapter.js";
 import { lineGatewayAdapter } from "./gateway.js";
 import { resolveLineGroupRequireMention } from "./group-policy.js";
+import { inferLineTargetChatType, normalizeLineMessagingTarget } from "./messaging-target.js";
 import { lineMessageAdapter, lineOutboundAdapter } from "./outbound.js";
 import { hasLineDirectives, parseLineDirectives } from "./reply-payload-transform.js";
 import { getLineRuntime } from "./runtime.js";
-import { lineSetupAdapter } from "./setup-core.js";
+import { lineSetupAdapter, lineSetupContract } from "./setup-core.js";
 import { lineSetupWizard } from "./setup-surface.js";
 import { lineStatusAdapter } from "./status.js";
 
@@ -42,14 +51,49 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
     groups: {
       resolveRequireMention: resolveLineGroupRequireMention,
     },
+    allowlist: buildDmGroupAccountAllowlistAdapter({
+      channelId: "line",
+      resolveAccount: ({ cfg, accountId }) =>
+        resolveLineAccount({ cfg, accountId: accountId ?? undefined }),
+      normalize: ({ cfg, accountId, values }) =>
+        lineConfigAdapter.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
+      resolveDmAllowFrom: (account) => account.config.allowFrom,
+      resolveGroupAllowFrom: (account) => account.config.groupAllowFrom,
+      resolveDmPolicy: (account) => account.config.dmPolicy,
+      resolveGroupPolicy: (account) => account.config.groupPolicy,
+      resolveGroupOverrides: createFlatAllowlistOverrideResolver({
+        resolveRecord: (account) => account.config.groups,
+        label: (groupId) => groupId,
+        resolveEntries: (groupCfg) => groupCfg?.allowFrom,
+      }),
+    }),
     messaging: {
       targetPrefixes: ["line"],
-      normalizeTarget: (target) => {
-        const trimmed = target.trim();
-        if (!trimmed) {
-          return undefined;
+      normalizeTarget: normalizeLineMessagingTarget,
+      inferTargetChatType: ({ to }) => inferLineTargetChatType(to),
+      resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target }) => {
+        const peerId = normalizeLineMessagingTarget(target);
+        const chatType = inferLineTargetChatType(target);
+        if (!peerId || !chatType) {
+          return null;
         }
-        return trimmed.replace(/^line:(group|room|user):/i, "").replace(/^line:/i, "");
+        const isRoom = peerId.startsWith("R");
+        return buildChannelOutboundSessionRoute({
+          cfg,
+          agentId,
+          channel: "line",
+          accountId,
+          recipientSessionExact: true,
+          peer: { kind: chatType, id: peerId },
+          chatType,
+          from:
+            chatType === "direct"
+              ? `line:${peerId}`
+              : isRoom
+                ? `line:room:${peerId}`
+                : `line:group:${peerId}`,
+          to: peerId,
+        });
       },
       resolveInboundConversation: lineBindingsAdapter.resolveInboundConversation,
       transformReplyPayload: ({ payload }) => {
@@ -71,6 +115,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
     },
     directory: createEmptyChannelDirectoryAdapter(),
     setup: lineSetupAdapter,
+    setupContract: lineSetupContract,
     status: lineStatusAdapter,
     gateway: lineGatewayAdapter,
     message: lineMessageAdapter,

@@ -1,31 +1,38 @@
 // Memory Core plugin module implements manager async state behavior.
-export function startAsyncSearchSync(params: {
+export async function startAsyncSearchSync(params: {
   enabled: boolean;
   dirty: boolean;
   sessionsDirty: boolean;
   sync: (params: { reason: string }) => Promise<void>;
   onError: (err: unknown) => void;
-}): void {
+}): Promise<void> {
   if (!params.enabled || (!params.dirty && !params.sessionsDirty)) {
     return;
   }
-  void params.sync({ reason: "search" }).catch((err: unknown) => {
+  try {
+    await params.sync({ reason: "search" });
+  } catch (err: unknown) {
     params.onError(err);
-  });
+  }
 }
 
 export async function awaitPendingManagerWork(params: {
   pendingSync?: Promise<void> | null;
   pendingProviderInit?: Promise<void> | null;
+  onError?: (err: unknown) => void;
 }): Promise<void> {
   if (params.pendingSync) {
     try {
       await params.pendingSync;
-    } catch {}
+    } catch (err: unknown) {
+      params.onError?.(err);
+    }
   }
   if (params.pendingProviderInit) {
     try {
       await params.pendingProviderInit;
-    } catch {}
+    } catch (err: unknown) {
+      params.onError?.(err);
+    }
   }
 }

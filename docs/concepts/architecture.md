@@ -18,7 +18,8 @@ title: "Gateway architecture"
 - The **canvas host** is served by the Gateway HTTP server under:
   - `/__openclaw__/canvas/` (agent-editable HTML/CSS/JS)
   - `/__openclaw__/a2ui/` (A2UI host)
-    It uses the same port as the Gateway (default `18789`).
+
+  It uses the same port as the Gateway (default `18789`).
 
 ## Components and flows
 
@@ -42,9 +43,7 @@ title: "Gateway architecture"
   approval lives in the device pairing store.
 - Expose commands like `canvas.*`, `camera.*`, `screen.record`, `location.get`.
 
-Protocol details:
-
-- [Gateway protocol](/gateway/protocol)
+Protocol details: [Gateway protocol](/gateway/protocol)
 
 ### WebChat
 
@@ -94,7 +93,7 @@ sequenceDiagram
   safely retry; the server keeps a short-lived dedupe cache.
 - Nodes must include `role: "node"` plus caps/commands/permissions in `connect`.
 
-## Pairing + local trust
+## Pairing and local trust
 
 - All WS clients (operators + nodes) include a **device identity** on `connect`.
 - New device IDs require pairing approval; the Gateway issues a **device token**
@@ -105,10 +104,9 @@ sequenceDiagram
   trusted shared-secret helper flows.
 - Tailnet and LAN connects, including same-host tailnet binds, still require
   explicit pairing approval.
-- All connects must sign the `connect.challenge` nonce.
-- Signature payload `v3` also binds `platform` + `deviceFamily`; the gateway
-  pins paired metadata on reconnect and requires repair pairing for metadata
-  changes.
+- All connects must sign the `connect.challenge` nonce. Signature payload `v3`
+  also binds `platform` and `deviceFamily`; the gateway pins paired metadata on
+  reconnect and requires repair pairing for metadata changes.
 - **Non-local** connects still require explicit approval.
 - Gateway auth (`gateway.auth.*`) still applies to **all** connections, local or
   remote.
@@ -128,7 +126,7 @@ Details: [Gateway protocol](/gateway/protocol), [Pairing](/channels/pairing),
 - Alternative: SSH tunnel
 
   ```bash
-  ssh -N -L 18789:127.0.0.1:18789 user@host
+  ssh -N -L 18789:127.0.0.1:18789 user@gateway-host
   ```
 
 - The same handshake + auth token apply over the tunnel.

@@ -7,7 +7,7 @@ import {
   assertRequiredParams,
   REQUIRED_PARAM_GROUPS,
   getToolParamsRecord,
-  stripMalformedXmlArgValueSuffix,
+  normalizeFileToolPathParam,
   wrapToolParamValidation,
 } from "./agent-tools.params.js";
 
@@ -18,11 +18,25 @@ describe("assertRequiredParams", () => {
   });
 
   it("strips only the malformed terminal XML arg-value suffix", () => {
-    expect(stripMalformedXmlArgValueSuffix("echo test</arg_value>>")).toBe("echo test");
-    expect(stripMalformedXmlArgValueSuffix("echo test</arg_value>>>>>")).toBe("echo test");
-    expect(stripMalformedXmlArgValueSuffix("echo test</arg_value>")).toBe("echo test</arg_value>");
-    expect(stripMalformedXmlArgValueSuffix("echo </arg_value>> test")).toBe(
-      "echo </arg_value>> test",
+    expect(normalizeFileToolPathParam("echo test</arg_value>>")).toBe("echo test");
+    expect(normalizeFileToolPathParam("echo test</arg_value>>>>>")).toBe("echo test");
+    expect(normalizeFileToolPathParam("echo test</arg_value>")).toBe("echo test</arg_value>");
+    expect(normalizeFileToolPathParam("echo </arg_value>> test")).toBe("echo </arg_value>> test");
+  });
+
+  it("normalizes known hallucinated Office/codex path extensions", () => {
+    expect(normalizeFileToolPathParam("reports/final.docodex")).toBe("reports/final.docx");
+    expect(normalizeFileToolPathParam("slides/plan.pptxodex")).toBe("slides/plan.pptx");
+    expect(normalizeFileToolPathParam("sheets/budget.XLSCODEX")).toBe("sheets/budget.xlsx");
+    expect(normalizeFileToolPathParam("notes/codex-report.txt")).toBe("notes/codex-report.txt");
+    expect(normalizeFileToolPathParam("archive.docodex/notes.txt")).toBe(
+      "archive.docodex/notes.txt",
+    );
+  });
+
+  it("normalizes file-tool paths after malformed XML suffix cleanup", () => {
+    expect(normalizeFileToolPathParam("reports/final.docodex</arg_value>>")).toBe(
+      "reports/final.docx",
     );
   });
 
@@ -49,6 +63,35 @@ describe("assertRequiredParams", () => {
       {
         path: "notes.txt",
         content: "keep literal payload</arg_value>>",
+      },
+      undefined,
+      undefined,
+    );
+  });
+
+  it("normalizes Office/codex path extensions without touching payload text", async () => {
+    const execute = vi.fn(async (_id, args) => args);
+    const tool = wrapToolParamValidation(
+      {
+        name: "write",
+        label: "write",
+        description: "write a file",
+        parameters: {},
+        execute,
+      },
+      REQUIRED_PARAM_GROUPS.write,
+    );
+
+    await tool.execute("id", {
+      path: "reports/final.docodex",
+      content: "keep literal payload.docodex",
+    });
+
+    expect(execute).toHaveBeenCalledWith(
+      "id",
+      {
+        path: "reports/final.docx",
+        content: "keep literal payload.docodex",
       },
       undefined,
       undefined,
@@ -93,9 +136,9 @@ describe("assertRequiredParams", () => {
         newText: "literal new</arg_value>>",
       },
     ];
-    await tool.execute("id", { path: "notes.txt</arg_value>>>", edits });
+    await tool.execute("id", { path: "notes.docxodex</arg_value>>>", edits });
 
-    expect(execute).toHaveBeenCalledWith("id", { path: "notes.txt", edits }, undefined, undefined);
+    expect(execute).toHaveBeenCalledWith("id", { path: "notes.docx", edits }, undefined, undefined);
   });
 
   it("includes received keys in error when some params are present but content is missing", () => {

@@ -228,6 +228,24 @@ describe("resolveMentions", () => {
       expect(result.hasExplicitMention).toBe(true);
     });
 
+    it("detects mention when the visible label is bracketed @displayName text", () => {
+      const result = resolveMentions({
+        content: {
+          msgtype: "m.text",
+          body: "@[Display Name] please reply",
+          formatted_body:
+            '<a href="https://matrix.to/#/@bot:matrix.org">@[Display Name]</a> please reply',
+          "m.mentions": { user_ids: ["@bot:matrix.org"] },
+        },
+        userId,
+        displayName: "Display Name",
+        text: "@[Display Name] please reply",
+        mentionRegexes: [],
+      });
+      expect(result.wasMentioned).toBe(true);
+      expect(result.hasExplicitMention).toBe(true);
+    });
+
     it("ignores out-of-range hexadecimal HTML entities in visible labels", () => {
       expect(
         resolveMentions({

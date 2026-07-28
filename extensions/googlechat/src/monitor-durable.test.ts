@@ -9,11 +9,26 @@ describe("resolveGoogleChatDurableReplyOptions", () => {
         payload: { text: "hello", replyToId: "thread-1" },
         infoKind: "final",
         spaceId: "spaces/AAA",
+        hasTypingMessage: false,
       }),
     ).toEqual({
       to: "spaces/AAA",
       replyToId: "thread-1",
       threadId: "thread-1",
+    });
+  });
+
+  it("suppresses stale context reply metadata when the final payload is top-level", () => {
+    expect(
+      resolveGoogleChatDurableReplyOptions({
+        payload: { text: "hello" },
+        infoKind: "final",
+        spaceId: "spaces/AAA",
+        hasTypingMessage: false,
+      }),
+    ).toEqual({
+      to: "spaces/AAA",
+      replyToId: null,
     });
   });
 
@@ -23,7 +38,7 @@ describe("resolveGoogleChatDurableReplyOptions", () => {
         payload: { text: "hello" },
         infoKind: "final",
         spaceId: "spaces/AAA",
-        typingMessageName: "spaces/AAA/messages/typing",
+        hasTypingMessage: true,
       }),
     ).toBe(false);
   });
@@ -34,6 +49,7 @@ describe("resolveGoogleChatDurableReplyOptions", () => {
         payload: { text: "hello" },
         infoKind: "block",
         spaceId: "spaces/AAA",
+        hasTypingMessage: false,
       }),
     ).toBe(false);
   });

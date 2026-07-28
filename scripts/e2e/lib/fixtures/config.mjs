@@ -1,22 +1,11 @@
 // Config fixture writer commands for E2E scenarios.
 import path from "node:path";
+import { readPositiveIntEnv, readTcpPortEnv } from "../env-limits.mjs";
 import { requireArg, writeJson } from "./common.mjs";
-
-function readPositiveIntEnv(name, fallback) {
-  const text = String(process.env[name] ?? fallback).trim();
-  if (!/^\d+$/u.test(text)) {
-    throw new Error(`invalid ${name}: ${text}`);
-  }
-  const value = Number(text);
-  if (!Number.isSafeInteger(value) || value <= 0) {
-    throw new Error(`invalid ${name}: ${text}`);
-  }
-  return value;
-}
 
 function writeConfig(kind) {
   const configPath = requireArg(process.env.OPENCLAW_CONFIG_PATH, "OPENCLAW_CONFIG_PATH");
-  const port = readPositiveIntEnv("PORT", 18789);
+  const port = readTcpPortEnv("PORT", 18789);
   const config =
     kind === "config-reload"
       ? {
@@ -26,10 +15,10 @@ function writeConfig(kind) {
               mode: "token",
               token: { source: "env", provider: "default", id: "GATEWAY_AUTH_TOKEN_REF" },
             },
-            channelHealthCheckMinutes: 1,
             controlUi: { enabled: false },
-            reload: { mode: "hybrid", debounceMs: 0 },
+            reload: { mode: "hybrid" },
           },
+          ui: { seamColor: "#ff4500" },
         }
       : kind === "browser-cdp"
         ? {
@@ -43,12 +32,13 @@ function writeConfig(kind) {
             },
             browser: {
               enabled: true,
+              noSandbox: true,
+              extraArgs: ["--remote-debugging-address=127.0.0.1", "about:blank"],
               defaultProfile: "docker-cdp",
               ssrfPolicy: { allowedHostnames: ["127.0.0.1"] },
               profiles: {
                 "docker-cdp": {
-                  cdpUrl: `http://127.0.0.1:${readPositiveIntEnv("CDP_PORT", 19222)}`,
-                  color: "#FF4500",
+                  cdpUrl: `http://127.0.0.1:${readTcpPortEnv("CDP_PORT", 19222)}`,
                 },
               },
             },
@@ -73,7 +63,7 @@ function writeOpenAiWebSearchMinimalConfig() {
       providers: {
         openai: {
           api: "openai-responses",
-          baseUrl: "http://api.openai.com/v1",
+          baseUrl: "https://api.openai.com/v1",
           apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
           request: { allowPrivateNetwork: true },
           models: [

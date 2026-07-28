@@ -6,38 +6,16 @@ read_when:
 title: "OpenCode Go"
 ---
 
-OpenCode Go is the Go catalog within [OpenCode](/providers/opencode).
-It uses the same `OPENCODE_API_KEY` as the Zen catalog, but keeps the runtime
-provider id `opencode-go` so upstream per-model routing stays correct.
+OpenCode Go is the Go catalog inside [OpenCode](/providers/opencode). It shares
+the `OPENCODE_API_KEY` credential with the Zen catalog, but keeps its own
+runtime provider id (`opencode-go`) so upstream per-model routing stays
+correct.
 
-| Property         | Value                           |
-| ---------------- | ------------------------------- |
-| Runtime provider | `opencode-go`                   |
-| Auth             | `OPENCODE_API_KEY`              |
-| Parent setup     | [OpenCode](/providers/opencode) |
-
-## Built-in catalog
-
-OpenClaw sources most Go catalog rows from the bundled OpenClaw model registry and
-supplements current upstream rows while the registry catches up. Run
-`openclaw models list --provider opencode-go` for the current model list.
-
-The provider includes:
-
-| Model ref                       | Name                  |
-| ------------------------------- | --------------------- |
-| `opencode-go/glm-5`             | GLM-5                 |
-| `opencode-go/glm-5.1`           | GLM-5.1               |
-| `opencode-go/kimi-k2.5`         | Kimi K2.5             |
-| `opencode-go/kimi-k2.6`         | Kimi K2.6 (3x limits) |
-| `opencode-go/deepseek-v4-pro`   | DeepSeek V4 Pro       |
-| `opencode-go/deepseek-v4-flash` | DeepSeek V4 Flash     |
-| `opencode-go/mimo-v2-omni`      | MiMo V2 Omni          |
-| `opencode-go/mimo-v2-pro`       | MiMo V2 Pro           |
-| `opencode-go/minimax-m2.5`      | MiniMax M2.5          |
-| `opencode-go/minimax-m2.7`      | MiniMax M2.7          |
-| `opencode-go/qwen3.5-plus`      | Qwen3.5 Plus          |
-| `opencode-go/qwen3.6-plus`      | Qwen3.6 Plus          |
+| Property         | Value                                              |
+| ---------------- | -------------------------------------------------- |
+| Runtime provider | `opencode-go`                                      |
+| Auth             | `OPENCODE_API_KEY` (alias: `OPENCODE_ZEN_API_KEY`) |
+| Parent setup     | [OpenCode](/providers/opencode)                    |
 
 ## Getting started
 
@@ -87,22 +65,48 @@ The provider includes:
 }
 ```
 
+## Built-in catalog
+
+Run `openclaw models list --provider opencode-go` for the current model list.
+Bundled rows:
+
+| Model ref                       | Name              | Context   | Max output | Image input |
+| ------------------------------- | ----------------- | --------- | ---------- | ----------- |
+| `opencode-go/deepseek-v4-pro`   | DeepSeek V4 Pro   | 1M        | 384K       | No          |
+| `opencode-go/deepseek-v4-flash` | DeepSeek V4 Flash | 1M        | 384K       | No          |
+| `opencode-go/glm-5`             | GLM-5             | 202,752   | 32,768     | No          |
+| `opencode-go/glm-5.1`           | GLM-5.1           | 202,752   | 32,768     | No          |
+| `opencode-go/glm-5.2`           | GLM-5.2           | 1M        | 131,072    | No          |
+| `opencode-go/hy3-preview`       | HY3 Preview       | 262,144   | 32,768     | No          |
+| `opencode-go/kimi-k2.5`         | Kimi K2.5         | 262,144   | 65,536     | Yes         |
+| `opencode-go/kimi-k2.6`         | Kimi K2.6         | 262,144   | 65,536     | Yes         |
+| `opencode-go/kimi-k2.7-code`    | Kimi K2.7 Code    | 262,144   | 262,144    | Yes         |
+| `opencode-go/mimo-v2.5`         | MiMo V2.5         | 1M        | 128,000    | Yes         |
+| `opencode-go/mimo-v2.5-pro`     | MiMo V2.5 Pro     | 1,048,576 | 128,000    | No          |
+| `opencode-go/minimax-m2.5`      | MiniMax M2.5      | 204,800   | 65,536     | No          |
+| `opencode-go/minimax-m2.7`      | MiniMax M2.7      | 204,800   | 131,072    | No          |
+| `opencode-go/minimax-m3`        | MiniMax M3        | 204,800   | 131,072    | No          |
+| `opencode-go/qwen3.5-plus`      | Qwen3.5 Plus      | 262,144   | 65,536     | Yes         |
+| `opencode-go/qwen3.6-plus`      | Qwen3.6 Plus      | 262,144   | 65,536     | Yes         |
+| `opencode-go/qwen3.7-max`       | Qwen3.7 Max       | 1M        | 65,536     | No          |
+| `opencode-go/qwen3.7-plus`      | Qwen3.7 Plus      | 1M        | 65,536     | Yes         |
+
 ## Advanced configuration
 
 <AccordionGroup>
   <Accordion title="Routing behavior">
-    OpenClaw handles per-model routing automatically when the model ref uses
-    `opencode-go/...`. No additional provider config is required.
+    OpenClaw routes any `opencode-go/...` model ref automatically. No extra
+    provider config is required.
   </Accordion>
 
   <Accordion title="Runtime ref convention">
-    Runtime refs stay explicit: `opencode/...` for Zen, `opencode-go/...` for Go.
-    This keeps upstream per-model routing correct across both catalogs.
+    Runtime refs stay explicit: `opencode/...` for Zen, `opencode-go/...` for
+    Go. This keeps upstream per-model routing correct across both catalogs.
   </Accordion>
 
   <Accordion title="Shared credentials">
-    The same `OPENCODE_API_KEY` is used by both the Zen and Go catalogs. Entering
-    the key during setup stores credentials for both runtime providers.
+    One `OPENCODE_API_KEY` covers both the Zen and Go catalogs. Entering the
+    key during setup stores credentials for both runtime providers.
   </Accordion>
 </AccordionGroup>
 

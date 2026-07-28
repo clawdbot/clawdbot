@@ -53,6 +53,10 @@ export type SessionUsageEntry = {
 
 /** Cross-session aggregate buckets returned alongside usage rows. */
 export type SessionsUsageAggregates = {
+  /** Sessions with activity in the requested range, before the row `limit` cap. */
+  sessionCount?: number;
+  /** Longest single-row duration across every matched session, not just returned rows. */
+  longestSessionDurationMs?: number;
   messages: SessionMessageCounts;
   tools: SessionToolUsage;
   byModel: SessionModelUsage[];

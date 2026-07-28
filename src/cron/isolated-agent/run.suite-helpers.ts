@@ -1,6 +1,5 @@
 /** Shared setup helpers for isolated-agent run test suites. */
 import { afterEach, beforeEach } from "vitest";
-import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import {
   clearFastTestEnv,
   makeCronSession,
@@ -24,6 +23,3 @@ export function setupRunCronIsolatedAgentTurnSuite(options?: { fast?: boolean })
     restoreFastTestEnv(previousFastTestEnv);
   });
 }
-
-export const makeIsolatedAgentTurnJob = makeIsolatedAgentJobFixture;
-export const makeIsolatedAgentTurnParams = makeIsolatedAgentParamsFixture;

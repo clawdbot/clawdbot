@@ -1,5 +1,11 @@
 // Voice Call API module exposes the plugin public contract.
 import { fetchWithSsrFGuard } from "../../../api.js";
+import {
+  cancelProviderResponseBody,
+  readProviderErrorResponseSnippet,
+  readProviderJsonResponseText,
+} from "../shared/response-body.js";
+import { requireSupportedTwilioApiHostname } from "../twilio-region.js";
 
 // Guarded Twilio REST API client helpers.
 
@@ -69,6 +75,7 @@ export async function twilioApiRequest<T = unknown>(params: {
         }, new URLSearchParams());
 
   const requestUrl = `${params.baseUrl}${params.endpoint}`;
+  const allowedHostname = requireSupportedTwilioApiHostname(params.baseUrl);
   const { response, release } = await fetchWithSsrFGuard({
     url: requestUrl,
     init: {
@@ -79,20 +86,21 @@ export async function twilioApiRequest<T = unknown>(params: {
       },
       body: bodyParams,
     },
-    policy: { allowedHostnames: ["api.twilio.com"] },
+    policy: { allowedHostnames: [allowedHostname] },
     timeoutMs: TWILIO_API_TIMEOUT_MS,
     auditContext: "voice-call.twilio.api",
   });
   try {
     if (!response.ok) {
       if (params.allowNotFound && response.status === 404) {
+        await cancelProviderResponseBody(response);
         return undefined as T;
       }
-      const errorText = await response.text();
+      const errorText = await readProviderErrorResponseSnippet(response);
       throw new TwilioApiError(response.status, errorText);
     }
 
-    const text = await response.text();
+    const text = await readProviderJsonResponseText(response);
     if (!text) {
       return undefined as T;
     }

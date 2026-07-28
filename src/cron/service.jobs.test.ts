@@ -1,15 +1,19 @@
 // Cron service job tests cover job creation, updates, and runtime scheduling.
 import { describe, expect, it } from "vitest";
 import {
+  applyDeclarativeJobSpec,
   applyJobPatch,
+  computeJobNextRunAtMs,
+  computeJobPreviousRunAtOrBeforeMs,
   createJob,
   nextWakeAtMs,
   recomputeNextRuns,
   recomputeNextRunsForMaintenance,
 } from "./service/jobs.js";
 import type { CronServiceState } from "./service/state.js";
-import { DEFAULT_TOP_OF_HOUR_STAGGER_MS } from "./stagger.js";
 import type { CronJob, CronJobPatch } from "./types.js";
+
+const DEFAULT_TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1000;
 
 function expectCronStaggerMs(job: CronJob, expected: number): void {
   expect(job.schedule.kind).toBe("cron");
@@ -319,6 +323,53 @@ describe("applyJobPatch", () => {
     }
   });
 
+  it("clears agentTurn payload.fallbacks when patch requests null", () => {
+    const job = createIsolatedAgentTurnJob("job-fallbacks-clear", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = {
+      kind: "agentTurn",
+      message: "do it",
+      fallbacks: ["openrouter/gpt-4.1-mini"],
+    };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        fallbacks: null,
+      },
+    });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.fallbacks).toBeUndefined();
+    }
+  });
+
+  it("omits null payload.fallbacks when replacing a non-agent payload", () => {
+    const job = createIsolatedAgentTurnJob("job-fallbacks-kind-switch", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = { kind: "systemEvent", text: "tick" };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        fallbacks: null,
+      },
+    });
+
+    const payload = job.payload as CronJob["payload"];
+    expect(payload.kind).toBe("agentTurn");
+    if (payload.kind === "agentTurn") {
+      expect(payload.fallbacks).toBeUndefined();
+    }
+  });
+
   it("persists agentTurn payload.toolsAllow updates when editing existing jobs", () => {
     const job = createIsolatedAgentTurnJob("job-tools", {
       mode: "announce",
@@ -344,7 +395,92 @@ describe("applyJobPatch", () => {
     }
   });
 
-  it("clears agentTurn payload.toolsAllow when patch requests null", () => {
+  it("clears the default toolsAllow flag when editing to an explicit restriction", () => {
+    const job = createIsolatedAgentTurnJob("job-tools-explicit", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = {
+      kind: "agentTurn",
+      message: "do it",
+      toolsAllow: ["exec", "read"],
+      toolsAllowIsDefault: true,
+    };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        toolsAllow: ["read"],
+        toolsAllowIsDefault: true,
+      },
+    });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.toolsAllow).toEqual(["read"]);
+      expect(job.payload.toolsAllowIsDefault).toBeUndefined();
+    }
+  });
+
+  it("preserves the default toolsAllow flag when a full payload edit keeps the default list", () => {
+    const job = createIsolatedAgentTurnJob("job-tools-default-edit", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = {
+      kind: "agentTurn",
+      message: "do it",
+      toolsAllow: ["exec", "read"],
+      toolsAllowIsDefault: true,
+    };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it later",
+        toolsAllow: ["exec", "read"],
+        toolsAllowIsDefault: true,
+      },
+    });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.message).toBe("do it later");
+      expect(job.payload.toolsAllow).toEqual(["exec", "read"]);
+      expect(job.payload.toolsAllowIsDefault).toBe(true);
+    }
+  });
+
+  it("preserves the default toolsAllow flag when a self-edit echoes the default list", () => {
+    const job = createIsolatedAgentTurnJob("job-tools-default-echo", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = {
+      kind: "agentTurn",
+      message: "do it",
+      toolsAllow: ["exec", "read"],
+      toolsAllowIsDefault: true,
+    };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it later",
+        toolsAllow: ["exec", "read"],
+      },
+    });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.message).toBe("do it later");
+      expect(job.payload.toolsAllow).toEqual(["exec", "read"]);
+      expect(job.payload.toolsAllowIsDefault).toBe(true);
+    }
+  });
+
+  it("stores an explicit wildcard when a patch clears agentTurn payload.toolsAllow", () => {
     const job = createIsolatedAgentTurnJob("job-tools-clear", {
       mode: "announce",
       channel: "telegram",
@@ -353,6 +489,7 @@ describe("applyJobPatch", () => {
       kind: "agentTurn",
       message: "do it",
       toolsAllow: ["exec", "read"],
+      toolsAllowIsDefault: true,
     };
 
     applyJobPatch(job, {
@@ -365,7 +502,8 @@ describe("applyJobPatch", () => {
 
     expect(job.payload.kind).toBe("agentTurn");
     if (job.payload.kind === "agentTurn") {
-      expect(job.payload.toolsAllow).toBeUndefined();
+      expect(job.payload.toolsAllow).toEqual(["*"]);
+      expect(job.payload.toolsAllowIsDefault).toBeUndefined();
     }
   });
 
@@ -410,6 +548,75 @@ describe("applyJobPatch", () => {
     if (job.payload.kind === "agentTurn") {
       expect(job.payload.message).toBe("do it");
       expect(job.payload.model).toBeUndefined();
+    }
+  });
+
+  it("persists agentTurn payload.thinking updates when editing existing jobs", () => {
+    const job = createIsolatedAgentTurnJob("job-thinking", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = {
+      kind: "agentTurn",
+      message: "do it",
+      thinking: "high",
+    };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        thinking: "low",
+      },
+    });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.thinking).toBe("low");
+    }
+  });
+
+  it("clears agentTurn payload.thinking when patch requests null", () => {
+    const job = createIsolatedAgentTurnJob("job-thinking-clear", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = {
+      kind: "agentTurn",
+      message: "do it",
+      thinking: "high",
+    };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        thinking: null,
+      },
+    });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.message).toBe("do it");
+      expect(job.payload.thinking).toBeUndefined();
+    }
+  });
+
+  it("omits null thinking when patch builds a replacement agentTurn payload", () => {
+    const job = createMainSystemEventJob("job-thinking-replace", { mode: "none" });
+
+    applyJobPatch(job, {
+      sessionTarget: "isolated",
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        thinking: null,
+      },
+    });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.message).toBe("do it");
+      expect(job.payload.thinking).toBeUndefined();
     }
   });
 
@@ -476,6 +683,30 @@ describe("applyJobPatch", () => {
     expect(payload.kind).toBe("agentTurn");
     if (payload.kind === "agentTurn") {
       expect(payload.toolsAllow).toEqual(["exec", "read"]);
+    }
+  });
+
+  it("carries payload.toolsAllow default flag when replacing payload kind via patch", () => {
+    const job = createIsolatedAgentTurnJob("job-tools-default-switch", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = { kind: "systemEvent", text: "ping" };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        toolsAllow: ["exec", "read"],
+        toolsAllowIsDefault: true,
+      },
+    });
+
+    const payload = job.payload as CronJob["payload"];
+    expect(payload.kind).toBe("agentTurn");
+    if (payload.kind === "agentTurn") {
+      expect(payload.toolsAllow).toEqual(["exec", "read"]);
+      expect(payload.toolsAllowIsDefault).toBe(true);
     }
   });
 
@@ -587,14 +818,267 @@ describe("applyJobPatch", () => {
   });
 });
 
-function createMockState(now: number, opts?: { defaultAgentId?: string }): CronServiceState {
+function createMockState(
+  now: number,
+  opts?: { defaultAgentId?: string; scriptPayloadsEnabled?: boolean },
+): CronServiceState {
   return {
     deps: {
       nowMs: () => now,
       defaultAgentId: opts?.defaultAgentId,
+      cronConfig:
+        opts?.scriptPayloadsEnabled === undefined
+          ? undefined
+          : { triggers: { enabled: opts.scriptPayloadsEnabled } },
     },
   } as unknown as CronServiceState;
 }
+
+describe("cron tool authority defaults", () => {
+  const now = Date.parse("2026-07-21T12:00:00.000Z");
+
+  it("stores an explicit wildcard for newly created tool-runtime jobs", () => {
+    const agentTurn = createJob(createMockState(now), {
+      name: "agent turn",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "work" },
+    });
+    const triggeredEvent = createJob(createMockState(now, { scriptPayloadsEnabled: true }), {
+      name: "triggered event",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "wake" },
+      trigger: { script: "return true" },
+    });
+
+    expect(agentTurn.payload.toolsAllow).toEqual(["*"]);
+    expect(triggeredEvent.payload.toolsAllow).toEqual(["*"]);
+  });
+
+  it("preserves explicit empty caps and leaves transport-only jobs capless", () => {
+    const noTools = createJob(createMockState(now), {
+      name: "no tools",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "render", toolsAllow: [] },
+    });
+    const transportOnly = createJob(createMockState(now), {
+      name: "transport only",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "wake" },
+    });
+
+    expect(noTools.payload.toolsAllow).toEqual([]);
+    expect(transportOnly.payload.toolsAllow).toBeUndefined();
+  });
+
+  it("preserves legacy and explicit state during declarative convergence", () => {
+    const base = {
+      id: "declared-job",
+      name: "declared job",
+      enabled: true,
+      createdAtMs: now,
+      updatedAtMs: now,
+      schedule: { kind: "every" as const, everyMs: 60_000, anchorMs: now },
+      sessionTarget: "isolated" as const,
+      wakeMode: "now" as const,
+      delivery: { mode: "none" as const },
+      state: {},
+    };
+    const input = {
+      name: "declared job",
+      enabled: true,
+      schedule: { kind: "every" as const, everyMs: 60_000 },
+      sessionTarget: "isolated" as const,
+      wakeMode: "now" as const,
+      payload: { kind: "agentTurn" as const, message: "updated" },
+      delivery: { mode: "none" as const },
+    };
+    const legacy: CronJob = {
+      ...base,
+      payload: { kind: "agentTurn", message: "legacy" },
+    };
+    const explicit: CronJob = {
+      ...base,
+      id: "explicit-job",
+      payload: {
+        kind: "agentTurn",
+        message: "explicit",
+        toolsAllow: ["read", "cron"],
+        toolsAllowIsDefault: true,
+      },
+    };
+
+    applyDeclarativeJobSpec(legacy, input, {
+      enabledExplicit: true,
+      nowMs: now,
+    });
+    applyDeclarativeJobSpec(explicit, input, {
+      enabledExplicit: true,
+      nowMs: now,
+    });
+
+    expect(legacy.payload.toolsAllow).toBeUndefined();
+    expect(explicit.payload).toMatchObject({
+      toolsAllow: ["read", "cron"],
+      toolsAllowIsDefault: true,
+    });
+  });
+
+  it("adopts explicit authority when a declaration becomes tool-bearing", () => {
+    const job: CronJob = {
+      id: "declared-trigger",
+      name: "declared trigger",
+      enabled: true,
+      createdAtMs: now,
+      updatedAtMs: now,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: now },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "wake" },
+      state: {},
+    };
+
+    applyDeclarativeJobSpec(
+      job,
+      {
+        name: "declared trigger",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "wake" },
+        trigger: { script: "return true" },
+      },
+      {
+        enabledExplicit: true,
+        nowMs: now,
+        cronConfig: { triggers: { enabled: true } },
+      },
+    );
+
+    expect(job.payload.toolsAllow).toEqual(["*"]);
+  });
+});
+
+describe("script payload validation", () => {
+  const now = Date.parse("2026-07-18T12:00:00.000Z");
+  const input = (sessionTarget: CronJob["sessionTarget"] = "isolated") => ({
+    name: "script-job",
+    enabled: true,
+    schedule: { kind: "every" as const, everyMs: 60_000 },
+    sessionTarget,
+    wakeMode: "now" as const,
+    payload: {
+      kind: "script" as const,
+      script: "return { state: { count: 1 } }",
+      timeoutSeconds: 4_000,
+      toolBudget: 4_000,
+    },
+  });
+
+  it("rejects creation while the trigger gate is disabled", () => {
+    expect(() =>
+      createJob(createMockState(now, { scriptPayloadsEnabled: false }), input()),
+    ).toThrow("cron.triggers.enabled=true");
+  });
+
+  it.each(["current", "session:reporting"] as const)(
+    "rejects the %s session target",
+    (sessionTarget) => {
+      expect(() =>
+        createJob(createMockState(now, { scriptPayloadsEnabled: true }), input(sessionTarget)),
+      ).toThrow('sessionTarget="main" or "isolated"');
+    },
+  );
+
+  it("persists defaults and hard caps when creation is enabled", () => {
+    const job = createJob(createMockState(now, { scriptPayloadsEnabled: true }), input());
+
+    expect(job.payload).toMatchObject({
+      kind: "script",
+      timeoutSeconds: 900,
+      toolBudget: 200,
+    });
+    expect(job.delivery).toEqual({ mode: "announce" });
+  });
+
+  it("allows a main-session script for a named agent", () => {
+    const job = createJob(
+      createMockState(now, { defaultAgentId: "main", scriptPayloadsEnabled: true }),
+      { ...input("main"), agentId: "reporter" },
+    );
+
+    expect(job.sessionTarget).toBe("main");
+    expect(job.agentId).toBe("reporter");
+  });
+
+  it("rejects condition triggers because both script kinds own trigger.state", () => {
+    const state = createMockState(now, { scriptPayloadsEnabled: true });
+    expect(() =>
+      createJob(state, {
+        ...input(),
+        trigger: { script: "return { fire: true }" },
+      }),
+    ).toThrow("cannot be combined with a condition trigger");
+
+    const job = createJob(state, input());
+    expect(() =>
+      applyJobPatch(
+        job,
+        { trigger: { script: "return { fire: true }" } },
+        { cronConfig: { triggers: { enabled: true } } },
+      ),
+    ).toThrow("cannot be combined with a condition trigger");
+  });
+
+  it("rejects converting a job to script while disabled and caps enabled patches", () => {
+    const base = createJob(createMockState(now), {
+      name: "agent-job",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "run" },
+    });
+    expect(() =>
+      applyJobPatch(
+        structuredClone(base),
+        { payload: { kind: "script", script: "return {}" } },
+        { cronConfig: { triggers: { enabled: false } } },
+      ),
+    ).toThrow("cron.triggers.enabled=true");
+
+    const patched = structuredClone(base);
+    applyJobPatch(
+      patched,
+      {
+        payload: {
+          kind: "script",
+          script: "return {}",
+          timeoutSeconds: 9_000,
+          toolBudget: 9_000,
+        },
+      },
+      { cronConfig: { triggers: { enabled: true } } },
+    );
+    expect(patched.payload).toMatchObject({
+      kind: "script",
+      timeoutSeconds: 900,
+      toolBudget: 200,
+    });
+  });
+});
 
 describe("createJob rejects sessionTarget main for non-default agents", () => {
   const now = Date.parse("2026-02-28T12:00:00.000Z");
@@ -865,21 +1349,63 @@ describe("cron stagger defaults", () => {
   });
 });
 
+describe("computeJobPreviousRunAtOrBeforeMs", () => {
+  function createCronJob(schedule: Extract<CronJob["schedule"], { kind: "cron" }>): CronJob {
+    return {
+      id: "inclusive-previous-run",
+      name: "inclusive previous run",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule,
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: {},
+    };
+  }
+
+  it("includes an exact boundary and keeps the prior slot between boundaries", () => {
+    const job = createCronJob({ kind: "cron", expr: "* * * * * *", tz: "UTC", staggerMs: 0 });
+    const boundary = Date.parse("2025-12-13T04:02:00.000Z");
+
+    expect(computeJobPreviousRunAtOrBeforeMs(job, boundary)).toBe(boundary);
+    expect(computeJobPreviousRunAtOrBeforeMs(job, boundary + 500)).toBe(boundary);
+  });
+
+  it("includes an exact effective boundary after per-job staggering", () => {
+    const job = createCronJob({
+      kind: "cron",
+      expr: "0 * * * * *",
+      tz: "UTC",
+      staggerMs: 30_000,
+    });
+    const cursor = Date.parse("2025-12-13T04:02:00.000Z");
+    const effectiveBoundary = computeJobNextRunAtMs(job, cursor);
+
+    expect(effectiveBoundary).toBeTypeOf("number");
+    expect(computeJobPreviousRunAtOrBeforeMs(job, effectiveBoundary!)).toBe(effectiveBoundary);
+  });
+});
+
 describe("createJob delivery defaults", () => {
   const now = Date.parse("2026-02-28T12:00:00.000Z");
 
-  it('defaults delivery to { mode: "announce" } for isolated agentTurn jobs without explicit delivery', () => {
-    const state = createMockState(now);
-    const job = createJob(state, {
-      name: "isolated-no-delivery",
-      enabled: true,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload: { kind: "agentTurn", message: "hello" },
-    });
-    expect(job.delivery).toEqual({ mode: "announce" });
-  });
+  it.each(["isolated", "current", "session:project-alpha"] as const)(
+    'defaults delivery to { mode: "announce" } for %s agentTurn jobs',
+    (sessionTarget) => {
+      const state = createMockState(now);
+      const job = createJob(state, {
+        name: `${sessionTarget}-no-delivery`,
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget,
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "hello" },
+      });
+      expect(job.delivery).toEqual({ mode: "announce" });
+    },
+  );
 
   it("preserves explicit delivery for isolated agentTurn jobs", () => {
     const state = createMockState(now);
@@ -1066,6 +1592,65 @@ describe("recomputeNextRuns", () => {
     expect(job.state.nextRunAtMs).toBe(deferred);
   });
 
+  it("preserves pending startup catch-up deferrals until the deferred slot is reached", () => {
+    const now = Date.parse("2026-05-05T12:00:00.000Z");
+    const deferred = Date.parse("2026-05-05T12:02:00.000Z");
+    const job: CronJob = {
+      id: "daily-pending-startup-deferral",
+      name: "daily pending startup deferral",
+      enabled: true,
+      createdAtMs: Date.parse("2026-05-05T00:00:00.000Z"),
+      updatedAtMs: Date.parse("2026-05-05T00:00:00.000Z"),
+      schedule: { kind: "cron", expr: "0 0 21 * * *", tz: "Asia/Shanghai", staggerMs: 0 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: { nextRunAtMs: deferred, startupCatchupAtMs: deferred },
+    };
+    const state = {
+      ...createMockState(now),
+      store: { version: 1 as const, jobs: [job] },
+    } as CronServiceState;
+
+    expect(recomputeNextRunsForMaintenance(state)).toBe(false);
+    expect(job.state.nextRunAtMs).toBe(deferred);
+    expect(job.state.startupCatchupAtMs).toBe(deferred);
+
+    expect(
+      recomputeNextRunsForMaintenance(state, {
+        nowMs: deferred,
+        repairFutureCronNextRunAtMs: true,
+      }),
+    ).toBe(true);
+    expect(job.state.startupCatchupAtMs).toBeUndefined();
+    expect(job.state.nextRunAtMs).toBe(deferred);
+  });
+
+  it("drops startup catch-up deferrals for disabled jobs", () => {
+    const now = Date.parse("2026-05-05T12:00:00.000Z");
+    const deferred = Date.parse("2026-05-05T12:02:00.000Z");
+    const disabledJob: CronJob = {
+      id: "disabled-pending-startup-deferral",
+      name: "disabled pending startup deferral",
+      enabled: false,
+      createdAtMs: Date.parse("2026-05-05T00:00:00.000Z"),
+      updatedAtMs: Date.parse("2026-05-05T00:00:00.000Z"),
+      schedule: { kind: "cron", expr: "0 0 21 * * *", tz: "Asia/Shanghai", staggerMs: 0 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: { nextRunAtMs: deferred, startupCatchupAtMs: deferred },
+    };
+    const state = {
+      ...createMockState(now),
+      store: { version: 1 as const, jobs: [disabledJob] },
+    } as CronServiceState;
+
+    expect(recomputeNextRunsForMaintenance(state)).toBe(true);
+    expect(disabledJob.state.startupCatchupAtMs).toBeUndefined();
+    expect(disabledJob.state.nextRunAtMs).toBeUndefined();
+  });
+
   it("preserves cron retry backoff nextRunAtMs values during maintenance", () => {
     const now = Date.parse("2025-12-13T04:02:00.000Z");
     const retryAt = Date.parse("2025-12-13T04:10:00.000Z");
@@ -1155,6 +1740,45 @@ describe("recomputeNextRuns", () => {
     expect(job.state.nextRunAtMs).toBe(expected);
   });
 
+  it("preserves exact-second cron slots that fall multiple intervals into the future (#81691)", () => {
+    // Regression for the stale-future repair path. `isStaggeredCronRunAtMs`
+    // used to probe the cron library at `runAtMs + 1` to classify whether the
+    // persisted timestamp was a real scheduled slot. Croner-style second-
+    // granular schedules normalize that 1ms probe back to the candidate's
+    // second, so `previousRuns(1, probe)` returns the slot before the
+    // candidate rather than the slot itself. The slot then looks "stale" and
+    // future-slot repair rebases it, even though it is a perfectly valid
+    // schedule slot two-or-more intervals out.
+    //
+    // The bug only surfaces when nextRun lands two-plus intervals past
+    // `naturalNext`, because the closer cases are already saved by the
+    // `nextRun === naturalNext` / `followingNaturalNext` guards in
+    // shouldRepairFutureCronNextRunAtMs.
+    const now = Date.parse("2026-05-05T12:00:00.000Z");
+    // "0 9 * * *" Pacific/Honolulu (UTC-10) → 19:00 UTC daily.
+    // Honolulu has no DST, so the UTC offset is stable across the window.
+    const exactFutureSlot = Date.parse("2026-05-08T19:00:00.000Z");
+    const job: CronJob = {
+      id: "honolulu-9am-future-slot",
+      name: "honolulu 9am future slot",
+      enabled: true,
+      createdAtMs: Date.parse("2026-05-01T00:00:00.000Z"),
+      updatedAtMs: Date.parse("2026-05-01T00:00:00.000Z"),
+      schedule: { kind: "cron", expr: "0 9 * * *", tz: "Pacific/Honolulu", staggerMs: 0 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: { nextRunAtMs: exactFutureSlot },
+    };
+    const state = {
+      ...createMockState(now),
+      store: { version: 1 as const, jobs: [job] },
+    } as CronServiceState;
+
+    expect(recomputeNextRunsForMaintenance(state)).toBe(false);
+    expect(job.state.nextRunAtMs).toBe(exactFutureSlot);
+  });
+
   it("keeps future nextRunAtMs while probing malformed cron schedules", () => {
     const now = Date.parse("2026-05-05T12:00:00.000Z");
     const future = Date.parse("2026-05-12T16:00:00.000Z");
@@ -1180,3 +1804,4 @@ describe("recomputeNextRuns", () => {
     expect(job.state.scheduleErrorCount).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

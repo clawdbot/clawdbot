@@ -3,9 +3,9 @@ import { describe, expect, it } from "vitest";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
 import {
   resolveRunTimeoutDuringCompaction,
-  resolveRunTimeoutWithCompactionGraceMs,
   selectCompactionTimeoutSnapshot,
   shouldFlagCompactionTimeout,
+  trimToContinuableTail,
 } from "./compaction-timeout.js";
 
 function expectSelectedSnapshot(params: {
@@ -88,15 +88,6 @@ describe("compaction-timeout helpers", () => {
         graceAlreadyUsed: false,
       }),
     ).toBe("abort");
-  });
-
-  it("adds one compaction grace window to the run timeout budget", () => {
-    expect(
-      resolveRunTimeoutWithCompactionGraceMs({
-        runTimeoutMs: 600_000,
-        compactionTimeoutMs: 900_000,
-      }),
-    ).toBe(1_500_000);
   });
 
   it("uses pre-compaction snapshot when compaction timeout occurs", () => {
@@ -220,5 +211,56 @@ describe("compaction-timeout helpers", () => {
       expectedSessionIdUsed: "session-current",
       expectedSnapshot: current,
     });
+  });
+
+  it.each([
+    {
+      name: "assistant tail",
+      tail: castAgentMessage({ role: "assistant", content: "partial" }),
+      expectedLength: 1,
+    },
+    {
+      name: "excluded bash tail",
+      tail: castAgentMessage({
+        role: "bashExecution",
+        command: "echo hi",
+        output: "hi\n",
+        exitCode: 0,
+        cancelled: false,
+        truncated: false,
+        excludeFromContext: true,
+      }),
+      expectedLength: 1,
+    },
+    {
+      name: "tool result tail",
+      tail: castAgentMessage({
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "lookup",
+        content: [{ type: "text", text: "result" }],
+        isError: false,
+        timestamp: 2,
+      }),
+      expectedLength: 2,
+    },
+    {
+      name: "summary tail",
+      tail: castAgentMessage({
+        role: "compactionSummary",
+        summary: "older work",
+        tokensBefore: 100,
+        timestamp: 2,
+      }),
+      expectedLength: 2,
+    },
+  ])("normalizes $name for compaction recovery exits", ({ tail, expectedLength }) => {
+    const normalized = trimToContinuableTail([
+      castAgentMessage({ role: "user", content: "safe" }),
+      tail,
+    ]);
+
+    expect(normalized).toHaveLength(expectedLength);
+    expect(normalized?.at(-1)?.role).not.toBe("assistant");
   });
 });

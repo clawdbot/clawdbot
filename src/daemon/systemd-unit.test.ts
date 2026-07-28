@@ -23,6 +23,7 @@ describe("buildSystemdUnit", () => {
     expect(unit).toContain("TimeoutStopSec=30");
     expect(unit).toContain("TimeoutStartSec=30");
     expect(unit).toContain("SuccessExitStatus=0 143");
+    expect(unit).toContain("OOMPolicy=continue");
     expect(unit).toContain("StartLimitBurst=5");
     expect(unit).toContain("StartLimitIntervalSec=60");
     expect(unit).toContain("RestartPreventExitStatus=78");

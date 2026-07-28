@@ -5,6 +5,7 @@ import {
   normalizeOptionalSecretInput,
 } from "openclaw/plugin-sdk/provider-auth";
 import { resolveEnvApiKey } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   enablePluginInConfig,
   readPositiveIntegerParam,
@@ -67,11 +68,7 @@ type OllamaWebSearchAttempt = {
 };
 
 async function readOllamaWebSearchResponse(response: Response): Promise<OllamaWebSearchResponse> {
-  try {
-    return (await response.json()) as OllamaWebSearchResponse;
-  } catch (cause) {
-    throw new Error("Ollama web search returned malformed JSON", { cause });
-  }
+  return await readProviderJsonResponse<OllamaWebSearchResponse>(response, "Ollama web search");
 }
 
 function isOllamaCloudBaseUrl(baseUrl: string): boolean {
@@ -93,10 +90,6 @@ function resolveConfiguredOllamaWebSearchApiKey(config?: OpenClawConfig): string
 
 function resolveEnvOllamaWebSearchApiKey(): string | undefined {
   return resolveEnvApiKey("ollama")?.apiKey;
-}
-
-function resolveOllamaWebSearchApiKey(config?: OpenClawConfig): string | undefined {
-  return resolveConfiguredOllamaWebSearchApiKey(config) ?? resolveEnvOllamaWebSearchApiKey();
 }
 
 function resolveOllamaWebSearchBaseUrl(config?: OpenClawConfig): string {
@@ -164,7 +157,7 @@ function buildOllamaWebSearchAttempts(params: {
   return attempts;
 }
 
-export async function runOllamaWebSearch(params: {
+async function runOllamaWebSearch(params: {
   config?: OpenClawConfig;
   query: string;
   count?: number;
@@ -195,8 +188,9 @@ export async function runOllamaWebSearch(params: {
         method: "POST",
         headers,
         body,
-        signal: AbortSignal.timeout(DEFAULT_OLLAMA_WEB_SEARCH_TIMEOUT_MS),
       },
+      // Guard-owned timeoutMs also bounds DNS/proxy preflight; init.signal does not.
+      timeoutMs: DEFAULT_OLLAMA_WEB_SEARCH_TIMEOUT_MS,
       policy: buildOllamaBaseUrlSsrFPolicy(attempt.baseUrl),
       auditContext: "ollama-web-search.search",
     });
@@ -339,16 +333,3 @@ export function createOllamaWebSearchProvider(): WebSearchProviderPlugin {
     }),
   };
 }
-
-export const testing = {
-  buildOllamaWebSearchAttempts,
-  normalizeOllamaWebSearchResult,
-  resolveConfiguredOllamaWebSearchApiKey,
-  resolveEnvOllamaWebSearchApiKey,
-  resolveOllamaWebSearchApiKey,
-  resolveOllamaWebSearchBaseUrl,
-  isOllamaCloudBaseUrl,
-  readOllamaWebSearchResponse,
-  warnOllamaWebSearchPrereqs,
-};
-export { testing as __testing };

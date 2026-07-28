@@ -4,9 +4,9 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/ios-write-version-xcconfig.sh [--build-number 7]
+  scripts/ios-write-version-xcconfig.sh [--version 2026.7.2] [--revision 1] [--build-number 3]
 
-Writes apps/ios/build/Version.xcconfig from apps/ios/version.json:
+Writes apps/ios/build/Version.xcconfig from package.json or explicit --version:
 - OPENCLAW_IOS_VERSION = exact canonical iOS version
 - OPENCLAW_MARKETING_VERSION = short iOS/App Store version
 - OPENCLAW_BUILD_VERSION = explicit build number or local numeric fallback
@@ -14,6 +14,7 @@ EOF
 }
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "${ROOT_DIR}/scripts/lib/build-metadata.sh"
 IOS_DIR="${ROOT_DIR}/apps/ios"
 BUILD_DIR="${IOS_DIR}/build"
 VERSION_XCCONFIG="${IOS_DIR}/build/Version.xcconfig"
@@ -21,6 +22,21 @@ VERSION_HELPER="${ROOT_DIR}/scripts/ios-version.ts"
 IOS_VERSION=""
 MARKETING_VERSION=""
 BUILD_NUMBER=""
+APP_STORE_REVISION=""
+RELEASE_VERSION=""
+RESOLVED_GIT_COMMIT=""
+RESOLVED_BUILD_TIMESTAMP=""
+
+require_option_value() {
+  local option="$1"
+  local value="${2-}"
+
+  if [[ -z "${value}" || "${value}" == --* ]]; then
+    echo "Missing value for ${option}." >&2
+    usage >&2
+    exit 1
+  fi
+}
 
 prepare_build_dir() {
   if [[ -L "${BUILD_DIR}" ]]; then
@@ -51,7 +67,18 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --build-number)
+      require_option_value "$1" "${2-}"
       BUILD_NUMBER="${2:-}"
+      shift 2
+      ;;
+    --revision)
+      require_option_value "$1" "${2-}"
+      APP_STORE_REVISION="${2:-}"
+      shift 2
+      ;;
+    --version)
+      require_option_value "$1" "${2-}"
+      RELEASE_VERSION="${2:-}"
       shift 2
       ;;
     -h|--help)
@@ -66,6 +93,18 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+VERSION_HELPER_ARGS=(--shell)
+if [[ -n "${RELEASE_VERSION}" ]]; then
+  VERSION_HELPER_ARGS+=(--version "${RELEASE_VERSION}")
+fi
+if [[ -n "${APP_STORE_REVISION}" ]]; then
+  if [[ -z "${RELEASE_VERSION}" ]]; then
+    echo "--revision requires an explicit --version." >&2
+    exit 1
+  fi
+  VERSION_HELPER_ARGS+=(--revision "${APP_STORE_REVISION}")
+fi
+
 while IFS='=' read -r key value; do
   case "${key}" in
     OPENCLAW_IOS_VERSION)
@@ -75,10 +114,10 @@ while IFS='=' read -r key value; do
       MARKETING_VERSION="${value}"
       ;;
   esac
-done < <(cd "${ROOT_DIR}" && node --import tsx "${VERSION_HELPER}" --shell)
+done < <(cd "${ROOT_DIR}" && node --import tsx "${VERSION_HELPER}" "${VERSION_HELPER_ARGS[@]}")
 
 if [[ -z "${IOS_VERSION}" || -z "${MARKETING_VERSION}" ]]; then
-  echo "Unable to resolve iOS version metadata from ${ROOT_DIR}/apps/ios/version.json." >&2
+  echo "Unable to resolve iOS version metadata." >&2
   exit 1
 fi
 
@@ -91,6 +130,9 @@ if [[ ! "${BUILD_NUMBER}" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
+RESOLVED_GIT_COMMIT="$(openclaw_resolve_git_commit "${ROOT_DIR}")"
+RESOLVED_BUILD_TIMESTAMP="$(openclaw_resolve_build_timestamp)"
+
 prepare_build_dir
 
 write_generated_file "${VERSION_XCCONFIG}" <<EOF
@@ -99,6 +141,8 @@ write_generated_file "${VERSION_XCCONFIG}" <<EOF
 OPENCLAW_IOS_VERSION = ${IOS_VERSION}
 OPENCLAW_MARKETING_VERSION = ${MARKETING_VERSION}
 OPENCLAW_BUILD_VERSION = ${BUILD_NUMBER}
+OPENCLAW_GIT_COMMIT = ${RESOLVED_GIT_COMMIT}
+OPENCLAW_BUILD_TIMESTAMP = ${RESOLVED_BUILD_TIMESTAMP}
 EOF
 
-echo "Prepared iOS version settings: ios=${IOS_VERSION} marketing=${MARKETING_VERSION} build=${BUILD_NUMBER}"
+echo "Prepared iOS version settings: ios=${IOS_VERSION} marketing=${MARKETING_VERSION} build=${BUILD_NUMBER} commit=${RESOLVED_GIT_COMMIT} built=${RESOLVED_BUILD_TIMESTAMP}"

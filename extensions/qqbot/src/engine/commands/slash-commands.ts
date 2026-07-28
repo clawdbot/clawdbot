@@ -10,6 +10,9 @@
  * Zero external dependencies.
  */
 
+import type { QQBotGroupCommandLevel } from "../config/group.js";
+import { PRIVATE_CHAT_ONLY_TEXT } from "./command-visibility.js";
+
 // ============ Types ============
 
 /** Slash command context (message metadata plus runtime state). */
@@ -42,8 +45,12 @@ export interface SlashCommandContext {
   accountConfig?: Record<string, unknown>;
   /** Whether the sender is authorized per the allowFrom config. */
   commandAuthorized: boolean;
+  /** Effective per-group command level for group invocations. */
+  groupCommandLevel?: QQBotGroupCommandLevel;
   /** Queue snapshot for the current sender. */
   queueSnapshot: QueueSnapshot;
+  /** Durable guard for non-idempotent effects during ingress drain dispatch. */
+  runIngressEffectOnce?: SlashCommandIngressEffectRunner;
 }
 
 /** Queue status snapshot. */
@@ -53,6 +60,11 @@ export interface QueueSnapshot {
   maxConcurrentUsers: number;
   senderPending: number;
 }
+
+type SlashCommandIngressEffectRunner = <T>(params: {
+  effect: string;
+  run: () => Promise<T>;
+}) => Promise<{ kind: "executed"; value: T } | { kind: "replayed" }>;
 
 /** Slash command result: text, a text+file result, or null to skip handling. */
 export type SlashCommandResult = string | SlashCommandFileResult | null;
@@ -132,11 +144,6 @@ export class SlashCommandRegistry {
     }));
   }
 
-  /** Return all pre-dispatch commands. */
-  getPreDispatchCommands(): Map<string, SlashCommand> {
-    return this.commands;
-  }
-
   /** Return all registered commands (both maps) for help listing. */
   getAllCommands(): Map<string, SlashCommand> {
     const all = new Map<string, SlashCommand>();
@@ -173,9 +180,15 @@ export class SlashCommandRegistry {
       return null;
     }
 
+    const isGroup = ctx.type === "group" || ctx.type === "guild";
+    const groupCommandLevel = ctx.groupCommandLevel ?? "all";
+    if (isGroup && groupCommandLevel === "strict") {
+      return PRIVATE_CHAT_ONLY_TEXT;
+    }
+
     // Reject c2cOnly commands when invoked outside private chat.
     if (cmd.c2cOnly && ctx.type !== "c2c") {
-      return `💡 请在私聊中使用此指令`;
+      return PRIVATE_CHAT_ONLY_TEXT;
     }
 
     // Gate sensitive commands behind the allowFrom authorization check.
@@ -183,7 +196,6 @@ export class SlashCommandRegistry {
       log?.info?.(
         `[qqbot] Slash command /${cmd.name} rejected: sender ${ctx.senderId} is not authorized`,
       );
-      const isGroup = ctx.type === "group" || ctx.type === "guild";
       const configHint = isGroup ? "groupAllowFrom" : "allowFrom";
       return `⛔ 权限不足：请先在 channels.qqbot.${configHint} 中配置明确的发送者列表后再使用 /${cmd.name}。`;
     }

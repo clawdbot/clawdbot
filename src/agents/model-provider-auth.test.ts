@@ -6,10 +6,16 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
+import type {
+  ModelAuthAvailabilityEvaluation,
+  ModelAuthAvailabilityRef,
+} from "./model-auth-availability.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import { publishProviderAuthWarmSnapshot } from "./model-provider-auth-state.js";
 
 const modelCatalogMocks = vi.hoisted(() => ({
   loadModelCatalog: vi.fn<(params?: unknown) => Promise<ModelCatalogEntry[]>>(),
+  ownerWorkspaceDir: undefined as string | undefined,
 }));
 
 const modelAuthMocks = vi.hoisted(() => ({
@@ -34,6 +40,20 @@ const modelAuthMocks = vi.hoisted(() => ({
     >(),
 }));
 
+const modelAuthAvailabilityMocks = vi.hoisted(() => {
+  const evaluateModelAuth = vi.fn<
+    (provider: string, ref?: ModelAuthAvailabilityRef) => ModelAuthAvailabilityEvaluation
+  >(() => ({ availability: false, routeResolution: null }));
+  return {
+    evaluateModelAuth,
+    createModelAuthAvailabilityResolver: vi.fn((_params: unknown) => ({
+      evaluateModelAuth,
+      resolveProviderAuthAvailability: vi.fn(() => false),
+      hasSyntheticAuth: vi.fn(() => false),
+    })),
+  };
+});
+
 const authProfilesMocks = vi.hoisted(() => ({
   ensureAuthProfileStore: vi.fn(() => ({ profiles: {} })),
   ensureAuthProfileStoreWithoutExternalProfiles: vi.fn(() => ({ profiles: {} })),
@@ -45,14 +65,27 @@ const authProfilesMocks = vi.hoisted(() => ({
   listProfilesForProvider: vi.fn(() => []),
 }));
 
-vi.mock("./model-catalog.js", () => ({
-  loadModelCatalog: modelCatalogMocks.loadModelCatalog,
+vi.mock("./prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalogOwnerSnapshot: async (params?: unknown) => ({
+    ...(modelCatalogMocks.ownerWorkspaceDir
+      ? { workspaceDir: modelCatalogMocks.ownerWorkspaceDir }
+      : {}),
+    modelCatalog: {
+      entries: await modelCatalogMocks.loadModelCatalog(params),
+      routeVariants: [],
+    },
+  }),
 }));
 
 vi.mock("./model-auth.js", () => ({
   createRuntimeProviderAuthLookup: modelAuthMocks.createRuntimeProviderAuthLookup,
   hasAvailableAuthForProvider: modelAuthMocks.hasAvailableAuthForProvider,
   hasRuntimeAvailableProviderAuth: modelAuthMocks.hasRuntimeAvailableProviderAuth,
+}));
+
+vi.mock("./model-auth-availability.js", () => ({
+  createModelAuthAvailabilityResolver:
+    modelAuthAvailabilityMocks.createModelAuthAvailabilityResolver,
 }));
 
 vi.mock("./auth-profiles.js", () => ({
@@ -82,14 +115,25 @@ const {
   buildCurrentProviderAuthStateSnapshot,
   createProviderAuthChecker,
   hasAuthForModelProvider,
-  warmCurrentProviderAuthState,
   warmCurrentProviderAuthStateOffMainThread,
 } = await import("./model-provider-auth.js");
+
+async function publishCurrentProviderAuthStateSnapshot(
+  cfg: OpenClawConfig,
+  options?: Parameters<typeof buildCurrentProviderAuthStateSnapshot>[1],
+): Promise<void> {
+  publishProviderAuthWarmSnapshot(await buildCurrentProviderAuthStateSnapshot(cfg, options));
+}
 
 describe("prepared provider auth state", () => {
   afterEach(() => {
     clearCurrentProviderAuthState();
     vi.clearAllMocks();
+    modelCatalogMocks.ownerWorkspaceDir = undefined;
+    modelAuthAvailabilityMocks.evaluateModelAuth.mockReturnValue({
+      availability: false,
+      routeResolution: null,
+    });
   });
 
   it("reuses prepared runtime auth lookup data while warming providers", async () => {
@@ -102,7 +146,7 @@ describe("prepared provider auth state", () => {
     ]);
     modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
 
-    await warmCurrentProviderAuthState(cfg);
+    await publishCurrentProviderAuthStateSnapshot(cfg);
 
     expect(modelAuthMocks.createRuntimeProviderAuthLookup).toHaveBeenCalledTimes(1);
     const firstLookup =
@@ -119,11 +163,33 @@ describe("prepared provider auth state", () => {
     ]);
     modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
 
-    await warmCurrentProviderAuthState(cfg);
+    await publishCurrentProviderAuthStateSnapshot(cfg);
 
-    expect(modelCatalogMocks.loadModelCatalog).toHaveBeenCalledWith({
-      config: cfg,
-      readOnly: true,
+    expect(modelCatalogMocks.loadModelCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: cfg,
+        agentDir: expect.any(String),
+        readOnly: true,
+      }),
+    );
+    expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]).not.toHaveProperty(
+      "workspaceDir",
+    );
+  });
+
+  it("uses the prepared owner's authoritative workspace for auth discovery", async () => {
+    const cfg = {} as OpenClawConfig;
+    modelCatalogMocks.ownerWorkspaceDir = "/warm/gateway-launch-workspace";
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { id: "gpt", name: "gpt", provider: "openai" },
+    ]);
+    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
+
+    await buildCurrentProviderAuthStateSnapshot(cfg);
+
+    expect(modelAuthMocks.createRuntimeProviderAuthLookup).toHaveBeenCalledWith({
+      cfg,
+      workspaceDir: "/warm/gateway-launch-workspace",
     });
   });
 
@@ -193,7 +259,7 @@ describe("prepared provider auth state", () => {
       ({ provider }) => provider === "openai",
     );
 
-    await warmCurrentProviderAuthState(cfg);
+    await publishCurrentProviderAuthStateSnapshot(cfg);
     expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
 
     // Flip the underlying answer; if the prepared map is consulted first,
@@ -217,7 +283,7 @@ describe("prepared provider auth state", () => {
     ]);
     // Warm with the broad answer: provider has CLI/synthetic auth.
     modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(true);
-    await warmCurrentProviderAuthState(cfg);
+    await publishCurrentProviderAuthStateSnapshot(cfg);
     expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
 
     // Flip the underlying compute to false. A narrow-scope caller must NOT
@@ -252,7 +318,7 @@ describe("prepared provider auth state", () => {
     expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
   });
 
-  it("does not prepare synthetic auth refs when plugin synthetic auth is disabled", async () => {
+  it("keeps provider-only OpenAI checks on the legacy auth path", async () => {
     const cfg = {} as OpenClawConfig;
     modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
 
@@ -262,6 +328,7 @@ describe("prepared provider auth state", () => {
       discoverExternalCliAuth: false,
     });
 
+    await expect(hasAuth("openai")).resolves.toBe(false);
     await expect(hasAuth("openai")).resolves.toBe(false);
 
     expect(modelAuthMocks.createRuntimeProviderAuthLookup).toHaveBeenCalledWith({
@@ -275,6 +342,138 @@ describe("prepared provider auth state", () => {
     expect(runtimeLookup).toBe(
       modelAuthMocks.createRuntimeProviderAuthLookup.mock.results[0]?.value,
     );
+    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
+    expect(modelAuthAvailabilityMocks.createModelAuthAvailabilityResolver).not.toHaveBeenCalled();
+    expect(modelAuthAvailabilityMocks.evaluateModelAuth).not.toHaveBeenCalled();
+  });
+
+  it("preserves explicit prepared runtime auth while keeping disabled discovery isolated", async () => {
+    const cfg = {} as OpenClawConfig;
+    const hasAuth = createProviderAuthChecker({
+      cfg,
+      allowPluginSyntheticAuth: false,
+      discoverExternalCliAuth: false,
+      allowPreparedRuntimeAuth: true,
+    });
+
+    await hasAuth("openai", {
+      modelId: "gpt-5.5",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    });
+
+    expect(modelAuthAvailabilityMocks.createModelAuthAvailabilityResolver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg,
+        allowPreparedRuntimeAuth: true,
+        syntheticAuthProviderRefs: [],
+      }),
+    );
+    const resolverParams =
+      modelAuthAvailabilityMocks.createModelAuthAvailabilityResolver.mock.calls[0]?.[0];
+    expect(resolverParams).not.toHaveProperty("externalCliProviderIds");
+  });
+
+  it("keeps tuple-aware null-artifact checks indeterminate with broad auth enabled", async () => {
+    const cfg = {} as OpenClawConfig;
+    const hasAuth = createProviderAuthChecker({ cfg });
+
+    await expect(hasAuth("openai", { modelId: "gpt-5.5" })).resolves.toBe(false);
+
+    expect(modelAuthMocks.createRuntimeProviderAuthLookup).toHaveBeenCalledWith({
+      cfg,
+      workspaceDir: undefined,
+      env: undefined,
+      includePluginSyntheticAuth: true,
+    });
+    expect(modelAuthAvailabilityMocks.createModelAuthAvailabilityResolver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg,
+        allowPreparedRuntimeAuth: true,
+        externalCliProviderIds: ["openai"],
+        syntheticAuthProviderRefs: [],
+      }),
+    );
+    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).not.toHaveBeenCalled();
+  });
+
+  it("caches OpenAI auth by the complete route tuple", async () => {
+    const hasAuth = createProviderAuthChecker({ cfg: {} as OpenClawConfig });
+    const platformRef = {
+      modelId: "gpt-5.5",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    };
+
+    await hasAuth("openai", platformRef);
+    await hasAuth("openai", { ...platformRef });
+    await hasAuth("openai", {
+      ...platformRef,
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    });
+
+    expect(modelAuthAvailabilityMocks.evaluateModelAuth).toHaveBeenCalledTimes(2);
+  });
+
+  it("exposes the cached route evaluation alongside the boolean checker", async () => {
+    const evaluation = {
+      availability: true,
+      routeResolution: null,
+      evidence: "profile" as const,
+    };
+    modelAuthAvailabilityMocks.evaluateModelAuth.mockReturnValue(evaluation);
+    const hasAuth = createProviderAuthChecker({ cfg: {} as OpenClawConfig });
+    const ref = {
+      modelId: "gpt-5.5",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    };
+
+    await expect(hasAuth.evaluateModelAuth("openai", ref)).resolves.toBe(evaluation);
+    await expect(hasAuth("openai", { ...ref })).resolves.toBe(true);
+    expect(modelAuthAvailabilityMocks.evaluateModelAuth).toHaveBeenCalledOnce();
+  });
+
+  it("uses shared model auth evaluation for a non-OpenAI AWS SDK model", async () => {
+    const evaluation = {
+      availability: true,
+      routeResolution: null,
+      selectedAuthMode: "aws-sdk",
+      evidence: "aws-sdk" as const,
+    };
+    modelAuthAvailabilityMocks.evaluateModelAuth.mockReturnValue(evaluation);
+    const hasAuth = createProviderAuthChecker({ cfg: {} as OpenClawConfig });
+    const ref = {
+      modelId: "us.anthropic.claude-sonnet-4-5",
+      api: "bedrock-converse-stream",
+    };
+
+    await expect(hasAuth.evaluateModelAuth("amazon-bedrock", ref)).resolves.toBe(evaluation);
+    await expect(hasAuth("amazon-bedrock", { ...ref })).resolves.toBe(true);
+    expect(modelAuthAvailabilityMocks.evaluateModelAuth).toHaveBeenCalledWith(
+      "amazon-bedrock",
+      ref,
+    );
+    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).not.toHaveBeenCalled();
+  });
+
+  it("does not let legacy provider auth override an unresolved model SecretRef", async () => {
+    const evaluation = {
+      availability: undefined,
+      routeResolution: null,
+      selectedAuthMode: "api-key",
+      evidence: "provider-config" as const,
+    };
+    modelAuthAvailabilityMocks.evaluateModelAuth.mockReturnValue(evaluation);
+    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(true);
+    const hasAuth = createProviderAuthChecker({ cfg: {} as OpenClawConfig });
+    const ref = { modelId: "claude-sonnet-4-6", api: "anthropic-messages" };
+
+    await expect(hasAuth.evaluateModelAuth("anthropic", ref)).resolves.toBe(evaluation);
+    await expect(hasAuth("anthropic", { ...ref })).resolves.toBe(false);
+    expect(modelAuthAvailabilityMocks.evaluateModelAuth).toHaveBeenCalledWith("anthropic", ref);
+    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).not.toHaveBeenCalled();
   });
 
   it("uses an explicit agent auth store directory for provider auth checks", async () => {
@@ -306,7 +505,7 @@ describe("prepared provider auth state", () => {
       { id: "gpt", name: "gpt", provider: "openai" },
     ]);
     modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(true);
-    await warmCurrentProviderAuthState(cfg);
+    await publishCurrentProviderAuthStateSnapshot(cfg);
     expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
 
     modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
@@ -322,7 +521,7 @@ describe("prepared provider auth state", () => {
       { id: "gpt", name: "gpt", provider: "openai" },
     ]);
     modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(true);
-    await warmCurrentProviderAuthState(cfg);
+    await publishCurrentProviderAuthStateSnapshot(cfg);
     expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
 
     // Per-agent picker calls pass an agent-specific workspaceDir that the
@@ -349,49 +548,7 @@ describe("prepared provider auth state", () => {
     expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
   });
 
-  it("does not publish an older warm after the prepared auth state is cleared", async () => {
-    const firstCfg = { gateway: { port: 18789 } } as OpenClawConfig;
-    const secondCfg = { gateway: { port: 19001 } } as OpenClawConfig;
-    let resolveFirstCatalog: ((catalog: ModelCatalogEntry[]) => void) | undefined;
-    let resolveSecondCatalog: ((catalog: ModelCatalogEntry[]) => void) | undefined;
-    modelCatalogMocks.loadModelCatalog
-      .mockReturnValueOnce(
-        new Promise<ModelCatalogEntry[]>((resolve) => {
-          resolveFirstCatalog = resolve;
-        }),
-      )
-      .mockReturnValueOnce(
-        new Promise<ModelCatalogEntry[]>((resolve) => {
-          resolveSecondCatalog = resolve;
-        }),
-      );
-    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockImplementation(
-      ({ cfg }) => cfg === firstCfg,
-    );
-
-    const firstWarm = warmCurrentProviderAuthState(firstCfg);
-    await Promise.resolve();
-    clearCurrentProviderAuthState();
-    const secondWarm = warmCurrentProviderAuthState(secondCfg);
-
-    resolveSecondCatalog?.([{ id: "gpt", name: "gpt", provider: "openai" }]);
-    await secondWarm;
-    resolveFirstCatalog?.([{ id: "gpt", name: "gpt", provider: "openai" }]);
-    await firstWarm;
-    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
-
-    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(true);
-    await expect(hasAuthForModelProvider({ provider: "openai", cfg: secondCfg })).resolves.toBe(
-      false,
-    );
-    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
-    await expect(hasAuthForModelProvider({ provider: "openai", cfg: firstCfg })).resolves.toBe(
-      true,
-    );
-    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not publish a warm that is cancelled before completion", async () => {
+  it("returns an empty warm snapshot when cancelled before publication", async () => {
     const cfg = {} as OpenClawConfig;
     let cancelled = false;
     modelCatalogMocks.loadModelCatalog.mockResolvedValue([
@@ -399,14 +556,17 @@ describe("prepared provider auth state", () => {
     ]);
     modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(true);
 
-    await warmCurrentProviderAuthState(cfg, { isCancelled: () => cancelled });
+    await publishCurrentProviderAuthStateSnapshot(cfg, { isCancelled: () => cancelled });
     await expect(hasAuthForModelProvider({ provider: "openai", cfg })).resolves.toBe(true);
     expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
 
     clearCurrentProviderAuthState();
     modelAuthMocks.hasRuntimeAvailableProviderAuth.mockClear();
     cancelled = true;
-    await warmCurrentProviderAuthState(cfg, { isCancelled: () => cancelled });
+    const cancelledSnapshot = await buildCurrentProviderAuthStateSnapshot(cfg, {
+      isCancelled: () => cancelled,
+    });
+    expect(cancelledSnapshot).toEqual({ agents: [] });
 
     modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
     await expect(hasAuthForModelProvider({ provider: "openai", cfg })).resolves.toBe(false);
@@ -426,7 +586,10 @@ describe("prepared provider auth state", () => {
       return false;
     });
 
-    await warmCurrentProviderAuthState(cfg, { isCancelled: () => cancelled });
+    const snapshot = await buildCurrentProviderAuthStateSnapshot(cfg, {
+      isCancelled: () => cancelled,
+    });
+    expect(snapshot).toEqual({ agents: [] });
     expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
 
     modelAuthMocks.hasRuntimeAvailableProviderAuth.mockClear();

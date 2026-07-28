@@ -3,8 +3,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { drainSessionStoreWriterQueuesForTest } from "../config/sessions.js";
+import { describe, expect, it, vi } from "vitest";
 import {
   readCompactionCount,
   seedSessionStore,
@@ -13,9 +12,11 @@ import {
 import {
   handleCompactionEnd,
   handleCompactionStart,
-  reconcileSessionStoreCompactionCountAfterSuccess,
 } from "./embedded-agent-subscribe.handlers.compaction.js";
+import reconcileSessionStoreCompactionCountAfterSuccess from "./embedded-agent-subscribe.handlers.compaction.runtime.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
+import type { AgentMessage } from "./runtime/index.js";
+import { makeZeroUsageSnapshot, type AssistantUsageSnapshot } from "./usage.js";
 
 function createCompactionContext(params: {
   storePath: string;
@@ -23,6 +24,7 @@ function createCompactionContext(params: {
   agentId?: string;
   initialCount: number;
   info?: (message: string, meta?: Record<string, unknown>) => void;
+  messages?: AgentMessage[];
 }): EmbeddedAgentSubscribeContext {
   // Minimal context preserves only the compaction counters and callbacks the
   // handlers mutate, making store reconciliation assertions direct.
@@ -30,7 +32,7 @@ function createCompactionContext(params: {
   return {
     params: {
       runId: "run-test",
-      session: { messages: [] } as never,
+      session: { messages: params.messages ?? [] } as never,
       config: { session: { store: params.storePath } } as never,
       sessionKey: params.sessionKey,
       sessionId: "session-1",
@@ -60,6 +62,56 @@ function createCompactionContext(params: {
   } as unknown as EmbeddedAgentSubscribeContext;
 }
 
+function makeUsageSnapshot(totalTokens: number): AssistantUsageSnapshot {
+  return {
+    input: totalTokens,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens,
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 0,
+    },
+  };
+}
+
+function makeAssistantUsageMessage(params: {
+  text: string;
+  usage: AssistantUsageSnapshot;
+  timestamp?: number;
+}): AgentMessage {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text: params.text }],
+    stopReason: "stop",
+    usage: params.usage,
+    ...(params.timestamp !== undefined ? { timestamp: params.timestamp } : {}),
+  } as AgentMessage;
+}
+
+function makeCompactionSummaryMessage(timestamp?: number): AgentMessage {
+  return {
+    role: "compactionSummary",
+    summary: "compressed",
+    tokensBefore: 120_000,
+    ...(timestamp !== undefined ? { timestamp } : {}),
+  } as AgentMessage;
+}
+
+function finishCompaction(ctx: EmbeddedAgentSubscribeContext): void {
+  handleCompactionEnd(ctx, {
+    type: "compaction_end",
+    reason: "threshold",
+    result: { kept: 12 },
+    willRetry: false,
+    aborted: false,
+  });
+}
+
 function loggedInfoMetaAt(info: ReturnType<typeof vi.fn>, index: number): Record<string, unknown> {
   // Logging assertions need structured metadata, not just console strings.
   const [, meta] = info.mock.calls[index] ?? [];
@@ -76,10 +128,6 @@ function loggedInfoMessageAt(info: ReturnType<typeof vi.fn>, index: number): str
   }
   return message;
 }
-
-afterEach(async () => {
-  await drainSessionStoreWriterQueuesForTest();
-});
 
 describe("reconcileSessionStoreCompactionCountAfterSuccess", () => {
   it("raises the stored compaction count to the observed value", async () => {
@@ -312,5 +360,165 @@ describe("handleCompactionEnd", () => {
 
     expect(await readCompactionCount(storePath, sessionKey)).toBe(2);
     expect(ctx.noteCompactionTokensAfter).toHaveBeenCalledWith(undefined);
+  });
+
+  it("clears stale assistant usage before compaction and preserves fresh usage after it", async () => {
+    const staleUsage = makeUsageSnapshot(123_000);
+    const freshUsage = makeUsageSnapshot(1_250);
+    const messages = [
+      makeAssistantUsageMessage({
+        text: "pre-compaction answer",
+        timestamp: 1_000,
+        usage: staleUsage,
+      }),
+      makeCompactionSummaryMessage(2_000),
+      { role: "user", content: "new question", timestamp: 3_000 },
+      makeAssistantUsageMessage({
+        text: "fresh answer",
+        timestamp: 4_000,
+        usage: freshUsage,
+      }),
+    ] as AgentMessage[];
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-usage-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const ctx = createCompactionContext({
+      storePath,
+      sessionKey,
+      initialCount: 0,
+      messages,
+    });
+
+    finishCompaction(ctx);
+
+    const staleAssistant = messages[0] as Extract<AgentMessage, { role: "assistant" }>;
+    const freshAssistant = messages[3] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(staleAssistant.usage).toEqual(makeZeroUsageSnapshot());
+    expect(freshAssistant.usage).toEqual(freshUsage);
+  });
+
+  it("uses the compaction timestamp for summary-first transcripts", async () => {
+    const staleUsage = makeUsageSnapshot(120_000);
+    const freshUsage = makeUsageSnapshot(1_250);
+    const compactionTimestamp = 2_000;
+    const messages = [
+      makeCompactionSummaryMessage(compactionTimestamp),
+      makeAssistantUsageMessage({
+        text: "kept pre-compaction answer",
+        timestamp: compactionTimestamp - 1,
+        usage: staleUsage,
+      }),
+      makeAssistantUsageMessage({
+        text: "fresh answer",
+        timestamp: compactionTimestamp + 1,
+        usage: freshUsage,
+      }),
+    ] as AgentMessage[];
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-summary-first-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const ctx = createCompactionContext({
+      storePath,
+      sessionKey,
+      initialCount: 0,
+      messages,
+    });
+
+    finishCompaction(ctx);
+
+    const staleAssistant = messages[1] as Extract<AgentMessage, { role: "assistant" }>;
+    const freshAssistant = messages[2] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(staleAssistant.usage).toEqual(makeZeroUsageSnapshot());
+    expect(freshAssistant.usage).toEqual(freshUsage);
+  });
+
+  it("uses index fallback only for legacy transcripts without timestamps", async () => {
+    const staleUsage = makeUsageSnapshot(120_000);
+    const freshUsage = makeUsageSnapshot(1_250);
+    const messages = [
+      makeAssistantUsageMessage({
+        text: "legacy pre-compaction answer",
+        usage: staleUsage,
+      }),
+      makeCompactionSummaryMessage(),
+      makeAssistantUsageMessage({
+        text: "legacy fresh answer",
+        usage: freshUsage,
+      }),
+    ] as AgentMessage[];
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-legacy-usage-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const ctx = createCompactionContext({
+      storePath,
+      sessionKey,
+      initialCount: 0,
+      messages,
+    });
+
+    finishCompaction(ctx);
+
+    const staleAssistant = messages[0] as Extract<AgentMessage, { role: "assistant" }>;
+    const freshAssistant = messages[2] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(staleAssistant.usage).toEqual(makeZeroUsageSnapshot());
+    expect(freshAssistant.usage).toEqual(freshUsage);
+  });
+
+  it("clears assistant usage when final compaction has no summary marker", async () => {
+    const firstUsage = makeUsageSnapshot(120_000);
+    const secondUsage = makeUsageSnapshot(1_250);
+    const messages = [
+      makeAssistantUsageMessage({
+        text: "first answer before marker-free compaction",
+        usage: firstUsage,
+      }),
+      { role: "user", content: "new question" },
+      makeAssistantUsageMessage({
+        text: "second answer before marker-free compaction",
+        usage: secondUsage,
+      }),
+    ] as AgentMessage[];
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-no-summary-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const ctx = createCompactionContext({
+      storePath,
+      sessionKey,
+      initialCount: 0,
+      messages,
+    });
+
+    finishCompaction(ctx);
+
+    const firstAssistant = messages[0] as Extract<AgentMessage, { role: "assistant" }>;
+    const secondAssistant = messages[2] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(firstAssistant.usage).toEqual(makeZeroUsageSnapshot());
+    expect(secondAssistant.usage).toEqual(makeZeroUsageSnapshot());
+  });
+
+  it("does not let legacy index fallback erase timestamp-fresh usage", async () => {
+    const freshUsage = makeUsageSnapshot(1_250);
+    const messages = [
+      makeAssistantUsageMessage({
+        text: "fresh answer written before delayed summary",
+        timestamp: 3_000,
+        usage: freshUsage,
+      }),
+      makeCompactionSummaryMessage(2_000),
+    ] as AgentMessage[];
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-timestamp-fresh-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const ctx = createCompactionContext({
+      storePath,
+      sessionKey,
+      initialCount: 0,
+      messages,
+    });
+
+    finishCompaction(ctx);
+
+    const freshAssistant = messages[0] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(freshAssistant.usage).toEqual(freshUsage);
   });
 });

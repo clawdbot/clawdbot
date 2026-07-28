@@ -17,7 +17,7 @@ import {
 type BoundaryAllowedType = "file" | "directory";
 
 /** Caller-provided path safety requirements for one fs bridge operation. */
-export type PathSafetyOptions = {
+type PathSafetyOptions = {
   action: string;
   aliasPolicy?: PathAliasPolicy;
   requireWritable?: boolean;

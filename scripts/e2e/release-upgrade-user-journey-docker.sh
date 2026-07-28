@@ -24,11 +24,17 @@ docker_e2e_build_or_reuse "$IMAGE_NAME" release-upgrade-user-journey "$ROOT_DIR/
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 release-upgrade-user-journey empty)"
 
 run_log="$(docker_e2e_run_log release-upgrade-user-journey)"
+DOCKER_ENV_ARGS=(
+  -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+  -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64"
+)
+if [ -n "${OPENCLAW_RELEASE_UPGRADE_BASELINE_SPEC:-}" ]; then
+  DOCKER_ENV_ARGS+=(-e "OPENCLAW_RELEASE_UPGRADE_BASELINE_SPEC=$OPENCLAW_RELEASE_UPGRADE_BASELINE_SPEC")
+fi
+
 echo "Running release upgrade user journey Docker E2E..."
 if ! docker_e2e_run_with_harness \
-  -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
-  -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
-  -e "OPENCLAW_RELEASE_UPGRADE_BASELINE_SPEC=${OPENCLAW_RELEASE_UPGRADE_BASELINE_SPEC:-openclaw@latest}" \
+  "${DOCKER_ENV_ARGS[@]}" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   -i "$IMAGE_NAME" bash scripts/e2e/lib/release-upgrade-user-journey/scenario.sh >"$run_log" 2>&1; then
   docker_e2e_print_log "$run_log"

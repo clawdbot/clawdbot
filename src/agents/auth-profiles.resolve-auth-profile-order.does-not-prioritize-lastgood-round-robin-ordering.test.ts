@@ -4,10 +4,7 @@
  * round-robin ordering semantics.
  */
 import { describe, expect, it, vi } from "vitest";
-import {
-  ANTHROPIC_CFG,
-  ANTHROPIC_STORE,
-} from "./auth-profiles.resolve-auth-profile-order.fixtures.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 
@@ -41,6 +38,31 @@ function makeApiKeyProfilesByProviderProvider(
     ]),
   );
 }
+
+const ANTHROPIC_STORE = {
+  version: 1,
+  profiles: {
+    "anthropic:default": {
+      type: "api_key",
+      provider: "anthropic",
+      key: "sk-default",
+    },
+    "anthropic:work": {
+      type: "api_key",
+      provider: "anthropic",
+      key: "sk-work",
+    },
+  },
+} satisfies AuthProfileStore;
+
+const ANTHROPIC_CFG = {
+  auth: {
+    profiles: {
+      "anthropic:default": { provider: "anthropic", mode: "api_key" },
+      "anthropic:work": { provider: "anthropic", mode: "api_key" },
+    },
+  },
+} satisfies OpenClawConfig;
 
 describe("resolveAuthProfileOrder", () => {
   const store = ANTHROPIC_STORE;

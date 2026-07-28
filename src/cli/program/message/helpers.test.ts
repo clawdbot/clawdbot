@@ -60,6 +60,8 @@ vi.mock("../../deps.js", () => ({
 
 const { createMessageCliHelpers } = await import("./helpers.js");
 
+const NON_NEGATIVE_INTEGER_FLAGS = new Set(["--delete-days", "--duration-min"]);
+
 const baseSendOptions = {
   channel: "discord",
   target: "123",
@@ -365,7 +367,7 @@ describe("runMessageAction", () => {
 
     await expect(runMessageAction(action, opts)).rejects.toThrow("exit");
 
-    const kind = flag === "--delete-days" ? "non-negative" : "positive";
+    const kind = NON_NEGATIVE_INTEGER_FLAGS.has(flag) ? "non-negative" : "positive";
     expect(errorMock).toHaveBeenCalledWith(`Error: ${flag} must be a ${kind} integer.`);
     expect(ensurePluginRegistryLoaded).not.toHaveBeenCalled();
     expect(messageCommandMock).not.toHaveBeenCalled();
@@ -390,7 +392,7 @@ describe("runMessageAction", () => {
       }),
     ).rejects.toThrow("exit");
 
-    const kind = flag === "--delete-days" ? "non-negative" : "positive";
+    const kind = NON_NEGATIVE_INTEGER_FLAGS.has(flag) ? "non-negative" : "positive";
     expect(errorMock).toHaveBeenCalledWith(`Error: ${flag} must be a ${kind} integer.`);
     expect(messageCommandMock).not.toHaveBeenCalled();
     expect(exitMock).toHaveBeenCalledWith(1);
@@ -413,6 +415,27 @@ describe("runMessageAction", () => {
       guildId: "g",
       userId: "u",
       deleteDays: "0",
+    });
+    expect(exitMock).toHaveBeenCalledWith(0);
+  });
+
+  it("allows zero duration-min for clearing Discord timeouts", async () => {
+    const runMessageAction = createRunMessageAction();
+
+    await expect(
+      runMessageAction("timeout", {
+        guildId: "g",
+        userId: "u",
+        durationMin: "0",
+      }),
+    ).rejects.toThrow("exit");
+
+    expect(errorMock).not.toHaveBeenCalled();
+    expectMessageCommandOptions({
+      action: "timeout",
+      guildId: "g",
+      userId: "u",
+      durationMin: "0",
     });
     expect(exitMock).toHaveBeenCalledWith(0);
   });

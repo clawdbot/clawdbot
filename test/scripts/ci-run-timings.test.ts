@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   collectRunJobsFromPages,
+  isRetryableGhJsonErrorMessage,
   parseRunTimingArgs,
   selectLatestMainPushCiRun,
   summarizePnpmStoreWarmupBarrier,
@@ -9,7 +10,7 @@ import {
 } from "../../scripts/ci-run-timings.mjs";
 
 describe("scripts/ci-run-timings.mjs", () => {
-  it("separates queue time from job duration", () => {
+  it("separates start delay from job duration without mislabeling dependency wait", () => {
     const summary = summarizeRunTimings(
       {
         conclusion: "success",
@@ -48,7 +49,7 @@ describe("scripts/ci-run-timings.mjs", () => {
       ["slow", 60],
       ["queued", 10],
     ]);
-    expect(summary.byQueue.map((job) => [job.name, job.queueSeconds])).toEqual([
+    expect(summary.byStartDelay.map((job) => [job.name, job.startDelaySeconds])).toEqual([
       ["queued", 50],
       ["slow", 20],
     ]);
@@ -141,6 +142,21 @@ describe("scripts/ci-run-timings.mjs", () => {
         status: "completed",
       },
     ]);
+  });
+
+  it("retries transient GitHub API failures while preserving auth failures", () => {
+    for (const message of [
+      "gh: API secondary rate limit exceeded (HTTP 403)",
+      "gh: HTTP 429: too many requests",
+      "Command failed: gh api repos/openclaw/openclaw/actions/runs/1/jobs\nHTTP 502",
+      "read ECONNRESET",
+    ]) {
+      expect(isRetryableGhJsonErrorMessage(message)).toBe(true);
+    }
+
+    expect(
+      isRetryableGhJsonErrorMessage("gh: Resource not accessible by integration (HTTP 403)"),
+    ).toBe(false);
   });
 
   it("summarizes the pnpm store warmup fanout barrier", () => {
@@ -263,7 +279,13 @@ describe("scripts/ci-run-timings.mjs", () => {
   });
 
   it("rejects missing monitor limits instead of treating flags as values", () => {
-    for (const args of [["--limit"], ["--limit", "--recent", "4"], ["--recent"]]) {
+    for (const args of [
+      ["--limit"],
+      ["--limit", "--recent", "4"],
+      ["--limit", "-h"],
+      ["--recent"],
+      ["--recent", "-h"],
+    ]) {
       expect(() => parseRunTimingArgs(args)).toThrow("requires a value");
     }
   });

@@ -9,7 +9,12 @@ import path from "node:path";
 import type { AgentTool, AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
-import { createOpenClawReadTool, createSandboxedReadTool } from "./agent-tools.read.js";
+import * as windowsEncoding from "../infra/windows-encoding.js";
+import {
+  createOpenClawReadTool,
+  createSandboxedReadTool,
+  wrapReadToolWithSkillContent,
+} from "./agent-tools.read.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 
 function extractToolText(result: unknown): string {
@@ -32,6 +37,56 @@ function extractToolText(result: unknown): string {
 }
 
 describe("createOpenClawCodingTools read behavior", () => {
+  it("reads exact node skill locators without sending them to the filesystem backend", async () => {
+    const locator = "node://node-1/skills/pond/SKILL.md";
+    const execute = vi.fn(async () => {
+      throw new Error("filesystem backend should not run");
+    });
+    const tool = wrapReadToolWithSkillContent(
+      {
+        name: "read",
+        label: "read",
+        description: "read a file",
+        parameters: {},
+        execute,
+      } as never,
+      [{ filePath: locator, readContent: "# Pond\nremote-marker" }],
+    );
+
+    const result = await tool.execute("node-skill-read", { path: locator });
+
+    expect(extractToolText(result)).toContain("remote-marker");
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("uses host decoding only for host-backed sandbox paths", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sbx-encoding-"));
+    await fs.writeFile(path.join(tmpDir, "notes.txt"), "hello", "utf8");
+    const hostBridge = createHostSandboxFsBridge(tmpDir);
+    const remoteBridge = {
+      ...hostBridge,
+      resolvePath: (params: Parameters<typeof hostBridge.resolvePath>[0]) => {
+        const { relativePath, containerPath } = hostBridge.resolvePath(params);
+        return { relativePath, containerPath };
+      },
+    };
+    const decodeSpy = vi.spyOn(windowsEncoding, "decodeWindowsTextFileBuffer");
+
+    try {
+      const hostTool = createSandboxedReadTool({ root: tmpDir, bridge: hostBridge });
+      await hostTool.execute("host-read", { path: "notes.txt" });
+      expect(decodeSpy).toHaveBeenCalledTimes(1);
+
+      decodeSpy.mockClear();
+      const remoteTool = createSandboxedReadTool({ root: tmpDir, bridge: remoteBridge });
+      await remoteTool.execute("remote-read", { path: "notes.txt" });
+      expect(decodeSpy).not.toHaveBeenCalled();
+    } finally {
+      decodeSpy.mockRestore();
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("applies sandbox path guards to canonical path", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sbx-"));
     const outsidePath = path.join(os.tmpdir(), "openclaw-outside.txt");

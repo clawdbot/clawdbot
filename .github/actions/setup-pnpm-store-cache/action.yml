@@ -70,7 +70,14 @@ runs:
             exit 1
             ;;
         esac
-        corepack enable
+        if [ -n "${PNPM_HOME:-}" ]; then
+          mkdir -p "$PNPM_HOME"
+          corepack enable --install-directory "$PNPM_HOME"
+          echo "PNPM_HOME=$PNPM_HOME" >> "$GITHUB_ENV"
+          echo "$PNPM_HOME" >> "$GITHUB_PATH"
+        else
+          corepack enable
+        fi
         for attempt in 1 2 3; do
           if corepack prepare "$package_manager" --activate; then
             exit 0
@@ -92,7 +99,7 @@ runs:
     - name: Restore pnpm store cache
       id: pnpm-store-cache
       if: ${{ inputs.use-actions-cache == 'true' && runner.os != 'Windows' }}
-      uses: actions/cache/restore@v5
+      uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
       with:
         path: ${{ steps.pnpm-store.outputs.path }}
         key: pnpm-store-${{ runner.os }}-${{ runner.arch }}-${{ inputs.node-version }}-${{ hashFiles(inputs.package-manager-file) }}-${{ hashFiles(inputs.lockfile-path) }}

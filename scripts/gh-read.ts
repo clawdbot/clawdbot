@@ -1,10 +1,18 @@
 // Gh Read script supports OpenClaw repository automation.
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createPrivateKey, createSign } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { readSecretFileSync } from "@openclaw/fs-safe/secret";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { truncateUtf16Safe } from "../packages/normalization-core/src/utf16-slice.js";
 import { readBoundedResponseText } from "./lib/bounded-response.ts";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
+import {
+  normalizeGitHubRepo as normalizeRepo,
+  resolveGitHubRepoFromOrigin,
+} from "./lib/github-repo.ts";
+
+export { normalizeRepo };
 
 const APP_ID_ENV = "OPENCLAW_GH_READ_APP_ID";
 const KEY_FILE_ENV = "OPENCLAW_GH_READ_PRIVATE_KEY_FILE";
@@ -14,6 +22,7 @@ const API_VERSION = "2022-11-28";
 const DEFAULT_GITHUB_FETCH_TIMEOUT_MS = 30_000;
 const GITHUB_ERROR_BODY_MAX_CHARS = 4096;
 const GITHUB_JSON_BODY_MAX_BYTES = 1024 * 1024;
+const GITHUB_APP_PRIVATE_KEY_MAX_BYTES = 64 * 1024;
 const DEFAULT_READ_PERMISSION_KEYS = [
   "actions",
   "checks",
@@ -43,9 +52,14 @@ type GitHubJsonOptions = {
   timeoutMs?: number;
 };
 
+type GitHubBodyReadOptions = {
+  signal?: AbortSignal;
+  timeoutPromise?: Promise<never>;
+};
+
 export function parseRepoArg(args: string[]): string | null {
   for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
+    const arg = expectDefined(args[i], `GitHub CLI argument at index ${i}`);
     if (arg === "-R" || arg === "--repo") {
       return normalizeRepo(args[i + 1] ?? null);
     }
@@ -57,23 +71,6 @@ export function parseRepoArg(args: string[]): string | null {
     }
   }
   return null;
-}
-
-export function normalizeRepo(value: string | null | undefined): string | null {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  const withoutProtocol = trimmed.replace(/^[a-z]+:\/\//i, "");
-  const withoutHost = withoutProtocol.replace(/^(?:[^@/]+@)?github\.com[:/]/i, "");
-  const normalized = withoutHost.replace(/\.git$/i, "").replace(/^\/+|\/+$/g, "");
-  const parts = normalized.split("/").filter(Boolean);
-  if (parts.length < 2) {
-    return null;
-  }
-
-  return `${parts[parts.length - 2]}/${parts[parts.length - 1]}`;
 }
 
 export function parsePermissionKeys(raw: string | null | undefined): string[] {
@@ -141,11 +138,7 @@ function resolveRepo(args: string[]): string | null {
   }
 
   try {
-    const remote = execFileSync("git", ["config", "--get", "remote.origin.url"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    return normalizeRepo(remote);
+    return resolveGitHubRepoFromOrigin();
   } catch {
     return null;
   }
@@ -174,11 +167,11 @@ function createAppJwt(appId: string, privateKeyPem: string) {
 async function withGitHubFetchTimeout<T>(
   label: string,
   timeoutMs: number,
-  run: (signal: AbortSignal) => Promise<T>,
+  run: (signal: AbortSignal, timeoutPromise: Promise<never>) => Promise<T>,
 ): Promise<T> {
   const controller = new AbortController();
   let timeout: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<T>((_resolve, reject) => {
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
     timeout = setTimeout(() => {
       const error = new Error(`${label} exceeded timeout of ${timeoutMs}ms`);
       reject(error);
@@ -186,7 +179,7 @@ async function withGitHubFetchTimeout<T>(
     }, timeoutMs);
   });
   try {
-    return await Promise.race([run(controller.signal), timeoutPromise]);
+    return await Promise.race([run(controller.signal, timeoutPromise), timeoutPromise]);
   } finally {
     if (timeout) {
       clearTimeout(timeout);
@@ -194,9 +187,35 @@ async function withGitHubFetchTimeout<T>(
   }
 }
 
+function cancelReaderSoon(reader: ReadableStreamDefaultReader<Uint8Array>): void {
+  void Promise.resolve()
+    .then(() => reader.cancel())
+    .catch(() => undefined);
+}
+
+async function readGitHubErrorChunk(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  timeoutPromise: Promise<never> | undefined,
+  markCanceled: () => void,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  const read = reader.read();
+  if (!timeoutPromise) {
+    return await read;
+  }
+  return await Promise.race([
+    read,
+    timeoutPromise.catch((error: unknown) => {
+      markCanceled();
+      cancelReaderSoon(reader);
+      throw error;
+    }),
+  ]);
+}
+
 export async function readBoundedGitHubErrorText(
   response: Response,
   maxChars = GITHUB_ERROR_BODY_MAX_CHARS,
+  options: Pick<GitHubBodyReadOptions, "timeoutPromise"> = {},
 ): Promise<string> {
   if (!response.body) {
     return "";
@@ -206,10 +225,13 @@ export async function readBoundedGitHubErrorText(
   const decoder = new TextDecoder();
   let text = "";
   let truncated = false;
+  let canceled = false;
 
   try {
     while (text.length <= maxChars) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readGitHubErrorChunk(reader, options.timeoutPromise, () => {
+        canceled = true;
+      });
       if (done) {
         text += decoder.decode();
         break;
@@ -217,7 +239,7 @@ export async function readBoundedGitHubErrorText(
 
       text += decoder.decode(value, { stream: true });
       if (text.length > maxChars) {
-        text = text.slice(0, maxChars);
+        text = truncateUtf16Safe(text, maxChars);
         truncated = true;
         break;
       }
@@ -225,7 +247,7 @@ export async function readBoundedGitHubErrorText(
   } finally {
     if (truncated) {
       await reader.cancel().catch(() => undefined);
-    } else {
+    } else if (!canceled) {
       reader.releaseLock();
     }
   }
@@ -236,12 +258,15 @@ export async function readBoundedGitHubErrorText(
 export async function readBoundedGitHubJson<T>(
   response: Response,
   maxBytes = GITHUB_JSON_BODY_MAX_BYTES,
+  options: GitHubBodyReadOptions = {},
 ): Promise<T> {
   const text = await readBoundedResponseText(response, "GitHub API", maxBytes, {
     createTooLargeError: (message) =>
       Object.assign(new Error(message), {
         code: "ETOOBIG",
       }),
+    signal: options.signal,
+    timeoutPromise: options.timeoutPromise,
   });
   return JSON.parse(text) as T;
 }
@@ -260,7 +285,7 @@ export async function githubJson<T>(
   return await withGitHubFetchTimeout(
     `GitHub API ${init?.method ?? "GET"} ${path}`,
     timeoutMs,
-    async (signal) => {
+    async (signal, timeoutPromise) => {
       const response = await fetchImpl(`https://api.github.com${path}`, {
         method: init?.method ?? "GET",
         headers: {
@@ -275,11 +300,11 @@ export async function githubJson<T>(
       });
 
       if (!response.ok) {
-        const text = await readBoundedGitHubErrorText(response);
+        const text = await readBoundedGitHubErrorText(response, undefined, { timeoutPromise });
         fail(`${init?.method ?? "GET"} ${path} failed (${response.status}): ${text}`);
       }
 
-      return await readBoundedGitHubJson<T>(response);
+      return await readBoundedGitHubJson<T>(response, undefined, { signal, timeoutPromise });
     },
   );
 }
@@ -329,6 +354,13 @@ async function createInstallationToken(
   return tokenResponse.token;
 }
 
+export function readGitHubAppPrivateKey(filePath: string): string {
+  return readSecretFileSync(filePath, "GitHub App private key", {
+    maxBytes: GITHUB_APP_PRIVATE_KEY_MAX_BYTES,
+    rejectHardlinks: false,
+  });
+}
+
 async function main() {
   if (process.argv.length <= 2) {
     fail(
@@ -339,7 +371,7 @@ async function main() {
   const ghArgs = process.argv.slice(2);
   const appId = readRequiredEnv(APP_ID_ENV);
   const privateKeyPath = readRequiredEnv(KEY_FILE_ENV);
-  const privateKeyPem = readFileSync(privateKeyPath, "utf8");
+  const privateKeyPem = readGitHubAppPrivateKey(privateKeyPath);
   const repo = resolveRepo(ghArgs);
   const appJwt = createAppJwt(appId, privateKeyPem);
   const installation = await resolveInstallation(appJwt, repo);

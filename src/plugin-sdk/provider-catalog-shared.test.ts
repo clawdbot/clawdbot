@@ -3,10 +3,12 @@ import type { ModelCatalogProvider } from "@openclaw/model-catalog-core/model-ca
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyProviderNativeStreamingUsageCompat,
+  buildManifestModelDefinition,
   buildManifestModelProviderConfig,
   clearLiveCatalogCacheForTests,
   getCachedLiveCatalogValue,
   readConfiguredProviderCatalogEntries,
+  readManifestProviderDefaultModelRef,
   supportsNativeStreamingUsageCompat,
 } from "./provider-catalog-shared.js";
 import type { ModelDefinitionConfig } from "./provider-model-shared.js";
@@ -298,6 +300,7 @@ describe("provider-catalog-shared manifest provider configs", () => {
     const catalog: ModelCatalogProvider = {
       baseUrl: "https://api.example.test/v1",
       api: "openai-completions",
+      defaultModel: " example-model ",
       headers: { "x-provider": "example" },
       models: [
         {
@@ -308,6 +311,7 @@ describe("provider-catalog-shared manifest provider configs", () => {
           contextWindow: 128_000,
           contextTokens: 64_000,
           maxTokens: 8192,
+          thinkingLevelMap: { off: null, minimal: "low", max: "max" },
           mediaInput: {
             image: { maxSidePx: 2048, preferredSidePx: 1024, tokenMode: "detail" },
           },
@@ -359,12 +363,33 @@ describe("provider-catalog-shared manifest provider configs", () => {
           contextWindow: 128_000,
           contextTokens: 64_000,
           maxTokens: 8192,
+          thinkingLevelMap: { off: null, minimal: "low", max: "max" },
           mediaInput: {
             image: { maxSidePx: 2048, preferredSidePx: 1024, tokenMode: "detail" },
           },
           compat: { supportsUsageInStreaming: true },
         },
       ],
+    });
+    expect(
+      readManifestProviderDefaultModelRef(
+        { modelCatalog: { providers: { example: catalog } } },
+        "example",
+      ),
+    ).toBe("example/example-model");
+
+    expect(
+      buildManifestModelDefinition({
+        providerId: "example",
+        catalog,
+        decorate: (model) => ({
+          ...model,
+          compat: { ...model.compat, supportsUsageInStreaming: false },
+        }),
+      })(catalog.models[0]),
+    ).toEqual({
+      ...buildManifestModelProviderConfig({ providerId: "example", catalog }).models[0],
+      compat: { supportsUsageInStreaming: false },
     });
   });
 

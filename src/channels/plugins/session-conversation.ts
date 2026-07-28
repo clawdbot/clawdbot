@@ -22,7 +22,7 @@ import { getLoadedChannelPlugin, normalizeChannelId as normalizeAnyChannelId } f
 /**
  * Normalized conversation id details for one channel raw id.
  */
-export type ResolvedSessionConversation = {
+type ResolvedSessionConversation = {
   id: string;
   threadId: string | undefined;
   baseConversationId: string;
@@ -32,7 +32,7 @@ export type ResolvedSessionConversation = {
 /**
  * Parsed session-key conversation reference with parent/thread metadata.
  */
-export type ResolvedSessionConversationRef = {
+type ResolvedSessionConversationRef = {
   channel: string;
   kind: "group" | "channel";
   rawId: string;
@@ -88,10 +88,6 @@ function getMessagingAdapter(channel: string) {
   }
 }
 
-function dedupeConversationIds(values: Array<string | undefined | null>): string[] {
-  return normalizeUniqueSingleOrTrimmedStringList(values);
-}
-
 function buildGenericConversationResolution(rawId: string): ResolvedSessionConversation | null {
   const trimmed = rawId.trim();
   if (!trimmed) {
@@ -110,7 +106,7 @@ function buildGenericConversationResolution(rawId: string): ResolvedSessionConve
     id,
     threadId: parsed.threadId,
     baseConversationId: id,
-    parentConversationCandidates: dedupeConversationIds(
+    parentConversationCandidates: normalizeUniqueSingleOrTrimmedStringList(
       parsed.threadId ? [parsed.baseSessionKey] : [],
     ),
   };
@@ -130,9 +126,11 @@ function normalizeSessionConversationResolution(
     // candidate so nested topic/thread routes still collapse to their parent.
     baseConversationId:
       normalizeOptionalString(resolved.baseConversationId) ??
-      dedupeConversationIds(resolved.parentConversationCandidates ?? []).at(-1) ??
+      normalizeUniqueSingleOrTrimmedStringList(resolved.parentConversationCandidates ?? []).at(
+        -1,
+      ) ??
       resolved.id.trim(),
-    parentConversationCandidates: dedupeConversationIds(
+    parentConversationCandidates: normalizeUniqueSingleOrTrimmedStringList(
       resolved.parentConversationCandidates ?? [],
     ),
     hasExplicitParentConversationCandidates: Object.hasOwn(
@@ -229,7 +227,7 @@ function resolveSessionConversationResolution(params: {
     return null;
   }
 
-  const parentConversationCandidates = dedupeConversationIds(
+  const parentConversationCandidates = normalizeUniqueSingleOrTrimmedStringList(
     pluginResolved?.hasExplicitParentConversationCandidates
       ? resolved.parentConversationCandidates
       : (messaging?.resolveParentConversationCandidates?.({

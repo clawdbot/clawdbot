@@ -2,7 +2,8 @@
   "id": "google-meet",
   "name": "Google Meet",
   "description": "OpenClaw Google Meet participant plugin for joining calls through Chrome or Twilio transports.",
-  "enabledByDefault": false,
+  "icon": "https://cdn.simpleicons.org/googlemeet",
+  "enabledByDefault": true,
   "commandAliases": [{ "name": "googlemeet" }],
   "activation": {
     "onStartup": true,
@@ -10,7 +11,8 @@
     "onCapabilities": ["tool"]
   },
   "contracts": {
-    "tools": ["google_meet"]
+    "tools": ["google_meet"],
+    "transcriptSourceProviders": ["google-meet"]
   },
   "uiHints": {
     "defaults.meeting": {
@@ -424,7 +426,7 @@
           },
           "dtmfDelayMs": {
             "type": "number",
-            "default": 2500
+            "default": 12000
           },
           "postDtmfSpeechDelayMs": {
             "type": "number",
@@ -527,6 +529,9 @@
     }
   },
   "configContracts": {
-    "compatibilityMigrationPaths": ["plugins.entries.google-meet.config.realtime.provider"]
+    "compatibilityMigrationPaths": ["plugins.entries.google-meet.config.realtime.provider"],
+    "secretInputs": {
+      "paths": [{ "path": "realtime.providers.*.apiKey", "expected": "string" }]
+    }
   }
 }

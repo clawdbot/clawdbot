@@ -2,10 +2,10 @@
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { hasExplicitOptions } from "../command-options.js";
 import { formatHelpExamples } from "../help-format.js";
 import { collectOption } from "./helpers.js";
-import { registerAgentTurnCommand } from "./register.agent-turn.js";
 
 type AgentsAddModule = typeof import("../../commands/agents.commands.add.js");
 type AgentsBindModule = typeof import("../../commands/agents.commands.bind.js");
@@ -15,11 +15,9 @@ type AgentsListModule = typeof import("../../commands/agents.commands.list.js");
 type CliUtilsModule = typeof import("../cli-utils.js");
 type RuntimeModule = typeof import("../../runtime.js");
 
-let agentsBindModulePromise: Promise<AgentsBindModule> | undefined;
-
-function loadAgentsBindModule(): Promise<AgentsBindModule> {
-  return (agentsBindModulePromise ??= import("../../commands/agents.commands.bind.js"));
-}
+const loadAgentsBindModule = createLazyRuntimeModule(
+  () => import("../../commands/agents.commands.bind.js"),
+);
 
 async function loadAgentsAddCommand(): Promise<AgentsAddModule["agentsAddCommand"]> {
   return (await import("../../commands/agents.commands.add.js")).agentsAddCommand;
@@ -69,15 +67,6 @@ async function runAgentsCommandAction(
   await runCommandWithRuntime(defaultRuntime, async () => {
     await action(defaultRuntime);
   });
-}
-
-/** Register single-turn `agent` plus multi-agent management commands. */
-export function registerAgentCommands(
-  program: Command,
-  args: { agentChannelOptions: string },
-): void {
-  registerAgentTurnCommand(program, args);
-  registerAgentsCommands(program);
 }
 
 /** Register `agents` management subcommands for config, bindings, identity, and deletion. */

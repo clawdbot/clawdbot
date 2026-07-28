@@ -12,11 +12,15 @@ import {
 import { listCliRuntimeModelBackendBindings } from "../../agents/cli-backends.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
-import { loadModelCatalogForBrowse } from "../../agents/model-catalog-browse.js";
-import { resolveVisibleModelCatalog } from "../../agents/model-catalog-visibility.js";
-import { loadModelCatalog } from "../../agents/model-catalog.js";
-import { isRetiredModelPickerProvider } from "../../agents/model-picker-visibility.js";
+import { loadPreparedModelCatalogSnapshotForBrowse } from "../../agents/model-catalog-browse.js";
+import {
+  resolveLogicalModelCatalogEntryState,
+  resolveLogicalVisibleModelCatalog,
+  type ModelCatalogAuthChecker,
+} from "../../agents/model-catalog-visibility.js";
 import { createProviderAuthChecker } from "../../agents/model-provider-auth.js";
+import { isRetiredModelPickerProvider } from "../../agents/model-runtime-aliases.js";
+import { modelCatalogLogicalKey } from "../../agents/model-selection-shared.js";
 import {
   buildModelAliasIndex,
   normalizeProviderId,
@@ -28,12 +32,13 @@ import {
   RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
   createModelVisibilityPolicy,
 } from "../../agents/model-visibility-policy.js";
+import { openAIModelCatalogRoutePolicy } from "../../agents/openai-model-routes.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
+import { loadPreparedModelCatalogSnapshot } from "../../agents/prepared-model-catalog.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { resolveAgentRuntimeLabel } from "../../status/agent-runtime-label.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
@@ -154,25 +159,27 @@ export async function buildModelsProviderData(
     cfg,
     agentId,
   });
+  const catalogWorkspaceDir = options.workspaceDir;
   const workspaceDir =
     options.workspaceDir ??
     (agentId ? resolveAgentWorkspaceDir(cfg, agentId) : undefined) ??
     resolveDefaultAgentWorkspaceDir();
-  const metadataSnapshot = getCurrentPluginMetadataSnapshot({
-    config: cfg,
-    workspaceDir,
-    env: process.env,
-    allowScopedSnapshot: true,
-  });
   const cliRuntimeProviders = new Set(
     listCliRuntimeModelBackendBindings().map((binding) => normalizeProviderId(binding.runtime)),
   );
 
-  const catalog = await loadModelCatalogForBrowse({
+  const snapshot = await loadPreparedModelCatalogSnapshotForBrowse({
     cfg,
     view: options.view ?? "default",
-    loadCatalog: ({ readOnly }) => loadModelCatalog({ config: cfg, readOnly, metadataSnapshot }),
+    loadCatalog: ({ readOnly }) =>
+      loadPreparedModelCatalogSnapshot({
+        config: cfg,
+        readOnly,
+        ...(agentId ? { agentId, agentDir: resolveAgentDir(cfg, agentId) } : {}),
+        ...(catalogWorkspaceDir ? { workspaceDir: catalogWorkspaceDir } : {}),
+      }),
   });
+  const catalog = snapshot.entries;
   const visibilityPolicy = createModelVisibilityPolicy({
     cfg,
     catalog,
@@ -181,18 +188,21 @@ export async function buildModelsProviderData(
     agentId,
     ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
   });
-  const hasAuth: (provider: string) => Promise<boolean> =
-    options.view === "all"
-      ? async () => true
-      : createProviderAuthChecker({
-          cfg,
-          workspaceDir,
-          agentId,
-          allowPluginSyntheticAuth: false,
-          discoverExternalCliAuth: false,
-          allowPreparedRuntimeAuth: true,
-        });
-  const visibleCatalog = await resolveVisibleModelCatalog({
+  const authChecker = createProviderAuthChecker({
+    cfg,
+    workspaceDir,
+    agentId,
+    allowPluginSyntheticAuth: false,
+    discoverExternalCliAuth: false,
+    allowPreparedRuntimeAuth: true,
+  });
+  const logicalModelKey = (entry: { provider: string; id: string }) =>
+    openAIModelCatalogRoutePolicy.resolveIdentity(entry)?.key ?? modelCatalogLogicalKey(entry);
+  // Configured/default rows may remain visible without auth, but must not
+  // reintroduce a model that its provider route contract rejected.
+  const incompatibleModelKeys = new Set<string>();
+  const hasAuth: ModelCatalogAuthChecker = options.view === "all" ? async () => true : authChecker;
+  const visibleCatalog = await resolveLogicalVisibleModelCatalog({
     cfg,
     catalog,
     defaultProvider: resolvedDefault.provider,
@@ -200,13 +210,33 @@ export async function buildModelsProviderData(
     agentId,
     workspaceDir,
     view: options.view,
-    runtimeAuthDiscovery: false,
-    providerAuthChecker: hasAuth,
+    routePolicy: openAIModelCatalogRoutePolicy,
+    routeVariants: snapshot.routeVariants,
+    evaluateEntry: async (entry, routeVariants) => {
+      const identity = openAIModelCatalogRoutePolicy.resolveIdentity(entry);
+      const evaluation = await authChecker.evaluateModelAuth(entry.provider, {
+        modelId: identity?.id ?? entry.id,
+        observedRoutes: routeVariants.map((variant) => ({
+          api: variant.api,
+          baseUrl: variant.baseUrl,
+        })),
+      });
+      if (evaluation.routeResolution?.kind === "incompatible") {
+        incompatibleModelKeys.add(logicalModelKey(entry));
+      }
+      return resolveLogicalModelCatalogEntryState({
+        entry,
+        evaluation,
+        authBacked: options.view === "all" || evaluation.availability === true,
+        routePolicy: openAIModelCatalogRoutePolicy,
+      });
+    },
   });
 
   const aliasIndex = buildModelAliasIndex({
     cfg,
     defaultProvider: resolvedDefault.provider,
+    agentId,
   });
   const restrictToProviderWildcards =
     options.view !== "all" && visibilityPolicy.hasProviderWildcards;
@@ -250,6 +280,13 @@ export async function buildModelsProviderData(
     if (!resolved) {
       return;
     }
+    if (
+      incompatibleModelKeys.has(
+        logicalModelKey({ provider: resolved.ref.provider, id: resolved.ref.model }),
+      )
+    ) {
+      return;
+    }
     add(resolved.ref.provider, resolved.ref.model);
   };
 
@@ -276,13 +313,20 @@ export async function buildModelsProviderData(
   };
 
   for (const entry of visibleCatalog) {
+    if (incompatibleModelKeys.has(logicalModelKey(entry))) {
+      continue;
+    }
     add(entry.provider, entry.id);
   }
 
   for (const entry of catalog) {
     if (
       usesUnfilteredCatalogModels(entry.provider, cliRuntimeProviders) &&
-      (await hasAuth(entry.provider))
+      (await hasAuth(entry.provider, {
+        modelId: entry.id,
+        api: entry.api,
+        baseUrl: entry.baseUrl,
+      }))
     ) {
       add(entry.provider, entry.id);
     }
@@ -292,7 +336,13 @@ export async function buildModelsProviderData(
     addRawModelRef(raw);
   }
 
-  add(resolvedDefault.provider, resolvedDefault.model);
+  if (
+    !incompatibleModelKeys.has(
+      logicalModelKey({ provider: resolvedDefault.provider, id: resolvedDefault.model }),
+    )
+  ) {
+    add(resolvedDefault.provider, resolvedDefault.model);
+  }
   addModelConfigEntries();
 
   const providers = [...byProvider.keys()].toSorted();
@@ -717,3 +767,4 @@ export const handleModelsCommand: CommandHandler = async (params, allowTextComma
   }
   return { reply, shouldContinue: false };
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

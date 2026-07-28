@@ -35,7 +35,13 @@ import {
   type PluginModuleLoaderCache,
 } from "../../plugins/plugin-module-loader-cache.js";
 import { getActivePluginChannelRegistryVersion } from "../../plugins/runtime.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import { resolveNormalizedAccountEntry } from "../../routing/account-lookup.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  normalizeOptionalAccountId,
+} from "../../routing/session-key.js";
+import { resolveListedDefaultAccountId } from "./account-helpers.js";
 import { getBundledChannelSetupPlugin } from "./bundled.js";
 import {
   isSafeManifestChannelId,
@@ -148,7 +154,7 @@ type ReadOnlyChannelPluginResolution = {
   loadFailures: ReadOnlyChannelPluginLoadFailure[];
 };
 type ManifestChannelConfigRecord = NonNullable<PluginManifestRecord["channelConfigs"]>[string];
-export type ReadOnlyChannelPluginLoadFailure = {
+type ReadOnlyChannelPluginLoadFailure = {
   channelId: string;
   pluginId: string;
   message: string;
@@ -349,6 +355,10 @@ function getChannelConfigRecord(cfg: OpenClawConfig, channelId: string): Record<
     : {};
 }
 
+function normalizeManifestAccountConfigKey(accountId: string): string {
+  return normalizeOptionalAccountId(accountId) ?? "";
+}
+
 function listManifestChannelAccountIds(cfg: OpenClawConfig, channelId: string): string[] {
   const channelConfig = getChannelConfigRecord(cfg, channelId);
   const accounts = channelConfig.accounts;
@@ -356,11 +366,22 @@ function listManifestChannelAccountIds(cfg: OpenClawConfig, channelId: string): 
     return sortUniqueStrings(
       Object.keys(accounts)
         .filter((accountId) => !isBlockedObjectKey(accountId))
-        .map((accountId) => normalizeAccountId(accountId))
-        .filter((accountId) => !isBlockedObjectKey(accountId)),
+        .map((accountId) => normalizeOptionalAccountId(accountId))
+        .filter((accountId): accountId is string => Boolean(accountId)),
     );
   }
   return hasExplicitChannelConfig({ config: cfg, channelId }) ? [DEFAULT_ACCOUNT_ID] : [];
+}
+
+function resolveManifestChannelDefaultAccountId(cfg: OpenClawConfig, channelId: string): string {
+  const channelConfig = getChannelConfigRecord(cfg, channelId);
+  const configuredDefaultAccountId = normalizeOptionalAccountId(
+    typeof channelConfig.defaultAccount === "string" ? channelConfig.defaultAccount : undefined,
+  );
+  return resolveListedDefaultAccountId({
+    accountIds: listManifestChannelAccountIds(cfg, channelId),
+    configuredDefaultAccountId,
+  });
 }
 
 function resolveManifestChannelAccountConfig(params: {
@@ -372,9 +393,10 @@ function resolveManifestChannelAccountConfig(params: {
   const resolvedAccountId = normalizeAccountId(params.accountId);
   const accounts = channelConfig.accounts;
   if (accounts && typeof accounts === "object" && !Array.isArray(accounts)) {
-    const accountConfig = readOwnRecordValue(
+    const accountConfig = resolveNormalizedAccountEntry(
       accounts as Record<string, unknown>,
       resolvedAccountId,
+      normalizeManifestAccountConfigKey,
     );
     if (accountConfig && typeof accountConfig === "object" && !Array.isArray(accountConfig)) {
       return accountConfig as Record<string, unknown>;
@@ -451,7 +473,7 @@ function buildManifestChannelPlugin(params: {
       : {}),
     config: {
       listAccountIds: (cfg) => listManifestChannelAccountIds(cfg, params.channelId),
-      defaultAccountId: () => DEFAULT_ACCOUNT_ID,
+      defaultAccountId: (cfg) => resolveManifestChannelDefaultAccountId(cfg, params.channelId),
       resolveAccount: (cfg, accountId) => ({
         accountId: normalizeAccountId(accountId),
         config: resolveManifestChannelAccountConfig({
@@ -621,8 +643,14 @@ function rebindChannelPluginConfig(
     isConfigured: config.isConfigured
       ? (account, cfg) => config.isConfigured?.(account, rebind(cfg)) ?? false
       : undefined,
+    isLinked: config.isLinked
+      ? (account, cfg) => config.isLinked?.(account, rebind(cfg)) ?? "unknown"
+      : undefined,
     unconfiguredReason: config.unconfiguredReason
       ? (account, cfg) => config.unconfiguredReason?.(account, rebind(cfg)) ?? ""
+      : undefined,
+    unlinkedReason: config.unlinkedReason
+      ? (account, cfg) => config.unlinkedReason?.(account, rebind(cfg)) ?? ""
       : undefined,
     describeAccount: config.describeAccount
       ? (account, cfg) => config.describeAccount!(account, rebind(cfg))
@@ -1018,3 +1046,4 @@ export function resolveReadOnlyChannelPluginsForConfig(
   }
   return cloneReadOnlyChannelPluginResolution(resolution);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

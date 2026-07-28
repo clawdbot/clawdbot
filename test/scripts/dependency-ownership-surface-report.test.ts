@@ -42,6 +42,7 @@ describe("parseArgs", () => {
   it("rejects missing markdown artifact paths", () => {
     expect(() => parseArgs(["--markdown"])).toThrow("--markdown requires a value");
     expect(() => parseArgs(["--markdown", "--json"])).toThrow("--markdown requires a value");
+    expect(() => parseArgs(["--markdown", "-h"])).toThrow("--markdown requires a value");
     expect(() => parseArgs(["--markdown", ""])).toThrow("--markdown requires a value");
   });
 
@@ -54,6 +55,16 @@ describe("parseArgs", () => {
       asJson: true,
       jsonPath: "report.json",
     });
+    expect(() => parseArgs(["--json", "-h"])).toThrow("Unsupported argument: -h");
+  });
+
+  it("rejects duplicate report artifact options", () => {
+    expect(() => parseArgs(["--json", "first.json", "--json", "second.json"])).toThrow(
+      "--json was provided more than once.",
+    );
+    expect(() => parseArgs(["--markdown", "first.md", "--markdown", "second.md"])).toThrow(
+      "--markdown was provided more than once.",
+    );
   });
 });
 

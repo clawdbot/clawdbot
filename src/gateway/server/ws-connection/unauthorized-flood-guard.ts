@@ -5,13 +5,13 @@ import { ErrorCodes, type ErrorShape } from "../../../../packages/gateway-protoc
 /**
  * Per-connection guard that suppresses noisy unauthorized-role retries.
  */
-export type UnauthorizedFloodGuardOptions = {
+type UnauthorizedFloodGuardOptions = {
   closeAfter?: number;
   logEvery?: number;
 };
 
 /** Decision returned after recording one unauthorized role failure. */
-export type UnauthorizedFloodDecision = {
+type UnauthorizedFloodDecision = {
   shouldClose: boolean;
   shouldLog: boolean;
   count: number;

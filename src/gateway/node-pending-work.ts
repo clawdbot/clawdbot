@@ -1,5 +1,5 @@
 // Gateway pending node-work queue.
-// Stores short-lived per-node prompts until connected nodes drain/ack them.
+// Stores short-lived per-node prompts until connected nodes drain them.
 import { randomUUID } from "node:crypto";
 import {
   asDateTimestampMs,
@@ -9,8 +9,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 
 // Pending node work is an in-memory per-node queue for gateway prompts such as
-// status/location requests. Nodes drain it opportunistically and acknowledge
-// item ids after handling them.
+// status/location requests. Nodes drain it opportunistically after reconnecting.
 const NODE_PENDING_WORK_TYPES = ["status.request", "location.request"] as const;
 /** Work item types that connected nodes understand today. */
 export type NodePendingWorkType = (typeof NODE_PENDING_WORK_TYPES)[number];
@@ -31,12 +30,14 @@ type NodePendingWorkItem = {
 type NodePendingWorkState = {
   revision: number;
   itemsById: Map<string, NodePendingWorkItem>;
+  pairingGeneration?: string;
 };
 
 type DrainOptions = {
   maxItems?: number;
   includeDefaultStatus?: boolean;
   nowMs?: number;
+  pairingGeneration?: string;
 };
 
 type DrainResult = {
@@ -48,6 +49,7 @@ type DrainResult = {
 const DEFAULT_STATUS_ITEM_ID = "baseline-status";
 const DEFAULT_STATUS_PRIORITY: NodePendingWorkPriority = "default";
 const DEFAULT_PRIORITY: NodePendingWorkPriority = "normal";
+const DEFAULT_PENDING_WORK_TTL_MS = 24 * 60 * 60_000;
 const DEFAULT_MAX_ITEMS = 4;
 const MAX_ITEMS = 10;
 const PRIORITY_RANK: Record<NodePendingWorkPriority, number> = {
@@ -56,23 +58,28 @@ const PRIORITY_RANK: Record<NodePendingWorkPriority, number> = {
   default: 1,
 };
 
-const stateByNodeId = new Map<string, NodePendingWorkState>();
+const stateByNodeId = new Map<string, Map<string | undefined, NodePendingWorkState>>();
 
-function getOrCreateState(nodeId: string): NodePendingWorkState {
-  let state = stateByNodeId.get(nodeId);
+function getOrCreateState(nodeId: string, pairingGeneration?: string): NodePendingWorkState {
+  let states = stateByNodeId.get(nodeId);
+  if (!states) {
+    states = new Map();
+    stateByNodeId.set(nodeId, states);
+  }
+  let state = states.get(pairingGeneration);
   if (!state) {
     state = {
       revision: 0,
       itemsById: new Map(),
+      ...(pairingGeneration ? { pairingGeneration } : {}),
     };
-    stateByNodeId.set(nodeId, state);
+    states.set(pairingGeneration, state);
   }
   return state;
 }
 
 function pruneExpired(state: NodePendingWorkState, nowMs: number): boolean {
-  // Expiry pruning bumps revision so polling nodes can observe that work changed
-  // even when no explicit acknowledge call happened.
+  // Expiry pruning bumps revision so polling nodes can observe that work changed.
   const validNowMs = asDateTimestampMs(nowMs);
   if (validNowMs === undefined) {
     return false;
@@ -93,9 +100,40 @@ function pruneExpired(state: NodePendingWorkState, nowMs: number): boolean {
   return changed;
 }
 
-function pruneStateIfEmpty(nodeId: string, state: NodePendingWorkState) {
-  if (state.itemsById.size === 0) {
+function pruneExpiredRetiredGenerations(
+  nodeId: string,
+  currentPairingGeneration: string | undefined,
+  nowMs: number,
+): void {
+  const states = stateByNodeId.get(nodeId);
+  if (!states) {
+    return;
+  }
+  for (const [pairingGeneration, state] of states) {
+    if (pairingGeneration === currentPairingGeneration) {
+      continue;
+    }
+    pruneExpired(state, nowMs);
+    if (state.itemsById.size === 0) {
+      states.delete(pairingGeneration);
+    }
+  }
+  if (states.size === 0) {
     stateByNodeId.delete(nodeId);
+  }
+}
+
+function pruneStateIfEmpty(
+  nodeId: string,
+  pairingGeneration: string | undefined,
+  state: NodePendingWorkState,
+) {
+  if (state.itemsById.size === 0) {
+    const states = stateByNodeId.get(nodeId);
+    states?.delete(pairingGeneration);
+    if (states?.size === 0) {
+      stateByNodeId.delete(nodeId);
+    }
   }
 }
 
@@ -123,11 +161,12 @@ function makeBaselineStatusItem(nowMs: number): NodePendingWorkItem {
   };
 }
 
-function resolvePendingWorkExpiresAtMs(expiresInMs: unknown, nowMs: number): number | null {
-  if (typeof expiresInMs !== "number" || !Number.isFinite(expiresInMs)) {
-    return null;
-  }
-  return resolveExpiresAtMsFromDurationMs(Math.max(1_000, Math.trunc(expiresInMs)), { nowMs }) ?? 0;
+function resolvePendingWorkExpiresAtMs(expiresInMs: unknown, nowMs: number): number {
+  const ttlMs =
+    typeof expiresInMs === "number" && Number.isFinite(expiresInMs)
+      ? Math.max(1_000, Math.trunc(expiresInMs))
+      : DEFAULT_PENDING_WORK_TTL_MS;
+  return resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs }) ?? 0;
 }
 
 export function enqueueNodePendingWork(params: {
@@ -136,6 +175,7 @@ export function enqueueNodePendingWork(params: {
   priority?: NodePendingWorkPriority;
   expiresInMs?: number;
   payload?: Record<string, unknown>;
+  pairingGeneration?: string;
 }): { revision: number; item: NodePendingWorkItem; deduped: boolean } {
   const nodeId = params.nodeId.trim();
   if (!nodeId) {
@@ -143,10 +183,13 @@ export function enqueueNodePendingWork(params: {
   }
   const rawNowMs = Date.now();
   const nowMs = resolveDateTimestampMs(rawNowMs);
-  const state = getOrCreateState(nodeId);
+  // Generation changes stop touching old buckets, so sweep their TTLs from
+  // every active-generation access instead of retaining retired work forever.
+  pruneExpiredRetiredGenerations(nodeId, params.pairingGeneration, nowMs);
+  const state = getOrCreateState(nodeId, params.pairingGeneration);
   pruneExpired(state, nowMs);
   // Keep one outstanding item per type so repeated status/location requests
-  // collapse until the node has a chance to drain and acknowledge them.
+  // collapse until the node has a chance to drain them.
   const existing = [...state.itemsById.values()].find((item) => item.type === params.type);
   if (existing) {
     return { revision: state.revision, item: existing, deduped: true };
@@ -164,6 +207,42 @@ export function enqueueNodePendingWork(params: {
   return { revision: state.revision, item, deduped: false };
 }
 
+/** Clears explicit pending work owned by a removed node pairing. */
+export function clearNodePendingWork(nodeId: string, pairingGeneration?: string): boolean {
+  const normalizedNodeId = nodeId.trim();
+  if (!normalizedNodeId) {
+    return false;
+  }
+  if (pairingGeneration === undefined) {
+    return stateByNodeId.delete(normalizedNodeId);
+  }
+  const states = stateByNodeId.get(normalizedNodeId);
+  const deleted = states?.delete(pairingGeneration) ?? false;
+  if (states?.size === 0) {
+    stateByNodeId.delete(normalizedNodeId);
+  }
+  return deleted;
+}
+
+/** Removes one exact item without disturbing concurrent work in the same generation. */
+export function removeNodePendingWorkItem(params: {
+  nodeId: string;
+  itemId: string;
+  pairingGeneration?: string;
+}): boolean {
+  const normalizedNodeId = params.nodeId.trim();
+  if (!normalizedNodeId || !params.itemId) {
+    return false;
+  }
+  const state = stateByNodeId.get(normalizedNodeId)?.get(params.pairingGeneration);
+  if (!state || !state.itemsById.delete(params.itemId)) {
+    return false;
+  }
+  state.revision += 1;
+  pruneStateIfEmpty(normalizedNodeId, params.pairingGeneration, state);
+  return true;
+}
+
 /** Drains pending work for a node, including a baseline status request unless disabled. */
 export function drainNodePendingWork(nodeId: string, opts: DrainOptions = {}): DrainResult {
   const normalizedNodeId = nodeId.trim();
@@ -171,10 +250,11 @@ export function drainNodePendingWork(nodeId: string, opts: DrainOptions = {}): D
     return { revision: 0, items: [], hasMore: false };
   }
   const nowMs = resolveDateTimestampMs(opts.nowMs ?? Date.now());
-  const state = stateByNodeId.get(normalizedNodeId);
+  pruneExpiredRetiredGenerations(normalizedNodeId, opts.pairingGeneration, nowMs);
+  const state = stateByNodeId.get(normalizedNodeId)?.get(opts.pairingGeneration);
   if (state) {
     pruneExpired(state, nowMs);
-    pruneStateIfEmpty(normalizedNodeId, state);
+    pruneStateIfEmpty(normalizedNodeId, opts.pairingGeneration, state);
   }
   const revision = state?.revision ?? 0;
   const maxItems = Math.min(MAX_ITEMS, Math.max(1, Math.trunc(opts.maxItems ?? DEFAULT_MAX_ITEMS)));
@@ -187,49 +267,18 @@ export function drainNodePendingWork(nodeId: string, opts: DrainOptions = {}): D
   }
   const explicitReturnedCount = items.filter((item) => item.id !== DEFAULT_STATUS_ITEM_ID).length;
   const baselineIncluded = items.some((item) => item.id === DEFAULT_STATUS_ITEM_ID);
+  if (state && explicitReturnedCount > 0) {
+    for (const item of items) {
+      if (item.id !== DEFAULT_STATUS_ITEM_ID) {
+        state.itemsById.delete(item.id);
+      }
+    }
+    state.revision += 1;
+    pruneStateIfEmpty(normalizedNodeId, opts.pairingGeneration, state);
+  }
   return {
-    revision,
+    revision: state?.revision ?? revision,
     items,
     hasMore: explicitItems.length > explicitReturnedCount || (includeBaseline && !baselineIncluded),
   };
-}
-
-/** Acknowledges completed pending-work ids and advances the node revision. */
-export function acknowledgeNodePendingWork(params: { nodeId: string; itemIds: string[] }): {
-  revision: number;
-  removedItemIds: string[];
-} {
-  const nodeId = params.nodeId.trim();
-  if (!nodeId) {
-    return { revision: 0, removedItemIds: [] };
-  }
-  const state = stateByNodeId.get(nodeId);
-  if (!state) {
-    return { revision: 0, removedItemIds: [] };
-  }
-  const removedItemIds: string[] = [];
-  for (const itemId of params.itemIds) {
-    const trimmedId = itemId.trim();
-    if (!trimmedId || trimmedId === DEFAULT_STATUS_ITEM_ID) {
-      continue;
-    }
-    if (state.itemsById.delete(trimmedId)) {
-      removedItemIds.push(trimmedId);
-    }
-  }
-  if (removedItemIds.length > 0) {
-    state.revision += 1;
-  }
-  pruneStateIfEmpty(nodeId, state);
-  return { revision: state.revision, removedItemIds };
-}
-
-/** Clears all pending work state for tests. */
-export function resetNodePendingWorkForTests() {
-  stateByNodeId.clear();
-}
-
-/** Returns the number of node queues retained in memory for tests. */
-export function getNodePendingWorkStateCountForTests(): number {
-  return stateByNodeId.size;
 }

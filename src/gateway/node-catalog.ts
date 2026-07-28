@@ -1,6 +1,9 @@
 // Gateway node catalog builder.
 // Merges paired devices, approved node records, and live websocket sessions.
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { normalizeSortedUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { hasEffectivePairedDeviceRole, type PairedDevice } from "../infra/device-pairing.js";
 import {
@@ -75,6 +78,28 @@ type KnownNodeCatalog = {
 
 function uniqueSortedStrings(...items: Array<readonly unknown[] | undefined>): string[] {
   return normalizeSortedUniqueTrimmedStringList(items.flatMap((item) => item ?? []));
+}
+
+// Catalog scalars come from blind-cast pairing records, so coerce every formatter-facing optional
+// string scalar to a trimmed string or undefined: a non-string would crash `nodes status`/`nodes
+// list` formatters (.trim(), sanitizeTerminalText/stripAnsi). Scalar analog of uniqueSortedStrings.
+function firstNormalizedString(...values: unknown[]): string | undefined {
+  // Treat a non-string (or empty) higher-priority value as ABSENT and fall through, instead of
+  // letting `find` pick the first non-null value and normalize it to undefined — which would
+  // suppress a valid lower-priority string. Return the first value that yields a trimmed string.
+  for (const value of values) {
+    const normalized = normalizeOptionalString(value);
+    if (normalized !== undefined) {
+      return normalized;
+    }
+  }
+  return undefined;
+}
+
+// Blind-cast pairing records can carry a non-string id; a node with no addressable string
+// id is unusable and would crash the id-based catalog sort/format, so drop it entirely.
+function hasAddressableId(value: unknown): boolean {
+  return normalizeOptionalString(value) !== undefined;
 }
 
 function buildDevicePairingSource(entry: PairedDevice): KnownNodeDevicePairingSource {
@@ -182,7 +207,7 @@ function resolveEffectiveLastSeen(params: {
   }
   return {
     lastSeenAtMs: newest.atMs,
-    lastSeenReason: newest.reason,
+    lastSeenReason: normalizeOptionalString(newest.reason),
   };
 }
 
@@ -197,34 +222,64 @@ function buildEffectiveKnownNode(entry: {
   const lastSeen = resolveEffectiveLastSeen({ live, devicePairing, nodePairing });
   return {
     nodeId,
-    displayName:
-      live?.displayName ??
-      nodePairing?.displayName ??
-      devicePairing?.displayName ??
+    displayName: firstNormalizedString(
+      live?.displayName,
+      nodePairing?.displayName,
+      devicePairing?.displayName,
       pendingNodePairing?.displayName,
-    platform:
-      live?.platform ??
-      nodePairing?.platform ??
-      devicePairing?.platform ??
+    ),
+    platform: firstNormalizedString(
+      live?.platform,
+      nodePairing?.platform,
+      devicePairing?.platform,
       pendingNodePairing?.platform,
-    version: live?.version ?? nodePairing?.version ?? pendingNodePairing?.version,
-    coreVersion: live?.coreVersion ?? nodePairing?.coreVersion ?? pendingNodePairing?.coreVersion,
-    uiVersion: live?.uiVersion ?? nodePairing?.uiVersion ?? pendingNodePairing?.uiVersion,
-    clientId: live?.clientId ?? devicePairing?.clientId ?? pendingNodePairing?.clientId,
-    clientMode: live?.clientMode ?? devicePairing?.clientMode ?? pendingNodePairing?.clientMode,
-    deviceFamily:
-      live?.deviceFamily ?? nodePairing?.deviceFamily ?? pendingNodePairing?.deviceFamily,
-    modelIdentifier:
-      live?.modelIdentifier ?? nodePairing?.modelIdentifier ?? pendingNodePairing?.modelIdentifier,
-    remoteIp:
-      live?.remoteIp ??
-      nodePairing?.remoteIp ??
-      devicePairing?.remoteIp ??
+    ),
+    version: firstNormalizedString(
+      live?.version,
+      nodePairing?.version,
+      pendingNodePairing?.version,
+    ),
+    coreVersion: firstNormalizedString(
+      live?.coreVersion,
+      nodePairing?.coreVersion,
+      pendingNodePairing?.coreVersion,
+    ),
+    uiVersion: firstNormalizedString(
+      live?.uiVersion,
+      nodePairing?.uiVersion,
+      pendingNodePairing?.uiVersion,
+    ),
+    clientId: firstNormalizedString(
+      live?.clientId,
+      devicePairing?.clientId,
+      pendingNodePairing?.clientId,
+    ),
+    clientMode: firstNormalizedString(
+      live?.clientMode,
+      devicePairing?.clientMode,
+      pendingNodePairing?.clientMode,
+    ),
+    deviceFamily: firstNormalizedString(
+      live?.deviceFamily,
+      nodePairing?.deviceFamily,
+      pendingNodePairing?.deviceFamily,
+    ),
+    modelIdentifier: firstNormalizedString(
+      live?.modelIdentifier,
+      nodePairing?.modelIdentifier,
+      pendingNodePairing?.modelIdentifier,
+    ),
+    remoteIp: firstNormalizedString(
+      live?.remoteIp,
+      nodePairing?.remoteIp,
+      devicePairing?.remoteIp,
       pendingNodePairing?.remoteIp,
+    ),
     caps: live ? uniqueSortedStrings(live.caps) : uniqueSortedStrings(nodePairing?.caps),
     commands: live
       ? uniqueSortedStrings(live.commands)
       : uniqueSortedStrings(nodePairing?.commands),
+    nodePluginTools: live?.nodePluginTools,
     pathEnv: live?.pathEnv,
     permissions: live?.permissions ?? nodePairing?.permissions,
     approvalState: pendingNodePairing
@@ -239,6 +294,8 @@ function buildEffectiveKnownNode(entry: {
     pendingDeclaredCommands: pendingNodePairing?.commands,
     pendingDeclaredPermissions: pendingNodePairing?.permissions,
     connectedAtMs: live?.connectedAtMs,
+    lastActiveAtMs: live?.lastActiveAtMs,
+    presenceUpdatedAtMs: live?.presenceUpdatedAtMs,
     lastSeenAtMs: lastSeen.lastSeenAtMs,
     lastSeenReason: lastSeen.lastSeenReason,
     approvedAtMs: nodePairing?.approvedAtMs ?? devicePairing?.approvedAtMs,
@@ -271,15 +328,22 @@ export function createKnownNodeCatalog(params: {
 }): KnownNodeCatalog {
   const devicePairingById = new Map(
     params.pairedDevices
-      .filter((entry) => hasEffectivePairedDeviceRole(entry, "node"))
+      .filter(
+        (entry) => hasAddressableId(entry.deviceId) && hasEffectivePairedDeviceRole(entry, "node"),
+      )
       .map((entry) => [entry.deviceId, buildDevicePairingSource(entry)]),
   );
   const nodePairingById = new Map(
-    (params.pairedNodes ?? []).map((entry) => [entry.nodeId, buildApprovedNodeSource(entry)]),
+    (params.pairedNodes ?? [])
+      .filter((entry) => hasAddressableId(entry.nodeId))
+      .map((entry) => [entry.nodeId, buildApprovedNodeSource(entry)]),
   );
   const pendingNodePairingById = new Map<string, KnownNodePendingSource>();
   // listNodePairing returns newest requests first; keep the current approval action per node.
   for (const entry of params.pendingNodes ?? []) {
+    if (!hasAddressableId(entry.nodeId)) {
+      continue;
+    }
     if (!pendingNodePairingById.has(entry.nodeId)) {
       pendingNodePairingById.set(entry.nodeId, buildPendingNodeSource(entry));
     }
@@ -327,10 +391,7 @@ export function listKnownNodes(catalog: KnownNodeCatalog): NodeListNode[] {
 }
 
 /** Returns the merged catalog entry for diagnostics that need source details. */
-export function getKnownNodeEntry(
-  catalog: KnownNodeCatalog,
-  nodeId: string,
-): KnownNodeEntry | null {
+function getKnownNodeEntry(catalog: KnownNodeCatalog, nodeId: string): KnownNodeEntry | null {
   return catalog.entriesById.get(nodeId) ?? null;
 }
 

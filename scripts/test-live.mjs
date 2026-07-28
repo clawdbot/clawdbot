@@ -1,6 +1,9 @@
 // Runs the full live Vitest suite with live-test env and heartbeat output.
+import { terminateManagedChild } from "./lib/managed-child-process.mjs";
 import { spawnPnpmRunner } from "./pnpm-runner.mjs";
+import { resolveVitestNoOutputTimeoutMs } from "./run-vitest.mjs";
 import {
+  forwardSignalToVitestProcessGroup,
   installVitestProcessGroupCleanup,
   shouldUseDetachedVitestProcessGroup,
 } from "./vitest-process-group.mjs";
@@ -8,7 +11,7 @@ import {
 /**
  * Renders CLI usage for the live-test wrapper.
  */
-export function testLiveUsage() {
+function testLiveUsage() {
   return [
     "Usage: node scripts/test-live.mjs [options] [--] [vitest targets/args...]",
     "",
@@ -103,6 +106,13 @@ export function resolveTestLiveHeartbeatMs(baseEnv = process.env) {
 }
 
 /**
+ * Reads the live-test no-output timeout using the shared Vitest watchdog contract.
+ */
+export function resolveTestLiveNoOutputTimeoutMs(baseEnv = process.env) {
+  return resolveVitestNoOutputTimeoutMs(baseEnv);
+}
+
+/**
  * Builds pnpm/vitest args for full live test execution.
  */
 export function buildTestLivePnpmArgs(args) {
@@ -139,8 +149,11 @@ export function main(argv = process.argv.slice(2), baseEnv = process.env) {
 
   const env = buildTestLiveEnv(args, baseEnv);
   const heartbeatMs = resolveTestLiveHeartbeatMs(baseEnv);
+  const noOutputTimeoutMs = resolveTestLiveNoOutputTimeoutMs(baseEnv);
   const startedAt = Date.now();
   let lastOutputAt = startedAt;
+  let lastHeartbeatAt = startedAt;
+  let timedOut = false;
 
   const child = spawnPnpmRunner({
     pnpmArgs: buildTestLivePnpmArgs(args),
@@ -149,6 +162,8 @@ export function main(argv = process.argv.slice(2), baseEnv = process.env) {
   let forwardedSignal = null;
   const teardownChildCleanup = installVitestProcessGroupCleanup({
     child,
+    forceSignal: "SIGKILL",
+    forceSignalDelayMs: 100,
     onSignal: (signal) => {
       forwardedSignal ??= signal;
     },
@@ -161,6 +176,7 @@ export function main(argv = process.argv.slice(2), baseEnv = process.env) {
 
   const noteOutput = () => {
     lastOutputAt = Date.now();
+    lastHeartbeatAt = lastOutputAt;
   };
 
   child.stdout?.on("data", (chunk) => {
@@ -173,29 +189,51 @@ export function main(argv = process.argv.slice(2), baseEnv = process.env) {
     process.stderr.write(chunk);
   });
 
-  const heartbeat = setInterval(() => {
-    const now = Date.now();
-    if (now - lastOutputAt < heartbeatMs) {
-      return;
-    }
-    const elapsedSec = Math.max(1, Math.round((now - startedAt) / 1_000));
-    const quietSec = Math.max(1, Math.round((now - lastOutputAt) / 1_000));
-    process.stderr.write(
-      `[test:live] still running (${elapsedSec}s elapsed, ${quietSec}s since last output)\n`,
-    );
-    lastOutputAt = now;
-  }, heartbeatMs);
+  const heartbeat = setInterval(
+    () => {
+      const now = Date.now();
+      const quietMs = now - lastOutputAt;
+      if (noOutputTimeoutMs !== null && quietMs >= noOutputTimeoutMs) {
+        timedOut = true;
+        clearInterval(heartbeat);
+        process.stderr.write(
+          `[test:live] no output for ${noOutputTimeoutMs}ms; terminating stalled Vitest process group\n`,
+        );
+        terminateManagedChild(child, "SIGKILL");
+        return;
+      }
+      if (quietMs < heartbeatMs || now - lastHeartbeatAt < heartbeatMs) {
+        return;
+      }
+      const elapsedSec = Math.max(1, Math.round((now - startedAt) / 1_000));
+      const quietSec = Math.max(1, Math.round(quietMs / 1_000));
+      process.stderr.write(
+        `[test:live] still running (${elapsedSec}s elapsed, ${quietSec}s since last output)\n`,
+      );
+      lastHeartbeatAt = now;
+    },
+    Math.min(heartbeatMs, noOutputTimeoutMs ?? heartbeatMs),
+  );
   heartbeat.unref?.();
 
   child.on("exit", (code, signal) => {
     teardown();
+    if (forwardedSignal) {
+      forwardSignalToVitestProcessGroup({
+        child,
+        kill: process.kill.bind(process),
+        signal: "SIGKILL",
+      });
+      process.kill(process.pid, forwardedSignal);
+      return;
+    }
+    if (timedOut) {
+      process.exit(1);
+      return;
+    }
     if (signal) {
       process.stderr.write(`[test:live] vitest exited via signal=${signal}\n`);
       process.kill(process.pid, signal);
-      return;
-    }
-    if (forwardedSignal) {
-      process.kill(process.pid, forwardedSignal);
       return;
     }
     if ((code ?? 1) !== 0) {

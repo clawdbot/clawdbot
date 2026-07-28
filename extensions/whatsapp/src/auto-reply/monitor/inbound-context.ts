@@ -1,5 +1,10 @@
 // Whatsapp plugin module implements inbound context behavior.
-import { filterChannelInboundQuoteContext } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  filterChannelInboundQuoteContext,
+  formatMediaPlaceholderText,
+  resolveInboundSupplementalSenderAllowed,
+} from "openclaw/plugin-sdk/channel-inbound";
+import type { HistoryMediaEntry } from "openclaw/plugin-sdk/reply-history";
 import { filterSupplementalContextItems } from "openclaw/plugin-sdk/security-runtime";
 import {
   getComparableIdentityValues,
@@ -8,7 +13,8 @@ import {
   type WhatsAppIdentity,
   type WhatsAppReplyContext,
 } from "../../identity.js";
-import type { WebInboundMessage } from "../../inbound/types.js";
+import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
+import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { normalizeE164 } from "../../text-runtime.js";
 
 export type GroupHistoryEntry = {
@@ -17,12 +23,13 @@ export type GroupHistoryEntry = {
   timestamp?: number;
   id?: string;
   senderJid?: string;
+  media?: HistoryMediaEntry[];
 };
 
 type ContextVisibilityMode = "all" | "allowlist" | "allowlist_quote";
 
 function isWhatsAppSupplementalSenderAllowed(params: {
-  allowFrom: string[];
+  allowFrom: readonly string[];
   authDir?: string;
   sender?: WhatsAppIdentity | null;
 }): boolean {
@@ -55,24 +62,27 @@ export function resolveVisibleWhatsAppGroupHistory(params: {
   groupPolicy: "open" | "allowlist" | "disabled";
   groupAllowFrom: string[];
 }): GroupHistoryEntry[] {
-  if (params.groupPolicy !== "allowlist") {
-    return params.history;
-  }
   return filterSupplementalContextItems({
     items: params.history,
     mode: params.mode,
     kind: "history",
     isSenderAllowed: (entry) =>
-      isWhatsAppSupplementalSenderAllowed({
+      resolveInboundSupplementalSenderAllowed({
+        isGroup: true,
+        groupPolicy: params.groupPolicy,
         allowFrom: params.groupAllowFrom,
-        authDir: params.authDir,
-        sender: entry.senderJid ? { jid: entry.senderJid } : null,
+        isSenderAllowed: (allowFrom) =>
+          isWhatsAppSupplementalSenderAllowed({
+            allowFrom,
+            authDir: params.authDir,
+            sender: entry.senderJid ? { jid: entry.senderJid } : null,
+          }),
       }),
   }).items;
 }
 
 export function resolveVisibleWhatsAppReplyContext(params: {
-  msg: WebInboundMessage;
+  msg: AdmittedWebInboundMessage;
   authDir?: string;
   mode: ContextVisibilityMode;
   groupPolicy: "open" | "allowlist" | "disabled";
@@ -82,19 +92,29 @@ export function resolveVisibleWhatsAppReplyContext(params: {
   if (!replyTo) {
     return null;
   }
-  const senderAllowed =
-    params.msg.chatType !== "group" || params.groupPolicy !== "allowlist"
-      ? true
-      : isWhatsAppSupplementalSenderAllowed({
-          allowFrom: params.groupAllowFrom,
-          authDir: params.authDir,
-          sender: replyTo.sender,
-        });
+  const admission = requireWhatsAppInboundAdmission(params.msg);
+  const previewBody = [
+    replyTo.body,
+    formatMediaPlaceholderText(replyTo.media ? [replyTo.media] : []),
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const senderAllowed = resolveInboundSupplementalSenderAllowed({
+    isGroup: admission.conversation.kind === "group",
+    groupPolicy: params.groupPolicy,
+    allowFrom: params.groupAllowFrom,
+    isSenderAllowed: (allowFrom) =>
+      isWhatsAppSupplementalSenderAllowed({
+        allowFrom,
+        authDir: params.authDir,
+        sender: replyTo.sender,
+      }),
+  });
   const visible = filterChannelInboundQuoteContext(params.mode, {
     id: replyTo.id,
-    body: replyTo.body,
+    body: previewBody,
     sender: replyTo.sender?.label ?? undefined,
     senderAllowed,
   });
-  return visible ? replyTo : null;
+  return visible ? { ...replyTo, body: visible.body ?? "" } : null;
 }

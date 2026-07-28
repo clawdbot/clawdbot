@@ -98,7 +98,7 @@ export async function resolveBareSessionResetPromptState(params: {
  * know which daily memory files to read during their Session Startup sequence.
  * Without this, agents on /new or /reset guess the date from their training cutoff.
  */
-export function buildBareSessionResetPrompt(
+function buildBareSessionResetPrompt(
   cfg?: OpenClawConfig,
   nowMs?: number,
   bootstrapMode?: BootstrapMode,
@@ -113,6 +113,3 @@ export function buildBareSessionResetPrompt(
     nowMs ?? Date.now(),
   );
 }
-
-/** @deprecated Use buildBareSessionResetPrompt(cfg) instead */
-export const BARE_SESSION_RESET_PROMPT = BARE_SESSION_RESET_PROMPT_BASE;

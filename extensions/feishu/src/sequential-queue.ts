@@ -21,7 +21,7 @@ import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 
 const DEFAULT_TASK_TIMEOUT_MS = 5 * 60 * 1000;
 
-export interface SequentialQueueOptions {
+interface SequentialQueueOptions {
   /**
    * Maximum time (ms) to block subsequent same-key tasks behind a single
    * in-flight task. Pass 0 (or a non-finite value) to disable the cap and

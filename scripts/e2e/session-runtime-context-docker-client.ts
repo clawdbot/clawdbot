@@ -5,7 +5,9 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   buildRuntimeContextCustomMessage,
   resolveRuntimeContextPromptParts,
@@ -28,12 +30,8 @@ function assert(condition: unknown, message: string): asserts condition {
   }
 }
 
-async function readJsonl(filePath: string): Promise<TranscriptEntry[]> {
-  const raw = await fs.readFile(filePath, "utf-8");
-  return raw
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as TranscriptEntry);
+function setEnvValue(key: string, value: string): void {
+  Reflect.set(process.env, key, value);
 }
 
 function messageText(content: unknown): string {
@@ -87,7 +85,7 @@ async function verifyRuntimeContextTranscriptShape(root: string) {
     timestamp: Date.now() + 1,
   });
 
-  const entries = await readJsonl(sessionFile);
+  const entries = sessionManager.getEntries() as TranscriptEntry[];
   const customEntry = entries.find((entry) => entry.type === "custom_message");
   assert(!customEntry, "runtime custom message should not be persisted without its user turn");
   assert(
@@ -214,7 +212,25 @@ async function verifyDoctorRepair(root: string) {
     result.status === 0,
     `doctor --fix failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
   );
-  const entries = await readJsonl(sessionFile);
+  const databasePath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+  const database = new DatabaseSync(databasePath, { readOnly: true });
+  let migratedSessionId: string | undefined;
+  try {
+    const row = database
+      .prepare("SELECT current_session_id AS session_id FROM session_nodes WHERE session_key = ?")
+      .get("agent:main:qa:docker-runtime-context");
+    if (typeof row?.session_id === "string") {
+      migratedSessionId = row.session_id;
+    }
+  } finally {
+    database.close();
+  }
+  assert(migratedSessionId, "doctor did not migrate session");
+  const entries = (await readSessionTranscriptEvents({
+    agentId: "main",
+    sessionId: migratedSessionId,
+    sessionKey: "agent:main:qa:docker-runtime-context",
+  })) as TranscriptEntry[];
   const ids = entries.map((entryValue) => (entryValue as { id?: string }).id).filter(Boolean);
   assert(
     JSON.stringify(ids) ===
@@ -235,9 +251,10 @@ async function verifyDoctorRepair(root: string) {
 
 async function main() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-runtime-context-"));
-  process.env.HOME = root;
-  process.env.OPENCLAW_STATE_DIR = path.join(root, ".openclaw");
-  process.env.OPENCLAW_CONFIG_PATH = path.join(process.env.OPENCLAW_STATE_DIR, "openclaw.json");
+  const stateDir = path.join(root, ".openclaw");
+  setEnvValue("HOME", root);
+  setEnvValue("OPENCLAW_STATE_DIR", stateDir);
+  setEnvValue("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
   try {
     await verifyRuntimeContextTranscriptShape(root);
     await verifyDoctorRepair(root);

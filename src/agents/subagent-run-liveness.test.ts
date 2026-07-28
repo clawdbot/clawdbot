@@ -5,9 +5,10 @@ import {
   isLiveUnendedSubagentRun,
   RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
   isStaleUnendedSubagentRun,
-  STALE_UNENDED_SUBAGENT_RUN_MS,
   shouldKeepSubagentRunChildLink,
 } from "./subagent-run-liveness.js";
+
+const STALE_UNENDED_SUBAGENT_RUN_MS = 2 * 60 * 60 * 1_000;
 
 describe("subagent run liveness", () => {
   const now = Date.parse("2026-04-25T12:00:00Z");

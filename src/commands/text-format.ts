@@ -3,6 +3,9 @@
 
 /** Shortens text to maxLen code points, appending an ellipsis when truncated. */
 export const shortenText = (value: string, maxLen: number) => {
+  if (maxLen <= 0) {
+    return "";
+  }
   const chars = Array.from(value);
   if (chars.length <= maxLen) {
     return value;

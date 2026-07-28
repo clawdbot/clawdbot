@@ -70,6 +70,111 @@ describe("runtime tool input schema projection", () => {
     });
   });
 
+  it("reports non-finite numeric schema values before JSON projection", () => {
+    expect(
+      projectRuntimeToolInputSchema({
+        type: "object",
+        properties: {
+          score: { type: "number", default: Number.NaN },
+        },
+      }),
+    ).toEqual({
+      schema: {},
+      violations: ["parameters.properties.score.default is not JSON-serializable"],
+    });
+  });
+
+  it("reports non-finite values returned by nested toJSON serializers", () => {
+    expect(
+      projectRuntimeToolInputSchema({
+        type: "object",
+        properties: {
+          score: {
+            toJSON() {
+              return { type: "number", maximum: Number.POSITIVE_INFINITY };
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      schema: {},
+      violations: ["parameters.properties.score.maximum is not JSON-serializable"],
+    });
+  });
+
+  it("keeps empty property names in non-finite diagnostic paths", () => {
+    expect(
+      projectRuntimeToolInputSchema({
+        type: "object",
+        properties: {
+          "": { type: "number", maximum: Number.POSITIVE_INFINITY },
+        },
+      }),
+    ).toEqual({
+      schema: {},
+      violations: ["parameters.properties..maximum is not JSON-serializable"],
+    });
+  });
+
+  it("reports boxed non-finite numeric schema values", () => {
+    expect(
+      projectRuntimeToolInputSchema({
+        type: "object",
+        properties: {
+          score: { type: "number", maximum: Object(Number.POSITIVE_INFINITY) },
+        },
+      }),
+    ).toEqual({
+      schema: {},
+      violations: ["parameters.properties.score.maximum is not JSON-serializable"],
+    });
+  });
+
+  it("does not treat a spoofed Number tag as a boxed number", () => {
+    const taggedValue = { [Symbol.toStringTag]: "Number", value: "finite" };
+    expect(
+      projectRuntimeToolInputSchema({
+        type: "object",
+        properties: {
+          score: { default: taggedValue },
+        },
+      }),
+    ).toEqual({
+      schema: {
+        type: "object",
+        properties: {
+          score: { default: { value: "finite" } },
+        },
+      },
+      violations: [],
+    });
+  });
+
+  it("ignores an unreadable Number tag that JSON serialization does not use", () => {
+    const taggedValue = {
+      get [Symbol.toStringTag](): string {
+        throw new Error("unreadable tag");
+      },
+      value: "finite",
+    };
+    expect(
+      projectRuntimeToolInputSchema({
+        type: "object",
+        properties: {
+          score: { default: taggedValue },
+        },
+      }),
+    ).toEqual({
+      schema: {
+        type: "object",
+        properties: {
+          score: { default: { value: "finite" } },
+        },
+      },
+      violations: [],
+    });
+  });
+
   it("does not report schema map field names as dynamic JSON Schema keywords", () => {
     // Dynamic keywords are only invalid as JSON Schema control fields; property
     // names and definitions can legally contain the same strings.

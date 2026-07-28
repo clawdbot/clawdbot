@@ -1,7 +1,7 @@
 // Voice Call plugin module implements cli behavior.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { format } from "node:util";
 import type { Command } from "commander";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -22,6 +22,7 @@ import { validateProviderConfig, type VoiceCallConfig } from "./config.js";
 import { getCallHistoryFromStore } from "./manager/store.js";
 import { setVoiceCallStateRuntime, type VoiceCallStateRuntime } from "./runtime-state.js";
 import type { VoiceCallRuntime } from "./runtime.js";
+import { resolveDefaultVoiceCallStoreDir } from "./store-path.js";
 import { resolveUserPath } from "./utils.js";
 import { resolveWebhookExposureStatus } from "./webhook-exposure.js";
 import {
@@ -64,22 +65,6 @@ const VOICE_CALL_GATEWAY_DEFAULT_TIMEOUT_MS = 5000;
 const VOICE_CALL_GATEWAY_OPERATION_TIMEOUT_MS = 30000;
 const VOICE_CALL_GATEWAY_TRANSCRIPT_BUFFER_MS = 10000;
 const VOICE_CALL_GATEWAY_POLL_INTERVAL_MS = 1000;
-
-const voiceCallCliDeps = {
-  callGatewayFromCli,
-};
-
-export const testing = {
-  setCallGatewayFromCliForTests(next?: typeof callGatewayFromCli): void {
-    voiceCallCliDeps.callGatewayFromCli = next ?? callGatewayFromCli;
-  },
-  isGatewayUnavailableForLocalFallback,
-  parseVoiceCallIntOption,
-  resolveGatewayContinueTimeoutMs,
-  resolveGatewayOperationTimeoutMs,
-  readGatewayPollTimeoutMs,
-  resolveVoiceCallDeadlineMs,
-};
 
 function writeStdoutLine(...values: unknown[]): void {
   process.stdout.write(`${format(...values)}\n`);
@@ -125,7 +110,7 @@ async function callVoiceCallGateway(
       typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
         ? Math.max(1, Math.ceil(opts.timeoutMs))
         : VOICE_CALL_GATEWAY_DEFAULT_TIMEOUT_MS;
-    const payload = await voiceCallCliDeps.callGatewayFromCli(
+    const payload = await callGatewayFromCli(
       method,
       { json: true, timeout: String(timeoutMs) },
       params,
@@ -209,11 +194,17 @@ async function pollVoiceCallContinueGateway(params: {
 }): Promise<unknown> {
   const deadlineMs = resolveVoiceCallDeadlineMs(params.timeoutMs);
 
-  while (Date.now() <= deadlineMs) {
+  for (;;) {
+    // Sleep already clamps to remaining budget; the gateway RPC must too.
+    // Otherwise the final poll can overrun the continue deadline by a full RPC timeout.
+    const remainingMs = deadlineMs - Date.now();
+    if (remainingMs <= 0) {
+      break;
+    }
     const gateway = await callVoiceCallGateway(
       "voicecall.continue.result",
       { operationId: params.operationId },
-      { timeoutMs: VOICE_CALL_GATEWAY_DEFAULT_TIMEOUT_MS },
+      { timeoutMs: Math.min(VOICE_CALL_GATEWAY_DEFAULT_TIMEOUT_MS, remainingMs) },
     );
     if (!gateway.ok) {
       throw new Error(
@@ -229,9 +220,11 @@ async function pollVoiceCallContinueGateway(params: {
     if (result.status === "failed") {
       throw new Error(result.error);
     }
-    await sleep(
-      Math.min(VOICE_CALL_GATEWAY_POLL_INTERVAL_MS, Math.max(1, deadlineMs - Date.now())),
-    );
+    const sleepMs = Math.min(VOICE_CALL_GATEWAY_POLL_INTERVAL_MS, deadlineMs - Date.now());
+    if (sleepMs <= 0) {
+      break;
+    }
+    await sleep(sleepMs);
   }
 
   throw new Error("voicecall continue timed out waiting for gateway operation");
@@ -246,17 +239,9 @@ function resolveMode(input: string): "off" | "serve" | "funnel" {
 }
 
 function resolveDefaultStorePath(config: VoiceCallConfig): string {
-  const preferred = path.join(os.homedir(), ".openclaw", "voice-calls");
-  const resolvedPreferred = resolveUserPath(preferred);
-  const existing =
-    [resolvedPreferred].find((dir) => {
-      try {
-        return fs.existsSync(path.join(dir, "calls.jsonl")) || fs.existsSync(dir);
-      } catch {
-        return false;
-      }
-    }) ?? resolvedPreferred;
-  const base = config.store?.trim() ? resolveUserPath(config.store) : existing;
+  const base = config.store?.trim()
+    ? resolveUserPath(config.store)
+    : resolveDefaultVoiceCallStoreDir();
   return path.join(base, "calls.jsonl");
 }
 
@@ -733,7 +718,7 @@ export function registerVoiceCallCli(params: {
       }
       const rt = await ensureRuntime();
       if (options.callId) {
-        const call = rt.manager.getCall(options.callId);
+        const call = await rt.manager.getCallFromMemoryOrStore(options.callId);
         writeStdoutJson(call ?? { found: false });
         return;
       }
@@ -782,27 +767,38 @@ export function registerVoiceCallCli(params: {
       };
 
       if (fs.existsSync(file) && path.basename(file) !== "calls.jsonl") {
-        const initial = fs.readFileSync(file, "utf8");
-        const lines = initial.split("\n").filter(Boolean);
+        const initial = fs.readFileSync(file);
+        let decoder = new StringDecoder("utf8");
+        const initialLines = decoder.write(initial).split("\n");
+        let pendingLine = initialLines.pop() ?? "";
+        const lines = initialLines.filter(Boolean);
         for (const line of lines.slice(Math.max(0, lines.length - since))) {
           writeStdoutLine(line);
         }
 
-        let offset = Buffer.byteLength(initial, "utf8");
+        let offset = initial.length;
+        let lastObservedSize = initial.length;
         for (;;) {
           try {
             const stat = fs.statSync(file);
-            if (stat.size < offset) {
+            // A short read can leave the cursor behind the observed file size;
+            // compare observed sizes so copytruncate also clears buffered text.
+            if (stat.size < lastObservedSize) {
               offset = 0;
+              decoder = new StringDecoder("utf8");
+              pendingLine = "";
             }
+            lastObservedSize = stat.size;
             if (stat.size > offset) {
               const fd = fs.openSync(file, "r");
               try {
                 const buf = Buffer.alloc(stat.size - offset);
-                fs.readSync(fd, buf, 0, buf.length, offset);
-                offset = stat.size;
-                const text = buf.toString("utf8");
-                for (const line of text.split("\n").filter(Boolean)) {
+                const bytesRead = fs.readSync(fd, buf, 0, buf.length, offset);
+                offset += bytesRead;
+                const text = decoder.write(buf.subarray(0, bytesRead));
+                const completeLines = `${pendingLine}${text}`.split("\n");
+                pendingLine = completeLines.pop() ?? "";
+                for (const line of completeLines.filter(Boolean)) {
                   writeStdoutLine(line);
                 }
               } finally {
@@ -926,4 +922,4 @@ export function registerVoiceCallCli(params: {
       },
     );
 }
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

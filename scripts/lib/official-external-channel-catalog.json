@@ -76,9 +76,9 @@
           }
         },
         "install": {
-          "npmSpec": "openclaw-plugin-yuanbao@2.13.1",
+          "npmSpec": "openclaw-plugin-yuanbao@2.15.0",
           "defaultChoice": "npm",
-          "expectedIntegrity": "sha512-lH2I9/nsmrg7l0YJJSQhOSpWMEFBAa6FwKbZcRLDFHDT2+mOZkHa44XE+8KYN4VmorlUdAxHzpZQmVr7C98IuA=="
+          "expectedIntegrity": "sha512-3GD+mf3EjTSUTOAREjTHAyp/deXdpgqB+q+xE0b19Qtat4ADhUV1mHDwFkVCRqTCBY5ATFKtKcipoDejqFj/+w=="
         }
       }
     },
@@ -114,10 +114,98 @@
           }
         },
         "install": {
-          "npmSpec": "@tencent-weixin/openclaw-weixin@2.4.3",
+          "npmSpec": "@tencent-weixin/openclaw-weixin@2.4.6",
           "defaultChoice": "npm",
-          "expectedIntegrity": "sha512-dPQbidUNWigC6V10vGW4i+GLH09x+6zUhafZRjuxkJ9GDu8o62WBsnUTojp4KqUH756hz+t2v9khiCRSi0dBDw==",
-          "minHostVersion": ">=2026.3.22"
+          "expectedIntegrity": "sha512-qw9k3PLTiMWGNjjsknHgcTManH1w4j+Ji1ArWIaYLKCq3aFRsVwcqnPi127bvOoVMJGW4dbyJ8NECEMgoO+iRw==",
+          "minHostVersion": ">=2026.5.12"
+        }
+      }
+    },
+    {
+      "name": "@zalo-platforms/openclaw-zaloclawbot",
+      "description": "OpenClaw Zalo ClawBot channel plugin by the Zalo Platforms team.",
+      "source": "external",
+      "kind": "channel",
+      "openclaw": {
+        "plugin": {
+          "id": "openclaw-zaloclawbot",
+          "label": "Zalo ClawBot"
+        },
+        "channel": {
+          "id": "openclaw-zaloclawbot",
+          "label": "Zalo ClawBot",
+          "selectionLabel": "Zalo ClawBot (QR)",
+          "detailLabel": "Zalo ClawBot",
+          "docsPath": "/channels/zaloclawbot",
+          "docsLabel": "zaloclawbot",
+          "blurb": "Personal Zalo assistant bot via QR-code login — owner-bound, no setup.",
+          "aliases": ["zaloclawbot", "zalo-clawbot"],
+          "order": 82
+        },
+        "channelConfigs": {
+          "openclaw-zaloclawbot": {
+            "label": "Zalo ClawBot",
+            "description": "Personal Zalo assistant — QR-onboarded, owner-bound.",
+            "schema": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        },
+        "install": {
+          "npmSpec": "@zalo-platforms/openclaw-zaloclawbot@0.1.4",
+          "defaultChoice": "npm",
+          "expectedIntegrity": "sha512-5IxZriHJYACLLGqkCPPsTP9tas62kXEOFqTFAFMdunAM3SPhIJwVFRp0WvoP/m7L2PX85weD0g8LOtxM93VDYg==",
+          "minHostVersion": ">=2026.4.10"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/clickclack",
+      "description": "OpenClaw ClickClack channel plugin",
+      "source": "official",
+      "kind": "channel",
+      "openclaw": {
+        "channel": {
+          "id": "clickclack",
+          "label": "ClickClack",
+          "selectionLabel": "ClickClack",
+          "detailLabel": "ClickClack Bot",
+          "docsPath": "/channels/clickclack",
+          "docsLabel": "clickclack",
+          "blurb": "self-hosted chat via first-class ClickClack bot tokens.",
+          "envVars": [
+            "CLICKCLACK_BOT_TOKEN"
+          ],
+          "systemImage": "bubble.left.and.bubble.right",
+          "markdownCapable": true,
+          "preferSessionLookupForAnnounceTarget": true,
+          "order": 85,
+          "commands": {
+            "nativeCommandsAutoEnabled": false,
+            "nativeSkillsAutoEnabled": false
+          },
+          "cliAddOptions": [
+            {
+              "flags": "--base-url <url>",
+              "description": "Channel base URL"
+            },
+            {
+              "flags": "--code <code>",
+              "description": "ClickClack one-time setup code or setup URL"
+            },
+            {
+              "flags": "--workspace <workspace>",
+              "description": "ClickClack workspace id, slug, or name"
+            }
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/clickclack",
+          "npmSpec": "@openclaw/clickclack",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.9",
+          "allowInvalidConfigRecovery": true
         }
       }
     },
@@ -222,6 +310,52 @@
       }
     },
     {
+      "name": "@openclaw/irc",
+      "description": "OpenClaw IRC channel plugin",
+      "source": "official",
+      "kind": "channel",
+      "openclaw": {
+        "channel": {
+          "id": "irc",
+          "label": "IRC",
+          "selectionLabel": "IRC (Server + Nick)",
+          "detailLabel": "IRC",
+          "docsPath": "/channels/irc",
+          "docsLabel": "irc",
+          "blurb": "classic IRC networks with DM/channel routing and pairing controls.",
+          "aliases": [
+            "internet-relay-chat"
+          ],
+          "envVars": [
+            "IRC_HOST",
+            "IRC_PORT",
+            "IRC_TLS",
+            "IRC_NICK",
+            "IRC_USERNAME",
+            "IRC_REALNAME",
+            "IRC_PASSWORD",
+            "IRC_CHANNELS",
+            "IRC_NICKSERV_PASSWORD",
+            "IRC_NICKSERV_REGISTER_EMAIL"
+          ],
+          "systemImage": "network",
+          "cliAddOptions": [
+            {
+              "flags": "--password <password>",
+              "description": "Channel password or login secret"
+            }
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/irc",
+          "npmSpec": "@openclaw/irc",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.9",
+          "allowInvalidConfigRecovery": true
+        }
+      }
+    },
+    {
       "name": "@openclaw/line",
       "description": "OpenClaw LINE channel plugin",
       "source": "official",
@@ -237,12 +371,56 @@
           "blurb": "LINE Messaging API webhook bot.",
           "systemImage": "message",
           "order": 75,
-          "quickstartAllowFrom": true
+          "quickstartAllowFrom": true,
+          "cliAddOptions": [
+            {
+              "flags": "--secret-file <path>",
+              "description": "Read channel shared secret from file"
+            }
+          ]
         },
         "install": {
           "npmSpec": "@openclaw/line",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.10"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/mattermost",
+      "description": "OpenClaw Mattermost channel plugin",
+      "source": "official",
+      "kind": "channel",
+      "openclaw": {
+        "channel": {
+          "id": "mattermost",
+          "label": "Mattermost",
+          "selectionLabel": "Mattermost (plugin)",
+          "docsPath": "/channels/mattermost",
+          "docsLabel": "mattermost",
+          "blurb": "self-hosted Slack-style chat; install the plugin to enable.",
+          "envVars": [
+            "MATTERMOST_BOT_TOKEN",
+            "MATTERMOST_URL"
+          ],
+          "order": 65,
+          "cliAddOptions": [
+            {
+              "flags": "--bot-token <token>",
+              "description": "Bot token"
+            },
+            {
+              "flags": "--http-url <url>",
+              "description": "Channel HTTP service URL"
+            }
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/mattermost",
+          "npmSpec": "@openclaw/mattermost",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.9",
+          "allowInvalidConfigRecovery": true
         }
       }
     },
@@ -282,12 +460,17 @@
               "description": "Matrix access token"
             },
             {
+              "flags": "--password <password>",
+              "description": "Channel password or login secret"
+            },
+            {
               "flags": "--device-name <name>",
               "description": "Matrix device name"
             },
             {
               "flags": "--initial-sync-limit <n>",
-              "description": "Matrix initial sync limit"
+              "description": "Matrix initial sync limit",
+              "valueType": "int"
             }
           ]
         },
@@ -338,12 +521,58 @@
           "blurb": "Self-hosted chat via Nextcloud Talk webhook bots.",
           "aliases": ["nc-talk", "nc"],
           "order": 65,
-          "quickstartAllowFrom": true
+          "quickstartAllowFrom": true,
+          "cliAddOptions": [
+            {
+              "flags": "--base-url <url>",
+              "description": "Channel base URL"
+            },
+            {
+              "flags": "--secret <secret>",
+              "description": "Channel shared secret"
+            },
+            {
+              "flags": "--secret-file <path>",
+              "description": "Read channel shared secret from file"
+            },
+            {
+              "flags": "--password <password>",
+              "description": "Channel password or login secret"
+            },
+            {
+              "flags": "--url <url>",
+              "description": "Channel setup URL"
+            }
+          ]
         },
         "install": {
           "npmSpec": "@openclaw/nextcloud-talk",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.10"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/buzz",
+      "description": "Connect OpenClaw agents to Buzz rooms",
+      "source": "official",
+      "kind": "channel",
+      "openclaw": {
+        "channel": {
+          "id": "buzz",
+          "label": "Buzz",
+          "selectionLabel": "Buzz",
+          "docsPath": "/channels/buzz",
+          "docsLabel": "buzz",
+          "blurb": "Connect OpenClaw agents to Buzz team rooms.",
+          "envVars": ["BUZZ_RELAY_URL", "BUZZ_PRIVATE_KEY", "BUZZ_AUTH_TAG"],
+          "order": 56
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/buzz",
+          "npmSpec": "@openclaw/buzz",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
         }
       }
     },
@@ -361,7 +590,17 @@
           "docsLabel": "nostr",
           "blurb": "Decentralized protocol; encrypted DMs via NIP-04.",
           "order": 55,
-          "quickstartAllowFrom": true
+          "quickstartAllowFrom": true,
+          "cliAddOptions": [
+            {
+              "flags": "--private-key <key>",
+              "description": "Nostr private key (nsec... or hex)"
+            },
+            {
+              "flags": "--relay-urls <list>",
+              "description": "Nostr relay URLs (comma-separated)"
+            }
+          ]
         },
         "install": {
           "npmSpec": "@openclaw/nostr",
@@ -394,6 +633,58 @@
       }
     },
     {
+      "name": "@openclaw/signal",
+      "description": "OpenClaw Signal channel plugin",
+      "source": "official",
+      "kind": "channel",
+      "openclaw": {
+        "channel": {
+          "id": "signal",
+          "label": "Signal",
+          "selectionLabel": "Signal (signal-cli)",
+          "detailLabel": "Signal REST",
+          "docsPath": "/channels/signal",
+          "docsLabel": "signal",
+          "blurb": "signal-cli linked device with extra setup for the local REST bridge.",
+          "systemImage": "antenna.radiowaves.left.and.right",
+          "markdownCapable": true,
+          "cliAddOptions": [
+            {
+              "flags": "--cli-path <path>",
+              "description": "Channel CLI path"
+            },
+            {
+              "flags": "--http-url <url>",
+              "description": "Channel HTTP service URL"
+            },
+            {
+              "flags": "--signal-number <e164>",
+              "description": "Signal account number (E.164)"
+            },
+            {
+              "flags": "--signal-transport <kind>",
+              "description": "Signal HTTP transport (external-native or container)"
+            },
+            {
+              "flags": "--http-host <host>",
+              "description": "Signal HTTP daemon host"
+            },
+            {
+              "flags": "--http-port <port>",
+              "description": "Signal HTTP daemon port"
+            }
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/signal",
+          "npmSpec": "@openclaw/signal",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.9",
+          "allowInvalidConfigRecovery": true
+        }
+      }
+    },
+    {
       "name": "@openclaw/slack",
       "description": "OpenClaw Slack channel plugin",
       "source": "official",
@@ -408,7 +699,17 @@
           "docsLabel": "slack",
           "blurb": "supported (Socket Mode).",
           "systemImage": "number",
-          "markdownCapable": true
+          "markdownCapable": true,
+          "cliAddOptions": [
+            {
+              "flags": "--bot-token <token>",
+              "description": "Bot token"
+            },
+            {
+              "flags": "--app-token <token>",
+              "description": "App token"
+            }
+          ]
         },
         "channelConfigs": {
           "slack": {
@@ -429,6 +730,42 @@
       }
     },
     {
+      "name": "@openclaw/sms",
+      "description": "OpenClaw SMS channel plugin for Twilio text messages.",
+      "source": "official",
+      "kind": "channel",
+      "openclaw": {
+        "channel": {
+          "id": "sms",
+          "label": "SMS",
+          "selectionLabel": "SMS (Twilio)",
+          "detailLabel": "Twilio SMS",
+          "docsPath": "/channels/sms",
+          "docsLabel": "sms",
+          "blurb": "Twilio-backed SMS with inbound webhooks and outbound replies.",
+          "envVars": [
+            "TWILIO_ACCOUNT_SID",
+            "TWILIO_AUTH_TOKEN",
+            "TWILIO_PHONE_NUMBER",
+            "TWILIO_SMS_FROM",
+            "TWILIO_MESSAGING_SERVICE_SID",
+            "SMS_PUBLIC_WEBHOOK_URL",
+            "SMS_WEBHOOK_PATH",
+            "SMS_ALLOWED_USERS"
+          ],
+          "order": 88,
+          "quickstartAllowFrom": true
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/sms",
+          "npmSpec": "@openclaw/sms",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.9",
+          "allowInvalidConfigRecovery": true
+        }
+      }
+    },
+    {
       "name": "@openclaw/synology-chat",
       "description": "Synology Chat channel plugin for OpenClaw",
       "source": "official",
@@ -441,12 +778,68 @@
           "docsPath": "/channels/synology-chat",
           "docsLabel": "synology-chat",
           "blurb": "Connect your Synology NAS Chat to OpenClaw with full agent capabilities.",
-          "order": 90
+          "order": 90,
+          "cliAddOptions": [
+            {
+              "flags": "--url <url>",
+              "description": "Channel setup URL"
+            }
+          ]
         },
         "install": {
           "npmSpec": "@openclaw/synology-chat",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.10"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/raft",
+      "description": "OpenClaw Raft channel plugin",
+      "source": "official",
+      "kind": "channel",
+      "openclaw": {
+        "channel": {
+          "id": "raft",
+          "label": "Raft",
+          "selectionLabel": "Raft (CLI wake bridge)",
+          "docsPath": "/channels/raft",
+          "docsLabel": "raft",
+          "blurb": "Raft CLI wake bridge for human and agent collaboration.",
+          "order": 72
+        },
+        "channelConfigs": {
+          "raft": {
+            "label": "Raft",
+            "description": "Raft External Agent CLI wake bridge.",
+            "schema": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "name": { "type": "string" },
+                "enabled": { "type": "boolean" },
+                "profile": { "type": "string", "minLength": 1 },
+                "defaultAccount": { "type": "string" },
+                "accounts": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "name": { "type": "string" },
+                      "enabled": { "type": "boolean" },
+                      "profile": { "type": "string", "minLength": 1 }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "install": {
+          "npmSpec": "@openclaw/raft",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.8"
         }
       }
     },
@@ -464,7 +857,39 @@
           "docsLabel": "tlon",
           "blurb": "decentralized messaging on Urbit; install the plugin to enable.",
           "order": 90,
-          "quickstartAllowFrom": true
+          "quickstartAllowFrom": true,
+          "cliAddOptions": [
+            {
+              "flags": "--url <url>",
+              "description": "Channel setup URL"
+            },
+            {
+              "flags": "--ship <ship>",
+              "description": "Tlon ship name (~sampel-palnet)"
+            },
+            {
+              "flags": "--code <code>",
+              "description": "Tlon login code"
+            },
+            {
+              "flags": "--group-channels <list>",
+              "description": "Tlon group channels (comma-separated)",
+              "valueType": "list"
+            },
+            {
+              "flags": "--dm-allowlist <list>",
+              "description": "Tlon DM allowlist (comma-separated ships)",
+              "valueType": "list"
+            },
+            {
+              "flags": "--auto-discover-channels",
+              "description": "Tlon auto-discover group channels"
+            },
+            {
+              "flags": "--no-auto-discover-channels",
+              "description": "Disable Tlon auto-discovery"
+            }
+          ]
         },
         "install": {
           "npmSpec": "@openclaw/tlon",
@@ -508,7 +933,13 @@
           "docsPath": "/channels/whatsapp",
           "docsLabel": "whatsapp",
           "blurb": "works with your own number; recommend a separate phone + eSIM.",
-          "systemImage": "message"
+          "systemImage": "message",
+          "cliAddOptions": [
+            {
+              "flags": "--auth-dir <path>",
+              "description": "WhatsApp auth directory override"
+            }
+          ]
         },
         "install": {
           "clawhubSpec": "clawhub:@openclaw/whatsapp",

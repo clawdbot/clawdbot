@@ -31,29 +31,6 @@ function ensureNonEmptyContent<T>(content: T[]): T[] {
   return [{ type: "text", text: EMPTY_CONTENT_PLACEHOLDER }] as T[];
 }
 
-/** Return true when an assistant turn contains no usable content blocks. */
-export function isEmptyAssistantMessageContent(
-  message: Extract<AgentMessage, { role: "assistant" }>,
-): boolean {
-  const content = message.content;
-  if (content == null) {
-    return true;
-  }
-  if (!Array.isArray(content)) {
-    return false;
-  }
-  return content.every((block) => {
-    if (!block || typeof block !== "object") {
-      return true;
-    }
-    const rec = block as { type?: unknown; text?: unknown };
-    if (rec.type !== "text") {
-      return false;
-    }
-    return typeof rec.text !== "string" || rec.text.trim().length === 0;
-  });
-}
-
 /** Resize/remove unsafe image payloads while keeping transcript turns valid. */
 export async function sanitizeSessionMessagesImages(
   messages: AgentMessage[],

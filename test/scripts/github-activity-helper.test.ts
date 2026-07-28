@@ -60,6 +60,7 @@ exit 64
     env: {
       ...process.env,
       FAKE_GH_LOG: logPath,
+      OPENCLAW_GH_BIN: ghPath,
       PATH: `${binDir}:${process.env.PATH ?? ""}`,
     },
   });

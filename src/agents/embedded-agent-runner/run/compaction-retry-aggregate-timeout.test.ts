@@ -1,7 +1,10 @@
 // Coverage for aggregate timeout handling while waiting on compaction retry.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
-import { waitForCompactionRetryWithAggregateTimeout } from "./compaction-retry-aggregate-timeout.js";
+import {
+  hasActiveCompactionRetryWork,
+  waitForCompactionRetryWithAggregateTimeout,
+} from "./compaction-retry-aggregate-timeout.js";
 
 type AggregateTimeoutParams = Parameters<typeof waitForCompactionRetryWithAggregateTimeout>[0];
 type TimeoutCallback = NonNullable<AggregateTimeoutParams["onTimeout"]>;
@@ -42,7 +45,7 @@ function buildAggregateTimeoutParams(
     waitForCompactionRetry: overrides.waitForCompactionRetry,
     abortable: overrides.abortable ?? (async (promise) => await promise),
     aggregateTimeoutMs: overrides.aggregateTimeoutMs ?? 60_000,
-    isCompactionStillInFlight: overrides.isCompactionStillInFlight,
+    isCompactionRetryStillActive: overrides.isCompactionRetryStillActive,
     onTimeout,
   };
 }
@@ -63,23 +66,23 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
     });
   });
 
-  it("keeps waiting while compaction remains in flight", async () => {
-    // The aggregate timer should not cut off active compaction work; timeout
-    // starts once compaction is no longer in flight.
+  it("keeps waiting while compaction retry work remains active", async () => {
+    // The aggregate timer should not cut off either the compaction call or its
+    // retry model run; timeout starts once both phases are idle.
     await withFakeTimers(async () => {
-      let compactionInFlight = true;
+      let retryWorkActive = true;
       const waitForCompactionRetry = vi.fn(
         async () =>
           await new Promise<void>((resolve) => {
             setTimeout(() => {
-              compactionInFlight = false;
+              retryWorkActive = false;
               resolve();
             }, 170_000);
           }),
       );
       const params = buildAggregateTimeoutParams({
         waitForCompactionRetry,
-        isCompactionStillInFlight: () => compactionInFlight,
+        isCompactionRetryStillActive: () => retryWorkActive,
       });
 
       const resultPromise = waitForCompactionRetryWithAggregateTimeout(params);
@@ -101,7 +104,7 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
       }, 90_000);
       const params = buildAggregateTimeoutParams({
         waitForCompactionRetry,
-        isCompactionStillInFlight: () => compactionInFlight,
+        isCompactionRetryStillActive: () => compactionInFlight,
       });
 
       const resultPromise = waitForCompactionRetryWithAggregateTimeout(params);
@@ -200,5 +203,23 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
 
       expectClearedTimeoutState(params.onTimeout, false);
     });
+  });
+});
+
+describe("hasActiveCompactionRetryWork", () => {
+  it.each([
+    { isCompactionInFlight: true, isSessionStreaming: false },
+    { isCompactionInFlight: false, isSessionStreaming: true },
+  ])("returns true while either retry phase is active", (params) => {
+    expect(hasActiveCompactionRetryWork(params)).toBe(true);
+  });
+
+  it("returns false once compaction and the retry model run are idle", () => {
+    expect(
+      hasActiveCompactionRetryWork({
+        isCompactionInFlight: false,
+        isSessionStreaming: false,
+      }),
+    ).toBe(false);
   });
 });

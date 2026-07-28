@@ -1,65 +1,7 @@
 // Coverage for Tool Search control planning and allowlist accounting.
 import { describe, expect, it } from "vitest";
 import { setPluginToolMeta } from "../../../plugins/tools.js";
-import {
-  buildAutoAddedToolSearchControlNamesForAllowlistCheck,
-  buildCallableToolNamesForEmptyAllowlistCheck,
-  buildToolSearchRunPlan,
-} from "./attempt.tool-search-run-plan.js";
-
-describe("buildCallableToolNamesForEmptyAllowlistCheck", () => {
-  it("ignores auto-added Tool Search controls so bad allowlists still fail", () => {
-    // Auto-added controls are not real callable tools when the backing catalog
-    // is empty.
-    expect(
-      buildCallableToolNamesForEmptyAllowlistCheck({
-        effectiveToolNames: ["tool_search_code"],
-        autoAddedToolSearchControlNames: new Set(["tool_search_code"]),
-        toolSearchCatalogToolCount: 0,
-      }),
-    ).toEqual([]);
-  });
-
-  it("counts cataloged tools hidden behind auto-added Tool Search controls", () => {
-    expect(
-      buildCallableToolNamesForEmptyAllowlistCheck({
-        effectiveToolNames: ["tool_search_code"],
-        autoAddedToolSearchControlNames: new Set(["tool_search_code"]),
-        toolSearchCatalogToolCount: 1,
-      }),
-    ).toEqual(["tool-search:0"]);
-  });
-
-  it("keeps explicitly requested Tool Search controls callable", () => {
-    expect(
-      buildCallableToolNamesForEmptyAllowlistCheck({
-        effectiveToolNames: ["tool_search_code"],
-        autoAddedToolSearchControlNames: new Set(),
-        toolSearchCatalogToolCount: 0,
-      }),
-    ).toEqual(["tool_search_code"]);
-  });
-});
-
-describe("buildAutoAddedToolSearchControlNamesForAllowlistCheck", () => {
-  it("treats controls as auto-added unless any explicit allowlist requested them", () => {
-    expect(
-      buildAutoAddedToolSearchControlNamesForAllowlistCheck({
-        toolSearchControlsEnabled: true,
-        explicitAllowlistSources: [{ entries: ["missing_tool"] }],
-        controlNames: ["tool_search_code", "tool_search"],
-      }),
-    ).toEqual(new Set(["tool_search_code", "tool_search"]));
-
-    expect(
-      buildAutoAddedToolSearchControlNamesForAllowlistCheck({
-        toolSearchControlsEnabled: true,
-        explicitAllowlistSources: [{ entries: ["tool_search_code"] }],
-        controlNames: ["tool_search_code", "tool_search"],
-      }),
-    ).toEqual(new Set(["tool_search"]));
-  });
-});
+import { buildToolSearchRunPlan } from "./attempt.tool-search-run-plan.js";
 
 describe("buildToolSearchRunPlan", () => {
   it("keeps compact visible names separate from replay-safe names", () => {
@@ -159,6 +101,19 @@ describe("buildToolSearchRunPlan", () => {
     });
 
     expect(plan.emptyAllowlistCallableNames).toEqual([]);
+  });
+
+  it("keeps explicitly requested Tool Search controls callable", () => {
+    const plan = buildToolSearchRunPlan({
+      visibleTools: [{ name: "tool_search_code" }] as never,
+      uncompactedTools: [{ name: "tool_search_code" }] as never,
+      clientToolsCataloged: true,
+      catalogToolCount: 0,
+      controlsEnabled: true,
+      explicitAllowlistSources: [{ entries: ["tool_search_code"] }],
+    });
+
+    expect(plan.emptyAllowlistCallableNames).toEqual(["tool_search_code"]);
   });
 
   it("keeps uncataloged directory-mode client tools visible", () => {

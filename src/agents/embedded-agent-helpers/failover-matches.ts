@@ -17,8 +17,13 @@ const HIGH_CONFIDENCE_AUTH_PERMANENT_PATTERNS = [
   "not allowed for this organization",
 ] as const satisfies readonly ErrorPattern[];
 
+// Providers use both "invalid API key" and "API key is/not valid" word order.
+// Keep them in one matcher so every result/exception classifier agrees on auth failover.
+const INVALID_API_KEY_RE =
+  /(?:invalid[_ ]?api[_ ]?key(?![a-z0-9])|api[_ ]?key(?:[_ ]?(?:is[_ ]?)?(?:invalid(?![a-z0-9])|not[_ ]?valid(?![a-z0-9]))))/i;
+
 const AMBIGUOUS_AUTH_ERROR_PATTERNS = [
-  /invalid[_ ]?api[_ ]?key/,
+  INVALID_API_KEY_RE,
   /could not (?:authenticate|validate).*(?:api[_ ]?key|credentials)/i,
   "permission_error",
 ] as const satisfies readonly ErrorPattern[];
@@ -107,6 +112,7 @@ const ERROR_PATTERNS = {
     // Chinese provider overloaded messages
     "服务过载",
     "当前负载过高",
+    "访问量过大",
   ],
   serverError: [
     "an error occurred while processing",
@@ -160,11 +166,14 @@ const ERROR_PATTERNS = {
     /\benotfound\b/i,
     /\beai_again\b/i,
     /without sending (?:any )?chunks?/i,
-    /\bstop reason:\s*(?:abort|error|malformed_response|network_error)\b/i,
-    /\breason:\s*(?:abort|error|malformed_response|network_error)\b/i,
-    /\bunhandled stop reason:\s*(?:abort|error|malformed_response|network_error)\b/i,
+    // Bare `error` is a provider-completed failure, not a hang — classified as
+    // server_error separately so diagnostics stay accurate while fallback still
+    // runs (#109218). Keep abort / network / malformed as timeout-like transients.
+    /\bstop reason:\s*(?:abort|malformed_response|network_error)\b/i,
+    /\breason:\s*(?:abort|malformed_response|network_error)\b/i,
+    /\bunhandled stop reason:\s*(?:abort|malformed_response|network_error)\b/i,
     // `\breason:` does not match provider payloads like `finish_reason: network_error` (#61281).
-    /\bfinish_reason:\s*(?:abort|error|malformed_response|network_error)\b/i,
+    /\bfinish_reason:\s*(?:abort|malformed_response|network_error)\b/i,
     // AbortError messages from fetch/stream aborts (Ollama NDJSON stream
     // timeouts, signal aborts, etc.) — without these the flattened message
     // falls through to reason=unknown (#58315).
@@ -183,6 +192,18 @@ const ERROR_PATTERNS = {
     // the configured fallback chain runs instead of surfacing the error.
     /^request failed$/i,
     /\brequest failed after repeated internal retries\b/i,
+    // The generic assistant error text "LLM request failed." is produced by
+    // formatUserFacingAssistantErrorText when the underlying provider error
+    // cannot be formatted into a specific category. For local providers (LM
+    // Studio, Ollama) this wraps connection/availability failures when the
+    // model is not loaded or the endpoint is unreachable. Without this match,
+    // cron retry and payload.fallbacks never engage because the error is not
+    // classified as any transient type (#93931).
+    // Use a strict exact-match regex so variants like
+    // "LLM request failed: provider rejected the request schema or tool payload."
+    // (a format/schema error, not transient) are NOT caught here — they
+    // fall through to their own pattern classifications.
+    /^llm request failed\.$/i,
   ],
   billing: [
     /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment/i,
@@ -278,6 +299,24 @@ export function isRateLimitErrorMessage(raw: string): boolean {
 
 export function isTimeoutErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.timeout);
+}
+
+/**
+ * Provider stream completed with an explicit error finish/stop reason.
+ * These are not request timeouts: the transport finished quickly with a
+ * provider-side error. Keep them failover-eligible as server_error (#109218).
+ */
+const PROVIDER_COMPLETED_ERROR_FINISH_REASON_PATTERNS = [
+  /\bfinish_reason:\s*error\b/i,
+  /\bstop reason:\s*error\b/i,
+  /\bunhandled stop reason:\s*error\b/i,
+  // Symmetric with the timeout stop-reason family; scoped to the word `error`
+  // only so `reason: network_error` stays in the timeout lane.
+  /\breason:\s*error\b/i,
+] as const satisfies readonly ErrorPattern[];
+
+export function isProviderCompletedErrorFinishReasonMessage(raw: string): boolean {
+  return matchesErrorPatterns(raw, PROVIDER_COMPLETED_ERROR_FINISH_REASON_PATTERNS);
 }
 
 export function isPeriodicUsageLimitErrorMessage(raw: string): boolean {

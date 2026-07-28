@@ -5,7 +5,7 @@ import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import { replaceManagedMarkdownBlock } from "openclaw/plugin-sdk/memory-host-markdown";
-import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
+import { readRegularFile, replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 
 const DREAMS_FILENAMES = ["DREAMS.md", "dreams.md"] as const;
 const DEEP_START_MARKER = "<!-- openclaw:dreaming:deep:start -->";
@@ -19,7 +19,7 @@ type DreamsFileLockEntry = {
 
 const dreamsFileLocks = resolveGlobalMap<string, DreamsFileLockEntry>(DREAMS_FILE_LOCKS_KEY);
 
-async function resolveDreamsPath(workspaceDir: string): Promise<string> {
+export async function resolveDreamsPath(workspaceDir: string): Promise<string> {
   for (const name of DREAMS_FILENAMES) {
     const target = path.join(workspaceDir, name);
     try {
@@ -34,11 +34,27 @@ async function resolveDreamsPath(workspaceDir: string): Promise<string> {
   return path.join(workspaceDir, DREAMS_FILENAMES[0]);
 }
 
-async function readDreamsFile(dreamsPath: string): Promise<string> {
+function isEmptyDreamsReadError(err: unknown): boolean {
+  const code = extractErrorCode(err);
+  if (
+    code === "ENOENT" ||
+    code === "ENOTDIR" ||
+    code === "not-found" ||
+    code === "not-file" ||
+    code === "path-alias" ||
+    code === "path-mismatch" ||
+    code === "symlink"
+  ) {
+    return true;
+  }
+  return err instanceof Error && err.message === "path must be a regular file";
+}
+
+export async function readDreamsFile(dreamsPath: string): Promise<string> {
   try {
-    return await fs.readFile(dreamsPath, "utf-8");
+    return (await readRegularFile({ filePath: dreamsPath })).buffer.toString("utf-8");
   } catch (err) {
-    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+    if (isEmptyDreamsReadError(err)) {
       return "";
     }
     throw err;

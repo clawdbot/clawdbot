@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
+import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import {
   loadGatewayConfig,
   openAuthenticatedGatewayWs,
@@ -49,7 +50,7 @@ async function openDeviceTokenWsWithDetails(
     auth?: { deviceToken?: unknown };
   };
 }> {
-  const identityPath = path.join(os.tmpdir(), `openclaw-shared-auth-${process.pid}-${port}.json`);
+  const identityPath = path.join(os.tmpdir(), `openclaw-shared-auth-${process.pid}-${port}.sqlite`);
   const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
     await import("../infra/device-identity.js");
   const { approveDevicePairing, ensureDeviceToken, requestDevicePairing, rotateDeviceToken } =
@@ -68,7 +69,7 @@ async function openDeviceTokenWsWithDetails(
         mode: "test",
       };
 
-  const identity = loadOrCreateDeviceIdentity(identityPath);
+  const identity = loadOrCreateDeviceIdentity({ path: identityPath });
   const pending = await requestDevicePairing({
     deviceId: identity.deviceId,
     publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
@@ -339,7 +340,7 @@ describe("gateway shared auth rotation with unchanged SecretRefs", () => {
     }
     secretRefPort = await getFreePort();
     testState.gatewayAuth = undefined;
-    process.env[SECRET_REF_TOKEN_ID] = OLD_TOKEN;
+    setTestEnvValue(SECRET_REF_TOKEN_ID, OLD_TOKEN);
     await fs.mkdir(path.dirname(configPath), { recursive: true });
     await fs.writeFile(
       configPath,
@@ -362,11 +363,11 @@ describe("gateway shared auth rotation with unchanged SecretRefs", () => {
 
   beforeEach(() => {
     testState.gatewayAuth = undefined;
-    process.env[SECRET_REF_TOKEN_ID] = OLD_TOKEN;
+    setTestEnvValue(SECRET_REF_TOKEN_ID, OLD_TOKEN);
   });
 
   afterAll(async () => {
-    delete process.env[SECRET_REF_TOKEN_ID];
+    deleteTestEnvValue(SECRET_REF_TOKEN_ID);
     testState.gatewayAuth = ORIGINAL_GATEWAY_AUTH;
     await secretRefServer.close();
   });
@@ -379,7 +380,7 @@ describe("gateway shared auth rotation with unchanged SecretRefs", () => {
     const ws = await openSecretRefAuthenticatedWs();
     try {
       const closed = waitForGatewayWsClose(ws, 30_000);
-      process.env[SECRET_REF_TOKEN_ID] = NEW_TOKEN;
+      setTestEnvValue(SECRET_REF_TOKEN_ID, NEW_TOKEN);
       const res = await applyCurrentConfig(ws);
       expect(res.ok).toBe(true);
       await expectGatewayAuthChangedClose(closed);

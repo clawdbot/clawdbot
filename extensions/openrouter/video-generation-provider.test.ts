@@ -24,13 +24,40 @@ const {
   fetchWithTimeoutGuardedMock: vi.fn(),
   postJsonRequestMock: vi.fn(),
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "openrouter-key" })),
-  resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
-    baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://openrouter.ai/api/v1",
-    allowPrivateNetwork: false,
-    headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
-    dispatcherPolicy: undefined,
-    requestConfig: {},
-  })),
+  resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => {
+    const request = params.request as
+      | {
+          allowPrivateNetwork?: boolean;
+          auth?:
+            | { mode: "provider-default" }
+            | { mode: "authorization-bearer"; token: string }
+            | {
+                mode: "header";
+                headerName: string;
+                value: string;
+                prefix?: string;
+              };
+          headers?: Record<string, string>;
+        }
+      | undefined;
+    const headers = new Headers(params.defaultHeaders as HeadersInit | undefined);
+    for (const [key, value] of Object.entries(request?.headers ?? {})) {
+      headers.set(key, value);
+    }
+    if (request?.auth?.mode === "authorization-bearer") {
+      headers.set("Authorization", `Bearer ${request.auth.token}`);
+    } else if (request?.auth?.mode === "header") {
+      headers.delete("Authorization");
+      headers.set(request.auth.headerName, `${request.auth.prefix ?? ""}${request.auth.value}`);
+    }
+    return {
+      baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://openrouter.ai/api/v1",
+      allowPrivateNetwork: request?.allowPrivateNetwork === true,
+      headers,
+      dispatcherPolicy: undefined,
+      requestConfig: {},
+    };
+  }),
   waitProviderOperationPollIntervalMock: vi.fn(async () => {}),
 }));
 
@@ -54,10 +81,31 @@ vi.mock("openclaw/plugin-sdk/provider-http", async () => {
 
 function releasedJson(value: unknown) {
   return {
-    response: {
-      json: async () => value,
-    },
+    response: new Response(JSON.stringify(value), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
     release: vi.fn(async () => {}),
+  };
+}
+
+function releasedOversizedJsonStream() {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new Uint8Array(16 * 1024 * 1024 + 1));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+    release: vi.fn(async () => {}),
+    wasCanceled: () => canceled,
   };
 }
 
@@ -120,6 +168,13 @@ function expectOpenRouterFetchCall(index: number, url: string, auditContext: str
   expect(fetchFn).toBe(fetch);
   expect(requireRecord(guardOptions, "OpenRouter fetch guard options").auditContext).toBe(
     auditContext,
+  );
+}
+
+function requireFetchGuardOptions(index: number): Record<string, unknown> {
+  return requireRecord(
+    requireMockCallArg(fetchWithTimeoutGuardedMock.mock.calls, index, 4, "fetch guard options"),
+    "OpenRouter fetch guard options",
   );
 }
 
@@ -191,6 +246,10 @@ describe("openrouter video generation provider", () => {
   });
 
   it("maps OpenRouter video model discovery into unified catalog rows", async () => {
+    const requestOverrides = {
+      allowPrivateNetwork: true,
+      headers: { "X-OpenRouter-Catalog": "enabled" },
+    };
     fetchWithTimeoutGuardedMock.mockResolvedValueOnce(
       releasedJson({
         data: [
@@ -219,6 +278,7 @@ describe("openrouter video generation provider", () => {
           providers: {
             openrouter: {
               baseUrl: "https://custom.openrouter.test/openrouter/api/v1",
+              request: requestOverrides,
             },
           },
         },
@@ -231,8 +291,8 @@ describe("openrouter video generation provider", () => {
       resolveProviderAuth: () => ({
         apiKey: "OPENROUTER_API_KEY",
         discoveryApiKey: "resolved-openrouter-key",
-        mode: "api_key",
-        source: "env",
+        mode: "api_key" as const,
+        source: "env" as const,
       }),
     });
 
@@ -246,6 +306,7 @@ describe("openrouter video generation provider", () => {
         defaultBaseUrl: "https://openrouter.ai/api/v1",
         provider: "openrouter",
         capability: "video",
+        request: requestOverrides,
       },
     );
     expectOpenRouterFetchCall(
@@ -254,6 +315,8 @@ describe("openrouter video generation provider", () => {
       "openrouter-video-models",
     );
     expect(requireFetchCallHeaders(0).get("authorization")).toBe("Bearer resolved-openrouter-key");
+    expect(requireFetchCallHeaders(0).get("x-openrouter-catalog")).toBe("enabled");
+    expect(requireFetchGuardOptions(0).ssrfPolicy).toEqual({ allowPrivateNetwork: true });
     expectUnifiedModelCatalogEntries(rows, {
       provider: "openrouter",
       kind: "video_generation",
@@ -292,6 +355,140 @@ describe("openrouter video generation provider", () => {
     });
   });
 
+  it("lets configured auth replace the OpenRouter catalog default", async () => {
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce(releasedJson({ data: [] }));
+
+    await listOpenRouterVideoModelCatalog({
+      config: {
+        models: {
+          providers: {
+            openrouter: {
+              request: {
+                auth: {
+                  mode: "authorization-bearer",
+                  token: ["test", "auth"].join("-"),
+                },
+              },
+            },
+          },
+        },
+      } as never,
+      env: {},
+      resolveProviderApiKey: () => ({ apiKey: "key", discoveryApiKey: "test-key" }),
+      resolveProviderAuth: () => ({
+        apiKey: "key",
+        discoveryApiKey: "test-key",
+        mode: "api_key" as const,
+        source: "env" as const,
+      }),
+    });
+
+    const requestConfig = requireRecord(
+      requireMockCallArg(resolveProviderHttpRequestConfigMock.mock.calls, 0, 0, "request config"),
+      "request config",
+    );
+    expect(requireRecord(requestConfig.defaultHeaders, "default headers").Authorization).toBe(
+      "Bearer test-key",
+    );
+    expect(requireFetchCallHeaders(0).get("authorization")).toBe("Bearer test-auth");
+  });
+
+  it("keys live OpenRouter video catalog cache by request policy", async () => {
+    fetchWithTimeoutGuardedMock
+      .mockResolvedValueOnce(
+        releasedJson({
+          data: [{ id: "google/veo-3.1-fast", name: "Veo first policy" }],
+        }),
+      )
+      .mockResolvedValueOnce(
+        releasedJson({
+          data: [{ id: "google/veo-3.1-quality", name: "Veo second policy" }],
+        }),
+      );
+
+    const buildCatalogContext = (request: {
+      allowPrivateNetwork?: boolean;
+      headers?: Record<string, string>;
+    }) => ({
+      config: {
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://custom.openrouter.test/openrouter/api/v1",
+              request,
+            },
+          },
+        },
+      } as never,
+      env: {},
+      resolveProviderApiKey: () => ({
+        apiKey: "OPENROUTER_API_KEY",
+        discoveryApiKey: "resolved-openrouter-key",
+      }),
+      resolveProviderAuth: () => ({
+        apiKey: "OPENROUTER_API_KEY",
+        discoveryApiKey: "resolved-openrouter-key",
+        mode: "api_key" as const,
+        source: "env" as const,
+      }),
+    });
+
+    const firstRows = await listOpenRouterVideoModelCatalog(
+      buildCatalogContext({
+        allowPrivateNetwork: true,
+        headers: { "X-OpenRouter-Policy": "first" },
+      }),
+    );
+    const secondRows = await listOpenRouterVideoModelCatalog(
+      buildCatalogContext({
+        allowPrivateNetwork: false,
+        headers: { "X-OpenRouter-Policy": "second" },
+      }),
+    );
+
+    expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledTimes(2);
+    expect(requireFetchCallHeaders(0).get("x-openrouter-policy")).toBe("first");
+    expect(requireFetchCallHeaders(1).get("x-openrouter-policy")).toBe("second");
+    expect(requireFetchGuardOptions(0).ssrfPolicy).toEqual({ allowPrivateNetwork: true });
+    expect(requireFetchGuardOptions(1).ssrfPolicy).toBeUndefined();
+    expect(firstRows?.[0]?.model).toBe("google/veo-3.1-fast");
+    expect(secondRows?.[0]?.model).toBe("google/veo-3.1-quality");
+  });
+
+  it("cancels oversized OpenRouter video catalog success bodies", async () => {
+    const oversized = releasedOversizedJsonStream();
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce(oversized);
+
+    await expect(
+      listOpenRouterVideoModelCatalog({
+        config: {
+          models: {
+            providers: {
+              openrouter: {
+                baseUrl: "https://custom.openrouter.test/openrouter/api/v1",
+              },
+            },
+          },
+        } as never,
+        env: {},
+        resolveProviderApiKey: () => ({
+          apiKey: "OPENROUTER_API_KEY",
+          discoveryApiKey: "resolved-openrouter-key",
+        }),
+        resolveProviderAuth: () => ({
+          apiKey: "OPENROUTER_API_KEY",
+          discoveryApiKey: "resolved-openrouter-key",
+          mode: "api_key",
+          source: "env" as const,
+        }),
+      }),
+    ).rejects.toThrow(
+      "OpenRouter video models request failed: JSON response exceeds 16777216 bytes",
+    );
+    expect(oversized.wasCanceled()).toBe(true);
+    expect(oversized.release).toHaveBeenCalledOnce();
+  });
+
   it("skips live OpenRouter video catalog discovery without an API key", async () => {
     await expect(
       listOpenRouterVideoModelCatalog({
@@ -305,6 +502,10 @@ describe("openrouter video generation provider", () => {
   });
 
   it("resolves live per-model capabilities for runtime overlays", async () => {
+    const requestOverrides = {
+      allowPrivateNetwork: true,
+      headers: { "X-OpenRouter-Capabilities": "enabled" },
+    };
     fetchWithTimeoutGuardedMock.mockResolvedValueOnce(
       releasedJson({
         data: [
@@ -329,6 +530,7 @@ describe("openrouter video generation provider", () => {
           providers: {
             openrouter: {
               baseUrl: "https://custom.openrouter.test/openrouter/api/v1",
+              request: requestOverrides,
             },
           },
         },
@@ -347,6 +549,20 @@ describe("openrouter video generation provider", () => {
       "https://custom.openrouter.test/openrouter/api/v1/videos/models",
       "openrouter-video-models",
     );
+    expectRecordFields(
+      requireRecord(
+        requireMockCallArg(resolveProviderHttpRequestConfigMock.mock.calls, 0, 0, "request config"),
+        "request config",
+      ),
+      {
+        provider: "openrouter",
+        capability: "video",
+        baseUrl: "https://custom.openrouter.test/openrouter/api/v1",
+        request: requestOverrides,
+      },
+    );
+    expect(requireFetchCallHeaders(0).get("x-openrouter-capabilities")).toBe("enabled");
+    expect(requireFetchGuardOptions(0).ssrfPolicy).toEqual({ allowPrivateNetwork: true });
     expect(requireMockCallArg(fetchWithTimeoutGuardedMock.mock.calls, 0, 2, "fetch")).toBe(12_345);
     expect(requireMockCallArg(fetchWithTimeoutGuardedMock.mock.calls, 0, 3, "fetch")).toBeTypeOf(
       "function",
@@ -491,6 +707,7 @@ describe("openrouter video generation provider", () => {
         provider: "openrouter",
         capability: "video",
         baseUrl: "https://custom.openrouter.test/api/v1",
+        allowPrivateNetwork: false,
         request: requestOverrides,
       },
     );
@@ -617,11 +834,10 @@ describe("openrouter video generation provider", () => {
 
   it("wraps non-JSON successful OpenRouter submit responses", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => {
-          throw new SyntaxError("Unexpected token < in JSON");
-        },
-      },
+      response: new Response("<html></html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      }),
       release: vi.fn(async () => {}),
     });
 
@@ -634,6 +850,22 @@ describe("openrouter video generation provider", () => {
         cfg: {} as never,
       }),
     ).rejects.toThrow("OpenRouter video generation response malformed");
+  });
+
+  it("bounds oversized successful OpenRouter submit responses", async () => {
+    const oversized = releasedOversizedJsonStream();
+    postJsonRequestMock.mockResolvedValue(oversized);
+
+    const provider = buildOpenRouterVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "openrouter",
+        model: "google/veo-3.1",
+        prompt: "oversized body",
+        cfg: {} as never,
+      }),
+    ).rejects.toThrow("OpenRouter video generation: JSON response exceeds 16777216 bytes");
+    expect(oversized.wasCanceled()).toBe(true);
   });
 
   it("rejects unknown OpenRouter poll statuses without waiting for timeout", async () => {

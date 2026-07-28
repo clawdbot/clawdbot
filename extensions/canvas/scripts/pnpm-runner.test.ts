@@ -17,6 +17,7 @@ describe("canvas pnpm runner", () => {
     try {
       expect(
         resolvePnpmRunner({
+          env: { PATH: "" },
           npmExecPath,
           platform: "darwin",
           pnpmArgs: ["exec", "rolldown", "-c"],
@@ -40,6 +41,7 @@ describe("canvas pnpm runner", () => {
     try {
       expect(
         resolvePnpmRunner({
+          env: { PATH: "" },
           npmExecPath,
           platform: "darwin",
           pnpmArgs: ["exec", "rolldown", "-c"],
@@ -47,6 +49,81 @@ describe("canvas pnpm runner", () => {
       ).toEqual({
         args: ["exec", "rolldown", "-c"],
         command: "pnpm",
+        shell: false,
+      });
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  posixIt("uses Corepack when pnpm is not directly available on PATH", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "canvas-pnpm-runner-corepack-"));
+    const corepackPath = path.join(tempDir, "corepack");
+    writeFileSync(corepackPath, "#!/bin/sh\nexit 0\n");
+    chmodSync(corepackPath, 0o755);
+
+    try {
+      expect(
+        resolvePnpmRunner({
+          env: { PATH: tempDir },
+          npmExecPath: "",
+          platform: "darwin",
+          pnpmArgs: ["exec", "rolldown", "-c"],
+        }),
+      ).toEqual({
+        args: ["pnpm", "exec", "rolldown", "-c"],
+        command: corepackPath,
+        shell: false,
+      });
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  posixIt("ignores a missing pnpm JS npm_execpath before checking PATH", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "canvas-pnpm-runner-missing-"));
+    const corepackPath = path.join(tempDir, "corepack");
+    writeFileSync(corepackPath, "#!/bin/sh\nexit 0\n");
+    chmodSync(corepackPath, 0o755);
+
+    try {
+      expect(
+        resolvePnpmRunner({
+          env: { PATH: tempDir },
+          npmExecPath: path.join(tempDir, "missing-pnpm.mjs"),
+          platform: "darwin",
+          pnpmArgs: ["exec", "rolldown", "-c"],
+        }),
+      ).toEqual({
+        args: ["pnpm", "exec", "rolldown", "-c"],
+        command: corepackPath,
+        shell: false,
+      });
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  posixIt("prefers a direct pnpm executable over Corepack", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "canvas-pnpm-runner-path-"));
+    const pnpmPath = path.join(tempDir, "pnpm");
+    const corepackPath = path.join(tempDir, "corepack");
+    writeFileSync(pnpmPath, "#!/bin/sh\nexit 0\n");
+    writeFileSync(corepackPath, "#!/bin/sh\nexit 0\n");
+    chmodSync(pnpmPath, 0o755);
+    chmodSync(corepackPath, 0o755);
+
+    try {
+      expect(
+        resolvePnpmRunner({
+          env: { PATH: tempDir },
+          npmExecPath: "",
+          platform: "darwin",
+          pnpmArgs: ["exec", "rolldown", "-c"],
+        }),
+      ).toEqual({
+        args: ["exec", "rolldown", "-c"],
+        command: pnpmPath,
         shell: false,
       });
     } finally {

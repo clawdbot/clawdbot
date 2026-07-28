@@ -2,12 +2,7 @@
  * Gateway node catalog regression tests.
  */
 import { describe, expect, it } from "vitest";
-import {
-  createKnownNodeCatalog,
-  getKnownNode,
-  getKnownNodeEntry,
-  listKnownNodes,
-} from "./node-catalog.js";
+import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "./node-catalog.js";
 
 type CatalogInput = Parameters<typeof createKnownNodeCatalog>[0];
 type TestPairedDevice = CatalogInput["pairedDevices"][number];
@@ -40,7 +35,6 @@ function pairedDevice(overrides: Partial<TestPairedDevice> = {}): TestPairedDevi
 function pairedNode(overrides: Partial<TestPairedNode> = {}): TestPairedNode {
   return {
     nodeId: "mac-1",
-    token: "node-token",
     platform: "macos",
     caps: ["camera"],
     commands: ["system.run"],
@@ -95,14 +89,10 @@ describe("gateway/node-catalog", () => {
     expect(listKnownNodes(catalog).map((node) => node.nodeId)).toEqual(["current-mac"]);
   });
 
-  it("builds one merged node view for paired and live state", () => {
+  it("builds one public node view from paired and live state", () => {
     const connectedAtMs = 123;
     const catalog = createKnownNodeCatalog({
-      pairedDevices: [
-        pairedDevice({
-          remoteIp: "100.0.0.10",
-        }),
-      ],
+      pairedDevices: [pairedDevice({ remoteIp: "100.0.0.10" })],
       pairedNodes: [
         pairedNode({
           displayName: "Mac",
@@ -127,35 +117,39 @@ describe("gateway/node-catalog", () => {
           caps: ["camera", "screen"],
           declaredCommands: ["screen.snapshot", "system.run"],
           commands: ["screen.snapshot", "system.run"],
+          declaredNodePluginTools: [],
+          nodePluginTools: [],
+          nodeSkills: [],
           remoteIp: "100.0.0.11",
           pathEnv: "/usr/bin:/bin",
           connectedAtMs,
+          lastActiveAtMs: 120,
+          presenceUpdatedAtMs: 125,
         },
       ],
     });
 
-    const entry = getKnownNodeEntry(catalog, "mac-1");
-    expect(entry?.nodePairing?.commands).toEqual(["system.run"]);
-    expect(entry?.nodePairing?.caps).toEqual(["camera"]);
-    expect(entry?.nodePairing?.approvedAtMs).toBe(100);
-    const node = getKnownNode(catalog, "mac-1");
-    expect(node?.nodeId).toBe("mac-1");
-    expect(node?.displayName).toBe("Mac");
-    expect(node?.clientId).toBe("openclaw-macos");
-    expect(node?.clientMode).toBe("node");
-    expect(node?.remoteIp).toBe("100.0.0.11");
-    expect(node?.caps).toEqual(["camera", "screen"]);
-    expect(node?.commands).toEqual(["screen.snapshot", "system.run"]);
-    expect(node?.pathEnv).toBe("/usr/bin:/bin");
-    expect(node?.approvedAtMs).toBe(100);
-    expect(node?.connectedAtMs).toBe(connectedAtMs);
-    expect(node?.lastSeenAtMs).toBe(connectedAtMs);
-    expect(node?.lastSeenReason).toBe("connect");
-    expect(node?.paired).toBe(true);
-    expect(node?.connected).toBe(true);
+    expect(getKnownNode(catalog, "mac-1")).toMatchObject({
+      nodeId: "mac-1",
+      displayName: "Mac",
+      clientId: "openclaw-macos",
+      clientMode: "node",
+      remoteIp: "100.0.0.11",
+      caps: ["camera", "screen"],
+      commands: ["screen.snapshot", "system.run"],
+      pathEnv: "/usr/bin:/bin",
+      approvedAtMs: 100,
+      connectedAtMs,
+      lastActiveAtMs: 120,
+      presenceUpdatedAtMs: 125,
+      lastSeenAtMs: connectedAtMs,
+      lastSeenReason: "connect",
+      paired: true,
+      connected: true,
+    });
   });
 
-  it("surfaces node-pair metadata even when the node is offline", () => {
+  it("surfaces paired-node metadata while the node is offline", () => {
     const catalog = createKnownNodeCatalog({
       pairedDevices: [pairedDevice()],
       pairedNodes: [
@@ -169,20 +163,16 @@ describe("gateway/node-catalog", () => {
       connectedNodes: [],
     });
 
-    const entry = getKnownNodeEntry(catalog, "mac-1");
-    expect(entry?.live).toBeUndefined();
-    expect(entry?.nodePairing?.commands).toEqual(["system.run"]);
-    expect(entry?.nodePairing?.caps).toEqual(["system"]);
-    expect(entry?.nodePairing?.approvedAtMs).toBe(123);
-    const node = getKnownNode(catalog, "mac-1");
-    expect(node?.nodeId).toBe("mac-1");
-    expect(node?.caps).toEqual(["system"]);
-    expect(node?.commands).toEqual(["system.run"]);
-    expect(node?.approvedAtMs).toBe(123);
-    expect(node?.lastSeenAtMs).toBe(456);
-    expect(node?.lastSeenReason).toBe("silent_push");
-    expect(node?.paired).toBe(true);
-    expect(node?.connected).toBe(false);
+    expect(getKnownNode(catalog, "mac-1")).toMatchObject({
+      nodeId: "mac-1",
+      caps: ["system"],
+      commands: ["system.run"],
+      approvedAtMs: 123,
+      lastSeenAtMs: 456,
+      lastSeenReason: "silent_push",
+      paired: true,
+      connected: false,
+    });
   });
 
   it("uses the newest durable last-seen source for offline nodes", () => {
@@ -236,6 +226,9 @@ describe("gateway/node-catalog", () => {
           caps: ["canvas"],
           declaredCommands: ["canvas.snapshot"],
           commands: ["canvas.snapshot"],
+          declaredNodePluginTools: [],
+          nodePluginTools: [],
+          nodeSkills: [],
           connectedAtMs: 1,
         },
       ],
@@ -327,6 +320,9 @@ describe("gateway/node-catalog", () => {
           caps: [],
           declaredCommands: ["screen.snapshot", "system.run"],
           commands: [],
+          declaredNodePluginTools: [],
+          nodePluginTools: [],
+          nodeSkills: [],
           connectedAtMs: 1,
         },
       ],
@@ -361,6 +357,9 @@ describe("gateway/node-catalog", () => {
           caps: ["camera"],
           declaredCommands: ["screen.snapshot", "system.run"],
           commands: ["screen.snapshot"],
+          declaredNodePluginTools: [],
+          nodePluginTools: [],
+          nodeSkills: [],
           declaredPermissions: { camera: true, screen: true },
           permissions: { camera: true },
           connectedAtMs: 1,
@@ -401,6 +400,9 @@ describe("gateway/node-catalog", () => {
           caps: ["camera"],
           declaredCommands: ["screen.snapshot"],
           commands: ["screen.snapshot"],
+          declaredNodePluginTools: [],
+          nodePluginTools: [],
+          nodeSkills: [],
           declaredPermissions: { camera: true },
           permissions: { camera: true },
           connectedAtMs: 1,
@@ -408,8 +410,6 @@ describe("gateway/node-catalog", () => {
       ],
     });
 
-    const entry = getKnownNodeEntry(catalog, "mac-1");
-    expect(entry?.pendingNodePairing).toBeUndefined();
     const node = getKnownNode(catalog, "mac-1");
     expect(node?.approvalState).toBe("approved");
     expect(node?.pendingRequestId).toBeUndefined();
@@ -443,5 +443,95 @@ describe("gateway/node-catalog", () => {
     expect(nodes[0]?.nodeId).toBe("bad-node");
     expect(nodes[0]?.caps).toEqual(["camera"]);
     expect(nodes[0]?.commands).toEqual(["system.run"]);
+  });
+
+  it("normalizes non-string scalar fields from malformed pairing records (no nodes-status crash)", () => {
+    // Paired/pending records are blind-cast from disk, so every formatter-facing scalar can be a
+    // non-string; before this guard a `nodes status` formatter (.trim() / sanitizeTerminalText) threw.
+    const catalog = createKnownNodeCatalog({
+      pairedDevices: [
+        pairedDevice({
+          deviceId: "mac-1",
+          displayName: 654 as unknown as string,
+          clientId: 456 as unknown as string,
+          clientMode: 789 as unknown as string,
+        }),
+      ],
+      pairedNodes: [
+        pairedNode({
+          nodeId: "mac-1",
+          version: 123 as unknown as string,
+          displayName: 321 as unknown as string,
+          platform: 11 as unknown as string,
+          remoteIp: 22 as unknown as string,
+          deviceFamily: 33 as unknown as string,
+          modelIdentifier: 44 as unknown as string,
+        }),
+      ],
+      connectedNodes: [],
+    });
+
+    const node = getKnownNode(catalog, "mac-1");
+    expect(node?.version).toBeUndefined();
+    expect(node?.displayName).toBeUndefined();
+    expect(node?.clientId).toBeUndefined();
+    expect(node?.clientMode).toBeUndefined();
+    expect(node?.platform).toBeUndefined();
+    expect(node?.remoteIp).toBeUndefined();
+    expect(node?.deviceFamily).toBeUndefined();
+    expect(node?.modelIdentifier).toBeUndefined();
+  });
+
+  it("falls through a non-string higher-priority scalar to a valid lower-priority value", () => {
+    // A corrupted live (higher-priority) scalar must be treated as ABSENT so the valid paired
+    // (lower-priority) value still surfaces, instead of the malformed value suppressing it.
+    const catalog = createKnownNodeCatalog({
+      pairedDevices: [pairedDevice({ deviceId: "mac-1" })],
+      pairedNodes: [
+        pairedNode({ nodeId: "mac-1", displayName: "Node Display", platform: "linux" }),
+      ],
+      connectedNodes: [
+        {
+          nodeId: "mac-1",
+          connId: "conn-1",
+          client: {} as never,
+          displayName: 42 as unknown as string,
+          platform: {} as unknown as string,
+          declaredCaps: [],
+          caps: [],
+          declaredCommands: [],
+          commands: [],
+          declaredNodePluginTools: [],
+          nodePluginTools: [],
+          nodeSkills: [],
+          connectedAtMs: 1,
+        },
+      ],
+    });
+
+    const node = getKnownNode(catalog, "mac-1");
+    expect(node?.displayName).toBe("Node Display");
+    expect(node?.platform).toBe("linux");
+  });
+
+  it("drops blind-cast pairing entries whose required id is not a string", () => {
+    const catalog = createKnownNodeCatalog({
+      pairedDevices: [
+        pairedDevice({ deviceId: "good-node" }),
+        // A corrupted pairing file can carry a non-string id; without the catalog id guard
+        // these would key the maps and crash listKnownNodes' nodeId.localeCompare sort.
+        pairedDevice({ deviceId: 7 as unknown as string }),
+      ],
+      pairedNodes: [
+        pairedNode({ nodeId: "good-node" }),
+        pairedNode({ nodeId: {} as unknown as string }),
+      ],
+      pendingNodes: [pendingNode({ nodeId: [] as unknown as string })],
+      connectedNodes: [],
+    });
+
+    const nodes = listKnownNodes(catalog);
+    expect(nodes.map((entry) => entry.nodeId)).toEqual(["good-node"]);
+    expect(getKnownNode(catalog, "good-node")).not.toBeNull();
   });
 });

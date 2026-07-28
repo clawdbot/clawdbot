@@ -135,6 +135,27 @@ export class MatrixRecoveryKeyStore {
     };
   }
 
+  getSecretStorageKeyCandidate(keyId: string): Uint8Array | null {
+    const normalizedKeyId = keyId.trim();
+    if (!normalizedKeyId) {
+      return null;
+    }
+    const staged = this.resolveStagedSecretStorageKey([normalizedKeyId]);
+    if (staged) {
+      return staged[1];
+    }
+    const stored = this.loadStoredRecoveryKey();
+    if (!stored?.privateKeyBase64) {
+      return null;
+    }
+    const privateKey = new Uint8Array(Buffer.from(stored.privateKeyBase64, "base64"));
+    if (privateKey.length === 0) {
+      return null;
+    }
+    this.rememberSecretStorageKey(normalizedKeyId, privateKey, stored.keyInfo);
+    return privateKey;
+  }
+
   private resolveEncodedRecoveryKeyInput(params: {
     encodedPrivateKey: string;
     keyId?: string | null;

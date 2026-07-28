@@ -1,6 +1,7 @@
 // Covers target input normalization, provider plugin normalizers, resolver
 // caching, and id-like lookup heuristics.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/config.js";
 
 const getLoadedChannelPluginMock = vi.hoisted(() => vi.fn());
@@ -15,11 +16,14 @@ let maybeResolvePluginMessagingTarget: TargetNormalizationModule["maybeResolvePl
 let normalizeChannelTargetInput: TargetNormalizationModule["normalizeChannelTargetInput"];
 let resolveNormalizedTargetInput: TargetNormalizationModule["resolveNormalizedTargetInput"];
 let normalizeTargetForProvider: TargetNormalizationModule["normalizeTargetForProvider"];
-let resetTargetNormalizerCacheForTests: TargetNormalizationModule["testing"]["resetTargetNormalizerCacheForTests"];
 
-vi.mock("../../channels/plugins/registry-loaded-read.js", () => ({
-  getLoadedChannelPluginForRead: (...args: unknown[]) => getLoadedChannelPluginMock(...args),
-}));
+vi.mock("../../channels/plugins/registry-loaded.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../channels/plugins/registry-loaded.js")>();
+  return {
+    ...actual,
+    getLoadedChannelPluginForRead: (...args: unknown[]) => getLoadedChannelPluginMock(...args),
+  };
+});
 
 vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
@@ -30,7 +34,11 @@ vi.mock("../../plugins/runtime.js", () => ({
     getActivePluginChannelRegistryVersionMock(...args),
 }));
 
-beforeAll(async () => {
+beforeEach(async () => {
+  vi.resetModules();
+  getLoadedChannelPluginMock.mockReset();
+  getChannelPluginMock.mockReset();
+  getActivePluginChannelRegistryVersionMock.mockReset();
   ({
     buildTargetResolverSignature,
     looksLikeTargetId,
@@ -39,16 +47,6 @@ beforeAll(async () => {
     normalizeTargetForProvider,
     resolveNormalizedTargetInput,
   } = await import("./target-normalization.js"));
-  ({
-    testing: { resetTargetNormalizerCacheForTests },
-  } = await import("./target-normalization.js"));
-});
-
-beforeEach(() => {
-  getLoadedChannelPluginMock.mockReset();
-  getChannelPluginMock.mockReset();
-  getActivePluginChannelRegistryVersionMock.mockReset();
-  resetTargetNormalizerCacheForTests();
 });
 
 describe("normalizeChannelTargetInput", () => {
@@ -327,5 +325,28 @@ describe("buildTargetResolverSignature", () => {
     const second = buildTargetResolverSignature("workspace");
 
     expect(first).not.toBe(second);
+  });
+
+  it("partitions prepared runtime plugins from pinned and replacement plugin cache entries", () => {
+    const firstPlugin = {
+      messaging: {
+        targetResolver: {},
+      },
+    } as ChannelPlugin;
+    const replacementPlugin = {
+      messaging: {
+        targetResolver: {},
+      },
+    } as ChannelPlugin;
+    getLoadedChannelPluginMock.mockReturnValue(firstPlugin);
+
+    const pinned = buildTargetResolverSignature("workspace");
+    const prepared = buildTargetResolverSignature("workspace", firstPlugin);
+    const samePrepared = buildTargetResolverSignature("workspace", firstPlugin);
+    const replacementPrepared = buildTargetResolverSignature("workspace", replacementPlugin);
+
+    expect(prepared).not.toBe(pinned);
+    expect(samePrepared).toBe(prepared);
+    expect(replacementPrepared).not.toBe(prepared);
   });
 });

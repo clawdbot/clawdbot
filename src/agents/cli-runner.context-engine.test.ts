@@ -103,6 +103,7 @@ function buildPreparedContext(contextEngine: ContextEngine): PreparedCliRunConte
       env: {},
     },
     reusableCliSession: {
+      mode: "reuse",
       sessionId: "existing-external-cli-session",
     },
     hadSessionFile: true,
@@ -175,7 +176,7 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     const dispose = vi.fn(async () => {});
     const contextEngine = createContextEngine({ bootstrap, afterTurn, maintain, dispose });
     const context = buildPreparedContext(contextEngine);
-    context.params.bootstrapContextRunKind = "heartbeat";
+    context.params.bootstrapContextRunKind = "commitment-only";
     const result = await runPreparedCliAgent(context);
 
     expect(result.meta.agentMeta?.sessionId).toBe("external-cli-session-1");
@@ -187,10 +188,29 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
       config: undefined,
     });
     expect(loadCliSessionHistoryMessagesMock).not.toHaveBeenCalled();
-    expect(bootstrap).toHaveBeenCalledWith({
+    expect(bootstrap).toHaveBeenCalledTimes(1);
+    const bootstrapParams = bootstrap.mock.calls[0]?.[0];
+    expect(bootstrapParams).toMatchObject({
       sessionId: "openclaw-session-1",
       sessionKey: "agent:main:main",
       sessionFile: "session.jsonl",
+      runtimeSettings: {
+        schemaVersion: 1,
+        runtime: { host: "openclaw", mode: "normal" },
+        model: {
+          provider: "claude-cli",
+          requested: null,
+          resolved: "sonnet-4.6",
+        },
+        contextEngineSelection: {
+          selectedId: expect.any(String),
+          source: "configured",
+        },
+        executionHost: {
+          id: "cli:claude-cli",
+          label: 'CLI backend "claude-cli"',
+        },
+      },
     });
     expect(afterTurn).toHaveBeenCalledTimes(1);
     const afterTurnParams = afterTurn.mock.calls[0]?.[0];

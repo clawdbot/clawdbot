@@ -11,6 +11,28 @@ vi.mock("../../../api.js", () => ({
 
 import { guardedJsonApiRequest } from "./guarded-json-api.js";
 
+function cancelTrackedTextResponse(
+  text: string,
+  init?: ResponseInit,
+): {
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, init),
+    wasCanceled: () => canceled,
+  };
+}
+
 describe("guardedJsonApiRequest", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -44,6 +66,7 @@ describe("guardedJsonApiRequest", () => {
       },
       policy: { allowedHostnames: ["api.example.com"] },
       auditContext: "voice-call:test",
+      timeoutMs: 30_000,
     });
     expect(release).toHaveBeenCalledTimes(1);
   });
@@ -66,8 +89,9 @@ describe("guardedJsonApiRequest", () => {
       }),
     ).resolves.toBeUndefined();
 
+    const missing = cancelTrackedTextResponse("missing", { status: 404 });
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response("missing", { status: 404 }),
+      response: missing.response,
       release,
     });
 
@@ -82,6 +106,9 @@ describe("guardedJsonApiRequest", () => {
         errorPrefix: "request failed",
       }),
     ).resolves.toBeUndefined();
+
+    expect(missing.wasCanceled()).toBe(true);
+    expect(release).toHaveBeenCalledTimes(2);
   });
 
   it("throws prefixed errors and still releases the response handle", async () => {
@@ -105,6 +132,39 @@ describe("guardedJsonApiRequest", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("bounds provider error bodies on complete UTF-8 characters and cancels overflow", async () => {
+    const release = vi.fn(async () => {});
+    const tracked = cancelTrackedTextResponse(`${"x".repeat(8 * 1024 - 2)}😀tail`, {
+      status: 500,
+    });
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: tracked.response,
+      release,
+    });
+
+    let caught: Error | undefined;
+    try {
+      await guardedJsonApiRequest({
+        url: "https://api.example.com/v1/calls/3",
+        method: "DELETE",
+        headers: {},
+        allowedHostnames: ["api.example.com"],
+        auditContext: "voice-call:test",
+        errorPrefix: "provider error",
+      });
+    } catch (error) {
+      caught = error as Error;
+    }
+
+    expect(caught?.message).toContain("provider error: 500 ");
+    expect(caught?.message).toContain("... [truncated]");
+    expect(caught?.message).not.toContain("�");
+    expect(caught?.message).not.toContain("tail");
+    expect(caught?.message.length).toBeLessThan(8_300);
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("throws prefixed errors for malformed json success responses", async () => {
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValue({
@@ -123,6 +183,29 @@ describe("guardedJsonApiRequest", () => {
       }),
     ).rejects.toThrow("provider error: malformed JSON response");
 
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects oversized json success bodies and cancels unread overflow", async () => {
+    const release = vi.fn(async () => {});
+    const tracked = cancelTrackedTextResponse("x".repeat(1024 * 1024 + 1), { status: 200 });
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: tracked.response,
+      release,
+    });
+
+    await expect(
+      guardedJsonApiRequest({
+        url: "https://api.example.com/v1/calls/5",
+        method: "GET",
+        headers: {},
+        allowedHostnames: ["api.example.com"],
+        auditContext: "voice-call:test",
+        errorPrefix: "provider error",
+      }),
+    ).rejects.toThrow("provider response body too large: 1048577 bytes (limit: 1048576 bytes)");
+
+    expect(tracked.wasCanceled()).toBe(true);
     expect(release).toHaveBeenCalledTimes(1);
   });
 });

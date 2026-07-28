@@ -46,7 +46,7 @@ if ! command -v opengrep >/dev/null 2>&1; then
 error: 'opengrep' not found on PATH.
 
 Install with one of:
-  curl -fsSL https://raw.githubusercontent.com/opengrep/opengrep/v1.22.0/install.sh | bash -s -- -v v1.22.0
+  curl -fsSL https://raw.githubusercontent.com/opengrep/opengrep/v1.25.0/install.sh | bash -s -- -v v1.25.0
   brew install opengrep/tap/opengrep
   pipx install opengrep
 
@@ -61,11 +61,13 @@ PATHS_PASSED=0
 SAW_DOUBLE_DASH=0
 CHANGED_ONLY=0
 FAIL_ON_FINDINGS=0
+SARIF_OUTPUT=""
 while (( $# > 0 )); do
   case "$1" in
     --sarif)
       mkdir -p "$REPO_ROOT/.opengrep-out"
-      EXTRA_ARGS+=( "--sarif-output=$REPO_ROOT/.opengrep-out/$BUCKET.sarif" )
+      SARIF_OUTPUT="$REPO_ROOT/.opengrep-out/$BUCKET.sarif"
+      EXTRA_ARGS+=( "--sarif-output=$SARIF_OUTPUT" )
       shift
       ;;
     --json)
@@ -101,6 +103,31 @@ while (( $# > 0 )); do
       ;;
   esac
 done
+
+write_empty_sarif() {
+  local output="$1"
+
+  mkdir -p "$(dirname "$output")"
+  cat > "$output" <<'JSON'
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "Opengrep OSS",
+          "informationUri": "https://opengrep.dev",
+          "semanticVersion": "1.25.0",
+          "rules": []
+        }
+      },
+      "results": []
+    }
+  ]
+}
+JSON
+}
 
 cd "$REPO_ROOT"
 
@@ -181,6 +208,9 @@ if (( PATHS_PASSED == 0 )); then
     fi
     if (( ${#SCAN_PATHS[@]} == 0 )); then
       echo "→ No changed first-party paths for opengrep." >&2
+      if [[ -n "$SARIF_OUTPUT" ]]; then
+        write_empty_sarif "$SARIF_OUTPUT"
+      fi
       exit 0
     fi
   else

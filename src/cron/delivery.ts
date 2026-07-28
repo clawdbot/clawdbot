@@ -7,13 +7,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { resolveAgentOutboundIdentity } from "../infra/outbound/identity.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { getChildLogger } from "../logging.js";
-import {
-  resolveFailureDestination,
-  type CronFailureDeliveryPlan,
-  type CronFailureDestinationInput,
-  type CronDeliveryPlan,
-  resolveCronDeliveryPlan,
-} from "./delivery-plan.js";
+import { resolveFailureDestination, resolveCronDeliveryPlan } from "./delivery-plan.js";
 import {
   resolveDeliveryTarget,
   type DeliveryTargetResolution,
@@ -21,23 +15,19 @@ import {
 import { resolveCronNotificationSessionKey } from "./session-target.js";
 import type { CronMessageChannel } from "./types.js";
 
-export {
-  resolveCronDeliveryPlan,
-  resolveFailureDestination,
-  type CronDeliveryPlan,
-  type CronFailureDeliveryPlan,
-  type CronFailureDestinationInput,
-};
+export { resolveCronDeliveryPlan, resolveFailureDestination };
 
 const FAILURE_NOTIFICATION_TIMEOUT_MS = 30_000;
 const cronDeliveryLogger = getChildLogger({ subsystem: "cron-delivery" });
 
 /** Channel target metadata used for cron announcements and failure notifications. */
-export type CronAnnounceTarget = {
+type CronAnnounceTarget = {
   channel?: string;
   to?: string;
+  threadId?: string | number;
   accountId?: string;
   sessionKey?: string;
+  inheritSessionThread?: boolean;
 };
 
 type SuccessfulDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
@@ -58,12 +48,20 @@ async function resolveCronAnnounceDelivery(params: {
 > {
   // Resolve the target before building outbound identity/session so send errors
   // report the configured route, not only the cron job id.
-  const resolvedTarget = await resolveDeliveryTarget(params.cfg, params.agentId, {
-    channel: params.target.channel as CronMessageChannel | undefined,
-    to: params.target.to,
-    accountId: params.target.accountId,
-    sessionKey: params.target.sessionKey,
-  });
+  const targetResolutionOptions =
+    params.target.inheritSessionThread === false ? { inheritSessionThread: false } : undefined;
+  const resolvedTarget = await resolveDeliveryTarget(
+    params.cfg,
+    params.agentId,
+    {
+      channel: params.target.channel as CronMessageChannel | undefined,
+      to: params.target.to,
+      threadId: params.target.threadId,
+      accountId: params.target.accountId,
+      sessionKey: params.target.sessionKey,
+    },
+    targetResolutionOptions,
+  );
 
   if (!resolvedTarget.ok) {
     return { ok: false, error: resolvedTarget.error };

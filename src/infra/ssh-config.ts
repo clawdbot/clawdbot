@@ -1,7 +1,7 @@
 // Reads effective SSH target config from the local ssh client.
-import { spawn } from "node:child_process";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { parseStrictPositiveInteger } from "./parse-finite-number.js";
-import { resolveSystemBin } from "./resolve-system-bin.js";
+import { resolveSshClient } from "./ssh-client.js";
 import type { SshParsedTarget } from "./ssh-tunnel.js";
 
 export const SSH_CONFIG_OUTPUT_MAX_CHARS = 64 * 1024;
@@ -12,8 +12,6 @@ export type SshResolvedConfig = {
   port?: number;
   identityFiles: string[];
 };
-
-type AppendSshConfigOutputResult = { ok: true; value: string } | { ok: false; reason: "too-large" };
 
 function parsePort(value: string | undefined): number | undefined {
   if (!value) {
@@ -61,26 +59,12 @@ export function parseSshConfigOutput(output: string): SshResolvedConfig {
   return result;
 }
 
-export function appendSshConfigOutput(
-  current: string,
-  chunk: unknown,
-  maxChars = SSH_CONFIG_OUTPUT_MAX_CHARS,
-): AppendSshConfigOutputResult {
-  const next = current + String(chunk);
-  if (next.length > maxChars) {
-    return { ok: false, reason: "too-large" };
-  }
-  return { ok: true, value: next };
-}
-
 export async function resolveSshConfig(
   target: SshParsedTarget,
   opts: { identity?: string; timeoutMs?: number } = {},
 ): Promise<SshResolvedConfig | null> {
-  // Resolve ssh from trusted system directories only (never a PATH-controlled
-  // binary). Best-effort config read: skip enrichment when no system ssh exists.
-  const sshPath = resolveSystemBin("ssh", { trust: "strict" });
-  if (sshPath === null) {
+  const sshPath = resolveSshClient();
+  if (!sshPath) {
     return null;
   }
   const args = ["-G"];
@@ -94,43 +78,18 @@ export async function resolveSshConfig(
   // Use "--" so userHost can't be parsed as an ssh option.
   args.push("--", userHost);
 
-  return await new Promise<SshResolvedConfig | null>((resolve) => {
-    const child = spawn(sshPath, args, {
-      stdio: ["ignore", "pipe", "ignore"],
+  try {
+    const result = await runCommandWithTimeout([sshPath, ...args], {
+      maxOutputBytes: SSH_CONFIG_OUTPUT_MAX_CHARS,
+      outputCapture: "head",
+      terminateOnOutputLimit: true,
+      timeoutMs: Math.max(200, opts.timeoutMs ?? 800),
     });
-    let stdout = "";
-    let outputTooLarge = false;
-    child.stdout?.setEncoding("utf8");
-    child.stdout?.on("data", (chunk) => {
-      const appended = appendSshConfigOutput(stdout, chunk);
-      if (!appended.ok) {
-        outputTooLarge = true;
-        child.kill("SIGKILL");
-        return;
-      }
-      stdout = appended.value;
-    });
-
-    const timeoutMs = Math.max(200, opts.timeoutMs ?? 800);
-    const timer = setTimeout(() => {
-      try {
-        child.kill("SIGKILL");
-      } finally {
-        resolve(null);
-      }
-    }, timeoutMs);
-
-    child.once("error", () => {
-      clearTimeout(timer);
-      resolve(null);
-    });
-    child.once("exit", (code) => {
-      clearTimeout(timer);
-      if (outputTooLarge || code !== 0 || !stdout.trim()) {
-        resolve(null);
-        return;
-      }
-      resolve(parseSshConfigOutput(stdout));
-    });
-  });
+    if (result.code !== 0 || result.termination !== "exit" || !result.stdout.trim()) {
+      return null;
+    }
+    return parseSshConfigOutput(result.stdout);
+  } catch {
+    return null;
+  }
 }

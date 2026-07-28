@@ -93,6 +93,9 @@ describe("qa suite runtime agent media helpers", () => {
         timeoutMs: 2_000,
       }),
     ).resolves.toBe("/tmp/generated.png");
+    expect(fetchJsonMock).toHaveBeenCalledOnce();
+    expect(fetchJsonMock).toHaveBeenCalledWith(expect.any(String), expect.any(Number));
+    expect(fetchJsonMock.mock.calls[0]?.[1]).toBeLessThanOrEqual(2_000);
   });
 
   it("falls back to generated image files under the gateway temp root", async () => {
@@ -109,6 +112,27 @@ describe("qa suite runtime agent media helpers", () => {
           gateway: { tempRoot },
         } as never,
         promptSnippet: "unused",
+        startedAtMs: Date.now(),
+        timeoutMs: 2_000,
+      }),
+    ).resolves.toBe(mediaPath);
+  });
+
+  it("falls back to generated image files when mock request logs are unavailable", async () => {
+    fetchJsonMock.mockRejectedValue(new Error("mock debug unavailable"));
+    const tempRoot = await makeTempDir("qa-generated-image-");
+    const mediaDir = path.join(tempRoot, "state", "media", "tool-image-generation");
+    await fs.mkdir(mediaDir, { recursive: true });
+    const mediaPath = path.join(mediaDir, "generated.png");
+    await fs.writeFile(mediaPath, "png", "utf8");
+
+    await expect(
+      resolveGeneratedImagePath({
+        env: {
+          mock: { baseUrl: "http://127.0.0.1:9999" },
+          gateway: { tempRoot },
+        } as never,
+        promptSnippet: "prompt snippet",
         startedAtMs: Date.now(),
         timeoutMs: 2_000,
       }),

@@ -11,6 +11,11 @@ describe("shortenText", () => {
     expect(shortenText("openclaw-status-output", 10)).toBe("openclaw-…");
   });
 
+  it("returns an empty string for non-positive limits", () => {
+    expect(shortenText("openclaw", 0)).toBe("");
+    expect(shortenText("openclaw", -1)).toBe("");
+  });
+
   it("counts multi-byte characters correctly", () => {
     expect(shortenText("hello🙂world", 7)).toBe("hello🙂…");
   });

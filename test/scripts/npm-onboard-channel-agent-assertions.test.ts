@@ -84,7 +84,23 @@ function runOnboardAssert(home: string) {
   });
 }
 
-function runStatusAssert(channel: string, channelsStatus: unknown, statusText: string) {
+function runMockModelAssert(home: string, command: string, port: string) {
+  return spawnSync(process.execPath, [assertionsPath, command, port], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      HOME: home,
+      NODE_OPTIONS: nodeOptionsWithoutExperimentalWarnings(),
+    },
+  });
+}
+
+function runStatusAssert(
+  channel: string,
+  channelsStatus: unknown,
+  statusText: string,
+  env: NodeJS.ProcessEnv = {},
+) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-status-assertions-"));
   try {
     const channelsStatusPath = path.join(tempDir, "channels-status.json");
@@ -96,6 +112,7 @@ function runStatusAssert(channel: string, channelsStatus: unknown, statusText: s
       [assertionsPath, "assert-status-surfaces", channel, channelsStatusPath, statusTextPath],
       {
         encoding: "utf8",
+        env: { ...process.env, ...env },
       },
     );
   } finally {
@@ -104,6 +121,102 @@ function runStatusAssert(channel: string, channelsStatus: unknown, statusText: s
 }
 
 describe("npm onboard channel agent assertions", () => {
+  it("rejects loose mock OpenAI port args", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-onboard-assertions-"));
+
+    try {
+      for (const command of ["configure-mock-model", "assert-mock-model-config"]) {
+        const result = runMockModelAssert(tempDir, command, "1e3");
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("mock OpenAI port must be a TCP port from 1 to 65535");
+        expect(result.stderr).toContain('"1e3"');
+      }
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("configures and validates the canonical main agent's mock model", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-onboard-mock-agent-"));
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+
+    try {
+      fs.mkdirSync(path.dirname(configPath), { recursive: true });
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          agents: {
+            defaults: { models: {} },
+            entries: { main: { default: true, model: "openai/gpt-5.6" } },
+          },
+          models: { providers: {} },
+        }),
+      );
+
+      expect(runMockModelAssert(home, "configure-mock-model", "18181").status).toBe(0);
+      expect(runMockModelAssert(home, "assert-mock-model-config", "18181").status).toBe(0);
+
+      const cfg = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
+        agents: {
+          entries: Record<
+            string,
+            {
+              default?: boolean;
+              model?: { primary?: string };
+              models?: Record<string, { agentRuntime?: { id?: string } }>;
+            }
+          >;
+        };
+      };
+      expect(cfg.agents.entries.main).toMatchObject({
+        default: true,
+        model: { primary: "openai/gpt-5.6-luna" },
+        models: {
+          "openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } },
+        },
+      });
+    } finally {
+      fs.rmSync(home, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects a canonical main agent that does not use the configured mock model", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-onboard-mock-agent-"));
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+
+    try {
+      fs.mkdirSync(path.dirname(configPath), { recursive: true });
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          agents: {
+            defaults: { models: {} },
+            entries: { main: { default: true, model: "openai/gpt-5.6" } },
+          },
+          models: { providers: {} },
+        }),
+      );
+      expect(runMockModelAssert(home, "configure-mock-model", "18181").status).toBe(0);
+
+      const cfg = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
+        agents: { entries: Record<string, { model?: { primary?: string } }> };
+      };
+      const mainAgent = cfg.agents.entries.main;
+      if (!mainAgent) {
+        throw new Error("mock configuration did not contain the main agent");
+      }
+      mainAgent.model = { primary: "openai/gpt-5.6" };
+      fs.writeFileSync(configPath, JSON.stringify(cfg));
+
+      const result = runMockModelAssert(home, "assert-mock-model-config", "18181");
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("mock agent model was not preserved");
+    } finally {
+      fs.rmSync(home, { force: true, recursive: true });
+    }
+  });
+
   it("validates OpenAI env refs from the SQLite auth profile store", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-onboard-assertions-"));
     const agentDir = path.join(tempDir, ".openclaw", "agents", "main", "agent");
@@ -263,5 +376,29 @@ describe("npm onboard channel agent assertions", () => {
     expect(result.stderr).toContain(
       "plain status output did not mention telegram in the Channels section",
     );
+  });
+
+  it("rejects oversized plain status output before parsing it", () => {
+    const result = runStatusAssert(
+      "telegram",
+      { configuredChannels: ["telegram"] },
+      `# OpenClaw status\n${"x".repeat(128)}`,
+      { OPENCLAW_NPM_ONBOARD_STATUS_TEXT_MAX_BYTES: "64" },
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("plain status output exceeded 64 bytes");
+  });
+
+  it("rejects oversized channels status JSON before parsing it", () => {
+    const result = runStatusAssert(
+      "telegram",
+      { configuredChannels: ["telegram"], filler: "x".repeat(128) },
+      "# Channels\ntelegram ok configured",
+      { OPENCLAW_NPM_ONBOARD_JSON_ARTIFACT_MAX_BYTES: "64" },
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("JSON artifact exceeded 64 bytes");
   });
 });

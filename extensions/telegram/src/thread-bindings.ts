@@ -16,12 +16,14 @@ import {
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeAccountId, isAcpSessionKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getTelegramRuntime } from "./runtime.js";
+import { loadTelegramSendModule } from "./send-runtime.js";
 import { resolveTelegramToken } from "./token.js";
 
 const DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
@@ -30,14 +32,6 @@ const THREAD_BINDINGS_SWEEP_INTERVAL_MS = 60_000;
 const STORE_VERSION = 1;
 export const TELEGRAM_THREAD_BINDINGS_NAMESPACE = "telegram.thread-bindings";
 export const TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES = 5_000;
-
-let telegramSendModulePromise: Promise<typeof import("./send.js")> | undefined;
-let threadBindingStoreForTest: PluginStateSyncKeyedStore<TelegramThreadBindingRecord> | undefined;
-
-async function loadTelegramSendModule() {
-  telegramSendModulePromise ??= import("./send.js");
-  return await telegramSendModulePromise;
-}
 
 type TelegramBindingTargetKind = "subagent" | "acp";
 
@@ -132,13 +126,10 @@ function resolveStoredBindingKey(params: { accountId: string; conversationId: st
 }
 
 function openThreadBindingStore(): TelegramThreadBindingStore {
-  return (
-    threadBindingStoreForTest ??
-    getTelegramRuntime().state.openSyncKeyedStore<TelegramThreadBindingRecord>({
-      namespace: TELEGRAM_THREAD_BINDINGS_NAMESPACE,
-      maxEntries: TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES,
-    })
-  );
+  return getTelegramRuntime().state.openSyncKeyedStore<TelegramThreadBindingRecord>({
+    namespace: TELEGRAM_THREAD_BINDINGS_NAMESPACE,
+    maxEntries: TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES,
+  });
 }
 
 function toSessionBindingTargetKind(raw: TelegramBindingTargetKind): BindingTargetKind {
@@ -440,21 +431,14 @@ function enqueuePersistBindings(params: {
   if (!params.persist) {
     return Promise.resolve();
   }
-  const previous =
-    getThreadBindingsState().persistQueueByAccountId.get(params.accountId) ?? Promise.resolve();
-  const next = previous
-    .catch(() => undefined)
-    .then(async () => {
+  const state = getThreadBindingsState();
+  return enqueueKeyedTask({
+    tails: state.persistQueueByAccountId,
+    key: params.accountId,
+    task: async () => {
       await persistBindingsToStore(params);
-    });
-  getThreadBindingsState().persistQueueByAccountId.set(params.accountId, next);
-  const cleanup = () => {
-    if (getThreadBindingsState().persistQueueByAccountId.get(params.accountId) === next) {
-      getThreadBindingsState().persistQueueByAccountId.delete(params.accountId);
-    }
-  };
-  next.then(cleanup, cleanup);
-  return next;
+    },
+  });
 }
 
 function persistBindingsSafely(params: {
@@ -1019,12 +1003,6 @@ export async function resetTelegramThreadBindingsForTests() {
   getThreadBindingsState().bindingsByAccountConversation.clear();
 }
 
-export function setTelegramThreadBindingStoreForTest(
-  store: TelegramThreadBindingStore | undefined,
-): void {
-  threadBindingStoreForTest = store;
-}
-
 export function listTelegramLegacyThreadBindingEntries(params: {
   accountId: string;
   persistedPath?: string;
@@ -1041,4 +1019,4 @@ export const testing = {
   resolveBindingsPath,
   resolveStoredBindingKey,
 };
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

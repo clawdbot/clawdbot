@@ -1,5 +1,5 @@
 /** Upper bound for config path array indexes to reject impractical sparse writes. */
-export const MAX_CONFIG_PATH_ARRAY_INDEX = 100_000;
+const MAX_CONFIG_PATH_ARRAY_INDEX = 100_000;
 
 const CANONICAL_ARRAY_INDEX_SEGMENT = /^(0|[1-9]\d*)$/;
 

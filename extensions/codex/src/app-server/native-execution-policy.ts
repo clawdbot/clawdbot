@@ -31,6 +31,17 @@ export type CodexNativeExecutionPolicy = {
   blockReason?: string;
 };
 
+/** Projects node execution ownership into the runtime tool factory options. */
+export function resolveCodexNodeExecToolOverrides(
+  policy: CodexNativeExecutionPolicy,
+): { host: "node"; node?: string } | undefined {
+  if (policy.effectiveExecHost !== "node") {
+    return undefined;
+  }
+  const node = policy.node?.trim();
+  return { host: "node", ...(node ? { node } : {}) };
+}
+
 /** Resolves node/gateway/sandbox execution ownership from overrides, session, agent, and config. */
 export function resolveCodexNativeExecutionPolicy(params: {
   config?: OpenClawConfig;
@@ -44,10 +55,14 @@ export function resolveCodexNativeExecutionPolicy(params: {
 }): CodexNativeExecutionPolicy {
   const config = params.config ?? {};
   const sessionKey = params.sessionKey?.trim() || params.sessionId?.trim() || undefined;
+  const agentId = resolvePolicyAgentId({ config, sessionKey, agentId: params.agentId });
+  const canReadSessionEntry =
+    params.readRuntimeSessionEntry &&
+    shouldReadRuntimeSessionEntry({ config, sessionKey, agentId: params.agentId });
   const sessionEntry =
     params.sessionEntry ??
-    (params.readRuntimeSessionEntry && sessionKey
-      ? readRuntimeSessionEntryBestEffort(sessionKey)
+    (canReadSessionEntry && sessionKey
+      ? readRuntimeSessionEntryBestEffort({ sessionKey, agentId })
       : undefined);
   const sandboxAvailable =
     params.sandboxAvailable ??
@@ -57,7 +72,6 @@ export function resolveCodexNativeExecutionPolicy(params: {
           sessionKey,
         }).sandboxed
       : false);
-  const agentId = resolvePolicyAgentId({ config, sessionKey, agentId: params.agentId });
   const agentExec = resolvePolicyAgentExec({ config, agentId });
   const globalExec = config.tools?.exec;
   const requestedExecHost =
@@ -117,8 +131,7 @@ function resolvePolicyAgentId(params: {
     return sessionAgentId;
   }
   const agents = listAgentEntries(params.config);
-  const defaultEntry = agents.find((entry) => entry?.default) ?? agents[0];
-  return normalizeAgentId(defaultEntry?.id);
+  return resolveDefaultPolicyAgentId(agents);
 }
 
 function resolvePolicyAgentExec(params: {
@@ -146,6 +159,40 @@ function parseAgentIdFromSessionKey(sessionKey?: string): string | undefined {
     return undefined;
   }
   return normalizeAgentIdOrDefault(parts[1]);
+}
+
+function shouldReadRuntimeSessionEntry(params: {
+  config: OpenClawConfig;
+  sessionKey?: string;
+  agentId?: string;
+}): boolean {
+  if (!params.sessionKey) {
+    return false;
+  }
+  const explicitAgentId = normalizeAgentIdOrDefault(params.agentId);
+  if (!explicitAgentId) {
+    return true;
+  }
+  const sessionAgentId = parseAgentIdFromSessionKey(params.sessionKey);
+  if (!sessionAgentId) {
+    return isDefaultAgentSessionKeyForAgent({ config: params.config, agentId: explicitAgentId });
+  }
+  return sessionAgentId === explicitAgentId;
+}
+
+function isDefaultAgentSessionKeyForAgent(params: {
+  config: OpenClawConfig;
+  agentId: string;
+}): boolean {
+  return (
+    normalizeAgentId(params.agentId) ===
+    resolveDefaultPolicyAgentId(listAgentEntries(params.config))
+  );
+}
+
+function resolveDefaultPolicyAgentId(agents: AgentEntry[]): string {
+  const defaultEntry = agents.find((entry) => entry?.default) ?? agents[0];
+  return normalizeAgentId(defaultEntry?.id);
 }
 
 function normalizeAgentIdOrDefault(value?: string | null): string | undefined {
@@ -194,9 +241,16 @@ function resolveEffectiveExecHost(params: {
   return params.requestedExecHost;
 }
 
-function readRuntimeSessionEntryBestEffort(sessionKey: string): SessionEntry | undefined {
+function readRuntimeSessionEntryBestEffort(params: {
+  sessionKey: string;
+  agentId: string;
+}): SessionEntry | undefined {
   try {
-    return getSessionEntry({ sessionKey, hydrateSkillPromptRefs: false });
+    return getSessionEntry({
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      hydrateSkillPromptRefs: false,
+    });
   } catch {
     return undefined;
   }

@@ -442,7 +442,7 @@ export function redactConfigSnapshot(
     redactedRaw &&
     shouldFallbackToStructuredRawRedaction({
       redactedRaw,
-      originalConfig: snapshot.config,
+      originalConfig: snapshot.parsed ?? snapshot.config,
       restoreParsed: (parsed) =>
         withRestoreWarningsSuppressed(() =>
           restoreRedactedValues(parsed, snapshot.config, uiHints),
@@ -538,7 +538,7 @@ function restoreOriginalValueOrThrow(params: {
   path: string;
   original: Record<string, unknown>;
 }): unknown {
-  if (params.key in params.original) {
+  if (Object.hasOwn(params.original, params.key)) {
     return params.original[params.key];
   }
   if (!suppressRestoreWarnings) {
@@ -888,3 +888,4 @@ function restoreRedactedValuesGuessing(
   }
   return result;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

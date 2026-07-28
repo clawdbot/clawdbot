@@ -2,6 +2,7 @@
 // APNs destinations through an explicit HTTP(S) forward proxy.
 import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
+import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
 import { probeApnsHttp2ReachabilityViaProxy } from "../../push-apns-http2.js";
 import { fetchWithRuntimeDispatcher } from "../runtime-fetch.js";
@@ -12,18 +13,18 @@ import {
   type ManagedProxyTlsOptions,
 } from "./proxy-tls.js";
 
-export const DEFAULT_PROXY_VALIDATION_ALLOWED_URLS = ["https://example.com/"] as const;
-export const DEFAULT_PROXY_VALIDATION_APNS_AUTHORITY = "https://api.sandbox.push.apple.com";
+const DEFAULT_PROXY_VALIDATION_ALLOWED_URLS = ["https://example.com/"] as const;
+const DEFAULT_PROXY_VALIDATION_APNS_AUTHORITY = "https://api.sandbox.push.apple.com";
 
 const DEFAULT_PROXY_VALIDATION_TIMEOUT_MS = 5000;
 const DENIED_CANARY_HEADER = "x-openclaw-proxy-validation-canary";
 const APNS_REACHABILITY_REASON = "InvalidProviderToken";
 
 /** Describes where the effective proxy validation URL came from. */
-export type ProxyValidationConfigSource = "override" | "config" | "env" | "missing" | "disabled";
+type ProxyValidationConfigSource = "override" | "config" | "env" | "missing" | "disabled";
 
 /** Normalized proxy validation input plus actionable config errors. */
-export type ProxyValidationResolvedConfig = {
+type ProxyValidationResolvedConfig = {
   enabled: boolean;
   proxyUrl?: string;
   proxyCaFile?: string;
@@ -32,10 +33,10 @@ export type ProxyValidationResolvedConfig = {
 };
 
 /** Validation probe categories reported to CLI output. */
-export type ProxyValidationCheckKind = "allowed" | "denied" | "apns";
+type ProxyValidationCheckKind = "allowed" | "denied" | "apns";
 
 /** Result for one proxy validation probe. */
-export type ProxyValidationCheck = {
+type ProxyValidationCheck = {
   kind: ProxyValidationCheckKind;
   url: string;
   ok: boolean;
@@ -51,7 +52,7 @@ export type ProxyValidationResult = {
 };
 
 /** Parameters for fetch-based proxy validation probes. */
-export type ProxyValidationFetchCheckParams = {
+type ProxyValidationFetchCheckParams = {
   proxyUrl: string;
   proxyTls?: ManagedProxyTlsOptions;
   targetUrl: string;
@@ -59,26 +60,26 @@ export type ProxyValidationFetchCheckParams = {
 };
 
 /** Result from a fetch-based probe, including optional denied-canary evidence. */
-export type ProxyValidationFetchCheckResult = {
+type ProxyValidationFetchCheckResult = {
   ok: boolean;
   status: number;
   deniedCanaryToken?: string;
 };
 
 /** Injectable fetch probe used by tests and the default runtime validator. */
-export type ProxyValidationFetchCheck = (
+type ProxyValidationFetchCheck = (
   params: ProxyValidationFetchCheckParams,
 ) => Promise<ProxyValidationFetchCheckResult>;
 
 /** Parameters for APNs reachability validation through the proxy tunnel. */
-export type ProxyValidationApnsCheckParams = {
+type ProxyValidationApnsCheckParams = {
   proxyUrl: string;
   proxyTls?: ManagedProxyTlsOptions;
   authority: string;
   timeoutMs: number;
 };
 
-export type ProxyValidationApnsCheckResult = {
+type ProxyValidationApnsCheckResult = {
   status: number;
   /** Present when the response originated from a real APNs server (Apple always returns this UUID). */
   apnsId?: string;
@@ -87,12 +88,12 @@ export type ProxyValidationApnsCheckResult = {
 };
 
 /** Injectable APNs probe used by tests and the default HTTP/2 validator. */
-export type ProxyValidationApnsCheck = (
+type ProxyValidationApnsCheck = (
   params: ProxyValidationApnsCheckParams,
 ) => Promise<ProxyValidationApnsCheckResult>;
 
 /** Inputs used to resolve proxy validation config before network probes run. */
-export type ResolveProxyValidationConfigOptions = {
+type ResolveProxyValidationConfigOptions = {
   config?: ProxyConfig;
   env?: NodeJS.ProcessEnv | Partial<Record<"OPENCLAW_PROXY_URL", string | undefined>>;
   proxyUrlOverride?: string;
@@ -100,7 +101,7 @@ export type ResolveProxyValidationConfigOptions = {
 };
 
 /** Full proxy validation runner options, including probe overrides for tests. */
-export type RunProxyValidationOptions = ResolveProxyValidationConfigOptions & {
+type RunProxyValidationOptions = ResolveProxyValidationConfigOptions & {
   allowedUrls?: readonly string[];
   deniedUrls?: readonly string[];
   timeoutMs?: number;
@@ -115,45 +116,18 @@ function normalizeProxyUrl(value: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-function isHttpOrHttpsProxyUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
 function validateProxyUrl(value: string | undefined): string[] {
   if (!value) {
     return ["proxy validation requires proxy.proxyUrl, --proxy-url, or OPENCLAW_PROXY_URL"];
   }
-  if (!isHttpOrHttpsProxyUrl(value)) {
+  if (!isHttpUrl(value)) {
     return ["proxyUrl must use http:// or https://"];
   }
   return [];
 }
 
-function validateProxyEnabled(source: ProxyValidationConfigSource, enabled: boolean): string[] {
-  if (enabled || source === "override" || source === "missing" || source === "disabled") {
-    return [];
-  }
-  if (source === "env") {
-    return ["proxy validation requires proxy.enabled to be true for OPENCLAW_PROXY_URL"];
-  }
-  return ["proxy validation requires proxy.enabled to be true for configured proxy URLs"];
-}
-
-function validateResolvedProxy(
-  source: ProxyValidationConfigSource,
-  enabled: boolean,
-  value: string | undefined,
-): string[] {
-  return [...validateProxyUrl(value), ...validateProxyEnabled(source, enabled)];
-}
-
 /** Resolves validation config precedence: explicit override, config, then env. */
-export function resolveProxyValidationConfig(
+function resolveProxyValidationConfig(
   options: ResolveProxyValidationConfigOptions,
 ): ProxyValidationResolvedConfig {
   const overrideUrl = normalizeProxyUrl(options.proxyUrlOverride);
@@ -167,7 +141,7 @@ export function resolveProxyValidationConfig(
       proxyUrl: overrideUrl,
       ...(proxyCaFile ? { proxyCaFile } : {}),
       source: "override",
-      errors: validateResolvedProxy("override", true, overrideUrl),
+      errors: validateProxyUrl(overrideUrl),
     };
   }
 
@@ -179,11 +153,14 @@ export function resolveProxyValidationConfig(
       caFileOverride: options.proxyCaFileOverride,
     });
     return {
-      enabled: options.config?.enabled === true,
+      enabled: options.config?.enabled !== false,
       proxyUrl: configUrl,
       ...(proxyCaFile ? { proxyCaFile } : {}),
       source: "config",
-      errors: validateResolvedProxy("config", options.config?.enabled === true, configUrl),
+      errors:
+        options.config?.enabled === false
+          ? ["proxy validation is disabled by proxy.enabled=false"]
+          : validateProxyUrl(configUrl),
     };
   }
 
@@ -195,11 +172,14 @@ export function resolveProxyValidationConfig(
       caFileOverride: options.proxyCaFileOverride,
     });
     return {
-      enabled: options.config?.enabled === true,
+      enabled: options.config?.enabled !== false,
       proxyUrl: envUrl,
       ...(proxyCaFile ? { proxyCaFile } : {}),
       source: "env",
-      errors: validateResolvedProxy("env", options.config?.enabled === true, envUrl),
+      errors:
+        options.config?.enabled === false
+          ? ["proxy validation is disabled by proxy.enabled=false"]
+          : validateProxyUrl(envUrl),
     };
   }
 
@@ -214,9 +194,7 @@ export function resolveProxyValidationConfig(
   return {
     enabled: false,
     source: "disabled",
-    errors: [
-      "proxy validation requires proxy.enabled=true with proxy.proxyUrl or OPENCLAW_PROXY_URL, or --proxy-url",
-    ],
+    errors: ["proxy validation requires proxy.proxyUrl, OPENCLAW_PROXY_URL, or --proxy-url"],
   };
 }
 
@@ -238,7 +216,7 @@ async function defaultProxyValidationFetchCheck({
       dispatcher,
       redirect: "manual",
     });
-    void response.body?.cancel();
+    void response.body?.cancel().catch(() => undefined);
     return {
       ok: response.ok,
       status: response.status,
@@ -295,15 +273,6 @@ function normalizeTimeoutMs(value: number | undefined): number {
     return DEFAULT_PROXY_VALIDATION_TIMEOUT_MS;
   }
   return Math.floor(value);
-}
-
-function isValidHttpTargetUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:";
-  } catch {
-    return false;
-  }
 }
 
 type ProxyValidationDeniedTarget = {
@@ -392,7 +361,7 @@ async function runAllowedCheck(params: {
   timeoutMs: number;
   fetchCheck: ProxyValidationFetchCheck;
 }): Promise<ProxyValidationCheck> {
-  if (!isValidHttpTargetUrl(params.url)) {
+  if (!isHttpUrl(params.url)) {
     return {
       kind: "allowed",
       url: params.url,
@@ -435,7 +404,7 @@ async function runDeniedCheck(params: {
   timeoutMs: number;
   fetchCheck: ProxyValidationFetchCheck;
 }): Promise<ProxyValidationCheck> {
-  if (!isValidHttpTargetUrl(params.target.url)) {
+  if (!isHttpUrl(params.target.url)) {
     return {
       kind: "denied",
       url: params.target.url,
@@ -557,7 +526,7 @@ export async function runProxyValidation(
         config: {
           ...config,
           errors: [
-            "Proxy validation is disabled. Set proxy.enabled=true or pass --proxy-url to run validation.",
+            "Proxy validation is disabled. Configure proxy.proxyUrl, OPENCLAW_PROXY_URL, or pass --proxy-url to run validation.",
           ],
         },
         checks: [],

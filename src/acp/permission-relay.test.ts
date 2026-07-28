@@ -1,42 +1,31 @@
 /** Tests Gateway exec approval to ACP permission relay helpers. */
 import { describe, expect, it } from "vitest";
 import {
-  buildAcpPermissionOptions,
   buildAcpPermissionRequest,
-  normalizeGatewayExecApprovalDecisions,
   parseGatewayExecApprovalEventData,
   parseGatewayExecApprovalRequestEventPayload,
   resolveGatewayDecisionFromPermissionOutcome,
 } from "./permission-relay.js";
 
-describe("ACP permission relay helpers", () => {
-  it("maps Gateway exec approval decisions to ACP permission options", () => {
-    expect(buildAcpPermissionOptions(["allow-once", "allow-always", "deny"])).toEqual([
-      {
-        optionId: "allow-once",
-        name: "Allow once",
-        kind: "allow_once",
-      },
-      {
-        optionId: "allow-always",
-        name: "Allow always",
-        kind: "allow_always",
-      },
-      {
-        optionId: "deny",
-        name: "Deny",
-        kind: "reject_once",
-      },
-    ]);
-  });
+function buildOptionsForAllowedDecisions(allowedDecisions: unknown) {
+  return buildAcpPermissionRequest({
+    sessionId: "session-1",
+    event: {
+      approvalId: "approval-1",
+      command: "echo ok",
+    },
+    details: { allowedDecisions },
+  }).options;
+}
 
+describe("ACP permission relay helpers", () => {
   it("filters unknown decisions and falls back to allow-once plus deny", () => {
-    expect(normalizeGatewayExecApprovalDecisions(["allow-once", "bogus", "deny"])).toEqual([
-      "allow-once",
-      "deny",
-    ]);
-    expect(normalizeGatewayExecApprovalDecisions(["bogus"])).toEqual(["allow-once", "deny"]);
-    expect(normalizeGatewayExecApprovalDecisions(undefined)).toEqual(["allow-once", "deny"]);
+    const optionIds = (allowedDecisions: unknown) =>
+      buildOptionsForAllowedDecisions(allowedDecisions).map((option) => option.optionId);
+
+    expect(optionIds(["allow-once", "bogus", "deny"])).toEqual(["allow-once", "deny"]);
+    expect(optionIds(["bogus"])).toEqual(["allow-once", "deny"]);
+    expect(optionIds(undefined)).toEqual(["allow-once", "deny"]);
   });
 
   it("builds a request_permission payload from Gateway approval data", () => {
@@ -110,12 +99,14 @@ describe("ACP permission relay helpers", () => {
           command: "echo raw",
           host: "gateway",
           sessionKey: "agent:main:main",
+          toolCallId: "tool-raw",
         },
       }),
     ).toEqual({
       approvalId: "approval-raw",
       command: "echo raw",
       host: "gateway",
+      toolCallId: "tool-raw",
     });
 
     expect(parseGatewayExecApprovalRequestEventPayload({ id: "approval-raw" })).toBeNull();
@@ -132,7 +123,7 @@ describe("ACP permission relay helpers", () => {
   });
 
   it("maps selected ACP outcomes back to Gateway decisions", () => {
-    const options = buildAcpPermissionOptions(["allow-once", "allow-always", "deny"]);
+    const options = buildOptionsForAllowedDecisions(["allow-once", "allow-always", "deny"]);
 
     expect(
       resolveGatewayDecisionFromPermissionOutcome(

@@ -1,28 +1,53 @@
 // Tests model selection resolution from directives, config, and session state.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import {
   MODEL_CONTEXT_TOKEN_CACHE,
   providerContextTokenCacheKey,
 } from "../../agents/context-cache.js";
 import {
   loadManifestModelCatalog,
-  loadModelCatalog as loadModelCatalogLocal,
+  loadPreparedModelCatalog as loadModelCatalogLocal,
 } from "../../agents/model-catalog.runtime.js";
+import { resolveModelCandidateChain } from "../../agents/model-fallback-candidates.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
 import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
+
+const DEFAULT_MOCK_CATALOG_ENTRIES = vi.hoisted(() => [
+  { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus 4.5" },
+  { provider: "inferencer", id: "deepseek-v3-4bit-mlx", name: "DeepSeek V3" },
+  { provider: "kimi", id: "kimi-code", name: "Kimi Code" },
+  { provider: "openai", id: "gpt-4o-mini", name: "GPT-4o mini" },
+  { provider: "openai", id: "gpt-4o", name: "GPT-4o" },
+  { provider: "xai", id: "grok-4", name: "Grok 4" },
+  { provider: "xai", id: "grok-4.20-reasoning", name: "Grok 4.20 (Reasoning)" },
+]);
+
+const catalogRuntimeMocks = vi.hoisted(() => {
+  const loadModelCatalog = vi.fn(
+    async (_params?: unknown): Promise<unknown[]> => DEFAULT_MOCK_CATALOG_ENTRIES,
+  );
+  return {
+    loadModelCatalog,
+    // Delegate to the entries mock so per-test `loadModelCatalog.mockResolvedValueOnce`
+    // still drives selection; tests that need a degraded snapshot override this directly.
+    loadModelCatalogSnapshot: vi.fn(async (params?: unknown) => {
+      const entries = await loadModelCatalog(params as never);
+      return { entries, routeVariants: entries, authoritative: true };
+    }),
+  };
+});
 
 vi.mock("../../agents/model-catalog.runtime.js", () => ({
   loadManifestModelCatalog: vi.fn(() => []),
-  loadModelCatalog: vi.fn(async () => [
-    { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus 4.5" },
-    { provider: "inferencer", id: "deepseek-v3-4bit-mlx", name: "DeepSeek V3" },
-    { provider: "kimi", id: "kimi-code", name: "Kimi Code" },
-    { provider: "openai", id: "gpt-4o-mini", name: "GPT-4o mini" },
-    { provider: "openai", id: "gpt-4o", name: "GPT-4o" },
-    { provider: "xai", id: "grok-4", name: "Grok 4" },
-    { provider: "xai", id: "grok-4.20-reasoning", name: "Grok 4.20 (Reasoning)" },
-  ]),
+  loadPreparedModelCatalog: catalogRuntimeMocks.loadModelCatalog,
+  loadPreparedModelCatalogSnapshot: catalogRuntimeMocks.loadModelCatalogSnapshot,
 }));
 
 vi.mock("../../agents/provider-model-normalization.runtime.js", () => ({
@@ -59,8 +84,41 @@ vi.mock("../../agents/auth-profiles.runtime.js", () => ({
   ensureAuthProfileStore: authProfileStoreMock.ensureAuthProfileStore,
 }));
 
+// Alias-aware stub: mirrors the real isStoredCredentialCompatibleWithAuthProvider
+// but inlines the claude-cli->anthropic alias so tests don't need live plugin metadata.
+vi.mock("../../agents/auth-profiles/order.js", () => ({
+  isStoredCredentialCompatibleWithAuthProvider: ({
+    provider,
+    credential,
+  }: {
+    provider: string;
+    credential: { type: string; provider: string };
+  }) => {
+    const normalize = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, "");
+    const resolveAuthKey = (v: string) => {
+      const n = normalize(v);
+      // claude-cli is a deprecated choice id that resolves to the anthropic auth key
+      if (n === "claudecli") {
+        return "anthropic";
+      }
+      return n;
+    };
+    const providerKey = resolveAuthKey(provider);
+    const credentialKey = resolveAuthKey(credential.provider);
+    if (credentialKey === providerKey) {
+      return true;
+    }
+    // OpenAI Codex compat: openai api_key credential works for openai-codex provider
+    if (providerKey === "openaiapicodex" || providerKey === "openaicodex") {
+      return credentialKey === "openai" && credential.type === "api_key";
+    }
+    return false;
+  },
+}));
+
 afterEach(() => {
   MODEL_CONTEXT_TOKEN_CACHE.clear();
+  cliBackendsTesting.resetDepsForTest();
   vi.mocked(loadManifestModelCatalog).mockReset();
   vi.mocked(loadManifestModelCatalog).mockReturnValue([]);
   authProfileStoreMock.reset();
@@ -115,42 +173,45 @@ describe("createModelSelectionState catalog loading", () => {
     expect(loadModelCatalogLocal).not.toHaveBeenCalled();
   });
 
-  it("prefers per-model params.thinking over global thinkingDefault", async () => {
-    vi.mocked(loadModelCatalogLocal).mockClear();
-    const cfg = {
-      agents: {
-        defaults: {
-          thinkingDefault: "low",
-          models: {
-            "openai-codex/gpt-5.4": {
-              params: { thinking: "high" },
+  it.each(["high", "ultra"] as const)(
+    "prefers per-model params.thinking=%s over global thinkingDefault",
+    async (thinking) => {
+      vi.mocked(loadModelCatalogLocal).mockClear();
+      const cfg = {
+        agents: {
+          defaults: {
+            thinkingDefault: "low",
+            models: {
+              "openai-codex/gpt-5.4": {
+                params: { thinking },
+              },
             },
           },
         },
-      },
-      models: {
-        providers: {
-          "openai-codex": {
-            baseUrl: "https://api.openai.com/v1",
-            models: [makeConfiguredModel()],
+        models: {
+          providers: {
+            "openai-codex": {
+              baseUrl: "https://api.openai.com/v1",
+              models: [makeConfiguredModel()],
+            },
           },
         },
-      },
-    } as OpenClawConfig;
+      } as OpenClawConfig;
 
-    const state = await createModelSelectionState({
-      cfg,
-      agentCfg: cfg.agents?.defaults,
-      defaultProvider: "openai-codex",
-      defaultModel: "gpt-5.4",
-      provider: "openai-codex",
-      model: "gpt-5.4",
-      hasModelDirective: false,
-    });
+      const state = await createModelSelectionState({
+        cfg,
+        agentCfg: cfg.agents?.defaults,
+        defaultProvider: "openai-codex",
+        defaultModel: "gpt-5.4",
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        hasModelDirective: false,
+      });
 
-    await expect(state.resolveDefaultThinkingLevel()).resolves.toBe("high");
-    expect(loadModelCatalogLocal).not.toHaveBeenCalled();
-  });
+      await expect(state.resolveDefaultThinkingLevel()).resolves.toBe(thinking);
+      expect(loadModelCatalogLocal).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps per-model disabled params.thinking ahead of global thinkingDefault", async () => {
     vi.mocked(loadModelCatalogLocal).mockClear();
@@ -346,7 +407,7 @@ describe("createModelSelectionState catalog loading", () => {
     expect(loadModelCatalogLocal).not.toHaveBeenCalled();
   });
 
-  it("keeps configured compat when runtime thinking catalog is already loaded", async () => {
+  it("uses only configured compat for a custom route when the catalog is loaded", async () => {
     vi.mocked(loadModelCatalogLocal).mockClear();
     vi.mocked(loadModelCatalogLocal).mockResolvedValueOnce([
       {
@@ -396,10 +457,7 @@ describe("createModelSelectionState catalog loading", () => {
         provider: "vllm",
         id: "Qwen/Qwen3-8B",
         reasoning: true,
-        compat: {
-          supportedReasoningEfforts: ["xhigh"],
-          thinkingFormat: "qwen-chat-template",
-        },
+        compat: { thinkingFormat: "qwen-chat-template" },
       }),
     ]);
     expect(loadModelCatalogLocal).toHaveBeenCalledOnce();
@@ -463,6 +521,7 @@ describe("createModelSelectionState catalog loading", () => {
     });
 
     expect(loadModelCatalogLocal).toHaveBeenCalledOnce();
+    expect(vi.mocked(loadModelCatalogLocal).mock.calls[0]?.[0]).not.toHaveProperty("readOnly");
   });
 
   it("carries catalog context limits into cold model selection", async () => {
@@ -582,6 +641,7 @@ describe("createModelSelectionState catalog loading", () => {
       providerOverride: "vllm",
       modelOverride: "new-local-model",
       modelOverrideSource: "user",
+      modelOverrideRouteResolution: "resolved",
     };
     const sessionStore = { main: sessionEntry };
 
@@ -600,6 +660,7 @@ describe("createModelSelectionState catalog loading", () => {
 
     expect(state.provider).toBe("vllm");
     expect(state.model).toBe("new-local-model");
+    expect(state.requestedRouteResolution).toBe("resolved");
     expect(sessionStore.main.modelOverride).toBe("new-local-model");
     expect(loadModelCatalogLocal).toHaveBeenCalledOnce();
   });
@@ -694,6 +755,7 @@ describe("resolveContextTokens", () => {
 const makeEntry = (overrides: Partial<SessionEntry> = {}): SessionEntry => ({
   sessionId: "session-id",
   updatedAt: Date.now(),
+  delivery: { kind: "none" },
   ...overrides,
 });
 
@@ -954,7 +1016,7 @@ describe("createModelSelectionState respects session model override", () => {
     expect(state.model).toBe("qwen2.5-coder:7b");
   });
 
-  it("normalizes deprecated xai beta session overrides before allowlist checks", async () => {
+  it("preserves xai beta session overrides during allowlist checks", async () => {
     const cfg = {
       agents: {
         defaults: {
@@ -989,18 +1051,105 @@ describe("createModelSelectionState respects session model override", () => {
     });
 
     expect(state.provider).toBe("xai");
-    expect(state.model).toBe("grok-4.20-beta-latest-reasoning");
+    expect(state.model).toBe("grok-4.20-experimental-beta-0304-reasoning");
     expect(state.resetModelOverride).toBe(false);
+  });
+
+  it("keeps provider-qualified stored overrides when providerOverride is also persisted", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          models: {
+            "openai/gpt-5.5": {},
+            "openai/gpt-5.4": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:dashboard:child";
+    const sessionEntry = makeEntry({
+      providerOverride: "openai",
+      modelOverride: "openai/gpt-5.5",
+      modelOverrideSource: "user",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      provider: "openai",
+      model: "gpt-5.4",
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe("openai");
+    expect(state.model).toBe("gpt-5.5");
+    expect(state.resetModelOverride).toBe(false);
+    expect(sessionStore[sessionKey]?.providerOverride).toBe("openai");
+    expect(sessionStore[sessionKey]?.modelOverride).toBe("openai/gpt-5.5");
+  });
+
+  it("normalizes provider-qualified parent stored overrides before allowlist checks", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          models: {
+            "openai/gpt-5.5": {},
+            "openai/gpt-5.4": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const parentSessionKey = "agent:main:dashboard:parent";
+    const sessionKey = "agent:main:dashboard:child";
+    const sessionEntry = makeEntry();
+    const parentEntry = makeEntry({
+      providerOverride: "openai",
+      modelOverride: "openai/gpt-5.5",
+      modelOverrideSource: "user",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry, [parentSessionKey]: parentEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      parentSessionKey,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      provider: "openai",
+      model: "gpt-5.4",
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe("openai");
+    expect(state.model).toBe("gpt-5.5");
+    expect(state.resetModelOverride).toBe(false);
+    expect(sessionStore[parentSessionKey]?.modelOverride).toBe("openai/gpt-5.5");
+    expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
   });
 
   it("clears disallowed model overrides and falls back to the default", async () => {
     const cfg = {
       agents: {
         defaults: {
-          model: { primary: "openai/gpt-4o" },
+          model: {
+            primary: "openai/gpt-4o",
+            fallbacks: ["openai/gpt-4o-mini"],
+          },
           models: {
             "openai/gpt-4o": {},
           },
+          modelPolicy: { allow: ["openai/gpt-4o"] },
         },
       },
     } as OpenClawConfig;
@@ -1028,6 +1177,273 @@ describe("createModelSelectionState respects session model override", () => {
     expect(state.resetModelOverrideRef).toBe("openai/gpt-4o-mini");
     expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
     expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
+  });
+
+  it("rejects automatic repair of a locked disallowed override", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-4o" },
+          models: {
+            "openai/gpt-4o": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:telegram:direct:locked";
+    const sessionEntry = makeEntry({
+      providerOverride: "openai",
+      modelOverride: "gpt-4o-mini",
+      modelOverrideSource: "user",
+      modelSelectionLocked: true,
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    await expect(
+      createModelSelectionState({
+        cfg,
+        agentCfg: cfg.agents?.defaults,
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        defaultProvider: "openai",
+        defaultModel: "gpt-4o",
+        provider: "openai",
+        model: "gpt-4o",
+        hasModelDirective: false,
+      }),
+    ).rejects.toMatchObject({
+      name: "ModelSelectionLockedError",
+      message: MODEL_SELECTION_LOCKED_MESSAGE,
+    });
+    expect(sessionStore[sessionKey]).toMatchObject({
+      providerOverride: "openai",
+      modelOverride: "gpt-4o-mini",
+      modelOverrideSource: "user",
+      modelSelectionLocked: true,
+    });
+  });
+
+  it("preserves a locked CLI runtime alias when its canonical model is allowed", async () => {
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [],
+      resolvePluginSetupCliBackend: ({ backend }) =>
+        backend === "claude-cli"
+          ? ({
+              pluginId: "anthropic",
+              backend: {
+                id: "claude-cli",
+                modelProvider: "anthropic",
+                config: { command: "claude" },
+                bundleMcp: false,
+              },
+            } as never)
+          : undefined,
+    });
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          models: {
+            "openai/gpt-5.6-sol": {},
+            "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:plugin:anthropic:catalog-adopt:claude:test";
+    const sessionEntry = makeEntry({
+      providerOverride: "claude-cli",
+      modelOverride: "claude-opus-4-8",
+      modelSelectionLocked: true,
+      pluginOwnerId: "anthropic",
+      cliSessionBindings: {
+        "claude-cli": {
+          sessionId: "native-claude-session",
+          forceReuse: true,
+          forkNextResume: true,
+        },
+      },
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.6-sol",
+      provider: "claude-cli",
+      model: "claude-opus-4-8",
+      hasModelDirective: false,
+    });
+
+    expect(state).toMatchObject({
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      resetModelOverride: false,
+    });
+    expect(sessionStore[sessionKey]).toMatchObject({
+      providerOverride: "claude-cli",
+      modelOverride: "claude-opus-4-8",
+      modelSelectionLocked: true,
+    });
+  });
+
+  it("keeps ordinary provider overrides off the CLI setup-registry path", async () => {
+    const resolvePluginSetupCliBackend = vi.fn(() => undefined);
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [],
+      resolvePluginSetupCliBackend,
+    });
+    const cfg = {
+      agents: {
+        defaults: {
+          models: { "custom-provider/custom-model": {} },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:custom-provider";
+    const sessionEntry = makeEntry({
+      providerOverride: "custom-provider",
+      modelOverride: "custom-model",
+    });
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      defaultProvider: "custom-provider",
+      defaultModel: "custom-model",
+      provider: "custom-provider",
+      model: "custom-model",
+      hasModelDirective: false,
+    });
+
+    expect(state).toMatchObject({ provider: "custom-provider", model: "custom-model" });
+    expect(resolvePluginSetupCliBackend).not.toHaveBeenCalled();
+  });
+
+  it("adopts a concurrent valid model while repairing a stale override", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-model-repair-race-"));
+    const storePath = path.join(tempRoot, "sessions.json");
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-4o" },
+          models: {
+            "openai/gpt-4o": {},
+            "openai/gpt-5.5": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:telegram:direct:1";
+    const sessionEntry = makeEntry({
+      providerOverride: "openai",
+      modelOverride: "gpt-4o-mini",
+    });
+    const concurrentEntry = makeEntry({
+      updatedAt: sessionEntry.updatedAt + 1,
+      providerOverride: "openai",
+      modelOverride: "gpt-5.5",
+      modelOverrideSource: "user",
+    });
+    await replaceSessionEntry({ sessionKey, storePath }, concurrentEntry);
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    try {
+      const state = await createModelSelectionState({
+        cfg,
+        agentCfg: cfg.agents?.defaults,
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath,
+        defaultProvider: "openai",
+        defaultModel: "gpt-4o",
+        provider: "openai",
+        model: "gpt-4o-mini",
+        hasModelDirective: false,
+      });
+
+      expect(state).toMatchObject({
+        provider: "openai",
+        model: "gpt-5.5",
+        resetModelOverride: false,
+      });
+      expect(sessionEntry).toMatchObject({
+        providerOverride: "openai",
+        modelOverride: "gpt-5.5",
+        modelOverrideSource: "user",
+      });
+      expect(sessionStore[sessionKey]).toEqual(sessionEntry);
+      expect(loadSessionEntry({ sessionKey, storePath })).toEqual(sessionEntry);
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects stale-model repair when the session rotates during persistence", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-model-repair-rotation-"));
+    const storePath = path.join(tempRoot, "sessions.json");
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-4o" },
+          models: {
+            "openai/gpt-4o": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:telegram:direct:1";
+    const sessionEntry = makeEntry({
+      sessionId: "s1",
+      providerOverride: "openai",
+      modelOverride: "gpt-4o-mini",
+    });
+    const rotatedEntry = makeEntry({
+      sessionId: "s2",
+      updatedAt: sessionEntry.updatedAt + 1,
+      providerOverride: "openai",
+      modelOverride: "gpt-4o",
+      modelOverrideSource: "user",
+    });
+    await replaceSessionEntry({ sessionKey, storePath }, rotatedEntry);
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    try {
+      await expect(
+        createModelSelectionState({
+          cfg,
+          agentCfg: cfg.agents?.defaults,
+          sessionEntry,
+          sessionStore,
+          sessionKey,
+          storePath,
+          defaultProvider: "openai",
+          defaultModel: "gpt-4o",
+          provider: "openai",
+          model: "gpt-4o-mini",
+          hasModelDirective: false,
+        }),
+      ).rejects.toThrow(/changed while starting work/i);
+
+      expect(sessionEntry).toMatchObject({
+        sessionId: "s1",
+        providerOverride: "openai",
+        modelOverride: "gpt-4o-mini",
+      });
+      expect(sessionStore[sessionKey]).toBe(sessionEntry);
+      expect(loadSessionEntry({ sessionKey, storePath })).toEqual(rotatedEntry);
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it("keeps wildcard-provider overrides when configured catalog rows are unavailable", async () => {
@@ -1064,6 +1480,7 @@ describe("createModelSelectionState respects session model override", () => {
 
     expect(state.provider).toBe("openai");
     expect(state.model).toBe("gpt-added-after-startup");
+    expect(state.requestedRouteResolution).toBe("raw");
     expect(state.resetModelOverride).toBe(false);
     expect(sessionStore[sessionKey]?.providerOverride).toBe("openai");
     expect(sessionStore[sessionKey]?.modelOverride).toBe("gpt-added-after-startup");
@@ -1117,6 +1534,7 @@ describe("createModelSelectionState auto-failover overrides", () => {
     providerOverride: string;
     modelOverride: string;
     modelOverrideSource: "auto" | "user" | undefined;
+    modelOverrideRouteResolution?: "resolved";
     modelOverrideFallbackOriginProvider?: string;
     modelOverrideFallbackOriginModel?: string;
     fallbackNoticeSelectedModel?: string;
@@ -1134,9 +1552,16 @@ describe("createModelSelectionState auto-failover overrides", () => {
       providerOverride: params.providerOverride,
       modelOverride: params.modelOverride,
       modelOverrideSource: params.modelOverrideSource,
+      modelOverrideRouteResolution: params.modelOverrideRouteResolution,
       modelOverrideFallbackOriginProvider: params.modelOverrideFallbackOriginProvider,
       modelOverrideFallbackOriginModel: params.modelOverrideFallbackOriginModel,
-      fallbackNoticeSelectedModel: params.fallbackNoticeSelectedModel,
+      fallbackNotice: params.fallbackNoticeSelectedModel
+        ? {
+            kind: "active",
+            selectedModel: params.fallbackNoticeSelectedModel,
+            activeModel: `${params.providerOverride}/${params.modelOverride}`,
+          }
+        : undefined,
       authProfileOverride: params.authProfileOverride,
       authProfileOverrideSource: params.authProfileOverrideSource,
     });
@@ -1344,6 +1769,7 @@ describe("createModelSelectionState auto-failover overrides", () => {
       providerOverride: "openai",
       modelOverride: "gpt-5.5",
       modelOverrideSource: "user",
+      modelOverrideRouteResolution: "resolved",
     });
     const sessionStore = { [sessionKey]: sessionEntry };
 
@@ -1615,11 +2041,13 @@ describe("createModelSelectionState auto-failover overrides", () => {
       providerOverride: "openrouter",
       modelOverride: "minimax/minimax-m2.7",
       modelOverrideSource: "user",
+      modelOverrideRouteResolution: "resolved",
     });
 
     // User-selected override must persist.
     expect(state.provider).toBe("openrouter");
     expect(state.model).toBe("minimax/minimax-m2.7");
+    expect(state.requestedRouteResolution).toBe("resolved");
     expect(sessionStore[sessionKey]?.providerOverride).toBe("openrouter");
     expect(sessionStore[sessionKey]?.modelOverride).toBe("minimax/minimax-m2.7");
     expect(state.resetModelOverride).toBe(false);
@@ -1636,8 +2064,93 @@ describe("createModelSelectionState auto-failover overrides", () => {
 
     expect(state.provider).toBe("openrouter");
     expect(state.model).toBe("minimax/minimax-m2.7");
+    expect(state.requestedRouteResolution).toBe("raw");
     expect(sessionStore[sessionKey]?.modelOverride).toBe("minimax/minimax-m2.7");
     expect(state.resetModelOverride).toBe(false);
+  });
+
+  it("keeps a canonical stored route ahead of a colliding bare alias", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "google/gemini-3.1-pro-preview", fallbacks: [] },
+          models: {
+            "google/gemini-2.5-flash-lite": { alias: "google-flash-lite" },
+            "openrouter/google/gemini-2.5-flash-lite": {
+              alias: "gemini-2.5-flash-lite",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionEntry = makeEntry({
+      providerOverride: "google",
+      modelOverride: "gemini-2.5-flash-lite",
+      modelOverrideSource: "user",
+    });
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      defaultProvider: "google",
+      defaultModel: "gemini-3.1-pro-preview",
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+      hasModelDirective: false,
+    });
+
+    expect(state.requestedRouteResolution).toBe("resolved");
+    expect(
+      resolveModelCandidateChain({
+        cfg,
+        provider: state.provider,
+        model: state.model,
+        requestedRouteResolution: state.requestedRouteResolution,
+      })[0],
+    ).toMatchObject({ provider: "google", model: "gemini-2.5-flash-lite" });
+  });
+
+  it("canonicalizes a reset-upgraded legacy alias before fallback", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: [] },
+          models: {
+            "anthropic/claude-sonnet-4-6": { alias: "legacy-fast-model" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionEntry = makeEntry({
+      providerOverride: "anthropic",
+      modelOverride: "legacy-fast-model",
+      // Older resets added the source without resolving the stored alias.
+      modelOverrideSource: "user",
+    });
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      defaultProvider: "anthropic",
+      defaultModel: "claude-sonnet-4-6",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      hasModelDirective: false,
+    });
+
+    expect(state.requestedRouteResolution).toBe("resolved");
+    expect(
+      resolveModelCandidateChain({
+        cfg,
+        provider: state.provider,
+        model: state.model,
+        requestedRouteResolution: state.requestedRouteResolution,
+      })[0],
+    ).toMatchObject({ provider: "anthropic", model: "claude-sonnet-4-6" });
   });
 
   it("does not touch an auto-failover override inherited from a parent session", async () => {
@@ -1677,6 +2190,50 @@ describe("createModelSelectionState auto-failover overrides", () => {
   });
 });
 
+describe("createModelSelectionState auth-profile override flapping regression", () => {
+  const sessionKey = "agent:main:telegram:direct:1";
+
+  it("keeps alias-compatible authProfileOverride when stored credential provider is 'anthropic' for a claude-cli session", async () => {
+    // Regression: the old code compared profile.provider directly to acceptedAuthProviders,
+    // which cleared an 'anthropic' credential when the session ran under the 'claude-cli'
+    // provider. The alias (claude-cli -> anthropic) must be respected so the override is kept.
+    authProfileStoreMock.store = {
+      version: 1,
+      profiles: {
+        "anthropic:claude-cli": {
+          type: "api_key",
+          provider: "anthropic",
+          key: "test-cli-oauth-token",
+        },
+      },
+    };
+    const sessionEntry: SessionEntry = {
+      sessionId: "s-cli",
+      updatedAt: 1,
+      authProfileOverride: "anthropic:claude-cli",
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    await createModelSelectionState({
+      cfg: {} as OpenClawConfig,
+      agentCfg: undefined,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "claude-cli",
+      defaultModel: "claude-opus-4-7",
+      provider: "claude-cli",
+      model: "claude-opus-4-7",
+      hasModelDirective: false,
+    });
+
+    // The override must NOT have been cleared — the anthropic credential is
+    // alias-compatible with the claude-cli provider.
+    expect(sessionStore[sessionKey]?.authProfileOverride).toBe("anthropic:claude-cli");
+    expect(sessionEntry.authProfileOverride).toBe("anthropic:claude-cli");
+  });
+});
+
 describe("createModelSelectionState resolveDefaultReasoningLevel", () => {
   it("uses manifest metadata before hydrating the runtime reasoning catalog", async () => {
     vi.mocked(loadModelCatalogLocal).mockClear();
@@ -1703,7 +2260,7 @@ describe("createModelSelectionState resolveDefaultReasoningLevel", () => {
   });
 
   it("returns on when catalog model has reasoning true", async () => {
-    const { loadModelCatalog: loadModelCatalogForCase } =
+    const { loadPreparedModelCatalog: loadModelCatalogForCase } =
       await import("../../agents/model-catalog.runtime.js");
     vi.mocked(loadModelCatalogForCase).mockResolvedValueOnce([
       { provider: "openrouter", id: "x-ai/grok-4.1-fast", name: "Grok", reasoning: true },
@@ -1733,3 +2290,106 @@ describe("createModelSelectionState resolveDefaultReasoningLevel", () => {
     await expect(state.resolveDefaultReasoningLevel()).resolves.toBe("off");
   });
 });
+
+describe("createModelSelectionState degraded-catalog override preservation", () => {
+  const sessionKey = "agent:main:discord:channel:g1";
+  // The `anthropic/*` wildcard (a non-default provider) forces the live catalog
+  // load path (`needsModelCatalog`), which is the only path where a degraded
+  // catalog can transiently drop a pin. Every test must load the snapshot so its
+  // one-time mock is consumed and cannot leak into a sibling test.
+  //
+  // Allow-list without gpt-4o, so the pinned override reads as "not allowed"
+  // whenever the catalog cannot vouch for it. The authoritative flag then
+  // decides whether that reads as a genuine disallow or a transient outage.
+  const restrictiveCfg = {
+    agents: { defaults: { models: { "openai/gpt-4o-mini": {}, "anthropic/*": {} } } },
+  } as unknown as OpenClawConfig;
+  // Permissive allow-list that keeps gpt-4o allowed regardless of the catalog.
+  const permissiveCfg = {
+    agents: {
+      defaults: { models: { "openai/gpt-4o": {}, "openai/gpt-4o-mini": {}, "anthropic/*": {} } },
+    },
+  } as unknown as OpenClawConfig;
+
+  const makeOverrideEntry = (): SessionEntry => ({
+    sessionId: "session-id",
+    updatedAt: Date.now(),
+    providerOverride: "openai",
+    modelOverride: "gpt-4o",
+    modelOverrideSource: "user",
+  });
+
+  async function run(params: {
+    cfg: OpenClawConfig;
+    snapshotEntries: unknown[];
+    authoritative: boolean;
+  }): Promise<{
+    state: Awaited<ReturnType<typeof createModelSelectionState>>;
+    sessionEntry: SessionEntry;
+  }> {
+    catalogRuntimeMocks.loadModelCatalogSnapshot.mockResolvedValueOnce({
+      entries: params.snapshotEntries,
+      routeVariants: params.snapshotEntries,
+      authoritative: params.authoritative,
+    });
+    const sessionEntry = makeOverrideEntry();
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const state = await createModelSelectionState({
+      cfg: params.cfg,
+      agentCfg: params.cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o-mini",
+      primaryProvider: "openai",
+      primaryModel: "gpt-4o-mini",
+      provider: "openai",
+      model: "gpt-4o-mini",
+      hasModelDirective: false,
+    });
+    return { state, sessionEntry };
+  }
+
+  it("preserves a pin the degraded catalog cannot vouch for", async () => {
+    // Degraded snapshot: we cannot prove the pin is really disallowed, so keep it.
+    const { state, sessionEntry } = await run({
+      cfg: restrictiveCfg,
+      snapshotEntries: [],
+      authoritative: false,
+    });
+    expect(state.resetModelOverride).toBe(false);
+    expect(state.resetModelOverrideReason).toBe("temporarily-unavailable");
+    expect(state.resetModelOverrideRef).toBe("openai/gpt-4o");
+    // The pin is untouched and the turn falls back to primary.
+    expect(sessionEntry.modelOverride).toBe("gpt-4o");
+    expect(state.model).toBe("gpt-4o-mini");
+  });
+
+  it("destroys a genuinely-disallowed pin on an authoritative catalog", async () => {
+    // Same disallowed pin, but an authoritative catalog proves it is gone.
+    const { state } = await run({
+      cfg: restrictiveCfg,
+      snapshotEntries: [{ provider: "openai", id: "gpt-4o-mini", name: "GPT-4o mini" }],
+      authoritative: true,
+    });
+    expect(state.resetModelOverrideReason).toBe("disallowed");
+    expect(state.resetModelOverride).toBe(true);
+  });
+
+  it("keeps a configured pin that is present on an authoritative catalog", async () => {
+    const { state } = await run({
+      cfg: permissiveCfg,
+      snapshotEntries: [
+        { provider: "openai", id: "gpt-4o", name: "GPT-4o" },
+        { provider: "openai", id: "gpt-4o-mini", name: "GPT-4o mini" },
+      ],
+      authoritative: true,
+    });
+    expect(state.resetModelOverride).toBe(false);
+    expect(state.resetModelOverrideReason).toBeUndefined();
+    expect(state.model).toBe("gpt-4o");
+  });
+});
+
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

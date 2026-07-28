@@ -2,7 +2,7 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { testing } from "./startup-metadata.js";
+import { testing } from "./startup-metadata.test-support.js";
 
 describe("startup metadata path resolution", () => {
   it("checks metadata beside the bundled chunk before the legacy parent path", () => {

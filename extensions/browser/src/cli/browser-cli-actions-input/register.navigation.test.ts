@@ -2,6 +2,7 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as browserCliResizeModule from "../browser-cli-resize.js";
+import * as browserCliSharedModule from "../browser-cli-shared.js";
 import {
   createBrowserProgram,
   getBrowserCliRuntime,
@@ -10,9 +11,17 @@ import {
 import * as cliCoreApiModule from "../core-api.js";
 
 const mocks = vi.hoisted(() => ({
+  callBrowserRequest: vi.fn<
+    (
+      opts?: unknown,
+      req?: unknown,
+      extra?: { timeoutMs?: number },
+    ) => Promise<Record<string, unknown>>
+  >(async () => ({ url: "https://example.test/landing" })),
   runBrowserResizeWithOutput: vi.fn(async () => {}),
 }));
 
+vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(mocks.callBrowserRequest);
 vi.spyOn(browserCliResizeModule, "runBrowserResizeWithOutput").mockImplementation(
   mocks.runBrowserResizeWithOutput,
 );
@@ -34,8 +43,49 @@ function createNavigationProgram(): Command {
 
 describe("browser navigation commands", () => {
   beforeEach(() => {
+    mocks.callBrowserRequest.mockClear();
     mocks.runBrowserResizeWithOutput.mockClear();
     getBrowserCliRuntimeCapture().resetRuntimeCapture();
+  });
+
+  it("sends navigate requests with the URL and target id", async () => {
+    const program = createNavigationProgram();
+
+    await program.parseAsync(
+      ["browser", "navigate", "https://example.test/page", "--target-id", "tab-1"],
+      { from: "user" },
+    );
+
+    const request = mocks.callBrowserRequest.mock.calls.at(-1)?.[1] as
+      | { method?: string; path?: string; body?: Record<string, unknown> }
+      | undefined;
+    const options = mocks.callBrowserRequest.mock.calls.at(-1)?.[2] as
+      | { timeoutMs?: number }
+      | undefined;
+    expect(request).toMatchObject({
+      method: "POST",
+      path: "/navigate",
+      body: { url: "https://example.test/page", targetId: "tab-1" },
+    });
+    expect(options?.timeoutMs).toBe(20000);
+  });
+
+  it("passes normalized resize dimensions and target id to the resize helper", async () => {
+    const program = createNavigationProgram();
+
+    await program.parseAsync(["browser", "resize", "1024", "768", "--target-id", "tab-2"], {
+      from: "user",
+    });
+
+    expect(mocks.runBrowserResizeWithOutput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        width: 1024,
+        height: 768,
+        targetId: "tab-2",
+        timeoutMs: 20000,
+        successMessage: "resized to 1024x768",
+      }),
+    );
   });
 
   it("rejects non-decimal resize dimensions before dispatch", async () => {

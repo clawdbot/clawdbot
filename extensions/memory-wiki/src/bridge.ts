@@ -7,6 +7,7 @@ import {
   listActiveMemoryPublicArtifacts,
   type MemoryPluginPublicArtifact,
 } from "openclaw/plugin-sdk/memory-host-core";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import type { OpenClawConfig } from "../api.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
@@ -44,6 +45,45 @@ export type BridgeMemoryWikiResult = {
   pagePaths: string[];
 };
 
+export function resolveMemoryWikiVaultAgentId(
+  config: Pick<ResolvedMemoryWikiConfig, "agentId" | "vault">,
+): string | null {
+  if (config.vault.scope === "global") {
+    return null;
+  }
+  const agentId = config.agentId?.trim();
+  if (!agentId) {
+    throw new Error("Memory Wiki agent-scoped vault requires a resolved agent id");
+  }
+  return normalizeAgentId(agentId);
+}
+
+export function filterMemoryWikiBridgeArtifacts(params: {
+  config: Pick<ResolvedMemoryWikiConfig, "agentId" | "vault">;
+  artifacts: MemoryPluginPublicArtifact[];
+  callerAgentId?: string;
+}): MemoryPluginPublicArtifact[] {
+  const vaultAgentId = resolveMemoryWikiVaultAgentId(params.config);
+  const callerAgentId = params.callerAgentId?.trim();
+  // Agent-scoped vault ownership is authoritative. Global vaults remain shared,
+  // but agent tools still scope diagnostic metadata to their calling agent.
+  const agentId = vaultAgentId ?? (callerAgentId ? normalizeAgentId(callerAgentId) : null);
+  if (!agentId) {
+    return params.artifacts;
+  }
+  // Ownership metadata is mandatory only in agent scope. Global scope keeps
+  // accepting legacy providers that omit agentIds.
+  return params.artifacts.filter((artifact) => {
+    const artifactAgentIds = Array.isArray(artifact.agentIds) ? artifact.agentIds : [];
+    return artifactAgentIds.some(
+      (artifactAgentId) =>
+        typeof artifactAgentId === "string" &&
+        artifactAgentId.trim().length > 0 &&
+        normalizeAgentId(artifactAgentId) === agentId,
+    );
+  });
+}
+
 function shouldImportArtifact(
   artifact: MemoryPluginPublicArtifact,
   bridgeConfig: ResolvedMemoryWikiConfig["bridge"],
@@ -64,14 +104,19 @@ function shouldImportArtifact(
 
 async function collectBridgeArtifacts(
   bridgeConfig: ResolvedMemoryWikiConfig["bridge"],
+  vaultRoot: string,
   artifacts: MemoryPluginPublicArtifact[],
 ): Promise<BridgeArtifact[]> {
   const collected: BridgeArtifact[] = [];
+  const vaultRootKey = await resolveArtifactKey(vaultRoot);
   for (const artifact of artifacts) {
     if (!shouldImportArtifact(artifact, bridgeConfig)) {
       continue;
     }
     const syncKey = await resolveArtifactKey(artifact.absolutePath);
+    if (isPathInsideOrEqual(vaultRootKey, syncKey)) {
+      continue;
+    }
     collected.push({
       syncKey,
       artifactType: artifact.kind === "event-log" ? "memory-events" : "markdown",
@@ -85,6 +130,14 @@ async function collectBridgeArtifacts(
     deduped.set(artifact.syncKey, artifact);
   }
   return [...deduped.values()];
+}
+
+function isPathInsideOrEqual(parentPath: string, candidatePath: string): boolean {
+  const relative = path.relative(parentPath, candidatePath);
+  return (
+    relative === "" ||
+    (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+  );
 }
 
 function resolveBridgeTitle(artifact: BridgeArtifact, agentIds: string[]): string {
@@ -206,6 +259,7 @@ export async function syncMemoryWikiBridgeSources(params: {
   config: ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
 }): Promise<BridgeMemoryWikiResult> {
+  resolveMemoryWikiVaultAgentId(params.config);
   await initializeMemoryWikiVault(params.config);
   if (
     params.config.vaultMode !== "bridge" ||
@@ -224,10 +278,19 @@ export async function syncMemoryWikiBridgeSources(params: {
     };
   }
 
-  const publicArtifacts = await listActiveMemoryPublicArtifacts({ cfg: params.appConfig });
+  // Filter before building active keys so each vault's pruning state tracks
+  // only artifacts that are visible to its resolved agent.
+  const publicArtifacts = filterMemoryWikiBridgeArtifacts({
+    config: params.config,
+    artifacts: await listActiveMemoryPublicArtifacts({ cfg: params.appConfig }),
+  });
   const results: Array<{ pagePath: string; changed: boolean; created: boolean }> = [];
   const activeKeys = new Set<string>();
-  const artifacts = await collectBridgeArtifacts(params.config.bridge, publicArtifacts);
+  const artifacts = await collectBridgeArtifacts(
+    params.config.bridge,
+    params.config.vault.path,
+    publicArtifacts,
+  );
   const state = await readMemoryWikiSourceSyncState(params.config.vault.path);
   assertMemoryWikiSourceSyncStateCapacity({
     state,

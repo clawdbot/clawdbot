@@ -1,8 +1,9 @@
+import { buildChannelOutboundSessionRoute } from "openclaw/plugin-sdk/channel-core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Irc helper module supports normalize behavior.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-  normalizeStringEntriesLower,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { hasIrcControlChars } from "./control-chars.js";
 import type { IrcInboundMessage } from "./types.js";
@@ -38,6 +39,32 @@ export function normalizeIrcMessagingTarget(raw: string): string | undefined {
   return target;
 }
 
+export function resolveIrcOutboundSessionRoute(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  accountId?: string | null;
+  target: string;
+}) {
+  const target = normalizeIrcMessagingTarget(params.target);
+  if (!target) {
+    return null;
+  }
+  const chatType = isChannelTarget(target) ? "group" : "direct";
+  // Server-specific casemapping and nick changes mean the outbound spelling is
+  // not a stable inbound peer identity, even when delivery succeeds.
+  return buildChannelOutboundSessionRoute({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    channel: "irc",
+    accountId: params.accountId,
+    recipientSessionExact: chatType === "direct" ? "direct-alias" : false,
+    peer: { kind: chatType, id: target },
+    chatType,
+    from: `irc:${target}`,
+    to: target,
+  });
+}
+
 export function looksLikeIrcTargetId(raw: string): boolean {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -63,10 +90,6 @@ export function normalizeIrcAllowEntry(raw: string): string {
   return value.trim();
 }
 
-export function normalizeIrcAllowlist(entries?: Array<string | number>): string[] {
-  return (entries ?? []).map((entry) => normalizeIrcAllowEntry(String(entry))).filter(Boolean);
-}
-
 export function buildIrcAllowlistCandidates(
   message: IrcInboundMessage,
   params?: { allowNameMatching?: boolean },
@@ -88,24 +111,4 @@ export function buildIrcAllowlistCandidates(
     candidates.add(`${nick}!${user}@${host}`);
   }
   return [...candidates];
-}
-
-export function resolveIrcAllowlistMatch(params: {
-  allowFrom: string[];
-  message: IrcInboundMessage;
-  allowNameMatching?: boolean;
-}): { allowed: boolean; source?: string } {
-  const allowFrom = new Set(normalizeStringEntriesLower(params.allowFrom));
-  if (allowFrom.has("*")) {
-    return { allowed: true, source: "wildcard" };
-  }
-  const candidates = buildIrcAllowlistCandidates(params.message, {
-    allowNameMatching: params.allowNameMatching,
-  });
-  for (const candidate of candidates) {
-    if (allowFrom.has(candidate)) {
-      return { allowed: true, source: candidate };
-    }
-  }
-  return { allowed: false };
 }

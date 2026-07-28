@@ -5,18 +5,18 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { listChatChannels } from "../channels/chat-meta.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import { listChannelSetupPlugins } from "../channels/plugins/setup-registry.js";
-import type { ChannelSetupPlugin } from "../channels/plugins/setup-wizard-types.js";
+import type {
+  ChannelSetupPlugin,
+  ChannelSetupStatus,
+  ChannelSetupWizardAdapter,
+  SetupChannelsOptions,
+} from "../channels/plugins/setup-wizard-types.js";
 import type { ChannelMeta } from "../channels/plugins/types.core.js";
 import { formatChannelPrimerLine, formatChannelSelectionLine } from "../channels/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveChannelSetupEntries } from "../commands/channel-setup/discovery.js";
 import { shouldShowChannelInSetup } from "../commands/channel-setup/discovery.js";
 import { resolveChannelSetupWizardAdapterForPlugin } from "../commands/channel-setup/registry.js";
-import type {
-  ChannelSetupWizardAdapter,
-  ChannelSetupStatus,
-  SetupChannelsOptions,
-} from "../commands/channel-setup/types.js";
 import type { ChannelChoice } from "../commands/onboard-types.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -51,8 +51,6 @@ type ChannelSetupSelectionEntry = {
     label: string;
     selectionLabel?: string;
     exposure?: { setup?: boolean };
-    showConfigured?: boolean;
-    showInSetup?: boolean;
   };
 };
 
@@ -373,7 +371,9 @@ export async function collectChannelStatus(params: {
       });
     }),
   );
-  const statusByChannel = new Map(statusEntries.map((entry) => [entry.channel, entry]));
+  const statusByChannel = new Map(
+    statusEntries.map((entry: ChannelSetupStatus) => [entry.channel, entry]),
+  );
   const fallbackStatuses = listChatChannels()
     .filter((meta) => shouldShowChannelInSetup(meta))
     .filter((meta) => !statusByChannel.has(meta.id))

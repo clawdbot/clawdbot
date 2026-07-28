@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   acquireDebugProxyCaptureStore,
@@ -10,12 +11,20 @@ import {
 import {
   closeQaHttpServer,
   handleQaBusRequest,
+  isQaMalformedJsonBodyError,
   readQaJsonBody,
   writeError,
   writeJson,
   writeQaRequestBodyLimitError,
 } from "./bus-server.js";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
+import {
+  QaEvidenceGalleryError,
+  buildQaEvidenceGalleryModel,
+  resolveQaEvidenceArtifactFileByIndex,
+  resolveQaEvidenceArtifactFile,
+  resolveQaEvidenceProducerFile,
+} from "./evidence-gallery.js";
 import { createQaRunnerRuntime } from "./harness-runtime.js";
 import {
   isCaptureQueryPreset,
@@ -41,13 +50,15 @@ import type {
 } from "./lab-server.types.js";
 import type { QaRunnerModelOption } from "./model-catalog.runtime.js";
 import { createQaChannelGatewayConfig } from "./qa-channel-transport.js";
+import type { QaTransportAdapterFactory } from "./qa-transport-registry.js";
 import {
   createIdleQaRunnerSnapshot,
   createQaRunOutputDir,
   normalizeQaRunSelection,
+  resolveQaLabRunPlan,
 } from "./run-config.js";
-import { qaChannelPlugin, setQaChannelRuntime, type OpenClawConfig } from "./runtime-api.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
+import { readQaScorecardTaxonomyReport } from "./scorecard-taxonomy.js";
 import { runQaSelfCheckAgainstState, type QaSelfCheckResult } from "./self-check.js";
 
 type QaLabBootstrapDefaults = {
@@ -65,8 +76,16 @@ export type {
   QaLabServerStartParams,
 } from "./lab-server.types.js";
 
-export function writeQaLabServerError(res: Parameters<typeof writeError>[0], error: unknown): void {
+function writeQaLabServerError(res: Parameters<typeof writeError>[0], error: unknown): void {
   if (writeQaRequestBodyLimitError(res, error)) {
+    return;
+  }
+  if (isQaMalformedJsonBodyError(error)) {
+    writeError(res, 400, error.message);
+    return;
+  }
+  if (error instanceof QaEvidenceGalleryError) {
+    writeError(res, error.statusCode, error.message);
     return;
   }
   writeError(res, 500, error);
@@ -88,6 +107,17 @@ function withQaLabRunCounts(run: Omit<QaLabScenarioRun, "counts">): QaLabScenari
     ...run,
     counts: countQaLabScenarioRun(run.scenarios),
   };
+}
+
+function parseQaEvidenceArtifactIndexText(value: string): number {
+  if (!/^(0|[1-9]\d*)$/.test(value)) {
+    throw new QaEvidenceGalleryError("Evidence artifact index is invalid.", 400);
+  }
+  const index = Number(value);
+  if (!Number.isSafeInteger(index) || String(index) !== value) {
+    throw new QaEvidenceGalleryError("Evidence artifact index is invalid.", 400);
+  }
+  return index;
 }
 
 function injectKickoffMessage(params: {
@@ -128,12 +158,33 @@ function createBootstrapDefaults(autoKickoffTarget?: string): QaLabBootstrapDefa
 
 const CONTROL_UI_CREDENTIAL_QUERY_KEYS = new Set([
   "access_token",
+  "api_key",
+  "apikey",
   "auth",
   "devicetoken",
+  "id_token",
   "password",
   "refresh_token",
   "token",
 ]);
+const CONTROL_UI_CREDENTIAL_QUERY_PATTERN =
+  /([?&])(?:access_token|api_?key|auth|deviceToken|id_token|password|refresh_token|token)=[^&#\s]*&?/gi;
+
+function stripSensitiveQueryParamsFromText(rawUrl: string): string {
+  let sanitized = rawUrl;
+  for (;;) {
+    const next = sanitized
+      .replace(CONTROL_UI_CREDENTIAL_QUERY_PATTERN, (match: string, separator: string) =>
+        match.endsWith("&") ? separator : "",
+      )
+      .replace(/[?&]$/, "")
+      .replace("?&", "?");
+    if (next === sanitized) {
+      return next;
+    }
+    sanitized = next;
+  }
+}
 
 function stripSensitiveQueryParams(rawUrl: string): string {
   try {
@@ -145,13 +196,7 @@ function stripSensitiveQueryParams(rawUrl: string): string {
     }
     return url.toString();
   } catch {
-    return rawUrl
-      .replace(
-        /([?&])(?:access_token|auth|deviceToken|password|refresh_token|token)=[^&#\s]*&?/gi,
-        (match: string, separator: string) => (match.endsWith("&") ? separator : ""),
-      )
-      .replace(/[?&]$/, "")
-      .replace("?&", "?");
+    return stripSensitiveQueryParamsFromText(rawUrl);
   }
 }
 
@@ -168,7 +213,44 @@ function createQaLabConfig(baseUrl: string): OpenClawConfig {
   return createQaChannelGatewayConfig({ baseUrl });
 }
 
+function normalizeQaLabCleanupError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(formatErrorMessage(error));
+}
+
+function detectQaEvidenceArtifactContentType(filePath: string): string {
+  const lower = filePath.toLowerCase();
+  if (lower.endsWith(".png")) {
+    return "image/png";
+  }
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) {
+    return "image/jpeg";
+  }
+  if (lower.endsWith(".gif")) {
+    return "image/gif";
+  }
+  if (lower.endsWith(".webp")) {
+    return "image/webp";
+  }
+  if (lower.endsWith(".webm")) {
+    return "video/webm";
+  }
+  if (lower.endsWith(".mp4")) {
+    return "video/mp4";
+  }
+  if (lower.endsWith(".mov")) {
+    return "video/quicktime";
+  }
+  if (lower.endsWith(".json") || lower.endsWith(".jsonl")) {
+    return "application/json; charset=utf-8";
+  }
+  if (lower.endsWith(".md") || lower.endsWith(".txt") || lower.endsWith(".log")) {
+    return "text/plain; charset=utf-8";
+  }
+  return "application/octet-stream";
+}
+
 async function startQaGatewayLoop(params: { state: QaBusState; baseUrl: string }) {
+  const { qaChannelPlugin, setQaChannelRuntime } = await import("openclaw/plugin-sdk/qa-channel");
   const runtime = createQaRunnerRuntime();
   setQaChannelRuntime(runtime);
   const cfg = createQaLabConfig(params.baseUrl);
@@ -215,19 +297,59 @@ export async function startQaLabServer(
 ): Promise<QaLabServerHandle> {
   const repoRoot = path.resolve(params?.repoRoot ?? process.cwd());
   const captureSettings = resolveDebugProxySettings();
-  const captureStoreLease = acquireDebugProxyCaptureStore(
-    captureSettings.dbPath,
-    captureSettings.blobDir,
-  );
+  const captureStoreLease = acquireDebugProxyCaptureStore();
   const captureStore = captureStoreLease.store;
   const state = createQaBusState();
   let latestReport: QaLabLatestReport | null = null;
   let latestScenarioRun: QaLabScenarioRun | null = null;
   const scenarioCatalog = readQaBootstrapScenarioCatalog();
+  const scorecardReport = readQaScorecardTaxonomyReport(scenarioCatalog.scenarios);
+  const runnerChannels = [
+    ...new Set(
+      scenarioCatalog.scenarios
+        .map((scenario) => scenario.execution.channel)
+        .filter((channel): channel is string => Boolean(channel)),
+    ),
+  ].toSorted();
   const bootstrapDefaults = createBootstrapDefaults(params?.autoKickoffTarget);
   let runnerModelOptions: QaRunnerModelOption[] = [];
   let runnerModelCatalogStatus: "loading" | "ready" | "failed" = "loading";
-  let runnerSnapshot = createIdleQaRunnerSnapshot(scenarioCatalog.scenarios);
+  const resolveServerRunPlan = async (
+    selection: ReturnType<typeof normalizeQaRunSelection>,
+    adapterFactories?: readonly QaTransportAdapterFactory[],
+  ) => {
+    const crabline =
+      selection.channelDriver === "crabline" ? await import("@openclaw/crabline") : undefined;
+    return resolveQaLabRunPlan({
+      selection,
+      scenarios: scenarioCatalog.scenarios,
+      scorecardReport,
+      defaultChannel:
+        crabline?.OPENCLAW_CRABLINE_DEFAULT_CHANNEL ??
+        (selection.channelDriver === "qa-channel" ? "qa-channel" : undefined),
+      ...(crabline
+        ? {
+            supportsChannel: (channel: string) => {
+              try {
+                crabline.resolveOpenClawCrablineChannelDriverSelection({ channel });
+                return true;
+              } catch {
+                return false;
+              }
+            },
+          }
+        : adapterFactories
+          ? {
+              supportsChannel: (channel: string) =>
+                adapterFactories.some((factory) =>
+                  factory.matches({ channelId: channel, driver: "live" }),
+                ),
+            }
+          : {}),
+    });
+  };
+  let runnerSnapshot = createIdleQaRunnerSnapshot(scorecardReport.profiles);
+  runnerSnapshot.plan = await resolveServerRunPlan(runnerSnapshot.selection);
   let activeSuiteRun: Promise<void> | null = null;
   let controlUiProxyTarget = params?.controlUiProxyTarget?.trim()
     ? new URL(params.controlUiProxyTarget)
@@ -242,7 +364,10 @@ export async function startQaLabServer(
     | undefined;
   const embeddedGatewayEnabled = params?.embeddedGateway !== "disabled";
   let labHandle: QaLabServerHandle | null = null;
+  let captureStoreReleased = false;
+  let serverListening = false;
 
+  let listenUrl = "";
   let publicBaseUrl = "";
   let runnerModelCatalogPromise: Promise<void> | null = null;
   let runnerModelCatalogAbort: AbortController | null = null;
@@ -352,6 +477,8 @@ export async function startQaLabServer(
             runnerCatalog: {
               status: runnerModelCatalogStatus,
               real: runnerModelOptions,
+              profiles: scorecardReport.profiles,
+              channels: runnerChannels,
             },
           });
           return;
@@ -373,11 +500,83 @@ export async function startQaLabServer(
             "content-type": "application/json; charset=utf-8",
             "cache-control": "no-store",
           });
-          res.end(JSON.stringify({ version: resolveUiAssetVersion(params?.uiDistDir) }));
+          res.end(JSON.stringify({ version: resolveUiAssetVersion(params?.uiDistDir, repoRoot) }));
           return;
         }
         if (req.method === "GET" && url.pathname === "/api/outcomes") {
           writeJson(res, 200, { run: latestScenarioRun });
+          return;
+        }
+        if (req.method === "GET" && url.pathname === "/api/evidence") {
+          const evidencePath =
+            url.searchParams.get("path")?.trim() || runnerSnapshot.artifacts?.evidencePath;
+          if (!evidencePath) {
+            res.writeHead(200, {
+              "content-type": "application/json; charset=utf-8",
+              "cache-control": "no-store",
+            });
+            res.end(JSON.stringify({ evidence: null }));
+            return;
+          }
+          // Build the model before sending any headers so a thrown QaEvidenceGalleryError
+          // still routes through writeQaLabServerError (writing headers first would make the
+          // error response throw ERR_HTTP_HEADERS_SENT and reset the connection).
+          const evidence = await buildQaEvidenceGalleryModel({ evidencePath, repoRoot });
+          res.writeHead(200, {
+            "content-type": "application/json; charset=utf-8",
+            "cache-control": "no-store",
+          });
+          res.end(JSON.stringify({ evidence }));
+          return;
+        }
+        if (
+          (req.method === "GET" || req.method === "HEAD") &&
+          url.pathname === "/api/evidence/artifact"
+        ) {
+          const evidencePath = url.searchParams.get("evidencePath")?.trim();
+          const artifactPath = url.searchParams.get("artifactPath")?.trim();
+          const producerFile = url.searchParams.get("producerFile")?.trim();
+          const entryIndexText = url.searchParams.get("entryIndex");
+          const artifactIndexText = url.searchParams.get("artifactIndex");
+          if (
+            !evidencePath ||
+            (!artifactPath && !producerFile && (!entryIndexText || !artifactIndexText))
+          ) {
+            writeError(res, 400, "Missing evidencePath and artifact selector");
+            return;
+          }
+          const artifactFile = artifactPath
+            ? await resolveQaEvidenceArtifactFile({
+                artifactPath,
+                evidencePath,
+                repoRoot,
+              })
+            : producerFile
+              ? await resolveQaEvidenceProducerFile({
+                  evidencePath,
+                  producerFile,
+                  repoRoot,
+                })
+              : await resolveQaEvidenceArtifactFileByIndex({
+                  artifactIndex: parseQaEvidenceArtifactIndexText(artifactIndexText!),
+                  entryIndex: parseQaEvidenceArtifactIndexText(entryIndexText!),
+                  evidencePath,
+                  repoRoot,
+                });
+          const artifactStats = await fs.promises.stat(artifactFile);
+          res.writeHead(200, {
+            "content-type": detectQaEvidenceArtifactContentType(artifactFile),
+            "content-length": artifactStats.size,
+            "cache-control": "no-store",
+            "x-content-type-options": "nosniff",
+          });
+          if (req.method === "HEAD") {
+            res.end();
+            return;
+          }
+          fs.createReadStream(artifactFile)
+            .on("error", (error) => res.destroy(normalizeQaLabCleanupError(error)))
+            .pipe(res);
           return;
         }
         if (req.method === "GET" && url.pathname === "/api/capture/sessions") {
@@ -530,17 +729,52 @@ export async function startQaLabServer(
             writeError(res, 409, "QA suite run already in progress");
             return;
           }
-          const selection = normalizeQaRunSelection(
-            await readQaJsonBody(req),
-            scenarioCatalog.scenarios,
-          );
+          let selection: ReturnType<typeof normalizeQaRunSelection>;
+          let plan: ReturnType<typeof resolveQaLabRunPlan>;
+          let adapterFactories: readonly QaTransportAdapterFactory[] | undefined;
+          try {
+            selection = normalizeQaRunSelection(
+              await readQaJsonBody(req),
+              scenarioCatalog.scenarios,
+              scorecardReport.profiles,
+            );
+            adapterFactories =
+              selection.channelDriver === "live"
+                ? (await import("./live-transports/cli.js")).listLiveTransportQaAdapterFactories()
+                : undefined;
+            plan = await resolveServerRunPlan(selection, adapterFactories);
+          } catch (error) {
+            writeError(res, 400, error);
+            return;
+          }
+          if (plan.status === "invalid") {
+            writeJson(res, 400, {
+              error: plan.errors.join(" "),
+              plan,
+            });
+            return;
+          }
+          if (activeSuiteRun) {
+            writeError(res, 409, "QA suite run already in progress");
+            return;
+          }
           state.reset();
           latestReport = null;
-          latestScenarioRun = null;
           const startedAt = new Date().toISOString();
+          latestScenarioRun = withQaLabRunCounts({
+            kind: "suite",
+            status: "running",
+            startedAt,
+            scenarios: plan.selectedScenarios.map((scenario) => ({
+              id: scenario.id,
+              name: scenario.title,
+              status: "pending",
+            })),
+          });
           runnerSnapshot = {
             status: "running",
             selection,
+            plan,
             startedAt,
             finishedAt: undefined,
             artifacts: null,
@@ -548,38 +782,86 @@ export async function startQaLabServer(
           };
           activeSuiteRun = (async () => {
             try {
-              const { runQaFlowSuite } = await import("./suite.js");
-              const result = await runQaFlowSuite({
+              const [{ runQaSuite }, channelDriverSelection] = await Promise.all([
+                import("./suite-launch.runtime.js"),
+                selection.channelDriver === "crabline" && selection.channel
+                  ? import("@openclaw/crabline").then((module) =>
+                      module.resolveOpenClawCrablineChannelDriverSelection({
+                        channel: selection.channel!,
+                      }),
+                    )
+                  : Promise.resolve(undefined),
+              ]);
+              const runtimeResult = await runQaSuite({
                 lab: labHandle ?? undefined,
                 startLab: startQaLabServer,
+                repoRoot,
                 outputDir: createQaRunOutputDir(repoRoot),
+                channelDriver: selection.channelDriver,
+                ...(adapterFactories ? { adapterFactories } : {}),
+                ...(selection.channelDriver === "live" && selection.channel
+                  ? { channelId: selection.channel }
+                  : {}),
+                ...(channelDriverSelection ? { channelDriverSelection } : {}),
+                evidenceMode: selection.evidenceMode,
                 providerMode: selection.providerMode,
                 primaryModel: selection.primaryModel,
                 alternateModel: selection.alternateModel,
-                scenarioIds: selection.scenarioIds,
+                fastMode: selection.fastMode,
+                scenarioIds: plan.selectedScenarios.map((scenario) => scenario.id),
+                ...(selection.runtimePair ? { runtimePair: selection.runtimePair } : {}),
               });
+              const result = runtimeResult.result;
+              const finishedAt = new Date().toISOString();
+              latestReport = {
+                outputPath: result.reportPath,
+                markdown: result.report,
+                generatedAt: finishedAt,
+              };
               runnerSnapshot = {
                 status: "completed",
                 selection,
+                plan,
                 startedAt,
-                finishedAt: new Date().toISOString(),
+                finishedAt,
                 artifacts: {
                   outputDir: result.outputDir,
                   evidencePath: result.evidencePath,
                   reportPath: result.reportPath,
                   summaryPath: result.summaryPath,
-                  watchUrl: result.watchUrl,
+                  watchUrl:
+                    "watchUrl" in result && typeof result.watchUrl === "string"
+                      ? result.watchUrl
+                      : (labHandle?.baseUrl ?? publicBaseUrl),
                 },
                 error: null,
               };
             } catch (error) {
+              const finishedAt = new Date().toISOString();
+              const message = formatErrorMessage(error);
+              latestScenarioRun = withQaLabRunCounts({
+                kind: "suite",
+                status: "completed",
+                startedAt,
+                finishedAt,
+                scenarios: (latestScenarioRun?.scenarios ?? []).map((scenario) =>
+                  scenario.status === "pending" || scenario.status === "running"
+                    ? Object.assign({}, scenario, {
+                        status: "fail" as const,
+                        details: message,
+                        finishedAt,
+                      })
+                    : scenario,
+                ),
+              });
               runnerSnapshot = {
                 status: "failed",
                 selection,
+                plan,
                 startedAt,
-                finishedAt: new Date().toISOString(),
+                finishedAt,
                 artifacts: null,
-                error: formatErrorMessage(error),
+                error: message,
               };
             } finally {
               activeSuiteRun = null;
@@ -587,6 +869,7 @@ export async function startQaLabServer(
           })();
           writeJson(res, 202, {
             ok: true,
+            plan,
             runner: runnerSnapshot,
           });
           return;
@@ -628,82 +911,107 @@ export async function startQaLabServer(
     })();
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(params?.port ?? 0, params?.host ?? "127.0.0.1", () => resolve());
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("qa-lab failed to bind");
-  }
-  const listenUrl = resolveAdvertisedBaseUrl({
-    bindHost: params?.host ?? "127.0.0.1",
-    bindPort: address.port,
-  });
-  publicBaseUrl = resolveAdvertisedBaseUrl({
-    bindHost: params?.host ?? "127.0.0.1",
-    bindPort: address.port,
-    advertiseHost: params?.advertiseHost,
-    advertisePort: params?.advertisePort,
-  });
-  if (embeddedGatewayEnabled) {
-    gateway = await startQaGatewayLoop({ state, baseUrl: listenUrl });
-  }
-  if (params?.sendKickoffOnStart) {
-    injectKickoffMessage({
-      state,
-      defaults: bootstrapDefaults,
-      kickoffTask: scenarioCatalog.kickoffTask,
-    });
-  }
-
-  server.on("upgrade", (req, socket, head) => {
-    const url = new URL(req.url ?? "/", "http://127.0.0.1");
-    if (!controlUiProxyTarget || !isControlUiProxyPath(url.pathname)) {
-      socket.destroy();
+  const releaseCaptureStore = () => {
+    if (captureStoreReleased) {
       return;
     }
-    proxyUpgradeRequest({
-      req,
-      socket,
-      head,
-      target: controlUiProxyTarget,
-      authorizationToken: controlUiProxyToken,
-    });
-  });
-
-  const lab = {
-    baseUrl: publicBaseUrl,
-    listenUrl,
-    state,
-    setControlUi(next: {
-      controlUiUrl?: string | null;
-      controlUiProxyToken?: string | null;
-      controlUiProxyTarget?: string | null;
-    }) {
-      controlUiUrl = sanitizeControlUiPublicUrl(next.controlUiUrl?.trim() || null);
-      controlUiProxyToken = next.controlUiProxyToken?.trim() || null;
-      controlUiProxyTarget = next.controlUiProxyTarget?.trim()
-        ? new URL(next.controlUiProxyTarget)
-        : null;
-    },
-    setScenarioRun(next: Omit<QaLabScenarioRun, "counts"> | null) {
-      latestScenarioRun = next ? withQaLabRunCounts(next) : null;
-    },
-    setLatestReport(next: QaLabLatestReport | null) {
-      latestReport = next;
-    },
-    runSelfCheck,
-    async stop() {
-      runnerModelCatalogAbort?.abort();
-      await runnerModelCatalogPromise?.catch(() => undefined);
-      await gateway?.stop();
-      await closeQaHttpServer(server);
-      captureStoreLease.release();
-    },
+    captureStoreReleased = true;
+    captureStoreLease.release();
   };
-  labHandle = lab;
-  return lab;
+
+  const stopLabServerResources = async (): Promise<Error | undefined> => {
+    runnerModelCatalogAbort?.abort();
+    await runnerModelCatalogPromise?.catch(() => undefined);
+    const results = await Promise.allSettled([
+      Promise.resolve().then(() => gateway?.stop()),
+      Promise.resolve().then(() => (serverListening ? closeQaHttpServer(server) : undefined)),
+      Promise.resolve().then(releaseCaptureStore),
+    ]);
+    const failed = results.find((result) => result.status === "rejected");
+    return failed ? normalizeQaLabCleanupError(failed.reason) : undefined;
+  };
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(params?.port ?? 0, params?.host ?? "127.0.0.1", () => resolve());
+    });
+    serverListening = true;
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("qa-lab failed to bind");
+    }
+    listenUrl = resolveAdvertisedBaseUrl({
+      bindHost: params?.host ?? "127.0.0.1",
+      bindPort: address.port,
+    });
+    publicBaseUrl = resolveAdvertisedBaseUrl({
+      bindHost: params?.host ?? "127.0.0.1",
+      bindPort: address.port,
+      advertiseHost: params?.advertiseHost,
+      advertisePort: params?.advertisePort,
+    });
+    if (embeddedGatewayEnabled) {
+      gateway = await startQaGatewayLoop({ state, baseUrl: listenUrl });
+    }
+    if (params?.sendKickoffOnStart) {
+      injectKickoffMessage({
+        state,
+        defaults: bootstrapDefaults,
+        kickoffTask: scenarioCatalog.kickoffTask,
+      });
+    }
+
+    server.on("upgrade", (req, socket, head) => {
+      const url = new URL(req.url ?? "/", "http://127.0.0.1");
+      if (!controlUiProxyTarget || !isControlUiProxyPath(url.pathname)) {
+        socket.destroy();
+        return;
+      }
+      proxyUpgradeRequest({
+        req,
+        socket,
+        head,
+        target: controlUiProxyTarget,
+        authorizationToken: controlUiProxyToken,
+      });
+    });
+
+    const lab = {
+      baseUrl: publicBaseUrl,
+      listenUrl,
+      state,
+      setControlUi(next: {
+        controlUiUrl?: string | null;
+        controlUiProxyToken?: string | null;
+        controlUiProxyTarget?: string | null;
+      }) {
+        controlUiUrl = sanitizeControlUiPublicUrl(next.controlUiUrl?.trim() || null);
+        controlUiProxyToken = next.controlUiProxyToken?.trim() || null;
+        controlUiProxyTarget = next.controlUiProxyTarget?.trim()
+          ? new URL(next.controlUiProxyTarget)
+          : null;
+      },
+      setScenarioRun(next: Omit<QaLabScenarioRun, "counts"> | null) {
+        latestScenarioRun = next ? withQaLabRunCounts(next) : null;
+      },
+      setLatestReport(next: QaLabLatestReport | null) {
+        latestReport = next;
+      },
+      runSelfCheck,
+      async stop() {
+        const cleanupError = await stopLabServerResources();
+        if (cleanupError) {
+          throw cleanupError;
+        }
+      },
+    };
+    labHandle = lab;
+    return lab;
+  } catch (error) {
+    await stopLabServerResources().catch(() => undefined);
+    throw error;
+  }
 }
 
 function serializeSelfCheck(result: QaSelfCheckResult) {
@@ -714,3 +1022,4 @@ function serializeSelfCheck(result: QaSelfCheckResult) {
     scenario: result.scenarioResult,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

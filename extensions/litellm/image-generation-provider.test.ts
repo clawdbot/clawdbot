@@ -33,15 +33,21 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: resolveApiKeyForProviderMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/provider-http", () => ({
-  assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
-  createProviderOperationDeadline: createProviderOperationDeadlineMock,
-  postJsonRequest: postJsonRequestMock,
-  postMultipartRequest: postMultipartRequestMock,
-  resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
-  resolveProviderOperationTimeoutMs: resolveProviderOperationTimeoutMsMock,
-  sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
-}));
+vi.mock("openclaw/plugin-sdk/provider-http", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-http")>(
+    "openclaw/plugin-sdk/provider-http",
+  );
+  return {
+    assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
+    createProviderOperationDeadline: createProviderOperationDeadlineMock,
+    postJsonRequest: postJsonRequestMock,
+    postMultipartRequest: postMultipartRequestMock,
+    readProviderJsonResponse: actual.readProviderJsonResponse,
+    resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
+    resolveProviderOperationTimeoutMs: resolveProviderOperationTimeoutMsMock,
+    sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
+  };
+});
 
 afterAll(() => {
   vi.doUnmock("openclaw/plugin-sdk/provider-auth-runtime");
@@ -49,13 +55,18 @@ afterAll(() => {
   vi.resetModules();
 });
 
+function jsonResponse(payload: unknown): Response {
+  return new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
 function mockGeneratedPngResponse() {
   postJsonRequestMock.mockResolvedValue({
-    response: {
-      json: async () => ({
-        data: [{ b64_json: Buffer.from("png-bytes").toString("base64") }],
-      }),
-    },
+    response: jsonResponse({
+      data: [{ b64_json: Buffer.from("png-bytes").toString("base64") }],
+    }),
     release: vi.fn(async () => {}),
   });
 }
@@ -243,7 +254,9 @@ describe("litellm image generation provider", () => {
     const cases = [
       "http://localhost:4000",
       "http://127.0.0.1:4000",
+      "http://127.255.255.254:4000",
       "http://[::1]:4000",
+      "http://[0:0:0:0:0:0:0:1]:4000",
       "http://host.docker.internal:4000",
       "https://localhost:4000",
     ] as const;
@@ -272,6 +285,7 @@ describe("litellm image generation provider", () => {
       "https://192.168.5.10:4000",
       "http://printer.local:4000",
       "http://proxy.internal:4000",
+      "http://127.evil.com:4000",
       "https://metadata.google.internal",
     ] as const;
     for (const baseUrl of cases) {
@@ -292,33 +306,36 @@ describe("litellm image generation provider", () => {
     }
   });
 
-  it("honors explicit private-network opt-in for a LAN LiteLLM proxy", async () => {
-    mockGeneratedPngResponse();
+  it.each(["http://192.168.5.10:4000", "http://127.evil.com:4000"])(
+    "honors explicit private-network opt-in for %s",
+    async (baseUrl) => {
+      mockGeneratedPngResponse();
 
-    const provider = buildLitellmImageGenerationProvider();
-    await provider.generateImage({
-      provider: "litellm",
-      model: "gpt-image-2",
-      prompt: "x",
-      cfg: {
-        models: {
-          providers: {
-            litellm: {
-              baseUrl: "http://192.168.5.10:4000",
-              request: { allowPrivateNetwork: true },
-              models: [],
+      const provider = buildLitellmImageGenerationProvider();
+      await provider.generateImage({
+        provider: "litellm",
+        model: "gpt-image-2",
+        prompt: "x",
+        cfg: {
+          models: {
+            providers: {
+              litellm: {
+                baseUrl,
+                request: { allowPrivateNetwork: true },
+                models: [],
+              },
             },
           },
         },
-      },
-    });
+      });
 
-    expectFields(mockObjectArg(resolveProviderHttpRequestConfigMock), {
-      allowPrivateNetwork: undefined,
-      request: { allowPrivateNetwork: true },
-    });
-    expect(mockObjectArg(postJsonRequestMock).allowPrivateNetwork).toBe(true);
-  });
+      expectFields(mockObjectArg(resolveProviderHttpRequestConfigMock), {
+        allowPrivateNetwork: undefined,
+        request: { allowPrivateNetwork: true },
+      });
+      expect(mockObjectArg(postJsonRequestMock).allowPrivateNetwork).toBe(true);
+    },
+  );
 
   it("does not allow private network for public hosts that embed private strings in the URL", async () => {
     // Must not be fooled by an attacker-controlled URL that mentions

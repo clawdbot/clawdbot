@@ -16,7 +16,7 @@ const AUTH_PROFILE_MODES = new Set<AuthProfileConfig["mode"]>([
   "token",
 ]);
 
-export type AuthProfileConfigProtectionResult = {
+type AuthProfileConfigProtectionResult = {
   config: OpenClawConfig;
   repairs: string[];
   warnings: string[];

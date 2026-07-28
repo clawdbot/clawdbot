@@ -35,7 +35,7 @@ export type SecretDefaults = {
 };
 
 /** Resolved API key value plus provenance for discovery and secret-marker handling. */
-export type ProfileApiKeyResolution = {
+type ProfileApiKeyResolution = {
   apiKey: string;
   source: "plaintext" | "env-ref" | "non-env-ref";
   discoveryApiKey?: string;
@@ -92,9 +92,7 @@ export function resolveEnvApiKeyVarName(
 }
 
 /** Resolves the AWS SDK API key env var used by Bedrock-style auth. */
-export function resolveAwsSdkApiKeyVarName(
-  env: NodeJS.ProcessEnv = process.env,
-): string | undefined {
+function resolveAwsSdkApiKeyVarName(env: NodeJS.ProcessEnv = process.env): string | undefined {
   return resolveAwsSdkEnvVarName(env);
 }
 

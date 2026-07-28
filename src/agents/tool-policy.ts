@@ -5,6 +5,7 @@
  */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "./agent-bundle-mcp-names.js";
 import { IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW } from "./sandbox-tool-policy.js";
 import { expandToolGroups, normalizeToolList, normalizeToolName } from "./tool-policy-shared.js";
 export {
@@ -31,34 +32,47 @@ export type PluginToolGroups = {
 };
 
 /** Analysis of an allowlist after matching core and plugin tool ids. */
-export type AllowlistResolution = {
+type AllowlistResolution = {
   policy: ToolPolicyLike | undefined;
   unknownAllowlist: string[];
   pluginOnlyAllowlist: boolean;
 };
 
+export type DeclaredToolAllowlistContext = {
+  pluginToolNames?: Iterable<string>;
+  pluginIds?: Iterable<string>;
+  mcpServerNames?: Iterable<string>;
+};
+
 /** Synthetic allowlist entry that means "use default plugin tools". */
 export const DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY = "__openclaw_default_plugin_tools__";
 
+const SHIPPED_PLUGIN_POLICY_FAMILY_CORE_TOOLS = new Map<string, readonly string[]>([
+  // `canvas` is a shipped operator policy family. Keep promoted `show_widget`
+  // in that family so existing allow/deny configs retain their old surface.
+  ["canvas", ["show_widget"]],
+]);
+
 /** Returns true when an allow policy is narrower than all/default plugin tools. */
 export function hasRestrictiveAllowPolicy(policy?: { allow?: string[] }): boolean {
-  return (
-    Array.isArray(policy?.allow) &&
-    policy.allow.some((entry) => {
-      const normalized = normalizeToolName(entry);
-      return (
-        Boolean(normalized) &&
-        normalized !== "*" &&
-        normalized !== DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY
-      );
-    })
+  if (!Array.isArray(policy?.allow)) {
+    return false;
+  }
+  const normalizedAllow = policy.allow.map((entry) => normalizeToolName(entry));
+  // A wildcard remains allow-all when additive entries are present. Treating
+  // those extras as restrictive would unnecessarily cap delegated sessions.
+  if (normalizedAllow.includes("*")) {
+    return false;
+  }
+  return normalizedAllow.some(
+    (entry) => Boolean(entry) && entry !== DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
   );
 }
 
 /** Replaces an allowlist with the normalized names of an effective tool array. */
 export function replaceWithEffectiveToolAllowlist(
   target: string[],
-  tools: Array<{ name: string }>,
+  tools: ReadonlyArray<{ name: string }>,
 ): void {
   target.length = 0;
   const seen = new Set<string>();
@@ -146,7 +160,7 @@ export function buildPluginToolGroups<T extends { name: string }>(params: {
 }
 
 /** Expands group:plugins and plugin-id entries into concrete plugin tool names. */
-export function expandPluginGroups(
+function expandPluginGroups(
   list: string[] | undefined,
   groups: PluginToolGroups,
 ): string[] | undefined {
@@ -164,9 +178,13 @@ export function expandPluginGroups(
       }
       continue;
     }
-    const tools = groups.byPlugin.get(normalized);
-    if (tools && tools.length > 0) {
-      expanded.push(...tools);
+    const tools = groups.byPlugin.get(normalized) ?? [];
+    // Discord owns its own show_widget; only alias names absent from plugin ownership metadata.
+    const promotedCoreTools = (
+      SHIPPED_PLUGIN_POLICY_FAMILY_CORE_TOOLS.get(normalized) ?? []
+    ).filter((toolName) => !groups.all.includes(toolName));
+    if (tools.length > 0 || promotedCoreTools.length > 0) {
+      expanded.push(...tools, ...promotedCoreTools);
       continue;
     }
     expanded.push(normalized);
@@ -188,11 +206,56 @@ export function expandPolicyWithPluginGroups(
   };
 }
 
+function buildDeclaredMcpToolPrefixes(serverNames?: Iterable<string>): Set<string> {
+  const prefixes = new Set<string>();
+  const usedNames = new Set<string>();
+  for (const serverName of serverNames ?? []) {
+    const safeName = sanitizeServerName(serverName, usedNames);
+    const prefix = normalizeToolName(safeName + TOOL_NAME_SEPARATOR);
+    if (prefix) {
+      prefixes.add(prefix);
+    }
+  }
+  return prefixes;
+}
+
+function normalizeDeclaredPluginIds(values?: Iterable<string>): Set<string> {
+  return new Set(
+    Array.from(values ?? [], (value) => normalizeOptionalLowercaseString(value)).filter(
+      (value): value is string => Boolean(value),
+    ),
+  );
+}
+
+function normalizeDeclaredToolNames(values?: Iterable<string>): Set<string> {
+  return new Set(
+    Array.from(values ?? [], (value) => normalizeToolName(value)).filter((value): value is string =>
+      Boolean(value),
+    ),
+  );
+}
+
+function isDeclaredMcpAllowlistEntry(entry: string, prefixes: Set<string>): boolean {
+  if (prefixes.size === 0) {
+    return false;
+  }
+  if (entry === "bundle-mcp") {
+    return true;
+  }
+  for (const prefix of prefixes) {
+    if (entry.length > prefix.length && entry.startsWith(prefix)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Classifies allowlists as core, plugin-only, or unknown for diagnostics. */
 export function analyzeAllowlistByToolType(
   policy: ToolPolicyLike | undefined,
   groups: PluginToolGroups,
   coreTools: Set<string>,
+  declaredTools?: DeclaredToolAllowlistContext,
 ): AllowlistResolution {
   if (!policy?.allow || policy.allow.length === 0) {
     return { policy, unknownAllowlist: [], pluginOnlyAllowlist: false };
@@ -201,8 +264,15 @@ export function analyzeAllowlistByToolType(
   if (normalized.length === 0) {
     return { policy, unknownAllowlist: [], pluginOnlyAllowlist: false };
   }
-  const pluginIds = new Set(groups.byPlugin.keys());
-  const pluginTools = new Set(groups.all);
+  const pluginIds = new Set([
+    ...groups.byPlugin.keys(),
+    ...normalizeDeclaredPluginIds(declaredTools?.pluginIds),
+  ]);
+  const pluginTools = new Set([
+    ...groups.all,
+    ...normalizeDeclaredToolNames(declaredTools?.pluginToolNames),
+  ]);
+  const mcpToolPrefixes = buildDeclaredMcpToolPrefixes(declaredTools?.mcpServerNames);
   const unknownAllowlist: string[] = [];
   let hasOnlyPluginEntries = true;
   for (const entry of normalized) {
@@ -211,7 +281,10 @@ export function analyzeAllowlistByToolType(
       continue;
     }
     const isPluginEntry =
-      entry === "group:plugins" || pluginIds.has(entry) || pluginTools.has(entry);
+      entry === "group:plugins" ||
+      pluginIds.has(entry) ||
+      pluginTools.has(entry) ||
+      isDeclaredMcpAllowlistEntry(entry, mcpToolPrefixes);
     const expanded = expandToolGroups([entry]);
     const isCoreEntry = expanded.some((tool) => coreTools.has(tool));
     if (!isPluginEntry) {

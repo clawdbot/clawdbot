@@ -1,5 +1,6 @@
 // Gateway control-plane audit helpers.
 // Extracts stable actor identity and compact changed-path summaries for audit logs.
+import { normalizeControlPlaneIdentityPart } from "./control-plane-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
 
 /** Stable actor fields included in control-plane audit and rate-limit logs. */
@@ -10,21 +11,13 @@ export type ControlPlaneActor = {
   connId: string;
 };
 
-function normalizePart(value: unknown, fallback: string): string {
-  if (typeof value !== "string") {
-    return fallback;
-  }
-  const normalized = value.trim();
-  return normalized.length > 0 ? normalized : fallback;
-}
-
 /** Extracts audit identity from a possibly missing or partially connected client. */
 export function resolveControlPlaneActor(client: GatewayClient | null): ControlPlaneActor {
   return {
-    actor: normalizePart(client?.connect?.client?.id, "unknown-actor"),
-    deviceId: normalizePart(client?.connect?.device?.id, "unknown-device"),
-    clientIp: normalizePart(client?.clientIp, "unknown-ip"),
-    connId: normalizePart(client?.connId, "unknown-conn"),
+    actor: normalizeControlPlaneIdentityPart(client?.connect?.client?.id, "unknown-actor"),
+    deviceId: normalizeControlPlaneIdentityPart(client?.connect?.device?.id, "unknown-device"),
+    clientIp: normalizeControlPlaneIdentityPart(client?.clientIp, "unknown-ip"),
+    connId: normalizeControlPlaneIdentityPart(client?.connId, "unknown-conn"),
   };
 }
 

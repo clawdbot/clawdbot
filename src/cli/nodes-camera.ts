@@ -1,9 +1,11 @@
 // Camera payload validation and artifact writers for node media commands.
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
+import { parseMediaContentLength } from "@openclaw/media-core/content-length";
+import { toErrorObject } from "../infra/errors.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { normalizeHostname } from "../infra/net/hostname.js";
-import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { resolveCliName } from "./cli-name.js";
 import {
   asBoolean,
@@ -15,12 +17,50 @@ import {
 
 const MAX_CAMERA_URL_DOWNLOAD_BYTES = 250 * 1024 * 1024;
 const MAX_CAMERA_BASE64_BYTES = MAX_CAMERA_URL_DOWNLOAD_BYTES;
+// Keep the 250 MiB media path bounded without applying a short control-request deadline.
+const CAMERA_URL_DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
 
 /** Camera orientation accepted by node camera commands. */
 export type CameraFacing = "front" | "back";
 
+/** Camera artifact label; Linux V4L2 devices do not expose a reliable facing. */
+export type CameraArtifactFacing = CameraFacing | "unknown";
+
+type CameraSnapTarget = {
+  requestFacing?: CameraFacing;
+  artifactFacing: CameraArtifactFacing;
+};
+
+type CameraClipTarget = CameraSnapTarget;
+
+/** Resolve one or two snap requests without inventing a facing for Linux V4L2 devices. */
+export function resolveCameraSnapTargets(params: {
+  facing: CameraFacing | "both";
+  platform?: string;
+  deviceId?: string;
+}): CameraSnapTarget[] {
+  if (params.platform?.toLowerCase() === "linux") {
+    return [{ artifactFacing: "unknown" }];
+  }
+  const facings: CameraFacing[] = params.facing === "both" ? ["front", "back"] : [params.facing];
+  if (params.deviceId && facings.length > 1) {
+    throw new Error("facing=both is not allowed when deviceId is set");
+  }
+  return facings.map((facing) => ({ requestFacing: facing, artifactFacing: facing }));
+}
+
+/** Keep Linux clip requests and artifact labels honest when V4L2 position is unknown. */
+export function resolveCameraClipTarget(params: {
+  facing: CameraFacing;
+  platform?: string;
+}): CameraClipTarget {
+  return params.platform?.toLowerCase() === "linux"
+    ? { artifactFacing: "unknown" }
+    : { requestFacing: params.facing, artifactFacing: params.facing };
+}
+
 /** Validated still-image payload from `nodes camera snap`. */
-export type CameraSnapPayload = {
+type CameraSnapPayload = {
   format: string;
   base64?: string;
   url?: string;
@@ -29,13 +69,19 @@ export type CameraSnapPayload = {
 };
 
 /** Validated video payload from `nodes camera clip`. */
-export type CameraClipPayload = {
+type CameraClipPayload = {
   format: string;
   base64?: string;
   url?: string;
   durationMs: number;
   hasAudio: boolean;
 };
+
+async function cancelIgnoredResponseBody(response: Response | undefined): Promise<void> {
+  if (response?.bodyUsed !== true) {
+    await response?.body?.cancel().catch(() => undefined);
+  }
+}
 
 /** Validate and normalize an unknown camera still-image payload. */
 export function parseCameraSnapPayload(value: unknown): CameraSnapPayload {
@@ -68,7 +114,7 @@ export function parseCameraClipPayload(value: unknown): CameraClipPayload {
 /** Build a deterministic temp path for a camera artifact. */
 export function cameraTempPath(opts: {
   kind: "snap" | "clip";
-  facing?: CameraFacing;
+  facing?: CameraArtifactFacing;
   ext: string;
   tmpDir?: string;
   id?: string;
@@ -84,11 +130,7 @@ export function cameraTempPath(opts: {
 }
 
 /** Download a node-hosted media URL to disk after HTTPS, host, redirect, and size checks. */
-export async function writeUrlToFile(
-  filePath: string,
-  url: string,
-  opts: { expectedHost: string },
-) {
+async function writeUrlToFile(filePath: string, url: string, opts: { expectedHost: string }) {
   const parsed = new URL(url);
   if (parsed.protocol !== "https:") {
     throw new Error(`writeUrlToFile: only https URLs are allowed, got ${parsed.protocol}`);
@@ -117,29 +159,32 @@ export async function writeUrlToFile(
       url,
       auditContext: "writeUrlToFile",
       policy,
+      requireHttps: true,
+      timeoutMs: CAMERA_URL_DOWNLOAD_TIMEOUT_MS,
     });
     release = guarded.release;
+    const res = guarded.response;
     const finalUrl = new URL(guarded.finalUrl);
-    if (finalUrl.protocol !== "https:") {
-      throw new Error(`writeUrlToFile: redirect resolved to non-https URL ${guarded.finalUrl}`);
-    }
     if (normalizeHostname(finalUrl.hostname) !== expectedHost) {
+      await cancelIgnoredResponseBody(res);
       throw new Error(
         `writeUrlToFile: redirect host ${finalUrl.hostname} must match node host ${opts.expectedHost}`,
       );
     }
-    const res = guarded.response;
     if (!res.ok) {
+      await cancelIgnoredResponseBody(res);
       throw new Error(`failed to download ${url}: ${res.status} ${res.statusText}`);
     }
 
-    const contentLengthRaw = res.headers.get("content-length");
-    const contentLength = parseStrictNonNegativeInteger(contentLengthRaw);
-    if (
-      typeof contentLength === "number" &&
-      Number.isFinite(contentLength) &&
-      contentLength > MAX_CAMERA_URL_DOWNLOAD_BYTES
-    ) {
+    let contentLength: number | null;
+    try {
+      contentLength = parseMediaContentLength(res.headers.get("content-length"));
+    } catch (err) {
+      await cancelIgnoredResponseBody(res);
+      throw err;
+    }
+    if (contentLength !== null && contentLength > MAX_CAMERA_URL_DOWNLOAD_BYTES) {
+      await cancelIgnoredResponseBody(res);
       throw new Error(
         `writeUrlToFile: content-length ${contentLength} exceeds max ${MAX_CAMERA_URL_DOWNLOAD_BYTES}`,
       );
@@ -147,13 +192,14 @@ export async function writeUrlToFile(
 
     const body = res.body;
     if (!body) {
+      await cancelIgnoredResponseBody(res);
       throw new Error(`failed to download ${url}: empty response body`);
     }
 
     const fileHandle = await fs.open(filePath, "w");
     let thrown: unknown;
+    const reader = body.getReader();
     try {
-      const reader = body.getReader();
       while (true) {
         const { done, value } = await reader.read();
         if (done) {
@@ -164,6 +210,7 @@ export async function writeUrlToFile(
         }
         bytes += value.byteLength;
         if (bytes > MAX_CAMERA_URL_DOWNLOAD_BYTES) {
+          await reader.cancel().catch(() => undefined);
           throw new Error(
             `writeUrlToFile: downloaded ${bytes} bytes, exceeds max ${MAX_CAMERA_URL_DOWNLOAD_BYTES}`,
           );
@@ -172,25 +219,21 @@ export async function writeUrlToFile(
       }
     } catch (err) {
       thrown = err;
+      await reader.cancel().catch(() => undefined);
     } finally {
+      reader.releaseLock();
       await fileHandle.close();
     }
 
     if (thrown) {
       await fs.unlink(filePath).catch(() => {});
-      throw toLintErrorObject(thrown, "Non-Error thrown");
+      throw toErrorObject(thrown, "Non-Error thrown");
     }
   } finally {
     await release();
   }
 
   return { path: filePath, bytes };
-}
-
-function estimateDecodedBase64Bytes(base64: string): number {
-  const normalized = base64.replace(/\s+/g, "");
-  const padding = normalized.endsWith("==") ? 2 : normalized.endsWith("=") ? 1 : 0;
-  return Math.floor((normalized.length * 3) / 4) - padding;
 }
 
 /** Decode a base64 media payload to disk with preflight and post-decode size checks. */
@@ -200,10 +243,14 @@ export async function writeBase64ToFile(
   opts: { maxBytes?: number } = {},
 ) {
   const maxBytes = opts.maxBytes ?? MAX_CAMERA_BASE64_BYTES;
-  if (estimateDecodedBase64Bytes(base64) > maxBytes) {
+  if (estimateBase64DecodedBytes(base64) > maxBytes) {
     throw new Error(`writeBase64ToFile: decoded payload exceeds max ${maxBytes}`);
   }
-  const buf = Buffer.from(base64, "base64");
+  const canonicalBase64 = canonicalizeBase64(base64);
+  if (!canonicalBase64) {
+    throw new Error("writeBase64ToFile: invalid base64 payload");
+  }
+  const buf = Buffer.from(canonicalBase64, "base64");
   if (buf.length > maxBytes) {
     throw new Error(`writeBase64ToFile: decoded ${buf.length} bytes, exceeds max ${maxBytes}`);
   }
@@ -212,7 +259,7 @@ export async function writeBase64ToFile(
 }
 
 /** Require the node remote IP needed to validate URL-backed camera payloads. */
-export function requireNodeRemoteIp(remoteIp?: string): string {
+function requireNodeRemoteIp(remoteIp?: string): string {
   const normalized = remoteIp?.trim();
   if (!normalized) {
     throw new Error("camera URL payload requires node remoteIp");
@@ -243,7 +290,7 @@ export async function writeCameraPayloadToFile(params: {
 /** Write a camera clip payload to a generated temp file and return its path. */
 export async function writeCameraClipPayloadToFile(params: {
   payload: CameraClipPayload;
-  facing: CameraFacing;
+  facing: CameraArtifactFacing;
   tmpDir?: string;
   id?: string;
   expectedHost?: string;
@@ -262,18 +309,4 @@ export async function writeCameraClipPayloadToFile(params: {
     invalidPayloadMessage: "invalid camera.clip payload",
   });
   return filePath;
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

@@ -5,7 +5,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installWebAutoReplyUnitTestHooks, makeSessionStore } from "./auto-reply.test-harness.js";
 import { buildMentionConfig } from "./auto-reply/mentions.js";
 import { createEchoTracker } from "./auto-reply/monitor/echo.js";
-import { awaitBackgroundTasks } from "./auto-reply/monitor/last-route.js";
 import { createWebOnMessageHandler } from "./auto-reply/monitor/on-message.js";
 import { createTestWebInboundMessage } from "./inbound/test-message.test-helper.js";
 
@@ -90,10 +89,16 @@ function buildInboundMessage(params: {
       senderName: params.senderName,
       selfE164: params.selfE164,
     },
-    from: params.from,
-    conversationId: params.conversationId,
-    chatType: params.chatType,
-    accountId: params.accountId ?? "default",
+    admission: {
+      accountId: params.accountId ?? "default",
+      conversation: {
+        kind: params.chatType,
+        id: params.conversationId,
+      },
+      sender: {
+        id: params.senderE164 ?? params.from,
+      },
+    },
   });
 }
 
@@ -128,7 +133,8 @@ describe("web auto-reply last-route", () => {
       }),
     );
 
-    await awaitBackgroundTasks(backgroundTasks);
+    await Promise.allSettled(backgroundTasks);
+    backgroundTasks.clear();
 
     expect(updateLastRouteInBackgroundMock).toHaveBeenCalledTimes(1);
     const updateParams = updateLastRouteInBackgroundMock.mock.calls.at(0)?.[0] as
@@ -196,6 +202,7 @@ describe("web auto-reply last-route", () => {
         conversationId: "123@g.us",
         chatType: "group",
         chatId: "123@g.us",
+        body: "hello +2000",
         timestamp: now,
         accountId: "work",
         senderE164: "+1000",
@@ -204,7 +211,8 @@ describe("web auto-reply last-route", () => {
       }),
     );
 
-    await awaitBackgroundTasks(backgroundTasks);
+    await Promise.allSettled(backgroundTasks);
+    backgroundTasks.clear();
 
     expect(updateLastRouteInBackgroundMock).toHaveBeenCalledTimes(1);
     const updateParams = updateLastRouteInBackgroundMock.mock.calls.at(0)?.[0] as

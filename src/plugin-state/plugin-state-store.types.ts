@@ -16,6 +16,8 @@ export type PluginStateKeyedStore<T> = {
     updateValue: (current: T | undefined) => T | undefined,
     opts?: { ttlMs?: number },
   ) => Promise<boolean>;
+  /** Atomically deletes an existing entry when its current value matches. */
+  deleteIf?: (key: string, predicate: (current: T) => boolean) => Promise<boolean>;
   lookup(key: string): Promise<T | undefined>;
   consume(key: string): Promise<T | undefined>;
   delete(key: string): Promise<boolean>;
@@ -32,6 +34,8 @@ export type PluginStateSyncKeyedStore<T> = {
     updateValue: (current: T | undefined) => T | undefined,
     opts?: { ttlMs?: number },
   ) => boolean;
+  /** Atomically deletes an existing entry when its current value matches. */
+  deleteIf?: (key: string, predicate: (current: T) => boolean) => boolean;
   lookup(key: string): T | undefined;
   consume(key: string): T | undefined;
   delete(key: string): boolean;
@@ -40,9 +44,12 @@ export type PluginStateSyncKeyedStore<T> = {
 };
 
 /** Options for opening a keyed plugin-state namespace. */
+export type PluginStateOverflowPolicy = "evict-oldest" | "reject-new";
+
 export type OpenKeyedStoreOptions = {
   namespace: string;
   maxEntries: number;
+  overflowPolicy?: PluginStateOverflowPolicy;
   defaultTtlMs?: number;
   env?: NodeJS.ProcessEnv;
 };
@@ -70,7 +77,7 @@ export type PluginStateStoreOperation =
   | "probe"
   | "close";
 
-export type PluginStateStoreErrorOptions = {
+type PluginStateStoreErrorOptions = {
   code: PluginStateStoreErrorCode;
   operation: PluginStateStoreOperation;
   path?: string;

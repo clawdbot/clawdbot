@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from "vitest";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import {
-  buildAssistantStreamData,
   consumePendingAssistantReplyDirectivesIntoReply,
   consumePendingToolMediaIntoReply,
   consumePendingToolMediaReply,
@@ -12,15 +11,37 @@ import {
   handleMessageUpdate,
   hasAssistantVisibleReply,
   readPendingToolMediaReply,
+} from "./embedded-agent-subscribe.handlers.messages.js";
+import {
+  buildAssistantStreamData,
   recordPendingAssistantReplyDirectives,
   resolveSilentReplyFallbackText,
-} from "./embedded-agent-subscribe.handlers.messages.js";
+} from "./embedded-agent-subscribe.handlers.messages.test-support.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import {
   createOpenAiResponsesPartial,
   createOpenAiResponsesTextBlock,
   createOpenAiResponsesTextEvent as createTextUpdateEvent,
 } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
+
+function updateMessage(
+  context: EmbeddedAgentSubscribeContext,
+  event: { message: unknown; assistantMessageEvent?: unknown },
+) {
+  // Stream fixtures intentionally include incomplete and malformed provider payloads.
+  return handleMessageUpdate(context, {
+    type: "message_update",
+    ...event,
+  } as Parameters<typeof handleMessageUpdate>[1]);
+}
+
+function endMessage(context: EmbeddedAgentSubscribeContext, event: { message: unknown }) {
+  // Message-end coverage includes malformed content and partial provider usage.
+  return handleMessageEnd(context, {
+    type: "message_end",
+    ...event,
+  } as Parameters<typeof handleMessageEnd>[1]);
+}
 
 function createMessageUpdateContext(
   params: {
@@ -72,6 +93,7 @@ function createMessageUpdateContext(
     },
     log: { debug: params.debug ?? vi.fn() },
     noteLastAssistant: vi.fn(),
+    noteCompletedAssistant: vi.fn(),
     stripBlockTags: params.stripBlockTags ?? vi.fn((text: string) => text),
     consumePartialReplyDirectives:
       params.consumePartialReplyDirectives ??
@@ -105,9 +127,11 @@ function createMessageEndContext(
     finalizeAssistantTexts?: ReturnType<typeof vi.fn>;
     flushBlockReplyBuffer?: ReturnType<typeof vi.fn>;
     consumeReplyDirectives?: ReturnType<typeof vi.fn>;
+    stripBlockTags?: ReturnType<typeof vi.fn>;
     warn?: ReturnType<typeof vi.fn>;
     builtinToolNames?: ReadonlySet<string>;
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+    enforceFinalTag?: boolean;
     blockChunker?: { hasBuffered: () => boolean; reset: () => void };
     state?: Record<string, unknown>;
   } = {},
@@ -122,6 +146,7 @@ function createMessageEndContext(
       ...(params.sourceReplyDeliveryMode
         ? { sourceReplyDeliveryMode: params.sourceReplyDeliveryMode }
         : {}),
+      ...(params.enforceFinalTag !== undefined ? { enforceFinalTag: params.enforceFinalTag } : {}),
       ...(params.onAgentEvent ? { onAgentEvent: params.onAgentEvent } : {}),
       ...(params.onBlockReply ? { onBlockReply: params.onBlockReply } : { onBlockReply: vi.fn() }),
     },
@@ -155,11 +180,12 @@ function createMessageEndContext(
       ...params.state,
     },
     noteLastAssistant: vi.fn(),
+    noteCompletedAssistant: vi.fn(),
     recordAssistantUsage: vi.fn(),
     commitAssistantUsage: vi.fn(),
     log: { debug: vi.fn(), info: vi.fn(), warn: params.warn ?? vi.fn() },
     builtinToolNames: params.builtinToolNames,
-    stripBlockTags: (text: string) => text,
+    stripBlockTags: params.stripBlockTags ?? vi.fn((text: string) => text),
     finalizeAssistantTexts: params.finalizeAssistantTexts ?? vi.fn(),
     emitAssistantStreamData: vi.fn(
       (data: Parameters<EmbeddedAgentSubscribeContext["emitAssistantStreamData"]>[0]) => {
@@ -324,32 +350,33 @@ describe("pending assistant reply directives", () => {
 });
 
 describe("handleMessageUpdate text signatures", () => {
-  it("uses incremental text deltas for non-phase streams", () => {
+  it("uses incremental text deltas for unphased OpenAI Responses streams", () => {
     const onAgentEvent = vi.fn();
     const stripBlockTags = vi.fn((text: string) => text);
     const context = createMessageUpdateContext({ onAgentEvent, stripBlockTags });
 
     const createNonPhaseEvent = (text: string, delta: string) =>
       ({
-        type: "message_update",
         message: { role: "assistant", content: [] },
         assistantMessageEvent: {
           type: "text_delta",
+          contentIndex: 0,
           delta,
           partial: {
             role: "assistant",
             content: [{ type: "text", text }],
             stopReason: "stop",
-            provider: "test",
-            model: "local",
+            api: "openai-responses",
+            provider: "openai",
+            model: "gpt-5.2",
             usage: {},
             timestamp: 0,
           },
         },
       }) as never;
 
-    handleMessageUpdate(context, createNonPhaseEvent("Hello ", "Hello "));
-    handleMessageUpdate(context, createNonPhaseEvent("Hello world", "world"));
+    updateMessage(context, createNonPhaseEvent("Hello ", "Hello "));
+    updateMessage(context, createNonPhaseEvent("Hello world", "world"));
 
     expect(stripBlockTags.mock.calls.map(([text]) => text)).toEqual(["Hello ", "world"]);
     expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
@@ -364,6 +391,55 @@ describe("handleMessageUpdate text signatures", () => {
     ]);
   });
 
+  it("treats unphased OpenAI Responses content-index changes as message boundaries", () => {
+    const flushBlockReplyBuffer = vi.fn();
+    const onAssistantMessageStart = vi.fn();
+    const onPartialReply = vi.fn();
+    const context = createMessageUpdateContext({
+      flushBlockReplyBuffer,
+      onPartialReply,
+      state: {
+        deltaBuffer: "First block",
+        lastStreamedAssistant: "First block",
+        lastStreamedAssistantCleaned: "First block",
+        lastAssistantStreamContentIndex: 0,
+      },
+    });
+    const resetAssistantMessageState = vi.fn(() => {
+      context.state.deltaBuffer = "";
+      context.state.lastStreamedAssistant = undefined;
+      context.state.lastStreamedAssistantCleaned = undefined;
+    });
+    context.resetAssistantMessageState = resetAssistantMessageState;
+    context.params.onAssistantMessageStart = onAssistantMessageStart;
+
+    updateMessage(context, {
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: {
+        type: "text_end",
+        contentIndex: 1,
+        content: "First block",
+        partial: {
+          role: "assistant",
+          content: [
+            { type: "text", text: "First block" },
+            { type: "text", text: "First block" },
+          ],
+          api: "openai-responses",
+        },
+      },
+    });
+
+    expect(flushBlockReplyBuffer).toHaveBeenCalledTimes(1);
+    expect(resetAssistantMessageState).toHaveBeenCalledTimes(1);
+    expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
+    expect(onPartialReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "First block", delta: "First block" }),
+    );
+    expect(context.state.blockBuffer).toBe("First block");
+    expect(context.state.lastAssistantStreamContentIndex).toBe(1);
+  });
+
   it("holds incomplete streaming directive tails without emitting them as text", () => {
     const onAgentEvent = vi.fn();
     const accumulator = createStreamingDirectiveAccumulator();
@@ -376,7 +452,6 @@ describe("handleMessageUpdate text signatures", () => {
 
     const createNonPhaseEvent = (delta: string) =>
       ({
-        type: "message_update",
         message: { role: "assistant", content: [] },
         assistantMessageEvent: {
           type: "text_delta",
@@ -384,8 +459,8 @@ describe("handleMessageUpdate text signatures", () => {
         },
       }) as never;
 
-    handleMessageUpdate(context, createNonPhaseEvent("Hello\n"));
-    handleMessageUpdate(context, createNonPhaseEvent("M"));
+    updateMessage(context, createNonPhaseEvent("Hello\n"));
+    updateMessage(context, createNonPhaseEvent("M"));
 
     expect(onAgentEvent).toHaveBeenCalledTimes(1);
     expect(firstMockArg(onAgentEvent, "agent event")).toMatchObject({
@@ -401,7 +476,6 @@ describe("handleMessageUpdate text signatures", () => {
 
     const createNonPhaseEvent = (delta: string) =>
       ({
-        type: "message_update",
         message: { role: "assistant", content: [] },
         assistantMessageEvent: {
           type: "text_delta",
@@ -409,8 +483,8 @@ describe("handleMessageUpdate text signatures", () => {
         },
       }) as never;
 
-    handleMessageUpdate(context, createNonPhaseEvent("[[reply_to_current]]\nHello"));
-    handleMessageUpdate(context, createNonPhaseEvent(" world"));
+    updateMessage(context, createNonPhaseEvent("[[reply_to_current]]\nHello"));
+    updateMessage(context, createNonPhaseEvent(" world"));
 
     expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
       {
@@ -428,14 +502,13 @@ describe("handleMessageUpdate text signatures", () => {
     const onAgentEvent = vi.fn();
     const context = createMessageUpdateContext({ onAgentEvent });
 
-    handleMessageUpdate(context, {
-      type: "message_update",
+    updateMessage(context, {
       message: { role: "assistant", content: [] },
       assistantMessageEvent: {
         type: "text_delta",
         delta: "Here it is.\nMEDIA:/tmp/final.png\n",
       },
-    } as never);
+    });
 
     expect(firstMockArg(onAgentEvent, "agent event")).toMatchObject({
       stream: "assistant",
@@ -447,7 +520,7 @@ describe("handleMessageUpdate text signatures", () => {
     const onAgentEvent = vi.fn();
     const context = createMessageUpdateContext({ onAgentEvent });
 
-    handleMessageUpdate(
+    updateMessage(
       context,
       createTextUpdateEvent({
         type: "text_delta",
@@ -458,7 +531,7 @@ describe("handleMessageUpdate text signatures", () => {
         partialPhase: "commentary",
       }),
     );
-    handleMessageUpdate(
+    updateMessage(
       context,
       createTextUpdateEvent({
         type: "text_delta",
@@ -471,11 +544,188 @@ describe("handleMessageUpdate text signatures", () => {
     );
 
     expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
+      // Emit-always: the commentary delta reaches the bus tagged with its
+      // phase; reply lanes still exclude it (covered below).
+      {
+        stream: "assistant",
+        data: { delta: "Hello", phase: "commentary", itemId: "item-commentary" },
+      },
       {
         stream: "assistant",
         data: { text: "Hello world", delta: "Hello world", phase: "final_answer" },
       },
     ]);
+  });
+
+  it.each([
+    "openai-responses",
+    "openai-chatgpt-responses",
+    "openclaw-openai-responses-transport",
+    "openclaw-openai-chatgpt-responses-transport",
+    "openclaw-azure-openai-responses-transport",
+  ])("streams %s commentary bytes exactly once across start, deltas, and end", async (api) => {
+    const onAgentEvent = vi.fn();
+    const context = createMessageUpdateContext({ onAgentEvent });
+    const createPartial = (text: string) => ({
+      ...createOpenAiResponsesPartial({
+        text,
+        id: "item-commentary",
+        signaturePhase: "commentary",
+        partialPhase: "commentary",
+      }),
+      api,
+    });
+    const startPartial = createPartial("Work");
+    const finalPartial = createPartial("Working...");
+
+    updateMessage(context, {
+      message: startPartial,
+      assistantMessageEvent: {
+        type: "text_start",
+        contentIndex: 0,
+        partial: startPartial,
+      },
+    });
+    updateMessage(context, {
+      message: startPartial,
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "Work",
+        partial: startPartial,
+      },
+    });
+    updateMessage(context, {
+      message: finalPartial,
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "ing...",
+        partial: finalPartial,
+      },
+    });
+    updateMessage(context, {
+      message: finalPartial,
+      assistantMessageEvent: {
+        type: "text_end",
+        contentIndex: 0,
+        content: "Working...",
+        partial: finalPartial,
+      },
+    });
+    await endMessage(context, {
+      message: finalPartial,
+    });
+
+    expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
+      {
+        stream: "assistant",
+        data: { delta: "Work", phase: "commentary", itemId: "item-commentary" },
+      },
+      {
+        stream: "assistant",
+        data: { delta: "ing...", phase: "commentary", itemId: "item-commentary" },
+      },
+    ]);
+    expect(context.state.deltaBuffer).toBe("Working...");
+    expect(context.state.blockBuffer).toBe("");
+  });
+
+  it("keeps same-index commentary snapshot extensions on the original live item key", async () => {
+    const onAgentEvent = vi.fn();
+    const context = createMessageUpdateContext({ onAgentEvent });
+    const createPartial = (text: string, id: string) =>
+      createOpenAiResponsesPartial({
+        text,
+        id,
+        signaturePhase: "commentary",
+        partialPhase: "commentary",
+      });
+    const firstPartial = createPartial("Working", "item-1");
+    const extendedPartial = createPartial("Working now", "item-2");
+
+    updateMessage(context, {
+      message: firstPartial,
+      assistantMessageEvent: { type: "text_start", contentIndex: 0, partial: firstPartial },
+    });
+    updateMessage(context, {
+      message: firstPartial,
+      assistantMessageEvent: {
+        type: "text_end",
+        contentIndex: 0,
+        content: "Working",
+        partial: firstPartial,
+      },
+    });
+    updateMessage(context, {
+      message: extendedPartial,
+      assistantMessageEvent: {
+        type: "text_end",
+        contentIndex: 0,
+        content: "Working now",
+        partial: extendedPartial,
+      },
+    });
+    await endMessage(context, { message: extendedPartial });
+
+    expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
+      {
+        stream: "assistant",
+        data: { delta: "Working", phase: "commentary", itemId: "item-1" },
+      },
+      {
+        stream: "assistant",
+        data: { delta: " now", phase: "commentary", itemId: "item-1" },
+      },
+    ]);
+    expect(context.state.lastAssistantStreamItemId).toBe("item-1");
+    expect(context.state.deltaBuffer).toBe("Working now");
+  });
+
+  it("emits a commentary snapshot when Anthropic text is classified after deltas", () => {
+    const onAgentEvent = vi.fn();
+    const context = createMessageUpdateContext({ onAgentEvent });
+    const narration = "I'll check the repo first.";
+    const commentaryPartial = {
+      role: "assistant",
+      api: "anthropic-messages",
+      content: [
+        {
+          type: "text",
+          text: narration,
+          textSignature: JSON.stringify({ v: 1, id: "commentary-0", phase: "commentary" }),
+        },
+      ],
+    };
+
+    updateMessage(context, {
+      message: {
+        role: "assistant",
+        api: "anthropic-messages",
+        content: [{ type: "text", text: narration }],
+      },
+      assistantMessageEvent: { type: "text_delta", delta: narration },
+    });
+    updateMessage(context, {
+      message: { role: "assistant", api: "anthropic-messages", content: [] },
+      assistantMessageEvent: {
+        type: "text_end",
+        content: narration,
+        partial: commentaryPartial,
+      },
+    });
+
+    expect(onAgentEvent.mock.calls.map(([event]) => event)).toContainEqual(
+      expect.objectContaining({
+        stream: "assistant",
+        data: expect.objectContaining({
+          text: narration,
+          replace: true,
+          phase: "commentary",
+          itemId: "commentary-0",
+        }),
+      }),
+    );
   });
 
   it("uses incremental deltas for same-item phased streams", () => {
@@ -498,7 +748,6 @@ describe("handleMessageUpdate text signatures", () => {
 
     const createPhasedDelta = (delta: string) =>
       ({
-        type: "message_update",
         message: { role: "assistant", content: [] },
         assistantMessageEvent: {
           type: "text_delta",
@@ -507,8 +756,8 @@ describe("handleMessageUpdate text signatures", () => {
         },
       }) as never;
 
-    handleMessageUpdate(context, createPhasedDelta("Hello"));
-    handleMessageUpdate(context, createPhasedDelta(" world"));
+    updateMessage(context, createPhasedDelta("Hello"));
+    updateMessage(context, createPhasedDelta(" world"));
 
     expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
       {
@@ -542,7 +791,6 @@ describe("handleMessageUpdate text signatures", () => {
 
     const createPhasedDelta = (delta: string) =>
       ({
-        type: "message_update",
         message: { role: "assistant", content: [] },
         assistantMessageEvent: {
           type: "text_delta",
@@ -551,12 +799,12 @@ describe("handleMessageUpdate text signatures", () => {
         },
       }) as never;
 
-    handleMessageUpdate(context, createPhasedDelta("Visible\n<tool_call>{"));
-    handleMessageUpdate(
+    updateMessage(context, createPhasedDelta("Visible\n<tool_call>{"));
+    updateMessage(
       context,
       createPhasedDelta('"name":"read","arguments":{"file_path":"secret.md"}}</tool_call>'),
     );
-    handleMessageUpdate(context, createPhasedDelta("\nDone."));
+    updateMessage(context, createPhasedDelta("\nDone."));
 
     expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
       {
@@ -590,7 +838,6 @@ describe("handleMessageUpdate text signatures", () => {
 
     const createPhasedDelta = (delta: string) =>
       ({
-        type: "message_update",
         message: { role: "assistant", content: [] },
         assistantMessageEvent: {
           type: "text_delta",
@@ -599,8 +846,8 @@ describe("handleMessageUpdate text signatures", () => {
         },
       }) as never;
 
-    handleMessageUpdate(context, createPhasedDelta("<tool_call>{"));
-    handleMessageUpdate(
+    updateMessage(context, createPhasedDelta("<tool_call>{"));
+    updateMessage(
       context,
       createPhasedDelta('"name":"read","arguments":{"file_path":"secret.md"}}</tool_call>\nDone.'),
     );
@@ -617,16 +864,18 @@ describe("handleMessageUpdate text signatures", () => {
     const flushBlockReplyBuffer = vi.fn();
     const resetAssistantMessageState = vi.fn();
     const onAssistantMessageStart = vi.fn();
+    const onPartialReply = vi.fn();
     const context = createMessageUpdateContext({
       flushBlockReplyBuffer,
       resetAssistantMessageState,
+      onPartialReply,
     });
     context.params.onAssistantMessageStart = onAssistantMessageStart;
+    context.state.lastAssistantStreamContentIndex = 0;
     context.state.lastAssistantStreamItemId = "item-1";
     context.state.assistantMessageIndex = 7;
 
-    handleMessageUpdate(context, {
-      type: "message_update",
+    updateMessage(context, {
       message: { role: "assistant", content: [] },
       assistantMessageEvent: {
         type: "text_delta",
@@ -655,11 +904,182 @@ describe("handleMessageUpdate text signatures", () => {
           timestamp: 0,
         },
       },
-    } as never);
+    });
 
     expect(flushBlockReplyBuffer).toHaveBeenCalledWith({ assistantMessageIndex: 7 });
     expect(resetAssistantMessageState).toHaveBeenCalledWith(0);
     expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
+    expect(onPartialReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Second block",
+        delta: "Second block",
+        phase: "final_answer",
+      }),
+    );
+    expect(onPartialReply).not.toHaveBeenCalledWith(
+      expect.objectContaining({ text: "First block\nSecond block" }),
+    );
+    expect(context.state.lastAssistantStreamContentIndex).toBe(1);
+    expect(context.state.lastAssistantStreamItemId).toBe("item-2");
+  });
+
+  it("does not replay a deferred item snapshot before its first delta", () => {
+    const flushBlockReplyBuffer = vi.fn();
+    const resetAssistantMessageState = vi.fn();
+    const onAssistantMessageStart = vi.fn();
+    const onPartialReply = vi.fn();
+    const context = createMessageUpdateContext({
+      flushBlockReplyBuffer,
+      resetAssistantMessageState,
+      onPartialReply,
+      state: {
+        lastAssistantStreamContentIndex: 0,
+        lastAssistantStreamItemId: "item-1",
+      },
+    });
+    context.params.onAssistantMessageStart = onAssistantMessageStart;
+    const partial = {
+      role: "assistant",
+      phase: "final_answer",
+      content: [
+        createOpenAiResponsesTextBlock({
+          text: "First block",
+          id: "item-1",
+          phase: "final_answer",
+        }),
+        createOpenAiResponsesTextBlock({
+          text: "Second block",
+          id: "item-2",
+          phase: "final_answer",
+        }),
+      ],
+      api: "openai-responses",
+    };
+
+    updateMessage(context, {
+      message: partial,
+      assistantMessageEvent: {
+        type: "text_start",
+        contentIndex: 1,
+        partial,
+      },
+    });
+    updateMessage(context, {
+      message: partial,
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 1,
+        delta: "Second block",
+      },
+    });
+
+    expect(flushBlockReplyBuffer).toHaveBeenCalledTimes(1);
+    expect(resetAssistantMessageState).toHaveBeenCalledTimes(1);
+    expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
+    expect(onPartialReply).toHaveBeenCalledTimes(1);
+    expect(onPartialReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Second block",
+        delta: "Second block",
+        phase: "final_answer",
+      }),
+    );
+  });
+
+  it("keeps same-block OpenAI Responses snapshot extensions in one assistant message", () => {
+    const flushBlockReplyBuffer = vi.fn();
+    const resetAssistantMessageState = vi.fn();
+    const onAssistantMessageStart = vi.fn();
+    const onPartialReply = vi.fn();
+    const context = createMessageUpdateContext({
+      flushBlockReplyBuffer,
+      resetAssistantMessageState,
+      onPartialReply,
+      state: {
+        deltaBuffer: "First block",
+        lastStreamedAssistant: "First block",
+        lastStreamedAssistantCleaned: "First block",
+        lastAssistantStreamContentIndex: 0,
+        lastAssistantStreamItemId: "item-1",
+      },
+    });
+    context.params.onAssistantMessageStart = onAssistantMessageStart;
+
+    updateMessage(context, {
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: {
+        type: "text_end",
+        contentIndex: 0,
+        content: "First block extended",
+        partial: createOpenAiResponsesPartial({
+          text: "First block extended",
+          id: "item-2",
+          signaturePhase: "final_answer",
+          partialPhase: "final_answer",
+        }),
+      },
+    });
+
+    expect(flushBlockReplyBuffer).not.toHaveBeenCalled();
+    expect(resetAssistantMessageState).not.toHaveBeenCalled();
+    expect(onAssistantMessageStart).not.toHaveBeenCalled();
+    expect(onPartialReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "First block extended",
+        delta: " extended",
+        phase: "final_answer",
+      }),
+    );
+    expect(context.state.lastAssistantStreamContentIndex).toBe(0);
+    expect(context.state.lastAssistantStreamItemId).toBe("item-1");
+  });
+
+  it("scopes item-id fallback boundaries to the matching signed block", () => {
+    const onPartialReply = vi.fn();
+    const resetAssistantMessageState = vi.fn();
+    const context = createMessageUpdateContext({
+      onPartialReply,
+      resetAssistantMessageState,
+      state: { lastAssistantStreamItemId: "item-1" },
+    });
+
+    updateMessage(context, {
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "Second block",
+        partial: {
+          role: "assistant",
+          phase: "final_answer",
+          content: [
+            createOpenAiResponsesTextBlock({
+              text: "First block",
+              id: "item-1",
+              phase: "final_answer",
+            }),
+            createOpenAiResponsesTextBlock({
+              text: "Second block",
+              id: "item-2",
+              phase: "final_answer",
+            }),
+          ],
+          api: "openai-responses",
+        },
+      },
+    });
+
+    expect(resetAssistantMessageState).toHaveBeenCalledTimes(1);
+    expect(onPartialReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Second block",
+        delta: "Second block",
+        phase: "final_answer",
+      }),
+    );
+    expect(onPartialReply).not.toHaveBeenCalledWith(
+      expect.objectContaining({ text: "First block\nSecond block" }),
+    );
+    expect(context.state.lastAssistantStreamContentIndex).toBeUndefined();
     expect(context.state.lastAssistantStreamItemId).toBe("item-2");
   });
 
@@ -675,7 +1095,7 @@ describe("handleMessageUpdate text signatures", () => {
     });
     const replyText = "Done.\n\n[[reply_to_current]]\n[[audio_as_voice]]\nMEDIA:/tmp/reply.ogg";
 
-    handleMessageUpdate(
+    updateMessage(
       ctx,
       createTextUpdateEvent({
         type: "text_delta",
@@ -685,7 +1105,7 @@ describe("handleMessageUpdate text signatures", () => {
         partialPhase: "final_answer",
       }),
     );
-    handleMessageUpdate(
+    updateMessage(
       ctx,
       createTextUpdateEvent({
         type: "text_end",
@@ -837,11 +1257,11 @@ describe("handleMessageUpdate commentary phase", () => {
       flushBlockReplyBuffer,
     });
 
-    handleMessageUpdate(
+    updateMessage(
       ctx,
       createTextUpdateEvent({ type: "text_delta", text: "Need send.", messagePhase: "commentary" }),
     );
-    handleMessageUpdate(
+    updateMessage(
       ctx,
       createTextUpdateEvent({ type: "text_end", text: "Need send.", messagePhase: "commentary" }),
     );
@@ -868,7 +1288,7 @@ describe("handleMessageUpdate commentary phase", () => {
       flushBlockReplyBuffer,
     });
 
-    handleMessageUpdate(
+    updateMessage(
       ctx,
       createTextUpdateEvent({
         type: "text_delta",
@@ -876,7 +1296,7 @@ describe("handleMessageUpdate commentary phase", () => {
         content: [commentaryBlock],
       }),
     );
-    handleMessageUpdate(
+    updateMessage(
       ctx,
       createTextUpdateEvent({
         type: "text_end",
@@ -887,21 +1307,23 @@ describe("handleMessageUpdate commentary phase", () => {
 
     await Promise.resolve();
 
-    expect(onAgentEvent).not.toHaveBeenCalled();
+    // Archive-always: commentary (textSignature-only phase — the F3 shape) is
+    // emitted on the bus for archival + window, but kept out of the reply lanes.
+    expect(onAgentEvent).toHaveBeenCalled();
     expect(onPartialReply).not.toHaveBeenCalled();
     expect(flushBlockReplyBuffer).not.toHaveBeenCalled();
     expect(ctx.state.deltaBuffer).toBe("");
     expect(ctx.state.blockBuffer).toBe("");
   });
 
-  it("suppresses commentary partials even when they contain visible text", () => {
+  it("keeps commentary partials out of reply lanes while emitting them on the bus", () => {
     const onAgentEvent = vi.fn();
     const ctx = createMessageUpdateContext({
       onAgentEvent,
       shouldEmitPartialReplies: false,
     });
 
-    handleMessageUpdate(
+    updateMessage(
       ctx,
       createTextUpdateEvent({
         type: "text_delta",
@@ -915,11 +1337,19 @@ describe("handleMessageUpdate commentary phase", () => {
       }),
     );
 
-    expect(onAgentEvent).not.toHaveBeenCalled();
-    expect(ctx.state.deltaBuffer).toBe("");
+    // Emit-always: the bus sees the commentary delta with its phase tag. The raw
+    // cumulative buffer retains it for end-event dedupe, but reply blocks stay untouched.
+    expect(onAgentEvent).toHaveBeenCalledTimes(1);
+    const commentaryEvent = firstMockArg(onAgentEvent, "agent event") as
+      | { stream?: string; data?: { delta?: string; phase?: string } }
+      | undefined;
+    expect(commentaryEvent?.stream).toBe("assistant");
+    expect(commentaryEvent?.data?.phase).toBe("commentary");
+    expect(commentaryEvent?.data?.delta).toBe("Working...");
+    expect(ctx.state.deltaBuffer).toBe("Working...");
     expect(ctx.state.blockBuffer).toBe("");
 
-    handleMessageUpdate(
+    updateMessage(
       ctx,
       createTextUpdateEvent({
         type: "text_delta",
@@ -933,8 +1363,8 @@ describe("handleMessageUpdate commentary phase", () => {
       }),
     );
 
-    expect(onAgentEvent).toHaveBeenCalledTimes(1);
-    const event = firstMockArg(onAgentEvent, "agent event") as
+    expect(onAgentEvent).toHaveBeenCalledTimes(2);
+    const event = onAgentEvent.mock.calls[1]?.[0] as
       | { stream?: string; data?: { text?: string; delta?: string } }
       | undefined;
     expect(event?.stream).toBe("assistant");
@@ -952,7 +1382,7 @@ describe("handleMessageUpdate commentary phase", () => {
       }),
     });
 
-    handleMessageUpdate(ctx, createTextUpdateEvent({ type: "text_end", text: "" }));
+    updateMessage(ctx, createTextUpdateEvent({ type: "text_end", text: "" }));
 
     await vi.waitFor(() => {
       expect(debug).toHaveBeenCalledWith("text_end block reply flush failed: Error: boom");
@@ -961,6 +1391,122 @@ describe("handleMessageUpdate commentary phase", () => {
 });
 
 describe("handleMessageEnd", () => {
+  it.each([
+    {
+      name: "counts a completed provider assistant message",
+      message: { role: "assistant", content: [{ type: "text", text: "Done." }] },
+      expected: 1,
+    },
+    {
+      name: "ignores transcript-only mirrored assistant messages",
+      message: {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: "Done." }],
+      },
+      expected: 0,
+    },
+    {
+      name: "ignores non-assistant messages",
+      message: { role: "user", content: [{ type: "text", text: "hi" }] },
+      expected: 0,
+    },
+  ])("$name for assistantTurnCount", ({ message, expected }) => {
+    const ctx = createMessageEndContext({ state: { assistantTurnCount: 0 } });
+
+    void endMessage(ctx, { message });
+
+    expect(ctx.state.assistantTurnCount).toBe(expected);
+  });
+
+  it("keeps duplicate-reply diagnostics free of lone surrogates", () => {
+    const text = `${"a".repeat(49)}😀tail`;
+    const ctx = createMessageEndContext({
+      consumeReplyDirectives: vi.fn((value: string) => ({ text: value })),
+      state: { messagingToolSentTextsNormalized: [`${"a".repeat(49)}tail`] },
+    });
+
+    void endMessage(ctx, {
+      message: { role: "assistant", content: [{ type: "text", text }] },
+    });
+
+    const diagnostic = (ctx.log.debug as ReturnType<typeof vi.fn>).mock.calls
+      .flat()
+      .find((value) => String(value).startsWith("Skipping message_end block reply"));
+    expect(diagnostic).toEqual(expect.any(String));
+    expect(Buffer.from(String(diagnostic)).toString()).toBe(diagnostic);
+  });
+
+  it("persists streamed usage when the final assistant snapshot is zeroed", () => {
+    const ctx = createMessageEndContext({
+      state: {
+        pendingAssistantUsage: { input: 7, output: 5, reasoningTokens: 2, total: 12 },
+      },
+    });
+    const message = {
+      role: "assistant",
+      api: "openai-completions",
+      content: [{ type: "text", text: "Done." }],
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+      },
+    };
+
+    void endMessage(ctx, {
+      message,
+    });
+
+    expect(firstMockArg(ctx.noteLastAssistant as never, "last assistant")).toMatchObject({
+      usage: {
+        input: 7,
+        output: 5,
+        cacheRead: 0,
+        cacheWrite: 0,
+        reasoningTokens: 2,
+        totalTokens: 12,
+      },
+    });
+    expect(ctx.recordAssistantUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: 7,
+        output: 5,
+        reasoningTokens: 2,
+        totalTokens: 12,
+      }),
+    );
+  });
+
+  it("keeps authoritative final usage instead of pending stream usage", () => {
+    const ctx = createMessageEndContext({
+      state: {
+        pendingAssistantUsage: { input: 7, output: 5, total: 12 },
+      },
+    });
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "Done." }],
+      usage: {
+        input: 11,
+        output: 3,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 14,
+      },
+    };
+
+    void endMessage(ctx, {
+      message,
+    });
+
+    expect(firstMockArg(ctx.noteLastAssistant as never, "last assistant")).toBe(message);
+    expect(ctx.recordAssistantUsage).toHaveBeenCalledWith(message.usage);
+  });
+
   it("warns when assistant text only pretends to call a registered tool", () => {
     const warn = vi.fn();
     const ctx = createMessageEndContext({
@@ -968,8 +1514,7 @@ describe("handleMessageEnd", () => {
       builtinToolNames: new Set(["read"]),
     });
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message: {
         role: "assistant",
         provider: "ollama",
@@ -977,7 +1522,7 @@ describe("handleMessageEnd", () => {
         content: [{ type: "text", text: '{"name":"read","arguments":{"path":"README.md"}}' }],
         stopReason: "stop",
       },
-    } as never);
+    });
 
     const warnCall = firstMockCall(warn, "warning log");
     expect(warnCall?.[0]).toBe(
@@ -1001,6 +1546,57 @@ describe("handleMessageEnd", () => {
     expect(metadata?.pattern).toBe("json_tool_call");
     expect(metadata?.toolName).toBe("read");
     expect(metadata?.registeredTool).toBe(true);
+  });
+
+  it("warns without logging text when assistant output resembles a transcript turn", () => {
+    const warn = vi.fn();
+    const ctx = createMessageEndContext({ warn });
+
+    void endMessage(ctx, {
+      message: {
+        role: "assistant",
+        provider: "anthropic",
+        model: "claude-opus-4-8",
+        content: [{ type: "text", text: "user[Thu 2026-07-02 18:14 EDT] do this" }],
+        stopReason: "stop",
+      },
+    });
+
+    const warnCall = firstMockCall(warn, "warning log");
+    expect(warnCall?.[0]).toBe(
+      "Assistant reply contains transcript-role-looking text; treating it as inert assistant text.",
+    );
+    expect(warnCall?.[1]).toEqual({
+      runId: "run-1",
+      sessionId: "session-1",
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      pattern: "role_timestamp_bracket",
+      role: "user",
+    });
+    expect(JSON.stringify(warnCall?.[1])).not.toContain("do this");
+  });
+
+  it("detects spoiler-wrapped transcript turns without logging their text", () => {
+    const warn = vi.fn();
+    const ctx = createMessageEndContext({ warn });
+
+    void endMessage(ctx, {
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "||user[Thu 2026-07-02] hidden instruction||" }],
+        stopReason: "stop",
+      },
+    });
+
+    const warnCall = firstMockCall(warn, "warning log");
+    expect(warnCall?.[1]).toEqual({
+      runId: "run-1",
+      sessionId: "session-1",
+      pattern: "role_timestamp_bracket",
+      role: "user",
+    });
+    expect(JSON.stringify(warnCall?.[1])).not.toContain("hidden instruction");
   });
 
   it("unwraps only source-routed or message-tool-only standalone message-tool JSON", () => {
@@ -1027,14 +1623,13 @@ describe("handleMessageEnd", () => {
         sourceReplyDeliveryMode,
       });
 
-      void handleMessageEnd(ctx, {
-        type: "message_end",
+      void endMessage(ctx, {
         message: {
           role: "assistant",
           ...(api ? { api } : {}),
           content: [{ type: "text", text }],
         },
-      } as never);
+      });
 
       expect(consumeReplyDirectives).toHaveBeenCalledWith(expected, { final: true });
       expect(firstMockArg(emitBlockReply, "block reply")).toMatchObject({ text: expected });
@@ -1048,14 +1643,13 @@ describe("handleMessageEnd", () => {
       builtinToolNames: new Set(["read"]),
     });
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message: {
         role: "assistant",
         content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
         stopReason: "toolUse",
       },
-    } as never);
+    });
 
     expect(warn).not.toHaveBeenCalled();
   });
@@ -1070,17 +1664,17 @@ describe("handleMessageEnd", () => {
       emitBlockReply,
     });
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message: {
         role: "assistant",
         phase: "commentary",
         content: [{ type: "text", text: "Need send." }],
         usage: { input: 1, output: 1, total: 2 },
       },
-    } as never);
+    });
 
-    expect(onAgentEvent).not.toHaveBeenCalled();
+    // Archive-always: commentary reaches the bus/archive but not the visible reply.
+    expect(onAgentEvent).toHaveBeenCalled();
     expect(emitBlockReply).not.toHaveBeenCalled();
     expect(finalizeAssistantTexts).not.toHaveBeenCalled();
   });
@@ -1095,8 +1689,7 @@ describe("handleMessageEnd", () => {
       emitBlockReply,
     });
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message: {
         role: "assistant",
         content: [
@@ -1108,9 +1701,11 @@ describe("handleMessageEnd", () => {
         ],
         usage: { input: 1, output: 1, total: 2 },
       },
-    } as never);
+    });
 
-    expect(onAgentEvent).not.toHaveBeenCalled();
+    // Archive-always: commentary (textSignature-only phase) reaches the
+    // bus/archive but not the visible reply.
+    expect(onAgentEvent).toHaveBeenCalled();
     expect(emitBlockReply).not.toHaveBeenCalled();
     expect(finalizeAssistantTexts).not.toHaveBeenCalled();
   });
@@ -1137,19 +1732,45 @@ describe("handleMessageEnd", () => {
       },
     });
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message: {
         role: "assistant",
         content: [{ type: "text", text: "Hello world" }],
         usage: { input: 10, output: 5, total: 15 },
       },
-    } as never);
+    });
 
     // The block reply should NOT fire again since text_end already delivered it.
     // consumeReplyDirectives is called once with "" (the final flush for
     // text_end channels) but returns null, so emitBlockReply is never called.
     expect(emitBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("tags message-end safety replies with the current assistant message", () => {
+    const emitBlockReply = vi.fn();
+    const ctx = createMessageEndContext({
+      onBlockReply: vi.fn(),
+      emitBlockReply,
+      consumeReplyDirectives: vi.fn((text: string) => (text ? { text } : null)),
+      state: {
+        assistantMessageIndex: 7,
+        blockReplyBreak: "text_end",
+        lastBlockReplyText: null,
+      },
+    });
+
+    void endMessage(ctx, {
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Final answer" }],
+        usage: { input: 10, output: 5, total: 15 },
+      },
+    });
+
+    expect(emitBlockReply).toHaveBeenCalledWith(
+      { text: "Final answer" },
+      { assistantMessageIndex: 7 },
+    );
   });
 
   it("does not duplicate block reply for text_end channels even when stripping differs", () => {
@@ -1172,15 +1793,14 @@ describe("handleMessageEnd", () => {
       },
     });
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message: {
         role: "assistant",
         // The raw text differs slightly from lastBlockReplyText due to stripping
         content: [{ type: "text", text: "Hello world" }],
         usage: { input: 10, output: 5, total: 15 },
       },
-    } as never);
+    });
 
     // Even though text !== lastBlockReplyText (different stripping), the safety
     // send should NOT fire for text_end channels. The only consumeReplyDirectives
@@ -1209,14 +1829,13 @@ describe("handleMessageEnd", () => {
       },
     });
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message: {
         role: "assistant",
         content: [{ type: "text", text: "Caption\nMEDIA:/tmp/final.png" }],
         usage: { input: 10, output: 5, total: 15 },
       },
-    } as never);
+    });
 
     expect(flushBlockReplyBuffer).toHaveBeenCalledWith({
       assistantMessageIndex: undefined,
@@ -1227,6 +1846,74 @@ describe("handleMessageEnd", () => {
       text: "",
       mediaUrls: ["/tmp/final.png"],
     });
+  });
+
+  it("preserves literal reasoning-looking tags in unphased final visible text", () => {
+    const onAgentEvent = vi.fn();
+    const stripBlockTags = vi.fn(() => "Before");
+    const ctx = createMessageEndContext({
+      onAgentEvent,
+      stripBlockTags,
+      consumeReplyDirectives: vi.fn((text: string) => ({ text })),
+      state: {
+        blockBuffer: "",
+        deltaBuffer: "",
+      },
+    });
+
+    void endMessage(ctx, {
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "Before <think>literal tag text after",
+            textSignature: JSON.stringify({ v: 1, id: "item_unphased" }),
+          },
+        ],
+        usage: { input: 10, output: 5, total: 15 },
+      },
+    });
+
+    expect(stripBlockTags).not.toHaveBeenCalled();
+    expect(firstMockArg(ctx.emitAssistantStreamData as never, "assistant stream")).toMatchObject({
+      text: "Before <think>literal tag text after",
+      delta: "Before <think>literal tag text after",
+    });
+    expect(ctx.finalizeAssistantTexts).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Before <think>literal tag text after" }),
+    );
+  });
+
+  it("keeps final-tag enforcement in message_end fallback", () => {
+    const onAgentEvent = vi.fn();
+    const stripBlockTags = vi.fn(() => "");
+    const ctx = createMessageEndContext({
+      enforceFinalTag: true,
+      onAgentEvent,
+      stripBlockTags,
+      consumeReplyDirectives: vi.fn((text: string) => ({ text })),
+      state: {
+        blockBuffer: "",
+        deltaBuffer: "",
+      },
+    });
+
+    void endMessage(ctx, {
+      message: {
+        role: "assistant",
+        content: "Hello world",
+        usage: { input: 10, output: 5, total: 15 },
+      },
+    });
+
+    expect(stripBlockTags).toHaveBeenCalledWith(
+      "Hello world",
+      { thinking: false, final: false },
+      { final: true },
+    );
+    expect(ctx.emitAssistantStreamData).not.toHaveBeenCalled();
+    expect(ctx.finalizeAssistantTexts).toHaveBeenCalledWith(expect.objectContaining({ text: "" }));
   });
 
   it("emits a replacement final assistant event when final_answer appears only at message_end", () => {
@@ -1242,8 +1929,7 @@ describe("handleMessageEnd", () => {
       },
     });
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message: {
         role: "assistant",
         content: [
@@ -1265,7 +1951,7 @@ describe("handleMessageEnd", () => {
         usage: {},
         timestamp: 0,
       },
-    } as never);
+    });
 
     expect(onAgentEvent).toHaveBeenCalledTimes(1);
     const event = firstMockArg(onAgentEvent, "agent event") as
@@ -1277,3 +1963,4 @@ describe("handleMessageEnd", () => {
     expect(event?.data?.replace).toBe(true);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

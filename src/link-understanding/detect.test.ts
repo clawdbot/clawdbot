@@ -20,6 +20,15 @@ describe("extractLinksFromMessage", () => {
     expect(links).toEqual(["https://bare.example"]);
   });
 
+  it("ignores markdown links whose label contains brackets", () => {
+    // The closing "]" inside the label must not break markdown stripping, otherwise
+    // the citation URL leaks out as a bare link (with a stray trailing ")").
+    const links = extractLinksFromMessage(
+      "Check [my notes [v2]](https://internal.example/doc) for details",
+    );
+    expect(links).toStrictEqual([]);
+  });
+
   it("blocks 127.0.0.1", () => {
     const links = extractLinksFromMessage("http://127.0.0.1/test https://ok.test");
     expect(links).toEqual(["https://ok.test"]);

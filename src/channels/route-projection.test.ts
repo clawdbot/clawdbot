@@ -3,16 +3,10 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
-  deliveryContextFromRoute,
   formatConversationTarget,
-  normalizeRoutableChannelRoute,
-  resolveConversationDeliveryTarget,
   routeFromBindingRecord,
   routeFromConversationRef,
-  routeFromDeliveryContext,
-  routeFromSessionEntry,
   routeToDeliveryFields,
-  routesShareDeliveryTarget,
 } from "./route-projection.js";
 
 describe("channel route projection", () => {
@@ -82,28 +76,6 @@ describe("channel route projection", () => {
     );
   });
 
-  it("round-trips delivery context through channel route metadata", () => {
-    const route = routeFromDeliveryContext({
-      channel: " Slack ",
-      to: " channel:C123 ",
-      accountId: " work ",
-      threadId: " 177000.123 ",
-    });
-
-    expect(route).toEqual({
-      channel: "slack",
-      accountId: "work",
-      target: { to: "channel:C123" },
-      thread: { id: "177000.123" },
-    });
-    expect(deliveryContextFromRoute(route)).toEqual({
-      channel: "slack",
-      to: "channel:C123",
-      accountId: "work",
-      threadId: "177000.123",
-    });
-  });
-
   it("formats plugin-defined conversation targets via channel messaging hooks", () => {
     expect(
       formatConversationTarget({ channel: "room-chat", conversationId: "!room:example" }),
@@ -118,19 +90,6 @@ describe("channel route projection", () => {
     expect(
       formatConversationTarget({ channel: "room-chat", conversationId: "  " }),
     ).toBeUndefined();
-  });
-
-  it("resolves delivery targets for plugin-defined child threads", () => {
-    expect(
-      resolveConversationDeliveryTarget({
-        channel: "room-chat",
-        conversationId: "$thread",
-        parentConversationId: "!room:example",
-      }),
-    ).toEqual({
-      to: "room:!room:example",
-      threadId: "$thread",
-    });
   });
 
   it("projects parent-child conversation refs through plugin delivery targets", () => {
@@ -190,58 +149,5 @@ describe("channel route projection", () => {
       accountId: "work",
       threadId: "thread-1",
     });
-  });
-
-  it("uses session route before legacy last route fields", () => {
-    expect(
-      routeFromSessionEntry({
-        sessionId: "sess-1",
-        updatedAt: 1,
-        route: {
-          channel: "slack",
-          target: { to: "channel:C123" },
-          thread: { id: "177000.123" },
-        },
-        deliveryContext: {
-          channel: "discord",
-          to: "channel:old",
-          threadId: "old-thread",
-        },
-        lastChannel: "discord",
-        lastTo: "channel:older",
-      }),
-    ).toEqual({
-      channel: "slack",
-      target: { to: "channel:C123" },
-      thread: { id: "177000.123" },
-    });
-  });
-
-  it("narrows only routable routes and compares delivery targets", () => {
-    expect(normalizeRoutableChannelRoute({ channel: "slack" })).toBeUndefined();
-    expect(
-      routesShareDeliveryTarget({
-        left: { channel: "slack", target: { to: "channel:C123" } },
-        right: {
-          channel: "slack",
-          accountId: "work",
-          target: { to: "channel:C123" },
-        },
-      }),
-    ).toBe(true);
-    expect(
-      routesShareDeliveryTarget({
-        left: {
-          channel: "slack",
-          target: { to: "channel:C123" },
-          thread: { id: "thread-a" },
-        },
-        right: {
-          channel: "slack",
-          target: { to: "channel:C123" },
-          thread: { id: "thread-b" },
-        },
-      }),
-    ).toBe(false);
   });
 });

@@ -16,26 +16,6 @@ path_is_docsish() {
   return 1
 }
 
-path_is_testish() {
-  local path="$1"
-  case "$path" in
-    *__tests__/*|*.test.*|*.spec.*|test/*|tests/*)
-      return 0
-      ;;
-  esac
-  return 1
-}
-
-path_is_maintainer_workflow_only() {
-  local path="$1"
-  case "$path" in
-    .agents/*|scripts/pr|scripts/pr-*|docs/subagent.md)
-      return 0
-      ;;
-  esac
-  return 1
-}
-
 file_list_is_docsish_only() {
   local files="$1"
   local saw_any=false
@@ -54,6 +34,15 @@ file_list_is_docsish_only() {
 changelog_required_for_changed_files() {
   # CHANGELOG.md is release-owned. Normal PRs carry release-note context in
   # PR bodies and commit messages; release automation generates the file.
+  return 1
+}
+
+root_changelog_update_allowed_for_pr() {
+  case "${OPENCLAW_ALLOW_ROOT_CHANGELOG_PR:-}" in
+    1|true|TRUE|yes|YES|on|ON)
+      return 0
+      ;;
+  esac
   return 1
 }
 
@@ -156,27 +145,6 @@ wait_for_pr_head_sha() {
   return 1
 }
 
-is_author_email_merge_error() {
-  local msg="$1"
-  printf '%s\n' "$msg" | rg -qi 'author.?email|email.*associated|associated.*email|invalid.*email'
-}
-
-merge_author_email_candidates() {
-  local reviewer="$1"
-  local reviewer_id="$2"
-
-  local gh_email
-  gh_email=$(gh api user --jq '.email // ""' 2>/dev/null || true)
-  local git_email
-  git_email=$(git config user.email 2>/dev/null || true)
-
-  printf '%s\n' \
-    "$gh_email" \
-    "$git_email" \
-    "${reviewer_id}+${reviewer}@users.noreply.github.com" \
-    "${reviewer}@users.noreply.github.com" | awk 'NF && !seen[$0]++'
-}
-
 pr_contributor_allows_human_trailers() {
   local contrib="${1:-}"
   local normalized
@@ -217,38 +185,30 @@ common_repo_root() {
 worktree_path_for_branch() {
   local branch="$1"
   local ref="refs/heads/$branch"
-
-  git worktree list --porcelain | awk -v ref="$ref" '
-    /^worktree / {
-      worktree=$2
-      next
-    }
-    /^branch / {
-      if ($2 == ref) {
-        print worktree
-        found=1
-      }
-    }
-    END {
-      if (!found) {
-        exit 1
-      }
-    }
-  '
+  local field worktree=""
+  while IFS= read -r -d '' field; do
+    case "$field" in
+      worktree\ *) worktree="${field#worktree }" ;;
+      "branch $ref")
+        [ -n "$worktree" ] || return 1
+        printf '%s\n' "$worktree"
+        return 0
+        ;;
+      "") worktree="" ;;
+    esac
+  done < <(git worktree list --porcelain -z)
+  return 1
 }
 
 worktree_is_registered() {
   local path="$1"
-  git worktree list --porcelain | awk -v target="$path" '
-    /^worktree / {
-      if ($2 == target) {
-        found=1
-      }
-    }
-    END {
-      exit found ? 0 : 1
-    }
-  '
+  local field
+  while IFS= read -r -d '' field; do
+    case "$field" in
+      worktree\ *) [ "${field#worktree }" = "$path" ] && return 0 ;;
+    esac
+  done < <(git worktree list --porcelain -z)
+  return 1
 }
 
 resolve_existing_dir_path() {
@@ -291,24 +251,55 @@ is_repo_pr_worktree_dir() {
 
 remove_worktree_if_present() {
   local path="$1"
+  local registered_path=""
+  local registered_parent=""
+  registered_parent=$(resolve_existing_dir_path "$(dirname "$path")" 2>/dev/null || true)
+  if [ -n "$registered_parent" ]; then
+    registered_path="$registered_parent/$(basename "$path")"
+  fi
+
   if [ ! -e "$path" ]; then
+    # A torn-down PR worktree once left a stale registration that poisoned
+    # every later worktree add until the registration was pruned.
+    if [ -n "$registered_path" ] && worktree_is_registered "$registered_path"; then
+      git worktree prune || true
+      if worktree_is_registered "$registered_path"; then
+        echo "Warning: failed to remove registered worktree $path"
+      fi
+    fi
     return 0
   fi
 
-  if worktree_is_registered "$path"; then
-    git worktree remove "$path" --force >/dev/null 2>&1 || true
-  fi
-
-  if [ ! -e "$path" ]; then
+  if [ -L "$path" ] || ! is_repo_pr_worktree_dir "$path"; then
+    echo "Warning: refusing to remove non-canonical PR-worktree path $path"
     return 0
   fi
 
-  if worktree_is_registered "$path"; then
+  if [ -n "$registered_path" ] && worktree_is_registered "$registered_path"; then
+    local remove_error
+    if ! remove_error=$(git worktree remove --force "$registered_path" 2>&1); then
+      echo "Warning: git worktree remove failed for $path: $remove_error"
+    fi
+  fi
+
+  if [ ! -e "$path" ]; then
+    # See the stale-registration recovery above: removal can delete the path
+    # while leaving Git's linked-worktree metadata behind.
+    if [ -n "$registered_path" ] && worktree_is_registered "$registered_path"; then
+      git worktree prune || true
+      if worktree_is_registered "$registered_path"; then
+        echo "Warning: failed to remove registered worktree $path"
+      fi
+    fi
+    return 0
+  fi
+
+  if [ -n "$registered_path" ] && worktree_is_registered "$registered_path"; then
     echo "Warning: failed to remove registered worktree $path"
     return 0
   fi
 
-  if ! is_repo_pr_worktree_dir "$path"; then
+  if [ -L "$path" ] || ! is_repo_pr_worktree_dir "$path"; then
     echo "Warning: refusing to trash non-PR-worktree path $path"
     return 0
   fi

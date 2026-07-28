@@ -1,6 +1,6 @@
 // Agent Core tests cover prompt templates behavior.
 import { describe, expect, it } from "vitest";
-import { parseCommandArgs, substituteArgs } from "./prompt-templates.js";
+import { parseCommandArgs, substituteArgs } from "./prompt-template-arguments.js";
 
 describe("prompt template argument substitution", () => {
   it("parses quoted and multiline arguments", () => {

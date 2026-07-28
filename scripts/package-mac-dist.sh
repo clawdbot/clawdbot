@@ -10,11 +10,12 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/plistbuddy.sh"
+source "$ROOT_DIR/scripts/lib/swift-toolchain.sh"
 
 BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
 PRODUCT="OpenClaw"
 BUILD_CONFIG="${BUILD_CONFIG:-release}"
-APP_VERSION_INPUT="${APP_VERSION:-$(cd "$ROOT_DIR" && node -p "require('./package.json').version" 2>/dev/null || echo "0.0.0")}"
+APP_VERSION_INPUT="${APP_VERSION:-}"
 
 # Default to universal binary for distribution builds (supports both Apple Silicon and Intel Macs)
 export BUILD_ARCHS="${BUILD_ARCHS:-all}"
@@ -33,13 +34,13 @@ DIST_PNPM_CMD=()
 SPARKLE_BUILD_DEPS_RETRIED=0
 
 resolve_dist_pnpm_cmd() {
-  if command -v pnpm >/dev/null 2>&1; then
-    DIST_PNPM_CMD=(pnpm)
+  if command -v corepack >/dev/null 2>&1 && (cd "$ROOT_DIR" && corepack pnpm --version >/dev/null 2>&1); then
+    DIST_PNPM_CMD=(corepack pnpm)
     return 0
   fi
 
-  if command -v corepack >/dev/null 2>&1 && (cd "$ROOT_DIR" && corepack pnpm --version >/dev/null 2>&1); then
-    DIST_PNPM_CMD=(corepack pnpm)
+  if command -v pnpm >/dev/null 2>&1; then
+    DIST_PNPM_CMD=(pnpm)
     return 0
   fi
 
@@ -128,6 +129,12 @@ correction_build_from_exact_tag() {
 
 # Local fallback releases must not silently fall back to a git-rev-count build number.
 # For correction tags, pass a higher explicit APP_BUILD than the canonical floor.
+require_swift_toolchain
+
+if [[ -z "$APP_VERSION_INPUT" ]]; then
+  APP_VERSION_INPUT="$(cd "$ROOT_DIR" && node -p "require('./package.json').version" 2>/dev/null || echo "0.0.0")"
+fi
+
 if [[ -z "${APP_BUILD:-}" && "$BUILD_CONFIG" == "release" ]]; then
   CANONICAL_APP_BUILD="$(require_canonical_sparkle_build "$APP_VERSION_INPUT")"
   APP_BUILD="$(correction_build_from_exact_tag "$APP_VERSION_INPUT" "$CANONICAL_APP_BUILD")"
@@ -154,6 +161,24 @@ SKIP_NOTARIZE="${SKIP_NOTARIZE:-0}"
 NOTARIZE=1
 SKIP_DSYM="${SKIP_DSYM:-0}"
 SKIP_DMG="${SKIP_DMG:-0}"
+NOTARY_ZIP_PENDING_CLEANUP=0
+
+cleanup_notary_zip() {
+  if [[ "$NOTARY_ZIP_PENDING_CLEANUP" == "1" ]]; then
+    rm -f "$NOTARY_ZIP"
+  fi
+}
+
+cleanup_tmp_dsym() {
+  rm -rf "$TMP_DSYM"
+}
+
+copy_dsym_to_tmp() {
+  if ! cp -R "$1" "$TMP_DSYM"; then
+    cleanup_tmp_dsym
+    exit 1
+  fi
+}
 
 if [[ "$SKIP_NOTARIZE" == "1" ]]; then
   NOTARIZE=0
@@ -185,9 +210,13 @@ fi
 if [[ "$NOTARIZE" == "1" ]]; then
   echo "📦 Notary zip: $NOTARY_ZIP"
   rm -f "$NOTARY_ZIP"
+  NOTARY_ZIP_PENDING_CLEANUP=1
+  trap cleanup_notary_zip EXIT
   ditto -c -k --sequesterRsrc --keepParent "$APP" "$NOTARY_ZIP"
   STAPLE_APP_PATH="$APP" "$ROOT_DIR/scripts/notarize-mac-artifact.sh" "$NOTARY_ZIP"
   rm -f "$NOTARY_ZIP"
+  NOTARY_ZIP_PENDING_CLEANUP=0
+  trap - EXIT
 fi
 
 echo "📦 Zip: $ZIP"
@@ -234,29 +263,37 @@ if [[ "$SKIP_DSYM" != "1" ]]; then
     TMP_DSYM="$ROOT_DIR/dist/$PRODUCT.dSYM"
     rm -rf "$TMP_DSYM"
     if [[ "${#DSYM_PATHS[@]}" -gt 1 ]]; then
-      cp -R "${DSYM_PATHS[0]}" "$TMP_DSYM"
+      copy_dsym_to_tmp "${DSYM_PATHS[0]}"
       DWARF_OUT="$TMP_DSYM/Contents/Resources/DWARF/$PRODUCT"
       DWARF_INPUTS=()
       for dsym in "${DSYM_PATHS[@]}"; do
         DWARF_INPUT="$dsym/Contents/Resources/DWARF/$PRODUCT"
         if [[ ! -f "$DWARF_INPUT" ]]; then
           echo "Error: missing DWARF binaries for dSYM merge (set SKIP_DSYM=1 to skip symbols)" >&2
+          cleanup_tmp_dsym
           exit 1
         fi
         DWARF_INPUTS+=("$DWARF_INPUT")
       done
       if [[ "${#DWARF_INPUTS[@]}" -gt 1 ]]; then
-        /usr/bin/lipo -create "${DWARF_INPUTS[@]}" -output "$DWARF_OUT"
+        if ! /usr/bin/lipo -create "${DWARF_INPUTS[@]}" -output "$DWARF_OUT"; then
+          cleanup_tmp_dsym
+          exit 1
+        fi
       else
         echo "Error: missing DWARF binaries for dSYM merge (set SKIP_DSYM=1 to skip symbols)" >&2
+        cleanup_tmp_dsym
         exit 1
       fi
     else
-      cp -R "${DSYM_PATHS[0]}" "$TMP_DSYM"
+      copy_dsym_to_tmp "${DSYM_PATHS[0]}"
     fi
     echo "🧩 dSYM: $DSYM_ZIP"
     rm -f "$DSYM_ZIP"
-    ditto -c -k --keepParent "$TMP_DSYM" "$DSYM_ZIP"
+    if ! ditto -c -k --keepParent "$TMP_DSYM" "$DSYM_ZIP"; then
+      rm -rf "$TMP_DSYM"
+      exit 1
+    fi
     rm -rf "$TMP_DSYM"
   else
     echo "Error: dSYM not found (set SKIP_DSYM=1 to skip symbols)" >&2

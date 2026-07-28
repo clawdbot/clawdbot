@@ -1,3 +1,4 @@
+import CoreFoundation
 import CryptoKit
 import Foundation
 import OpenClawProtocol
@@ -5,8 +6,8 @@ import OpenClawProtocol
 enum OpenClawConfigFile {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "config")
     private static let configAuditFileName = "config-audit.jsonl"
-    private static let configHealthFileName = "config-health.json"
     private static let fileLock = NSRecursiveLock()
+    private nonisolated(unsafe) static var configHealthState: [String: Any] = [:]
 
     private static func withFileLock<T>(_ body: () throws -> T) rethrows -> T {
         self.fileLock.lock()
@@ -26,10 +27,6 @@ enum OpenClawConfigFile {
 
     static func stateDirURL() -> URL {
         OpenClawPaths.stateDirURL
-    }
-
-    static func defaultWorkspaceURL() -> URL {
-        OpenClawPaths.workspaceURL
     }
 
     static func loadDict() -> [String: Any] {
@@ -61,7 +58,9 @@ enum OpenClawConfigFile {
     {
         self.withFileLock {
             // Nix mode disables config writes in production, but tests rely on saving temp configs.
-            if ProcessInfo.processInfo.isNixMode, !ProcessInfo.processInfo.isRunningTests { return false }
+            if ProcessInfo.processInfo.isNixMode, !ProcessInfo.processInfo.isRunningTests {
+                return false
+            }
             let url = self.url()
             let previousData = try? Data(contentsOf: url)
             let previousRoot = previousData.flatMap { self.parseConfigData($0) }
@@ -184,11 +183,6 @@ enum OpenClawConfigFile {
         }
     }
 
-    static func loadGatewayDict() -> [String: Any] {
-        let root = self.loadDict()
-        return root["gateway"] as? [String: Any] ?? [:]
-    }
-
     static func updateGatewayDict(_ mutate: (inout [String: Any]) -> Void) {
         var root = self.loadDict()
         var gateway = root["gateway"] as? [String: Any] ?? [:]
@@ -201,10 +195,157 @@ enum OpenClawConfigFile {
         self.saveDict(root)
     }
 
+    static func gatewayUpdateChannel() -> String? {
+        let root = self.loadDict()
+        let update = root["update"] as? [String: Any]
+        return self.normalizedGatewayUpdateChannel(update?["channel"] as? String)
+    }
+
+    static func normalizedGatewayUpdateChannel(_ channel: String?) -> String? {
+        let normalized = channel?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized?.isEmpty == false ? normalized : nil
+    }
+
     static func browserControlEnabled(defaultValue: Bool = true) -> Bool {
         let root = self.loadDict()
         let browser = root["browser"] as? [String: Any]
         return browser?["enabled"] as? Bool ?? defaultValue
+    }
+}
+
+extension OpenClawConfigFile {
+    private static func normalizedPluginConfigId(_ value: Any?) -> String? {
+        guard let value = value as? String else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed.lowercased()
+    }
+
+    private static func literalBoolean(_ value: Any?) -> Bool? {
+        guard let number = value as? NSNumber,
+              CFGetTypeID(number) == CFBooleanGetTypeID()
+        else { return nil }
+        return number.boolValue
+    }
+
+    static func pluginEntry(_ pluginId: String, root: [String: Any]? = nil) -> [String: Any]? {
+        let root = root ?? self.loadDict()
+        guard let pluginId = normalizedPluginConfigId(pluginId) else { return nil }
+        guard let plugins = root["plugins"] as? [String: Any],
+              let entries = plugins["entries"] as? [String: Any]
+        else { return nil }
+        let matches = entries.filter { key, _ in
+            self.normalizedPluginConfigId(key) == pluginId
+        }
+        // Core merges normalized aliases in source order. JSON dictionaries do not
+        // expose a portable source-order contract here, so ambiguous aliases fail closed.
+        guard matches.count == 1 else { return nil }
+        return matches.first?.value as? [String: Any]
+    }
+
+    static func explicitlyEnabledPlugin(_ pluginId: String, root: [String: Any]? = nil) -> Bool {
+        let root = root ?? self.loadDict()
+        guard let pluginId = normalizedPluginConfigId(pluginId) else { return false }
+        guard let plugins = root["plugins"] as? [String: Any],
+              let entry = pluginEntry(pluginId, root: root),
+              literalBoolean(entry["enabled"]) == true
+        else { return false }
+        if let enabled = plugins["enabled"], literalBoolean(enabled) != true {
+            return false
+        }
+
+        let deny = (plugins["deny"] as? [Any] ?? []).compactMap(self.normalizedPluginConfigId)
+        if deny.contains(pluginId) {
+            return false
+        }
+
+        let allow = (plugins["allow"] as? [Any] ?? []).compactMap(self.normalizedPluginConfigId)
+        if !allow.isEmpty, !allow.contains(pluginId) {
+            return false
+        }
+        return true
+    }
+
+    /// Mirrors configured-root activation for bundled plugins: a declared config path may
+    /// activate the plugin unless global policy, an entry opt-out, or deny disables it.
+    static func configuredBundledPluginAllowed(
+        _ pluginId: String,
+        root: [String: Any]? = nil) -> Bool
+    {
+        let root = root ?? self.loadDict()
+        guard let pluginId = normalizedPluginConfigId(pluginId),
+              let plugins = root["plugins"] as? [String: Any],
+              let entry = pluginEntry(pluginId, root: root)
+        else { return false }
+        if let enabled = plugins["enabled"], literalBoolean(enabled) != true {
+            return false
+        }
+        if let enabled = entry["enabled"], literalBoolean(enabled) != true {
+            return false
+        }
+
+        let deny = (plugins["deny"] as? [Any] ?? []).compactMap(self.normalizedPluginConfigId)
+        if deny.contains(pluginId) {
+            return false
+        }
+
+        let allow = (plugins["allow"] as? [Any] ?? []).compactMap(self.normalizedPluginConfigId)
+        return allow.isEmpty || allow.contains(pluginId)
+    }
+
+    /// Mirrors Gateway startup policy for a bundled plugin that is enabled by default.
+    /// An absent entry stays enabled; global policy, deny, allow, or an entry opt-out can block it.
+    static func defaultEnabledBundledPluginAllowed(
+        _ pluginId: String,
+        root: [String: Any]? = nil) -> Bool
+    {
+        let root = root ?? self.loadDict()
+        guard let pluginId = normalizedPluginConfigId(pluginId) else { return false }
+        let plugins = root["plugins"] as? [String: Any] ?? [:]
+        if let enabled = plugins["enabled"], literalBoolean(enabled) != true {
+            return false
+        }
+        let entries = plugins["entries"] as? [String: Any] ?? [:]
+        let matches = entries.filter { key, _ in
+            self.normalizedPluginConfigId(key) == pluginId
+        }
+        // The Gateway normalizes entry ids before merging them. Swift dictionaries do not
+        // preserve that source ordering, so aliases and malformed matching entries fail closed.
+        guard matches.count <= 1 else { return false }
+        if let rawEntry = matches.first?.value {
+            guard let entry = rawEntry as? [String: Any] else { return false }
+            if let enabled = entry["enabled"], literalBoolean(enabled) != true {
+                return false
+            }
+        }
+
+        let deny = (plugins["deny"] as? [Any] ?? []).compactMap(self.normalizedPluginConfigId)
+        if deny.contains(pluginId) {
+            return false
+        }
+
+        let allow = (plugins["allow"] as? [Any] ?? []).compactMap(self.normalizedPluginConfigId)
+        return allow.isEmpty || allow.contains(pluginId)
+    }
+
+    static func explicitlyEnabledPluginConfigFlag(
+        _ pluginId: String,
+        path: [String],
+        root: [String: Any]? = nil) -> Bool
+    {
+        let root = root ?? self.loadDict()
+        guard self.explicitlyEnabledPlugin(pluginId, root: root),
+              let entry = pluginEntry(pluginId, root: root),
+              let config = entry["config"]
+        else { return false }
+
+        var value = config
+        for key in path {
+            guard let object = value as? [String: Any], let next = object[key] else {
+                return false
+            }
+            value = next
+        }
+        return self.literalBoolean(value) == true
     }
 
     static func setBrowserControlEnabled(_ enabled: Bool) {
@@ -216,32 +357,12 @@ enum OpenClawConfigFile {
         self.logger.debug("browser control updated enabled=\(enabled)")
     }
 
-    static func agentWorkspace() -> String? {
-        AgentWorkspaceConfig.workspace(from: self.loadDict())
-    }
-
-    static func setAgentWorkspace(_ workspace: String?) {
-        var root = self.loadDict()
-        AgentWorkspaceConfig.setWorkspace(in: &root, workspace: workspace)
-        self.saveDict(root)
-        let hasWorkspace = !(workspace?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-        self.logger.debug("agents.defaults.workspace updated set=\(hasWorkspace)")
-    }
-
-    static func gatewayPassword() -> String? {
-        let root = self.loadDict()
-        guard let gateway = root["gateway"] as? [String: Any],
-              let remote = gateway["remote"] as? [String: Any]
-        else {
-            return nil
-        }
-        return remote["password"] as? String
-    }
-
     static func gatewayPort() -> Int? {
         let root = self.loadDict()
         guard let gateway = root["gateway"] as? [String: Any] else { return nil }
-        if let port = gateway["port"] as? Int, port > 0 { return port }
+        if let port = gateway["port"] as? Int, port > 0 {
+            return port
+        }
         if let number = gateway["port"] as? NSNumber, number.intValue > 0 {
             return number.intValue
         }
@@ -255,7 +376,7 @@ enum OpenClawConfigFile {
     }
 
     static func remoteGatewayPort() -> Int? {
-        guard let url = self.remoteGatewayUrl(),
+        guard let url = remoteGatewayUrl(),
               let port = url.port,
               port > 0
         else { return nil }
@@ -264,7 +385,7 @@ enum OpenClawConfigFile {
 
     static func remoteGatewayPort(matchingHost sshHost: String) -> Int? {
         guard let normalizedSshHost = canonicalHostForComparison(sshHost),
-              let url = self.remoteGatewayUrl(),
+              let url = remoteGatewayUrl(),
               let port = url.port,
               port > 0,
               let urlHost = url.host,
@@ -430,7 +551,7 @@ enum OpenClawConfigFile {
         allowGatewayAuthMutation: Bool) -> Bool
     {
         guard !allowGatewayAuthMutation,
-              let previousAuth = self.gatewayAuth(previousRoot)
+              let previousAuth = gatewayAuth(previousRoot)
         else {
             return false
         }
@@ -477,39 +598,6 @@ enum OpenClawConfigFile {
             .appendingPathComponent(self.configAuditFileName, isDirectory: false)
     }
 
-    private static func configHealthStateURL() -> URL {
-        self.stateDirURL()
-            .appendingPathComponent("logs", isDirectory: true)
-            .appendingPathComponent(self.configHealthFileName, isDirectory: false)
-    }
-
-    private static func readConfigHealthState() -> [String: Any] {
-        let url = self.configHealthStateURL()
-        guard let data = try? Data(contentsOf: url),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else {
-            return [:]
-        }
-        return root
-    }
-
-    private static func writeConfigHealthState(_ root: [String: Any]) {
-        guard JSONSerialization.isValidJSONObject(root),
-              let data = try? JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
-        else {
-            return
-        }
-        let url = self.configHealthStateURL()
-        do {
-            try FileManager().createDirectory(
-                at: url.deletingLastPathComponent(),
-                withIntermediateDirectories: true)
-            try data.write(to: url, options: [.atomic])
-        } catch {
-            // best-effort
-        }
-    }
-
     private static func configHealthEntry(state: [String: Any], configPath: String) -> [String: Any] {
         let entries = state["entries"] as? [String: Any]
         return entries?[configPath] as? [String: Any] ?? [:]
@@ -541,19 +629,27 @@ enum OpenClawConfigFile {
     }
 
     private static func fileAttributeInt(_ value: Any?) -> Int? {
-        if let number = value as? NSNumber { return number.intValue }
-        if let number = value as? Int { return number }
+        if let number = value as? NSNumber {
+            return number.intValue
+        }
+        if let number = value as? Int {
+            return number
+        }
         return nil
     }
 
     private static func fileSystemNumber(_ value: Any?) -> String? {
-        if let number = value as? NSNumber { return number.stringValue }
-        if let number = value as? Int { return String(number) }
+        if let number = value as? NSNumber {
+            return number.stringValue
+        }
+        if let number = value as? Int {
+            return String(number)
+        }
         return nil
     }
 
     private static func posixMode(_ value: Any?) -> Int? {
-        guard let mode = self.fileAttributeInt(value) else { return nil }
+        guard let mode = fileAttributeInt(value) else { return nil }
         return mode & 0o777
     }
 
@@ -616,7 +712,7 @@ enum OpenClawConfigFile {
         if (lastKnownGood["gatewayMode"] as? String) != nil, self.gatewayMode(root) == nil {
             reasons.append("gateway-mode-missing-vs-last-good")
         }
-        if let root, (lastKnownGood["gatewayMode"] as? String) != nil, self.isUpdateChannelOnlyRoot(root) {
+        if let root, (lastKnownGood["gatewayMode"] as? String) != nil, isUpdateChannelOnlyRoot(root) {
             reasons.append("update-channel-only-root")
         }
         return reasons
@@ -672,7 +768,7 @@ enum OpenClawConfigFile {
     private static func observeConfigRead(data: Data, root: [String: Any]?, configURL: URL, valid: Bool) {
         let observedAt = ISO8601DateFormatter().string(from: Date())
         let current = self.configFingerprint(data: data, root: root, configURL: configURL, observedAt: observedAt)
-        var state = self.readConfigHealthState()
+        var state = self.configHealthState
         let entry = self.configHealthEntry(state: state, configPath: configURL.path)
         let lastKnownGood = entry["lastKnownGood"] as? [String: Any]
         let suspicious = self.observeSuspiciousReasons(
@@ -688,7 +784,7 @@ enum OpenClawConfigFile {
             ]
             if !self.sameFingerprint(lastKnownGood, current) || entry["lastObservedSuspiciousSignature"] != nil {
                 state = self.setConfigHealthEntry(state: state, configPath: configURL.path, entry: nextEntry)
-                self.writeConfigHealthState(state)
+                self.configHealthState = state
             }
             return
         }
@@ -750,7 +846,7 @@ enum OpenClawConfigFile {
         var nextEntry = entry
         nextEntry["lastObservedSuspiciousSignature"] = signature
         state = self.setConfigHealthEntry(state: state, configPath: configURL.path, entry: nextEntry)
-        self.writeConfigHealthState(state)
+        self.configHealthState = state
     }
 
     private static func appendConfigWriteAudit(_ fields: [String: Any]) {

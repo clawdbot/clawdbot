@@ -3,8 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveStatusGatewayHealth,
   resolveStatusGatewayHealthSafe,
-  resolveStatusLastHeartbeat,
-  resolveStatusRuntimeDetails,
   resolveStatusRuntimeSnapshot,
   resolveStatusSecurityAudit,
   resolveStatusServiceSummaries,
@@ -18,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   getDaemonStatusSummary: vi.fn(),
   getNodeDaemonStatusSummary: vi.fn(),
   resolveReadOnlyChannelPluginsForConfig: vi.fn(),
+  resolveModelAuthLabel: vi.fn(),
 }));
 
 vi.mock("../channels/plugins/read-only.js", () => ({
@@ -26,6 +25,10 @@ vi.mock("../channels/plugins/read-only.js", () => ({
 
 vi.mock("../infra/provider-usage.js", () => ({
   loadProviderUsageSummary: mocks.loadProviderUsageSummary,
+}));
+
+vi.mock("../agents/model-auth-label.js", () => ({
+  resolveModelAuthLabel: mocks.resolveModelAuthLabel,
 }));
 
 vi.mock("../security/audit.runtime.js", () => ({
@@ -45,6 +48,8 @@ function requireProviderUsageCall(): {
   timeoutMs?: number;
   config?: unknown;
   agentDir?: string;
+  providers?: string[];
+  auth?: Array<Record<string, unknown>>;
 } {
   const call = mocks.loadProviderUsageSummary.mock.calls[0];
   if (!call) {
@@ -58,6 +63,8 @@ function requireProviderUsageCall(): {
     timeoutMs?: number;
     config?: unknown;
     agentDir?: string;
+    providers?: string[];
+    auth?: Array<Record<string, unknown>>;
   };
 }
 
@@ -69,6 +76,7 @@ describe("status-runtime-shared", () => {
     mocks.callGateway.mockResolvedValue({ ok: true });
     mocks.getDaemonStatusSummary.mockResolvedValue({ label: "LaunchAgent" });
     mocks.getNodeDaemonStatusSummary.mockResolvedValue({ label: "node" });
+    mocks.resolveModelAuthLabel.mockReturnValue(undefined);
     mocks.resolveReadOnlyChannelPluginsForConfig.mockReturnValue({
       plugins: [{ id: "telegram" }],
       configuredChannelIds: ["telegram"],
@@ -134,6 +142,176 @@ describe("status-runtime-shared", () => {
     expect(usageCall.agentDir).toContain("main");
   });
 
+  it("adds Codex synthetic usage for configured OpenAI Codex runtime routes without profiles", async () => {
+    mocks.loadProviderUsageSummary
+      .mockResolvedValueOnce({
+        updatedAt: 1,
+        providers: [
+          {
+            provider: "anthropic",
+            displayName: "Claude",
+            windows: [],
+            error: "HTTP 429",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        updatedAt: 2,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            windows: [{ label: "5h", usedPercent: 9 }],
+          },
+        ],
+      });
+
+    await expect(
+      resolveStatusUsageSummary({
+        timeoutMs: 3456,
+        config: {
+          agents: {
+            defaults: {
+              model: { primary: "openai/gpt-5.5" },
+              models: {
+                "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/status-agent",
+      }),
+    ).resolves.toEqual({
+      updatedAt: 1,
+      providers: [
+        {
+          provider: "anthropic",
+          displayName: "Claude",
+          windows: [],
+          error: "HTTP 429",
+        },
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          windows: [{ label: "5h", usedPercent: 9 }],
+        },
+      ],
+    });
+
+    expect(mocks.loadProviderUsageSummary).toHaveBeenNthCalledWith(2, {
+      timeoutMs: 3456,
+      providers: ["openai"],
+      auth: [
+        {
+          provider: "openai",
+          token: "codex-app-server",
+          hookProvider: "codex",
+        },
+      ],
+      config: expect.any(Object),
+      agentDir: "/tmp/status-agent",
+    });
+  });
+
+  it("keeps existing OpenAI usage when Codex synthetic usage has no windows", async () => {
+    mocks.loadProviderUsageSummary
+      .mockResolvedValueOnce({
+        updatedAt: 1,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            windows: [{ label: "5h", usedPercent: 22 }],
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        updatedAt: 2,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            windows: [],
+          },
+        ],
+      });
+
+    await expect(
+      resolveStatusUsageSummary({
+        timeoutMs: 3456,
+        config: {
+          agents: {
+            defaults: {
+              model: { primary: "openai/gpt-5.5" },
+              models: {
+                "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/status-agent",
+      }),
+    ).resolves.toEqual({
+      updatedAt: 1,
+      providers: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          windows: [{ label: "5h", usedPercent: 22 }],
+        },
+      ],
+    });
+  });
+
+  it("does not add Codex synthetic usage for OpenAI routes pinned to OpenClaw runtime", async () => {
+    await resolveStatusUsageSummary({
+      timeoutMs: 3456,
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.5" },
+            models: {
+              "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
+            },
+          },
+        },
+      },
+      agentDir: "/tmp/status-agent",
+    });
+
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledOnce();
+    expect(requireProviderUsageCall()).not.toHaveProperty("auth");
+  });
+
+  it("does not add Codex synthetic usage for API-key-backed OpenAI Codex runtime routes", async () => {
+    mocks.resolveModelAuthLabel.mockReturnValue("api-key (openai:api)");
+
+    await resolveStatusUsageSummary({
+      timeoutMs: 3456,
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.5" },
+            models: {
+              "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+            },
+          },
+        },
+      },
+      agentDir: "/tmp/status-agent",
+    });
+
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledOnce();
+    expect(requireProviderUsageCall()).not.toHaveProperty("auth");
+    expect(mocks.resolveModelAuthLabel).toHaveBeenCalledWith({
+      provider: "openai",
+      acceptedProviderIds: ["openai"],
+      cfg: expect.any(Object),
+      agentDir: "/tmp/status-agent",
+      includeExternalProfiles: false,
+    });
+  });
+
   it("resolves usage summaries with explicit agent scope", async () => {
     await resolveStatusUsageSummary({
       timeoutMs: 2345,
@@ -194,114 +372,11 @@ describe("status-runtime-shared", () => {
     });
   });
 
-  it("returns null for heartbeat when the gateway is unreachable", async () => {
-    expect(
-      await resolveStatusLastHeartbeat({
-        config: { gateway: {} },
-        timeoutMs: 1000,
-        gatewayReachable: false,
-      }),
-    ).toBeNull();
-    expect(mocks.callGateway).not.toHaveBeenCalled();
-  });
-
-  it("catches heartbeat gateway errors and returns null", async () => {
-    mocks.callGateway.mockRejectedValueOnce(new Error("boom"));
-
-    expect(
-      await resolveStatusLastHeartbeat({
-        config: { gateway: {} },
-        timeoutMs: 1000,
-        gatewayReachable: true,
-      }),
-    ).toBeNull();
-    expect(mocks.callGateway).toHaveBeenCalledWith({
-      method: "last-heartbeat",
-      params: {},
-      timeoutMs: 1000,
-      config: { gateway: {} },
-    });
-  });
-
   it("resolves daemon summaries together", async () => {
     await expect(resolveStatusServiceSummaries()).resolves.toEqual([
       { label: "LaunchAgent" },
       { label: "node" },
     ]);
-  });
-
-  it("resolves shared runtime details with optional usage and deep fields", async () => {
-    await expect(
-      resolveStatusRuntimeDetails({
-        config: { gateway: {} },
-        timeoutMs: 1234,
-        usage: true,
-        deep: true,
-        gatewayReachable: true,
-      }),
-    ).resolves.toEqual({
-      usage: { providers: [] },
-      health: { ok: true },
-      lastHeartbeat: { ok: true },
-      gatewayService: { label: "LaunchAgent" },
-      nodeService: { label: "node" },
-    });
-    const usageCall = requireProviderUsageCall();
-    expect(usageCall.timeoutMs).toBe(1234);
-    expect(usageCall.config).toEqual({ gateway: {} });
-    expect(usageCall.agentDir).toContain("main");
-    expect(mocks.callGateway).toHaveBeenNthCalledWith(1, {
-      method: "health",
-      params: { probe: true },
-      timeoutMs: 1234,
-      config: { gateway: {} },
-    });
-    expect(mocks.callGateway).toHaveBeenNthCalledWith(2, {
-      method: "last-heartbeat",
-      params: {},
-      timeoutMs: 1234,
-      config: { gateway: {} },
-    });
-  });
-
-  it("skips optional runtime details when flags are off", async () => {
-    await expect(
-      resolveStatusRuntimeDetails({
-        config: { gateway: {} },
-        timeoutMs: 1234,
-        usage: false,
-        deep: false,
-        gatewayReachable: true,
-      }),
-    ).resolves.toEqual({
-      usage: undefined,
-      health: undefined,
-      lastHeartbeat: null,
-      gatewayService: { label: "LaunchAgent" },
-      nodeService: { label: "node" },
-    });
-    expect(mocks.loadProviderUsageSummary).not.toHaveBeenCalled();
-    expect(mocks.callGateway).not.toHaveBeenCalled();
-  });
-
-  it("suppresses health failures inside shared runtime details", async () => {
-    mocks.callGateway.mockRejectedValueOnce(new Error("boom"));
-
-    await expect(
-      resolveStatusRuntimeDetails({
-        config: { gateway: {} },
-        timeoutMs: 1234,
-        deep: true,
-        gatewayReachable: false,
-        suppressHealthErrors: true,
-      }),
-    ).resolves.toEqual({
-      usage: undefined,
-      health: undefined,
-      lastHeartbeat: null,
-      gatewayService: { label: "LaunchAgent" },
-      nodeService: { label: "node" },
-    });
   });
 
   it("resolves the shared runtime snapshot with security audit and runtime details", async () => {

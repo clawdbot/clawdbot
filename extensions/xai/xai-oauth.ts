@@ -1,5 +1,4 @@
 // Xai plugin module implements xai oauth behavior.
-import { randomBytes } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   positiveSecondsToSafeMilliseconds,
@@ -9,41 +8,37 @@ import {
 import type { ProviderAuthContext, ProviderAuthMethod } from "openclaw/plugin-sdk/plugin-entry";
 import {
   buildOauthProviderAuthResult,
-  generateHexPkceVerifierChallenge,
   toFormUrlEncoded,
   type OAuthCredential,
   type ProviderAuthResult,
 } from "openclaw/plugin-sdk/provider-auth";
-import { waitForLocalOAuthCallback } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
 import { xaiUserAgent } from "./src/xai-user-agent.js";
 
 const PROVIDER_ID = "xai";
-export const XAI_OAUTH_METHOD_ID = "oauth";
-export const XAI_OAUTH_CHOICE_ID = "xai-oauth";
-export const XAI_DEVICE_CODE_METHOD_ID = "device-code";
-export const XAI_DEVICE_CODE_CHOICE_ID = "xai-device-code";
-export const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
-export const XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:access";
-export const XAI_OAUTH_ISSUER = "https://auth.x.ai";
-export const XAI_OAUTH_DISCOVERY_URL = `${XAI_OAUTH_ISSUER}/.well-known/openid-configuration`;
-export const XAI_OAUTH_CALLBACK_HOST = "127.0.0.1";
-export const XAI_OAUTH_CALLBACK_PORT = 56121;
-export const XAI_OAUTH_CALLBACK_PATH = "/callback";
-export const XAI_OAUTH_REDIRECT_URI = `http://${XAI_OAUTH_CALLBACK_HOST}:${XAI_OAUTH_CALLBACK_PORT}${XAI_OAUTH_CALLBACK_PATH}`;
-// Hosts whose CORS preflight against the loopback redirect URI should be
-// echoed; everything else gets a 204 with no `Access-Control-Allow-*`.
-export const XAI_OAUTH_CALLBACK_CORS_ORIGIN_ALLOWLIST = ["auth.x.ai", "accounts.x.ai"] as const;
+const XAI_OAUTH_METHOD_ID = "oauth";
+const XAI_OAUTH_CHOICE_ID = "xai-oauth";
+const XAI_DEVICE_CODE_METHOD_ID = "device-code";
+const XAI_DEVICE_CODE_CHOICE_ID = "xai-device-code";
+const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
+const XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:access";
+const XAI_OAUTH_ISSUER = "https://auth.x.ai";
+const XAI_OAUTH_DISCOVERY_URL = `${XAI_OAUTH_ISSUER}/.well-known/openid-configuration`;
+const XAI_LEGACY_OAUTH_TOKEN_ENDPOINT = `${XAI_OAUTH_ISSUER}/oauth/token`;
 
 const XAI_OAUTH_TIMEOUT_MS = 5 * 60 * 1000;
 const XAI_OAUTH_FETCH_TIMEOUT_MS = 30 * 1000;
+const XAI_OAUTH_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+const XAI_OAUTH_REFRESH_MAX_ATTEMPTS = 3;
+const XAI_OAUTH_REFRESH_RETRY_DELAY_MS = 250;
 const XAI_DEVICE_CODE_DEFAULT_INTERVAL_MS = 5 * 1000;
 const XAI_DEVICE_CODE_MIN_INTERVAL_MS = 1 * 1000;
 const XAI_DEVICE_CODE_SLOW_DOWN_INCREMENT_MS = 5 * 1000;
 const XAI_DEVICE_CODE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code";
 
 type XaiOAuthDiscovery = {
-  authorizationEndpoint: string;
   tokenEndpoint: string;
 };
 
@@ -68,7 +63,13 @@ type XaiOAuthIdentity = {
 type XaiOAuthFetchOptions = {
   fetchImpl?: typeof fetch;
   now?: () => number;
+  signal?: AbortSignal;
 };
+
+function xaiOAuthFetchSignal(signal?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(XAI_OAUTH_FETCH_TIMEOUT_MS);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
 
 type XaiDeviceCodeResponse = {
   deviceCode: string;
@@ -84,11 +85,16 @@ type XaiOAuthErrorResponse = {
   errorDescription?: string;
 };
 
+type XaiOAuthResponseBody = {
+  json: unknown;
+  text: string;
+};
+
 function getFetchImpl(fetchImpl?: typeof fetch): typeof fetch {
   return fetchImpl ?? fetch;
 }
 
-export function isTrustedXaiOAuthEndpoint(endpoint: string): boolean {
+function isTrustedXaiOAuthEndpoint(endpoint: string): boolean {
   try {
     const url = new URL(endpoint);
     if (url.protocol !== "https:") {
@@ -113,20 +119,30 @@ function readStringRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
-async function readJsonResponse(response: Response, context: string): Promise<unknown> {
-  let body: unknown;
+async function readResponseBody(response: Response): Promise<XaiOAuthResponseBody> {
+  const buffer = await readResponseWithLimit(response, XAI_OAUTH_RESPONSE_MAX_BYTES, {
+    onOverflow: ({ maxBytes }) => new Error(`xAI OAuth response exceeds ${maxBytes} bytes`),
+  });
+  const text = new TextDecoder().decode(buffer);
+  let json: unknown;
   try {
-    body = await response.json();
+    json = JSON.parse(text);
   } catch {
-    body = null;
+    json = null;
   }
+  return { json, text };
+}
+
+async function readJsonResponse(response: Response, context: string): Promise<unknown> {
+  const body = await readResponseBody(response);
   if (!response.ok) {
-    const errorText = readStringRecord(body).error_description ?? readStringRecord(body).error;
+    const errorText =
+      readStringRecord(body.json).error_description ?? readStringRecord(body.json).error;
     throw new Error(
       `${context} failed (${response.status})${typeof errorText === "string" ? `: ${errorText}` : ""}`,
     );
   }
-  return body;
+  return body.json;
 }
 
 async function fetchXaiOAuthDiscoveryDocument(
@@ -137,25 +153,20 @@ async function fetchXaiOAuthDiscoveryDocument(
       Accept: "application/json",
       "User-Agent": xaiUserAgent(),
     },
-    signal: AbortSignal.timeout(XAI_OAUTH_FETCH_TIMEOUT_MS),
+    signal: xaiOAuthFetchSignal(options.signal),
   });
   return readStringRecord(await readJsonResponse(response, "xAI OAuth discovery"));
 }
 
-export async function fetchXaiOAuthDiscovery(
+async function fetchXaiOAuthDiscovery(
   options: XaiOAuthFetchOptions = {},
 ): Promise<XaiOAuthDiscovery> {
   const json = await fetchXaiOAuthDiscoveryDocument(options);
-  const authorizationEndpoint = json.authorization_endpoint;
   const tokenEndpoint = json.token_endpoint;
-  if (typeof authorizationEndpoint !== "string" || typeof tokenEndpoint !== "string") {
-    throw new Error("xAI OAuth discovery response is missing endpoints");
+  if (typeof tokenEndpoint !== "string") {
+    throw new Error("xAI OAuth discovery response is missing the token endpoint");
   }
   return {
-    authorizationEndpoint: requireTrustedXaiOAuthEndpoint(
-      authorizationEndpoint,
-      "authorization endpoint",
-    ),
     tokenEndpoint: requireTrustedXaiOAuthEndpoint(tokenEndpoint, "token endpoint"),
   };
 }
@@ -175,45 +186,6 @@ async function fetchXaiDeviceCodeDiscovery(
       "device authorization endpoint",
     ),
     tokenEndpoint: requireTrustedXaiOAuthEndpoint(tokenEndpoint, "token endpoint"),
-  };
-}
-
-export function buildXaiOAuthAuthorizeUrl(params: {
-  authorizationEndpoint: string;
-  state: string;
-  nonce: string;
-  challenge: string;
-}): string {
-  const url = new URL(
-    requireTrustedXaiOAuthEndpoint(params.authorizationEndpoint, "authorization endpoint"),
-  );
-  url.searchParams.set("response_type", "code");
-  url.searchParams.set("client_id", XAI_OAUTH_CLIENT_ID);
-  url.searchParams.set("redirect_uri", XAI_OAUTH_REDIRECT_URI);
-  url.searchParams.set("scope", XAI_OAUTH_SCOPE);
-  url.searchParams.set("state", params.state);
-  url.searchParams.set("nonce", params.nonce);
-  url.searchParams.set("code_challenge", params.challenge);
-  url.searchParams.set("code_challenge_method", "S256");
-  url.searchParams.set("plan", "generic");
-  url.searchParams.set("referrer", "openclaw");
-  return url.toString();
-}
-
-export function buildXaiOAuthAuthorizationCodeTokenBody(params: {
-  code: string;
-  codeVerifier: string;
-  codeChallenge: string;
-}): Record<string, string> {
-  return {
-    grant_type: "authorization_code",
-    code: params.code,
-    redirect_uri: XAI_OAUTH_REDIRECT_URI,
-    client_id: XAI_OAUTH_CLIENT_ID,
-    code_verifier: params.codeVerifier,
-    // xAI validates these PKCE fields again at token exchange for this client.
-    code_challenge: params.codeChallenge,
-    code_challenge_method: "S256",
   };
 }
 
@@ -287,6 +259,53 @@ function formatXaiOAuthError(params: { context: string; status: number; body: un
   return `${params.context} failed (${params.status})`;
 }
 
+function isLikelyXaiCloudflareChallenge(params: { response: Response; bodyText: string }): boolean {
+  const contentType = params.response.headers.get("content-type") ?? "";
+  return (
+    params.response.headers.get("cf-mitigated") === "challenge" ||
+    /text\/html/i.test(contentType) ||
+    /<!doctype html|<html\b/i.test(params.bodyText) ||
+    /\b(?:cloudflare|attention required|just a moment|enable javascript and cookies|challenge-platform)\b/i.test(
+      params.bodyText,
+    )
+  );
+}
+
+function formatXaiOAuthCloudflareChallengeError(params: {
+  context: string;
+  status: number;
+}): string {
+  return (
+    `${params.context} failed (${params.status}): xAI returned an HTML/Cloudflare challenge ` +
+    "instead of OAuth JSON. xAI may be blocking the automated token refresh; try again later " +
+    "or re-run xAI OAuth login."
+  );
+}
+
+/**
+ * Single source of truth for how a non-OK token response is reported and whether
+ * it is worth retrying. Detection runs once so the message and the retry decision
+ * never disagree: a structured OAuth error (e.g. invalid_grant) is authoritative
+ * and final, while intermediary Cloudflare HTML challenges are retryable.
+ */
+function describeXaiOAuthTokenFailure(params: {
+  context: string;
+  response: Response;
+  body: XaiOAuthResponseBody;
+}): { message: string; retryable: boolean } {
+  const { context, response, body } = params;
+  const status = response.status;
+  const hasStructuredError = Boolean(parseXaiOAuthErrorResponse(body.json).error);
+  const isCloudflareChallenge =
+    !hasStructuredError && isLikelyXaiCloudflareChallenge({ response, bodyText: body.text });
+  return {
+    message: isCloudflareChallenge
+      ? formatXaiOAuthCloudflareChallengeError({ context, status })
+      : formatXaiOAuthError({ context, status, body: body.json }),
+    retryable: isCloudflareChallenge,
+  };
+}
+
 async function exchangeXaiOAuthToken(
   params: {
     tokenEndpoint: string;
@@ -295,24 +314,46 @@ async function exchangeXaiOAuthToken(
     requireRefreshToken?: boolean;
   } & XaiOAuthFetchOptions,
 ): Promise<XaiOAuthTokenResponse> {
-  const response = await getFetchImpl(params.fetchImpl)(
-    requireTrustedXaiOAuthEndpoint(params.tokenEndpoint, "token endpoint"),
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        Accept: "application/json",
-        "User-Agent": xaiUserAgent(),
-      },
-      body: toFormUrlEncoded(params.body),
-      signal: AbortSignal.timeout(XAI_OAUTH_FETCH_TIMEOUT_MS),
-    },
-  );
-  return parseXaiOAuthTokenResponse(
-    await readJsonResponse(response, params.context),
-    params.now ?? Date.now,
-    { requireRefreshToken: params.requireRefreshToken },
-  );
+  const endpoint = requireTrustedXaiOAuthEndpoint(params.tokenEndpoint, "token endpoint");
+  const maxAttempts =
+    params.body.grant_type === "refresh_token" ? XAI_OAUTH_REFRESH_MAX_ATTEMPTS : 1;
+  let lastMessage = `${params.context} failed`;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    let response: Response;
+    try {
+      response = await getFetchImpl(params.fetchImpl)(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Accept: "application/json",
+          "User-Agent": xaiUserAgent(),
+        },
+        body: toFormUrlEncoded(params.body),
+        signal: xaiOAuthFetchSignal(params.signal),
+      });
+    } catch (err) {
+      // Transport failures are not safe to retry for refresh grants: xAI rotates
+      // refresh tokens, so a response lost after xAI consumed the token would burn
+      // it on resend. Only Cloudflare challenge responses are retried below.
+      throw new Error(`${params.context} failed: ${formatErrorMessage(err)}`, { cause: err });
+    }
+    const body = await readResponseBody(response);
+    if (response.ok) {
+      return parseXaiOAuthTokenResponse(body.json, params.now ?? Date.now, {
+        requireRefreshToken: params.requireRefreshToken,
+      });
+    }
+
+    const failure = describeXaiOAuthTokenFailure({ context: params.context, response, body });
+    lastMessage = failure.message;
+    if (attempt >= maxAttempts || !failure.retryable) {
+      throw new Error(lastMessage);
+    }
+    await sleep(XAI_OAUTH_REFRESH_RETRY_DELAY_MS);
+  }
+
+  throw new Error(lastMessage);
 }
 
 async function requestXaiDeviceCode(
@@ -336,7 +377,7 @@ async function requestXaiDeviceCode(
         client_id: XAI_OAUTH_CLIENT_ID,
         scope: XAI_OAUTH_SCOPE,
       }),
-      signal: AbortSignal.timeout(XAI_OAUTH_FETCH_TIMEOUT_MS),
+      signal: xaiOAuthFetchSignal(params.signal),
     },
   );
   const json = readStringRecord(await readJsonResponse(response, "xAI device code request"));
@@ -409,12 +450,16 @@ async function pollXaiDeviceCodeToken(
           client_id: XAI_OAUTH_CLIENT_ID,
           device_code: params.deviceCode,
         }),
-        signal: AbortSignal.timeout(XAI_OAUTH_FETCH_TIMEOUT_MS),
+        signal: xaiOAuthFetchSignal(params.signal),
       },
     );
     let body: unknown;
     try {
-      body = await response.json();
+      const buffer = await readResponseWithLimit(response, XAI_OAUTH_RESPONSE_MAX_BYTES, {
+        onOverflow: ({ maxBytes }) =>
+          new Error(`xAI device code response exceeds ${maxBytes} bytes`),
+      });
+      body = JSON.parse(new TextDecoder().decode(buffer));
     } catch {
       body = null;
     }
@@ -426,16 +471,18 @@ async function pollXaiDeviceCodeToken(
 
     const error = parseXaiOAuthErrorResponse(body).error;
     if (error === "authorization_pending") {
-      await new Promise((resolve) => {
-        setTimeout(resolve, resolveNextXaiDeviceCodePollDelayMs(intervalMs, deadlineMs));
-      });
+      await waitForXaiDeviceCodePoll(
+        resolveNextXaiDeviceCodePollDelayMs(intervalMs, deadlineMs),
+        params.signal,
+      );
       continue;
     }
     if (error === "slow_down") {
       intervalMs += XAI_DEVICE_CODE_SLOW_DOWN_INCREMENT_MS;
-      await new Promise((resolve) => {
-        setTimeout(resolve, resolveNextXaiDeviceCodePollDelayMs(intervalMs, deadlineMs));
-      });
+      await waitForXaiDeviceCodePoll(
+        resolveNextXaiDeviceCodePollDelayMs(intervalMs, deadlineMs),
+        params.signal,
+      );
       continue;
     }
     if (error === "access_denied" || error === "authorization_denied") {
@@ -455,6 +502,29 @@ async function pollXaiDeviceCodeToken(
   }
 
   throw new Error("xAI device authorization timed out");
+}
+
+async function waitForXaiDeviceCodePoll(delayMs: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) {
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, delayMs);
+    });
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timeout);
+      reject(signal.reason instanceof Error ? signal.reason : new Error("xAI login cancelled"));
+    };
+    const timeout = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) {
+      onAbort();
+    }
+  });
 }
 
 function decodeJwtPayload(token: string | undefined): Record<string, unknown> {
@@ -492,91 +562,27 @@ function readCredentialString<TKey extends string>(
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
-async function noteXaiOAuthUrl(ctx: ProviderAuthContext, authorizeUrl: string): Promise<void> {
-  const lines = ["Open this xAI OAuth URL in your browser:"];
-  if (ctx.isRemote) {
-    lines.push(
-      "",
-      "Remote host: forward the callback before signing in:",
-      `ssh -N -L ${XAI_OAUTH_CALLBACK_PORT}:${XAI_OAUTH_CALLBACK_HOST}:${XAI_OAUTH_CALLBACK_PORT} <host>`,
-    );
+function isLegacyXaiOAuthTokenEndpoint(endpoint: string): boolean {
+  try {
+    const url = new URL(endpoint);
+    return `${url.origin}${url.pathname}` === XAI_LEGACY_OAUTH_TOKEN_ENDPOINT;
+  } catch {
+    return false;
   }
-  await ctx.prompter.note(lines.join("\n"), "xAI OAuth");
-  if (ctx.prompter.plain) {
-    await ctx.prompter.plain(`\n${authorizeUrl}\n`);
-    return;
-  }
-  ctx.runtime.log(`\n${authorizeUrl}\n`);
 }
 
-export async function loginXaiOAuth(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
-  const progress = ctx.prompter.progress("Starting xAI OAuth...");
-  try {
-    const discovery = await fetchXaiOAuthDiscovery();
-    const pkce = generateHexPkceVerifierChallenge();
-    const state = randomBytes(32).toString("hex");
-    const nonce = randomBytes(16).toString("hex");
-    const authorizeUrl = buildXaiOAuthAuthorizeUrl({
-      authorizationEndpoint: discovery.authorizationEndpoint,
-      state,
-      nonce,
-      challenge: pkce.challenge,
-    });
-    progress.update(`Waiting for xAI OAuth callback on ${XAI_OAUTH_REDIRECT_URI}...`);
-    const callbackPromise = waitForLocalOAuthCallback({
-      expectedState: state,
-      timeoutMs: XAI_OAUTH_TIMEOUT_MS,
-      port: XAI_OAUTH_CALLBACK_PORT,
-      callbackPath: XAI_OAUTH_CALLBACK_PATH,
-      redirectUri: XAI_OAUTH_REDIRECT_URI,
-      hostname: XAI_OAUTH_CALLBACK_HOST,
-      successTitle: "xAI OAuth complete",
-      onProgress: (message) => progress.update(message),
-      corsOriginAllowlist: XAI_OAUTH_CALLBACK_CORS_ORIGIN_ALLOWLIST,
-    });
-    void callbackPromise.catch(() => undefined);
-    await noteXaiOAuthUrl(ctx, authorizeUrl);
-    if (!ctx.isRemote) {
-      await ctx.openUrl(authorizeUrl);
-    }
-    const callback = await callbackPromise;
-    const tokens = await exchangeXaiOAuthToken({
-      tokenEndpoint: discovery.tokenEndpoint,
-      context: "xAI OAuth token exchange",
-      requireRefreshToken: true,
-      body: buildXaiOAuthAuthorizationCodeTokenBody({
-        code: callback.code,
-        codeVerifier: pkce.verifier,
-        codeChallenge: pkce.challenge,
-      }),
-    });
-    const identity = resolveXaiOAuthIdentity(tokens);
-    progress.stop("xAI OAuth complete");
-    return buildOauthProviderAuthResult({
-      providerId: PROVIDER_ID,
-      defaultModel: XAI_DEFAULT_MODEL_REF,
-      access: tokens.accessToken,
-      refresh: tokens.refreshToken,
-      expires: tokens.expires,
-      email: identity.email,
-      displayName: identity.displayName,
-      profileName: identity.email ?? identity.accountId,
-      configPatch: applyXaiConfig(ctx.config),
-      credentialExtra: {
-        tokenEndpoint: discovery.tokenEndpoint,
-        issuer: XAI_OAUTH_ISSUER,
-        ...(tokens.idToken ? { idToken: tokens.idToken } : {}),
-        ...(identity.accountId ? { accountId: identity.accountId } : {}),
-      },
-      notes: [
-        "xAI OAuth uses your xAI account entitlement; xAI API keys still work.",
-        "xAI may label the consent app as Grok Build because OpenClaw uses xAI's shared OAuth client.",
-      ],
-    });
-  } catch (err) {
-    progress.stop("xAI OAuth failed");
-    throw new Error(`xAI OAuth failed: ${formatErrorMessage(err)}`, { cause: err });
+async function resolveXaiOAuthRefreshTokenEndpoint(
+  credential: OAuthCredential,
+  options: XaiOAuthFetchOptions,
+): Promise<string> {
+  const cachedEndpoint = readCredentialString(credential, "tokenEndpoint");
+  // Rediscover when there is no cached endpoint, or when an older persisted
+  // credential still points at the retired endpoint, so refresh writes back the
+  // current OAuth token endpoint.
+  if (!cachedEndpoint || isLegacyXaiOAuthTokenEndpoint(cachedEndpoint)) {
+    return (await fetchXaiOAuthDiscovery(options)).tokenEndpoint;
   }
+  return cachedEndpoint;
 }
 
 async function noteXaiDeviceCode(
@@ -584,6 +590,15 @@ async function noteXaiDeviceCode(
   deviceCode: XaiDeviceCodeResponse,
 ): Promise<void> {
   const expiresInMinutes = Math.max(1, Math.round(deviceCode.expiresInMs / 60_000));
+  if (ctx.prompter.deviceCode) {
+    await ctx.prompter.deviceCode({
+      title: "xAI OAuth",
+      code: deviceCode.userCode,
+      expiresInMinutes,
+      message: "Enter this one-time code on the xAI sign-in page.",
+    });
+    return;
+  }
   await ctx.prompter.note(
     [
       ctx.isRemote
@@ -593,30 +608,35 @@ async function noteXaiDeviceCode(
       `Code: ${deviceCode.userCode}`,
       `Code expires in ${expiresInMinutes} minutes. Never share it.`,
     ].join("\n"),
-    "xAI device code",
+    "xAI OAuth",
   );
 }
 
-export async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
-  const progress = ctx.prompter.progress("Starting xAI device code flow...");
+async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
+  const progress = ctx.prompter.progress("Starting xAI OAuth...");
   try {
-    const discovery = await fetchXaiDeviceCodeDiscovery();
-    progress.update("Requesting xAI device code...");
+    const discovery = await fetchXaiDeviceCodeDiscovery(
+      ctx.signal ? { signal: ctx.signal } : undefined,
+    );
+    progress.update("Requesting xAI OAuth device code...");
     const deviceCode = await requestXaiDeviceCode({
       deviceAuthorizationEndpoint: discovery.deviceAuthorizationEndpoint,
+      ...(ctx.signal ? { signal: ctx.signal } : {}),
     });
-    await noteXaiDeviceCode(ctx, deviceCode);
     const browserUrl = deviceCode.verificationUriComplete ?? deviceCode.verificationUri;
+    let openedBrowser = false;
+    try {
+      await ctx.openUrl(browserUrl);
+      openedBrowser = true;
+    } catch {
+      ctx.runtime.log(`Open manually: ${deviceCode.verificationUri}`);
+    }
+    await noteXaiDeviceCode(ctx, deviceCode);
     const logUrl = deviceCode.verificationUri;
     if (ctx.isRemote) {
       ctx.runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${logUrl}\n`);
-    } else {
-      try {
-        await ctx.openUrl(browserUrl);
-        ctx.runtime.log(`Open: ${logUrl}`);
-      } catch {
-        ctx.runtime.log(`Open manually: ${logUrl}`);
-      }
+    } else if (openedBrowser) {
+      ctx.runtime.log(`Open: ${logUrl}`);
     }
 
     progress.update("Waiting for xAI device authorization...");
@@ -625,9 +645,10 @@ export async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<Prov
       deviceCode: deviceCode.deviceCode,
       expiresInMs: deviceCode.expiresInMs,
       intervalMs: deviceCode.intervalMs,
+      ...(ctx.signal ? { signal: ctx.signal } : {}),
     });
     const identity = resolveXaiOAuthIdentity(tokens);
-    progress.stop("xAI device code complete");
+    progress.stop("xAI OAuth complete");
     return buildOauthProviderAuthResult({
       providerId: PROVIDER_ID,
       defaultModel: XAI_DEFAULT_MODEL_REF,
@@ -647,13 +668,13 @@ export async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<Prov
         ...(identity.accountId ? { accountId: identity.accountId } : {}),
       },
       notes: [
-        "xAI device code login uses your xAI account entitlement without requiring a localhost callback.",
+        "xAI OAuth uses device-code verification without requiring a localhost callback.",
         "xAI may label the consent app as Grok Build because OpenClaw uses xAI's shared OAuth client.",
       ],
     });
   } catch (err) {
-    progress.stop("xAI device code failed");
-    throw new Error(`xAI device code failed: ${formatErrorMessage(err)}`, { cause: err });
+    progress.stop("xAI OAuth failed");
+    throw new Error(`xAI OAuth failed: ${formatErrorMessage(err)}`, { cause: err });
   }
 }
 
@@ -665,9 +686,7 @@ export async function refreshXaiOAuthCredential(
   if (!refreshToken) {
     throw new Error("xAI OAuth credential is missing refresh token");
   }
-  const tokenEndpoint =
-    readCredentialString(credential, "tokenEndpoint") ??
-    (await fetchXaiOAuthDiscovery(options)).tokenEndpoint;
+  const tokenEndpoint = await resolveXaiOAuthRefreshTokenEndpoint(credential, options);
   const tokens = await exchangeXaiOAuthToken({
     ...options,
     tokenEndpoint,
@@ -699,18 +718,18 @@ export function createXaiOAuthAuthMethod(): ProviderAuthMethod {
   return {
     id: XAI_OAUTH_METHOD_ID,
     label: "xAI OAuth",
-    hint: "Browser sign-in for eligible xAI accounts",
+    hint: "Remote-friendly browser sign-in without a localhost callback",
     kind: "oauth",
     wizard: {
       choiceId: XAI_OAUTH_CHOICE_ID,
       choiceLabel: "xAI OAuth",
-      choiceHint: "Browser sign-in for eligible xAI accounts",
+      choiceHint: "Remote-friendly browser sign-in without a localhost callback",
       groupId: PROVIDER_ID,
       groupLabel: "xAI (Grok)",
-      groupHint: "API key or browser OAuth",
+      groupHint: "API key or OAuth",
       methodId: XAI_OAUTH_METHOD_ID,
     },
-    run: async (ctx) => loginXaiOAuth(ctx),
+    run: async (ctx) => loginXaiDeviceCode(ctx),
   };
 }
 
@@ -718,15 +737,16 @@ export function createXaiDeviceCodeAuthMethod(): ProviderAuthMethod {
   return {
     id: XAI_DEVICE_CODE_METHOD_ID,
     label: "xAI device code",
-    hint: "Remote-friendly browser sign-in without a localhost callback",
+    hint: "Deprecated alias for xAI OAuth device-code login",
     kind: "device_code",
     wizard: {
       choiceId: XAI_DEVICE_CODE_CHOICE_ID,
       choiceLabel: "xAI device code",
-      choiceHint: "Remote-friendly browser sign-in without a localhost callback",
+      choiceHint: "Compatibility alias for xAI OAuth device-code sign-in",
+      assistantVisibility: "manual-only",
       groupId: PROVIDER_ID,
       groupLabel: "xAI (Grok)",
-      groupHint: "API key or browser OAuth",
+      groupHint: "API key or OAuth",
       methodId: XAI_DEVICE_CODE_METHOD_ID,
     },
     run: async (ctx) => loginXaiDeviceCode(ctx),

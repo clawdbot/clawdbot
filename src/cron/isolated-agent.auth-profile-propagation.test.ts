@@ -2,10 +2,10 @@
 import { describe, expect, it } from "vitest";
 import type { AuthProfileFailurePolicy } from "../agents/embedded-agent-runner/run/auth-profile-failure-policy.types.js";
 import {
-  makeIsolatedAgentTurnJob,
-  makeIsolatedAgentTurnParams,
-  setupRunCronIsolatedAgentTurnSuite,
-} from "./isolated-agent/run.suite-helpers.js";
+  makeIsolatedAgentJobFixture,
+  makeIsolatedAgentParamsFixture,
+} from "./isolated-agent/job-fixtures.js";
+import { setupRunCronIsolatedAgentTurnSuite } from "./isolated-agent/run.suite-helpers.js";
 import {
   loadRunCronIsolatedAgentTurn,
   mockRunCronFallbackPassthrough,
@@ -35,8 +35,8 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     mockRunCronFallbackPassthrough();
 
     await runCronIsolatedAgentTurn(
-      makeIsolatedAgentTurnParams({
-        job: makeIsolatedAgentTurnJob({
+      makeIsolatedAgentParamsFixture({
+        job: makeIsolatedAgentJobFixture({
           delivery: { mode: "none" },
           payload: { kind: "agentTurn", message: "check status" },
         }),
@@ -61,7 +61,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     mockRunCronFallbackPassthrough();
 
     const result = await runCronIsolatedAgentTurn(
-      makeIsolatedAgentTurnParams({
+      makeIsolatedAgentParamsFixture({
         cfg: {
           auth: {
             profiles: {
@@ -73,7 +73,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
             order: { openrouter: ["openrouter:default"] },
           },
         },
-        job: makeIsolatedAgentTurnJob({
+        job: makeIsolatedAgentJobFixture({
           delivery: { mode: "none" },
           payload: {
             kind: "agentTurn",

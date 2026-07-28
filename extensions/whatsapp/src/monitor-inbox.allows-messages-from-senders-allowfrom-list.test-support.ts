@@ -117,7 +117,11 @@ describe("web monitor inbox", () => {
     // Should call onMessage for authorized senders
     expect(onMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        from: "+999",
+        admission: expect.objectContaining({
+          conversation: expect.objectContaining({
+            id: "+999",
+          }),
+        }),
         payload: expect.objectContaining({
           body: "authorized message",
         }),
@@ -151,7 +155,11 @@ describe("web monitor inbox", () => {
     // Should allow self-messages even if not in allowFrom
     expect(onMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        from: "+123",
+        admission: expect.objectContaining({
+          conversation: expect.objectContaining({
+            id: "+123",
+          }),
+        }),
         payload: expect.objectContaining({
           body: "self message",
         }),
@@ -214,7 +222,11 @@ describe("web monitor inbox", () => {
     expect(onMessage).toHaveBeenCalledTimes(1);
     expect(onMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        from: "+123",
+        admission: expect.objectContaining({
+          conversation: expect.objectContaining({
+            id: "+123",
+          }),
+        }),
         payload: expect.objectContaining({
           body: "self ping",
         }),
@@ -303,8 +315,12 @@ describe("web monitor inbox", () => {
 
     expect(onMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        chatType: "group",
-        from: "120363@g.us",
+        admission: expect.objectContaining({
+          conversation: expect.objectContaining({
+            kind: "group",
+            id: "120363@g.us",
+          }),
+        }),
         payload: expect.objectContaining({
           body: "/status",
         }),

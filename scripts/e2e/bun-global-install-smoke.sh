@@ -2,13 +2,29 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
+source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
+
+read_positive_int_env() {
+  local name="${1:?missing environment variable name}"
+  local fallback="${2:?missing fallback value}"
+  local value="${!name-}"
+  if [ -z "${!name+x}" ]; then
+    value="$fallback"
+  fi
+  if [[ ! "$value" =~ ^[0-9]+$ ]] || (( 10#$value < 1 )); then
+    echo "invalid $name: $value" >&2
+    return 2
+  fi
+  printf "%s\n" "$((10#$value))"
+}
+
 BUN_BIN="${BUN_BIN:-bun}"
 HOST_BUILD="${OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD:-1}"
 DIST_IMAGE="${OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE:-}"
 PACKAGE_TGZ="${OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ:-}"
-COMMAND_TIMEOUT_MS="${OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_MS:-180000}"
+COMMAND_TIMEOUT_MS="$(read_positive_int_env OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_MS 180000)"
 DOCKER_COMMAND_TIMEOUT="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_BUN_GLOBAL_SMOKE_DOCKER_COMMAND_TIMEOUT:-600s}}"
+AI_PACKAGE_TGZ=""
 SMOKE_DIR=""
 PACK_DIR=""
 
@@ -21,6 +37,39 @@ cleanup() {
   fi
 }
 
+prepare_ai_candidate() {
+  local ai_manifest
+  local ai_package_dir
+  local ai_tarballs
+  local root_manifest
+
+  if [ -z "$PACK_DIR" ]; then
+    PACK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-bun-pack.XXXXXX")"
+  fi
+  echo "==> Extract bundled candidate @openclaw/ai package"
+  ai_package_dir="$PACK_DIR/ai-candidate"
+  mkdir -p "$ai_package_dir"
+  tar -xzf "$PACKAGE_TGZ" \
+    -C "$ai_package_dir" \
+    --strip-components=4 \
+    package/node_modules/@openclaw/ai
+  root_manifest="$PACK_DIR/openclaw-package.json"
+  ai_manifest="$ai_package_dir/package.json"
+  tar -xOf "$PACKAGE_TGZ" package/package.json >"$root_manifest"
+  node scripts/e2e/lib/bun-global-install/assertions.mjs \
+    assert-release-versions \
+    "$root_manifest" \
+    "$ai_manifest" \
+    >/dev/null
+  npm pack --ignore-scripts --silent --pack-destination "$PACK_DIR" "$ai_package_dir" >/dev/null
+  ai_tarballs=("$PACK_DIR"/openclaw-ai-*.tgz)
+  if [ "${#ai_tarballs[@]}" -ne 1 ] || [ ! -f "${ai_tarballs[0]}" ]; then
+    echo "expected one packed @openclaw/ai candidate in $PACK_DIR" >&2
+    exit 1
+  fi
+  AI_PACKAGE_TGZ="${ai_tarballs[0]}"
+}
+
 trap cleanup EXIT
 
 run_with_timeout() {
@@ -29,67 +78,8 @@ run_with_timeout() {
   node scripts/e2e/lib/bun-global-install/assertions.mjs run-with-timeout "$timeout_ms" "$@"
 }
 
-restore_dist_from_image() {
-  local image="$1"
-  local backup_dir=""
-  local container_id=""
-  local swapped=0
-  local temp_dir=""
-
-  cleanup_restore_dist() {
-    if [ -n "$container_id" ]; then
-      docker_e2e_docker_cmd rm -f "$container_id" >/dev/null 2>&1 || true
-    fi
-    if [ "$swapped" != "1" ] && [ -n "$backup_dir" ] && [ -d "$backup_dir" ]; then
-      rm -rf "$ROOT_DIR/dist" >/dev/null 2>&1 || true
-      if [ ! -e "$ROOT_DIR/dist" ] && mv "$backup_dir" "$ROOT_DIR/dist" >/dev/null 2>&1; then
-        backup_dir=""
-      fi
-    fi
-    if [ -n "$temp_dir" ]; then
-      rm -rf "$temp_dir"
-    fi
-    if [ "$swapped" = "1" ] && [ -n "$backup_dir" ]; then
-      rm -rf "$backup_dir"
-    fi
-  }
-
-  echo "==> Reuse dist/ from Docker image: $image"
-  if ! container_id="$(docker_e2e_docker_cmd create "$image")"; then
-    cleanup_restore_dist
-    return 1
-  fi
-  if ! temp_dir="$(mktemp -d "$ROOT_DIR/.bun-dist.XXXXXX")"; then
-    cleanup_restore_dist
-    return 1
-  fi
-  if ! docker_e2e_docker_cmd cp "${container_id}:/app/dist" "$temp_dir/dist"; then
-    cleanup_restore_dist
-    return 1
-  fi
-  if [ -e "$ROOT_DIR/dist" ]; then
-    if ! backup_dir="$(mktemp -d "$ROOT_DIR/.dist-backup.XXXXXX")"; then
-      cleanup_restore_dist
-      return 1
-    fi
-    if ! rmdir "$backup_dir"; then
-      cleanup_restore_dist
-      return 1
-    fi
-    if ! mv "$ROOT_DIR/dist" "$backup_dir"; then
-      cleanup_restore_dist
-      return 1
-    fi
-  fi
-  if ! mv "$temp_dir/dist" "$ROOT_DIR/dist"; then
-    cleanup_restore_dist
-    return 1
-  fi
-  swapped=1
-  cleanup_restore_dist
-}
-
 resolve_package_tgz() {
+  local -a package_args
   if [ -n "$PACKAGE_TGZ" ]; then
     if [ ! -f "$PACKAGE_TGZ" ]; then
       echo "OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ does not exist: $PACKAGE_TGZ" >&2
@@ -100,7 +90,7 @@ resolve_package_tgz() {
   fi
 
   if [ -n "$DIST_IMAGE" ]; then
-    restore_dist_from_image "$DIST_IMAGE"
+    docker_e2e_restore_package_dist_from_image "$DIST_IMAGE"
   elif [ "$HOST_BUILD" != "0" ]; then
     echo "==> Build host package artifacts"
     pnpm build
@@ -113,25 +103,19 @@ resolve_package_tgz() {
     exit 1
   fi
 
-  echo "==> Write package inventory"
-  node --import tsx scripts/write-package-dist-inventory.ts
-
-  local pack_json_file
   PACK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-bun-pack.XXXXXX")"
-  pack_json_file="$PACK_DIR/pack.json"
 
   echo "==> Pack OpenClaw tarball"
-  npm pack --ignore-scripts --json --pack-destination "$PACK_DIR" >"$pack_json_file"
+  package_args=(
+    --skip-build
+    --output-dir "$PACK_DIR"
+    --output-name openclaw-current.tgz
+  )
+  if [[ "${OPENCLAW_BUN_GLOBAL_SMOKE_ALLOW_UNRELEASED_CHANGELOG:-true}" == "true" ]]; then
+    package_args+=(--allow-unreleased-changelog)
+  fi
   PACKAGE_TGZ="$(
-    node -e '
-const raw = require("node:fs").readFileSync(process.argv[1], "utf8") || "[]";
-const parsed = JSON.parse(raw);
-const last = Array.isArray(parsed) ? parsed.at(-1) : null;
-if (!last || typeof last.filename !== "string" || last.filename.length === 0) {
-  process.exit(1);
-}
-process.stdout.write(require("node:path").resolve(process.argv[2], last.filename));
-' "$pack_json_file" "$PACK_DIR"
+    node scripts/package-openclaw-for-docker.mjs "${package_args[@]}"
   )"
   if [ -z "$PACKAGE_TGZ" ] || [ ! -f "$PACKAGE_TGZ" ]; then
     echo "missing packed OpenClaw tarball" >&2
@@ -148,6 +132,7 @@ main() {
   fi
 
   resolve_package_tgz
+  prepare_ai_candidate
 
   local bun_path
   local openclaw_bin
@@ -160,8 +145,21 @@ main() {
   export OPENCLAW_NO_ONBOARD=1
   export OPENCLAW_DISABLE_UPDATE_CHECK=1
   export NO_COLOR=1
-  mkdir -p "$HOME" "$BUN_INSTALL/bin" "$XDG_CACHE_HOME"
+  mkdir -p "$HOME" "$BUN_INSTALL/bin" "$BUN_INSTALL/install/global" "$XDG_CACHE_HOME"
   export PATH="$BUN_INSTALL/bin:$(dirname "$(command -v node)"):$PATH"
+  # Release publishes @openclaw/ai first. Bun 1.3.14 ignores bundled deps in
+  # local tarballs, so resolve that one package from the exact candidate bytes.
+  node --input-type=module - \
+    "$BUN_INSTALL/install/global/package.json" \
+    "$AI_PACKAGE_TGZ" <<'NODE'
+import fs from "node:fs";
+
+const [, , packageJsonPath, aiPackageTarball] = process.argv;
+fs.writeFileSync(
+  packageJsonPath,
+  `${JSON.stringify({ private: true, overrides: { "@openclaw/ai": `file:${aiPackageTarball}` } })}\n`,
+);
+NODE
 
   echo "==> Bun version"
   "$bun_path" --version

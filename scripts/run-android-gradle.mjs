@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -39,11 +41,35 @@ export function linuxArmAndroidGradleSkipMessage(platform = process.platform, ar
   );
 }
 
-export function run(command, args, cwd) {
+// Fresh git worktrees do not carry the gitignored apps/android/local.properties,
+// so AGP tasks fail with "SDK location not found" even when an SDK is installed.
+// Fall back to the Android Studio default install path when nothing names one.
+export function resolveAndroidSdkEnv(options = {}) {
+  const env = options.env ?? process.env;
+  if (env.ANDROID_HOME || env.ANDROID_SDK_ROOT) {
+    return env;
+  }
+  const existsSync = options.existsSync ?? fs.existsSync;
+  if (existsSync(path.join(androidDir, "local.properties"))) {
+    return env;
+  }
+  const homeDir = options.homeDir ?? os.homedir();
+  const platform = options.platform ?? process.platform;
+  const defaultSdkDir =
+    platform === "darwin"
+      ? path.join(homeDir, "Library", "Android", "sdk")
+      : path.join(homeDir, "Android", "Sdk");
+  if (!existsSync(defaultSdkDir)) {
+    return env;
+  }
+  return { ...env, ANDROID_HOME: defaultSdkDir };
+}
+
+export function run(command, args, cwd, env = process.env) {
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       cwd,
-      env: process.env,
+      env,
       stdio: "inherit",
     });
     child.on("close", (status, signal) => {
@@ -78,12 +104,13 @@ export async function main(argv = process.argv.slice(2)) {
     return 0;
   }
 
-  const gradleStatus = await run("./gradlew", gradleArgs, androidDir);
+  const env = resolveAndroidSdkEnv();
+  const gradleStatus = await run("./gradlew", gradleArgs, androidDir, env);
   if (gradleStatus !== 0 || postArgs.length === 0) {
     return gradleStatus;
   }
 
-  return await run(postArgs[0], postArgs.slice(1), repoRoot);
+  return await run(postArgs[0], postArgs.slice(1), repoRoot, env);
 }
 
 if (isMain) {

@@ -1,13 +1,13 @@
 // Mattermost tests cover reply delivery plugin behavior.
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-runtime";
+import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../../runtime-api.js";
 import {
   createMattermostReplyDeliveryBarrier,
   deliverMattermostReplyPayload,
+  toMattermostChannelDeliveryResult,
 } from "./reply-delivery.js";
 
 type DeliverMattermostReplyPayloadParams = Parameters<typeof deliverMattermostReplyPayload>[0];
@@ -40,6 +40,22 @@ function createReplyDeliveryCore(): DeliverMattermostReplyPayloadParams["core"] 
     },
   } as unknown as PluginRuntime;
 }
+
+describe("toMattermostChannelDeliveryResult", () => {
+  it.each(["text", "media"] as const)("marks %s delivery as visible", (outcome) => {
+    expect(toMattermostChannelDeliveryResult(outcome)).toEqual({ visibleReplySent: true });
+  });
+
+  it.each(["reasoning_skipped", "empty"] as const)(
+    "marks %s delivery as intentionally non-visible",
+    (outcome) => {
+      expect(toMattermostChannelDeliveryResult(outcome)).toEqual({
+        visibleReplySent: false,
+        suppression: { reason: "no_visible_result" },
+      });
+    },
+  );
+});
 
 describe("createMattermostReplyDeliveryBarrier", () => {
   it("extends while direct deliveries or DM resolution remain unsettled", async () => {
@@ -216,18 +232,20 @@ describe("deliverMattermostReplyPayload", () => {
     expect(sendMessage).toHaveBeenCalledWith(
       "channel:town-square",
       "Intro line\nReasoning: appears in content but is not a prefix",
-      {
+      expect.objectContaining({
         cfg,
         accountId: "default",
         replyToId: "root-post",
-      },
+      }),
     );
   });
 
   it("passes agent-scoped mediaLocalRoots when sending media paths", async () => {
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mm-state-"));
-    process.env.OPENCLAW_STATE_DIR = stateDir;
+    const openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-mm-state-",
+    });
+    const stateDir = openClawState.stateDir;
 
     try {
       const sendMessage = vi.fn(async () => undefined);
@@ -251,26 +269,25 @@ describe("deliverMattermostReplyPayload", () => {
       });
 
       expect(sendMessage).toHaveBeenCalledTimes(1);
-      expect(sendMessage).toHaveBeenCalledWith("channel:town-square", "caption", {
-        cfg,
-        accountId: "default",
-        mediaUrl,
-        replyToId: "root-post",
-        mediaLocalRoots: expect.arrayContaining([
-          path.join(stateDir, "media"),
-          path.join(stateDir, "canvas"),
-          path.join(stateDir, "workspace"),
-          path.join(stateDir, "sandboxes"),
-          path.join(stateDir, `workspace-${agentId}`),
-        ]),
-      });
+      expect(sendMessage).toHaveBeenCalledWith(
+        "channel:town-square",
+        "caption",
+        expect.objectContaining({
+          cfg,
+          accountId: "default",
+          mediaUrl,
+          replyToId: "root-post",
+          mediaLocalRoots: expect.arrayContaining([
+            path.join(stateDir, "media"),
+            path.join(stateDir, "canvas"),
+            path.join(stateDir, "workspace"),
+            path.join(stateDir, "sandboxes"),
+            path.join(stateDir, `workspace-${agentId}`),
+          ]),
+        }),
+      );
     } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      await fs.rm(stateDir, { recursive: true, force: true });
+      await openClawState.cleanup();
     }
   });
 
@@ -294,11 +311,15 @@ describe("deliverMattermostReplyPayload", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage).toHaveBeenCalledWith("channel:town-square", "hello", {
-      cfg,
-      accountId: "default",
-      replyToId: "root-post",
-    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      "channel:town-square",
+      "hello",
+      expect.objectContaining({
+        cfg,
+        accountId: "default",
+        replyToId: "root-post",
+      }),
+    );
     expect(outcome).toBe("text");
   });
 });

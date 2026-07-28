@@ -397,7 +397,7 @@ fs.writeFileSync(
     {
       id: "brave",
       activation: { onStartup: false },
-      providerAuthEnvVars: { brave: ["BRAVE_API_KEY"] },
+      setup: { providers: [{ id: "brave", envVars: ["BRAVE_API_KEY"] }] },
       contracts: { webSearchProviders: ["brave"] },
       configSchema: {
         type: "object",
@@ -425,7 +425,8 @@ fs.writeFileSync(
 );
 NODE
   tar -czf "$tarball" -C "$fixture_root" package
-  node scripts/e2e/lib/plugins/npm-registry-server.mjs \
+  OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org \
+    node scripts/e2e/lib/plugins/npm-registry-server.mjs \
     "$port_file" \
     "@openclaw/brave-plugin" \
     "2026.5.2" \
@@ -969,21 +970,6 @@ write_update_restart_service_secretref_env() {
   mv "$tmp_path" "$dotenv_path"
 }
 
-write_update_restart_service_auth_env() {
-  mkdir -p "$OPENCLAW_STATE_DIR"
-  local dotenv_path="$OPENCLAW_STATE_DIR/.env"
-  local tmp_path="$dotenv_path.tmp.$$"
-  if [ -f "$dotenv_path" ]; then
-    grep -v '^GATEWAY_AUTH_TOKEN_REF=' "$dotenv_path" >"$tmp_path" || true
-  else
-    : >"$tmp_path"
-  fi
-  printf 'GATEWAY_AUTH_TOKEN_REF=%s\n' "$GATEWAY_AUTH_TOKEN_REF" >>"$tmp_path"
-  mv "$tmp_path" "$dotenv_path"
-  local systemd_env_path="$OPENCLAW_STATE_DIR/gateway.systemd.env"
-  printf 'GATEWAY_AUTH_TOKEN_REF=%s\n' "$GATEWAY_AUTH_TOKEN_REF" >"$systemd_env_path"
-}
-
 prepare_update_restart_probe() {
   if [ "$UPDATE_RESTART_MODE" != "auto-auth" ]; then
     return 0
@@ -993,18 +979,6 @@ prepare_update_restart_probe() {
   seed_update_restart_probe_device_auth
   start_gateway legacy-ready-log-ok
   write_update_restart_service_secretref_env
-  install_update_restart_service_unit
-}
-
-prepare_update_restart_probe_current_install() {
-  if [ "$UPDATE_RESTART_MODE" != "auto-auth" ]; then
-    return 0
-  fi
-  echo "Preparing candidate-auth gateway for automatic update restart."
-  install_update_restart_systemctl_shim
-  seed_update_restart_probe_device_auth
-  start_gateway
-  write_update_restart_service_auth_env
   install_update_restart_service_unit
 }
 
@@ -1189,7 +1163,8 @@ probe_gateway_endpoint() {
 
 start_gateway() {
   local port=18789
-  local budget="${OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS:-90}"
+  local budget
+  budget="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS 90)"
   local start_epoch
   local ready_epoch
   start_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
@@ -1222,7 +1197,8 @@ check_gateway_probes() {
 
 check_gateway_status() {
   local port=18789
-  local budget="${OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS:-30}"
+  local budget
+  budget="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS 30)"
   local status_start
   local status_end
   status_start="$(node -e "process.stdout.write(String(Date.now()))")"

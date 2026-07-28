@@ -16,13 +16,6 @@ metadata:
               "bins": ["gh"],
               "label": "Install GitHub CLI (brew)",
             },
-            {
-              "id": "apt",
-              "kind": "apt",
-              "package": "gh",
-              "bins": ["gh"],
-              "label": "Install GitHub CLI (apt)",
-            },
           ],
       },
   }

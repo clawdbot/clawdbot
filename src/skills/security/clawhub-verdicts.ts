@@ -6,8 +6,8 @@ import {
 } from "../../infra/clawhub.js";
 import type { buildWorkspaceSkillStatus } from "../discovery/status.js";
 
-/** Public ClawHub verdict item shape projected into local security scan verdicts. */
-export type OpenClawSkillSecurityVerdictItem = Omit<
+/** ClawHub verdict item shape projected into local security scan verdicts. */
+type OpenClawSkillSecurityVerdictItem = Omit<
   ClawHubSkillSecurityVerdictItem,
   "decision" | "error" | "security"
 > & {
@@ -37,7 +37,7 @@ function readSecurityPassed(security: unknown): boolean | null | undefined {
   return typeof passed === "boolean" ? passed : undefined;
 }
 
-export function projectClawHubVerdictItem(
+function projectClawHubVerdictItem(
   item: ClawHubSkillSecurityVerdictItem,
   registry: string,
 ): OpenClawSkillSecurityVerdictItem {

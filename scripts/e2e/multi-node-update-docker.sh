@@ -1,14 +1,12 @@
 #!/usr/bin/env bash
-# Reproduces the multi-node-install update bug.
+# Guards the multi-node-install update fix.
 #
 # Sets up two independent Node installations inside a Docker container, installs
 # OpenClaw under node-A, registers the gateway service pointing at node-A, then
 # switches PATH so node-B comes first and runs `openclaw update`. Verifies that:
 #
-# 1. The update targets the wrong install root (node-B npm prefix) or produces
-#    a gateway service definition pointing at node-B while the package lives
-#    under node-A.
-# 2. The gateway fails to start or runs a stale/missing entrypoint.
+# 1. The update stays on node-A's package root and service runtime.
+# 2. The gateway restarts from the preserved entrypoint and becomes healthy.
 #
 # Usage:
 #   ./scripts/e2e/multi-node-update-docker.sh
@@ -20,7 +18,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
-IMAGE_NAME="openclaw-multi-node-update-e2e"
+IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-multi-node-update-e2e" OPENCLAW_MULTI_NODE_UPDATE_E2E_IMAGE)"
+SKIP_BUILD="${OPENCLAW_MULTI_NODE_UPDATE_E2E_SKIP_BUILD:-0}"
 DOCKER_RUN_TIMEOUT="${OPENCLAW_MULTI_NODE_DOCKER_TIMEOUT:-300s}"
 RUN_ID="${OPENCLAW_MULTI_NODE_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
 ARTIFACT_DIR="${OPENCLAW_MULTI_NODE_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/multi-node-update/$RUN_ID}"
@@ -33,7 +32,7 @@ cleanup() {
 trap cleanup EXIT
 
 # Build the bare e2e image and prepare the package tarball.
-docker_e2e_build_or_reuse "$IMAGE_NAME" multi-node-update "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "${OPENCLAW_SKIP_DOCKER_BUILD:-0}"
+docker_e2e_build_or_reuse "$IMAGE_NAME" multi-node-update "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"
 PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz multi-node-update "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}")"
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
 
@@ -205,7 +204,7 @@ start_gateway() {
     echo "systemctl shim: unit not found: \$unit" >&2
     return 1
   fi
-  exec_start="\$(sed -n 's/^ExecStart=//p' "\$unit" | tail -n 1)"
+  exec_start="\$(sed -n "s/^ExecStart=//p" "\$unit" | tail -n 1)"
   if [ -z "\$exec_start" ]; then
     echo "systemctl shim: no ExecStart in \$unit" >&2
     return 1
@@ -215,7 +214,7 @@ start_gateway() {
     export OPENCLAW_NO_RESPAWN=1
     echo "systemctl shim: starting: \$exec_start"
     nohup bash -lc "exec \$exec_start" >>"$GATEWAY_DAEMON_LOG" 2>&1 &
-    printf '%s\n' "\$!" >"$GATEWAY_PID_FILE"
+    printf "%s\n" "\$!" >"$GATEWAY_PID_FILE"
   )
 }
 
@@ -246,9 +245,9 @@ case "\$command" in
     ;;
   show)
     if is_running; then
-      printf 'ActiveState=active\nSubState=running\nMainPID=%s\nExecMainStatus=0\nExecMainCode=0\n' "\$(cat "$GATEWAY_PID_FILE")"
+      printf "ActiveState=active\nSubState=running\nMainPID=%s\nExecMainStatus=0\nExecMainCode=0\n" "\$(cat "$GATEWAY_PID_FILE")"
     else
-      printf 'ActiveState=inactive\nSubState=dead\nMainPID=0\nExecMainStatus=0\nExecMainCode=0\n'
+      printf "ActiveState=inactive\nSubState=dead\nMainPID=0\nExecMainStatus=0\nExecMainCode=0\n"
     fi
     ;;
   *)
@@ -267,6 +266,27 @@ if ! openclaw gateway install --json >"$ARTIFACTS/gateway-install.json" 2>"$ARTI
   echo "FAIL: gateway install failed before update"
   cat "$ARTIFACTS/gateway-install.json" 2>/dev/null || true
   cat "$ARTIFACTS/gateway-install.err" 2>/dev/null || true
+  exit 1
+fi
+
+if ! openclaw gateway status --json \
+  >"$ARTIFACTS/gateway-status-before-update.json" \
+  2>"$ARTIFACTS/gateway-status-before-update.err"; then
+  echo "FAIL: gateway status failed before update"
+  cat "$ARTIFACTS/gateway-status-before-update.err" 2>/dev/null || true
+  exit 1
+fi
+if ! GATEWAY_STATUS_FILE="$ARTIFACTS/gateway-status-before-update.json" node --input-type=module <<"NODE"
+import fs from "node:fs";
+const status = JSON.parse(fs.readFileSync(process.env.GATEWAY_STATUS_FILE, "utf8"));
+if (status.service?.runtime?.status !== "running") {
+  console.error(`expected running gateway service before update, got \${status.service?.runtime?.status ?? "missing"}`);
+  process.exit(1);
+}
+NODE
+then
+  echo "FAIL: gateway service was not running before update"
+  cat "$ARTIFACTS/gateway-status-before-update.json" 2>/dev/null || true
   exit 1
 fi
 
@@ -418,7 +438,9 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 let last = "timeout";
 while (Date.now() < deadline) {
   try {
-    const response = await fetch(url);
+    // Keep each request inside the outer probe budget so a stalled fetch cannot outlive it.
+    const remainingMs = Math.max(1, deadline - Date.now());
+    const response = await fetch(url, { signal: AbortSignal.timeout(remainingMs) });
     if (response.ok) {
       process.exit(0);
     }
@@ -426,7 +448,11 @@ while (Date.now() < deadline) {
   } catch (error) {
     last = error instanceof Error ? error.message : String(error);
   }
-  await sleep(500);
+  const remainingDelayMs = deadline - Date.now();
+  if (remainingDelayMs <= 0) {
+    break;
+  }
+  await sleep(Math.min(500, remainingDelayMs));
 }
 console.error(last);
 process.exit(1);

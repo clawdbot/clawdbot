@@ -1,0 +1,4 @@
+interface:
+  display_name: "OpenClaw CI Limits"
+  short_description: "Tune OpenClaw CI fanout and runner budgets"
+  default_prompt: "Use $openclaw-ci-limits to inspect OpenClaw CI pressure, tune runner-registration fanout safely, and document the exact validation before landing."

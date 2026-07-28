@@ -7,7 +7,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { isRecord } from "../utils.js";
 import { executeStatusScanFromOverview } from "./status.scan-execute.ts";
 import {
-  resolveDefaultMemoryStorePath,
+  resolveDefaultMemoryDatabasePath,
   resolveStatusMemoryStatusSnapshot,
 } from "./status.scan-memory.ts";
 import { collectStatusScanOverview } from "./status.scan-overview.ts";
@@ -26,7 +26,6 @@ const STATUS_JSON_CHANNEL_ENV_VARS = new Set(
 type StatusJsonScanPolicy = {
   commandName: string;
   allowMissingConfigFastPath?: boolean;
-  includeChannelSummary?: boolean;
   fetchGitUpdate?: boolean;
   includeRegistryUpdate?: boolean;
   includeLocalStatusRpcFallback?: boolean;
@@ -108,9 +107,6 @@ export async function scanStatusJsonWithPolicy(
   return await executeStatusScanFromOverview({
     overview,
     runtime,
-    summary: {
-      includeChannelSummary: policy.includeChannelSummary,
-    },
     resolveMemory: policy.resolveMemory,
     channelIssues: [],
     channels: { rows: [], details: [] },
@@ -129,14 +125,10 @@ export async function scanStatusJsonFast(
   return await scanStatusJsonWithPolicy(opts, runtime, {
     commandName: "status --json",
     allowMissingConfigFastPath: true,
-    includeChannelSummary: false,
     fetchGitUpdate: opts.all === true,
     includeRegistryUpdate: opts.all === true,
     includeLocalStatusRpcFallback: opts.all === true,
-    gatewayProbeTimeoutMs:
-      opts.all === true
-        ? undefined
-        : (cfg) => opts.timeoutMs ?? Math.max(1000, cfg.gateway?.handshakeTimeoutMs ?? 0),
+    gatewayProbeTimeoutMs: opts.all === true ? undefined : () => opts.timeoutMs ?? 1000,
     resolveHasConfiguredChannels: (cfg) => hasPotentialConfiguredChannelsForStatusJson(cfg),
     resolveMemory: async ({ cfg, agentStatus, memoryPlugin }) =>
       opts.all
@@ -144,7 +136,7 @@ export async function scanStatusJsonFast(
             cfg,
             agentStatus,
             memoryPlugin,
-            requireDefaultStore: resolveDefaultMemoryStorePath,
+            requireDefaultDatabasePath: resolveDefaultMemoryDatabasePath,
           })
         : null,
   });

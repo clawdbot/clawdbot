@@ -1,4 +1,5 @@
 // Covers OpenClaw CLI PATH construction.
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureOpenClawCliOnPath } from "./path-env.js";
@@ -51,6 +52,10 @@ describe("ensureOpenClawCliOnPath", () => {
     "OPENCLAW_PATH_BOOTSTRAPPED",
     "OPENCLAW_ALLOW_PROJECT_LOCAL_BIN",
     "MISE_DATA_DIR",
+    "XDG_DATA_HOME",
+    "LOCALAPPDATA",
+    "PNPM_HOME",
+    "NPM_CONFIG_PREFIX",
     "HOMEBREW_PREFIX",
     "HOMEBREW_BREW_FILE",
     "XDG_BIN_HOME",
@@ -106,6 +111,11 @@ describe("ensureOpenClawCliOnPath", () => {
     delete process.env.HOMEBREW_PREFIX;
     delete process.env.HOMEBREW_BREW_FILE;
     delete process.env.XDG_BIN_HOME;
+    delete process.env.PNPM_HOME;
+    delete process.env.NPM_CONFIG_PREFIX;
+    delete process.env.MISE_DATA_DIR;
+    delete process.env.XDG_DATA_HOME;
+    delete process.env.LOCALAPPDATA;
   }
 
   function expectPathsAfter(parts: string[], anchor: string, expectedPaths: string[]) {
@@ -164,14 +174,116 @@ describe("ensureOpenClawCliOnPath", () => {
     expect(process.env.PATH).toBe("/bin");
   });
 
-  it("appends mise shims after system dirs", () => {
-    const { tmp, appCli } = setupAppCliRoot("case-mise");
-    const miseDataDir = path.join(tmp, "mise");
-    const shimsDir = path.join(miseDataDir, "shims");
-    setDir(miseDataDir);
-    setDir(shimsDir);
+  it("uses MISE_DATA_DIR before all platform defaults", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-mise-override");
+    const miseShims = path.join(tmp, "mise-override", "shims");
+    const xdgShims = path.join(tmp, "xdg-data", "mise", "shims");
+    const localAppDataShims = path.join(tmp, "local-app-data", "mise", "shims");
+    const homeShims = path.join(tmp, "AppData", "Local", "mise", "shims");
+    for (const dir of [miseShims, xdgShims, localAppDataShims, homeShims]) {
+      setDir(dir);
+    }
 
-    process.env.MISE_DATA_DIR = miseDataDir;
+    resetBootstrapEnv();
+    process.env.MISE_DATA_DIR = path.dirname(miseShims);
+    process.env.XDG_DATA_HOME = path.join(tmp, "xdg-data");
+    process.env.LOCALAPPDATA = path.join(tmp, "local-app-data");
+
+    const updated = bootstrapPath({
+      execPath: appCli,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "win32",
+    });
+    expectPathsAfter(updated, "/usr/bin", [miseShims]);
+    expect(updated).not.toContain(xdgShims);
+    expect(updated).not.toContain(localAppDataShims);
+    expect(updated).not.toContain(homeShims);
+  });
+
+  it("uses XDG_DATA_HOME before Windows platform defaults", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-mise-xdg-windows");
+    const xdgShims = path.join(tmp, "xdg-data", "mise", "shims");
+    const localAppDataShims = path.join(tmp, "local-app-data", "mise", "shims");
+    const homeShims = path.join(tmp, "AppData", "Local", "mise", "shims");
+    for (const dir of [xdgShims, localAppDataShims, homeShims]) {
+      setDir(dir);
+    }
+
+    resetBootstrapEnv();
+    process.env.XDG_DATA_HOME = path.join(tmp, "xdg-data");
+    process.env.LOCALAPPDATA = path.join(tmp, "local-app-data");
+
+    const updated = bootstrapPath({
+      execPath: appCli,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "win32",
+    });
+    expectPathsAfter(updated, "/usr/bin", [xdgShims]);
+    expect(updated).not.toContain(localAppDataShims);
+    expect(updated).not.toContain(homeShims);
+  });
+
+  it("uses LOCALAPPDATA before the Windows HOME fallback", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-mise-local-app-data");
+    const localAppDataShims = path.join(tmp, "local-app-data", "mise", "shims");
+    const homeShims = path.join(tmp, "AppData", "Local", "mise", "shims");
+    setDir(localAppDataShims);
+    setDir(homeShims);
+
+    resetBootstrapEnv();
+    process.env.LOCALAPPDATA = path.join(tmp, "local-app-data");
+
+    const updated = bootstrapPath({
+      execPath: appCli,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "win32",
+    });
+    expectPathsAfter(updated, "/usr/bin", [localAppDataShims]);
+    expect(updated).not.toContain(homeShims);
+  });
+
+  it("uses HOME/AppData/Local when Windows overrides are absent", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-mise-windows-home");
+    const homeShims = path.join(tmp, "AppData", "Local", "mise", "shims");
+    setDir(homeShims);
+    resetBootstrapEnv();
+
+    const updated = bootstrapPath({
+      execPath: appCli,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "win32",
+    });
+    expectPathsAfter(updated, "/usr/bin", [homeShims]);
+  });
+
+  it("uses XDG_DATA_HOME before the Unix HOME fallback", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-mise-xdg-unix");
+    const xdgShims = path.join(tmp, "xdg-data", "mise", "shims");
+    const homeShims = path.join(tmp, ".local", "share", "mise", "shims");
+    setDir(xdgShims);
+    setDir(homeShims);
+
+    resetBootstrapEnv();
+    process.env.XDG_DATA_HOME = path.join(tmp, "xdg-data");
+
+    const updated = bootstrapPath({
+      execPath: appCli,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "linux",
+    });
+    expectPathsAfter(updated, "/usr/bin", [xdgShims]);
+    expect(updated).not.toContain(homeShims);
+  });
+
+  it("uses HOME/.local/share when Unix overrides are absent", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-mise-unix-home");
+    const homeShims = path.join(tmp, ".local", "share", "mise", "shims");
+    setDir(homeShims);
     resetBootstrapEnv();
 
     const updated = bootstrapPath({
@@ -180,7 +292,7 @@ describe("ensureOpenClawCliOnPath", () => {
       homeDir: tmp,
       platform: "darwin",
     });
-    expectPathsAfter(updated, "/usr/bin", [shimsDir]);
+    expectPathsAfter(updated, "/usr/bin", [homeShims]);
   });
 
   it.each([
@@ -232,6 +344,26 @@ describe("ensureOpenClawCliOnPath", () => {
     },
   );
 
+  it("skips project-local bins when the working directory was deleted", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-deleted-cwd");
+    const localBinDir = path.join(tmp, "node_modules", ".bin");
+    setDir(localBinDir);
+    setExe(path.join(localBinDir, "openclaw"));
+    resetBootstrapEnv();
+    process.env.OPENCLAW_ALLOW_PROJECT_LOCAL_BIN = "1";
+    const cwdSpy = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw new Error("ENOENT: uv_cwd");
+    });
+
+    try {
+      ensureOpenClawCliOnPath({ execPath: appCli, homeDir: tmp, platform: "darwin" });
+    } finally {
+      cwdSpy.mockRestore();
+    }
+
+    expect((process.env.PATH ?? "").split(path.delimiter)).not.toContain(localBinDir);
+  });
+
   it("prepends XDG_BIN_HOME ahead of other user bin fallbacks", () => {
     const { tmp, appCli } = setupAppCliRoot("case-xdg-bin-home");
     const xdgBinHome = path.join(tmp, "xdg-bin");
@@ -272,12 +404,17 @@ describe("ensureOpenClawCliOnPath", () => {
   it("places all user-writable home dirs after system dirs", () => {
     const { tmp, appCli } = setupAppCliRoot("case-user-writable-after-system");
     const localBin = path.join(tmp, ".local", "bin");
+    const npmGlobalBin = path.join(tmp, ".npm-global", "bin");
+    const pnpm11Bin = path.join(tmp, ".local", "share", "pnpm", "bin");
     const pnpmBin = path.join(tmp, ".local", "share", "pnpm");
     const bunBin = path.join(tmp, ".bun", "bin");
     const yarnBin = path.join(tmp, ".yarn", "bin");
     setDir(path.join(tmp, ".local"));
     setDir(localBin);
+    setDir(path.join(tmp, ".npm-global"));
+    setDir(npmGlobalBin);
     setDir(path.join(tmp, ".local", "share"));
+    setDir(pnpm11Bin);
     setDir(pnpmBin);
     setDir(path.join(tmp, ".bun"));
     setDir(bunBin);
@@ -292,7 +429,146 @@ describe("ensureOpenClawCliOnPath", () => {
       homeDir: tmp,
       platform: "linux",
     });
-    expectPathsAfter(updated, "/usr/bin", [localBin, pnpmBin, bunBin, yarnBin]);
+    expectPathsAfter(updated, "/usr/bin", [
+      localBin,
+      npmGlobalBin,
+      pnpm11Bin,
+      pnpmBin,
+      bunBin,
+      yarnBin,
+    ]);
+  });
+
+  it("appends package-manager env bin dirs after system dirs", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-package-manager-env");
+    const pnpmHome = path.join(tmp, "pnpm-home");
+    const pnpmHomeBin = path.join(pnpmHome, "bin");
+    const npmPrefix = path.join(tmp, "npm-prefix");
+    const npmPrefixBin = path.join(npmPrefix, "bin");
+    setDir(pnpmHome);
+    setDir(pnpmHomeBin);
+    setDir(npmPrefix);
+    setDir(npmPrefixBin);
+
+    resetBootstrapEnv("/usr/bin:/bin");
+    process.env.PNPM_HOME = pnpmHome;
+    process.env.NPM_CONFIG_PREFIX = npmPrefix;
+
+    const updated = bootstrapPath({
+      execPath: appCli,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "linux",
+    });
+    expectPathsAfter(updated, "/usr/bin", [pnpmHome, pnpmHomeBin, npmPrefixBin]);
+  });
+
+  it("keeps package-manager env roots when cwd is the filesystem root", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-package-manager-root-cwd");
+    const pnpmHome = path.join(tmp, "pnpm-home");
+    const pnpmHomeBin = path.join(pnpmHome, "bin");
+    const npmPrefix = path.join(tmp, "npm-prefix");
+    const npmPrefixBin = path.join(npmPrefix, "bin");
+    for (const dir of [pnpmHome, pnpmHomeBin, npmPrefix, npmPrefixBin]) {
+      setDir(dir);
+    }
+
+    resetBootstrapEnv("/usr/bin:/bin");
+    process.env.PNPM_HOME = pnpmHome;
+    process.env.NPM_CONFIG_PREFIX = npmPrefix;
+
+    const updated = bootstrapPath({
+      execPath: appCli,
+      cwd: path.parse(tmp).root,
+      homeDir: tmp,
+      platform: "linux",
+    });
+
+    expectPathsAfter(updated, "/usr/bin", [pnpmHome, pnpmHomeBin, npmPrefixBin]);
+  });
+
+  it("ignores relative package-manager env roots", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-package-manager-relative");
+    resetBootstrapEnv("/usr/bin:/bin");
+    process.env.PNPM_HOME = ".";
+    process.env.NPM_CONFIG_PREFIX = "npm-prefix";
+
+    const updated = bootstrapPath({
+      execPath: appCli,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "linux",
+    });
+
+    expect(updated).not.toContain(".");
+    expect(updated).not.toContain("bin");
+    expect(updated).not.toContain(path.join("npm-prefix", "bin"));
+  });
+
+  it("ignores package-manager env roots derived from the active workspace", () => {
+    const homeDir = abs("/tmp/openclaw-path/home");
+    const cwd = path.join(homeDir, "workspace");
+    const appBinDir = path.join(homeDir, "app-bin");
+    const appCli = path.join(appBinDir, "openclaw");
+    const pnpmHome = path.join(cwd, ".pnpm");
+    const npmPrefix = path.join(cwd, ".npm-prefix");
+    for (const dir of [homeDir, cwd, appBinDir, pnpmHome, path.join(pnpmHome, "bin"), npmPrefix]) {
+      setDir(dir);
+    }
+    setDir(path.join(npmPrefix, "bin"));
+    setExe(appCli);
+    resetBootstrapEnv("/usr/bin:/bin");
+    process.env.PNPM_HOME = pnpmHome;
+    process.env.NPM_CONFIG_PREFIX = npmPrefix;
+
+    const updated = bootstrapPath({
+      execPath: appCli,
+      cwd,
+      homeDir,
+      platform: "linux",
+    });
+
+    expect(updated).not.toContain(pnpmHome);
+    expect(updated).not.toContain(path.join(pnpmHome, "bin"));
+    expect(updated).not.toContain(path.join(npmPrefix, "bin"));
+  });
+
+  it("ignores package-manager env roots whose existing parent resolves into the workspace", () => {
+    const homeDir = abs("/tmp/openclaw-path/home");
+    const cwd = path.join(homeDir, "workspace");
+    const appBinDir = path.join(homeDir, "app-bin");
+    const appCli = path.join(appBinDir, "openclaw");
+    for (const dir of [homeDir, cwd, appBinDir]) {
+      setDir(dir);
+    }
+    setExe(appCli);
+    resetBootstrapEnv("/usr/bin:/bin");
+    process.env.PNPM_HOME = "/tmp/workspace-link/missing-pnpm-home";
+
+    const realpathNative = vi.spyOn(fs.realpathSync, "native").mockImplementation((candidate) => {
+      const value = String(candidate);
+      if (value === "/tmp/workspace-link") {
+        return cwd;
+      }
+      if (value === cwd || value === homeDir) {
+        return value;
+      }
+      throw Object.assign(new Error("missing"), { code: "ENOENT" });
+    });
+
+    try {
+      const updated = bootstrapPath({
+        execPath: appCli,
+        cwd,
+        homeDir,
+        platform: "linux",
+      });
+
+      expect(updated).not.toContain(process.env.PNPM_HOME);
+      expect(updated).not.toContain(path.join(process.env.PNPM_HOME, "bin"));
+    } finally {
+      realpathNative.mockRestore();
+    }
   });
 
   it.each([

@@ -1,8 +1,8 @@
 // Verifies logging config parsing and file path handling.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withTempDirSync } from "../test-helpers/temp-dir.js";
 
 const mocks = vi.hoisted(() => ({
   createConfigIO: vi.fn().mockReturnValue({
@@ -39,15 +39,16 @@ describe("config logging", () => {
   });
 
   it("formats backup as an indented detail when present", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-log-"));
-    const configPath = path.join(dir, "openclaw.json");
-    const backupPath = `${configPath}.bak`;
-    fs.writeFileSync(backupPath, "{}", "utf8");
+    withTempDirSync({ prefix: "openclaw-config-log-" }, (dir) => {
+      const configPath = path.join(dir, "openclaw.json");
+      const backupPath = `${configPath}.bak`;
+      fs.writeFileSync(backupPath, "{}", "utf8");
 
-    expect(
-      formatConfigUpdatedMessage(configPath, {
-        backupPath,
-      }),
-    ).toBe(`Updated config: ${configPath}\n  Backup: ${backupPath}`);
+      expect(
+        formatConfigUpdatedMessage(configPath, {
+          backupPath,
+        }),
+      ).toBe(`Updated config: ${configPath}\n  Backup: ${backupPath}`);
+    });
   });
 });

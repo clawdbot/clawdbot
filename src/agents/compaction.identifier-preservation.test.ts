@@ -15,15 +15,16 @@ vi.mock("./sessions/index.js", async () => {
 
 const mockGenerateSummary = vi.mocked(agentSessions.generateSummary);
 type SummarizeInStagesInput = Parameters<typeof import("./compaction.js").summarizeInStages>[0];
+const MESSAGE_TIME_BASE_MS = Date.UTC(2026, 0, 1);
 
-const { buildCompactionSummarizationInstructions, summarizeInStages } =
-  await import("./compaction.js");
+const { buildCompactionSummarizationInstructions } = await import("./compaction.test-support.js");
+const { summarizeInStages } = await import("./compaction.js");
 
 function makeMessage(index: number, size = 1200): AgentMessage {
   return {
     role: "user",
     content: `m${index}-${"x".repeat(size)}`,
-    timestamp: index,
+    timestamp: MESSAGE_TIME_BASE_MS + index * 60_000,
   };
 }
 
@@ -113,6 +114,14 @@ describe("compaction identifier-preservation instructions", () => {
         "Preserve all opaque identifiers exactly as written",
       );
     }
+
+    type SyntheticMergeMessage = { role: "user"; content: string; timestamp: number };
+    const mergeMessages = mockGenerateSummary.mock.calls[2]![0] as SyntheticMergeMessage[];
+    expect(mergeMessages.map((message) => message.content)).toEqual([
+      "[Chunk 1 — oldest messages [2026-01-01 00:01 — 2026-01-01 00:02 UTC]]\nsummary",
+      "[Chunk 2 — most recent messages [2026-01-01 00:03 — 2026-01-01 00:04 UTC]]\nsummary",
+    ]);
+    expect(mergeMessages[1]!.timestamp).toBe(mergeMessages[0]!.timestamp + 1);
   });
 
   it("avoids duplicate additional-focus headers in split+merge path", async () => {

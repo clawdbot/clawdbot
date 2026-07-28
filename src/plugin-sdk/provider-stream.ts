@@ -36,7 +36,6 @@ export {
   createMoonshotThinkingWrapper,
   createPlainTextToolCallCompatWrapper,
   createToolStreamWrapper,
-  createZaiToolStreamWrapper,
   defaultToolStreamExtraParams,
   isOpenAICompatibleThinkingEnabled,
   type ProviderStreamWrapperFactory,
@@ -64,6 +63,24 @@ export type ProviderStreamFamily =
   | "tool-stream-default-on";
 
 type ProviderStreamFamilyHooks = Pick<ProviderPlugin, "wrapStreamFn">;
+
+function hasFastModeParam(extraParams: Record<string, unknown> | undefined): boolean {
+  return Boolean(
+    extraParams &&
+    (Object.hasOwn(extraParams, "fastMode") || Object.hasOwn(extraParams, "fast_mode")),
+  );
+}
+
+function resolveBooleanFastMode(
+  extraParams: Record<string, unknown> | undefined,
+): boolean | undefined {
+  const raw = extraParams?.fastMode ?? extraParams?.fast_mode;
+  if (typeof raw === "function") {
+    const resolved = (raw as () => unknown)();
+    return typeof resolved === "boolean" ? resolved : undefined;
+  }
+  return typeof raw === "boolean" ? raw : undefined;
+}
 
 /** Builds provider hook objects for one supported stream-wrapper family. */
 export function buildProviderStreamFamilyHooks(
@@ -95,7 +112,7 @@ export function buildProviderStreamFamilyHooks(
       return {
         wrapStreamFn: (ctx: ProviderWrapStreamFnContext) => {
           const thinkingLevel =
-            ctx.modelId === "kilo/auto" || isProxyReasoningUnsupported(ctx.modelId)
+            ctx.modelId === "kilo-auto/balanced" || isProxyReasoningUnsupported(ctx.modelId)
               ? undefined
               : ctx.thinkingLevel;
           return createKilocodeWrapper(ctx.streamFn, thinkingLevel);
@@ -104,7 +121,7 @@ export function buildProviderStreamFamilyHooks(
     case "minimax-fast-mode":
       return {
         wrapStreamFn: (ctx: ProviderWrapStreamFnContext) =>
-          createMinimaxFastModeWrapper(ctx.streamFn, ctx.extraParams?.fastMode === true),
+          createMinimaxFastModeWrapper(ctx.streamFn, () => resolveBooleanFastMode(ctx.extraParams)),
       };
     case "openai-responses-defaults":
       return {
@@ -113,8 +130,10 @@ export function buildProviderStreamFamilyHooks(
           // before payload-shape and context-management compatibility rewrites.
           let nextStreamFn = createOpenAIAttributionHeadersWrapper(ctx.streamFn);
 
-          if (resolveOpenAIFastMode(ctx.extraParams)) {
-            nextStreamFn = createOpenAIFastModeWrapper(nextStreamFn);
+          if (hasFastModeParam(ctx.extraParams)) {
+            nextStreamFn = createOpenAIFastModeWrapper(nextStreamFn, () =>
+              resolveOpenAIFastMode(ctx.extraParams),
+            );
           }
 
           const serviceTier = resolveOpenAIServiceTier(ctx.extraParams);

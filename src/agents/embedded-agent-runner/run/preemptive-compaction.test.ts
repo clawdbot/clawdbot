@@ -8,7 +8,6 @@ import { estimateToolResultReductionPotential } from "../tool-result-truncation.
 let PREEMPTIVE_OVERFLOW_ERROR_TEXT: typeof import("./preemptive-compaction.js").PREEMPTIVE_OVERFLOW_ERROR_TEXT;
 let estimateLlmBoundaryTokenPressure: typeof import("./preemptive-compaction.js").estimateLlmBoundaryTokenPressure;
 let buildPrePromptContextBudgetStatus: typeof import("./preemptive-compaction.js").buildPrePromptContextBudgetStatus;
-let estimatePrePromptTokens: typeof import("./preemptive-compaction.js").estimatePrePromptTokens;
 let estimateRenderedLlmBoundaryTokenPressure: typeof import("./preemptive-compaction.js").estimateRenderedLlmBoundaryTokenPressure;
 let formatPrePromptPrecheckLog: typeof import("./preemptive-compaction.js").formatPrePromptPrecheckLog;
 let shouldPreemptivelyCompactBeforePrompt: typeof import("./preemptive-compaction.js").shouldPreemptivelyCompactBeforePrompt;
@@ -21,7 +20,6 @@ beforeAll(async () => {
     PREEMPTIVE_OVERFLOW_ERROR_TEXT,
     estimateLlmBoundaryTokenPressure,
     buildPrePromptContextBudgetStatus,
-    estimatePrePromptTokens,
     estimateRenderedLlmBoundaryTokenPressure,
     formatPrePromptPrecheckLog,
     shouldPreemptivelyCompactBeforePrompt,
@@ -91,12 +89,12 @@ describe("preemptive-compaction", () => {
   });
 
   it("raises the estimate as prompt-side content grows", () => {
-    const smaller = estimatePrePromptTokens({
+    const smaller = estimateLlmBoundaryTokenPressure({
       messages: [makeAssistantHistory(verboseHistory)],
       systemPrompt: "sys",
       prompt: "hello",
     });
-    const larger = estimatePrePromptTokens({
+    const larger = estimateLlmBoundaryTokenPressure({
       messages: [makeAssistantHistory(verboseHistory)],
       systemPrompt: verboseSystem,
       prompt: verbosePrompt,
@@ -293,7 +291,7 @@ describe("preemptive-compaction", () => {
         })),
       }),
     ];
-    const estimatedPromptTokens = estimatePrePromptTokens({
+    const estimatedPromptTokens = estimateLlmBoundaryTokenPressure({
       messages,
       systemPrompt: "sys",
       prompt: "continue",
@@ -372,7 +370,7 @@ describe("preemptive-compaction", () => {
     ];
     const reserveTokens = 2_000;
     const contextTokenBudget = 26_000;
-    const estimatedPromptTokens = estimatePrePromptTokens({
+    const estimatedPromptTokens = estimateLlmBoundaryTokenPressure({
       messages,
       systemPrompt: "sys",
       prompt: "hello",
@@ -395,7 +393,7 @@ describe("preemptive-compaction", () => {
   });
 
   it("routes to compact then truncate when recent tool tails help but cannot fully cover the overflow", () => {
-    const medium = "alpha beta gamma delta epsilon ".repeat(220);
+    const medium = "alpha beta gamma delta epsilon ".repeat(600);
     const longHistory = "old discussion with substantial retained context and decisions ".repeat(
       5000,
     );
@@ -428,16 +426,18 @@ describe("preemptive-compaction", () => {
       makeToolResultMessage(oversized),
       makeToolResultMessage(medium),
       makeToolResultMessage(medium),
+      makeToolResultMessage(medium),
+      makeToolResultMessage(medium),
     ];
     const reserveTokens = 2_000;
-    const estimatedPromptTokens = estimatePrePromptTokens({
+    const estimatedPromptTokens = estimateLlmBoundaryTokenPressure({
       messages,
       systemPrompt: "sys",
       prompt: "hello",
     });
     const potential = estimateToolResultReductionPotential({
       messages,
-      contextWindowTokens: 128_000,
+      contextWindowTokens: 20_000,
     });
     const desiredOverflowTokens = 2_000;
     const result = shouldPreemptivelyCompactBeforePrompt({
@@ -454,5 +454,134 @@ describe("preemptive-compaction", () => {
     expect(potential.maxReducibleChars).toBeGreaterThan(desiredOverflowTokens * 4);
     expect(result.route).toBe("truncate_tool_results_only");
     expect(result.shouldCompact).toBe(false);
+  });
+
+  it("estimates CJK tool results at roughly one token per character", () => {
+    const cjkText = "中".repeat(85_000);
+    const toolResultTokens = estimateLlmBoundaryTokenPressure({
+      messages: [makeToolResultMessage(cjkText)],
+      systemPrompt: "sys",
+      prompt: "continue",
+    });
+    const assistantTokens = estimateLlmBoundaryTokenPressure({
+      messages: [makeAssistantHistory(cjkText)],
+      systemPrompt: "sys",
+      prompt: "continue",
+    });
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages: [makeToolResultMessage(cjkText)],
+      systemPrompt: "sys",
+      prompt: "continue",
+      contextTokenBudget: 128_000,
+      reserveTokens: 20_000,
+    });
+
+    expect(toolResultTokens).toBeGreaterThanOrEqual(assistantTokens);
+    expect(toolResultTokens - assistantTokens).toBeLessThanOrEqual(5);
+    expect(result.estimatedPromptTokens).toBe(toolResultTokens);
+    expect(result.promptBudgetBeforeReserve).toBeGreaterThan(result.estimatedPromptTokens);
+    expect(result.route).toBe("fits");
+    expect(result.shouldCompact).toBe(false);
+    expect(result.overflowTokens).toBe(0);
+  });
+
+  it("avoids false overflow when CJK is less than half of a tool result", () => {
+    const mixedContent = "中".repeat(40_000) + "a".repeat(60_000);
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages: [makeToolResultMessage(mixedContent)],
+      systemPrompt: "sys",
+      prompt: "continue",
+      contextTokenBudget: 100_000,
+      reserveTokens: 20_000,
+    });
+
+    expect(result.estimatedPromptTokens).toBeLessThan(result.promptBudgetBeforeReserve);
+    expect(result.route).toBe("fits");
+    expect(result.shouldCompact).toBe(false);
+  });
+
+  it("keeps mixed-script estimates monotonic across the former CJK cutoff", () => {
+    const estimate = (cjkChars: number) =>
+      estimateLlmBoundaryTokenPressure({
+        messages: [makeToolResultMessage("中".repeat(cjkChars) + "a".repeat(10_000 - cjkChars))],
+        systemPrompt: "sys",
+        prompt: "continue",
+      });
+
+    const belowCutoff = estimate(4_999);
+    const atCutoff = estimate(5_000);
+    const aboveCutoff = estimate(5_001);
+
+    expect(atCutoff).toBeGreaterThanOrEqual(belowCutoff);
+    expect(aboveCutoff).toBeGreaterThanOrEqual(atCutoff);
+    expect(aboveCutoff - belowCutoff).toBeLessThanOrEqual(2);
+  });
+
+  it("keeps the conservative ratio for non-CJK tool results", () => {
+    const latinText = "alpha beta gamma delta epsilon ".repeat(1000);
+    const toolResultTokens = estimateLlmBoundaryTokenPressure({
+      messages: [makeToolResultMessage(latinText)],
+      systemPrompt: "sys",
+      prompt: "continue",
+    });
+    const assistantTokens = estimateLlmBoundaryTokenPressure({
+      messages: [makeAssistantHistory(latinText)],
+      systemPrompt: "sys",
+      prompt: "continue",
+    });
+
+    expect(toolResultTokens).toBeGreaterThan(assistantTokens * 1.5);
+    expect(toolResultTokens).toBeLessThan(assistantTokens * 2.5);
+  });
+
+  it("applies the CJK-aware ratio to JSON tool-result payloads", () => {
+    const cjkPayload = {
+      summary: "中文内容".repeat(5_000),
+      note: "更多中文文本".repeat(2_000),
+    };
+    const messages = [makeJsonToolResultMessage(cjkPayload)];
+
+    const estimatedPromptTokens = estimateLlmBoundaryTokenPressure({
+      messages,
+      systemPrompt: "sys",
+      prompt: "continue",
+    });
+
+    expect(estimatedPromptTokens).toBeLessThan(90_000);
+
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages,
+      systemPrompt: "sys",
+      prompt: "continue",
+      contextTokenBudget: 128_000,
+      reserveTokens: 20_000,
+    });
+
+    expect(result.route).toBe("fits");
+    expect(result.shouldCompact).toBe(false);
+    expect(result.overflowTokens).toBe(0);
+  });
+
+  it("does not throw when tool-result content cannot be serialized", () => {
+    const circular: Record<string, unknown> = { self: undefined };
+    circular.self = circular;
+    const message = {
+      role: "toolResult",
+      toolCallId: "call_circular",
+      toolName: "bad_tool",
+      content: circular,
+      isError: false,
+      timestamp: timestamp++,
+    } as unknown as AgentMessage;
+
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages: [message],
+      systemPrompt: "sys",
+      prompt: "continue",
+      contextTokenBudget: 128_000,
+      reserveTokens: 20_000,
+    });
+
+    expect(Number.isFinite(result.estimatedPromptTokens)).toBe(true);
   });
 });

@@ -68,4 +68,32 @@ describe("resolveSessionAgentIds", () => {
     });
     expect(sessionAgentId).toBe("main");
   });
+
+  it("uses fallbackAgentId for unscoped channel session keys", () => {
+    const { sessionAgentId } = resolveSessionAgentIds({
+      sessionKey: "feishu:direct:ou_user1",
+      fallbackAgentId: "main",
+      config: cfg,
+    });
+    expect(sessionAgentId).toBe("main");
+  });
+
+  it("prefers session-key agent over fallbackAgentId", () => {
+    const { sessionAgentId } = resolveSessionAgentIds({
+      sessionKey: "agent:beta:feishu:direct:ou_user1",
+      fallbackAgentId: "main",
+      config: cfg,
+    });
+    expect(sessionAgentId).toBe("beta");
+  });
+
+  it("prefers explicit agentId over fallbackAgentId", () => {
+    const { sessionAgentId } = resolveSessionAgentIds({
+      sessionKey: "feishu:direct:ou_user1",
+      agentId: "beta",
+      fallbackAgentId: "main",
+      config: cfg,
+    });
+    expect(sessionAgentId).toBe("beta");
+  });
 });

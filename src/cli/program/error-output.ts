@@ -3,6 +3,7 @@ import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { getCommandPathWithRootOptions } from "../argv.js";
 import { formatCliCommand } from "../command-format.js";
+import { formatCliCommandSuggestions } from "./command-suggestions.js";
 
 type FormatCliParseErrorOptions = {
   argv?: string[];
@@ -53,6 +54,7 @@ export function formatCliParseErrorOutput(
     const command = unknownCommand[1] ?? "";
     return lines(
       theme.error(`OpenClaw does not know the command ${quote(command)}.`),
+      formatCliCommandSuggestions(command),
       formatHelpHint(options.argv, { root: true }),
       `${theme.muted("Plugin command?")} ${theme.command(formatCliCommand("openclaw plugins list"))}`,
       formatDocsHint(),

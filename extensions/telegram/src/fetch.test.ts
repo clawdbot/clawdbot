@@ -2,6 +2,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -316,7 +317,7 @@ function expectPinnedIpv4ConnectDispatcher(args: {
   }
 }
 
-function expectPinnedFallbackIpDispatcher(callIndex: number) {
+async function expectPinnedFallbackIpDispatcher(callIndex: number) {
   const dispatcher = getDispatcherFromUndiciCall(callIndex);
   expect(dispatcher?.options?.connect?.family).toBe(4);
   expect(dispatcher?.options?.connect?.autoSelectFamily).toBe(false);
@@ -327,6 +328,9 @@ function expectPinnedFallbackIpDispatcher(callIndex: number) {
       | ((hostname: string, callback: (err: null, address: string, family: number) => void) => void)
       | undefined
   )?.("api.telegram.org", callback);
+  await new Promise<void>((resolve) => {
+    process.nextTick(resolve);
+  });
   expect(callback).toHaveBeenCalledWith(null, "149.154.167.220", 4);
 }
 
@@ -655,9 +659,12 @@ describe("resolveTelegramFetch", () => {
     expect(transport.fetch).not.toBe(transport.sourceFetch);
     expect(transport.dispatcherAttempts).toHaveLength(3);
 
-    const [defaultAttempt, ipv4Attempt, pinnedAttempt] = transport.dispatcherAttempts as Array<{
+    const attempts = transport.dispatcherAttempts as Array<{
       dispatcherPolicy?: DirectTelegramDispatcherPolicy;
     }>;
+    const defaultAttempt = expectDefined(attempts[0], "default Telegram dispatcher attempt");
+    const ipv4Attempt = expectDefined(attempts[1], "IPv4 Telegram dispatcher attempt");
+    const pinnedAttempt = expectDefined(attempts[2], "pinned Telegram dispatcher attempt");
 
     const defaultPolicy = defaultAttempt.dispatcherPolicy;
     const ipv4Policy = ipv4Attempt.dispatcherPolicy;
@@ -694,9 +701,10 @@ describe("resolveTelegramFetch", () => {
     ).resolves.toEqual({ ok: true });
     // Only the default dispatcher — no IPv4 fallback or pinned IP attempts
     expect(transport.dispatcherAttempts).toHaveLength(1);
-    const [defaultAttempt] = transport.dispatcherAttempts as Array<{
+    const attempts = transport.dispatcherAttempts as Array<{
       dispatcherPolicy?: DirectTelegramDispatcherPolicy;
     }>;
+    const defaultAttempt = expectDefined(attempts[0], "default Telegram dispatcher attempt");
     expect(defaultAttempt.dispatcherPolicy?.mode).toBe("direct");
     expect(defaultAttempt.dispatcherPolicy?.connect?.autoSelectFamily).toBe(true);
   });
@@ -956,8 +964,8 @@ describe("resolveTelegramFetch", () => {
     expect(thirdDispatcher).toBe(seventhDispatcher);
     expect(eighthDispatcher).toBe(firstDispatcher);
     expect(ninthDispatcher).toBe(firstDispatcher);
-    expectPinnedFallbackIpDispatcher(3);
-    expectLoggerMessageContaining(loggerWarn, "fetch fallback: DNS-resolved IP unreachable");
+    await expectPinnedFallbackIpDispatcher(3);
+    expectLoggerMessageContaining(loggerWarn, "fetch fallback: primary connection path failed");
     expectLoggerMessageContaining(
       loggerDebug,
       "fetch fallback: recovered from attempt 2 to attempt 0",
@@ -1022,7 +1030,7 @@ describe("resolveTelegramFetch", () => {
     await resolved("https://api.telegram.org/botx/getMe");
 
     expect(undiciFetch).toHaveBeenCalledTimes(4);
-    expectPinnedFallbackIpDispatcher(3);
+    await expectPinnedFallbackIpDispatcher(3);
     expect(getDispatcherFromUndiciCall(4)).toBe(getDispatcherFromUndiciCall(3));
   });
 
@@ -1193,6 +1201,31 @@ describe("resolveTelegramFetch", () => {
     expect(undiciFetch).toHaveBeenCalledTimes(1);
   });
 
+  it("does not automatically retry structured EADDRNOTAVAIL fetch failures", async () => {
+    const fetchError = buildFetchFallbackError("EADDRNOTAVAIL");
+    undiciFetch.mockRejectedValue(fetchError);
+
+    const resolved = resolveTelegramFetchOrThrow(undefined, STICKY_IPV4_FALLBACK_NETWORK);
+
+    await expect(resolved("https://api.telegram.org/botx/sendMessage")).rejects.toThrow(
+      "fetch failed",
+    );
+
+    expect(undiciFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves EADDRNOTAVAIL in forced fallback diagnostics", () => {
+    const transport = resolveTelegramTransport(undefined, STICKY_IPV4_FALLBACK_NETWORK);
+    const fetchError = buildFetchFallbackError("EADDRNOTAVAIL");
+
+    expect(transport.forceFallback?.("probe timeout/network error", fetchError)).toBe(true);
+    expect(transport.forceFallback?.("probe timeout/network error", fetchError)).toBe(true);
+
+    expectLoggerMessageContaining(loggerWarn, "primary connection path failed");
+    expectLoggerMessageContaining(loggerWarn, "codes=EADDRNOTAVAIL");
+    expectNoLoggerMessageContaining(loggerWarn, "DNS-resolved IP unreachable");
+  });
+
   it("retries sticky fallback when the local network is down during connect", async () => {
     undiciFetch
       .mockRejectedValueOnce(buildFetchFallbackError("ENETDOWN"))
@@ -1305,7 +1338,7 @@ describe("resolveTelegramFetch", () => {
           dnsResultOrder: "ipv4first",
         },
       });
-      const instance = AgentCtor.mock.instances[0];
+      const instance = expectDefined(AgentCtor.mock.instances[0], "Telegram dispatcher instance");
 
       await transport.close();
       await transport.close();
@@ -1321,10 +1354,11 @@ describe("resolveTelegramFetch", () => {
           dnsResultOrder: "ipv4first",
         },
       });
-      const instance = AgentCtor.mock.instances[0];
+      const instance = expectDefined(AgentCtor.mock.instances[0], "Telegram dispatcher instance");
       instance.destroy.mockRejectedValueOnce(new Error("already destroyed"));
 
       await expect(transport.close()).resolves.toBeUndefined();
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

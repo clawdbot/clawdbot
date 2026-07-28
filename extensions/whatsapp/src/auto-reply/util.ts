@@ -1,5 +1,6 @@
 // Whatsapp plugin module implements util behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 export function elide(text?: string, limit = 400) {
   if (!text) {
@@ -8,7 +9,8 @@ export function elide(text?: string, limit = 400) {
   if (text.length <= limit) {
     return text;
   }
-  return `${text.slice(0, limit)}… (truncated ${text.length - limit} chars)`;
+  const truncated = truncateUtf16Safe(text, limit);
+  return `${truncated}… (truncated ${text.length - truncated.length} chars)`;
 }
 
 export function markWhatsAppVisibleDeliveryError(error: unknown): unknown {

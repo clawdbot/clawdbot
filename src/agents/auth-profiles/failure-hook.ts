@@ -1,5 +1,5 @@
 /** Hook invoked when auth profile failure state changes. */
-export type AuthProfileFailureHook = () => void;
+type AuthProfileFailureHook = () => void;
 
 let authProfileFailureHook: AuthProfileFailureHook | undefined;
 

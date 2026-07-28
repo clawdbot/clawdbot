@@ -91,6 +91,22 @@ describe("qa suite runtime agent tools helpers", () => {
     expect(skillPath).toBe(path.join(workspaceDir, "skills", "my-skill", "SKILL.md"));
   });
 
+  it("rejects workspace skill names that escape the skills directory", async () => {
+    const workspaceDir = await makeTempDir("qa-workspace-");
+
+    for (const name of ["", " spaced", "spaced ", ".", "..", "../escape", "..\\escape", "a/b"]) {
+      await expect(
+        writeWorkspaceSkill({
+          env: { gateway: { workspaceDir } } as never,
+          name,
+          body: "escape",
+        }),
+      ).rejects.toThrow(`invalid QA workspace skill name: ${JSON.stringify(name)}`);
+    }
+
+    await expect(fs.readdir(path.join(workspaceDir, "skills"))).rejects.toThrow();
+  });
+
   it("routes generic transport actions through the payload extractor", async () => {
     const handleAction = vi.fn(async () => ({
       content: [{ type: "text", text: "done" }],

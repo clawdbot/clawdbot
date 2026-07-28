@@ -49,15 +49,21 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: resolveApiKeyForProviderMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/provider-http", () => ({
-  assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
-  createProviderOperationDeadline: createProviderOperationDeadlineMock,
-  postJsonRequest: postJsonRequestMock,
-  postMultipartRequest: postMultipartRequestMock,
-  resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
-  resolveProviderOperationTimeoutMs: resolveProviderOperationTimeoutMsMock,
-  sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
-}));
+vi.mock("openclaw/plugin-sdk/provider-http", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-http")>(
+    "openclaw/plugin-sdk/provider-http",
+  );
+  return {
+    assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
+    createProviderOperationDeadline: createProviderOperationDeadlineMock,
+    postJsonRequest: postJsonRequestMock,
+    postMultipartRequest: postMultipartRequestMock,
+    readProviderJsonResponse: actual.readProviderJsonResponse,
+    resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
+    resolveProviderOperationTimeoutMs: resolveProviderOperationTimeoutMsMock,
+    sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
+  };
+});
 
 vi.mock("./runtime.js", () => ({
   prepareFoundryRuntimeAuth: prepareFoundryRuntimeAuthMock,
@@ -69,12 +75,16 @@ function buildConfig(
     modelName?: string;
     baseUrl?: string;
     includeModel?: boolean;
+    mediaMaxMb?: number;
   } = {},
 ): OpenClawConfig {
   const baseUrl = params.baseUrl ?? "https://example.services.ai.azure.com/openai/v1";
   const modelId = params.modelId ?? "image-deployment";
   const modelName = params.modelName ?? "MAI-Image-2.5";
   return {
+    ...(params.mediaMaxMb !== undefined
+      ? { agents: { defaults: { mediaMaxMb: params.mediaMaxMb } } }
+      : {}),
     models: {
       providers: {
         [PROVIDER_ID]: {
@@ -225,6 +235,64 @@ describe("microsoft foundry image generation provider", () => {
     expect(result.model).toBe("image-deployment");
     expect(result.images[0]?.buffer.toString()).toBe("png");
     expect(result.images[0]?.mimeType).toBe("image/png");
+  });
+
+  it("accepts a valid max-size MAI image JSON response", async () => {
+    const imageBytes = Buffer.alloc(6 * 1024 * 1024, 1);
+    postJsonRequestMock.mockResolvedValue(
+      releasedJson({
+        data: [{ b64_json: imageBytes.toString("base64") }],
+      }),
+    );
+    const provider = buildMicrosoftFoundryImageGenerationProvider();
+
+    const result = await provider.generateImage({
+      provider: PROVIDER_ID,
+      model: "image-deployment",
+      prompt: "draw it",
+      cfg: buildConfig(),
+    });
+
+    expect(result.images).toHaveLength(1);
+    expect(result.images[0]?.buffer.byteLength).toBe(imageBytes.byteLength);
+  });
+
+  it("honors configured generated media caps above the default image limit", async () => {
+    const imageBytes = Buffer.alloc(7 * 1024 * 1024, 1);
+    postJsonRequestMock.mockResolvedValue(
+      releasedJson({
+        data: [{ b64_json: imageBytes.toString("base64") }],
+      }),
+    );
+    const provider = buildMicrosoftFoundryImageGenerationProvider();
+
+    const result = await provider.generateImage({
+      provider: PROVIDER_ID,
+      model: "image-deployment",
+      prompt: "draw it",
+      cfg: buildConfig({ mediaMaxMb: 8 }),
+    });
+
+    expect(result.images).toHaveLength(1);
+    expect(result.images[0]?.buffer.byteLength).toBe(imageBytes.byteLength);
+  });
+
+  it("rejects oversized MAI image JSON responses", async () => {
+    postJsonRequestMock.mockResolvedValue(
+      releasedJson({
+        data: [{ b64_json: "x".repeat(10 * 1024 * 1024) }],
+      }),
+    );
+    const provider = buildMicrosoftFoundryImageGenerationProvider();
+
+    await expect(
+      provider.generateImage({
+        provider: PROVIDER_ID,
+        model: "image-deployment",
+        prompt: "draw it",
+        cfg: buildConfig(),
+      }),
+    ).rejects.toThrow("microsoft-foundry.image-generation: JSON response exceeds");
   });
 
   it("uses AZURE_OPENAI_ENDPOINT when env API-key auth has no configured base URL", async () => {

@@ -10,8 +10,6 @@ const imageGenerationTaskStatusMocks = vi.hoisted(() => ({
   buildImageGenerationTaskStatusDetails: vi.fn(() => ({})),
   buildImageGenerationTaskStatusText: vi.fn(() => "Image generation task status"),
   findActiveImageGenerationTaskForSession: vi.fn(),
-  getImageGenerationTaskProviderId: vi.fn(),
-  isActiveImageGenerationTask: vi.fn(() => false),
   IMAGE_GENERATION_TASK_KIND: "image_generation",
 }));
 const videoGenerationTaskStatusMocks = vi.hoisted(() => ({
@@ -19,8 +17,6 @@ const videoGenerationTaskStatusMocks = vi.hoisted(() => ({
   buildVideoGenerationTaskStatusDetails: vi.fn(() => ({})),
   buildVideoGenerationTaskStatusText: vi.fn(() => "Video generation task status"),
   findActiveVideoGenerationTaskForSession: vi.fn(),
-  getVideoGenerationTaskProviderId: vi.fn(),
-  isActiveVideoGenerationTask: vi.fn(() => false),
   VIDEO_GENERATION_TASK_KIND: "video_generation",
 }));
 const musicGenerationTaskStatusMocks = vi.hoisted(() => ({
@@ -39,7 +35,7 @@ import {
   ensureSystemPromptCacheBoundary,
   SYSTEM_PROMPT_CACHE_BOUNDARY,
   splitSystemPromptCacheBoundary,
-} from "../../system-prompt-cache-boundary.js";
+} from "@openclaw/ai/internal/shared";
 import {
   appendModelIdentitySystemPrompt,
   buildModelIdentityPromptLine,

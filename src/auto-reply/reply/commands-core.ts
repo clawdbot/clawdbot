@@ -35,7 +35,20 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
   if (HANDLERS === null) {
     HANDLERS = (await loadCommandHandlersRuntime()).loadCommandHandlers();
   }
-  const resetResult = await maybeHandleResetCommand(params);
+  const allowCreateSessionEntry = params.allowCreateSessionEntry === true;
+  const initialSessionEntry =
+    params.initialSessionEntry ??
+    (allowCreateSessionEntry
+      ? undefined
+      : params.sessionEntry
+        ? { ...params.sessionEntry }
+        : undefined);
+  const commandParams: HandleCommandsParams = {
+    ...params,
+    initialSessionEntry,
+    allowCreateSessionEntry,
+  };
+  const resetResult = await maybeHandleResetCommand(commandParams);
   if (resetResult) {
     return normalizeCommandHandlerResult(resetResult);
   }
@@ -47,7 +60,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
   });
 
   for (const handler of HANDLERS) {
-    const result = await handler(params, allowTextCommands);
+    const result = await handler(commandParams, allowTextCommands);
     if (result) {
       return normalizeCommandHandlerResult(result);
     }

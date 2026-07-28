@@ -86,13 +86,13 @@ function joinBlocks(blocks: MemoryBlock[]): string {
   return blocks.map((block) => block.text).join("\n");
 }
 
-export type CompactMemoryParams = {
+type CompactMemoryParams = {
   existingMemory: string;
   newSection: string;
   budgetChars: number;
 };
 
-export type CompactMemoryResult = {
+type CompactMemoryResult = {
   compacted: string;
   droppedDates: string[];
 };

@@ -2,8 +2,9 @@
 import { spawn, type SpawnOptions } from "node:child_process";
 import path from "node:path";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
+import { trimToValue } from "../mantis-options.runtime.js";
 
-export type CommandResult = {
+type CommandResult = {
   stderr: string;
   stdout: string;
 };
@@ -26,11 +27,6 @@ export type CrabboxInspect = {
   state?: string;
 };
 
-function trimToValue(value: string | undefined) {
-  const trimmed = value?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : undefined;
-}
-
 export async function defaultCommandRunner(
   command: string,
   args: readonly string[],
@@ -43,15 +39,15 @@ export async function defaultCommandRunner(
     });
     let stdout = "";
     let stderr = "";
-    child.stdout?.on("data", (chunk: Buffer) => {
-      const text = chunk.toString();
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (text: string) => {
       stdout += text;
       if (options.stdio === "inherit") {
         process.stdout.write(text);
       }
     });
-    child.stderr?.on("data", (chunk: Buffer) => {
-      const text = chunk.toString();
+    child.stderr?.on("data", (text: string) => {
       stderr += text;
       if (options.stdio === "inherit") {
         process.stderr.write(text);
@@ -86,7 +82,7 @@ export async function resolveCrabboxBin(params: {
   return "crabbox";
 }
 
-export function extractLeaseId(output: string) {
+function extractLeaseId(output: string) {
   return output.match(/\b(?:cbx_[a-f0-9]+|tbx_[A-Za-z0-9_-]+)\b/u)?.[0];
 }
 

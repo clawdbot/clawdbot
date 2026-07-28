@@ -107,7 +107,7 @@ describe("vitest process group helpers", () => {
     expectListenerCount(listeners, "SIGTERM", 1);
     expectListenerCount(listeners, "exit", 1);
 
-    getListenerSet(listeners, "SIGTERM").values().next().value();
+    getListenerSet(listeners, "SIGTERM").values().next().value!();
     expect(onSignal).toHaveBeenCalledWith("SIGTERM");
     expect(kill).toHaveBeenCalledWith(-4200, "SIGTERM");
 
@@ -115,6 +115,36 @@ describe("vitest process group helpers", () => {
     expectListenerCount(listeners, "SIGINT", 0);
     expectListenerCount(listeners, "SIGTERM", 0);
     expectListenerCount(listeners, "exit", 0);
+  });
+
+  it("can force-kill process groups after forwarded parent signals", async () => {
+    const listeners = new Map<string, Set<() => void>>();
+    const fakeProcess = {
+      on(event: string, handler: () => void) {
+        const set = listeners.get(event) ?? new Set();
+        set.add(handler);
+        listeners.set(event, set);
+      },
+      off(event: string, handler: () => void) {
+        listeners.get(event)?.delete(handler);
+      },
+    };
+    const kill = vi.fn();
+    const teardown = installVitestProcessGroupCleanup({
+      child: { pid: 4200 },
+      forceSignal: "SIGKILL",
+      processObject: fakeProcess as unknown as NodeJS.Process,
+      platform: "darwin",
+      kill,
+    });
+
+    getListenerSet(listeners, "SIGTERM").values().next().value!();
+    await Promise.resolve();
+
+    expect(kill).toHaveBeenNthCalledWith(1, -4200, "SIGTERM");
+    expect(kill).toHaveBeenNthCalledWith(2, -4200, "SIGKILL");
+
+    teardown();
   });
 
   it("raises process listener limits for highly parallel cleanup handlers", () => {

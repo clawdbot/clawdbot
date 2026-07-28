@@ -6,13 +6,13 @@ import type { collectChannelStatusIssues as collectChannelStatusIssuesFn } from 
 import { resolveOsSummary } from "../infra/os-summary.js";
 import type { UpdateCheckResult } from "../infra/update-check.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
+import type { pickGatewaySelfPresence } from "./gateway-presence.js";
 import type { buildChannelsTable as buildChannelsTableFn } from "./status-all/channels.js";
 import type { getAgentLocalStatuses as getAgentLocalStatusesFn } from "./status.agent-local.js";
 import type {
   GatewayProbeSnapshot,
   MemoryPluginStatus,
   MemoryStatusSnapshot,
-  pickGatewaySelfPresence,
 } from "./status.scan.shared.js";
 import type { getStatusSummary as getStatusSummaryFn } from "./status.summary.js";
 
@@ -24,6 +24,7 @@ export type StatusScanResult = {
   tailscaleMode: string;
   tailscaleDns: string | null;
   tailscaleHttpsUrl: string | null;
+  advertisedControlUiLinks?: { httpUrl: string; wsUrl: string };
   update: UpdateCheckResult;
   gatewayConnection: GatewayProbeSnapshot["gatewayConnection"];
   remoteUrlMissing: boolean;
@@ -54,6 +55,7 @@ export function buildStatusScanResult(params: {
   tailscaleMode: string;
   tailscaleDns: string | null;
   tailscaleHttpsUrl: string | null;
+  advertisedControlUiLinks?: { httpUrl: string; wsUrl: string };
   update: UpdateCheckResult;
   gatewaySnapshot: Pick<
     GatewayProbeSnapshot,
@@ -82,6 +84,9 @@ export function buildStatusScanResult(params: {
     tailscaleMode: params.tailscaleMode,
     tailscaleDns: params.tailscaleDns,
     tailscaleHttpsUrl: params.tailscaleHttpsUrl,
+    ...(params.advertisedControlUiLinks
+      ? { advertisedControlUiLinks: params.advertisedControlUiLinks }
+      : {}),
     update: params.update,
     gatewayConnection: params.gatewaySnapshot.gatewayConnection,
     remoteUrlMissing: params.gatewaySnapshot.remoteUrlMissing,

@@ -1,6 +1,11 @@
 // Covers gateway process discovery across platform process listings.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
+import {
+  getWindowsPowerShellExePath,
+  getWindowsSystem32ExePath,
+  getWindowsWmicExePath,
+} from "./windows-install-roots.js";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 const readFileSyncMock = vi.hoisted(() => vi.fn());
@@ -112,6 +117,11 @@ describe("gateway-processes", () => {
       "run",
     ]);
     expect(readGatewayProcessArgsSync(124)).toBeNull();
+    expect(spawnSyncMock).toHaveBeenCalledWith("ps", ["-o", "command=", "-p", "123"], {
+      encoding: "utf8",
+      killSignal: "SIGKILL",
+      timeout: 1_000,
+    });
   });
 
   it("falls back from powershell to wmic for windows process args", () => {
@@ -130,6 +140,28 @@ describe("gateway-processes", () => {
     parseCmdScriptCommandLineMock.mockReturnValue(["node.exe", "gateway", "run"]);
 
     expect(readGatewayProcessArgsSync(77)).toEqual(["node.exe", "gateway", "run"]);
+    expect(spawnSyncMock.mock.calls[0]?.[0]).toBe(getWindowsPowerShellExePath());
+    expect(spawnSyncMock.mock.calls[1]?.[0]).toBe(getWindowsWmicExePath());
+    expect(parseCmdScriptCommandLineMock).toHaveBeenCalledWith("node.exe gateway run");
+  });
+
+  it("decodes UTF-16 WMIC output when reading windows process args", () => {
+    setPlatform("win32");
+    spawnSyncMock
+      .mockReturnValueOnce({
+        error: new Error("powershell missing"),
+        status: null,
+        stdout: "",
+      })
+      .mockReturnValueOnce({
+        error: null,
+        status: 0,
+        stdout: Buffer.from("\uFEFFCommandLine=node.exe gateway run\r\n", "utf16le"),
+      });
+    parseCmdScriptCommandLineMock.mockReturnValue(["node.exe", "gateway", "run"]);
+
+    expect(readGatewayProcessArgsSync(77)).toEqual(["node.exe", "gateway", "run"]);
+    expect(spawnSyncMock.mock.calls[1]?.[0]).toBe(getWindowsWmicExePath());
     expect(parseCmdScriptCommandLineMock).toHaveBeenCalledWith("node.exe gateway run");
   });
 
@@ -146,6 +178,33 @@ describe("gateway-processes", () => {
     expect(() => signalVerifiedGatewayPidSync(501, "SIGUSR1")).toThrow(
       /refusing to signal non-gateway process pid 501/,
     );
+  });
+
+  it("swallows ESRCH when a verified gateway process exits before the signal", () => {
+    setPlatform("linux");
+    readFileSyncMock.mockReturnValue("node\0gateway\0");
+    parseProcCmdlineMock.mockReturnValue(["node", "gateway"]);
+    isGatewayArgvMock.mockReturnValue(true);
+    const esrchErr = Object.assign(new Error("no such process"), { code: "ESRCH" });
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => {
+      throw esrchErr;
+    });
+
+    expect(() => signalVerifiedGatewayPidSync(500, "SIGTERM")).not.toThrow();
+    expect(killSpy).toHaveBeenCalledWith(500, "SIGTERM");
+  });
+
+  it("re-throws non-ESRCH kill errors", () => {
+    setPlatform("linux");
+    readFileSyncMock.mockReturnValue("node\0gateway\0");
+    parseProcCmdlineMock.mockReturnValue(["node", "gateway"]);
+    isGatewayArgvMock.mockReturnValue(true);
+    const epermErr = Object.assign(new Error("permission denied"), { code: "EPERM" });
+    vi.spyOn(process, "kill").mockImplementation(() => {
+      throw epermErr;
+    });
+
+    expect(() => signalVerifiedGatewayPidSync(500, "SIGTERM")).toThrow("permission denied");
   });
 
   it("dedupes and filters verified gateway listener pids on unix and windows", () => {
@@ -175,6 +234,40 @@ describe("gateway-processes", () => {
     isGatewayArgvMock.mockReturnValue(true);
 
     expect(findVerifiedGatewayListenerPidsOnPortSync(18789)).toEqual([200]);
+  });
+
+  it("falls back from powershell to trusted netstat for windows listener pids", () => {
+    setPlatform("win32");
+    spawnSyncMock
+      .mockReturnValueOnce({
+        error: new Error("powershell missing"),
+        status: null,
+        stdout: "",
+      })
+      .mockReturnValueOnce({
+        error: null,
+        status: 0,
+        stdout: [
+          "Proto  Local Address          Foreign Address        State           PID",
+          "TCP    127.0.0.1:18789       127.0.0.1:0            ABHOEREN       998",
+          "TCP    127.0.0.1:18789       127.0.0.1:54321        HERGESTELLT    999",
+          "TCP    0.0.0.0:18789         0.0.0.0:0              ABHOEREN       200",
+          "TCP    [::]:18789            [::]:0                 ABHOEREN       200",
+        ].join("\r\n"),
+      })
+      .mockReturnValueOnce({
+        error: null,
+        status: 0,
+        stdout: "node.exe gateway run",
+      });
+    parseCmdScriptCommandLineMock.mockReturnValue(["node.exe", "gateway", "run"]);
+    isGatewayArgvMock.mockReturnValue(true);
+
+    expect(findVerifiedGatewayListenerPidsOnPortSync(18789)).toEqual([200]);
+    expect(spawnSyncMock.mock.calls[0]?.[0]).toBe(getWindowsPowerShellExePath());
+    expect(spawnSyncMock.mock.calls[1]?.[0]).toBe(getWindowsSystem32ExePath("netstat.exe"));
+    expect(spawnSyncMock.mock.calls[1]?.[1]).toEqual(["-ano"]);
+    expect(spawnSyncMock.mock.calls[2]?.[0]).toBe(getWindowsPowerShellExePath());
   });
 
   it("formats pid lists as comma-separated output", () => {

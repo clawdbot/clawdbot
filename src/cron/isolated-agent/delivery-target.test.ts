@@ -1,6 +1,9 @@
 // Isolated agent delivery target tests cover target resolution for cron runs.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
+import type {
+  ChannelDirectoryEntry,
+  ChannelOutboundAdapter,
+} from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
@@ -8,9 +11,11 @@ import {
   parseTelegramTargetForTest,
   telegramMessagingForTest,
 } from "../../infra/outbound/targets.test-helpers.js";
+import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import { buildChannelOutboundSessionRoute } from "../../plugin-sdk/core.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 
 const { extractDeliveryInfoMock } = vi.hoisted(() => ({
   extractDeliveryInfoMock: vi.fn(),
@@ -29,9 +34,13 @@ vi.mock("../../config/sessions/paths.js", () => ({
   resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store.json"),
 }));
 
-vi.mock("../../config/sessions/session-accessor.js", () => ({
-  loadSessionEntry: vi.fn(),
-}));
+vi.mock("../../config/sessions/session-accessor.js", () => {
+  const loadSessionEntry = vi.fn();
+  return {
+    loadSessionEntry,
+    loadSessionEntryReadOnly: loadSessionEntry,
+  };
+});
 
 vi.mock("../../infra/outbound/channel-selection.runtime.js", () => ({
   resolveMessageChannelSelection: vi
@@ -220,11 +229,27 @@ const DEFAULT_TARGET = {
   channel: "forum" as const,
   to: "room:default",
 };
+const malformedAccountIdCases = [
+  { description: "numeric", accountId: 123 },
+  { description: "boolean", accountId: false },
+  { description: "object", accountId: {} },
+] as const;
 
-type SessionStore = Record<string, SessionEntry>;
+type SessionStore = Record<
+  string,
+  SessionEntry & {
+    lastChannel?: string;
+    lastTo?: string;
+    lastAccountId?: string;
+    lastThreadId?: string | number;
+  }
+>;
 
 function setSessionStore(store: SessionStore) {
-  vi.mocked(loadSessionEntry).mockImplementation(({ sessionKey }) => store[sessionKey]);
+  const canonical = Object.fromEntries(
+    Object.entries(store).map(([key, entry]) => [key, normalizeLegacySessionEntryDelivery(entry)]),
+  );
+  vi.mocked(loadSessionEntry).mockImplementation(({ sessionKey }) => canonical[sessionKey]);
 }
 
 function setMainSessionEntry(entry?: SessionStore[string]) {
@@ -242,10 +267,14 @@ function setLastSessionEntry(params: {
   setMainSessionEntry({
     sessionId: params.sessionId,
     updatedAt: 1000,
-    lastChannel: params.lastChannel,
-    lastTo: params.lastTo,
-    ...(params.lastThreadId ? { lastThreadId: params.lastThreadId } : {}),
-    ...(params.lastAccountId ? { lastAccountId: params.lastAccountId } : {}),
+    delivery: normalizeSessionDeliveryState({
+      context: {
+        channel: params.lastChannel,
+        to: params.lastTo,
+        threadId: params.lastThreadId,
+        accountId: params.lastAccountId,
+      },
+    }),
   });
 }
 
@@ -278,8 +307,11 @@ describe("resolveDeliveryTarget", () => {
 
     const result = await resolveLastTarget(makeCfg({ channels: { alpha: { allowFrom: [] } } }));
 
+    // #91613: a keyless implicit cron inheriting the shared agent-main bucket's lastTo is now
+    // refused (ok:false). The snapshot-read mechanism under test still runs — the resolver reads the
+    // session entry to make that determination — it just no longer drains to the inherited room.
     expect(result.channel).toBe("alpha");
-    expect(result.to).toBe("room-allowed");
+    expect(result.ok).toBe(false);
     expect(loadSessionEntry).toHaveBeenCalledWith({
       agentId: AGENT_ID,
       sessionKey: "agent:test:main",
@@ -357,6 +389,96 @@ describe("resolveDeliveryTarget", () => {
     expect(result.accountId).toBe("account-b");
   });
 
+  it.each([
+    {
+      description: "trims an explicit account",
+      explicitAccountId: "  explicit-account  ",
+      expectedAccountId: "explicit-account",
+    },
+    {
+      description: "falls back to the session for a whitespace-only account",
+      explicitAccountId: "   ",
+      expectedAccountId: "session-account",
+    },
+    {
+      description: "falls back to the session for an empty account",
+      explicitAccountId: "",
+      expectedAccountId: "session-account",
+    },
+  ])("$description", async ({ explicitAccountId, expectedAccountId }) => {
+    setLastSessionEntry({
+      sessionId: "sess-account-normalization",
+      lastChannel: "forum",
+      lastTo: "room:ops",
+      lastAccountId: "session-account",
+    });
+
+    const result = await resolveDeliveryTarget(makeForumBoundCfg(), AGENT_ID, {
+      channel: "forum",
+      to: "room:ops",
+      accountId: explicitAccountId,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.accountId).toBe(expectedAccountId);
+  });
+
+  it.each([
+    { description: "whitespace-only", explicitAccountId: "   " },
+    { description: "empty", explicitAccountId: "" },
+  ])(
+    "falls back to the bound account for a $description account",
+    async ({ explicitAccountId }) => {
+      setMainSessionEntry(undefined);
+
+      const result = await resolveDeliveryTarget(makeForumBoundCfg(), AGENT_ID, {
+        channel: "forum",
+        to: "room:ops",
+        accountId: explicitAccountId,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.accountId).toBe("account-b");
+    },
+  );
+
+  it.each(malformedAccountIdCases)(
+    "falls back to the session for a malformed $description account",
+    async ({ accountId }) => {
+      setLastSessionEntry({
+        sessionId: "sess-malformed-account",
+        lastChannel: "forum",
+        lastTo: "room:ops",
+        lastAccountId: "session-account",
+      });
+
+      const result = await resolveDeliveryTarget(makeForumBoundCfg(), AGENT_ID, {
+        channel: "forum",
+        to: "room:ops",
+        accountId: accountId as unknown as string,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.accountId).toBe("session-account");
+    },
+  );
+
+  it.each(malformedAccountIdCases)(
+    "falls back to the bound account for a malformed $description account",
+    async ({ accountId }) => {
+      setMainSessionEntry(undefined);
+
+      const result = await resolveDeliveryTarget(makeForumBoundCfg(), AGENT_ID, {
+        channel: "forum",
+        to: "room:ops",
+        accountId: accountId as unknown as string,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.accountId).toBe("account-b");
+    },
+  );
+
   it("preserves binding order when peerless delivery falls back to a bound accountId", async () => {
     setMainSessionEntry(undefined);
     const cfg = makeCfg({
@@ -405,9 +527,9 @@ describe("resolveDeliveryTarget", () => {
     setMainSessionEntry({
       sessionId: "sess-1",
       updatedAt: 1000,
-      lastChannel: "forum",
-      lastTo: "room:default",
-      lastAccountId: "session-account",
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "forum", to: "room:default", accountId: "session-account" },
+      }),
     });
 
     const cfg = makeForumBoundCfg();
@@ -450,6 +572,8 @@ describe("resolveDeliveryTarget", () => {
       channel: "forum",
       input: "123456789",
       accountId: undefined,
+      plugin: expect.objectContaining({ id: "forum" }),
+      preferredKind: undefined,
     });
   });
 
@@ -465,6 +589,7 @@ describe("resolveDeliveryTarget", () => {
               id: "alpha",
               outbound: createStubOutbound("Alpha"),
               messaging: { targetPrefixes: ["alpha"] },
+              capabilities: { chatTypes: ["group"] },
             }),
             directory: {
               listGroups: async () => [
@@ -501,6 +626,7 @@ describe("resolveDeliveryTarget", () => {
               id: "alpha",
               outbound: createStubOutbound("Alpha"),
               messaging: { targetPrefixes: ["alpha"] },
+              capabilities: { chatTypes: ["group"] },
             }),
             directory: {
               listGroups: async () => {
@@ -734,6 +860,57 @@ describe("resolveDeliveryTarget", () => {
     expect(result.threadId).toBeUndefined();
   });
 
+  it("resolves cron reserved explicit targets through directory entries", async () => {
+    setMainSessionEntry(undefined);
+    const listGroups = vi.fn(async () => [
+      {
+        kind: "group",
+        id: "-1002458651455",
+        name: "current",
+        handle: "@current",
+      } satisfies ChannelDirectoryEntry,
+    ]);
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: {
+            ...createOutboundTestPlugin({
+              id: "telegram",
+              outbound: createStubOutbound("Telegram"),
+              capabilities: { chatTypes: ["direct", "group", "channel"] },
+              messaging: {
+                ...telegramMessagingForTest,
+                normalizeTarget: normalizeTelegramTargetForDeliveryTest,
+                targetResolver: {
+                  reservedLiterals: ["current", "self", "this", "me"],
+                  hint: "<chatId>",
+                },
+              },
+            }),
+            directory: { listGroups },
+          },
+        },
+      ]),
+    );
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "telegram",
+      to: "current",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe("-1002458651455");
+    expect(result.threadId).toBeUndefined();
+    expect(listGroups).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: undefined,
+        query: "current",
+      }),
+    );
+  });
+
   it("uses canonical route targets even when the route has no thread", async () => {
     setMainSessionEntry(undefined);
     setActivePluginRegistry(
@@ -923,6 +1100,8 @@ describe("resolveDeliveryTarget", () => {
       channel: "forum",
       input: "123456789",
       accountId: undefined,
+      plugin: expect.objectContaining({ id: "forum" }),
+      preferredKind: undefined,
     });
   });
 
@@ -1100,6 +1279,29 @@ describe("resolveDeliveryTarget", () => {
 
     const result = await resolveForAgent({ cfg: makeCfg({ bindings: [] }) });
     expect(result.threadId).toBe("thread-2");
+  });
+
+  it("can resolve the same explicit recipient without inheriting its session threadId", async () => {
+    setLastSessionEntry({
+      sessionId: "sess-3",
+      lastChannel: "forum",
+      lastTo: "room:default",
+      lastThreadId: "thread-2",
+    });
+
+    const result = await resolveDeliveryTarget(
+      makeCfg({ bindings: [] }),
+      AGENT_ID,
+      {
+        channel: "forum",
+        to: "room:default",
+      },
+      { inheritSessionThread: false },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe("room:default");
+    expect(result.threadId).toBeUndefined();
   });
 
   it("does not carry a Telegram topic threadId to a bare explicit group target", async () => {
@@ -1348,9 +1550,12 @@ describe("resolveDeliveryTarget", () => {
 
     const result = await resolveLastTarget(makeCfg({ bindings: [] }));
 
+    // #91613: channel=last still resolves the channel from the main session entry ("forum"), but a
+    // keyless implicit cron whose `to` is inherited from the shared agent-main bucket is now refused
+    // rather than drained to that cross-conversation room. (Successful channel=last delivery for a
+    // cron with an allowFrom reroute / its own identity is covered by the tests above.)
     expect(result.channel).toBe("forum");
-    expect(result.to).toBe("room:default");
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
   });
 
   it("parses explicit plugin topic targets into delivery threadId", async () => {
@@ -1522,3 +1727,4 @@ describe("resolveDeliveryTarget", () => {
     expect(result.accountId).toBe("explicit");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,4 +1,5 @@
 // Browser tests cover browser request.shared control state plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getFreePort } from "../browser/test-port.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -9,7 +10,6 @@ const mocks = vi.hoisted(() => ({
   ensureBrowserControlAuth: vi.fn(async () => ({ auth: {} })),
   resolveBrowserControlAuth: vi.fn(() => ({})),
   shouldAutoGenerateBrowserAuth: vi.fn(() => false),
-  ensureExtensionRelayForProfiles: vi.fn(async () => {}),
   stopKnownBrowserProfiles: vi.fn(async () => {}),
   isChromeReachable: vi.fn(async () => false),
   isChromeCdpReady: vi.fn(async () => false),
@@ -32,7 +32,6 @@ vi.mock("../browser/control-auth.js", () => ({
 }));
 
 vi.mock("../browser/server-lifecycle.js", () => ({
-  ensureExtensionRelayForProfiles: mocks.ensureExtensionRelayForProfiles,
   stopKnownBrowserProfiles: mocks.stopKnownBrowserProfiles,
 }));
 
@@ -48,13 +47,10 @@ vi.mock("../browser/chrome.js", () => ({
   stopOpenClawChrome: vi.fn(async () => {}),
 }));
 
-vi.mock("../browser/pw-ai-state.js", () => ({
-  isPwAiLoaded: vi.fn(() => false),
-}));
-
 const { startBrowserControlServerFromConfig, stopBrowserControlServer } =
   await import("../server.js");
 const { stopBrowserControlService } = await import("../control-service.js");
+const { getBridgeAuthForPort } = await import("../browser/bridge-auth-registry.js");
 const { browserHandlers } = await import("./browser-request.js");
 
 function browserConfig(params: {
@@ -85,7 +81,10 @@ function browserConfig(params: {
 
 async function browserRequestStatus(): Promise<unknown> {
   const respond = vi.fn();
-  await browserHandlers["browser.request"]({
+  await expectDefined(
+    browserHandlers["browser.request"],
+    "browser request handler",
+  )({
     params: {
       method: "GET",
       path: "/",
@@ -148,5 +147,43 @@ describe("browser.request local control state", () => {
     expect(status.executablePath).toBe("/usr/bin/google-chrome");
     expect(status.headless).toBe(true);
     expect(status.noSandbox).toBe(true);
+  });
+
+  it("retains port auth until a failed stop is retried successfully", async () => {
+    const controlPort = await getFreePort();
+    mocks.runtimeConfig = browserConfig({ gatewayPort: controlPort - 2 });
+    mocks.runtimeSourceConfig = mocks.runtimeConfig;
+    mocks.ensureBrowserControlAuth.mockResolvedValueOnce({ auth: { token: "test-token" } });
+    const state = await startBrowserControlServerFromConfig();
+    expect(state?.port).toBe(controlPort);
+    expect(getBridgeAuthForPort(controlPort)).toEqual({ token: "test-token" });
+
+    mocks.stopKnownBrowserProfiles.mockRejectedValueOnce(new Error("cleanup failed"));
+    await expect(stopBrowserControlServer()).rejects.toThrow("cleanup failed");
+    expect(getBridgeAuthForPort(controlPort)).toEqual({ token: "test-token" });
+
+    await stopBrowserControlServer();
+    expect(getBridgeAuthForPort(controlPort)).toBeUndefined();
+  });
+
+  it("clears auth when a stop queues behind cold startup", async () => {
+    const controlPort = await getFreePort();
+    mocks.runtimeConfig = browserConfig({ gatewayPort: controlPort - 2 });
+    mocks.runtimeSourceConfig = mocks.runtimeConfig;
+    let releaseAuth!: () => void;
+    const authGate = new Promise<void>((resolve) => {
+      releaseAuth = resolve;
+    });
+    mocks.ensureBrowserControlAuth.mockImplementationOnce(async () => {
+      await authGate;
+      return { auth: { token: "test-token" } };
+    });
+
+    const starting = startBrowserControlServerFromConfig();
+    const stopping = stopBrowserControlServer();
+    releaseAuth();
+    await expect(starting).resolves.toBeTruthy();
+    await expect(stopping).resolves.toBeUndefined();
+    expect(getBridgeAuthForPort(controlPort)).toBeUndefined();
   });
 });

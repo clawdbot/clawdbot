@@ -20,14 +20,7 @@ export function createBrowserProgram(params?: { withGatewayUrl?: boolean }): {
   if (params?.withGatewayUrl) {
     browser.option("--url <url>", "Gateway WebSocket URL");
   }
-  const parentOpts = (cmd: Command): BrowserParentOpts => {
-    for (let current: Command | null | undefined = cmd; current; current = current.parent) {
-      if (current.name() === "browser") {
-        return current.opts() as BrowserParentOpts;
-      }
-    }
-    return cmd.parent?.opts?.() as BrowserParentOpts;
-  };
+  const parentOpts = (cmd: Command): BrowserParentOpts => cmd.optsWithGlobals<BrowserParentOpts>();
   return { program, browser, parentOpts };
 }
 
@@ -42,29 +35,4 @@ export function getBrowserCliRuntimeCapture(): CliRuntimeCapture {
 /** Returns the default runtime from the Browser CLI capture. */
 export function getBrowserCliRuntime() {
   return getBrowserCliRuntimeCapture().defaultRuntime;
-}
-
-/** Provides a mock module shape for defaultRuntime imports. */
-export async function mockBrowserCliDefaultRuntime() {
-  browserCliRuntimeState.capture ??= createCliRuntimeCapture();
-  return { defaultRuntime: browserCliRuntimeState.capture.defaultRuntime };
-}
-
-/** Runs a command action through the same error callback shape as the real helper. */
-export async function runCommandWithRuntimeMock(
-  _runtime: unknown,
-  action: () => Promise<void>,
-  onError: (err: unknown) => void,
-) {
-  return await action().catch(onError);
-}
-
-/** Provides a mock module shape for core runCommandWithRuntime imports. */
-export async function createBrowserCliUtilsMockModule() {
-  return { runCommandWithRuntime: runCommandWithRuntimeMock };
-}
-
-/** Provides a mock module shape for Browser CLI runtime imports. */
-export async function createBrowserCliRuntimeMockModule() {
-  return await mockBrowserCliDefaultRuntime();
 }

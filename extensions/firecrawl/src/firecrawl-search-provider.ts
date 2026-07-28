@@ -1,18 +1,12 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Firecrawl provider module implements model/runtime integration.
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type { WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-contract";
 import { buildFirecrawlWebSearchProviderBase } from "../web-search-shared.js";
 
-type FirecrawlClientModule = typeof import("./firecrawl-client.js");
+const loadFirecrawlClientModule = createLazyRuntimeModule(() => import("./firecrawl-client.js"));
 
-let firecrawlClientModulePromise: Promise<FirecrawlClientModule> | undefined;
-
-function loadFirecrawlClientModule(): Promise<FirecrawlClientModule> {
-  firecrawlClientModulePromise ??= import("./firecrawl-client.js");
-  return firecrawlClientModulePromise;
-}
-
-const GenericFirecrawlSearchSchema = {
+export const GenericFirecrawlSearchSchema = {
   type: "object",
   properties: {
     query: { type: "string", description: "Search query string." },

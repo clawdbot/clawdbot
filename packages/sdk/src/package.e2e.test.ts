@@ -1,11 +1,14 @@
 // OpenClaw SDK tests cover package behavior.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync, type SpawnOptionsWithoutStdio } from "node:child_process";
 import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveNpmRunner } from "../../../scripts/npm-runner.mjs";
+import { createPnpmRunnerSpawnSpec } from "../../../scripts/pnpm-runner.mjs";
+import { getWindowsSystem32ExePath } from "../../../src/infra/windows-install-roots.js";
 import { createNodeEvalArgs } from "../../../src/test-utils/node-process.js";
 
 type CommandResult = {
@@ -15,11 +18,6 @@ type CommandResult = {
 
 const COMMAND_TIMEOUT_MS = 120_000;
 const tempDirs: string[] = [];
-const WORKSPACE_PACKAGE_NAMES = [
-  "@openclaw/gateway-protocol",
-  "@openclaw/gateway-client",
-  "@openclaw/sdk",
-] as const;
 
 type PackageManifest = {
   name: string;
@@ -33,21 +31,35 @@ type PackedPackage = {
   tarball: string;
 };
 
+function resolveWorkspacePackageRoot(repoRoot: string, packageName: string): string {
+  const prefix = "@openclaw/";
+  if (!packageName.startsWith(prefix)) {
+    throw new Error(`unsupported workspace package name: ${packageName}`);
+  }
+  return path.join(repoRoot, "packages", packageName.slice(prefix.length));
+}
+
 function runCommand(
   command: string,
   args: string[],
-  options: { cwd: string; timeoutMs?: number },
+  options: { cwd: string; timeoutMs?: number } & Pick<
+    SpawnOptionsWithoutStdio,
+    "env" | "shell" | "windowsVerbatimArguments"
+  >,
 ): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
     const stdout: string[] = [];
     const stderr: string[] = [];
     const child = spawn(command, args, {
       cwd: options.cwd,
-      env: { ...process.env, npm_config_audit: "false", npm_config_fund: "false" },
+      detached: process.platform !== "win32",
+      env: options.env ?? createCommandEnv(),
+      shell: options.shell,
       stdio: ["ignore", "pipe", "pipe"],
+      windowsVerbatimArguments: options.windowsVerbatimArguments,
     });
     const timer = setTimeout(() => {
-      child.kill("SIGKILL");
+      signalCommandProcess(child, "SIGKILL");
       reject(
         new Error(
           `command timed out after ${options.timeoutMs ?? COMMAND_TIMEOUT_MS}ms: ${[
@@ -82,6 +94,96 @@ function runCommand(
   });
 }
 
+function signalCommandProcess(
+  child: ReturnType<typeof spawn>,
+  signal: NodeJS.Signals,
+  runTaskkill: typeof spawnSync = spawnSync,
+): void {
+  if (process.platform === "win32") {
+    if (typeof child.pid === "number") {
+      const args = ["/PID", String(child.pid), "/T"];
+      if (signal === "SIGKILL") {
+        args.push("/F");
+      }
+      const taskkillPath = getWindowsSystem32ExePath("taskkill.exe");
+      const result = runTaskkill(taskkillPath, args, { stdio: "ignore", windowsHide: true });
+      if (!result.error && result.status === 0) {
+        return;
+      }
+      if (signal !== "SIGKILL") {
+        const forceResult = runTaskkill(taskkillPath, [...args, "/F"], {
+          stdio: "ignore",
+          windowsHide: true,
+        });
+        if (!forceResult.error && forceResult.status === 0) {
+          return;
+        }
+      }
+    }
+    child.kill(signal);
+    return;
+  }
+  if (typeof child.pid === "number") {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") {
+        return;
+      }
+    }
+  }
+  child.kill(signal);
+}
+
+function createCommandEnv(): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    CI: process.env.CI ?? "true",
+    npm_config_audit: "false",
+    npm_config_fund: "false",
+    PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
+  };
+}
+
+function runPnpmCommand(
+  args: string[],
+  options: { cwd: string; timeoutMs?: number },
+): Promise<CommandResult> {
+  const spec = createPnpmRunnerSpawnSpec({
+    cwd: options.cwd,
+    env: createCommandEnv(),
+    pnpmArgs: args,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const cwd = typeof spec.options.cwd === "string" ? spec.options.cwd : options.cwd;
+  return runCommand(spec.command, spec.args, {
+    cwd,
+    env: spec.options.env,
+    shell: spec.options.shell,
+    timeoutMs: options.timeoutMs,
+    windowsVerbatimArguments: spec.options.windowsVerbatimArguments,
+  });
+}
+
+function runNpmCommand(
+  args: string[],
+  options: { cwd: string; timeoutMs?: number },
+): Promise<CommandResult> {
+  const env = createCommandEnv();
+  const runner = resolveNpmRunner({
+    env,
+    npmArgs: args,
+  });
+  return runCommand(runner.command, runner.args, {
+    cwd: options.cwd,
+    env: runner.env ?? env,
+    shell: runner.shell,
+    timeoutMs: options.timeoutMs,
+    windowsVerbatimArguments: runner.windowsVerbatimArguments,
+  });
+}
+
 function normalizeWorkspaceDependencies(
   dependencies: Record<string, string> | undefined,
 ): Record<string, string> | undefined {
@@ -91,18 +193,55 @@ function normalizeWorkspaceDependencies(
   const normalized: Record<string, string> = {};
   for (const [name, spec] of Object.entries(dependencies)) {
     normalized[name] =
-      name.startsWith("@openclaw/") && spec === "workspace:*" ? "0.0.0-private" : spec;
+      name.startsWith("@openclaw/") && spec.startsWith("workspace:") ? "0.0.0-private" : spec;
   }
   return normalized;
 }
 
-async function readPackageManifest(packageRoot: string): Promise<PackageManifest> {
+async function readRawPackageManifest(packageRoot: string): Promise<PackageManifest> {
   const packageJson = await fs.readFile(path.join(packageRoot, "package.json"), "utf8");
-  const manifest = JSON.parse(packageJson) as PackageManifest;
+  return JSON.parse(packageJson) as PackageManifest;
+}
+
+async function readPackageManifest(packageRoot: string): Promise<PackageManifest> {
+  const manifest = await readRawPackageManifest(packageRoot);
   return {
     ...manifest,
     dependencies: normalizeWorkspaceDependencies(manifest.dependencies),
   };
+}
+
+async function collectWorkspacePackageRoots(params: {
+  repoRoot: string;
+  entryRoot: string;
+}): Promise<string[]> {
+  const orderedRoots: string[] = [];
+  const visitedNames = new Set<string>();
+
+  async function visit(packageRoot: string, expectedName?: string): Promise<void> {
+    const manifest = await readRawPackageManifest(packageRoot);
+    if (expectedName && manifest.name !== expectedName) {
+      throw new Error(
+        `workspace dependency ${expectedName} resolved to unexpected package ${manifest.name}`,
+      );
+    }
+    if (visitedNames.has(manifest.name)) {
+      return;
+    }
+    visitedNames.add(manifest.name);
+
+    const workspaceDependencies = Object.entries(manifest.dependencies ?? {})
+      .filter(([, spec]) => spec.startsWith("workspace:"))
+      .map(([name]) => name)
+      .toSorted();
+    for (const dependencyName of workspaceDependencies) {
+      await visit(resolveWorkspacePackageRoot(params.repoRoot, dependencyName), dependencyName);
+    }
+    orderedRoots.push(packageRoot);
+  }
+
+  await visit(params.entryRoot);
+  return orderedRoots;
 }
 
 function tarballFileName(manifest: PackageManifest): string {
@@ -118,7 +257,7 @@ async function createPackStagingRoot(
   const stagingRoot = path.join(destinationRoot, `pack-${packageSlug}`);
   await fs.mkdir(stagingRoot, { recursive: true });
   await fs.writeFile(path.join(stagingRoot, "package.json"), JSON.stringify(manifest, null, 2));
-  const files = Array.isArray(manifest.files) ? manifest.files : [];
+  const files: string[] = Array.isArray(manifest.files) ? (manifest.files as string[]) : [];
   for (const entry of files) {
     if (typeof entry !== "string") {
       continue;
@@ -209,25 +348,58 @@ describe("OpenClaw SDK package e2e", () => {
     );
   });
 
+  it("force-kills Windows package command process trees when graceful taskkill fails", () => {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      const killMock = vi.fn();
+      const child = {
+        pid: 12345,
+        kill: killMock,
+      } as unknown as ReturnType<typeof spawn>;
+      const runTaskkill = vi
+        .fn()
+        .mockReturnValueOnce({ status: 1 })
+        .mockReturnValueOnce({ status: 0 });
+
+      signalCommandProcess(child, "SIGTERM", runTaskkill);
+
+      const taskkillPath = getWindowsSystem32ExePath("taskkill.exe");
+      expect(runTaskkill).toHaveBeenNthCalledWith(1, taskkillPath, ["/PID", "12345", "/T"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      expect(runTaskkill).toHaveBeenNthCalledWith(2, taskkillPath, ["/PID", "12345", "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      expect(killMock).not.toHaveBeenCalled();
+    } finally {
+      if (platformDescriptor) {
+        Object.defineProperty(process, "platform", platformDescriptor);
+      }
+    }
+  });
+
   it("packs and imports from an external temp consumer", async () => {
     const repoRoot = process.cwd();
-    const packageRoots = [
-      path.join(repoRoot, "packages", "gateway-protocol"),
-      path.join(repoRoot, "packages", "gateway-client"),
-      path.join(repoRoot, "packages", "sdk"),
-    ];
+    const packageRoots = await collectWorkspacePackageRoots({
+      repoRoot,
+      entryRoot: path.join(repoRoot, "packages", "sdk"),
+    });
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sdk-consumer-"));
     tempDirs.push(tempDir);
 
-    for (const packageName of WORKSPACE_PACKAGE_NAMES) {
-      await runCommand("pnpm", ["--filter", packageName, "build"], {
+    for (const packageRoot of packageRoots) {
+      const manifest = await readRawPackageManifest(packageRoot);
+      await runPnpmCommand(["--filter", manifest.name, "build"], {
         cwd: repoRoot,
         timeoutMs: 180_000,
       });
     }
     for (const packageRoot of packageRoots) {
       const stagingRoot = await createPackStagingRoot(packageRoot, tempDir);
-      await runCommand("npm", ["pack", "--ignore-scripts", "--pack-destination", tempDir], {
+      await runNpmCommand(["pack", "--ignore-scripts", "--pack-destination", tempDir], {
         cwd: stagingRoot,
       });
     }
@@ -250,13 +422,9 @@ describe("OpenClaw SDK package e2e", () => {
     );
     await fs.writeFile(path.join(tempDir, ".npmrc"), `@openclaw:registry=${registry.registryUrl}`);
     try {
-      await runCommand(
-        "npm",
-        ["install", "--ignore-scripts", "--no-audit", "--no-fund", sdkTarball],
-        {
-          cwd: tempDir,
-        },
-      );
+      await runNpmCommand(["install", "--ignore-scripts", "--no-audit", "--no-fund", sdkTarball], {
+        cwd: tempDir,
+      });
     } finally {
       await registry.close();
     }

@@ -1,17 +1,17 @@
+import {
+  normalizeToolParameterSchema,
+  type ToolParameterSchemaOptions,
+} from "@openclaw/ai/internal/openai";
 /**
  * Tool schema normalization wrappers.
  * Applies provider-compatible parameter schema cleanup while preserving plugin
  * and channel metadata on normalized tools.
  */
 import { copyPluginToolMeta } from "../plugins/tools.js";
-import {
-  normalizeToolParameterSchema,
-  type ToolParameterSchemaOptions,
-} from "./agent-tools-parameter-schema.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import { copyBeforeToolCallHookMarker } from "./before-tool-call-metadata.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
-
-export { normalizeToolParameterSchema };
+import { copyToolTerminalPresentation } from "./tool-terminal-presentation.js";
 
 function isObjectSchemaWithNoRequiredParams(schema: unknown): boolean {
   if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
@@ -72,6 +72,8 @@ export function normalizeToolParameters(
   function preserveToolMeta(target: AnyAgentTool): AnyAgentTool {
     copyPluginToolMeta(tool, target);
     copyChannelAgentToolMeta(tool as never, target as never);
+    copyBeforeToolCallHookMarker(tool, target);
+    copyToolTerminalPresentation(tool, target);
     return target;
   }
   const schema =
@@ -87,12 +89,4 @@ export function normalizeToolParameters(
     ...addEmptyObjectArgumentPreparation(tool, parameters),
     parameters,
   });
-}
-
-/**
- * @deprecated Use normalizeToolParameters with modelProvider instead.
- * This function should only be used for Gemini providers.
- */
-export function cleanToolSchemaForGemini(schema: Record<string, unknown>): unknown {
-  return normalizeToolParameterSchema(schema, { modelProvider: "gemini" });
 }

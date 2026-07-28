@@ -21,7 +21,7 @@ type BrowserDoctorDeps = {
   pathExists?: (targetPath: string) => boolean;
 };
 
-export type BrowserDoctorRepairDeps = {
+type BrowserDoctorRepairDeps = {
   env?: NodeJS.ProcessEnv;
   configDir?: string;
   pathExists?: (targetPath: string) => boolean;

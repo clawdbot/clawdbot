@@ -1,4 +1,4 @@
-// Telegram plugin module implements sendchataction 401 backoff behavior.
+// Telegram plugin module implements sendchataction 401 and transient backoff behavior.
 import type { Bot } from "grammy";
 import {
   computeBackoff,
@@ -6,8 +6,14 @@ import {
   type BackoffPolicy,
 } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecoverableTelegramNetworkError,
+  isTelegramRateLimitError,
+  isTelegramServerError,
+  readTelegramRetryAfterMs,
+} from "./network-errors.js";
 
-export type TelegramSendChatActionLogger = (message: string) => void;
+type TelegramSendChatActionLogger = (message: string) => void;
 
 type ChatAction =
   | "typing"
@@ -32,7 +38,7 @@ type SendChatActionFn = (
 
 export type TelegramSendChatActionHandler = {
   /**
-   * Send a chat action with automatic 401 backoff and circuit breaker.
+   * Send a chat action with automatic 401 backoff and transient cooldown.
    * Safe to call from multiple concurrent message contexts.
    */
   sendChatAction: (
@@ -44,7 +50,7 @@ export type TelegramSendChatActionHandler = {
   reset: () => void;
 };
 
-export type CreateTelegramSendChatActionHandlerParams = {
+type CreateTelegramSendChatActionHandlerParams = {
   sendChatActionFn: SendChatActionFn;
   logger: TelegramSendChatActionLogger;
   maxConsecutive401?: number;
@@ -63,16 +69,53 @@ function is401Error(error: unknown): boolean {
   if (!error) {
     return false;
   }
+  // When a structured Telegram error_code is present, trust it exclusively.
+  // A 429 with retry_after=401 renders as "(429: Too Many Requests: retry after 401)"
+  // whose message contains the substring "401" — that must NOT trigger the 401
+  // suspension path. The sibling classifiers in network-errors.ts also use
+  // error_code before message heuristics; see hasTelegramErrorCode.
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "error_code" in error &&
+    typeof (error as { error_code: unknown }).error_code === "number"
+  ) {
+    return (error as { error_code: number }).error_code === 401;
+  }
+  // Fallback for non-Telegram errors without a structured error_code:
+  // match "unauthorized" case-insensitively, but do NOT use bare "401"
+  // substring matching — that was the root cause of #94787.
   const message = error instanceof Error ? error.message : JSON.stringify(error);
+  return normalizeLowercaseStringOrEmpty(message).includes("unauthorized");
+}
+
+class TelegramSendChatActionTransientCooldownError extends Error {
+  constructor(remainingMs: number) {
+    super(`sendChatAction transient cooldown active for ${Math.ceil(remainingMs)}ms`);
+    this.name = "TelegramSendChatActionTransientCooldownError";
+  }
+}
+
+function isTransientSendChatActionError(error: unknown): boolean {
   return (
-    message.includes("401") || normalizeLowercaseStringOrEmpty(message).includes("unauthorized")
+    isTelegramRateLimitError(error) ||
+    isTelegramServerError(error) ||
+    isRecoverableTelegramNetworkError(error, { context: "action" })
   );
 }
 
+function resolveTransientCooldownMs(error: unknown, attempt: number): number {
+  const retryAfterMs = readTelegramRetryAfterMs(error);
+  if (retryAfterMs !== undefined && retryAfterMs > 0) {
+    return retryAfterMs;
+  }
+  return computeBackoff(BACKOFF_POLICY, attempt);
+}
+
 /**
- * Creates a GLOBAL (per-account) handler for sendChatAction that tracks 401 errors
- * across all message contexts. This prevents the infinite loop that caused Telegram
- * to delete bots (issue #27092).
+ * Creates a GLOBAL (per-account) handler for sendChatAction that tracks 401 and
+ * transient errors across all message contexts. This prevents the infinite loop
+ * that caused Telegram to delete bots (issue #27092).
  *
  * When a 401 occurs, exponential backoff is applied (1s → 2s → 4s → ... → 5min).
  * After maxConsecutive401 failures (default 10), all sendChatAction calls are
@@ -86,11 +129,19 @@ export function createTelegramSendChatActionHandler({
   now = () => Date.now(),
 }: CreateTelegramSendChatActionHandlerParams): TelegramSendChatActionHandler {
   let consecutive401Failures = 0;
+  let consecutiveTransientFailures = 0;
   let suspended = false;
+  let transientCooldownUntilMs = 0;
   const blockedUntilByKey = new Map<string, number>();
+
+  const clearTransientCooldown = () => {
+    consecutiveTransientFailures = 0;
+    transientCooldownUntilMs = 0;
+  };
 
   const reset = () => {
     consecutive401Failures = 0;
+    clearTransientCooldown();
     suspended = false;
     blockedUntilByKey.clear();
   };
@@ -104,8 +155,15 @@ export function createTelegramSendChatActionHandler({
       return;
     }
 
+    const attemptedAt = now();
+    const remainingTransientCooldownMs = transientCooldownUntilMs - attemptedAt;
+    if (remainingTransientCooldownMs > 0) {
+      // Reject transient cooldown starts so channel typing guards can count the
+      // failure and stop keepalive loops instead of silently hammering Telegram.
+      throw new TelegramSendChatActionTransientCooldownError(remainingTransientCooldownMs);
+    }
+
     const key = minIntervalMs > 0 ? `${String(chatId)}:${action}` : undefined;
-    const attemptedAt = key ? now() : 0;
     if (key) {
       const blockedUntil = blockedUntilByKey.get(key);
       if (blockedUntil !== undefined && attemptedAt < blockedUntil) {
@@ -130,8 +188,10 @@ export function createTelegramSendChatActionHandler({
         logger(`sendChatAction recovered after ${consecutive401Failures} consecutive 401 failures`);
         consecutive401Failures = 0;
       }
+      clearTransientCooldown();
     } catch (error) {
       if (is401Error(error)) {
+        clearTransientCooldown();
         consecutive401Failures++;
 
         if (consecutive401Failures >= maxConsecutive401) {
@@ -139,7 +199,7 @@ export function createTelegramSendChatActionHandler({
           logger(
             `CRITICAL: sendChatAction suspended after ${consecutive401Failures} consecutive 401 errors. ` +
               `Bot token is likely invalid. Telegram may DELETE the bot if requests continue. ` +
-              `Replace the token and restart: openclaw channels restart telegram`,
+              `Replace the Telegram token in config/env, then restart the Gateway.`,
           );
         } else {
           logger(
@@ -147,6 +207,21 @@ export function createTelegramSendChatActionHandler({
               `Retrying with exponential backoff.`,
           );
         }
+      } else if (isTransientSendChatActionError(error)) {
+        consecutiveTransientFailures++;
+        const cooldownMs = resolveTransientCooldownMs(error, consecutiveTransientFailures);
+        const cooldownStartedAt = now();
+        // Keep transient failures rejected through the same-chat coalesce window;
+        // otherwise the next typing keepalive can look successful and reset its guard.
+        const coalescingUntilMs = key ? attemptedAt + minIntervalMs : 0;
+        transientCooldownUntilMs = Math.max(cooldownStartedAt + cooldownMs, coalescingUntilMs);
+        const effectiveCooldownMs = Math.max(0, transientCooldownUntilMs - cooldownStartedAt);
+        logger(
+          `sendChatAction transient error (${consecutiveTransientFailures}). ` +
+            `Cooling down ${effectiveCooldownMs}ms before retry.`,
+        );
+      } else {
+        clearTransientCooldown();
       }
       throw error;
     } finally {

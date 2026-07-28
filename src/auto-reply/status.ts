@@ -7,15 +7,9 @@ export {
   buildCommandsMessage,
   buildCommandsMessagePaginated,
   buildHelpMessage,
-  type CommandsMessageOptions,
-  type CommandsMessageResult,
 } from "./command-status-builders.js";
-export {
-  buildStatusMessage,
-  formatContextUsageShort,
-  formatTokenCount,
-  type StatusArgs,
-} from "../status/status-message.js";
+export { formatContextUsageShort } from "../status/status-message.js";
+export { formatTokenCount } from "../utils/usage-format.js";
 
 type ToolsMessageItem = {
   id: string;

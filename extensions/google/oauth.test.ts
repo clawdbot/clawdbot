@@ -1,6 +1,11 @@
 // Google tests cover oauth plugin behavior.
 import { join, parse } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearGoogleOAuthCredentialsCache,
+  setGoogleOAuthCredentialsFs,
+  setGoogleOAuthSettingsFs,
+} from "./google-oauth.test-support.js";
 
 vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
@@ -57,16 +62,14 @@ function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean):
   return count;
 }
 
-describe("resolveGeminiCliSelectedAuthType", () => {
+describe("isGeminiCliPersonalOAuth", () => {
   const ENV_KEYS = ["GOOGLE_GENAI_USE_GCA"] as const;
 
   let envSnapshot: Partial<Record<(typeof ENV_KEYS)[number], string>>;
-  let resolveGeminiCliSelectedAuthType: typeof import("./oauth.settings.js").resolveGeminiCliSelectedAuthType;
-  let setOAuthSettingsFsForTest: typeof import("./oauth.settings.js").setOAuthSettingsFsForTest;
+  let isGeminiCliPersonalOAuth: typeof import("./oauth.settings.js").isGeminiCliPersonalOAuth;
 
   beforeAll(async () => {
-    ({ resolveGeminiCliSelectedAuthType, setOAuthSettingsFsForTest } =
-      await import("./oauth.settings.js"));
+    ({ isGeminiCliPersonalOAuth } = await import("./oauth.settings.js"));
   });
 
   beforeEach(() => {
@@ -74,7 +77,7 @@ describe("resolveGeminiCliSelectedAuthType", () => {
     delete process.env.GOOGLE_GENAI_USE_GCA;
     mockSettingsExistsSync.mockReset();
     mockSettingsReadFileSync.mockReset();
-    setOAuthSettingsFsForTest({
+    setGoogleOAuthSettingsFs({
       existsSync: (...args) => mockSettingsExistsSync(...args),
       readFileSync: (...args) => mockSettingsReadFileSync(...args),
       homedir: () => "/mock/home",
@@ -90,14 +93,14 @@ describe("resolveGeminiCliSelectedAuthType", () => {
         process.env[key] = value;
       }
     }
-    setOAuthSettingsFsForTest();
+    setGoogleOAuthSettingsFs();
   });
 
   it("uses GOOGLE_GENAI_USE_GCA as an oauth-personal fallback when settings are absent", () => {
     process.env.GOOGLE_GENAI_USE_GCA = "true";
     mockSettingsExistsSync.mockReturnValue(false);
 
-    expect(resolveGeminiCliSelectedAuthType()).toBe("oauth-personal");
+    expect(isGeminiCliPersonalOAuth()).toBe(true);
   });
 
   it("prefers settings auth selection over the GOOGLE_GENAI_USE_GCA fallback", () => {
@@ -113,7 +116,7 @@ describe("resolveGeminiCliSelectedAuthType", () => {
       }),
     );
 
-    expect(resolveGeminiCliSelectedAuthType()).toBe("oauth-code-assist");
+    expect(isGeminiCliPersonalOAuth()).toBe(false);
   });
 
   it("reads the nested security auth selection from ~/.gemini/settings.json", () => {
@@ -128,7 +131,7 @@ describe("resolveGeminiCliSelectedAuthType", () => {
       }),
     );
 
-    expect(resolveGeminiCliSelectedAuthType()).toBe("oauth-personal");
+    expect(isGeminiCliPersonalOAuth()).toBe(true);
   });
 
   it("falls back to legacy top-level selectedAuthType keys", () => {
@@ -137,11 +140,11 @@ describe("resolveGeminiCliSelectedAuthType", () => {
       JSON.stringify({ selectedAuthType: "oauth-personal" }),
     );
 
-    expect(resolveGeminiCliSelectedAuthType()).toBe("oauth-personal");
+    expect(isGeminiCliPersonalOAuth()).toBe(true);
   });
 });
 
-describe("extractGeminiCliCredentials", () => {
+describe("resolveOAuthClientConfig", () => {
   const ENV_KEYS = [
     "OPENCLAW_GEMINI_OAUTH_CLIENT_ID",
     "OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET",
@@ -160,13 +163,18 @@ describe("extractGeminiCliCredentials", () => {
 
   let originalPath: string | undefined;
   let envSnapshot: Partial<Record<(typeof ENV_KEYS)[number], string>>;
-  let extractGeminiCliCredentials: typeof import("./oauth.credentials.js").extractGeminiCliCredentials;
   let resolveOAuthClientConfig: typeof import("./oauth.credentials.js").resolveOAuthClientConfig;
-  let clearCredentialsCache: typeof import("./oauth.credentials.js").clearCredentialsCache;
-  let setOAuthCredentialsFsForTest: typeof import("./oauth.credentials.js").setOAuthCredentialsFsForTest;
+
+  function resolveExtractedCredentialsOrNull() {
+    try {
+      return resolveOAuthClientConfig();
+    } catch {
+      return null;
+    }
+  }
 
   async function installMockFs() {
-    setOAuthCredentialsFsForTest({
+    setGoogleOAuthCredentialsFs({
       existsSync: (...args) => mockExistsSync(...args),
       readFileSync: (...args) => mockReadFileSync(...args),
       realpathSync: (...args) => mockRealpathSync(...args),
@@ -454,12 +462,7 @@ describe("extractGeminiCliCredentials", () => {
   }
 
   beforeAll(async () => {
-    ({
-      extractGeminiCliCredentials,
-      resolveOAuthClientConfig,
-      clearCredentialsCache,
-      setOAuthCredentialsFsForTest,
-    } = await import("./oauth.credentials.js"));
+    ({ resolveOAuthClientConfig } = await import("./oauth.credentials.js"));
   });
 
   beforeEach(async () => {
@@ -482,22 +485,22 @@ describe("extractGeminiCliCredentials", () => {
         process.env[key] = value;
       }
     }
-    setOAuthCredentialsFsForTest();
+    setGoogleOAuthCredentialsFs();
   });
 
   it("returns null when gemini binary is not in PATH", () => {
     process.env.PATH = "/nonexistent";
     mockExistsSync.mockReturnValue(false);
 
-    clearCredentialsCache();
-    expect(extractGeminiCliCredentials()).toBeNull();
+    clearGoogleOAuthCredentialsCache();
+    expect(resolveExtractedCredentialsOrNull()).toBeNull();
   });
 
   it("includes missing binary details when resolving OAuth client config", async () => {
     process.env.PATH = "/nonexistent";
     mockExistsSync.mockReturnValue(false);
 
-    clearCredentialsCache();
+    clearGoogleOAuthCredentialsCache();
     expect(() => resolveOAuthClientConfig()).toThrow(
       /Details: Gemini CLI binary was not found in PATH/,
     );
@@ -506,8 +509,8 @@ describe("extractGeminiCliCredentials", () => {
   it("extracts credentials from oauth2.js in known path", () => {
     installGeminiLayout({ oauth2Exists: true, oauth2Content: FAKE_OAUTH2_CONTENT });
 
-    clearCredentialsCache();
-    const result = extractGeminiCliCredentials();
+    clearGoogleOAuthCredentialsCache();
+    const result = resolveExtractedCredentialsOrNull();
 
     expectFakeCliCredentials(result);
   });
@@ -515,8 +518,8 @@ describe("extractGeminiCliCredentials", () => {
   it("extracts credentials when PATH entry is an npm global shim", () => {
     installNpmShimLayout({ oauth2Exists: true, oauth2Content: FAKE_OAUTH2_CONTENT });
 
-    clearCredentialsCache();
-    const result = extractGeminiCliCredentials();
+    clearGoogleOAuthCredentialsCache();
+    const result = resolveExtractedCredentialsOrNull();
 
     expectFakeCliCredentials(result);
   });
@@ -529,8 +532,8 @@ describe("extractGeminiCliCredentials", () => {
       `,
     });
 
-    clearCredentialsCache();
-    const result = extractGeminiCliCredentials();
+    clearGoogleOAuthCredentialsCache();
+    const result = resolveExtractedCredentialsOrNull();
 
     expectFakeCliCredentials(result);
   });
@@ -538,8 +541,8 @@ describe("extractGeminiCliCredentials", () => {
   it("extracts credentials from Homebrew libexec installs", () => {
     installHomebrewLibexecLayout({ oauth2Content: FAKE_OAUTH2_CONTENT });
 
-    clearCredentialsCache();
-    const result = extractGeminiCliCredentials();
+    clearGoogleOAuthCredentialsCache();
+    const result = resolveExtractedCredentialsOrNull();
 
     expectFakeCliCredentials(result);
   });
@@ -547,14 +550,14 @@ describe("extractGeminiCliCredentials", () => {
   it("returns null when oauth2.js cannot be found", () => {
     installGeminiLayout({ oauth2Exists: false, readdir: [] });
 
-    clearCredentialsCache();
-    expect(extractGeminiCliCredentials()).toBeNull();
+    clearGoogleOAuthCredentialsCache();
+    expect(resolveExtractedCredentialsOrNull()).toBeNull();
   });
 
   it("includes missing oauth2.js details when resolving OAuth client config", async () => {
     installGeminiLayout({ oauth2Exists: false, readdir: [] });
 
-    clearCredentialsCache();
+    clearGoogleOAuthCredentialsCache();
     expect(() => resolveOAuthClientConfig()).toThrow(/Could not locate oauth2\.js/);
     expect(() => resolveOAuthClientConfig()).toThrow(/recursiveSearchDepth=10/);
   });
@@ -562,8 +565,8 @@ describe("extractGeminiCliCredentials", () => {
   it("returns null when oauth2.js lacks credentials", () => {
     installGeminiLayout({ oauth2Exists: true, oauth2Content: "// no credentials here" });
 
-    clearCredentialsCache();
-    expect(extractGeminiCliCredentials()).toBeNull();
+    clearGoogleOAuthCredentialsCache();
+    expect(resolveExtractedCredentialsOrNull()).toBeNull();
   });
 
   it("includes parse failure details when resolving OAuth client config", async () => {
@@ -573,7 +576,7 @@ describe("extractGeminiCliCredentials", () => {
       readdir: [],
     });
 
-    clearCredentialsCache();
+    clearGoogleOAuthCredentialsCache();
     expect(() => resolveOAuthClientConfig()).toThrow(
       /Candidate credential files did not contain a parseable OAuth client id\/secret/,
     );
@@ -585,7 +588,7 @@ describe("extractGeminiCliCredentials", () => {
       throw new Error("mock read failure");
     });
 
-    clearCredentialsCache();
+    clearGoogleOAuthCredentialsCache();
     expect(() => resolveOAuthClientConfig()).toThrow(
       /Unexpected errors occurred while reading candidate credential files\/directories/,
     );
@@ -595,15 +598,15 @@ describe("extractGeminiCliCredentials", () => {
   it("caches credentials after first extraction", () => {
     installGeminiLayout({ oauth2Exists: true, oauth2Content: FAKE_OAUTH2_CONTENT });
 
-    clearCredentialsCache();
+    clearGoogleOAuthCredentialsCache();
 
     // First call
-    const result1 = extractGeminiCliCredentials();
+    const result1 = resolveExtractedCredentialsOrNull();
     expectFakeCliCredentials(result1);
 
     // Second call should use cache (readFileSync not called again)
     const readCount = mockReadFileSync.mock.calls.length;
-    const result2 = extractGeminiCliCredentials();
+    const result2 = resolveExtractedCredentialsOrNull();
     expect(result2).toEqual(result1);
     expect(mockReadFileSync.mock.calls.length).toBe(readCount);
   });
@@ -614,8 +617,8 @@ describe("extractGeminiCliCredentials", () => {
       unrelatedOauth2Content: "// unrelated oauth file",
     });
 
-    clearCredentialsCache();
-    const result = extractGeminiCliCredentials();
+    clearGoogleOAuthCredentialsCache();
+    const result = resolveExtractedCredentialsOrNull();
 
     expectFakeCliCredentials(result);
     expect(
@@ -649,6 +652,7 @@ describe("loginGeminiCliOAuth", () => {
     platform: "PLATFORM_UNSPECIFIED",
     pluginType: "GEMINI",
   } as const;
+  const OVERSIZED_OAUTH_RESPONSE_BYTES = 17 * 1024 * 1024;
 
   function getRequestUrl(input: string | URL | Request): string {
     if (typeof input === "string") {
@@ -678,6 +682,51 @@ describe("loginGeminiCliOAuth", () => {
       status,
       headers: { "Content-Type": "application/json" },
     });
+  }
+
+  function oversizedJsonStringFieldResponse(params: {
+    prefix: string;
+    suffix: string;
+    targetBytes?: number;
+  }): Response {
+    const encoder = new TextEncoder();
+    const prefix = encoder.encode(params.prefix);
+    const suffix = encoder.encode(params.suffix);
+    const chunk = new Uint8Array(64 * 1024).fill(0x61);
+    const targetBytes = params.targetBytes ?? OVERSIZED_OAUTH_RESPONSE_BYTES;
+    let sentBytes = 0;
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(prefix);
+          sentBytes += prefix.byteLength;
+        },
+        pull(controller) {
+          if (sentBytes >= targetBytes) {
+            controller.enqueue(suffix);
+            controller.close();
+            return;
+          }
+          controller.enqueue(chunk);
+          sentBytes += chunk.byteLength;
+        },
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+  }
+
+  function responseTextBodyWithTextTrap(body: string, status = 500) {
+    const response = new Response(body, {
+      status,
+      headers: { "Content-Type": "text/plain" },
+    });
+    const text = vi
+      .spyOn(response, "text")
+      .mockRejectedValue(new Error("unexpected response.text() call"));
+    return { response, text };
   }
 
   function tokenResponse(): Response {
@@ -758,13 +807,14 @@ describe("loginGeminiCliOAuth", () => {
     isRemote: boolean;
     openUrl: () => Promise<void>;
     log: (msg: string) => void;
-    note: () => Promise<void>;
+    note: (message?: string, title?: string) => Promise<void>;
     prompt: () => Promise<string>;
     progress: { update: () => void; stop: () => void };
   }) => Promise<{ projectId?: string }>;
 
   async function runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth: LoginGeminiCliOAuthFn) {
     let authUrl = "";
+    const notes: string[] = [];
     const result = await loginGeminiCliOAuth({
       isRemote: true,
       openUrl: async () => {},
@@ -774,14 +824,18 @@ describe("loginGeminiCliOAuth", () => {
           authUrl = found[0];
         }
       },
-      note: async () => {},
+      note: async (message?: string) => {
+        if (message) {
+          notes.push(message);
+        }
+      },
       prompt: async () => {
         const state = new URL(authUrl).searchParams.get("state");
         return `http://localhost:8085/oauth2callback?code=oauth-code&state=${state}`;
       },
       progress: { update: () => {}, stop: () => {} },
     });
-    return { result, authUrl };
+    return { result, authUrl, notes };
   }
 
   async function runProjectDiscoveryExpectingProjectId(projectId: string) {
@@ -790,11 +844,37 @@ describe("loginGeminiCliOAuth", () => {
     expect(result.projectId).toBe(projectId);
   }
 
+  it("propagates cancellation through Gemini identity and project discovery", async () => {
+    const controller = new AbortController();
+    const signals: Array<AbortSignal | null | undefined> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        signals.push(init?.signal);
+        if (url === USERINFO_URL) {
+          return new Response(JSON.stringify({ email: "test@example.com" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        controller.abort(new Error("setup cancelled"));
+        throw controller.signal.reason;
+      }),
+    );
+
+    const { resolveGoogleOAuthIdentity } = await import("./oauth.project.js");
+    await expect(resolveGoogleOAuthIdentity("access-token", controller.signal)).rejects.toThrow(
+      "setup cancelled",
+    );
+    expect(signals).toEqual([controller.signal, controller.signal]);
+  });
+
   let envSnapshot: Partial<Record<(typeof ENV_KEYS)[number], string>>;
-  let setOAuthSettingsFsForTest: typeof import("./oauth.settings.js").setOAuthSettingsFsForTest;
 
   beforeAll(async () => {
-    ({ setOAuthSettingsFsForTest } = await import("./oauth.settings.js"));
+    await import("./oauth.settings.js");
   });
 
   beforeEach(() => {
@@ -808,7 +888,7 @@ describe("loginGeminiCliOAuth", () => {
     delete process.env.GOOGLE_GENAI_USE_GCA;
     mockSettingsExistsSync.mockReset();
     mockSettingsReadFileSync.mockReset();
-    setOAuthSettingsFsForTest({
+    setGoogleOAuthSettingsFs({
       existsSync: (...args) => mockSettingsExistsSync(...args),
       readFileSync: (...args) => mockSettingsReadFileSync(...args),
       homedir: () => "/mock/home",
@@ -825,7 +905,8 @@ describe("loginGeminiCliOAuth", () => {
         process.env[key] = value;
       }
     }
-    setOAuthSettingsFsForTest();
+    setGoogleOAuthSettingsFs();
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
@@ -881,7 +962,9 @@ describe("loginGeminiCliOAuth", () => {
     });
 
     const { loginGeminiCliOAuth } = await import("./oauth.js");
-    const { authUrl } = await runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth);
+    const { authUrl, notes } = await runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth);
+
+    expect(notes).toContainEqual(expect.stringContaining(authUrl));
 
     const authState = requireString(new URL(authUrl).searchParams.get("state"), "OAuth state");
 
@@ -925,6 +1008,30 @@ describe("loginGeminiCliOAuth", () => {
       /loadCodeAssist failed/i,
     );
     expect(requests.filter(({ url }) => url.includes("v1internal:loadCodeAssist"))).toHaveLength(3);
+  });
+
+  it.each([
+    [
+      "exchange",
+      "x",
+      async () =>
+        (await import("./oauth.token.js")).exchangeCodeForTokens("oauth-code", "pkce-verifier"),
+    ],
+    [
+      "refresh",
+      "y",
+      async () =>
+        (await import("./oauth.token.js")).refreshTokensForGeminiCli({ refresh: "refresh-token" }),
+    ],
+  ])("bounds token %s error bodies without using response.text()", async (_flow, fill, request) => {
+    const { response, text } = responseTextBodyWithTextTrap(fill.repeat(32 * 1024), 500);
+    installGeminiOAuthFetchMock(() => undefined, { tokenResponse: () => response });
+
+    const error = await request().catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(`Token exchange failed: ${fill.repeat(8 * 1024)}`);
+    expect(text).not.toHaveBeenCalled();
   });
 
   it("falls back to GOOGLE_CLOUD_PROJECT when all loadCodeAssist endpoints fail", async () => {
@@ -1082,4 +1189,103 @@ describe("loginGeminiCliOAuth", () => {
     expect(Number.isSafeInteger(result.expires)).toBe(true);
     expect(result.expires).toBeLessThanOrEqual(beforeRefresh);
   });
+
+  it("rejects an oversized token exchange response body", async () => {
+    // End-to-end OAuth path: oversized upstream bodies fail closed before auth
+    // completes. After #97628 the shared fetchWithTimeout cap fires first;
+    // readProviderJsonResponse remains the labeled parse boundary afterward.
+    installGeminiOAuthFetchMock(() => undefined, {
+      tokenResponse: () =>
+        oversizedJsonStringFieldResponse({
+          prefix: '{"access_token":"',
+          suffix: '","refresh_token":"r","expires_in":3600}',
+        }),
+    });
+
+    const { exchangeCodeForTokens } = await import("./oauth.token.js");
+    await expect(exchangeCodeForTokens("oauth-code", "pkce-verifier")).rejects.toThrow(
+      /google HTTP fetch: body exceeds|google\.token.*exceeds|Content too large/,
+    );
+  });
+
+  it("rejects an oversized token body at the JSON parse boundary", async () => {
+    // Defense-in-depth: if fetchWithTimeout already returned a buffered Response,
+    // readProviderJsonResponse still caps JSON.parse on the OAuth token path.
+    vi.resetModules();
+    const oauthHttp = await import("./oauth.http.js");
+    const originalFetchWithTimeout = oauthHttp.fetchWithTimeout;
+    vi.spyOn(oauthHttp, "fetchWithTimeout").mockImplementation(async (url, init, timeoutMs) => {
+      if (url === TOKEN_URL) {
+        return oversizedJsonStringFieldResponse({
+          prefix: '{"access_token":"',
+          suffix: '","refresh_token":"r","expires_in":3600}',
+        });
+      }
+      return originalFetchWithTimeout(url, init, timeoutMs);
+    });
+    installGeminiOAuthFetchMock(() => undefined);
+
+    const { exchangeCodeForTokens } = await import("./oauth.token.js");
+    await expect(exchangeCodeForTokens("oauth-code", "pkce-verifier")).rejects.toThrow(
+      /google\.token.*exceeds|Content too large/,
+    );
+  });
+
+  it("rejects an oversized loadCodeAssist success response body", async () => {
+    // discoverProject loops over all 3 LOAD endpoints; each must return the
+    // oversized body so that bound errors propagate for the whole loop.
+    const oversizedResponse = () =>
+      oversizedJsonStringFieldResponse({
+        prefix: '{"currentTier":{"id":"standard-tier"},"cloudaicompanionProject":{"id":"',
+        suffix: '"}}',
+      });
+    installGeminiOAuthFetchMock(({ url }) => {
+      if (url === LOAD_PROD || url === LOAD_DAILY || url === LOAD_AUTOPUSH) {
+        return oversizedResponse();
+      }
+      return undefined;
+    });
+
+    const { resolveGoogleOAuthIdentity } = await import("./oauth.project.js");
+    await expect(resolveGoogleOAuthIdentity("access-token")).rejects.toThrow(
+      /google HTTP fetch: body exceeds|google\.load-code-assist.*exceeds|Content too large/,
+    );
+  });
+
+  it("swallows bound error on oversized userinfo body and returns undefined email", async () => {
+    // getUserEmail catches all errors; an oversized userinfo body should not
+    // propagate but email must be undefined. After #97628 the fetch cap may
+    // truncate the upstream body before parse, so the swallowed error can be
+    // either a labeled size cap or malformed JSON — either proves the bound fired.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        if (url === USERINFO_URL) {
+          return oversizedJsonStringFieldResponse({
+            prefix: '{"email":"',
+            suffix: '"}',
+          });
+        }
+        if (url === LOAD_PROD) {
+          return new Response(
+            JSON.stringify({
+              currentTier: { id: "standard-tier" },
+              cloudaicompanionProject: { id: "proj-bound-test" },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return new Response(JSON.stringify({ error: "not found" }), { status: 503 });
+      }),
+    );
+
+    const { resolveGoogleOAuthIdentity } = await import("./oauth.project.js");
+    const result = await resolveGoogleOAuthIdentity("access-token");
+    expect(result.projectId).toBe("proj-bound-test");
+    // email is undefined: the bound error was thrown and swallowed by getUserEmail
+    expect(result.email).toBeUndefined();
+  });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

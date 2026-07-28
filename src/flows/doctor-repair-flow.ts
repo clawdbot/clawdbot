@@ -4,9 +4,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
 import { normalizeHealthCheck } from "./health-check-adapter.js";
 import { listHealthChecks } from "./health-check-registry.js";
-import type { HealthCheckRunResult, RegisteredHealthCheck } from "./health-check-runner-types.js";
 import type {
-  HealthCheck,
+  HealthCheckInput,
+  HealthCheckRunResult,
+  RegisteredHealthCheck,
+} from "./health-check-runner-types.js";
+import type {
   HealthFinding,
   HealthRepairContext,
   HealthRepairDiff,
@@ -15,13 +18,13 @@ import type {
 } from "./health-checks.js";
 
 // Repair runner for structured doctor health checks; carries config between checks.
-export interface DoctorRepairRunOptions {
-  readonly checks?: readonly HealthCheck[];
+interface DoctorRepairRunOptions {
+  readonly checks?: readonly HealthCheckInput[];
   readonly dryRun?: boolean;
   readonly diff?: boolean;
 }
 
-export interface DoctorRepairRunResult {
+interface DoctorRepairRunResult {
   readonly config: OpenClawConfig;
   readonly findings: readonly HealthFinding[];
   readonly remainingFindings: readonly HealthFinding[];
@@ -127,6 +130,7 @@ async function runSplitHealthCheck(
     warnings.push(...(result.warnings ?? []));
     diffs.push(...(result.diffs ?? []));
     effects.push(...(result.effects ?? []));
+    changes.push(...result.changes);
     const status = result.status ?? "repaired";
     if (status !== "repaired") {
       warnings.push(`${check.id} repair ${status}${result.reason ? `: ${result.reason}` : ""}`);
@@ -135,7 +139,6 @@ async function runSplitHealthCheck(
     if (result.config !== undefined && opts.dryRun !== true) {
       cfg = result.config;
     }
-    changes.push(...result.changes);
     checksRepaired++;
     if (opts.dryRun === true) {
       return repairRunResult(cfg, findings, remainingFindings, changes, warnings, diffs, effects, {

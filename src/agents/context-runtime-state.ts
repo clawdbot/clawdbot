@@ -73,7 +73,7 @@ export function beginContextWindowCacheRefresh(): void {
 }
 
 /** Reset prepared context-window state after model config or plugin metadata changes. */
-export function resetContextWindowCache(): void {
+function resetContextWindowCache(): void {
   beginContextWindowCacheRefresh();
   CONTEXT_WINDOW_RUNTIME_STATE.modelsConfigRuntimeLoader.clear();
   MODEL_CONFIGURED_CONTEXT_TOKEN_CACHE.clear();

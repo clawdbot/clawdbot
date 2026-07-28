@@ -2,7 +2,10 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { detectPluginVersionDrift } from "./plugin-version-drift.js";
+import {
+  detectPluginVersionDrift,
+  resolvePluginVersionDriftUpdateCommand,
+} from "./plugin-version-drift.js";
 
 function npmRecord(
   version: string,
@@ -316,5 +319,71 @@ describe("detectPluginVersionDrift", () => {
     });
 
     expect(result.drifts.map((d) => d.pluginId)).toEqual(["discord", "matrix", "whatsapp"]);
+  });
+});
+
+describe("resolvePluginVersionDriftUpdateCommand", () => {
+  it("uses an exact npm package target when the drifted install is pinned", () => {
+    expect(
+      resolvePluginVersionDriftUpdateCommand({
+        pluginId: "brave",
+        installedVersion: "2026.6.9",
+        gatewayVersion: "2026.6.10-beta.1",
+        source: "npm",
+        packageName: "@openclaw/brave-plugin",
+        spec: "@openclaw/brave-plugin@2026.6.9",
+      }),
+    ).toBe("openclaw plugins update @openclaw/brave-plugin@2026.6.10-beta.1");
+  });
+
+  it("parses the package name from exact npm specs when drift metadata is sparse", () => {
+    expect(
+      resolvePluginVersionDriftUpdateCommand({
+        pluginId: "brave",
+        installedVersion: "2026.6.9",
+        gatewayVersion: "2026.6.10-beta.1",
+        source: "npm",
+        spec: "@openclaw/brave-plugin@2026.6.9",
+      }),
+    ).toBe("openclaw plugins update @openclaw/brave-plugin@2026.6.10-beta.1");
+  });
+
+  it("prefers the parsed exact npm spec package over inconsistent drift metadata", () => {
+    expect(
+      resolvePluginVersionDriftUpdateCommand({
+        pluginId: "brave",
+        installedVersion: "2026.6.9",
+        gatewayVersion: "2026.6.10-beta.1",
+        source: "npm",
+        packageName: "@openclaw/other-plugin",
+        spec: "@openclaw/brave-plugin@2026.6.9",
+      }),
+    ).toBe("openclaw plugins update @openclaw/brave-plugin@2026.6.10-beta.1");
+  });
+
+  it("keeps plugin-id updates for floating npm install records", () => {
+    expect(
+      resolvePluginVersionDriftUpdateCommand({
+        pluginId: "brave",
+        installedVersion: "2026.6.9",
+        gatewayVersion: "2026.6.10-beta.1",
+        source: "npm",
+        packageName: "@openclaw/brave-plugin",
+        spec: "@openclaw/brave-plugin",
+      }),
+    ).toBe("openclaw plugins update brave");
+  });
+
+  it("keeps plugin-id updates when the gateway version is not a registry version", () => {
+    expect(
+      resolvePluginVersionDriftUpdateCommand({
+        pluginId: "brave",
+        installedVersion: "2026.6.9",
+        gatewayVersion: "unknown",
+        source: "npm",
+        packageName: "@openclaw/brave-plugin",
+        spec: "@openclaw/brave-plugin@2026.6.9",
+      }),
+    ).toBe("openclaw plugins update brave");
   });
 });

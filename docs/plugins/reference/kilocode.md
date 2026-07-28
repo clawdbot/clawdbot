@@ -12,11 +12,11 @@ Adds Kilocode model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/kilocode-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/kilocode-provider`
 
 ## Surface
 
-providers: kilocode
+providers: `kilocode`
 
 ## Related docs
 

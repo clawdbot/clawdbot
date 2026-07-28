@@ -10,7 +10,7 @@ const BACKOFF_SCHEDULE_MS = [5000, 10000, 30000, 60000];
  * Calculate suggested retry delay based on consecutive no-output poll count.
  * Implements exponential backoff schedule: 5s → 10s → 30s → 60s (capped).
  */
-export function calculateBackoffMs(consecutiveNoOutputPolls: number): number {
+function calculateBackoffMs(consecutiveNoOutputPolls: number): number {
   const index = Math.min(consecutiveNoOutputPolls, BACKOFF_SCHEDULE_MS.length - 1);
   return BACKOFF_SCHEDULE_MS[index] ?? 60000;
 }
@@ -43,21 +43,6 @@ export function recordCommandPoll(
   state.commandPollCounts.set(commandId, { count: newCount, lastPollAt: now });
 
   return calculateBackoffMs(newCount);
-}
-
-/**
- * Get current suggested backoff for a command without modifying state.
- * Useful for checking current backoff level.
- */
-export function getCommandPollSuggestion(
-  state: SessionState,
-  commandId: string,
-): number | undefined {
-  const pollData = state.commandPollCounts?.get(commandId);
-  if (!pollData) {
-    return undefined;
-  }
-  return calculateBackoffMs(pollData.count);
 }
 
 /**

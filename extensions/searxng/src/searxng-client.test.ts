@@ -1,16 +1,22 @@
 // Searxng tests cover searxng client plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const endpointMockState = vi.hoisted(() => ({
-  calls: [] as Array<{ url: string; timeoutSeconds: number; init: RequestInit }>,
+  calls: [] as Array<{
+    url: string;
+    timeoutSeconds: number;
+    init: RequestInit;
+    signal?: AbortSignal;
+  }>,
   responses: [] as Response[],
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/provider-web-search")>();
   const runEndpoint = async (
-    params: { url: string; timeoutSeconds: number; init: RequestInit },
+    params: { url: string; timeoutSeconds: number; init: RequestInit; signal?: AbortSignal },
     run: (response: Response) => Promise<unknown>,
   ) => {
     endpointMockState.calls.push(params);
@@ -97,8 +103,10 @@ describe("searxng client", () => {
     });
 
     expect(endpointMockState.calls).toHaveLength(2);
-    expect(new URL(endpointMockState.calls[0].url).searchParams.get("categories")).toBe("weather");
-    expect(new URL(endpointMockState.calls[1].url).searchParams.get("categories")).toBe("general");
+    const firstCall = expectDefined(endpointMockState.calls[0], "first SearXNG endpoint call");
+    const secondCall = expectDefined(endpointMockState.calls[1], "second SearXNG endpoint call");
+    expect(new URL(firstCall.url).searchParams.get("categories")).toBe("weather");
+    expect(new URL(secondCall.url).searchParams.get("categories")).toBe("general");
     expect(result.provider).toBe("searxng");
     expect(result.query).toBe("beijing hourly weather");
     expect(result.count).toBe(1);
@@ -148,6 +156,47 @@ describe("searxng client", () => {
       },
       results: [],
     });
+  });
+
+  it("forwards the abort signal to the guarded endpoint", async () => {
+    endpointMockState.responses.push(
+      new Response(JSON.stringify({ results: [] }), { status: 200 }),
+    );
+    const controller = new AbortController();
+
+    await runSearxngSearch({
+      baseUrl: "http://127.0.0.1:8888",
+      query: "openclaw",
+      categories: "general",
+      signal: controller.signal,
+    });
+
+    expect(endpointMockState.calls).toHaveLength(1);
+    expect(endpointMockState.calls[0]?.signal).toBe(controller.signal);
+  });
+
+  it("rejects partial response bodies without blaming the size limit", async () => {
+    const chunk = new TextEncoder().encode("partial");
+    let sentChunk = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (!sentChunk) {
+          sentChunk = true;
+          controller.enqueue(chunk);
+          return;
+        }
+        controller.error(new Error("stream reset"));
+      },
+    });
+    endpointMockState.responses.push(new Response(stream, { status: 200 }));
+
+    await expect(
+      runSearxngSearch({
+        baseUrl: "http://127.0.0.1:8888",
+        query: "openclaw",
+        categories: "general",
+      }),
+    ).rejects.toThrow("SearXNG response incomplete after 7 bytes.");
   });
 
   it("detects category searches that should retry with general", () => {

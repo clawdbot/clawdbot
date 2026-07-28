@@ -5,9 +5,11 @@ import path from "node:path";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 function createGlm47Template() {
   return {
@@ -49,6 +51,26 @@ function expectModelFields(
 }
 
 describe("zai provider plugin", () => {
+  it("preserves all regional auth choices and the exact manifest-owned static catalog", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(provider.aliases).toEqual(["z-ai", "z.ai"]);
+    expect(provider.envVars).toEqual(["ZAI_API_KEY", "Z_AI_API_KEY"]);
+    expect(provider.auth.map((method) => method.id)).toEqual([
+      "api-key",
+      "coding-global",
+      "coding-cn",
+      "global",
+      "cn",
+    ]);
+    expect(await provider.staticCatalog?.run({} as never)).toEqual({
+      provider: buildManifestModelProviderConfig({
+        providerId: "zai",
+        catalog: manifest.modelCatalog.providers.zai,
+      }),
+    });
+  });
+
   it("owns replay policy for OpenAI-compatible Z.ai transports", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
@@ -106,8 +128,8 @@ describe("zai provider plugin", () => {
           baseUrl: "https://api.z.ai/api/paas/v4",
           input: ["text"],
           reasoning: true,
-          contextWindow: 202800,
-          maxTokens: 131100,
+          contextWindow: 200_000,
+          maxTokens: 131_072,
         },
       },
       {
@@ -117,8 +139,8 @@ describe("zai provider plugin", () => {
           baseUrl: "https://api.z.ai/api/paas/v4",
           input: ["text", "image"],
           reasoning: true,
-          contextWindow: 202800,
-          maxTokens: 131100,
+          contextWindow: 200_000,
+          maxTokens: 131_072,
         },
       },
     ] as const;
@@ -189,20 +211,39 @@ describe("zai provider plugin", () => {
     ).toEqual(registered);
   });
 
+  it("falls back to manifest baseUrl when both providerConfig and template model are unavailable", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    const resolved = provider.resolveDynamicModel?.({
+      provider: "zai",
+      modelId: "glm-5.3",
+      modelRegistry: {
+        find: () => null,
+      },
+    } as never) as Record<string, unknown> | undefined;
+    expectModelFields(resolved, {
+      id: "glm-5.3",
+      provider: "zai",
+      api: "openai-completions",
+      baseUrl: "https://api.z.ai/api/paas/v4",
+      reasoning: true,
+      input: ["text"],
+    });
+  });
+
   it("still synthesizes unknown GLM-5 variants from the GLM-4.7 template", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     const template = createGlm47Template();
 
     const resolved = provider.resolveDynamicModel?.({
       provider: "zai",
-      modelId: "glm-5-turbo",
+      modelId: "glm-5.3",
       modelRegistry: {
         find: (_provider: string, modelId: string) => (modelId === "glm-4.7" ? template : null),
       },
     } as never) as Record<string, unknown> | undefined;
     expectModelFields(resolved, {
-      id: "glm-5-turbo",
-      name: "GLM-5 Turbo",
+      id: "glm-5.3",
       provider: "zai",
       api: "openai-completions",
       baseUrl: "https://api.z.ai/api/paas/v4",
@@ -260,6 +301,40 @@ describe("zai provider plugin", () => {
     expect(capturedPayload).not.toHaveProperty("tool_stream");
   });
 
+  it("exposes full GLM-5.2 thinking levels while keeping older GLM models binary", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "zai",
+        modelId: "glm-5.2",
+        reasoning: true,
+      } as never),
+    ).toEqual({
+      levels: [
+        { id: "off", label: "off" },
+        { id: "low", label: "low" },
+        { id: "high", label: "high" },
+        { id: "max", label: "max" },
+      ],
+      defaultLevel: "off",
+    });
+
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "zai",
+        modelId: "glm-5.1",
+        reasoning: true,
+      } as never),
+    ).toEqual({
+      levels: [
+        { id: "off", label: "off" },
+        { id: "low", label: "on" },
+      ],
+      defaultLevel: "off",
+    });
+  });
+
   it("maps thinking off to Z.AI thinking disabled", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     let capturedPayload: Record<string, unknown> | undefined;
@@ -290,6 +365,74 @@ describe("zai provider plugin", () => {
 
     expect(capturedPayload?.tool_stream).toBe(true);
     expect(capturedPayload?.thinking).toEqual({ type: "disabled" });
+  });
+
+  it("keeps minimal thinking enabled for binary GLM models", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    let capturedPayload: Record<string, unknown> | undefined;
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      const payload: Record<string, unknown> = {};
+      options?.onPayload?.(payload as never, model as never);
+      capturedPayload = payload;
+      return {} as ReturnType<StreamFn>;
+    };
+
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "zai",
+      modelId: "glm-5.1",
+      extraParams: {},
+      thinkingLevel: "minimal",
+      streamFn: baseStreamFn,
+    } as never);
+
+    void wrapped?.(
+      {
+        api: "openai-completions",
+        provider: "zai",
+        id: "glm-5.1",
+      } as Model<"openai-completions">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(capturedPayload).not.toHaveProperty("thinking");
+  });
+
+  it("maps GLM-5.2 thinking levels to Z.AI reasoning effort", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      const payload: Record<string, unknown> = {};
+      options?.onPayload?.(payload as never, model as never);
+      return { payload } as never;
+    };
+
+    for (const [thinkingLevel, expectedEffort] of [
+      ["low", "high"],
+      ["high", "high"],
+      ["max", "max"],
+    ] as const) {
+      const wrapped = provider.wrapStreamFn?.({
+        provider: "zai",
+        modelId: "glm-5.2",
+        extraParams: {},
+        thinkingLevel,
+        streamFn: baseStreamFn,
+      } as never);
+
+      const result = wrapped?.(
+        {
+          api: "openai-completions",
+          provider: "zai",
+          id: "glm-5.2",
+        } as Model<"openai-completions">,
+        { messages: [] } as Context,
+        {},
+      ) as unknown as { payload: Record<string, unknown> };
+
+      expect(result.payload.reasoning_effort).toBe(expectedEffort);
+      expect(result.payload).not.toHaveProperty("thinking");
+      expect(result.payload.tool_stream).toBe(true);
+    }
   });
 
   it("enables Z.AI preserved thinking only when requested", async () => {

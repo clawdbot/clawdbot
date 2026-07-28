@@ -112,6 +112,7 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       );
       return jsonResult({
         ok: true,
+        channelId,
         messages: messages.map((message) => ctx.normalizeMessage(message)),
       });
     }
@@ -126,6 +127,7 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       const content = readStringParam(ctx.params, "content", {
         required: true,
       });
+      await ctx.assertReadTargetAllowed({ channelId });
       const message = await discordMessagingActionRuntime.editMessageDiscord(
         channelId,
         messageId,
@@ -142,6 +144,7 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       const messageId = readStringParam(ctx.params, "messageId", {
         required: true,
       });
+      await ctx.assertReadTargetAllowed({ channelId });
       await discordMessagingActionRuntime.deleteMessageDiscord(
         channelId,
         messageId,
@@ -157,6 +160,7 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       const messageId = readStringParam(ctx.params, "messageId", {
         required: true,
       });
+      await ctx.assertReadTargetAllowed({ channelId });
       await discordMessagingActionRuntime.pinMessageDiscord(channelId, messageId, ctx.withOpts());
       return jsonResult({ ok: true });
     }
@@ -168,6 +172,7 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       const messageId = readStringParam(ctx.params, "messageId", {
         required: true,
       });
+      await ctx.assertReadTargetAllowed({ channelId });
       await discordMessagingActionRuntime.unpinMessageDiscord(channelId, messageId, ctx.withOpts());
       return jsonResult({ ok: true });
     }
@@ -184,18 +189,51 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       if (!ctx.isActionEnabled("search")) {
         throw new Error("Discord search is disabled.");
       }
-      const guildId = readStringParam(ctx.params, "guildId", {
-        required: true,
-      });
-      const content = readStringParam(ctx.params, "content", {
-        required: true,
-      });
+      let guildId = readStringParam(ctx.params, "guildId");
+      const content =
+        readStringParam(ctx.params, "content") ?? readStringParam(ctx.params, "query");
+      if (!content) {
+        throw new Error("Discord search requires content or query text.");
+      }
       const channelId = readStringParam(ctx.params, "channelId");
       const channelIds = readStringArrayParam(ctx.params, "channelIds");
+      // Resolve guildId from channel info when not explicitly provided.
+      if (!guildId) {
+        const rawInferChannelId = channelId ?? channelIds?.[0];
+        if (rawInferChannelId) {
+          try {
+            const inferChannelId =
+              discordMessagingActionRuntime.resolveDiscordChannelId(rawInferChannelId);
+            const channelInfo = await discordMessagingActionRuntime.fetchChannelInfoDiscord(
+              inferChannelId,
+              ctx.withOpts(),
+            );
+            if (channelInfo && typeof channelInfo === "object") {
+              const record = channelInfo as unknown as Record<string, unknown>;
+              const resolved = record.guild_id ?? record.guildId;
+              if (typeof resolved === "string" && resolved.trim()) {
+                guildId = resolved.trim();
+              }
+            }
+          } catch {
+            // Channel info fetch failed; fall through to descriptive error.
+          }
+        }
+      }
+      if (!guildId) {
+        throw new Error(
+          "Discord search requires guildId. Provide guildId explicitly, or provide channelId so the guild can be resolved from the channel.",
+        );
+      }
       const authorId = readStringParam(ctx.params, "authorId");
       const authorIds = readStringArrayParam(ctx.params, "authorIds");
       const limit = readPositiveIntegerParam(ctx.params, "limit");
-      const channelIdList = [...(channelIds ?? []), ...(channelId ? [channelId] : [])];
+      const channelIdList = [
+        ...(channelIds ?? []).map((id) =>
+          discordMessagingActionRuntime.resolveDiscordChannelId(id),
+        ),
+        ...(channelId ? [discordMessagingActionRuntime.resolveDiscordChannelId(channelId)] : []),
+      ];
       if (channelIdList.length > 0) {
         for (const targetChannelId of channelIdList) {
           await ctx.assertReadTargetAllowed({ guildId, channelId: targetChannelId });
@@ -217,8 +255,7 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       if (!results || typeof results !== "object") {
         return jsonResult({ ok: true, results });
       }
-      const resultsRecord = results as Record<string, unknown>;
-      const messages = resultsRecord.messages;
+      const messages = results.messages;
       const normalizedMessages = Array.isArray(messages)
         ? messages.map((group) =>
             Array.isArray(group) ? group.map((msg) => ctx.normalizeMessage(msg)) : group,
@@ -227,7 +264,7 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       return jsonResult({
         ok: true,
         results: {
-          ...resultsRecord,
+          ...results,
           messages: normalizedMessages,
         },
       });

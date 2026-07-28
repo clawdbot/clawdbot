@@ -34,11 +34,39 @@ export function getDefaultLocalRoots(): readonly string[] {
   return getDefaultMediaLocalRoots();
 }
 
+/** Resolves an allowlist once for callers that validate several media paths. */
+export async function resolveLocalMediaRoots(
+  localRoots?: readonly string[],
+): Promise<readonly string[]> {
+  const roots = localRoots ?? getDefaultLocalRoots();
+  return await Promise.all(
+    roots.map(async (root) => {
+      let resolvedRoot: string;
+      try {
+        resolvedRoot = await fs.realpath(root);
+      } catch {
+        resolvedRoot = path.resolve(root);
+      }
+      if (resolvedRoot === path.parse(resolvedRoot).root) {
+        throw new LocalMediaAccessError(
+          "invalid-root",
+          `Invalid localRoots entry (refuses filesystem root): ${root}. Pass a narrower directory.`,
+        );
+      }
+      return resolvedRoot;
+    }),
+  );
+}
+
 /** Verifies that a local media path is managed inbound media or lives under allowed roots. */
 export async function assertLocalMediaAllowed(
   mediaPath: string,
   localRoots: readonly string[] | "any" | undefined,
-  options?: { inboundRoots?: readonly string[] },
+  options?: {
+    inboundRoots?: readonly string[];
+    resolvedRoots?: readonly string[];
+    resolveRoots?: () => Promise<readonly string[]>;
+  },
 ): Promise<void> {
   if (localRoots === "any") {
     return;
@@ -86,13 +114,12 @@ export async function assertLocalMediaAllowed(
     }
   }
 
-  for (const root of roots) {
-    let resolvedRoot: string;
-    try {
-      resolvedRoot = await fs.realpath(root);
-    } catch {
-      resolvedRoot = path.resolve(root);
-    }
+  const resolvedRoots =
+    options?.resolvedRoots ??
+    (await options?.resolveRoots?.()) ??
+    (await resolveLocalMediaRoots(roots));
+  for (const [index, resolvedRoot] of resolvedRoots.entries()) {
+    const root = roots[index] ?? resolvedRoot;
     if (resolvedRoot === path.parse(resolvedRoot).root) {
       throw new LocalMediaAccessError(
         "invalid-root",

@@ -1,14 +1,11 @@
 // Skill filter tests cover active skill selection for isolated cron runs.
 import { describe, expect, it } from "vitest";
-import {
-  makeIsolatedAgentTurnJob,
-  makeIsolatedAgentTurnParams,
-  setupRunCronIsolatedAgentTurnSuite,
-} from "./run.suite-helpers.js";
+import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
+import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
   buildWorkspaceSkillSnapshotMock,
   dispatchCronDeliveryMock,
-  getCliSessionIdMock,
+  getCliSessionBindingMock,
   isCliProviderMock,
   lookupContextTokensMock,
   loadRunCronIsolatedAgentTurn,
@@ -24,8 +21,6 @@ import {
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
-const makeSkillJob = makeIsolatedAgentTurnJob;
-const makeSkillParams = makeIsolatedAgentTurnParams;
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -60,7 +55,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
   setupRunCronIsolatedAgentTurnSuite();
 
   async function runSkillFilterCase(overrides?: Record<string, unknown>) {
-    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams(overrides));
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture(overrides));
     expect(result.status).toBe("ok");
     return result;
   }
@@ -233,8 +228,8 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       });
 
       const result = await runCronIsolatedAgentTurn(
-        makeSkillParams({
-          job: makeSkillJob({
+        makeIsolatedAgentParamsFixture({
+          job: makeIsolatedAgentJobFixture({
             payload: { kind: "agentTurn", message: "test", model: "anthropic/claude-sonnet-4-6" },
           }),
         }),
@@ -254,16 +249,17 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       });
 
       const result = await runCronIsolatedAgentTurn(
-        makeSkillParams({
+        makeIsolatedAgentParamsFixture({
           cfg: {
             agents: {
               defaults: {
                 model: { primary: "openai/gpt-5.4", fallbacks: defaultFallbacks },
                 models: { "openai/gpt-5.4": {} },
+                modelPolicy: { allow: ["openai/gpt-5.4"] },
               },
             },
           },
-          job: makeSkillJob({
+          job: makeIsolatedAgentJobFixture({
             payload: {
               kind: "agentTurn",
               message: "test",
@@ -275,7 +271,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
 
       expect(result.status).toBe("error");
       expect(result.error).toBe(
-        "cron payload.model 'anthropic/claude-sonnet-4-6' rejected by agents.defaults.models allowlist: anthropic/claude-sonnet-4-6 is not in [openai/gpt-5.4]",
+        "cron payload.model 'anthropic/claude-sonnet-4-6' rejected by agents.defaults.modelPolicy.allow: anthropic/claude-sonnet-4-6 is not in [openai/gpt-5.4]",
       );
       expect(logWarnMock).not.toHaveBeenCalled();
       expect(runWithModelFallbackMock).not.toHaveBeenCalled();
@@ -287,8 +283,8 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       });
 
       const result = await runCronIsolatedAgentTurn(
-        makeSkillParams({
-          job: makeSkillJob({
+        makeIsolatedAgentParamsFixture({
+          job: makeIsolatedAgentJobFixture({
             payload: { kind: "agentTurn", message: "test", model: "openai/" },
           }),
         }),
@@ -311,7 +307,8 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
 
       isCliProviderMock.mockReturnValue(true);
       runCliAgentMock.mockImplementationOnce(async (params: { abortSignal?: AbortSignal }) => {
-        expect(params.abortSignal).toBe(abortController.signal);
+        expect(params.abortSignal).not.toBe(abortController.signal);
+        expect(params.abortSignal?.aborted).toBe(false);
         if (!markCliStarted) {
           throw new Error("Expected CLI start marker callback to be initialized");
         }
@@ -327,7 +324,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       mockCliFallbackInvocation();
 
       const runPromise = runCronIsolatedAgentTurn(
-        makeSkillParams({ abortSignal: abortController.signal }),
+        makeIsolatedAgentParamsFixture({ abortSignal: abortController.signal }),
       );
       await cliStarted;
       abortController.abort("cron: job execution timed out");
@@ -341,7 +338,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
 
     it("does not pass stored cliSessionId on fresh isolated runs (isNewSession=true)", async () => {
       // Simulate a persisted CLI session ID from a previous run.
-      getCliSessionIdMock.mockReturnValue("prev-cli-session-abc");
+      getCliSessionBindingMock.mockReturnValue({ sessionId: "prev-cli-session-abc" });
       isCliProviderMock.mockReturnValue(true);
       runCliAgentMock.mockResolvedValue({
         payloads: [{ text: "output" }],
@@ -364,7 +361,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
         isNewSession: true,
       });
 
-      await runCronIsolatedAgentTurn(makeSkillParams());
+      await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
 
       expect(runCliAgentMock).toHaveBeenCalledOnce();
       // Fresh session: cliSessionId must be undefined, not the stored value.
@@ -372,7 +369,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     });
 
     it("reuses stored cliSessionId on continuation runs (isNewSession=false)", async () => {
-      getCliSessionIdMock.mockReturnValue("existing-cli-session-def");
+      getCliSessionBindingMock.mockReturnValue({ sessionId: "existing-cli-session-def" });
       isCliProviderMock.mockReturnValue(true);
       runCliAgentMock.mockResolvedValue({
         payloads: [{ text: "output" }],
@@ -395,7 +392,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
         isNewSession: false,
       });
 
-      await runCronIsolatedAgentTurn(makeSkillParams());
+      await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
 
       expect(runCliAgentMock).toHaveBeenCalledOnce();
       // Continuation: cliSessionId should be passed through for session resume.

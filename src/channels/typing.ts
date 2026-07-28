@@ -25,6 +25,8 @@ export type CreateTypingCallbacksParams = {
   maxDurationMs?: number;
 };
 
+const DEFAULT_MAX_CONSECUTIVE_TYPING_FAILURES = 2;
+
 function resolvePositiveIntegerOption(value: number | undefined, fallback: number): number {
   const parsed = parseFiniteNumber(value);
   return parsed === undefined || parsed <= 0 ? fallback : Math.max(1, Math.floor(parsed));
@@ -41,7 +43,10 @@ function resolveDurationMsOption(value: number | undefined, fallback: number): n
 export function createTypingCallbacks(params: CreateTypingCallbacksParams): TypingCallbacks {
   const stop = params.stop;
   const keepaliveIntervalMs = resolveKeepaliveIntervalMs(params.keepaliveIntervalMs);
-  const maxConsecutiveFailures = resolvePositiveIntegerOption(params.maxConsecutiveFailures, 2);
+  const maxConsecutiveFailures = resolvePositiveIntegerOption(
+    params.maxConsecutiveFailures,
+    DEFAULT_MAX_CONSECUTIVE_TYPING_FAILURES,
+  );
   const maxDurationMs = resolveDurationMsOption(params.maxDurationMs, 60_000);
   let stopSent = false;
   let closed = false;

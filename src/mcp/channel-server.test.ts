@@ -3,8 +3,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, test, vi } from "vitest";
 import { z } from "zod";
-import { shouldRetryInitialMcpGatewayConnect } from "./channel-bridge.js";
-import { createOpenClawChannelMcpServer, OpenClawChannelBridge } from "./channel-server.js";
+import { OpenClawChannelBridge } from "./channel-bridge.js";
+import { createChannelMcpRuntime } from "./channel-server-runtime.js";
 import { extractAttachmentsFromMessage } from "./channel-shared.js";
 
 const ClaudeChannelNotificationSchema = z.object({
@@ -24,7 +24,7 @@ const ClaudePermissionNotificationSchema = z.object({
 });
 
 async function connectMcpWithoutGateway(params?: { claudeChannelMode?: "auto" | "on" | "off" }) {
-  const serverHarness = await createOpenClawChannelMcpServer({
+  const serverHarness = await createChannelMcpRuntime({
     claudeChannelMode: params?.claudeChannelMode ?? "auto",
     config: {} as never,
     verbose: false,
@@ -83,22 +83,7 @@ function requireFirstMockCall(mock: { mock: { calls: unknown[][] } }, label: str
   return call;
 }
 
-function gatewayRequestError(retryable: boolean): Error {
-  return Object.assign(new Error(retryable ? "gateway busy" : "auth failed"), {
-    name: "GatewayClientRequestError",
-    retryable,
-  });
-}
-
 describe("openclaw channel mcp server", () => {
-  test("keeps initial MCP gateway connection alive through transient connect errors", () => {
-    expect(
-      shouldRetryInitialMcpGatewayConnect(new Error("gateway request timeout for connect")),
-    ).toBe(true);
-    expect(shouldRetryInitialMcpGatewayConnect(gatewayRequestError(true))).toBe(true);
-    expect(shouldRetryInitialMcpGatewayConnect(gatewayRequestError(false))).toBe(false);
-  });
-
   describe("gateway-backed flows", () => {
     describe("gateway integration", () => {
       test("returns conversation and message payloads in primary MCP content", async () => {
@@ -218,6 +203,37 @@ describe("openclaw channel mcp server", () => {
         ).toBe(true);
       });
 
+      test("clamps direct bridge session limits to the public MCP windows", async () => {
+        const sessionKey = "agent:main:main";
+        const gatewayRequest = vi.fn(async (method: string) => {
+          if (method === "sessions.list") {
+            return { sessions: [] };
+          }
+          if (method === "sessions.get") {
+            return { messages: [] };
+          }
+          throw new Error(`unexpected gateway method ${method}`);
+        });
+        const bridge = new OpenClawChannelBridge({} as never, {
+          claudeChannelMode: "off",
+          verbose: false,
+        });
+        attachReadyGateway(bridge, gatewayRequest);
+
+        await bridge.listConversations({ limit: 10_000 });
+        await bridge.readMessages(sessionKey, 10_000);
+
+        expect(gatewayRequest).toHaveBeenNthCalledWith(
+          1,
+          "sessions.list",
+          expect.objectContaining({ limit: 500 }),
+        );
+        expect(gatewayRequest).toHaveBeenNthCalledWith(2, "sessions.get", {
+          key: sessionKey,
+          limit: 200,
+        });
+      });
+
       test("serializes conversation and message payloads into MCP primary content", async () => {
         const mcp = await connectMcpWithoutGateway({ claudeChannelMode: "off" });
         try {
@@ -293,6 +309,7 @@ describe("openclaw channel mcp server", () => {
             }
           ).handleSessionMessageEvent({
             sessionKey,
+            senderIsOwner: true,
             lastChannel: "imessage",
             lastTo: "+15551234567",
             messageId: "msg-user-1",
@@ -327,6 +344,7 @@ describe("openclaw channel mcp server", () => {
             }
           ).handleSessionMessageEvent({
             sessionKey,
+            senderIsOwner: true,
             lastChannel: "imessage",
             lastTo: "+15551234567",
             messageId: "msg-user-2",

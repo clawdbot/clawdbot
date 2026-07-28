@@ -23,6 +23,10 @@ export function extractFirstTextBlock(message: unknown): string | undefined {
 
 export type AssistantPhase = "commentary" | "final_answer";
 
+function isAssistantTextContentBlockType(value: unknown): boolean {
+  return value === "text" || value === "input_text" || value === "output_text";
+}
+
 /** Narrows unknown phase metadata to assistant text phases that affect visibility. */
 export function normalizeAssistantPhase(value: unknown): AssistantPhase | undefined {
   return value === "commentary" || value === "final_answer" ? value : undefined;
@@ -54,18 +58,6 @@ export function parseAssistantTextSignature(
   }
 }
 
-/** Encodes versioned assistant text metadata stored alongside streamed text blocks. */
-export function encodeAssistantTextSignature(params: {
-  id: string;
-  phase?: AssistantPhase;
-}): string {
-  return JSON.stringify({
-    v: 1,
-    id: params.id,
-    ...(params.phase ? { phase: params.phase } : {}),
-  });
-}
-
 /** Resolves a message phase only when the top-level phase or all explicit blocks agree. */
 export function resolveAssistantMessagePhase(message: unknown): AssistantPhase | undefined {
   if (!message || typeof message !== "object") {
@@ -85,7 +77,7 @@ export function resolveAssistantMessagePhase(message: unknown): AssistantPhase |
       continue;
     }
     const record = block as { type?: unknown; textSignature?: unknown };
-    if (record.type !== "text") {
+    if (!isAssistantTextContentBlockType(record.type)) {
       continue;
     }
     const phase = parseAssistantTextSignature(record.textSignature)?.phase;
@@ -168,7 +160,7 @@ export function extractAssistantTextForPhase(
       return false;
     }
     const record = block as { type?: unknown; textSignature?: unknown };
-    if (record.type !== "text") {
+    if (!isAssistantTextContentBlockType(record.type)) {
       return false;
     }
     return Boolean(parseAssistantTextSignature(record.textSignature)?.phase);
@@ -185,7 +177,7 @@ export function extractAssistantTextForPhase(
         return null;
       }
       const record = block as { type?: unknown; text?: unknown; textSignature?: unknown };
-      if (record.type !== "text" || typeof record.text !== "string") {
+      if (!isAssistantTextContentBlockType(record.type) || typeof record.text !== "string") {
         return null;
       }
       const signature = parseAssistantTextSignature(record.textSignature);

@@ -45,7 +45,7 @@ function resolveAgainstCwd(filePath: string, cwd: string): string {
   return isAbsolute(filePath) ? resolvePath(filePath) : resolvePath(cwd, filePath);
 }
 
-export function getCwdRelativePath(filePath: string, cwd: string): string | undefined {
+function getCwdRelativePath(filePath: string, cwd: string): string | undefined {
   const resolvedCwd = resolvePath(cwd);
   const resolvedPath = resolveAgainstCwd(filePath, resolvedCwd);
   const relativePath = relative(resolvedCwd, resolvedPath);

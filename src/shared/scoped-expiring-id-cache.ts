@@ -1,4 +1,9 @@
 /** Per-scope TTL cache used to suppress repeated ids without cross-scope bleed. */
+import {
+  resolveIntegerOption,
+  resolveNonNegativeIntegerOption,
+} from "@openclaw/normalization-core/number-coercion";
+
 export type ScopedExpiringIdCache<TScope extends string | number, TId extends string | number> = {
   /** Records an id for a scope at the provided timestamp or current time. */
   record: (scope: TScope, id: TId, now?: number) => void;
@@ -7,10 +12,6 @@ export type ScopedExpiringIdCache<TScope extends string | number, TId extends st
   /** Clears every scope and id from the backing store. */
   clear: () => void;
 };
-
-function resolveNonNegativeInteger(value: number, fallback: number): number {
-  return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : fallback;
-}
 
 /** Creates a scoped TTL cache for ids that should expire independently per scope. */
 export function createScopedExpiringIdCache<
@@ -24,8 +25,8 @@ export function createScopedExpiringIdCache<
   /** Scope size that triggers opportunistic cleanup on record. */
   cleanupThreshold: number;
 }): ScopedExpiringIdCache<TScope, TId> {
-  const ttlMs = resolveNonNegativeInteger(options.ttlMs, 0);
-  const cleanupThreshold = Math.max(1, resolveNonNegativeInteger(options.cleanupThreshold, 1));
+  const ttlMs = resolveNonNegativeIntegerOption(options.ttlMs, 0);
+  const cleanupThreshold = resolveIntegerOption(options.cleanupThreshold, 1, { min: 1 });
 
   function cleanupExpired(scopeKey: string, entry: Map<string, number>, now: number): void {
     for (const [id, timestamp] of entry) {

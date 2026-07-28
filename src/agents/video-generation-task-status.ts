@@ -11,26 +11,11 @@ import {
   buildMediaGenerationTaskStatusText,
   findActiveMediaGenerationTaskForSession,
   findDuplicateGuardMediaGenerationTaskForSession,
-  getMediaGenerationTaskProviderId,
-  isActiveMediaGenerationTask,
 } from "./media-generation-task-status-shared.js";
 
 export const VIDEO_GENERATION_TASK_KIND = "video_generation";
 const VIDEO_GENERATION_SOURCE_PREFIX = "video_generate";
 const RECENT_VIDEO_GENERATION_DUPLICATE_GUARD_MS = 2 * 60_000;
-
-/** Returns whether a task is an active video generation task. */
-export function isActiveVideoGenerationTask(task: TaskRecord): boolean {
-  return isActiveMediaGenerationTask({
-    task,
-    taskKind: VIDEO_GENERATION_TASK_KIND,
-  });
-}
-
-/** Extracts the provider id from a video generation task source. */
-export function getVideoGenerationTaskProviderId(task: TaskRecord): string | undefined {
-  return getMediaGenerationTaskProviderId(task, VIDEO_GENERATION_SOURCE_PREFIX);
-}
 
 /** Finds an active video generation task for a session. */
 export function findActiveVideoGenerationTaskForSession(

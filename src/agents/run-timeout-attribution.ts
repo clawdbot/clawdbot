@@ -1,5 +1,5 @@
 /** Agent run phases used when attributing timeout/cancellation sources. */
-export const AGENT_RUN_TIMEOUT_PHASES = [
+const AGENT_RUN_TIMEOUT_PHASES = [
   "queue",
   "preflight",
   "provider",

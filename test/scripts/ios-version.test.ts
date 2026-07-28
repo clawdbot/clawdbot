@@ -1,12 +1,15 @@
 // Ios Version tests cover ios version script behavior.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  encodeIosAppStoreVersion,
   extractChangelogSection,
   normalizeGatewayVersionToPinnedIosVersion,
+  normalizeIosAppStoreRevision,
+  normalizePinnedIosVersion,
   renderIosReleaseNotes,
-  renderIosVersionXcconfig,
   resolveGatewayVersionForIosRelease,
   resolveIosVersion,
 } from "../../scripts/lib/ios-version.ts";
@@ -15,42 +18,241 @@ import { installIosFixtureCleanup, writeIosFixture } from "./ios-version.test-su
 installIosFixtureCleanup();
 
 describe("resolveIosVersion", () => {
-  it("parses pinned release versions and derives Apple marketing fields", () => {
+  it("writes shared full commit and UTC timestamp settings for iOS builds", () => {
+    const script = fs.readFileSync("scripts/ios-write-version-xcconfig.sh", "utf8");
+
+    expect(script).toContain('source "${ROOT_DIR}/scripts/lib/build-metadata.sh"');
+    expect(script).toContain("OPENCLAW_GIT_COMMIT = ${RESOLVED_GIT_COMMIT}");
+    expect(script).toContain("OPENCLAW_BUILD_TIMESTAMP = ${RESOLVED_BUILD_TIMESTAMP}");
+    expect(script).toContain('openclaw_resolve_git_commit "${ROOT_DIR}"');
+    expect(script).toContain("openclaw_resolve_build_timestamp");
+  });
+
+  it("rejects missing CLI option values before reading version files", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/ios-version.ts", "--field"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe("Missing value for --field.\n");
+
+    const shortFlagResult = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/ios-version.ts", "--field", "-h"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(shortFlagResult.status).toBe(1);
+    expect(shortFlagResult.stderr).toBe("Missing value for --field.\n");
+  });
+
+  it("prints selected fields from the CLI", () => {
     const rootDir = writeIosFixture({
-      version: "2026.4.6",
+      packageVersion: "2026.4.6",
+      changelog: "# OpenClaw iOS Changelog\n\n## 2026.4.6\n\nStable notes.\n",
+    });
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "scripts/ios-version.ts",
+        "--root",
+        rootDir,
+        "--field",
+        "canonicalVersion",
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("2026.4.6\n");
+    expect(result.stderr).toBe("");
+  });
+
+  it("prints explicit gateway version fields from the CLI", () => {
+    const rootDir = writeIosFixture({
+      packageVersion: "2026.4.6",
+      changelog: "# OpenClaw iOS Changelog\n\n## 2026.4.7\n\nStable notes.\n",
+    });
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "scripts/ios-version.ts",
+        "--root",
+        rootDir,
+        "--version",
+        "2026.4.7",
+        "--field",
+        "canonicalVersion",
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("2026.4.7\n");
+    expect(result.stderr).toBe("");
+  });
+
+  it("prints an encoded App Store version for an explicit gateway revision", () => {
+    const rootDir = writeIosFixture({
+      packageVersion: "2026.7.2",
+      changelog: "# OpenClaw iOS Changelog\n\n## 2026.7.21\n\nRevision notes.\n",
+    });
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "scripts/ios-version.ts",
+        "--root",
+        rootDir,
+        "--version",
+        "2026.7.2",
+        "--revision",
+        "1",
+        "--field",
+        "marketingVersion",
+      ],
+      { cwd: process.cwd(), encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("2026.7.21\n");
+    expect(result.stderr).toBe("");
+  });
+
+  it("prints derived release notes from the CLI", () => {
+    const rootDir = writeIosFixture({
+      packageVersion: "2026.4.6",
+      changelog: "# OpenClaw iOS Changelog\n\n## 2026.4.7\n\nGenerated notes.\n",
+    });
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "scripts/ios-version.ts",
+        "--root",
+        rootDir,
+        "--version",
+        "2026.4.7",
+        "--field",
+        "releaseNotes",
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("Generated notes.\n");
+    expect(result.stderr).toBe("");
+  });
+
+  it("rejects missing iOS sync CLI root values before reading version files", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/ios-sync-versioning.ts", "--root", "--check"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe("Missing value for --root.\n");
+
+    const shortFlagResult = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/ios-sync-versioning.ts", "--root", "-h"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(shortFlagResult.status).toBe(1);
+    expect(shortFlagResult.stderr).toBe("Missing value for --root.\n");
+  });
+
+  it("derives Apple marketing fields from the root package release version", () => {
+    const rootDir = writeIosFixture({
+      packageVersion: "2026.4.6",
       changelog: "# OpenClaw iOS Changelog\n\n## 2026.4.6\n\nStable notes.\n",
     });
 
     expect(resolveIosVersion(rootDir)).toEqual({
+      appStoreRevision: null,
+      appStoreVersion: null,
       buildVersion: "1",
       canonicalVersion: "2026.4.6",
       changelogPath: path.join(rootDir, "apps/ios/CHANGELOG.md"),
+      gatewayVersion: "2026.4.6",
       marketingVersion: "2026.4.6",
-      releaseNotesPath: path.join(rootDir, "apps/ios/fastlane/metadata/en-US/release_notes.txt"),
-      versionFilePath: path.join(rootDir, "apps/ios/version.json"),
-      versionXcconfigPath: path.join(rootDir, "apps/ios/Config/Version.xcconfig"),
+      versionSource: "package",
+      versionSourcePath: path.join(rootDir, "package.json"),
     });
   });
 
-  it("rejects semver-only versions", () => {
+  it("appends one unpadded App Store revision digit to the gateway patch", () => {
+    expect(encodeIosAppStoreVersion("2026.7.2", 0)).toBe("2026.7.20");
+    expect(encodeIosAppStoreVersion("2026.7.2", 1)).toBe("2026.7.21");
+    expect(encodeIosAppStoreVersion("2026.7.2", 9)).toBe("2026.7.29");
+    expect(encodeIosAppStoreVersion("2026.7.3", 0)).toBe("2026.7.30");
+    expect(encodeIosAppStoreVersion("2026.12.33", 4)).toBe("2026.12.334");
+  });
+
+  it("rejects invalid App Store revisions", () => {
+    expect(() => normalizeIosAppStoreRevision("-1")).toThrow("integer from 0 to 9");
+    expect(() => normalizeIosAppStoreRevision("01")).toThrow("integer from 0 to 9");
+    expect(() => normalizeIosAppStoreRevision("10")).toThrow("integer from 0 to 9");
+    expect(() => normalizeIosAppStoreRevision("1.5")).toThrow("integer from 0 to 9");
+  });
+
+  it("rejects semver-only package versions", () => {
     const rootDir = writeIosFixture({
-      version: "1.2.3",
+      packageVersion: "1.2.3",
       changelog: "# OpenClaw iOS Changelog\n\n## Unreleased\n\nNotes.\n",
     });
 
-    expect(() => resolveIosVersion(rootDir)).toThrow(
-      "Expected pinned release version like 2026.6.5",
+    expect(() => resolveIosVersion(rootDir)).toThrow("Expected YYYY.M.PATCH");
+  });
+
+  it("rejects prerelease suffixes in explicit gateway versions", () => {
+    const rootDir = writeIosFixture({
+      packageVersion: "2026.4.6",
+      changelog: "# OpenClaw iOS Changelog\n\n## Unreleased\n\nNotes.\n",
+    });
+
+    expect(() => resolveIosVersion(rootDir, { releaseVersion: "2026.4.6-beta.1" })).toThrow(
+      "Expected release version like 2026.6.5",
     );
   });
 
-  it("rejects prerelease suffixes in the pinned iOS version file", () => {
-    const rootDir = writeIosFixture({
-      version: "2026.4.6-beta.1",
-      changelog: "# OpenClaw iOS Changelog\n\n## Unreleased\n\nNotes.\n",
-    });
-
-    expect(() => resolveIosVersion(rootDir)).toThrow(
-      "Expected pinned release version like 2026.6.5",
+  it("rejects impossible pinned release versions", () => {
+    expect(() => normalizePinnedIosVersion("2026.13.6")).toThrow(
+      "Expected release version like 2026.6.5",
+    );
+    expect(() => normalizePinnedIosVersion("2026.4.9007199254740993")).toThrow(
+      "Expected release version like 2026.6.5",
     );
   });
 });
@@ -72,9 +274,17 @@ describe("gateway version normalization", () => {
     expect(normalizeGatewayVersionToPinnedIosVersion("2026.4.6-3")).toBe("2026.4.6");
   });
 
+  it("rejects impossible gateway release versions", () => {
+    expect(() => normalizeGatewayVersionToPinnedIosVersion("2026.13.6-alpha.1")).toThrow(
+      "Expected YYYY.M.PATCH",
+    );
+    expect(() =>
+      normalizeGatewayVersionToPinnedIosVersion("2026.4.6-alpha.9007199254740993"),
+    ).toThrow("Expected YYYY.M.PATCH");
+  });
+
   it("reads and normalizes the root package version for iOS releases", () => {
     const rootDir = writeIosFixture({
-      version: "2026.4.6",
       packageVersion: "2026.4.7-beta.5",
       changelog: "# OpenClaw iOS Changelog\n\n## Unreleased\n\nNotes.\n",
     });
@@ -86,24 +296,51 @@ describe("gateway version normalization", () => {
   });
 });
 
-describe("renderIosVersionXcconfig", () => {
-  it("renders checked-in defaults from the pinned iOS version", () => {
-    const rootDir = writeIosFixture({
-      version: "2026.4.8",
-      changelog: "# OpenClaw iOS Changelog\n\n## 2026.4.8\n\nNotes.\n",
-    });
-    const version = resolveIosVersion(rootDir);
-
-    expect(renderIosVersionXcconfig(version)).toContain("OPENCLAW_IOS_VERSION = 2026.4.8");
-    expect(renderIosVersionXcconfig(version)).toContain("OPENCLAW_MARKETING_VERSION = 2026.4.8");
-    expect(renderIosVersionXcconfig(version)).toContain("OPENCLAW_BUILD_VERSION = 1");
-  });
-});
-
 describe("release note extraction", () => {
+  it("requires exact App Store version notes and adds the gateway association", () => {
+    const rootDir = writeIosFixture({
+      packageVersion: "2026.7.2",
+      changelog: `# OpenClaw iOS Changelog
+
+## Unreleased
+
+Draft notes.
+
+## 2026.7.21
+
+- App Store revision notes.
+`,
+    });
+    const version = resolveIosVersion(rootDir, {
+      appStoreRevision: 1,
+      releaseVersion: "2026.7.2",
+    });
+    const changelog = fs.readFileSync(path.join(rootDir, "apps", "ios", "CHANGELOG.md"), "utf8");
+
+    expect(renderIosReleaseNotes(version, changelog)).toBe(
+      "Gateway version: 2026.7.2\n\n- App Store revision notes.\n",
+    );
+  });
+
+  it("does not fall back to gateway or Unreleased notes for App Store revisions", () => {
+    const rootDir = writeIosFixture({
+      packageVersion: "2026.7.2",
+      changelog: "# OpenClaw iOS Changelog\n\n## Unreleased\n\nDraft notes.\n",
+    });
+    const version = resolveIosVersion(rootDir, {
+      appStoreRevision: 1,
+      releaseVersion: "2026.7.2",
+    });
+    const changelog = fs.readFileSync(path.join(rootDir, "apps", "ios", "CHANGELOG.md"), "utf8");
+
+    expect(() => renderIosReleaseNotes(version, changelog)).toThrow(
+      "Unable to find iOS changelog notes for 2026.7.21",
+    );
+  });
+
   it("extracts exact pinned version sections first", () => {
     const rootDir = writeIosFixture({
-      version: "2026.4.6",
+      packageVersion: "2026.4.6",
       changelog: `# OpenClaw iOS Changelog
 
 ## Unreleased
@@ -123,7 +360,7 @@ Draft notes.
 
   it("falls back to Unreleased when the release section does not exist yet", () => {
     const rootDir = writeIosFixture({
-      version: "2026.4.6",
+      packageVersion: "2026.4.6",
       changelog: `# OpenClaw iOS Changelog
 
 ## Unreleased

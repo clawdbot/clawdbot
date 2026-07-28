@@ -1,7 +1,7 @@
 // Tests local port probing and availability detection.
 import net from "node:net";
 import { describe, expect, it } from "vitest";
-import { tryListenOnPort } from "./ports-probe.js";
+import { probePortUsage, tryListenOnPort } from "./ports-probe.js";
 
 async function withListeningServer(cb: (address: net.AddressInfo) => Promise<void>): Promise<void> {
   const server = net.createServer();
@@ -62,6 +62,14 @@ describe("tryListenOnPort", () => {
       expect(listenError?.address).toBe("127.0.0.1");
       expect(listenError?.port).toBe(address.port);
       expect(rejection?.syscall).toBe("listen");
+    });
+  });
+});
+
+describe("probePortUsage", () => {
+  it("reports an IPv4-only loopback listener as busy", async () => {
+    await withListeningServer(async (address) => {
+      await expect(probePortUsage(address.port)).resolves.toBe("busy");
     });
   });
 });

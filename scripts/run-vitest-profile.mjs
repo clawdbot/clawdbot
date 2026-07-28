@@ -12,7 +12,7 @@ import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mjs";
  */
 function readOutputDirValue(argv, index) {
   const value = argv[index + 1];
-  if (value === undefined || value === "" || value.startsWith("--")) {
+  if (value === undefined || value === "" || value.startsWith("-")) {
     throw new Error("Expected --output-dir <dir>.");
   }
   return value;

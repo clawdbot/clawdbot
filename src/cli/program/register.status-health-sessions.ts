@@ -327,7 +327,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .option("--session-key <key>", "Session key to export")
     .option("--output <path>", "Output directory name inside .openclaw/trajectory-exports")
     .option("--workspace <path>", "Workspace root for the export (default: current directory)")
-    .option("--store <path>", "Path to session store (default: resolved from session key)")
+    .option("--store <path>", "Path to session store (default: resolved from config)")
     .option("--agent <id>", "Agent id for resolving the default session store")
     .option("--request-json-base64 <payload>", "Base64url-encoded export request")
     .option("--json", "Output JSON", false)
@@ -349,6 +349,109 @@ export function registerStatusHealthSessionsCommands(program: Command) {
             store: (opts.store as string | undefined) ?? parentOpts?.store,
             agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
             requestJsonBase64: opts.requestJsonBase64 as string | undefined,
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  sessionsCmd
+    .command("compact <key>")
+    .description("Compact a stored session transcript via the running gateway")
+    .option("--agent <id>", "Agent id that owns the session (required for global keys)")
+    .option(
+      "--max-lines <count>",
+      "Truncate to the last N transcript lines instead of LLM summarization",
+    )
+    .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
+    .option("--token <token>", "Gateway token (if required)")
+    .option("--password <password>", "Gateway password (password auth)")
+    .option("--timeout <ms>", "RPC timeout in milliseconds (defaults to no client deadline)")
+    .option("--json", "Output JSON", false)
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          [
+            'openclaw sessions compact "agent:main:main"',
+            "LLM-summarize a session to reclaim context budget.",
+          ],
+          [
+            'openclaw sessions compact "agent:main:main" --max-lines 200',
+            "Truncate to the last 200 transcript lines instead.",
+          ],
+          [
+            'openclaw sessions compact "agent:work:main" --agent work --json',
+            "Target one agent's session and emit JSON.",
+          ],
+        ])}\n\n${theme.muted(
+          "Backed by the sessions.compact gateway RPC; exits non-zero when compaction fails.",
+        )}`,
+    )
+    .action(async (key: string, opts, command) => {
+      // Sibling `sessions` subcommands inherit parent options (see list/cleanup
+      // above): `--agent`/`--json` may be supplied on the parent `sessions`
+      // command, e.g. `openclaw sessions --agent work compact <key>`. Merge those
+      // so a parent `--agent` is not silently dropped and the wrong agent's
+      // session compacted.
+      //
+      // The parent also defines list-only options (`--store`/`--all-agents`/
+      // `--active`/`--limit`). `compact` mutates the single session the gateway
+      // resolves from <key> + --agent, so it cannot honor a parent `--store`
+      // (the gateway picks the store) and the rest are meaningless here.
+      // Silently dropping `--store` is the dangerous case — the user could
+      // believe they targeted one store while the gateway compacts another — so
+      // reject any unsupported inherited option instead of ignoring it.
+      const parentOpts = command.parent?.opts() as
+        | {
+            agent?: string;
+            json?: boolean;
+            store?: string;
+            allAgents?: boolean;
+            active?: string;
+            limit?: string;
+            verbose?: boolean;
+          }
+        | undefined;
+      const unsupportedParentOptions = [
+        parentOpts?.store !== undefined ? "--store" : undefined,
+        parentOpts?.allAgents ? "--all-agents" : undefined,
+        parentOpts?.active !== undefined ? "--active" : undefined,
+        parentOpts?.limit !== undefined ? "--limit" : undefined,
+        parentOpts?.verbose ? "--verbose" : undefined,
+      ].filter((flag): flag is string => flag !== undefined);
+      if (unsupportedParentOptions.length > 0) {
+        const plural = unsupportedParentOptions.length > 1 ? "options" : "option";
+        defaultRuntime.error(
+          `\`sessions compact\` does not support the parent \`sessions\` ${plural} ${unsupportedParentOptions.join(", ")}; the gateway resolves the target store from <key> and --agent.`,
+        );
+        defaultRuntime.exit(1);
+        return;
+      }
+      const maxLines = parseStrictPositiveIntOrUndefined(opts.maxLines);
+      if (opts.maxLines !== undefined && maxLines === undefined) {
+        defaultRuntime.error("--max-lines must be a positive integer.");
+        defaultRuntime.exit(1);
+        return;
+      }
+      const timeoutMs = parseStrictPositiveIntOrUndefined(opts.timeout);
+      if (opts.timeout !== undefined && timeoutMs === undefined) {
+        defaultRuntime.error("--timeout must be a positive integer (milliseconds).");
+        defaultRuntime.exit(1);
+        return;
+      }
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { sessionsCompactCommand } = await import("../../commands/sessions-compact.js");
+        await sessionsCompactCommand(
+          {
+            key,
+            agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
+            maxLines,
+            timeout: timeoutMs !== undefined ? String(timeoutMs) : undefined,
+            url: opts.url as string | undefined,
+            token: opts.token as string | undefined,
+            password: opts.password as string | undefined,
             json: Boolean(opts.json || parentOpts?.json),
           },
           defaultRuntime,
@@ -660,3 +763,4 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       });
     });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

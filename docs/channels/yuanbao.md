@@ -6,27 +6,23 @@ read_when:
 title: Yuanbao
 ---
 
-Tencent Yuanbao is Tencent's AI assistant platform. The OpenClaw channel plugin
-connects Yuanbao bots to OpenClaw over WebSocket so they can interact with users
-through direct messages and group chats.
+Tencent Yuanbao is Tencent's AI assistant platform. The community-maintained `openclaw-plugin-yuanbao` plugin connects Yuanbao bots to OpenClaw over WebSocket for direct messages and group chats.
 
-**Status:** production-ready for bot DMs + group chats. WebSocket is the only supported connection mode.
-
----
+**Status:** production-ready for bot DMs and group chats. WebSocket is the only supported connection mode. This plugin is maintained by the Tencent Yuanbao team as an external catalog entry, not by core OpenClaw; the config/behavior details below (beyond install and the generic CLI surface) come from the plugin's own docs and are not verified against OpenClaw core source.
 
 ## Quick start
 
-> **Requires OpenClaw 2026.4.10 or above.** Run `openclaw --version` to check. Upgrade with `openclaw update`.
+Requires OpenClaw 2026.4.10 or above. Check with `openclaw --version`; upgrade with `openclaw update`.
 
 <Steps>
   <Step title="Add the Yuanbao channel with your credentials">
   ```bash
   openclaw channels add --channel yuanbao --token "appKey:appSecret"
   ```
-  The `--token` value uses colon-separated `appKey:appSecret` format. You can obtain these from the Yuanbao app by creating a robot in your application settings.
+  `--token` uses colon-separated `appKey:appSecret`. Get these from the Yuanbao app by creating a bot in your application settings.
   </Step>
 
-  <Step title="After setup completes, restart the gateway to apply the changes">
+  <Step title="Restart the gateway to apply the change">
   ```bash
   openclaw gateway restart
   ```
@@ -35,28 +31,26 @@ through direct messages and group chats.
 
 ### Interactive setup (alternative)
 
-You can also use the interactive wizard:
-
 ```bash
 openclaw channels login --channel yuanbao
 ```
 
 Follow the prompts to enter your App ID and App Secret.
 
----
-
 ## Access control
 
 ### Direct messages
 
-Configure `dmPolicy` to control who can DM the bot:
+`channels.yuanbao.dm.policy`:
 
-- `"pairing"` - unknown users receive a pairing code; approve via CLI
-- `"allowlist"` - only users listed in `allowFrom` can chat
-- `"open"` - allow all users (default)
-- `"disabled"` - disable all DMs
+| Value            | Behavior                                          |
+| ---------------- | ------------------------------------------------- |
+| `open` (default) | Allow all users                                   |
+| `pairing`        | Unknown users get a pairing code; approve via CLI |
+| `allowlist`      | Only users in `allowFrom` can chat                |
+| `disabled`       | Disable all DMs                                   |
 
-**Approve a pairing request:**
+Approve a pairing request:
 
 ```bash
 openclaw pairing list yuanbao
@@ -65,18 +59,11 @@ openclaw pairing approve yuanbao <CODE>
 
 ### Group chats
 
-**Mention requirement** (`channels.yuanbao.requireMention`):
-
-- `true` - require @mention (default)
-- `false` - respond without @mention
-
-Replying to the bot's message in a group chat is treated as an implicit mention.
-
----
+`channels.yuanbao.requireMention` (default `true`): require an @mention before the bot responds in a group. Replying to the bot's own message is treated as an implicit mention.
 
 ## Configuration examples
 
-### Basic setup with open DM policy
+Basic setup, open DM policy:
 
 ```json5
 {
@@ -92,7 +79,7 @@ Replying to the bot's message in a group chat is treated as an implicit mention.
 }
 ```
 
-### Restrict DMs to specific users
+Restrict DMs to specific users:
 
 ```json5
 {
@@ -109,7 +96,7 @@ Replying to the bot's message in a group chat is treated as an implicit mention.
 }
 ```
 
-### Disable @mention requirement in groups
+Disable the @mention requirement in groups:
 
 ```json5
 {
@@ -121,20 +108,7 @@ Replying to the bot's message in a group chat is treated as an implicit mention.
 }
 ```
 
-### Optimize outbound message delivery
-
-```json5
-{
-  channels: {
-    yuanbao: {
-      // Send each chunk immediately without buffering
-      outboundQueueStrategy: "immediate",
-    },
-  },
-}
-```
-
-### Tune merge-text strategy
+Outbound delivery tuning:
 
 ```json5
 {
@@ -149,7 +123,7 @@ Replying to the bot's message in a group chat is treated as an implicit mention.
 }
 ```
 
----
+Set `outboundQueueStrategy: "immediate"` to send each chunk without buffering.
 
 ## Common commands
 
@@ -162,38 +136,34 @@ Replying to the bot's message in a group chat is treated as an implicit mention.
 | `/restart` | Restart OpenClaw            |
 | `/compact` | Compact the session context |
 
-> Yuanbao supports native slash-command menus. Commands are synced to the platform automatically when the gateway starts.
-
----
+Yuanbao supports native slash-command menus; commands sync to the platform automatically when the gateway starts.
 
 ## Troubleshooting
 
-### Bot does not respond in group chats
+**Bot does not respond in group chats:**
 
-1. Ensure the bot is added to the group
-2. Ensure you @mention the bot (required by default)
+1. Confirm the bot is added to the group
+2. Confirm you @mention the bot (required by default)
 3. Check logs: `openclaw logs --follow`
 
-### Bot does not receive messages
+**Bot does not receive messages:**
 
-1. Ensure the bot is created and approved in the Yuanbao app
-2. Ensure `appKey` and `appSecret` are correctly configured
-3. Ensure the gateway is running: `openclaw gateway status`
+1. Confirm the bot is created and approved in the Yuanbao app
+2. Confirm `appKey` and `appSecret` are correctly configured
+3. Confirm the gateway is running: `openclaw gateway status`
 4. Check logs: `openclaw logs --follow`
 
-### Bot sends empty or fallback replies
+**Bot sends empty or fallback replies:**
 
-1. Check if the AI model is returning valid content
-2. The default fallback reply is: "暂时无法解答，你可以换个问题问问我哦"
-3. Customize it via `channels.yuanbao.fallbackReply`
+1. Check whether the AI model is returning valid content
+2. Default fallback reply: "暂时无法解答，你可以换个问题问问我哦"
+3. Customize with `channels.yuanbao.fallbackReply`
 
-### App Secret leaked
+**App Secret leaked:**
 
-1. Reset the App Secret in YuanBao APP
+1. Reset the App Secret in the Yuanbao app
 2. Update the value in your config
 3. Restart the gateway: `openclaw gateway restart`
-
----
 
 ## Advanced configuration
 
@@ -226,13 +196,13 @@ Replying to the bot's message in a group chat is treated as an implicit mention.
 
 ### Message limits
 
-- `maxChars` - single message max character count (default: `3000` chars)
-- `mediaMaxMb` - media upload/download limit (default: `20` MB)
-- `overflowPolicy` - behavior when message exceeds limit: `"split"` (default) or `"stop"`
+- `maxChars`: single message max character count (default `3000`)
+- `mediaMaxMb`: media upload/download limit (default `20` MB)
+- `overflowPolicy`: behavior when a message exceeds the limit, `"split"` (default) or `"stop"`
 
 ### Streaming
 
-Yuanbao supports block-level streaming output. When enabled, the bot sends text in chunks as it generates.
+Yuanbao supports block-level streaming output; the bot sends text in chunks as it generates.
 
 ```json5
 {
@@ -248,8 +218,6 @@ Set `disableBlockStreaming: true` to send the complete reply in one message.
 
 ### Group chat history context
 
-Control how many historical messages are included in the AI context for group chats:
-
 ```json5
 {
   channels: {
@@ -260,9 +228,9 @@ Control how many historical messages are included in the AI context for group ch
 }
 ```
 
-### Reply-to mode
+Controls how many historical messages are included in the AI context for group chats.
 
-Control how the bot quotes messages when replying in group chats:
+### Reply-to mode
 
 ```json5
 {
@@ -274,15 +242,15 @@ Control how the bot quotes messages when replying in group chats:
 }
 ```
 
-| Value     | Behavior                                                 |
-| --------- | -------------------------------------------------------- |
-| `"off"`   | No quote reply                                           |
-| `"first"` | Quote only the first reply per inbound message (default) |
-| `"all"`   | Quote every reply                                        |
+| Value   | Behavior                                                 |
+| ------- | -------------------------------------------------------- |
+| `off`   | No quote reply                                           |
+| `first` | Quote only the first reply per inbound message (default) |
+| `all`   | Quote every reply                                        |
 
 ### Markdown hint injection
 
-By default, the bot injects instructions in the system prompt to prevent the AI model from wrapping the entire reply in markdown code blocks.
+By default, the bot injects a system-prompt instruction to prevent the model from wrapping the entire reply in a markdown code block.
 
 ```json5
 {
@@ -296,8 +264,6 @@ By default, the bot injects instructions in the system prompt to prevent the AI 
 
 ### Debug mode
 
-Enable unsanitized log output for specific bot IDs:
-
 ```json5
 {
   channels: {
@@ -308,9 +274,11 @@ Enable unsanitized log output for specific bot IDs:
 }
 ```
 
+Enables unsanitized log output for the listed bot IDs.
+
 ### Multi-agent routing
 
-Use `bindings` to route Yuanbao DMs or groups to different agents.
+Use `bindings` to route Yuanbao DMs or groups to different agents:
 
 ```json5
 {
@@ -340,13 +308,9 @@ Use `bindings` to route Yuanbao DMs or groups to different agents.
 }
 ```
 
-Routing fields:
-
 - `match.channel`: `"yuanbao"`
 - `match.peer.kind`: `"direct"` (DM) or `"group"` (group chat)
 - `match.peer.id`: user ID or group code
-
----
 
 ## Configuration reference
 
@@ -356,8 +320,8 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | ------------------------------------------ | ------------------------------------------------- | -------------------------------------- |
 | `channels.yuanbao.enabled`                 | Enable/disable the channel                        | `true`                                 |
 | `channels.yuanbao.defaultAccount`          | Default account for outbound routing              | `default`                              |
-| `channels.yuanbao.accounts.<id>.appKey`    | App Key (used for signing and ticket generation)  | -                                      |
-| `channels.yuanbao.accounts.<id>.appSecret` | App Secret (used for signing)                     | -                                      |
+| `channels.yuanbao.accounts.<id>.appKey`    | App Key (signing + ticket generation)             | -                                      |
+| `channels.yuanbao.accounts.<id>.appSecret` | App Secret (signing)                              | -                                      |
 | `channels.yuanbao.accounts.<id>.token`     | Pre-signed token (skips automatic ticket signing) | -                                      |
 | `channels.yuanbao.accounts.<id>.name`      | Account display name                              | -                                      |
 | `channels.yuanbao.accounts.<id>.enabled`   | Enable/disable a specific account                 | `true`                                 |
@@ -373,39 +337,17 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.yuanbao.mediaMaxMb`              | Media size limit (MB)                             | `20`                                   |
 | `channels.yuanbao.historyLimit`            | Group chat history context entries                | `100`                                  |
 | `channels.yuanbao.disableBlockStreaming`   | Disable block-level streaming output              | `false`                                |
-| `channels.yuanbao.fallbackReply`           | Fallback reply when AI returns no content         | `暂时无法解答，你可以换个问题问问我哦` |
+| `channels.yuanbao.fallbackReply`           | Fallback reply when the model returns no content  | `暂时无法解答，你可以换个问题问问我哦` |
 | `channels.yuanbao.markdownHintEnabled`     | Inject markdown anti-wrapping instructions        | `true`                                 |
-| `channels.yuanbao.debugBotIds`             | Debug whitelist bot IDs (unsanitized logs)        | `[]`                                   |
-
----
+| `channels.yuanbao.debugBotIds`             | Debug allowlist bot IDs (unsanitized logs)        | `[]`                                   |
 
 ## Supported message types
 
-### Receive
+**Receive:** text, images, files, audio/voice, video, stickers/custom emoji, custom elements (link cards).
 
-- ✅ Text
-- ✅ Images
-- ✅ Files
-- ✅ Audio / Voice
-- ✅ Video
-- ✅ Stickers / Custom emoji
-- ✅ Custom elements (link cards, etc.)
+**Send:** text (markdown), images, files, audio, video, stickers.
 
-### Send
-
-- ✅ Text (with markdown support)
-- ✅ Images
-- ✅ Files
-- ✅ Audio
-- ✅ Video
-- ✅ Stickers
-
-### Threads and replies
-
-- ✅ Quote replies (configurable via `replyToMode`)
-- ❌ Thread replies (not supported by platform)
-
----
+**Threads and replies:** quote replies (configurable via `replyToMode`); thread replies are not supported by the platform.
 
 ## Related
 

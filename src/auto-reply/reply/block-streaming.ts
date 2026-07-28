@@ -31,20 +31,14 @@ function resolveProviderChunkContext(
 }
 
 type ProviderBlockStreamingConfig = {
-  blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   streaming?: unknown;
-  accounts?: Record<
-    string,
-    { blockStreamingCoalesce?: BlockStreamingCoalesceConfig; streaming?: unknown }
-  >;
+  accounts?: Record<string, { streaming?: unknown }>;
 };
 
 function resolveScopedBlockStreamingCoalesce(
   config: ProviderBlockStreamingConfig | undefined,
 ): BlockStreamingCoalesceConfig | undefined {
-  return config
-    ? (resolveChannelStreamingBlockCoalesce(config) ?? config.blockStreamingCoalesce)
-    : undefined;
+  return config ? resolveChannelStreamingBlockCoalesce(config) : undefined;
 }
 
 function resolveProviderBlockStreamingCoalesce(params: {
@@ -82,14 +76,14 @@ export type BlockStreamingCoalescing = {
   flushOnEnqueue?: boolean;
 };
 
-export type BlockStreamingChunking = {
+type BlockStreamingChunking = {
   minChars: number;
   maxChars: number;
   breakPreference: "paragraph" | "newline" | "sentence";
   flushOnParagraph?: boolean;
 };
 
-export function clampPositiveInteger(
+function clampPositiveInteger(
   value: unknown,
   fallback: number,
   bounds: { min: number; max: number },

@@ -2,13 +2,11 @@
   "id": "twitch",
   "name": "Twitch",
   "description": "OpenClaw Twitch channel plugin for chat and moderation workflows.",
+  "icon": "https://cdn.simpleicons.org/twitch",
   "activation": {
     "onStartup": false
   },
   "channels": ["twitch"],
-  "channelEnvVars": {
-    "twitch": ["OPENCLAW_TWITCH_ACCESS_TOKEN"]
-  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

@@ -1,6 +1,7 @@
 // Shared provider HTTP/audio helpers for media-understanding integrations,
 // including guarded fetches, deadlines, retries, and multipart upload bodies.
 import path from "node:path";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   assertOkOrThrowHttpError,
   createProviderHttpError,
@@ -32,6 +33,7 @@ import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
 import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import {
   executeProviderOperationWithRetry,
+  isTransientProviderHttpStatus,
   type ProviderOperationRetryStage,
   type TransientProviderRetryConfig,
 } from "../provider-runtime/operation-retry.js";
@@ -41,8 +43,6 @@ export { normalizeBaseUrl } from "../agents/provider-request-config.js";
 export { sanitizeConfiguredModelProviderRequest } from "../agents/provider-request-config.js";
 
 const DEFAULT_GUARDED_HTTP_TIMEOUT_MS = 60_000;
-const MAX_ERROR_CHARS = 300;
-const MAX_ERROR_RESPONSE_BYTES = 4096;
 const MAX_AUDIT_CONTEXT_CHARS = 80;
 
 /** Resolves the multipart upload filename, mapping AAC inputs to provider-friendly `.m4a`. */
@@ -108,25 +108,22 @@ type GuardedProviderRequestParams = {
   mode?: GuardedFetchMode;
 };
 
-/** Creates a timer-safe absolute operation deadline from an optional total timeout. */
+/** Creates a timer-safe absolute deadline, resolving a lazy total timeout exactly once. */
 export function createProviderOperationDeadline(params: {
-  timeoutMs?: number;
+  timeoutMs?: ProviderOperationTimeoutMs;
   label: string;
 }): ProviderOperationDeadline {
-  if (
-    typeof params.timeoutMs !== "number" ||
-    !Number.isFinite(params.timeoutMs) ||
-    params.timeoutMs <= 0
-  ) {
+  const timeoutMs = typeof params.timeoutMs === "function" ? params.timeoutMs() : params.timeoutMs;
+  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     return { label: params.label };
   }
-  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
+  const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
   const deadlineAtMs =
-    resolveExpiresAtMsFromDurationMs(timeoutMs) ?? resolveDateTimestampMs(Date.now());
+    resolveExpiresAtMsFromDurationMs(resolvedTimeoutMs) ?? resolveDateTimestampMs(Date.now());
   return {
     deadlineAtMs,
     label: params.label,
-    timeoutMs,
+    timeoutMs: resolvedTimeoutMs,
   };
 }
 
@@ -142,9 +139,40 @@ export function resolveProviderOperationTimeoutMs(params: {
   }
   const remainingMs = deadlineAtMs - Date.now();
   if (remainingMs <= 0) {
-    throw new Error(`${params.deadline.label} timed out after ${params.deadline.timeoutMs}ms`);
+    throw createProviderOperationTimeoutError(params.deadline);
   }
   return Math.max(1, Math.min(defaultTimeoutMs, remainingMs));
+}
+
+/** Builds the canonical error for an exhausted provider operation deadline. */
+function createProviderOperationTimeoutError(deadline: ProviderOperationDeadline): Error {
+  const timeoutLabel =
+    typeof deadline.timeoutMs === "number" ? ` after ${deadline.timeoutMs}ms` : "";
+  return new Error(`${deadline.label} timed out${timeoutLabel}`);
+}
+
+/** Resolves a static or lazy request timeout with a validated fallback. */
+function resolveProviderRequestTimeoutMs(params: {
+  timeoutMs?: ProviderOperationTimeoutMs;
+  defaultTimeoutMs: number;
+}): number {
+  const resolved = typeof params.timeoutMs === "function" ? params.timeoutMs() : params.timeoutMs;
+  const fallback = resolveTimerTimeoutMs(params.defaultTimeoutMs, DEFAULT_GUARDED_HTTP_TIMEOUT_MS);
+  if (typeof resolved !== "number" || !Number.isFinite(resolved) || resolved <= 0) {
+    return fallback;
+  }
+  return resolveTimerTimeoutMs(resolved, fallback);
+}
+
+/** Returns lazy body-read options tied to the same absolute provider operation deadline. */
+function createProviderOperationBodyReadOptions(params: {
+  deadline: ProviderOperationDeadline;
+  defaultTimeoutMs: number;
+}) {
+  return {
+    timeoutMs: createProviderOperationTimeoutResolver(params),
+    onTimeout: () => createProviderOperationTimeoutError(params.deadline),
+  };
 }
 
 /** Returns a lazy timeout resolver for code paths that retry or poll multiple HTTP calls. */
@@ -170,7 +198,7 @@ export async function waitProviderOperationPollInterval(params: {
   }
   const remainingMs = deadlineAtMs - Date.now();
   if (remainingMs <= 0) {
-    throw new Error(`${params.deadline.label} timed out after ${params.deadline.timeoutMs}ms`);
+    throw createProviderOperationTimeoutError(params.deadline);
   }
   await new Promise((resolve) => {
     setTimeout(resolve, Math.min(pollIntervalMs, remainingMs));
@@ -192,6 +220,10 @@ export async function pollProviderOperationJson<TPayload>(
     getFailureMessage?: (payload: TPayload) => string | undefined;
   } & GuardedProviderRequestParams,
 ): Promise<TPayload> {
+  const bodyReadOptions = createProviderOperationBodyReadOptions({
+    deadline: params.deadline,
+    defaultTimeoutMs: params.defaultTimeoutMs,
+  });
   for (let attempt = 0; attempt < params.maxAttempts; attempt += 1) {
     const init = {
       method: "GET",
@@ -217,6 +249,7 @@ export async function pollProviderOperationJson<TPayload>(
             return (await readProviderJsonObjectResponse(
               result.response,
               params.requestFailedMessage,
+              bodyReadOptions,
             )) as TPayload;
           } finally {
             await result.release();
@@ -232,6 +265,7 @@ export async function pollProviderOperationJson<TPayload>(
             requestFailedMessage: params.requestFailedMessage,
           }),
           params.requestFailedMessage,
+          bodyReadOptions,
         )) as TPayload);
     if (params.isComplete(payload)) {
       return payload;
@@ -263,49 +297,70 @@ export async function fetchProviderOperationResponse(params: {
     stage: params.stage,
     retry: params.retry,
     operation: async () => {
+      const timeoutMs = resolveProviderRequestTimeoutMs({
+        timeoutMs: params.timeoutMs,
+        defaultTimeoutMs: DEFAULT_GUARDED_HTTP_TIMEOUT_MS,
+      });
+      const requestDeadline = createProviderOperationDeadline({
+        timeoutMs,
+        label: params.requestFailedMessage ?? `${params.provider ?? "provider"} ${params.stage}`,
+      });
       const response = await fetchWithTimeout(
         params.url,
         params.init ?? {},
-        resolveProviderOperationRequestTimeoutMs(params.timeoutMs),
+        timeoutMs,
         params.fetchFn,
       );
       if (params.requestFailedMessage) {
-        await assertOkOrThrowHttpError(response, params.requestFailedMessage);
+        await assertOkOrThrowHttpError(response, params.requestFailedMessage, {
+          bodyTimeoutMs: createProviderOperationTimeoutResolver({
+            deadline: requestDeadline,
+            defaultTimeoutMs: timeoutMs,
+          }),
+          onBodyTimeout: () => createProviderOperationTimeoutError(requestDeadline),
+        });
       }
       return response;
     },
   });
 }
 
+/**
+ * Fetches generated-asset response headers and bounded error details under an absolute deadline.
+ * Successful-body readers must reuse the same deadline so header time cannot reset the budget.
+ */
 export async function fetchProviderDownloadResponse(params: {
   url: string;
   init?: RequestInit;
+  deadline?: ProviderOperationDeadline;
+  /** @deprecated Pass `deadline` so successful-body reads can reuse the same total budget. */
   timeoutMs?: ProviderOperationTimeoutMs;
   fetchFn: typeof fetch;
   provider?: string;
   requestFailedMessage: string;
   retry?: TransientProviderRetryConfig;
 }): Promise<Response> {
+  // timeoutMs is a shipped Plugin SDK contract. Normalize it at this boundary;
+  // new callers pass the deadline through to their successful-body reader.
+  const deadline =
+    params.deadline ??
+    createProviderOperationDeadline({
+      timeoutMs: params.timeoutMs,
+      label: params.requestFailedMessage,
+    });
   return await fetchProviderOperationResponse({
     stage: "download",
     url: params.url,
     init: params.init,
-    timeoutMs: params.timeoutMs,
+    timeoutMs: createProviderOperationTimeoutResolver({
+      deadline,
+      defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_GUARDED_HTTP_TIMEOUT_MS,
+    }),
     fetchFn: params.fetchFn,
     provider: params.provider,
     requestFailedMessage: params.requestFailedMessage,
     retry: params.retry,
   });
-}
-
-function resolveProviderOperationRequestTimeoutMs(
-  timeoutMs: ProviderOperationTimeoutMs | undefined,
-): number {
-  const resolved = typeof timeoutMs === "function" ? timeoutMs() : timeoutMs;
-  if (typeof resolved !== "number" || !Number.isFinite(resolved) || resolved <= 0) {
-    return DEFAULT_GUARDED_HTTP_TIMEOUT_MS;
-  }
-  return resolved;
 }
 
 function resolveGuardedHttpTimeoutMs(timeoutMs: number | undefined): number {
@@ -323,10 +378,22 @@ function sanitizeAuditContext(auditContext: string | undefined): string | undefi
   if (!cleaned) {
     return undefined;
   }
-  return cleaned.slice(0, MAX_AUDIT_CONTEXT_CHARS);
+  return truncateUtf16Safe(cleaned, MAX_AUDIT_CONTEXT_CHARS);
 }
 
-export function resolveProviderHttpRequestConfig(params: {
+type ResolvedProviderHttpRequestConfig = {
+  baseUrl: string;
+  allowPrivateNetwork: boolean;
+  headers: Headers;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
+  requestConfig: ResolvedProviderRequestConfig;
+};
+
+type ResolvedProviderHttpRequestConfigWithOriginTrust = ResolvedProviderHttpRequestConfig & {
+  trustConfiguredBaseUrlOrigin: boolean;
+};
+
+function resolveProviderHttpRequestConfigWithOriginTrustInternal(params: {
   baseUrl?: string;
   defaultBaseUrl: string;
   allowPrivateNetwork?: boolean;
@@ -337,13 +404,7 @@ export function resolveProviderHttpRequestConfig(params: {
   api?: string;
   capability?: ProviderRequestCapability;
   transport?: ProviderRequestTransport;
-}): {
-  baseUrl: string;
-  allowPrivateNetwork: boolean;
-  headers: Headers;
-  dispatcherPolicy?: PinnedDispatcherPolicy;
-  requestConfig: ResolvedProviderRequestConfig;
-} {
+}): ResolvedProviderHttpRequestConfigWithOriginTrust {
   const requestConfig = resolveProviderRequestPolicyConfig({
     provider: params.provider ?? "",
     baseUrl: params.baseUrl,
@@ -370,7 +431,30 @@ export function resolveProviderHttpRequestConfig(params: {
     headers,
     dispatcherPolicy: buildProviderRequestDispatcherPolicy(requestConfig),
     requestConfig,
+    trustConfiguredBaseUrlOrigin:
+      !requestConfig.privateNetworkExplicitlyDenied &&
+      (requestConfig.policy.endpointClass === "custom" ||
+        requestConfig.policy.endpointClass === "local"),
   };
+}
+
+export function resolveProviderHttpRequestConfig(
+  params: Parameters<typeof resolveProviderHttpRequestConfigWithOriginTrustInternal>[0],
+): ResolvedProviderHttpRequestConfig {
+  const resolved = resolveProviderHttpRequestConfigWithOriginTrustInternal(params);
+  return {
+    baseUrl: resolved.baseUrl,
+    allowPrivateNetwork: resolved.allowPrivateNetwork,
+    headers: resolved.headers,
+    dispatcherPolicy: resolved.dispatcherPolicy,
+    requestConfig: resolved.requestConfig,
+  };
+}
+
+export function resolveProviderHttpRequestConfigWithOriginTrust(
+  params: Parameters<typeof resolveProviderHttpRequestConfigWithOriginTrustInternal>[0],
+): ResolvedProviderHttpRequestConfigWithOriginTrust {
+  return resolveProviderHttpRequestConfigWithOriginTrustInternal(params);
 }
 
 /**
@@ -520,16 +604,30 @@ async function fetchGuardedProviderOperationResponse(params: {
     stage: params.stage,
     retry: params.retry,
     operation: async () => {
+      const timeoutMs = resolveProviderRequestTimeoutMs({
+        timeoutMs: params.timeoutMs,
+        defaultTimeoutMs: DEFAULT_GUARDED_HTTP_TIMEOUT_MS,
+      });
+      const requestDeadline = createProviderOperationDeadline({
+        timeoutMs,
+        label: params.requestFailedMessage ?? `${params.provider ?? "provider"} ${params.stage}`,
+      });
       const result = await fetchWithTimeoutGuarded(
         params.url,
         params.init,
-        resolveProviderOperationRequestTimeoutMs(params.timeoutMs),
+        timeoutMs,
         params.fetchFn,
         params.guardedOptions,
       );
       try {
         if (params.requestFailedMessage) {
-          await assertOkOrThrowHttpError(result.response, params.requestFailedMessage);
+          await assertOkOrThrowHttpError(result.response, params.requestFailedMessage, {
+            bodyTimeoutMs: createProviderOperationTimeoutResolver({
+              deadline: requestDeadline,
+              defaultTimeoutMs: timeoutMs,
+            }),
+            onBodyTimeout: () => createProviderOperationTimeoutError(requestDeadline),
+          });
         }
         return result;
       } catch (error) {
@@ -555,6 +653,7 @@ type GuardedPostRequestParams<TBody> = GuardedProviderRequestParams &
     headers: Headers;
     body: TBody;
     timeoutMs?: number;
+    signal?: AbortSignal;
     fetchFn: typeof fetch;
   };
 
@@ -565,6 +664,7 @@ export async function postTranscriptionRequest(params: GuardedPostRequestParams<
       method: "POST",
       headers: params.headers,
       body: params.body,
+      ...(params.signal ? { signal: params.signal } : {}),
     },
     timeoutMs: params.timeoutMs,
     fetchFn: params.fetchFn,
@@ -584,6 +684,7 @@ async function postGuardedRequest(params: {
   retry?: TransientProviderRetryConfig;
 }) {
   const operation = async () => {
+    params.init.signal?.throwIfAborted();
     const result = await fetchWithTimeoutGuarded(
       params.url,
       params.init,
@@ -609,12 +710,9 @@ async function postGuardedRequest(params: {
     provider: "provider-http",
     stage: params.retryStage,
     retry: params.retry,
+    signal: params.init.signal ?? undefined,
     operation,
   });
-}
-
-function isTransientProviderHttpStatus(status: number): boolean {
-  return status === 500 || status === 502 || status === 503 || status === 504;
 }
 
 export async function postJsonRequest(params: GuardedPostRequestParams<unknown>) {
@@ -624,6 +722,7 @@ export async function postJsonRequest(params: GuardedPostRequestParams<unknown>)
       method: "POST",
       headers: params.headers,
       body: JSON.stringify(params.body),
+      ...(params.signal ? { signal: params.signal } : {}),
     },
     timeoutMs: params.timeoutMs,
     fetchFn: params.fetchFn,
@@ -640,6 +739,7 @@ export async function postMultipartRequest(params: GuardedPostRequestParams<Body
       method: "POST",
       headers: params.headers,
       body: params.body,
+      ...(params.signal ? { signal: params.signal } : {}),
     },
     timeoutMs: params.timeoutMs,
     fetchFn: params.fetchFn,
@@ -647,62 +747,6 @@ export async function postMultipartRequest(params: GuardedPostRequestParams<Body
     retryStage: params.retryStage,
     retry: params.retry,
   });
-}
-
-export async function readErrorResponse(res: Response): Promise<string | undefined> {
-  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-  try {
-    if (!res.body) {
-      return undefined;
-    }
-    reader = res.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let total = 0;
-    let sawBytes = false;
-    while (total < MAX_ERROR_RESPONSE_BYTES) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      if (!value || value.length === 0) {
-        continue;
-      }
-      sawBytes = true;
-      const remaining = MAX_ERROR_RESPONSE_BYTES - total;
-      const chunk = value.length <= remaining ? value : value.subarray(0, remaining);
-      chunks.push(chunk);
-      total += chunk.length;
-      if (chunk.length < value.length) {
-        break;
-      }
-    }
-    if (!sawBytes) {
-      return undefined;
-    }
-    const bytes = new Uint8Array(total);
-    let offset = 0;
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset);
-      offset += chunk.length;
-    }
-    const text = new TextDecoder().decode(bytes);
-    const collapsed = text.replace(/\s+/g, " ").trim();
-    if (!collapsed) {
-      return undefined;
-    }
-    if (collapsed.length <= MAX_ERROR_CHARS) {
-      return collapsed;
-    }
-    return `${collapsed.slice(0, MAX_ERROR_CHARS)}…`;
-  } catch {
-    return undefined;
-  } finally {
-    try {
-      await reader?.cancel();
-    } catch {
-      // Ignore stream-cancel failures while reporting the original HTTP error.
-    }
-  }
 }
 
 export function requireTranscriptionText(

@@ -6,12 +6,21 @@ import {
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
 import { FsSafeError, pathExists, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
+import {
+  activateMemoryWikiCompiledCacheOwner,
+  invalidateMemoryWikiCompiledCache,
+  reconcileMemoryWikiCompiledCacheOwner,
+} from "./compiled-cache.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
-import { appendMemoryWikiLog } from "./log.js";
+import {
+  appendMemoryWikiLog,
+  ensureMemoryWikiVaultGeneration,
+  loadMemoryWikiValidatedVaultIdentity,
+} from "./log.js";
 import { WIKI_RAW_SOURCE_MARKER } from "./markdown.js";
 import { resolveMemoryWikiTimestamp } from "./time.js";
 
-export const WIKI_VAULT_DIRECTORIES = [
+const WIKI_VAULT_DIRECTORIES = [
   "entities",
   "concepts",
   "syntheses",
@@ -20,9 +29,9 @@ export const WIKI_VAULT_DIRECTORIES = [
   "_attachments",
   "_views",
   ".openclaw-wiki",
-  ".openclaw-wiki/locks",
-  ".openclaw-wiki/cache",
 ] as const;
+
+const WIKI_VAULT_SCAFFOLD = ["AGENTS.md", "WIKI.md", "index.md", ".openclaw-wiki/log.jsonl"];
 
 type InitializeMemoryWikiVaultResult = {
   rootDir: string;
@@ -51,7 +60,7 @@ function buildAgentsMarkdown(): string {
 - Preserve human notes outside managed markers.
 - Prefer source-backed claims over wiki-to-wiki citation loops.
 - Prefer structured \`claims\` with evidence over burying key beliefs only in prose.
-- Use \`.openclaw-wiki/cache/agent-digest.json\` and \`claims.jsonl\` for machine reads; markdown pages are the human view.
+- Use the wiki tools for machine reads; Markdown pages are the human view.
 `);
 }
 
@@ -69,7 +78,7 @@ This vault is maintained by the OpenClaw memory-wiki plugin.
 - Raw sources remain the evidence layer.
 - To keep unmanaged raw Markdown in \`sources/\`, add \`${WIKI_RAW_SOURCE_MARKER}\` near the top of the page.
 - Wiki pages are the human-readable synthesis layer.
-- \`.openclaw-wiki/cache/agent-digest.json\` is the agent-facing compiled digest.
+- Compiled query and prompt snapshots live in OpenClaw plugin state, not vault files.
 
 ## Notes
 <!-- openclaw:human:start -->
@@ -102,11 +111,21 @@ export async function initializeMemoryWikiVault(
   const rootDir = config.vault.path;
   const createdDirectories: string[] = [];
   const createdFiles: string[] = [];
+  const rootCreated = !(await pathExists(rootDir));
 
-  if (!(await pathExists(rootDir))) {
+  if (rootCreated) {
     createdDirectories.push(rootDir);
   }
   await fs.mkdir(rootDir, { recursive: true });
+  const hadVaultScaffold = (
+    await Promise.all(
+      WIKI_VAULT_SCAFFOLD.map((relativePath) => pathExists(path.join(rootDir, relativePath))),
+    )
+  ).every(Boolean);
+  if (!hadVaultScaffold) {
+    // Missing scaffold means a new/recreated vault, even when its parent directory survived.
+    await invalidateMemoryWikiCompiledCache(config);
+  }
 
   for (const relativeDir of WIKI_VAULT_DIRECTORIES) {
     const fullPath = path.join(rootDir, relativeDir);
@@ -125,22 +144,6 @@ export async function initializeMemoryWikiVault(
     withTrailingNewline("# Inbox\n\nDrop raw ideas, questions, and source links here.\n"),
     createdFiles,
   );
-  await writeFileIfMissing(
-    rootDir,
-    ".openclaw-wiki/state.json",
-    withTrailingNewline(
-      JSON.stringify(
-        {
-          version: 1,
-          createdAt: resolveMemoryWikiTimestamp(options?.nowMs),
-          renderMode: config.vault.renderMode,
-        },
-        null,
-        2,
-      ),
-    ),
-    createdFiles,
-  );
   await writeFileIfMissing(rootDir, ".openclaw-wiki/log.jsonl", "", createdFiles);
 
   if (createdDirectories.length > 0 || createdFiles.length > 0) {
@@ -153,6 +156,16 @@ export async function initializeMemoryWikiVault(
       },
     });
   }
+  const vaultGeneration = await ensureMemoryWikiVaultGeneration(rootDir);
+  const identity = await loadMemoryWikiValidatedVaultIdentity(rootDir);
+  activateMemoryWikiCompiledCacheOwner(
+    config,
+    vaultGeneration,
+    identity.compiledCachePublicationId,
+  );
+  await reconcileMemoryWikiCompiledCacheOwner(config, () =>
+    loadMemoryWikiValidatedVaultIdentity(rootDir),
+  );
 
   return {
     rootDir,

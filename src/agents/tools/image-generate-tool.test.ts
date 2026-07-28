@@ -21,18 +21,40 @@ const taskRuntimeMocks = vi.hoisted(() => ({
   completeTaskRunByRunId: vi.fn(),
   failTaskRunByRunId: vi.fn(),
 }));
+const sessionAccessorMocks = vi.hoisted(() => ({
+  loadSessionEntryReadOnly: vi.fn(),
+}));
 
 vi.mock("../../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
 vi.mock("../../tasks/detached-task-runtime.js", () => taskRuntimeMocks);
+vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/session-accessor.js")>()),
+  loadSessionEntryReadOnly: sessionAccessorMocks.loadSessionEntryReadOnly,
+}));
 
 let imageGenerationRuntime: typeof import("../../image-generation/runtime.js");
 let imageOps: typeof import("../../media/media-services.js");
 let splitMediaFromOutput: typeof import("../../media/parse.js").splitMediaFromOutput;
 let mediaStore: typeof import("../../media/store.js");
 let webMedia: typeof import("../../media/web-media.js");
-let resetRecentMediaGenerationDuplicateGuardsForTests: typeof import("../media-generation-task-status-shared.js").resetRecentMediaGenerationDuplicateGuardsForTests;
-let createImageGenerateTool: typeof import("./image-generate-tool.js").createImageGenerateTool;
-let resolveImageGenerationModelConfigForTool: typeof import("./image-generate-tool.js").resolveImageGenerationModelConfigForTool;
+let resetRecentMediaGenerationDuplicateGuardsForTests: typeof import("../media-generation-task-status-shared.test-support.js").resetRecentMediaGenerationDuplicateGuardsForTests;
+let createImageGenerateToolImpl: typeof import("./image-generate-tool.js").createImageGenerateTool;
+let resolveImageGenerationModelConfigForTool: typeof import("./image-generate-tool.test-support.js").resolveImageGenerationModelConfigForTool;
+import { canonicalizeMediaGenerationTestConfig } from "./media-generation-config.test-support.js";
+
+function createImageGenerateTool(
+  params: Parameters<typeof createImageGenerateToolImpl>[0],
+): ReturnType<typeof createImageGenerateToolImpl> {
+  const options = params ?? {};
+  return createImageGenerateToolImpl({
+    ...options,
+    config: canonicalizeMediaGenerationTestConfig(
+      options.config ?? {},
+      "image",
+      "imageGenerationModel",
+    ),
+  });
+}
 
 const GENERATION_PROVIDER_ENV_VARS = [
   "BYTEPLUS_API_KEY",
@@ -195,9 +217,11 @@ function createToolWithPrimaryImageModel(
   extra?: {
     agentDir?: string;
     workspaceDir?: string;
+    fallbacks?: string[];
   },
 ) {
   ensureDefaultImageGenerationProvidersStubbed();
+  const { fallbacks, ...toolOptions } = extra ?? {};
   return requireImageGenerateTool(
     createImageGenerateTool({
       config: {
@@ -205,16 +229,20 @@ function createToolWithPrimaryImageModel(
           defaults: {
             imageGenerationModel: {
               primary,
+              ...(fallbacks ? { fallbacks } : {}),
             },
           },
         },
       },
-      ...extra,
+      ...toolOptions,
     }),
   );
 }
 
 function stubEditedImageFlow(params?: { width?: number; height?: number }) {
+  const maxDimension = Math.max(params?.width ?? 0, params?.height ?? 0);
+  const appliedResolution =
+    maxDimension >= 3000 ? "4K" : maxDimension >= 1500 ? "2K" : maxDimension > 0 ? "1K" : undefined;
   // Edit tests stub the whole media pipeline so assertions focus on tool input
   // shaping, provider choice, and saved-media metadata.
   const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
@@ -222,6 +250,7 @@ function stubEditedImageFlow(params?: { width?: number; height?: number }) {
     model: "gemini-3-pro-image-preview",
     attempts: [],
     ignoredOverrides: [],
+    ...(appliedResolution ? { appliedResolution } : {}),
     images: [
       {
         buffer: Buffer.from("png-out"),
@@ -253,9 +282,13 @@ function stubEditedImageFlow(params?: { width?: number; height?: number }) {
 function createFalEditProvider(params?: {
   defaultModel?: string;
   maxInputImages?: number;
+  maxInputImagesByModel?: Readonly<Record<string, number>>;
+  maxInputImagesByModelPrefix?: Readonly<Record<string, number>>;
+  omitMaxInputImages?: boolean;
   models?: string[];
   supportsAspectRatio?: boolean;
   aspectRatios?: string[];
+  resolutionsByModel?: Record<string, ("1K" | "2K" | "4K")[]>;
 }) {
   return {
     id: "fal",
@@ -270,15 +303,24 @@ function createFalEditProvider(params?: {
       },
       edit: {
         enabled: true,
-        maxInputImages: params?.maxInputImages ?? 1,
+        ...(!params?.omitMaxInputImages ? { maxInputImages: params?.maxInputImages ?? 1 } : {}),
+        ...(params?.maxInputImagesByModel
+          ? { maxInputImagesByModel: params.maxInputImagesByModel }
+          : {}),
+        ...(params?.maxInputImagesByModelPrefix
+          ? { maxInputImagesByModelPrefix: params.maxInputImagesByModelPrefix }
+          : {}),
         supportsSize: true,
         supportsAspectRatio: params?.supportsAspectRatio ?? false,
         supportsResolution: true,
       },
-      ...(params?.aspectRatios
+      ...(params?.aspectRatios || params?.resolutionsByModel
         ? {
             geometry: {
-              aspectRatios: params.aspectRatios,
+              ...(params.aspectRatios ? { aspectRatios: params.aspectRatios } : {}),
+              ...(params.resolutionsByModel
+                ? { resolutionsByModel: params.resolutionsByModel }
+                : {}),
             },
           }
         : {}),
@@ -314,9 +356,11 @@ describe("createImageGenerateTool", () => {
     mediaStore = await import("../../media/store.js");
     webMedia = await import("../../media/web-media.js");
     ({ resetRecentMediaGenerationDuplicateGuardsForTests } =
-      await import("../media-generation-task-status-shared.js"));
-    ({ createImageGenerateTool, resolveImageGenerationModelConfigForTool } =
+      await import("../media-generation-task-status-shared.test-support.js"));
+    ({ createImageGenerateTool: createImageGenerateToolImpl } =
       await import("./image-generate-tool.js"));
+    ({ resolveImageGenerationModelConfigForTool } =
+      await import("./image-generate-tool.test-support.js"));
   });
 
   beforeEach(() => {
@@ -327,6 +371,7 @@ describe("createImageGenerateTool", () => {
     taskRuntimeMocks.recordTaskRunProgressByRunId.mockReset();
     taskRuntimeMocks.completeTaskRunByRunId.mockReset();
     taskRuntimeMocks.failTaskRunByRunId.mockReset();
+    sessionAccessorMocks.loadSessionEntryReadOnly.mockReset();
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
     taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReset();
@@ -353,7 +398,7 @@ describe("createImageGenerateTool", () => {
 
     const tool = requireImageGenerateTool(createImageGenerateTool({ config: {} }));
 
-    expect(tool.description).toContain('outputFormat="png" or "webp"');
+    expect(tool.description).toContain("outputFormat png|webp");
     expect(tool.description).toContain('background="transparent"');
     expect(tool.description).toContain("openai.background");
     expect(tool.description).toContain("gpt-image-1.5");
@@ -372,8 +417,10 @@ describe("createImageGenerateTool", () => {
         config: {
           agents: {
             defaults: {
-              imageGenerationModel: {
-                primary: "openai/gpt-image-1",
+              mediaModels: {
+                image: {
+                  primary: "openai/gpt-image-1",
+                },
               },
             },
           },
@@ -443,8 +490,10 @@ describe("createImageGenerateTool", () => {
         cfg: {
           agents: {
             defaults: {
-              imageGenerationModel: {
-                primary: "openai/gpt-image-1",
+              mediaModels: {
+                image: {
+                  primary: "openai/gpt-image-1",
+                },
               },
             },
           },
@@ -635,8 +684,10 @@ describe("createImageGenerateTool", () => {
           agents: {
             defaults: {
               mediaMaxMb: 8,
-              imageGenerationModel: {
-                primary: "openai/gpt-image-1",
+              mediaModels: {
+                image: {
+                  primary: "openai/gpt-image-1",
+                },
               },
             },
           },
@@ -658,8 +709,10 @@ describe("createImageGenerateTool", () => {
       agents: {
         defaults: {
           mediaMaxMb: 8,
-          imageGenerationModel: {
-            primary: "openai/gpt-image-1",
+          mediaModels: {
+            image: {
+              primary: "openai/gpt-image-1",
+            },
           },
         },
       },
@@ -746,14 +799,16 @@ describe("createImageGenerateTool", () => {
     const config: OpenClawConfig = {
       agents: {
         defaults: {
-          imageGenerationModel: {
-            primary: "bootstrap/unused",
+          mediaModels: {
+            image: {
+              primary: "bootstrap/unused",
+            },
           },
         },
       },
     };
     const tool = requireImageGenerateTool(createImageGenerateTool({ config }));
-    config.agents!.defaults!.imageGenerationModel = { timeoutMs: 180_000 };
+    config.agents!.defaults!.mediaModels!.image = { timeoutMs: 180_000 };
 
     const result = await tool.execute("call-explicit-foundry", {
       prompt: "A product render",
@@ -766,7 +821,7 @@ describe("createImageGenerateTool", () => {
     const cfg = requireRecord(generateArgs.cfg, "generateImage config");
     const agents = requireRecord(cfg.agents, "generateImage agents config");
     const defaults = requireRecord(agents.defaults, "generateImage defaults config");
-    expect(defaults.imageGenerationModel).toEqual({
+    expect(requireRecord(defaults.mediaModels, "mediaModels").image).toEqual({
       primary: "microsoft-foundry/prod-image",
       timeoutMs: 180_000,
     });
@@ -863,6 +918,14 @@ describe("createImageGenerateTool", () => {
   it("starts run-scoped cron image generation as a tracked async task", async () => {
     stubImageGenerationProviders();
     vi.stubEnv("OPENAI_API_KEY", "openai-test");
+    sessionAccessorMocks.loadSessionEntryReadOnly.mockReturnValue({
+      sessionId: "run-123",
+      updatedAt: 1,
+      cronRunContinuation: {
+        lifecycleRevision: "revision-1",
+        phase: "running",
+      },
+    });
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
       provider: "openai",
       model: "gpt-image-1",
@@ -1490,31 +1553,259 @@ describe("createImageGenerateTool", () => {
     expect(generateArgs.aspectRatio).toBe("2.35:1");
   });
 
-  it("does not infer edit resolution for fal Krea style references", async () => {
+  it.each(["krea/v2/medium/text-to-image", "google/nano-banana-2-lite"])(
+    "does not infer edit resolution when %s declares no resolution options",
+    async (model) => {
+      vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+        createFalEditProvider({
+          defaultModel: model,
+          models: [model],
+          maxInputImages: 10,
+          supportsAspectRatio: true,
+          resolutionsByModel: { [model]: [] },
+        }),
+      ]);
+      const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+        provider: "fal",
+        model,
+        attempts: [],
+        ignoredOverrides: [],
+        images: [
+          {
+            buffer: Buffer.from("krea-style-out"),
+            mimeType: "image/png",
+            fileName: "krea-style.png",
+          },
+        ],
+      });
+      vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+        kind: "image",
+        buffer: Buffer.from("style-ref"),
+        contentType: "image/png",
+      });
+      vi.spyOn(imageOps, "getImageMetadata").mockResolvedValue({
+        width: 2048,
+        height: 2048,
+      });
+      vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+        path: "/tmp/krea-style.png",
+        id: "krea-style.png",
+        size: 14,
+        contentType: "image/png",
+      });
+
+      const tool = createToolWithPrimaryImageModel(`fal/${model}`, {
+        workspaceDir: process.cwd(),
+      });
+      await tool.execute("call-fal-krea-style", {
+        prompt: "Style-directed portrait",
+        image: "./fixtures/style.png",
+      });
+
+      const generateArgs = mockCallArg(generateImage, 0, "generateImage");
+      expect(generateArgs.resolution).toBeUndefined();
+      expect(generateArgs.inferredResolution).toBe("2K");
+      expect(generateArgs.inputImages).toHaveLength(1);
+    },
+  );
+
+  it.each([
+    {
+      model: "fal-ai/nano-banana-2",
+      primaryRef: "fal/fal-ai/nano-banana-2",
+      maxInputImages: 14,
+      disablesResolution: false,
+    },
+    {
+      model: "google/nano-banana-2-lite",
+      primaryRef: "fal/google/nano-banana-2-lite",
+      maxInputImages: 14,
+      disablesResolution: true,
+    },
+    {
+      model: "openai/gpt-image-2/edit",
+      primaryRef: "FAL/openai/gpt-image-2/edit",
+      maxInputImages: 10,
+      limitPrefix: "openai/gpt-image-",
+      disablesResolution: false,
+    },
+  ])("accepts $model edits up to its reference limit", async (testCase) => {
+    const { model, primaryRef, maxInputImages } = testCase;
     vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
       createFalEditProvider({
-        defaultModel: "krea/v2/medium/text-to-image",
-        models: ["krea/v2/medium/text-to-image"],
-        maxInputImages: 10,
-        supportsAspectRatio: true,
+        defaultModel: model,
+        models: [model],
+        maxInputImages: 1,
+        ...(testCase.limitPrefix
+          ? { maxInputImagesByModelPrefix: { [testCase.limitPrefix]: maxInputImages } }
+          : { maxInputImagesByModel: { [model]: maxInputImages } }),
+        ...(testCase.disablesResolution ? { resolutionsByModel: { [model]: [] } } : {}),
       }),
     ]);
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
       provider: "fal",
-      model: "krea/v2/medium/text-to-image",
+      model,
       attempts: [],
       ignoredOverrides: [],
-      images: [
-        {
-          buffer: Buffer.from("krea-style-out"),
-          mimeType: "image/png",
-          fileName: "krea-style.png",
-        },
-      ],
+      images: [{ buffer: Buffer.from("edited"), mimeType: "image/png" }],
     });
     vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
       kind: "image",
-      buffer: Buffer.from("style-ref"),
+      buffer: Buffer.from("reference"),
+      contentType: "image/png",
+    });
+    vi.spyOn(imageOps, "getImageMetadata").mockResolvedValue({
+      width: 1024,
+      height: 1024,
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/edited.png",
+      id: "edited.png",
+      size: 6,
+      contentType: "image/png",
+    });
+
+    const tool = createToolWithPrimaryImageModel(primaryRef, {
+      workspaceDir: process.cwd(),
+    });
+    await tool.execute("call-model-reference-limit", {
+      prompt: "combine references",
+      images: Array.from(
+        { length: maxInputImages },
+        (_, index) => `./fixtures/ref-${index + 1}.png`,
+      ),
+    });
+
+    expect(mockCallArg(generateImage, 0, "generateImage").inputImages).toHaveLength(maxInputImages);
+  });
+
+  it("keeps the default edit limit at 10 for providers without limit metadata", async () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      createFalEditProvider({ omitMaxInputImages: true }),
+    ]);
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage");
+    const loadWebMedia = vi.spyOn(webMedia, "loadWebMedia");
+    const tool = createToolWithPrimaryImageModel("fal/fal-ai/flux/dev", {
+      workspaceDir: process.cwd(),
+    });
+
+    await expect(
+      tool.execute("call-default-reference-limit", {
+        prompt: "combine references",
+        images: Array.from({ length: 11 }, (_, index) => `./fixtures/ref-${index + 1}.png`),
+      }),
+    ).rejects.toThrow("fal edit supports at most 10 reference images");
+    expect(loadWebMedia).not.toHaveBeenCalled();
+    expect(generateImage).not.toHaveBeenCalled();
+  });
+
+  it("rejects model-specific reference limits before loading inputs", async () => {
+    const model = "xai/grok-imagine-image";
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      createFalEditProvider({
+        defaultModel: model,
+        models: [model],
+        maxInputImages: 1,
+        maxInputImagesByModel: { [model]: 3 },
+      }),
+    ]);
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage");
+    const loadWebMedia = vi.spyOn(webMedia, "loadWebMedia");
+    const tool = createToolWithPrimaryImageModel(`fal/${model}`, {
+      workspaceDir: process.cwd(),
+    });
+
+    await expect(
+      tool.execute("call-grok-too-many-references", {
+        prompt: "combine references",
+        images: Array.from({ length: 4 }, (_, index) => `./fixtures/ref-${index + 1}.png`),
+      }),
+    ).rejects.toThrow("fal edit supports at most 3 reference images");
+    expect(loadWebMedia).not.toHaveBeenCalled();
+    expect(generateImage).not.toHaveBeenCalled();
+  });
+
+  it("accepts the highest reference limit across configured fallbacks", async () => {
+    const primaryModel = "xai/grok-imagine-image";
+    const fallbackModel = "google/nano-banana-2-lite";
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      createFalEditProvider({
+        defaultModel: primaryModel,
+        models: [primaryModel, fallbackModel],
+        maxInputImages: 1,
+        maxInputImagesByModel: {
+          [primaryModel]: 3,
+          [fallbackModel]: 14,
+        },
+      }),
+    ]);
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "fal",
+      model: fallbackModel,
+      attempts: [],
+      ignoredOverrides: [],
+      images: [{ buffer: Buffer.from("edited"), mimeType: "image/png" }],
+    });
+    vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+      kind: "image",
+      buffer: Buffer.from("reference"),
+      contentType: "image/png",
+    });
+    vi.spyOn(imageOps, "getImageMetadata").mockResolvedValue({
+      width: 1024,
+      height: 1024,
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/edited.png",
+      id: "edited.png",
+      size: 6,
+      contentType: "image/png",
+    });
+    const tool = createToolWithPrimaryImageModel(`fal/${primaryModel}`, {
+      workspaceDir: process.cwd(),
+      fallbacks: [`fal/${fallbackModel}`],
+    });
+
+    await tool.execute("call-fallback-reference-limit", {
+      prompt: "combine references",
+      images: Array.from({ length: 14 }, (_, index) => `./fixtures/ref-${index + 1}.png`),
+    });
+
+    expect(mockCallArg(generateImage, 0, "generateImage").inputImages).toHaveLength(14);
+  });
+
+  it("passes inferred resolution separately when fallbacks have different capabilities", async () => {
+    const fallbackModel = "google/nano-banana-2-lite";
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      {
+        id: "google",
+        defaultModel: "gemini-3-pro-image-preview",
+        models: ["gemini-3-pro-image-preview"],
+        capabilities: {
+          generate: { supportsResolution: true },
+          edit: { enabled: true, maxInputImages: 5, supportsResolution: true },
+          geometry: { resolutions: ["1K", "2K", "4K"] },
+        },
+        generateImage: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+      createFalEditProvider({
+        defaultModel: fallbackModel,
+        models: [fallbackModel],
+        resolutionsByModel: { [fallbackModel]: [] },
+      }),
+    ]);
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "google",
+      model: "gemini-3-pro-image-preview",
+      attempts: [],
+      ignoredOverrides: [],
+      images: [{ buffer: Buffer.from("edited"), mimeType: "image/png" }],
+    });
+    vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+      kind: "image",
+      buffer: Buffer.from("reference"),
       contentType: "image/png",
     });
     vi.spyOn(imageOps, "getImageMetadata").mockResolvedValue({
@@ -1522,23 +1813,57 @@ describe("createImageGenerateTool", () => {
       height: 2048,
     });
     vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
-      path: "/tmp/krea-style.png",
-      id: "krea-style.png",
-      size: 14,
+      path: "/tmp/edited.png",
+      id: "edited.png",
+      size: 6,
       contentType: "image/png",
     });
 
-    const tool = createToolWithPrimaryImageModel("fal/krea/v2/medium/text-to-image", {
+    const tool = createToolWithPrimaryImageModel("google/gemini-3-pro-image-preview", {
       workspaceDir: process.cwd(),
+      fallbacks: [`fal/${fallbackModel}`],
     });
-    await tool.execute("call-fal-krea-style", {
-      prompt: "Style-directed portrait",
-      image: "./fixtures/style.png",
+    await tool.execute("call-edit-with-resolutionless-fallback", {
+      prompt: "edit safely across fallbacks",
+      image: "./fixtures/reference.png",
     });
 
     const generateArgs = mockCallArg(generateImage, 0, "generateImage");
     expect(generateArgs.resolution).toBeUndefined();
-    expect(generateArgs.inputImages).toHaveLength(1);
+    expect(generateArgs.inferredResolution).toBe("2K");
+  });
+
+  it("accepts Grok-specific aspect ratios through image_generate", async () => {
+    const model = "xai/grok-imagine-image";
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      createFalEditProvider({
+        defaultModel: model,
+        models: [model],
+        supportsAspectRatio: true,
+        aspectRatios: ["1:1", "20:9"],
+      }),
+    ]);
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "fal",
+      model,
+      attempts: [],
+      ignoredOverrides: [],
+      images: [{ buffer: Buffer.from("grok-out"), mimeType: "image/png" }],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/grok.png",
+      id: "grok.png",
+      size: 8,
+      contentType: "image/png",
+    });
+
+    const tool = createToolWithPrimaryImageModel(`fal/${model}`);
+    await tool.execute("call-fal-grok-aspect", {
+      prompt: "wide landscape",
+      aspectRatio: "20:9",
+    });
+
+    expect(mockCallArg(generateImage, 0, "generateImage").aspectRatio).toBe("20:9");
   });
 
   it.each([60.5, "60px", null])("rejects malformed OpenAI output compression %s", async (value) => {
@@ -1779,14 +2104,16 @@ describe("createImageGenerateTool", () => {
       workspaceDir: process.cwd(),
     });
 
-    await tool.execute("call-edit", {
+    const result = await tool.execute("call-edit", {
       prompt: "Add a dramatic stormy sky but keep everything else identical.",
       image: "./fixtures/reference.png",
     });
 
     const generateArgs = mockCallArg(generateImage, 0, "generateImage");
     expect(generateArgs.aspectRatio).toBeUndefined();
-    expect(generateArgs.resolution).toBe("4K");
+    expect(generateArgs.resolution).toBeUndefined();
+    expect(generateArgs.inferredResolution).toBe("4K");
+    expect(resultDetails(result).resolution).toBe("4K");
     expect(generateArgs.inputImages).toEqual([
       {
         buffer: Buffer.from("input-image"),
@@ -1977,6 +2304,7 @@ describe("createImageGenerateTool", () => {
     const generateArgs = mockCallArg(generateImage, 0, "generateImage");
     expect(generateArgs.modelOverride).toBeUndefined();
     expect(generateArgs.resolution).toBeUndefined();
+    expect(generateArgs.inferredResolution).toBe("4K");
     expect(generateArgs.inputImages).toEqual([
       {
         buffer: Buffer.from("input-image"),
@@ -2219,7 +2547,7 @@ describe("createImageGenerateTool", () => {
     await expect(
       tool.execute("call-bad-aspect", { prompt: "portrait", aspectRatio: "7:5" }),
     ).rejects.toThrow(
-      "aspectRatio must be one of 1:1, 2:3, 3:2, 2.35:1, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9, 4:1, 1:4, 8:1, or 1:8",
+      "aspectRatio must be one of 1:1, 2:1, 20:9, 19.5:9, 2:3, 3:2, 2.35:1, 3:4, 4:3, 4:5, 5:4, 9:16, 9:19.5, 9:20, 16:9, 21:9, 1:2, 4:1, 1:4, 8:1, or 1:8",
     );
   });
 
@@ -2273,6 +2601,25 @@ describe("createImageGenerateTool", () => {
       supportsResolution: true,
     });
     expect(openaiProvider.authEnvVars).toEqual(["OPENAI_API_KEY"]);
+  });
+
+  it("reports model-specific edit limits in provider listings", async () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      createFalEditProvider({
+        defaultModel: "fal-ai/flux/dev",
+        models: ["fal-ai/flux/dev", "google/nano-banana-2-lite"],
+        maxInputImages: 1,
+        maxInputImagesByModelPrefix: {
+          "fal-ai/flux/dev": 1,
+          "google/nano-banana": 14,
+        },
+      }),
+    ]);
+    const tool = createToolWithPrimaryImageModel("fal/fal-ai/flux/dev");
+
+    const result = await tool.execute("call-list-model-limits", { action: "list" });
+
+    expect(resultText(result)).toContain("editing up to 14 refs depending on model");
   });
 
   it("skips auth hints for prototype-like provider ids", async () => {
@@ -2418,3 +2765,4 @@ describe("createImageGenerateTool", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

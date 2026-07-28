@@ -4,7 +4,7 @@
  * Resolves lightweight discovery hooks without loading full channel plugins.
  */
 import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
-import type { ChannelMessageActionAdapter, ChannelMessageToolDiscovery } from "./types.public.js";
+import type { ChannelMessageActionAdapter } from "./types.public.js";
 
 /**
  * Narrow adapter surface used for message-tool schema discovery.
@@ -52,20 +52,4 @@ export function resolveBundledChannelMessageToolDiscoveryAdapter(
     return undefined;
   }
   return { describeMessageTool };
-}
-
-/**
- * Runs a bundled channel's message-tool discovery hook through its public artifact.
- */
-export function describeBundledChannelMessageTool(params: {
-  channelId: string;
-  context: Parameters<NonNullable<ChannelMessageToolDiscoveryAdapter["describeMessageTool"]>>[0];
-}): ChannelMessageToolDiscovery | null | undefined {
-  const describeMessageTool = loadBundledChannelMessageToolApi(
-    params.channelId,
-  )?.describeMessageTool;
-  if (typeof describeMessageTool !== "function") {
-    return undefined;
-  }
-  return describeMessageTool(params.context) ?? null;
 }

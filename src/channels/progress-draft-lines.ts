@@ -2,7 +2,7 @@
 import type { ChannelProgressDraftLine } from "./streaming.js";
 
 /** Progress draft state can mix legacy plain text lines with keyed structured lines. */
-export type ProgressDraftLine = string | ChannelProgressDraftLine;
+type ProgressDraftLine = string | ChannelProgressDraftLine;
 
 /**
  * Removes a keyed structured progress line while preserving plain text draft lines.

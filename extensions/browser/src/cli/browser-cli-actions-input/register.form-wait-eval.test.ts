@@ -36,6 +36,56 @@ function createActionInputProgram(): Command {
   return program;
 }
 
+function getLastActionBody(): Record<string, unknown> | undefined {
+  return (mocks.callBrowserRequest.mock.calls.at(-1)?.[1] as { body?: Record<string, unknown> })
+    ?.body;
+}
+
+describe("browser action input fill command", () => {
+  beforeEach(() => {
+    mocks.callBrowserRequest.mockClear();
+    getBrowserCliRuntimeCapture().resetRuntimeCapture();
+  });
+
+  it("sends normalized fill fields and target id to the act route", async () => {
+    const program = createActionInputProgram();
+
+    await program.parseAsync(
+      [
+        "browser",
+        "fill",
+        "--fields",
+        '[{"ref":"name","value":"Ada"},{"ref":"enabled","value":true}]',
+        "--target-id",
+        "tab-1",
+      ],
+      { from: "user" },
+    );
+
+    expect(getLastActionBody()).toMatchObject({
+      kind: "fill",
+      fields: [
+        { ref: "name", type: "text", value: "Ada" },
+        { ref: "enabled", type: "text", value: true },
+      ],
+      targetId: "tab-1",
+    });
+  });
+
+  it("reports malformed fields without sending a browser request", async () => {
+    const program = createActionInputProgram();
+
+    await expect(
+      program.parseAsync(["browser", "fill", "--fields", "NOT JSON {{{"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(getBrowserCliRuntimeCapture().runtimeErrors.join("\n")).toContain(
+      "fields must be valid JSON.",
+    );
+    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+  });
+});
+
 describe("browser action input wait command", () => {
   beforeEach(() => {
     mocks.callBrowserRequest.mockClear();
@@ -63,7 +113,39 @@ describe("browser action input wait command", () => {
     const options = mocks.callBrowserRequest.mock.calls.at(-1)?.[2] as
       | { timeoutMs?: number }
       | undefined;
-    expect(options?.timeoutMs).toBeGreaterThan(21000);
+    expect(options?.timeoutMs).toBe(26_000);
+  });
+
+  it("budgets every supplied wait condition before adding transport slack", async () => {
+    const program = createActionInputProgram();
+
+    await program.parseAsync(
+      [
+        "browser",
+        "wait",
+        "#result",
+        "--time",
+        "1000",
+        "--text",
+        "Ready",
+        "--text-gone",
+        "Loading",
+        "--url",
+        "**/done",
+        "--load",
+        "networkidle",
+        "--fn",
+        "() => true",
+        "--timeout-ms",
+        "2000",
+      ],
+      { from: "user" },
+    );
+
+    const options = mocks.callBrowserRequest.mock.calls.at(-1)?.[2] as
+      | { timeoutMs?: number }
+      | undefined;
+    expect(options?.timeoutMs).toBe(18_000);
   });
 
   it("rejects non-decimal wait numeric options before sending the wait request", async () => {
@@ -97,6 +179,31 @@ describe("browser action input evaluate command", () => {
   beforeEach(() => {
     mocks.callBrowserRequest.mockClear();
     getBrowserCliRuntimeCapture().resetRuntimeCapture();
+  });
+
+  it("sends evaluate function, ref, and target id to the act route", async () => {
+    const program = createActionInputProgram();
+
+    await program.parseAsync(
+      [
+        "browser",
+        "evaluate",
+        "--fn",
+        "el => el.textContent",
+        "--ref",
+        "button-1",
+        "--target-id",
+        "tab-2",
+      ],
+      { from: "user" },
+    );
+
+    expect(getLastActionBody()).toMatchObject({
+      kind: "evaluate",
+      fn: "el => el.textContent",
+      ref: "button-1",
+      targetId: "tab-2",
+    });
   });
 
   it("passes timeout-ms through to the evaluate action and outer request", async () => {

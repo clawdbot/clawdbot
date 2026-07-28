@@ -8,15 +8,11 @@ title: "Clawbot"
 
 # `openclaw clawbot`
 
-Legacy alias namespace kept for backwards compatibility.
-
-Current supported alias:
-
-- `openclaw clawbot qr` (same behavior as [`openclaw qr`](/cli/qr))
+Legacy alias namespace kept for backward compatibility. It registers the same QR command as the top-level CLI, so `openclaw clawbot qr` accepts every [`openclaw qr`](/cli/qr) flag.
 
 ## Migration
 
-Prefer modern top-level commands directly:
+Prefer the modern top-level command:
 
 - `openclaw clawbot qr` -> `openclaw qr`
 

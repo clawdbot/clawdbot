@@ -1,7 +1,7 @@
 // Model command shared tests cover shared config and provider helper behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { loadValidConfigOrThrow, updateConfig } from "./shared.js";
+import { formatTokenK, loadValidConfigOrThrow, updateConfig } from "./shared.js";
 
 const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
@@ -93,5 +93,28 @@ describe("models/shared", () => {
     const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
     expect(replaceParams?.nextConfig).toEqual(sourceConfig);
     expect(replaceParams?.baseHash).toBe("config-2");
+  });
+
+  describe("formatTokenK", () => {
+    // Token context windows are decimal, so round windows must not shrink
+    // (regression: /1024 rendered 200000 as "195k" instead of "200k").
+    it("renders round token context windows in decimal K", () => {
+      expect(formatTokenK(200_000)).toBe("200k");
+      expect(formatTokenK(128_000)).toBe("128k");
+      expect(formatTokenK(1_000_000)).toBe("1000k");
+      expect(formatTokenK(195_000)).toBe("195k");
+    });
+
+    it("passes small counts through and switches to K at 1000", () => {
+      expect(formatTokenK(999)).toBe("999");
+      expect(formatTokenK(1_000)).toBe("1k");
+    });
+
+    it("returns a dash for missing or non-finite values", () => {
+      expect(formatTokenK(undefined)).toBe("-");
+      expect(formatTokenK(null)).toBe("-");
+      expect(formatTokenK(0)).toBe("-");
+      expect(formatTokenK(Number.NaN)).toBe("-");
+    });
   });
 });

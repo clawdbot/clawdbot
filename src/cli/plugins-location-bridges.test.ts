@@ -1,7 +1,7 @@
 // Plugin location bridge tests cover CLI plugin path bridging between install surfaces.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { InstalledPluginStartupInfo } from "../plugins/installed-plugin-index-types.js";
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
-import type { InstalledPluginStartupInfo } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 
 const readPersistedInstalledPluginIndexMock = vi.fn();
@@ -24,7 +24,8 @@ vi.mock("../plugins/manifest-registry-installed.js", () => ({
     loadPluginManifestRegistryForInstalledIndexMock(...args),
 }));
 
-const { listPersistedBundledPluginLocationBridges } = await import("./plugins-location-bridges.js");
+const { listPersistedBundledPluginLocationBridges, listPersistedBundledPluginRecoveryLocations } =
+  await import("./plugins-location-bridges.js");
 
 function makeIndex(record: InstalledPluginIndex["plugins"][number]): InstalledPluginIndex {
   return {
@@ -183,5 +184,52 @@ describe("listPersistedBundledPluginLocationBridges", () => {
     loadPluginManifestRegistryForInstalledIndexMock.mockReturnValue(makeRegistry("local-only"));
 
     await expect(listPersistedBundledPluginLocationBridges({})).resolves.toStrictEqual([]);
+  });
+});
+
+describe("listPersistedBundledPluginRecoveryLocations", () => {
+  beforeEach(() => {
+    readPersistedInstalledPluginIndexMock.mockReset();
+    loadPluginManifestRegistryForInstalledIndexMock.mockReset();
+  });
+
+  it("includes exact packaged and legacy paths for disabled bundled records", async () => {
+    readPersistedInstalledPluginIndexMock.mockResolvedValue(
+      makeIndex({
+        pluginId: "diagnostics-otel",
+        manifestPath: "/app/dist/extensions/diagnostics-otel/openclaw.plugin.json",
+        manifestHash: "hash",
+        source: "/app/dist/extensions/diagnostics-otel/index.js",
+        rootDir: "/app/dist/extensions/diagnostics-otel",
+        origin: "bundled",
+        enabled: false,
+        startup: startupInfo,
+        compat: [],
+      }),
+    );
+
+    await expect(listPersistedBundledPluginRecoveryLocations({})).resolves.toEqual([
+      {
+        pluginId: "diagnostics-otel",
+        loadPaths: ["/app/dist/extensions/diagnostics-otel", "/app/extensions/diagnostics-otel"],
+      },
+    ]);
+  });
+
+  it("does not use a relative persisted bundled root as ownership proof", async () => {
+    readPersistedInstalledPluginIndexMock.mockResolvedValue(
+      makeIndex({
+        pluginId: "diagnostics-otel",
+        manifestPath: "extensions/diagnostics-otel/openclaw.plugin.json",
+        manifestHash: "hash",
+        source: "extensions/diagnostics-otel/index.js",
+        rootDir: "extensions/diagnostics-otel",
+        origin: "bundled",
+        enabled: true,
+        startup: startupInfo,
+        compat: [],
+      }),
+    );
+    await expect(listPersistedBundledPluginRecoveryLocations({})).resolves.toStrictEqual([]);
   });
 });

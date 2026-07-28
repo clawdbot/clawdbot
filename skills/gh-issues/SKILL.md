@@ -152,7 +152,7 @@ Run relevant tests.
 Commit with conventional message.
 Push to PUSH_REMOTE.
 Open PR against SOURCE_REPO BASE_BRANCH.
-PR body: Summary + Verification + Fixes SOURCE_REPO#<n>.
+PR body: What Problem This Solves + Why This Change Was Made + User Impact + Evidence + visible Fixes SOURCE_REPO#<n>.
 Report PR URL or failure reason.
 Send completion/failure with openclaw message send if route provided.
 ```

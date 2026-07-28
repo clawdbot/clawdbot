@@ -140,7 +140,7 @@ export function requireRecord(value: unknown, label: string): Record<string, unk
   return value as Record<string, unknown>;
 }
 
-export function configOptions(value: unknown) {
+function configOptions(value: unknown) {
   expect(Array.isArray(value), "config options").toBe(true);
   return value as Array<Record<string, unknown>>;
 }

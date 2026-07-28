@@ -55,4 +55,70 @@ describe("media-generation catalog", () => {
       }),
     ).toEqual(["video-default", "video-pro"]);
   });
+
+  it("uses per-model capabilities and modes when provided", () => {
+    type VideoCapabilities = {
+      generate?: { maxVideos: number };
+      imageToVideo?: { enabled: boolean; maxInputImages: number };
+    };
+    const providerCapabilities: VideoCapabilities = {
+      generate: { maxVideos: 1 },
+    };
+    const alternateCapabilities: VideoCapabilities = {
+      imageToVideo: { enabled: true, maxInputImages: 1 },
+    };
+
+    const rows = synthesizeMediaGenerationCatalogEntries({
+      kind: "video_generation",
+      provider: {
+        id: "example",
+        defaultModel: "default-video",
+        models: ["default-video", "image-video"],
+        capabilities: providerCapabilities,
+        catalogByModel: {
+          "image-video": {
+            capabilities: alternateCapabilities,
+            modes: ["imageToVideo"],
+          },
+        },
+      },
+      modes: ["generate"],
+    });
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        model: "default-video",
+        capabilities: providerCapabilities,
+        modes: ["generate"],
+      }),
+      expect.objectContaining({
+        model: "image-video",
+        capabilities: alternateCapabilities,
+        modes: ["imageToVideo"],
+      }),
+    ]);
+  });
+
+  it("marks a trimmed default model as the catalog default", () => {
+    expect(
+      synthesizeMediaGenerationCatalogEntries({
+        kind: "video_generation",
+        provider: {
+          id: "example",
+          defaultModel: " video-default ",
+          models: ["video-default"],
+          capabilities: {},
+        },
+      }),
+    ).toEqual([
+      {
+        kind: "video_generation",
+        provider: "example",
+        model: "video-default",
+        source: "static",
+        default: true,
+        capabilities: {},
+      },
+    ]);
+  });
 });

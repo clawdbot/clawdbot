@@ -17,12 +17,23 @@ const ACP_ERROR_CODE_SET = new Set<AcpRuntimeErrorCode>(ACP_ERROR_CODES);
 /** Error type used at ACP runtime boundaries so callers can preserve structured failure codes. */
 export class AcpRuntimeError extends Error {
   readonly code: AcpRuntimeErrorCode;
+  /**
+   * Backend-specific structured failure code (e.g. acpx "SESSION_RESUME_REQUIRED"),
+   * preserved so recovery decisions key on the failure kind rather than parsing
+   * the human-readable message.
+   */
+  readonly detailCode?: string;
   override readonly cause?: unknown;
 
-  constructor(code: AcpRuntimeErrorCode, message: string, options?: { cause?: unknown }) {
+  constructor(
+    code: AcpRuntimeErrorCode,
+    message: string,
+    options?: { cause?: unknown; detailCode?: string },
+  ) {
     super(message);
     this.name = "AcpRuntimeError";
     this.code = code;
+    this.detailCode = options?.detailCode;
     this.cause = options?.cause;
   }
 }

@@ -1,10 +1,12 @@
 // Twitch tests cover plugin.lifecycle plugin behavior.
 import {
   createStartAccountContext,
+  expectLifecyclePatch,
   expectStopPendingUntilAbort,
   startAccountAndTrackLifecycle,
   waitForStartedMocks,
 } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/status-helpers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { TwitchAccountConfig } from "./types.js";
 
@@ -83,5 +85,21 @@ describe("twitch startAccount lifecycle", () => {
 
     expect(hoisted.monitorTwitchProvider).toHaveBeenCalledOnce();
     expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it("clears running status when monitor startup fails", async () => {
+    hoisted.monitorTwitchProvider.mockRejectedValue(new Error("irc join failed"));
+    const patches: ChannelAccountSnapshot[] = [];
+
+    const task = requireStartAccount()(
+      createStartAccountContext({
+        account: buildAccount(),
+        statusPatchSink: (next) => patches.push({ ...next }),
+      }),
+    );
+
+    await expect(task).rejects.toThrow("irc join failed");
+    expectLifecyclePatch(patches, { running: true });
+    expectLifecyclePatch(patches, { running: false });
   });
 });

@@ -5,6 +5,7 @@ import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
 import { QA_EVIDENCE_FILENAME, validateQaEvidenceSummaryJson } from "../evidence-summary.js";
+import { trimToValue } from "../mantis-options.runtime.js";
 
 export type MantisBeforeAfterOptions = {
   allowFailures?: boolean;
@@ -24,7 +25,7 @@ export type MantisBeforeAfterOptions = {
   transport?: string;
 };
 
-export type MantisBeforeAfterResult = {
+type MantisBeforeAfterResult = {
   comparisonPath: string;
   manifestPath: string;
   outputDir: string;
@@ -133,11 +134,6 @@ const MANTIS_SCENARIO_CONFIGS: Record<string, MantisScenarioConfig> = {
     title: "Mantis Discord Thread Attachment QA",
   },
 };
-
-function trimToValue(value: string | undefined) {
-  const trimmed = value?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : undefined;
-}
 
 function normalizeRequiredLiteral<T extends string>(
   value: string | undefined,
@@ -251,7 +247,7 @@ async function readNormalizedLaneResult(params: {
   const entry =
     summary.entries.find((candidate) => candidate.test.id === params.scenario) ??
     summary.entries[0];
-  const artifacts = entry?.execution.artifacts ?? [];
+  const artifacts = entry?.execution?.artifacts ?? [];
   return {
     details: entry?.result.failure?.reason,
     screenshotPath: artifacts.find((artifact) => artifact.kind === "screenshot")?.path,
@@ -457,7 +453,7 @@ async function runLane(params: {
   const worktreeOutputDir = path.join(".artifacts", "qa-e2e", "mantis", "run", params.lane);
   await runCommand({
     command: "git",
-    args: ["worktree", "add", "--detach", worktreeDir, params.ref],
+    args: ["worktree", "add", "--detach", "--", worktreeDir, params.ref],
     cwd: params.repoRoot,
     runner: params.runner,
   });

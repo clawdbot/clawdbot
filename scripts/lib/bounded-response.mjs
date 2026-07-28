@@ -13,6 +13,15 @@ function cancelReaderSoon(reader) {
     .catch(() => undefined);
 }
 
+function parseContentLengthHeader(headers) {
+  const raw = headers.get("content-length");
+  if (!raw || !/^\d+$/u.test(raw)) {
+    return undefined;
+  }
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) ? parsed : Number.POSITIVE_INFINITY;
+}
+
 async function readResponseChunk(reader, label, signal, markCanceled) {
   if (!signal) {
     return await reader.read();
@@ -73,8 +82,8 @@ export async function readBoundedResponseText(response, label, maxBytes, options
   const formatTooLargeMessage = options.formatTooLargeMessage ?? defaultTooLargeMessage;
   const createTooLargeError = options.createTooLargeError ?? defaultTooLargeError;
   const tooLargeError = () => createTooLargeError(formatTooLargeMessage(label, maxBytes));
-  const contentLength = Number(response.headers.get("content-length") ?? "");
-  if (Number.isSafeInteger(contentLength) && contentLength > maxBytes) {
+  const contentLength = parseContentLengthHeader(response.headers);
+  if (contentLength !== undefined && contentLength > maxBytes) {
     await response.body?.cancel().catch(() => undefined);
     throw tooLargeError();
   }

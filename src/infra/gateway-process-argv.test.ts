@@ -1,6 +1,6 @@
 // Tests gateway process argv parsing for diagnostics.
 import { describe, expect, it } from "vitest";
-import { isGatewayArgv, parseProcCmdline, parseWindowsCmdline } from "./gateway-process-argv.js";
+import { isGatewayArgv, isOpenClawCommandArgv, parseProcCmdline } from "./gateway-process-argv.js";
 
 describe("parseProcCmdline", () => {
   it("splits null-delimited argv and trims empty entries", () => {
@@ -15,27 +15,6 @@ describe("parseProcCmdline", () => {
   it("keeps non-delimited single arguments and drops whitespace-only entries", () => {
     expect(parseProcCmdline(" gateway ")).toEqual(["gateway"]);
     expect(parseProcCmdline(" \0\t\0 ")).toStrictEqual([]);
-  });
-});
-
-describe("parseWindowsCmdline", () => {
-  it("splits unquoted tokens by whitespace", () => {
-    expect(parseWindowsCmdline("node.exe gateway run")).toEqual(["node.exe", "gateway", "run"]);
-  });
-
-  it("handles double-quoted paths with spaces", () => {
-    expect(
-      parseWindowsCmdline('"C:\\Program Files\\node.exe" "C:\\my app\\dist\\index.js" gateway run'),
-    ).toEqual(["C:\\Program Files\\node.exe", "C:\\my app\\dist\\index.js", "gateway", "run"]);
-  });
-
-  it("returns empty array for empty input", () => {
-    expect(parseWindowsCmdline("")).toStrictEqual([]);
-    expect(parseWindowsCmdline("   ")).toStrictEqual([]);
-  });
-
-  it("collapses consecutive spaces outside quotes", () => {
-    expect(parseWindowsCmdline("node.exe   gateway   run")).toEqual(["node.exe", "gateway", "run"]);
   });
 });
 
@@ -55,6 +34,7 @@ describe("isGatewayArgv", () => {
   it("matches the openclaw executable but gates the gateway binary behind the opt-in flag", () => {
     expect(isGatewayArgv(["C:\\bin\\openclaw.cmd", "gateway"])).toBe(true);
     expect(isGatewayArgv(["/usr/local/bin/openclaw-gateway", "gateway"])).toBe(false);
+    expect(isGatewayArgv(["openclaw-gateway"])).toBe(false);
     expect(
       isGatewayArgv(["/usr/local/bin/openclaw-gateway", "gateway"], {
         allowGatewayBinary: true,
@@ -65,10 +45,30 @@ describe("isGatewayArgv", () => {
         allowGatewayBinary: true,
       }),
     ).toBe(true);
+    expect(isGatewayArgv(["openclaw-gateway"], { allowGatewayBinary: true })).toBe(true);
   });
 
   it("rejects unknown gateway argv even when the token is present", () => {
     expect(isGatewayArgv(["node", "/srv/openclaw/custom.js", "gateway"])).toBe(false);
     expect(isGatewayArgv(["python", "gateway", "script.py"])).toBe(false);
+  });
+});
+
+describe("isOpenClawCommandArgv", () => {
+  it("matches doctor across source, built, and installed entrypoints", () => {
+    expect(isOpenClawCommandArgv(["node", "/srv/openclaw/openclaw.mjs", "doctor"], "doctor")).toBe(
+      true,
+    );
+    expect(
+      isOpenClawCommandArgv(["NODE", "C:\\OpenClaw\\DIST\\ENTRY.JS", "DOCTOR"], "doctor"),
+    ).toBe(true);
+    expect(isOpenClawCommandArgv(["C:\\bin\\openclaw.cmd", "doctor", "--fix"], "doctor")).toBe(
+      true,
+    );
+  });
+
+  it("rejects other OpenClaw commands and unrelated doctor processes", () => {
+    expect(isOpenClawCommandArgv(["openclaw", "gateway"], "doctor")).toBe(false);
+    expect(isOpenClawCommandArgv(["python", "doctor", "worker.py"], "doctor")).toBe(false);
   });
 });

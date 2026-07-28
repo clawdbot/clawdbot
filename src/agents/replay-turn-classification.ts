@@ -4,9 +4,9 @@ type AssistantTurnLike = {
   content?: unknown;
 };
 
-/** Returns true when a token-limited turn contains only incomplete provider reasoning. */
-export function isReasoningOnlyLengthAssistantTurn(message: AssistantTurnLike): boolean {
-  if (message.role !== "assistant" || message.stopReason !== "length") {
+/** Returns true when an assistant turn contains only provider reasoning and blank text. */
+export function hasOnlyAssistantReasoningContent(message: AssistantTurnLike): boolean {
+  if (message.role !== "assistant") {
     return false;
   }
   const content = Array.isArray(message.content)
@@ -30,4 +30,9 @@ export function isReasoningOnlyLengthAssistantTurn(message: AssistantTurnLike): 
     return false;
   }
   return hasThinking;
+}
+
+/** Returns true when a token-limited turn contains only incomplete provider reasoning. */
+export function isReasoningOnlyLengthAssistantTurn(message: AssistantTurnLike): boolean {
+  return message.stopReason === "length" && hasOnlyAssistantReasoningContent(message);
 }

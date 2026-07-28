@@ -1,15 +1,21 @@
 // Google provider module implements model/runtime integration.
 import {
   generatedImageAssetFromBase64,
+  resolveInlineImageJsonResponseMaxBytes,
   type GeneratedImageAsset,
   type ImageGenerationProvider,
 } from "openclaw/plugin-sdk/image-generation";
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import {
+  hasConfiguredSecretInput,
+  isProviderApiKeyConfigured,
+} from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
   postJsonRequest,
+  readProviderJsonResponse,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import {
@@ -19,9 +25,10 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeGoogleModelId, resolveGoogleGenerativeAiHttpRequestConfig } from "./api.js";
 
-const DEFAULT_GOOGLE_IMAGE_MODEL = "gemini-3.1-flash-image-preview";
+const DEFAULT_GOOGLE_IMAGE_MODEL = "gemini-3.1-flash-image";
 const DEFAULT_IMAGE_TIMEOUT_MS = 180_000;
 const DEFAULT_OUTPUT_MIME = "image/png";
+const GOOGLE_MAX_IMAGE_RESULTS = 4;
 const GOOGLE_SUPPORTED_SIZES = [
   "1024x1024",
   "1024x1536",
@@ -141,22 +148,26 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
     id: "google",
     label: "Google",
     defaultModel: DEFAULT_GOOGLE_IMAGE_MODEL,
-    models: [DEFAULT_GOOGLE_IMAGE_MODEL, "gemini-3-pro-image-preview"],
-    isConfigured: ({ agentDir }) =>
+    models: [DEFAULT_GOOGLE_IMAGE_MODEL, "gemini-3-pro-image"],
+    isConfigured: ({ cfg, agentDir }) =>
+      // generateImage already authenticates from a config apiKey; count a
+      // usable one (non-blank literal or secret ref) as configured here too,
+      // so image gen works from config alone, like chat.
+      hasConfiguredSecretInput(cfg?.models?.providers?.google?.apiKey) ||
       isProviderApiKeyConfigured({
         provider: "google",
         agentDir,
       }),
     capabilities: {
       generate: {
-        maxCount: 4,
+        maxCount: GOOGLE_MAX_IMAGE_RESULTS,
         supportsSize: true,
         supportsAspectRatio: true,
         supportsResolution: true,
       },
       edit: {
         enabled: true,
-        maxCount: 4,
+        maxCount: GOOGLE_MAX_IMAGE_RESULTS,
         maxInputImages: 5,
         supportsSize: true,
         supportsAspectRatio: true,
@@ -231,7 +242,12 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
       try {
         await assertOkOrThrowHttpError(res, "Google image generation failed");
 
-        const payload = await res.json();
+        const payload = await readProviderJsonResponse(res, "google.image-generation", {
+          maxBytes: resolveInlineImageJsonResponseMaxBytes(
+            GOOGLE_MAX_IMAGE_RESULTS,
+            resolveGeneratedMediaMaxBytes(req.cfg, "image"),
+          ),
+        });
         let imageIndex = 0;
         const images: GeneratedImageAsset[] = [];
         for (const part of googleResponseParts(payload)) {

@@ -4,6 +4,33 @@ import { capturePluginRegistration } from "./captured-registration.js";
 import type { AnyAgentTool, OpenClawPluginApi } from "./types.js";
 
 describe("captured plugin registration", () => {
+  it("preserves root machine-output metadata", () => {
+    const machineOutput = ({ stdoutIsTTY }: { stdoutIsTTY: boolean }) => !stdoutIsTTY;
+    const captured = capturePluginRegistration({
+      register(api) {
+        api.registerCli(() => {}, {
+          descriptors: [
+            {
+              name: "captured-machine",
+              description: "Captured machine output",
+              hasSubcommands: true,
+              machineOutput,
+            },
+          ],
+        });
+      },
+    });
+
+    const descriptor = captured.cliRegistrars[0]?.descriptors[0];
+    expect(descriptor?.machineOutput).toBe(machineOutput);
+    expect(
+      descriptor?.machineOutput?.({
+        argv: ["node", "openclaw", "captured-machine"],
+        stdoutIsTTY: false,
+      }),
+    ).toBe(true);
+  });
+
   it("keeps a complete plugin API surface available while capturing supported capabilities", () => {
     const capturedTool = {
       name: "captured-tool",
@@ -19,6 +46,21 @@ describe("captured plugin registration", () => {
           label: "Captured Provider",
           auth: [],
         });
+        api.registerWorkerProvider({
+          id: "captured-worker",
+          provision: async () => ({
+            leaseId: "captured-lease",
+            ssh: {
+              host: "worker.example",
+              port: 22,
+              user: "worker",
+              hostKey: ["ssh-ed25519", "AAAA"].join(" "),
+              keyRef: { source: "env", provider: "default", id: "WORKER_SSH_KEY" },
+            },
+          }),
+          inspect: async () => ({ status: "active" }),
+          destroy: async () => {},
+        });
         api.registerModelCatalogProvider({
           provider: "captured-provider",
           kinds: ["text"],
@@ -30,6 +72,12 @@ describe("captured plugin registration", () => {
               source: "static",
             },
           ],
+        });
+        api.registerSessionCatalog({
+          id: "captured-catalog",
+          label: "Captured Catalog",
+          list: async () => [],
+          read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
         });
         api.registerVideoGenerationProvider({
           id: "captured-video",
@@ -91,9 +139,11 @@ describe("captured plugin registration", () => {
 
     expect(captured.tools.map((tool) => tool.name)).toEqual(["captured-tool"]);
     expect(captured.providers.map((provider) => provider.id)).toEqual(["captured-provider"]);
+    expect(captured.workerProviders.map((provider) => provider.id)).toEqual(["captured-worker"]);
     expect(captured.modelCatalogProviders.map((provider) => provider.provider)).toEqual([
       "captured-provider",
     ]);
+    expect(captured.sessionCatalogs.map((provider) => provider.id)).toEqual(["captured-catalog"]);
     expect(captured.videoGenerationProviders.map((provider) => provider.id)).toEqual([
       "captured-video",
     ]);

@@ -7,15 +7,15 @@ read_when:
 title: "Access groups"
 ---
 
-Access groups are named sender lists you define once and reference from channel allowlists with `accessGroup:<name>`.
+Access groups are named sender lists you define once under `accessGroups` and reference from channel allowlists with `accessGroup:<name>`.
 
 Use them when the same people should be allowed across several message channels, or when one trusted set should apply to both DMs and group sender authorization.
 
-Access groups do not grant access by themselves. A group only matters when an allowlist field references it.
+A group grants nothing by itself. It only matters where an allowlist field references it.
 
 ## Static message sender groups
 
-Static sender groups use `type: "message.senders"`.
+Static sender groups use `type: "message.senders"`. `members` is keyed by message-channel id, plus `"*"` for entries shared by every channel:
 
 ```json5
 {
@@ -33,16 +33,12 @@ Static sender groups use `type: "message.senders"`.
 }
 ```
 
-Member lists are keyed by message-channel id:
+| Key                        | Meaning                                                                     |
+| -------------------------- | --------------------------------------------------------------------------- |
+| `"*"`                      | Shared entries checked for every message channel that references the group. |
+| `discord`, `telegram`, ... | Entries checked only for that channel's allowlist matching.                 |
 
-| Key        | Meaning                                                                 |
-| ---------- | ----------------------------------------------------------------------- |
-| `"*"`      | Shared entries checked for every message channel that references group. |
-| `discord`  | Entries checked only for Discord allowlist matching.                    |
-| `telegram` | Entries checked only for Telegram allowlist matching.                   |
-| `whatsapp` | Entries checked only for WhatsApp allowlist matching.                   |
-
-Entries are matched with the destination channel's normal `allowFrom` rules. OpenClaw does not translate sender ids between channels. If Alice has a Telegram id and a Discord id, list both ids under the appropriate keys.
+Entries are matched with the destination channel's normal `allowFrom` rules. OpenClaw does not translate sender ids between channels: if Alice has a Telegram id and a Discord id, list both ids under the matching channel keys.
 
 ## Reference groups from allowlists
 
@@ -93,7 +89,7 @@ Group sender allowlist example:
       groupAllowFrom: ["accessGroup:oncall"],
     },
     googlechat: {
-      spaces: {
+      groups: {
         "spaces/AAA": {
           users: ["accessGroup:oncall"],
         },
@@ -118,33 +114,14 @@ You can mix groups and direct entries:
 
 ## Supported message-channel paths
 
-Access groups are available in shared message-channel authorization paths, including:
+Access groups work in the shared message-channel authorization paths:
 
 - DM sender allowlists such as `channels.<channel>.allowFrom`
 - group sender allowlists such as `channels.<channel>.groupAllowFrom`
-- channel-specific per-room sender allowlists that use the same sender matching rules
+- channel-specific per-room sender allowlists that use the same sender matching rules (for example Google Chat `groups.<space>.users`)
 - command authorization paths that reuse message-channel sender allowlists
 
-Channel support depends on whether that channel is wired through the shared OpenClaw sender-authorization helpers. Current bundled support includes Discord, Feishu, Google Chat, iMessage, LINE, Mattermost, Microsoft Teams, Nextcloud Talk, Nostr, QQBot, Signal, WhatsApp, Zalo, and Zalo Personal. Static `message.senders` groups are designed to be channel-agnostic, so new message channels should support them by using the shared plugin SDK helpers instead of custom allowlist expansion.
-
-## Plugin diagnostics
-
-Plugin authors can inspect structured access-group state without expanding it back into a flat allowlist:
-
-```typescript
-import { resolveAccessGroupAllowFromState } from "openclaw/plugin-sdk/security-runtime";
-
-const state = await resolveAccessGroupAllowFromState({
-  accessGroups: cfg.accessGroups,
-  allowFrom: channelConfig.allowFrom,
-  channel: "my-channel",
-  accountId: "default",
-  senderId,
-  isSenderAllowed,
-});
-```
-
-The result reports referenced, matched, missing, unsupported, and failed groups. Use this when you need diagnostics or conformance tests. Use `expandAllowFromWithAccessGroups(...)` only for compatibility paths that still expect a flat `allowFrom` array.
+Channel support depends on whether that channel is wired through the shared OpenClaw sender-authorization helpers. Current bundled support includes ClickClack, Discord, Feishu, Google Chat, iMessage, IRC, LINE, Mattermost, Microsoft Teams, Nextcloud Talk, Nostr, QQ Bot, Signal, Slack, SMS, Telegram, WhatsApp, Zalo, and Zalo Personal. Static `message.senders` groups are channel-agnostic, so new message channels get them by using the shared plugin SDK ingress helpers instead of custom allowlist expansion.
 
 ## Discord channel audiences
 
@@ -169,7 +146,7 @@ Discord also supports a dynamic access group type:
 }
 ```
 
-`discord.channelAudience` means "allow Discord DM senders who can currently view this guild channel." OpenClaw resolves the sender through Discord at authorization time and applies Discord `ViewChannel` permission rules.
+`discord.channelAudience` means "allow Discord DM senders who can currently view this guild channel." OpenClaw resolves the sender through Discord at authorization time and applies Discord `ViewChannel` permission rules. `membership` is optional and defaults to `canViewChannel`.
 
 Use this when a Discord channel is already the source of truth for a team, such as `#maintainers` or `#on-call`.
 
@@ -180,6 +157,25 @@ Requirements and failure behavior:
 - The access group fails closed when Discord returns `Missing Access`, the sender cannot be resolved as a guild member, or the channel belongs to another guild.
 
 More Discord-specific examples: [Discord access control](/channels/discord#access-control-and-routing)
+
+## Plugin diagnostics
+
+Plugin authors can inspect structured access-group state without expanding it back into a flat allowlist:
+
+```typescript
+import { resolveAccessGroupAllowFromState } from "openclaw/plugin-sdk/access-groups";
+
+const state = await resolveAccessGroupAllowFromState({
+  accessGroups: cfg.accessGroups,
+  allowFrom: channelConfig.allowFrom,
+  channel: "my-channel",
+  accountId: "default",
+  senderId,
+  isSenderAllowed,
+});
+```
+
+The result reports referenced, matched, missing, unsupported, and failed groups. Use it for diagnostics or conformance tests. Use `expandAllowFromWithAccessGroups(...)` only for compatibility paths that still expect a flat `allowFrom` array.
 
 ## Security notes
 

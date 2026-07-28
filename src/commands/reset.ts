@@ -19,14 +19,13 @@ import {
   listAgentSessionDirs,
   removePath,
   removeStateAndLinkedPaths,
-  removeWorkspaceAttestationPaths,
   removeWorkspaceDirs,
 } from "./cleanup-utils.js";
 
-export type ResetScope = "config" | "config+creds+sessions" | "full";
+type ResetScope = "config" | "config+creds+sessions" | "full";
 
 /** CLI options accepted by `openclaw reset`. */
-export type ResetOptions = {
+type ResetOptions = {
   scope?: ResetScope;
   yes?: boolean;
   nonInteractive?: boolean;
@@ -155,15 +154,15 @@ export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
   }
 
   if (scope === "full") {
-    await removeStateAndLinkedPaths(
+    const stateRemoved = await removeStateAndLinkedPaths(
       { stateDir, configPath, oauthDir, configInsideState, oauthInsideState },
       runtime,
       { dryRun },
     );
-    await removeWorkspaceDirs(workspaceDirs, runtime, { dryRun });
-    // Workspace attestations live beside workspace dirs and can outlive the
-    // workspace itself, so full reset cleans both surfaces.
-    await removeWorkspaceAttestationPaths(workspaceDirs, runtime, { dryRun });
+    await removeWorkspaceDirs(workspaceDirs, runtime, {
+      dryRun,
+      removeStateRows: !stateRemoved,
+    });
     runtime.log(`Next: ${formatCliCommand("openclaw onboard --install-daemon")}`);
   }
 }

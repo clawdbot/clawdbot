@@ -2,9 +2,11 @@
 import { appendFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { tailText } from "../lib/text-file-utils.mjs";
 import { say, warn } from "./host-command.ts";
 
-export const PHASE_LOG_TAIL_MAX_BYTES = 512 * 1024;
+const PHASE_LOG_TAIL_MAX_BYTES = 512 * 1024;
 
 function appendTextTail(current: string, chunk: string, maxBytes: number): string {
   const text = chunk.endsWith("\n") ? chunk : `${chunk}\n`;
@@ -14,8 +16,12 @@ function appendTextTail(current: string, chunk: string, maxBytes: number): strin
   }
   const marker = `[phase log tail truncated to last ${maxBytes} bytes]\n`;
   const tailBytes = Math.max(0, maxBytes - Buffer.byteLength(marker));
-  const tail = Buffer.from(combined).subarray(-tailBytes).toString("utf8");
-  return `${marker}${tail}`;
+  // tailText owns the UTF-8-safe byte truncation; the marker keeps the tail self-describing.
+  return `${marker}${tailText(combined, tailBytes)}`;
+}
+
+function resolvePhaseTimeoutMs(timeoutSeconds: number): number {
+  return clampTimerTimeoutMs(timeoutSeconds * 1000) ?? 1;
 }
 
 export class PhaseRunner {
@@ -37,10 +43,11 @@ export class PhaseRunner {
 
   async phase(name: string, timeoutSeconds: number, fn: () => Promise<void> | void): Promise<void> {
     const logPath = path.join(this.runDir, `${name}.log`);
+    const timeoutMs = resolvePhaseTimeoutMs(timeoutSeconds);
     say(name);
     this.logTail = "";
     this.currentLogPath = logPath;
-    this.deadlineMs = Date.now() + timeoutSeconds * 1000;
+    this.deadlineMs = Date.now() + timeoutMs;
     await writeFile(logPath, "", "utf8");
     const startedAt = Date.now();
     let status: "pass" | "fail" = "fail";
@@ -48,7 +55,7 @@ export class PhaseRunner {
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(
         () => reject(new Error(`${name} timed out after ${timeoutSeconds}s`)),
-        timeoutSeconds * 1000,
+        timeoutMs,
       );
     });
     try {

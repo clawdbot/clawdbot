@@ -1,11 +1,20 @@
-/** Tests context report command output and generated report files. */
-import { mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
+/** Tests context command behavior, token reporting, and generated report files. */
+import { mkdtemp, readFile, rm, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
+import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { buildContextReply } from "./commands-context-report.js";
+import { buildCommandContext } from "./commands-context.js";
 import type { HandleCommandsParams } from "./commands-types.js";
+import { stripStructuralPrefixes } from "./mentions.js";
+import { buildTestCtx } from "./test-ctx.js";
+
+/** Tests context report command output and generated report files. */
 
 function makeParams(
   commandBodyNormalized: string,
@@ -18,7 +27,6 @@ function makeParams(
     cfg?: Record<string, unknown>;
     sessionKey?: string;
     sessionId?: string;
-    sessionFile?: string;
     storePath?: string;
     agentId?: string;
     currentTurn?: NonNullable<SessionEntry["systemPromptReport"]>["currentTurn"];
@@ -41,7 +49,6 @@ function makeParams(
     resolvedReasoningLevel: "off",
     sessionEntry: {
       ...(options?.sessionId ? { sessionId: options.sessionId } : {}),
-      ...(options?.sessionFile ? { sessionFile: options.sessionFile } : {}),
       totalTokens: options?.totalTokens ?? 123,
       totalTokensFresh: options?.totalTokensFresh ?? true,
       inputTokens: 100,
@@ -91,21 +98,37 @@ function makeParams(
 
 async function withTranscript(
   messages: unknown[],
-  run: (sessionFile: string, dir: string) => Promise<void>,
+  run: (target: {
+    agentId: string;
+    sessionId: string;
+    sessionKey: string;
+    storePath: string;
+  }) => Promise<void>,
+  options: { agentId?: string; sessionKey?: string } = {},
 ): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), "openclaw-context-report-"));
   try {
-    const sessionFile = join(dir, "session.jsonl");
-    const lines = messages.map((message, index) =>
-      JSON.stringify({
-        id: `record-${index + 1}`,
-        timestamp: new Date(index + 1).toISOString(),
-        message,
-      }),
+    const agentId = options.agentId ?? "default";
+    const target = {
+      agentId,
+      sessionId: "session",
+      sessionKey: options.sessionKey ?? `agent:${agentId}:main`,
+      storePath: join(dir, "sessions.json"),
+    };
+    await persistSessionTranscriptTurn(
+      { ...target, storePath: resolveSessionStorePathForScope(target) },
+      {
+        messages: messages.map((message, index) => ({
+          eventId: `record-${index + 1}`,
+          message,
+          parentId: index === 0 ? null : `record-${index}`,
+        })),
+        touchSessionEntry: false,
+      },
     );
-    await writeFile(sessionFile, `${lines.join("\n")}\n`, "utf8");
-    await run(sessionFile, dir);
+    await run(target);
   } finally {
+    closeOpenClawAgentDatabasesForTest();
     await rm(dir, { recursive: true, force: true });
   }
 }
@@ -123,7 +146,7 @@ describe("buildContextReply", () => {
     expect(result.text).toContain("Bootstrap max/total: 60,000 chars");
     expect(result.text).toContain("⚠ Bootstrap context is over configured limits");
     expect(result.text).toContain("Causes: 1 file(s) exceeded max/file.");
-    expect(result.text).toContain("agents.list[].bootstrapMaxChars");
+    expect(result.text).toContain("agents.entries.*.bootstrapMaxChars");
     expect(result.text).toContain("agents.defaults.*");
   });
 
@@ -202,13 +225,12 @@ describe("buildContextReply", () => {
           toolName: "read",
         },
       ],
-      async (sessionFile) => {
+      async (target) => {
         const result = await buildContextReply(
           makeParams("/context detail", false, {
             contextTokens: 8_192,
             totalTokens: 900,
-            sessionId: "session",
-            sessionFile,
+            ...target,
           }),
         );
 
@@ -216,6 +238,10 @@ describe("buildContextReply", () => {
           "Compactable transcript: 2 real conversation message(s) / 3 transcript message(s)",
         );
         expect(result.text).not.toContain("Compaction note:");
+      },
+      {
+        agentId: "context-incognito",
+        sessionKey: "agent:context-incognito:dashboard:incognito-context-report",
       },
     );
   });
@@ -236,13 +262,12 @@ describe("buildContextReply", () => {
           toolName: "read",
         },
       ],
-      async (sessionFile) => {
+      async (target) => {
         const result = await buildContextReply(
           makeParams("/context detail", false, {
             contextTokens: 8_192,
             totalTokens: 900,
-            sessionId: "session",
-            sessionFile,
+            ...target,
           }),
         );
 
@@ -328,7 +353,44 @@ describe("buildContextReply", () => {
     }
   });
 
-  it("counts room events as event context in context maps", async () => {
+  it("includes transcript conversation size in context maps", async () => {
+    await withTranscript(
+      [
+        { role: "user", content: "abcd", timestamp: 1 },
+        { role: "assistant", content: [{ type: "text", text: "efghij" }], timestamp: 2 },
+        {
+          role: "toolResult",
+          content: [{ type: "text", text: "klmno" }],
+          timestamp: 3,
+          toolCallId: "call-1",
+          toolName: "read",
+        },
+      ],
+      async (target) => {
+        const result = await buildContextReply(
+          makeParams("/context map", false, {
+            contextTokens: 8_192,
+            totalTokens: 900,
+            ...target,
+          }),
+        );
+        if (!result.mediaUrl) {
+          throw new Error("missing context map media path");
+        }
+        try {
+          const png = await readFile(result.mediaUrl);
+          expect(result.text).toContain("Conversation: 20 chars (~5 tok)");
+          expect(result.trustedLocalMedia).toBe(true);
+          expect(result.sensitiveMedia).toBe(true);
+          expect(png.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+        } finally {
+          await unlink(result.mediaUrl);
+        }
+      },
+    );
+  });
+
+  it("counts model-only turn context but not the persisted current-turn prompt", async () => {
     const result = await buildContextReply(
       makeParams("/context map", false, {
         contextTokens: 8_192,
@@ -337,6 +399,7 @@ describe("buildContextReply", () => {
           kind: "room_event",
           promptChars: 11,
           runtimeContextChars: 17,
+          modelOnlyPromptChars: 5,
         },
       }),
     );
@@ -344,7 +407,8 @@ describe("buildContextReply", () => {
       throw new Error("missing context map media path");
     }
     try {
-      expect(result.text).toContain("Tracked: 10,548 chars");
+      expect(result.text).toContain("Tracked: 10,542 chars");
+      expect(result.text).toContain("Conversation: 22 chars (~6 tok)");
     } finally {
       await unlink(result.mediaUrl);
     }
@@ -370,5 +434,108 @@ describe("buildContextReply", () => {
     expect(result.text).toContain("No actual run context is cached for this session yet.");
     expect(result.text).not.toContain("Source: estimate");
     expect(result.mediaUrl).toBeUndefined();
+  });
+});
+
+/** Tests context command behavior and token reporting. */
+
+describe("buildCommandContext", () => {
+  it("canonicalizes registered aliases like /id to their primary command", () => {
+    const ctx = buildTestCtx({
+      Provider: "webchat",
+      Surface: "webchat",
+      From: "user",
+      To: "bot",
+      Body: "/id",
+      RawBody: "/id",
+      CommandBody: "/id",
+      BodyForCommands: "/id",
+    });
+
+    const result = buildCommandContext({
+      ctx,
+      cfg: {} as OpenClawConfig,
+      isGroup: false,
+      triggerBodyNormalized: "/id",
+      commandAuthorized: true,
+    });
+
+    expect(result.commandBodyNormalized).toBe("/whoami");
+  });
+
+  it("preserves multiline soft reset tails after structural normalization", () => {
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      From: "user",
+      To: "bot",
+      Body: "/reset soft\nre-read persona files",
+      RawBody: "/reset soft\nre-read persona files",
+      CommandBody: "/reset soft\nre-read persona files",
+      BodyForCommands: "/reset soft\nre-read persona files",
+    });
+
+    const result = buildCommandContext({
+      ctx,
+      cfg: {} as OpenClawConfig,
+      isGroup: false,
+      triggerBodyNormalized: stripStructuralPrefixes("/reset soft\nre-read persona files"),
+      commandAuthorized: true,
+    });
+
+    expect(result.commandBodyNormalized).toBe("/reset soft re-read persona files");
+  });
+
+  it("preserves multiline slash skill payloads after structural normalization", () => {
+    const body = "/skill demo_skill first line\nsecond line";
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      From: "user",
+      To: "bot",
+      Body: body,
+      RawBody: body,
+      CommandBody: body,
+      BodyForCommands: body,
+    });
+
+    const result = buildCommandContext({
+      ctx,
+      cfg: {} as OpenClawConfig,
+      isGroup: false,
+      triggerBodyNormalized: stripStructuralPrefixes(body),
+      commandAuthorized: true,
+    });
+
+    expect(result.commandBodyNormalized).toBe("/skill demo_skill first line\nsecond line");
+  });
+
+  it("maps explicit gateway origin into command context", () => {
+    const ctx = buildTestCtx({
+      Provider: "internal",
+      Surface: "internal",
+      OriginatingChannel: "slack",
+      OriginatingTo: "user:U123",
+      SenderId: "gateway-client",
+      From: undefined,
+      To: undefined,
+      Body: "/codex bind",
+      RawBody: "/codex bind",
+      CommandBody: "/codex bind",
+      BodyForCommands: "/codex bind",
+    });
+
+    const result = buildCommandContext({
+      ctx,
+      cfg: {} as OpenClawConfig,
+      isGroup: false,
+      triggerBodyNormalized: "/codex bind",
+      commandAuthorized: true,
+    });
+
+    expect(result.channel).toBe("slack");
+    expect(result.channelId).toBe("slack");
+    expect(result.from).toBe("gateway-client");
+    expect(result.to).toBe("user:U123");
   });
 });

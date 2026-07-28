@@ -1,6 +1,7 @@
 // Talk logging helpers write voice session logs and diagnostic entries.
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { getChildLogger } from "../logging/logger.js";
-import { firstFiniteTalkEventNumber, talkEventPayloadRecord } from "./event-metrics.js";
+import { firstFiniteTalkEventNumber } from "./event-metrics.js";
 import type { TalkEvent, TalkEventType } from "./talk-events.js";
 
 /**
@@ -37,7 +38,7 @@ export function createTalkLogRecord(event: TalkEvent): TalkLogRecord | undefined
     return undefined;
   }
 
-  const payload = talkEventPayloadRecord(event.payload);
+  const payload = asOptionalRecord(event.payload);
   const attributes: Record<string, string | number | boolean> = {
     sessionId: event.sessionId,
     talkEventType: event.type,

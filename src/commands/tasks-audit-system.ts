@@ -103,3 +103,40 @@ export function buildTaskSystemAuditFindings(params: {
     },
   };
 }
+
+type TaskSystemAuditResult = ReturnType<typeof buildTaskSystemAuditFindings>;
+
+export function buildTaskSystemAuditJsonPayload(
+  result: TaskSystemAuditResult,
+  params: {
+    severityFilter?: TaskSystemAuditSeverity;
+    codeFilter?: TaskSystemAuditCode;
+    limit?: number;
+  },
+) {
+  const { allFindings, filteredFindings, taskFindings, summary } = result;
+  const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : undefined;
+  const displayed = limit ? filteredFindings.slice(0, limit) : filteredFindings;
+  // Preserve the legacy task-only summary while adding combined task-flow counts.
+  const legacySummary = summarizeTaskAuditFindings(taskFindings);
+  return {
+    count: allFindings.length,
+    filteredCount: filteredFindings.length,
+    displayed: displayed.length,
+    filters: {
+      severity: params.severityFilter ?? null,
+      code: params.codeFilter ?? null,
+      limit: limit ?? null,
+    },
+    summary: {
+      ...legacySummary,
+      taskFlows: summary.taskFlows,
+      combined: {
+        total: summary.total,
+        errors: summary.errors,
+        warnings: summary.warnings,
+      },
+    },
+    findings: displayed,
+  };
+}

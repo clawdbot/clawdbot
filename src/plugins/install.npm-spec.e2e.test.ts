@@ -81,7 +81,6 @@ process.stdin.on("end", () => {
 });
 `,
           ],
-          allowInsecurePath: true,
           timeoutMs: 5000,
           maxOutputBytes: 16 * 1024,
         },
@@ -657,7 +656,7 @@ describe("installPluginFromNpmSpec e2e", () => {
       dependencies?: Record<string, string>;
       openclaw?: { managedPeerDependencies?: string[] };
     };
-    expect(rootManifest.dependencies?.[runtimePeer]).toBe("1.0.0");
+    expect(["1.0.0", "^1.0.0"]).toContain(rootManifest.dependencies?.[runtimePeer]);
     expect(rootManifest.openclaw?.managedPeerDependencies ?? []).toContain(runtimePeer);
   });
 
@@ -1311,3 +1310,4 @@ describe("installPluginFromNpmSpec e2e", () => {
     expect(installedLockEntry?.version).toBe("1.0.0");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

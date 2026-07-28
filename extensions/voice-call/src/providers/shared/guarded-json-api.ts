@@ -1,7 +1,14 @@
 // Voice Call API module exposes the plugin public contract.
 import { fetchWithSsrFGuard } from "../../../api.js";
+import {
+  cancelProviderResponseBody,
+  readProviderErrorResponseSnippet,
+  readProviderJsonResponseText,
+} from "./response-body.js";
 
 // Shared guarded JSON API client for voice-call providers.
+
+const VOICE_CALL_PROVIDER_API_TIMEOUT_MS = 30_000;
 
 /** Parameters for an SSRF-guarded provider JSON request. */
 type GuardedJsonApiRequestParams = {
@@ -28,18 +35,20 @@ export async function guardedJsonApiRequest<T = unknown>(
     },
     policy: { allowedHostnames: params.allowedHostnames },
     auditContext: params.auditContext,
+    timeoutMs: VOICE_CALL_PROVIDER_API_TIMEOUT_MS,
   });
 
   try {
     if (!response.ok) {
       if (params.allowNotFound && response.status === 404) {
+        await cancelProviderResponseBody(response);
         return undefined as T;
       }
-      const errorText = await response.text();
+      const errorText = await readProviderErrorResponseSnippet(response);
       throw new Error(`${params.errorPrefix}: ${response.status} ${errorText}`);
     }
 
-    const text = await response.text();
+    const text = await readProviderJsonResponseText(response);
     if (!text) {
       return undefined as T;
     }

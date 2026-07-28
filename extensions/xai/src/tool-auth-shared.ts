@@ -40,18 +40,6 @@ function readConfiguredOrManagedApiKey(value: unknown): string | undefined {
   return ref ? resolveNonEnvSecretRefApiKeyMarker(ref.source) : undefined;
 }
 
-function readLegacyGrokFallbackAuth(cfg?: OpenClawConfig): XaiFallbackAuth | undefined {
-  const search = cfg?.tools?.web?.search;
-  if (!search || typeof search !== "object") {
-    return undefined;
-  }
-  const grok = (search as Record<string, unknown>).grok;
-  const apiKey = readConfiguredOrManagedApiKey(
-    grok && typeof grok === "object" ? (grok as Record<string, unknown>).apiKey : undefined,
-  );
-  return apiKey ? { apiKey, source: "tools.web.search.grok.apiKey" } : undefined;
-}
-
 function readConfiguredRuntimeApiKey(
   value: unknown,
   path: string,
@@ -89,19 +77,6 @@ function readConfiguredRuntimeApiKey(
   return envValue ? { status: "available", value: envValue } : { status: "missing" };
 }
 
-function readLegacyGrokApiKeyResult(cfg?: OpenClawConfig): ConfiguredRuntimeApiKeyResolution {
-  const search = cfg?.tools?.web?.search;
-  if (!search || typeof search !== "object") {
-    return { status: "missing" };
-  }
-  const grok = (search as Record<string, unknown>).grok;
-  return readConfiguredRuntimeApiKey(
-    grok && typeof grok === "object" ? (grok as Record<string, unknown>).apiKey : undefined,
-    "tools.web.search.grok.apiKey",
-    cfg,
-  );
-}
-
 function readPluginXaiWebSearchApiKeyResult(
   cfg?: OpenClawConfig,
 ): ConfiguredRuntimeApiKeyResolution {
@@ -120,17 +95,9 @@ function resolveConfiguredXaiToolApiKeyResult(params: {
   if (runtimePlugin.status === "available" || runtimePlugin.status === "blocked") {
     return runtimePlugin;
   }
-  const runtimeLegacy = readLegacyGrokApiKeyResult(params.runtimeConfig);
-  if (runtimeLegacy.status === "available" || runtimeLegacy.status === "blocked") {
-    return runtimeLegacy;
-  }
   const sourcePlugin = readPluginXaiWebSearchApiKeyResult(params.sourceConfig);
   if (sourcePlugin.status === "available" || sourcePlugin.status === "blocked") {
     return sourcePlugin;
-  }
-  const sourceLegacy = readLegacyGrokApiKeyResult(params.sourceConfig);
-  if (sourceLegacy.status === "available" || sourceLegacy.status === "blocked") {
-    return sourceLegacy;
   }
   return { status: "missing" };
 }
@@ -154,33 +121,7 @@ export function resolveFallbackXaiAuth(cfg?: OpenClawConfig): XaiFallbackAuth | 
       source: "plugins.entries.xai.config.webSearch.apiKey",
     };
   }
-  return readLegacyGrokFallbackAuth(cfg);
-}
-
-export function resolveFallbackXaiApiKey(cfg?: OpenClawConfig): string | undefined {
-  const plugin = readPluginXaiWebSearchApiKeyResult(cfg);
-  if (plugin.status === "available") {
-    return plugin.value;
-  }
-  if (plugin.status === "blocked") {
-    return undefined;
-  }
-  const legacy = readLegacyGrokApiKeyResult(cfg);
-  return legacy.status === "available" ? legacy.value : undefined;
-}
-
-export function resolveXaiToolApiKey(params: {
-  runtimeConfig?: OpenClawConfig;
-  sourceConfig?: OpenClawConfig;
-}): string | undefined {
-  const configured = resolveConfiguredXaiToolApiKeyResult(params);
-  if (configured.status === "available") {
-    return configured.value;
-  }
-  if (configured.status === "blocked") {
-    return undefined;
-  }
-  return readProviderEnvValue([XAI_API_KEY_ENV_VAR]);
+  return undefined;
 }
 
 export async function resolveXaiToolApiKeyWithAuth(params: {

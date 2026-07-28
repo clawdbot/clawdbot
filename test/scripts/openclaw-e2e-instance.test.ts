@@ -3,6 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 
 const helperPath = path.resolve("scripts/lib/openclaw-e2e-instance.sh");
@@ -53,8 +54,21 @@ function shellTestEnv(overrides: Record<string, string | undefined>): NodeJS.Pro
   return env;
 }
 
+function runSourcedHelper(
+  script: string,
+  overrides: Record<string, string | undefined> = {},
+): ReturnType<typeof spawnSync> {
+  return spawnSync(
+    "bash",
+    ["-lc", ["set -euo pipefail", `source ${shellQuote(helperPath)}`, script].join("; ")],
+    { encoding: "utf8", env: shellTestEnv(overrides) },
+  );
+}
+
 function expectShellSuccess(result: ReturnType<typeof spawnSync>) {
-  expect(result.status, result.stderr || result.stdout || result.error?.message).toBe(0);
+  expect(result.status, String(result.stderr || result.stdout || result.error?.message || "")).toBe(
+    0,
+  );
 }
 
 function writePackageFixture(packagePath: string): void {
@@ -147,6 +161,70 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
     expect(result.status).not.toBe(0);
     expect(result.stdout).not.toContain("value=");
     expect(result.stderr).toContain("decoded to an empty script");
+  });
+
+  it("reads positive integer env values without treating decimal input as durations", () => {
+    const fallback = runSourcedHelper(
+      'printf "%s" "$(openclaw_e2e_read_positive_int_env OPENCLAW_E2E_SAMPLE_SECONDS 180)"',
+    );
+    const leadingZero = runSourcedHelper(
+      'printf "%s" "$(openclaw_e2e_read_positive_int_env OPENCLAW_E2E_SAMPLE_SECONDS 180)"',
+      { OPENCLAW_E2E_SAMPLE_SECONDS: "008" },
+    );
+    const duration = runSourcedHelper(
+      "openclaw_e2e_read_positive_int_env OPENCLAW_E2E_SAMPLE_SECONDS 180",
+      { OPENCLAW_E2E_SAMPLE_SECONDS: "30s" },
+    );
+
+    expectShellSuccess(fallback);
+    expect(fallback.stdout).toBe("180");
+    expectShellSuccess(leadingZero);
+    expect(leadingZero.stdout).toBe("008");
+    expect(duration.status).toBe(2);
+    expect(duration.stderr).toContain("invalid OPENCLAW_E2E_SAMPLE_SECONDS: 30s");
+  });
+
+  it("reads non-negative integer env values without accepting shell-style sizes", () => {
+    const fallback = runSourcedHelper(
+      'printf "%s" "$(openclaw_e2e_read_nonnegative_int_env OPENCLAW_E2E_SAMPLE_BYTES 262144)"',
+    );
+    const zero = runSourcedHelper(
+      'printf "%s" "$(openclaw_e2e_read_nonnegative_int_env OPENCLAW_E2E_SAMPLE_BYTES 262144)"',
+      { OPENCLAW_E2E_SAMPLE_BYTES: "0" },
+    );
+    const size = runSourcedHelper(
+      "openclaw_e2e_read_nonnegative_int_env OPENCLAW_E2E_SAMPLE_BYTES 262144",
+      { OPENCLAW_E2E_SAMPLE_BYTES: "64kb" },
+    );
+
+    expectShellSuccess(fallback);
+    expect(fallback.stdout).toBe("262144");
+    expectShellSuccess(zero);
+    expect(zero.stdout).toBe("0");
+    expect(size.status).toBe(2);
+    expect(size.stderr).toContain("invalid OPENCLAW_E2E_SAMPLE_BYTES: 64kb");
+  });
+
+  it("probes default and explicit mock OpenAI base URLs", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-mock-openai-url-"));
+    try {
+      const probePath = path.join(tempDir, "probe-url.txt");
+      const result = runSourcedHelper(
+        [
+          `openclaw_e2e_probe_http() { printf "%s\\n" "$1" >>${shellQuote(probePath)}; return 0; }`,
+          "openclaw_e2e_wait_mock_openai 44080 1 400",
+          "openclaw_e2e_wait_mock_openai 443 1 400 https://api.openai.com:443",
+        ].join("; "),
+      );
+
+      expectShellSuccess(result);
+      expect(fs.readFileSync(probePath, "utf8").trim().split("\n")).toEqual([
+        "http://127.0.0.1:44080/health",
+        "https://api.openai.com:443/health",
+      ]);
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
   });
 
   it("requires /readyz after the gateway ready log", () => {
@@ -493,6 +571,27 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
     }
   });
 
+  it.each([
+    ["bytes", "OPENCLAW_E2E_LOG_TAIL_BYTES", "64kb"],
+    ["lines", "OPENCLAW_E2E_LOG_TAIL_LINES", "25 lines"],
+  ])("rejects invalid E2E log tail %s before invoking tail", (_label, envName, value) => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-instance-log-tail-"));
+    try {
+      const logPath = path.join(tempDir, "install.log");
+      fs.writeFileSync(logPath, "old log\nrecent log\n", "utf8");
+
+      const result = runSourcedHelper(`openclaw_e2e_print_log ${shellQuote(logPath)}`, {
+        [envName]: value,
+      });
+
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain(`invalid ${envName}: ${value}`);
+      expect(result.stdout).not.toContain("old log");
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
   it("bounds commands with the Node watchdog when timeout is unavailable", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-instance-node-watchdog-"));
     try {
@@ -775,6 +874,12 @@ exit 1
     }
   });
 
+  it("cancels HTTP readiness probe response bodies", () => {
+    const helper = fs.readFileSync(helperPath, "utf8");
+
+    expect(helper).toContain("await response?.body?.cancel?.().catch(() => undefined);");
+  });
+
   it("does not repeatedly grep the full gateway log while waiting for readiness", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-readyz-incremental-"));
     try {
@@ -999,7 +1104,7 @@ exit 1
       expect(result.status).toBe(1);
       expect(result.stdout).toContain("recent command tail");
       expect(result.stdout).not.toContain("DO_NOT_PRINT_OLD_COMMAND_LOG");
-      const [logFile] = fs.readdirSync(logDir);
+      const logFile = expectDefined(fs.readdirSync(logDir)[0], "OpenClaw E2E command log file");
       expect(fs.readFileSync(path.join(logDir, logFile), "utf8")).toContain(
         "DO_NOT_PRINT_OLD_COMMAND_LOG",
       );

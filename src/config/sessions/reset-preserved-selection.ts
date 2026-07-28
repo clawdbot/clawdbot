@@ -2,11 +2,12 @@
 import { hasSessionAutoModelFallbackProvenance } from "./model-override-provenance.js";
 import type { SessionEntry } from "./types.js";
 
-export type ResetPreservedSelectionState = Pick<
+type ResetPreservedSelectionState = Pick<
   SessionEntry,
   | "providerOverride"
   | "modelOverride"
   | "modelOverrideSource"
+  | "modelOverrideRouteResolution"
   | "authProfileOverride"
   | "authProfileOverrideSource"
   | "authProfileOverrideCompactionCount"
@@ -45,6 +46,9 @@ export function resolveResetPreservedSelection(params: {
     preserved.providerOverride = entry.providerOverride;
     preserved.modelOverride = entry.modelOverride;
     preserved.modelOverrideSource = "user";
+    if (entry.modelOverrideRouteResolution) {
+      preserved.modelOverrideRouteResolution = entry.modelOverrideRouteResolution;
+    }
   }
 
   if (entry.authProfileOverrideSource === "user" && entry.authProfileOverride) {

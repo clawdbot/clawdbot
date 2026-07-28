@@ -17,6 +17,7 @@ import {
 } from "../plugins/plugin-metadata-snapshot.js";
 import { listSetupProviderIds } from "../plugins/setup-descriptors.js";
 import { hasKind } from "../plugins/slots.js";
+import { appendUniqueEnvVarCandidates } from "../shared/env-var-candidates.js";
 
 const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
@@ -94,27 +95,6 @@ function shouldUsePluginProviderAuthEvidence(
   // Auth evidence can point at local credential files, so workspace plugins must be explicitly
   // trusted through config before their evidence participates in auth discovery.
   return isWorkspacePluginTrustedForProviderEnvVars(plugin, params?.config);
-}
-
-function appendUniqueEnvVarCandidates(
-  target: Record<string, string[]>,
-  providerId: string,
-  keys: readonly string[],
-) {
-  const normalizedProviderId = providerId.trim();
-  if (!normalizedProviderId || keys.length === 0) {
-    return;
-  }
-  const bucket = (target[normalizedProviderId] ??= []);
-  const seen = new Set(bucket);
-  for (const key of keys) {
-    const normalizedKey = key.trim();
-    if (!normalizedKey || seen.has(normalizedKey)) {
-      continue;
-    }
-    seen.add(normalizedKey);
-    bucket.push(normalizedKey);
-  }
 }
 
 function appendUniqueAuthEvidence(
@@ -204,6 +184,17 @@ function resolveManifestProviderAuthEnvVarCandidates(
   return resolveManifestProviderAuthEnvVarCandidatesFromSnapshot(params, snapshot, aliases);
 }
 
+function resolveManifestProviderUsageAuthEnvVarNames(
+  params?: ProviderEnvVarLookupParams,
+): string[] {
+  const snapshot = resolveProviderMetadataSnapshot(params);
+  return uniqueStrings(
+    snapshot.plugins
+      .filter((plugin) => shouldUsePluginProviderEnvVars(plugin, params))
+      .flatMap((plugin) => Object.values(plugin.providerUsageAuthEnvVars ?? {}).flat()),
+  );
+}
+
 function resolveManifestProviderAuthEnvVarCandidatesFromSnapshot(
   params: ProviderEnvVarLookupParams | undefined,
   snapshot: PluginMetadataSnapshot,
@@ -213,13 +204,6 @@ function resolveManifestProviderAuthEnvVarCandidatesFromSnapshot(
   for (const plugin of snapshot.plugins) {
     if (!shouldUsePluginProviderEnvVars(plugin, params)) {
       continue;
-    }
-    if (plugin.providerAuthEnvVars) {
-      for (const [providerId, keys] of Object.entries(plugin.providerAuthEnvVars).toSorted(
-        ([left], [right]) => left.localeCompare(right),
-      )) {
-        appendUniqueEnvVarCandidates(candidates, providerId, keys);
-      }
     }
     for (const provider of plugin.setup?.providers ?? []) {
       appendUniqueEnvVarCandidates(candidates, provider.id, provider.envVars ?? []);
@@ -234,17 +218,6 @@ function resolveManifestProviderAuthEnvVarCandidatesFromSnapshot(
     }
   }
   return candidates;
-}
-
-function resolveManifestProviderAuthEvidence(
-  params?: ProviderEnvVarLookupParams,
-): Record<string, ProviderAuthEvidence[]> {
-  const snapshot = resolveProviderMetadataSnapshot(params);
-  const aliases = resolveProviderAuthAliasMap({
-    ...params,
-    metadataSnapshot: snapshot,
-  });
-  return resolveManifestProviderAuthEvidenceFromSnapshot(params, snapshot, aliases);
 }
 
 function resolveManifestProviderAuthEvidenceFromSnapshot(
@@ -321,13 +294,6 @@ export function resolveProviderAuthEnvVarCandidates(
   };
 }
 
-/** Resolves non-env evidence that provider auth may already be configured. */
-export function resolveProviderAuthEvidence(
-  params?: ProviderEnvVarLookupParams,
-): Record<string, readonly ProviderAuthEvidence[]> {
-  return resolveManifestProviderAuthEvidence(params);
-}
-
 /** Resolves all provider auth lookup maps from a single metadata snapshot. */
 export function resolveProviderAuthLookupMaps(
   params?: ProviderEnvVarLookupParams,
@@ -354,7 +320,7 @@ export function resolveProviderAuthLookupMaps(
 }
 
 /** Resolves env vars used by setup, default SecretRefs, and broad secret scrubbing. */
-export function resolveProviderEnvVars(
+function resolveProviderEnvVars(
   params?: ProviderEnvVarLookupParams,
 ): Record<string, readonly string[]> {
   return {
@@ -363,15 +329,10 @@ export function resolveProviderEnvVars(
   };
 }
 
-const lazyRecordCacheResetters = new Set<() => void>();
-
 function createLazyReadonlyRecord(
   resolve: () => Record<string, readonly string[]>,
 ): Record<string, readonly string[]> {
   let cached: Record<string, readonly string[]> | undefined;
-  lazyRecordCacheResetters.add(() => {
-    cached = undefined;
-  });
   const getResolved = (): Record<string, readonly string[]> => {
     cached ??= resolve();
     return cached;
@@ -409,17 +370,6 @@ function createLazyReadonlyRecord(
 }
 
 /**
- * Provider auth env candidates used by generic auth resolution.
- *
- * Order matters: the first non-empty value wins for helpers such as
- * `resolveEnvApiKey()`. Bundled providers source this from plugin manifest
- * metadata so auth probes do not need to load plugin runtime.
- */
-export const PROVIDER_AUTH_ENV_VAR_CANDIDATES = createLazyReadonlyRecord(() =>
-  resolveProviderAuthEnvVarCandidates(),
-);
-
-/**
  * Provider env vars used for setup/default secret refs and broad secret
  * scrubbing. This can include non-model providers and may intentionally choose
  * a different preferred first env var than auth resolution.
@@ -428,15 +378,7 @@ export const PROVIDER_AUTH_ENV_VAR_CANDIDATES = createLazyReadonlyRecord(() =>
  * is only for true core/non-plugin providers and a few setup-specific ordering
  * overrides where generic onboarding wants a different preferred env var.
  */
-export const PROVIDER_ENV_VARS = createLazyReadonlyRecord(() => resolveProviderEnvVars());
-
-export const testing = {
-  resetProviderEnvVarCachesForTests(): void {
-    for (const reset of lazyRecordCacheResetters) {
-      reset();
-    }
-  },
-};
+const PROVIDER_ENV_VARS = createLazyReadonlyRecord(() => resolveProviderEnvVars());
 
 /** Returns known env var candidates for a provider id or alias. */
 export function getProviderEnvVars(
@@ -457,12 +399,16 @@ export function listKnownProviderAuthEnvVarNames(params?: ProviderEnvVarLookupPa
   return uniqueStrings([
     ...Object.values(resolveProviderAuthEnvVarCandidates(params)).flat(),
     ...Object.values(resolveProviderEnvVars(params)).flat(),
+    ...resolveManifestProviderUsageAuthEnvVarNames(params),
   ]);
 }
 
 /** Lists env vars that may contain provider secrets for broad scrubbing. */
 export function listKnownSecretEnvVarNames(params?: ProviderEnvVarLookupParams): string[] {
-  return uniqueStrings(Object.values(resolveProviderEnvVars(params)).flat());
+  return uniqueStrings([
+    ...Object.values(resolveProviderEnvVars(params)).flat(),
+    ...resolveManifestProviderUsageAuthEnvVarNames(params),
+  ]);
 }
 
 /** Returns a copy of an env object with denied keys removed case-insensitively. */
@@ -488,4 +434,3 @@ export function omitEnvKeysCaseInsensitive(
   }
   return env;
 }
-export { testing as __testing };

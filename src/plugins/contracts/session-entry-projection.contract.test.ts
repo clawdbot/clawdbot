@@ -6,7 +6,8 @@ import {
   registerTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadSessionStore, updateSessionStore, type SessionEntry } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { listSessionEntries, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -16,7 +17,7 @@ import { patchPluginSessionExtension } from "../host-hook-state.js";
 import type { PluginJsonValue } from "../host-hooks.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { setActivePluginRegistry } from "../runtime.js";
-import { createPluginRecord } from "../status.test-helpers.js";
+import { createPluginRecord } from "../status.test-fixtures.js";
 import { runTrustedToolPolicies } from "../trusted-tool-policy.js";
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -44,6 +45,29 @@ function extensionNamespace(entry: Record<string, unknown>, pluginId: string, na
   return requireRecord(pluginExtensions[namespace], `${pluginId}.${namespace} state`);
 }
 
+function loadSessionStore(
+  storePath: string,
+  _options?: { skipCache?: boolean },
+): Record<string, SessionEntry> {
+  return Object.fromEntries(
+    listSessionEntries({ agentId: "main", storePath }).map(({ sessionKey, entry }) => [
+      sessionKey,
+      entry,
+    ]),
+  );
+}
+
+async function updateSessionStore(
+  storePath: string,
+  update: (store: Record<string, SessionEntry>) => void,
+): Promise<void> {
+  const store: Record<string, SessionEntry> = {};
+  update(store);
+  for (const [sessionKey, entry] of Object.entries(store)) {
+    await replaceSessionEntry({ sessionKey, storePath }, entry);
+  }
+}
+
 async function withProjectionSessionStore(
   prefix: string,
   run: (fixture: {
@@ -53,7 +77,10 @@ async function withProjectionSessionStore(
 ): Promise<void> {
   const stateDir = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), prefix));
   const storePath = path.join(stateDir, "sessions.json");
-  const tempConfig = { session: { store: storePath } };
+  const tempConfig = {
+    agents: { entries: { main: { default: true } } },
+    session: { store: storePath },
+  };
   try {
     return await withEnvAsync(
       { OPENCLAW_STATE_DIR: stateDir },
@@ -269,14 +296,34 @@ describe("plugin session extension SessionEntry projection", () => {
           sessionEntrySlotKey: "updatedAt",
         });
         api.registerSessionExtension({
+          namespace: "main-recovery",
+          description: "bad main recovery slot",
+          sessionEntrySlotKey: "mainRestartRecovery",
+        });
+        api.registerSessionExtension({
           namespace: "recovery",
           description: "bad fresh-main slot",
           sessionEntrySlotKey: "subagentRecovery",
         });
+        api.registerSessionExtension({
+          namespace: "run-error",
+          description: "bad run error slot",
+          sessionEntrySlotKey: "lastRunError",
+        });
+        api.registerSessionExtension({
+          namespace: "transcript-path",
+          description: "retired transcript locator",
+          sessionEntrySlotKey: "transcriptPath",
+        });
+        api.registerSessionExtension({
+          namespace: "pending-final-text",
+          description: "retired pending-final field",
+          sessionEntrySlotKey: "pendingFinalDeliveryText",
+        });
       },
     });
 
-    expect(registry.registry.sessionExtensions ?? []).toHaveLength(0);
+    expect(registry.registry.sessionExtensions).toHaveLength(0);
     expect(
       registry.registry.diagnostics.map(({ pluginId, message }) => ({ pluginId, message })),
     ).toStrictEqual([
@@ -286,7 +333,23 @@ describe("plugin session extension SessionEntry projection", () => {
       },
       {
         pluginId: "slot-collision",
+        message: "sessionEntrySlotKey is reserved by SessionEntry: mainRestartRecovery",
+      },
+      {
+        pluginId: "slot-collision",
         message: "sessionEntrySlotKey is reserved by SessionEntry: subagentRecovery",
+      },
+      {
+        pluginId: "slot-collision",
+        message: "sessionEntrySlotKey is reserved by SessionEntry: lastRunError",
+      },
+      {
+        pluginId: "slot-collision",
+        message: "sessionEntrySlotKey is reserved by SessionEntry: transcriptPath",
+      },
+      {
+        pluginId: "slot-collision",
+        message: "sessionEntrySlotKey is reserved by SessionEntry: pendingFinalDeliveryText",
       },
     ]);
   });
@@ -316,7 +379,7 @@ describe("plugin session extension SessionEntry projection", () => {
       },
     });
 
-    expect(registry.registry.sessionExtensions ?? []).toHaveLength(0);
+    expect(registry.registry.sessionExtensions).toHaveLength(0);
     const diagnostics = registry.registry.diagnostics.map(({ pluginId, message }) => ({
       pluginId,
       message,
@@ -369,8 +432,8 @@ describe("plugin session extension SessionEntry projection", () => {
       },
     });
 
-    expect(registry.registry.sessionExtensions ?? []).toHaveLength(1);
-    expect(registry.registry.sessionExtensions?.[0]?.extension.sessionEntrySlotKey).toBe(
+    expect(registry.registry.sessionExtensions).toHaveLength(1);
+    expect(registry.registry.sessionExtensions[0]?.extension.sessionEntrySlotKey).toBe(
       "approvalSnapshot",
     );
     const diagnostics = registry.registry.diagnostics.map(({ pluginId, message }) => ({

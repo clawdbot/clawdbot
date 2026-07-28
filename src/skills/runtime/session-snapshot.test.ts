@@ -1,4 +1,5 @@
 // Session snapshot tests cover runtime skill state captured for agent sessions.
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
@@ -6,11 +7,11 @@ import type { SkillSnapshot } from "../types.js";
 
 const TEST_WORKSPACE_DIR = "/tmp/workspace";
 
-function strippedSnapshot(skillName = "test"): SkillSnapshot {
+function strippedSnapshot(skillName = "test", version = 1): SkillSnapshot {
   return {
     prompt: "skills prompt",
     skills: [{ name: skillName }],
-    version: 0,
+    version,
     promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
   };
 }
@@ -27,8 +28,10 @@ const {
     resolvedSkills: [] as unknown[],
   })),
   ensureSkillsWatcherMock: vi.fn(),
-  getSkillsSnapshotVersionMock: vi.fn(() => 0),
-  shouldRefreshSnapshotForVersionMock: vi.fn((_cached?: number, _next?: number) => false),
+  getSkillsSnapshotVersionMock: vi.fn(() => 1),
+  shouldRefreshSnapshotForVersionMock: vi.fn((cached = 0, next = 0) =>
+    next === 0 ? cached > 0 : cached < next,
+  ),
 }));
 
 vi.mock("../loading/workspace.js", () => ({
@@ -44,16 +47,19 @@ vi.mock("./refresh-state.js", () => ({
   shouldRefreshSnapshotForVersion: shouldRefreshSnapshotForVersionMock,
 }));
 
-const { resolveReusableWorkspaceSkillSnapshot, resetResolvedSkillsCacheForTests } =
-  await import("./session-snapshot.js");
+let resolveReusableWorkspaceSkillSnapshot: typeof import("./session-snapshot.js").resolveReusableWorkspaceSkillSnapshot;
 
 describe("resolveReusableWorkspaceSkillSnapshot", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ resolveReusableWorkspaceSkillSnapshot } = await import("./session-snapshot.js"));
     vi.clearAllMocks();
-    resetResolvedSkillsCacheForTests();
     buildWorkspaceSkillSnapshotMock.mockReturnValue({ prompt: "", skills: [], resolvedSkills: [] });
-    getSkillsSnapshotVersionMock.mockReturnValue(0);
-    shouldRefreshSnapshotForVersionMock.mockReturnValue(false);
+    ensureSkillsWatcherMock.mockImplementation(() => undefined);
+    getSkillsSnapshotVersionMock.mockReturnValue(1);
+    shouldRefreshSnapshotForVersionMock.mockImplementation((cached = 0, next = 0) =>
+      next === 0 ? cached > 0 : cached < next,
+    );
   });
 
   it("reuses cached resolvedSkills across calls with the same workspace, version, and filter", () => {
@@ -96,25 +102,88 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(2);
   });
 
+  it("refreshes when effective node-skill eligibility changes", () => {
+    const result = resolveReusableWorkspaceSkillSnapshot({
+      workspaceDir: TEST_WORKSPACE_DIR,
+      config: {},
+      eligibility: { nodeSkills: { canExec: false } },
+      existingSnapshot: {
+        ...strippedSnapshot(),
+        nodeSkillsEligibility: { canExec: true, node: "build-node" },
+      },
+    });
+
+    expect(result.shouldRefresh).toBe(true);
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
+  });
+
   it("reads the skills snapshot version after watcher-side invalidation", () => {
-    getSkillsSnapshotVersionMock.mockReturnValue(0);
+    getSkillsSnapshotVersionMock.mockReturnValue(1);
     ensureSkillsWatcherMock.mockImplementation(() => {
       getSkillsSnapshotVersionMock.mockReturnValue(5);
     });
-    shouldRefreshSnapshotForVersionMock.mockImplementation((cached = 0, next = 0) => cached < next);
 
     resolveReusableWorkspaceSkillSnapshot({
       workspaceDir: TEST_WORKSPACE_DIR,
       config: { skills: { load: { extraDirs: ["/tmp/shared-skills"] } } },
-      existingSnapshot: strippedSnapshot(),
+      existingSnapshot: strippedSnapshot("test", 1),
     });
 
-    expect(shouldRefreshSnapshotForVersionMock).toHaveBeenCalledWith(0, 5);
+    expect(shouldRefreshSnapshotForVersionMock).toHaveBeenCalledWith(1, 5);
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
-    const [[, snapshotParams]] = buildWorkspaceSkillSnapshotMock.mock.calls as unknown as Array<
-      [string, { snapshotVersion?: number }]
-    >;
+    const [, snapshotParams] = expectDefined(
+      (
+        buildWorkspaceSkillSnapshotMock.mock.calls as unknown as Array<
+          [string, { snapshotVersion?: number }]
+        >
+      )[0],
+      "(buildWorkspaceSkillSnapshotMock.mock.calls as unknown as Array<\n        [string, { snapshotVersion?: number }]\n      >)[0] test invariant",
+    );
     expect(snapshotParams.snapshotVersion).toBe(5);
+  });
+
+  it("refreshes persisted version-0 snapshots after process restart", () => {
+    const result = resolveReusableWorkspaceSkillSnapshot({
+      workspaceDir: TEST_WORKSPACE_DIR,
+      config: {},
+      existingSnapshot: strippedSnapshot("test", 0),
+    });
+
+    expect(result.shouldRefresh).toBe(true);
+    expect(shouldRefreshSnapshotForVersionMock).toHaveBeenCalledWith(0, 1);
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
+    const [, snapshotParams] = expectDefined(
+      (
+        buildWorkspaceSkillSnapshotMock.mock.calls as unknown as Array<
+          [string, { snapshotVersion?: number }]
+        >
+      )[0],
+      "(buildWorkspaceSkillSnapshotMock.mock.calls as unknown as Array<\n        [string, { snapshotVersion?: number }]\n      >)[0] test invariant",
+    );
+    expect(snapshotParams.snapshotVersion).toBe(1);
+  });
+
+  it("refreshes persisted timestamp-version snapshots from earlier processes", () => {
+    getSkillsSnapshotVersionMock.mockReturnValue(10_000);
+
+    const result = resolveReusableWorkspaceSkillSnapshot({
+      workspaceDir: TEST_WORKSPACE_DIR,
+      config: {},
+      existingSnapshot: strippedSnapshot("test", 9_999),
+    });
+
+    expect(result.shouldRefresh).toBe(true);
+    expect(shouldRefreshSnapshotForVersionMock).toHaveBeenCalledWith(9_999, 10_000);
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
+    const [, snapshotParams] = expectDefined(
+      (
+        buildWorkspaceSkillSnapshotMock.mock.calls as unknown as Array<
+          [string, { snapshotVersion?: number }]
+        >
+      )[0],
+      "(buildWorkspaceSkillSnapshotMock.mock.calls as unknown as Array<\n        [string, { snapshotVersion?: number }]\n      >)[0] test invariant",
+    );
+    expect(snapshotParams.snapshotVersion).toBe(10_000);
   });
 
   it("invalidates cached resolvedSkills when non-skills config gates change", () => {
@@ -191,9 +260,29 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     expect(result.shouldRefresh).toBe(true);
     expect(shouldRefreshSnapshotForVersionMock).toHaveBeenCalledWith(5, 0);
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
-    const [[, snapshotParams]] = buildWorkspaceSkillSnapshotMock.mock.calls as unknown as Array<
-      [string, { snapshotVersion?: number }]
-    >;
+    const [, snapshotParams] = expectDefined(
+      (
+        buildWorkspaceSkillSnapshotMock.mock.calls as unknown as Array<
+          [string, { snapshotVersion?: number }]
+        >
+      )[0],
+      "(buildWorkspaceSkillSnapshotMock.mock.calls as unknown as Array<\n        [string, { snapshotVersion?: number }]\n      >)[0] test invariant",
+    );
     expect(snapshotParams.snapshotVersion).toBe(0);
+  });
+
+  it("refreshes snapshots from before config-key skill identities", () => {
+    shouldRefreshSnapshotForVersionMock.mockReturnValue(false);
+    const result = resolveReusableWorkspaceSkillSnapshot({
+      workspaceDir: TEST_WORKSPACE_DIR,
+      config: {},
+      existingSnapshot: {
+        ...strippedSnapshot(),
+        promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION - 1,
+      },
+    });
+
+    expect(result.shouldRefresh).toBe(true);
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
   });
 });

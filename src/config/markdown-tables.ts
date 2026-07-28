@@ -40,24 +40,6 @@ function getDefaultTableModes(): Map<string, MarkdownTableMode> {
   return cachedDefaultTableModes;
 }
 
-const EMPTY_DEFAULT_TABLE_MODES = new Map<string, MarkdownTableMode>();
-
-function bindDefaultTableModesMethod<TValue>(value: TValue): TValue {
-  if (typeof value !== "function") {
-    return value;
-  }
-  return value.bind(getDefaultTableModes()) as TValue;
-}
-
-export const DEFAULT_TABLE_MODES: ReadonlyMap<string, MarkdownTableMode> = new Proxy(
-  EMPTY_DEFAULT_TABLE_MODES,
-  {
-    get(_target, prop, _receiver) {
-      return bindDefaultTableModesMethod(Reflect.get(getDefaultTableModes(), prop));
-    },
-  },
-);
-
 const isMarkdownTableMode = (value: unknown): value is MarkdownTableMode =>
   value === "off" || value === "bullets" || value === "code" || value === "block";
 
@@ -81,26 +63,19 @@ function resolveMarkdownModeFromSection(
   return isMarkdownTableMode(sectionMode) ? sectionMode : undefined;
 }
 
-export type {
-  ResolveMarkdownTableMode,
-  ResolveMarkdownTableModeParams,
-} from "./markdown-tables.types.js";
-
 export function resolveMarkdownTableMode(
   params: ResolveMarkdownTableModeParams,
 ): MarkdownTableMode {
   const channel = normalizeChannelId(params.channel);
   const defaultMode = channel ? (getDefaultTableModes().get(channel) ?? "code") : "code";
-  if (!channel || !params.cfg) {
-    return defaultMode;
+  let resolved = defaultMode;
+  if (channel && params.cfg) {
+    const channelsConfig = params.cfg.channels as Record<string, unknown> | undefined;
+    const rootConfig = params.cfg as Record<string, unknown>;
+    const section = (channelsConfig?.[channel] ?? rootConfig[channel]) as
+      | MarkdownConfigSection
+      | undefined;
+    resolved = resolveMarkdownModeFromSection(section, params.accountId) ?? defaultMode;
   }
-  const channelsConfig = params.cfg.channels as Record<string, unknown> | undefined;
-  const section = (channelsConfig?.[channel] ??
-    (params.cfg as Record<string, unknown> | undefined)?.[channel]) as
-    | MarkdownConfigSection
-    | undefined;
-  const resolved = resolveMarkdownModeFromSection(section, params.accountId) ?? defaultMode;
-  // "block" stays schema-valid for the shared markdown seam, but this PR
-  // keeps runtime delivery on safe text rendering until Slack send support lands.
-  return resolved === "block" ? "code" : resolved;
+  return resolved === "block" && !params.supportsBlockTables ? "code" : resolved;
 }

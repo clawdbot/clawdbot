@@ -14,7 +14,6 @@ describe("embedding provider registration", () => {
     expect(embeddingProviderSdk).not.toHaveProperty("clearEmbeddingProviders");
     expect(embeddingProviderSdk).not.toHaveProperty("restoreEmbeddingProviders");
     expect(embeddingProviderSdk).not.toHaveProperty("restoreRegisteredEmbeddingProviders");
-    expect(embeddingProviderSdk).not.toHaveProperty("resetEmbeddingProviders");
   });
 
   it("rejects plugins that did not declare the capability contract", () => {

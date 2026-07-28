@@ -13,6 +13,7 @@ import {
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
+import { issueOperatorToken } from "./device-authz.test-helpers.js";
 import {
   connectReq,
   installGatewayTestHooks,
@@ -155,11 +156,17 @@ async function requestAllowOnceApproval(
     nodeId,
     cwd: null,
     host: "node",
+    requireDeliveryRoute: false,
+    twoPhase: true,
     timeoutMs: 30_000,
   });
-  await rpcReq(ws, "exec.approval.resolve", { id: approvalId, decision: "allow-once" });
   const requested = await requestP;
   expect(requested.ok).toBe(true);
+  const resolved = await rpcReq(ws, "exec.approval.resolve", {
+    id: approvalId,
+    decision: "allow-once",
+  });
+  expect(resolved.ok).toBe(true);
   return approvalId;
 }
 
@@ -232,14 +239,17 @@ async function requestChatAllowOnceApproval(params: {
     turnSourceTo: params.context.turnSourceTo,
     turnSourceAccountId: params.context.turnSourceAccountId,
     turnSourceThreadId: params.context.turnSourceThreadId,
+    requireDeliveryRoute: false,
+    twoPhase: true,
     timeoutMs: 30_000,
-  });
-  await rpcReq(params.ws, "exec.approval.resolve", {
-    id: approvalId,
-    decision: "allow-once",
   });
   const requested = await requestP;
   expect(requested.ok).toBe(true);
+  const resolved = await rpcReq(params.ws, "exec.approval.resolve", {
+    id: approvalId,
+    decision: "allow-once",
+  });
+  expect(resolved.ok).toBe(true);
   return approvalId;
 }
 
@@ -252,7 +262,15 @@ describe("node.invoke approval bypass", () => {
       gateway: {
         nodes: {
           pairing: { autoApproveCidrs: ["127.0.0.1/32", "::1/128"] },
-          allowCommands: ["system.run", "system.run.prepare", "system.which"],
+          commands: {
+            allow: [
+              "system.run",
+              "system.run.prepare",
+              "system.which",
+              "browser.proxy",
+              "fs.listDir",
+            ],
+          },
         },
       },
     });
@@ -396,6 +414,29 @@ describe("node.invoke approval bypass", () => {
         nonce,
       };
     });
+  };
+
+  const connectDeviceTokenOperator = async (scopes: string[]) => {
+    const issued = await issueOperatorToken({
+      name: `browser-proxy-scope-${crypto.randomUUID()}`,
+      approvedScopes: scopes,
+      clientId: GATEWAY_CLIENT_NAMES.TEST,
+      clientMode: GATEWAY_CLIENT_MODES.TEST,
+    });
+    const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+    trackConnectChallengeNonce(ws);
+    await new Promise<void>((resolve) => {
+      ws.once("open", resolve);
+    });
+    const res = await connectReq(ws, {
+      skipDefaultAuth: true,
+      deviceIdentityPath: issued.identityPath,
+      deviceToken: issued.token,
+      scopes,
+      timeoutMs: CONNECT_REQ_TIMEOUT_MS,
+    });
+    expect(res.ok).toBe(true);
+    return ws;
   };
 
   const connectLinuxNode = async (
@@ -550,6 +591,140 @@ describe("node.invoke approval bypass", () => {
     }
   });
 
+  test("requires admin scope for direct browser.proxy node.invoke", async () => {
+    let sawInvoke = false;
+    const nodeIdentity = createDeviceIdentity();
+    const node = await connectLinuxNode(
+      () => {
+        sawInvoke = true;
+      },
+      nodeIdentity,
+      ["browser.proxy"],
+    );
+    const ws = await connectDeviceTokenOperator(["operator.write"]);
+    try {
+      const browserRequest = await rpcReq(ws, "browser.request", {
+        method: "GET",
+        path: "/profiles",
+      });
+      expect(browserRequest.ok).toBe(false);
+      expect(browserRequest.error?.message ?? "").toContain("missing scope: operator.admin");
+
+      const directProxy = await rpcReq(ws, "node.invoke", {
+        nodeId: nodeIdentity.deviceId,
+        command: "browser.proxy",
+        params: {
+          method: "GET",
+          path: "/profiles",
+        },
+        idempotencyKey: crypto.randomUUID(),
+      });
+      expect(directProxy.ok).toBe(false);
+      expect(directProxy.error).toMatchObject({
+        code: "FORBIDDEN",
+        message: "missing scope: operator.admin",
+        details: {
+          code: "MISSING_SCOPE",
+          missingScope: "operator.admin",
+          requiredScopes: ["operator.admin"],
+        },
+      });
+      await expectNoForwardedInvoke(() => sawInvoke);
+    } finally {
+      ws.close();
+      node.stop();
+    }
+  });
+
+  test("allows direct browser.proxy node.invoke for admin-scoped operators", async () => {
+    let sawInvoke = false;
+    const nodeIdentity = createDeviceIdentity();
+    const node = await connectLinuxNode(
+      () => {
+        sawInvoke = true;
+      },
+      nodeIdentity,
+      ["browser.proxy"],
+    );
+    const ws = await connectDeviceTokenOperator(["operator.admin"]);
+    try {
+      const directProxy = await rpcReq(ws, "node.invoke", {
+        nodeId: nodeIdentity.deviceId,
+        command: "browser.proxy",
+        params: {
+          method: "GET",
+          path: "/profiles",
+        },
+        idempotencyKey: crypto.randomUUID(),
+      });
+      expect(directProxy.ok, JSON.stringify(directProxy.error)).toBe(true);
+      expect(sawInvoke).toBe(true);
+    } finally {
+      ws.close();
+      node.stop();
+    }
+  });
+
+  test("requires admin scope for direct fs.listDir node.invoke", async () => {
+    let sawInvoke = false;
+    const nodeIdentity = createDeviceIdentity();
+    const node = await connectLinuxNode(
+      () => {
+        sawInvoke = true;
+      },
+      nodeIdentity,
+      ["fs.listDir"],
+    );
+    const ws = await connectDeviceTokenOperator(["operator.write"]);
+    try {
+      const directList = await rpcReq(ws, "node.invoke", {
+        nodeId: nodeIdentity.deviceId,
+        command: "fs.listDir",
+        params: { path: "/tmp" },
+        idempotencyKey: crypto.randomUUID(),
+      });
+      expect(directList.ok).toBe(false);
+      expect(directList.error).toMatchObject({
+        code: "FORBIDDEN",
+        details: {
+          code: "MISSING_SCOPE",
+          missingScope: "operator.admin",
+          requiredScopes: ["operator.admin"],
+        },
+      });
+      await expectNoForwardedInvoke(() => sawInvoke);
+    } finally {
+      ws.close();
+      node.stop();
+    }
+  });
+
+  test("allows direct fs.listDir node.invoke for admin-scoped operators", async () => {
+    let sawInvoke = false;
+    const nodeIdentity = createDeviceIdentity();
+    const node = await connectLinuxNode(
+      () => {
+        sawInvoke = true;
+      },
+      nodeIdentity,
+      ["fs.listDir"],
+    );
+    const ws = await connectDeviceTokenOperator(["operator.admin"]);
+    try {
+      const directList = await rpcReq(ws, "node.invoke", {
+        nodeId: nodeIdentity.deviceId,
+        command: "fs.listDir",
+        params: { path: "/tmp" },
+        idempotencyKey: crypto.randomUUID(),
+      });
+      expect(directList.ok, JSON.stringify(directList.error)).toBe(true);
+      expect(sawInvoke).toBe(true);
+    } finally {
+      ws.close();
+      node.stop();
+    }
+  });
+
   test("binds approvals to decision/device and blocks cross-device replay", async () => {
     const invokeCapture = createInvokeParamCapture();
     const node = await connectLinuxNode(invokeCapture.onInvoke);
@@ -572,7 +747,7 @@ describe("node.invoke approval bypass", () => {
         }),
         idempotencyKey: crypto.randomUUID(),
       });
-      expect(invoke.ok).toBe(true);
+      expect(invoke.ok, JSON.stringify(invoke.error)).toBe(true);
       await expectForwardedApprovedParams({ invokeCapture, absentKey: "injected" });
 
       const replayApprovalId = await requestAllowOnceApproval(wsApprover, "echo hi", nodeId);

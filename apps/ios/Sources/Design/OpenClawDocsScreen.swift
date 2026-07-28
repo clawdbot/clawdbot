@@ -4,11 +4,17 @@ struct OpenClawDocsScreen: View {
     private let docsURL = URL(string: "https://docs.openclaw.ai")!
     private let gatewayURL = URL(string: "https://docs.openclaw.ai/gateway")!
     private let pairingURL = URL(string: "https://docs.openclaw.ai/channels/pairing")!
-    let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let headerSidebarAction: OpenClawSidebarHeaderAction?
+    let usesNativeNavigationChrome: Bool
     let gatewayAction: (() -> Void)?
 
-    init(headerLeadingAction: OpenClawSidebarHeaderAction? = nil, gatewayAction: (() -> Void)? = nil) {
-        self.headerLeadingAction = headerLeadingAction
+    init(
+        headerSidebarAction: OpenClawSidebarHeaderAction? = nil,
+        usesNativeNavigationChrome: Bool = false,
+        gatewayAction: (() -> Void)? = nil)
+    {
+        self.headerSidebarAction = headerSidebarAction
+        self.usesNativeNavigationChrome = usesNativeNavigationChrome
         self.gatewayAction = gatewayAction
     }
 
@@ -17,15 +23,34 @@ struct OpenClawDocsScreen: View {
             OpenClawProBackground()
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    self.headerCard
+                    if !self.usesNativeNavigationChrome {
+                        self.headerCard
+                    }
                     self.linkCard
-                    self.versionCard
                 }
                 .padding(.vertical, 18)
+                .font(OpenClawType.body)
             }
         }
         .navigationTitle("Docs")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(self.usesNativeNavigationChrome ? .visible : .hidden, for: .navigationBar)
+        .toolbar {
+            if self.usesNativeNavigationChrome, let gatewayAction {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(action: gatewayAction) {
+                        Image(systemName: "antenna.radiowaves.left.and.right")
+                            .font(OpenClawType.subheadSemiBold)
+                    }
+                    .accessibilityLabel("Gateway settings")
+                }
+            }
+            if self.usesNativeNavigationChrome, let headerSidebarAction {
+                OpenClawSidebarToolbarItem(
+                    action: headerSidebarAction,
+                    placement: .topBarLeading)
+            }
+        }
     }
 
     private var headerCard: some View {
@@ -33,12 +58,12 @@ struct OpenClawDocsScreen: View {
             OpenClawAdaptiveHeaderRow(
                 title: "Docs",
                 subtitle: "Gateway setup, pairing, channels, and mobile node reference.",
-                titleFont: .headline,
-                subtitleFont: .caption)
+                titleFont: OpenClawType.headline,
+                subtitleFont: OpenClawType.caption)
             {
-                HStack(alignment: .top, spacing: 12) {
-                    if let headerLeadingAction {
-                        OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
+                HStack(spacing: 10) {
+                    if let headerSidebarAction {
+                        OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)
                     }
                     ProIconBadge(systemName: "book", color: OpenClawBrand.accent)
                 }
@@ -55,7 +80,8 @@ struct OpenClawDocsScreen: View {
             Button(action: gatewayAction) {
                 OpenClawGatewayCompactPill()
             }
-            .buttonStyle(.plain)
+            .buttonBorderShape(.capsule)
+            .openClawGlassButton()
             .accessibilityHint("Opens Settings / Gateway")
         } else {
             OpenClawGatewayCompactPill()
@@ -87,37 +113,21 @@ struct OpenClawDocsScreen: View {
         .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
-    private var versionCard: some View {
-        ProCard(radius: OpenClawProMetric.cardRadius) {
-            HStack(spacing: 10) {
-                Text("Version")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 8)
-                Text("v\(DeviceInfoHelper.openClawVersionString())")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.primary)
-                    .textSelection(.enabled)
-            }
-        }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
-    }
-
     private func docsLinkRow(title: String, detail: String, icon: String, url: URL) -> some View {
         Link(destination: url) {
             HStack(spacing: 12) {
                 ProIconBadge(systemName: icon, color: OpenClawBrand.accent)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(title)
-                        .font(.subheadline.weight(.semibold))
+                        .font(OpenClawType.subheadSemiBold)
                     Text(detail)
-                        .font(.caption)
+                        .font(OpenClawType.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
                 Spacer(minLength: 8)
                 Image(systemName: "arrow.up.right")
-                    .font(.caption.weight(.bold))
+                    .font(OpenClawType.captionBold)
                     .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 14)

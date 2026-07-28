@@ -1,5 +1,6 @@
 // Nostr plugin module implements nostr state store behavior.
 import { getNostrRuntime } from "./runtime.js";
+import { normalizeNostrStateAccountId } from "./state-account-id.js";
 
 const STORE_VERSION = 2;
 const PROFILE_STATE_VERSION = 1;
@@ -10,7 +11,7 @@ type NostrBusState = {
   lastProcessedAt: number | null;
   /** Gateway startup timestamp (seconds) - events before this are old */
   gatewayStartedAt: number | null;
-  /** Recent processed event IDs for overlap dedupe across restarts */
+  /** Retired replay-guard seed, cleared after durable ingress tombstone migration. */
   recentEventIds: string[];
 };
 
@@ -24,14 +25,6 @@ type NostrProfileState = {
   /** Per-relay publish results from last attempt */
   lastPublishResults: Record<string, "ok" | "failed" | "timeout"> | null;
 };
-
-function normalizeAccountId(accountId?: string): string {
-  const trimmed = accountId?.trim();
-  if (!trimmed) {
-    return "default";
-  }
-  return trimmed.replace(/[^a-z0-9._-]+/gi, "_");
-}
 
 function openNostrBusStateStore(env?: NodeJS.ProcessEnv) {
   return getNostrRuntime().state.openKeyedStore<NostrBusState>({
@@ -54,7 +47,9 @@ export async function readNostrBusState(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<NostrBusState | null> {
   return (
-    (await openNostrBusStateStore(params.env).lookup(normalizeAccountId(params.accountId))) ?? null
+    (await openNostrBusStateStore(params.env).lookup(
+      normalizeNostrStateAccountId(params.accountId),
+    )) ?? null
   );
 }
 
@@ -71,7 +66,10 @@ export async function writeNostrBusState(params: {
     gatewayStartedAt: params.gatewayStartedAt,
     recentEventIds: (params.recentEventIds ?? []).filter((x): x is string => typeof x === "string"),
   };
-  await openNostrBusStateStore(params.env).register(normalizeAccountId(params.accountId), payload);
+  await openNostrBusStateStore(params.env).register(
+    normalizeNostrStateAccountId(params.accountId),
+    payload,
+  );
 }
 
 /**
@@ -107,8 +105,9 @@ export async function readNostrProfileState(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<NostrProfileState | null> {
   return (
-    (await openNostrProfileStateStore(params.env).lookup(normalizeAccountId(params.accountId))) ??
-    null
+    (await openNostrProfileStateStore(params.env).lookup(
+      normalizeNostrStateAccountId(params.accountId),
+    )) ?? null
   );
 }
 
@@ -126,7 +125,7 @@ export async function writeNostrProfileState(params: {
     lastPublishResults: params.lastPublishResults,
   };
   await openNostrProfileStateStore(params.env).register(
-    normalizeAccountId(params.accountId),
+    normalizeNostrStateAccountId(params.accountId),
     payload,
   );
 }

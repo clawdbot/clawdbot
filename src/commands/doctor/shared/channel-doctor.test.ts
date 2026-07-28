@@ -150,6 +150,37 @@ describe("channel doctor compatibility mutations", () => {
     expect(mocks.getBundledChannelPlugin).not.toHaveBeenCalled();
   });
 
+  it("limits stale config cleanup to requested channel ids", async () => {
+    const matrixCleanup = vi.fn(({ cfg }: { cfg: unknown }) => ({
+      config: cfg,
+      changes: ["matrix cleanup"],
+    }));
+    const discordCleanup = vi.fn(({ cfg }: { cfg: unknown }) => ({
+      config: cfg,
+      changes: ["discord cleanup"],
+    }));
+    mocks.getBundledChannelSetupPlugin.mockImplementation((id: string) => ({
+      id,
+      doctor: {
+        cleanStaleConfig: id === "matrix" ? matrixCleanup : discordCleanup,
+      },
+    }));
+    const cfg = {
+      channels: {
+        discord: { enabled: true },
+        matrix: { enabled: true },
+      },
+    };
+
+    const result = await collectChannelDoctorStaleConfigMutations(cfg as never, {
+      channelIds: ["matrix"],
+    });
+
+    expect(result).toHaveLength(1);
+    expect(matrixCleanup).toHaveBeenCalledTimes(1);
+    expect(discordCleanup).not.toHaveBeenCalled();
+  });
+
   it("skips plugin discovery for explicitly disabled channels", () => {
     const result = collectChannelDoctorCompatibilityMutations({
       channels: {

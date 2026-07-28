@@ -4,12 +4,7 @@
  */
 import { expect, test } from "vitest";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
-import {
-  BRACKETED_PASTE_END,
-  BRACKETED_PASTE_START,
-  encodeKeySequence,
-  encodePaste,
-} from "./pty-keys.js";
+import { encodeKeySequence, encodePaste } from "./pty-keys.js";
 
 const ESC = "\x1b";
 
@@ -120,8 +115,8 @@ test("encodeKeySequence supports hex + literal with warnings", () => {
 
 test("encodePaste wraps bracketed sequences by default", () => {
   const payload = encodePaste("line1\nline2\n");
-  expect(payload.startsWith(BRACKETED_PASTE_START)).toBe(true);
-  expect(payload.endsWith(BRACKETED_PASTE_END)).toBe(true);
+  expect(payload.startsWith(`${ESC}[200~`)).toBe(true);
+  expect(payload.endsWith(`${ESC}[201~`)).toBe(true);
 });
 
 test("stripDsrRequests removes cursor queries and counts them", () => {

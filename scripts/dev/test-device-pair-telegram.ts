@@ -32,6 +32,21 @@ class UsageError extends Error {
   readonly exitCode = 1;
 }
 
+class CliArgumentError extends UsageError {}
+
+type DevicePairTelegramArgs = {
+  accountId?: string;
+  chatId?: string;
+  help: boolean;
+};
+
+const BOOLEAN_FLAGS = new Set(["--help", "-h"]);
+const VALUE_FLAGS = new Set(["--account", "-a", "--chat", "-c"]);
+
+function isMissingOptionValue(value: string | undefined): boolean {
+  return !value || BOOLEAN_FLAGS.has(value) || VALUE_FLAGS.has(value) || value.startsWith("--");
+}
+
 function writeStdoutLine(...parts: string[]): void {
   process.stdout.write(`${parts.join(" ")}\n`);
 }
@@ -57,7 +72,39 @@ function readArg(args: string[], flag: string, short?: string): string | undefin
 function usage(): string {
   return [
     "Usage: bun scripts/dev/test-device-pair-telegram.ts --chat <telegram-chat-id> [--account <accountId>]",
+    "",
+    "Options:",
+    "  --chat, -c <id>       Telegram chat id",
+    "  --account, -a <id>    Telegram account id",
+    "  -h, --help            Show this help",
   ].join("\n");
+}
+
+function validateArgs(args: readonly string[]): void {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] ?? "";
+    if (BOOLEAN_FLAGS.has(arg)) {
+      continue;
+    }
+    if (VALUE_FLAGS.has(arg)) {
+      const value = args[index + 1];
+      if (isMissingOptionValue(value)) {
+        throw new CliArgumentError(`${arg} requires a value`);
+      }
+      index += 1;
+      continue;
+    }
+    throw new CliArgumentError(`Unknown argument: ${arg}`);
+  }
+}
+
+function parseDevicePairTelegramArgs(args: readonly string[]): DevicePairTelegramArgs {
+  validateArgs(args);
+  return {
+    accountId: readArg([...args], "--account", "-a"),
+    chatId: readArg([...args], "--chat", "-c"),
+    help: args.includes("--help") || args.includes("-h"),
+  };
 }
 
 async function loadTelegramRuntimeSendMessage(): Promise<SendMessageTelegram> {
@@ -86,8 +133,10 @@ async function runDevicePairTelegram(
   args = process.argv.slice(2),
   deps: DevicePairTelegramDeps = createDefaultDeps(),
 ): Promise<DevicePairTelegramResult> {
-  const chatId = readArg(args, "--chat", "-c");
-  const accountId = readArg(args, "--account", "-a");
+  const { accountId, chatId, help } = parseDevicePairTelegramArgs(args);
+  if (help) {
+    throw new UsageError(usage());
+  }
   if (!chatId) {
     throw new UsageError(usage());
   }
@@ -133,7 +182,12 @@ async function runDevicePairTelegram(
 
 async function main(): Promise<void> {
   try {
-    const result = await runDevicePairTelegram();
+    const args = process.argv.slice(2);
+    if (args.includes("--help") || args.includes("-h")) {
+      writeStdoutLine(usage());
+      return;
+    }
+    const result = await runDevicePairTelegram(args);
     writeStdoutLine(
       "Sent split /pair messages to",
       result.chatId,
@@ -150,4 +204,4 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   await main();
 }
 
-export { runDevicePairTelegram };
+export { parseDevicePairTelegramArgs, runDevicePairTelegram };

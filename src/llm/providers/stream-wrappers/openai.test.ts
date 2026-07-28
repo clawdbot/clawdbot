@@ -7,6 +7,7 @@ import {
   createOpenAIAttributionHeadersWrapper,
   createOpenAICompletionsStrictMessageKeysWrapper,
   createOpenAICompletionsToolsCompatWrapper,
+  createOpenAIFastModeWrapper,
   createOpenAIThinkingLevelWrapper,
   createCodexNativeWebSearchWrapper,
 } from "./openai.js";
@@ -35,7 +36,23 @@ const openaiModel = {
   api: "openai-responses",
   provider: "openai",
   id: "gpt-5.2",
+  baseUrl: "https://api.openai.com/v1",
 } as Model<"openai-responses">;
+
+describe("createOpenAIFastModeWrapper", () => {
+  it("resolves dynamic fast mode for each stream call", () => {
+    const { baseStreamFn, payloads } = createPayloadCapture();
+    let enabled = true;
+    const wrapped = createOpenAIFastModeWrapper(baseStreamFn, () => enabled);
+
+    void wrapped(openaiModel, { messages: [] }, {});
+    enabled = false;
+    void wrapped(openaiModel, { messages: [] }, {});
+
+    expect(payloads[0]?.service_tier).toBe("priority");
+    expect(payloads[1]).not.toHaveProperty("service_tier");
+  });
+});
 
 describe("createOpenAICompletionsToolsCompatWrapper", () => {
   it("strips tools fields when OpenAI-compatible models disable tool support", () => {
@@ -186,12 +203,19 @@ describe("createCodexNativeWebSearchWrapper", () => {
         tools: [
           { name: "exec", description: "", parameters: {} },
           { name: "wait", description: "", parameters: {} },
+          { name: "sessions_yield", description: "", parameters: {} },
+          { name: "structured_output", description: "", parameters: {} },
         ],
       },
       {
         onPayload: async () => ({
           tools: [
             { type: "function", name: "exec" },
+            { type: "function", name: "computer" },
+            { type: "function", name: "image" },
+            { type: "function", name: "message" },
+            { type: "function", name: "sessions_yield" },
+            { type: "function", name: "structured_output" },
             {
               type: "function",
               get function(): { name: string } {
@@ -209,6 +233,8 @@ describe("createCodexNativeWebSearchWrapper", () => {
     expect(nextPayload).toEqual({
       tools: [
         { type: "function", name: "exec" },
+        { type: "function", name: "sessions_yield" },
+        { type: "function", name: "structured_output" },
         { type: "function", name: "wait" },
       ],
     });
@@ -256,6 +282,11 @@ describe("createCodexNativeWebSearchWrapper", () => {
         tools: [
           { type: "function", name: "exec" },
           { type: "function", name: "wait" },
+          { type: "function", name: "sessions_yield" },
+          { type: "function", name: "structured_output" },
+          { type: "function", name: "computer" },
+          { type: "function", name: "image" },
+          { type: "function", name: "message" },
           { type: "function", name: "read" },
         ],
       };
@@ -278,6 +309,8 @@ describe("createCodexNativeWebSearchWrapper", () => {
         tools: [
           { name: "exec", description: "", parameters: {} },
           { name: "wait", description: "", parameters: {} },
+          { name: "sessions_yield", description: "", parameters: {} },
+          { name: "structured_output", description: "", parameters: {} },
         ],
       },
       {},
@@ -287,6 +320,8 @@ describe("createCodexNativeWebSearchWrapper", () => {
     expect(payloads[0]?.tools).toEqual([
       { type: "function", name: "exec" },
       { type: "function", name: "wait" },
+      { type: "function", name: "sessions_yield" },
+      { type: "function", name: "structured_output" },
     ]);
   });
 
@@ -299,6 +334,11 @@ describe("createCodexNativeWebSearchWrapper", () => {
           {
             functionDeclarations: [
               { name: "exec", description: "Run code" },
+              { name: "sessions_yield", description: "Yield the current session" },
+              { name: "structured_output", description: "Return a structured response" },
+              { name: "computer", description: "Control a desktop" },
+              { name: "image", description: "Read an image" },
+              { name: "message", description: "Deliver the response" },
               { name: "read", description: "Read a file" },
               { name: "wait", description: "Resume code" },
             ],
@@ -325,6 +365,8 @@ describe("createCodexNativeWebSearchWrapper", () => {
         tools: [
           { name: "exec", description: "", parameters: {} },
           { name: "wait", description: "", parameters: {} },
+          { name: "sessions_yield", description: "", parameters: {} },
+          { name: "structured_output", description: "", parameters: {} },
         ],
       },
       {},
@@ -334,6 +376,8 @@ describe("createCodexNativeWebSearchWrapper", () => {
       {
         functionDeclarations: [
           { name: "exec", description: "Run code" },
+          { name: "sessions_yield", description: "Yield the current session" },
+          { name: "structured_output", description: "Return a structured response" },
           { name: "wait", description: "Resume code" },
         ],
       },
@@ -649,6 +693,61 @@ describe("createOpenAIThinkingLevelWrapper", () => {
     void wrapped(model as Model<typeof model.api>, { messages: [] }, {});
 
     expect(payloads[0]?.reasoning).toEqual({ effort: "xhigh" });
+  });
+
+  it("preserves max for native GPT-5.6 models", () => {
+    const { baseStreamFn, payloads } = createPayloadCapture({
+      initialReasoning: { effort: "xhigh", summary: "auto" },
+    });
+    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "max");
+    void wrapped(
+      {
+        ...openaiModel,
+        id: "gpt-5.6-sol",
+      },
+      { messages: [] },
+      {},
+    );
+
+    expect(payloads[0]?.reasoning).toEqual({ effort: "max", summary: "auto" });
+  });
+
+  it("raises unsupported minimal reasoning to low for native GPT-5.6 models", () => {
+    const { baseStreamFn, payloads } = createPayloadCapture({
+      initialReasoning: { effort: "minimal", summary: "auto" },
+    });
+    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "minimal");
+    void wrapped(
+      {
+        ...openaiModel,
+        id: "gpt-5.6-luna",
+      },
+      { messages: [] },
+      {},
+    );
+
+    expect(payloads[0]?.reasoning).toEqual({ effort: "low", summary: "auto" });
+  });
+
+  it("keeps max clamped to xhigh for earlier OpenAI and Azure models", () => {
+    const models = [
+      { ...openaiModel, id: "gpt-5.5" },
+      {
+        api: "azure-openai-responses",
+        provider: "azure-openai-responses",
+        id: "gpt-5.6-sol",
+        baseUrl: "https://example.openai.azure.com/openai",
+      } as Model<"azure-openai-responses">,
+    ];
+
+    for (const model of models) {
+      const { baseStreamFn, payloads } = createPayloadCapture({
+        initialReasoning: { effort: "high" },
+      });
+      const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "max");
+      void wrapped(model, { messages: [] }, {});
+      expect(payloads[0]?.reasoning).toEqual({ effort: "xhigh" });
+    }
   });
 });
 

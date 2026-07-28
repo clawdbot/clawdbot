@@ -2,7 +2,51 @@
 import { describe, expect, it } from "vitest";
 import { markdownToIR } from "./ir.js";
 
-describe("markdownToIR tableMode code - style overlap", () => {
+describe("markdownToIR tableMode code", () => {
+  it("aligns CJK and emoji cells by display width", () => {
+    const md = `
+| Kind | Value |
+| --- | --- |
+| 类型 | Frontend |
+| 👨‍👩‍👧‍👦 | Family |
+`.trim();
+
+    const ir = markdownToIR(md, { tableMode: "code" });
+
+    expect(ir.text).toBe(
+      [
+        "| Kind | Value    |",
+        "| ---- | -------- |",
+        "| 类型 | Frontend |",
+        "| 👨‍👩‍👧‍👦   | Family   |",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("keeps text-presentation and incomplete emoji sequences narrow", () => {
+    const md = `
+| I | L |
+| --- | --- |
+| © | text |
+| 1️ | selector |
+| A | ascii |
+`.trim();
+
+    const ir = markdownToIR(md, { tableMode: "code" });
+
+    expect(ir.text).toBe(
+      [
+        "| I | L        |",
+        "| --- | -------- |",
+        "| © | text     |",
+        "| 1️ | selector |",
+        "| A | ascii    |",
+        "",
+      ].join("\n"),
+    );
+  });
+
   it("should not have overlapping styles when cell has bold text", () => {
     const md = `
 | Name | Value |

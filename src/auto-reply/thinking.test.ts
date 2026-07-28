@@ -2,17 +2,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const providerRuntimeMocks = vi.hoisted(() => ({
-  resolveProviderBinaryThinking: vi.fn(),
-  resolveProviderDefaultThinkingLevel: vi.fn(),
   resolveProviderThinkingProfile: vi.fn(),
-  resolveProviderXHighThinking: vi.fn(),
 }));
 
 vi.mock("../plugins/provider-thinking.js", () => ({
-  resolveProviderBinaryThinking: providerRuntimeMocks.resolveProviderBinaryThinking,
-  resolveProviderDefaultThinkingLevel: providerRuntimeMocks.resolveProviderDefaultThinkingLevel,
   resolveProviderThinkingProfile: providerRuntimeMocks.resolveProviderThinkingProfile,
-  resolveProviderXHighThinking: providerRuntimeMocks.resolveProviderXHighThinking,
 }));
 
 const {
@@ -25,17 +19,12 @@ const {
   formatThinkingLevels,
   resolveSupportedThinkingLevel,
   resolveThinkingDefaultForModel,
+  resolveEffectiveResponseUsage,
 } = await import("./thinking.js");
 
 beforeEach(() => {
-  providerRuntimeMocks.resolveProviderBinaryThinking.mockReset();
-  providerRuntimeMocks.resolveProviderBinaryThinking.mockReturnValue(undefined);
-  providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockReset();
-  providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockReturnValue(undefined);
   providerRuntimeMocks.resolveProviderThinkingProfile.mockReset();
   providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue(undefined);
-  providerRuntimeMocks.resolveProviderXHighThinking.mockReset();
-  providerRuntimeMocks.resolveProviderXHighThinking.mockReturnValue(undefined);
 });
 
 describe("normalizeThinkLevel", () => {
@@ -76,28 +65,39 @@ describe("normalizeThinkLevel", () => {
     expect(normalizeThinkLevel("max")).toBe("max");
     expect(normalizeThinkLevel("MAX")).toBe("max");
   });
+
+  it("keeps explicit Ultra distinct from the legacy ultrathink alias", () => {
+    expect(normalizeThinkLevel("ultra")).toBe("ultra");
+    expect(normalizeThinkLevel("ULTRA")).toBe("ultra");
+    expect(normalizeThinkLevel("ultrathink")).toBe("high");
+  });
 });
 
 describe("listThinkingLevels", () => {
-  it("uses provider runtime hooks for xhigh support", () => {
-    providerRuntimeMocks.resolveProviderXHighThinking.mockReturnValue(true);
+  it("uses provider thinking profiles for xhigh support", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [{ id: "off" }, { id: "low" }, { id: "xhigh" }],
+    });
 
     expect(listThinkingLevels("demo", "demo-model")).toContain("xhigh");
   });
 
-  it("uses provider runtime hooks for xhigh labels", () => {
-    providerRuntimeMocks.resolveProviderXHighThinking.mockReturnValue(true);
+  it("uses provider thinking profiles for xhigh labels", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [{ id: "off" }, { id: "low" }, { id: "xhigh" }],
+    });
 
     expect(listThinkingLevelLabels("demo", "demo-model")).toContain("xhigh");
   });
 
   it("includes xhigh for provider-advertised models", () => {
-    providerRuntimeMocks.resolveProviderXHighThinking.mockImplementation(({ provider, context }) =>
-      (provider === "openai" &&
-        ["gpt-5.4", "gpt-5.4-pro", "gpt-5.3-codex-spark"].includes(context.modelId)) ||
-      (provider === "github-copilot" && context.modelId === "gpt-5.4")
-        ? true
-        : undefined,
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(
+      ({ provider, context }) =>
+        (provider === "openai" &&
+          ["gpt-5.4", "gpt-5.4-pro", "gpt-5.3-codex-spark"].includes(context.modelId)) ||
+        (provider === "github-copilot" && context.modelId === "gpt-5.4")
+          ? { levels: [{ id: "off" }, { id: "low" }, { id: "xhigh" }] }
+          : undefined,
     );
 
     for (const [provider, model] of [
@@ -116,6 +116,38 @@ describe("listThinkingLevels", () => {
 
   it("does not include max without provider support", () => {
     expect(listThinkingLevels("openai", "gpt-5.4")).not.toContain("max");
+  });
+
+  it("passes the effective agent runtime into provider thinking profiles", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ context }) => ({
+      levels: [
+        { id: "off" },
+        { id: "max" },
+        ...(context.agentRuntime === "openclaw" ? [{ id: "ultra" as const }] : []),
+      ],
+    }));
+
+    expect(listThinkingLevels("openai", "gpt-5.6-luna", undefined, "openclaw")).toContain("ultra");
+    expect(listThinkingLevels("openai", "gpt-5.6-luna", undefined, "codex")).not.toContain("ultra");
+    expect(providerRuntimeMocks.resolveProviderThinkingProfile).toHaveBeenLastCalledWith({
+      provider: "openai",
+      context: expect.objectContaining({ agentRuntime: "codex" }),
+    });
+  });
+
+  it("can clamp from active provider facts without public artifact fallback", () => {
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "deepseek",
+        model: "deepseek-v4-pro",
+        level: "medium",
+        providerPolicySource: "active",
+      }),
+    ).toBe("medium");
+    expect(providerRuntimeMocks.resolveProviderThinkingProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "deepseek" }),
+      { allowPublicArtifactFallback: false },
+    );
   });
 
   it("does not include adaptive without provider support", () => {
@@ -147,13 +179,11 @@ describe("listThinkingLevels", () => {
     ]);
   });
 
-  it("uses provider thinking profiles ahead of legacy hooks", () => {
+  it("uses provider thinking profiles as the canonical policy", () => {
     providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
       levels: [{ id: "off" }, { id: "low", label: "on" }],
       defaultLevel: "off",
     });
-    providerRuntimeMocks.resolveProviderXHighThinking.mockReturnValue(true);
-
     expect(listThinkingLevels("demo", "demo-model")).toEqual(["off", "low"]);
     expect(listThinkingLevelLabels("demo", "demo-model")).toEqual(["off", "on"]);
   });
@@ -572,7 +602,12 @@ describe("listThinkingLevels", () => {
   });
 
   it("does not let catalog xhigh compat override binary thinking providers", () => {
-    providerRuntimeMocks.resolveProviderBinaryThinking.mockReturnValue(true);
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [
+        { id: "off", label: "off" },
+        { id: "low", label: "on" },
+      ],
+    });
     const catalog = [
       {
         provider: "zai",
@@ -646,18 +681,44 @@ describe("listThinkingLevels", () => {
       }),
     ).toBe("high");
   });
+
+  it("clamps a below-range request down to the cheapest level on a no-off profile", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [{ id: "low" }, { id: "medium" }, { id: "high" }],
+    });
+
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "demo-noff",
+        model: "demo-model",
+        level: "off",
+      }),
+    ).toBe("low");
+  });
 });
 
 describe("listThinkingLevelLabels", () => {
-  it("uses provider runtime hooks for binary thinking providers", () => {
-    providerRuntimeMocks.resolveProviderBinaryThinking.mockReturnValue(true);
+  it("uses provider thinking profiles for binary thinking providers", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [
+        { id: "off", label: "off" },
+        { id: "low", label: "on" },
+      ],
+    });
 
     expect(listThinkingLevelLabels("demo", "demo-model")).toEqual(["off", "on"]);
   });
 
   it("returns on/off for provider-advertised binary thinking", () => {
-    providerRuntimeMocks.resolveProviderBinaryThinking.mockImplementation(({ provider }) =>
-      provider === "zai" ? true : undefined,
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ provider }) =>
+      provider === "zai"
+        ? {
+            levels: [
+              { id: "off", label: "off" },
+              { id: "low", label: "on" },
+            ],
+          }
+        : undefined,
     );
 
     expect(listThinkingLevelLabels("zai", "glm-4.7")).toEqual(["off", "on"]);
@@ -675,8 +736,11 @@ describe("listThinkingLevelLabels", () => {
 });
 
 describe("resolveThinkingDefaultForModel", () => {
-  it("uses provider runtime hooks for default thinking levels", () => {
-    providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockReturnValue("adaptive");
+  it("uses provider thinking profiles for default thinking levels", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [{ id: "off" }, { id: "adaptive" }],
+      defaultLevel: "adaptive",
+    });
 
     expect(resolveThinkingDefaultForModel({ provider: "demo", model: "demo-model" })).toBe(
       "adaptive",
@@ -684,9 +748,11 @@ describe("resolveThinkingDefaultForModel", () => {
   });
 
   it("uses provider-advertised adaptive defaults", () => {
-    providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockImplementation(
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(
       ({ provider, context }) =>
-        provider === "anthropic" && context.modelId === "claude-opus-4-6" ? "adaptive" : undefined,
+        provider === "anthropic" && context.modelId === "claude-opus-4-6"
+          ? { levels: [{ id: "off" }, { id: "adaptive" }], defaultLevel: "adaptive" }
+          : undefined,
     );
 
     expect(
@@ -695,10 +761,10 @@ describe("resolveThinkingDefaultForModel", () => {
   });
 
   it("does not apply provider-advertised adaptive defaults across Bedrock id variants", () => {
-    providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockImplementation(
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(
       ({ provider, context }) =>
         provider === "amazon-bedrock" && context.modelId === "claude-sonnet-4-6"
-          ? "adaptive"
+          ? { levels: [{ id: "off" }, { id: "adaptive" }], defaultLevel: "adaptive" }
           : undefined,
     );
 
@@ -727,8 +793,8 @@ describe("resolveThinkingDefaultForModel", () => {
   });
 
   it("remaps implicit reasoning defaults to the strongest supported level at or below medium", () => {
-    providerRuntimeMocks.resolveProviderBinaryThinking.mockImplementation(
-      ({ provider }) => provider === "demo-binary",
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ provider }) =>
+      provider === "demo-binary" ? { levels: [{ id: "off" }, { id: "low" }] } : undefined,
     );
 
     expect(
@@ -805,5 +871,48 @@ describe("normalizeReasoningLevel", () => {
   it("accepts stream", () => {
     expect(normalizeReasoningLevel("stream")).toBe("stream");
     expect(normalizeReasoningLevel("streaming")).toBe("stream");
+  });
+});
+
+describe("resolveEffectiveResponseUsage", () => {
+  it("returns off when session is unset and no config is provided", () => {
+    expect(resolveEffectiveResponseUsage(undefined, undefined)).toBe("off");
+    expect(resolveEffectiveResponseUsage(null, undefined)).toBe("off");
+  });
+
+  it("applies config default when session is unset", () => {
+    expect(resolveEffectiveResponseUsage(undefined, "tokens")).toBe("tokens");
+    expect(resolveEffectiveResponseUsage(undefined, "full")).toBe("full");
+  });
+
+  it("applies per-channel config entry when session is unset", () => {
+    const cfg = { default: "off", discord: "full", telegram: "tokens" } as const;
+    expect(resolveEffectiveResponseUsage(undefined, cfg, "discord")).toBe("full");
+    expect(resolveEffectiveResponseUsage(undefined, cfg, "telegram")).toBe("tokens");
+    // Unknown channel falls back to config default
+    expect(resolveEffectiveResponseUsage(undefined, cfg, "whatsapp")).toBe("off");
+  });
+
+  it("session explicit off overrides any config default", () => {
+    // Explicit "off" is stored and wins — non-off config default cannot re-enable it.
+    expect(resolveEffectiveResponseUsage("off", "tokens")).toBe("off");
+    expect(resolveEffectiveResponseUsage("off", "full")).toBe("off");
+    expect(
+      resolveEffectiveResponseUsage("off", { default: "full", discord: "full" }, "discord"),
+    ).toBe("off");
+  });
+
+  it("session explicit on value overrides config default", () => {
+    expect(resolveEffectiveResponseUsage("tokens", "full")).toBe("tokens");
+    expect(resolveEffectiveResponseUsage("full", "off")).toBe("full");
+  });
+
+  it("unset (undefined/null) falls through to config; explicit off does not", () => {
+    // These two are distinct states:
+    // - undefined = unset/inherit → gets config default
+    // - "off"     = explicit off  → stays off
+    const cfg = "tokens" as const;
+    expect(resolveEffectiveResponseUsage(undefined, cfg)).toBe("tokens"); // inherits
+    expect(resolveEffectiveResponseUsage("off", cfg)).toBe("off"); // explicit off persists
   });
 });

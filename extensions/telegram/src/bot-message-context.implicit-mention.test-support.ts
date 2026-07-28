@@ -1,7 +1,15 @@
 // Telegram plugin module implements bot message context.implicit mention support behavior.
 import { describe, expect, it } from "vitest";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
-import { TELEGRAM_FORUM_SERVICE_FIELDS } from "./forum-service-message.js";
+
+const TELEGRAM_FORUM_SERVICE_FIELDS = [
+  "forum_topic_created",
+  "forum_topic_edited",
+  "forum_topic_closed",
+  "forum_topic_reopened",
+  "general_forum_topic_hidden",
+  "general_forum_topic_unhidden",
+] as const;
 
 describe("buildTelegramMessageContext implicitMention forum service messages", () => {
   /**
@@ -106,6 +114,8 @@ describe("buildTelegramMessageContext implicitMention forum service messages", (
     // Real bot reply → implicitMention fires → message is NOT skipped.
     expect(ctx).not.toBeNull();
     expect(ctx?.ctxPayload?.WasMentioned).toBe(true);
+    expect(ctx?.ctxPayload?.MentionSource).toBe("implicit_thread");
+    expect(ctx?.ctxPayload?.ImplicitMentionKinds).toEqual(["reply_to_bot"]);
   });
 
   it("DOES trigger implicitMention for bot media messages with caption", async () => {

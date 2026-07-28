@@ -1,6 +1,7 @@
 // Respawn child runner restarts child processes after configured exits.
 import type { ChildProcess, spawn } from "node:child_process";
 import type { attachChildProcessBridge } from "./child-process-bridge.js";
+import { signalProcessTree } from "./kill-tree.js";
 
 const RESPAWN_SIGNAL_EXIT_GRACE_MS = 1_000;
 const RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS = 1_000;
@@ -16,13 +17,19 @@ export function runRespawnChildWithSignalBridge(params: {
   command: string;
   args: string[];
   env: NodeJS.ProcessEnv;
+  detachForProcessTree?: boolean;
+  stdioIsTerminal?: boolean;
   runtime: RespawnChildRuntime;
   onError: (error: unknown) => void;
 }): ChildProcess {
   const { command, args, env, runtime, onError } = params;
+  const stdioIsTerminal = params.stdioIsTerminal ?? (process.stdin.isTTY || process.stdout.isTTY);
+  const detachForProcessTree =
+    params.detachForProcessTree === true && process.platform !== "win32" && !stdioIsTerminal;
   const child = runtime.spawn(command, args, {
     stdio: "inherit",
     env,
+    detached: detachForProcessTree,
   });
 
   // Let the child honor forwarded signals first; then terminate it so the
@@ -30,6 +37,9 @@ export function runRespawnChildWithSignalBridge(params: {
   let signalExitTimer: NodeJS.Timeout | undefined;
   let signalForceKillTimer: NodeJS.Timeout | undefined;
   let signalHardExitTimer: NodeJS.Timeout | undefined;
+  let parentSignalReceived = false;
+  let firstForwardedSignal: NodeJS.Signals | undefined;
+  let hardKillBackstopStarted = false;
   const clearSignalTimers = (): void => {
     if (signalExitTimer) {
       clearTimeout(signalExitTimer);
@@ -44,20 +54,28 @@ export function runRespawnChildWithSignalBridge(params: {
       signalHardExitTimer = undefined;
     }
   };
+  const signalChild = (signal: "SIGTERM" | "SIGKILL"): void => {
+    if (detachForProcessTree && typeof child.pid === "number" && child.pid > 0) {
+      signalProcessTree(child.pid, signal, { detached: true });
+      return;
+    }
+    child.kill(signal === "SIGKILL" && process.platform === "win32" ? "SIGTERM" : signal);
+  };
   const forceKillChild = (): void => {
     try {
-      child.kill(process.platform === "win32" ? "SIGTERM" : "SIGKILL");
+      signalChild("SIGKILL");
     } catch {
       // Best-effort shutdown fallback.
     }
   };
   const requestChildTermination = (): void => {
     try {
-      child.kill("SIGTERM");
+      signalChild("SIGTERM");
     } catch {
       // Best-effort shutdown fallback.
     }
     signalForceKillTimer = setTimeout(() => {
+      hardKillBackstopStarted = true;
       forceKillChild();
       signalHardExitTimer = setTimeout(() => {
         runtime.exit(1);
@@ -66,7 +84,9 @@ export function runRespawnChildWithSignalBridge(params: {
     }, RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS);
     signalForceKillTimer.unref?.();
   };
-  const scheduleParentExit = (): void => {
+  const scheduleParentExit = (signal: NodeJS.Signals): void => {
+    parentSignalReceived = true;
+    firstForwardedSignal ??= signal;
     if (signalExitTimer) {
       return;
     }
@@ -81,9 +101,20 @@ export function runRespawnChildWithSignalBridge(params: {
   });
 
   child.once("exit", (code, signal) => {
+    if (parentSignalReceived && detachForProcessTree) {
+      forceKillChild();
+    }
     clearSignalTimers();
     if (signal) {
-      runtime.exit(1);
+      const forwardedSignalExitCode =
+        !hardKillBackstopStarted && signal === firstForwardedSignal
+          ? signal === "SIGINT"
+            ? 130
+            : signal === "SIGTERM"
+              ? 143
+              : undefined
+          : undefined;
+      runtime.exit(forwardedSignalExitCode ?? 1);
       return;
     }
     runtime.exit(code ?? 1);

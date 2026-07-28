@@ -8,11 +8,11 @@ import { resolveEffectiveOAuthCredential } from "./effective-oauth.js";
 import type { OAuthCredential } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
-  readManagedExternalCliCredential: vi.fn<() => OAuthCredential | null>(() => null),
+  readExternalCliBootstrapCredential: vi.fn<() => OAuthCredential | null>(() => null),
 }));
 
 vi.mock("./external-cli-sync.js", () => ({
-  readManagedExternalCliCredential: mocks.readManagedExternalCliCredential,
+  readExternalCliBootstrapCredential: mocks.readExternalCliBootstrapCredential,
 }));
 
 function makeCredential(overrides: Partial<OAuthCredential> = {}): OAuthCredential {
@@ -28,7 +28,7 @@ function makeCredential(overrides: Partial<OAuthCredential> = {}): OAuthCredenti
 
 describe("resolveEffectiveOAuthCredential", () => {
   beforeEach(() => {
-    mocks.readManagedExternalCliCredential.mockReset().mockReturnValue(null);
+    mocks.readExternalCliBootstrapCredential.mockReset().mockReturnValue(null);
   });
 
   it("uses external cli oauth only when local credentials are unusable and safe to bootstrap", () => {
@@ -37,10 +37,11 @@ describe("resolveEffectiveOAuthCredential", () => {
       refresh: "fresh-cli-refresh-token",
       expires: Date.now() + 30 * 60_000,
     });
-    mocks.readManagedExternalCliCredential.mockReturnValue(imported);
+    mocks.readExternalCliBootstrapCredential.mockReturnValue(imported);
 
     expect(
       resolveEffectiveOAuthCredential({
+        store: { version: 1, profiles: {} },
         profileId: "openai:default",
         credential: makeCredential(),
       }),
@@ -58,10 +59,11 @@ describe("resolveEffectiveOAuthCredential", () => {
       refresh: "healthy-local-refresh-token",
       expires: Date.now() + 30 * 60_000,
     });
-    mocks.readManagedExternalCliCredential.mockReturnValue(imported);
+    mocks.readExternalCliBootstrapCredential.mockReturnValue(imported);
 
     expect(
       resolveEffectiveOAuthCredential({
+        store: { version: 1, profiles: {} },
         profileId: "openai:default",
         credential: local,
       }),
@@ -75,10 +77,11 @@ describe("resolveEffectiveOAuthCredential", () => {
       expires: Date.now() + 30 * 60_000,
       accountId: "acct-external",
     });
-    mocks.readManagedExternalCliCredential.mockReturnValue(imported);
+    mocks.readExternalCliBootstrapCredential.mockReturnValue(imported);
 
     expect(
       resolveEffectiveOAuthCredential({
+        store: { version: 1, profiles: {} },
         profileId: "openai:default",
         credential: local,
       }),

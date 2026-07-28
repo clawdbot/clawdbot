@@ -1,8 +1,7 @@
 // Telegram plugin module implements inbound event delivery behavior.
 import { stripTelegramInternalPrefixes } from "./targets.js";
 
-export type TelegramInboundEventDeliveryEnd = () => void;
-export type TelegramInboundEventDeliveryKind = "user_request" | "room_event";
+type TelegramInboundEventDeliveryEnd = () => void;
 
 type ActiveInboundEvent = {
   outboundTo: string;
@@ -40,7 +39,7 @@ function telegramDeliveryTargetsMatch(expected: string, actual: string): boolean
   );
 }
 
-export function resolveTelegramInboundEventDeliveryCorrelationKey(
+function resolveTelegramInboundEventDeliveryCorrelationKey(
   sessionKey: string | undefined,
   inboundEventKind?: string,
 ): string | undefined {

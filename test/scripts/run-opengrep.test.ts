@@ -68,6 +68,56 @@ describe("run-opengrep.sh", () => {
     expect(args).toContain("security/opengrep/precise.yml");
   });
 
+  it("writes empty SARIF when a changed scan has no first-party paths", () => {
+    const repo = createTempDir("openclaw-run-opengrep-empty-sarif-");
+    git(repo, "init", "-q");
+    git(repo, "config", "user.email", "test@example.com");
+    git(repo, "config", "user.name", "Test User");
+
+    copyRunOpengrepFiles(repo);
+    writeFile(path.join(repo, "security/opengrep/precise.yml"), "rules: []\n");
+    writeFile(path.join(repo, ".github/actions/ensure-base-commit/action.yml"), "name: ensure\n");
+    git(repo, "add", ".");
+    git(repo, "commit", "-qm", "initial");
+
+    fs.appendFileSync(
+      path.join(repo, ".github/actions/ensure-base-commit/action.yml"),
+      "# changed\n",
+    );
+    const argsPath = path.join(repo, "opengrep-args.txt");
+    const binDir = path.join(repo, "bin");
+    fs.mkdirSync(binDir);
+    writeFile(
+      path.join(binDir, "opengrep"),
+      [
+        "#!/usr/bin/env bash",
+        `printf '%s\\n' "$@" > ${JSON.stringify(argsPath)}`,
+        "exit 0",
+        "",
+      ].join("\n"),
+    );
+    fs.chmodSync(path.join(binDir, "opengrep"), 0o755);
+
+    execFileSync("bash", ["scripts/run-opengrep.sh", "--changed", "--sarif", "--error"], {
+      cwd: repo,
+      env: {
+        ...process.env,
+        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+        OPENCLAW_OPENGREP_BASE_REF: "HEAD",
+      },
+      encoding: "utf8",
+    });
+
+    const sarif = JSON.parse(
+      fs.readFileSync(path.join(repo, ".opengrep-out/precise.sarif"), "utf8"),
+    );
+    expect(sarif.version).toBe("2.1.0");
+    expect(sarif.runs[0].tool.driver.name).toBe("Opengrep OSS");
+    expect(sarif.runs[0].tool.driver.semanticVersion).toBe("1.25.0");
+    expect(sarif.runs[0].results).toEqual([]);
+    expect(fs.existsSync(argsPath)).toBe(false);
+  });
+
   it("scans PR files instead of main-only files when the payload base is stale", () => {
     const repo = createTempDir("openclaw-run-opengrep-merge-");
     git(repo, "init", "-q", "--initial-branch=main");

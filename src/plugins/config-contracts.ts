@@ -1,17 +1,15 @@
 /** Resolves plugin config contract metadata for scanners and secret/config policy checks. */
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { findBundledPluginMetadataById } from "./bundled-plugin-metadata.js";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginManifestConfigContracts } from "./manifest.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
-export {
-  collectPluginConfigContractMatches,
-  type PluginConfigContractMatch,
-} from "./config-contract-matches.js";
+export { collectPluginConfigContractMatches } from "./config-contract-matches.js";
 
-export type PluginConfigContractMetadata = {
+type PluginConfigContractMetadata = {
   /** Runtime origin that supplied the contract metadata. */
   origin: PluginOrigin;
   /** Manifest-declared config contract paths used by secret/security/config scanners. */
@@ -59,6 +57,15 @@ export function resolvePluginConfigContractsById(params: {
     });
     for (const plugin of registry.plugins) {
       bundledContractFallbacks.set(plugin.id, plugin.configContracts);
+    }
+    if (bundledContractFallbacks.get(pluginId) === undefined) {
+      const bundledMetadata = findBundledPluginMetadataById(pluginId, {
+        includeChannelConfigs: false,
+        includeSyntheticChannelConfigs: false,
+      });
+      if (bundledMetadata?.manifest.configContracts) {
+        bundledContractFallbacks.set(pluginId, bundledMetadata.manifest.configContracts);
+      }
     }
     if (!bundledContractFallbacks.has(pluginId)) {
       bundledContractFallbacks.set(pluginId, undefined);

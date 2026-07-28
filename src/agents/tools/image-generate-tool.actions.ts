@@ -17,15 +17,16 @@ import {
   listActiveImageGenerationTasksForSession,
 } from "../image-generation-task-status.js";
 import {
+  createMediaGenerateDuplicateGuardResult,
   createMediaGenerateProviderListActionResult,
   createMediaGenerateTaskStatusActions,
   type MediaGenerateActionResult,
 } from "./media-generate-tool-actions-shared.js";
 
-export type ImageGenerateActionResult = MediaGenerateActionResult;
+type ImageGenerateActionResult = MediaGenerateActionResult;
 
 /** Formats provider auth setup hints for the image generation `list` action. */
-export function formatImageGenerationAuthHint(provider: {
+function formatImageGenerationAuthHint(provider: {
   id: string;
   authEnvVars: readonly string[];
 }): string | undefined {
@@ -39,17 +40,26 @@ export function formatImageGenerationAuthHint(provider: {
 }
 
 /** Lists supported image-generation modes exposed by a provider. */
-export function listSupportedImageGenerationModes(provider: ImageGenerationProvider): string[] {
+function listSupportedImageGenerationModes(provider: ImageGenerationProvider): string[] {
   return ["generate", ...(provider.capabilities.edit.enabled ? ["edit"] : [])];
 }
 
 /** Formats provider capability details for the image generation `list` action. */
-export function summarizeImageGenerationCapabilities(provider: ImageGenerationProvider): string {
+function summarizeImageGenerationCapabilities(provider: ImageGenerationProvider): string {
   const caps: string[] = [];
   if (provider.capabilities.edit.enabled) {
-    const maxRefs = provider.capabilities.edit.maxInputImages;
+    const modelLimits = Object.values(provider.capabilities.edit.maxInputImagesByModel ?? {})
+      .concat(Object.values(provider.capabilities.edit.maxInputImagesByModelPrefix ?? {}))
+      .filter((value) => Number.isFinite(value));
+    const declaredLimits = [
+      ...(typeof provider.capabilities.edit.maxInputImages === "number"
+        ? [provider.capabilities.edit.maxInputImages]
+        : []),
+      ...modelLimits,
+    ];
+    const maxRefs = declaredLimits.length > 0 ? Math.max(...declaredLimits) : undefined;
     caps.push(
-      `editing${typeof maxRefs === "number" ? ` up to ${maxRefs} ref${maxRefs === 1 ? "" : "s"}` : ""}`,
+      `editing${typeof maxRefs === "number" ? ` up to ${maxRefs} ref${maxRefs === 1 ? "" : "s"}` : ""}${modelLimits.length > 0 ? " depending on model" : ""}`,
     );
   }
   if ((provider.capabilities.geometry?.resolutions?.length ?? 0) > 0) {
@@ -121,24 +131,12 @@ export function createImageGenerateDuplicateGuardResult(
   sessionKey?: string,
   params?: { prompt?: string; requestKey?: string },
 ): ImageGenerateActionResult | undefined {
-  const blockingTask = findDuplicateGuardImageGenerationTaskForSession(sessionKey, {
+  return createMediaGenerateDuplicateGuardResult({
+    sessionKey,
     prompt: params?.prompt,
     requestKey: params?.requestKey,
+    findDuplicateTask: findDuplicateGuardImageGenerationTaskForSession,
+    buildStatusText: buildImageGenerationTaskStatusText,
+    buildStatusDetails: buildImageGenerationTaskStatusDetails,
   });
-  if (!blockingTask) {
-    return undefined;
-  }
-  return {
-    content: [
-      {
-        type: "text",
-        text: buildImageGenerationTaskStatusText(blockingTask, { duplicateGuard: true }),
-      },
-    ],
-    details: {
-      action: "status",
-      duplicateGuard: true,
-      ...buildImageGenerationTaskStatusDetails(blockingTask),
-    },
-  };
 }

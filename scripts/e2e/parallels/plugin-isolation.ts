@@ -9,7 +9,85 @@ interface PluginIsolationOptions {
   nodeCommand?: string;
 }
 
-export function providerOnlyPluginId(modelId: string, fallbackPluginId: string): string {
+export function posixCodexPlatformPackageRepairFunction(): string {
+  return `repair_missing_codex_platform_package() {
+  output_file="$1"
+  grep -F 'Missing optional dependency @openai/codex-' "$output_file" >/dev/null 2>&1 || return 1
+  state_home="\${OPENCLAW_PARALLELS_HOME:-\${HOME:-}}"
+  codex_manifest=""
+  for candidate in "$state_home"/.openclaw/npm/projects/*/node_modules/@openclaw/codex/package.json; do
+    [ -f "$candidate" ] || continue
+    codex_manifest="$candidate"
+    break
+  done
+  if [ -z "$codex_manifest" ]; then
+    echo "codex-platform-repair: managed Codex project not found" >&2
+    return 1
+  fi
+  project_root="\${codex_manifest%/node_modules/@openclaw/codex/package.json}"
+  cache_dir="$(mktemp -d "\${TMPDIR:-/tmp}/openclaw-npm-cache.XXXXXX")"
+  echo "codex-platform-repair: retrying managed npm install once with a fresh cache" >&2
+  repair_rc=0
+  (
+    cd "$project_root"
+    NPM_CONFIG_CACHE="$cache_dir" npm_config_cache="$cache_dir" npm install --omit=dev --omit=peer --legacy-peer-deps --ignore-scripts --no-audit --no-fund
+  ) || repair_rc=$?
+  rm -rf "$cache_dir"
+  if [ "$repair_rc" -ne 0 ]; then
+    echo "codex-platform-repair: npm install failed with exit code $repair_rc" >&2
+    return "$repair_rc"
+  fi
+  echo "codex-platform-repair: managed npm install completed" >&2
+}`;
+}
+
+export function windowsCodexPlatformPackageRepairFunction(): string {
+  return String.raw`function Repair-MissingCodexPlatformPackage {
+  param([object[]] $Output)
+  $outputText = $Output | Out-String
+  if ($outputText -notmatch [regex]::Escape('Missing optional dependency @openai/codex-')) {
+    return $false
+  }
+  $projectsRoot = Join-Path $env:USERPROFILE '.openclaw\npm\projects'
+  $codexManifest = Get-ChildItem -Path $projectsRoot -Filter package.json -File -Recurse -ErrorAction SilentlyContinue |
+    Where-Object { $_.FullName -match 'node_modules[\\/]@openclaw[\\/]codex[\\/]package\.json$' } |
+    Select-Object -First 1
+  if (-not $codexManifest) {
+    Write-Warning 'codex-platform-repair: managed Codex project not found'
+    return $false
+  }
+  $projectRoot = $codexManifest.Directory.Parent.Parent.Parent.FullName
+  $cacheDir = Join-Path ([System.IO.Path]::GetTempPath()) ('openclaw-npm-cache-' + [guid]::NewGuid().ToString('N'))
+  $oldUpperCache = [Environment]::GetEnvironmentVariable('NPM_CONFIG_CACHE', 'Process')
+  $oldLowerCache = [Environment]::GetEnvironmentVariable('npm_config_cache', 'Process')
+  $pushedLocation = $false
+  $repairExit = 1
+  try {
+    New-Item -ItemType Directory -Path $cacheDir -Force | Out-Null
+    [Environment]::SetEnvironmentVariable('NPM_CONFIG_CACHE', $cacheDir, 'Process')
+    [Environment]::SetEnvironmentVariable('npm_config_cache', $cacheDir, 'Process')
+    Push-Location $projectRoot
+    $pushedLocation = $true
+    Write-Host 'codex-platform-repair: retrying managed npm install once with a fresh cache'
+    $repairOutput = & npm.cmd install --omit=dev --omit=peer --legacy-peer-deps --ignore-scripts --no-audit --no-fund 2>&1
+    $repairExit = $LASTEXITCODE
+    if ($null -ne $repairOutput) { $repairOutput | ForEach-Object { Write-Host $_ } }
+  } finally {
+    if ($pushedLocation) { Pop-Location }
+    [Environment]::SetEnvironmentVariable('NPM_CONFIG_CACHE', $oldUpperCache, 'Process')
+    [Environment]::SetEnvironmentVariable('npm_config_cache', $oldLowerCache, 'Process')
+    Remove-Item $cacheDir -Force -Recurse -ErrorAction SilentlyContinue
+  }
+  if ($repairExit -ne 0) {
+    Write-Warning "codex-platform-repair: npm install failed with exit code $repairExit"
+    return $false
+  }
+  Write-Host 'codex-platform-repair: managed npm install completed'
+  return $true
+}`;
+}
+
+function providerOnlyPluginId(modelId: string, fallbackPluginId: string): string {
   return providerIdFromModelId(modelId) || fallbackPluginId;
 }
 
@@ -31,14 +109,17 @@ export function windowsProviderOnlyPluginIsolationScript(options: PluginIsolatio
   return `$env:OPENCLAW_PARALLELS_PLUGIN_ISOLATION = @'
 ${payloadJson}
 '@
-$isolationScriptPath = Join-Path ([System.IO.Path]::GetTempPath()) 'openclaw-parallels-plugin-isolation.cjs'
+$isolationScriptPath = Join-Path ([System.IO.Path]::GetTempPath()) ('openclaw-parallels-plugin-isolation-' + [guid]::NewGuid().ToString('N') + '.cjs')
+try {
 @'
 ${providerOnlyPluginIsolationNodeSource()}
 '@ | Set-Content -Path $isolationScriptPath -Encoding UTF8
 node.exe $isolationScriptPath
 if ($LASTEXITCODE -ne 0) { throw "plugin isolation failed with exit code $LASTEXITCODE" }
-Remove-Item $isolationScriptPath -Force -ErrorAction SilentlyContinue
-Remove-Item Env:OPENCLAW_PARALLELS_PLUGIN_ISOLATION -Force -ErrorAction SilentlyContinue`;
+} finally {
+  Remove-Item $isolationScriptPath -Force -ErrorAction SilentlyContinue
+  Remove-Item Env:OPENCLAW_PARALLELS_PLUGIN_ISOLATION -Force -ErrorAction SilentlyContinue
+}`;
 }
 
 function providerOnlyPluginIsolationNodeScript(options: PluginIsolationOptions): string {

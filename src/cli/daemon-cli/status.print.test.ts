@@ -12,6 +12,9 @@ const resolveControlUiLinksMock = vi.hoisted(() =>
 );
 const isSystemdUnavailableDetailMock = vi.hoisted(() => vi.fn(() => false));
 const renderSystemdUnavailableHintsMock = vi.hoisted(() => vi.fn<() => string[]>(() => []));
+const isWSLEnvMock = vi.hoisted(() =>
+  vi.fn((env?: Record<string, string | undefined>) => Boolean(env?.WSL_DISTRO_NAME)),
+);
 
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: runtime,
@@ -55,7 +58,7 @@ vi.mock("../../daemon/systemd-hints.js", () => ({
 }));
 
 vi.mock("../../infra/wsl.js", () => ({
-  isWSLEnv: () => false,
+  isWSLEnv: isWSLEnvMock,
 }));
 
 vi.mock("./shared.js", () => ({
@@ -93,6 +96,35 @@ describe("printDaemonStatus", () => {
     resolveControlUiLinksMock.mockClear();
     isSystemdUnavailableDetailMock.mockReset().mockReturnValue(false);
     renderSystemdUnavailableHintsMock.mockReset().mockReturnValue([]);
+    isWSLEnvMock.mockClear();
+  });
+
+  it("prints the applied Gateway heap limit and derivation", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          gatewayHeap: {
+            appliedMiB: 6144,
+            maxOldSpaceSizeMiB: 4096,
+            availableMemoryMiB: 8192,
+            memorySource: "constrained",
+            floorMiB: 2048,
+            capMiB: 8192,
+            headroomCapMiB: 6144,
+          },
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expectMockLineContains(runtime.log, "Gateway heap: 6144 MiB");
+    expectMockLineContains(runtime.log, "adaptive default 4096 MiB");
+    expectMockLineContains(runtime.log, "8192 MiB constrained memory");
   });
 
   it("prints stale gateway pid guidance when runtime does not own the listener", () => {
@@ -179,6 +211,84 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.log, "protocol mismatch after rollback");
   });
 
+  it("prints Windows firewall diagnostics in gateway status output", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        gateway: {
+          bindMode: "lan",
+          bindHost: "0.0.0.0",
+          port: 18789,
+          portSource: "env/config",
+          probeUrl: "ws://127.0.0.1:18789",
+          windowsFirewall: {
+            applies: true,
+            severity: "warning",
+            code: "windows_firewall_local_rules_ignored",
+            message:
+              "Windows Firewall may ignore local Gateway allow rules for this network profile.",
+            details: ["Windows reports LocalFirewallRules as N/A (GPO-store only)."],
+          },
+        },
+        extraServices: [],
+      },
+      { json: false, deep: true },
+    );
+
+    expectMockLineContains(runtime.error, "Windows firewall: Windows Firewall may ignore");
+    expectMockLineContains(runtime.error, "GPO-store only");
+  });
+
+  it("uses service command env for WSL systemd unavailable hints", () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "linux" });
+    isSystemdUnavailableDetailMock.mockReturnValue(true);
+    renderSystemdUnavailableHintsMock.mockReturnValue(["wsl hint"]);
+    try {
+      printDaemonStatus(
+        {
+          service: {
+            label: "systemd",
+            loaded: true,
+            loadedText: "loaded",
+            notLoadedText: "not loaded",
+            runtime: {
+              status: "unknown",
+              detail: "System has not been booted with systemd as init system",
+            },
+            command: {
+              programArguments: [],
+              environment: { WSL_DISTRO_NAME: "Ubuntu" },
+            },
+          },
+          rpc: {
+            ok: false,
+            error: "unavailable",
+            url: "ws://127.0.0.1:18789",
+          },
+          extraServices: [],
+        },
+        { json: false },
+      );
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
+
+    expect(isWSLEnvMock).toHaveBeenCalledWith({ WSL_DISTRO_NAME: "Ubuntu" });
+    expect(renderSystemdUnavailableHintsMock).toHaveBeenCalledWith({
+      wsl: true,
+      kind: "generic_unavailable",
+      container: false,
+    });
+    expectMockLineContains(runtime.error, "wsl hint");
+  });
+
   it("prints stale updater launchd job guidance", () => {
     printDaemonStatus(
       {
@@ -245,6 +355,14 @@ describe("printDaemonStatus", () => {
             listeners: [],
             hints: [],
           },
+          rpc: {
+            ok: false,
+            kind: "connect",
+            capability: "unknown",
+            error: "gateway closed (1000): ",
+            url: "ws://127.0.0.1:18789",
+          },
+          lastError: "failed to bind gateway socket EADDRINUSE",
           extraServices: [],
         },
         { json: false },
@@ -256,6 +374,8 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.error, "Gateway port 18789 is not listening");
     expectMockLineContains(runtime.error, "/Users/test/Library/Logs/openclaw/gateway.log");
     expectMockLineContains(runtime.error, "Errors: suppressed");
+    const errors = runtime.error.mock.calls.map(([line]) => line).join("\n");
+    expect(errors.match(/Last gateway error:/g)).toHaveLength(1);
   });
 
   it("prints GUI-session wording before generic missing-supervision wording", () => {
@@ -313,6 +433,50 @@ describe("printDaemonStatus", () => {
 
     expectMockLineContains(runtime.log, "Connectivity probe: ok");
     expectMockLineContains(runtime.log, "Capability: write-capable");
+  });
+
+  it("prints the last gateway error when a running service fails the RPC probe", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "systemd user",
+          loaded: true,
+          loadedText: "enabled",
+          notLoadedText: "disabled",
+          runtime: { status: "running", pid: 8000 },
+        },
+        gateway: {
+          bindMode: "lan",
+          bindHost: "0.0.0.0",
+          port: 2345,
+          portSource: "service args",
+          probeUrl: "ws://127.0.0.1:2345",
+        },
+        port: {
+          port: 2345,
+          status: "busy",
+          listeners: [{ pid: 8000, ppid: 1, address: "*:2345" }],
+          hints: [],
+        },
+        rpc: {
+          ok: false,
+          kind: "connect",
+          capability: "unknown",
+          error: "gateway closed (1000): ",
+          url: "ws://127.0.0.1:2345",
+        },
+        lastError: "parse/handle error: Error: ENOSPC: no space left on device, write",
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expectMockLineContains(runtime.error, "Connectivity probe: failed");
+    expectMockLineContains(runtime.error, "gateway closed (1000):");
+    expectMockLineContains(
+      runtime.error,
+      "Last gateway error: parse/handle error: Error: ENOSPC: no space left on device, write",
+    );
   });
 
   it("prints CLI and gateway versions with readable guidance when they differ", () => {
@@ -478,6 +642,50 @@ describe("printDaemonStatus", () => {
     });
   });
 
+  it("prints gathered advertised dashboard links without recomputing them", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+        },
+        config: {
+          cli: {
+            path: "/tmp/openclaw-cli/openclaw.json",
+            exists: true,
+            valid: true,
+          },
+          daemon: {
+            path: "/tmp/openclaw-daemon/openclaw.json",
+            exists: true,
+            valid: true,
+            controlUi: { basePath: "/ui" },
+          },
+          mismatch: true,
+        },
+        gateway: {
+          bindMode: "lan",
+          bindHost: "0.0.0.0",
+          port: 19001,
+          portSource: "service args",
+          probeUrl: "wss://127.0.0.1:19001",
+          tlsEnabled: true,
+          controlUiLinks: {
+            httpUrl: "https://10.211.55.3:19001/ui/",
+            wsUrl: "wss://10.211.55.3:19001/ui",
+          },
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expect(runtime.log).toHaveBeenCalledWith("Dashboard: https://10.211.55.3:19001/ui/");
+    expect(resolveControlUiLinksMock).not.toHaveBeenCalled();
+  });
+
   it("prints deep config warnings", () => {
     printDaemonStatus(
       {
@@ -601,7 +809,43 @@ describe("printDaemonStatus", () => {
     );
 
     expectMockLineContains(runtime.log, "- whatsapp: 2026.5.3 (clawhub)");
-    expectMockLineContains(runtime.log, "openclaw plugins update <plugin-id>");
+    expectMockLineContains(runtime.log, "openclaw plugins update whatsapp");
+    expectMockLineContains(runtime.log, "openclaw gateway restart");
+  });
+
+  it("prints exact package update commands for pinned npm plugin drift in deep mode", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        pluginVersionDrift: {
+          gatewayVersion: "2026.6.10-beta.1",
+          drifts: [
+            {
+              pluginId: "brave",
+              installedVersion: "2026.6.9",
+              gatewayVersion: "2026.6.10-beta.1",
+              source: "npm",
+              packageName: "@openclaw/brave-plugin",
+              spec: "@openclaw/brave-plugin@2026.6.9",
+            },
+          ],
+        },
+        extraServices: [],
+      },
+      { json: false, deep: true },
+    );
+
+    expectMockLineContains(runtime.log, "- brave: 2026.6.9 (npm)");
+    expectMockLineContains(
+      runtime.log,
+      "openclaw plugins update @openclaw/brave-plugin@2026.6.10-beta.1",
+    );
     expectMockLineContains(runtime.log, "openclaw gateway restart");
   });
 
@@ -643,4 +887,224 @@ describe("printDaemonStatus", () => {
     expect(errors).not.toContain("systemd user services unavailable");
     expect(errors).not.toContain("run loginctl enable-linger");
   });
+
+  it("warns that systemd gave up restarting a crash-looped gateway", () => {
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    try {
+      printDaemonStatus(
+        {
+          service: {
+            label: "systemd",
+            loaded: true,
+            loadedText: "loaded",
+            notLoadedText: "not loaded",
+            runtime: {
+              status: "stopped",
+              state: "failed",
+              systemd: { result: "exit-code", nRestarts: 5, startLimitBurst: 5 },
+            },
+          },
+          extraServices: [],
+        },
+        { json: false },
+      );
+    } finally {
+      platform.mockRestore();
+    }
+
+    const errors = runtime.error.mock.calls.map(([line]) => line).join("\n");
+    expect(errors).toContain("systemd stopped restarting the gateway after repeated crashes");
+    expect(errors).not.toContain("likely exited immediately");
+  });
+
+  it("keeps the generic stopped message after a config exit (78) despite a stale restart count", () => {
+    // RestartPreventExitStatus=78 stopped systemd deliberately; a leftover
+    // NRestarts must not surface start-limit recovery guidance here.
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    try {
+      printDaemonStatus(
+        {
+          service: {
+            label: "systemd",
+            loaded: true,
+            loadedText: "loaded",
+            notLoadedText: "not loaded",
+            runtime: {
+              status: "stopped",
+              state: "failed",
+              lastExitStatus: 78,
+              systemd: { result: "exit-code", nRestarts: 5, startLimitBurst: 5 },
+            },
+          },
+          extraServices: [],
+        },
+        { json: false },
+      );
+    } finally {
+      platform.mockRestore();
+    }
+
+    const errors = runtime.error.mock.calls.map(([line]) => line).join("\n");
+    expect(errors).toContain("Service is loaded but not running (likely exited immediately).");
+    expect(errors).not.toContain("systemd stopped restarting the gateway");
+  });
+
+  it("steers a failed RPC probe to credentials/config when the gateway process owns the port", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        gateway: {
+          bindMode: "loopback",
+          bindHost: "127.0.0.1",
+          port: 18789,
+          portSource: "env/config",
+          probeUrl: "ws://127.0.0.1:18789",
+        },
+        rpc: {
+          ok: false,
+          error: "gateway closed (1008 policy violation: invalid token)",
+          url: "ws://127.0.0.1:18789",
+        },
+        health: {
+          healthy: true,
+          staleGatewayPids: [],
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expectMockLineContains(
+      runtime.log,
+      "Gateway process is running and owns the gateway port, so this is not a warm-up delay",
+    );
+    expectMockLineContains(runtime.log, "Check the probe credentials/config");
+    const logged = runtime.log.mock.calls.map(([line]) => line).join("\n");
+    expect(logged).not.toContain("Warm-up: launch agents");
+  });
+
+  it("keeps the warm-up hint (not owns-port guidance) when healthy is reachability-only and a stale gateway PID is still held", () => {
+    // inspectGatewayRestart can set healthy from reachability after ownership failed,
+    // while still returning non-empty staleGatewayPids. That must not be treated as
+    // owns-port proof, or this message would contradict the stale-PID diagnostic below.
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        gateway: {
+          bindMode: "loopback",
+          bindHost: "127.0.0.1",
+          port: 18789,
+          portSource: "env/config",
+          probeUrl: "ws://127.0.0.1:18789",
+        },
+        rpc: {
+          ok: false,
+          error: "gateway closed (1008 policy violation: invalid token)",
+          url: "ws://127.0.0.1:18789",
+        },
+        health: {
+          healthy: true,
+          staleGatewayPids: [9000],
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    const logged = runtime.log.mock.calls.map(([line]) => line).join("\n");
+    expect(logged).toContain("Warm-up: launch agents can take a few seconds");
+    expect(logged).not.toContain("Gateway process is running and owns the gateway port");
+    const errors = runtime.error.mock.calls.map(([line]) => line).join("\n");
+    expect(errors).toContain("Gateway runtime PID does not own the listening port");
+  });
+
+  it("keeps the warm-up hint for an unhealthy gateway, even with the port held", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        gateway: {
+          bindMode: "loopback",
+          bindHost: "127.0.0.1",
+          port: 18789,
+          portSource: "env/config",
+          probeUrl: "ws://127.0.0.1:18789",
+        },
+        rpc: {
+          ok: false,
+          error: "gateway closed (1006 abnormal closure (no close frame))",
+          url: "ws://127.0.0.1:18789",
+        },
+        port: {
+          port: 18789,
+          status: "busy",
+          listeners: [],
+          hints: [],
+        },
+        health: {
+          healthy: false,
+          staleGatewayPids: [],
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    // health.healthy === false is ambiguous (not-yet-bound / foreign port conflict / stale
+    // PID), so it keeps the warm-up hint rather than steering to a restart; the dedicated
+    // stale-PID / port-not-listening / port-conflict blocks own those cases.
+    expectMockLineContains(runtime.log, "Warm-up: launch agents can take a few seconds");
+    const logged = runtime.log.mock.calls.map(([line]) => line).join("\n");
+    expect(logged).not.toContain("Gateway process is");
+  });
+
+  it("keeps the warm-up hint when gateway health is unknown", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        gateway: {
+          bindMode: "loopback",
+          bindHost: "127.0.0.1",
+          port: 18789,
+          portSource: "env/config",
+          probeUrl: "ws://127.0.0.1:18789",
+        },
+        rpc: {
+          ok: false,
+          error: "gateway closed (1006 abnormal closure (no close frame))",
+          url: "ws://127.0.0.1:18789",
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expectMockLineContains(runtime.log, "Warm-up: launch agents can take a few seconds");
+    const logged = runtime.log.mock.calls.map(([line]) => line).join("\n");
+    expect(logged).not.toContain("Gateway process is");
+  });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

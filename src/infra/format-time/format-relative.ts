@@ -8,7 +8,7 @@
  * - `formatRelativeTimestamp(epochMs)` — format an epoch timestamp relative to now (handles future)
  */
 
-export type FormatTimeAgoOptions = {
+type FormatTimeAgoOptions = {
   /** Append "ago" suffix. Default: true. When false, returns bare unit: "5m", "2h" */
   suffix?: boolean;
   /** Return value for invalid/null/negative input. Default: "unknown" */
@@ -51,7 +51,7 @@ export function formatTimeAgo(
   return suffix ? `${days}d ago` : `${days}d`;
 }
 
-export type FormatRelativeTimestampOptions = {
+type FormatRelativeTimestampOptions = {
   /** If true, fall back to short date (e.g. "Oct 5") for timestamps >7 days. Default: false */
   dateFallback?: boolean;
   /** IANA timezone for date fallback display */

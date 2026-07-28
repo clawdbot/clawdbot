@@ -1,8 +1,57 @@
 // Exa tests cover exa web search provider plugin behavior.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { testing } from "../test-api.js";
 import { createExaWebSearchProvider as createContractExaWebSearchProvider } from "../web-search-contract-api.js";
 import { createExaWebSearchProvider } from "./exa-web-search-provider.js";
+
+function cancelTrackedResponse(
+  text: string,
+  init: ResponseInit,
+): {
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, init),
+    wasCanceled: () => canceled,
+  };
+}
+
+function streamingJsonResponse(params: { chunkCount: number; chunkSize: number }): {
+  response: Response;
+  getReadCount: () => number;
+} {
+  // Streaming fixture proves an oversized success body stops being read before
+  // the whole payload is buffered into memory.
+  let reads = 0;
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (reads >= params.chunkCount) {
+        controller.close();
+        return;
+      }
+      reads += 1;
+      controller.enqueue(encoder.encode("a".repeat(params.chunkSize)));
+    },
+  });
+  return {
+    response: new Response(stream, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+    getReadCount: () => reads,
+  };
+}
 
 describe("exa web search provider", () => {
   it("exposes the expected metadata and selection wiring", () => {
@@ -104,6 +153,26 @@ describe("exa web search provider", () => {
     );
   });
 
+  it("partitions Exa cache keys by effective content options", () => {
+    const base = {
+      endpoint: "https://api.exa.ai/search",
+      type: "auto" as const,
+      query: "openclaw",
+      count: 5,
+    };
+    const defaultKey = testing.buildExaCacheKey(base);
+
+    expect(testing.buildExaCacheKey({ ...base, contents: { highlights: true } })).toBe(defaultKey);
+
+    const disabledKeys = [
+      testing.buildExaCacheKey({ ...base, contents: { highlights: false } }),
+      testing.buildExaCacheKey({ ...base, contents: { text: false } }),
+      testing.buildExaCacheKey({ ...base, contents: { summary: false } }),
+    ];
+    expect(disabledKeys).not.toContain(defaultKey);
+    expect(new Set(disabledKeys).size).toBe(disabledKeys.length);
+  });
+
   it("normalizes Exa result descriptions from highlights before text", () => {
     expect(
       testing.resolveExaDescription({
@@ -160,8 +229,10 @@ describe("exa web search provider", () => {
   it("exposes newer documented Exa search types and count limits", () => {
     const provider = createExaWebSearchProvider();
     const tool = provider.createTool({
-      config: {},
-      searchConfig: { exa: { apiKey: "exa-secret" } },
+      config: {
+        plugins: { entries: { exa: { config: { webSearch: { apiKey: "exa-secret" } } } } },
+      },
+      searchConfig: {},
     });
     if (!tool) {
       throw new Error("Expected tool definition");
@@ -194,8 +265,10 @@ describe("exa web search provider", () => {
   it("returns validation errors for conflicting time filters", async () => {
     const provider = createExaWebSearchProvider();
     const tool = provider.createTool({
-      config: {},
-      searchConfig: { exa: { apiKey: "exa-secret" } },
+      config: {
+        plugins: { entries: { exa: { config: { webSearch: { apiKey: "exa-secret" } } } } },
+      },
+      searchConfig: {},
     });
     if (!tool) {
       throw new Error("Expected tool definition");
@@ -218,8 +291,10 @@ describe("exa web search provider", () => {
   it("returns validation errors for invalid date input", async () => {
     const provider = createExaWebSearchProvider();
     const tool = provider.createTool({
-      config: {},
-      searchConfig: { exa: { apiKey: "exa-secret" } },
+      config: {
+        plugins: { entries: { exa: { config: { webSearch: { apiKey: "exa-secret" } } } } },
+      },
+      searchConfig: {},
     });
     if (!tool) {
       throw new Error("Expected tool definition");
@@ -241,5 +316,42 @@ describe("exa web search provider", () => {
     await expect(testing.readExaSearchResults(new Response("{ nope"))).rejects.toThrow(
       "Exa API returned malformed JSON",
     );
+  });
+
+  it("parses well-formed Exa search JSON under the byte cap", async () => {
+    const response = new Response(
+      JSON.stringify({ results: [{ url: "https://example.com", title: "Example" }] }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+
+    await expect(testing.readExaSearchResults(response)).resolves.toEqual([
+      { url: "https://example.com", title: "Example" },
+    ]);
+  });
+
+  it("caps oversized Exa search JSON instead of buffering the whole body", async () => {
+    const streamed = streamingJsonResponse({ chunkCount: 64, chunkSize: 1024 });
+
+    await expect(
+      testing.readExaSearchResults(streamed.response, { maxBytes: 4096 }),
+    ).rejects.toThrow(/Exa API response exceeds 4096 bytes/);
+
+    expect(streamed.getReadCount()).toBeLessThan(64);
+  });
+
+  it("bounds Exa API error bodies without using response.text()", async () => {
+    const tracked = cancelTrackedResponse(`${"exa upstream unavailable ".repeat(1024)}tail`, {
+      status: 503,
+      headers: { "content-type": "text/plain" },
+    });
+    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+
+    const detail = await testing.readExaErrorDetail(tracked.response);
+
+    expect(detail).toContain("exa upstream unavailable");
+    expect(detail).not.toContain("tail");
+    expect(await testing.readExaErrorDetail(new Response("short"))).toBe("short");
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(textSpy).not.toHaveBeenCalled();
   });
 });

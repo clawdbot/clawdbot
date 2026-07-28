@@ -8,8 +8,8 @@ import {
   text as clackText,
 } from "@clack/prompts";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { styleSelectParams } from "../../packages/terminal-core/src/prompt-select-styled-params.js";
 import {
-  stylePromptHint,
   stylePromptMessage,
   stylePromptTitle,
 } from "../../packages/terminal-core/src/prompt-style.js";
@@ -90,6 +90,12 @@ export const text = (params: Parameters<typeof clackText>[0]) =>
     ...params,
     message: stylePromptMessage(params.message),
   });
+/** Styled password prompt wrapper. Echoes bullets so secrets never appear in cleartext. */
+export const password = (params: Parameters<typeof clackPassword>[0]) =>
+  clackPassword({
+    ...params,
+    message: stylePromptMessage(params.message),
+  });
 /** Styled confirm prompt wrapper. */
 export const confirm = (params: Parameters<typeof clackConfirm>[0]) =>
   clackConfirm({
@@ -98,16 +104,4 @@ export const confirm = (params: Parameters<typeof clackConfirm>[0]) =>
   });
 /** Styled select prompt wrapper that also normalizes option hints. */
 export const select = <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
-  clackSelect({
-    ...params,
-    message: stylePromptMessage(params.message),
-    options: params.options.map((opt) =>
-      opt.hint === undefined ? opt : { ...opt, hint: stylePromptHint(opt.hint) },
-    ),
-  });
-/** Styled password prompt wrapper. */
-export const password = (params: Parameters<typeof clackPassword>[0]) =>
-  clackPassword({
-    ...params,
-    message: stylePromptMessage(params.message),
-  });
+  clackSelect(styleSelectParams(params));

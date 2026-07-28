@@ -2,6 +2,7 @@
  * Public parameter types for subscribing to embedded-agent sessions.
  */
 import type {
+  BlockReplyContext,
   PartialReplyPayload,
   SourceReplyDeliveryMode,
 } from "../auto-reply/get-reply-options.types.js";
@@ -12,6 +13,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { BlockReplyPayload } from "./embedded-agent-payloads.js";
 import type { EmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
+import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
+import type { BlockReplyFlushContext } from "./embedded-agent-runner/types.js";
 import type {
   BlockReplyChunking,
   ToolProgressDetailMode,
@@ -20,11 +23,14 @@ import type {
 import type { AgentInternalEvent } from "./internal-events.js";
 import type { AgentMessage } from "./runtime/index.js";
 import type { AgentSession } from "./sessions/index.js";
-export type {
-  BlockReplyChunking,
-  ToolProgressDetailMode,
-  ToolResultFormat,
-} from "./embedded-agent-subscribe.shared-types.js";
+export type { BlockReplyChunking } from "./embedded-agent-subscribe.shared-types.js";
+
+type ReasoningStreamPayload = Pick<
+  ReplyPayload,
+  "text" | "mediaUrls" | "isReasoning" | "isReasoningSnapshot"
+> & {
+  requiresReasoningProgressOptIn?: boolean;
+};
 
 export type SubscribeEmbeddedAgentSessionParams = {
   session: AgentSession;
@@ -45,18 +51,19 @@ export type SubscribeEmbeddedAgentSessionParams = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   /** Attempt-owned delivery proof for message-tool-only source replies. */
   hasDeliveredMessageToolOnlySourceReply?: () => boolean;
+  /** Reports source delivery observed through bridged tool lifecycle events. */
+  onDeliveredMessageToolOnlySourceReply?: () => void;
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
   onAgentToolResult?: (event: { toolName: string; result: unknown; isError: boolean }) => void;
-  onReasoningStream?: (payload: {
-    text?: string;
-    mediaUrls?: string[];
-    isReasoningSnapshot?: boolean;
-  }) => void | Promise<void>;
+  observeToolTerminal?: EmbeddedRunAttemptParams["observeToolTerminal"];
+  onReasoningStream?: (payload: ReasoningStreamPayload) => void | Promise<void>;
+  /** Expands window reasoning beyond "stream" mode for callers with their own display gate. */
+  streamReasoningInNonStreamModes?: boolean;
   /** Called when a thinking/reasoning block ends (</think> tag processed). */
   onReasoningEnd?: () => void | Promise<void>;
-  onBlockReply?: (payload: BlockReplyPayload) => void | Promise<void>;
-  /** Flush pending block replies (e.g., before tool execution to preserve message boundaries). */
-  onBlockReplyFlush?: () => void | Promise<void>;
+  onBlockReply?: (payload: BlockReplyPayload, context?: BlockReplyContext) => void | Promise<void>;
+  /** Flush pending block replies and identify the boundary that requested it. */
+  onBlockReplyFlush?: (context: BlockReplyFlushContext) => void | Promise<void>;
   blockReplyBreak?: "text_end" | "message_end";
   blockReplyChunking?: BlockReplyChunking;
   onPartialReply?: (payload: PartialReplyPayload) => void | Promise<void>;
@@ -72,7 +79,9 @@ export type SubscribeEmbeddedAgentSessionParams = {
     data: Record<string, unknown>;
     sessionKey?: string;
   }) => void | Promise<void>;
+  onToolStreamBoundary?: () => void | Promise<void>;
   onHeartbeatToolResponse?: (response: HeartbeatToolResponse) => void | Promise<void>;
+  /** "finishing" defers both success and error terminal ownership to the caller. */
   terminalLifecyclePhase?: "end" | "finishing";
   /** Read immediately before terminal lifecycle emission. */
   isTerminalAborted?: () => boolean | undefined;
@@ -93,6 +102,13 @@ export type SubscribeEmbeddedAgentSessionParams = {
   onBeforeLifecycleTerminal?: () => void | Promise<void>;
   enforceFinalTag?: boolean;
   silentExpected?: boolean;
+  /**
+   * Skip per-chunk live visible-text parsing in handleMessageUpdate. Set for runs
+   * with no live stream consumer — notably subagents, whose result is read back
+   * from the final message_end path. Suppressing intermediate passes does not
+   * change final output.
+   */
+  suppressLiveStreamOutput?: boolean;
   config?: OpenClawConfig;
   sessionKey?: string;
   /** Current transport channel resolved for this run. */
@@ -115,6 +131,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
    * Exact raw names of OpenClaw tools registered for this run.
    */
   builtinToolNames?: ReadonlySet<string>;
+  /** Exact registered tool names whose concrete instances are safe to replay. */
+  replaySafeToolNames?: ReadonlySet<string>;
   /**
    * Exact raw names allowed to emit local media paths for this run.
    * Includes core trusted tools plus bundled plugin tools proven from the

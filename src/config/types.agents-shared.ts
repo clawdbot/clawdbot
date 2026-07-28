@@ -28,11 +28,6 @@ export type AgentToolModelConfig =
       timeoutMs?: number;
     };
 
-export type AgentEmbeddedHarnessConfig = {
-  /** Agent runtime id. Omitted uses "openclaw"; "auto" opts into plugin harness auto-selection. */
-  runtime?: string;
-};
-
 /** Runtime selection policy attached to providers, models, and agent defaults. */
 export type AgentRuntimePolicyConfig = {
   /** Agent runtime id. Omitted uses "openclaw"; "auto" opts into plugin harness auto-selection. */

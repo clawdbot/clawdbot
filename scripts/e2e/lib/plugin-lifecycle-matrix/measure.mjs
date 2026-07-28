@@ -1,5 +1,5 @@
 // Measures plugin lifecycle matrix E2E command timings.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -21,6 +21,21 @@ function readPositiveIntEnv(name, fallback) {
   return value;
 }
 
+function readPositiveIntEnvOrGetconf(name, variable) {
+  if (process.env[name] !== undefined) {
+    return readPositiveIntEnv(name, "");
+  }
+  const result = spawnSync("getconf", [variable], { encoding: "utf8" });
+  if (result.error || result.status !== 0) {
+    const details =
+      result.error?.message || result.stderr.trim() || `exit ${String(result.status)}`;
+    throw new Error(
+      `failed to derive ${name} from getconf ${variable}: ${details}; set ${name} explicitly`,
+    );
+  }
+  return readPositiveIntEnv(name, result.stdout);
+}
+
 function readPositiveNumberEnv(name, fallback) {
   const text = String(process.env[name] ?? fallback).trim();
   if (!/^\d+(?:\.\d+)?$/u.test(text)) {
@@ -33,13 +48,20 @@ function readPositiveNumberEnv(name, fallback) {
   return value;
 }
 
-const pageSize = readPositiveIntEnv("OPENCLAW_PROC_PAGE_SIZE", 4096);
-const clockTicks = readPositiveIntEnv("OPENCLAW_PROC_CLK_TCK", 100);
-const pollMs = readPositiveIntEnv("OPENCLAW_PLUGIN_LIFECYCLE_METRIC_POLL_MS", 100);
-const timeoutMs = readPositiveIntEnv("OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS", 300000);
-const timeoutKillGraceMs = readPositiveIntEnv(
-  "OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS",
-  2000,
+const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
+
+function clampTimerTimeoutMs(valueMs) {
+  return Math.min(Math.max(Math.floor(valueMs), 1), MAX_TIMER_TIMEOUT_MS);
+}
+
+const pollMs = clampTimerTimeoutMs(
+  readPositiveIntEnv("OPENCLAW_PLUGIN_LIFECYCLE_METRIC_POLL_MS", 100),
+);
+const timeoutMs = clampTimerTimeoutMs(
+  readPositiveIntEnv("OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS", 300000),
+);
+const timeoutKillGraceMs = clampTimerTimeoutMs(
+  readPositiveIntEnv("OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS", 2000),
 );
 const maxRssKbThreshold = readPositiveIntEnv(
   "OPENCLAW_PLUGIN_LIFECYCLE_MAX_RSS_KB",
@@ -52,6 +74,11 @@ if (!fs.existsSync("/proc")) {
   console.error("plugin lifecycle resource sampler requires Linux /proc");
   process.exit(2);
 }
+
+// /proc RSS is in host pages and CPU times are in host clock ticks. Query the
+// live units so 64 KiB ARM kernels do not under-report resource use.
+const pageSize = readPositiveIntEnvOrGetconf("OPENCLAW_PROC_PAGE_SIZE", "PAGESIZE");
+const clockTicks = readPositiveIntEnvOrGetconf("OPENCLAW_PROC_CLK_TCK", "CLK_TCK");
 
 function readProcSnapshot() {
   const stats = new Map();
@@ -173,6 +200,12 @@ function finishChildClosedResultIfGroupDrained() {
   }
 }
 
+// Child readiness can become externally visible before the initial /proc scan.
+// Install handlers first so early parent termination still reaches the detached group.
+for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"]) {
+  process.once(signal, () => handleParentSignal(signal));
+}
+
 updateMetrics();
 const interval = setInterval(updateMetrics, pollMs);
 const timeoutTimer =
@@ -274,10 +307,6 @@ function handleParentSignal(signal) {
     },
     Math.min(50, timeoutKillGraceMs),
   );
-}
-
-for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"]) {
-  process.once(signal, () => handleParentSignal(signal));
 }
 
 process.once("exit", () => {

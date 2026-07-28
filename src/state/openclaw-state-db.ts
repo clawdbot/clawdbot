@@ -1,23 +1,96 @@
 // OpenClaw state database manages shared persisted state and migrations.
-import { randomUUID } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
+  enableNodeSqliteKyselyStatementCache,
   executeSqliteQuerySync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
-import { configureSqliteWalMaintenance, type SqliteWalMaintenance } from "../infra/sqlite-wal.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import {
-  resolveOpenClawStateSqliteDir,
-  resolveOpenClawStateSqlitePath,
-} from "./openclaw-state-db.paths.js";
+  repairCanonicalSqliteIndexes,
+  verifyAndRepairCanonicalSqliteIndexes,
+} from "../infra/sqlite-index-schema.js";
+import {
+  assertSqliteIntegrity,
+  confirmSqliteFileIntegrity,
+  isTerminalSqliteIntegrityError,
+  type SqliteIntegrityConfirmation,
+} from "../infra/sqlite-integrity.js";
+import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.js";
+import { assertSqliteSchemaTablesPresent } from "../infra/sqlite-schema-contract.js";
+import { migrateSqliteSchemaToStrictInTransaction } from "../infra/sqlite-strict.js";
+import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
+import {
+  runSqliteImmediateTransactionSync,
+  type SqliteTransactionOptions,
+} from "../infra/sqlite-transaction.js";
+import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import {
+  configureSqliteConnectionPragmas,
+  configureSqlitePreSchemaPragmas,
+  type SqliteWalMaintenance,
+} from "../infra/sqlite-wal.js";
+import { migrateLegacyCronRunLogsToTaskRuns } from "../infra/state-migrations.cron-run-logs.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { VERSION } from "../version.js";
+import {
+  clearOpenClawDatabaseQuarantine,
+  readOpenClawDatabaseQuarantine,
+} from "./openclaw-quarantine-store.js";
+import { repairAuditEventsSchema } from "./openclaw-state-db-audit-migration.js";
+import {
+  OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
+  LAZY_ADDITIVE_STATE_TABLES,
+  OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+  OPENCLAW_STATE_SCHEMA_VERSION,
+  OPENCLAW_STATE_STRICT_SCHEMA_VERSION,
+  type OpenClawStateDatabase,
+  type OpenClawStateDatabaseOptions,
+} from "./openclaw-state-db-contract.js";
+import {
+  assertOpenClawStateDatabaseForMaintenance,
+  assertOpenClawStateDatabaseV5ForMigration,
+  assertSupportedSchemaVersion,
+  createOpenClawDatabaseVerificationError,
+  resolveDatabasePath,
+} from "./openclaw-state-db-maintenance.js";
+import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
+import { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
+import { ensureAdditiveStateColumns } from "./openclaw-state-db-schema-additive.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
+import {
+  assertCanonicalStateSchemaShape,
+  detectOpenClawStateDatabaseSchemaMigrationsFromDatabase,
+  dropLegacyStateTables,
+  markCurrentStateSchemaVersion,
+  repairAgentDatabasesCompositePrimaryKey,
+  repairLegacyGatewayRestartHandoffsForStrictMigration,
+} from "./openclaw-state-db-schema-repair.js";
+import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
+import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.generated.js";
+
+export {
+  OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
+  OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+  OPENCLAW_STATE_SCHEMA_VERSION,
+};
+export type {
+  OpenClawStateDatabase,
+  OpenClawStateDatabaseOptions,
+  OpenClawStateDatabaseSchemaMigration,
+} from "./openclaw-state-db-contract.js";
+export {
+  assertOpenClawStateDatabaseForMaintenance,
+  createOpenClawDatabaseVerificationError,
+} from "./openclaw-state-db-maintenance.js";
+export { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
+export { detectOpenClawStateDatabaseSchemaMigrations } from "./openclaw-state-db-schema-repair.js";
+export { withOpenClawStateStartupMigrationCheckpointDatabase } from "./openclaw-state-db-startup-checkpoint.js";
 
 /**
  * Shared OpenClaw SQLite state database lifecycle and metadata writers.
@@ -26,294 +99,71 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.generated.js"
  * tables, private file permissions, cached handles, and audit rows for
  * migrations/backups that operate on local state.
  */
-const OPENCLAW_STATE_SCHEMA_VERSION = 1;
-/** Shared timeout used by state and agent SQLite handles before surfacing busy errors. */
-export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 30_000;
-const OPENCLAW_STATE_DIR_MODE = 0o700;
-const OPENCLAW_STATE_FILE_MODE = 0o600;
-const OPENCLAW_STATE_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
-
-/** Open shared SQLite database handle plus WAL maintenance lifecycle. */
-export type OpenClawStateDatabase = {
-  db: DatabaseSync;
-  path: string;
-  walMaintenance: SqliteWalMaintenance;
-};
-
-/** Options for resolving or overriding the shared state database path. */
-export type OpenClawStateDatabaseOptions = {
-  env?: NodeJS.ProcessEnv;
-  path?: string;
-};
-
-/** Status stored for a state migration run. */
-export type OpenClawMigrationRunStatus = "completed" | "warning" | "failed";
-/** Status stored for a state backup run. */
-export type OpenClawBackupRunStatus = "completed" | "failed";
-
-export type OpenClawStateDatabaseSchemaMigration = {
-  kind: "agent-databases-composite-primary-key";
-  path: string;
-};
-
-/** Input for recording one state migration run summary. */
-export type RecordOpenClawStateMigrationRunOptions = OpenClawStateDatabaseOptions & {
-  id?: string;
-  startedAt: number;
-  finishedAt?: number;
-  status: OpenClawMigrationRunStatus;
-  report: Record<string, unknown>;
-};
-
-/** Input for recording one migrated source file/table pair. */
-export type RecordOpenClawStateMigrationSourceOptions = OpenClawStateDatabaseOptions & {
-  runId: string;
-  migrationKind: string;
-  sourceKey: string;
-  sourcePath: string;
-  targetTable: string;
-  status: OpenClawMigrationRunStatus;
-  importedAt: number;
-  removedSource: boolean;
-  sourceSha256?: string;
-  sourceSizeBytes?: number;
-  sourceRecordCount?: number;
-  report: Record<string, unknown>;
-};
-
-/** Input for recording one state backup archive. */
-export type RecordOpenClawStateBackupRunOptions = OpenClawStateDatabaseOptions & {
-  id?: string;
-  createdAt: number;
-  archivePath: string;
-  status: OpenClawBackupRunStatus;
-  manifest: Record<string, unknown>;
-};
-
 const cachedDatabases = new Map<string, OpenClawStateDatabase>();
-
-type OpenClawStateMetadataDatabase = Pick<
-  OpenClawStateKyselyDatabase,
-  "backup_runs" | "migration_runs" | "migration_sources" | "schema_meta"
->;
-
-function readSqliteUserVersion(db: DatabaseSync): number {
-  const row = db.prepare("PRAGMA user_version").get() as { user_version?: unknown } | undefined;
-  return Number(row?.user_version ?? 0);
-}
-
-function assertSupportedSchemaVersion(db: DatabaseSync, pathname: string): void {
-  const userVersion = readSqliteUserVersion(db);
-  if (userVersion > OPENCLAW_STATE_SCHEMA_VERSION) {
-    throw new Error(
-      `OpenClaw state database ${pathname} uses newer schema version ${userVersion}; this OpenClaw build supports ${OPENCLAW_STATE_SCHEMA_VERSION}.`,
-    );
-  }
-}
-
-const stateDbLog = createSubsystemLogger("state/db");
-
-/** Targets already warned about, so chmod-less filesystems warn once per path. */
-const chmodWarnedTargets = new Set<string>();
-
-// Unambiguous errno codes raised when the filesystem cannot enforce POSIX modes.
-const CHMOD_UNSUPPORTED_CODES = new Set(["ENOTSUP", "EOPNOTSUPP", "EINVAL"]);
-
-function hasRestrictivePermissions(target: string): boolean {
-  try {
-    return (statSync(target).mode & 0o077) === 0;
-  } catch {
-    return false;
-  }
-}
-
-function filesystemRejectsChmod(target: string): boolean {
-  let probePath: string;
-  try {
-    const probeDir = statSync(target).isDirectory() ? target : path.dirname(target);
-    probePath = path.join(probeDir, `.openclaw-chmod-probe-${randomUUID()}`);
-    writeFileSync(probePath, "", { flag: "wx", mode: OPENCLAW_STATE_FILE_MODE });
-  } catch {
-    return false;
-  }
-  try {
-    chmodSync(probePath, OPENCLAW_STATE_FILE_MODE);
-    return false;
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "EPERM";
-  } finally {
-    try {
-      unlinkSync(probePath);
-    } catch {
-      // The probe is best-effort cleanup after a failed capability check.
-    }
-  }
-}
-
-function canIgnoreChmodError(target: string, code: string | undefined): boolean {
-  if (code && CHMOD_UNSUPPORTED_CODES.has(code)) {
-    return true;
-  }
-  if (code !== "EPERM") {
-    return false;
-  }
-  // EPERM is ambiguous: keep restrictive targets usable, otherwise prove the
-  // containing filesystem also rejects chmod before weakening fail-closed behavior.
-  return hasRestrictivePermissions(target) || filesystemRejectsChmod(target);
-}
-
-// Permission hardening is best-effort only on filesystems that cannot apply
-// it: the database stays usable without the chmod, and crashing at open would
-// take the gateway down on Azure Files/NFS/Docker volumes (#91919). Unexpected
-// chmod failures still throw so credentials-adjacent hardening stays loud.
-function bestEffortChmodSync(target: string, mode: number): void {
-  try {
-    chmodSync(target, mode);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (!canIgnoreChmodError(target, code)) {
-      throw err;
-    }
-    if (chmodWarnedTargets.has(target)) {
+const terminalOpenLatch = createSqliteTerminalOpenLatch({
+  closeByPath: (pathname) => {
+    const cached = cachedDatabases.get(pathname);
+    if (!cached) {
       return;
     }
-    chmodWarnedTargets.add(target);
-    stateDbLog.warn(`skipped permission hardening for ${target}: ${String(err)}`);
-  }
-}
-
-function ensureOpenClawStatePermissions(pathname: string, env: NodeJS.ProcessEnv): void {
-  const dir = path.dirname(pathname);
-  const defaultDir = resolveOpenClawStateSqliteDir(env);
-  const isDefaultStateDatabase =
-    path.resolve(pathname) === path.resolve(resolveOpenClawStateSqlitePath(env));
-  if (isDefaultStateDatabase && dir !== defaultDir) {
-    throw new Error(`OpenClaw state database path resolved outside its state dir: ${pathname}`);
-  }
-  const dirExisted = existsSync(dir);
-  mkdirSync(dir, { recursive: true, mode: OPENCLAW_STATE_DIR_MODE });
-  // Default state contains credentials-adjacent metadata; custom existing dirs keep caller modes.
-  if (isDefaultStateDatabase || !dirExisted) {
-    bestEffortChmodSync(dir, OPENCLAW_STATE_DIR_MODE);
-  }
-  for (const suffix of OPENCLAW_STATE_SIDECAR_SUFFIXES) {
-    const candidate = `${pathname}${suffix}`;
-    if (existsSync(candidate)) {
-      bestEffortChmodSync(candidate, OPENCLAW_STATE_FILE_MODE);
+    cached.walMaintenance.close();
+    clearNodeSqliteKyselyCacheForDatabase(cached.db);
+    if (cached.db.isOpen) {
+      cached.db.close();
     }
-  }
+    cachedDatabases.delete(pathname);
+  },
+});
+
+/** Reconfirm an advisory worker failure on the live owner connection. */
+export function confirmOpenClawStateDatabaseIntegrity(
+  pathname: string,
+): SqliteIntegrityConfirmation {
+  const resolvedPath = path.resolve(pathname);
+  closeOpenClawStateDatabaseByPath(resolvedPath);
+  return confirmSqliteFileIntegrity(resolvedPath, resolvedPath);
 }
 
-function tableHasColumn(db: DatabaseSync, tableName: string, columnName: string): boolean {
-  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name?: unknown }>;
-  return rows.some((row) => row.name === columnName);
+/** Latch background verification damage so later opens fail without rescanning. */
+export function recordOpenClawStateDatabaseOpenFailure(
+  pathname: string,
+  error: Error,
+  generation?: SqliteFileGeneration,
+): boolean {
+  return terminalOpenLatch.record(pathname, error, generation);
 }
 
-function tablePrimaryKeyColumns(db: DatabaseSync, tableName: string): string[] {
-  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{
-    name?: unknown;
-    pk?: unknown;
-  }>;
-  return rows
-    .filter((row) => Number(row.pk ?? 0) > 0 && typeof row.name === "string")
-    .toSorted((left, right) => Number(left.pk ?? 0) - Number(right.pk ?? 0))
-    .map((row) => row.name as string);
+/** Clear a terminal open failure after doctor rewrites the database file. */
+export function clearOpenClawStateDatabaseOpenFailure(pathname: string): void {
+  terminalOpenLatch.clear(pathname);
 }
 
-function tableExists(db: DatabaseSync, tableName: string): boolean {
-  const row = db
-    .prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?")
-    .get(tableName) as { ok?: unknown } | undefined;
-  return row?.ok === 1;
-}
+type OpenClawStateMetadataDatabase = Pick<OpenClawStateKyselyDatabase, "schema_meta">;
+const stateDbLog = createSubsystemLogger("state/db");
 
-function ensureColumn(db: DatabaseSync, tableName: string, columnSql: string): void {
-  const columnName = columnSql.trim().split(/\s+/, 1)[0];
-  if (!columnName || !tableExists(db, tableName) || tableHasColumn(db, tableName, columnName)) {
+function executeCanonicalStateSchema(
+  database: DatabaseSync,
+  options: { includeLazyAdditiveTables: boolean },
+): void {
+  if (options.includeLazyAdditiveTables) {
+    database.exec(OPENCLAW_STATE_SCHEMA_SQL);
     return;
   }
-  // State migrations are additive here; destructive or shape-changing repairs belong in doctor.
-  db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnSql};`);
-}
 
-function hasCanonicalAgentDatabasesPrimaryKey(db: DatabaseSync): boolean {
-  if (!tableExists(db, "agent_databases")) {
-    return true;
+  // Current-version databases may lack lazy cache tables, but the remaining
+  // canonical DDL must still run so doctor can restore indexes and triggers.
+  let eagerSchema = OPENCLAW_STATE_SCHEMA_SQL;
+  for (const tableName of LAZY_ADDITIVE_STATE_TABLES) {
+    const startMarker = `CREATE TABLE IF NOT EXISTS ${tableName} (`;
+    const start = eagerSchema.indexOf(startMarker);
+    const endMarker = "\n) STRICT;";
+    const end = start >= 0 ? eagerSchema.indexOf(endMarker, start) : -1;
+    if (start < 0 || end < 0) {
+      throw new Error(`lazy additive state schema block is missing for ${tableName}`);
+    }
+    eagerSchema = `${eagerSchema.slice(0, start)}${eagerSchema.slice(end + endMarker.length)}`;
   }
-  const primaryKey = tablePrimaryKeyColumns(db, "agent_databases");
-  return primaryKey.length === 2 && primaryKey[0] === "agent_id" && primaryKey[1] === "path";
-}
-
-function canRepairAgentDatabasesPrimaryKey(db: DatabaseSync): boolean {
-  if (!tableExists(db, "agent_databases")) {
-    return false;
-  }
-  const requiredColumns = ["agent_id", "path", "schema_version", "last_seen_at", "size_bytes"];
-  return requiredColumns.every((column) => tableHasColumn(db, "agent_databases", column));
-}
-
-function repairAgentDatabasesCompositePrimaryKey(db: DatabaseSync): boolean {
-  if (hasCanonicalAgentDatabasesPrimaryKey(db) || !canRepairAgentDatabasesPrimaryKey(db)) {
-    return false;
-  }
-  // Released DBs may have PRIMARY KEY(agent_id); current registration upserts by
-  // (agent_id,path) so explicit relocated agent DBs do not overwrite each other.
-  db.exec(`
-    DROP TABLE IF EXISTS agent_databases_migration_new;
-    CREATE TABLE agent_databases_migration_new (
-      agent_id TEXT NOT NULL,
-      path TEXT NOT NULL,
-      schema_version INTEGER NOT NULL,
-      last_seen_at INTEGER NOT NULL,
-      size_bytes INTEGER,
-      PRIMARY KEY (agent_id, path)
-    );
-    INSERT OR REPLACE INTO agent_databases_migration_new (
-      agent_id,
-      path,
-      schema_version,
-      last_seen_at,
-      size_bytes
-    )
-    SELECT
-      agent_id,
-      path,
-      schema_version,
-      last_seen_at,
-      size_bytes
-    FROM agent_databases
-    WHERE agent_id IS NOT NULL AND path IS NOT NULL;
-    DROP TABLE agent_databases;
-    ALTER TABLE agent_databases_migration_new RENAME TO agent_databases;
-  `);
-  return true;
-}
-
-function assertCanonicalStateSchemaShape(db: DatabaseSync, pathname: string): void {
-  if (hasCanonicalAgentDatabasesPrimaryKey(db)) {
-    return;
-  }
-  throw new Error(
-    `OpenClaw state database ${pathname} has a legacy agent database registry schema; run openclaw doctor --fix to migrate it.`,
-  );
-}
-
-export function detectOpenClawStateDatabaseSchemaMigrations(
-  options: OpenClawStateDatabaseOptions = {},
-): OpenClawStateDatabaseSchemaMigration[] {
-  const pathname = resolveDatabasePath(options);
-  if (!existsSync(pathname)) {
-    return [];
-  }
-  const sqlite = requireNodeSqlite();
-  const db = new sqlite.DatabaseSync(pathname, { readOnly: true });
-  try {
-    return hasCanonicalAgentDatabasesPrimaryKey(db)
-      ? []
-      : [{ kind: "agent-databases-composite-primary-key", path: pathname }];
-  } finally {
-    db.close();
-  }
+  database.exec(eagerSchema);
 }
 
 export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabaseOptions = {}): {
@@ -326,581 +176,363 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
     return { changes: [], warnings: [] };
   }
   ensureOpenClawStatePermissions(pathname, env);
-  const sqlite = requireNodeSqlite();
-  const db = new sqlite.DatabaseSync(pathname);
-  db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+  const db = openNodeSqliteDatabase(pathname);
+  const rebuiltIndexNames = new Set<string>();
   try {
+    db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     assertSupportedSchemaVersion(db, pathname);
-    const repaired = runSqliteImmediateTransactionSync(db, () =>
-      repairAgentDatabasesCompositePrimaryKey(db),
-    );
-    return repaired
-      ? {
-          changes: [`Migrated shared state agent database registry primary key → agent_id,path`],
-          warnings: [],
+    db.exec("PRAGMA foreign_keys = OFF;");
+    const changes = runSqliteImmediateTransactionSync(
+      db,
+      () => {
+        const applied: string[] = [];
+        const previousVersion = readSqliteUserVersion(db);
+        if (previousVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
+          for (const name of repairCanonicalSqliteIndexes(db, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
+            allowMissingColumns: true,
+          })) {
+            rebuiltIndexNames.add(name);
+          }
+          // Current-schema doctor repair may normalize recognized columns or
+          // table options, but it must never recreate a missing table empty.
+          assertSqliteSchemaTablesPresent(db, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
+            allowedMissingTables: LAZY_ADDITIVE_STATE_TABLES,
+          });
         }
-      : { changes: [], warnings: [] };
+        if (rebuiltIndexNames.size === 0) {
+          assertSqliteIntegrity(db, pathname);
+        }
+        dropLegacyStateTables(db);
+        if (repairAgentDatabasesCompositePrimaryKey(db)) {
+          applied.push(`Migrated shared state agent database registry primary key → agent_id,path`);
+        }
+        if (repairAuditEventsSchema(db)) {
+          applied.push(
+            `Migrated shared state audit event ledger → versioned message lifecycle schema`,
+          );
+        }
+        applied.push(...operatorApprovalMigration.repairOperatorApprovalSchema(db));
+        const needsSessionWatchMigration =
+          sessionWatchMigration.needsSessionWatchCursorProvenanceMigration(db, previousVersion);
+        const sessionWatchResult = sessionWatchMigration.migrateSessionWatchCursorProvenance(db);
+        if (needsSessionWatchMigration) {
+          applied.push(
+            `Migrated shared state session watch cursors → provenance column (${sessionWatchResult.migratedAmbientWatches} ambient, ${sessionWatchResult.removedLegacySentinels} sentinels removed)`,
+          );
+        }
+        assertCanonicalStateSchemaShape(db, pathname);
+        if (tableExists(db, "audit_events")) {
+          ensureAdditiveStateColumns(db);
+          executeCanonicalStateSchema(db, {
+            includeLazyAdditiveTables: previousVersion !== OPENCLAW_STATE_SCHEMA_VERSION,
+          });
+          if (previousVersion < OPENCLAW_STATE_STRICT_SCHEMA_VERSION) {
+            repairLegacyGatewayRestartHandoffsForStrictMigration(db);
+          }
+          const strictMigration = migrateSqliteSchemaToStrictInTransaction(
+            db,
+            OPENCLAW_STATE_SCHEMA_SQL,
+            { databaseLabel: pathname },
+          );
+          if (strictMigration.migratedTables.length > 0) {
+            applied.push(
+              `Migrated shared state tables to SQLite STRICT typing (${strictMigration.migratedTables.length})`,
+            );
+          }
+          for (const name of repairCanonicalSqliteIndexes(db, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
+            verifyPhysicalIntegrity: false,
+          })) {
+            rebuiltIndexNames.add(name);
+          }
+        }
+        markCurrentStateSchemaVersion(db, {
+          createMetadataIfMissing: previousVersion < OPENCLAW_STATE_SCHEMA_VERSION,
+        });
+        if (readSqliteUserVersion(db) === OPENCLAW_STATE_SCHEMA_VERSION) {
+          assertCurrentStateRuntimeSchema(db, pathname);
+        }
+        if (rebuiltIndexNames.size > 0) {
+          applied.push(`Rebuilt canonical shared-state SQLite indexes (${rebuiltIndexNames.size})`);
+        }
+        return applied;
+      },
+      {
+        busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+        databaseLabel: pathname,
+        operationLabel: "state.schema.repair",
+      },
+    );
+    const quarantineCleared = clearOpenClawDatabaseQuarantine(pathname, { env });
+    clearOpenClawStateDatabaseOpenFailure(pathname);
+    return {
+      changes,
+      warnings: quarantineCleared
+        ? []
+        : [
+            `Persisted quarantine record for ${pathname} could not be cleared; rerun openclaw doctor --fix so the repaired database is not refused again.`,
+          ],
+    };
   } catch (err) {
+    // Reaching this catch inside doctor means repair itself refused or failed,
+    // so the runtime asserts' "run openclaw doctor --fix" advice is circular here.
+    const reason = String(err).replace(
+      /has a legacy ([a-z ]+) schema; run openclaw doctor --fix to migrate it\./u,
+      "has a legacy $1 schema; automatic repair refused the unrecognized schema shape.",
+    );
     return {
       changes: [],
-      warnings: [`Failed migrating shared state database schema at ${pathname}: ${String(err)}`],
+      warnings: [`Failed migrating shared state database schema at ${pathname}: ${reason}`],
     };
   } finally {
+    if (db.isOpen) {
+      db.exec("PRAGMA foreign_keys = ON;");
+    }
+    clearNodeSqliteKyselyCacheForDatabase(db);
     db.close();
     ensureOpenClawStatePermissions(pathname, env);
   }
 }
 
-function backfillCronRunLogEntryJson(db: DatabaseSync): void {
-  if (!tableExists(db, "cron_run_logs") || !tableHasColumn(db, "cron_run_logs", "entry_json")) {
-    return;
+/** Skip the exclusive doctor repair when automatic migration sees a canonical current schema. */
+export function repairOpenClawStateDatabaseSchemaIfNeeded(
+  options: OpenClawStateDatabaseOptions = {},
+): {
+  changes: string[];
+  warnings: string[];
+} {
+  const pathname = resolveDatabasePath(options);
+  if (!existsSync(pathname)) {
+    return { changes: [], warnings: [] };
   }
-  const rows = db
-    .prepare(
-      `SELECT store_key, job_id, seq, ts
-         FROM cron_run_logs
-        WHERE entry_json = '{}'`,
-    )
-    .all() as Array<{
-    store_key: string;
-    job_id: string;
-    seq: number | bigint;
-    ts: number | bigint;
-  }>;
-  if (rows.length === 0) {
-    return;
-  }
-  const update = db.prepare(
-    `UPDATE cron_run_logs
-        SET entry_json = ?
-      WHERE store_key = ? AND job_id = ? AND seq = ?`,
-  );
-  for (const row of rows) {
-    update.run(
-      JSON.stringify({ ts: Number(row.ts), jobId: row.job_id, action: "finished" }),
-      row.store_key,
-      row.job_id,
-      row.seq,
-    );
-  }
-}
 
-function parseJsonRecord(value: string): Record<string, unknown> | null {
+  let needsRepair = true;
+  let database: DatabaseSync | undefined;
   try {
-    const parsed = JSON.parse(value) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
+    database = openNodeSqliteDatabase(pathname, { readOnly: true });
+    assertSupportedSchemaVersion(database, pathname);
+    needsRepair =
+      readSqliteUserVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION ||
+      detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(database, pathname).length > 0;
+    if (!needsRepair) {
+      assertCurrentStateRuntimeSchema(database, pathname);
+    }
   } catch {
-    return null;
-  }
-}
-
-function textField(record: Record<string, unknown>, key: string): string | null {
-  const value = record[key];
-  return typeof value === "string" && value.trim() ? value : null;
-}
-
-function numberField(record: Record<string, unknown>, key: string): number | null {
-  const value = record[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function recordField(record: Record<string, unknown>, key: string): Record<string, unknown> | null {
-  const value = record[key];
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function jsonField(value: unknown): string | null {
-  return value === undefined ? null : JSON.stringify(value);
-}
-
-function cronSessionTargetField(record: Record<string, unknown>): string | null {
-  const value = textField(record, "sessionTarget");
-  if (!value) {
-    return null;
-  }
-  return value === "main" ||
-    value === "isolated" ||
-    value === "current" ||
-    value.startsWith("session:")
-    ? value
-    : null;
-}
-
-function cronWakeModeField(record: Record<string, unknown>): string | null {
-  const value = textField(record, "wakeMode");
-  return value === "now" || value === "next-heartbeat" ? value : null;
-}
-
-function booleanField(record: Record<string, unknown>, key: string): number | null {
-  const value = record[key];
-  return typeof value === "boolean" ? (value ? 1 : 0) : null;
-}
-
-function failureDestinationField(
-  record: Record<string, unknown> | null,
-  key: "accountId" | "channel" | "mode" | "to",
-): string | null {
-  if (!record || !Object.hasOwn(record, key)) {
-    return null;
-  }
-  const value = record[key];
-  return typeof value === "string" && value.trim() ? value : "";
-}
-
-function backfillCronJobsFromJobJson(db: DatabaseSync): void {
-  if (
-    !tableExists(db, "cron_jobs") ||
-    !tableHasColumn(db, "cron_jobs", "job_json") ||
-    !tableHasColumn(db, "cron_jobs", "schedule_kind") ||
-    !tableHasColumn(db, "cron_jobs", "payload_kind")
-  ) {
-    return;
-  }
-  const rows = db
-    .prepare(
-      `SELECT store_key, job_id, job_json, updated_at
-         FROM cron_jobs
-        WHERE schedule_kind = 'manual'
-           OR payload_kind = 'message'
-           OR name = ''`,
-    )
-    .all() as Array<{
-    store_key: string;
-    job_id: string;
-    job_json: string;
-    updated_at: number | bigint;
-  }>;
-  if (rows.length === 0) {
-    return;
-  }
-  const update = db.prepare(
-    `UPDATE cron_jobs
-        SET name = ?,
-            enabled = ?,
-            delete_after_run = ?,
-            created_at_ms = ?,
-            agent_id = ?,
-            session_key = ?,
-            schedule_kind = ?,
-            schedule_expr = ?,
-            schedule_tz = ?,
-            every_ms = ?,
-            anchor_ms = ?,
-            at = ?,
-            stagger_ms = ?,
-            session_target = ?,
-            wake_mode = ?,
-            payload_kind = ?,
-            payload_message = ?,
-            payload_model = ?,
-            payload_fallbacks_json = ?,
-            payload_thinking = ?,
-            payload_timeout_seconds = ?,
-            payload_allow_unsafe_external_content = ?,
-            payload_external_content_source_json = ?,
-            payload_light_context = ?,
-            payload_tools_allow_json = ?,
-            delivery_mode = ?,
-            delivery_channel = ?,
-            delivery_to = ?,
-            delivery_thread_id = ?,
-            delivery_account_id = ?,
-            delivery_best_effort = ?,
-            delivery_completion_mode = ?,
-            delivery_completion_to = ?,
-            failure_delivery_mode = ?,
-            failure_delivery_channel = ?,
-            failure_delivery_to = ?,
-            failure_delivery_account_id = ?,
-            failure_alert_disabled = ?,
-            failure_alert_after = ?,
-            failure_alert_channel = ?,
-            failure_alert_to = ?,
-            failure_alert_cooldown_ms = ?,
-            failure_alert_include_skipped = ?,
-            failure_alert_mode = ?,
-            failure_alert_account_id = ?,
-            runtime_updated_at_ms = ?
-      WHERE store_key = ?
-        AND job_id = ?`,
-  );
-  for (const row of rows) {
-    const job = parseJsonRecord(row.job_json);
-    if (!job) {
-      continue;
+    // Preserve the repair path's existing diagnostics for unreadable or noncanonical databases.
+    needsRepair = true;
+  } finally {
+    if (database?.isOpen) {
+      database.close();
     }
-    // Legacy cron rows kept the contract in job_json; columns are a queryable projection of it.
-    const schedule = recordField(job, "schedule");
-    const payload = recordField(job, "payload");
-    const scheduleKind = textField(schedule ?? {}, "kind");
-    const payloadKind = textField(payload ?? {}, "kind");
-    const isAt = scheduleKind === "at" && textField(schedule ?? {}, "at");
-    const isEvery = scheduleKind === "every" && numberField(schedule ?? {}, "everyMs") != null;
-    const isCron = scheduleKind === "cron" && textField(schedule ?? {}, "expr");
-    const isSystemEvent = payloadKind === "systemEvent" && textField(payload ?? {}, "text");
-    const isAgentTurn = payloadKind === "agentTurn" && textField(payload ?? {}, "message");
-    if (
-      !schedule ||
-      !payload ||
-      (!isAt && !isEvery && !isCron) ||
-      (!isSystemEvent && !isAgentTurn)
-    ) {
-      continue;
-    }
-    const fallbackTime = Number(row.updated_at) || 0;
-    const delivery = recordField(job, "delivery");
-    const completionDestination = delivery ? recordField(delivery, "completionDestination") : null;
-    const failureDestination = delivery ? recordField(delivery, "failureDestination") : null;
-    const failureAlertValue = job.failureAlert;
-    const failureAlert =
-      failureAlertValue &&
-      typeof failureAlertValue === "object" &&
-      !Array.isArray(failureAlertValue)
-        ? (failureAlertValue as Record<string, unknown>)
-        : null;
-    update.run(
-      textField(job, "name") ?? row.job_id,
-      job.enabled === false ? 0 : 1,
-      booleanField(job, "deleteAfterRun"),
-      numberField(job, "createdAtMs") ?? fallbackTime,
-      textField(job, "agentId"),
-      textField(job, "sessionKey"),
-      scheduleKind,
-      isCron ? textField(schedule, "expr") : null,
-      isCron ? textField(schedule, "tz") : null,
-      isEvery ? numberField(schedule, "everyMs") : null,
-      isEvery ? numberField(schedule, "anchorMs") : null,
-      isAt ? textField(schedule, "at") : null,
-      isCron ? numberField(schedule, "staggerMs") : null,
-      cronSessionTargetField(job) ?? (payloadKind === "agentTurn" ? "isolated" : "main"),
-      cronWakeModeField(job) ?? "now",
-      payloadKind,
-      isSystemEvent ? textField(payload, "text") : textField(payload, "message"),
-      isAgentTurn ? textField(payload, "model") : null,
-      isAgentTurn ? jsonField(payload.fallbacks) : null,
-      isAgentTurn ? textField(payload, "thinking") : null,
-      isAgentTurn ? numberField(payload, "timeoutSeconds") : null,
-      isAgentTurn && typeof payload.allowUnsafeExternalContent === "boolean"
-        ? payload.allowUnsafeExternalContent
-          ? 1
-          : 0
-        : null,
-      isAgentTurn ? jsonField(payload.externalContentSource) : null,
-      isAgentTurn && typeof payload.lightContext === "boolean"
-        ? payload.lightContext
-          ? 1
-          : 0
-        : null,
-      isAgentTurn ? jsonField(payload.toolsAllow) : null,
-      delivery ? textField(delivery, "mode") : null,
-      delivery ? textField(delivery, "channel") : null,
-      delivery ? textField(delivery, "to") : null,
-      delivery ? textField(delivery, "threadId") : null,
-      delivery ? textField(delivery, "accountId") : null,
-      delivery && typeof delivery.bestEffort === "boolean" ? (delivery.bestEffort ? 1 : 0) : null,
-      completionDestination ? textField(completionDestination, "mode") : null,
-      completionDestination ? textField(completionDestination, "to") : null,
-      failureDestinationField(failureDestination, "mode"),
-      failureDestinationField(failureDestination, "channel"),
-      failureDestinationField(failureDestination, "to"),
-      failureDestinationField(failureDestination, "accountId"),
-      failureAlertValue === false ? 1 : failureAlert ? 0 : null,
-      failureAlert ? numberField(failureAlert, "after") : null,
-      failureAlert ? textField(failureAlert, "channel") : null,
-      failureAlert ? textField(failureAlert, "to") : null,
-      failureAlert ? numberField(failureAlert, "cooldownMs") : null,
-      failureAlert && typeof failureAlert.includeSkipped === "boolean"
-        ? failureAlert.includeSkipped
-          ? 1
-          : 0
-        : null,
-      failureAlert ? textField(failureAlert, "mode") : null,
-      failureAlert ? textField(failureAlert, "accountId") : null,
-      numberField(job, "updatedAtMs") ?? fallbackTime,
-      row.store_key,
-      row.job_id,
-    );
   }
-}
 
-function metadataStringField(record: Record<string, unknown>, key: string): string | null {
-  return textField(record, key);
-}
-
-function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): void {
-  if (
-    !tableExists(db, "delivery_queue_entries") ||
-    !tableHasColumn(db, "delivery_queue_entries", "entry_json") ||
-    !tableHasColumn(db, "delivery_queue_entries", "retry_count")
-  ) {
-    return;
-  }
-  const rows = db
-    .prepare(
-      `SELECT queue_name, id, entry_json
-         FROM delivery_queue_entries
-        WHERE retry_count = 0
-           OR last_attempt_at IS NULL
-           OR last_error IS NULL
-           OR recovery_state IS NULL
-           OR platform_send_started_at IS NULL
-           OR entry_kind IS NULL
-           OR session_key IS NULL
-           OR channel IS NULL
-           OR target IS NULL
-           OR account_id IS NULL`,
-    )
-    .all() as Array<{ queue_name: string; id: string; entry_json: string }>;
-  if (rows.length === 0) {
-    return;
-  }
-  const update = db.prepare(
-    `UPDATE delivery_queue_entries
-        SET entry_kind = COALESCE(?, entry_kind),
-            session_key = COALESCE(?, session_key),
-            channel = COALESCE(?, channel),
-            target = COALESCE(?, target),
-            account_id = COALESCE(?, account_id),
-            retry_count = ?,
-            last_attempt_at = COALESCE(?, last_attempt_at),
-            last_error = COALESCE(?, last_error),
-            recovery_state = COALESCE(?, recovery_state),
-            platform_send_started_at = COALESCE(?, platform_send_started_at)
-      WHERE queue_name = ?
-        AND id = ?`,
-  );
-  for (const row of rows) {
-    const entry = parseJsonRecord(row.entry_json);
-    if (!entry) {
-      continue;
-    }
-    // Queue metadata is denormalized for recovery queries but entry_json remains source of truth.
-    const session = recordField(entry, "session");
-    const route = recordField(entry, "route");
-    const deliveryContext = recordField(entry, "deliveryContext");
-    update.run(
-      metadataStringField(entry, "kind"),
-      metadataStringField(entry, "sessionKey") ??
-        (session ? metadataStringField(session, "key") : null),
-      metadataStringField(entry, "channel") ??
-        (route ? metadataStringField(route, "channel") : null) ??
-        (deliveryContext ? metadataStringField(deliveryContext, "channel") : null),
-      metadataStringField(entry, "to") ??
-        (route ? metadataStringField(route, "to") : null) ??
-        (deliveryContext ? metadataStringField(deliveryContext, "to") : null),
-      metadataStringField(entry, "accountId") ??
-        (route ? metadataStringField(route, "accountId") : null) ??
-        (deliveryContext ? metadataStringField(deliveryContext, "accountId") : null),
-      numberField(entry, "retryCount") ?? 0,
-      numberField(entry, "lastAttemptAt"),
-      metadataStringField(entry, "lastError"),
-      metadataStringField(entry, "recoveryState"),
-      numberField(entry, "platformSendStartedAt"),
-      row.queue_name,
-      row.id,
-    );
-  }
-}
-
-function ensureAdditiveStateColumns(db: DatabaseSync): void {
-  ensureColumn(db, "node_pairing_pending", "client_id TEXT");
-  ensureColumn(db, "node_pairing_pending", "client_mode TEXT");
-  ensureColumn(db, "node_pairing_paired", "client_id TEXT");
-  ensureColumn(db, "node_pairing_paired", "client_mode TEXT");
-  ensureColumn(db, "cron_run_logs", "status TEXT");
-  ensureColumn(db, "cron_run_logs", "error TEXT");
-  ensureColumn(db, "cron_run_logs", "summary TEXT");
-  ensureColumn(db, "cron_run_logs", "diagnostics_summary TEXT");
-  ensureColumn(db, "cron_run_logs", "delivery_status TEXT");
-  ensureColumn(db, "cron_run_logs", "delivery_error TEXT");
-  ensureColumn(db, "cron_run_logs", "delivered INTEGER");
-  ensureColumn(db, "cron_run_logs", "session_id TEXT");
-  ensureColumn(db, "cron_run_logs", "session_key TEXT");
-  ensureColumn(db, "cron_run_logs", "run_id TEXT");
-  ensureColumn(db, "cron_run_logs", "run_at_ms INTEGER");
-  ensureColumn(db, "cron_run_logs", "duration_ms INTEGER");
-  ensureColumn(db, "cron_run_logs", "next_run_at_ms INTEGER");
-  ensureColumn(db, "cron_run_logs", "model TEXT");
-  ensureColumn(db, "cron_run_logs", "provider TEXT");
-  ensureColumn(db, "cron_run_logs", "total_tokens INTEGER");
-  ensureColumn(db, "cron_run_logs", "entry_json TEXT NOT NULL DEFAULT '{}'");
-  ensureColumn(db, "cron_run_logs", "created_at INTEGER NOT NULL DEFAULT 0");
-  backfillCronRunLogEntryJson(db);
-  ensureColumn(db, "cron_jobs", "description TEXT");
-  ensureColumn(db, "cron_jobs", "name TEXT NOT NULL DEFAULT ''");
-  ensureColumn(db, "cron_jobs", "enabled INTEGER NOT NULL DEFAULT 1");
-  ensureColumn(db, "cron_jobs", "delete_after_run INTEGER");
-  ensureColumn(db, "cron_jobs", "created_at_ms INTEGER NOT NULL DEFAULT 0");
-  ensureColumn(db, "cron_jobs", "agent_id TEXT");
-  ensureColumn(db, "cron_jobs", "session_key TEXT");
-  ensureColumn(db, "cron_jobs", "schedule_kind TEXT NOT NULL DEFAULT 'manual'");
-  ensureColumn(db, "cron_jobs", "schedule_expr TEXT");
-  ensureColumn(db, "cron_jobs", "schedule_tz TEXT");
-  ensureColumn(db, "cron_jobs", "every_ms INTEGER");
-  ensureColumn(db, "cron_jobs", "anchor_ms INTEGER");
-  ensureColumn(db, "cron_jobs", "at TEXT");
-  ensureColumn(db, "cron_jobs", "stagger_ms INTEGER");
-  ensureColumn(db, "cron_jobs", "session_target TEXT NOT NULL DEFAULT 'main'");
-  ensureColumn(db, "cron_jobs", "wake_mode TEXT NOT NULL DEFAULT 'auto'");
-  ensureColumn(db, "cron_jobs", "payload_kind TEXT NOT NULL DEFAULT 'message'");
-  ensureColumn(db, "cron_jobs", "payload_message TEXT");
-  ensureColumn(db, "cron_jobs", "payload_model TEXT");
-  ensureColumn(db, "cron_jobs", "payload_fallbacks_json TEXT");
-  ensureColumn(db, "cron_jobs", "payload_thinking TEXT");
-  ensureColumn(db, "cron_jobs", "payload_timeout_seconds INTEGER");
-  ensureColumn(db, "cron_jobs", "payload_allow_unsafe_external_content INTEGER");
-  ensureColumn(db, "cron_jobs", "payload_external_content_source_json TEXT");
-  ensureColumn(db, "cron_jobs", "payload_light_context INTEGER");
-  ensureColumn(db, "cron_jobs", "payload_tools_allow_json TEXT");
-  ensureColumn(db, "cron_jobs", "delivery_mode TEXT");
-  ensureColumn(db, "cron_jobs", "delivery_channel TEXT");
-  ensureColumn(db, "cron_jobs", "delivery_to TEXT");
-  ensureColumn(db, "cron_jobs", "delivery_thread_id TEXT");
-  ensureColumn(db, "cron_jobs", "delivery_account_id TEXT");
-  ensureColumn(db, "cron_jobs", "delivery_best_effort INTEGER");
-  ensureColumn(db, "cron_jobs", "delivery_completion_mode TEXT");
-  ensureColumn(db, "cron_jobs", "delivery_completion_to TEXT");
-  ensureColumn(db, "cron_jobs", "failure_delivery_mode TEXT");
-  ensureColumn(db, "cron_jobs", "failure_delivery_channel TEXT");
-  ensureColumn(db, "cron_jobs", "failure_delivery_to TEXT");
-  ensureColumn(db, "cron_jobs", "failure_delivery_account_id TEXT");
-  ensureColumn(db, "cron_jobs", "failure_alert_disabled INTEGER");
-  ensureColumn(db, "cron_jobs", "failure_alert_after INTEGER");
-  ensureColumn(db, "cron_jobs", "failure_alert_channel TEXT");
-  ensureColumn(db, "cron_jobs", "failure_alert_to TEXT");
-  ensureColumn(db, "cron_jobs", "failure_alert_cooldown_ms INTEGER");
-  ensureColumn(db, "cron_jobs", "failure_alert_include_skipped INTEGER");
-  ensureColumn(db, "cron_jobs", "failure_alert_mode TEXT");
-  ensureColumn(db, "cron_jobs", "failure_alert_account_id TEXT");
-  ensureColumn(db, "cron_jobs", "next_run_at_ms INTEGER");
-  ensureColumn(db, "cron_jobs", "running_at_ms INTEGER");
-  ensureColumn(db, "cron_jobs", "last_run_at_ms INTEGER");
-  ensureColumn(db, "cron_jobs", "last_run_status TEXT");
-  ensureColumn(db, "cron_jobs", "last_error TEXT");
-  ensureColumn(db, "cron_jobs", "last_duration_ms INTEGER");
-  ensureColumn(db, "cron_jobs", "consecutive_errors INTEGER");
-  ensureColumn(db, "cron_jobs", "consecutive_skipped INTEGER");
-  ensureColumn(db, "cron_jobs", "schedule_error_count INTEGER");
-  ensureColumn(db, "cron_jobs", "last_delivery_status TEXT");
-  ensureColumn(db, "cron_jobs", "last_delivery_error TEXT");
-  ensureColumn(db, "cron_jobs", "last_delivered INTEGER");
-  ensureColumn(db, "cron_jobs", "last_failure_alert_at_ms INTEGER");
-  ensureColumn(db, "cron_jobs", "state_json TEXT NOT NULL DEFAULT '{}'");
-  ensureColumn(db, "cron_jobs", "runtime_updated_at_ms INTEGER");
-  ensureColumn(db, "cron_jobs", "schedule_identity TEXT");
-  ensureColumn(db, "cron_jobs", "sort_order INTEGER NOT NULL DEFAULT 0");
-  backfillCronJobsFromJobJson(db);
-  ensureColumn(db, "sandbox_registry_entries", "session_key TEXT");
-  ensureColumn(db, "sandbox_registry_entries", "backend_id TEXT");
-  ensureColumn(db, "sandbox_registry_entries", "runtime_label TEXT");
-  ensureColumn(db, "sandbox_registry_entries", "image TEXT");
-  ensureColumn(db, "sandbox_registry_entries", "created_at_ms INTEGER");
-  ensureColumn(db, "sandbox_registry_entries", "last_used_at_ms INTEGER");
-  ensureColumn(db, "sandbox_registry_entries", "config_label_kind TEXT");
-  ensureColumn(db, "sandbox_registry_entries", "config_hash TEXT");
-  ensureColumn(db, "sandbox_registry_entries", "cdp_port INTEGER");
-  ensureColumn(db, "sandbox_registry_entries", "no_vnc_port INTEGER");
-  ensureColumn(db, "delivery_queue_entries", "entry_kind TEXT");
-  ensureColumn(db, "delivery_queue_entries", "session_key TEXT");
-  ensureColumn(db, "delivery_queue_entries", "channel TEXT");
-  ensureColumn(db, "delivery_queue_entries", "target TEXT");
-  ensureColumn(db, "delivery_queue_entries", "account_id TEXT");
-  ensureColumn(db, "delivery_queue_entries", "retry_count INTEGER NOT NULL DEFAULT 0");
-  ensureColumn(db, "delivery_queue_entries", "last_attempt_at INTEGER");
-  ensureColumn(db, "delivery_queue_entries", "last_error TEXT");
-  ensureColumn(db, "delivery_queue_entries", "recovery_state TEXT");
-  ensureColumn(db, "delivery_queue_entries", "platform_send_started_at INTEGER");
-  backfillDeliveryQueueEntriesFromEntryJson(db);
-  ensureColumn(db, "commitments", "account_id TEXT");
-  ensureColumn(db, "commitments", "recipient_id TEXT");
-  ensureColumn(db, "commitments", "thread_id TEXT");
-  ensureColumn(db, "commitments", "sender_id TEXT");
-  ensureColumn(db, "commitments", "kind TEXT NOT NULL DEFAULT 'followup'");
-  ensureColumn(db, "commitments", "sensitivity TEXT NOT NULL DEFAULT 'normal'");
-  ensureColumn(db, "commitments", "source TEXT NOT NULL DEFAULT 'unknown'");
-  ensureColumn(db, "commitments", "reason TEXT NOT NULL DEFAULT ''");
-  ensureColumn(db, "commitments", "suggested_text TEXT NOT NULL DEFAULT ''");
-  ensureColumn(db, "commitments", "dedupe_key TEXT NOT NULL DEFAULT ''");
-  ensureColumn(db, "commitments", "confidence REAL NOT NULL DEFAULT 0");
-  ensureColumn(db, "commitments", "due_timezone TEXT NOT NULL DEFAULT 'UTC'");
-  ensureColumn(db, "commitments", "source_message_id TEXT");
-  ensureColumn(db, "commitments", "source_run_id TEXT");
-  ensureColumn(db, "commitments", "created_at_ms INTEGER NOT NULL DEFAULT 0");
-  ensureColumn(db, "commitments", "attempts INTEGER NOT NULL DEFAULT 0");
-  ensureColumn(db, "commitments", "last_attempt_at_ms INTEGER");
-  ensureColumn(db, "commitments", "sent_at_ms INTEGER");
-  ensureColumn(db, "commitments", "dismissed_at_ms INTEGER");
-  ensureColumn(db, "commitments", "snoozed_until_ms INTEGER");
-  ensureColumn(db, "commitments", "expired_at_ms INTEGER");
-  ensureColumn(db, "current_conversation_bindings", "target_agent_id TEXT NOT NULL DEFAULT 'main'");
-  ensureColumn(db, "current_conversation_bindings", "target_session_id TEXT");
-  ensureColumn(
-    db,
-    "current_conversation_bindings",
-    "conversation_kind TEXT NOT NULL DEFAULT 'channel'",
-  );
-  ensureColumn(db, "device_bootstrap_tokens", "pending_profile_json TEXT");
-  ensureColumn(db, "gateway_restart_handoff", "restart_trace_started_at INTEGER");
-  ensureColumn(db, "gateway_restart_handoff", "restart_trace_last_at INTEGER");
-  ensureColumn(db, "gateway_restart_intent", "reason TEXT");
-  ensureColumn(db, "gateway_restart_sentinel", "delivery_channel TEXT");
-  ensureColumn(db, "gateway_restart_sentinel", "delivery_to TEXT");
-  ensureColumn(db, "gateway_restart_sentinel", "delivery_account_id TEXT");
-  ensureColumn(db, "gateway_restart_sentinel", "message TEXT");
-  ensureColumn(db, "gateway_restart_sentinel", "continuation_json TEXT");
-  ensureColumn(db, "gateway_restart_sentinel", "doctor_hint TEXT");
-  ensureColumn(db, "gateway_restart_sentinel", "stats_json TEXT");
-  ensureColumn(db, "subagent_runs", "task_name TEXT");
+  return needsRepair ? repairOpenClawStateDatabaseSchema(options) : { changes: [], warnings: [] };
 }
 
 function ensureSchema(db: DatabaseSync, pathname: string): void {
-  assertSupportedSchemaVersion(db, pathname);
-  ensureAdditiveStateColumns(db);
-  assertCanonicalStateSchemaShape(db, pathname);
-  db.exec(OPENCLAW_STATE_SCHEMA_SQL);
-  ensureAdditiveStateColumns(db);
-  db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};`);
   const now = Date.now();
   const kysely = getNodeSqliteKysely<OpenClawStateMetadataDatabase>(db);
-  executeSqliteQuerySync(
-    db,
-    kysely
-      .insertInto("schema_meta")
-      .values({
-        meta_key: "primary",
-        role: "global",
-        schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
-        agent_id: null,
-        app_version: null,
-        created_at: now,
-        updated_at: now,
-      })
-      .onConflict((conflict) =>
-        conflict.column("meta_key").doUpdateSet({
-          role: "global",
-          schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
-          agent_id: null,
-          app_version: null,
-          updated_at: now,
-        }),
-      ),
-  );
+  // Rebuilding referenced tables requires disabling FK enforcement before BEGIN.
+  db.exec("PRAGMA foreign_keys = OFF;");
+  try {
+    runSqliteImmediateTransactionSync(
+      db,
+      () => {
+        assertSupportedSchemaVersion(db, pathname);
+        const previousVersion = readSqliteUserVersion(db);
+        if (previousVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
+          repairCanonicalSqliteIndexes(db, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
+            verifyPhysicalIntegrity: false,
+          });
+          assertCurrentStateRuntimeSchema(db, pathname);
+        } else if (previousVersion === 5) {
+          assertOpenClawStateDatabaseV5ForMigration(db, { pathname });
+        }
+        dropLegacyStateTables(db);
+        ensureAdditiveStateColumns(db);
+        sessionWatchMigration.migrateSessionWatchCursorProvenance(db);
+        assertCanonicalStateSchemaShape(db, pathname);
+        executeCanonicalStateSchema(db, {
+          includeLazyAdditiveTables: previousVersion !== OPENCLAW_STATE_SCHEMA_VERSION,
+        });
+        migrateLegacyCronRunLogsToTaskRuns(db);
+        if (previousVersion < OPENCLAW_STATE_STRICT_SCHEMA_VERSION) {
+          repairLegacyGatewayRestartHandoffsForStrictMigration(db);
+          migrateSqliteSchemaToStrictInTransaction(db, OPENCLAW_STATE_SCHEMA_SQL, {
+            databaseLabel: pathname,
+          });
+        }
+        repairCanonicalSqliteIndexes(db, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
+          verifyPhysicalIntegrity: false,
+        });
+        db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};`);
+        executeSqliteQuerySync(
+          db,
+          kysely
+            .insertInto("schema_meta")
+            .values({
+              meta_key: "primary",
+              role: "global",
+              schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
+              agent_id: null,
+              app_version: VERSION,
+              created_at: now,
+              updated_at: now,
+            })
+            .onConflict((conflict) =>
+              conflict.column("meta_key").doUpdateSet({
+                role: "global",
+                schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
+                agent_id: null,
+                app_version: VERSION,
+                updated_at: now,
+              }),
+            ),
+        );
+        assertOpenClawStateDatabaseForMaintenance(db, { pathname });
+      },
+      {
+        busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+        databaseLabel: pathname,
+        operationLabel: "state.schema.ensure",
+      },
+    );
+  } finally {
+    db.exec("PRAGMA foreign_keys = ON;");
+  }
 }
 
-function resolveDatabasePath(options: OpenClawStateDatabaseOptions = {}): string {
-  return options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env);
+/** Open existing shared state without creating, migrating, chmodding, or configuring it. */
+export async function openExistingOpenClawStateDatabaseReadOnly(
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<OpenClawStateDatabase | undefined> {
+  const env = options.env ?? process.env;
+  const pathname = resolveDatabasePath(options);
+  if (!existsSync(pathname)) {
+    return undefined;
+  }
+  const terminalFailure = terminalOpenLatch.get(pathname);
+  if (terminalFailure) {
+    throw terminalFailure;
+  }
+  try {
+    const quarantine = readOpenClawDatabaseQuarantine(pathname, { env });
+    if (quarantine) {
+      throw createOpenClawDatabaseVerificationError("state", pathname, quarantine.reason);
+    }
+  } catch (error) {
+    if (error instanceof Error && error.name === "SqliteIntegrityError") {
+      throw error;
+    }
+    // A broken quarantine store must not brick read-only diagnostics.
+  }
+  const prepared = await prepareSqliteReadOnlyLocation(pathname);
+  let db: DatabaseSync;
+  try {
+    db = openNodeSqliteDatabase(prepared.location, {
+      readOnly: true,
+    });
+  } catch (error) {
+    prepared.cleanup();
+    throw error;
+  }
+  try {
+    db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+    assertSupportedSchemaVersion(db, pathname);
+    assertSqliteIntegrity(db, pathname);
+    if (readSqliteUserVersion(db) === OPENCLAW_STATE_SCHEMA_VERSION) {
+      assertOpenClawStateDatabaseForMaintenance(db, { pathname });
+    }
+  } catch (error) {
+    try {
+      clearNodeSqliteKyselyCacheForDatabase(db);
+      db.close();
+    } catch {
+      // Preserve the verification failure that explains why the database was refused.
+    }
+    prepared.cleanup();
+    throw error;
+  }
+  let cleanupComplete = false;
+  return {
+    db,
+    path: pathname,
+    walMaintenance: {
+      checkpoint: () => false,
+      // Cleanup can fail transiently after the database closes. Keep the
+      // close contract retryable until one call finishes both responsibilities.
+      close: () => {
+        const wasOpen = db.isOpen;
+        if (!wasOpen && cleanupComplete) {
+          return false;
+        }
+        try {
+          if (wasOpen) {
+            clearNodeSqliteKyselyCacheForDatabase(db);
+            db.close();
+          }
+        } finally {
+          cleanupComplete = prepared.cleanup();
+        }
+        return cleanupComplete;
+      },
+    },
+  };
+}
+
+function assertCurrentStateRuntimeSchema(database: DatabaseSync, pathname: string): void {
+  assertCanonicalStateSchemaShape(database, pathname);
+  assertOpenClawStateDatabaseForMaintenance(database, { pathname });
+}
+
+function assertStateDatabaseIntegrityBeforeMutation(
+  database: DatabaseSync,
+  pathname: string,
+): void {
+  database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+  const userVersion = readSqliteUserVersion(database);
+  const hasApplicationSchema = database
+    .prepare("SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1")
+    .get();
+  const migrationPending =
+    (userVersion === 0 && hasApplicationSchema) ||
+    (userVersion > 0 && userVersion < OPENCLAW_STATE_SCHEMA_VERSION);
+  if (migrationPending) {
+    stateDbLog.info("state database schema migration pending; verifying integrity first", {
+      fromVersion: userVersion,
+      path: pathname,
+      toVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+    });
+  }
+  if (userVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
+    verifyAndRepairCanonicalSqliteIndexes(database, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
+      allowMissingColumns: true,
+      validateAfterRepair: () => assertCurrentStateRuntimeSchema(database, pathname),
+    });
+  } else {
+    // Every physical open proves the full file before schema mutation or exposure.
+    assertSqliteIntegrity(database, pathname);
+  }
+  if (userVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
+    assertCurrentStateRuntimeSchema(database, pathname);
+  }
 }
 
 /** Open or return a cached shared state database after schema and migration checks. */
+
 export function openOpenClawStateDatabase(
   options: OpenClawStateDatabaseOptions = {},
 ): OpenClawStateDatabase {
+  if (options.database) {
+    return options.database;
+  }
   const env = options.env ?? process.env;
   const pathname = resolveDatabasePath(options);
+  // Latched paths are quarantined: the recorder closed any live handle, and
+  // every open fails fast here until doctor repairs the file and clears it.
+  const terminalFailure = terminalOpenLatch.get(pathname);
+  if (terminalFailure) {
+    throw terminalFailure;
+  }
   const cached = cachedDatabases.get(pathname);
   if (cached?.db.isOpen) {
     return cached;
@@ -911,27 +543,61 @@ export function openOpenClawStateDatabase(
     clearNodeSqliteKyselyCacheForDatabase(cached.db);
     cachedDatabases.delete(pathname);
   }
-
-  ensureOpenClawStatePermissions(pathname, env);
-  const sqlite = requireNodeSqlite();
-  const db = new sqlite.DatabaseSync(pathname);
-  const walMaintenance = configureSqliteWalMaintenance(db, {
-    databaseLabel: "openclaw-state",
-    databasePath: pathname,
-  });
-  db.exec("PRAGMA synchronous = NORMAL;");
-  db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-  db.exec("PRAGMA foreign_keys = ON;");
+  let quarantineFailure: Error | undefined;
   try {
-    ensureSchema(db, pathname);
-  } catch (err) {
-    walMaintenance.close();
-    db.close();
-    throw err;
+    const quarantine = readOpenClawDatabaseQuarantine(pathname, { env });
+    if (quarantine) {
+      quarantineFailure = createOpenClawDatabaseVerificationError(
+        "state",
+        pathname,
+        quarantine.reason,
+      );
+    }
+  } catch {
+    // A broken quarantine store must not brick every state open.
+    // The process latch and daily verifier still cover known damage.
   }
+  if (quarantineFailure) {
+    throw quarantineFailure;
+  }
+  ensureOpenClawStatePermissions(pathname, env);
+  const db = openNodeSqliteDatabase(pathname);
+  enableNodeSqliteKyselyStatementCache(db);
+  const walMaintenance = (() => {
+    let maintenance: SqliteWalMaintenance | undefined;
+    try {
+      db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+      assertSupportedSchemaVersion(db, pathname);
+      assertStateDatabaseIntegrityBeforeMutation(db, pathname);
+      configureSqlitePreSchemaPragmas(db, {
+        busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+      });
+      maintenance = configureSqliteConnectionPragmas(db, {
+        busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+        databaseLabel: "openclaw-state",
+        databasePath: pathname,
+        foreignKeys: true,
+        synchronous: "NORMAL",
+      });
+      ensureSchema(db, pathname);
+      return maintenance;
+    } catch (err) {
+      maintenance?.close();
+      clearNodeSqliteKyselyCacheForDatabase(db);
+      db.close();
+      if (
+        err instanceof Error &&
+        (err.name === "SqliteSchemaVersionError" || isTerminalSqliteIntegrityError(err))
+      ) {
+        recordOpenClawStateDatabaseOpenFailure(pathname, err);
+      }
+      throw err;
+    }
+  })();
   ensureOpenClawStatePermissions(pathname, env);
   const database = { db, path: pathname, walMaintenance };
   cachedDatabases.set(pathname, database);
+  terminalOpenLatch.clear(pathname);
   return database;
 }
 
@@ -939,9 +605,18 @@ export function openOpenClawStateDatabase(
 export function runOpenClawStateWriteTransaction<T>(
   operation: (database: OpenClawStateDatabase) => T,
   options: OpenClawStateDatabaseOptions = {},
+  transactionOptions: Pick<
+    SqliteTransactionOptions,
+    "busyTimeoutMs" | "operationLabel" | "slowTransactionHoldMs"
+  > = {},
 ): T {
   const database = openOpenClawStateDatabase(options);
-  const result = runSqliteImmediateTransactionSync(database.db, () => operation(database));
+  const result = runSqliteImmediateTransactionSync(database.db, () => operation(database), {
+    busyTimeoutMs: transactionOptions.busyTimeoutMs ?? OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+    databaseLabel: database.path,
+    ...transactionOptions,
+    operationLabel: transactionOptions.operationLabel ?? "state.write",
+  });
   try {
     ensureOpenClawStatePermissions(database.path, options.env ?? process.env);
   } catch {
@@ -951,87 +626,33 @@ export function runOpenClawStateWriteTransaction<T>(
   return result;
 }
 
-/** Record a state migration run and return its stable run id. */
-export function recordOpenClawStateMigrationRun(
-  options: RecordOpenClawStateMigrationRunOptions,
-): string {
-  const id = options.id ?? randomUUID();
-  runOpenClawStateWriteTransaction((database) => {
-    const db = getNodeSqliteKysely<OpenClawStateMetadataDatabase>(database.db);
-    executeSqliteQuerySync(
-      database.db,
-      db.insertInto("migration_runs").values({
-        id,
-        started_at: options.startedAt,
-        finished_at: options.finishedAt ?? null,
-        status: options.status,
-        report_json: JSON.stringify(options.report),
-      }),
-    );
-  }, options);
-  return id;
+/**
+ * Return a shared state handle this process already holds open, if any.
+ *
+ * Read-only callers use this to avoid opening a connection per call; it never
+ * creates, repairs, or registers a handle.
+ */
+export function getOpenClawStateDatabaseIfOpen(
+  options: OpenClawStateDatabaseOptions = {},
+): OpenClawStateDatabase | undefined {
+  const cached = cachedDatabases.get(resolveDatabasePath(options));
+  return cached?.db.isOpen ? cached : undefined;
 }
 
-/** Upsert the per-source audit row for a state migration. */
-export function recordOpenClawStateMigrationSource(
-  options: RecordOpenClawStateMigrationSourceOptions,
-): void {
-  runOpenClawStateWriteTransaction((database) => {
-    const db = getNodeSqliteKysely<OpenClawStateMetadataDatabase>(database.db);
-    executeSqliteQuerySync(
-      database.db,
-      db
-        .insertInto("migration_sources")
-        .values({
-          source_key: options.sourceKey,
-          migration_kind: options.migrationKind,
-          source_path: options.sourcePath,
-          target_table: options.targetTable,
-          source_sha256: options.sourceSha256 ?? null,
-          source_size_bytes: options.sourceSizeBytes ?? null,
-          source_record_count: options.sourceRecordCount ?? null,
-          last_run_id: options.runId,
-          status: options.status,
-          imported_at: options.importedAt,
-          removed_source: options.removedSource ? 1 : 0,
-          report_json: JSON.stringify(options.report),
-        })
-        .onConflict((conflict) =>
-          conflict.column("source_key").doUpdateSet({
-            migration_kind: (eb) => eb.ref("excluded.migration_kind"),
-            source_path: (eb) => eb.ref("excluded.source_path"),
-            target_table: (eb) => eb.ref("excluded.target_table"),
-            source_sha256: (eb) => eb.ref("excluded.source_sha256"),
-            source_size_bytes: (eb) => eb.ref("excluded.source_size_bytes"),
-            source_record_count: (eb) => eb.ref("excluded.source_record_count"),
-            last_run_id: (eb) => eb.ref("excluded.last_run_id"),
-            status: (eb) => eb.ref("excluded.status"),
-            imported_at: (eb) => eb.ref("excluded.imported_at"),
-            removed_source: (eb) => eb.ref("excluded.removed_source"),
-            report_json: (eb) => eb.ref("excluded.report_json"),
-          }),
-        ),
-    );
-  }, options);
-}
-
-/** Record a state backup archive and return its stable backup id. */
-export function recordOpenClawStateBackupRun(options: RecordOpenClawStateBackupRunOptions): string {
-  const id = options.id ?? randomUUID();
-  runOpenClawStateWriteTransaction((database) => {
-    const db = getNodeSqliteKysely<OpenClawStateMetadataDatabase>(database.db);
-    executeSqliteQuerySync(
-      database.db,
-      db.insertInto("backup_runs").values({
-        id,
-        created_at: options.createdAt,
-        archive_path: options.archivePath,
-        status: options.status,
-        manifest_json: JSON.stringify(options.manifest),
-      }),
-    );
-  }, options);
-  return id;
+/** Close one cached shared state database handle by exact pathname. */
+export function closeOpenClawStateDatabaseByPath(pathname: string): boolean {
+  const resolvedPath = path.resolve(pathname);
+  const database = cachedDatabases.get(resolvedPath);
+  if (!database) {
+    return false;
+  }
+  database.walMaintenance.close();
+  clearNodeSqliteKyselyCacheForDatabase(database.db);
+  if (database.db.isOpen) {
+    database.db.close();
+  }
+  cachedDatabases.delete(resolvedPath);
+  return true;
 }
 
 /** Close all cached shared state database handles. */
@@ -1051,5 +672,8 @@ export function isOpenClawStateDatabaseOpen(): boolean {
   return Array.from(cachedDatabases.values()).some((database) => database.db.isOpen);
 }
 
-/** Test alias for closing shared state handles from teardown code. */
-export const closeOpenClawStateDatabaseForTest = closeOpenClawStateDatabase;
+/** Close shared state handles and clear terminal failure latches for test isolation. */
+export function closeOpenClawStateDatabaseForTest(): void {
+  closeOpenClawStateDatabase();
+  terminalOpenLatch.clearAll();
+}

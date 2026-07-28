@@ -23,9 +23,28 @@ describe("qa channel transport", () => {
         },
       },
       messages: {
+        visibleReplies: "automatic",
         groupChat: {
           mentionPatterns: ["\\b@?openclaw\\b"],
           visibleReplies: "automatic",
+        },
+      },
+    });
+  });
+
+  it("maps declared transport policy without inspecting scenario ids", () => {
+    const transport = createQaChannelTransport(createQaBusState(), {
+      requireGroupMention: true,
+      senderAllowlist: ["driver"],
+    });
+
+    expect(transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:43123" })).toMatchObject({
+      channels: {
+        "qa-channel": {
+          allowFrom: ["driver"],
+          groupAllowFrom: ["driver"],
+          groupPolicy: "allowlist",
+          groups: { "*": { requireMention: true } },
         },
       },
     });
@@ -97,18 +116,18 @@ describe("qa channel transport", () => {
     ).rejects.toThrow("last probe error: channels.status exploded");
   });
 
-  it("inherits the shared normalized message capabilities", async () => {
+  it("uses the shared normalized message state", async () => {
     const transport = createQaChannelTransport(createQaBusState());
 
-    const inbound = await transport.capabilities.sendInboundMessage({
+    const inbound = await transport.sendInbound({
       accountId: "default",
       conversation: { id: "dm:qa-operator", kind: "direct" },
       senderId: "qa-operator",
       text: "hello from the operator",
     });
 
-    expect(transport.capabilities.getNormalizedMessageState().messages).toHaveLength(1);
-    const message = await transport.capabilities.readNormalizedMessage({
+    expect(transport.state.getSnapshot().messages).toHaveLength(1);
+    const message = await transport.state.readMessage({
       messageId: inbound.id,
     });
     if (!message) {
@@ -118,16 +137,53 @@ describe("qa channel transport", () => {
     expect(message.text).toBe("hello from the operator");
   });
 
+  it("implements the portable scenario transport actions", async () => {
+    const transport = createQaChannelTransport(createQaBusState());
+    const conversation = { id: "alice", kind: "direct" as const };
+
+    await transport.sendInbound({
+      conversation,
+      senderId: "alice",
+      text: "hello",
+    });
+    await transport.state.addOutboundMessage({
+      to: "dm:alice",
+      text: "QA-PORTABLE-OK",
+    });
+
+    await expect(
+      transport.waitForOutbound({ conversation, textIncludes: "QA-PORTABLE-OK" }),
+    ).resolves.toMatchObject({ text: "QA-PORTABLE-OK" });
+    await transport.reset();
+    expect(transport.state.getSnapshot().messages).toEqual([]);
+  });
+
+  it("injects native commands with transport metadata", async () => {
+    const transport = createQaChannelTransport(createQaBusState());
+
+    await transport.sendNativeCommand({
+      command: "stop",
+      conversation: { id: "alice", kind: "direct" },
+      senderId: "alice",
+    });
+
+    const [message] = transport.state.getSnapshot().messages;
+    expect(message).toMatchObject({
+      text: "/stop",
+      nativeCommand: { name: "stop" },
+    });
+  });
+
   it("inherits the shared failure-aware wait helper", async () => {
     const transport = createQaChannelTransport(createQaBusState());
     let injected = false;
 
     await expect(
-      transport.capabilities.waitForCondition(
+      transport.waitForCondition(
         async () => {
           if (!injected) {
             injected = true;
-            await transport.capabilities.injectOutboundMessage({
+            await transport.state.addOutboundMessage({
               accountId: "default",
               to: "dm:qa-operator",
               text: "⚠️ agent failed before reply: synthetic failure for wait helper",
@@ -144,22 +200,20 @@ describe("qa channel transport", () => {
   it("captures a fresh failure cursor for each wait helper call", async () => {
     const transport = createQaChannelTransport(createQaBusState());
 
-    await transport.capabilities.injectOutboundMessage({
+    await transport.state.addOutboundMessage({
       accountId: "default",
       to: "dm:qa-operator",
       text: "⚠️ agent failed before reply: stale failure should not leak",
     });
 
-    await expect(transport.capabilities.waitForCondition(async () => "ok", 50, 10)).resolves.toBe(
-      "ok",
-    );
+    await expect(transport.waitForCondition(async () => "ok", 50, 10)).resolves.toBe("ok");
   });
 
   it("keeps oversized wait helper intervals within the timeout", async () => {
     const transport = createQaChannelTransport(createQaBusState());
 
     await expect(
-      transport.capabilities.waitForCondition(async () => undefined, 5, Number.MAX_SAFE_INTEGER),
+      transport.waitForCondition(async () => undefined, 5, Number.MAX_SAFE_INTEGER),
     ).rejects.toThrow("timed out after 5ms");
   });
 });

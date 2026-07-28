@@ -18,7 +18,7 @@ describe("Control UI assistant media e2e", () => {
 
     const mediaDir = path.join(stateDir, "media", "control-ui-assistant-media-e2e");
     await fs.mkdir(mediaDir, { recursive: true });
-    const filePath = path.join(mediaDir, "ticketed-preview.txt");
+    const filePath = path.join(mediaDir, "测试 ticketed (final).txt");
     await fs.writeFile(filePath, "ticketed control ui media\n", "utf8");
 
     await withGatewayServer(
@@ -46,6 +46,9 @@ describe("Control UI assistant media e2e", () => {
           `${route}?source=${sourceParam}&mediaTicket=${encodeURIComponent(payload.mediaTicket ?? "")}`,
         );
         expect(ticketed.status).toBe(200);
+        expect(ticketed.headers.get("content-disposition")).toBe(
+          `attachment; filename="__ ticketed (final).txt"; filename*=UTF-8''%E6%B5%8B%E8%AF%95%20ticketed%20%28final%29.txt`,
+        );
         expect(await ticketed.text()).toBe("ticketed control ui media\n");
 
         const otherFilePath = path.join(mediaDir, "other-preview.txt");

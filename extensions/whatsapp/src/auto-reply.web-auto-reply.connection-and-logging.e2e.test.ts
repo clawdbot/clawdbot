@@ -23,15 +23,14 @@ import {
   resetLoadConfigMock,
   sendWebDirectInboundMessage,
   setLoadConfigMock,
-  setRuntimeConfigSourceSnapshotMock,
   startWebAutoReplyMonitor,
 } from "./auto-reply.test-harness.js";
-import { waitForWaConnection } from "./session.js";
 import {
   createTestLegacyFlatWebInboundMessage,
   createTestWebInboundMessage,
 } from "./inbound/test-message.test-helper.js";
 import type { WebInboundMessageInput } from "./inbound/types.js";
+import { waitForWaConnection } from "./session.js";
 
 type DrainSelectionEntry = {
   channel: string;
@@ -106,8 +105,9 @@ async function startWatchdogScenario(params: {
 }
 
 function expectErrorContaining(errorFn: unknown, text: string): void {
-  const messages = ((errorFn as { mock?: { calls?: unknown[][] } }).mock?.calls ?? []).map((call) =>
-    typeof call[0] === "string" ? call[0] : call[0] instanceof Error ? call[0].message : "",
+  const messages = ((errorFn as { mock?: { calls?: unknown[][] } }).mock?.calls ?? []).map(
+    (call) =>
+      typeof call[0] === "string" ? call[0] : call[0] instanceof Error ? call[0].message : "",
   );
   expect(messages.join("\n")).toContain(text);
 }
@@ -127,16 +127,6 @@ function mockCallArg(mocked: unknown, callIndex: number, argIndex: number): unkn
   return call[argIndex];
 }
 
-async function expectPathMissing(targetPath: string): Promise<void> {
-  try {
-    await fs.stat(targetPath);
-  } catch (error) {
-    expect((error as { code?: unknown }).code).toBe("ENOENT");
-    return;
-  }
-  throw new Error(`Expected path to be missing: ${targetPath}`);
-}
-
 describe("web auto-reply connection", () => {
   installWebAutoReplyUnitTestHooks();
 
@@ -148,6 +138,26 @@ describe("web auto-reply connection", () => {
   it("handles helper envelope timestamps with trimmed timezones (regression)", () => {
     const d = new Date("2025-01-01T00:00:00.000Z");
     expect(formatEnvelopeTimestamp(d, " America/Los_Angeles ")).toBe("Tue 2024-12-31 16:00:00 PST");
+  });
+
+  it("does not publish running status when config loading fails", async () => {
+    setLoadConfigMock(() => {
+      throw new Error("config snapshot failed");
+    });
+
+    const statuses: Array<{ running?: boolean }> = [];
+    const listenerFactory = vi.fn(async () => createMockWebListener());
+    const { run } = startWebAutoReplyMonitor({
+      monitorWebChannelFn: monitorWebChannel as never,
+      listenerFactory,
+      sleep: vi.fn(async () => {}),
+      statusSink: (next) => statuses.push({ ...next }),
+    });
+
+    await expect(run).rejects.toThrow("config snapshot failed");
+
+    expect(listenerFactory).not.toHaveBeenCalled();
+    expect(statuses.some((status) => status.running === true)).toBe(false);
   });
 
   it("handles reconnect progress and max-attempt stop behavior", async () => {
@@ -201,6 +211,52 @@ describe("web auto-reply connection", () => {
 
       expectErrorContaining(runtime.error, scenario.expectedError);
     }
+  });
+
+  it("widens append catch-up only after reconnecting a recently active listener", async () => {
+    const scripted = createScriptedWebListenerFactory();
+    const { controller, run } = startWebAutoReplyMonitor({
+      monitorWebChannelFn: monitorWebChannel as never,
+      listenerFactory: scripted.listenerFactory,
+      sleep: vi.fn(async () => {}),
+      messageTimeoutMs: 30 * 60_000,
+    });
+
+    await vi.waitFor(() => expect(scripted.getListenerCount()).toBe(1));
+    expect(
+      (
+        mockCallArg(scripted.listenerFactory, 0, 0) as {
+          appendReplyWindow?: { afterMs: number; untilMs: number; maxAgeMs: number };
+        }
+      ).appendReplyWindow,
+    ).toBeUndefined();
+
+    await sendWebDirectInboundMessage({
+      onMessage: requireOnMessage(scripted.getOnMessage()),
+      body: "hi before reconnect",
+      from: "+1",
+      to: "+2",
+      id: "active-before-reconnect",
+      spies: createWebInboundDeliverySpies(),
+    });
+
+    const reconnectStartedAt = Date.now();
+    scripted.resolveClose(0, { status: 408, isLoggedOut: false, error: new Error("timeout") });
+    await vi.waitFor(() => expect(scripted.getListenerCount()).toBe(2));
+
+    const appendReplyWindow = (
+      mockCallArg(scripted.listenerFactory, 1, 0) as {
+        appendReplyWindow?: { afterMs: number; untilMs: number; maxAgeMs: number };
+      }
+    ).appendReplyWindow;
+    expect(appendReplyWindow?.afterMs).toBeGreaterThanOrEqual(reconnectStartedAt - 20 * 60_000);
+    expect(appendReplyWindow?.afterMs).toBeLessThanOrEqual(Date.now() - 20 * 60_000);
+    expect(appendReplyWindow?.untilMs).toBeGreaterThanOrEqual(reconnectStartedAt + 20 * 60_000);
+    expect(appendReplyWindow?.maxAgeMs).toBe(20 * 60_000);
+
+    controller.abort();
+    scripted.resolveClose(1, { status: 499, isLoggedOut: false, error: "aborted" });
+    await run;
   });
 
   it("retries opening-phase Boom 428 through the reconnect policy", async () => {
@@ -417,6 +473,7 @@ describe("web auto-reply connection", () => {
     expect(sleep).not.toHaveBeenCalled();
     expectErrorContaining(runtime.error, "status 440");
     expectErrorContaining(runtime.error, "session conflict");
+    expectErrorContaining(runtime.error, "openclaw channels logout --channel whatsapp");
     expectErrorContaining(runtime.error, "Stopping web monitoring");
   });
 
@@ -434,15 +491,14 @@ describe("web auto-reply connection", () => {
       error: "Stream Errored (logged out)",
     },
   ] as const)(
-    "clears stale auth and active listener after terminal status $status",
+    "stops active listener and preserves auth after terminal status $status",
     async ({ status, isLoggedOut, healthState, error }) => {
       const accountId = `terminal-${status}`;
       const authDir = path.join(resolveOAuthDir(), "whatsapp", accountId);
+      const credsPath = resolveWebCredsPath(authDir);
+      const credsJson = JSON.stringify({ me: { id: "123@s.whatsapp.net" } });
       await fs.mkdir(authDir, { recursive: true });
-      await fs.writeFile(
-        resolveWebCredsPath(authDir),
-        JSON.stringify({ me: { id: "123@s.whatsapp.net" } }),
-      );
+      await fs.writeFile(credsPath, credsJson);
       setLoadConfigMock({
         channels: {
           whatsapp: {
@@ -489,7 +545,7 @@ describe("web auto-reply connection", () => {
       expect(scripted.getListenerCount()).toBe(1);
       expect(sleep).not.toHaveBeenCalled();
       expect(getActiveWebListener(accountId)).toBeNull();
-      await expectPathMissing(authDir);
+      await expect(fs.readFile(credsPath, "utf8")).resolves.toBe(credsJson);
       expect(
         statuses.filter((entry) => entry.connected === false && entry.healthState === healthState),
       ).not.toEqual([]);
@@ -868,73 +924,7 @@ describe("web auto-reply connection", () => {
     }
   });
 
-  it("passes accounts.default debounceMs into the live listener for named accounts", async () => {
-    const capture = createWebListenerFactoryCapture();
-
-    setLoadConfigMock({
-      channels: {
-        whatsapp: {
-          accounts: {
-            default: {
-              debounceMs: 250,
-            },
-            work: {
-              authDir: "/tmp/work",
-            },
-          },
-        },
-      },
-    } as OpenClawConfig);
-
-    await monitorWebChannel(
-      false,
-      capture.listenerFactory as never,
-      false,
-      async () => ({ text: "ok" }),
-      undefined,
-      undefined,
-      {
-        accountId: "work",
-      },
-    );
-
-    resetLoadConfigMock();
-    expect(capture.getLastOptions()?.debounceMs).toBe(250);
-  });
-
-  it("matches per-account debounce overrides case-insensitively", async () => {
-    const capture = createWebListenerFactoryCapture();
-
-    setLoadConfigMock({
-      channels: {
-        whatsapp: {
-          accounts: {
-            work: {
-              authDir: "/tmp/work",
-              debounceMs: 250,
-            },
-          },
-        },
-      },
-    } as OpenClawConfig);
-
-    await monitorWebChannel(
-      false,
-      capture.listenerFactory as never,
-      false,
-      async () => ({ text: "ok" }),
-      undefined,
-      undefined,
-      {
-        accountId: "Work",
-      },
-    );
-
-    resetLoadConfigMock();
-    expect(capture.getLastOptions()?.debounceMs).toBe(250);
-  });
-
-  it("keeps the global inbound debounce fallback when WhatsApp debounceMs is only the schema default", async () => {
+  it("passes the global inbound debounce into the live listener", async () => {
     const capture = createWebListenerFactoryCapture();
 
     setLoadConfigMock({
@@ -953,8 +943,6 @@ describe("web auto-reply connection", () => {
         },
       },
     } as OpenClawConfig);
-    setRuntimeConfigSourceSnapshotMock(null);
-
     await monitorWebChannel(
       false,
       capture.listenerFactory as never,
@@ -973,7 +961,7 @@ describe("web auto-reply connection", () => {
 
   it("normalizes legacy flat listener messages and rejects partial nested input", async () => {
     const capture = createWebListenerFactoryCapture();
-    const { reply } = createWebInboundDeliverySpies();
+    const { sendMedia, sendComposing, reply } = createWebInboundDeliverySpies();
 
     await monitorWebChannel(false, capture.listenerFactory as never, false, async () => ({
       text: "ok",
@@ -988,9 +976,45 @@ describe("web auto-reply connection", () => {
     });
 
     expect(capture.getLastOptions()?.shouldDebounce?.(msg)).toBe(true);
+    expect(
+      capture
+        .getLastOptions()
+        ?.shouldDebounce?.(createTestWebInboundMessage({ payload: { body: "   " } })),
+    ).toBe(false);
+    expect(
+      capture.getLastOptions()?.shouldDebounce?.(
+        createTestWebInboundMessage({
+          payload: {
+            body: "/stop\n\n[whatsapp attachment unavailable]",
+            commandBody: "/stop",
+          },
+          platform: { sendComposing, reply, sendMedia },
+        }),
+      ),
+    ).toBe(false);
     await onMessage(msg);
 
     expect(reply).toHaveBeenCalledWith("ok", undefined);
+    await expect(
+      onMessage({
+        event: { id: "canonical-no-admission" },
+        payload: { body: "canonical" },
+        platform: {
+          chatJid: "+3",
+          recipientJid: "+4",
+          sendComposing,
+          reply,
+          sendMedia,
+        },
+        from: "+3",
+        conversationId: "+3",
+        accountId: "default",
+        chatType: "direct",
+      }),
+    ).rejects.toThrow(/missing admission facts/);
+
+    expect(reply).toHaveBeenCalledWith("ok", undefined);
+    expect(reply).toHaveBeenCalledTimes(1);
     await expect(
       onMessage({
         ...msg,
@@ -1146,10 +1170,13 @@ describe("web auto-reply connection", () => {
           reply: vi.fn(),
           sendMedia: vi.fn(),
         },
-        from: "+1",
-        conversationId: "+1",
-        accountId: "default",
-        chatType: "direct",
+        admission: {
+          accountId: "default",
+          conversation: {
+            kind: "direct",
+            id: "+1",
+          },
+        },
       }),
     );
 
@@ -1203,10 +1230,13 @@ describe("web auto-reply connection", () => {
               reply,
               sendMedia,
             },
-            from: "+1000",
-            conversationId: "+1000",
-            chatType: "direct",
-            accountId: "default",
+            admission: {
+              accountId: "default",
+              conversation: {
+                kind: "direct",
+                id: "+1000",
+              },
+            },
           }),
         );
         return createMockWebListener();
@@ -1234,3 +1264,4 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   }
   return error;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

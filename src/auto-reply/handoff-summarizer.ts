@@ -2,7 +2,7 @@
 import type { AgentMessage } from "../agents/runtime/index.js";
 
 /** Summary of the prior model state used to brief the fallback model. */
-export interface HandoffSnapshot {
+interface HandoffSnapshot {
   summary: string;
   activeSubagents: Array<{
     sessionId: string;

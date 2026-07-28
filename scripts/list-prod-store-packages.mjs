@@ -3,8 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { parse } from "yaml";
 
-const parsed = JSON.parse(fs.readFileSync(0, "utf8"));
-const roots = Array.isArray(parsed) ? parsed : [parsed];
 const specs = new Set();
 const target = {
   cpu: process.arch,
@@ -23,6 +21,12 @@ function packageSpec(name, version) {
     normalizedVersion.startsWith("workspace:")
   ) {
     return undefined;
+  }
+  if (normalizedVersion.startsWith("npm:")) {
+    return normalizedVersion.slice("npm:".length);
+  }
+  if (normalizedVersion.startsWith("@")) {
+    return normalizedVersion;
   }
   return `${name}@${normalizedVersion}`;
 }
@@ -85,6 +89,15 @@ function addSpec(lockfile, spec) {
   }
 }
 
+function parseListRoots() {
+  const input = fs.readFileSync(0, "utf8").trim();
+  if (!input) {
+    return [];
+  }
+  const parsed = JSON.parse(input);
+  return Array.isArray(parsed) ? parsed : [parsed];
+}
+
 function visitListNode(lockfile, node) {
   for (const dep of Object.values(node.dependencies ?? {})) {
     const name = dep.from || dep.name;
@@ -93,6 +106,16 @@ function visitListNode(lockfile, node) {
       addSpec(lockfile, spec);
     }
     visitListNode(lockfile, dep);
+  }
+}
+
+function addImporterRoots(lockfile) {
+  for (const importer of Object.values(lockfile?.importers ?? {})) {
+    for (const deps of [importer.dependencies, importer.optionalDependencies]) {
+      for (const [name, dep] of Object.entries(deps ?? {})) {
+        addSpec(lockfile, packageSpec(name, dep?.version));
+      }
+    }
   }
 }
 
@@ -145,9 +168,10 @@ function addSnapshotClosure(lockfile) {
 }
 
 const lockfile = readLockfile();
-for (const root of roots) {
+for (const root of parseListRoots()) {
   visitListNode(lockfile, root);
 }
+addImporterRoots(lockfile);
 addSnapshotClosure(lockfile);
 
 process.stdout.write([...specs].toSorted((a, b) => a.localeCompare(b)).join("\n"));

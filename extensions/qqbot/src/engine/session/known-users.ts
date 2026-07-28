@@ -1,18 +1,11 @@
 /**
  * Known user tracking — SQLite KV-backed store.
- *
- * Legacy `known-users.json` data is imported once, then deleted after SQLite
- * has the canonical copy.
  */
 
 import crypto from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
-import { privateFileStoreSync } from "openclaw/plugin-sdk/security-runtime";
 import type { ChatScope } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 import { debugLog, debugError } from "../utils/log.js";
-import { getQQBotDataPath } from "../utils/platform.js";
 import { openQQBotSyncKeyedStore } from "../utils/sqlite-state.js";
 
 /** Persisted record for a user who has interacted with the bot. */
@@ -27,36 +20,18 @@ interface KnownUser {
   interactionCount: number;
 }
 
-type KnownUsersMigrationMarker = {
-  importedAt: string;
-};
-
-function getKnownUsersFile(): string {
-  return path.join(getQQBotDataPath("data"), "known-users.json");
-}
-
 function makeUserKey(user: Partial<KnownUser>): string {
   const base = `${user.accountId}:${user.type}:${user.openid}`;
   return user.type === "group" && user.groupOpenid ? `${base}:${user.groupOpenid}` : base;
 }
 
 const KNOWN_USERS_NAMESPACE = "known-users";
-const KNOWN_USERS_MIGRATIONS_NAMESPACE = "known-users-migrations";
-const LEGACY_KNOWN_USERS_MIGRATION_KEY = "known-users-json-v1";
 const MAX_KNOWN_USERS = 100_000;
-let legacyImported = false;
 
 function createKnownUsersStore() {
   return openQQBotSyncKeyedStore<KnownUser>({
     namespace: KNOWN_USERS_NAMESPACE,
     maxEntries: MAX_KNOWN_USERS,
-  });
-}
-
-function createKnownUsersMigrationStore() {
-  return openQQBotSyncKeyedStore<KnownUsersMigrationMarker>({
-    namespace: KNOWN_USERS_MIGRATIONS_NAMESPACE,
-    maxEntries: 100,
   });
 }
 
@@ -77,37 +52,6 @@ function toStoredKnownUser(user: KnownUser): KnownUser {
   };
 }
 
-function ensureLegacyKnownUsersImported(): void {
-  if (legacyImported) {
-    return;
-  }
-  const migrationStore = createKnownUsersMigrationStore();
-  if (migrationStore.lookup(LEGACY_KNOWN_USERS_MIGRATION_KEY)) {
-    legacyImported = true;
-    return;
-  }
-  try {
-    const knownUsersFile = getKnownUsersFile();
-    const users = privateFileStoreSync(path.dirname(knownUsersFile)).readJsonIfExists<KnownUser[]>(
-      path.basename(knownUsersFile),
-    );
-    if (Array.isArray(users)) {
-      const store = createKnownUsersStore();
-      for (const user of users) {
-        store.registerIfAbsent(knownUserStateKey(makeUserKey(user)), toStoredKnownUser(user));
-      }
-      debugLog(`[known-users] Migrated ${users.length} users to SQLite`);
-      fs.rmSync(knownUsersFile, { force: true });
-    }
-    migrationStore.register(LEGACY_KNOWN_USERS_MIGRATION_KEY, {
-      importedAt: new Date().toISOString(),
-    });
-    legacyImported = true;
-  } catch (err) {
-    debugError(`[known-users] Failed to import legacy users: ${formatErrorMessage(err)}`);
-  }
-}
-
 /** Flush pending writes immediately, typically during shutdown. */
 export function flushKnownUsers(): void {
   // SQLite writes are synchronous; no pending JSON flush remains.
@@ -122,7 +66,6 @@ export function recordKnownUser(user: {
   accountId: string;
 }): void {
   try {
-    ensureLegacyKnownUsersImported();
     const store = createKnownUsersStore();
     const key = makeUserKey(user);
     const stateKey = knownUserStateKey(key);

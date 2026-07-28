@@ -4,8 +4,10 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { makeTempWorkspace, writeWorkspaceFile } from "../../../test-helpers/workspace.js";
-import type { AgentBootstrapHookContext } from "../../hooks.js";
-import { createHookEvent } from "../../hooks.js";
+import {
+  type AgentBootstrapHookContext,
+  createInternalHookEvent as createHookEvent,
+} from "../../internal-hooks.js";
 import handler from "./handler.js";
 
 function createBootstrapExtraConfig(paths: string[]): OpenClawConfig {
@@ -85,14 +87,11 @@ describe("bootstrap-extra-files hook", () => {
       workspaceDir: tempDir,
       cfg,
       sessionKey: "agent:main:subagent:abc",
-      rootFiles: [
-        { name: "AGENTS.md", content: "root agents" },
-        { name: "TOOLS.md", content: "root tools" },
-      ],
+      rootFiles: [{ name: "AGENTS.md", content: "root agents" }],
     });
 
     const event = createHookEvent("agent", "bootstrap", "agent:main:subagent:abc", context);
     await handler(event);
-    expect(context.bootstrapFiles.map((f) => f.name).toSorted()).toEqual(["AGENTS.md", "TOOLS.md"]);
+    expect(context.bootstrapFiles.map((f) => f.name).toSorted()).toEqual(["AGENTS.md"]);
   });
 });

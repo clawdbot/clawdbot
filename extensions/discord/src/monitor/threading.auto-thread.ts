@@ -147,6 +147,28 @@ export async function maybeCreateDiscordAutoThread(
     return undefined;
   }
   try {
+    try {
+      const existingThreadId = (
+        (await getChannelMessage(params.client.rest, messageChannelId, params.message.id)) as {
+          thread?: { id?: string };
+        }
+      )?.thread?.id;
+      if (existingThreadId) {
+        logVerbose(
+          `discord: autoThread reusing existing thread ${existingThreadId} on ${messageChannelId}/${params.message.id}`,
+        );
+        return existingThreadId;
+      }
+    } catch {
+      // Best effort only. A failed message refetch must not block creating the thread.
+    }
+    if (params.message.author?.bot) {
+      logVerbose(
+        `discord: autoThread skipped for bot-authored message ${messageChannelId}/${params.message.id}`,
+      );
+      return undefined;
+    }
+
     const rawThreadSource = params.baseText || params.combinedBody || "Thread";
     const threadName = sanitizeDiscordThreadName(rawThreadSource, params.message.id);
     const archiveDuration = params.channelConfig?.autoArchiveDuration

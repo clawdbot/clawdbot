@@ -49,6 +49,7 @@ export {
   type WebListenerCloseReason,
   type WhatsAppStructuredContactContext,
 } from "./src/inbound/types.js";
+export type { WhatsAppInboundAdmission } from "./src/inbound/admission.js";
 export {
   listWhatsAppDirectoryGroupsFromConfig,
   listWhatsAppDirectoryPeersFromConfig,
@@ -62,7 +63,6 @@ export {
   normalizeWhatsAppMessagingTarget,
   normalizeWhatsAppTarget,
 } from "./src/normalize-target.js";
-export { resolveWhatsAppGroupIntroHint } from "./src/runtime-api.js";
 export { testing as whatsappAccessControlTesting } from "./src/inbound/access-control.js";
 export {
   startWhatsAppQaDriverSession,

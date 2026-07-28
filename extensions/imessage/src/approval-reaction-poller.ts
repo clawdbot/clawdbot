@@ -12,6 +12,7 @@ import {
   type PendingIMessageApprovalReactionPollTarget,
   type IMessageApprovalConversationKey,
 } from "./approval-reactions.js";
+import type { IMessageApprovalGatewayRuntime } from "./approval-resolver.js";
 import type { IMessageRpcClient } from "./client.js";
 import type { IMessagePayload } from "./monitor/types.js";
 
@@ -20,10 +21,6 @@ const PER_CHAT_HISTORY_LIMIT = 30;
 const OBSERVED_APPROVAL_PROMPT_TARGET_TTL_MS = 5 * 60 * 1000;
 
 const accountIdsWithCompletedNoTargetDiscovery = new Set<string>();
-
-export function clearIMessageApprovalReactionPollerStateForTest(): void {
-  accountIdsWithCompletedNoTargetDiscovery.clear();
-}
 
 type ChatListEntry = {
   id?: number | null;
@@ -186,6 +183,7 @@ function bindObservedConversation(params: {
       conversation,
       messageId,
       approvalId: params.target.approvalId,
+      approvalKind: params.target.approvalKind,
       allowedDecisions: params.target.allowedDecisions,
       ttlMs,
     });
@@ -217,6 +215,7 @@ function bindObservedApprovalPrompt(params: {
     conversation,
     messageId,
     approvalId: binding.approvalId,
+    approvalKind: binding.approvalKind,
     allowedDecisions: binding.allowedDecisions,
     expiresAtMs,
   };
@@ -229,6 +228,7 @@ export async function pollPendingIMessageApprovalReactions(params: {
   cfg: OpenClawConfig;
   accountId: string;
   allowRecentChatDiscovery?: boolean;
+  gatewayRuntime?: IMessageApprovalGatewayRuntime;
   logVerboseMessage?: (message: string) => void;
 }): Promise<void> {
   const targets = listPendingIMessageApprovalReactionPollTargets({
@@ -293,6 +293,7 @@ export async function pollPendingIMessageApprovalReactions(params: {
           accountId: params.accountId,
           message: reactionPayload,
           bodyText: reactionPayload.text ?? "",
+          gatewayRuntime: params.gatewayRuntime,
           logVerboseMessage: params.logVerboseMessage,
         });
         if (handled.stopPolling) {

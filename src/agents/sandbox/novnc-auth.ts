@@ -22,7 +22,7 @@ type NoVncObserverTokenEntry = {
   expiresAt: number;
 };
 
-export type NoVncObserverTokenPayload = {
+type NoVncObserverTokenPayload = {
   noVncPort: number;
   password?: string;
 };
@@ -50,8 +50,8 @@ function resolveNoVncObserverTokenExpiresAt(params: { ttlMs?: number; nowMs: num
   );
 }
 
-export function isNoVncEnabled(params: { enableNoVnc: boolean; headless: boolean }) {
-  return params.enableNoVnc && !params.headless;
+export function isNoVncEnabled(params: { noVncEnabled: boolean; headless: boolean }) {
+  return params.noVncEnabled && !params.headless;
 }
 
 export function generateNoVncPassword() {
@@ -61,21 +61,6 @@ export function generateNoVncPassword() {
     out += NOVNC_PASSWORD_ALPHABET[crypto.randomInt(0, NOVNC_PASSWORD_ALPHABET.length)];
   }
   return out;
-}
-
-export function buildNoVncDirectUrl(port: number) {
-  return `http://127.0.0.1:${port}/vnc.html`;
-}
-
-export function buildNoVncObserverTargetUrl(params: { port: number; password?: string }) {
-  const query = new URLSearchParams({
-    autoconnect: "1",
-    resize: "remote",
-  });
-  if (params.password?.trim()) {
-    query.set("password", params.password);
-  }
-  return `${buildNoVncDirectUrl(params.port)}#${query.toString()}`;
 }
 
 export function issueNoVncObserverToken(params: {
@@ -130,8 +115,4 @@ export function consumeNoVncObserverToken(
 export function buildNoVncObserverTokenUrl(baseUrl: string, token: string) {
   const query = new URLSearchParams({ token });
   return `${baseUrl}/sandbox/novnc?${query.toString()}`;
-}
-
-export function resetNoVncObserverTokensForTests() {
-  NO_VNC_OBSERVER_TOKENS.clear();
 }

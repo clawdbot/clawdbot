@@ -17,7 +17,7 @@ const {
   const { tmpdir } = require("node:os");
   const baseDir = mkdtempSync(nodePath.join(tmpdir(), "openclaw-sandbox-registry-"));
   const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  process.env.OPENCLAW_STATE_DIR = baseDir;
+  Reflect.set(process.env, "OPENCLAW_STATE_DIR", baseDir);
 
   return {
     TEST_STATE_DIR: baseDir,
@@ -38,10 +38,12 @@ vi.mock("./constants.js", () => ({
 }));
 
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { hashTextSha256 } from "./hash.js";
 import {
   migrateLegacySandboxRegistryFiles,
   readBrowserRegistry,
+  readRegisteredSandboxRuntimeIds,
   readRegistry,
   readRegistryEntry,
   removeBrowserRegistryEntry,
@@ -77,9 +79,9 @@ afterAll(async () => {
   closeOpenClawStateDatabaseForTest();
   await fs.rm(TEST_STATE_DIR, { recursive: true, force: true });
   if (PREVIOUS_OPENCLAW_STATE_DIR === undefined) {
-    delete process.env.OPENCLAW_STATE_DIR;
+    deleteTestEnvValue("OPENCLAW_STATE_DIR");
   } else {
-    process.env.OPENCLAW_STATE_DIR = PREVIOUS_OPENCLAW_STATE_DIR;
+    setTestEnvValue("OPENCLAW_STATE_DIR", PREVIOUS_OPENCLAW_STATE_DIR);
   }
 });
 
@@ -180,6 +182,7 @@ describe("registry race safety", () => {
     await expect(readRegistry()).resolves.toEqual({ entries: [] });
     await expect(readRegistryEntry("legacy-container")).resolves.toBeNull();
     await expect(fs.access(SANDBOX_REGISTRY_PATH)).resolves.toBeUndefined();
+    await expectPathMissing(path.join(TEST_STATE_DIR, "state", "openclaw.sqlite"));
   });
 
   it("normalizes legacy registry entries after explicit migration", async () => {
@@ -336,6 +339,48 @@ describe("registry race safety", () => {
     expect(entry?.containerName).toBe("container-x");
     expect(entry?.sessionKey).toBe("sess:x");
     await expect(readRegistryEntry("missing-container")).resolves.toBeNull();
+  });
+
+  it("reads registered runtime IDs for one backend and scope newest first", async () => {
+    await updateRegistry(
+      containerEntry({
+        containerName: "openshell-older",
+        backendId: "openshell",
+        sessionKey: "agent:main",
+        lastUsedAtMs: 10,
+      }),
+    );
+    await updateRegistry(
+      containerEntry({
+        containerName: "openshell-newer",
+        backendId: "openshell",
+        sessionKey: "agent:main",
+        lastUsedAtMs: 20,
+      }),
+    );
+    await updateRegistry(
+      containerEntry({
+        containerName: "docker-same-scope",
+        backendId: "docker",
+        sessionKey: "agent:main",
+        lastUsedAtMs: 30,
+      }),
+    );
+    await updateRegistry(
+      containerEntry({
+        containerName: "openshell-other-scope",
+        backendId: "openshell",
+        sessionKey: "agent:other",
+        lastUsedAtMs: 40,
+      }),
+    );
+
+    await expect(
+      readRegisteredSandboxRuntimeIds({
+        backendId: "openshell",
+        scopeKey: "agent:main",
+      }),
+    ).resolves.toEqual(["openshell-newer", "openshell-older"]);
   });
 
   it("keeps both container updates under concurrent writes", async () => {

@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
+import { expectDefined } from "@openclaw/normalization-core";
 import JSZip from "jszip";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -189,7 +190,10 @@ describe("media store", () => {
         expect(saved.id).not.toContain("---");
       }
       if (params.maxBaseNameLength !== undefined) {
-        const baseName = path.parse(saved.id).name.split("---")[0];
+        const baseName = expectDefined(
+          path.parse(saved.id).name.split("---")[0],
+          'path.parse(saved.id).name.split("---")[0] test invariant',
+        );
         expect(baseName.length).toBeLessThanOrEqual(params.maxBaseNameLength);
       }
     });
@@ -454,12 +458,12 @@ describe("media store", () => {
       },
     },
     {
-      name: "prefers detected stream mime over generic zip header extension",
+      name: "prefers detected stream mime over mixed-case generic zip header extension",
       run: async () => {
         await withTempStore(async (storeLocal10) => {
           const saved = await storeLocal10.saveMediaStream(
             Readable.from([Buffer.from("docx")]),
-            "application/zip",
+            "Application/Zip",
             "stream-inbound",
             1024,
             undefined,
@@ -683,13 +687,13 @@ describe("media store", () => {
       expectedExtension: ".custom",
     },
     {
-      name: "does not preserve image header extensions for generic container buffers",
+      name: "does not preserve mixed-case image header extensions for generic container buffers",
       bufferFactory: async () => {
         const zip = new JSZip();
         zip.file("hello.txt", "hi");
         return await zip.generateAsync({ type: "nodebuffer" });
       },
-      contentType: "image/png",
+      contentType: "IMAGE/PNG",
       originalFilename: "fake.png",
       expectedContentType: "application/zip",
       expectedExtension: ".zip",
@@ -792,6 +796,28 @@ describe("media store", () => {
         };
       },
       run: async (storeEntry: typeof import("./store.js")) => await storeEntry.cleanOldMedia(1_000),
+    },
+    {
+      name: "stays at the media root during non-recursive cleanup and retains first-level subdirs",
+      setup: async (storeRoot: typeof import("./store.js")) => {
+        const rootFile = await storeRoot.saveMediaBuffer(Buffer.from("old root"), "text/plain", "");
+        const inbound = await storeRoot.saveMediaBuffer(
+          Buffer.from("retained inbound"),
+          "text/plain",
+          "inbound",
+        );
+        const past = Date.now() - 10_000;
+        await fs.utimes(rootFile.path, past / 1000, past / 1000);
+        await fs.utimes(inbound.path, past / 1000, past / 1000);
+        return {
+          // recursive:false must stay at the media root, so retained subdir media survives even
+          // when older than the TTL. Guards the fs-safe maxDepth/recursive mapping in cleanOldMedia.
+          removedFiles: [rootFile.path],
+          preservedFiles: [inbound.path],
+        };
+      },
+      run: async (storeNonRecursive: typeof import("./store.js")) =>
+        await storeNonRecursive.cleanOldMedia(1_000, { recursive: false }),
     },
     {
       name: "prunes empty directory chains after recursive cleanup",
@@ -1004,9 +1030,20 @@ describe("media store", () => {
         maxBaseNameLength: 60,
       },
       {
+        name: "does not split supplementary-plane letters at the filename cap",
+        originalFilename: `${"a".repeat(59)}𐐀.txt`,
+        expectedIdPattern: /^a{59}---[a-f0-9-]{36}\.txt$/,
+        maxBaseNameLength: 60,
+      },
+      {
         name: "falls back to UUID-only when originalFilename not provided",
         expectedIdPattern: /^[a-f0-9-]{36}\.txt$/,
         expectUuidOnly: true,
+      },
+      {
+        name: "strips controls and neutralizes bidi/zero-width formatting",
+        originalFilename: "report\rC\nL\tT\fF\x1bE\x00N\x7fD\u202efd\u200bp\ufeffsafe.exe",
+        expectedIdPattern: /^reportCLTFEND_fd_p_safe---[a-f0-9-]{36}\.txt$/,
       },
     ] as const)("$name", async (testCase) => {
       await expectSavedOriginalFilenameCase(testCase);

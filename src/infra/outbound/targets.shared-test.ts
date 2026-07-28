@@ -100,6 +100,73 @@ export function runResolveOutboundTargetCoreTests(): void {
       }
     });
 
+    it.each(["current", "telegram:current", "tg:self"])(
+      "rejects plugin-reserved literal target %s before direct outbound fallback",
+      (to) => {
+        setActivePluginRegistry(
+          createTargetsTestRegistry([
+            createTestChannelPlugin({
+              id: "telegram",
+              label: "Telegram",
+              outbound: {
+                deliveryMode: "direct",
+                sendText: async () => ({ channel: "telegram", messageId: "telegram-msg" }),
+              },
+              messaging: {
+                targetPrefixes: ["telegram", "tg"],
+                targetResolver: {
+                  reservedLiterals: ["current", "self", "this", "me"],
+                  hint: "<chatId>",
+                },
+              },
+            }),
+          ]),
+        );
+
+        const res = resolveOutboundTarget({
+          channel: "telegram",
+          to,
+          mode: "explicit",
+        });
+
+        expect(res.ok).toBe(false);
+        if (!res.ok) {
+          expect(res.error.message).toContain("Reserved target");
+          expect(res.error.message).toContain("Telegram");
+        }
+      },
+    );
+
+    it("allows explicit handles that include the provider handle marker", () => {
+      setActivePluginRegistry(
+        createTargetsTestRegistry([
+          createTestChannelPlugin({
+            id: "telegram",
+            label: "Telegram",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: async () => ({ channel: "telegram", messageId: "telegram-msg" }),
+            },
+            messaging: {
+              targetPrefixes: ["telegram", "tg"],
+              targetResolver: {
+                reservedLiterals: ["current", "self", "this", "me"],
+                hint: "<chatId>",
+              },
+            },
+          }),
+        ]),
+      );
+
+      const res = resolveOutboundTarget({
+        channel: "telegram",
+        to: "telegram:@current",
+        mode: "explicit",
+      });
+
+      expect(res).toEqual({ ok: true, to: "telegram:@current" });
+    });
+
     it("uses the plugin hint when a channel has outbound support but no target resolver", () => {
       setActivePluginRegistry(
         createTargetsTestRegistry([

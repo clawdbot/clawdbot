@@ -1,11 +1,11 @@
 // Verifies CLI runtime alias resolution and runtime model-ref equivalence.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { testing as cliBackendsTesting } from "./cli-backends.js";
+import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import {
   createModelPickerVisibleProviderPredicate,
   isRetiredModelPickerProvider,
-} from "./model-picker-visibility.js";
+} from "./model-runtime-aliases.js";
 import {
   areRuntimeModelRefsEquivalent,
   isCliRuntimeProvider,
@@ -134,6 +134,26 @@ describe("resolveCliRuntimeExecutionProvider", () => {
     ).toBe("claude-cli");
   });
 
+  it("matches provider runtime policy from a provider-qualified model when the caller provider is empty", () => {
+    expect(
+      resolveCliRuntimeExecutionProvider({
+        cfg: {
+          models: {
+            providers: {
+              anthropic: {
+                baseUrl: "https://api.anthropic.example/v1",
+                agentRuntime: { id: "claude-cli" },
+                models: [],
+              },
+            },
+          },
+        } as OpenClawConfig,
+        provider: "",
+        modelId: "anthropic/opus-4.7",
+      }),
+    ).toBe("claude-cli");
+  });
+
   it("does not return a CLI runtime when the matched entry's provider is incompatible with the runtime alias", () => {
     expect(
       resolveCliRuntimeExecutionProvider({
@@ -232,15 +252,7 @@ describe("areRuntimeModelRefsEquivalent", () => {
 
     expect(
       areRuntimeModelRefsEquivalent("anthropic/claude-opus-4-7", "claude-cli/claude-opus-4-7", {
-        config: {
-          agents: {
-            defaults: {
-              cliBackends: {
-                "claude-cli": { command: "claude" },
-              },
-            },
-          },
-        },
+        config: {},
       }),
     ).toBe(true);
   });

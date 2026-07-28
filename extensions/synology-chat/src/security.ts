@@ -5,6 +5,7 @@
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   createFixedWindowRateLimiter,
   type FixedWindowRateLimiter,
@@ -64,7 +65,7 @@ export function sanitizeInput(text: string): string {
 
   const maxLength = 4000;
   if (sanitized.length > maxLength) {
-    sanitized = sanitized.slice(0, maxLength) + "... [truncated]";
+    sanitized = truncateUtf16Safe(sanitized, maxLength) + "... [truncated]";
   }
 
   return sanitized;

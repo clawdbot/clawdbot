@@ -1,11 +1,15 @@
 // Qa Lab plugin module implements server behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
+  type Journal,
   LLMock,
   type ChatCompletionRequest,
+  getTextContent,
   type JournalEntry,
   type Mountable,
 } from "@copilotkit/aimock";
+import { parseQaDebugRequestCursor } from "../shared/debug-request-cursor.js";
+import { writeJson } from "../shared/http-json.js";
 
 type AimockRequestSnapshot = {
   raw: string;
@@ -22,40 +26,12 @@ type AimockRequestSnapshot = {
   toolOutputStructuredError?: true;
 };
 
-function writeJson(res: ServerResponse, status: number, body: unknown) {
-  const text = JSON.stringify(body);
-  res.writeHead(status, {
-    "content-type": "application/json; charset=utf-8",
-    "content-length": Buffer.byteLength(text),
-    "cache-control": "no-store",
-  });
-  res.end(text);
-}
+const AIMOCK_DEBUG_REQUEST_LIMIT = 1_000;
 
-function stringifyContent(content: unknown): string {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => stringifyContent(part))
-      .filter(Boolean)
-      .join("\n");
-  }
-  if (content && typeof content === "object") {
-    const record = content as Record<string, unknown>;
-    if (typeof record.text === "string") {
-      return record.text;
-    }
-    if (typeof record.content === "string") {
-      return record.content;
-    }
-    if (typeof record.output === "string") {
-      return record.output;
-    }
-  }
-  return "";
-}
+// Runtime-context delimiters are owned by src/agents/internal-runtime-context.ts.
+// This mock mirrors the wire shape so delimiter drift fails through QA timeouts.
+const INTERNAL_RUNTIME_CONTEXT_BEGIN = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
+const INTERNAL_RUNTIME_CONTEXT_END = "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
 
 function requestMessages(body: ChatCompletionRequest | null | undefined) {
   return Array.isArray(body?.messages) ? body.messages : [];
@@ -66,15 +42,26 @@ function extractLastUserText(body: ChatCompletionRequest | null | undefined) {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message?.role === "user") {
-      return stringifyContent(message.content);
+      const text = getTextContent(message.content) ?? "";
+      if (!isInternalRuntimeContextCarrierText(text)) {
+        return text;
+      }
     }
   }
   return "";
 }
 
+function isInternalRuntimeContextCarrierText(text: string) {
+  const trimmed = text.trim();
+  return (
+    trimmed.includes(INTERNAL_RUNTIME_CONTEXT_BEGIN) &&
+    trimmed.endsWith(INTERNAL_RUNTIME_CONTEXT_END)
+  );
+}
+
 function extractAllInputText(body: ChatCompletionRequest | null | undefined) {
   return requestMessages(body)
-    .map((message) => stringifyContent(message.content))
+    .map((message) => getTextContent(message.content) ?? "")
     .filter(Boolean)
     .join("\n");
 }
@@ -84,7 +71,7 @@ function extractToolOutput(body: ChatCompletionRequest | null | undefined) {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message?.role === "tool") {
-      return stringifyContent(message.content);
+      return getTextContent(message.content) ?? "";
     }
   }
   return "";
@@ -197,8 +184,12 @@ function toRequestSnapshots(entries: JournalEntry[]): AimockRequestSnapshot[] {
     if (snapshot.toolOutputCallId && pendingPlannedIndexes.length > 0) {
       const plannedIndex = pendingPlannedIndexes.shift();
       if (plannedIndex !== undefined) {
+        const plannedSnapshot = snapshots[plannedIndex];
+        if (!plannedSnapshot) {
+          continue;
+        }
         snapshots[plannedIndex] = {
-          ...snapshots[plannedIndex],
+          ...plannedSnapshot,
           plannedToolCallId: snapshot.toolOutputCallId,
         };
       }
@@ -210,18 +201,96 @@ function toRequestSnapshots(entries: JournalEntry[]): AimockRequestSnapshot[] {
   return snapshots;
 }
 
-function createDebugMount(mock: LLMock): Mountable {
+function createDebugMount(): Mountable {
+  let journal: Journal | undefined;
+  let nextRequestCursor = 1;
+  const requestCursors = new Map<string, number>();
+
   return {
-    async handleRequest(_req: IncomingMessage, res: ServerResponse, pathname: string) {
-      const entries = mock.getRequests();
+    setJournal(nextJournal) {
+      if (journal === nextJournal) {
+        return;
+      }
+      if (journal) {
+        throw new Error("AIMock debug request cursor journal changed unexpectedly");
+      }
+      journal = nextJournal;
+      const addJournalEntry = journal.add.bind(journal);
+      // AIMock evicts its request journal FIFO. Assign cursors at insertion time
+      // so the debug boundary remains monotonic after retained entries rotate.
+      journal.add = (entry) => {
+        const recorded = addJournalEntry(entry);
+        requestCursors.set(recorded.id, nextRequestCursor++);
+        if (requestCursors.size > AIMOCK_DEBUG_REQUEST_LIMIT) {
+          const oldestRequestId = requestCursors.keys().next().value;
+          if (oldestRequestId !== undefined) {
+            requestCursors.delete(oldestRequestId);
+          }
+        }
+        return recorded;
+      };
+    },
+    async handleRequest(req: IncomingMessage, res: ServerResponse, pathname: string) {
+      const entries = journal?.getAll() ?? [];
       const snapshots = toRequestSnapshots(entries);
+      const cursorSnapshots = entries.map((entry, index) => {
+        const cursor = requestCursors.get(entry.id);
+        if (cursor === undefined) {
+          throw new Error(`AIMock debug request cursor missing for ${entry.id}`);
+        }
+        const snapshot = snapshots[index];
+        if (!snapshot) {
+          throw new Error(`AIMock debug request snapshot missing for ${entry.id}`);
+        }
+        return { cursor, snapshot };
+      });
+      const url = new URL(req.url ?? "/", "http://127.0.0.1");
       if (pathname === "/last-request") {
         const lastSnapshot = snapshots.at(-1);
         writeJson(res, 200, lastSnapshot ?? { ok: false, error: "no request recorded" });
         return true;
       }
+      if (pathname === "/request-cursor") {
+        writeJson(res, 200, { cursor: nextRequestCursor - 1 });
+        return true;
+      }
       if (pathname === "/requests") {
-        writeJson(res, 200, snapshots);
+        const afterText = url.searchParams.get("after");
+        if (afterText === null) {
+          writeJson(res, 200, snapshots);
+          return true;
+        }
+        const after = parseQaDebugRequestCursor(afterText);
+        if (after === null) {
+          writeJson(res, 400, { error: "after must be a non-negative safe integer" });
+          return true;
+        }
+        const latestCursor = nextRequestCursor - 1;
+        const oldestCursor = cursorSnapshots[0]?.cursor ?? nextRequestCursor;
+        if (after > latestCursor) {
+          writeJson(res, 409, {
+            error: "request cursor is ahead of the latest recorded request",
+            after,
+            latestCursor,
+          });
+          return true;
+        }
+        if (after < oldestCursor - 1) {
+          writeJson(res, 409, {
+            error: "request cursor expired",
+            after,
+            oldestCursor,
+            latestCursor,
+          });
+          return true;
+        }
+        writeJson(
+          res,
+          200,
+          cursorSnapshots
+            .filter((request) => request.cursor > after)
+            .map((request) => request.snapshot),
+        );
         return true;
       }
       if (pathname === "/image-generations") {
@@ -245,9 +314,10 @@ export async function startQaAimockServer(params?: { host?: string; port?: numbe
     port: params?.port ?? 0,
     strict: false,
     logLevel: "silent",
+    journalMaxEntries: AIMOCK_DEBUG_REQUEST_LIMIT,
   });
 
-  mock.mount("/debug", createDebugMount(mock));
+  mock.mount("/debug", createDebugMount());
   mock.onMessage(/.*/, { content: "AIMOCK_QA_OK" });
 
   await mock.start();

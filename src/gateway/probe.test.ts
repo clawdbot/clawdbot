@@ -7,6 +7,8 @@ const gatewayClientState = vi.hoisted(() => ({
   requests: [] as string[],
   startCalls: 0,
   startMode: "hello" as "hello" | "close" | "connect-error-close" | "startup-retry-then-hello",
+  socketOpened: true,
+  transportValidated: true,
   close: { code: 1008, reason: "pairing required" },
   helloAuth: {
     role: "operator",
@@ -22,6 +24,7 @@ const gatewayClientState = vi.hoisted(() => ({
     reason: "scope-upgrade",
     requestId: "req-123",
   } as Record<string, unknown> | null,
+  requestError: null as { code: string; message: string; details?: unknown } | null,
   stopCalls: 0,
   stopAndWaitCalls: [] as Array<{ timeoutMs?: number } | undefined>,
   stopAndWaitMode: "resolve" as "resolve" | "defer" | "reject",
@@ -53,10 +56,15 @@ const eventLoopReadyState = vi.hoisted(() => ({
 }));
 
 class MockGatewayClientRequestError extends Error {
+  readonly code: string;
+  readonly gatewayCode: string;
   readonly details?: unknown;
 
-  constructor(error: { message?: string; details?: unknown }) {
+  constructor(error: { code?: string; message?: string; details?: unknown }) {
     super(error.message ?? "gateway request failed");
+    this.name = "GatewayClientRequestError";
+    this.code = error.code ?? "UNAVAILABLE";
+    this.gatewayCode = this.code;
     this.details = error.details;
   }
 }
@@ -84,7 +92,12 @@ class MockGatewayClient {
   private emitClose(): void {
     const onClose = this.opts.onClose;
     if (typeof onClose === "function") {
-      onClose(gatewayClientState.close.code, gatewayClientState.close.reason);
+      onClose(gatewayClientState.close.code, gatewayClientState.close.reason, {
+        phase: "pre-hello",
+        socketOpened: gatewayClientState.socketOpened,
+        transportValidated: gatewayClientState.transportValidated,
+        transientPreHelloCleanClose: false,
+      });
     }
   }
 
@@ -136,6 +149,9 @@ class MockGatewayClient {
 
   async request(method: string): Promise<unknown> {
     gatewayClientState.requests.push(method);
+    if (gatewayClientState.requestError) {
+      throw new MockGatewayClientRequestError(gatewayClientState.requestError);
+    }
     if (method === "system-presence") {
       return [];
     }
@@ -155,8 +171,8 @@ vi.mock("../infra/device-identity.js", () => ({
     }
     return deviceIdentityState.value;
   },
-  loadDeviceIdentityIfPresent: (filePath: unknown) => {
-    deviceIdentityState.identityPaths.push(filePath);
+  loadDeviceIdentityIfPresent: (options: unknown) => {
+    deviceIdentityState.identityPaths.push(options);
     if (deviceIdentityState.throwOnLoad) {
       throw new Error("read-only identity dir");
     }
@@ -280,6 +296,8 @@ describe("probeGateway", () => {
     deviceIdentityState.identityPaths = [];
     deviceIdentityState.tokenParams = [];
     gatewayClientState.startMode = "hello";
+    gatewayClientState.socketOpened = true;
+    gatewayClientState.transportValidated = true;
     gatewayClientState.options = null;
     gatewayClientState.requests = [];
     gatewayClientState.startCalls = 0;
@@ -294,6 +312,7 @@ describe("probeGateway", () => {
       reason: "scope-upgrade",
       requestId: "req-123",
     };
+    gatewayClientState.requestError = null;
     gatewayClientState.stopCalls = 0;
     gatewayClientState.stopAndWaitCalls = [];
     gatewayClientState.stopAndWaitMode = "resolve";
@@ -380,6 +399,33 @@ describe("probeGateway", () => {
     });
   });
 
+  it("preserves structured missing-scope details from a post-connect request", async () => {
+    gatewayClientState.helloAuth = {
+      role: "operator",
+      scopes: ["operator.write"],
+    };
+    gatewayClientState.requestError = {
+      code: "FORBIDDEN",
+      message: "permission denied",
+      details: {
+        code: "MISSING_SCOPE",
+        missingScope: "operator.read",
+        requiredScopes: ["operator.read"],
+      },
+    };
+
+    const result = await runTokenProbe();
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("permission denied");
+    expect(result.connectLatencyMs).not.toBeNull();
+    expect(result.missingScopeErrorDetails).toEqual({
+      code: "MISSING_SCOPE",
+      missingScope: "operator.read",
+      requiredScopes: ["operator.read"],
+    });
+  });
+
   it("loads probe identity and cached device auth from the provided env", async () => {
     const env = {
       ...process.env,
@@ -388,9 +434,7 @@ describe("probeGateway", () => {
 
     await runTokenProbe({ env });
 
-    expect(deviceIdentityState.identityPaths).toEqual([
-      "/tmp/openclaw-probe-service-state/identity/device.json",
-    ]);
+    expect(deviceIdentityState.identityPaths).toEqual([{ env }]);
     expect(deviceIdentityState.tokenParams).toEqual([
       {
         deviceId: "test-device-identity",
@@ -481,6 +525,21 @@ describe("probeGateway", () => {
     expect(result.health).toBeNull();
     expect(result.status).toBeNull();
     expect(result.configSnapshot).toBeNull();
+  });
+
+  it("fetches only config for config-only probes", async () => {
+    const result = await probeGateway({
+      url: "ws://127.0.0.1:18789",
+      timeoutMs: 1_000,
+      detailLevel: "config",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(gatewayClientState.requests).toEqual(["config.get"]);
+    expect(result.health).toBeNull();
+    expect(result.status).toBeNull();
+    expect(result.presence).toBeNull();
+    expect(result.configSnapshot).toEqual({});
   });
 
   it("passes through tls fingerprints for secure daemon probes", async () => {
@@ -586,6 +645,7 @@ describe("probeGateway", () => {
 
   it("prefers the structured connect error over the generic close reason", async () => {
     gatewayClientState.startMode = "connect-error-close";
+    gatewayClientState.socketOpened = true;
 
     const result = await runTokenLightweightProbe({
       timeoutMs: 5_000,
@@ -596,6 +656,17 @@ describe("probeGateway", () => {
       error: "scope upgrade pending approval (requestId: req-123)",
       close: { code: 1008, reason: "pairing required" },
     });
+    expect(result.connectLatencyMs).not.toBeNull();
+  });
+
+  it("keeps latency unknown when the opened transport fails validation", async () => {
+    gatewayClientState.startMode = "connect-error-close";
+    gatewayClientState.socketOpened = true;
+    gatewayClientState.transportValidated = false;
+
+    const result = await runTokenLightweightProbe({ timeoutMs: 5_000 });
+
+    expect(result.connectLatencyMs).toBeNull();
   });
 
   it("keeps probing through internally retried startup-unavailable handshakes", async () => {

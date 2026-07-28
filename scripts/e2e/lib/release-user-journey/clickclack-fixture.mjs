@@ -2,9 +2,9 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
-import { readPositiveIntEnv } from "../env-limits.mjs";
+import { readPositiveIntEnv, readTcpPortEnv } from "../env-limits.mjs";
 
-const port = readPositiveIntEnv("CLICKCLACK_FIXTURE_PORT", 44181);
+const port = readTcpPortEnv("CLICKCLACK_FIXTURE_PORT", 44181);
 const requestMaxBytes = readPositiveIntEnv("CLICKCLACK_FIXTURE_REQUEST_MAX_BYTES", 4 * 1024 * 1024);
 const token = process.env.CLICKCLACK_FIXTURE_TOKEN ?? "clickclack-release-token";
 const statePath = process.env.CLICKCLACK_FIXTURE_STATE ?? "/tmp/openclaw-clickclack-fixture.json";

@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -15,6 +16,18 @@ function mkTmpRoot() {
 function writeJson(filePath: string, value: unknown) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(value), "utf8");
+}
+
+function runCli(...args: string[]) {
+  return spawnSync(process.execPath, ["scripts/openclaw-performance-source-summary.mjs", ...args], {
+    cwd: path.resolve("."),
+    encoding: "utf8",
+  });
+}
+
+function expectNoNodeStack(stderr: string) {
+  expect(stderr).not.toContain("Node.js");
+  expect(stderr).not.toContain("\n    at ");
 }
 
 function writeSourceFixture(sourceDir: string) {
@@ -71,7 +84,7 @@ function writeSourceFixture(sourceDir: string) {
       agentDatabases: 2,
       channelIngressEvents: 1000,
       cronJobs: 100,
-      cronRunLogs: 1000,
+      cronTaskRuns: 1000,
       deliveryQueueEntries: 1000,
       pluginStateEntries: 1000,
       stateRows: 4100,
@@ -121,10 +134,25 @@ describe("parseArgs", () => {
     for (const flag of ["--source-dir", "--baseline-source-dir", "--output"]) {
       expect(() => parseArgs([flag])).toThrow(`${flag} requires a value`);
       expect(() => parseArgs([flag, ""])).toThrow(`${flag} requires a value`);
+      expect(() => parseArgs([flag, "-h"])).toThrow(`${flag} requires a value`);
       expect(() => parseArgs([flag, "--source-dir", "reports/current"])).toThrow(
         `${flag} requires a value`,
       );
     }
+  });
+
+  it("reports CLI argument errors without a Node stack trace", () => {
+    const missingSource = runCli();
+    expect(missingSource.status).toBe(1);
+    expect(missingSource.stdout).toBe("");
+    expect(missingSource.stderr.trim()).toBe("--source-dir is required");
+    expectNoNodeStack(missingSource.stderr);
+
+    const unknownArg = runCli("--wat");
+    expect(unknownArg.status).toBe(1);
+    expect(unknownArg.stdout).toBe("");
+    expect(unknownArg.stderr.trim()).toBe("Unknown argument: --wat");
+    expectNoNodeStack(unknownArg.stderr);
   });
 });
 

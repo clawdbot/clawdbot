@@ -164,7 +164,7 @@ async function listenGateway(params: {
   return `ws://127.0.0.1:${address.port}`;
 }
 
-function runScript(url: string): Promise<ScriptResult> {
+function runScript(url: string, extraArgs: readonly string[] = []): Promise<ScriptResult> {
   return new Promise((resolve) => {
     const child = spawn(
       process.execPath,
@@ -177,6 +177,7 @@ function runScript(url: string): Promise<ScriptResult> {
         "--token",
         "token",
         "--json",
+        ...extraArgs,
       ],
       { stdio: "pipe" },
     );
@@ -215,7 +216,62 @@ function runScript(url: string): Promise<ScriptResult> {
   });
 }
 
+function runScriptRaw(args: readonly string[]): Promise<ScriptResult> {
+  return new Promise((resolve) => {
+    const child = spawn(
+      process.execPath,
+      ["--import", "tsx", "scripts/dev/ios-node-e2e.ts", ...args],
+      {
+        stdio: "pipe",
+      },
+    );
+    const stdout = createBoundedChildOutput();
+    const stderr = createBoundedChildOutput();
+    child.stdout.on("data", (chunk) => {
+      stdout.append(chunk);
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr.append(chunk);
+    });
+    child.on("close", (status, signal) => {
+      resolve({ status, signal, stdout: stdout.text(), stderr: stderr.text(), timedOut: false });
+    });
+  });
+}
+
 describe("ios-node-e2e", () => {
+  it("prints CLI help without connecting", async () => {
+    const result = await runScriptRaw(["--help"]);
+
+    expect(result).toMatchObject({ signal: null, status: 0, timedOut: false });
+    expect(result.stdout).toContain("Usage: bun scripts/dev/ios-node-e2e.ts");
+    expect(result.stderr).toBe("");
+  });
+
+  it("rejects unknown CLI args before connecting", async () => {
+    const result = await runScript("ws://127.0.0.1:9", ["--wat"]);
+
+    expect(result).toMatchObject({ signal: null, status: 1, timedOut: false });
+    expect(result.stderr.trim()).toBe("Unknown argument: --wat");
+    expect(result.stdout).toBe("");
+  });
+
+  it("rejects short flags as CLI option values before help handling", async () => {
+    const result = await runScriptRaw(["--url", "-h", "--token", "token"]);
+
+    expect(result).toMatchObject({ signal: null, status: 1, timedOut: false });
+    expect(result.stderr.trim()).toBe("--url requires a value");
+    expect(result.stdout).toBe("");
+  });
+
+  it("rejects malformed wait seconds before connecting", async () => {
+    const result = await runScript("ws://127.0.0.1:9", ["--wait-seconds", "1e3"]);
+
+    expect(result).toMatchObject({ signal: null, status: 1, timedOut: false });
+    expect(result.stderr).toContain("--wait-seconds must be a positive integer; got: 1e3");
+    expect(result.stdout).toBe("");
+  });
+
   it("fails empty node invoke payloads instead of counting them as proof", async () => {
     const invokeParams: Array<{ command?: string; idempotencyKey?: string }> = [];
     const url = await listenGateway({ mode: "empty", invokeParams });

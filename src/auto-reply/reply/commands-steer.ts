@@ -7,6 +7,7 @@ import {
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
+import { applyCommandTextToParams } from "./command-context-rewrite.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import {
   formatEmbeddedAgentQueueFailureSummary,
@@ -57,31 +58,38 @@ function resolveStoredSessionEntry(
   return undefined;
 }
 
+function listSteerCandidateSessionKeys(targetSessionKey: string): string[] {
+  const candidates = [targetSessionKey];
+  if (targetSessionKey.includes(":slash:")) {
+    candidates.push(
+      targetSessionKey.replace(":slash:", ":direct:"),
+      targetSessionKey.replace(":slash:", ":dm:"),
+    );
+  }
+  return [...new Set(candidates)];
+}
+
 function resolveSteerSessionId(params: {
   commandParams: HandleCommandsParams;
   targetSessionKey: string;
 }): string | undefined {
-  const activeSessionId = resolveActiveEmbeddedRunSessionId(params.targetSessionKey);
-  if (activeSessionId) {
-    return activeSessionId;
+  const candidateKeys = listSteerCandidateSessionKeys(params.targetSessionKey);
+  for (const candidateKey of candidateKeys) {
+    const activeSessionId = resolveActiveEmbeddedRunSessionId(candidateKey);
+    if (activeSessionId) {
+      return activeSessionId;
+    }
   }
 
-  const entry = resolveStoredSessionEntry(params.commandParams, params.targetSessionKey);
-  const sessionId = normalizeOptionalString(entry?.sessionId);
-  if (!sessionId || !isEmbeddedAgentRunActive(sessionId)) {
-    return undefined;
+  for (const candidateKey of candidateKeys) {
+    const entry = resolveStoredSessionEntry(params.commandParams, candidateKey);
+    const sessionId = normalizeOptionalString(entry?.sessionId);
+    if (sessionId && isEmbeddedAgentRunActive(sessionId)) {
+      return sessionId;
+    }
   }
-  return sessionId;
-}
 
-function applySteerFallbackPrompt(ctx: HandleCommandsParams["ctx"], message: string): void {
-  const mutableCtx = ctx as Record<string, unknown>;
-  mutableCtx.Body = message;
-  mutableCtx.RawBody = message;
-  mutableCtx.CommandBody = message;
-  mutableCtx.BodyForCommands = message;
-  mutableCtx.BodyForAgent = message;
-  mutableCtx.BodyStripped = message;
+  return undefined;
 }
 
 function formatSteerError(err: unknown): string {
@@ -94,12 +102,7 @@ function continueWithSteerFallback(
   logMessage: string,
 ): CommandHandlerResult {
   logVerbose(logMessage);
-  applySteerFallbackPrompt(params.ctx, message);
-  if (params.rootCtx && params.rootCtx !== params.ctx) {
-    applySteerFallbackPrompt(params.rootCtx, message);
-  }
-  params.command.rawBodyNormalized = message;
-  params.command.commandBodyNormalized = message;
+  applyCommandTextToParams(params, message);
   return { shouldContinue: true };
 }
 
@@ -142,7 +145,12 @@ export const handleSteerCommand: CommandHandler = async (params, allowTextComman
 
   const queueOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(sessionId, message, {
     steeringMode: "all",
+    isInboundUserMessage: true,
     debounceMs: 0,
+    ...(params.opts?.sourceReplyDeliveryMode
+      ? { sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode }
+      : {}),
+    taskSuggestionDeliveryMode: params.opts?.taskSuggestionDeliveryMode,
   }).catch((err: unknown): CommandHandlerResult => {
     return continueWithSteerFallback(
       params,

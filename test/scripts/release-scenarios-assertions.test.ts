@@ -55,6 +55,14 @@ function writeAuthProfileStoreSqlite(agentDir: string, store: unknown) {
 }
 
 describe("release scenario assertions", () => {
+  it("rejects loose mock OpenAI port args", () => {
+    const result = runAssertion(["configure-mock-openai", "1e3"]);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("mock OpenAI port must be a TCP port from 1 to 65535");
+    expect(result.stderr).toContain('"1e3"');
+  });
+
   it("scans large files when checking release scenario output text", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-scenarios-"));
     const outputPath = path.join(root, "output.log");

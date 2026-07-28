@@ -28,13 +28,3 @@ export function normalizeConversationTargetParams(params: ConversationTargetPara
   const parentConversationId = normalizeConversationId(params.parentConversationId);
   return { channel, conversationId, parentConversationId };
 }
-
-export function formatGenericConversationTarget(
-  params: ConversationTargetParams,
-): string | undefined {
-  const { channel, conversationId } = normalizeConversationTargetParams(params);
-  if (!channel || !conversationId) {
-    return undefined;
-  }
-  return `channel:${conversationId}`;
-}

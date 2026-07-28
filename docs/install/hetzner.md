@@ -8,12 +8,11 @@ read_when:
 title: "Hetzner"
 ---
 
-## Goal
-
 Run a persistent OpenClaw Gateway on a Hetzner VPS using Docker, with durable state, baked-in binaries, and safe restart behavior.
 
-If you want "OpenClaw 24/7 for ~$5", this is the simplest reliable setup.
-Hetzner pricing changes; pick the smallest Debian/Ubuntu VPS and scale up if you hit OOMs.
+Hetzner pricing changes; pick the smallest Debian/Ubuntu VPS that fits and scale up if you hit OOMs.
+
+The Gateway can be accessed via SSH port forwarding from your laptop, or via direct port exposure if you manage firewalling and tokens yourself.
 
 Security model reminder:
 
@@ -23,68 +22,37 @@ Security model reminder:
 
 See [Security](/gateway/security) and [VPS hosting](/vps).
 
-## What are we doing (simple terms)?
+This guide assumes Ubuntu or Debian on Hetzner. On another Linux VPS, map packages accordingly. For the generic Docker flow, see [Docker](/install/docker).
 
-- Rent a small Linux server (Hetzner VPS)
-- Install Docker (isolated app runtime)
-- Start the OpenClaw Gateway in Docker
-- Persist `~/.openclaw` + `~/.openclaw/workspace` on the host (survives restarts/rebuilds)
-- Access the Control UI from your laptop via an SSH tunnel
+## What you need
 
-That mounted `~/.openclaw` state includes `openclaw.json`, per-agent
-`agents/<agentId>/agent/auth-profiles.json`, and `.env`.
+- Hetzner VPS with root access
+- SSH access from your laptop
+- Docker and Docker Compose
+- Model auth credentials
+- Optional provider credentials (WhatsApp QR, Telegram bot token, Gmail OAuth)
+- ~20 minutes
 
-The Gateway can be accessed via:
-
-- SSH port forwarding from your laptop
-- Direct port exposure if you manage firewalling and tokens yourself
-
-This guide assumes Ubuntu or Debian on Hetzner.  
-If you are on another Linux VPS, map packages accordingly.
-For the generic Docker flow, see [Docker](/install/docker).
-
----
-
-## Quick path (experienced operators)
+## Quick path
 
 1. Provision Hetzner VPS
 2. Install Docker
-3. Clone OpenClaw repository
+3. Clone the OpenClaw repository
 4. Create persistent host directories
 5. Configure `.env` and `docker-compose.yml`
 6. Bake required binaries into the image
 7. `docker compose up -d`
 8. Verify persistence and Gateway access
 
----
-
-## What you need
-
-- Hetzner VPS with root access
-- SSH access from your laptop
-- Basic comfort with SSH + copy/paste
-- ~20 minutes
-- Docker and Docker Compose
-- Model auth credentials
-- Optional provider credentials
-  - WhatsApp QR
-  - Telegram bot token
-  - Gmail OAuth
-
----
-
 <Steps>
   <Step title="Provision the VPS">
-    Create an Ubuntu or Debian VPS in Hetzner.
-
-    Connect as root:
+    Create an Ubuntu or Debian VPS in Hetzner, then connect as root:
 
     ```bash
     ssh root@YOUR_VPS_IP
     ```
 
-    This guide assumes the VPS is stateful.
-    Do not treat it as disposable infrastructure.
+    Treat the VPS as stateful, not disposable infrastructure.
 
   </Step>
 
@@ -110,13 +78,12 @@ For the generic Docker flow, see [Docker](/install/docker).
     cd openclaw
     ```
 
-    This guide assumes you will build a custom image to guarantee binary persistence.
+    This guide builds a custom image so any binaries you bake in survive restarts.
 
   </Step>
 
   <Step title="Create persistent host directories">
-    Docker containers are ephemeral.
-    All long-lived state must live on the host.
+    Docker containers are ephemeral; all long-lived state must live on the host.
 
     ```bash
     mkdir -p /root/.openclaw/workspace
@@ -128,7 +95,7 @@ For the generic Docker flow, see [Docker](/install/docker).
   </Step>
 
   <Step title="Configure environment variables">
-    Create `.env` in the repository root.
+    Create `.env` in the repository root:
 
     ```bash
     OPENCLAW_IMAGE=openclaw:latest
@@ -143,26 +110,23 @@ For the generic Docker flow, see [Docker](/install/docker).
     XDG_CONFIG_HOME=/home/node/.openclaw
     ```
 
-    Set `OPENCLAW_GATEWAY_TOKEN` when you want to manage the stable gateway
-    token through `.env`; otherwise configure `gateway.auth.token` before
-    relying on clients across restarts. If neither source exists, OpenClaw uses
-    a runtime-only token for that startup. Generate a keyring password and paste
-    it into `GOG_KEYRING_PASSWORD`:
+    Set `OPENCLAW_GATEWAY_TOKEN` to manage the stable gateway token through
+    `.env`; otherwise configure `gateway.auth.token` before relying on clients
+    across restarts. If neither is set, OpenClaw uses a runtime-only token for
+    that startup. Generate a keyring password for `GOG_KEYRING_PASSWORD`:
 
     ```bash
     openssl rand -hex 32
     ```
 
-    **Do not commit this file.**
-
-    This `.env` file is for container/runtime env such as `OPENCLAW_GATEWAY_TOKEN`.
-    Stored provider OAuth/API-key auth lives in the mounted
-    `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`.
+    **Do not commit this file.** It holds container/runtime env such as
+    `OPENCLAW_GATEWAY_TOKEN`. Stored provider OAuth/API-key auth lives in the
+    mounted `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`.
 
   </Step>
 
   <Step title="Docker Compose configuration">
-    Create or update `docker-compose.yml`.
+    Create or update `docker-compose.yml`:
 
     ```yaml
     services:
@@ -202,12 +166,12 @@ For the generic Docker flow, see [Docker](/install/docker).
           ]
     ```
 
-    `--allow-unconfigured` is only for bootstrap convenience, it is not a replacement for a proper gateway configuration. Still set auth (`gateway.auth.token` or password) and use safe bind settings for your deployment.
+    `--allow-unconfigured` is only for bootstrap convenience, not a substitute for real gateway configuration. Still set auth (`gateway.auth.token` or password) and a safe bind mode for your deployment.
 
   </Step>
 
   <Step title="Shared Docker VM runtime steps">
-    Use the shared runtime guide for the common Docker host flow:
+    Follow the shared runtime guide for the common Docker host flow:
 
     - [Bake required binaries into the image](/install/docker-vm-runtime#bake-required-binaries-into-the-image)
     - [Build and launch](/install/docker-vm-runtime#build-and-launch)
@@ -217,18 +181,17 @@ For the generic Docker flow, see [Docker](/install/docker).
   </Step>
 
   <Step title="Hetzner-specific access">
-    After the shared build and launch steps, complete the following setup to open the tunnel:
+    After the shared build and launch steps, open the tunnel.
 
-    **Prerequisite:** Ensure your VPS sshd config allows TCP forwarding. If you
-    have hardened your SSH config, check `/etc/ssh/sshd_config` and set:
+    **Prerequisite:** ensure your VPS sshd config allows TCP forwarding. If you
+    hardened your SSH config, check `/etc/ssh/sshd_config` and set:
 
-    ```
+    ```text
     AllowTcpForwarding local
     ```
 
     `local` allows `ssh -L` local forwards from your laptop while blocking
-    remote forwards from the server. Setting it to `no` will fail the tunnel
-    with:
+    remote forwards from the server. Setting it to `no` fails the tunnel with:
     `channel 3: open failed: administratively prohibited: open failed`
 
     After confirming TCP forwarding is enabled, restart the SSH service
@@ -238,12 +201,9 @@ For the generic Docker flow, see [Docker](/install/docker).
     ssh -N -L 18789:127.0.0.1:18789 root@YOUR_VPS_IP
     ```
 
-    Open:
-
-    `http://127.0.0.1:18789/`
-
-    Paste the configured shared secret. This guide uses the gateway token by
-    default; if you switched to password auth, use that password instead.
+    Open `http://127.0.0.1:18789/` and paste the configured shared secret.
+    This guide uses the gateway token by default; use your configured password
+    instead if you switched to password auth.
 
   </Step>
 </Steps>

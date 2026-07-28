@@ -1,6 +1,7 @@
 // Verifies agent-end side effects keep plugin hooks independent from auto-capture.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runSkillResearchAutoCapture } from "../../skills/research/autocapture.js";
+import { scheduleSkillExperienceReview } from "../../skills/workshop/experience-review-default.js";
 import { awaitAgentEndSideEffects, runAgentEndSideEffects } from "./agent-end-side-effects.js";
 import {
   awaitAgentHarnessAgentEndHook,
@@ -11,18 +12,24 @@ vi.mock("../../skills/research/autocapture.js", () => ({
   runSkillResearchAutoCapture: vi.fn(),
 }));
 
+vi.mock("../../skills/workshop/experience-review-default.js", () => ({
+  scheduleSkillExperienceReview: vi.fn(),
+}));
+
 vi.mock("./lifecycle-hook-helpers.js", () => ({
   awaitAgentHarnessAgentEndHook: vi.fn(),
   runAgentHarnessAgentEndHook: vi.fn(),
 }));
 
 const mockAutoCapture = vi.mocked(runSkillResearchAutoCapture);
+const mockExperienceReview = vi.mocked(scheduleSkillExperienceReview);
 const mockAwaitAgentEndHook = vi.mocked(awaitAgentHarnessAgentEndHook);
 const mockRunAgentEndHook = vi.mocked(runAgentHarnessAgentEndHook);
 
 describe("agent end side effects", () => {
   beforeEach(() => {
     mockAutoCapture.mockReset();
+    mockExperienceReview.mockReset();
     mockAwaitAgentEndHook.mockReset();
     mockRunAgentEndHook.mockReset();
   });
@@ -44,7 +51,9 @@ describe("agent end side effects", () => {
       },
       ctx: {
         runId: "run-1",
+        sessionKey: "agent:main:main",
         workspaceDir: "/workspace",
+        trigger: "user",
         config: {
           skills: {
             workshop: {
@@ -58,14 +67,28 @@ describe("agent end side effects", () => {
     });
 
     expect(mockRunAgentEndHook).toHaveBeenCalledTimes(1);
-    expect(mockAutoCapture).toHaveBeenCalledWith({
-      event: {
-        messages: [],
-        success: true,
-      },
-      ctx: {
-        runId: "run-1",
-        workspaceDir: "/workspace",
+    await vi.waitFor(() => expect(mockExperienceReview).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => {
+      expect(mockAutoCapture).toHaveBeenCalledWith({
+        event: {
+          messages: [],
+          success: true,
+        },
+        ctx: {
+          runId: "run-1",
+          sessionKey: "agent:main:main",
+          workspaceDir: "/workspace",
+          trigger: "user",
+          config: {
+            skills: {
+              workshop: {
+                autonomous: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
         config: {
           skills: {
             workshop: {
@@ -75,16 +98,7 @@ describe("agent end side effects", () => {
             },
           },
         },
-      },
-      config: {
-        skills: {
-          workshop: {
-            autonomous: {
-              enabled: true,
-            },
-          },
-        },
-      },
+      });
     });
 
     resolveCapture?.();
@@ -117,5 +131,6 @@ describe("agent end side effects", () => {
       },
     });
     expect(mockAwaitAgentEndHook).toHaveBeenCalledTimes(1);
+    expect(mockExperienceReview).toHaveBeenCalledTimes(1);
   });
 });

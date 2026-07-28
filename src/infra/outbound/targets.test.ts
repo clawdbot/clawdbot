@@ -3,12 +3,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import { normalizeLegacySessionEntryDelivery } from "../state-migrations.legacy-session-store.js";
 import {
-  resolveHeartbeatDeliveryTarget,
-  resolveHeartbeatDeliveryTargetWithSessionRoute,
+  resolveHeartbeatDeliveryTarget as resolveCanonicalHeartbeatDeliveryTarget,
+  resolveHeartbeatDeliveryTargetWithSessionRoute as resolveCanonicalHeartbeatDeliveryTargetWithSessionRoute,
   resolveOutboundTarget,
-  resolveSessionDeliveryTarget,
+  resolveSessionDeliveryTarget as resolveCanonicalSessionDeliveryTarget,
 } from "./targets.js";
 import type { SessionDeliveryTarget } from "./targets.js";
 import {
@@ -26,6 +29,51 @@ const mocks = vi.hoisted(() => ({
   normalizeDeliverableOutboundChannel: vi.fn(),
   resolveOutboundChannelPlugin: vi.fn(),
 }));
+
+type LegacyDeliveryFixture = SessionEntry & {
+  route?: ChannelRouteRef;
+  deliveryContext?: DeliveryContext;
+  origin?: { provider?: string; accountId?: string; threadId?: string | number };
+  channel?: string;
+  lastChannel?: string;
+  lastTo?: string;
+  lastAccountId?: string;
+  lastThreadId?: string | number;
+};
+
+function resolveSessionDeliveryTarget(
+  params: Omit<Parameters<typeof resolveCanonicalSessionDeliveryTarget>[0], "entry"> & {
+    entry?: LegacyDeliveryFixture;
+  },
+) {
+  return resolveCanonicalSessionDeliveryTarget({
+    ...params,
+    entry: params.entry ? normalizeLegacySessionEntryDelivery(params.entry) : undefined,
+  });
+}
+
+function resolveHeartbeatDeliveryTarget(
+  params: Omit<Parameters<typeof resolveCanonicalHeartbeatDeliveryTarget>[0], "entry"> & {
+    entry?: LegacyDeliveryFixture;
+  },
+) {
+  return resolveCanonicalHeartbeatDeliveryTarget({
+    ...params,
+    entry: params.entry ? normalizeLegacySessionEntryDelivery(params.entry) : undefined,
+  });
+}
+
+async function resolveHeartbeatDeliveryTargetWithSessionRoute(
+  params: Omit<
+    Parameters<typeof resolveCanonicalHeartbeatDeliveryTargetWithSessionRoute>[0],
+    "entry"
+  > & { entry?: LegacyDeliveryFixture },
+) {
+  return await resolveCanonicalHeartbeatDeliveryTargetWithSessionRoute({
+    ...params,
+    entry: params.entry ? normalizeLegacySessionEntryDelivery(params.entry) : undefined,
+  });
+}
 
 vi.mock("./channel-resolution.js", () => ({
   normalizeDeliverableOutboundChannel: mocks.normalizeDeliverableOutboundChannel,
@@ -542,10 +590,10 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.reason).toBe("target-none");
   });
 
-  const resolveHeartbeatTarget = (entry: SessionEntry, directPolicy?: "allow" | "block") =>
+  const resolveHeartbeatTarget = (entry: LegacyDeliveryFixture, directPolicy?: "allow" | "block") =>
     resolveHeartbeatDeliveryTarget({
       cfg: {},
-      entry,
+      entry: normalizeLegacySessionEntryDelivery(entry),
       heartbeat: {
         target: "last",
         ...(directPolicy ? { directPolicy } : {}),
@@ -554,7 +602,7 @@ describe("resolveSessionDeliveryTarget", () => {
 
   const expectHeartbeatTarget = (params: {
     name: string;
-    entry: SessionEntry;
+    entry: LegacyDeliveryFixture;
     directPolicy?: "allow" | "block";
     expectedChannel: string;
     expectedTo?: string;
@@ -678,7 +726,7 @@ describe("resolveSessionDeliveryTarget", () => {
     },
   ] satisfies Array<{
     name: string;
-    entry: NonNullable<Parameters<typeof resolveHeartbeatDeliveryTarget>[0]["entry"]>;
+    entry: LegacyDeliveryFixture;
     directPolicy?: "allow" | "block";
     expectedChannel: string;
     expectedTo?: string;
@@ -766,6 +814,130 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.threadId).toBeUndefined();
   });
 
+  it("bootstraps plugin-channel heartbeat routes when the plugin registry is unavailable", () => {
+    const forum = createForumTargetTestPlugin();
+    setActivePluginRegistry(createTargetsTestRegistry([]));
+    mocks.resolveOutboundChannelPlugin.mockImplementation(
+      ({ channel, allowBootstrap }: { channel: string; allowBootstrap?: boolean }) =>
+        channel === "forum" && allowBootstrap === true ? forum : undefined,
+    );
+
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: {},
+      entry: {
+        sessionId: "sess-heartbeat-no-registry",
+        updatedAt: 1,
+        lastChannel: "forum",
+        lastTo: "room:ops",
+      },
+      heartbeat: {
+        target: "last",
+      },
+    });
+
+    expect(resolved.channel).toBe("forum");
+    expect(resolved.to).toBe("room:ops");
+    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledWith({
+      channel: "forum",
+      cfg: {},
+      allowBootstrap: true,
+    });
+    expect(
+      mocks.resolveOutboundChannelPlugin.mock.calls.filter(
+        ([params]) => params.allowBootstrap === true,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("does not bypass target policy when bootstrapping plugin-channel heartbeat routes", () => {
+    const forum = createForumTargetTestPlugin();
+    setActivePluginRegistry(createTargetsTestRegistry([]));
+    mocks.resolveOutboundChannelPlugin.mockImplementation(
+      ({ channel, allowBootstrap }: { channel: string; allowBootstrap?: boolean }) =>
+        channel === "forum" && allowBootstrap === true ? forum : undefined,
+    );
+
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: {},
+      entry: {
+        sessionId: "sess-heartbeat-no-registry-invalid-target",
+        updatedAt: 1,
+        lastChannel: "forum",
+        lastTo: "invalid",
+      },
+      heartbeat: {
+        target: "last",
+      },
+    });
+
+    expect(resolved.channel).toBe("none");
+    expect(resolved.reason).toBe("no-target");
+    expect(
+      mocks.resolveOutboundChannelPlugin.mock.calls.filter(
+        ([params]) => params.allowBootstrap === true,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("does not bypass account validation when bootstrapping plugin-channel heartbeat routes", () => {
+    const forum = createForumTargetTestPlugin();
+    const forumWithAccounts = {
+      ...forum,
+      config: {
+        ...forum.config,
+        listAccountIds: () => ["valid-account"],
+      },
+    };
+    setActivePluginRegistry(createTargetsTestRegistry([]));
+    mocks.resolveOutboundChannelPlugin.mockImplementation(
+      ({ channel, allowBootstrap }: { channel: string; allowBootstrap?: boolean }) =>
+        channel === "forum" && allowBootstrap === true ? forumWithAccounts : undefined,
+    );
+
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: {},
+      entry: {
+        sessionId: "sess-heartbeat-no-registry-invalid-account",
+        updatedAt: 1,
+        lastChannel: "forum",
+        lastTo: "room:ops",
+      },
+      heartbeat: {
+        target: "last",
+        accountId: "missing-account",
+      },
+    });
+
+    expect(resolved.channel).toBe("none");
+    expect(resolved.reason).toBe("unknown-account");
+    expect(
+      mocks.resolveOutboundChannelPlugin.mock.calls.filter(
+        ([params]) => params.allowBootstrap === true,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("does not bootstrap plugin-channel heartbeat routes without a concrete target", () => {
+    setActivePluginRegistry(createTargetsTestRegistry([]));
+
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: {},
+      entry: {
+        sessionId: "sess-heartbeat-no-target",
+        updatedAt: 1,
+        lastChannel: "forum",
+      },
+      heartbeat: {
+        target: "last",
+        accountId: "configured-account",
+      },
+    });
+
+    expect(resolved.channel).toBe("none");
+    expect(resolved.reason).toBe("no-target");
+    expect(mocks.resolveOutboundChannelPlugin).not.toHaveBeenCalled();
+  });
+
   it("resolves explicit heartbeat plugin targets through the outbound session route", async () => {
     const cfg: OpenClawConfig = {};
     const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
@@ -782,25 +954,70 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.threadId).toBe(1008013);
   });
 
+  it("bootstraps explicit external heartbeat targets before strict validation", () => {
+    const external = {
+      ...createForumTargetTestPlugin(),
+      id: "external-channel",
+    };
+    mocks.resolveOutboundChannelPlugin.mockImplementation(
+      ({ channel, allowBootstrap }: { channel: string; allowBootstrap?: boolean }) =>
+        channel === "external-channel" && allowBootstrap === true ? external : undefined,
+    );
+
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: {},
+      entry: {
+        sessionId: "sess-external-account",
+        updatedAt: 1,
+        lastChannel: "external-channel",
+        lastTo: "room:previous",
+        lastAccountId: "account-2",
+      },
+      heartbeat: {
+        target: "external-channel",
+        to: "room:ops",
+      },
+    });
+
+    expect(resolved.channel).toBe("external-channel");
+    expect(resolved.to).toBe("room:ops");
+    expect(resolved.accountId).toBe("account-2");
+    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledWith({
+      channel: "external-channel",
+      cfg: {},
+      allowBootstrap: true,
+    });
+  });
+
   it("blocks heartbeat targets that route to direct chats after canonicalization", async () => {
     const alpha = createGenericTargetTestPlugin("alpha", "Alpha");
-    setActivePluginRegistry(
-      createTargetsTestRegistry([
-        {
-          ...alpha,
-          messaging: {
-            ...alpha.messaging,
-            resolveOutboundSessionRoute: () => ({
-              sessionKey: "main:alpha:user:u123",
-              baseSessionKey: "main:alpha:user:u123",
-              peer: { kind: "direct", id: "u123" },
-              chatType: "direct",
-              from: "alpha:u123",
-              to: "user:u123",
-            }),
-          },
-        },
-      ]),
+    const routedAlpha = {
+      ...alpha,
+      messaging: {
+        ...alpha.messaging,
+        resolveOutboundSessionRoute: () => ({
+          sessionKey: "main:alpha:user:u123",
+          baseSessionKey: "main:alpha:user:u123",
+          peer: { kind: "direct" as const, id: "u123" },
+          chatType: "direct" as const,
+          from: "alpha:u123",
+          to: "user:u123",
+        }),
+      },
+    };
+    setActivePluginRegistry(createTargetsTestRegistry([]));
+    mocks.resolveOutboundChannelPlugin.mockImplementation(
+      ({ channel, allowBootstrap }: { channel: string; allowBootstrap?: boolean }) => {
+        if (channel !== "alpha") {
+          return undefined;
+        }
+        if (allowBootstrap === true) {
+          setActivePluginRegistry(createTargetsTestRegistry([routedAlpha]));
+          return routedAlpha;
+        }
+        return getActivePluginRegistry()?.channels.find((entry) => entry?.plugin?.id === channel)
+          ?.plugin;
+      },
     );
 
     const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
@@ -874,6 +1091,266 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.channel).toBe("telegram");
     expect(resolved.to).toBe("@public_group");
     expect(resolved.chatType).toBe("group");
+  });
+
+  it("uses an activation-aware external plugin when canonicalizing heartbeat routes", async () => {
+    const external = createTestChannelPlugin({
+      id: "external-channel",
+      label: "External",
+      outbound: {
+        deliveryMode: "direct",
+        resolveTarget: ({ to }) =>
+          to
+            ? { ok: true as const, to: to.trim() }
+            : { ok: false as const, error: new Error("target required") },
+      },
+      messaging: {
+        targetResolver: {
+          resolveTarget: async ({ normalized }) => ({
+            to: normalized,
+            kind: "user",
+            source: "directory",
+          }),
+        },
+        resolveOutboundSessionRoute: ({ target, resolvedTarget }) => {
+          const isDirect = resolvedTarget?.kind === "user";
+          return {
+            sessionKey: `main:external-channel:${isDirect ? "user" : "group"}:${target}`,
+            baseSessionKey: `main:external-channel:${isDirect ? "user" : "group"}:${target}`,
+            peer: { kind: isDirect ? "direct" : "group", id: target },
+            chatType: isDirect ? "direct" : "group",
+            from: `external-channel:${target}`,
+            to: target,
+          };
+        },
+      },
+    });
+    const setupExternal = { ...external, messaging: undefined };
+    setActivePluginRegistry(createTargetsTestRegistry([setupExternal]));
+    mocks.resolveOutboundChannelPlugin.mockImplementation(
+      ({ channel, allowBootstrap }: { channel: string; allowBootstrap?: boolean }) => {
+        if (channel !== "external-channel") {
+          return undefined;
+        }
+        if (allowBootstrap === true) {
+          return external;
+        }
+        return setupExternal;
+      },
+    );
+
+    const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
+      cfg: {},
+      agentId: "main",
+      heartbeat: {
+        target: "external-channel",
+        to: "person-123",
+        directPolicy: "block",
+      },
+    });
+
+    expect(resolved.channel).toBe("none");
+    expect(resolved.reason).toBe("dm-blocked");
+  });
+
+  it("blocks direct targets from prepared external target resolvers without route hooks", async () => {
+    const external = createTestChannelPlugin({
+      id: "external-channel",
+      label: "External",
+      outbound: {
+        deliveryMode: "direct",
+        resolveTarget: ({ to }) =>
+          to
+            ? { ok: true as const, to: to.trim() }
+            : { ok: false as const, error: new Error("target required") },
+      },
+      messaging: {
+        targetResolver: {
+          resolveTarget: async ({ normalized }) => ({
+            to: normalized,
+            kind: "user",
+            source: "directory",
+          }),
+        },
+      },
+    });
+    setActivePluginRegistry(createTargetsTestRegistry([]));
+    mocks.resolveOutboundChannelPlugin.mockImplementation(
+      ({ channel, allowBootstrap }: { channel: string; allowBootstrap?: boolean }) => {
+        if (channel !== "external-channel") {
+          return undefined;
+        }
+        if (allowBootstrap === true) {
+          setActivePluginRegistry(createTargetsTestRegistry([external]));
+          return external;
+        }
+        return getActivePluginRegistry()?.channels.find((entry) => entry?.plugin?.id === channel)
+          ?.plugin;
+      },
+    );
+
+    const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
+      cfg: {},
+      agentId: "main",
+      heartbeat: {
+        target: "external-channel",
+        to: "person-123",
+        directPolicy: "block",
+      },
+    });
+
+    expect(resolved.channel).toBe("none");
+    expect(resolved.reason).toBe("dm-blocked");
+  });
+
+  it("uses an activation-aware infer-only plugin for heartbeat direct policy", () => {
+    const external = createTestChannelPlugin({
+      id: "external-channel",
+      label: "External",
+      outbound: {
+        deliveryMode: "direct",
+        sendText: vi.fn(),
+        resolveTarget: ({ to }) =>
+          to
+            ? { ok: true as const, to: to.trim() }
+            : { ok: false as const, error: new Error("target required") },
+      },
+      messaging: {
+        inferTargetChatType: () => "direct",
+      },
+    });
+    const setupExternal = { ...external, messaging: undefined };
+    mocks.resolveOutboundChannelPlugin.mockImplementation(
+      ({ channel, allowBootstrap }: { channel: string; allowBootstrap?: boolean }) => {
+        if (channel !== "external-channel") {
+          return undefined;
+        }
+        return allowBootstrap === true ? external : setupExternal;
+      },
+    );
+
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: {},
+      heartbeat: {
+        target: "external-channel",
+        to: "person-123",
+        directPolicy: "block",
+      },
+    });
+
+    expect(resolved.channel).toBe("none");
+    expect(resolved.reason).toBe("dm-blocked");
+  });
+
+  it("resolves heartbeat reserved targets through directory before session routing", async () => {
+    const listGroups = vi
+      .fn()
+      .mockResolvedValue([{ kind: "group", id: "-1002458651455", name: "current" }]);
+    const listGroupsLive = vi.fn().mockResolvedValue([]);
+    setActivePluginRegistry(
+      createTargetsTestRegistry([
+        {
+          ...createTestChannelPlugin({
+            id: "telegram",
+            label: "Telegram",
+            outbound: {
+              deliveryMode: "direct",
+              resolveTarget: ({ to }) =>
+                to
+                  ? { ok: true as const, to: to.trim() }
+                  : { ok: false as const, error: new Error("target required") },
+            },
+            messaging: {
+              targetPrefixes: ["telegram", "tg"],
+              targetResolver: {
+                reservedLiterals: ["current", "self", "this", "me"],
+                hint: "<chatId>",
+              },
+              resolveOutboundSessionRoute: ({ target, resolvedTarget }) => ({
+                sessionKey: `main:telegram:group:${target}`,
+                baseSessionKey: `main:telegram:group:${target}`,
+                peer: { kind: resolvedTarget?.kind === "user" ? "direct" : "group", id: target },
+                chatType: resolvedTarget?.kind === "user" ? "direct" : "group",
+                from: `telegram:group:${target}`,
+                to: target,
+              }),
+            },
+          }),
+          directory: {
+            listGroups,
+            listGroupsLive,
+          },
+        },
+      ]),
+    );
+
+    const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
+      cfg: {},
+      agentId: "main",
+      heartbeat: {
+        target: "telegram",
+        to: "current",
+      },
+    });
+
+    expect(resolved.channel).toBe("telegram");
+    expect(resolved.to).toBe("-1002458651455");
+    expect(listGroups).toHaveBeenCalled();
+  });
+
+  it("fails closed when a heartbeat reserved target misses the directory", async () => {
+    const listGroups = vi.fn().mockResolvedValue([]);
+    const listGroupsLive = vi.fn().mockResolvedValue([]);
+    setActivePluginRegistry(
+      createTargetsTestRegistry([
+        {
+          ...createTestChannelPlugin({
+            id: "telegram",
+            label: "Telegram",
+            outbound: {
+              deliveryMode: "direct",
+              resolveTarget: ({ to }) =>
+                to
+                  ? { ok: true as const, to: to.trim() }
+                  : { ok: false as const, error: new Error("target required") },
+            },
+            messaging: {
+              targetPrefixes: ["telegram", "tg"],
+              targetResolver: {
+                reservedLiterals: ["current", "self", "this", "me"],
+                hint: "<chatId>",
+              },
+              resolveOutboundSessionRoute: ({ target }) => ({
+                sessionKey: `main:telegram:group:${target}`,
+                baseSessionKey: `main:telegram:group:${target}`,
+                peer: { kind: "group", id: target },
+                chatType: "group",
+                from: `telegram:group:${target}`,
+                to: target,
+              }),
+            },
+          }),
+          directory: {
+            listGroups,
+            listGroupsLive,
+          },
+        },
+      ]),
+    );
+
+    const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
+      cfg: {},
+      agentId: "main",
+      heartbeat: {
+        target: "telegram",
+        to: "current",
+      },
+    });
+
+    expect(resolved.channel).toBe("none");
+    expect(resolved.reason).toBe("no-target");
+    expect(listGroups).toHaveBeenCalled();
+    expect(listGroupsLive).toHaveBeenCalled();
   });
 
   it("keeps heartbeat route canonicalization best-effort when target resolution fails", async () => {
@@ -1369,3 +1846,4 @@ describe("resolveSessionDeliveryTarget — cross-channel reply guard (#24152)", 
     expect(resolved.to).toBe("room-one");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

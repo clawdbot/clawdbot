@@ -12,11 +12,42 @@ set -euo pipefail
 #   NOTARYTOOL_KEY_ID    API key ID
 #   NOTARYTOOL_ISSUER    API issuer ID
 
-ARTIFACT="${1:-}"
+ARTIFACT=""
 STAPLE_APP_PATH="${STAPLE_APP_PATH:-}"
 
+usage() {
+  cat <<'HELP'
+Usage: scripts/notarize-mac-artifact.sh <artifact>
+
+Env:
+  STAPLE_APP_PATH=dist/OpenClaw.app
+  NOTARYTOOL_PROFILE=<keychain-profile>
+  NOTARYTOOL_KEY=<api-key.p8>
+  NOTARYTOOL_KEY_ID=<api-key-id>
+  NOTARYTOOL_ISSUER=<issuer-id>
+HELP
+}
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  usage
+  exit 0
+fi
+if [[ "${1:-}" == "--" ]]; then
+  shift
+fi
+if [[ "$#" -gt 0 ]]; then
+  case "$1" in
+    -*) echo "Error: unknown notarization option: $1" >&2; exit 1 ;;
+    *) ARTIFACT="$1"; shift ;;
+  esac
+fi
+if [[ "$#" -gt 0 ]]; then
+  echo "Error: unexpected notarization argument: $1" >&2
+  exit 1
+fi
+
 if [[ -z "$ARTIFACT" ]]; then
-  echo "Usage: $0 <artifact>" >&2
+  usage >&2
   exit 1
 fi
 if [[ ! -e "$ARTIFACT" ]]; then

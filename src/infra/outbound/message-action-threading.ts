@@ -31,6 +31,7 @@ export function resolveAndApplyOutboundThreadId(
     toolContext?: ChannelThreadingToolContext;
     resolveAutoThreadId?: ResolveAutoThreadId;
     resolveReplyTransport?: ResolveReplyTransport;
+    replyToIsExplicit?: boolean;
   },
 ): string | undefined {
   const threadId = readStringParam(actionParams, "threadId");
@@ -51,15 +52,18 @@ export function resolveAndApplyOutboundThreadId(
   const resolvedThreadId = threadId ?? autoResolvedThreadId;
   if (autoResolvedThreadId && !actionParams.threadId) {
     actionParams.threadId = autoResolvedThreadId;
+  }
+  if (replyToId && resolvedThreadId) {
     const canonicalReplyToId = context.resolveReplyTransport?.({
       cfg: context.cfg,
       accountId: context.accountId,
-      threadId: autoResolvedThreadId,
-      replyToId: autoResolvedThreadId,
+      threadId: resolvedThreadId,
+      replyToId,
+      replyToIsExplicit: context.replyToIsExplicit,
     })?.replyToId;
     // Providers that use one canonical root for reply and thread routing opt in
     // through resolveReplyTransport. Other transports keep message replies intact.
-    if (replyToId && canonicalReplyToId && replyToId !== canonicalReplyToId) {
+    if (canonicalReplyToId && replyToId !== canonicalReplyToId) {
       actionParams.replyTo = canonicalReplyToId;
     }
   }
@@ -172,6 +176,7 @@ export async function prepareOutboundMirrorRoute(params: {
   resolvedTarget?: ResolvedMessagingTarget;
   resolveAutoThreadId?: ResolveAutoThreadId;
   resolveReplyTransport?: ResolveReplyTransport;
+  replyToIsExplicit?: boolean;
   resolveOutboundSessionRoute: (
     params: ResolveOutboundSessionRouteParams,
   ) => Promise<OutboundSessionRoute | null>;
@@ -192,6 +197,7 @@ export async function prepareOutboundMirrorRoute(params: {
     toolContext: params.toolContext,
     resolveAutoThreadId: params.resolveAutoThreadId,
     resolveReplyTransport: params.resolveReplyTransport,
+    replyToIsExplicit: params.replyToIsExplicit,
   });
   const replyToId = readStringParam(params.actionParams, "replyTo");
   const outboundRoute =

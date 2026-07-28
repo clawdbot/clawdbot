@@ -8,15 +8,17 @@ import type {
   SandboxResolvedPath,
 } from "openclaw/plugin-sdk/sandbox";
 import { createWritableRenameTargetResolver } from "openclaw/plugin-sdk/sandbox";
-import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
+import { FsSafeError, isPathInside } from "openclaw/plugin-sdk/security-runtime";
 import type { OpenShellFsBridgeContext, OpenShellSandboxBackend } from "./backend.types.js";
-import { movePathWithCopyFallback } from "./mirror.js";
 
 type ResolvedMountPath = SandboxResolvedPath & {
   mountHostRoot: string;
   writable: boolean;
   source: "workspace" | "agent" | "protectedSkill";
 };
+
+type FsSafeRoot = Awaited<ReturnType<typeof fsRoot>>;
+type FsSafeStat = Awaited<ReturnType<FsSafeRoot["stat"]>>;
 
 const MATERIALIZED_SKILLS_CONTAINER_PARTS = [".openclaw", "sandbox-skills", "skills"] as const;
 
@@ -116,12 +118,8 @@ class OpenShellFsBridge implements SandboxFsBridge {
       allowMissingLeaf: true,
       allowFinalSymlinkForUnlink: false,
     });
-    await fsPromises.mkdir(hostPath, { recursive: true });
-    await this.backend.runRemoteShellScript({
-      script: 'mkdir -p -- "$1"',
-      args: [target.containerPath],
-      signal: params.signal,
-    });
+    await this.backend.mkdirpRemotePath(target.containerPath, params.signal);
+    await mkdirLocalRootPath({ hostPath, target });
   }
 
   async remove(params: {
@@ -140,17 +138,16 @@ class OpenShellFsBridge implements SandboxFsBridge {
       allowMissingLeaf: params.force !== false,
       allowFinalSymlinkForUnlink: true,
     });
-    await fsPromises.rm(hostPath, {
+    await this.backend.removeRemotePath(target.containerPath, {
       recursive: params.recursive ?? false,
-      force: params.force !== false,
-    });
-    await this.backend.runRemoteShellScript({
-      script: params.recursive
-        ? 'rm -rf -- "$1"'
-        : 'if [ -d "$1" ] && [ ! -L "$1" ]; then rmdir -- "$1"; elif [ -e "$1" ] || [ -L "$1" ]; then rm -f -- "$1"; fi',
-      args: [target.containerPath],
       signal: params.signal,
-      allowFailure: params.force !== false,
+      ignoreMissing: params.force !== false,
+    });
+    await removeLocalRootPath({
+      force: params.force,
+      hostPath,
+      recursive: params.recursive,
+      target,
     });
   }
 
@@ -175,13 +172,17 @@ class OpenShellFsBridge implements SandboxFsBridge {
       allowMissingLeaf: true,
       allowFinalSymlinkForUnlink: false,
     });
-    await fsPromises.mkdir(path.dirname(toHostPath), { recursive: true });
-    await movePathWithCopyFallback({ from: fromHostPath, to: toHostPath });
-    await this.backend.runRemoteShellScript({
-      script: 'mkdir -p -- "$(dirname -- "$2")" && mv -- "$1" "$2"',
-      args: [from.containerPath, to.containerPath],
-      signal: params.signal,
+    await assertRenameSourceSupported(fromHostPath);
+    if (from.mountHostRoot !== to.mountHostRoot) {
+      throw new Error("OpenShell cross-root mirror renames require pinned fs-safe support");
+    }
+    await assertSameDeviceRenameSupported({
+      fromHostPath,
+      root: from.mountHostRoot,
+      toHostPath,
     });
+    await this.backend.renameRemotePath(from.containerPath, to.containerPath, params.signal);
+    await moveLocalRootPath({ from, fromHostPath, to, toHostPath });
   }
 
   async stat(params: {
@@ -354,6 +355,162 @@ class OpenShellFsBridge implements SandboxFsBridge {
   }
 }
 
+async function mkdirLocalRootPath(params: {
+  target: ResolvedMountPath;
+  hostPath: string;
+}): Promise<void> {
+  const relativePath = relativeToRoot(params.target, params.hostPath);
+  if (!relativePath) {
+    return;
+  }
+  const root = await fsRoot(params.target.mountHostRoot);
+  await root.mkdir(relativePath);
+}
+
+async function removeLocalRootPath(params: {
+  target: ResolvedMountPath;
+  hostPath: string;
+  recursive?: boolean;
+  force?: boolean;
+}): Promise<void> {
+  const root = await fsRoot(params.target.mountHostRoot);
+  const relativePath = relativeToRoot(params.target, params.hostPath);
+  try {
+    if (params.force === false) {
+      await fsPromises.lstat(params.hostPath);
+    }
+    if (params.recursive) {
+      const stats = await fsPromises.lstat(params.hostPath).catch((err: unknown) => {
+        if (isNotFoundError(err)) {
+          return null;
+        }
+        throw err;
+      });
+      if (stats?.isSymbolicLink()) {
+        await root.remove(relativePath);
+        return;
+      }
+      await removeRootTree(root, relativePath);
+      return;
+    }
+    await root.remove(relativePath);
+  } catch (err) {
+    if (params.force !== false && isNotFoundError(err)) {
+      return;
+    }
+    throw err;
+  }
+}
+
+async function removeRootTree(
+  root: FsSafeRoot,
+  relativePath: string,
+  knownStats?: FsSafeStat,
+): Promise<void> {
+  const stats = knownStats ?? (await root.stat(relativePath));
+  if (stats.isDirectory && !stats.isSymbolicLink) {
+    const entries = await root.list(relativePath, { withFileTypes: true });
+    for (const entry of entries) {
+      await removeRootTree(root, path.join(relativePath, entry.name), entry);
+    }
+    if (!relativePath) {
+      return;
+    }
+  }
+  await root.remove(relativePath);
+}
+
+async function moveLocalRootPath(params: {
+  from: ResolvedMountPath;
+  fromHostPath: string;
+  to: ResolvedMountPath;
+  toHostPath: string;
+}): Promise<void> {
+  const root = await fsRoot(params.from.mountHostRoot);
+  const fromRelativePath = relativeToRoot(params.from, params.fromHostPath);
+  const toRelativePath = relativeToRoot(params.to, params.toHostPath);
+  await mkdirParentPath(root, toRelativePath);
+  await root.move(fromRelativePath, toRelativePath, { overwrite: true });
+}
+
+async function mkdirParentPath(root: FsSafeRoot, relativePath: string): Promise<void> {
+  const parentPath = path.dirname(relativePath);
+  if (parentPath === "." || parentPath === "") {
+    return;
+  }
+  await root.mkdir(parentPath);
+}
+
+function relativeToRoot(target: ResolvedMountPath, hostPath: string): string {
+  const relativePath = path.relative(target.mountHostRoot, hostPath);
+  return relativePath === "." ? "" : relativePath;
+}
+
+async function assertRenameSourceSupported(fromHostPath: string): Promise<void> {
+  const stats = await fsPromises.lstat(fromHostPath);
+  if (stats.isSymbolicLink()) {
+    throw new Error("Sandbox symlink rename sources are not supported by the local mirror bridge");
+  }
+  if (stats.isFile() && stats.nlink > 1) {
+    throw new Error(
+      "Sandbox hardlinked rename sources are not supported by the local mirror bridge",
+    );
+  }
+}
+
+async function assertSameDeviceRenameSupported(params: {
+  fromHostPath: string;
+  root: string;
+  toHostPath: string;
+}): Promise<void> {
+  const sourceStats = await fsPromises.lstat(params.fromHostPath);
+  const destinationParentStats = await nearestExistingDirectoryStats({
+    root: params.root,
+    targetPath: path.dirname(params.toHostPath),
+  });
+  if (sourceStats.dev !== destinationParentStats.dev) {
+    throw new Error("OpenShell cross-device mirror renames require pinned fs-safe support");
+  }
+}
+
+async function nearestExistingDirectoryStats(params: {
+  root: string;
+  targetPath: string;
+}): Promise<Awaited<ReturnType<typeof fsPromises.lstat>>> {
+  const rootPath = path.resolve(params.root);
+  let cursor = path.resolve(params.targetPath);
+  while (isPathInside(rootPath, cursor)) {
+    const stats = await fsPromises.lstat(cursor).catch((err: unknown) => {
+      if (isNotFoundError(err)) {
+        return null;
+      }
+      throw err;
+    });
+    if (stats) {
+      if (!stats.isDirectory()) {
+        throw new Error(`Sandbox rename destination parent is not a directory: ${cursor}`);
+      }
+      return stats;
+    }
+    const next = path.dirname(cursor);
+    if (next === cursor) {
+      break;
+    }
+    cursor = next;
+  }
+  return await fsPromises.lstat(rootPath);
+}
+
+function isNotFoundError(err: unknown): boolean {
+  return (
+    (err instanceof FsSafeError && err.code === "not-found") ||
+    (typeof err === "object" &&
+      err !== null &&
+      "code" in err &&
+      (err as { code?: unknown }).code === "ENOENT")
+  );
+}
+
 function resolveProtectedSkillTarget(params: {
   input: string;
   skillsRoot: string;
@@ -432,7 +589,11 @@ async function assertLocalPathSafety(params: {
   const canonicalRoot = await fsPromises
     .realpath(params.root)
     .catch(() => path.resolve(params.root));
-  const candidate = await resolveCanonicalCandidate(params.target.hostPath);
+  const targetStats = await fsPromises.lstat(params.target.hostPath).catch(() => null);
+  const candidate =
+    params.allowFinalSymlinkForUnlink && targetStats?.isSymbolicLink()
+      ? path.resolve(canonicalRoot, path.relative(params.root, params.target.hostPath))
+      : await resolveCanonicalCandidate(params.target.hostPath);
   if (!isPathInside(canonicalRoot, candidate)) {
     throw new Error(
       `Sandbox path escapes allowed mounts; cannot access: ${params.target.containerPath}`,
@@ -440,13 +601,10 @@ async function assertLocalPathSafety(params: {
   }
 
   const relative = path.relative(params.root, params.target.hostPath);
-  const segments = relative
-    .split(path.sep)
-    .filter(Boolean)
-    .slice(0, Math.max(0, relative.split(path.sep).filter(Boolean).length));
+  const segments = relative.split(path.sep).filter(Boolean);
   let cursor = params.root;
-  for (let index = 0; index < segments.length; index += 1) {
-    cursor = path.join(cursor, segments[index]);
+  for (const [index, segment] of segments.entries()) {
+    cursor = path.join(cursor, segment);
     const stats = await fsPromises.lstat(cursor).catch(() => null);
     if (!stats) {
       if (index === segments.length - 1 && params.allowMissingLeaf) {
@@ -480,10 +638,4 @@ async function resolveCanonicalCandidate(targetPath: string): Promise<string> {
     missing.unshift(path.basename(cursor));
     cursor = parent;
   }
-}
-
-export function setReadOpenFlagsResolverForTest(
-  _resolver: (() => { flags: number; supportsNoFollow: boolean }) | undefined,
-): void {
-  // Retained for older OpenShell tests; pinned reads now delegate to fs-safe.
 }

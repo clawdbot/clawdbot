@@ -8,7 +8,7 @@ import type {
 } from "../../plugins/hook-types.js";
 
 /** Session identity attached to plugin session hook payloads. */
-export type SessionHookContext = {
+type SessionHookContext = {
   sessionId: string;
   sessionKey: string;
   agentId: string;

@@ -1,11 +1,13 @@
 /** Shared normalization for thinking, verbosity, tracing, reasoning, and usage directives. */
 import {
+  type FastMode,
   normalizeFastMode,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../../packages/normalization-core/src/string-coerce.js";
 
 export { normalizeFastMode };
+export type { FastMode };
 
 /** Canonical thinking level values accepted by chat commands and session state. */
 export type ThinkLevel =
@@ -16,14 +18,13 @@ export type ThinkLevel =
   | "high"
   | "xhigh"
   | "adaptive"
-  | "max";
+  | "max"
+  | "ultra";
 export type VerboseLevel = "off" | "on" | "full";
 export type TraceLevel = "off" | "on" | "raw";
-export type NoticeLevel = "off" | "on" | "full";
 export type ElevatedLevel = "off" | "on" | "ask" | "full";
-export type ElevatedMode = "off" | "ask" | "full";
 export type ReasoningLevel = "off" | "on" | "stream";
-export type UsageDisplayLevel = "off" | "tokens" | "full";
+type UsageDisplayLevel = "off" | "tokens" | "full";
 /** Minimal model catalog entry needed to choose thinking defaults. */
 export type ThinkingCatalogEntry = {
   provider: string;
@@ -37,6 +38,19 @@ export type ThinkingCatalogEntry = {
   } | null;
 };
 
+/** Complete canonical level set accepted by user-facing thinking controls. */
+const ALL_THINKING_LEVELS: readonly ThinkLevel[] = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "adaptive",
+  "max",
+  "ultra",
+];
+export const THINKING_LEVELS_HELP = ALL_THINKING_LEVELS.join("|");
 export const BASE_THINKING_LEVELS: ThinkLevel[] = ["off", "minimal", "low", "medium", "high"];
 export const THINKING_LEVEL_RANKS: Record<ThinkLevel, number> = {
   off: 0,
@@ -47,6 +61,7 @@ export const THINKING_LEVEL_RANKS: Record<ThinkLevel, number> = {
   adaptive: 30,
   xhigh: 60,
   max: 70,
+  ultra: 80,
 };
 
 /** Normalizes user-provided thinking level strings to the canonical enum. */
@@ -61,6 +76,9 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
   }
   if (collapsed === "max") {
     return "max";
+  }
+  if (collapsed === "ultra") {
+    return "ultra";
   }
   if (collapsed === "xhigh" || collapsed === "extrahigh") {
     return "xhigh";
@@ -80,7 +98,7 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
   if (["mid", "med", "medium", "thinkharder", "think-harder", "harder"].includes(key)) {
     return "medium";
   }
-  if (["high", "ultra", "ultrathink", "think-hard", "thinkhardest", "highest"].includes(key)) {
+  if (["high", "ultrathink", "think-hard", "thinkhardest", "highest"].includes(key)) {
     return "high";
   }
   if (["think"].includes(key)) {
@@ -96,11 +114,6 @@ export function isSessionDefaultDirectiveValue(raw?: string | null): boolean {
     return false;
   }
   return ["default", "inherit", "inherited", "clear", "reset", "unpin"].includes(key);
-}
-
-/** Human-readable hint for xhigh support in command menus and errors. */
-export function formatXHighModelHint(): string {
-  return "provider models that advertise xhigh reasoning";
 }
 
 /** Chooses the default thinking level for one provider/model catalog entry. */
@@ -160,11 +173,6 @@ export function normalizeTraceLevel(raw?: string | null): TraceLevel | undefined
   return undefined;
 }
 
-/** Normalizes notice visibility values. */
-export function normalizeNoticeLevel(raw?: string | null): NoticeLevel | undefined {
-  return normalizeOnOffFullLevel(raw);
-}
-
 /** Normalizes response usage display values. */
 export function normalizeUsageDisplay(raw?: string | null): UsageDisplayLevel | undefined {
   if (!raw) {
@@ -191,6 +199,37 @@ export function resolveResponseUsageMode(raw?: string | null): UsageDisplayLevel
   return normalizeUsageDisplay(raw) ?? "off";
 }
 
+type ResponseUsageInput = "on" | "off" | "tokens" | "full";
+type ResponseUsageDefaultConfig =
+  | ResponseUsageInput
+  | { default?: ResponseUsageInput; [channel: string]: ResponseUsageInput | undefined };
+
+function resolveMessagesResponseUsageDefault(
+  configured: ResponseUsageDefaultConfig | undefined,
+  channel?: string,
+): ResponseUsageInput | undefined {
+  if (typeof configured === "string") {
+    return configured;
+  }
+  if (configured && typeof configured === "object") {
+    return (channel ? configured[channel] : undefined) ?? configured.default;
+  }
+  return undefined;
+}
+
+export function resolveEffectiveResponseUsage(
+  sessionRaw: string | undefined | null,
+  configured: ResponseUsageDefaultConfig | undefined,
+  channel?: string,
+): UsageDisplayLevel {
+  const sessionNormalized = normalizeUsageDisplay(sessionRaw);
+  if (sessionNormalized !== undefined) {
+    return sessionNormalized;
+  }
+  const configDefault = resolveMessagesResponseUsageDefault(configured, channel);
+  return resolveResponseUsageMode(configDefault);
+}
+
 /** Normalizes elevated execution policy values. */
 export function normalizeElevatedLevel(raw?: string | null): ElevatedLevel | undefined {
   if (!raw) {
@@ -210,17 +249,6 @@ export function normalizeElevatedLevel(raw?: string | null): ElevatedLevel | und
     return "on";
   }
   return undefined;
-}
-
-/** Collapses elevated levels into runtime execution mode. */
-export function resolveElevatedMode(level?: ElevatedLevel | null): ElevatedMode {
-  if (!level || level === "off") {
-    return "off";
-  }
-  if (level === "full") {
-    return "full";
-  }
-  return "ask";
 }
 
 /** Normalizes reasoning visibility values. */

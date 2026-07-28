@@ -56,6 +56,16 @@ describe("cron channel output policy", () => {
     ).resolves.toEqual({
       preferFinalAssistantVisibleText: false,
     });
+    // deliveryRequested is optional — undefined and missing opts are
+    // equivalent to "not requested" (no channel to deliver to). #90664
+    await expect(
+      resolveCronChannelOutputPolicy(undefined, { deliveryRequested: undefined }),
+    ).resolves.toEqual({
+      preferFinalAssistantVisibleText: true,
+    });
+    await expect(resolveCronChannelOutputPolicy(undefined)).resolves.toEqual({
+      preferFinalAssistantVisibleText: true,
+    });
   });
 
   it("lets channel plugins format current tool context targets", async () => {

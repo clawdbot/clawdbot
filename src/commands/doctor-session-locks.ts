@@ -9,7 +9,18 @@ import {
   type SessionWriteLockAcquireTimeoutConfig,
 } from "../agents/session-write-lock.js";
 import { resolveStateDir } from "../config/paths.js";
+import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { shortenHomePath } from "../utils.js";
+
+const SESSION_LOCKS_CHECK_ID = "core/doctor/session-locks";
+const REPORT_ONLY_STALE_LOCK_REASONS = new Set(["too-old", "hold-exceeded"]);
+
+function isReportOnlyStaleLock(lock: SessionLockInspection): boolean {
+  return (
+    lock.staleReasons.length > 0 &&
+    lock.staleReasons.every((reason) => REPORT_ONLY_STALE_LOCK_REASONS.has(reason))
+  );
+}
 
 function formatAge(ageMs: number | null): string {
   if (ageMs === null) {
@@ -38,6 +49,57 @@ function formatLockLine(lock: SessionLockInspection): string {
     : "stale=no";
   const removedStatus = lock.removed ? " [removed]" : "";
   return `- ${shortenHomePath(lock.lockPath)} ${pidStatus} ${ageStatus} ${staleStatus}${removedStatus}`;
+}
+
+export async function detectStaleSessionLocks(params?: {
+  config?: SessionWriteLockAcquireTimeoutConfig;
+  env?: NodeJS.ProcessEnv;
+  staleMs?: number;
+  readOwnerProcessArgs?: SessionLockOwnerProcessArgsReader;
+}): Promise<readonly SessionLockInspection[]> {
+  const staleMs = params?.staleMs ?? resolveSessionWriteLockStaleMs(params?.config, params?.env);
+  const env = params?.env ?? process.env;
+  const sessionDirs = await resolveAgentSessionDirs(resolveStateDir(env));
+  const staleLocks: SessionLockInspection[] = [];
+  for (const sessionsDir of sessionDirs) {
+    const result = await cleanStaleLockFiles({
+      sessionsDir,
+      staleMs,
+      removeStale: false,
+      readOwnerProcessArgs: params?.readOwnerProcessArgs,
+    });
+    staleLocks.push(...result.locks.filter((lock) => lock.stale));
+  }
+  return staleLocks.toSorted((a, b) => a.lockPath.localeCompare(b.lockPath));
+}
+
+export function sessionLockToHealthFinding(lock: SessionLockInspection): HealthFinding {
+  const fixHint = lock.removable
+    ? 'Run "openclaw doctor --fix" to remove this stale lock file automatically.'
+    : isReportOnlyStaleLock(lock)
+      ? "OpenClaw is preserving this live owned lock; inspect the owning process if it appears stuck."
+      : 'Run "openclaw doctor --fix" after the cleanup grace period if this stale lock remains.';
+  return {
+    checkId: SESSION_LOCKS_CHECK_ID,
+    severity: "warning",
+    message: `Stale session lock file: ${shortenHomePath(lock.lockPath)} (${lock.staleReasons.join(", ") || "unknown"})`,
+    path: lock.lockPath,
+    fixHint,
+  };
+}
+
+export function sessionLockToRepairEffect(lock: SessionLockInspection): HealthRepairEffect {
+  const action = lock.removable
+    ? "would-remove-stale-session-lock"
+    : isReportOnlyStaleLock(lock)
+      ? "would-preserve-report-only-stale-session-lock"
+      : "would-preserve-mtime-gated-stale-session-lock";
+  return {
+    kind: "state",
+    action,
+    target: lock.lockPath,
+    dryRunSafe: false,
+  };
 }
 
 /** Reports session write locks and removes stale locks when doctor repair is enabled. */

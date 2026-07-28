@@ -1,7 +1,10 @@
+import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
+import type { AgentMessage } from "../../runtime/index.js";
+import type { SessionManager } from "../../sessions/index.js";
 /**
  * Handles sessions-yield interruption, persistence, and artifact cleanup.
  */
-import type { AgentMessage } from "../../runtime/index.js";
+import { isRunnerAbortError } from "../abort.js";
 import { log } from "../logger.js";
 import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt.abort-settle-timeout.js";
 
@@ -108,6 +111,25 @@ export function createYieldAbortedResponse(model: {
   };
 }
 
+// sessions_yield ends the turn as a clean handoff, not an interruption.
+// turnHandoff:true tells agent-core to skip <turn_aborted> guidance
+// (packages/agent-core/src/turn-interruption.ts); code keys the runner's
+// own yield checks in attempt.ts and attempt-stream.ts.
+export const SESSIONS_YIELD_ABORT_REASON = { code: "sessions_yield", turnHandoff: true } as const;
+
+/** True when a runner abort error was raised by the sessions_yield handoff. */
+export function isSessionsYieldAbortError(err: unknown): boolean {
+  return isRunnerAbortError(err) && err instanceof Error && isSessionsYieldAbortReason(err.cause);
+}
+
+export function isSessionsYieldAbortReason(reason: unknown): boolean {
+  return (
+    typeof reason === "object" &&
+    reason !== null &&
+    (reason as { code?: unknown }).code === "sessions_yield"
+  );
+}
+
 // Queue a hidden steering message so agent runtime injects it before the next
 // LLM call once the current assistant turn finishes executing its tool calls.
 export function queueSessionsYieldInterruptMessage(activeSession: {
@@ -150,77 +172,64 @@ export async function persistSessionsYieldContextMessage(
 }
 
 // Remove the synthetic yield interrupt + aborted assistant entry from the live transcript.
+// After strip, the transcript must end with a non-assistant role so subagent
+// completion auto-announce can inject a continuation turn.
 export function stripSessionsYieldArtifacts(activeSession: {
   messages: AgentMessage[];
   agent: { state: { messages: AgentMessage[] } };
-  sessionManager?: unknown;
+  sessionManager: Pick<SessionManager, "removeTrailingEntries">;
 }) {
   const strippedMessages = activeSession.messages.slice();
+
+  // The tool-calling assistant turn and synthetic abort artifacts form one
+  // non-continuable suffix after sessions_yield.
   while (strippedMessages.length > 0) {
-    const last = strippedMessages.at(-1) as
-      | AgentMessage
-      | { role?: string; customType?: string; stopReason?: string };
-    if (last?.role === "assistant" && "stopReason" in last && last.stopReason === "aborted") {
-      strippedMessages.pop();
-      continue;
+    const last = strippedMessages.at(-1);
+    const removable =
+      last?.role === "assistant" ||
+      (last?.role === "custom" && last.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE);
+    if (!removable) {
+      break;
     }
-    if (
-      last?.role === "custom" &&
-      "customType" in last &&
-      last.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE
-    ) {
-      strippedMessages.pop();
-      continue;
-    }
-    break;
-  }
-  if (strippedMessages.length !== activeSession.messages.length) {
-    activeSession.agent.state.messages = strippedMessages;
+    strippedMessages.pop();
   }
 
-  const sessionManager = activeSession.sessionManager as
-    | {
-        fileEntries?: Array<{
-          type?: string;
-          id?: string;
-          parentId?: string | null;
-          message?: { role?: string; stopReason?: string };
-          customType?: string;
-        }>;
-        byId?: Map<string, { id: string }>;
-        leafId?: string | null;
-        rewriteFile?: () => void;
-      }
-    | undefined;
-  const fileEntries = sessionManager?.fileEntries;
-  const byId = sessionManager?.byId;
-  if (!fileEntries || !byId) {
+  const removedMessages = activeSession.messages.slice(strippedMessages.length);
+  if (removedMessages.length === 0) {
     return;
   }
 
-  let changed = false;
-  while (fileEntries.length > 1) {
-    const last = fileEntries.at(-1);
-    if (!last || last.type === "session") {
-      break;
-    }
-    const isYieldAbortAssistant =
-      last.type === "message" &&
-      last.message?.role === "assistant" &&
-      last.message?.stopReason === "aborted";
-    const isYieldInterruptMessage =
-      last.type === "custom_message" && last.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE;
-    if (!isYieldAbortAssistant && !isYieldInterruptMessage) {
-      break;
-    }
-    fileEntries.pop();
-    if (last.id) {
-      byId.delete(last.id);
-    }
-    sessionManager.leafId = last.parentId ?? null;
-    changed = true;
-  }
-  if (changed) {
-    sessionManager.rewriteFile?.();
-  }
+  activeSession.agent.state.messages = strippedMessages;
+
+  // The interrupt marker can settle independently in live and persisted state.
+  // Only assistant removals need the live-suffix cap to prevent data loss.
+  let remainingAssistantCount = removedMessages.filter(
+    (message) => message.role === "assistant",
+  ).length;
+  activeSession.sessionManager.removeTrailingEntries(
+    (entry) => {
+      if (
+        entry.type === "custom_message" &&
+        entry.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE
+      ) {
+        return true;
+      }
+      if (
+        entry.type !== "message" ||
+        entry.message.role !== "assistant" ||
+        remainingAssistantCount === 0
+      ) {
+        return false;
+      }
+      remainingAssistantCount -= 1;
+      return true;
+    },
+    {
+      preserveTrailing: (entry) =>
+        entry.type === "custom" ||
+        entry.type === "label" ||
+        entry.type === "session_info" ||
+        (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message)),
+    },
+  );
 }

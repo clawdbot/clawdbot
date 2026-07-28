@@ -4,7 +4,11 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.js";
 import { normalizePluginsConfig } from "./config-state.js";
-import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
+import {
+  hasExplicitManifestOwnerTrust,
+  isBundledManifestOwner,
+  passesManifestOwnerBasePolicy,
+} from "./manifest-owner-policy.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { PluginManifestActivationCapability } from "./manifest.js";
@@ -13,7 +17,7 @@ import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry-c
 import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
 
 /** Runtime surface that can request a lazily activated plugin owner. */
-export type PluginActivationPlannerTrigger =
+type PluginActivationPlannerTrigger =
   | { kind: "command"; command: string }
   | { kind: "provider"; provider: string }
   | { kind: "agentHarness"; runtime: string }
@@ -21,7 +25,7 @@ export type PluginActivationPlannerTrigger =
   | { kind: "route"; route: string }
   | { kind: "capability"; capability: PluginManifestActivationCapability };
 
-export type PluginActivationPlannerHintReason =
+type PluginActivationPlannerHintReason =
   | "activation-agent-harness-hint"
   | "activation-capability-hint"
   | "activation-channel-hint"
@@ -29,7 +33,7 @@ export type PluginActivationPlannerHintReason =
   | "activation-provider-hint"
   | "activation-route-hint";
 
-export type PluginActivationPlannerManifestReason =
+type PluginActivationPlannerManifestReason =
   | "manifest-channel-owner"
   | "manifest-command-alias"
   | "manifest-hook-owner"
@@ -37,17 +41,17 @@ export type PluginActivationPlannerManifestReason =
   | "manifest-setup-provider-owner"
   | "manifest-tool-contract";
 
-export type PluginActivationPlannerReason =
+type PluginActivationPlannerReason =
   | PluginActivationPlannerHintReason
   | PluginActivationPlannerManifestReason;
 
-export type PluginActivationPlanEntry = {
+type PluginActivationPlanEntry = {
   pluginId: string;
   origin: PluginOrigin;
   reasons: readonly PluginActivationPlannerReason[];
 };
 
-export type PluginActivationPlan = {
+type PluginActivationPlan = {
   trigger: PluginActivationPlannerTrigger;
   pluginIds: readonly string[];
   entries: readonly PluginActivationPlanEntry[];
@@ -63,6 +67,7 @@ type ResolveManifestActivationPlanParams = {
   onlyPluginIds?: readonly string[];
   manifestRecords?: readonly PluginManifestRecord[];
   allowRestrictiveAllowlistBypass?: boolean;
+  requireExplicitManifestOwnerTrust?: boolean;
 };
 
 /** Returns a deterministic activation plan without importing plugin runtime modules. */
@@ -70,7 +75,6 @@ export function resolveManifestActivationPlan(
   params: ResolveManifestActivationPlanParams,
 ): PluginActivationPlan {
   const onlyPluginIdSet = createPluginIdScopeSet(normalizePluginIdScope(params.onlyPluginIds));
-  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
   const registry = params.manifestRecords
     ? { plugins: params.manifestRecords, diagnostics: [] }
     : loadPluginManifestRegistryForPluginRegistry({
@@ -79,6 +83,7 @@ export function resolveManifestActivationPlan(
         env: params.env,
         includeDisabled: true,
       });
+  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
   const entries = registry.plugins
     .flatMap((plugin) => {
       if (params.origin && plugin.origin !== params.origin) {
@@ -92,6 +97,15 @@ export function resolveManifestActivationPlan(
           plugin,
           normalizedConfig,
           allowRestrictiveAllowlistBypass: params.allowRestrictiveAllowlistBypass,
+        })
+      ) {
+        return [];
+      }
+      if (
+        params.requireExplicitManifestOwnerTrust &&
+        !hasExplicitActivationPlannerManifestOwnerTrust({
+          plugin,
+          normalizedConfig,
         })
       ) {
         return [];
@@ -123,6 +137,23 @@ export function resolveManifestActivationPluginIds(
   params: ResolveManifestActivationPlanParams,
 ): string[] {
   return [...resolveManifestActivationPlan(params).pluginIds];
+}
+
+function hasExplicitActivationPlannerManifestOwnerTrust(params: {
+  plugin: Pick<PluginManifestRecord, "id" | "origin">;
+  normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
+}): boolean {
+  // plugins.load.paths is already an operator-selected trust boundary. Keep
+  // the trust local to planner callers so setup-only channel imports retain
+  // their stricter scoped-import policy.
+  return (
+    isBundledManifestOwner(params.plugin) ||
+    params.plugin.origin === "config" ||
+    hasExplicitManifestOwnerTrust({
+      plugin: params.plugin,
+      normalizedConfig: params.normalizedConfig,
+    })
+  );
 }
 
 function listManifestActivationTriggerReasons(

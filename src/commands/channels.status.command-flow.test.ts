@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(async () => ({ path: "/tmp/openclaw.json" })),
   requireValidConfigSnapshot: vi.fn(),
   listChannelPlugins: vi.fn(),
-  listConfiguredChannelIdsForReadOnlyScope: vi.fn((_params: unknown) => ["discord"]),
+  listConfiguredAnnounceChannelIdsForConfig: vi.fn((_params: unknown) => ["discord"]),
   missingOfficialExternalChannels: new Set<string>(),
   withProgress: vi.fn(async (_opts: unknown, run: () => Promise<unknown>) => await run()),
 }));
@@ -41,8 +41,8 @@ vi.mock("../config/config.js", () => ({
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
   listExplicitConfiguredChannelIdsForConfig: (config: { channels?: Record<string, unknown> }) =>
     Object.keys(config.channels ?? {}),
-  listConfiguredChannelIdsForReadOnlyScope: (params: unknown) =>
-    mocks.listConfiguredChannelIdsForReadOnlyScope(params),
+  listConfiguredAnnounceChannelIdsForConfig: (params: unknown) =>
+    mocks.listConfiguredAnnounceChannelIdsForConfig(params),
 }));
 
 vi.mock("../plugins/official-external-plugin-repair-hints.js", () => ({
@@ -108,7 +108,8 @@ vi.mock("../channels/plugins/index.js", () => ({
   listChannelPlugins: () => mocks.listChannelPlugins(),
   getChannelPlugin: (channel: string) =>
     (mocks.listChannelPlugins() as Array<{ id: string }>).find((plugin) => plugin.id === channel),
-  normalizeChannelId: (channel: string) => (channel === "imsg" ? "imessage" : channel),
+  normalizeChannelId: (channel: string) =>
+    channel === "clickclack" ? undefined : channel === "imsg" ? "imessage" : channel,
 }));
 
 vi.mock("../channels/plugins/read-only.js", () => ({
@@ -207,8 +208,8 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     mocks.requireValidConfigSnapshot.mockReset();
     mocks.listChannelPlugins.mockReset();
     mocks.missingOfficialExternalChannels.clear();
-    mocks.listConfiguredChannelIdsForReadOnlyScope.mockClear();
-    mocks.listConfiguredChannelIdsForReadOnlyScope.mockReturnValue(["discord"]);
+    mocks.listConfiguredAnnounceChannelIdsForConfig.mockClear();
+    mocks.listConfiguredAnnounceChannelIdsForConfig.mockReturnValue(["discord"]);
     mocks.withProgress.mockClear();
     mocks.listChannelPlugins.mockReturnValue([createTokenOnlyPlugin()]);
   });
@@ -355,13 +356,15 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     await channelsStatusCommand({ channel: "imsg", json: true, probe: false }, runtime as never);
 
     expect(mocks.listChannelPlugins).not.toHaveBeenCalled();
-    expect(mocks.listConfiguredChannelIdsForReadOnlyScope).toHaveBeenCalledOnce();
-    const readOnlyScopeRequest = mocks.listConfiguredChannelIdsForReadOnlyScope.mock
-      .calls[0]?.[0] as
-      | { config?: { secretResolved?: unknown }; includePersistedAuthState?: unknown }
+    expect(mocks.listConfiguredAnnounceChannelIdsForConfig).toHaveBeenCalledOnce();
+    const announceRequest = mocks.listConfiguredAnnounceChannelIdsForConfig.mock.calls[0]?.[0] as
+      | {
+          config?: { secretResolved?: unknown };
+          activationSourceConfig?: { secretResolved?: unknown };
+        }
       | undefined;
-    expect(readOnlyScopeRequest?.config?.secretResolved).toBe(true);
-    expect(readOnlyScopeRequest?.includePersistedAuthState).toBe(false);
+    expect(announceRequest?.config?.secretResolved).toBe(true);
+    expect(announceRequest?.activationSourceConfig?.secretResolved).toBe(false);
     const payload = JSON.parse(logs.at(-1) ?? "{}");
     expect(errors.join("\n")).not.toContain("user:pass");
     expect(errors.join("\n")).not.toContain("secret-token");
@@ -376,6 +379,53 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     expect(payload.gatewayAuthUnavailable).toBe(false);
     expect(payload.configOnly).toBe(true);
     expect(payload.configuredChannels).toStrictEqual([]);
+  });
+
+  it("includes explicitly configured channels in JSON config-only fallback", async () => {
+    mocks.callGateway.mockRejectedValue(new Error("gateway closed"));
+    mocks.requireValidConfigSnapshot.mockResolvedValue({
+      channels: { clickclack: { enabled: true } },
+    });
+    mocks.resolveCommandConfigWithSecrets.mockResolvedValue({
+      resolvedConfig: { channels: { clickclack: { enabled: true } } },
+      effectiveConfig: { channels: { clickclack: { enabled: true } } },
+      diagnostics: [],
+    });
+    mocks.listConfiguredAnnounceChannelIdsForConfig.mockReturnValue(["clickclack"]);
+    const { runtime, logs } = createCapturingTestRuntime();
+
+    await channelsStatusCommand({ json: true, probe: false }, runtime as never);
+
+    const payload = JSON.parse(logs.at(-1) ?? "{}");
+    expect(payload.gatewayReachable).toBe(false);
+    expect(payload.configOnly).toBe(true);
+    expect(payload.configuredChannels).toStrictEqual(["clickclack"]);
+  });
+
+  it("filters explicitly configured channels in JSON config-only fallback", async () => {
+    mocks.callGateway.mockRejectedValue(new Error("gateway closed"));
+    mocks.requireValidConfigSnapshot.mockResolvedValue({
+      channels: { clickclack: { enabled: true }, telegram: { enabled: true } },
+    });
+    mocks.resolveCommandConfigWithSecrets.mockResolvedValue({
+      resolvedConfig: {
+        channels: { clickclack: { enabled: true }, telegram: { enabled: true } },
+      },
+      effectiveConfig: {
+        channels: { clickclack: { enabled: true }, telegram: { enabled: true } },
+      },
+      diagnostics: [],
+    });
+    mocks.listConfiguredAnnounceChannelIdsForConfig.mockReturnValue(["clickclack", "telegram"]);
+    const { runtime, logs } = createCapturingTestRuntime();
+
+    await channelsStatusCommand(
+      { channel: "clickclack", json: true, probe: false },
+      runtime as never,
+    );
+
+    const payload = JSON.parse(logs.at(-1) ?? "{}");
+    expect(payload.configuredChannels).toStrictEqual(["clickclack"]);
   });
 
   it("rejects invalid timeout before falling back to config-only status", async () => {

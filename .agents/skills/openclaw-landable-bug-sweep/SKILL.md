@@ -1,17 +1,18 @@
 ---
 name: openclaw-landable-bug-sweep
-description: "Find or repair small high-confidence non-SDK-boundary OpenClaw bugfix PRs until five are landable."
+description: "Find or repair a requested batch of small high-confidence non-SDK-boundary OpenClaw bugfix PRs until they are landable."
 ---
 
 # OpenClaw Landable Bug Sweep
 
-Autonomous maintainer workflow for producing five landable OpenClaw bugfix PR URLs.
+Autonomous maintainer workflow for producing a requested batch of landable OpenClaw bugfix PR URLs.
 Use for broad issue/PR sweeps where the bar is high and the output is PRs, not notes.
 Do not use for plugin SDK/API boundary work; those need separate architecture review.
 
 ## Target
 
-Return exactly five PR URLs, each with:
+Use `batch_size` from the request, defaulting to `5` and capped at `20`.
+Return up to that many qualified PR URLs, each with:
 
 - bug summary
 - why the fix is low-risk
@@ -20,9 +21,18 @@ Return exactly five PR URLs, each with:
 - CI green on the exact pushed PR head
 - issue/duplicate cleanup done or still pending
 
-The five URLs may be existing PRs that were reviewed/fixed, or new PRs created from issues/clusters.
+The URLs may be existing PRs that were reviewed/fixed, or new PRs created from issues/clusters.
 Do not present a PR URL to the maintainer until it has been refreshed on current `main`, left-tested, autoreviewed clean, pushed, and verified green in live GitHub CI.
 If code, tests, changelog, PR body, or branch base changes after autoreview, rerun autoreview before showing the URL.
+Do not pad a batch when the bounded search yields fewer qualified PRs.
+
+## Inputs
+
+- `batch_size`: requested number of landable PRs; default `5`, maximum `20`.
+- `source_mode`: `discovery` or `provided-prs`; default `discovery`.
+- `provided_prs`: explicit PR refs when `source_mode=provided-prs`.
+
+In `provided-prs` mode, inspect only the supplied PRs plus directly linked duplicate/canonical refs unless broader discovery is required to prove the best fix.
 
 ## Companion Skills
 
@@ -78,7 +88,7 @@ Reject:
    - include PRs linked from issues and duplicates
 3. For each cluster:
    - read issue/PR body, comments, labels, linked refs, current source, adjacent tests
-   - suppress maintainer-owned queue noise unless it is the best fix path
+   - exclude PRs authored by wide-access maintainers until `created_at` is at least 14 days old; only a named PR or explicit maintainer-work request overrides
    - identify opener/author and preserve credit
    - decide: `repair-existing-pr`, `create-new-pr`, `close-fixed-on-main`, `close-duplicate`, or `reject`
 4. Prove before patching:
@@ -103,20 +113,13 @@ Reject:
    - close duplicates and fixed-on-main issues/PRs with proof as soon as you notice them during the sweep
    - never mutate more than five associated items in one cluster without explicit confirmation
    - comments must be kind, concrete, and include proof/PR/commit links
-8. Repeat until five landable PR URLs are ready.
+8. Repeat until `batch_size` landable PR URLs are ready or the bounded qualified queue is exhausted.
 
 ## PR Body Proof
 
-Use the repo PR template. Include these exact labels:
-
-```text
-Behavior addressed:
-Real environment tested:
-Exact steps or command run after this patch:
-Evidence after fix:
-Observed result after fix:
-What was not tested:
-```
+Use the repo PR template. Include authored `## What Problem This Solves` and
+`## Evidence` sections. Keep the body focused on intent and the most useful
+validation evidence; inspect the code, tests, and CI before judging correctness.
 
 ## Existing PR Rules
 
@@ -158,7 +161,7 @@ closed:
 
 Final answer:
 
-- exactly five accepted PR URLs
+- the requested number of accepted PR URLs, or the smaller qualified count with the exhausted-search reason
 - 2-4 sentence explainer per PR
 - proof/CI state per PR
 - closed duplicates/fixed-on-main refs

@@ -52,7 +52,7 @@ describe("discordOutbound shared interactive ordering", () => {
 
     expect(hoisted.sendDiscordComponentMessageMock).toHaveBeenCalledWith(
       "channel:123456",
-      {
+      expect.objectContaining({
         blocks: [
           { type: "text", text: "First" },
           {
@@ -61,17 +61,17 @@ describe("discordOutbound shared interactive ordering", () => {
           },
           { type: "text", text: "Last" },
         ],
-      },
-      {
+      }),
+      expect.objectContaining({
         accountId: undefined,
         chunkMode: undefined,
         cfg: {},
         maxLinesPerMessage: undefined,
-        replyTo: undefined,
+        reply: undefined,
         silent: undefined,
         tableMode: undefined,
         textLimit: undefined,
-      },
+      }),
     );
     expect(hoisted.sendMessageDiscordMock).not.toHaveBeenCalled();
     expect(result).toEqual({

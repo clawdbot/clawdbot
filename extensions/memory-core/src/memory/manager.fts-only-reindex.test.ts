@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
@@ -17,12 +18,26 @@ const createEmbeddingProviderMock = vi.hoisted(() =>
     providerUnavailableReason: "No embeddings provider available.",
   })),
 );
+const originalFtsOnlyStateDir = process.env.OPENCLAW_STATE_DIR;
+
+function setFtsOnlyStateDir(stateDir: string): void {
+  Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
+}
+
+function restoreFtsOnlyStateDir(): void {
+  if (originalFtsOnlyStateDir === undefined) {
+    Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
+  } else {
+    Reflect.set(process.env, "OPENCLAW_STATE_DIR", originalFtsOnlyStateDir);
+  }
+}
 
 vi.mock("./embeddings.js", () => ({
   createEmbeddingProvider: createEmbeddingProviderMock,
   resolveEmbeddingProviderAdapterId: (providerId: string) => providerId,
   resolveEmbeddingProviderAdapterTransport: (providerId: string) =>
     providerId === "local" ? "local" : "remote",
+  resolveEmbeddingProviderIndexIdentity: () => undefined,
   resolveEmbeddingProviderFallbackModel: () => "fts-only",
 }));
 
@@ -42,7 +57,8 @@ describe("memory manager FTS-only reindex", () => {
     workspaceDir = path.join(fixtureRoot, `case-${caseId++}`);
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Alpha topic\n\nKeep this note.");
-    indexPath = path.join(workspaceDir, "index.sqlite");
+    setFtsOnlyStateDir(path.join(workspaceDir, "state"));
+    indexPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
   });
 
   afterEach(async () => {
@@ -51,6 +67,7 @@ describe("memory manager FTS-only reindex", () => {
       manager = null;
     }
     await closeAllMemorySearchManagers();
+    restoreFtsOnlyStateDir();
   });
 
   afterAll(async () => {
@@ -65,22 +82,23 @@ describe("memory manager FTS-only reindex", () => {
   ): Promise<MemoryIndexManager> {
     const store =
       params.vectorEnabled === undefined
-        ? { path: indexPath }
-        : { path: indexPath, vector: { enabled: params.vectorEnabled } };
+        ? undefined
+        : { vector: { enabled: params.vectorEnabled } };
     const cfg = {
       memory: {
         backend: "builtin",
+
+        search: {
+          provider: params.provider ?? "auto",
+          model: "",
+          store,
+          cache: { enabled: false },
+          sync: { watch: false, onSessionStart: false, onSearch: false },
+        },
       },
       agents: {
         defaults: {
           workspace: workspaceDir,
-          memorySearch: {
-            provider: params.provider ?? "auto",
-            model: "",
-            store,
-            cache: { enabled: false },
-            sync: { watch: false, onSessionStart: false, onSearch: false },
-          },
         },
         list: [{ id: "main", default: true }],
       },
@@ -97,7 +115,7 @@ describe("memory manager FTS-only reindex", () => {
     const db = new DatabaseSync(indexPath);
     try {
       const row = db
-        .prepare(`SELECT COUNT(*) as c FROM chunks WHERE text LIKE ?`)
+        .prepare(`SELECT COUNT(*) as c FROM memory_index_chunks WHERE text LIKE ?`)
         .get(`%${term}%`) as { c: number } | undefined;
       return row?.c ?? 0;
     } finally {

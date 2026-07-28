@@ -39,10 +39,19 @@ export type PluginHealthErrorSummary = {
 export type PluginHealthSummary = {
   loaded: string[];
   errors: PluginHealthErrorSummary[];
+  unavailable?: Array<{
+    id: string;
+    state: "configured-unavailable";
+    diagnostic: {
+      kind: "plugin-verification";
+      reason: import("../plugins/runtime-degraded-state.js").PluginVerificationFailureReason;
+      detail: string;
+    };
+  }>;
 };
 
 /** Context engine quarantine entry included in health output. */
-export type ContextEngineHealthQuarantineSummary = {
+type ContextEngineHealthQuarantineSummary = {
   engineId: string;
   owner?: string;
   operation: string;
@@ -55,9 +64,25 @@ export type ContextEngineHealthSummary = {
   quarantined: ContextEngineHealthQuarantineSummary[];
 };
 
-/** Optional model pricing cache health reported by the gateway. */
-export type ModelPricingHealthSummary =
-  import("../gateway/model-pricing-cache-state.js").GatewayModelPricingHealth;
+/** Dead-lettered delivery queue entries surfaced in health output. */
+export type DeliveryQueueHealthSummary = {
+  failed: Array<{
+    queueName: string;
+    count: number;
+    oldestFailedAt?: number;
+  }>;
+  ingressFailed?: Array<{
+    channelId: string;
+    accountId: string;
+    count: number;
+    oldestFailedAt?: number;
+  }>;
+};
+
+/** Config hot-reload watcher status, present only when a reloader is running. */
+type ConfigReloadHealthSummary = {
+  hotReloadStatus: import("../gateway/config-reload-status.types.js").GatewayHotReloadStatus;
+};
 
 /** Full gateway health payload consumed by `openclaw health`. */
 export type HealthSummary = {
@@ -67,7 +92,8 @@ export type HealthSummary = {
   eventLoop?: import("../gateway/server/event-loop-health.js").GatewayEventLoopHealth;
   plugins?: PluginHealthSummary;
   contextEngines?: ContextEngineHealthSummary;
-  modelPricing?: ModelPricingHealthSummary;
+  deliveryQueues?: DeliveryQueueHealthSummary;
+  configReload?: ConfigReloadHealthSummary;
   channels: Record<string, ChannelHealthSummary>;
   channelOrder: string[];
   channelLabels: Record<string, string>;

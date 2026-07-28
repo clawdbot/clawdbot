@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Qa Lab tests cover cli plugin behavior.
 import { Command } from "commander";
 import type { QaRunnerCliContribution } from "openclaw/plugin-sdk/qa-runner-runtime";
@@ -47,6 +48,8 @@ const {
   runQaCredentialsRemoveCommand,
   runQaCoverageReportCommand,
   runQaJsonlReplayCommand,
+  runQaLabSelfCheckCommand,
+  runQaProfileCommand,
   runQaProviderServerCommand,
   runQaSuiteCommand,
   runQaTelegramCommand,
@@ -61,6 +64,8 @@ const {
   runQaCredentialsRemoveCommand: vi.fn(),
   runQaCoverageReportCommand: vi.fn(),
   runQaJsonlReplayCommand: vi.fn(),
+  runQaLabSelfCheckCommand: vi.fn(),
+  runQaProfileCommand: vi.fn(),
   runQaProviderServerCommand: vi.fn(),
   runQaSuiteCommand: vi.fn(),
   runQaTelegramCommand: vi.fn(),
@@ -117,6 +122,8 @@ vi.mock("./cli.runtime.js", () => ({
   runQaCredentialsRemoveCommand,
   runQaCoverageReportCommand,
   runQaJsonlReplayCommand,
+  runQaLabSelfCheckCommand,
+  runQaProfileCommand,
   runQaProviderServerCommand,
   runQaSuiteCommand,
 }));
@@ -133,6 +140,8 @@ describe("qa cli registration", () => {
     runQaCredentialsRemoveCommand.mockReset();
     runQaCoverageReportCommand.mockReset();
     runQaJsonlReplayCommand.mockReset();
+    runQaLabSelfCheckCommand.mockReset();
+    runQaProfileCommand.mockReset();
     runQaProviderServerCommand.mockReset();
     runQaSuiteCommand.mockReset();
     runQaTelegramCommand.mockReset();
@@ -172,6 +181,212 @@ describe("qa cli registration", () => {
     }
 
     expect(ui.options.map((option) => option.long)).not.toContain("--control-ui-token");
+  });
+
+  it("keeps qa run without a profile on the self-check command", async () => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "run",
+      "--repo-root",
+      "/tmp/openclaw-repo",
+      "--output",
+      ".artifacts/qa-self-check.md",
+    ]);
+
+    expect(runQaLabSelfCheckCommand).toHaveBeenCalledWith({
+      repoRoot: "/tmp/openclaw-repo",
+      output: ".artifacts/qa-self-check.md",
+    });
+    expect(runQaProfileCommand).not.toHaveBeenCalled();
+  });
+
+  it("routes qa run qa-profile flags into the taxonomy-backed profile command", async () => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "run",
+      "--repo-root",
+      "/tmp/openclaw-repo",
+      "--output-dir",
+      ".artifacts/qa-e2e/smoke-ci",
+      "--qa-profile",
+      "smoke-ci",
+      "--surface",
+      "channels",
+      "--category",
+      "channels.conversation-routing-and-delivery",
+      "--scenario",
+      "dm-chat-baseline",
+      "--evidence-mode",
+      "slim",
+      "--transport",
+      "qa-channel",
+      "--provider-mode",
+      "mock-openai",
+      "--model",
+      "openai/gpt-5.6-luna",
+      "--alt-model",
+      "anthropic/claude-sonnet-4-6",
+      "--concurrency",
+      "2",
+      "--allow-failures",
+      "--fast",
+    ]);
+
+    expect(runQaProfileCommand).toHaveBeenCalledWith({
+      repoRoot: "/tmp/openclaw-repo",
+      outputDir: ".artifacts/qa-e2e/smoke-ci",
+      profile: "smoke-ci",
+      surface: "channels",
+      category: "channels.conversation-routing-and-delivery",
+      scenarioIds: ["dm-chat-baseline"],
+      evidenceMode: "slim",
+      transportId: "qa-channel",
+      providerMode: "mock-openai",
+      primaryModel: "openai/gpt-5.6-luna",
+      alternateModel: "anthropic/claude-sonnet-4-6",
+      concurrency: 2,
+      allowFailures: true,
+      fastMode: true,
+    });
+    expect(runQaLabSelfCheckCommand).not.toHaveBeenCalled();
+  });
+
+  it("forwards fail-fast to taxonomy-backed QA profile runs", async () => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "run",
+      "--qa-profile",
+      "smoke-ci",
+      "--fail-fast",
+    ]);
+
+    expect(runQaProfileCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ failFast: true, profile: "smoke-ci" }),
+    );
+    expect(runQaLabSelfCheckCommand).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["--output-dir", [".artifacts/qa-e2e/smoke-ci"]],
+    ["--surface", ["agents"]],
+    ["--category", ["channels.conversation-routing-and-delivery"]],
+    ["--scenario", ["dm-chat-baseline"]],
+    ["--evidence-mode", ["slim"]],
+    ["--exclude-test-execution-evidence", []],
+    ["--transport", ["qa-channel"]],
+    ["--provider-mode", ["mock-openai"]],
+    ["--model", ["openai/gpt-5.6-luna"]],
+    ["--alt-model", ["anthropic/claude-sonnet-4-6"]],
+    ["--concurrency", ["2"]],
+    ["--allow-failures", []],
+    ["--fail-fast", []],
+    ["--fast", []],
+  ])("rejects qa run profile-only flag %s without --qa-profile", async (flag, values) => {
+    await expect(
+      program.parseAsync(["node", "openclaw", "qa", "run", flag, ...values]),
+    ).rejects.toThrow(`qa run ${flag} requires --qa-profile`);
+
+    expect(runQaLabSelfCheckCommand).not.toHaveBeenCalled();
+    expect(runQaProfileCommand).not.toHaveBeenCalled();
+  });
+
+  it.each([["--evidence-mode", "compact"], ["--exclude-test-execution-evidence"]])(
+    "maps deprecated compact evidence flag %s to slim",
+    async (...flags) => {
+      await program.parseAsync([
+        "node",
+        "openclaw",
+        "qa",
+        "run",
+        "--qa-profile",
+        "release",
+        ...flags.filter(Boolean),
+      ]);
+
+      expect(runQaProfileCommand).toHaveBeenCalledWith(
+        expect.objectContaining({
+          evidenceMode: "slim",
+          profile: "release",
+        }),
+      );
+    },
+  );
+
+  it("rejects conflicting deprecated evidence flags", async () => {
+    await expect(
+      program.parseAsync([
+        "node",
+        "openclaw",
+        "qa",
+        "run",
+        "--qa-profile",
+        "release",
+        "--evidence-mode",
+        "full",
+        "--exclude-test-execution-evidence",
+      ]),
+    ).rejects.toThrow("--exclude-test-execution-evidence conflicts with --evidence-mode full");
+
+    expect(runQaProfileCommand).not.toHaveBeenCalled();
+  });
+
+  it("rejects unknown qa evidence modes", async () => {
+    const invalidProgram = new Command();
+    invalidProgram.exitOverride();
+    invalidProgram.configureOutput({
+      writeErr: () => {},
+      writeOut: () => {},
+    });
+    registerQaLabCli(invalidProgram);
+
+    await expect(
+      invalidProgram.parseAsync([
+        "node",
+        "openclaw",
+        "qa",
+        "run",
+        "--qa-profile",
+        "smoke-ci",
+        "--evidence-mode",
+        "tiny",
+      ]),
+    ).rejects.toThrow("--evidence-mode must be one of full, slim.");
+
+    expect(runQaLabSelfCheckCommand).not.toHaveBeenCalled();
+    expect(runQaProfileCommand).not.toHaveBeenCalled();
+  });
+
+  it("rejects an empty qa run --qa-profile instead of falling back to self-check", async () => {
+    await expect(
+      program.parseAsync(["node", "openclaw", "qa", "run", "--qa-profile", ""]),
+    ).rejects.toThrow("--qa-profile must not be empty.");
+
+    expect(runQaLabSelfCheckCommand).not.toHaveBeenCalled();
+    expect(runQaProfileCommand).not.toHaveBeenCalled();
+  });
+
+  it("rejects self-check output flags in qa run profile mode", async () => {
+    await expect(
+      program.parseAsync([
+        "node",
+        "openclaw",
+        "qa",
+        "run",
+        "--qa-profile",
+        "smoke-ci",
+        "--output",
+        ".artifacts/qa-self-check.md",
+      ]),
+    ).rejects.toThrow("qa run --output is only valid for the self-check mode");
+
+    expect(runQaLabSelfCheckCommand).not.toHaveBeenCalled();
+    expect(runQaProfileCommand).not.toHaveBeenCalled();
   });
 
   it("routes mantis discord-smoke flags into the mantis runtime command", async () => {
@@ -355,9 +570,9 @@ describe("qa cli registration", () => {
       "--provider-mode",
       "live-frontier",
       "--model",
-      "openai/gpt-5.5",
+      "openai/gpt-5.6-luna",
       "--alt-model",
-      "openai/gpt-5.5",
+      "openai/gpt-5.6-luna",
       "--scenario",
       "slack-canary",
       "--credential-source",
@@ -369,7 +584,7 @@ describe("qa cli registration", () => {
     ]);
 
     expect(runMantisSlackDesktopSmokeCommand).toHaveBeenCalledWith({
-      alternateModel: "openai/gpt-5.5",
+      alternateModel: "openai/gpt-5.6-luna",
       crabboxBin: "/tmp/crabbox",
       credentialRole: "maintainer",
       credentialSource: "env",
@@ -382,7 +597,7 @@ describe("qa cli registration", () => {
       machineClass: "beast",
       market: "on-demand",
       outputDir: ".artifacts/qa-e2e/mantis/slack-desktop",
-      primaryModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.6-luna",
       provider: "hetzner",
       providerMode: "live-frontier",
       repoRoot: "/tmp/openclaw-repo",
@@ -540,7 +755,12 @@ describe("qa cli registration", () => {
   });
 
   it("delegates discovered qa runner registration through the generic host seam", () => {
-    const [{ registration }] = listQaRunnerCliContributions.mock.results[0].value;
+    const mockResult = expectDefined(
+      listQaRunnerCliContributions.mock.results[0],
+      "QA runner contribution result",
+    );
+    const contribution = expectDefined(mockResult.value[0], "QA runner contribution");
+    const { registration } = contribution;
     expect(registration.register).toHaveBeenCalledTimes(1);
   });
 
@@ -593,6 +813,33 @@ describe("qa cli registration", () => {
     [["qa", "up", "--qa-lab-port", "0x43124"], "--qa-lab-port must be a positive integer."],
     [["qa", "aimock", "--port", "1e4"], "--port must be a positive integer."],
   ])("rejects non-decimal QA numeric option %j", async (args, message) => {
+    const invalidProgram = new Command();
+    invalidProgram.exitOverride();
+    invalidProgram.configureOutput({
+      writeErr: () => {},
+      writeOut: () => {},
+    });
+    registerQaLabCli(invalidProgram);
+
+    await expect(invalidProgram.parseAsync(["node", "openclaw", ...args])).rejects.toThrow(message);
+  });
+
+  it.each([
+    [["qa", "ui", "--port", "65536"], "--port must be a TCP port between 1 and 65535."],
+    [
+      ["qa", "ui", "--advertise-port", "999999"],
+      "--advertise-port must be a TCP port between 1 and 65535.",
+    ],
+    [
+      ["qa", "docker-scaffold", "--output-dir", "/tmp/qa", "--gateway-port", "65536"],
+      "--gateway-port must be a TCP port between 1 and 65535.",
+    ],
+    [
+      ["qa", "up", "--qa-lab-port", "65536"],
+      "--qa-lab-port must be a TCP port between 1 and 65535.",
+    ],
+    [["qa", "aimock", "--port", "65536"], "--port must be a TCP port between 1 and 65535."],
+  ])("rejects out-of-range QA port option %j", async (args, message) => {
     const invalidProgram = new Command();
     invalidProgram.exitOverride();
     invalidProgram.configureOutput({
@@ -665,27 +912,34 @@ describe("qa cli registration", () => {
     expect(options.providerMode).toBeUndefined();
   });
 
-  it("forwards --pack for suite runs", async () => {
-    await program.parseAsync(["node", "openclaw", "qa", "suite", "--pack", "personal-agent"]);
-
-    const options = requireQaSuiteOptions();
-    expect(options.pack).toBe("personal-agent");
-  });
-
-  it("forwards --runtime-parity-tier for suite runs", async () => {
+  it.each(["host", "multipass"])("forwards --fail-fast to the %s suite runner", async (runner) => {
     await program.parseAsync([
       "node",
       "openclaw",
       "qa",
       "suite",
-      "--runtime-parity-tier",
-      "standard",
-      "--runtime-parity-tier",
-      "optional,soak",
+      "--runner",
+      runner,
+      "--fail-fast",
+    ]);
+
+    expect(requireQaSuiteOptions()).toEqual(expect.objectContaining({ failFast: true, runner }));
+  });
+
+  it("forwards --runtime-pair-lane for suite runs", async () => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "suite",
+      "--runtime-pair-lane",
+      "core",
+      "--runtime-pair-lane",
+      "extended,soak",
     ]);
 
     const options = requireQaSuiteOptions();
-    expect(options.runtimeParityTier).toEqual(["standard", "optional,soak"]);
+    expect(options.runtimePairLane).toEqual(["core", "extended,soak"]);
   });
 
   it("routes credential add flags into the qa runtime command", async () => {

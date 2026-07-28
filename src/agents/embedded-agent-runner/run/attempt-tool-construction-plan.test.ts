@@ -4,7 +4,6 @@ import {
   applyEmbeddedAttemptToolsAllow,
   mergeForcedEmbeddedAttemptToolsAllow,
   resolveEmbeddedAttemptToolConstructionPlan,
-  shouldBuildCoreCodingToolsForAllowlist,
   shouldCreateBundleLspRuntimeForAttempt,
   shouldCreateBundleMcpRuntimeForAttempt,
 } from "./attempt-tool-construction-plan.js";
@@ -76,6 +75,23 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
     ]);
   });
 
+  it("materializes host-required collector output through empty runtime allowlists", () => {
+    const tools = [{ name: "structured_output" }, { name: "read" }];
+    const toolsAllow = mergeForcedEmbeddedAttemptToolsAllow([], {
+      forceToolNames: ["structured_output"],
+    });
+
+    expect(toolsAllow).toEqual(["structured_output"]);
+    expect(applyEmbeddedAttemptToolsAllow(tools, toolsAllow).map((tool) => tool.name)).toEqual([
+      "structured_output",
+    ]);
+    expect(resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow })).toMatchObject({
+      constructTools: true,
+      includeCoreTools: true,
+      codingToolConstructionPlan: { includeOpenClawTools: true },
+    });
+  });
+
   it("normalizes explicit toolsAllow entries before filtering", () => {
     const tools = [{ name: "cron" }, { name: "read" }, { name: "message" }];
 
@@ -100,7 +116,9 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
   it("keeps plugin-only allowlists on the shared tool policy path", () => {
     const tools = [{ name: "memory_search" }, { name: "plugin_extra" }];
 
-    expect(shouldBuildCoreCodingToolsForAllowlist(["memory_search"])).toBe(false);
+    expect(
+      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["memory_search"] }),
+    ).toHaveProperty("includeCoreTools", false);
     expect(
       applyEmbeddedAttemptToolsAllow(tools, ["memory_search"]).map((tool) => tool.name),
     ).toEqual(["memory_search"]);
@@ -173,7 +191,10 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
     const tools = [{ name: "exec" }, { name: "read" }, { name: "message" }];
 
     expect(applyEmbeddedAttemptToolsAllow(tools, []).map((tool) => tool.name)).toStrictEqual([]);
-    expect(shouldBuildCoreCodingToolsForAllowlist([])).toBe(false);
+    expect(resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: [] })).toHaveProperty(
+      "includeCoreTools",
+      false,
+    );
   });
 });
 
@@ -204,6 +225,28 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
         includePluginTools: false,
       },
     });
+  });
+
+  it("short-circuits tool construction when the model disables tools", () => {
+    expectConstructionPlan(
+      resolveEmbeddedAttemptToolConstructionPlan({
+        toolsEnabled: false,
+        toolsAllow: ["message"],
+        forceMessageTool: true,
+      }),
+      {
+        constructTools: false,
+        includeCoreTools: false,
+        runtimeToolAllowlist: undefined,
+        coding: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: false,
+          includePluginTools: false,
+        },
+      },
+    );
   });
 
   it("constructs message tool for forced message delivery on explicit no-tools runs", () => {
@@ -323,9 +366,66 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
         },
       },
     );
+    for (const toolName of ["spawn_task", "dismiss_task"]) {
+      expectConstructionPlan(
+        resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: [toolName] }),
+        {
+          constructTools: true,
+          includeCoreTools: true,
+          runtimeToolAllowlist: [toolName],
+          coding: {
+            includeBaseCodingTools: false,
+            includeShellTools: false,
+            includeChannelTools: false,
+            includeOpenClawTools: true,
+            includePluginTools: false,
+          },
+        },
+      );
+    }
+  });
+
+  it("materializes computer for an exact core-tool allowlist", () => {
+    expectConstructionPlan(
+      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["computer"] }),
+      {
+        constructTools: true,
+        includeCoreTools: true,
+        runtimeToolAllowlist: ["computer"],
+        coding: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: true,
+          includePluginTools: false,
+        },
+      },
+    );
+  });
+
+  it("materializes transcripts through the core factory", () => {
+    expectConstructionPlan(
+      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["transcripts"] }),
+      {
+        includeCoreTools: true,
+        coding: {
+          includeChannelTools: false,
+          includeOpenClawTools: true,
+          includePluginTools: false,
+        },
+      },
+    );
   });
 
   it("keeps plugin-owned catalog tools on the plugin construction path", () => {
+    expectConstructionPlan(resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["canvas"] }), {
+      includeCoreTools: false,
+      coding: {
+        includeChannelTools: true,
+        includeOpenClawTools: false,
+        includePluginTools: true,
+      },
+    });
     expectConstructionPlan(
       resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["browser"] }),
       {

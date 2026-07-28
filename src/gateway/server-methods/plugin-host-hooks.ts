@@ -6,14 +6,16 @@ import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
+  missingScopeErrorShape,
   validatePluginsSessionActionParams,
   validatePluginsSessionActionResult,
   validatePluginsUiDescriptorsParams,
+  validatePluginsUiDescriptorsResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
-import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { getActivePluginSessionExtensionRegistry } from "../../plugins/runtime.js";
 import {
   validateJsonSchemaValue,
   type JsonSchemaValidationError,
@@ -21,6 +23,7 @@ import {
 } from "../../plugins/schema-validator.js";
 import { ADMIN_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 const log = createSubsystemLogger("gateway/plugin-host-hooks");
 
@@ -43,35 +46,65 @@ function validatePluginSessionActionJsonFields(
 /** Gateway handlers for plugin-declared Control UI descriptors and session actions. */
 export const pluginHostHookHandlers: GatewayRequestHandlers = {
   "plugins.uiDescriptors": ({ params, respond }) => {
-    if (!validatePluginsUiDescriptorsParams(params)) {
+    if (
+      !assertValidParams(
+        params,
+        validatePluginsUiDescriptorsParams,
+        "plugins.uiDescriptors",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const registry = getActivePluginSessionExtensionRegistry();
+    const descriptors = (registry?.controlUiDescriptors ?? []).map((entry) => {
+      const descriptor: Record<string, unknown> = {
+        id: entry.descriptor.id,
+        pluginId: entry.pluginId,
+        pluginName: entry.pluginName,
+        surface: entry.descriptor.surface,
+        label: entry.descriptor.label,
+      };
+      if (entry.descriptor.description !== undefined) {
+        descriptor.description = entry.descriptor.description;
+      }
+      if (entry.descriptor.placement !== undefined) {
+        descriptor.placement = entry.descriptor.placement;
+      }
+      if (entry.descriptor.schema !== undefined) {
+        descriptor.schema = entry.descriptor.schema;
+      }
+      if (entry.descriptor.requiredScopes !== undefined) {
+        descriptor.requiredScopes = entry.descriptor.requiredScopes;
+      }
+      return descriptor;
+    });
+    const result = { ok: true, descriptors };
+    if (!validatePluginsUiDescriptorsResult(result)) {
+      log.warn("invalid plugins.uiDescriptors result", {
+        errors: validatePluginsUiDescriptorsResult.errors,
+      });
       respond(
         false,
         undefined,
         errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid plugins.uiDescriptors params: ${formatValidationErrors(validatePluginsUiDescriptorsParams.errors)}`,
+          ErrorCodes.UNAVAILABLE,
+          `invalid plugins.uiDescriptors result: ${formatValidationErrors(validatePluginsUiDescriptorsResult.errors)}`,
         ),
       );
       return;
     }
-    const descriptors = (getActivePluginRegistry()?.controlUiDescriptors ?? []).map((entry) =>
-      Object.assign({}, entry.descriptor, {
-        pluginId: entry.pluginId,
-        pluginName: entry.pluginName,
-      }),
-    );
-    respond(true, { ok: true, descriptors }, undefined);
+    respond(true, result, undefined);
   },
   "plugins.sessionAction": async ({ params, client, respond }) => {
-    if (!validatePluginsSessionActionParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid plugins.sessionAction params: ${formatValidationErrors(validatePluginsSessionActionParams.errors)}`,
-        ),
-      );
+    if (
+      !assertValidParams(
+        params,
+        validatePluginsSessionActionParams,
+        "plugins.sessionAction",
+        respond,
+      )
+    ) {
       return;
     }
     const pluginId = normalizeOptionalString(params.pluginId);
@@ -88,7 +121,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const registry = getActivePluginRegistry();
+    const registry = getActivePluginSessionExtensionRegistry();
     const pluginLoaded = Boolean(
       registry?.plugins.some((plugin) => plugin.id === pluginId && plugin.status === "loaded"),
     );
@@ -121,11 +154,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
         !(scope === READ_SCOPE && scopes.includes(WRITE_SCOPE)),
     );
     if (missingScope) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${missingScope}`),
-      );
+      respond(false, undefined, missingScopeErrorShape({ missingScope, requiredScopes }));
       return;
     }
     try {

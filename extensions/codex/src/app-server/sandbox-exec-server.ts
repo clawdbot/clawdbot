@@ -9,9 +9,10 @@ import { isIP, type AddressInfo } from "node:net";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
-import { compareCodexAppServerVersions, type CodexAppServerClient } from "./client.js";
+import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import type { JsonValue } from "./protocol.js";
+import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
 import {
   createDirectory,
   copyPath,
@@ -39,7 +40,6 @@ import type {
   ManagedProcess,
   OpenClawExecServer,
 } from "./sandbox-exec-server/types.js";
-import { MIN_CODEX_SANDBOX_EXEC_SERVER_APP_SERVER_VERSION } from "./version.js";
 
 /** Codex environment metadata registered for one sandbox exec-server lease. */
 export type CodexSandboxExecEnvironment = {
@@ -47,22 +47,7 @@ export type CodexSandboxExecEnvironment = {
   cwd: string;
 };
 
-const SANDBOX_EXEC_SERVERS = new Map<string, Promise<OpenClawExecServer>>();
-export const CODEX_SANDBOX_EXEC_SERVER_MAX_INBOUND_MESSAGE_BYTES = 100 * 1024 * 1024;
-
-/** Closes all cached sandbox exec-server instances for deterministic tests. */
-export async function closeCodexSandboxExecServersForTests(): Promise<void> {
-  const servers = await Promise.allSettled(SANDBOX_EXEC_SERVERS.values());
-  SANDBOX_EXEC_SERVERS.clear();
-  await Promise.all(
-    servers.map(async (entry) => {
-      if (entry.status === "fulfilled") {
-        entry.value.refCount = 0;
-        await closeOpenClawExecServer(entry.value);
-      }
-    }),
-  );
-}
+const CODEX_SANDBOX_EXEC_SERVER_MAX_INBOUND_MESSAGE_BYTES = 100 * 1024 * 1024;
 
 /** Starts or reuses a sandbox exec-server and registers it with Codex app-server. */
 export async function ensureCodexSandboxExecServerEnvironment(params: {
@@ -80,7 +65,6 @@ export async function ensureCodexSandboxExecServerEnvironment(params: {
       "OpenClaw Codex exec-server uses a local loopback URL and cannot be registered with a remote Codex app-server.",
     );
   }
-  assertCodexSandboxExecServerSupported(params.client);
   const execServer = await acquireOpenClawExecServer(params.sandbox);
   try {
     await params.client.request(
@@ -114,26 +98,11 @@ export async function releaseCodexSandboxExecServerEnvironment(
   if (!sandbox?.enabled) {
     return;
   }
-  const server = await SANDBOX_EXEC_SERVERS.get(sandbox.runtimeId)?.catch(() => undefined);
+  const server = await sandboxExecServerRegistry.servers
+    .get(sandbox.runtimeId)
+    ?.catch(() => undefined);
   if (server) {
     await releaseOpenClawExecServer(server);
-  }
-}
-
-function assertCodexSandboxExecServerSupported(client: CodexAppServerClient): void {
-  const detectedVersion = client.getServerVersion();
-  if (
-    !detectedVersion ||
-    compareCodexAppServerVersions(
-      detectedVersion,
-      MIN_CODEX_SANDBOX_EXEC_SERVER_APP_SERVER_VERSION,
-    ) < 0
-  ) {
-    throw new Error(
-      `Codex app-server ${MIN_CODEX_SANDBOX_EXEC_SERVER_APP_SERVER_VERSION} or newer is required for OpenClaw sandbox exec-server environments, but detected ${
-        detectedVersion ?? "an unknown version"
-      }. Disable appServer.experimental.sandboxExecServer or configure a newer Codex app-server binary.`,
-    );
   }
 }
 
@@ -171,10 +140,10 @@ function canExposeLocalExecServerToAppServer(
 async function acquireOpenClawExecServer(sandbox: SandboxContext): Promise<OpenClawExecServer> {
   const key = sandbox.runtimeId;
   while (true) {
-    const existing = SANDBOX_EXEC_SERVERS.get(key);
+    const existing = sandboxExecServerRegistry.servers.get(key);
     const promise = existing ?? startAndRememberOpenClawExecServer(sandbox);
     const server = await promise;
-    if (!server.closed && SANDBOX_EXEC_SERVERS.get(key) === promise) {
+    if (!server.closed && sandboxExecServerRegistry.servers.get(key) === promise) {
       server.refCount += 1;
       return server;
     }
@@ -184,10 +153,10 @@ async function acquireOpenClawExecServer(sandbox: SandboxContext): Promise<OpenC
 function startAndRememberOpenClawExecServer(sandbox: SandboxContext): Promise<OpenClawExecServer> {
   const created = startOpenClawExecServer(sandbox);
   const key = sandbox.runtimeId;
-  SANDBOX_EXEC_SERVERS.set(key, created);
+  sandboxExecServerRegistry.servers.set(key, created);
   void created.catch(() => {
-    if (SANDBOX_EXEC_SERVERS.get(key) === created) {
-      SANDBOX_EXEC_SERVERS.delete(key);
+    if (sandboxExecServerRegistry.servers.get(key) === created) {
+      sandboxExecServerRegistry.servers.delete(key);
     }
   });
   return created;
@@ -243,14 +212,14 @@ async function releaseOpenClawExecServer(execServer: OpenClawExecServer): Promis
   if (execServer.refCount > 0) {
     return;
   }
-  const current = await SANDBOX_EXEC_SERVERS.get(execServer.sandbox.runtimeId)?.catch(
-    () => undefined,
-  );
+  const current = await sandboxExecServerRegistry.servers
+    .get(execServer.sandbox.runtimeId)
+    ?.catch(() => undefined);
   if (execServer.refCount > 0 || execServer.closed) {
     return;
   }
   if (current === execServer) {
-    SANDBOX_EXEC_SERVERS.delete(execServer.sandbox.runtimeId);
+    sandboxExecServerRegistry.servers.delete(execServer.sandbox.runtimeId);
   }
   await closeOpenClawExecServer(execServer);
 }

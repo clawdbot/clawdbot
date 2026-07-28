@@ -2,22 +2,62 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { readPositiveIntEnv } from "./env-limits.mjs";
+import { readTextFileBounded } from "./text-file-utils.mjs";
 
 const INDEX_KEY = "installed-plugin-index";
+const ERROR_DETAIL_TAIL_BYTES = 16 * 1024;
+const JSON_ARTIFACT_MAX_BYTES = readPositiveIntEnv(
+  "OPENCLAW_PLUGIN_INDEX_JSON_MAX_BYTES",
+  1024 * 1024,
+);
 
-export function stateDir() {
+function stateDir() {
   return process.env.OPENCLAW_STATE_DIR || path.join(process.env.HOME, ".openclaw");
 }
 
-export function configPath() {
+function configPath() {
   return process.env.OPENCLAW_CONFIG_PATH || path.join(stateDir(), "openclaw.json");
 }
 
 function readJsonMaybe(file) {
+  let text;
   try {
-    return JSON.parse(fs.readFileSync(file, "utf8"));
+    text = readTextFileBounded(file, "plugin index JSON artifact", JSON_ARTIFACT_MAX_BYTES, {
+      tailBytes: ERROR_DETAIL_TAIL_BYTES,
+    });
+  } catch (error) {
+    if (error?.code === "ETOOBIG") {
+      throw error;
+    }
+    return {};
+  }
+  try {
+    return JSON.parse(text);
   } catch {
     return {};
+  }
+}
+
+function textTooLargeError(message) {
+  return Object.assign(new Error(message), { code: "ETOOBIG" });
+}
+
+function parseIndexJsonText(text, label) {
+  const bytes = Buffer.byteLength(text, "utf8");
+  if (bytes > JSON_ARTIFACT_MAX_BYTES) {
+    throw textTooLargeError(`${label} exceeded ${JSON_ARTIFACT_MAX_BYTES} bytes (${bytes} bytes)`);
+  }
+  return JSON.parse(text);
+}
+
+function assertIndexJsonByteLength(bytesRaw, label) {
+  const bytes = Number(bytesRaw);
+  if (!Number.isFinite(bytes) || bytes < 0) {
+    throw new Error(`${label} byte length was invalid: ${String(bytesRaw)}`);
+  }
+  if (bytes > JSON_ARTIFACT_MAX_BYTES) {
+    throw textTooLargeError(`${label} exceeded ${JSON_ARTIFACT_MAX_BYTES} bytes (${bytes} bytes)`);
   }
 }
 
@@ -37,6 +77,26 @@ function readSqlitePluginIndex(root = stateDir()) {
   let db;
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });
+    const lengths = db
+      .prepare(
+        `
+          SELECT octet_length(install_records_json) AS install_records_json_bytes,
+                 octet_length(plugins_json) AS plugins_json_bytes,
+                 octet_length(diagnostics_json) AS diagnostics_json_bytes
+            FROM installed_plugin_index
+           WHERE index_key = ?
+        `,
+      )
+      .get(INDEX_KEY);
+    if (!lengths) {
+      return {};
+    }
+    assertIndexJsonByteLength(
+      lengths.install_records_json_bytes,
+      "plugin index install_records_json",
+    );
+    assertIndexJsonByteLength(lengths.plugins_json_bytes, "plugin index plugins_json");
+    assertIndexJsonByteLength(lengths.diagnostics_json_bytes, "plugin index diagnostics_json");
     const row = db
       .prepare(
         `
@@ -60,11 +120,17 @@ function readSqlitePluginIndex(root = stateDir()) {
       policyHash: row.policy_hash,
       generatedAtMs: Number(row.generated_at_ms),
       ...(row.refresh_reason ? { refreshReason: row.refresh_reason } : {}),
-      installRecords: JSON.parse(row.install_records_json),
-      plugins: JSON.parse(row.plugins_json),
-      diagnostics: JSON.parse(row.diagnostics_json),
+      installRecords: parseIndexJsonText(
+        row.install_records_json,
+        "plugin index install_records_json",
+      ),
+      plugins: parseIndexJsonText(row.plugins_json, "plugin index plugins_json"),
+      diagnostics: parseIndexJsonText(row.diagnostics_json, "plugin index diagnostics_json"),
     };
-  } catch {
+  } catch (error) {
+    if (error?.code === "ETOOBIG") {
+      throw error;
+    }
     return {};
   } finally {
     db?.close();

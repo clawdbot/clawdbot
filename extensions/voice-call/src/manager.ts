@@ -1,12 +1,10 @@
 // Voice Call plugin module implements manager behavior.
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { VoiceCallConfig } from "./config.js";
+import type { VoiceCallConfig, VoiceCallCoreSessionConfig } from "./config.js";
 import type { CallManagerContext, StreamSessionIssuer } from "./manager/context.js";
-import { processEvent as processManagerEvent } from "./manager/events.js";
+import { processEvent as processManagerEvent, type ProcessEventResult } from "./manager/events.js";
 import { getCallByProviderCallId as getCallByProviderCallIdFromMaps } from "./manager/lookup.js";
 import {
   continueCall as continueCallWithContext,
@@ -15,8 +13,10 @@ import {
   sendDtmf as sendDtmfWithContext,
   speak as speakWithContext,
   speakInitialMessage as speakInitialMessageWithContext,
+  type SpeakOptions,
 } from "./manager/outbound.js";
 import {
+  findCallMatchesInStore,
   getCallHistoryFromStore,
   loadActiveCallsFromStore,
   persistCallRecord,
@@ -24,6 +24,7 @@ import {
 import { resolveVoiceCallSecondsTimerDelayMs } from "./manager/timer-delays.js";
 import { startMaxDurationTimer } from "./manager/timers.js";
 import type { VoiceCallProvider } from "./providers/base.js";
+import { resolveDefaultVoiceCallStoreDir } from "./store-path.js";
 import {
   TerminalStates,
   type CallId,
@@ -47,22 +48,19 @@ function incrementRestoreStatusCount(
   counts.set(key, (counts.get(key) ?? 0) + 1);
 }
 
+function resolveRestoredMaxDurationAnchor(call: CallRecord): number | undefined {
+  return (
+    call.answeredAt ??
+    (call.state === "speaking" || call.state === "listening" ? call.startedAt : undefined)
+  );
+}
+
 function resolveDefaultStoreBase(config: VoiceCallConfig, storePath?: string): string {
   const rawOverride = storePath?.trim() || config.store?.trim();
   if (rawOverride) {
     return resolveUserPath(rawOverride);
   }
-  const preferred = path.join(os.homedir(), ".openclaw", "voice-calls");
-  const candidates = [preferred].map((dir) => resolveUserPath(dir));
-  const existing =
-    candidates.find((dir) => {
-      try {
-        return fs.existsSync(path.join(dir, "calls.jsonl")) || fs.existsSync(dir);
-      } catch {
-        return false;
-      }
-    }) ?? resolveUserPath(preferred);
-  return existing;
+  return resolveDefaultVoiceCallStoreDir();
 }
 
 /**
@@ -75,6 +73,7 @@ export class CallManager {
   private rejectedProviderCallIds = new Set<string>();
   private provider: VoiceCallProvider | null = null;
   private config: VoiceCallConfig;
+  private coreSession: VoiceCallCoreSessionConfig | undefined;
   private storePath: string;
   private webhookUrl: string | null = null;
   private activeTurnCalls = new Set<CallId>();
@@ -96,8 +95,13 @@ export class CallManager {
    */
   streamSessionIssuer: StreamSessionIssuer | undefined;
 
-  constructor(config: VoiceCallConfig, storePath?: string) {
+  constructor(
+    config: VoiceCallConfig,
+    storePath?: string,
+    coreSession?: VoiceCallCoreSessionConfig,
+  ) {
     this.config = config;
+    this.coreSession = coreSession;
     this.storePath = resolveDefaultStoreBase(config, storePath);
   }
 
@@ -126,11 +130,12 @@ export class CallManager {
       }
     }
 
-    // Restart max-duration timers for restored calls that are past the answered state
+    // Restart max-duration timers for restored calls that are past the answered/live state.
     let skippedAlreadyElapsedTimers = 0;
     for (const [callId, call] of verified) {
-      if (call.answeredAt && !TerminalStates.has(call.state)) {
-        const elapsed = Date.now() - call.answeredAt;
+      const maxDurationAnchor = resolveRestoredMaxDurationAnchor(call);
+      if (maxDurationAnchor !== undefined && !TerminalStates.has(call.state)) {
+        const elapsed = Date.now() - maxDurationAnchor;
         const maxDurationMs = resolveVoiceCallSecondsTimerDelayMs(this.config.maxDurationSeconds);
         if (elapsed >= maxDurationMs) {
           // Already expired — remove instead of keeping
@@ -140,6 +145,12 @@ export class CallManager {
           }
           skippedAlreadyElapsedTimers += 1;
           continue;
+        }
+        if (call.answeredAt === undefined) {
+          // Twilio streams can restore directly in speaking/listening without an
+          // answered webhook; anchoring at startedAt preserves bounded duration.
+          call.answeredAt = maxDurationAnchor;
+          persistCallRecord(this.storePath, call);
         }
         startMaxDurationTimer({
           ctx: this.getContext(),
@@ -296,8 +307,12 @@ export class CallManager {
   /**
    * Speak to user in an active call.
    */
-  async speak(callId: CallId, text: string): Promise<{ success: boolean; error?: string }> {
-    return speakWithContext(this.getContext(), callId, text);
+  async speak(
+    callId: CallId,
+    text: string,
+    options?: SpeakOptions,
+  ): Promise<{ success: boolean; error?: string }> {
+    return speakWithContext(this.getContext(), callId, text, options);
   }
 
   /**
@@ -339,6 +354,7 @@ export class CallManager {
       rejectedProviderCallIds: this.rejectedProviderCallIds,
       provider: this.provider,
       config: this.config,
+      coreSession: this.coreSession,
       storePath: this.storePath,
       webhookUrl: this.webhookUrl,
       activeTurnCalls: this.activeTurnCalls,
@@ -355,8 +371,8 @@ export class CallManager {
   /**
    * Process a webhook event.
    */
-  processEvent(event: NormalizedEvent): void {
-    processManagerEvent(this.getContext(), event);
+  processEvent(event: NormalizedEvent): ProcessEventResult {
+    return processManagerEvent(this.getContext(), event);
   }
 
   private shouldDeferConversationInitialMessageUntilStreamConnect(): boolean {
@@ -432,6 +448,18 @@ export class CallManager {
    */
   getActiveCalls(): CallRecord[] {
     return Array.from(this.activeCalls.values());
+  }
+
+  /** Resolve a status record from active state or the retained event store. */
+  async getCallFromMemoryOrStore(callId: CallId): Promise<CallRecord | undefined> {
+    const active = this.getCall(callId) ?? this.getCallByProviderCallId(callId);
+    if (active) {
+      return active;
+    }
+    const persisted = await findCallMatchesInStore(this.storePath, callId);
+    // Active indexes are canonical for live calls and keep provider-id status
+    // lookups off the retained-store path. Persisted ids are fallback-only.
+    return persisted.byCallId ?? persisted.byProviderCallId;
   }
 
   /**

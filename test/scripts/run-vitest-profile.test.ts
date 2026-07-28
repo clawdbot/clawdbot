@@ -91,6 +91,9 @@ describe("scripts/run-vitest-profile", () => {
 
   it("rejects missing profile output directories", () => {
     expect(() => parseArgs(["runner", "--output-dir"])).toThrow("Expected --output-dir <dir>.");
+    expect(() => parseArgs(["runner", "--output-dir", "-h"])).toThrow(
+      "Expected --output-dir <dir>.",
+    );
     expect(() => parseArgs(["runner", "--output-dir", "--", "--config", "custom.ts"])).toThrow(
       "Expected --output-dir <dir>.",
     );

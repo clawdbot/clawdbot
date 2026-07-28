@@ -17,13 +17,9 @@ import type {
   IngressReasonCode,
   InternalChannelIngressAdapter,
   InternalChannelIngressSubject,
-  InternalMatchMaterial,
   InternalNormalizedEntry,
   RouteGateFacts,
 } from "./types.js";
-
-/** Normalized identifier material used to match an inbound sender against allowlist entries. */
-export type ChannelIngressSubjectIdentifier = InternalMatchMaterial;
 
 /** Redacted subject identity assembled from a stable id plus optional platform aliases. */
 export type ChannelIngressSubject = InternalChannelIngressSubject;
@@ -101,8 +97,6 @@ export type ChannelIngressIdentitySubjectInput = {
 export type ChannelIngressConfigInput = {
   /** Static or dynamic access group definitions referenced by allowlist entries. */
   accessGroups?: ChannelIngressStateInput["accessGroups"];
-  /** Command config used for access-group command behavior. */
-  commands?: { useAccessGroups?: boolean } | null;
 } | null;
 
 /** Command gate input for control-command authorization. */
@@ -126,7 +120,7 @@ export type ChannelIngressCommandPresetInput = Omit<
 > & {
   /** Set false to omit the command gate entirely. */
   requested?: boolean;
-  /** Overrides `cfg.commands.useAccessGroups` for this command decision. */
+  /** Internal override for this command decision. */
   useAccessGroups?: boolean | null;
   /** Config subset used to derive command access-group behavior. */
   cfg?: ChannelIngressConfigInput;

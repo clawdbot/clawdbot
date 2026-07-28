@@ -56,6 +56,7 @@ describeWhenUiI18nPresent("ui i18n locale registry", () => {
       "ja-JP",
       "ko",
       "fr",
+      "hi",
       "ar",
       "it",
       "tr",
@@ -66,6 +67,7 @@ describeWhenUiI18nPresent("ui i18n locale registry", () => {
       "vi",
       "nl",
       "fa",
+      "ru",
     ]);
     expect(localeRegistry.DEFAULT_LOCALE).toBe("en");
   });
@@ -82,6 +84,7 @@ describeWhenUiI18nPresent("ui i18n locale registry", () => {
     expect(localeRegistry.resolveNavigatorLocale("ja-JP")).toBe("ja-JP");
     expect(localeRegistry.resolveNavigatorLocale("ko-KR")).toBe("ko");
     expect(localeRegistry.resolveNavigatorLocale("fr-CA")).toBe("fr");
+    expect(localeRegistry.resolveNavigatorLocale("hi-IN")).toBe("hi");
     expect(localeRegistry.resolveNavigatorLocale("ar-EG")).toBe("ar");
     expect(localeRegistry.resolveNavigatorLocale("it-IT")).toBe("it");
     expect(localeRegistry.resolveNavigatorLocale("tr-TR")).toBe("tr");
@@ -92,16 +95,19 @@ describeWhenUiI18nPresent("ui i18n locale registry", () => {
     expect(localeRegistry.resolveNavigatorLocale("vi-VN")).toBe("vi");
     expect(localeRegistry.resolveNavigatorLocale("nl-NL")).toBe("nl");
     expect(localeRegistry.resolveNavigatorLocale("fa-IR")).toBe("fa");
+    expect(localeRegistry.resolveNavigatorLocale("ru-RU")).toBe("ru");
   });
 
   it("loads lazy locale translations from the registry", async () => {
     const localeRegistry = getRegistry();
-    const [de, es, ptBR, zhCN, th, en] = await Promise.all([
+    const [de, es, ptBR, zhCN, hi, th, ru, en] = await Promise.all([
       localeRegistry.loadLazyLocaleTranslation("de"),
       localeRegistry.loadLazyLocaleTranslation("es"),
       localeRegistry.loadLazyLocaleTranslation("pt-BR"),
       localeRegistry.loadLazyLocaleTranslation("zh-CN"),
+      localeRegistry.loadLazyLocaleTranslation("hi"),
       localeRegistry.loadLazyLocaleTranslation("th"),
+      localeRegistry.loadLazyLocaleTranslation("ru"),
       localeRegistry.loadLazyLocaleTranslation("en"),
     ]);
 
@@ -110,7 +116,9 @@ describeWhenUiI18nPresent("ui i18n locale registry", () => {
     expect(getNestedTranslation(es, "languages", "de")).toBe("Deutsch (Alemán)");
     expect(getNestedTranslation(ptBR, "languages", "es")).toBe("Español (Espanhol)");
     expect(getNestedTranslation(zhCN, "common", "health")).toBe("\u5065\u5eb7\u72b6\u51b5");
+    expect(getNestedTranslation(hi, "languages", "en")).toBe("English (अंग्रेज़ी)");
     expect(getNestedTranslation(th, "languages", "en")).toBe("อังกฤษ");
+    expect(getNestedTranslation(ru, "languages", "en")).toBe("Английский");
     expect(en).toBeNull();
   });
 });

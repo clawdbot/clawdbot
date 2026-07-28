@@ -1,20 +1,16 @@
 [
   "dist/extensions/browser/runtime-api.js",
   "dist/extensions/canvas/runtime-api.js",
-  "dist/extensions/clickclack/runtime-api.js",
   "dist/extensions/copilot-proxy/runtime-api.js",
   "dist/extensions/google/runtime-api.js",
   "dist/extensions/imessage/runtime-api.js",
-  "dist/extensions/irc/runtime-api.js",
   "dist/extensions/lmstudio/runtime-api.js",
-  "dist/extensions/mattermost/runtime-api.js",
   "dist/extensions/memory-core/runtime-api.js",
   "dist/extensions/ollama/runtime-api.js",
   "dist/extensions/open-prose/runtime-api.js",
-  "dist/extensions/signal/runtime-api.js",
+  "dist/extensions/reef/runtime-api.js",
   "dist/extensions/telegram/runtime-api.js",
   "dist/extensions/telegram/runtime-setter-api.js",
   "dist/extensions/webhooks/runtime-api.js",
-  "dist/extensions/workboard/runtime-api.js",
-  "dist/extensions/zai/runtime-api.js"
+  "dist/extensions/workboard/runtime-api.js"
 ]

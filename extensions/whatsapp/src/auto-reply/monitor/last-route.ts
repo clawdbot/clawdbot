@@ -51,12 +51,3 @@ export function updateLastRouteInBackground(params: {
   });
   trackBackgroundTask(params.backgroundTasks, task);
 }
-
-export function awaitBackgroundTasks(backgroundTasks: Set<Promise<unknown>>) {
-  if (backgroundTasks.size === 0) {
-    return Promise.resolve();
-  }
-  return Promise.allSettled(backgroundTasks).then(() => {
-    backgroundTasks.clear();
-  });
-}

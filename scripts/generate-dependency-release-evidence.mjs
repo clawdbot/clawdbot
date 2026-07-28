@@ -292,7 +292,7 @@ function runEvidenceReports({ rootDir, outputDir, baseRef, execFileSyncImpl }) {
 /**
  * Generates dependency evidence reports, manifest, and summaries for a release.
  */
-export async function generateDependencyReleaseEvidence({
+async function generateDependencyReleaseEvidence({
   rootDir = process.cwd(),
   outputDir,
   releaseRef,
@@ -381,10 +381,27 @@ export async function generateDependencyReleaseEvidence({
 
 function readOptionValue(argv, index, optionName, { allowEmpty = false } = {}) {
   const value = argv[index + 1];
-  if (value === undefined || value.startsWith("--") || (!allowEmpty && value === "")) {
+  if (value === undefined || value.startsWith("-") || (!allowEmpty && value === "")) {
     throw new Error(`Expected ${optionName} <value>.`);
   }
   return value;
+}
+
+function usage() {
+  return `Usage: node scripts/generate-dependency-release-evidence.mjs --output-dir <dir> --release-ref <ref> --npm-dist-tag <tag> [options]
+
+Generates release dependency evidence reports and summary artifacts.
+
+Options:
+  --root <dir>                  Repository root
+  --output-dir <dir>            Evidence artifact directory
+  --release-ref <ref>           Release tag or SHA under validation
+  --npm-dist-tag <tag>          npm dist-tag being validated
+  --base-ref <ref>              Dependency change comparison base
+  --github-output <path>        GitHub Actions output file
+  --github-step-summary <path>  GitHub Actions step summary file
+  -h, --help                    Show this help
+`;
 }
 
 export function parseArgs(argv) {
@@ -397,43 +414,54 @@ export function parseArgs(argv) {
     githubOutput: process.env.GITHUB_OUTPUT,
     githubStepSummary: process.env.GITHUB_STEP_SUMMARY,
   };
+  const seen = new Set();
+  const setOnce = (flag, key, value) => {
+    if (seen.has(flag)) {
+      throw new Error(`${flag} was provided more than once.`);
+    }
+    seen.add(flag);
+    options[key] = value;
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--") {
       continue;
     }
+    if (arg === "-h" || arg === "--help") {
+      return { ...options, help: true };
+    }
     if (arg === "--root") {
-      options.rootDir = readOptionValue(argv, index, arg);
+      setOnce(arg, "rootDir", readOptionValue(argv, index, arg));
       index += 1;
       continue;
     }
     if (arg === "--output-dir") {
-      options.outputDir = readOptionValue(argv, index, arg);
+      setOnce(arg, "outputDir", readOptionValue(argv, index, arg));
       index += 1;
       continue;
     }
     if (arg === "--release-ref") {
-      options.releaseRef = readOptionValue(argv, index, arg);
+      setOnce(arg, "releaseRef", readOptionValue(argv, index, arg));
       index += 1;
       continue;
     }
     if (arg === "--npm-dist-tag") {
-      options.npmDistTag = readOptionValue(argv, index, arg);
+      setOnce(arg, "npmDistTag", readOptionValue(argv, index, arg));
       index += 1;
       continue;
     }
     if (arg === "--base-ref") {
-      options.baseRef = readOptionValue(argv, index, arg);
+      setOnce(arg, "baseRef", readOptionValue(argv, index, arg));
       index += 1;
       continue;
     }
     if (arg === "--github-output") {
-      options.githubOutput = readOptionValue(argv, index, arg, { allowEmpty: true });
+      setOnce(arg, "githubOutput", readOptionValue(argv, index, arg, { allowEmpty: true }));
       index += 1;
       continue;
     }
     if (arg === "--github-step-summary") {
-      options.githubStepSummary = readOptionValue(argv, index, arg, { allowEmpty: true });
+      setOnce(arg, "githubStepSummary", readOptionValue(argv, index, arg, { allowEmpty: true }));
       index += 1;
       continue;
     }
@@ -446,7 +474,12 @@ export function parseArgs(argv) {
  * Runs the dependency release evidence generator CLI.
  */
 export async function main(argv = process.argv.slice(2)) {
-  await generateDependencyReleaseEvidence(parseArgs(argv));
+  const options = parseArgs(argv);
+  if (options.help) {
+    process.stdout.write(usage());
+    return 0;
+  }
+  await generateDependencyReleaseEvidence(options);
   return 0;
 }
 
@@ -456,7 +489,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
       process.exitCode = exitCode;
     },
     /** @param {unknown} error */ (error) => {
-      process.stderr.write(`${error.stack ?? error.message ?? String(error)}\n`);
+      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
       process.exitCode = 1;
     },
   );

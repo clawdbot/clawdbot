@@ -1,16 +1,16 @@
 ---
 name: qqbot-remind
-description: QQBot scheduled reminders. Create, list, and cancel one-time or recurring reminders when a QQ conversation involves reminders, alarms, or scheduled tasks.
+description: QQBot scheduled reminders. Use only for explicit user requests to create, list, or cancel one-time or recurring QQ reminders; ask for missing time, content, or timezone before scheduling.
 metadata: { "openclaw": { "emoji": "⏰", "requires": { "config": ["channels.qqbot"] } } }
 ---
 
 # QQ Bot 定时提醒
 
-## ⚠️ 强制规则
+## ⚠️ 意图规则
 
-**当用户提到「提醒」「闹钟」「定时」「X分钟/小时后」「每天X点」「叫我」等任何涉及延时或定时的请求时，你必须调用工具，绝对不能只用自然语言回复说"好的，我会提醒你"！**
+只有当用户明确要求创建、查询或取消提醒/闹钟/定时任务时，才调用工具。闲聊、假设、解释提醒功能、讨论将来计划但未要求创建提醒时，不要调用工具。
 
-你没有内存或后台线程，口头承诺"到时候提醒"是无效的——只有调用工具才能真正注册定时任务。
+如果用户确实要求提醒，你没有内存或后台线程，口头承诺"到时候提醒"是无效的——必须调用工具才能真正注册定时任务。时间、提醒内容、目标会话或时区不清楚时先追问；不要替用户猜测。
 
 ---
 
@@ -18,13 +18,14 @@ metadata: { "openclaw": { "emoji": "⏰", "requires": { "config": ["channels.qqb
 
 **第一步**：调用 `qqbot_remind` 工具，传入简单参数：
 
-| 参数      | 说明                                         | 示例                               |
-| --------- | -------------------------------------------- | ---------------------------------- |
-| `action`  | 操作类型                                     | `"add"` / `"list"` / `"remove"`    |
-| `content` | 提醒内容                                     | `"喝水"`                           |
-| `to`      | 目标地址（可选，系统自动获取，通常无需填写） | —                                  |
-| `time`    | 时间（相对时间或 cron 表达式）               | `"5m"` / `"1h30m"` / `"0 8 * * *"` |
-| `jobId`   | 任务 ID（仅 remove）                         | `"xxx"`                            |
+| 参数       | 说明                                         | 示例                                        |
+| ---------- | -------------------------------------------- | ------------------------------------------- |
+| `action`   | 操作类型                                     | `"add"` / `"list"` / `"remove"`             |
+| `content`  | 提醒内容                                     | `"喝水"`                                    |
+| `to`       | 目标地址（可选，系统自动获取，通常无需填写） | —                                           |
+| `time`     | 时间（相对时间或 cron 表达式）               | `"5m"` / `"1h30m"` / `"0 8 * * *"`          |
+| `timezone` | IANA 时区（周期提醒建议明确传入）            | `"Asia/Shanghai"` / `"America/Los_Angeles"` |
+| `jobId`    | 任务 ID（仅 remove）                         | `"xxx"`                                     |
 
 **第二步**：根据 `qqbot_remind` 的返回结果，回复用户。`qqbot_remind` 会直接创建、查询或取消 Gateway cron 任务；成功后不要再调用 `cron` 工具。
 
@@ -92,7 +93,7 @@ metadata: { "openclaw": { "emoji": "⏰", "requires": { "config": ["channels.qqb
   "action": "add",
   "job": {
     "name": "{任务名}",
-    "schedule": { "kind": "cron", "expr": "0 8 * * *", "tz": "Asia/Shanghai" },
+    "schedule": { "kind": "cron", "expr": "0 8 * * *", "tz": "{用户确认的 IANA 时区}" },
     "sessionTarget": "isolated",
     "wakeMode": "now",
     "payload": {
@@ -124,7 +125,7 @@ metadata: { "openclaw": { "emoji": "⏰", "requires": { "config": ["channels.qqb
 | 每周末上午10点 | `"0 10 * * 0,6"` |
 | 每小时整点     | `"0 * * * *"`    |
 
-> 周期提醒必须加 `"tz": "Asia/Shanghai"`。
+> 周期提醒应使用用户明确提供、用户资料/会话中可信可得，或用户确认过的 IANA 时区。无法判断时先追问；不要把所有用户都假定在同一时区。
 
 ---
 
@@ -141,7 +142,7 @@ metadata: { "openclaw": { "emoji": "⏰", "requires": { "config": ["channels.qqb
 | "修改提醒时间"      | `remove` → `add` | —               |
 | "提醒我"（无时间）  | **需追问**       | —               |
 
-纯相对时间（"5分钟后"、"1小时后"）可直接计算，无需确认。时间模糊或缺失时需追问。
+纯相对时间（"5分钟后"、"1小时后"）可直接计算，无需确认。时间、日期、周期、内容或时区模糊/缺失时需追问。周期提醒在回复中说明解释后的本地时间和时区。
 
 ---
 

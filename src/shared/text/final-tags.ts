@@ -1,5 +1,5 @@
 // Final tag helpers detect final-answer tag regions in assistant text.
-export type FinalTagMatch = {
+type FinalTagMatch = {
   index: number;
   text: string;
   isClose: boolean;
@@ -78,7 +78,7 @@ function parseAttributeList(text: string): boolean {
 }
 
 /** Parses a candidate `<final>` tag while rejecting lookalike names and malformed attributes. */
-export function parseFinalTag(text: string): Omit<FinalTagMatch, "index" | "text"> | null {
+function parseFinalTag(text: string): Omit<FinalTagMatch, "index" | "text"> | null {
   if (!text.startsWith("<") || !text.endsWith(">")) {
     return null;
   }
@@ -128,11 +128,6 @@ export function findFinalTagMatches(text: string): FinalTagMatch[] {
     });
   }
   return matches;
-}
-
-/** Returns true when text contains at least one valid `<final>` control tag. */
-export function containsFinalTag(text: string): boolean {
-  return findFinalTagMatches(text).length > 0;
 }
 
 /** Removes valid `<final>` tags while preserving their enclosed visible answer text. */

@@ -85,4 +85,67 @@ describe("amazon-bedrock-mantle provider plugin", () => {
       } as never),
     ).toBeUndefined();
   });
+
+  it("restores missing or stale Opus 5 pricing during runtime normalization", async () => {
+    const provider = await registerSingleProviderPlugin(bedrockMantlePlugin);
+    const model = {
+      id: "anthropic.claude-opus-5",
+      name: "Claude Opus 5",
+      api: "anthropic-messages",
+      provider: "amazon-bedrock-mantle",
+      baseUrl: "https://bedrock-mantle.us-east-1.api.aws/anthropic",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      params: { canonicalModelId: "claude-opus-5" },
+    };
+    const expectedCost = { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 };
+
+    for (const cost of [undefined, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }]) {
+      const normalized = provider.normalizeResolvedModel?.({
+        provider: "amazon-bedrock-mantle",
+        modelId: "anthropic.claude-opus-5",
+        model: { ...model, cost },
+      } as never);
+      expect(normalized?.cost).toEqual(expectedCost);
+    }
+  });
+
+  it("restores missing or stale Sonnet 5 pricing during runtime normalization", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.UTC(2026, 8, 1));
+    try {
+      const provider = await registerSingleProviderPlugin(bedrockMantlePlugin);
+      const model = {
+        id: "anthropic.claude-sonnet-5",
+        name: "Claude Sonnet 5",
+        api: "anthropic-messages",
+        provider: "amazon-bedrock-mantle",
+        baseUrl: "https://bedrock-mantle.us-east-1.api.aws/anthropic",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 1_000_000,
+        maxTokens: 128_000,
+        params: { canonicalModelId: "claude-sonnet-5" },
+      };
+      const expectedCost = {
+        input: 3,
+        output: 15,
+        cacheRead: 0.3,
+        cacheWrite: 3.75,
+      };
+
+      for (const cost of [undefined, { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 }]) {
+        const normalized = provider.normalizeResolvedModel?.({
+          provider: "amazon-bedrock-mantle",
+          modelId: "anthropic.claude-sonnet-5",
+          model: { ...model, cost },
+        } as never);
+        expect(normalized?.cost).toEqual(expectedCost);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

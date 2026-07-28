@@ -1,12 +1,16 @@
 // Implements session commands for list, show, fork, reset, and routing state.
-import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import {
+  resolveNonNegativeIntegerOption,
+  resolveOptionalIntegerOption,
+  timestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { resolveFastModeState } from "../../agents/fast-mode.js";
+import { formatFastModeCurrentStatus, resolveFastModeState } from "../../agents/fast-mode.js";
 import {
   setChannelConversationBindingIdleTimeoutBySessionKey,
   setChannelConversationBindingMaxAgeBySessionKey,
@@ -16,18 +20,21 @@ import { formatThreadBindingDurationLabel } from "../../channels/thread-bindings
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import {
   buildRestartSuccessContinuation,
+  clearRestartSentinel,
   formatDoctorNonInteractiveHint,
-  removeRestartSentinelFile,
   type RestartSentinelPayload,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
 import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
+import { DEFAULT_AGENT_ID, isUnscopedSessionKeySentinel } from "../../routing/session-key.js";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -39,12 +46,15 @@ import {
   isSessionDefaultDirectiveValue,
   normalizeFastMode,
   normalizeUsageDisplay,
-  resolveResponseUsageMode,
+  resolveEffectiveResponseUsage,
 } from "../thinking.js";
 import { resolveCommandSurfaceChannel } from "./channel-context.js";
 import { rejectNonOwnerCommand, rejectUnauthorizedCommand } from "./command-gates.js";
 import { handleAbortTrigger, handleStopCommand } from "./commands-session-abort.js";
-import { persistSessionEntry } from "./commands-session-store.js";
+import {
+  persistSessionEntry,
+  sessionEntryPersistenceConflictReply,
+} from "./commands-session-store.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 import { resolveConversationBindingContextFromAcpCommand } from "./conversation-binding-input.js";
 
@@ -101,11 +111,7 @@ function resolveSessionBindingDurationMs(
   key: "idleTimeoutMs" | "maxAgeMs",
   fallbackMs: number,
 ): number {
-  const raw = binding.metadata?.[key];
-  if (typeof raw !== "number" || !Number.isFinite(raw)) {
-    return fallbackMs;
-  }
-  return Math.max(0, Math.floor(raw));
+  return resolveNonNegativeIntegerOption(binding.metadata?.[key], fallbackMs);
 }
 
 function resolveSessionBindingLastActivityAt(binding: SessionBindingRecord): number {
@@ -144,20 +150,8 @@ function resolveUpdatedLifecycleDurationMs(
   binding: UpdatedLifecycleBinding | SessionBindingRecord,
   key: "idleTimeoutMs" | "maxAgeMs",
 ): number | undefined {
-  if (!isSessionBindingRecord(binding)) {
-    const raw = binding[key];
-    if (typeof raw === "number" && Number.isFinite(raw)) {
-      return Math.max(0, Math.floor(raw));
-    }
-  }
-  if (!isSessionBindingRecord(binding)) {
-    return undefined;
-  }
-  const raw = binding.metadata?.[key];
-  if (typeof raw !== "number" || !Number.isFinite(raw)) {
-    return undefined;
-  }
-  return Math.max(0, Math.floor(raw));
+  const raw = isSessionBindingRecord(binding) ? binding.metadata?.[key] : binding[key];
+  return resolveOptionalIntegerOption(raw, { min: 0 });
 }
 
 function toUpdatedLifecycleBinding(
@@ -225,11 +219,13 @@ export const handleActivationCommand: CommandHandler = async (params, allowTextC
       reply: { text: "⚙️ Group activation only applies to group chats." },
     };
   }
-  if (!params.command.isAuthorizedSender) {
-    logVerbose(
-      `Ignoring /activation from unauthorized sender in group: ${params.command.senderId || "<unknown>"}`,
-    );
-    return { shouldContinue: false };
+  const unauthorizedResult = rejectUnauthorizedCommand(params, "/activation");
+  if (unauthorizedResult) {
+    return unauthorizedResult;
+  }
+  const nonOwnerResult = rejectNonOwnerCommand(params, "/activation");
+  if (nonOwnerResult) {
+    return nonOwnerResult;
   }
   if (!activationCommand.mode) {
     return {
@@ -240,7 +236,14 @@ export const handleActivationCommand: CommandHandler = async (params, allowTextC
   if (params.sessionEntry && params.sessionStore && params.sessionKey) {
     params.sessionEntry.groupActivation = activationCommand.mode;
     params.sessionEntry.groupActivationNeedsSystemIntro = true;
-    await persistSessionEntry(params);
+    if (
+      !(await persistSessionEntry({
+        ...params,
+        touchedFields: ["groupActivation", "groupActivationNeedsSystemIntro"],
+      }))
+    ) {
+      return sessionEntryPersistenceConflictReply();
+    }
   }
   return {
     shouldContinue: false,
@@ -278,7 +281,9 @@ export const handleSendPolicyCommand: CommandHandler = async (params, allowTextC
     } else {
       params.sessionEntry.sendPolicy = sendPolicyCommand.mode;
     }
-    await persistSessionEntry(params);
+    if (!(await persistSessionEntry({ ...params, touchedFields: ["sendPolicy"] }))) {
+      return sessionEntryPersistenceConflictReply();
+    }
   }
   const label =
     sendPolicyCommand.mode === "inherit"
@@ -311,17 +316,41 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
   const requested = rawArgs ? normalizeUsageDisplay(rawArgs) : undefined;
   if (normalizeLowercaseStringOrEmpty(rawArgs).startsWith("cost")) {
     const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
-    const sessionAgentId = params.sessionKey
-      ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
-      : params.agentId;
+    const sessionAgentId =
+      params.sessionKey && !isUnscopedSessionKeySentinel(params.sessionKey)
+        ? resolveSessionAgentId({
+            sessionKey: params.sessionKey,
+            config: params.cfg,
+            agentId: params.agentId,
+          })
+        : params.agentId;
+    const usageAgentId = sessionAgentId ?? DEFAULT_AGENT_ID;
     const sessionSummary = await loadSessionCostSummary({
       sessionId: targetSessionEntry?.sessionId,
       sessionEntry: targetSessionEntry,
-      sessionFile: targetSessionEntry?.sessionFile,
+      ...(targetSessionEntry?.sessionId && params.sessionKey
+        ? {
+            sessionTarget: {
+              agentId: usageAgentId,
+              sessionId: targetSessionEntry.sessionId,
+              sessionKey: params.sessionKey,
+              storePath: resolveSessionStorePathForScope({
+                agentId: usageAgentId,
+                sessionKey: params.sessionKey,
+                storePath:
+                  params.storePath ??
+                  resolveStorePath(params.cfg.session?.store, { agentId: usageAgentId }),
+              }),
+            },
+          }
+        : {}),
       config: params.cfg,
-      agentId: sessionAgentId,
+      agentId: usageAgentId,
     });
-    const summary = await loadCostUsageSummary({ days: 30, config: params.cfg });
+    const summary = await loadCostUsageSummary({
+      config: params.cfg,
+      agentId: usageAgentId,
+    });
 
     const sessionCost = formatUsd(sessionSummary?.totalCost);
     const sessionTokens = sessionSummary?.totalTokens
@@ -352,26 +381,58 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
     };
   }
 
-  if (rawArgs && !requested) {
+  const isReset = rawArgs ? isSessionDefaultDirectiveValue(rawArgs) : false;
+
+  if (rawArgs && !requested && !isReset) {
     return {
       shouldContinue: false,
-      reply: { text: "⚙️ Usage: /usage off|tokens|full|cost" },
+      reply: { text: "⚙️ Usage: /usage off|tokens|full|reset|cost" },
     };
   }
 
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+
+  if (isReset) {
+    if (targetSessionEntry && params.sessionStore && params.sessionKey) {
+      delete targetSessionEntry.responseUsage;
+      params.sessionStore[params.sessionKey] = targetSessionEntry;
+      if (
+        !(await persistSessionEntry({
+          ...params,
+          sessionEntry: targetSessionEntry,
+          touchedFields: ["responseUsage"],
+        }))
+      ) {
+        return sessionEntryPersistenceConflictReply();
+      }
+    }
+    return {
+      shouldContinue: false,
+      reply: { text: "⚙️ Usage footer: reset to default." },
+    };
+  }
+
+  const replyChannel = params.command.channel;
   const currentRaw = targetSessionEntry?.responseUsage;
-  const current = resolveResponseUsageMode(currentRaw);
+  const current = resolveEffectiveResponseUsage(
+    currentRaw,
+    params.cfg.messages?.responseUsage,
+    replyChannel,
+  );
   const next = requested ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
 
   if (targetSessionEntry && params.sessionStore && params.sessionKey) {
-    if (next === "off") {
-      delete targetSessionEntry.responseUsage;
-    } else {
-      targetSessionEntry.responseUsage = next;
-    }
+    targetSessionEntry.responseUsage = next;
     params.sessionStore[params.sessionKey] = targetSessionEntry;
-    await persistSessionEntry({ ...params, sessionEntry: targetSessionEntry });
+    if (
+      !(await persistSessionEntry({
+        ...params,
+        sessionEntry: targetSessionEntry,
+        touchedFields: ["responseUsage"],
+      }))
+    ) {
+      return sessionEntryPersistenceConflictReply();
+    }
   }
 
   return {
@@ -411,17 +472,16 @@ export const handleFastCommand: CommandHandler = async (params, allowTextCommand
       agentId: sessionAgentId,
       sessionEntry: targetSessionEntry,
     });
-    const suffix =
-      state.source === "agent"
-        ? " (agent)"
-        : state.source === "config"
-          ? " (config)"
-          : state.source === "default"
-            ? " (default)"
-            : "";
     return {
       shouldContinue: false,
-      reply: { text: `⚙️ Current fast mode: ${state.enabled ? "on" : "off"}${suffix}.` },
+      reply: {
+        text: formatFastModeCurrentStatus({
+          mode: state.mode,
+          source: state.source,
+          fastAutoOnSeconds: state.fastAutoOnSeconds,
+          label: "⚙️ Current fast mode",
+        }),
+      },
     };
   }
 
@@ -432,7 +492,15 @@ export const handleFastCommand: CommandHandler = async (params, allowTextCommand
     if (resetsToDefault) {
       if (targetSessionEntry && params.sessionStore && params.sessionKey) {
         delete targetSessionEntry.fastMode;
-        await persistSessionEntry({ ...params, sessionEntry: targetSessionEntry });
+        if (
+          !(await persistSessionEntry({
+            ...params,
+            sessionEntry: targetSessionEntry,
+            touchedFields: ["fastMode"],
+          }))
+        ) {
+          return sessionEntryPersistenceConflictReply();
+        }
       }
       return {
         shouldContinue: false,
@@ -441,18 +509,31 @@ export const handleFastCommand: CommandHandler = async (params, allowTextCommand
     }
     return {
       shouldContinue: false,
-      reply: { text: "⚙️ Usage: /fast status|on|off|default" },
+      reply: { text: "⚙️ Usage: /fast status|auto|on|off|default" },
     };
   }
 
   if (targetSessionEntry && params.sessionStore && params.sessionKey) {
     targetSessionEntry.fastMode = nextMode;
-    await persistSessionEntry({ ...params, sessionEntry: targetSessionEntry });
+    if (
+      !(await persistSessionEntry({
+        ...params,
+        sessionEntry: targetSessionEntry,
+        touchedFields: ["fastMode"],
+      }))
+    ) {
+      return sessionEntryPersistenceConflictReply();
+    }
   }
 
   return {
     shouldContinue: false,
-    reply: { text: `⚙️ Fast mode ${nextMode ? "enabled" : "disabled"}.` },
+    reply: {
+      text:
+        nextMode === "auto"
+          ? "⚙️ Fast mode set to auto."
+          : `⚙️ Fast mode ${nextMode ? "enabled" : "disabled"}.`,
+    },
   };
 };
 
@@ -703,7 +784,7 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
   const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
   const sentinelPayload = buildRestartCommandSentinel(params);
   if (hasSigusr1Listener) {
-    let sentinelPath: string | null = null;
+    let sentinelWritten = false;
     scheduleGatewaySigusr1Restart({
       reason: "/restart",
       // Sibling session-routing guard: /restart writes a session-scoped sentinel
@@ -713,10 +794,13 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       emitHooks: sentinelPayload
         ? {
             beforeEmit: async () => {
-              sentinelPath = await writeRestartSentinel(sentinelPayload);
+              await writeRestartSentinel(sentinelPayload);
+              sentinelWritten = true;
             },
             afterEmitRejected: async () => {
-              await removeRestartSentinelFile(sentinelPath);
+              if (sentinelWritten) {
+                await clearRestartSentinel();
+              }
             },
           }
         : undefined,
@@ -728,10 +812,11 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       },
     };
   }
-  let sentinelPath: string | null = null;
+  let sentinelWritten = false;
   try {
     if (sentinelPayload) {
-      sentinelPath = await writeRestartSentinel(sentinelPayload);
+      await writeRestartSentinel(sentinelPayload);
+      sentinelWritten = true;
     }
   } catch (err) {
     logVerbose(`failed to write /restart sentinel: ${String(err)}`);
@@ -744,7 +829,9 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
   }
   const restartMethod = triggerOpenClawRestart();
   if (!restartMethod.ok) {
-    await removeRestartSentinelFile(sentinelPath);
+    if (sentinelWritten) {
+      await clearRestartSentinel();
+    }
     const detail = restartMethod.detail ? ` Details: ${restartMethod.detail}` : "";
     return {
       shouldContinue: false,
@@ -762,3 +849,4 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
 };
 
 export { handleAbortTrigger, handleStopCommand };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

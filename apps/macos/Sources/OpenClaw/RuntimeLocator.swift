@@ -46,7 +46,6 @@ enum RuntimeResolutionError: Error {
     case unsupported(
         kind: RuntimeKind,
         found: RuntimeVersion,
-        required: RuntimeVersion,
         path: String,
         searchPaths: [String])
     case versionParse(kind: RuntimeKind, raw: String, path: String, searchPaths: [String])
@@ -54,7 +53,25 @@ enum RuntimeResolutionError: Error {
 
 enum RuntimeLocator {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "runtime")
-    private static let minNode = RuntimeVersion(major: 22, minor: 19, patch: 0)
+    // Keep these floors aligned with package.json engines so the app never launches
+    // the gateway on an unsupported odd release or an older even-major runtime.
+    private static let minNode22 = RuntimeVersion(major: 22, minor: 22, patch: 3)
+    private static let minNode24 = RuntimeVersion(major: 24, minor: 15, patch: 0)
+    private static let minNode25 = RuntimeVersion(major: 25, minor: 9, patch: 0)
+    private static let supportedNodeRange = ">=22.22.3 <23, >=24.15.0 <25, or >=25.9.0"
+
+    static func isSupportedNodeVersion(_ version: RuntimeVersion) -> Bool {
+        if version.major == self.minNode22.major {
+            return version >= self.minNode22
+        }
+        if version.major == self.minNode24.major {
+            return version >= self.minNode24
+        }
+        if version.major == self.minNode25.major {
+            return version >= self.minNode25
+        }
+        return version.major > self.minNode25.major
+    }
 
     static func resolve(
         searchPaths: [String] = CommandResolver.preferredPaths()) -> Result<RuntimeResolution, RuntimeResolutionError>
@@ -75,11 +92,10 @@ enum RuntimeLocator {
         guard let parsed = RuntimeVersion.from(string: rawVersion) else {
             return .failure(.versionParse(kind: runtime, raw: rawVersion, path: binary, searchPaths: searchPaths))
         }
-        guard parsed >= self.minNode else {
+        guard self.isSupportedNodeVersion(parsed) else {
             return .failure(.unsupported(
                 kind: runtime,
                 found: parsed,
-                required: self.minNode,
                 path: binary,
                 searchPaths: searchPaths))
         }
@@ -91,13 +107,13 @@ enum RuntimeLocator {
         switch error {
         case let .notFound(searchPaths):
             [
-                "openclaw needs Node >=22.19.0 but found no runtime.",
+                "openclaw needs Node \(self.supportedNodeRange) but found no runtime.",
                 "PATH searched: \(searchPaths.joined(separator: ":"))",
                 "Install Node: https://nodejs.org/en/download",
             ].joined(separator: "\n")
-        case let .unsupported(kind, found, required, path, searchPaths):
+        case let .unsupported(kind, found, path, searchPaths):
             [
-                "Found \(kind.rawValue) \(found) at \(path) but need >= \(required).",
+                "Found \(kind.rawValue) \(found) at \(path) but need \(self.supportedNodeRange).",
                 "PATH searched: \(searchPaths.joined(separator: ":"))",
                 "Upgrade Node and rerun openclaw.",
             ].joined(separator: "\n")
@@ -105,7 +121,7 @@ enum RuntimeLocator {
             [
                 "Could not parse \(kind.rawValue) version output \"\(raw)\" from \(path).",
                 "PATH searched: \(searchPaths.joined(separator: ":"))",
-                "Try reinstalling or pinning a supported version (Node >=22.19.0).",
+                "Try reinstalling or pinning a supported version (Node \(self.supportedNodeRange)).",
             ].joined(separator: "\n")
         }
     }

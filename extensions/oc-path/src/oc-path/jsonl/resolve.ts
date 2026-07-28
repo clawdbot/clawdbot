@@ -18,16 +18,11 @@
 import type { JsoncEntry, JsoncValue } from "../jsonc/ast.js";
 import { resolveJsoncValueOcPath } from "../jsonc/resolve-value.js";
 import type { OcPath } from "../oc-path.js";
-import {
-  POS_FIRST,
-  POS_LAST,
-  isQuotedSeg,
-  splitRespectingBrackets,
-  unquoteSeg,
-} from "../oc-path.js";
+import { isQuotedSeg, splitRespectingBrackets, unquoteSeg } from "../oc-path.js";
 import type { JsonlAst, JsonlLine } from "./ast.js";
+import { pickJsonlLine } from "./line.js";
 
-export type JsonlOcPathMatch =
+type JsonlOcPathMatch =
   | { readonly kind: "root"; readonly node: JsonlAst }
   | { readonly kind: "line"; readonly node: JsonlLine }
   | {
@@ -50,7 +45,7 @@ export function resolveJsonlOcPath(ast: JsonlAst, path: OcPath): JsonlOcPathMatc
     return { kind: "root", node: ast };
   }
 
-  const lineEntry = pickLine(ast, head);
+  const lineEntry = pickJsonlLine(ast, head);
   if (lineEntry === null) {
     return null;
   }
@@ -89,35 +84,4 @@ export function resolveJsonlOcPath(ast: JsonlAst, path: OcPath): JsonlOcPathMatc
     };
   }
   return { kind: "value", node: match.node, line: lineEntry.line, path: match.path };
-}
-
-function pickLine(ast: JsonlAst, addr: string): JsonlLine | null {
-  if (addr === POS_FIRST) {
-    for (const l of ast.lines) {
-      if (l.kind === "value") {
-        return l;
-      }
-    }
-    return null;
-  }
-  if (addr === POS_LAST) {
-    for (let i = ast.lines.length - 1; i >= 0; i--) {
-      const l = ast.lines[i];
-      if (l !== undefined && l.kind === "value") {
-        return l;
-      }
-    }
-    return null;
-  }
-  const m = /^L(\d+)$/.exec(addr);
-  if (m === null || m[1] === undefined) {
-    return null;
-  }
-  const target = Number(m[1]);
-  for (const l of ast.lines) {
-    if (l.line === target) {
-      return l;
-    }
-  }
-  return null;
 }

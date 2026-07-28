@@ -95,11 +95,16 @@ describe("sendFailureNotificationAnnounce", () => {
       "Cron failed",
     );
 
-    expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith(cfg, "main", {
-      channel: "telegram",
-      to: "123",
-      accountId: "bot-a",
-    });
+    expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith(
+      cfg,
+      "main",
+      {
+        channel: "telegram",
+        to: "123",
+        accountId: "bot-a",
+      },
+      undefined,
+    );
     expect(mocks.buildOutboundSessionContext).toHaveBeenCalledWith({
       cfg,
       agentId: "main",
@@ -133,17 +138,50 @@ describe("sendFailureNotificationAnnounce", () => {
       "Cron failed",
     );
 
-    expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith({} as never, "main", {
-      channel: "telegram",
-      to: undefined,
-      accountId: undefined,
-      sessionKey: "agent:main:telegram:direct:123:thread:99",
-    });
+    expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith(
+      {} as never,
+      "main",
+      {
+        channel: "telegram",
+        to: undefined,
+        accountId: undefined,
+        sessionKey: "agent:main:telegram:direct:123:thread:99",
+      },
+      undefined,
+    );
     expect(mocks.buildOutboundSessionContext).toHaveBeenCalledWith({
       cfg: {},
       agentId: "main",
       sessionKey: "agent:main:telegram:direct:123:thread:99",
     });
+  });
+
+  it("can suppress session-thread inheritance for explicit failure destinations", async () => {
+    await sendFailureNotificationAnnounce(
+      {} as never,
+      {} as never,
+      "main",
+      "job-1",
+      {
+        channel: "telegram",
+        to: "-1001234567890",
+        sessionKey: "agent:main:telegram:group:-1001234567890:thread:42",
+        inheritSessionThread: false,
+      },
+      "Cron failed",
+    );
+
+    expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith(
+      {},
+      "main",
+      {
+        channel: "telegram",
+        to: "-1001234567890",
+        accountId: undefined,
+        sessionKey: "agent:main:telegram:group:-1001234567890:thread:42",
+      },
+      { inheritSessionThread: false },
+    );
   });
 
   it("does not send when target resolution fails", async () => {

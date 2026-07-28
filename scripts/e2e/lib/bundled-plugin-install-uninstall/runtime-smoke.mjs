@@ -6,8 +6,12 @@ import path from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { resolveWindowsTaskkillPath } from "../../../lib/windows-taskkill.mjs";
+import { readBoundedResponseText } from "../bounded-response-text.mjs";
 
 const TOKEN = "bundled-plugin-runtime-smoke-token";
+const RUNTIME_PORT_BASE_ENV = "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_PORT_BASE";
+const TCP_PORT_MAX = 65535;
 const OUTPUT_CAPTURE_CHARS = readPositiveIntEnv(
   "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_OUTPUT_CHARS",
   1024 * 1024,
@@ -29,6 +33,7 @@ const RPC_READY_TIMEOUT_MS = readPositiveIntEnv(
 );
 const COMMAND_TIMEOUT_MS = readPositiveIntEnv("OPENCLAW_BUNDLED_PLUGIN_RUNTIME_COMMAND_MS", 120000);
 const HTTP_PROBE_TIMEOUT_MS = readPositiveIntEnv("OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS", 5000);
+const HTTP_PROBE_BODY_MAX_BYTES = 1024 * 1024;
 const GATEWAY_TEARDOWN_GRACE_MS = readPositiveIntEnv(
   "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_TEARDOWN_GRACE_MS",
   10000,
@@ -66,10 +71,36 @@ function readPositiveInt(raw, fallback, name) {
     throw new Error(`invalid ${name}: ${text}`);
   }
   const parsed = Number(text);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
     throw new Error(`invalid ${name}: ${text}`);
   }
   return parsed;
+}
+
+function readNonNegativeInt(raw, fallback, name) {
+  const text = String(raw ?? "").trim();
+  if (!text) {
+    return fallback;
+  }
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
+  return parsed;
+}
+
+export function resolveRuntimeSmokePort(pluginIndex, offset = 0, env = process.env) {
+  const base = readPositiveInt(env[RUNTIME_PORT_BASE_ENV], 19000, RUNTIME_PORT_BASE_ENV);
+  const port = base + pluginIndex * 3 + offset;
+  if (!Number.isSafeInteger(port) || port > TCP_PORT_MAX) {
+    throw new Error(
+      `${RUNTIME_PORT_BASE_ENV} with bundled plugin runtime index ${pluginIndex} and offset ${offset} must resolve to a TCP port from 1 to 65535. Got: ${port}`,
+    );
+  }
+  return port;
 }
 
 function readJson(file) {
@@ -522,7 +553,9 @@ function trackGatewayChild(child) {
 function trackCommandChild(child) {
   activeCommandChildren.add(child);
   const untrack = () => {
-    activeCommandChildren.delete(child);
+    if (!processTreeIsAlive(child)) {
+      activeCommandChildren.delete(child);
+    }
   };
   child.once("error", untrack);
   child.once("close", untrack);
@@ -609,14 +642,39 @@ function processTreeIsAlive(child) {
   }
 }
 
-function signalChildProcessTree(child, signal) {
-  if (process.platform !== "win32" && typeof child.pid === "number") {
+function defaultRunTaskkill(command, args, options) {
+  return childProcess.spawnSync(command, args, options);
+}
+
+export function signalChildProcessTree(
+  child,
+  signal,
+  { platform = process.platform, runTaskkill = defaultRunTaskkill } = {},
+) {
+  if (platform !== "win32" && typeof child.pid === "number") {
     try {
       process.kill(-child.pid, signal);
       return;
     } catch {
       // Non-detached callers may not own a process group keyed by child.pid; keep
       // the legacy direct-child kill path as the fallback.
+    }
+  }
+  if (platform === "win32" && typeof child.pid === "number") {
+    const args = ["/PID", String(child.pid), "/T"];
+    if (signal === "SIGKILL") {
+      args.push("/F");
+    }
+    const taskkillPath = resolveWindowsTaskkillPath();
+    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
+    if (!result?.error && result?.status === 0) {
+      return;
+    }
+    if (signal !== "SIGKILL") {
+      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
+      if (!forceResult?.error && forceResult?.status === 0) {
+        return;
+      }
     }
   }
   try {
@@ -665,18 +723,37 @@ export async function waitForReady(params) {
 async function fetchHttpProbeStatus(port, pathName, options = {}) {
   const { parseJson = false, timeoutMs = HTTP_PROBE_TIMEOUT_MS } = options;
   const controller = new AbortController();
-  const clearProbeTimer = timeoutMs
-    ? setTimeout(() => {
-        controller.abort();
-      }, timeoutMs)
+  const timeoutError = Object.assign(
+    new Error(`${pathName} probe timed out after ${timeoutMs}ms`),
+    {
+      code: "ETIMEDOUT",
+    },
+  );
+  let clearProbeTimer;
+  const timeoutPromise = timeoutMs
+    ? new Promise((_, reject) => {
+        clearProbeTimer = setTimeout(() => {
+          controller.abort(timeoutError);
+          reject(timeoutError);
+        }, timeoutMs);
+        clearProbeTimer.unref?.();
+      })
     : undefined;
   try {
-    const res = await fetch(`http://127.0.0.1:${port}${pathName}`, {
-      signal: controller.signal,
-    });
+    const res = await Promise.race([
+      fetch(`http://127.0.0.1:${port}${pathName}`, {
+        signal: controller.signal,
+      }),
+      ...(timeoutPromise ? [timeoutPromise] : []),
+    ]);
     const status = { ok: res.ok, status: res.status, body: undefined, bodyText: undefined };
     if (parseJson) {
-      const text = await res.text();
+      const text = await readBoundedResponseText(
+        res,
+        `${pathName} probe`,
+        HTTP_PROBE_BODY_MAX_BYTES,
+        timeoutPromise,
+      );
       status.bodyText = text;
       if (text.trim()) {
         try {
@@ -861,26 +938,52 @@ function parseJsonOutput(stdout) {
   if (!trimmed) {
     throw new Error("gateway call produced no JSON output");
   }
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    const jsonStart = trimmed.indexOf("{");
-    if (jsonStart >= 0) {
-      try {
-        return JSON.parse(trimmed.slice(jsonStart));
-      } catch {
-        // Fall through to the line-oriented fallback below.
-      }
-    }
-    const jsonLine = trimmed
-      .split(/\r?\n/u)
-      .toReversed()
-      .find((line) => line.trim().startsWith("{"));
-    if (!jsonLine) {
-      throw new Error(`gateway call JSON output was not parseable:\n${trimmed}`);
-    }
-    return JSON.parse(jsonLine);
+  const parsed = parseJsonValue(trimmed);
+  if (parsed.ok) {
+    return parsed.value;
   }
+
+  let lastParsed;
+  const lines = trimmed.split(/\r?\n/u);
+  for (let start = lines.length - 1; start >= 0; start -= 1) {
+    if (!lines[start].trimStart().startsWith("{")) {
+      continue;
+    }
+    let candidate = "";
+    for (let end = start; end < lines.length; end += 1) {
+      candidate = candidate ? `${candidate}\n${lines[end]}` : lines[end];
+      const candidateParsed = parseJsonValue(candidate);
+      if (!candidateParsed.ok) {
+        continue;
+      }
+      lastParsed ??= candidateParsed.value;
+      if (isGatewayJsonOutput(candidateParsed.value)) {
+        return candidateParsed.value;
+      }
+      break;
+    }
+  }
+  if (lastParsed !== undefined) {
+    return lastParsed;
+  }
+  throw new Error(`gateway call JSON output was not parseable:\n${trimmed}`);
+}
+
+function parseJsonValue(text) {
+  try {
+    return { ok: true, value: JSON.parse(text) };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function isGatewayJsonOutput(raw) {
+  return (
+    raw?.ok === false ||
+    hasOwnPayloadField(raw, "result") ||
+    hasOwnPayloadField(raw, "payload") ||
+    hasOwnPayloadField(raw, "data")
+  );
 }
 
 function hasOwnPayloadField(raw, field) {
@@ -951,8 +1054,7 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex, plu
   }
   const manifest = loadManifest(pluginDir, pluginRoot);
   const plan = buildPluginPlan(manifest);
-  const port =
-    readPositiveIntEnv("OPENCLAW_BUNDLED_PLUGIN_RUNTIME_PORT_BASE", 19000) + pluginIndex * 3;
+  const port = resolveRuntimeSmokePort(pluginIndex);
   const config = ensureGatewayConfig(
     activateSmokePlugin(readConfig(), pluginId, plan.channels),
     port,
@@ -960,16 +1062,13 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex, plu
   const env = withManifestChannelActivationEnv(process.env, plan.channels);
   if (plan.speechProviders[0]) {
     const provider = plan.speechProviders[0];
-    config.messages = {
-      ...config.messages,
-      tts: {
-        ...config.messages?.tts,
-        provider,
-        providers: {
-          ...config.messages?.tts?.providers,
-          [provider]: {
-            ...config.messages?.tts?.providers?.[provider],
-          },
+    config.tts = {
+      ...config.tts,
+      provider,
+      providers: {
+        ...config.tts?.providers,
+        [provider]: {
+          ...config.tts?.providers?.[provider],
         },
       },
     };
@@ -1284,8 +1383,7 @@ async function smokeTtsGlobalDisable(pluginId, pluginDir, provider, pluginIndex,
     console.log(`Global-disable TTS smoke skipped for ${pluginId}: no speech provider contract`);
     return;
   }
-  const port =
-    readPositiveIntEnv("OPENCLAW_BUNDLED_PLUGIN_RUNTIME_PORT_BASE", 19000) + pluginIndex * 3 + 1;
+  const port = resolveRuntimeSmokePort(pluginIndex, 1);
   const env = createIsolatedStateEnv(`tts-disabled-${pluginId}`);
   writeConfig(
     ensureGatewayConfig(
@@ -1293,10 +1391,8 @@ async function smokeTtsGlobalDisable(pluginId, pluginDir, provider, pluginIndex,
         plugins: {
           enabled: false,
         },
-        messages: {
-          tts: {
-            provider: selectedProvider,
-          },
+        tts: {
+          provider: selectedProvider,
         },
       },
       port,
@@ -1337,8 +1433,7 @@ async function smokeOpenAiTts(pluginIndex) {
     console.log("OpenAI key-backed TTS smoke skipped: OPENAI_API_KEY is not set");
     return;
   }
-  const port =
-    readPositiveIntEnv("OPENCLAW_BUNDLED_PLUGIN_RUNTIME_PORT_BASE", 19000) + pluginIndex * 3 + 2;
+  const port = resolveRuntimeSmokePort(pluginIndex, 2);
   const env = createIsolatedStateEnv("tts-openai-live");
   writeConfig(
     ensureGatewayConfig(
@@ -1350,13 +1445,11 @@ async function smokeOpenAiTts(pluginIndex) {
             openai: { enabled: true },
           },
         },
-        messages: {
-          tts: {
-            provider: "openai",
-            providers: {
-              openai: {
-                apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-              },
+        tts: {
+          provider: "openai",
+          providers: {
+            openai: {
+              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
             },
           },
         },
@@ -1424,10 +1517,10 @@ function tailText(text) {
   return text.split(/\r?\n/u).slice(-120).join("\n");
 }
 
-export async function main(argv = process.argv.slice(2)) {
+async function main(argv = process.argv.slice(2)) {
   const [command, pluginId, pluginDir, requiresConfigRaw, pluginIndexRaw, pluginRoot, provider] =
     argv;
-  const pluginIndex = Number.parseInt(pluginIndexRaw || "0", 10);
+  const pluginIndex = readNonNegativeInt(pluginIndexRaw, 0, "bundled plugin runtime index");
 
   if (command === "plugin") {
     await smokePlugin(pluginId, pluginDir, requiresConfigRaw === "1", pluginIndex, pluginRoot);

@@ -6,7 +6,8 @@ import { resolveSystemBin } from "../src/infra/resolve-system-bin.js";
 import { ensureDebugProxyCa } from "../src/proxy-capture/ca.js";
 import { resolveDebugProxySettings } from "../src/proxy-capture/env.js";
 
-const printOnly = process.argv.includes("--print-only");
+const parsedArgs = parseArgs(process.argv.slice(2));
+const printOnly = parsedArgs.printOnly;
 
 async function installCa() {
   const settings = resolveDebugProxySettings();
@@ -56,3 +57,27 @@ void installCa().catch(
     process.exit(1);
   },
 );
+
+function parseArgs(argv) {
+  let wantsPrintOnly = false;
+  for (const arg of argv) {
+    if (arg === "--help") {
+      printUsage(console.log);
+      process.exit(0);
+    }
+    if (arg === "--print-only") {
+      wantsPrintOnly = true;
+      continue;
+    }
+    console.error(`Unknown proxy install CA argument: ${arg}`);
+    printUsage(console.error);
+    process.exit(1);
+  }
+  return { printOnly: wantsPrintOnly };
+}
+
+function printUsage(writeLine) {
+  writeLine("Usage: node --import tsx scripts/proxy-install-ca.mjs [--print-only]");
+  writeLine("");
+  writeLine("  --print-only  create or reuse the debug proxy CA without changing system trust");
+}

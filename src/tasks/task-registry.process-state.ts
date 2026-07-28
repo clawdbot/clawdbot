@@ -2,7 +2,7 @@
 import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
 
 /** Process-local indexes backing task lookup, owner access, and pending delivery scans. */
-export type TaskRegistryProcessState = {
+type TaskRegistryProcessState = {
   tasks: Map<string, TaskRecord>;
   taskDeliveryStates: Map<string, TaskDeliveryState>;
   taskIdsByRunId: Map<string, Set<string>>;

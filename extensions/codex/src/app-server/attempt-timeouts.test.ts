@@ -2,11 +2,7 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS,
-  CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS,
-  CODEX_TURN_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS,
-  CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS,
-  CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
+  isCodexAppServerStartupError,
   resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs,
   resolveCodexGatewayTimeoutWithGraceMs,
   resolveCodexStartupTimeoutMs,
@@ -15,6 +11,12 @@ import {
   resolveCodexTurnTerminalIdleTimeoutMs,
   withCodexStartupTimeout,
 } from "./attempt-timeouts.js";
+
+const CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS = 100;
+const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 60_000;
+const CODEX_TURN_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS = 10_000;
+const CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS = 5 * 60_000;
+const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
 
 describe("Codex app-server attempt timeouts", () => {
   afterEach(() => {
@@ -112,6 +114,25 @@ describe("Codex app-server attempt timeouts", () => {
     );
   });
 
+  it("derives the terminal idle timeout from the effective run budget", () => {
+    const overFloor = CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS + 15 * 60_000;
+    // A run budget above the 30-minute floor extends the watchdog (the #85242 fix).
+    expect(resolveCodexTurnTerminalIdleTimeoutMs(undefined, overFloor)).toBe(overFloor);
+    // A run budget below the floor keeps the 30-minute floor (protection never shortened).
+    expect(resolveCodexTurnTerminalIdleTimeoutMs(undefined, 10 * 60_000)).toBe(
+      CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
+    );
+    // A non-finite budget falls back to the 30-minute default.
+    expect(resolveCodexTurnTerminalIdleTimeoutMs(undefined, Number.POSITIVE_INFINITY)).toBe(
+      CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
+    );
+    expect(resolveCodexTurnTerminalIdleTimeoutMs(undefined, Number.MAX_SAFE_INTEGER)).toBe(
+      MAX_TIMER_TIMEOUT_MS,
+    );
+    // An explicit override still wins even when a run budget is present.
+    expect(resolveCodexTurnTerminalIdleTimeoutMs(5 * 60_000, overFloor)).toBe(5 * 60_000);
+  });
+
   it("caps gateway timeout grace", () => {
     expect(resolveCodexGatewayTimeoutWithGraceMs(120_000)).toBe(130_000);
     expect(resolveCodexGatewayTimeoutWithGraceMs(120_000, 500)).toBe(120_500);
@@ -150,12 +171,14 @@ describe("Codex app-server attempt timeouts", () => {
       },
       operation: async () => new Promise<never>(() => {}),
     });
-    const rejected = expect(run).rejects.toThrow("codex app-server startup timed out");
+    const errorResult = run.catch((error: unknown) => error);
 
     await vi.advanceTimersByTimeAsync(10);
     expect(events).toEqual(["cleanup-start"]);
     await vi.advanceTimersByTimeAsync(5);
-    await rejected;
+    const error = await errorResult;
+    expect(isCodexAppServerStartupError(error, "timed_out")).toBe(true);
+    expect((error as Error).message).toBe("codex app-server startup timed out");
     expect(events).toEqual(["cleanup-start", "cleanup-done"]);
   });
 
@@ -167,10 +190,12 @@ describe("Codex app-server attempt timeouts", () => {
       signal: controller.signal,
       operation: async () => new Promise<never>(() => {}),
     });
-    const rejected = expect(run).rejects.toThrow("codex app-server startup aborted");
+    const errorResult = run.catch((error: unknown) => error);
 
     controller.abort();
 
-    await rejected;
+    const error = await errorResult;
+    expect(isCodexAppServerStartupError(error, "aborted")).toBe(true);
+    expect((error as Error).message).toBe("codex app-server startup aborted");
   });
 });

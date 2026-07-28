@@ -2,9 +2,19 @@
 import { describe, expect, it, vi } from "vitest";
 import { normalizeAllowFrom } from "./bot-access.js";
 
-const { transcribeFirstAudioMock, triggerInternalHookMock } = vi.hoisted(() => ({
+const {
+  resolveStickerVisionSupportRuntimeMock,
+  transcribeFirstAudioMock,
+  triggerInternalHookMock,
+} = vi.hoisted(() => ({
+  resolveStickerVisionSupportRuntimeMock: vi.fn(async (_params: unknown) => false),
   transcribeFirstAudioMock: vi.fn(),
   triggerInternalHookMock: vi.fn<(event: unknown) => Promise<void>>(async () => undefined),
+}));
+
+vi.mock("./sticker-vision.runtime.js", () => ({
+  resolveStickerVisionSupportRuntime: (params: unknown) =>
+    resolveStickerVisionSupportRuntimeMock(params),
 }));
 
 vi.mock("./media-understanding.runtime.js", () => ({
@@ -73,6 +83,261 @@ function transcribeCallContext(index = 0): Record<string, unknown> {
 }
 
 describe("resolveTelegramInboundBody", () => {
+  it("delivers rich-message-only updates as a sanitized placeholder", async () => {
+    const result = await resolveTelegramBody({
+      msg: {
+        message_id: 0,
+        date: 1_700_000_000,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        rich_message: { blocks: [{ type: "paragraph" }] },
+      } as never,
+    });
+
+    expect(result?.rawBody).toBe("[unsupported Telegram rich_message received]");
+    expect(result?.bodyText).toBe("[unsupported Telegram rich_message received]");
+  });
+
+  it("extracts text from rich-message-only updates", async () => {
+    const result = await resolveTelegramBody({
+      msg: {
+        message_id: 0,
+        date: 1_700_000_000,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        rich_message: {
+          blocks: [
+            {
+              type: "paragraph",
+              text: "Forwarded rich text",
+            },
+          ],
+        },
+      } as never,
+    });
+
+    expect(result?.rawBody).toBe("Forwarded rich text");
+    expect(result?.bodyText).toBe("Forwarded rich text");
+  });
+
+  it("preserves whitespace across rich-message inline text spans", async () => {
+    const result = await resolveTelegramBody({
+      msg: {
+        message_id: 0,
+        date: 1_700_000_000,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        rich_message: {
+          blocks: [
+            {
+              type: "paragraph",
+              text: ["Forwarded ", { type: "bold", text: "rich text" }],
+            },
+          ],
+        },
+      } as never,
+    });
+
+    expect(result?.rawBody).toBe("Forwarded rich text");
+  });
+
+  it("extracts markdown and html rich-message text", async () => {
+    const markdownResult = await resolveTelegramBody({
+      msg: {
+        message_id: 0,
+        date: 1_700_000_000,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        rich_message: { markdown: "Forwarded **markdown**" },
+      } as never,
+    });
+    const htmlResult = await resolveTelegramBody({
+      msg: {
+        message_id: 0,
+        date: 1_700_000_000,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        rich_message: { html: "<p>Forwarded html</p>" },
+      } as never,
+    });
+
+    expect(markdownResult?.rawBody).toBe("Forwarded **markdown**");
+    expect(htmlResult?.rawBody).toBe("Forwarded html");
+  });
+
+  it("extracts visible text from canonical rich-message block fields", async () => {
+    const result = await resolveTelegramBody({
+      msg: {
+        message_id: 0,
+        date: 1_700_000_000,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        rich_message: {
+          blocks: [
+            {
+              type: "details",
+              summary: "Run summary",
+              blocks: [
+                {
+                  type: "list",
+                  items: [
+                    {
+                      label: "1.",
+                      blocks: [
+                        {
+                          type: "paragraph",
+                          text: "CI clean",
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+            {
+              type: "mathematical_expression",
+              expression: "a^2+b^2=c^2",
+            },
+            {
+              type: "photo",
+              caption: {
+                text: "Chart",
+                credit: "OpenClaw",
+              },
+            },
+          ],
+        },
+      } as never,
+    });
+
+    expect(result?.rawBody).toBe("Run summary\n1.\nCI clean\na^2+b^2=c^2\nChart\nOpenClaw");
+    expect(result?.bodyText).toBe("Run summary\n1.\nCI clean\na^2+b^2=c^2\nChart\nOpenClaw");
+  });
+
+  it("keeps rich-message table caption spans inline", async () => {
+    const result = await resolveTelegramBody({
+      msg: {
+        message_id: 0,
+        date: 1_700_000_000,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        rich_message: {
+          blocks: [
+            {
+              type: "table",
+              caption: [
+                { type: "plain", text: "Total " },
+                { type: "bold", text: "Q1" },
+              ],
+            },
+          ],
+        },
+      } as never,
+    });
+
+    expect(result?.rawBody).toBe("Total Q1");
+    expect(result?.bodyText).toBe("Total Q1");
+  });
+
+  it("keeps rich-message placeholders quiet in requireMention groups", async () => {
+    const logger = { info: vi.fn() };
+    const result = await resolveTelegramBody({
+      cfg: {
+        channels: { telegram: {} },
+        messages: { groupChat: { mentionPatterns: ["\\btelegram\\b"] } },
+      } as never,
+      msg: {
+        message_id: 1,
+        date: 1_700_000_001,
+        chat: { id: -1001234567890, type: "supergroup", title: "Test Group" },
+        from: { id: 42, first_name: "Pat" },
+        rich_message: { blocks: [{ type: "paragraph" }] },
+      } as never,
+      isGroup: true,
+      chatId: -1001234567890,
+      senderId: "42",
+      groupConfig: { requireMention: true } as never,
+      requireMention: true,
+      logger,
+    });
+
+    expect(logger.info).toHaveBeenCalledWith(
+      { chatId: -1001234567890, reason: "no-mention" },
+      "skipping group message",
+    );
+    expect(result).toBeNull();
+  });
+
+  it("routes rich-message-only updates that match group mention patterns", async () => {
+    const logger = { info: vi.fn() };
+    const result = await resolveTelegramBody({
+      cfg: {
+        channels: { telegram: {} },
+        messages: { groupChat: { mentionPatterns: ["\\btelegram\\b"] } },
+      } as never,
+      msg: {
+        message_id: 1,
+        date: 1_700_000_001,
+        chat: { id: -1001234567890, type: "supergroup", title: "Test Group" },
+        from: { id: 42, first_name: "Pat" },
+        rich_message: {
+          blocks: [
+            {
+              type: "paragraph",
+              text: "telegram please read this",
+            },
+          ],
+        },
+      } as never,
+      isGroup: true,
+      chatId: -1001234567890,
+      senderId: "42",
+      groupConfig: { requireMention: true } as never,
+      requireMention: true,
+      logger,
+    });
+
+    expect(logger.info).not.toHaveBeenCalledWith(
+      { chatId: -1001234567890, reason: "no-mention" },
+      "skipping group message",
+    );
+    expect(result?.rawBody).toBe("telegram please read this");
+    expect(result?.effectiveWasMentioned).toBe(true);
+  });
+
+  it("routes rich-message-only updates that mention the bot username", async () => {
+    const logger = { info: vi.fn() };
+    const result = await resolveTelegramBody({
+      msg: {
+        message_id: 1,
+        date: 1_700_000_001,
+        chat: { id: -1001234567890, type: "supergroup", title: "Test Group" },
+        from: { id: 42, first_name: "Pat" },
+        rich_message: {
+          blocks: [
+            {
+              type: "paragraph",
+              text: "@bot please read this",
+            },
+          ],
+        },
+      } as never,
+      isGroup: true,
+      chatId: -1001234567890,
+      senderId: "42",
+      groupConfig: { requireMention: true } as never,
+      requireMention: true,
+      logger,
+    });
+
+    expect(logger.info).not.toHaveBeenCalledWith(
+      { chatId: -1001234567890, reason: "no-mention" },
+      "skipping group message",
+    );
+    expect(result?.rawBody).toBe("@bot please read this");
+    expect(result?.effectiveWasMentioned).toBe(true);
+  });
+
   it("renders Telegram text entities before building the agent body", async () => {
     const result = await resolveTelegramBody({
       msg: {
@@ -92,7 +357,7 @@ describe("resolveTelegramInboundBody", () => {
     expect(result?.bodyText).toBe("Hello **world** [docs](https://docs.example)");
   });
 
-  it("keeps the media marker when a captioned video has no downloaded media", async () => {
+  it("keeps only the caption when a video has no downloaded media", async () => {
     const result = await resolveTelegramBody({
       msg: {
         message_id: 0,
@@ -111,10 +376,10 @@ describe("resolveTelegramInboundBody", () => {
     });
 
     expect(result?.rawBody).toBe("episode caption");
-    expect(result?.bodyText).toBe("<media:video> [file_id:video-1]\nepisode caption");
+    expect(result?.bodyText).toBe("episode caption");
   });
 
-  it("uses saved media MIME for no-caption photo placeholders", async () => {
+  it("keeps no-caption photo bodies empty after materialization", async () => {
     const result = await resolveTelegramBody({
       msg: {
         message_id: 3,
@@ -123,14 +388,16 @@ describe("resolveTelegramInboundBody", () => {
         from: { id: 42, first_name: "Pat" },
         photo: [{ file_id: "photo-1", file_unique_id: "photo-u1", width: 120, height: 80 }],
       } as never,
-      allMedia: [{ path: "/tmp/upload.bin", contentType: "application/octet-stream" }],
+      allMedia: [
+        { path: "/tmp/upload.bin", contentType: "application/octet-stream", kind: "image" },
+      ],
     });
 
-    expect(result?.rawBody).toBe("<media:image>");
-    expect(result?.bodyText).toBe("<media:document>");
+    expect(result?.rawBody).toBe("");
+    expect(result?.bodyText).toBe("");
   });
 
-  it("summarizes multiple saved images as images", async () => {
+  it("keeps aggregate image bodies empty", async () => {
     const result = await resolveTelegramBody({
       msg: {
         message_id: 4,
@@ -140,15 +407,15 @@ describe("resolveTelegramInboundBody", () => {
         photo: [{ file_id: "photo-2", file_unique_id: "photo-u2", width: 120, height: 80 }],
       } as never,
       allMedia: [
-        { path: "/tmp/photo-1.webp", contentType: "image/webp" },
-        { path: "/tmp/photo-2.png", contentType: "image/png" },
+        { path: "/tmp/photo-1.webp", contentType: "image/webp", kind: "image" },
+        { path: "/tmp/photo-2.png", contentType: "image/png", kind: "image" },
       ],
     });
 
-    expect(result?.bodyText).toBe("<media:image> (2 images)");
+    expect(result?.bodyText).toBe("");
   });
 
-  it("summarizes mixed saved media as attachments", async () => {
+  it("keeps mixed aggregate media bodies empty", async () => {
     const result = await resolveTelegramBody({
       msg: {
         message_id: 5,
@@ -158,12 +425,114 @@ describe("resolveTelegramInboundBody", () => {
         photo: [{ file_id: "photo-3", file_unique_id: "photo-u3", width: 120, height: 80 }],
       } as never,
       allMedia: [
-        { path: "/tmp/photo.webp", contentType: "image/webp" },
-        { path: "/tmp/report.pdf", contentType: "application/pdf" },
+        { path: "/tmp/photo.webp", contentType: "image/webp", kind: "image" },
+        { path: "/tmp/report.pdf", contentType: "application/pdf", kind: "document" },
       ],
     });
 
-    expect(result?.bodyText).toBe("<media:document> (2 attachments)");
+    expect(result?.bodyText).toBe("");
+  });
+
+  it("preserves cached sticker descriptions when downloaded media exists", async () => {
+    const result = await resolveTelegramBody({
+      msg: {
+        message_id: 6,
+        date: 1_700_000_006,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        sticker: {
+          file_id: "sticker-1",
+          file_unique_id: "sticker-u1",
+          type: "regular",
+          width: 256,
+          height: 256,
+          is_animated: false,
+          is_video: false,
+          emoji: "ok",
+          set_name: "test-set",
+        },
+      } as never,
+      allMedia: [
+        {
+          path: "/tmp/sticker.webp",
+          contentType: "image/webp",
+          kind: "sticker",
+          stickerMetadata: {
+            emoji: "ok",
+            setName: "test-set",
+            cachedDescription: "Cached description",
+          },
+        },
+      ],
+    });
+
+    expect(result?.bodyText).toBe('[Sticker ok from "test-set"] Cached description');
+    expect(result?.stickerCacheHit).toBe(true);
+  });
+
+  it("includes cached sticker descriptions with user captions", async () => {
+    const result = await resolveTelegramBody({
+      msg: {
+        message_id: 7,
+        date: 1_700_000_007,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        caption: "What is this?",
+        sticker: {
+          file_id: "sticker-2",
+          file_unique_id: "sticker-u2",
+          type: "regular",
+          width: 256,
+          height: 256,
+          is_animated: false,
+          is_video: false,
+        },
+      } as never,
+      allMedia: [
+        {
+          path: "/tmp/sticker.webp",
+          contentType: "image/webp",
+          kind: "sticker",
+          stickerMetadata: { cachedDescription: "Cached description" },
+        },
+      ],
+    });
+
+    expect(result?.bodyText).toBe("[Sticker] Cached description\nWhat is this?");
+    expect(result?.stickerCacheHit).toBe(true);
+  });
+
+  it("keeps cached sticker media available when the active model supports vision", async () => {
+    resolveStickerVisionSupportRuntimeMock.mockResolvedValueOnce(true);
+
+    const result = await resolveTelegramBody({
+      msg: {
+        message_id: 8,
+        date: 1_700_000_008,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        sticker: {
+          file_id: "sticker-3",
+          file_unique_id: "sticker-u3",
+          type: "regular",
+          width: 256,
+          height: 256,
+          is_animated: false,
+          is_video: false,
+        },
+      } as never,
+      allMedia: [
+        {
+          path: "/tmp/sticker.webp",
+          contentType: "image/webp",
+          kind: "sticker",
+          stickerMetadata: { cachedDescription: "Cached description" },
+        },
+      ],
+    });
+
+    expect(result?.bodyText).toBe("");
+    expect(result?.stickerCacheHit).toBe(false);
   });
 
   it("lets catch-all mention patterns activate captionless group photos", async () => {
@@ -182,7 +551,7 @@ describe("resolveTelegramInboundBody", () => {
         photo: [{ file_id: "photo-4", file_unique_id: "photo-u4", width: 120, height: 80 }],
         entities: [],
       } as never,
-      allMedia: [{ path: "/tmp/photo.webp", contentType: "image/webp" }],
+      allMedia: [{ path: "/tmp/photo.webp", contentType: "image/webp", kind: "image" }],
       isGroup: true,
       chatId: -1001234567890,
       senderId: "46",
@@ -193,8 +562,8 @@ describe("resolveTelegramInboundBody", () => {
     });
 
     expect(logger.info).not.toHaveBeenCalled();
-    expect(result?.rawBody).toBe("<media:image>");
-    expect(result?.bodyText).toBe("<media:image>");
+    expect(result?.rawBody).toBe("");
+    expect(result?.bodyText).toBe("");
     expect(result?.effectiveWasMentioned).toBe(true);
   });
 
@@ -214,7 +583,7 @@ describe("resolveTelegramInboundBody", () => {
         photo: [{ file_id: "photo-5", file_unique_id: "photo-u5", width: 120, height: 80 }],
         entities: [],
       } as never,
-      allMedia: [{ path: "/tmp/photo.webp", contentType: "image/webp" }],
+      allMedia: [{ path: "/tmp/photo.webp", contentType: "image/webp", kind: "image" }],
       isGroup: true,
       chatId: -1001234567890,
       senderId: "46",
@@ -279,7 +648,7 @@ describe("resolveTelegramInboundBody", () => {
         voice: { file_id: "voice-1" },
         entities: [],
       } as never,
-      allMedia: [{ path: "/tmp/voice.ogg", contentType: "audio/ogg" }],
+      allMedia: [{ path: "/tmp/voice.ogg", contentType: "audio/ogg", kind: "audio" }],
       isGroup: true,
       chatId: -1001234567890,
       senderId: "46",
@@ -300,14 +669,13 @@ describe("resolveTelegramInboundBody", () => {
     expect(result).toBeNull();
   });
 
-  it("still transcribes when commands.useAccessGroups is false", async () => {
+  it("transcribes when the group sender is authorized", async () => {
     transcribeFirstAudioMock.mockReset();
     transcribeFirstAudioMock.mockResolvedValueOnce("hey bot please help");
 
     const result = await resolveTelegramBody({
       cfg: {
         channels: { telegram: {} },
-        commands: { useAccessGroups: false },
         messages: { groupChat: { mentionPatterns: ["\\bbot\\b"] } },
         tools: { media: { audio: { enabled: true } } },
       } as never,
@@ -319,13 +687,13 @@ describe("resolveTelegramInboundBody", () => {
         voice: { file_id: "voice-2" },
         entities: [],
       } as never,
-      allMedia: [{ path: "/tmp/voice-2.ogg", contentType: "audio/ogg" }],
+      allMedia: [{ path: "/tmp/voice-2.ogg", contentType: "audio/ogg", kind: "audio" }],
       isGroup: true,
       chatId: -1001234567891,
       senderId: "46",
       senderUsername: "",
       routeAgentId: undefined,
-      effectiveGroupAllow: normalizeAllowFrom(["999"]),
+      effectiveGroupAllow: normalizeAllowFrom(["46"]),
       effectiveDmAllow: normalizeAllowFrom([]),
       groupConfig: { requireMention: true } as never,
       requireMention: true,
@@ -356,7 +724,7 @@ describe("resolveTelegramInboundBody", () => {
         voice: { file_id: "voice-dm-1" },
         entities: [],
       } as never,
-      allMedia: [{ path: "/tmp/voice-dm.ogg", contentType: "audio/ogg" }],
+      allMedia: [{ path: "/tmp/voice-dm.ogg", contentType: "audio/ogg", kind: "audio" }],
     });
 
     expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
@@ -391,7 +759,7 @@ describe("resolveTelegramInboundBody", () => {
         voice: { file_id: "voice-dm-topic-1" },
         entities: [],
       } as never,
-      allMedia: [{ path: "/tmp/voice-dm-topic.ogg", contentType: "audio/ogg" }],
+      allMedia: [{ path: "/tmp/voice-dm-topic.ogg", contentType: "audio/ogg", kind: "audio" }],
       replyThreadId: 77,
     });
 
@@ -407,7 +775,6 @@ describe("resolveTelegramInboundBody", () => {
     await resolveTelegramBody({
       cfg: {
         channels: { telegram: {} },
-        commands: { useAccessGroups: false },
         messages: { groupChat: { mentionPatterns: ["\\bbot\\b"] } },
         tools: { media: { audio: { enabled: true, echoTranscript: true } } },
       } as never,
@@ -421,10 +788,11 @@ describe("resolveTelegramInboundBody", () => {
         voice: { file_id: "voice-forum-topic-1" },
         entities: [],
       } as never,
-      allMedia: [{ path: "/tmp/voice-forum-topic.ogg", contentType: "audio/ogg" }],
+      allMedia: [{ path: "/tmp/voice-forum-topic.ogg", contentType: "audio/ogg", kind: "audio" }],
       isGroup: true,
       chatId: -1001234567890,
       senderId: "46",
+      effectiveGroupAllow: normalizeAllowFrom(["46"]),
       groupConfig: { requireMention: true } as never,
       requireMention: true,
       resolvedThreadId: 99,
@@ -493,7 +861,6 @@ describe("resolveTelegramInboundBody", () => {
     const result = await resolveTelegramBody({
       cfg: {
         channels: { telegram: {} },
-        commands: { useAccessGroups: false },
         messages: { groupChat: { mentionPatterns: ["\\bbot\\b"] } },
         tools: { media: { audio: { enabled: true } } },
       } as never,
@@ -505,12 +872,12 @@ describe("resolveTelegramInboundBody", () => {
         voice: { file_id: "voice-escape" },
         entities: [],
       } as never,
-      allMedia: [{ path: "/tmp/voice-escape.ogg", contentType: "audio/ogg" }],
+      allMedia: [{ path: "/tmp/voice-escape.ogg", contentType: "audio/ogg", kind: "audio" }],
       isGroup: true,
       chatId: -1001234567892,
       senderId: "46",
       senderUsername: "",
-      effectiveGroupAllow: normalizeAllowFrom(["999"]),
+      effectiveGroupAllow: normalizeAllowFrom(["46"]),
       groupConfig: { requireMention: true } as never,
       requireMention: true,
     });

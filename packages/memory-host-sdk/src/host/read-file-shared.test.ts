@@ -34,4 +34,40 @@ describe("memory read result slicing", () => {
       lines: 2,
     });
   });
+
+  it("does not split surrogate pairs when truncating a single line", () => {
+    expect(
+      buildMemoryReadResultFromSlice({
+        selectedLines: ["abc🤖tail"],
+        relPath: "memory/test.md",
+        startLine: 1,
+        maxChars: 4,
+        suggestReadFallback: true,
+      }),
+    ).toEqual({
+      text: "abc\n\n[More content available. Requested excerpt exceeded the default maxChars budget. If you need the full raw line, use read on the source file.]",
+      path: "memory/test.md",
+      from: 1,
+      lines: 1,
+      truncated: true,
+    });
+  });
+
+  it("keeps the continuation notice when a leading surrogate pair is dropped", () => {
+    expect(
+      buildMemoryReadResultFromSlice({
+        selectedLines: ["🤖tail"],
+        relPath: "memory/test.md",
+        startLine: 1,
+        maxChars: 1,
+        suggestReadFallback: true,
+      }),
+    ).toEqual({
+      text: "\n\n[More content available. Requested excerpt exceeded the default maxChars budget. If you need the full raw line, use read on the source file.]",
+      path: "memory/test.md",
+      from: 1,
+      lines: 1,
+      truncated: true,
+    });
+  });
 });

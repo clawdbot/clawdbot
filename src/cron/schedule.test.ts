@@ -2,13 +2,15 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   coerceFiniteScheduleNumber,
-  clearCronScheduleCacheForTest,
   computeNextRunAtMs,
   computePreviousRunAtMs,
+} from "./schedule.js";
+import {
+  clearCronScheduleCacheForTest,
   getCronScheduleCacheMaxForTest,
   getCronScheduleCacheSizeForTest,
   hasCronInCacheForTest,
-} from "./schedule.js";
+} from "./schedule.test-support.js";
 
 function requireTimestamp(value: number | undefined, label: string): number {
   if (value === undefined) {
@@ -249,7 +251,26 @@ describe("coerceFiniteScheduleNumber", () => {
     expect(coerceFiniteScheduleNumber("0x10")).toBeUndefined();
     expect(coerceFiniteScheduleNumber(Number.NaN)).toBeUndefined();
     expect(coerceFiniteScheduleNumber(Infinity)).toBeUndefined();
+    expect(coerceFiniteScheduleNumber(Number.MAX_SAFE_INTEGER + 1)).toBeUndefined();
+    expect(coerceFiniteScheduleNumber(String(Number.MAX_SAFE_INTEGER + 1))).toBeUndefined();
     expect(coerceFiniteScheduleNumber(null)).toBeUndefined();
     expect(coerceFiniteScheduleNumber(undefined)).toBeUndefined();
+  });
+});
+
+describe("computeNextRunAtMs on-exit", () => {
+  it("never reports a time-due run for on-exit schedules (event-driven)", () => {
+    expect(computeNextRunAtMs({ kind: "on-exit", command: "sleep 1" }, Date.now())).toBeUndefined();
+    expect(
+      computeNextRunAtMs({ kind: "on-exit", command: "make build", cwd: "/repo" }, 0),
+    ).toBeUndefined();
+  });
+});
+
+describe("computeNextRunAtMs stream", () => {
+  it("never reports a time-due run for event stream schedules", () => {
+    expect(computeNextRunAtMs({ kind: "stream", command: ["node", "events.mjs"] }, 0)).toBe(
+      undefined,
+    );
   });
 });

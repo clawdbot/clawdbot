@@ -1,6 +1,5 @@
 // Mcp Code Mode Gateway E2E script supports OpenClaw repository automation.
 import fs from "node:fs/promises";
-import { createRequire } from "node:module";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -8,18 +7,23 @@ import process from "node:process";
 import { setTimeout as setNodeTimeout, clearTimeout as clearNodeTimeout } from "node:timers";
 import { pathToFileURL } from "node:url";
 import { startQaMockOpenAiServer } from "../extensions/qa-lab/src/providers/mock-openai/server.js";
+import {
+  qaMockRequestCursorUrl,
+  qaMockRequestsAfterUrl,
+  readQaMockRequestCursor,
+} from "../extensions/qa-lab/src/providers/shared/debug-request-cursor.js";
 import { stageQaMockAuthProfiles } from "../extensions/qa-lab/src/providers/shared/mock-auth.js";
 import { buildQaGatewayConfig } from "../extensions/qa-lab/src/qa-gateway-config.js";
 import { resetConfigRuntimeState } from "../src/config/config.js";
 import { startGatewayServer } from "../src/gateway/server.js";
+import { deleteTestEnvValue, setTestEnvValue } from "../src/test-utils/env.js";
+import { writeProbeMcpServer } from "./e2e/lib/mcp-code-mode-probe-server.ts";
 import {
   type McpCodeModeMentions,
   validateMcpCodeModeResult,
 } from "./e2e/lib/mcp-code-mode-validation.ts";
 import { countSessionLogMentions } from "./e2e/lib/session-log-mentions.ts";
 import { readBoundedResponseText } from "./lib/bounded-response.ts";
-
-const require = createRequire(import.meta.url);
 
 async function freePort(): Promise<number> {
   return await new Promise((resolve, reject) => {
@@ -89,45 +93,10 @@ async function readSessionLogMentions(stateDir: string): Promise<Record<string, 
 
 function restoreEnvValue(key: string, value: string | undefined): void {
   if (value === undefined) {
-    delete process.env[key];
+    deleteTestEnvValue(key);
   } else {
-    process.env[key] = value;
+    setTestEnvValue(key, value);
   }
-}
-
-async function writeProbeMcpServer(serverPath: string) {
-  const sdkMcpServerPath = require.resolve("@modelcontextprotocol/sdk/server/mcp.js");
-  const sdkStdioServerPath = require.resolve("@modelcontextprotocol/sdk/server/stdio.js");
-  const zodPath = require.resolve("zod");
-  await fs.mkdir(path.dirname(serverPath), { recursive: true });
-  await fs.writeFile(
-    serverPath,
-    `#!/usr/bin/env node
-import { McpServer } from ${JSON.stringify(sdkMcpServerPath)};
-import { StdioServerTransport } from ${JSON.stringify(sdkStdioServerPath)};
-import { z } from ${JSON.stringify(zodPath)};
-
-const notes = new Map([
-  ["alpha", "fixture-note-alpha"],
-  ["beta", "fixture-note-beta"],
-]);
-const server = new McpServer({ name: "code-mode-fixture", version: "1.0.0" });
-
-server.tool(
-  "lookup_note",
-  "Look up one read-only fixture note by id.",
-  {
-    id: z.string().describe("Fixture note id to look up."),
-  },
-  async ({ id }) => ({
-    content: [{ type: "text", text: notes.get(id) ?? "missing-note" }],
-  }),
-);
-
-await server.connect(new StdioServerTransport());
-`,
-    { encoding: "utf8", mode: 0o755 },
-  );
 }
 
 async function writeConfig(params: {
@@ -156,20 +125,11 @@ async function writeConfig(params: {
         memory: "none",
       },
     },
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        memorySearch: {
-          ...cfg.agents?.defaults?.memorySearch,
-          enabled: false,
-          sync: {
-            ...cfg.agents?.defaults?.memorySearch?.sync,
-            onSearch: false,
-            onSessionStart: false,
-            watch: false,
-          },
-        },
+    memory: {
+      ...cfg.memory,
+      search: {
+        ...cfg.memory?.search,
+        enabled: false,
       },
     },
     tools: {
@@ -212,7 +172,7 @@ async function writeConfig(params: {
   await fs.writeFile(params.configPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
 }
 
-export async function main() {
+async function main() {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mcp-code-mode-"));
   const keep = process.env.OPENCLAW_MCP_CODE_MODE_GATEWAY_E2E_KEEP === "1";
   const previousEnv = {
@@ -240,9 +200,9 @@ export async function main() {
       serverPath,
     });
 
-    process.env.OPENCLAW_STATE_DIR = stateDir;
-    process.env.OPENCLAW_CONFIG_PATH = configPath;
-    process.env.OPENCLAW_TEST_FAST = "1";
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+    setTestEnvValue("OPENCLAW_TEST_FAST", "1");
     resetConfigRuntimeState();
 
     server = await startGatewayServer(gatewayPort, {
@@ -252,7 +212,9 @@ export async function main() {
       openResponsesEnabled: true,
     });
 
-    const beforeRequests = (await fetchJson(`${provider.baseUrl}/debug/requests`)) as unknown[];
+    const requestCursorBefore = readQaMockRequestCursor(
+      await fetchJson(qaMockRequestCursorUrl(provider.baseUrl)),
+    );
     const response = await fetchJson(`http://127.0.0.1:${gatewayPort}/v1/responses`, {
       method: "POST",
       headers: {
@@ -278,12 +240,13 @@ export async function main() {
         stream: false,
       }),
     });
-    const requests = (await fetchJson(`${provider.baseUrl}/debug/requests`)) as Array<{
+    const laneRequests = (await fetchJson(
+      qaMockRequestsAfterUrl(provider.baseUrl, requestCursorBefore),
+    )) as Array<{
       raw?: string;
       body?: { tools?: unknown[] };
       plannedToolName?: string;
     }>;
-    const laneRequests = requests.slice(beforeRequests.length);
     const firstRequest = laneRequests[0] ?? {};
     const mentions = await readSessionLogMentions(stateDir);
     const plannedTools = laneRequests

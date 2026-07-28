@@ -9,7 +9,7 @@ import {
   resolveTrustedSourceLinkedOfficialNpmSpec,
 } from "./official-external-install-records.js";
 
-export type PluginVersionDriftEntry = {
+type PluginVersionDriftEntry = {
   pluginId: string;
   installedVersion: string;
   gatewayVersion: string;
@@ -22,6 +22,29 @@ export type PluginVersionDriftReport = {
   gatewayVersion: string;
   drifts: PluginVersionDriftEntry[];
 };
+
+function resolveExactNpmPinPackageName(entry: PluginVersionDriftEntry): string | undefined {
+  if (entry.source !== "npm" || !entry.spec) {
+    return undefined;
+  }
+  const parsed = parseRegistryNpmSpec(entry.spec);
+  if (parsed?.selectorKind !== "exact-version") {
+    return undefined;
+  }
+  return parsed.name;
+}
+
+/** Exact npm pins need a package@version target; id-only updates preserve the old pin. */
+export function resolvePluginVersionDriftUpdateCommand(entry: PluginVersionDriftEntry): string {
+  const exactNpmPackageName = resolveExactNpmPinPackageName(entry);
+  if (exactNpmPackageName) {
+    const exactNpmTarget = `${exactNpmPackageName}@${entry.gatewayVersion}`;
+    if (parseRegistryNpmSpec(exactNpmTarget)?.selectorKind === "exact-version") {
+      return `openclaw plugins update ${exactNpmTarget}`;
+    }
+  }
+  return `openclaw plugins update ${entry.pluginId}`;
+}
 
 /**
  * Strip a trailing build qualifier (e.g. `2026.5.4-1` -> `2026.5.4`) so that

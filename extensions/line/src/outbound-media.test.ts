@@ -15,10 +15,22 @@ afterAll(() => {
 });
 
 import {
-  detectLineMediaKind,
+  buildLineMediaMessage,
+  hasLineSpecificMediaOptions,
   resolveLineOutboundMedia,
   validateLineMediaUrl,
 } from "./outbound-media.js";
+
+const HTTPS_URL_ERROR = new Error("LINE outbound media URL must use HTTPS");
+
+function createCredentialBearingHttpUrl(): string {
+  const url = new URL("http://example.com/image.jpg");
+  url.username = ["line", "user"].join("-");
+  url.password = ["line", "fixture"].join("-");
+  url.searchParams.set("auth", ["line", "query"].join("-"));
+  url.hash = ["line", "fragment"].join("-");
+  return url.href;
+}
 
 describe("validateLineMediaUrl", () => {
   beforeEach(() => {
@@ -43,11 +55,33 @@ describe("validateLineMediaUrl", () => {
     });
   });
 
-  it("rejects HTTP URL", async () => {
-    await expect(validateLineMediaUrl("http://example.com/image.jpg")).rejects.toThrow(
-      /must use HTTPS/i,
-    );
-    expect(ssrfMocks.resolvePinnedHostnameWithPolicy).not.toHaveBeenCalled();
+  it.each([
+    {
+      name: "malformed media URL",
+      run: () => validateLineMediaUrl("not a url?query=fixture#fragment"),
+      expected: new Error("LINE outbound media URL must be a valid URL"),
+    },
+    {
+      name: "insecure media URL",
+      run: () => validateLineMediaUrl(createCredentialBearingHttpUrl()),
+      expected: HTTPS_URL_ERROR,
+    },
+    {
+      name: "insecure preview URL",
+      run: () =>
+        resolveLineOutboundMedia("https://example.com/video.mp4", {
+          mediaKind: "video",
+          previewImageUrl: createCredentialBearingHttpUrl(),
+        }),
+      expected: HTTPS_URL_ERROR,
+    },
+    {
+      name: "insecure resolved media URL",
+      run: () => resolveLineOutboundMedia(createCredentialBearingHttpUrl()),
+      expected: HTTPS_URL_ERROR,
+    },
+  ])("does not expose credentials from a $name", async ({ run, expected }) => {
+    await expect(run()).rejects.toThrow(expected);
   });
 
   it("rejects URL longer than 2000 chars", async () => {
@@ -68,28 +102,6 @@ describe("validateLineMediaUrl", () => {
     expect(ssrfMocks.resolvePinnedHostnameWithPolicy).toHaveBeenCalledWith("127.0.0.1", {
       policy: { allowPrivateNetwork: false },
     });
-  });
-});
-
-describe("detectLineMediaKind", () => {
-  it("maps image MIME to image", () => {
-    expect(detectLineMediaKind("image/jpeg")).toBe("image");
-  });
-
-  it("maps uppercase image MIME to image", () => {
-    expect(detectLineMediaKind("IMAGE/JPEG")).toBe("image");
-  });
-
-  it("maps video MIME to video", () => {
-    expect(detectLineMediaKind("video/mp4")).toBe("video");
-  });
-
-  it("maps audio MIME to audio", () => {
-    expect(detectLineMediaKind("audio/mpeg")).toBe("audio");
-  });
-
-  it("falls back unknown MIME to image", () => {
-    expect(detectLineMediaKind("application/octet-stream")).toBe("image");
   });
 });
 
@@ -163,15 +175,6 @@ describe("resolveLineOutboundMedia", () => {
     });
   });
 
-  it("validates previewImageUrl when provided", async () => {
-    await expect(
-      resolveLineOutboundMedia("https://example.com/video.mp4", {
-        mediaKind: "video",
-        previewImageUrl: "http://example.com/preview.jpg",
-      }),
-    ).rejects.toThrow(/must use HTTPS/i);
-  });
-
   it("falls back to image when no explicit LINE media options or known extension are present", async () => {
     await expect(
       resolveLineOutboundMedia("https://example.com/download?id=audio"),
@@ -186,10 +189,83 @@ describe("resolveLineOutboundMedia", () => {
       /requires a public https url/i,
     );
   });
+});
 
-  it("rejects non-HTTPS URL explicitly", async () => {
-    await expect(resolveLineOutboundMedia("http://example.com/image.jpg")).rejects.toThrow(
-      /must use HTTPS/i,
-    );
+describe("hasLineSpecificMediaOptions", () => {
+  it("is false for empty or text-only channel data", () => {
+    expect(hasLineSpecificMediaOptions({})).toBe(false);
+    expect(hasLineSpecificMediaOptions({ quickReplies: ["A"] })).toBe(false);
+    expect(hasLineSpecificMediaOptions({ previewImageUrl: "  " })).toBe(false);
+  });
+
+  it("is true when any LINE media option is set", () => {
+    expect(hasLineSpecificMediaOptions({ mediaKind: "video" })).toBe(true);
+    expect(hasLineSpecificMediaOptions({ previewImageUrl: "https://x/p.jpg" })).toBe(true);
+    expect(hasLineSpecificMediaOptions({ durationMs: 0 })).toBe(true);
+    expect(hasLineSpecificMediaOptions({ durationMs: 1000 })).toBe(true);
+    expect(hasLineSpecificMediaOptions({ trackingId: "t" })).toBe(true);
+  });
+});
+
+describe("buildLineMediaMessage", () => {
+  it("builds a video message and gates trackingId on user targets", async () => {
+    const options = {
+      mediaKind: "video" as const,
+      previewImageUrl: "https://example.com/preview.jpg",
+      trackingId: "track-1",
+    };
+    await expect(
+      buildLineMediaMessage("https://example.com/clip.mp4", options, "line:user:Uabc"),
+    ).resolves.toEqual({
+      type: "video",
+      originalContentUrl: "https://example.com/clip.mp4",
+      previewImageUrl: "https://example.com/preview.jpg",
+      trackingId: "track-1",
+    });
+    await expect(
+      buildLineMediaMessage("https://example.com/clip.mp4", options, "line:group:Cabc"),
+    ).resolves.toEqual({
+      type: "video",
+      originalContentUrl: "https://example.com/clip.mp4",
+      previewImageUrl: "https://example.com/preview.jpg",
+    });
+  });
+
+  it("rejects a video missing its preview image", async () => {
+    await expect(
+      buildLineMediaMessage(
+        "https://example.com/clip.mp4",
+        { mediaKind: "video" },
+        "line:user:Uabc",
+      ),
+    ).rejects.toThrow(/require previewImageUrl/i);
+  });
+
+  it("builds an audio message with a default duration", async () => {
+    await expect(
+      buildLineMediaMessage(
+        "https://example.com/voice.m4a",
+        { mediaKind: "audio" },
+        "line:user:Uabc",
+      ),
+    ).resolves.toEqual({
+      type: "audio",
+      originalContentUrl: "https://example.com/voice.m4a",
+      duration: 60000,
+    });
+  });
+
+  it("defaults an image preview to the media URL", async () => {
+    await expect(
+      buildLineMediaMessage(
+        "https://example.com/photo.png",
+        { mediaKind: "image" },
+        "line:user:Uabc",
+      ),
+    ).resolves.toEqual({
+      type: "image",
+      originalContentUrl: "https://example.com/photo.png",
+      previewImageUrl: "https://example.com/photo.png",
+    });
   });
 });

@@ -1,7 +1,11 @@
 // Resolves npm commands from the active Node toolchain, especially on Windows.
 import fs from "node:fs";
 import path from "node:path";
-import { buildCmdExeCommandLine, resolvePathEnvKey } from "./windows-cmd-helpers.mjs";
+import {
+  buildCmdExeCommandLine,
+  resolvePathEnvKey,
+  resolveWindowsCmdExePath,
+} from "./windows-cmd-helpers.mjs";
 
 function resolveToolchainNpmRunner(params) {
   const npmCliCandidates = [
@@ -11,10 +15,7 @@ function resolveToolchainNpmRunner(params) {
   const npmCliPath = npmCliCandidates.find((candidate) => params.existsSync(candidate));
   if (npmCliPath) {
     return {
-      command:
-        params.platform === "win32"
-          ? params.pathImpl.join(params.nodeDir, "node.exe")
-          : params.pathImpl.join(params.nodeDir, "node"),
+      command: params.execPath,
       args: [npmCliPath, ...params.npmArgs],
       shell: false,
     };
@@ -51,12 +52,13 @@ export function resolveNpmRunner(params = {}) {
   const existsSync = params.existsSync ?? fs.existsSync;
   const env = params.env ?? process.env;
   const platform = params.platform ?? process.platform;
-  const comSpec = params.comSpec ?? env.ComSpec ?? "cmd.exe";
+  const comSpec = params.comSpec ?? (platform === "win32" ? resolveWindowsCmdExePath(env) : "");
   const pathImpl = platform === "win32" ? path.win32 : path.posix;
   const nodeDir = pathImpl.dirname(execPath);
   const npmToolchain = resolveToolchainNpmRunner({
     comSpec,
     existsSync,
+    execPath,
     nodeDir,
     npmArgs,
     pathImpl,

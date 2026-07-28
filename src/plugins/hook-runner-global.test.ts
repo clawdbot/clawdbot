@@ -1,9 +1,20 @@
 /** Verifies global hook runner sequencing, mutation, and error behavior. */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createMockPluginRegistry } from "./hooks.test-helpers.js";
+import { createMockPluginRegistry } from "./hooks.test-fixtures.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import {
+  pinActivePluginChannelRegistry,
+  releasePinnedPluginChannelRegistry,
+  setActivePluginRegistry,
+} from "./runtime.js";
+import { createPluginRecord } from "./status.test-fixtures.js";
 
 async function importHookRunnerGlobalModule() {
   return import("./hook-runner-global.js");
+}
+
+async function importHookRunnerGlobalStateModule() {
+  return import("./hook-runner-global-state.js");
 }
 
 type HookRunnerGlobalModule = Awaited<ReturnType<typeof importHookRunnerGlobalModule>>;
@@ -31,6 +42,7 @@ async function expectGlobalRunnerState(expected: { hasRunner: boolean; registry?
 afterEach(async () => {
   const mod = await importHookRunnerGlobalModule();
   mod.resetGlobalHookRunner();
+  setActivePluginRegistry(createEmptyPluginRegistry());
 });
 
 describe("hook-runner-global", () => {
@@ -68,5 +80,55 @@ describe("hook-runner-global", () => {
     vi.resetModules();
 
     await expectGlobalRunnerState({ hasRunner: false });
+  });
+
+  it("exposes trusted policies from the same live registry set as hooks", async () => {
+    const mod = await importHookRunnerGlobalModule();
+    const gatewayRegistry = createMockPluginRegistry([
+      {
+        hookName: "before_tool_call",
+        pluginId: "rovoclaw",
+        handler: vi.fn(),
+      },
+    ]);
+    gatewayRegistry.plugins = [createPluginRecord({ id: "rovoclaw" })];
+    gatewayRegistry.trustedToolPolicies = [
+      {
+        pluginId: "rovoclaw",
+        pluginName: "RovoClaw",
+        source: "test",
+        policy: {
+          id: "atl-sec-core",
+          description: "trusted policy",
+          evaluate: () => undefined,
+        },
+      },
+    ];
+
+    setActivePluginRegistry(gatewayRegistry);
+    mod.initializeGlobalHookRunner(gatewayRegistry);
+    pinActivePluginChannelRegistry(gatewayRegistry);
+    try {
+      const laterRegistry = createEmptyPluginRegistry();
+      laterRegistry.plugins = [createPluginRecord({ id: "openai" })];
+      setActivePluginRegistry(laterRegistry);
+      mod.initializeGlobalHookRunner(laterRegistry);
+
+      expect(expectGlobalHookRunner(mod.getGlobalHookRunner()).hasHooks("before_tool_call")).toBe(
+        true,
+      );
+      expect(mod.getGlobalPluginRegistry()).toBe(laterRegistry);
+      const stateMod = await importHookRunnerGlobalStateModule();
+      expect(
+        stateMod
+          .getGlobalHookRunnerRegistry()
+          ?.trustedToolPolicies?.map((registration) => [
+            registration.pluginId,
+            registration.policy.id,
+          ]),
+      ).toEqual([["rovoclaw", "atl-sec-core"]]);
+    } finally {
+      releasePinnedPluginChannelRegistry(gatewayRegistry);
+    }
   });
 });

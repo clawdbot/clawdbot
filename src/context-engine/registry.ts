@@ -1,8 +1,15 @@
 // Context-engine registry owns engine registration, resolution, compatibility, and quarantine.
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { createAbortError } from "../infra/abort-signal.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { isStringOption } from "../utils/string-readers.js";
+import {
+  clearPersistedContextEngineQuarantineForProcess,
+  listPersistedContextEngineQuarantines,
+  recordPersistedContextEngineQuarantine,
+} from "./quarantine-health.js";
 import type {
   AssembleResult,
   BootstrapResult,
@@ -20,7 +27,7 @@ import type {
  * Provides config and path information so plugins can initialize engines
  * without fragile workarounds.
  */
-export type ContextEngineFactoryContext = {
+type ContextEngineFactoryContext = {
   config?: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
@@ -38,10 +45,17 @@ export type ContextEngineFactoryContext = {
 export type ContextEngineFactory = (
   ctx: ContextEngineFactoryContext,
 ) => ContextEngine | Promise<ContextEngine>;
-export type ContextEngineRegistrationResult = { ok: true } | { ok: false; existingOwner: string };
+type ContextEngineRegistrationResult = { ok: true } | { ok: false; existingOwner: string };
+type ContextEngineRegistrationLifecycle = "runtime" | "readOnlyDiscovery";
+type ContextEngineRegistration = {
+  factory: ContextEngineFactory;
+  owner: string;
+  lifecycle: ContextEngineRegistrationLifecycle;
+};
 
 type RegisterContextEngineForOwnerOptions = {
   allowSameOwnerRefresh?: boolean;
+  lifecycle?: ContextEngineRegistrationLifecycle;
 };
 
 const LEGACY_SESSION_KEY_COMPAT = Symbol.for("openclaw.contextEngine.sessionKeyCompat");
@@ -68,29 +82,36 @@ const SESSION_KEY_COMPAT_METHODS = [
   "assemble",
   "compact",
 ] as const;
-const LEGACY_COMPAT_PARAMS = ["sessionKey", "prompt"] as const;
+const LEGACY_COMPAT_PARAMS = [
+  "sessionKey",
+  "prompt",
+  "runtimeSettings",
+  "sessionTarget",
+  "runtimeContext",
+] as const;
 const LEGACY_COMPAT_METHOD_KEYS = {
-  bootstrap: ["sessionKey"],
-  maintain: ["sessionKey"],
+  bootstrap: ["sessionKey", "runtimeSettings", "sessionTarget", "runtimeContext"],
+  maintain: ["sessionKey", "runtimeSettings", "sessionTarget", "runtimeContext"],
   ingest: ["sessionKey"],
   ingestBatch: ["sessionKey"],
-  afterTurn: ["sessionKey"],
-  assemble: ["sessionKey", "prompt"],
-  compact: ["sessionKey"],
+  afterTurn: ["sessionKey", "runtimeSettings", "sessionTarget", "runtimeContext"],
+  assemble: ["sessionKey", "prompt", "runtimeSettings"],
+  compact: ["sessionKey", "runtimeSettings", "sessionTarget", "runtimeContext"],
 } as const;
 
 type SessionKeyCompatMethodName = (typeof SESSION_KEY_COMPAT_METHODS)[number];
 type SessionKeyCompatParams = {
   sessionKey?: string;
   prompt?: string;
+  runtimeSettings?: unknown;
+  sessionTarget?: unknown;
+  runtimeContext?: unknown;
 };
 type LegacyCompatKey = (typeof LEGACY_COMPAT_PARAMS)[number];
 type LegacyCompatParamMap = Partial<Record<LegacyCompatKey, unknown>>;
 
 function isSessionKeyCompatMethodName(value: PropertyKey): value is SessionKeyCompatMethodName {
-  return (
-    typeof value === "string" && (SESSION_KEY_COMPAT_METHODS as readonly string[]).includes(value)
-  );
+  return isStringOption(value, SESSION_KEY_COMPAT_METHODS);
 }
 
 function hasOwnLegacyCompatKey<K extends LegacyCompatKey>(
@@ -163,6 +184,33 @@ const LEGACY_UNKNOWN_FIELD_PATTERNS: Record<LegacyCompatKey, readonly RegExp[]> 
     /\b(?:unknown|invalid)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]prompt['"`]/i,
     /['"`]prompt['"`].*\b(?:was|is)\s+not allowed\b/i,
     /"code"\s*:\s*"unrecognized_keys"[^]*"prompt"/i,
+  ],
+  runtimeSettings: [
+    /\bunrecognized key(?:\(s\)|s)? in object:.*['"`]runtimeSettings['"`]/i,
+    /\badditional propert(?:y|ies)\b.*['"`]runtimeSettings['"`]/i,
+    /\bmust not have additional propert(?:y|ies)\b.*['"`]runtimeSettings['"`]/i,
+    /\b(?:unexpected|extraneous)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]runtimeSettings['"`]/i,
+    /\b(?:unknown|invalid)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]runtimeSettings['"`]/i,
+    /['"`]runtimeSettings['"`].*\b(?:was|is)\s+not allowed\b/i,
+    /"code"\s*:\s*"unrecognized_keys"[^]*"runtimeSettings"/i,
+  ],
+  sessionTarget: [
+    /\bunrecognized key(?:\(s\)|s)? in object:.*['"`]sessionTarget['"`]/i,
+    /\badditional propert(?:y|ies)\b.*['"`]sessionTarget['"`]/i,
+    /\bmust not have additional propert(?:y|ies)\b.*['"`]sessionTarget['"`]/i,
+    /\b(?:unexpected|extraneous)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]sessionTarget['"`]/i,
+    /\b(?:unknown|invalid)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]sessionTarget['"`]/i,
+    /['"`]sessionTarget['"`].*\b(?:was|is)\s+not allowed\b/i,
+    /"code"\s*:\s*"unrecognized_keys"[^]*"sessionTarget"/i,
+  ],
+  runtimeContext: [
+    /\bunrecognized key(?:\(s\)|s)? in object:.*['"`]runtimeContext['"`]/i,
+    /\badditional propert(?:y|ies)\b.*['"`]runtimeContext['"`]/i,
+    /\bmust not have additional propert(?:y|ies)\b.*['"`]runtimeContext['"`]/i,
+    /\b(?:unexpected|extraneous)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]runtimeContext['"`]/i,
+    /\b(?:unknown|invalid)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]runtimeContext['"`]/i,
+    /['"`]runtimeContext['"`].*\b(?:was|is)\s+not allowed\b/i,
+    /"code"\s*:\s*"unrecognized_keys"[^]*"runtimeContext"/i,
   ],
 } as const;
 
@@ -298,7 +346,6 @@ function wrapContextEngineWithSessionKeyCompat(engine: ContextEngine): ContextEn
     return engine;
   }
 
-  let isLegacy = false;
   const rejectedKeys = new Set<LegacyCompatKey>();
   const proxy: ContextEngine = new Proxy(engine, {
     get(target, property, receiver) {
@@ -318,17 +365,7 @@ function wrapContextEngineWithSessionKeyCompat(engine: ContextEngine): ContextEn
       return (params: SessionKeyCompatParams) => {
         const method = value.bind(target) as (params: SessionKeyCompatParams) => unknown;
         const allowedKeys = LEGACY_COMPAT_METHOD_KEYS[property];
-        if (
-          isLegacy &&
-          allowedKeys.some((key) => rejectedKeys.has(key) && hasOwnLegacyCompatKey(params, key))
-        ) {
-          // Fast path after first validation failure: skip keys the engine has already rejected.
-          return method(withoutLegacyCompatKeys(params, rejectedKeys));
-        }
         return invokeWithLegacyCompat(method, params, allowedKeys, {
-          onLegacyModeDetected: () => {
-            isLegacy = true;
-          },
           onLegacyKeysDetected: (keys) => {
             for (const key of keys) {
               rejectedKeys.add(key);
@@ -374,9 +411,8 @@ function wrapResolvedContextEngine(
 
 const CONTEXT_ENGINE_REGISTRY_STATE = Symbol.for("openclaw.contextEngineRegistryState");
 const CORE_CONTEXT_ENGINE_OWNER = "core";
-const PUBLIC_CONTEXT_ENGINE_OWNER = "public-sdk";
 
-export type ContextEngineRuntimeQuarantine = {
+type ContextEngineRuntimeQuarantine = {
   engineId: string;
   owner?: string;
   operation: string;
@@ -385,13 +421,7 @@ export type ContextEngineRuntimeQuarantine = {
 };
 
 type ContextEngineRegistryState = {
-  engines: Map<
-    string,
-    {
-      factory: ContextEngineFactory;
-      owner: string;
-    }
-  >;
+  engines: Map<string, ContextEngineRegistration>;
   quarantinedEngines: Map<string, ContextEngineRuntimeQuarantine>;
 };
 
@@ -445,6 +475,11 @@ function recordContextEngineQuarantine(params: {
     ...(params.owner ? { owner: params.owner } : {}),
   };
   registryState.quarantinedEngines.set(params.engineId, quarantine);
+  try {
+    recordPersistedContextEngineQuarantine(quarantine);
+  } catch {
+    // Quarantine behavior must not depend on the best-effort health mirror.
+  }
   const ownerSuffix = params.owner ? ` owner=${sanitizeForLog(params.owner)}` : "";
   console.error(
     `[context-engine] Context engine "${sanitizeForLog(params.engineId)}"${ownerSuffix} failed during ${sanitizeForLog(params.operation)}: ` +
@@ -471,16 +506,26 @@ export function listContextEngineQuarantines(): ContextEngineRuntimeQuarantine[]
     }
     quarantines.push(quarantine);
   }
+  const seenEngineIds = new Set(quarantines.map((entry) => entry.engineId));
+  for (const entry of listPersistedContextEngineQuarantines()) {
+    if (seenEngineIds.has(entry.engineId)) {
+      continue;
+    }
+    quarantines.push(entry);
+    seenEngineIds.add(entry.engineId);
+  }
   return quarantines;
 }
 
-export function clearContextEngineRuntimeQuarantine(engineId?: string): void {
+function clearContextEngineRuntimeQuarantine(engineId?: string): void {
   const quarantinedEngines = getContextEngineRegistryState().quarantinedEngines;
   if (engineId === undefined) {
     quarantinedEngines.clear();
+    clearPersistedContextEngineQuarantineForProcess(undefined, process.pid);
     return;
   }
   quarantinedEngines.delete(engineId);
+  clearPersistedContextEngineQuarantineForProcess(engineId, process.pid);
 }
 
 /**
@@ -493,6 +538,7 @@ export function registerContextEngineForOwner(
   opts?: RegisterContextEngineForOwnerOptions,
 ): ContextEngineRegistrationResult {
   const normalizedOwner = requireContextEngineOwner(owner);
+  const lifecycle = opts?.lifecycle ?? "runtime";
   const registry = getContextEngineRegistryState().engines;
   const existing = registry.get(id);
   if (
@@ -505,50 +551,40 @@ export function registerContextEngineForOwner(
   if (existing && existing.owner !== normalizedOwner) {
     return { ok: false, existingOwner: existing.owner };
   }
+  if (existing?.lifecycle === "runtime" && lifecycle === "readOnlyDiscovery") {
+    // Read-only discovery may re-run after live activation. It can collect metadata, but it must
+    // not replace the runtime-safe factory with a closure that captured a read-only plugin mode.
+    return { ok: true };
+  }
   if (existing && opts?.allowSameOwnerRefresh !== true) {
     return { ok: false, existingOwner: existing.owner };
   }
-  registry.set(id, { factory, owner: normalizedOwner });
-  clearContextEngineRuntimeQuarantine(id);
+  registry.set(id, { factory, owner: normalizedOwner, lifecycle });
+  if (lifecycle === "runtime") {
+    clearContextEngineRuntimeQuarantine(id);
+  }
   return { ok: true };
 }
 
-/**
- * Public SDK entry point for third-party registrations.
- *
- * This path is intentionally unprivileged: it cannot claim core-owned ids and
- * it cannot safely refresh an existing registration because the caller's
- * identity is not authenticated.
- */
-export function registerContextEngine(
-  id: string,
-  factory: ContextEngineFactory,
-): ContextEngineRegistrationResult {
-  return registerContextEngineForOwner(id, factory, PUBLIC_CONTEXT_ENGINE_OWNER);
-}
-
-/**
- * Return the factory for a registered engine, or undefined.
- */
-export function getContextEngineFactory(id: string): ContextEngineFactory | undefined {
-  return getContextEngineRegistryState().engines.get(id)?.factory;
+/** Returns registration metadata so callers can distinguish discovery snapshots from runtime entries. */
+export function getContextEngineRegistration(id: string): ContextEngineRegistration | undefined {
+  return getContextEngineRegistryState().engines.get(id);
 }
 
 /**
  * List all registered engine ids.
  */
-export function listContextEngineIds(): string[] {
+function listContextEngineIds(): string[] {
   return [...getContextEngineRegistryState().engines.keys()];
 }
 
 export function clearContextEnginesForOwner(owner: string): void {
   const normalizedOwner = requireContextEngineOwner(owner);
-  const registryState = getContextEngineRegistryState();
-  const registry = registryState.engines;
+  const registry = getContextEngineRegistryState().engines;
   for (const [id, entry] of registry.entries()) {
     if (entry.owner === normalizedOwner) {
       registry.delete(id);
-      registryState.quarantinedEngines.delete(id);
+      clearContextEngineRuntimeQuarantine(id);
     }
   }
 }
@@ -705,11 +741,9 @@ function contextEngineAbortError(methodParams: unknown): Error | undefined {
   if (reason instanceof Error) {
     return reason;
   }
-  const error = new Error(
+  return createAbortError(
     typeof reason === "string" && reason ? reason : "Context engine operation aborted.",
   );
-  error.name = "AbortError";
-  return error;
 }
 
 function isContextEngineAbortRejection(error: unknown, methodParams: unknown): boolean {
@@ -927,6 +961,13 @@ export async function resolveContextEngine(
     return resolveDefaultContextEngine(defaultEngineId, factoryCtx);
   }
 
+  if (!isDefaultEngine && entry.lifecycle === "readOnlyDiscovery") {
+    console.warn(
+      `[context-engine] Context engine "${engineId}" owner=${entry.owner} is registered for read-only discovery only; falling back to default engine "${defaultEngineId}" without quarantine until runtime activation registers it.`,
+    );
+    return resolveDefaultContextEngine(defaultEngineId, factoryCtx);
+  }
+
   let engine: ContextEngine;
   try {
     engine = await entry.factory(factoryCtx);
@@ -1009,3 +1050,4 @@ async function resolveDefaultContextEngine(
     engineId: defaultEngineId,
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

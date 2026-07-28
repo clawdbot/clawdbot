@@ -4,6 +4,7 @@
  * It can delegate cleanup to a live gateway or run local store maintenance,
  * with dry-run tables that explain every planned pruning action.
  */
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
@@ -14,6 +15,7 @@ import {
   type SessionsCleanupOptions,
   type SessionsCleanupResult,
 } from "../config/sessions.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway, isGatewayTransportError } from "../gateway/call.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
@@ -31,10 +33,17 @@ import {
   toSessionDisplayRows,
 } from "./sessions-table.js";
 
-const ACTION_PAD = 16;
+const ACTION_PAD = "prune-model-run".length;
 
 type SessionCleanupActionRow = ReturnType<typeof toSessionDisplayRows>[number] & {
   action: ReturnType<typeof resolveSessionCleanupAction>;
+  label?: string;
+};
+
+type SessionCleanupLabelSummary = {
+  label: string;
+  kept: number;
+  pruned: number;
 };
 
 function formatCleanupActionCell(
@@ -51,6 +60,9 @@ function formatCleanupActionCell(
   if (action === "prune-missing") {
     return theme.error(label);
   }
+  if (action === "prune-model-run") {
+    return theme.warn(label);
+  }
   if (action === "prune-stale") {
     return theme.warn(label);
   }
@@ -66,6 +78,7 @@ function formatCleanupActionCell(
 function buildActionRows(params: {
   beforeStore: Parameters<typeof toSessionDisplayRows>[0];
   missingKeys: Set<string>;
+  modelRunPrunedKeys: Set<string>;
   staleKeys: Set<string>;
   cappedKeys: Set<string>;
   budgetEvictedKeys: Set<string>;
@@ -75,9 +88,11 @@ function buildActionRows(params: {
   // action labels as the cleanup engine without mutating the preview store.
   return toSessionDisplayRows(params.beforeStore).map((row) =>
     Object.assign({}, row, {
+      label: params.beforeStore[row.key]?.label,
       action: resolveSessionCleanupAction({
         key: row.key,
         missingKeys: params.missingKeys,
+        modelRunPrunedKeys: params.modelRunPrunedKeys,
         staleKeys: params.staleKeys,
         cappedKeys: params.cappedKeys,
         budgetEvictedKeys: params.budgetEvictedKeys,
@@ -85,6 +100,55 @@ function buildActionRows(params: {
       }),
     }),
   );
+}
+
+function buildLabelSummaries(actionRows: SessionCleanupActionRow[]): SessionCleanupLabelSummary[] {
+  const summaryByLabel = new Map<string, SessionCleanupLabelSummary>();
+  for (const actionRow of actionRows) {
+    const rawLabel = typeof actionRow.label === "string" ? actionRow.label.trim() : "";
+    const label = sanitizeTerminalText(rawLabel) || "(unlabeled)";
+    let summary = summaryByLabel.get(label);
+    if (!summary) {
+      summary = { label, kept: 0, pruned: 0 };
+      summaryByLabel.set(label, summary);
+    }
+    if (actionRow.action === "keep") {
+      summary.kept += 1;
+    } else {
+      summary.pruned += 1;
+    }
+  }
+  return [...summaryByLabel.values()].toSorted((a, b) => a.label.localeCompare(b.label));
+}
+
+function renderLabelSummaries(params: {
+  actionRows: SessionCleanupActionRow[];
+  runtime: RuntimeEnv;
+}) {
+  const summaries = buildLabelSummaries(params.actionRows);
+  if (summaries.length === 0) {
+    return;
+  }
+  const labelPad = Math.max(...summaries.map((summary) => summary.label.length));
+  const totalKept = summaries.reduce((total, summary) => total + summary.kept, 0);
+  const totalPruned = summaries.reduce((total, summary) => total + summary.pruned, 0);
+  params.runtime.log("");
+  params.runtime.log("Summary by Label:");
+  for (const summary of summaries) {
+    params.runtime.log(
+      `${summary.label.padEnd(labelPad)}  ${summary.kept} kept, ${summary.pruned} pruned`,
+    );
+  }
+  params.runtime.log(`Total: ${totalKept} kept, ${totalPruned} pruned`);
+}
+
+function toDisplayedCleanupSummary(summary: SessionCleanupSummary): SessionCleanupSummary {
+  return {
+    ...summary,
+    storePath: resolveSqliteTargetFromSessionStorePath(summary.storePath, {
+      agentId: summary.agentId,
+    }).path,
+  };
 }
 
 function renderStoreDryRunPlan(params: {
@@ -95,16 +159,18 @@ function renderStoreDryRunPlan(params: {
   showAgentHeader: boolean;
 }) {
   const rich = isRich();
+  const displaySummary = toDisplayedCleanupSummary(params.summary);
   if (params.showAgentHeader) {
     params.runtime.log(`Agent: ${params.summary.agentId}`);
   }
-  params.runtime.log(`Session store: ${params.summary.storePath}`);
+  params.runtime.log(`Session store: ${displaySummary.storePath}`);
   params.runtime.log(`Maintenance mode: ${params.summary.mode}`);
   params.runtime.log(
     `Entries: ${params.summary.beforeCount} -> ${params.summary.afterCount} (remove ${params.summary.beforeCount - params.summary.afterCount})`,
   );
   params.runtime.log(`Would prune missing transcripts: ${params.summary.missing}`);
   params.runtime.log(`Would retire stale direct DM sessions: ${params.summary.dmScopeRetired}`);
+  params.runtime.log(`Would prune stale model-run probes: ${params.summary.modelRunPruned}`);
   params.runtime.log(`Would prune stale: ${params.summary.pruned}`);
   params.runtime.log(`Would cap overflow: ${params.summary.capped}`);
   if (params.summary.unreferencedArtifacts?.scannedFiles) {
@@ -141,11 +207,13 @@ function renderStoreDryRunPlan(params: {
     ].join(" ");
     params.runtime.log(line.trimEnd());
   }
+  renderLabelSummaries({ actionRows: params.actionRows, runtime: params.runtime });
 }
 
 function renderAppliedSummaries(params: {
   summaries: SessionCleanupSummary[];
   runtime: RuntimeEnv;
+  locallyOwned: boolean;
 }) {
   for (let i = 0; i < params.summaries.length; i += 1) {
     const summary = params.summaries[i];
@@ -158,7 +226,10 @@ function renderAppliedSummaries(params: {
     if (params.summaries.length > 1) {
       params.runtime.log(`Agent: ${summary.agentId}`);
     }
-    params.runtime.log(`Session store: ${summary.storePath}`);
+    const storePath = params.locallyOwned
+      ? toDisplayedCleanupSummary(summary).storePath
+      : summary.storePath;
+    params.runtime.log(`Session store: ${storePath}`);
     params.runtime.log(`Applied maintenance. Current entries: ${summary.appliedCount ?? 0}`);
     if (summary.unreferencedArtifacts?.removedFiles) {
       params.runtime.log(
@@ -170,14 +241,14 @@ function renderAppliedSummaries(params: {
 
 async function maybeRunGatewayCleanup(
   opts: SessionsCleanupOptions,
-): Promise<SessionsCleanupResult | null> {
+): Promise<{ delegated: true; result: SessionsCleanupResult } | { delegated: false }> {
   if (opts.store || opts.dryRun) {
     // Explicit store paths and dry-runs must stay local; the gateway only owns
     // live in-process cleanup for default stores.
-    return null;
+    return { delegated: false };
   }
   try {
-    return await callGateway<SessionsCleanupResult>({
+    const result = await callGateway<SessionsCleanupResult>({
       method: "sessions.cleanup",
       params: {
         agent: opts.agent,
@@ -191,11 +262,12 @@ async function maybeRunGatewayCleanup(
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       requiredMethods: ["sessions.cleanup"],
     });
+    return { delegated: true, result };
   } catch (error) {
     if (isGatewayTransportError(error)) {
       // A stopped gateway should not block local maintenance; fall back to the
       // on-disk session stores when transport is unavailable.
-      return null;
+      return { delegated: false };
     }
     throw error;
   }
@@ -203,15 +275,19 @@ async function maybeRunGatewayCleanup(
 
 /** Runs session cleanup, optionally using the live gateway for active stores. */
 export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runtime: RuntimeEnv) {
-  const gatewayResult = await maybeRunGatewayCleanup(opts);
-  if (gatewayResult) {
+  const gatewayCleanup = await maybeRunGatewayCleanup(opts);
+  if (gatewayCleanup.delegated) {
+    // The Gateway owns this path. Preserve its syntax because resolving a remote
+    // Windows path on a POSIX client (or vice versa) would fabricate a local path.
     if (opts.json) {
-      writeRuntimeJson(runtime, gatewayResult);
+      writeRuntimeJson(runtime, gatewayCleanup.result);
       return;
     }
     renderAppliedSummaries({
-      summaries: "stores" in gatewayResult ? gatewayResult.stores : [gatewayResult],
+      summaries:
+        "stores" in gatewayCleanup.result ? gatewayCleanup.result.stores : [gatewayCleanup.result],
       runtime,
+      locallyOwned: false,
     });
     return;
   }
@@ -242,14 +318,13 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
         serializeSessionCleanupResult({
           mode,
           dryRun: true,
-          summaries: previewResults.map((result) => result.summary),
+          summaries: previewResults.map((result) => toDisplayedCleanupSummary(result.summary)),
         }),
       );
       return;
     }
 
-    for (let i = 0; i < previewResults.length; i += 1) {
-      const result = previewResults[i];
+    for (const [i, result] of previewResults.entries()) {
       if (i > 0) {
         runtime.log("");
       }
@@ -270,11 +345,11 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
       serializeSessionCleanupResult({
         mode,
         dryRun: false,
-        summaries: appliedSummaries,
+        summaries: appliedSummaries.map(toDisplayedCleanupSummary),
       }),
     );
     return;
   }
 
-  renderAppliedSummaries({ summaries: appliedSummaries, runtime });
+  renderAppliedSummaries({ summaries: appliedSummaries, runtime, locallyOwned: true });
 }

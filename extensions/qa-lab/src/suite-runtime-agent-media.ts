@@ -86,21 +86,25 @@ async function resolveGeneratedImagePath(params: {
   startedAtMs: number;
   timeoutMs: number;
 }) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < params.timeoutMs) {
+  const deadline = Date.now() + params.timeoutMs;
+  while (Date.now() < deadline) {
     if (params.env.mock) {
-      const requests = await fetchJson<Array<{ allInputText?: string; toolOutput?: string }>>(
-        `${params.env.mock.baseUrl}/debug/requests`,
-      );
-      for (let index = requests.length - 1; index >= 0; index -= 1) {
-        const request = requests[index];
-        if (!(request.allInputText ?? "").includes(params.promptSnippet)) {
-          continue;
+      try {
+        const requests = await fetchJson<Array<{ allInputText?: string; toolOutput?: string }>>(
+          `${params.env.mock.baseUrl}/debug/requests`,
+          Math.max(1, deadline - Date.now()),
+        );
+        for (const request of requests.toReversed()) {
+          if (!(request.allInputText ?? "").includes(params.promptSnippet)) {
+            continue;
+          }
+          const mediaPath = extractMediaPathFromText(request.toolOutput);
+          if (mediaPath) {
+            return mediaPath;
+          }
         }
-        const mediaPath = extractMediaPathFromText(request.toolOutput);
-        if (mediaPath) {
-          return mediaPath;
-        }
+      } catch {
+        // The mock debug endpoint is best-effort; generated media files are the durable fallback.
       }
     }
 
@@ -132,9 +136,12 @@ async function resolveGeneratedImagePath(params: {
     if (match) {
       return match;
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 250);
-    });
+    const remainingMs = deadline - Date.now();
+    if (remainingMs > 0) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, Math.min(250, remainingMs));
+      });
+    }
   }
   throw new Error(`timed out after ${params.timeoutMs}ms`);
 }
@@ -148,6 +155,8 @@ async function ensureImageGenerationConfigured(env: QaSuiteRuntimeEnv) {
       providerBaseUrl: env.mock ? `${env.mock.baseUrl}/v1` : undefined,
       requiredPluginIds: env.transport.requiredPluginIds,
       existingPluginIds: readPluginAllow(snapshot.config),
+      forcedRuntime:
+        env.gateway?.runtimeEnv?.OPENCLAW_QA_FORCE_RUNTIME === "codex" ? "codex" : undefined,
     }),
   });
   await waitForGatewayHealthy(env);

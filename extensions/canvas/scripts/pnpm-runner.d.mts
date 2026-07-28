@@ -1,5 +1,7 @@
 export interface PnpmRunnerParams {
   comSpec?: string;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
   nodeArgs?: string[];
   nodeExecPath?: string;
   npmExecPath?: string;

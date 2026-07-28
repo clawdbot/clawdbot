@@ -155,31 +155,46 @@ describe("loginWeb coverage", () => {
     const restartOpts = createWaSocketOptions(1);
     expect(initialOpts?.onQr).toBe(restartOpts?.onQr);
 
-    initialOpts?.onQr?.("initial-qr");
-    restartOpts?.onQr?.("restart-qr");
-    await flushTasks();
+    const stdoutDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
+    try {
+      initialOpts?.onQr?.("initial-qr");
+      await flushTasks();
+      restartOpts?.onQr?.("restart-qr");
+      await flushTasks();
+    } finally {
+      if (stdoutDescriptor) {
+        Object.defineProperty(process.stdout, "isTTY", stdoutDescriptor);
+      } else {
+        Reflect.deleteProperty(process.stdout, "isTTY");
+      }
+    }
 
     expect(runtime.log).toHaveBeenCalledWith(
-      "Open the WhatsApp app, go to Linked Devices, then scan this QR:",
+      "Open the WhatsApp app, go to Linked Devices, then scan this QR:\nterminal:initial-qr",
     );
-    expect(runtime.log).toHaveBeenCalledWith("terminal:initial-qr");
-    expect(runtime.log).toHaveBeenCalledWith("terminal:restart-qr");
+    expect(runtime.log).toHaveBeenCalledWith(
+      "\x1b[2J\x1b[HOpen the WhatsApp app, go to Linked Devices, then scan this QR:\nterminal:restart-qr",
+    );
     expect(renderQrTerminalMock).toHaveBeenCalledWith("initial-qr", { small: true });
     expect(renderQrTerminalMock).toHaveBeenCalledWith("restart-qr", { small: true });
   });
 
-  it("clears creds and throws when logged out", async () => {
-    waitForWaConnectionMock.mockRejectedValueOnce({
-      output: { statusCode: 401 },
-    });
+  it("clears stale creds and continues login when logged out", async () => {
+    waitForWaConnectionMock
+      .mockRejectedValueOnce({
+        output: { statusCode: 401 },
+      })
+      .mockResolvedValueOnce(undefined);
 
     const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-    await expect(loginWeb(false, waitForWaConnectionMock as never, runtime)).rejects.toThrow(
-      /cache cleared/i,
+    await loginWeb(false, waitForWaConnectionMock as never, runtime);
+
+    expect(createWaSocketMock).toHaveBeenCalledTimes(2);
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtimeMessageCalls(runtime.log)).toContain(
+      "✅ Linked after restart; web session ready.",
     );
-    expect(runtimeMessageCalls(runtime.error)).toEqual([
-      "WhatsApp reported the session is logged out. Cleared cached web session; please rerun openclaw channels login and scan the QR again.",
-    ]);
     expect(rmMock).toHaveBeenCalledWith(path.resolve(testState.authDir), {
       recursive: true,
       force: true,

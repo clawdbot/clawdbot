@@ -9,15 +9,17 @@ import type {
   pollProviderOperationJson,
   postMultipartRequest,
   resolveProviderHttpRequestConfig,
+  resolveProviderRequestHeaders,
   sanitizeConfiguredModelProviderRequest,
 } from "../provider-http.js";
 
 type ResolveProviderHttpRequestConfigParams = Parameters<
   typeof resolveProviderHttpRequestConfig
 >[0];
+type FetchWithTimeoutGuardedParams = Parameters<typeof fetchWithTimeoutGuarded>;
+type ResolveProviderRequestHeadersParams = Parameters<typeof resolveProviderRequestHeaders>[0];
 type PollProviderOperationJsonParams = Parameters<typeof pollProviderOperationJson>[0];
 type PostMultipartRequestParams = Parameters<typeof postMultipartRequest>[0];
-type FetchWithTimeoutGuardedParams = Parameters<typeof fetchWithTimeoutGuarded>;
 type FetchProviderOperationResponseParams = Parameters<typeof fetchProviderOperationResponse>[0];
 type FetchProviderDownloadResponseParams = Parameters<typeof fetchProviderDownloadResponse>[0];
 type SanitizeConfiguredModelProviderRequestParams = Parameters<
@@ -28,7 +30,7 @@ type ResolveProviderHttpRequestConfigResult = {
   baseUrl: string;
   allowPrivateNetwork: boolean;
   headers: Headers;
-  dispatcherPolicy: undefined;
+  dispatcherPolicy: ReturnType<typeof resolveProviderHttpRequestConfig>["dispatcherPolicy"];
 };
 
 type AnyMock = Mock<(...args: unknown[]) => unknown>;
@@ -43,6 +45,9 @@ interface ProviderHttpMocks {
   pollProviderOperationJsonMock: AnyMock;
   assertOkOrThrowHttpErrorMock: Mock<(response: Response, label: string) => Promise<void>>;
   assertOkOrThrowProviderErrorMock: Mock<(response: Response, label: string) => Promise<void>>;
+  readProviderJsonResponseMock: Mock<
+    <T>(response: Response, label: string, opts?: { maxBytes?: number }) => Promise<T>
+  >;
   sanitizeConfiguredModelProviderRequestMock: Mock<
     (
       request: SanitizeConfiguredModelProviderRequestParams,
@@ -50,6 +55,9 @@ interface ProviderHttpMocks {
   >;
   resolveProviderHttpRequestConfigMock: Mock<
     (params: ResolveProviderHttpRequestConfigParams) => ResolveProviderHttpRequestConfigResult
+  >;
+  resolveProviderRequestHeadersMock: Mock<
+    (params: ResolveProviderRequestHeadersParams) => Record<string, string> | undefined
   >;
 }
 
@@ -65,6 +73,48 @@ const providerHttpMocks = vi.hoisted(() => ({
   pollProviderOperationJsonMock: vi.fn(),
   assertOkOrThrowHttpErrorMock: vi.fn(async (_response: Response, _label: string) => {}),
   assertOkOrThrowProviderErrorMock: vi.fn(async (_response: Response, _label: string) => {}),
+  readProviderJsonResponseMock: vi.fn(
+    async <T>(response: Response, label: string, opts?: { maxBytes?: number }): Promise<T> => {
+      const maxBytes = opts?.maxBytes ?? 16 * 1024 * 1024;
+      if (!response.body) {
+        try {
+          return (await response.json()) as T;
+        } catch (cause) {
+          throw new Error(`${label}: malformed JSON response`, { cause });
+        }
+      }
+      const reader = response.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let totalBytes = 0;
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) {
+            break;
+          }
+          totalBytes += value.byteLength;
+          if (totalBytes > maxBytes) {
+            await reader.cancel();
+            throw new Error(`${label}: JSON response exceeds ${maxBytes} bytes`);
+          }
+          chunks.push(value);
+        }
+      } finally {
+        reader.releaseLock();
+      }
+      const body = new Uint8Array(totalBytes);
+      let offset = 0;
+      for (const chunk of chunks) {
+        body.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      try {
+        return JSON.parse(new TextDecoder().decode(body)) as T;
+      } catch (cause) {
+        throw new Error(`${label}: malformed JSON response`, { cause });
+      }
+    },
+  ),
   sanitizeConfiguredModelProviderRequestMock: vi.fn(
     (request: SanitizeConfiguredModelProviderRequestParams) => request,
   ),
@@ -75,6 +125,20 @@ const providerHttpMocks = vi.hoisted(() => ({
     headers: new Headers(params.defaultHeaders),
     dispatcherPolicy: undefined,
   })),
+  resolveProviderRequestHeadersMock: vi.fn((params: ResolveProviderRequestHeadersParams) => {
+    if (params.provider === "google") {
+      return {
+        ...params.defaultHeaders,
+        "x-goog-api-client": "openclaw/test",
+        ...params.callerHeaders,
+      };
+    }
+    return params.callerHeaders ?? params.defaultHeaders;
+  }),
+}));
+
+const providerHttpMockKeys = vi.hoisted(() => ({
+  sanitizeConfiguredModelProviderRequest: "sanitizeConfiguredModelProviderRequest",
 }));
 
 providerHttpMocks.executeProviderOperationWithRetryMock.mockImplementation(
@@ -149,6 +213,15 @@ function resolveMockProviderTimeoutMs(
   return typeof timeoutMs === "function" ? timeoutMs() : (timeoutMs ?? 60_000);
 }
 
+function resolveMockProviderDownloadTimeoutMs(params: FetchProviderDownloadResponseParams) {
+  if (!params.deadline) {
+    return resolveMockProviderTimeoutMs(params.timeoutMs);
+  }
+  return params.deadline.deadlineAtMs === undefined
+    ? (params.deadline.timeoutMs ?? 60_000)
+    : Math.max(1, params.deadline.deadlineAtMs - Date.now());
+}
+
 providerHttpMocks.fetchProviderOperationResponseMock.mockImplementation(
   async (params: FetchProviderOperationResponseParams) => {
     const response = await providerHttpMocks.fetchWithTimeoutMock(
@@ -169,7 +242,7 @@ providerHttpMocks.fetchProviderDownloadResponseMock.mockImplementation(
     const response = await providerHttpMocks.fetchWithTimeoutMock(
       params.url,
       params.init ?? {},
-      resolveMockProviderTimeoutMs(params.timeoutMs),
+      resolveMockProviderDownloadTimeoutMs(params),
       params.fetchFn,
     );
     await providerHttpMocks.assertOkOrThrowHttpErrorMock(response, params.requestFailedMessage);
@@ -216,15 +289,34 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
     timeoutMs,
   }: {
     label: string;
-    timeoutMs?: number;
-  }) => ({
-    label,
-    timeoutMs,
-  }),
+    timeoutMs?: number | (() => number);
+  }) => {
+    const resolvedTimeoutMs = typeof timeoutMs === "function" ? timeoutMs() : timeoutMs;
+    return {
+      label,
+      timeoutMs: resolvedTimeoutMs,
+      deadlineAtMs:
+        typeof resolvedTimeoutMs === "number" ? Date.now() + resolvedTimeoutMs : undefined,
+    };
+  },
   createProviderOperationTimeoutResolver:
-    ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
-    () =>
+    ({
+      deadline,
       defaultTimeoutMs,
+    }: {
+      deadline: { deadlineAtMs?: number; label: string; timeoutMs?: number };
+      defaultTimeoutMs: number;
+    }) =>
+    () => {
+      if (typeof deadline.deadlineAtMs !== "number") {
+        return defaultTimeoutMs;
+      }
+      const remainingMs = deadline.deadlineAtMs - Date.now();
+      if (remainingMs <= 0) {
+        throw new Error(`${deadline.label} timed out after ${deadline.timeoutMs}ms`);
+      }
+      return Math.min(defaultTimeoutMs, remainingMs);
+    },
   executeProviderOperationWithRetry: providerHttpMocks.executeProviderOperationWithRetryMock,
   fetchProviderDownloadResponse: providerHttpMocks.fetchProviderDownloadResponseMock,
   fetchProviderOperationResponse: providerHttpMocks.fetchProviderOperationResponseMock,
@@ -234,10 +326,12 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   postJsonRequest: providerHttpMocks.postJsonRequestMock,
   postMultipartRequest: providerHttpMocks.postMultipartRequestMock,
   providerOperationRetryConfig: (_stage: string) => true,
+  readProviderJsonResponse: providerHttpMocks.readProviderJsonResponseMock,
   resolveProviderOperationTimeoutMs: ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
     defaultTimeoutMs,
   resolveProviderHttpRequestConfig: providerHttpMocks.resolveProviderHttpRequestConfigMock,
-  sanitizeConfiguredModelProviderRequest:
+  resolveProviderRequestHeaders: providerHttpMocks.resolveProviderRequestHeadersMock,
+  [providerHttpMockKeys.sanitizeConfiguredModelProviderRequest]:
     providerHttpMocks.sanitizeConfiguredModelProviderRequestMock,
   waitProviderOperationPollInterval: async () => {},
 }));
@@ -259,7 +353,9 @@ export function installProviderHttpMockCleanup(): void {
     providerHttpMocks.pollProviderOperationJsonMock.mockClear();
     providerHttpMocks.assertOkOrThrowHttpErrorMock.mockClear();
     providerHttpMocks.assertOkOrThrowProviderErrorMock.mockClear();
+    providerHttpMocks.readProviderJsonResponseMock.mockClear();
     providerHttpMocks.sanitizeConfiguredModelProviderRequestMock.mockClear();
     providerHttpMocks.resolveProviderHttpRequestConfigMock.mockClear();
+    providerHttpMocks.resolveProviderRequestHeadersMock.mockClear();
   });
 }

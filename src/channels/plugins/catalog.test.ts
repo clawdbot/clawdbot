@@ -33,7 +33,7 @@ describe("channel plugin catalog", () => {
     expect(yuanbao?.id).toBe("yuanbao");
     expect(yuanbao?.pluginId).toBe("openclaw-plugin-yuanbao");
     expect(yuanbao?.trustedSourceLinkedOfficialInstall).toBe(true);
-    expect(yuanbao?.install?.npmSpec).toBe("openclaw-plugin-yuanbao@2.13.1");
+    expect(yuanbao?.install?.npmSpec).toBe("openclaw-plugin-yuanbao@2.15.0");
   });
 
   it("excludes only the rejected origin/plugin pair when resolving fallback copies", () => {

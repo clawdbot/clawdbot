@@ -19,6 +19,8 @@ const DIRECT_METHOD_POLICIES = new Map<string, DirectMethodPolicy>([
   ["account/read", "allowed-control-plane"],
   ["app/list", "allowed-control-plane"],
   ["config/mcpServer/reload", "allowed-control-plane"],
+  ["config/read", "allowed-control-plane"],
+  ["config/value/write", "allowed-control-plane"],
   ["environment/add", "allowed-control-plane"],
   ["experimentalFeature/enablement/set", "allowed-control-plane"],
   ["feedback/upload", "allowed-control-plane"],
@@ -35,7 +37,7 @@ const DIRECT_METHOD_POLICIES = new Map<string, DirectMethodPolicy>([
   ["thread/inject_items", "allowed-control-plane"],
   ["thread/list", "allowed-control-plane"],
   ["thread/metadata/update", "allowed-control-plane"],
-  ["thread/name/update", "allowed-control-plane"],
+  ["thread/name/set", "allowed-control-plane"],
   ["thread/read", "allowed-control-plane"],
   ["thread/rollback", "allowed-control-plane"],
   ["thread/start", "requires-openclaw-environment"],
@@ -127,6 +129,7 @@ export function resolveCodexNativeExecutionBlock(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
   sessionId?: string;
+  agentId?: string;
   surface: string;
 }): string | undefined {
   return resolveCodexNativeSandboxBlock(params) ?? resolveCodexNativeNodeExecBlock(params);
@@ -199,12 +202,14 @@ function resolveCodexNativeNodeExecBlock(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
   sessionId?: string;
+  agentId?: string;
   surface: string;
 }): string | undefined {
   const sessionKey = params.sessionKey?.trim() || params.sessionId?.trim();
   const policy = resolveCodexNativeExecutionPolicy({
     config: params.config,
     sessionKey,
+    agentId: params.agentId,
     readRuntimeSessionEntry: Boolean(sessionKey),
   });
   if (policy.nativeToolSurfaceAllowed) {

@@ -1,11 +1,12 @@
 // Qa Lab tests cover suite runtime transport plugin behavior.
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
+import { createQaChannelTransport } from "./qa-channel-transport.js";
+import { findFailureOutboundMessage } from "./qa-transport.js";
 import {
-  createScenarioWaitForCondition,
-  findFailureOutboundMessage,
   formatTransportTranscript,
   readTransportTranscript,
+  waitForNoOutbound,
   waitForOutboundMessage,
   waitForTransportOutboundMessage,
 } from "./suite-runtime-transport.js";
@@ -36,7 +37,7 @@ describe("qa suite transport helpers", () => {
 
     state.addOutboundMessage({
       to: "dm:qa-operator",
-      text: '⚠️ No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai/gpt-5.5 with the Codex OAuth profile, or set OPENAI_API_KEY for direct OpenAI API access.',
+      text: '⚠️ No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai/gpt-5.6-luna with the Codex OAuth profile, or set OPENAI_API_KEY for direct OpenAI API access.',
       senderId: "openclaw",
       senderName: "OpenClaw QA",
     });
@@ -98,9 +99,34 @@ describe("qa suite transport helpers", () => {
     await expect(pending).rejects.toThrow("Tool read not found");
   });
 
+  it("checks no-outbound waits from the supplied outbound cursor", async () => {
+    const state = createQaBusState();
+    state.addOutboundMessage({
+      to: "dm:qa-operator",
+      text: "previous scenario reply",
+      senderId: "openclaw",
+      senderName: "OpenClaw QA",
+    });
+    const sinceIndex = state
+      .getSnapshot()
+      .messages.filter((message) => message.direction === "outbound").length;
+
+    await expect(waitForNoOutbound(state, 1, { sinceIndex })).resolves.toBeUndefined();
+
+    state.addOutboundMessage({
+      to: "channel:qa-room",
+      text: "current scenario reply",
+      senderId: "openclaw",
+      senderName: "OpenClaw QA",
+    });
+    await expect(waitForNoOutbound(state, 1, { sinceIndex })).rejects.toThrow(
+      "expected no outbound messages, saw 1: channel:qa-room:openclaw:current scenario reply",
+    );
+  });
+
   it("fails raw scenario waitForCondition calls when a classified failure reply arrives", async () => {
     const state = createQaBusState();
-    const waitForCondition = createScenarioWaitForCondition(state);
+    const waitForCondition = createQaChannelTransport(state).waitForCondition;
 
     const pending = waitForCondition(
       () =>
@@ -118,7 +144,7 @@ describe("qa suite transport helpers", () => {
 
     state.addOutboundMessage({
       to: "dm:qa-operator",
-      text: '⚠️ No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai/gpt-5.5 with the Codex OAuth profile, or set OPENAI_API_KEY for direct OpenAI API access.',
+      text: '⚠️ No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai/gpt-5.6-luna with the Codex OAuth profile, or set OPENAI_API_KEY for direct OpenAI API access.',
       senderId: "openclaw",
       senderName: "OpenClaw QA",
     });
@@ -147,7 +173,7 @@ describe("qa suite transport helpers", () => {
       text: "ok do it",
     });
 
-    const waitForCondition = createScenarioWaitForCondition(state);
+    const waitForCondition = createQaChannelTransport(state).waitForCondition;
     const pending = waitForCondition(
       () =>
         state
@@ -165,7 +191,7 @@ describe("qa suite transport helpers", () => {
 
     state.addOutboundMessage({
       to: "dm:qa-operator",
-      text: '⚠️ No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai/gpt-5.5 with the Codex OAuth profile, or set OPENAI_API_KEY for direct OpenAI API access.',
+      text: '⚠️ No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai/gpt-5.6-luna with the Codex OAuth profile, or set OPENAI_API_KEY for direct OpenAI API access.',
       senderId: "openclaw",
       senderName: "OpenClaw QA",
     });

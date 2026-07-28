@@ -39,6 +39,13 @@ describe("inline image data URL sanitizer", () => {
     );
   });
 
+  it("canonicalizes valid unpadded image data URLs", () => {
+    const unpaddedPng = PNG_1X1.replace(/=+$/u, "");
+    expect(sanitizeInlineImageDataUrl(`data:image/png;base64,${unpaddedPng}`)).toBe(
+      `data:image/png;base64,${PNG_1X1}`,
+    );
+  });
+
   it("rejects image data URLs for formats that require conversion before provider transport", () => {
     expect(sanitizeInlineImageDataUrl(`data:image/bmp;base64,${BMP_HEADER}`)).toBeUndefined();
     expect(sanitizeInlineImageDataUrl(`data:image/heic;base64,${HEIC_HEADER}`)).toBeUndefined();

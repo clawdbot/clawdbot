@@ -7,7 +7,10 @@ import {
   type RealtimeTranscriptionSessionCreateRequest,
   type RealtimeTranscriptionWebSocketTransport,
 } from "openclaw/plugin-sdk/realtime-transcription";
-import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
+import {
+  normalizeResolvedSecretInputString,
+  normalizeSecretInput,
+} from "openclaw/plugin-sdk/secret-input";
 import {
   asOptionalRecord as readRecord,
   normalizeOptionalString,
@@ -125,10 +128,7 @@ function normalizeProviderConfig(
 ): MistralRealtimeTranscriptionProviderConfig {
   const raw = readNestedMistralConfig(config);
   return {
-    apiKey: normalizeResolvedSecretInputString({
-      value: raw.apiKey,
-      path: "plugins.entries.voice-call.config.streaming.providers.mistral.apiKey",
-    }),
+    apiKey: normalizeMistralApiKey(raw.apiKey),
     baseUrl: normalizeOptionalString(raw.baseUrl),
     model: normalizeOptionalString(raw.model ?? raw.sttModel),
     sampleRate: readFiniteNumber(raw.sampleRate ?? raw.sample_rate),
@@ -137,6 +137,14 @@ function normalizeProviderConfig(
       raw.targetStreamingDelayMs ?? raw.target_streaming_delay_ms ?? raw.delayMs,
     ),
   };
+}
+
+function normalizeMistralApiKey(value: unknown): string | undefined {
+  const resolved = normalizeResolvedSecretInputString({
+    value,
+    path: "plugins.entries.voice-call.config.streaming.providers.mistral.apiKey",
+  });
+  return normalizeSecretInput(resolved) || undefined;
 }
 
 function readErrorDetail(event: MistralRealtimeTranscriptionEvent): string {
@@ -241,10 +249,13 @@ export function buildMistralRealtimeTranscriptionProvider(): RealtimeTranscripti
     autoSelectOrder: 45,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     isConfigured: ({ providerConfig }) =>
-      Boolean(normalizeProviderConfig(providerConfig).apiKey || process.env.MISTRAL_API_KEY),
+      Boolean(
+        normalizeProviderConfig(providerConfig).apiKey ||
+        normalizeMistralApiKey(process.env.MISTRAL_API_KEY),
+      ),
     createSession: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
-      const apiKey = config.apiKey || process.env.MISTRAL_API_KEY;
+      const apiKey = config.apiKey || normalizeMistralApiKey(process.env.MISTRAL_API_KEY);
       if (!apiKey) {
         throw new Error("Mistral API key missing");
       }
@@ -260,9 +271,3 @@ export function buildMistralRealtimeTranscriptionProvider(): RealtimeTranscripti
     },
   };
 }
-
-export const testing = {
-  normalizeProviderConfig,
-  toMistralRealtimeWsUrl,
-};
-export { testing as __testing };

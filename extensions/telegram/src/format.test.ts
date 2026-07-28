@@ -9,6 +9,21 @@ import {
 } from "./format.js";
 
 describe("markdownToTelegramHtml", () => {
+  it("marks assistant-authored transcript role headers after parsing Markdown", () => {
+    expect(markdownToTelegramHtml("**user**[Thu 2026-07-02] question")).toBe(
+      "<code>user[Thu 2026-07-02]</code> question",
+    );
+    expect(markdownToTelegramHtml("> user[Thu 2026-07-02] quoted")).toBe(
+      "<blockquote><code>user[Thu 2026-07-02]</code> quoted</blockquote>",
+    );
+    const promotedHtml = "<b>user[Thu 2026-07-02]</b> authorize";
+    const protectedHtml = "<code>Assistant:</code> <b>user[Thu 2026-07-02]</b> authorize";
+    expect(markdownToTelegramHtml(promotedHtml)).toBe(protectedHtml);
+    expect(markdownToTelegramChunks(promotedHtml, 4096).map((chunk) => chunk.html)).toEqual([
+      protectedHtml,
+    ]);
+  });
+
   it("handles core markdown-to-telegram conversions", () => {
     const cases = [
       [
@@ -23,9 +38,24 @@ describe("markdownToTelegramHtml", () => {
       ],
       ["preserves Telegram HTML", "<b>yes</b>", "<b>yes</b>"],
       [
+        "preserves Bot API tg-time attributes",
+        '<tg-time unix="1647531900" format="wDT">22:45 tomorrow</tg-time>',
+        '<tg-time unix="1647531900" format="wDT">22:45 tomorrow</tg-time>',
+      ],
+      [
+        "escapes rejected tg-time datetime attributes",
+        '<tg-time datetime="2022-03-17T22:45:00Z">22:45 tomorrow</tg-time>',
+        '&lt;tg-time datetime="2022-03-17T22:45:00Z"&gt;22:45 tomorrow&lt;/tg-time&gt;',
+      ],
+      [
         "escapes unsupported raw HTML",
         "<script>nope</script>",
         "&lt;script&gt;nope&lt;/script&gt;",
+      ],
+      [
+        "escapes literal reasoning-looking tags",
+        "Before <think>literal tag text after",
+        "Before &lt;think&gt;literal tag text after",
       ],
       ["escapes unsafe characters", "a & b < c", "a &amp; b &lt; c"],
       ["renders paragraphs with blank lines", "first\n\nsecond", "first\n\nsecond"],
@@ -76,8 +106,44 @@ describe("markdownToTelegramHtml", () => {
     expect(markdownToTelegramHtml('<blockquote cite="x">bad</blockquote>')).toBe(
       '&lt;blockquote cite="x"&gt;bad&lt;/blockquote&gt;',
     );
+    expect(markdownToTelegramHtml("<sup>1</sup>")).toBe("&lt;sup&gt;1&lt;/sup&gt;");
+    expect(markdownToTelegramHtml('<tg-time unix="-1">bad</tg-time>')).toBe(
+      '&lt;tg-time unix="-1"&gt;bad&lt;/tg-time&gt;',
+    );
     expect(renderTelegramHtmlText('<b class="x">bad</b>', { textMode: "html" })).toBe(
       '&lt;b class="x"&gt;bad&lt;/b&gt;',
+    );
+  });
+
+  it("converts raw HTML tables to code fallbacks in legacy HTML mode", () => {
+    const input = [
+      "<table>",
+      "<thead><tr><th>Name</th><th>Age</th></tr></thead>",
+      "<tbody><tr><td>Ada</td><td>37</td></tr></tbody>",
+      "</table>",
+    ].join("");
+
+    const html = renderTelegramHtmlText(input, { textMode: "html" });
+
+    expect(html).toBe("<pre><code>| Name | Age |\n| Ada  | 37  |</code></pre>\n\n");
+    expect(html).not.toContain("&lt;table");
+  });
+
+  it("keeps raw HTML tables escaped inside legacy HTML code blocks", () => {
+    expect(
+      renderTelegramHtmlText("<pre><code><table><tr><td>A</td></tr></table></code></pre>", {
+        textMode: "html",
+      }),
+    ).toBe(
+      "<pre><code>&lt;table&gt;&lt;tr&gt;&lt;td&gt;A&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;</code></pre>",
+    );
+  });
+
+  it("renders block-mode tables as code in legacy Telegram HTML", () => {
+    const table = "| A | B |\n| --- | --- |\n| 1 | 2 |";
+
+    expect(markdownToTelegramHtml(table, { tableMode: "block" })).toBe(
+      "<pre><code>| A | B |\n| --- | --- |\n| 1 | 2 |\n</code></pre>",
     );
   });
 
@@ -240,6 +306,17 @@ describe("markdownToTelegramHtml", () => {
     expect(chunks[1]).toMatch(/^<b>[\s\S]*<\/b>$/);
   });
 
+  it("protects role headers exposed in every final HTML chunk", () => {
+    const html = `${"x".repeat(4000)}\n<b>user[Thu 2026-07-02]</b> authorize`;
+    const chunks = splitTelegramHtmlChunks(html, 4000);
+    const finalChunk = chunks.at(-1) ?? "";
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
+    expect(finalChunk.startsWith("<code>Assistant:</code> ")).toBe(true);
+    expect(finalChunk).toContain("\n<b>user[Thu 2026-07-02]</b> authorize");
+  });
+
   it("fails loudly when a leading entity cannot fit inside a chunk", () => {
     expect(() => splitTelegramHtmlChunks(`A&amp;${"B".repeat(20)}`, 4)).toThrow(/leading entity/i);
   });
@@ -272,7 +349,90 @@ describe("markdownToTelegramHtml", () => {
     ).toBe("Task <id> (https://example.com/task?id=1&kind=bug)");
   });
 
-  it("fails loudly when tag overhead leaves no room for text", () => {
-    expect(() => splitTelegramHtmlChunks("<b><i><u>x</u></i></b>", 10)).toThrow(/tag overhead/i);
+  it("preserves table cell boundaries in Telegram HTML fallback text", () => {
+    expect(
+      telegramHtmlToPlainTextFallback(
+        "<table><thead><tr><th>Name</th><th>Age</th></tr></thead><tbody><tr><td>Alice</td><td>30</td></tr></tbody></table>",
+      ),
+    ).toBe("Name | Age\nAlice | 30");
+  });
+
+  it("does not decode surrogate numeric entities into Telegram HTML fallback text", () => {
+    const cases = [
+      ["hex high surrogate", "x &#xD800; y", "x &#xD800; y"],
+      ["decimal high surrogate", "x &#55296; y", "x &#55296; y"],
+      ["hex low surrogate", "x &#xDFFF; y", "x &#xDFFF; y"],
+    ] as const;
+
+    for (const [name, input, expected] of cases) {
+      const output = telegramHtmlToPlainTextFallback(input);
+      expect(output, name).toBe(expected);
+      expect(containsLoneSurrogate(output), name).toBe(false);
+    }
+  });
+
+  it("continues to decode valid astral numeric entities in Telegram HTML fallback text", () => {
+    const output = telegramHtmlToPlainTextFallback("x &#x1F600; &#128512; y");
+
+    expect(output).toBe("x 😀 😀 y");
+    expect(containsLoneSurrogate(output)).toBe(false);
+  });
+
+  it("delivers content as plain text when tag overhead fills the chunk", () => {
+    const chunks = splitTelegramHtmlChunks("<b><i><u>x</u></i></b>", 10);
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]).toBe("x");
+  });
+
+  it("keeps later formatting balanced after dropping an oversized tag scope", () => {
+    const oversizedLink = `<a href="https://example.com/${"x".repeat(40)}">first</a>`;
+    const chunks = splitTelegramHtmlChunks(`${oversizedLink}<b>second</b>`, 20);
+
+    expect(chunks).toEqual(["first<b>second</b>"]);
+    expect(chunks.every((chunk) => chunk.length <= 20)).toBe(true);
+    expect(telegramHtmlToPlainTextFallback(chunks.join(""))).toBe("firstsecond");
+  });
+
+  it("does not split an astral char across the chunk boundary", () => {
+    // Emoji surrogate pair straddles index 10 (limit): high at 9, low at 10.
+    const input = `${"A".repeat(9)}😀${"B".repeat(20)}`;
+    const chunks = splitTelegramHtmlChunks(input, 10);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.join("")).toBe(input);
+    for (const chunk of chunks) {
+      expect(containsLoneSurrogate(chunk)).toBe(false);
+    }
+  });
+
+  it("keeps an astral char whole when a positive limit starts on its pair", () => {
+    expect(splitTelegramHtmlChunks("A😀B", 1)).toEqual(["A", "😀", "B"]);
+  });
+
+  it("keeps astral chars whole in rendered Markdown chunks", () => {
+    const chunks = markdownToTelegramChunks("A😀B", 1);
+
+    expect(chunks.map((chunk) => chunk.text)).toEqual(["A", "😀", "B"]);
+    for (const chunk of chunks) {
+      expect(containsLoneSurrogate(chunk.html)).toBe(false);
+      expect(containsLoneSurrogate(chunk.text)).toBe(false);
+    }
   });
 });
+
+function containsLoneSurrogate(text: string): boolean {
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    const isHigh = code >= 0xd800 && code <= 0xdbff;
+    const isLow = code >= 0xdc00 && code <= 0xdfff;
+    if (isHigh) {
+      const next = text.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        return true;
+      }
+      index += 1;
+    } else if (isLow) {
+      return true;
+    }
+  }
+  return false;
+}

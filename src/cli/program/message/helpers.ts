@@ -34,11 +34,13 @@ const CHANNEL_MESSAGE_ACTION_NAME_SET = new Set<string>(CHANNEL_MESSAGE_ACTION_N
 const STRICT_POSITIVE_INTEGER_OPTIONS = new Map([
   ["pollDurationHours", "--poll-duration-hours"],
   ["pollDurationSeconds", "--poll-duration-seconds"],
-  ["durationMin", "--duration-min"],
   ["limit", "--limit"],
   ["autoArchiveMin", "--auto-archive-min"],
 ]);
-const STRICT_NON_NEGATIVE_INTEGER_OPTIONS = new Map([["deleteDays", "--delete-days"]]);
+const STRICT_NON_NEGATIVE_INTEGER_OPTIONS = new Map([
+  ["durationMin", "--duration-min"],
+  ["deleteDays", "--delete-days"],
+]);
 
 type MessagePluginLoadOptions = { scope: PluginRegistryScope; onlyChannelIds?: string[] };
 type MessagePluginPreloadPlan =

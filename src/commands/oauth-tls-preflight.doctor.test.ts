@@ -8,7 +8,7 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note,
 }));
 
-import { noteOpenAIOAuthTlsPrerequisites } from "./oauth-tls-preflight.js";
+import { noteOpenAIOAuthTlsPrerequisites } from "../plugins/provider-openai-chatgpt-oauth-tls.js";
 
 function buildOpenAICodexOAuthConfig(): OpenClawConfig {
   return {

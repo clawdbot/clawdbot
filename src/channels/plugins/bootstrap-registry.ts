@@ -4,8 +4,6 @@
  * Provides channel plugin metadata before the full runtime registry is installed.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { listBundledChannelPluginIdsForRoot } from "./bundled-ids.js";
-import { resolveBundledChannelRootScope } from "./bundled-root.js";
 import {
   getBundledChannelPlugin,
   getBundledChannelSecrets,
@@ -64,26 +62,6 @@ function mergeBootstrapPlugin(
     actions: mergePluginSection(runtimePlugin.actions, setupPlugin.actions),
     secrets: mergePluginSection(runtimePlugin.secrets, setupPlugin.secrets),
   } as ChannelPlugin;
-}
-
-/**
- * Lists bundled channel ids visible to bootstrap for the current root scope.
- */
-export function listBootstrapChannelPluginIds(): readonly string[] {
-  const rootScope = resolveBundledChannelRootScope();
-  return listBundledChannelPluginIdsForRoot(rootScope.cacheKey);
-}
-
-/**
- * Iterates bundled bootstrap channel plugins that can be loaded successfully.
- */
-export function* iterateBootstrapChannelPlugins(): IterableIterator<ChannelPlugin> {
-  for (const id of listBootstrapChannelPluginIds()) {
-    const plugin = getBootstrapChannelPlugin(id);
-    if (plugin) {
-      yield plugin;
-    }
-  }
 }
 
 /**

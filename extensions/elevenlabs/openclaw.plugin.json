@@ -1,5 +1,6 @@
 {
   "id": "elevenlabs",
+  "icon": "https://cdn.simpleicons.org/elevenlabs",
   "activation": {
     "onStartup": false
   },

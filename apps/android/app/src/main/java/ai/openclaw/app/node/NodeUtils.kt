@@ -66,15 +66,15 @@ fun parseJsonString(
   key: String,
 ): String? = readJsonPrimitive(params, key)?.contentOrNull
 
-/** Parses strict true/false flags from string-like JSON primitives. */
+/** Parses true/false flags from JSON primitives, including common string aliases. */
 fun parseJsonBooleanFlag(
   params: JsonObject?,
   key: String,
 ): Boolean? {
   val value = readJsonPrimitive(params, key)?.contentOrNull?.trim()?.lowercase() ?: return null
   return when (value) {
-    "true" -> true
-    "false" -> false
+    "true", "yes", "1" -> true
+    "false", "no", "0" -> false
     else -> null
   }
 }
@@ -109,6 +109,3 @@ fun normalizeMainKey(raw: String?): String? {
   val trimmed = raw?.trim().orEmpty()
   return if (trimmed.isEmpty()) null else trimmed
 }
-
-/** Returns true only for the canonical main-session key understood by gateway UI. */
-fun isCanonicalMainSessionKey(key: String): Boolean = key == "main"

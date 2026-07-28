@@ -1,19 +1,31 @@
 // Covers plugin conversation binding persistence and lookup behavior.
-import fs from "node:fs";
-import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type {
   ConversationRef,
   SessionBindingAdapter,
   SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import * as openClawStateDb from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
+import {
+  resetPluginConversationBindingStateForTest,
+  seedPluginConversationBindingApprovalForTest,
+} from "./conversation-binding.test-fixtures.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
 const tempRoot = makeTrackedTempDir("openclaw-plugin-binding", tempDirs);
-const approvalsPath = path.join(tempRoot, "plugin-binding-approvals.json");
+const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+
+type PluginBindingApprovalsDatabase = Pick<OpenClawStateKyselyDatabase, "plugin_binding_approvals">;
 
 const sessionBindingState = vi.hoisted(() => {
   const records = new Map<string, SessionBindingRecord>();
@@ -93,20 +105,6 @@ const pluginRuntimeState = vi.hoisted(
     }) satisfies { registry: PluginRegistry },
 );
 
-vi.mock("../infra/home-dir.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../infra/home-dir.js")>("../infra/home-dir.js");
-  return {
-    ...actual,
-    expandHomePrefix: (value: string) => {
-      if (value === "~/.openclaw/plugin-binding-approvals.json") {
-        return approvalsPath;
-      }
-      return actual.expandHomePrefix(value);
-    },
-  };
-});
-
 vi.mock("./runtime.js", async () => {
   const actual = await vi.importActual<typeof import("./runtime.js")>("./runtime.js");
   return {
@@ -119,8 +117,8 @@ vi.mock("./runtime.js", async () => {
   };
 });
 
-let testing: typeof import("./conversation-binding.js").testing;
 let buildPluginBindingApprovalCustomId: typeof import("./conversation-binding.js").buildPluginBindingApprovalCustomId;
+let bindPluginSessionConversation: typeof import("./session-conversation-binding.js").bindPluginSessionConversation;
 let detachPluginConversationBinding: typeof import("./conversation-binding.js").detachPluginConversationBinding;
 let getCurrentPluginConversationBinding: typeof import("./conversation-binding.js").getCurrentPluginConversationBinding;
 let parsePluginBindingApprovalCustomId: typeof import("./conversation-binding.js").parsePluginBindingApprovalCustomId;
@@ -165,12 +163,17 @@ function createAdapter(channel: string, accountId: string): SessionBindingAdapte
 }
 
 afterAll(() => {
+  closeOpenClawStateDatabaseForTest();
+  if (previousStateDir == null) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = previousStateDir;
+  }
   cleanupTrackedTempDirs(tempDirs);
 });
 
 beforeAll(async () => {
   ({
-    testing,
     buildPluginBindingApprovalCustomId,
     detachPluginConversationBinding,
     getCurrentPluginConversationBinding,
@@ -178,6 +181,7 @@ beforeAll(async () => {
     requestPluginConversationBinding,
     resolvePluginConversationBindingApproval,
   } = await import("./conversation-binding.js"));
+  ({ bindPluginSessionConversation } = await import("./session-conversation-binding.js"));
   ({ registerSessionBindingAdapter, unregisterSessionBindingAdapter } =
     await import("../infra/outbound/session-binding-service.js"));
   ({ setActivePluginRegistry } = await import("./runtime.js"));
@@ -283,7 +287,7 @@ async function approveBindingRequest(
 async function importDuplicateConversationBindingModules() {
   const first = await importConversationBindingModule(`first-${Date.now()}`);
   const second = await importConversationBindingModule(`second-${Date.now()}`);
-  first.testing.reset();
+  resetPluginConversationBindingStateForTest();
   return { first, second };
 }
 
@@ -415,20 +419,138 @@ async function expectResolutionDoesNotWait(params: {
   expect(result.status).toBe(params.expectedStatus);
 }
 
+function clearPluginBindingApprovalRows(): void {
+  runOpenClawStateWriteTransaction(({ db }) => {
+    const approvalsDb = getNodeSqliteKysely<PluginBindingApprovalsDatabase>(db);
+    executeSqliteQuerySync(db, approvalsDb.deleteFrom("plugin_binding_approvals"));
+  });
+}
+
+function readPluginBindingApprovalRows(): Array<{
+  account_id: string;
+  channel: string;
+  plugin_id: string;
+  plugin_root: string;
+}> {
+  const { db } = openOpenClawStateDatabase();
+  const approvalsDb = getNodeSqliteKysely<PluginBindingApprovalsDatabase>(db);
+  return executeSqliteQuerySync(
+    db,
+    approvalsDb
+      .selectFrom("plugin_binding_approvals")
+      .select(["account_id", "channel", "plugin_id", "plugin_root"])
+      .orderBy("account_id", "asc")
+      .orderBy("plugin_root", "asc"),
+  ).rows;
+}
+
+function insertPluginBindingApprovalRow(params: {
+  pluginRoot: string;
+  channel: string;
+  accountId: string;
+  pluginId: string;
+}): void {
+  seedPluginConversationBindingApprovalForTest({
+    ...params,
+    approvedAt: 1,
+  });
+}
+
 describe("plugin conversation binding approvals", () => {
   beforeEach(() => {
+    process.env.OPENCLAW_STATE_DIR = tempRoot;
+    clearPluginBindingApprovalRows();
     sessionBindingState.reset();
-    testing.reset();
+    resetPluginConversationBindingStateForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
-    fs.rmSync(approvalsPath, { force: true });
     unregisterSessionBindingAdapter({ channel: "discord", accountId: "default" });
     unregisterSessionBindingAdapter({ channel: "discord", accountId: "work" });
     unregisterSessionBindingAdapter({ channel: "discord", accountId: "isolated" });
     unregisterSessionBindingAdapter({ channel: "telegram", accountId: "default" });
+    unregisterSessionBindingAdapter({ channel: "webchat", accountId: "default" });
     registerSessionBindingAdapter(createAdapter("discord", "default"));
     registerSessionBindingAdapter(createAdapter("discord", "work"));
     registerSessionBindingAdapter(createAdapter("discord", "isolated"));
     registerSessionBindingAdapter(createAdapter("telegram", "default"));
+    registerSessionBindingAdapter(createAdapter("webchat", "default"));
+  });
+
+  it("restores the prior Control UI binding when provider publication fails", async () => {
+    const previous: SessionBindingRecord = {
+      bindingId: "binding-prior",
+      targetSessionKey: "agent:main:adopted",
+      targetKind: "session",
+      conversation: {
+        channel: "webchat",
+        accountId: "default",
+        conversationId: "agent:main:adopted",
+      },
+      status: "active",
+      boundAt: 1,
+      metadata: { pluginBindingOwner: "plugin", pluginId: "codex", pluginRoot: "/codex" },
+    };
+    sessionBindingState.setRecord(previous);
+
+    await expect(
+      bindPluginSessionConversation({
+        pluginId: "codex",
+        pluginRoot: "/codex",
+        sessionKey: "agent:main:adopted",
+        binding: { data: { kind: "codex-cli-node-session", version: 1 } },
+        afterBind: async () => {
+          throw new Error("publication failed");
+        },
+      }),
+    ).rejects.toThrow("publication failed");
+
+    expect(sessionBindingState.resolveByConversation(previous.conversation)).toMatchObject({
+      targetSessionKey: previous.targetSessionKey,
+      metadata: previous.metadata,
+    });
+    expect(sessionBindingState.bind).toHaveBeenCalledTimes(2);
+    expect(sessionBindingState.unbind).toHaveBeenCalledWith({
+      bindingId: "binding-1",
+      reason: "plugin-session-bind-rollback",
+    });
+  });
+
+  it("does not roll back a newer successful Control UI binding", async () => {
+    let rejectFirst = (_error: Error) => {};
+    const firstPublication = new Promise<void>((_resolve, reject) => {
+      rejectFirst = reject;
+    });
+    const first = bindPluginSessionConversation({
+      pluginId: "codex",
+      pluginRoot: "/codex",
+      sessionKey: "agent:main:adopted",
+      binding: { data: { kind: "remote-runtime", generation: 1 } },
+      afterBind: async () => await firstPublication,
+    });
+    await vi.waitFor(() => expect(sessionBindingState.bind).toHaveBeenCalledOnce());
+
+    // A concurrent Continue for the same session queues behind the failing
+    // attempt instead of interleaving with its rollback.
+    const second = bindPluginSessionConversation({
+      pluginId: "codex",
+      pluginRoot: "/codex",
+      sessionKey: "agent:main:adopted",
+      binding: { data: { kind: "remote-runtime", generation: 2 } },
+    });
+    rejectFirst(new Error("older publication failed"));
+    await expect(first).rejects.toThrow("older publication failed");
+    await second;
+
+    expect(
+      sessionBindingState.resolveByConversation({
+        channel: "webchat",
+        accountId: "default",
+        conversationId: "agent:main:adopted",
+      }),
+    ).toMatchObject({ metadata: { data: { kind: "remote-runtime", generation: 2 } } });
+    // Only the failed attempt rolled back its own binding.
+    expect(sessionBindingState.unbind).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "plugin-session-bind-rollback" }),
+    );
   });
 
   it("keeps Telegram bind approval callback_data within Telegram's limit", () => {
@@ -485,6 +607,126 @@ describe("plugin conversation binding approvals", () => {
     expect(differentAccount.status).toBe("pending");
   });
 
+  it("does not leak an in-memory auto-approval when persisting an allow-always grant fails", async () => {
+    const pendingRequest = await requestPendingBinding(
+      createDiscordCodexBindRequest("channel:persist-fail-1", "Bind Codex thread persist-fail-1."),
+    );
+
+    const writeSpy = vi
+      .spyOn(openClawStateDb, "runOpenClawStateWriteTransaction")
+      .mockImplementationOnce(() => {
+        throw new Error("SQLITE_BUSY: database is locked");
+      });
+
+    // A failed persist must propagate; the grant was never durably recorded.
+    await expect(approveBindingRequest(pendingRequest.approvalId, "allow-always")).rejects.toThrow(
+      "SQLITE_BUSY",
+    );
+
+    writeSpy.mockRestore();
+
+    // Nothing reached disk.
+    expect(readPluginBindingApprovalRows()).toEqual([]);
+
+    // No in-memory grant leaked: the next same-scope request still prompts instead of
+    // silently auto-approving from a cache entry that was never persisted.
+    const sameScope = await requestPluginConversationBinding(
+      createDiscordCodexBindRequest("channel:persist-fail-2", "Bind Codex thread persist-fail-2."),
+    );
+
+    expect(sameScope.status).toBe("pending");
+  });
+
+  it("persists overlapping always-allow approvals", async () => {
+    const firstRequest = await requestPendingBinding(
+      createDiscordCodexBindRequest(
+        "channel:race-1",
+        "Bind this conversation to Codex thread race-1.",
+        "default",
+      ),
+    );
+    const secondRequest = await requestPendingBinding(
+      createDiscordCodexBindRequest(
+        "channel:race-2",
+        "Bind this conversation to Codex thread race-2.",
+        "work",
+      ),
+    );
+
+    const [firstResult, secondResult] = await Promise.all([
+      resolvePluginConversationBindingApproval({
+        approvalId: firstRequest.approvalId,
+        decision: "allow-always",
+        senderId: "user-1",
+      }),
+      resolvePluginConversationBindingApproval({
+        approvalId: secondRequest.approvalId,
+        decision: "allow-always",
+        senderId: "user-1",
+      }),
+    ]);
+
+    expect(firstResult.status).toBe("approved");
+    expect(secondResult.status).toBe("approved");
+    expect(readPluginBindingApprovalRows()).toEqual([
+      {
+        account_id: "default",
+        channel: "discord",
+        plugin_id: "codex",
+        plugin_root: "/plugins/codex-a",
+      },
+      {
+        account_id: "work",
+        channel: "discord",
+        plugin_id: "codex",
+        plugin_root: "/plugins/codex-a",
+      },
+    ]);
+
+    // Both grants must stay live in the in-memory cache: publishing the cache only after
+    // the persist await must recompute from the latest cache, not clobber a concurrently
+    // approved scope with a stale pre-await snapshot. Follow-up binds auto-approve from cache.
+    const firstFollowUp = await requestPluginConversationBinding(
+      createDiscordCodexBindRequest("channel:race-1b", "Rebind Codex thread race-1.", "default"),
+    );
+    const secondFollowUp = await requestPluginConversationBinding(
+      createDiscordCodexBindRequest("channel:race-2b", "Rebind Codex thread race-2.", "work"),
+    );
+
+    expect(firstFollowUp.status).toBe("bound");
+    expect(secondFollowUp.status).toBe("bound");
+  });
+
+  it("does not remove approval rows written outside the process cache", async () => {
+    insertPluginBindingApprovalRow({
+      pluginRoot: "/plugins/other",
+      channel: "discord",
+      accountId: "default",
+      pluginId: "other",
+    });
+
+    const request = await requestPendingBinding(
+      createDiscordCodexBindRequest("channel:cache-race", "Bind this conversation to Codex."),
+    );
+    const approved = await approveBindingRequest(request.approvalId, "allow-always");
+
+    expect(approved.status).toBe("approved");
+    expect(readPluginBindingApprovalRows()).toEqual([
+      {
+        account_id: "default",
+        channel: "discord",
+        plugin_id: "other",
+        plugin_root: "/plugins/other",
+      },
+      {
+        account_id: "isolated",
+        channel: "discord",
+        plugin_id: "codex",
+        plugin_root: "/plugins/codex-a",
+      },
+    ]);
+  });
+
   it("shares pending bind approvals across duplicate module instances", async () => {
     const { first, second } = await importDuplicateConversationBindingModules();
     const request = await requestPendingBinding(
@@ -509,7 +751,7 @@ describe("plugin conversation binding approvals", () => {
     expect(approved.binding.pluginRoot).toBe("/plugins/codex-a");
     expect(approved.binding.conversationId).toBe("-10099:topic:77");
 
-    second.testing.reset();
+    resetPluginConversationBindingStateForTest();
   });
 
   it("shares persistent approvals across duplicate module instances", async () => {
@@ -544,8 +786,8 @@ describe("plugin conversation binding approvals", () => {
 
     expect(rebound.status).toBe("bound");
 
-    first.testing.reset();
-    fs.rmSync(approvalsPath, { force: true });
+    resetPluginConversationBindingStateForTest();
+    clearPluginBindingApprovalRows();
   });
 
   it("does not share persistent approvals across plugin roots even with the same plugin id", async () => {
@@ -956,3 +1198,4 @@ describe("plugin conversation binding approvals", () => {
     expect(binding.conversationId).toBe(expectedBinding.conversationId);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

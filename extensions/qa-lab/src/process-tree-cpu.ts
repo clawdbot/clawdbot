@@ -1,12 +1,15 @@
 // Qa Lab plugin module implements process tree cpu behavior.
 import { spawnSync } from "node:child_process";
 import { parseStrictFiniteNumber, parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
+import { resolveQaWindowsPowerShellExePath } from "./windows-system-tools.js";
 
 type ProcessTreeSnapshot = {
   childrenByParent: Map<number, number[]>;
   cpuByPid: Map<number, number>;
   rssByPid: Map<number, number>;
 };
+
+const PROCESS_TREE_SNAPSHOT_TIMEOUT_MS = 5_000;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -36,7 +39,7 @@ function parseNonNegativeNumber(value: unknown): number | null {
   return parsed;
 }
 
-export function parsePsCpuTimeMs(raw: string): number | null {
+function parsePsCpuTimeMs(raw: string): number | null {
   const match = raw.trim().match(/^(?:(\d+)-)?(\d+):(\d{2}(?:\.\d+)?)(?::(\d{2}(?:\.\d+)?))?$/u);
   if (!match) {
     return null;
@@ -68,7 +71,7 @@ export function parsePsCpuTimeMs(raw: string): number | null {
   return Math.round((first * 60 + second) * 1000);
 }
 
-export function parsePsRssBytes(raw: string): number | null {
+function parsePsRssBytes(raw: string): number | null {
   const trimmed = raw.trim();
   if (!trimmed) {
     return null;
@@ -80,7 +83,7 @@ export function parsePsRssBytes(raw: string): number | null {
   return Math.round(rssKiB * 1024);
 }
 
-export function parseWindowsProcessCpuTimeMs(params: {
+function parseWindowsProcessCpuTimeMs(params: {
   kernelModeTime: unknown;
   userModeTime: unknown;
 }): number | null {
@@ -92,12 +95,12 @@ export function parseWindowsProcessCpuTimeMs(params: {
   return Math.round((kernelModeTime + userModeTime) / 10_000);
 }
 
-export function parseWindowsWorkingSetBytes(raw: unknown): number | null {
+function parseWindowsWorkingSetBytes(raw: unknown): number | null {
   const parsed = parseNonNegativeNumber(raw);
   return parsed === null ? null : Math.round(parsed);
 }
 
-export function parseWindowsProcessTreeSnapshot(raw: string): ProcessTreeSnapshot | null {
+function parseWindowsProcessTreeSnapshot(raw: string): ProcessTreeSnapshot | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -175,7 +178,7 @@ function collectProcessTreeMetric(
 
 function readWindowsProcessTreeSnapshot(): ProcessTreeSnapshot | null {
   const result = spawnSync(
-    "powershell.exe",
+    resolveQaWindowsPowerShellExePath(),
     [
       "-NoProfile",
       "-ExecutionPolicy",
@@ -190,8 +193,10 @@ function readWindowsProcessTreeSnapshot(): ProcessTreeSnapshot | null {
     ],
     {
       encoding: "utf8",
+      killSignal: "SIGKILL",
       maxBuffer: 16 * 1024 * 1024,
       stdio: ["ignore", "pipe", "ignore"],
+      timeout: PROCESS_TREE_SNAPSHOT_TIMEOUT_MS,
     },
   );
   if (result.status !== 0) {
@@ -212,7 +217,9 @@ export function readProcessTreeCpuMs(rootPid: number | null | undefined): number
   }
   const result = spawnSync("ps", ["-eo", "pid=,ppid=,time="], {
     encoding: "utf8",
+    killSignal: "SIGKILL",
     stdio: ["ignore", "pipe", "ignore"],
+    timeout: PROCESS_TREE_SNAPSHOT_TIMEOUT_MS,
   });
   if (result.status !== 0) {
     return null;
@@ -256,7 +263,9 @@ export function readProcessTreeRssBytes(rootPid: number | null | undefined): num
   }
   const result = spawnSync("ps", ["-eo", "pid=,ppid=,rss="], {
     encoding: "utf8",
+    killSignal: "SIGKILL",
     stdio: ["ignore", "pipe", "ignore"],
+    timeout: PROCESS_TREE_SNAPSHOT_TIMEOUT_MS,
   });
   if (result.status !== 0) {
     return null;

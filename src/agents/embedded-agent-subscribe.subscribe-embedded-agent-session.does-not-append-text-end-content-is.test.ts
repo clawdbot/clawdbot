@@ -223,7 +223,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       toolName: "message",
       toolCallId: "message-tool-1",
       isError: false,
-      result: "ok",
+      result: { details: { deliveryStatus: "sent" } },
     });
     await Promise.resolve();
     await new Promise<void>((resolve) => {

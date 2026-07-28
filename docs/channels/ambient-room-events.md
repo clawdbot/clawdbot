@@ -10,7 +10,7 @@ sidebarTitle: "Ambient room events"
 
 Ambient room events let OpenClaw process unmentioned group or channel chatter as quiet context. The agent can update memory and session state, but the room stays silent unless the agent explicitly calls the `message` tool.
 
-For always-on group chats, this is the recommended mode: combine `messages.groupChat.unmentionedInbound: "room_event"` with `messages.groupChat.visibleReplies: "message_tool"`. Use it when the agent should listen, decide when a reply is useful, and avoid the old prompt pattern of answering `NO_REPLY`.
+For always-on group chats, combine `messages.groupChat.unmentionedInbound: "room_event"` with `messages.groupChat.visibleReplies: "message_tool"`. The agent listens, decides when a reply is useful, and never needs the old prompt pattern of answering `NO_REPLY`.
 
 Supported today: Discord guild channels, Slack channels and private channels, Slack multi-person DMs, and Telegram groups or supergroups. Other group channels keep their existing group behavior unless their channel page says they support ambient room events.
 
@@ -30,9 +30,31 @@ Set the global group-chat behavior:
 }
 ```
 
-Then configure the room itself as always-on by disabling mention gating for that room. The channel must still be allowed by its normal `groupPolicy`, room allowlist, and sender allowlist.
+Then make the room always-on by disabling mention gating for that room. The room must still pass its normal `groupPolicy`, room allowlist, and sender allowlist.
 
-After saving the config, the Gateway hot-reloads `messages` settings. Restart only when file watching or config reload is disabled.
+## Prerequisites
+
+Two settings silently disable ambient room events even when `unmentionedInbound: "room_event"` is set.
+
+**Mention gating must be off for the room.** `requireMention: true` drops unmentioned messages before routing, so they never become room events. The agent then has no room backlog at all — it only ever sees messages that mentioned it. If the agent reports that it cannot see recent room history, check mention gating before anything else.
+
+**The agent needs the `message` tool.** Room events use strict visible delivery, so posting requires `message(action=send)`. The `message` tool ships in the `messaging` tool profile; the `minimal` and `coding` profiles do not include it. An agent on `tools.profile: "coding"` will listen to room events and can never speak. Grant it explicitly when the profile omits it:
+
+```json5
+{
+  agents: {
+    entries: {
+      "<agent-id>": {
+        tools: { alsoAllow: ["message"] },
+      },
+    },
+  },
+}
+```
+
+Check the effective surface with `openclaw agents list` and a probe turn rather than assuming the profile includes it.
+
+After saving the config, the Gateway hot-applies `messages` settings. Restart only when file watching or config reload is disabled (`gateway.reload.mode: "off"`).
 
 ## What changes
 
@@ -40,11 +62,13 @@ With `messages.groupChat.unmentionedInbound: "room_event"`:
 
 - unmentioned allowed group or channel messages become quiet room events
 - mentioned messages stay user requests
-- text commands and native commands stay user requests
+- text control commands and native commands stay user requests
 - abort or stop requests stay user requests
 - direct messages stay user requests
 
 Room events use strict visible delivery. Final assistant text is private. The agent must call `message(action=send)` to post in the room.
+
+Typing and lifecycle status reactions stay suppressed for room events. The one explicit receipt exception is `messages.ackReactionScope: "all"`, which sends the configured ack reaction; use any narrower scope or `"off"` when the room must remain completely silent.
 
 ## Discord example
 
@@ -71,17 +95,17 @@ Room events use strict visible delivery. Final assistant text is private. The ag
 }
 ```
 
-Use per-channel Discord config when only one channel should be ambient:
+Use per-channel Discord config when only one channel should be ambient. Under `groupPolicy: "allowlist"`, listing the channel is what allows it (`enabled: false` disables an entry):
 
 ```json5
 {
   channels: {
     discord: {
+      groupPolicy: "allowlist",
       guilds: {
         "<DISCORD_SERVER_ID>": {
           channels: {
             "<DISCORD_CHANNEL_ID_OR_NAME>": {
-              allow: true,
               requireMention: false,
             },
           },
@@ -94,7 +118,7 @@ Use per-channel Discord config when only one channel should be ambient:
 
 ## Slack example
 
-Slack channel allowlists are ID-first. Use channel IDs such as `C12345678`, not `#channel-name`.
+Slack channel allowlists are ID-first. Use channel IDs such as `C12345678`, not `#channel-name`. Listing the channel under `channels.slack.channels` is what allows it (`enabled: false` disables an entry):
 
 ```json5
 {
@@ -110,7 +134,6 @@ Slack channel allowlists are ID-first. Use channel IDs such as `C12345678`, not 
       groupPolicy: "allowlist",
       channels: {
         "<SLACK_CHANNEL_ID>": {
-          allow: true,
           requireMention: false,
         },
       },
@@ -172,23 +195,21 @@ Use an agent override when several agents share the same room but only one shoul
 }
 ```
 
-The agent-specific `agents.list[].groupChat.unmentionedInbound` value overrides `messages.groupChat.unmentionedInbound` for that agent.
+The agent-specific `agents.entries.*.groupChat.unmentionedInbound` value overrides `messages.groupChat.unmentionedInbound` for that agent.
 
 ## Visible reply modes
 
-`messages.groupChat.visibleReplies` defaults to `"automatic"` for normal group/channel user requests. Keep that default when you want final assistant text to post visibly without requiring an explicit message-tool call.
+`messages.groupChat.visibleReplies` defaults to `"automatic"` for normal group/channel user requests. Keep that default when final assistant text should post visibly without an explicit message-tool call.
 
-For ambient always-on rooms, `messages.groupChat.visibleReplies: "message_tool"` is still recommended, especially with latest-generation, tool-reliable models such as GPT 5.5. It lets the agent decide when to speak by calling the message tool. If the model returns final text without calling the tool, OpenClaw keeps that final text private and logs suppressed delivery metadata.
+For ambient always-on rooms, `messages.groupChat.visibleReplies: "message_tool"` is still recommended, especially with latest-generation, tool-reliable models such as GPT-5.6 Sol. It lets the agent decide when to speak by calling the message tool. If the model returns final text without calling the tool, OpenClaw keeps that final text private and logs suppressed-delivery metadata.
 
-Room events stay strict even when other group requests use automatic replies. Unmentioned ambient room events still require `message(action=send)` for visible output.
+Room events stay strict even when other group requests use automatic replies. Unmentioned ambient room events always require `message(action=send)` for visible output.
 
 ## History
 
-`messages.groupChat.historyLimit` controls the global group history default. Channels can override it with `channels.<channel>.historyLimit`, and some channels also support per-account history limits.
+`messages.groupChat.historyLimit` sets the global group history default (50 when unset; must be a positive integer). Channels can override it with `channels.<channel>.historyLimit`, and some channels also support per-account history limits. Set the channel-level `historyLimit: 0` to disable group history context for that channel.
 
-Set `historyLimit: 0` to disable group history context.
-
-Supported room-event channels keep recent ambient room messages as context. Discord keeps room-event history until a visible Discord send succeeds, so quiet context is not lost before message-tool delivery.
+Supported room-event channels keep recent ambient room messages as context. Telegram keeps an always-on rolling per-group window bounded by `historyLimit`; user-request turns select entries after the bot's last recorded reply, while room-event turns receive the full recent window so the model can see its own recent posts. The retired Telegram `includeGroupHistoryContext` mode key is removed by `openclaw doctor --fix`.
 
 ## Troubleshooting
 
@@ -202,7 +223,7 @@ If the room shows typing or token usage but no visible message:
 
 If Telegram ambient rooms do not trigger at all, check BotFather privacy mode and verify the Gateway is receiving normal group messages.
 
-If Slack ambient rooms do not trigger, verify the channel key is the Slack channel ID and the app has the required `channels:history` or `groups:history` scope for that room type.
+If Slack ambient rooms do not trigger, verify the channel key is the Slack channel ID and the app has the history scope for that room type: `channels:history` (public), `groups:history` (private), or `mpim:history` (multi-person DMs).
 
 ## Related
 

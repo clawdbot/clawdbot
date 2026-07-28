@@ -1,11 +1,13 @@
 import { createRequire } from "node:module";
 import { readPluginPackageVersion } from "openclaw/plugin-sdk/extension-shared";
 import {
-  DEFAULT_SEARCH_COUNT,
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
+import {
   mergeScopedSearchConfig,
   readCachedSearchPayload,
   readConfiguredSecretString,
-  readNumberParam,
   readProviderEnvValue,
   readStringArrayParam,
   readStringParam,
@@ -34,6 +36,13 @@ import {
 
 const PARALLEL_BASE_URL = "https://api.parallel.ai";
 const PARALLEL_SEARCH_PATHNAME = "/v1/search";
+const PARALLEL_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+// Parallel's /v1/search returns a bounded result set, but the body is external
+// (web-search upstream) and untrusted. Cap the successful JSON read so a
+// hostile or malfunctioning endpoint streaming an unbounded body cannot force
+// the runtime to buffer the whole payload before parsing. 16 MiB matches the
+// shared provider JSON cap (readProviderJsonResponse default).
+const PARALLEL_SEARCH_RESPONSE_LIMIT_BYTES = 16 * 1024 * 1024;
 
 const require = createRequire(import.meta.url);
 const PLUGIN_VERSION = readPluginPackageVersion({ require });
@@ -53,8 +62,10 @@ function resolveParallelConfig(searchConfig?: SearchConfigRecord): ParallelConfi
 
 function resolveParallelApiKey(parallel?: ParallelConfig): string | undefined {
   return (
-    readConfiguredSecretString(parallel?.apiKey, "tools.web.search.parallel.apiKey") ??
-    readProviderEnvValue(["PARALLEL_API_KEY"])
+    readConfiguredSecretString(
+      parallel?.apiKey,
+      "plugins.entries.parallel.config.webSearch.apiKey",
+    ) ?? readProviderEnvValue(["PARALLEL_API_KEY"])
   );
 }
 
@@ -144,14 +155,14 @@ async function runParallelSearch(params: {
     },
     async (res) => {
       if (!res.ok) {
-        const detail = await res.text().catch(() => "");
+        const detail = await readResponseTextLimited(res, PARALLEL_ERROR_BODY_LIMIT_BYTES).catch(
+          () => "",
+        );
         throw new Error(`Parallel API error (${res.status}): ${detail || res.statusText}`);
       }
-      try {
-        return (await res.json()) as ParallelSearchResponse;
-      } catch (cause) {
-        throw new Error("Parallel API returned malformed JSON", { cause });
-      }
+      return await readProviderJsonResponse<ParallelSearchResponse>(res, "Parallel API", {
+        maxBytes: PARALLEL_SEARCH_RESPONSE_LIMIT_BYTES,
+      });
     },
   );
 }
@@ -192,12 +203,9 @@ export async function executeParallelWebSearchProviderTool(
   if (searchQueries.length === 0) {
     return invalidSearchQueriesPayload();
   }
-  const requestedCount =
-    readNumberParam(args, "count", { integer: true }) ??
-    (typeof searchConfig?.maxResults === "number" ? searchConfig.maxResults : undefined);
   // Always pass max_results so Parallel matches the openclaw web_search default
   // of 5 instead of Parallel's own default of 10.
-  const count = resolveParallelSearchCount(requestedCount ?? DEFAULT_SEARCH_COUNT);
+  const count = resolveParallelSearchCount(args, searchConfig?.maxResults);
   const sessionId = normalizeParallelSessionId(
     readStringParam(args, "session_id"),
     PARALLEL_SESSION_ID_MAX_LENGTH,
@@ -277,6 +285,8 @@ export const testing = {
   resolveParallelConfig,
   resolveParallelSearchCount,
   resolveParallelSearchEndpoint,
+  PARALLEL_ERROR_BODY_LIMIT_BYTES,
+  PARALLEL_SEARCH_RESPONSE_LIMIT_BYTES,
   USER_AGENT,
 } as const;
 

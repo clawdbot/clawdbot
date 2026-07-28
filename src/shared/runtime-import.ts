@@ -4,14 +4,11 @@
  */
 import { toSafeImportPath } from "./import-specifier.js";
 
-/** Runtime-facing alias for import specifier normalization helpers. */
-export { toSafeImportPath as toSafeRuntimeImportPath } from "./import-specifier.js";
-
 /**
  * Resolves lazy runtime import parts against the caller's module URL or path.
  * Absolute normalized paths stay standalone; relative parts resolve against the normalized base.
  */
-export function resolveRuntimeImportSpecifier(baseUrl: string, parts: readonly string[]): string {
+function resolveRuntimeImportSpecifier(baseUrl: string, parts: readonly string[]): string {
   const joined = parts.join("");
   const safeJoined = toSafeImportPath(joined);
   // Absolute Windows paths and UNC shares become standalone file URLs instead

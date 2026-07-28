@@ -1,10 +1,15 @@
 // Telegram helper module supports body helpers behavior.
 import type { Chat, Message, MessageOrigin, User } from "grammy/types";
-import type { NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
+import type {
+  ChannelInboundMediaInput,
+  NormalizedLocation,
+} from "openclaw/plugin-sdk/channel-inbound";
 import {
+  isRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { telegramHtmlToPlainTextFallback } from "../format.js";
 
 type TelegramMediaMessage = Pick<
   Message,
@@ -20,8 +25,10 @@ type TelegramMediaFileRef =
   | NonNullable<Message["document"]>
   | NonNullable<Message["sticker"]>;
 
+export type TelegramMediaKind = Exclude<NonNullable<ChannelInboundMediaInput["kind"]>, "unknown">;
+
 type TelegramPrimaryMedia = {
-  placeholder: string;
+  kind: TelegramMediaKind;
   fileRef: TelegramMediaFileRef;
 };
 
@@ -40,33 +47,27 @@ export function resolveTelegramPrimaryMedia(
   }
   const photo = msg.photo?.[msg.photo.length - 1];
   if (photo) {
-    return { placeholder: "<media:image>", fileRef: photo };
+    return { kind: "image", fileRef: photo };
   }
   if (msg.video) {
-    return { placeholder: "<media:video>", fileRef: msg.video };
+    return { kind: "video", fileRef: msg.video };
   }
   if (msg.video_note) {
-    return { placeholder: "<media:video>", fileRef: msg.video_note };
+    return { kind: "video", fileRef: msg.video_note };
   }
   if (msg.audio) {
-    return { placeholder: "<media:audio>", fileRef: msg.audio };
+    return { kind: "audio", fileRef: msg.audio };
   }
   if (msg.voice) {
-    return { placeholder: "<media:audio>", fileRef: msg.voice };
+    return { kind: "audio", fileRef: msg.voice };
   }
   if (msg.document) {
-    return { placeholder: "<media:document>", fileRef: msg.document };
+    return { kind: "document", fileRef: msg.document };
   }
   if (msg.sticker) {
-    return { placeholder: "<media:sticker>", fileRef: msg.sticker };
+    return { kind: "sticker", fileRef: msg.sticker };
   }
   return undefined;
-}
-
-export function resolveTelegramMediaPlaceholder(
-  msg: TelegramMediaMessage | undefined | null,
-): string | undefined {
-  return resolveTelegramPrimaryMedia(msg)?.placeholder;
 }
 
 export function buildSenderLabel(msg: Message, senderId?: number | string) {
@@ -93,6 +94,112 @@ export function buildSenderLabel(msg: Message, senderId?: number | string) {
 
 export type TelegramTextEntity = NonNullable<Message["entities"]>[number];
 
+const TELEGRAM_RICH_MESSAGE_PLACEHOLDER = "[unsupported Telegram rich_message received]";
+
+type TelegramTextMessage = Pick<Message, "text" | "caption" | "entities" | "caption_entities"> & {
+  rich_message?: unknown;
+};
+
+function hasTelegramRichMessage(value: unknown): boolean {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function compactRichText(value: string): string {
+  return value
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+function joinRichText(parts: string[], separator: string): string {
+  return parts.map(compactRichText).filter(Boolean).join(separator);
+}
+
+function renderRichInlineText(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(renderRichInlineText).filter(Boolean).join("");
+  }
+  if (!isRecord(value)) {
+    return "";
+  }
+  const directText = value.text;
+  if (directText !== undefined) {
+    return renderRichInlineText(directText);
+  }
+  for (const key of ["alternative_text", "expression"] as const) {
+    const text = value[key];
+    if (typeof text === "string") {
+      return text;
+    }
+  }
+  return "";
+}
+
+function renderRichBlocks(value: unknown): string {
+  if (Array.isArray(value)) {
+    return joinRichText(value.map(renderRichBlocks), "\n");
+  }
+  if (!isRecord(value)) {
+    return renderRichInlineText(value);
+  }
+  if (typeof value.markdown === "string") {
+    return value.markdown;
+  }
+  if (typeof value.html === "string") {
+    return telegramHtmlToPlainTextFallback(value.html);
+  }
+  const parts: string[] = [];
+  for (const key of [
+    "text",
+    "summary",
+    "label",
+    "title",
+    "subtitle",
+    "credit",
+    "expression",
+  ] as const) {
+    parts.push(renderRichInlineText(value[key]));
+  }
+  if (value.caption !== undefined) {
+    const caption = value.caption;
+    if (isRecord(caption) && caption.credit !== undefined) {
+      parts.push(
+        joinRichText(
+          [renderRichInlineText(caption.text), renderRichInlineText(caption.credit)],
+          "\n",
+        ),
+      );
+    } else {
+      parts.push(renderRichInlineText(caption));
+    }
+  }
+  for (const key of ["blocks", "items", "rows", "cells", "headers", "children"] as const) {
+    parts.push(renderRichBlocks(value[key]));
+  }
+  return joinRichText(parts, "\n");
+}
+
+export function resolveTelegramRichMessagePlaceholder(
+  msg: TelegramTextMessage,
+): string | undefined {
+  return hasTelegramRichMessage(msg.rich_message) ? TELEGRAM_RICH_MESSAGE_PLACEHOLDER : undefined;
+}
+
+export function resolveTelegramRichMessageText(msg: TelegramTextMessage): string | undefined {
+  if (!hasTelegramRichMessage(msg.rich_message)) {
+    return undefined;
+  }
+  return compactRichText(renderRichBlocks(msg.rich_message)) || undefined;
+}
+
+export function resolveTelegramRichMessageBody(msg: TelegramTextMessage): string | undefined {
+  return resolveTelegramRichMessageText(msg) ?? resolveTelegramRichMessagePlaceholder(msg);
+}
+
 export function isBinaryContent(text: string): boolean {
   for (let i = 0; i < text.length; i++) {
     const code = text.charCodeAt(i);
@@ -108,9 +215,7 @@ export function resolveTelegramTextContent(text: unknown, caption?: unknown): st
   return isBinaryContent(raw) ? "" : raw;
 }
 
-export function getTelegramTextParts(
-  msg: Pick<Message, "text" | "caption" | "entities" | "caption_entities">,
-): {
+export function getTelegramTextParts(msg: TelegramTextMessage): {
   text: string;
   entities: TelegramTextEntity[];
 } {
@@ -165,6 +270,13 @@ export function hasBotMention(msg: Message, botUsername: string) {
     }
   }
   return false;
+}
+
+export function hasBotMentionInText(text: string, botUsername: string): boolean {
+  return hasStandaloneTelegramMention(
+    normalizeLowercaseStringOrEmpty(text),
+    normalizeLowercaseStringOrEmpty(`@${botUsername}`),
+  );
 }
 
 type TelegramMarkdownEntity = {

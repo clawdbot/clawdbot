@@ -10,7 +10,7 @@ import type {
 } from "./health-checks.js";
 
 // Runnable health-check contracts used by doctor lint/fix orchestration.
-export interface HealthCheckRunContext extends HealthCheckContext {
+interface HealthCheckRunContext extends HealthCheckContext {
   readonly repair: boolean;
   readonly diff?: boolean;
   readonly previewRepair?: boolean;
@@ -25,18 +25,23 @@ export interface HealthCheckRunResult extends Omit<HealthRepairResult, "changes"
   readonly effects?: readonly HealthRepairEffect[];
 }
 
+/** Internal runner selection metadata. This is intentionally not part of the public SDK type. */
+interface HealthCheckSelectionOptions {
+  readonly defaultEnabled?: boolean;
+}
+
+export type SplitHealthCheckInput = HealthCheck & HealthCheckSelectionOptions;
+
 /** Health-check implementation that owns its own detect/repair orchestration. */
-export interface RunnableHealthCheck extends Pick<
-  HealthCheck,
-  "id" | "kind" | "description" | "source"
-> {
+export interface RunnableHealthCheck
+  extends Pick<HealthCheck, "id" | "kind" | "description" | "source">, HealthCheckSelectionOptions {
   run(ctx: HealthCheckRunContext, scope?: HealthCheckScope): Promise<HealthCheckRunResult>;
 }
 
-export type HealthCheckInput = HealthCheck | RunnableHealthCheck;
+export type HealthCheckInput = SplitHealthCheckInput | RunnableHealthCheck;
 
 /** Normalized check contract consumed by lint and repair runners. */
-export interface RegisteredHealthCheck extends HealthCheck {
+export interface RegisteredHealthCheck extends HealthCheck, HealthCheckSelectionOptions {
   readonly sourceContract: "split" | "run";
   run(ctx: HealthCheckRunContext, scope?: HealthCheckScope): Promise<HealthCheckRunResult>;
 }

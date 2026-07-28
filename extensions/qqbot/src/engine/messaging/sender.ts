@@ -25,6 +25,7 @@
  */
 
 import os from "node:os";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { ApiClient } from "../api/api-client.js";
 import { ChunkedMediaApi as ChunkedMediaApiClass } from "../api/media-chunked.js";
 import { downloadDirectUploadUrl, MediaApi as MediaApiClass } from "../api/media.js";
@@ -47,6 +48,7 @@ import { debugLog, debugError, debugWarn } from "../utils/log.js";
 import { sanitizeFileName } from "../utils/string-normalize.js";
 import { computeFileHash, getCachedFileInfo, setCachedFileInfo } from "../utils/upload-cache.js";
 import { normalizeSource, type MediaSource, type RawMediaSource } from "./media-source.js";
+import { claimMessageReply } from "./outbound-reply.js";
 
 // ============ Re-exported types ============
 
@@ -349,7 +351,7 @@ export async function withTokenRetry<T>(
     if (looksLike401) {
       log?.warn?.(
         `Token retry triggered by string heuristic (err is not ApiError). ` +
-          `Consider propagating ApiError end-to-end. msg=${errMsg.slice(0, 120)}`,
+          `Consider propagating ApiError end-to-end. msg=${truncateUtf16Safe(errMsg, 120)}`,
       );
       clearTokenCache(creds.appId);
       const newToken = await getAccessToken(creds.appId, creds.clientSecret);
@@ -385,16 +387,30 @@ export async function sendText(
   creds: AccountCreds,
   opts?: { msgId?: string; messageReference?: string; forcePlainText?: boolean },
 ): Promise<MessageResponse> {
-  const api = resolveAccount(creds.appId).messageApi;
+  const ctx = resolveAccount(creds.appId);
+  const api = ctx.messageApi;
   const c: Credentials = { appId: creds.appId, clientSecret: creds.clientSecret };
+  let msgId = opts?.msgId;
+
+  // MessageApi issues one POST. Higher-level token retries re-enter sendText,
+  // so every retry and target type claims another slot before reaching the wire.
+  if (msgId) {
+    const passive = claimMessageReply(msgId);
+    if (!passive.allowed) {
+      ctx.logger.warn?.(
+        `Passive reply unavailable for ${target.type}; falling back to a send without msg_id: ${passive.message}`,
+      );
+      msgId = undefined;
+    }
+  }
 
   if (target.type === "c2c" || target.type === "group") {
     const scope: ChatScope = target.type;
-    if (opts?.msgId) {
+    if (msgId) {
       return api.sendMessage(scope, target.id, content, c, {
-        msgId: opts.msgId,
-        messageReference: opts.messageReference,
-        forcePlainText: opts.forcePlainText,
+        msgId,
+        messageReference: opts?.messageReference,
+        forcePlainText: opts?.forcePlainText,
       });
     }
     return api.sendProactiveMessage(scope, target.id, content, c, {
@@ -403,10 +419,10 @@ export async function sendText(
   }
 
   if (target.type === "dm") {
-    return api.sendDmMessage({ guildId: target.id, content, creds: c, msgId: opts?.msgId });
+    return api.sendDmMessage({ guildId: target.id, content, creds: c, msgId });
   }
 
-  return api.sendChannelMessage({ channelId: target.id, content, creds: c, msgId: opts?.msgId });
+  return api.sendChannelMessage({ channelId: target.id, content, creds: c, msgId });
 }
 
 // ============ Input notify ============
@@ -614,13 +630,26 @@ async function sendMediaInternal(
     // and file APIs ignore it.
     const msgContent = opts.kind === "image" || opts.kind === "video" ? opts.content : undefined;
 
+    // Uploads do not spend the reply budget; the following message POST does.
+    // Claim here so every media path and retry shares the text/typing ledger.
+    let msgId = opts.msgId;
+    if (msgId) {
+      const passive = claimMessageReply(msgId);
+      if (!passive.allowed) {
+        ctx.logger.warn?.(
+          `Passive media reply unavailable for ${scope}; falling back to proactive send: ${passive.message}`,
+        );
+        msgId = undefined;
+      }
+    }
+
     const result = await ctx.mediaApi.sendMediaMessage(
       scope,
       opts.target.id,
       uploadResult.file_info,
       c,
       {
-        msgId: opts.msgId,
+        msgId,
         content: msgContent,
       },
     );
