@@ -199,7 +199,7 @@ export const SETTINGS_NAVIGATION_GROUPS = [
 // Settings subpages render with settings chrome but stay out of the sidebar:
 // model setup is reached from the Models page ("Run setup"). The sidebar
 // highlights nothing for them; search still deep-links via their owning page.
-const SETTINGS_SUBPAGE_ROUTES: readonly NavigationRouteId[] = ["model-setup"];
+const SETTINGS_SUBPAGE_ROUTES: readonly NavigationRouteId[] = ["model-setup", "lobsterdex"];
 
 const SETTINGS_NAVIGATION_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
   ...SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes),
@@ -231,6 +231,7 @@ const NAVIGATION_ICONS: NavigationItem = {
   profile: "circleUser",
   communications: "send",
   appearance: "palette",
+  lobsterdex: "bug",
   automation: "terminal",
   mcp: "wrench",
   memory: "book",
@@ -337,6 +338,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
     subtitleKey: "subtitles.communications",
   },
   appearance: { titleKey: "tabs.appearance", subtitleKey: "subtitles.appearance" },
+  lobsterdex: { titleKey: "tabs.lobsterdex", subtitleKey: "subtitles.lobsterdex" },
   automation: { titleKey: "tabs.automation", subtitleKey: "subtitles.automation" },
   mcp: { titleKey: "tabs.mcp", subtitleKey: "subtitles.mcp" },
   memory: { titleKey: "tabs.memory", subtitleKey: "subtitles.memory" },
