@@ -3,6 +3,10 @@ import { truncateUtf8Prefix } from "../../utils/utf8-truncate.js";
 import { normalizeSkillIndexName } from "../discovery/skill-index.js";
 import { compactWhitespace, extractTranscriptText } from "./text.js";
 
+// Intentionally heuristic: regex detection cannot fully separate durable
+// imperatives from ordinary prose, and we accept rare miscaptures because a
+// capture only creates a pending proposal a human must apply. Route new
+// ambiguity to abstention; do not grow this into a grammar or model call.
 const SIGNAL_PATTERNS = [
   /(?:^|[.;—–-]\s+)next time\b|\bnext time\s+(?:during|for|in|under|when|while|you)\b|\bnext time[.!?]*$/i,
   /\b(?:from now on|going forward)\b/i,
