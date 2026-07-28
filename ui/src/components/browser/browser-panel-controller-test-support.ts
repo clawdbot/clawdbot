@@ -166,7 +166,8 @@ export function stubScreenshotMedia(): void {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string | URL | Request) => {
-      const text = String(input).includes("fresh") ? "fresh screenshot" : "old screenshot";
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const text = url.includes("fresh") ? "fresh screenshot" : "old screenshot";
       return {
         ok: true,
         blob: async () => new Blob([text], { type: "image/png" }),
