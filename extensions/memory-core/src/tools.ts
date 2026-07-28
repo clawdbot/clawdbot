@@ -304,7 +304,8 @@ function queueShortTermRecallTracking(params: {
     results: trackingResults,
     timezone: params.timezone,
   }).catch(() => {
-    // Recall tracking is best-effort and must never block memory recall.
+    // Gateway tool calls are latency-sensitive and live in a long-running
+    // process, so background best-effort tracking is safe here unlike in the CLI.
   });
 }
 

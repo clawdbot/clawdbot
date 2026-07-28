@@ -365,6 +365,79 @@ describe("ChatLog", () => {
     expect(chatLog.render(120).join("\n")).toContain("queued hello");
   });
 
+  it("inserts another client's persisted prompt ahead of an already-streaming reply", () => {
+    const chatLog = new ChatLog(40);
+    chatLog.updateAssistant("Already streaming.", "shared-run");
+
+    chatLog.addLiveUser("Sent from the other client.", {
+      messageId: "shared-user",
+      runId: "shared-run",
+    });
+
+    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(rendered.indexOf("Sent from the other client.")).toBeLessThan(
+      rendered.indexOf("Already streaming."),
+    );
+    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
+      "UserMessageComponent",
+      "AssistantMessageComponent",
+    ]);
+
+    chatLog.updateAssistant("Still streaming.", "shared-run");
+    expect(normalizeTestText(chatLog.render(120).join("\n"))).toContain("Still streaming.");
+  });
+
+  it("deduplicates authoritative user events and adopts the matching pending prompt", () => {
+    const chatLog = new ChatLog(40);
+    chatLog.addPendingUser("shared-run", "Persisted prompt.");
+    chatLog.updateAssistant("Already streaming.", "shared-run");
+
+    chatLog.addLiveUser("Persisted prompt.", { messageId: "shared-user", runId: "shared-run" });
+    chatLog.addLiveUser("Persisted prompt.", { messageId: "shared-user", runId: "shared-run" });
+
+    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(rendered).toContain("Persisted prompt.");
+    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
+      "UserMessageComponent",
+      "AssistantMessageComponent",
+    ]);
+    expect(chatLog.countPendingUsers()).toBe(0);
+  });
+
+  it("preserves a different pending prompt when another client uses the same run", () => {
+    const chatLog = new ChatLog(40);
+    chatLog.addPendingUser("shared-run", "My local steering prompt.");
+    chatLog.updateAssistant("Already streaming.", "shared-run");
+
+    chatLog.addLiveUser("Another client's persisted prompt.", {
+      messageId: "shared-remote-user",
+      runId: "shared-run",
+    });
+
+    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(rendered).toContain("My local steering prompt.");
+    expect(rendered).toContain("Another client's persisted prompt.");
+    expect(rendered.indexOf("Another client's persisted prompt.")).toBeLessThan(
+      rendered.indexOf("Already streaming."),
+    );
+    expect(chatLog.countPendingUsers()).toBe(1);
+  });
+
+  it("deduplicates a replayed live prompt already loaded from authoritative history", () => {
+    const chatLog = new ChatLog(40);
+    chatLog.addUser("Loaded from history.", { messageId: "history-user" });
+
+    chatLog.addLiveUser("Loaded from history.", {
+      messageId: "history-user",
+      runId: "history-run",
+    });
+
+    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
+      "UserMessageComponent",
+    ]);
+    expect(normalizeTestText(chatLog.render(120).join("\n"))).toContain("Loaded from history.");
+  });
+
   it("re-keys a pending user in place without moving its position", () => {
     const chatLog = new ChatLog(40);
 

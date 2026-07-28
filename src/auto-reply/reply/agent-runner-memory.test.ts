@@ -146,6 +146,10 @@ type EmbeddedAgentParams = {
   bootstrapPromptWarningSignature?: string;
   abortSignal?: AbortSignal;
   isFinalFallbackAttempt?: boolean;
+  onAgentEvent?: (evt: {
+    stream: string;
+    data: { isError?: boolean; name?: string; phase?: string };
+  }) => void;
 };
 
 type CompactEmbeddedAgentSessionParams = {
@@ -418,6 +422,64 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(persisted.compactionCount).toBe(2);
     expect(persisted.memoryFlushCompactionCount).toBe(1);
     expect(persisted.memoryFlushAt).toBe(1_700_000_000_000);
+  });
+
+  it("records the least-trusted provenance across a multi-write flush", async () => {
+    const recordWriteProvenance = vi.fn(async () => {});
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 4_000,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 20_000,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+      recordWriteProvenance,
+    }));
+    const targetPath = path.join(rootDir, "memory", "2023-11-14.md");
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.writeFile(targetPath, "trusted existing line\n", "utf8");
+    runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await fs.appendFile(targetPath, "first untrusted line\n", "utf8");
+      params.onAgentEvent?.({
+        stream: "tool",
+        data: { name: "write", phase: "result", isError: false },
+      });
+      await fs.appendFile(targetPath, "second untrusted line\n", "utf8");
+      params.onAgentEvent?.({
+        stream: "tool",
+        data: { name: "write", phase: "result", isError: false },
+      });
+      return { payloads: [], meta: {} };
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+    };
+
+    await runMemoryFlushIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({ workspaceDir: rootDir, senderIsOwner: false }),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(recordWriteProvenance).toHaveBeenCalledOnce();
+    expect(recordWriteProvenance).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contentBefore: "trusted existing line\n",
+        contentAfter: "trusted existing line\nfirst untrusted line\nsecond untrusted line\n",
+        originClass: "untrusted",
+      }),
+    );
   });
 
   it("revalidates immutable Ultra for each memory-flush fallback candidate", async () => {

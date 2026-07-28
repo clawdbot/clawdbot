@@ -48,6 +48,7 @@ import {
 } from "./components/chat-model-controls.ts";
 import {
   resetChatThreadPresentationState,
+  resetChatThreadSessionPresentationState,
   toggleChatThreadSearch,
 } from "./components/chat-thread.ts";
 import { renderWelcomeState } from "./components/chat-welcome.ts";
@@ -1886,7 +1887,7 @@ describe("per-pane chat presentation state", () => {
     expect(paneB.querySelector(".agent-chat__search-bar")).toBeNull();
 
     toggleChatThreadSearch("pane-b", vi.fn());
-    resetChatThreadPresentationState("pane-a");
+    resetChatThreadSessionPresentationState("pane-a");
     renderPane(paneA, "pane-a", "");
     renderPane(paneB, "pane-b", "");
     expect(paneA.querySelector(".agent-chat__search-bar")).toBeNull();

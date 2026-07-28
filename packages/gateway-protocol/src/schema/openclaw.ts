@@ -20,6 +20,16 @@ export const SystemAgentChatParamsSchema = closedObject({
   ),
   /** Drop any in-flight approval/wizard state and start the session over. */
   reset: Type.Optional(Type.Boolean()),
+  /** Ephemeral Control UI location hint for interpreting the current user turn. */
+  context: Type.Optional(
+    closedObject({
+      page: Type.String({
+        minLength: 1,
+        maxLength: 64,
+        pattern: "^[A-Za-z0-9/_-]{1,64}$",
+      }),
+    }),
+  ),
   /** Host-only regular-agent delegation context. Never model-authored. */
   delegation: Type.Optional(
     closedObject({

@@ -29,6 +29,7 @@ import {
 import {
   APPEARANCE_SETTINGS_TARGET_IDS,
   COMMUNICATION_SETTINGS_TARGET_IDS,
+  CONNECTION_SETTINGS_TARGET_IDS,
   GENERAL_SETTINGS_TARGET_IDS,
   PROFILE_SETTINGS_TARGET_IDS,
 } from "./settings-targets.ts";
@@ -81,9 +82,9 @@ const GENERAL_SETTINGS_BLOCKS = {
     ],
   },
   system: {
-    routeId: "config",
+    routeId: "connection",
     labelKey: "quickSettings.system.gatewayHost",
-    hash: `#${GENERAL_SETTINGS_TARGET_IDS.system}`,
+    hash: `#${CONNECTION_SETTINGS_TARGET_IDS.host}`,
     searchKeys: [
       "quickSettings.system.cpu",
       "quickSettings.system.memory",

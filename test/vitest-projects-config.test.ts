@@ -123,6 +123,10 @@ describe("projects vitest config", () => {
     );
   });
 
+  it("keeps the embedded-agent cold-hook budget explicit", () => {
+    expect(requireTestConfig(createAgentsEmbeddedVitestConfig()).hookTimeout).toBe(600_000);
+  });
+
   it("honors explicit worker caps in CI vitest lanes", () => {
     expect(
       resolveSharedVitestWorkerConfig({

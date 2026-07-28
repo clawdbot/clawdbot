@@ -265,6 +265,8 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
     if (!modelKey) {
       return underlying(model, context, options);
     }
+    // Cancellation belongs to this caller; never start or join a shared load after abort.
+    options?.signal?.throwIfAborted();
     const providerConfig = ctx.config?.models?.providers?.[LMSTUDIO_PROVIDER_ID];
     if (!shouldPreloadLmstudioModels(providerConfig)) {
       return streamWithThinkingLevel(withLmstudioUsageCompat(model), context, options);

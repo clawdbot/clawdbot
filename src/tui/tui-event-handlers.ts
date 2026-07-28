@@ -7,7 +7,7 @@ import {
   sanitizeRenderableText,
 } from "./tui-formatters.js";
 import { createTuiRunLifecycle } from "./tui-run-lifecycle.js";
-import { matchesSelectedTuiSession } from "./tui-session-events.js";
+import { matchesSelectedTuiSession, readTuiSessionUserMessage } from "./tui-session-events.js";
 import { TuiSessionRunCoordinator } from "./tui-session-run-coordinator.js";
 import {
   clearPendingSubmit,
@@ -25,6 +25,7 @@ import type {
 } from "./tui-types.js";
 
 type EventHandlerChatLog = {
+  addLiveUser: (text: string, options: { messageId: string; runId?: string }) => void;
   startTool: (toolCallId: string, toolName: string, args: unknown) => void;
   updateToolResult: (
     toolCallId: string,
@@ -486,6 +487,15 @@ export function createEventHandlers(context: EventHandlerContext) {
     syncSessionKey();
     if (!matchesSelectedTuiSession(state, evt, { requireAliasOwnership: true })) {
       return;
+    }
+
+    const liveUserMessage = readTuiSessionUserMessage(evt);
+    if (liveUserMessage) {
+      chatLog.addLiveUser(liveUserMessage.text, {
+        messageId: liveUserMessage.messageId,
+        ...(liveUserMessage.runId ? { runId: liveUserMessage.runId } : {}),
+      });
+      tui.requestRender();
     }
 
     const currentUpdatedAt = state.sessionInfo.updatedAt;

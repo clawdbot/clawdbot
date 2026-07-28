@@ -67,10 +67,11 @@ export function renderMessageImages(images: RenderableImageBlock[], opts?: Image
     const requestVersion = opts?.onRequestOpenImage?.();
     const managedSource = isManagedOutgoingImageSource(img.displayUrl);
     const cacheKey = managedSource
-      ? resolveManagedOutgoingImageBlobUrlCacheKey(img.displayUrl, opts)
+      ? resolveManagedOutgoingImageBlobUrlCacheKey(img.displayUrl, opts, img.artifactId)
       : undefined;
     const previewIsCurrent =
-      !managedSource || readManagedOutgoingImageBlobUrl(img.displayUrl, opts) === previewUrl;
+      !managedSource ||
+      readManagedOutgoingImageBlobUrl(img.displayUrl, opts, img.artifactId) === previewUrl;
     if (previewIsCurrent) {
       const release =
         opts?.onOpenImage && cacheKey ? retainManagedImageBlobUrl(cacheKey) : undefined;
@@ -82,7 +83,7 @@ export function renderMessageImages(images: RenderableImageBlock[], opts?: Image
     // Re-resolve before opening so the modal never receives a revoked URL.
     if (!opts?.onOpenImage) {
       const pendingWindow = reserveExternalWindowForDeferredNavigation();
-      void resolveManagedOutgoingImageBlobUrl(img.displayUrl, opts)
+      void resolveManagedOutgoingImageBlobUrl(img.displayUrl, opts, img.artifactId)
         .then((freshUrl) => {
           const safeUrl = freshUrl
             ? resolveSafeExternalUrl(freshUrl, window.location.href, { allowDataImage: true })
@@ -98,7 +99,7 @@ export function renderMessageImages(images: RenderableImageBlock[], opts?: Image
         .catch(() => pendingWindow?.close());
       return;
     }
-    void resolveManagedOutgoingImageBlobUrl(img.displayUrl, opts)
+    void resolveManagedOutgoingImageBlobUrl(img.displayUrl, opts, img.artifactId)
       .then((freshUrl) => {
         if (!freshUrl) {
           return;
@@ -133,12 +134,14 @@ export function renderMessageImages(images: RenderableImageBlock[], opts?: Image
     if (!isManagedOutgoingImageSource(img.displayUrl)) {
       return renderImageElement(img, img.displayUrl);
     }
-    const preview = resolveManagedOutgoingImageBlobUrl(img.displayUrl, opts).then((previewUrl) => {
-      if (!previewUrl) {
-        return nothing;
-      }
-      return renderImageElement(img, previewUrl);
-    });
+    const preview = resolveManagedOutgoingImageBlobUrl(img.displayUrl, opts, img.artifactId).then(
+      (previewUrl) => {
+        if (!previewUrl) {
+          return nothing;
+        }
+        return renderImageElement(img, previewUrl);
+      },
+    );
     return until(preview, nothing);
   };
 
@@ -175,24 +178,29 @@ function resolveManagedOutgoingImageRequesterSessionKey(source: string): string 
 function resolveManagedOutgoingImageBlobUrlCacheKey(
   source: string,
   opts?: ImageRenderOptions,
+  artifactId?: string,
 ): string {
   const authToken = opts?.authToken?.trim() ?? "";
-  return `${source}::${authToken}`;
+  return `${source}::${authToken}::${artifactId?.trim() ?? ""}`;
 }
 
 function readManagedOutgoingImageBlobUrl(
   source: string,
   opts?: ImageRenderOptions,
+  artifactId?: string,
 ): string | undefined {
-  return readManagedImageBlobUrl(resolveManagedOutgoingImageBlobUrlCacheKey(source, opts));
+  return readManagedImageBlobUrl(
+    resolveManagedOutgoingImageBlobUrlCacheKey(source, opts, artifactId),
+  );
 }
 
 async function resolveManagedOutgoingImageBlobUrl(
   source: string,
   opts?: ImageRenderOptions,
+  artifactId?: string,
 ): Promise<string | null> {
   const authToken = opts?.authToken?.trim() ?? "";
-  const cacheKey = resolveManagedOutgoingImageBlobUrlCacheKey(source, opts);
+  const cacheKey = resolveManagedOutgoingImageBlobUrlCacheKey(source, opts, artifactId);
   const cached = readManagedImageBlobUrl(cacheKey);
   if (cached) {
     return cached;
@@ -204,11 +212,18 @@ async function resolveManagedOutgoingImageBlobUrl(
   if (!pending) {
     pending = (async () => {
       const requesterSessionKey = resolveManagedOutgoingImageRequesterSessionKey(source);
+      const artifactDownload =
+        requesterSessionKey && artifactId && opts?.resolveArtifactDownload
+          ? await opts
+              .resolveArtifactDownload({ sessionKey: requesterSessionKey, artifactId })
+              .catch(() => null)
+          : null;
+      const requestUrl = artifactDownload?.url ?? source;
       const headers = new Headers({ Accept: "image/*" });
-      if (authToken) {
+      if (!artifactDownload && authToken) {
         headers.set("Authorization", `Bearer ${authToken}`);
       }
-      if (requesterSessionKey) {
+      if (!artifactDownload && requesterSessionKey) {
         headers.set("x-openclaw-requester-session-key", requesterSessionKey);
       }
       const controller = new AbortController();
@@ -220,7 +235,7 @@ async function resolveManagedOutgoingImageBlobUrl(
       try {
         // Managed media is a Gateway API at the origin root. Rebasing it under
         // the Control UI mount path serves the HTML shell instead of image bytes.
-        const res = await fetch(source, {
+        const res = await fetch(requestUrl, {
           method: "GET",
           headers,
           credentials: "same-origin",

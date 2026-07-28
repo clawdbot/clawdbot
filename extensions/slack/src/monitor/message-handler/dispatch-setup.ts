@@ -288,14 +288,10 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     streamingEnabled,
     threadTs: streamThreadHint,
   });
-  // chat.update cannot preserve custom authorship. Use native streaming when
-  // possible; otherwise keep identity intact with one final postMessage.
-  const shouldUseDraftStream =
-    !hasSlackCustomIdentity &&
-    shouldInitializeSlackDraftStream({
-      previewStreamingEnabled,
-      useStreaming,
-    });
+  const shouldUseDraftStream = shouldInitializeSlackDraftStream({
+    previewStreamingEnabled,
+    useStreaming,
+  });
   const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(account.config);
   const disableBlockStreaming = sourceRepliesAreToolOnly
     ? true
@@ -343,6 +339,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     slackStreaming,
     streamThreadHint,
     previewStreamingEnabled,
+    hasSlackCustomIdentity,
     shouldUseDraftStream,
     disableBlockStreaming,
     useStreaming,

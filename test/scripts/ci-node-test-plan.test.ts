@@ -304,7 +304,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     );
     expect(embeddedAgentJob?.groups).toHaveLength(1);
     expect(embeddedAgentJob?.groups[0]?.env).toEqual({
-      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "420000",
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "660000",
     });
     expect(
       compact
@@ -1004,7 +1004,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       {
         checkName: "checks-node-agentic-agents-embedded",
         configs: ["test/vitest/vitest.agents-embedded-agent.config.ts"],
-        env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "420000" },
+        env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "660000" },
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
         shardName: "agentic-agents-embedded",

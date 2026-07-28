@@ -3638,6 +3638,52 @@ describe("grouped chat rendering", () => {
     activeItem?.release?.();
   });
 
+  it("prefers an artifact ticket without forwarding the gateway bearer", async () => {
+    const artifactId = `artifact_managed_image_${crypto.randomUUID()}`;
+    const managedChatImageUrl = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    const ticketedUrl = `${managedChatImageUrl}?mediaTicket=ticket`;
+    const resolveArtifactDownload = vi.fn(async () => ({
+      url: ticketedUrl,
+      expiresAt: "2026-07-28T05:00:00.000Z",
+    }));
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      expect(url).toBe(ticketedUrl);
+      const headers = new Headers(init?.headers);
+      expect(headers.get("Authorization")).toBeNull();
+      expect(headers.get("x-openclaw-requester-session-key")).toBeNull();
+      return { ok: true, blob: async () => new Blob(["png"], { type: "image/png" }) };
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const container = document.createElement("div");
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "image",
+            artifactId,
+            url: managedChatImageUrl,
+            alt: "Ticketed image",
+          },
+        ],
+        timestamp: Date.now(),
+      },
+      {
+        showToolCalls: false,
+        assistantAttachmentAuthToken: "must-not-be-forwarded",
+        resolveArtifactDownload,
+      },
+    );
+
+    await vi.waitFor(() => expect(container.querySelector(".chat-message-image")).not.toBeNull());
+    expect(resolveArtifactDownload).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      artifactId,
+    });
+  });
+
   it("aborts a stalled managed outgoing image fetch after the deadline", async () => {
     vi.useFakeTimers();
     const managedChatImageUrl = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
