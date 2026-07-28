@@ -673,6 +673,7 @@ describe("openclaw.chat", () => {
   it.each([
     { name: "unsafe characters", page: "channels?tab=all" },
     { name: "an overlong id", page: "a".repeat(65) },
+    { name: "a Unicode case-folding character", page: "\u212A" },
   ])("drops UI context with $name without rejecting the turn", async ({ page }) => {
     const engine = makeVerifiedEngine();
     const handle = vi

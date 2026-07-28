@@ -1,4 +1,4 @@
-const SYSTEM_AGENT_UI_CONTEXT_PAGE_PATTERN = /^[a-z0-9/_-]{1,64}$/iu;
+const SYSTEM_AGENT_UI_CONTEXT_PAGE_PATTERN = /^[A-Za-z0-9/_-]{1,64}$/u;
 
 export function sanitizeSystemAgentChatParams(params: unknown): unknown {
   if (!params || typeof params !== "object" || Array.isArray(params)) {
