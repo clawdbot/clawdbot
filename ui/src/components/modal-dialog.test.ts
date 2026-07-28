@@ -171,9 +171,7 @@ describe("openclaw-modal-dialog", () => {
     originalTrigger.focus();
     const { modal, webAwesomeDialog } = await renderModal();
 
-    (
-      modal as HTMLElement & { setReturnFocusTarget(target: HTMLElement | null): void }
-    ).setReturnFocusTarget(returnTarget);
+    modal.setReturnFocusTarget(returnTarget);
     setTimeout(() => originalTrigger.focus(), 0);
     webAwesomeDialog.dispatchEvent(new Event("wa-after-hide"));
     await new Promise<void>((resolve) => {
@@ -191,9 +189,7 @@ describe("openclaw-modal-dialog", () => {
     originalTrigger.focus();
     const { modal, webAwesomeDialog } = await renderModal();
 
-    (
-      modal as HTMLElement & { setReturnFocusTarget(target: HTMLElement | null): void }
-    ).setReturnFocusTarget(null);
+    modal.setReturnFocusTarget(null);
     setTimeout(() => originalTrigger.focus(), 0);
     webAwesomeDialog.dispatchEvent(new Event("wa-after-hide"));
     await new Promise<void>((resolve) => {
@@ -210,9 +206,7 @@ describe("openclaw-modal-dialog", () => {
     originalTrigger.focus();
     const { modal } = await renderModal();
 
-    (
-      modal as HTMLElement & { setReturnFocusTarget(target: HTMLElement | null): void }
-    ).setReturnFocusTarget(null);
+    modal.setReturnFocusTarget(null);
     container.querySelector<HTMLElement>("#first-action")?.focus();
     render(nothing, container);
     await nextFrame();

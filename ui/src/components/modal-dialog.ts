@@ -239,7 +239,7 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     // wa-after-hide; apply the owner's restoration or suppression after it.
     setTimeout(() => {
       if (returnFocus === null) {
-        if (document.activeElement === originalReturnFocus) {
+        if (originalReturnFocus && document.activeElement === originalReturnFocus) {
           originalReturnFocus.blur();
         }
       } else if (returnFocus.isConnected) {
