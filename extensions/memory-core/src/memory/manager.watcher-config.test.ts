@@ -260,6 +260,7 @@ describe("memory watcher config", () => {
     manager = result.manager as unknown as MemoryIndexManager;
   }
 
+  // Watcher startup can exceed the global timeout on packed 4-vCPU CI shards.
   it("routes directories to native recursive fs.watch and files to chokidar", async () => {
     await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
     const cfg = createWatcherConfig();
@@ -316,7 +317,7 @@ describe("memory watcher config", () => {
     expect(
       ignored?.(path.join(workspaceDir, "memory", "project"), { isDirectory: () => true }),
     ).toBe(false);
-  });
+  }, 240_000);
 
   it("does not start watchers for one-shot CLI managers", async () => {
     await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
