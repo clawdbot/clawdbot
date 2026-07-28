@@ -535,8 +535,11 @@ describe("nodes screen helpers", () => {
     );
   });
 
-  it("builds screen snapshot temp path", () => {
-    expect(screenSnapshotTempPath({ tmpDir: "/tmp", id: "id1" })).toBe(
+  it("builds screen snapshot temp path from the reported format", () => {
+    expect(screenSnapshotTempPath({ ext: "jpg", tmpDir: "/tmp", id: "id1" })).toBe(
+      path.join("/tmp", "openclaw-screen-snapshot-id1.jpg"),
+    );
+    expect(screenSnapshotTempPath({ ext: "png", tmpDir: "/tmp", id: "id1" })).toBe(
       path.join("/tmp", "openclaw-screen-snapshot-id1.png"),
     );
   });

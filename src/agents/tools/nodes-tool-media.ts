@@ -5,7 +5,10 @@
  */
 import crypto from "node:crypto";
 import { imageMimeFromFormat } from "@openclaw/media-core/mime";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   cameraTempPath,
   parseCameraClipPayload,
@@ -15,6 +18,7 @@ import {
   writeCameraClipPayloadToFile,
   writeCameraPayloadToFile,
 } from "../../cli/nodes-camera.js";
+import { withMediaFileExtension } from "../../cli/nodes-media-utils.js";
 import {
   parseScreenRecordPayload,
   parseScreenSnapshotPayload,
@@ -412,10 +416,9 @@ async function executeScreenRecord({
     idempotencyKey: crypto.randomUUID(),
   });
   const payload = parseScreenRecordPayload(raw?.payload);
-  const filePath =
-    typeof params.outPath === "string" && params.outPath.trim()
-      ? params.outPath.trim()
-      : screenRecordTempPath({ ext: payload.format || "mp4" });
+  const ext = payload.format || "mp4";
+  const outPath = normalizeOptionalString(params.outPath);
+  const filePath = outPath ? withMediaFileExtension(outPath, ext) : screenRecordTempPath({ ext });
   const written = await writeScreenRecordToFile(filePath, payload.base64);
   return {
     content: [{ type: "text", text: `FILE:${written.path}` }],
@@ -449,10 +452,10 @@ async function executeScreenSnapshot({
     throw new Error(`unsupported screen.snapshot format: ${payload.format}`);
   }
   const ext = normalizedFormat === "png" ? "png" : "jpg";
-  const filePath =
-    typeof params.outPath === "string" && params.outPath.trim()
-      ? params.outPath.trim()
-      : screenSnapshotTempPath({ ext });
+  // The node picks the encoding, so a caller-chosen `outPath` extension can
+  // disagree with the bytes; name the artifact after what actually arrived.
+  const outPath = normalizeOptionalString(params.outPath);
+  const filePath = outPath ? withMediaFileExtension(outPath, ext) : screenSnapshotTempPath({ ext });
   const written = await writeScreenSnapshotToFile(filePath, payload.base64);
   return {
     content: [{ type: "text", text: `FILE:${written.path}` }],

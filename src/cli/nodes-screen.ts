@@ -76,8 +76,10 @@ export function parseScreenSnapshotPayload(value: unknown): ScreenSnapshotPayloa
 }
 
 /** Build the temp output path for a screen snapshot artifact. */
-export function screenSnapshotTempPath(opts: { ext?: string; tmpDir?: string; id?: string }) {
-  const { tmpDir, id, ext } = resolveTempPathParts({ ...opts, ext: opts.ext ?? ".png" });
+export function screenSnapshotTempPath(opts: { ext: string; tmpDir?: string; id?: string }) {
+  // No default extension: the node chooses the encoding, and assuming PNG here
+  // is how a JPEG snapshot ends up named `.png`.
+  const { tmpDir, id, ext } = resolveTempPathParts(opts);
   return path.join(tmpDir, `openclaw-screen-snapshot-${id}${ext}`);
 }
 

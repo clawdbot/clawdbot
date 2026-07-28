@@ -161,6 +161,7 @@ describe("createNodesTool screen_record duration guardrails", () => {
     nodeUtilsMocks.resolveNodeId.mockClear();
     nodeUtilsMocks.resolveNode.mockClear();
     screenMocks.parseScreenRecordPayload.mockClear();
+    screenMocks.screenRecordTempPath.mockClear();
     screenMocks.writeScreenRecordToFile.mockClear();
     screenMocks.parseScreenSnapshotPayload.mockClear();
     screenMocks.screenSnapshotTempPath.mockClear();
@@ -479,6 +480,85 @@ describe("createNodesTool screen_record duration guardrails", () => {
         },
       },
     });
+  });
+
+  it("names a caller-supplied outPath after the encoding the node returned", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+    screenMocks.parseScreenSnapshotPayload.mockReturnValueOnce({
+      base64: "ZmFrZQ==",
+      format: "jpeg",
+      screenIndex: 0,
+      width: 1600,
+      height: 1049,
+    });
+    screenMocks.writeScreenSnapshotToFile.mockImplementationOnce(async (filePath: string) => ({
+      path: filePath,
+    }));
+    const tool = createNodesTool();
+
+    const result = await tool.execute("call-snapshot", {
+      action: "screen_snapshot",
+      node: "miniclaw",
+      outPath: "/workspace/miniclaw-screen-2026-07-28.png",
+    });
+
+    // The node encodes JPEG by default; a `.png` request must not mislabel it.
+    expect(screenMocks.writeScreenSnapshotToFile).toHaveBeenCalledWith(
+      "/workspace/miniclaw-screen-2026-07-28.jpg",
+      "ZmFrZQ==",
+    );
+    expect(screenMocks.screenSnapshotTempPath).not.toHaveBeenCalled();
+    expect(result.content).toEqual([
+      { type: "text", text: "FILE:/workspace/miniclaw-screen-2026-07-28.jpg" },
+    ]);
+  });
+
+  it("keeps a caller-supplied outPath whose extension already matches the encoding", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+    screenMocks.parseScreenSnapshotPayload.mockReturnValueOnce({
+      base64: "ZmFrZQ==",
+      format: "jpeg",
+      screenIndex: 0,
+      width: 1600,
+      height: 1049,
+    });
+    screenMocks.writeScreenSnapshotToFile.mockImplementationOnce(async (filePath: string) => ({
+      path: filePath,
+    }));
+    const tool = createNodesTool();
+
+    await tool.execute("call-snapshot", {
+      action: "screen_snapshot",
+      node: "miniclaw",
+      outPath: "/workspace/shot.jpeg",
+    });
+
+    expect(screenMocks.writeScreenSnapshotToFile).toHaveBeenCalledWith(
+      "/workspace/shot.jpeg",
+      "ZmFrZQ==",
+    );
+  });
+
+  it("names a screen_record outPath after the returned container format", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+    screenMocks.writeScreenRecordToFile.mockImplementationOnce(async (filePath: string) => ({
+      path: filePath,
+    }));
+    const tool = createNodesTool();
+
+    const result = await tool.execute("call-record", {
+      action: "screen_record",
+      node: "miniclaw",
+      durationMs: 1000,
+      outPath: "/workspace/clip.mov",
+    });
+
+    expect(screenMocks.writeScreenRecordToFile).toHaveBeenCalledWith(
+      "/workspace/clip.mp4",
+      "ZmFrZQ==",
+    );
+    expect(screenMocks.screenRecordTempPath).not.toHaveBeenCalled();
+    expect(result.content).toEqual([{ type: "text", text: "FILE:/workspace/clip.mp4" }]);
   });
 
   it("rejects unsupported screen.snapshot response formats before writing", async () => {
