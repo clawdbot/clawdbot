@@ -2031,6 +2031,14 @@ export const en: TranslationMap = {
     sessionRestarted:
       "{error} OpenClaw started a fresh session; earlier messages remain for context.",
     unsupportedGateway: "Update the Gateway to continue setup with OpenClaw.",
+    panel: {
+      title: "OpenClaw",
+      toggle: "Ask OpenClaw",
+      close: "Close Ask OpenClaw",
+      resize: "Resize Ask OpenClaw",
+      dockBottom: "Dock Ask OpenClaw at bottom",
+      dockRight: "Dock Ask OpenClaw at right",
+    },
     history: {
       button: "History",
       title: "Recent changes",
