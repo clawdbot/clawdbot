@@ -1164,8 +1164,8 @@ struct GatewayNodeSessionTests {
         do {
             try await WebSocketTaskBox(task: task).sendPing(timeout: .milliseconds(50))
             Issue.record("sendPing unexpectedly succeeded without a pong")
-        } catch let error as WebSocketPingError {
-            #expect(error == .timedOut)
+        } catch let error as URLError {
+            #expect(error.code == .timedOut)
         }
     }
 

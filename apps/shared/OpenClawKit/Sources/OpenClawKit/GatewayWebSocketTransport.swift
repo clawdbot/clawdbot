@@ -28,12 +28,6 @@ private final class WebSocketPingContinuationGate: @unchecked Sendable {
     }
 }
 
-/// Failure modes owned by the ping wrapper rather than by URLSession.
-public enum WebSocketPingError: Error, Equatable {
-    /// URLSession never delivered a pong result for a ping it accepted.
-    case timedOut
-}
-
 public struct WebSocketTaskBox: @unchecked Sendable {
     /// Bounds a ping whose pong handler URLSession may never invoke. Long enough that a
     /// slow-but-live link still pongs, short enough that a wedged keepalive recovers.
@@ -87,7 +81,9 @@ public struct WebSocketTaskBox: @unchecked Sendable {
                     return
                 }
                 gate.resumeOnce {
-                    ThrowingContinuationSupport.resumeVoid(continuation, error: WebSocketPingError.timedOut)
+                    // URLError keeps this indistinguishable from a transport timeout for
+                    // callers, which already handle URLSession errors from every other path.
+                    ThrowingContinuationSupport.resumeVoid(continuation, error: URLError(.timedOut))
                 }
             }
             self.task.sendPing { error in
