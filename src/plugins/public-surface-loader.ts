@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
+import { MissingPublicSurfaceError } from "../plugin-sdk/facade-loader.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
@@ -179,7 +180,7 @@ export function loadBundledPluginPublicArtifactModuleSync<T extends object>(para
 }): T {
   const location = resolvePublicSurfaceLocation(params);
   if (!location) {
-    throw new Error(
+    throw new MissingPublicSurfaceError(
       `Unable to resolve bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
     );
   }
@@ -200,7 +201,7 @@ export function loadPluginPublicArtifactModuleSync<T extends object>(params: {
 }): T {
   const modulePath = resolvePluginRootPublicSurfacePath(params);
   if (!modulePath) {
-    throw new Error(
+    throw new MissingPublicSurfaceError(
       `Unable to resolve plugin public surface ${params.pluginRoot}/${params.artifactBasename}`,
     );
   }
@@ -226,10 +227,7 @@ export function loadBundledPluginPublicArtifactModuleFromCandidatesSync<T extend
         artifactBasename,
       });
     } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message.startsWith("Unable to resolve bundled plugin public surface ")
-      ) {
+      if (error instanceof MissingPublicSurfaceError) {
         continue;
       }
       throw error;

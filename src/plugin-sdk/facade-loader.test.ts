@@ -10,6 +10,7 @@ import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import {
   listImportedBundledPluginFacadeIds,
   loadBundledPluginPublicSurfaceModuleSync,
+  MissingPublicSurfaceError,
   resetFacadeLoaderStateForTest,
   setFacadeLoaderSourceTransformFactoryForTest,
 } from "./facade-loader.js";
@@ -286,7 +287,55 @@ describe("plugin-sdk facade loader", () => {
         dirName: "browser",
         artifactBasename: "browser-maintenance.js",
       }),
-    ).toThrow("Unable to resolve bundled plugin public surface browser/browser-maintenance.js");
+    ).toThrow(MissingPublicSurfaceError);
+  });
+
+  it("MissingPublicSurfaceError is distinguishable from generic Error", () => {
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    try {
+      loadBundledPluginPublicSurfaceModuleSync({
+        dirName: "browser",
+        artifactBasename: "browser-maintenance.js",
+      });
+    } catch (err) {
+      expect(err instanceof MissingPublicSurfaceError).toBe(true);
+      expect(err instanceof Error).toBe(true);
+    }
+  });
+
+  it("open failures are not classified as MissingPublicSurfaceError", () => {
+    const fixture = createBundledPluginFixture({
+      prefix: "openclaw-facade-loader-open-fail-",
+      marker: "open-failure",
+    });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = fixture.bundledPluginsDir;
+
+    // Write a file that exists but causes openRootFileSync to fail (permission
+    // denials, hardlink rejection, or other I/O errors are real open failures,
+    // not missing artifacts).  Removing read permission on the fixture triggers
+    // a distinct error class.
+    const apiPath = path.join(fixture.bundledPluginsDir, fixture.pluginId, "api.js");
+    try {
+      fs.chmodSync(apiPath, 0o000);
+      expect(() =>
+        loadBundledPluginPublicSurfaceModuleSync({
+          dirName: fixture.pluginId,
+          artifactBasename: "api.js",
+        }),
+      ).toThrow(Error);
+      // The error must NOT be MissingPublicSurfaceError.
+      try {
+        loadBundledPluginPublicSurfaceModuleSync({
+          dirName: fixture.pluginId,
+          artifactBasename: "api.js",
+        });
+      } catch (err) {
+        expect(err).not.toBeInstanceOf(MissingPublicSurfaceError);
+      }
+    } finally {
+      fs.chmodSync(apiPath, 0o644);
+    }
   });
 
   it("shares loaded facade ids with facade-runtime", () => {

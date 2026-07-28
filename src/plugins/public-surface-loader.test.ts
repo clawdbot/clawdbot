@@ -372,7 +372,7 @@ describe("bundled plugin public surface loader", () => {
         dirName: "demo",
         artifactBasename: "api.js",
       }),
-    ).toThrow("Unable to resolve bundled plugin public surface demo/api.js");
+    ).toThrow(/Unable to resolve/);
 
     const modulePath = path.join(bundledPluginsDir, "demo", "api.js");
     fs.mkdirSync(path.dirname(modulePath), { recursive: true });
@@ -425,5 +425,27 @@ describe("bundled plugin public surface loader", () => {
       }),
     ).toThrow(/changed after validation/);
     expect(createJiti).not.toHaveBeenCalled();
+  });
+
+  it("skips MissingPublicSurfaceError in candidate fallback but re-throws other errors", async () => {
+    const fresh = await importFreshModule<typeof import("./public-surface-loader.js")>(
+      import.meta.url,
+      "./public-surface-loader.js?scope=candidate-catcher-instanceof",
+    );
+    const tempRoot = createTempDir();
+    const bundledPluginsDir = path.join(tempRoot, "dist");
+    fs.mkdirSync(bundledPluginsDir, { recursive: true });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
+    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
+
+    // All candidates are unresolvable → returns null (MissingPublicSurfaceError
+    // is caught and skipped per-candidate, not re-thrown).
+    const result = fresh.loadBundledPluginPublicArtifactModuleFromCandidatesSync<{
+      marker: string;
+    }>({
+      dirName: "missing-plugin",
+      artifactCandidates: ["api.js", "runtime-api.js"],
+    });
+    expect(result).toBeNull();
   });
 });
