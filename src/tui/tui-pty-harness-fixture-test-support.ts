@@ -3,6 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { TUI_PTY_GAP_HISTORY_FIXTURE_SCRIPT } from "./tui-pty-gap-fixture-test-support.js";
+import { TUI_PTY_SESSION_SUBSCRIPTION_FIXTURE_SCRIPT } from "./tui-pty-subscription-fixture-test-support.js";
 import { sleep, type PtyRun } from "./tui-pty-test-support.js";
 
 export async function writeTuiPtyFixtureScript(dir: string) {
@@ -118,7 +119,6 @@ export async function writeTuiPtyFixtureScript(dir: string) {
         connection = { url: "pty-fixture://local" };
         onEvent?: TuiBackend["onEvent"];
         onConnected?: TuiBackend["onConnected"];
-        onDisconnected?: TuiBackend["onDisconnected"];
         onGap?: TuiBackend["onGap"];
 
         start() {
@@ -128,6 +128,8 @@ export async function writeTuiPtyFixtureScript(dir: string) {
         stop() {
           record("stop");
         }
+
+        ${TUI_PTY_SESSION_SUBSCRIPTION_FIXTURE_SCRIPT}
 
         async sendChat(opts: Parameters<TuiBackend["sendChat"]>[0]) {
           record("sendChat", {
