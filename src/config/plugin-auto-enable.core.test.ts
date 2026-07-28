@@ -365,6 +365,26 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.changes).toStrictEqual([]);
   });
 
+  it("does not auto-enable Synology Chat from half of its credential pair", () => {
+    const partial = applyPluginAutoEnable({
+      config: {},
+      env: makeIsolatedEnv({ SYNOLOGY_CHAT_TOKEN: "token" }),
+    });
+
+    expect(partial.config.channels?.["synology-chat"]).toBeUndefined();
+    expect(partial.changes).toStrictEqual([]);
+
+    const complete = applyPluginAutoEnable({
+      config: {},
+      env: makeIsolatedEnv({
+        SYNOLOGY_CHAT_TOKEN: "token",
+        SYNOLOGY_CHAT_INCOMING_URL: "https://nas.example.com/webapi/incoming",
+      }),
+    });
+
+    expect(complete.config.channels?.["synology-chat"]?.enabled).toBe(true);
+  });
+
   it("stores auto-enable reasons in a null-prototype dictionary", () => {
     const result = applyPluginAutoEnable({
       config: {
