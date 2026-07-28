@@ -343,7 +343,7 @@ async function pollForGitHubAccessToken(
 }
 
 /** Exchange a GitHub credential for the legacy Copilot access token used during login setup. */
-export async function exchangeGitHubTokenForCopilotAccess(
+async function exchangeGitHubTokenForCopilotAccess(
   refreshToken: string,
   enterpriseDomain?: string,
   options: CopilotRequestOptions = {},
