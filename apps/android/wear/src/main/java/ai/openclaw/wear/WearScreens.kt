@@ -601,7 +601,7 @@ private fun VoiceHomeMode(
       ttsOnly -> stringResource(R.string.stop_speaking)
       realtimeActive -> stringResource(R.string.stop_speaking)
       else -> stringResource(R.string.speak_to_agent)
-  }
+    }
   val dictateClickLabel = stringResource(R.string.dictate)
   val orbClick = if (liveActionEnabled) toggleLive else startDictate
   val orbClickLabel = if (liveActionEnabled) liveClickLabel else dictateClickLabel
