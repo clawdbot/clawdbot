@@ -298,6 +298,7 @@ function createContinuationRun(params?: {
     summaryLine: "hello",
     enqueuedAt: Date.now(),
     run: {
+      agentId: "main",
       sessionId: "session",
       sessionKey,
       messageProvider: "discord",
@@ -532,6 +533,7 @@ describe("runReplyAgent :: continuation.work span", () => {
     const run = createContinuationRun({
       sessionKey: "continuation-work-incomplete-replay-safe",
     });
+    run.followupRun.run.modelSelectionLocked = true;
     runEmbeddedAgentMock.mockImplementationOnce(async (args: unknown) => {
       const options = args as {
         continueWorkOpts?: {
@@ -563,6 +565,7 @@ describe("runReplyAgent :: continuation.work span", () => {
       "Agent could not generate a response yet.",
     );
 
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     expect(spans.filter((s) => s.name === "continuation.work")).toHaveLength(1);
     expect(run.sessionEntry.continuationChainCount).toBe(1);
   });

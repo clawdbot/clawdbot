@@ -419,13 +419,11 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                 compactionCount: entryAfterTrim.compactionCount ?? 0,
                 entry: entryAfterTrim,
                 model: resolveSessionModelRef(cfg, entryAfterTrim, targetAgentId),
-                sessionFile:
-                  entryAfterTrim.sessionFile ??
-                  formatSqliteSessionFileMarker({
-                    agentId: targetAgentId,
-                    sessionId: entryAfterTrim.sessionId ?? sessionId,
-                    storePath,
-                  }),
+                sessionFile: formatSqliteSessionFileMarker({
+                  agentId: targetAgentId,
+                  sessionId: entryAfterTrim.sessionId ?? sessionId,
+                  storePath,
+                }),
                 sessionId: entryAfterTrim.sessionId ?? sessionId,
                 sessionKey: target.canonicalKey,
                 store: loadedAfterTrim.target.store,
@@ -582,14 +580,11 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                 compactionCount: releaseSessionEntry.compactionCount ?? 0,
                 entry: releaseSessionEntry,
                 model: resolveSessionModelRef(cfg, releaseSessionEntry, targetAgentId),
-                sessionFile:
-                  releaseSessionEntry.sessionFile ??
-                  formatSqliteSessionFileMarker({
-                    agentId: targetAgentId,
-                    sessionId:
-                      releaseSessionEntry.sessionId ?? result.result?.sessionId ?? sessionId,
-                    storePath,
-                  }),
+                sessionFile: formatSqliteSessionFileMarker({
+                  agentId: targetAgentId,
+                  sessionId: releaseSessionEntry.sessionId ?? result.result?.sessionId ?? sessionId,
+                  storePath,
+                }),
                 sessionId: releaseSessionEntry.sessionId ?? result.result?.sessionId ?? sessionId,
                 sessionKey: target.canonicalKey,
                 store: releaseSessionStore,

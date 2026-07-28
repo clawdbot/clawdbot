@@ -441,7 +441,7 @@ describe("executeAgentTurn: result and tool delivery", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const runAgentTurnWithFallback = await getExecuteAgentTurnForTest();
     const pendingToolTasks = new Set<Promise<void>>();
     const typingSignals = createMockTypingSignaler();
     const followupRun = createFollowupRun();

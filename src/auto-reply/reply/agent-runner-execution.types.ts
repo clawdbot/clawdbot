@@ -69,6 +69,8 @@ export type SettledAgentTurn = {
   status: "ok" | "failed";
   abortReason?: "user" | "restart";
   result: Awaited<ReturnType<typeof runEmbeddedAgent>>;
+  continueWorkRequests?: ContinueWorkRequest[];
+  compactionTraceparent?: string;
   resolved: { provider: string; model: string };
   fallback: { exhausted: boolean; attempts: RuntimeFallbackAttempt[] };
   autoCompactionCount: number;

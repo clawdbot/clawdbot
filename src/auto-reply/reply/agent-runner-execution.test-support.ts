@@ -272,6 +272,8 @@ export async function getExecuteAgentTurnForTest() {
         fallbackAttempts: outcome.fallback.attempts,
         didLogHeartbeatStrip: outcome.didLogHeartbeatStrip,
         autoCompactionCount: outcome.autoCompactionCount,
+        compactionTraceparent: outcome.compactionTraceparent,
+        continueWorkRequests: outcome.continueWorkRequests,
         directlySentBlockKeys: outcome.directlySentBlockKeys,
         directlySentBlockPayloads: outcome.directlySentBlockPayloads,
         terminalFailurePayload: outcome.terminalFailurePayload,

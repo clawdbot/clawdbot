@@ -587,6 +587,8 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
         status: internal.terminalFailurePayload ? "failed" : "ok",
         ...(abortReason ? { abortReason } : {}),
         result: internal.result,
+        continueWorkRequests: internal.continueWorkRequests,
+        compactionTraceparent: internal.compactionTraceparent,
         resolved: { provider, model },
         fallback: {
           exhausted: internal.fallbackExhausted === true,

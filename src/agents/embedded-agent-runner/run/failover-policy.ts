@@ -1,7 +1,10 @@
 /**
  * Resolves retry, fallback, and terminal failover decisions for a run.
  */
-import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
+import {
+  projectAgentRunAttemptTerminal,
+  type AgentRunAttemptTerminal,
+} from "../../agent-run-terminal-outcome.js";
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
 
 /** Failover action selected for one embedded run failure decision point. */
@@ -249,11 +252,13 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
       reason: params.failoverReason,
     };
   }
+  const terminal = projectAgentRunAttemptTerminal(params.terminal);
   if (
-    params.timedOut &&
-    !params.aborted &&
-    !params.timedOutDuringToolExecution &&
-    !params.timedOutDuringCompaction &&
+    terminal.timedOut &&
+    !terminal.idleTimedOut &&
+    !terminal.aborted &&
+    !terminal.timedOutDuringToolExecution &&
+    !terminal.timedOutDuringCompaction &&
     !params.harnessOwnsTransport
   ) {
     // Plain LLM-phase timeout outside an in-flight abort: surface so local

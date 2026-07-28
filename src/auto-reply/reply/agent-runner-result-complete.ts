@@ -79,7 +79,6 @@ export async function completeReplyAgentRun(input: {
     resolvedVerboseLevel,
     returnWithQueuedFollowupDrain,
     runFollowupTurn,
-    runOutcome,
     runtimePolicySessionKey,
     sessionCtx,
     sessionKey,
@@ -168,7 +167,7 @@ export async function completeReplyAgentRun(input: {
       emitContinuationCompactionReleasedSpan({
         releasedCount,
         compactionId: count,
-        traceparent: runOutcome.compactionTraceparent,
+        traceparent: execution.compactionTraceparent,
         log: (message) => defaultRuntime.log(message),
       });
     }

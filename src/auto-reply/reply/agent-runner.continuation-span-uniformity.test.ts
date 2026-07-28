@@ -250,6 +250,7 @@ function createContinuationRun(params: {
     summaryLine: "hello",
     enqueuedAt: Date.now(),
     run: {
+      agentId: "main",
       sessionId: "session",
       sessionKey: params.sessionKey,
       messageProvider: "discord",

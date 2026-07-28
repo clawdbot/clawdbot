@@ -324,10 +324,10 @@ export async function handleAssistantFailover(params: {
     // cross-provider case — resolveAssistantFailoverErrorMessage will pick the
     // timeout branch, not the stale prior-provider error message.
     if (
-      !params.externalAbort &&
-      params.timedOut &&
-      !params.timedOutDuringCompaction &&
-      !params.timedOutDuringToolExecution &&
+      !externalAbort &&
+      terminal.timedOut &&
+      !terminal.timedOutDuringCompaction &&
+      !terminal.timedOutDuringToolExecution &&
       params.fallbackConfigured &&
       !params.failoverFailure
     ) {
