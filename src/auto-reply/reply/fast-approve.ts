@@ -6,7 +6,7 @@ import { handleApproveCommandFromContext } from "./commands-approve.js";
 import { buildCommandContext } from "./commands-context.js";
 import { resolveCommandContextText } from "./context-text.js";
 
-export type FastApproveResult = { handled: false } | { handled: true; reply?: ReplyPayload };
+type FastApproveResult = { handled: false } | { handled: true; reply?: ReplyPayload };
 
 /** Resolve /approve before session admission so it can release the active run it reviews. */
 export async function tryFastApproveFromMessage(params: {
