@@ -675,22 +675,19 @@ describe("config view", () => {
     expect(onSectionChange).toHaveBeenCalledWith(null);
   });
 
-  it("renders the virtual Notifications tab in Communication settings", () => {
+  it("renders the virtual Notifications tab on Notifications settings", () => {
     const onSectionChange = vi.fn();
     const { container } = renderConfigView({
-      navRootLabel: "Communication",
-      includeSections: ["channels", "messages", "broadcast", "__notifications__", "talk", "audio"],
+      navRootLabel: "Notifications",
+      includeSections: ["__notifications__"],
       includeVirtualSections: true,
       onSectionChange,
       schema: {
         type: "object",
-        properties: {
-          channels: { type: "object", properties: {} },
-          messages: { type: "object", properties: {} },
-        },
+        properties: {},
       },
-      formValue: { channels: {}, messages: {} },
-      originalValue: { channels: {}, messages: {} },
+      formValue: {},
+      originalValue: {},
       webPush: {
         supported: true,
         permission: "default",

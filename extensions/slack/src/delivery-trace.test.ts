@@ -131,6 +131,7 @@ vi.mock("./client.js", async (importOriginal) => {
   };
   return {
     ...actual,
+    createSlackReadClient: traceClient,
     createSlackWebClient: traceClient,
     createSlackWriteClient: traceClient,
     getSlackWriteClient: traceClient,

@@ -2,12 +2,9 @@
 import { createHash } from "node:crypto";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { truncateUtf16Safe } from "../../utils.js";
+import { applyCommandTextToParams } from "./command-context-rewrite.js";
 import { rejectNonOwnerCommand, rejectUnauthorizedCommand } from "./command-gates.js";
-import type {
-  CommandHandler,
-  CommandHandlerResult,
-  HandleCommandsParams,
-} from "./commands-types.js";
+import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
 
 const LOOP_COMMAND_PREFIX = "/loop";
 const LOOP_MIN_INTERVAL_MS = 30_000;
@@ -18,38 +15,6 @@ const LOOP_USAGE =
 
 function directReply(text: string): CommandHandlerResult {
   return { shouldContinue: false, reply: { text } };
-}
-
-function applyLoopWorkOrderToContext(ctx: HandleCommandsParams["ctx"], instruction: string): void {
-  const mutableCtx = ctx as HandleCommandsParams["ctx"] & {
-    Body?: string;
-    RawBody?: string;
-    CommandBody?: string;
-    BodyForCommands?: string;
-    BodyForAgent?: string;
-    BodyStripped?: string;
-    commandText?: string;
-    agentText?: string;
-    rawText?: string;
-  };
-  mutableCtx.commandText = instruction;
-  mutableCtx.agentText = instruction;
-  mutableCtx.rawText = instruction;
-  mutableCtx.Body = instruction;
-  mutableCtx.RawBody = instruction;
-  mutableCtx.CommandBody = instruction;
-  mutableCtx.BodyForCommands = instruction;
-  mutableCtx.BodyForAgent = instruction;
-  mutableCtx.BodyStripped = instruction;
-}
-
-function applyLoopWorkOrder(params: HandleCommandsParams, instruction: string): void {
-  applyLoopWorkOrderToContext(params.ctx, instruction);
-  if (params.rootCtx && params.rootCtx !== params.ctx) {
-    applyLoopWorkOrderToContext(params.rootCtx, instruction);
-  }
-  params.command.rawBodyNormalized = instruction;
-  params.command.commandBodyNormalized = instruction;
 }
 
 function loopShortName(prompt: string): string {
@@ -142,14 +107,14 @@ export const handleLoopCommand: CommandHandler = async (params, allowTextCommand
     return directReply(LOOP_USAGE);
   }
   if (spec.toLowerCase() === "status") {
-    applyLoopWorkOrder(params, buildLoopStatusWorkOrder(params.sessionKey));
+    applyCommandTextToParams(params, buildLoopStatusWorkOrder(params.sessionKey));
     return { shouldContinue: true };
   }
 
   const [firstToken = ""] = spec.split(/\s+/u);
   if (firstToken.toLowerCase() === "stop") {
     const name = spec.slice(firstToken.length).trim();
-    applyLoopWorkOrder(params, buildLoopStopWorkOrder(name, params.sessionKey));
+    applyCommandTextToParams(params, buildLoopStopWorkOrder(name, params.sessionKey));
     return { shouldContinue: true };
   }
 
@@ -169,10 +134,10 @@ export const handleLoopCommand: CommandHandler = async (params, allowTextCommand
     if (!prompt) {
       return directReply(LOOP_USAGE);
     }
-    applyLoopWorkOrder(params, buildFixedLoopWorkOrder(prompt, everyMs, params.sessionKey));
+    applyCommandTextToParams(params, buildFixedLoopWorkOrder(prompt, everyMs, params.sessionKey));
     return { shouldContinue: true };
   }
 
-  applyLoopWorkOrder(params, buildSelfPacedLoopWorkOrder(spec, params.sessionKey));
+  applyCommandTextToParams(params, buildSelfPacedLoopWorkOrder(spec, params.sessionKey));
   return { shouldContinue: true };
 };

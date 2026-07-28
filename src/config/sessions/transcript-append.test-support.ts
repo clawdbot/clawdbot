@@ -520,7 +520,7 @@ async function withSessionTranscriptWriteLock<T>(
   const lock = await acquireSessionWriteLock({
     sessionFile: params.transcriptPath,
     ...resolveSessionWriteLockOptions(params.config),
-    allowReentrant: true,
+    reentrantOwner: `session:${path.resolve(params.transcriptPath)}:append:${randomUUID()}`,
   });
   try {
     return await run();

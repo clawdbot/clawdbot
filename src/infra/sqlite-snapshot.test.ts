@@ -304,11 +304,11 @@ describe("createVerifiedSqliteSnapshot", () => {
       const sourcePath = path.join(tempDir, "source.sqlite");
       const targetPath = path.join(tempDir, "snapshot.sqlite");
       createHotRollbackJournal(sourcePath);
-      const journalPath = `${sourcePath}-journal`;
+      const canonicalJournalPath = `${fsSync.realpathSync.native(sourcePath)}-journal`;
       const lstatSync = fsSync.lstatSync.bind(fsSync);
       let hidJournal = false;
       vi.spyOn(fsSync, "lstatSync").mockImplementation(((pathname, options) => {
-        if (!hidJournal && path.resolve(String(pathname)) === path.resolve(journalPath)) {
+        if (!hidJournal && path.resolve(String(pathname)) === canonicalJournalPath) {
           hidJournal = true;
           const error = new Error("missing");
           (error as NodeJS.ErrnoException).code = "ENOENT";

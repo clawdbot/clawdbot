@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { sleep } from "../../utils/sleep.js";
 import {
   createChannelIngressMonitor,
   type ChannelIngressMonitorDeliveryResult,
@@ -27,7 +28,7 @@ async function withQueue<T>(
 }
 
 function createMonitor(
-  queue: ChannelIngressQueue<StoredEvent>,
+  queue: ChannelIngressQueue<StoredEvent> | (() => ChannelIngressQueue<StoredEvent>),
   deliver: (
     raw: RawEvent,
     lifecycle: ChannelIngressMonitorLifecycle,
@@ -491,6 +492,30 @@ describe("channel ingress monitor", () => {
       expect(deliver).toHaveBeenCalledOnce();
       await recovered.stop();
     });
+  });
+
+  it("fails start once when the durable queue cannot be opened", async () => {
+    const denial = new Error(
+      'openChannelIngressQueue is only available for trusted plugins in this release. Plugin "slack" loaded with origin "config"',
+    );
+    const queueFactory = vi.fn((): ChannelIngressQueue<StoredEvent> => {
+      throw denial;
+    });
+    const onError = vi.fn();
+    const monitor = createMonitor(queueFactory, vi.fn(), undefined, onError, undefined, 1);
+
+    expect(() => monitor.start()).toThrow(denial);
+    expect(monitor.isRunning()).toBe(false);
+    // An armed poll timer would have retried the denied factory many times over this window.
+    await sleep(25);
+    expect(queueFactory).toHaveBeenCalledOnce();
+    expect(onError).not.toHaveBeenCalled();
+
+    // Accepted transport input still fails closed rather than being silently dropped.
+    await expect(monitor.admit({ id: "event-denied", lane: "a", text: "hello" })).rejects.toBe(
+      denial,
+    );
+    await monitor.stop();
   });
 
   it("can defer delivery-idle waiting to a channel-owned shutdown grace", async () => {

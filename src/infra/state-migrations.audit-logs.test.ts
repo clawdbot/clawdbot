@@ -854,7 +854,9 @@ describe("legacy core audit log migration", () => {
         mode: number,
       ) {
         chmodCalls += 1;
-        if (chmodCalls === 3) {
+        // fs-safe 0.5 applies the requested mode while creating the sanitized file before the
+        // migration's explicit hardening checks. Fail the later raw-archive hardening call.
+        if (chmodCalls === 4) {
           return Promise.reject(new Error("simulated chmod failure"));
         }
         return originalChmod.call(this, mode);
