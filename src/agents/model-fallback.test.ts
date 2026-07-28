@@ -1914,6 +1914,42 @@ describe("runWithModelFallback", () => {
     expect(result.provider).toBe("anthropic");
   });
 
+  it("continues to the next model after a Google invalid-key response (#114784)", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "google/gemini-3.1-pro-preview",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+      },
+    });
+    const googleInvalidKey = new Error(
+      "Google Generative AI API error (400): API key not valid. Please pass a valid API key. [code=INVALID_ARGUMENT]",
+    );
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(googleInvalidKey)
+      .mockResolvedValueOnce("fallback ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+      run,
+    });
+
+    expect(result.result).toBe("fallback ok");
+    expect(result.provider).toBe("anthropic");
+    expect(result.attempts[0]).toMatchObject({
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+      reason: "auth",
+    });
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps provider failover metadata authoritative over nested session locks", async () => {
     const cfg = makeCfg({
       agents: {
