@@ -86,7 +86,7 @@ let resolveProviderUsageAuthWithPlugin: typeof import("./provider-runtime.js").r
 let normalizeProviderToolSchemasWithPlugin: typeof import("./provider-runtime.js").normalizeProviderToolSchemasWithPlugin;
 let inspectProviderToolSchemasWithPlugin: typeof import("./provider-runtime.js").inspectProviderToolSchemasWithPlugin;
 let listProviderUsagePluginDescriptors: typeof import("./provider-runtime.js").listProviderUsagePluginDescriptors;
-let resolveProviderToolSchemaNormalizeCacheKey: typeof import("./provider-runtime.js").resolveProviderToolSchemaNormalizeCacheKey;
+let resolveProviderToolSchemaNormalizeCacheKey: typeof import("./provider-hook-runtime.js").resolveProviderToolSchemaNormalizeCacheKey;
 let normalizeProviderResolvedModelWithPlugin: typeof import("./provider-runtime.js").normalizeProviderResolvedModelWithPlugin;
 let prepareProviderDynamicModel: typeof import("./provider-runtime.js").prepareProviderDynamicModel;
 let prepareProviderRuntimeAuth: typeof import("./provider-runtime.js").prepareProviderRuntimeAuth;
@@ -342,7 +342,6 @@ describe("provider-runtime", () => {
       normalizeProviderToolSchemasWithPlugin,
       inspectProviderToolSchemasWithPlugin,
       listProviderUsagePluginDescriptors,
-      resolveProviderToolSchemaNormalizeCacheKey,
       normalizeProviderResolvedModelWithPlugin,
       prepareProviderDynamicModel,
       prepareProviderRuntimeAuth,
@@ -354,6 +353,7 @@ describe("provider-runtime", () => {
       wrapProviderSimpleCompletionStreamFn,
       wrapProviderStreamFn,
     } = await import("./provider-runtime.js"));
+    ({ resolveProviderToolSchemaNormalizeCacheKey } = await import("./provider-hook-runtime.js"));
     await import("../agents/ai-transport-runtime-host.js");
     ({ getAiTransportHost } = await import("@openclaw/ai"));
     ({ createEmptyPluginRegistry } = await import("./registry.js"));
