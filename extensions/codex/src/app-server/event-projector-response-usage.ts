@@ -5,7 +5,7 @@ import {
 import { readNonEmptyString } from "./event-projector-values.js";
 import { isJsonObject, type JsonObject } from "./protocol.js";
 
-export type CodexResponseUsage = ReturnType<typeof normalizeCodexResponseTokenUsage>;
+type CodexResponseUsage = ReturnType<typeof normalizeCodexResponseTokenUsage>;
 
 export type CodexCompletedResponseUsage = {
   responseId: string;
