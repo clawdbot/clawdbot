@@ -10,6 +10,7 @@ import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { stop } from "./ops-lifecycle.js";
+import { update } from "./ops-mutations.js";
 import { run } from "./ops-run.js";
 import { runWithCronAdmission } from "./run-admission.js";
 import { createCronServiceState } from "./state.js";
@@ -21,6 +22,54 @@ const opsRegressionFixtures = setupCronRegressionFixtures({
 });
 
 describe("cron service run admission cleanup", () => {
+  it.each(["force", "due"] as const)(
+    "preserves an operator-edited schedule when an active %s manual run completes",
+    async (mode) => {
+      const store = opsRegressionFixtures.makeStorePath();
+      const startedAt = Date.parse("2026-02-06T10:05:02.000Z");
+      const job = createDueIsolatedJob({
+        id: `manual-${mode}-completion-preserves-edited-schedule`,
+        nowMs: startedAt,
+        nextRunAtMs: startedAt,
+      });
+      job.schedule = { kind: "every", everyMs: 60_000, anchorMs: startedAt };
+      await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+      const runnerStarted = createDeferred<void>();
+      const releaseRun = createDeferred<{ status: "ok"; summary: string }>();
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => startedAt,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: vi.fn(async () => {
+          runnerStarted.resolve();
+          return await releaseRun.promise;
+        }),
+      });
+
+      const activeRun = run(state, job.id, mode);
+      await runnerStarted.promise;
+      const editedJob = await update(state, job.id, {
+        schedule: { kind: "every", everyMs: 3_600_000, anchorMs: startedAt },
+      });
+      const editedNextRunAtMs = editedJob.state.nextRunAtMs;
+      expect(editedNextRunAtMs).toBe(startedAt + 3_600_000);
+
+      releaseRun.resolve({ status: "ok", summary: "manual run completed" });
+      await expect(activeRun).resolves.toMatchObject({ ok: true, ran: true });
+
+      const persistedJob = (await loadCronStore(store.storePath)).jobs.find(
+        (entry) => entry.id === job.id,
+      );
+      expect(persistedJob?.schedule).toEqual(editedJob.schedule);
+      expect(persistedJob?.state.nextRunAtMs).toBe(editedNextRunAtMs);
+      expect(persistedJob?.state.forcePreservedNextRunAtMs).toBeUndefined();
+    },
+  );
+
   it("releases immediate and queued admission slots in FIFO order after failures", async () => {
     const store = opsRegressionFixtures.makeStorePath();
     const releaseFirst = createDeferred<void>();

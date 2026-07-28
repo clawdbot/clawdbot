@@ -191,6 +191,8 @@ async function finishPreparedManualRun(
             endedAt,
           },
           {
+            // Stale edits are preserved by scheduleOwnership inside applyJobResult;
+            // only a real forced run may request a force-preserved cadence marker.
             scheduleMode: scheduleMode === "force-preserve" ? "preserve" : "advance",
             scheduleOwnership,
             scheduleOwnershipAtMs: prepared.scheduleOwnershipAtMs,
