@@ -132,6 +132,7 @@ describe("Google invalid API key errors (#114784)", () => {
     expect(isAuthErrorMessage(raw)).toBe(false);
     expect(classifyFailoverReason(raw)).toBeNull();
     expect(isAuthErrorMessage("API key invalidation policy updated")).toBe(false);
+    expect(isAuthErrorMessage("INVALID API KEYSTORE configuration")).toBe(false);
   });
 });
 describe("Chinese provider overload messages", () => {
