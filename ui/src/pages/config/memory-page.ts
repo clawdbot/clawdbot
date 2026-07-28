@@ -11,6 +11,7 @@ import type { AgentSelectOption } from "../../components/agent-select.ts";
 import { t } from "../../i18n/index.ts";
 import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { currentConfigObject } from "../../lib/config/index.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   loadPluginCatalog,
   setPluginEnabled,
@@ -24,6 +25,7 @@ import {
   type DreamingConfigPathSupport,
 } from "../agents/memory/dreaming.ts";
 import "./memory-dreaming-page.ts";
+import "./memory-memories.ts";
 import { renderDreamingSettings, renderDreamingUnsupported } from "./memory-dreaming.ts";
 import { renderMemoryOverview, type MemoryOverviewStatus } from "./memory-overview.ts";
 import {
@@ -461,6 +463,19 @@ class MemorySettingsPage extends OpenClawLightDomElement {
         onRefresh: () => void this.loadOverviewStatus(true),
         onNavigate: (tab) => this.navigateTab(tab),
       }),
+      memories: html`
+        <openclaw-memory-memories
+          .client=${this.context.gateway.snapshot.client}
+          .connected=${this.context.gateway.snapshot.phase === "connected"}
+          .methodAdvertised=${isGatewayMethodAdvertised(
+            this.context.gateway.snapshot,
+            "memory.search",
+          ) === true}
+          .agentId=${agentId}
+          .agents=${agents}
+          .onAgentChange=${(next: string | null) => this.selectAgent(next)}
+        ></openclaw-memory-memories>
+      `,
       dreams: html`
         <openclaw-memory-dreaming
           .agentId=${agentId}

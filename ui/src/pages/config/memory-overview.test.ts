@@ -167,4 +167,28 @@ describe("renderMemoryOverview", () => {
     expect(lightRow?.textContent).not.toContain("Enabled");
     expect(lightRow?.textContent).not.toContain("next ");
   });
+
+  it("opens the Memories tab from the overview shortcut", () => {
+    const onNavigate = vi.fn();
+    const container = document.createElement("div");
+    render(
+      renderMemoryOverview({
+        agentId: "main",
+        agents: [],
+        engineSelection: { kind: "auto", engineId: "memory-core" },
+        engineDisabled: false,
+        status: { kind: "ready", payload: fixturePayload() },
+        onAgentChange: vi.fn(),
+        onRefresh: vi.fn(),
+        onNavigate,
+      }),
+      container,
+    );
+
+    const shortcut = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+      button.textContent?.includes("Search memories"),
+    );
+    shortcut?.click();
+    expect(onNavigate).toHaveBeenCalledWith("memories");
+  });
 });

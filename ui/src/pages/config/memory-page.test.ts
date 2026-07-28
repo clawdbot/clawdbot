@@ -137,13 +137,16 @@ function addonStatus(element: HTMLElement, label: string): string | null {
 }
 
 /** Which tab body is actually mounted, rather than what the tab strip claims. */
-function visibleTab(element: HTMLElement): "overview" | "dreams" | "settings" | null {
+function visibleTab(element: HTMLElement): "overview" | "memories" | "dreams" | "settings" | null {
   const panel = element.querySelector('[role="tabpanel"]');
   if (!panel) {
     return null;
   }
   if (panel.querySelector("openclaw-memory-dreaming")) {
     return "dreams";
+  }
+  if (panel.querySelector("openclaw-memory-memories")) {
+    return "memories";
   }
   return panel.querySelector(".memory-overview") ? "overview" : "settings";
 }
@@ -373,6 +376,10 @@ describe("MemorySettingsPage tab routing", () => {
       element.tab = "settings";
       await element.updateComplete;
       expect(visibleTab(element)).toBe("settings");
+
+      element.tab = "memories";
+      await element.updateComplete;
+      expect(visibleTab(element)).toBe("memories");
     } finally {
       element.remove();
     }
@@ -392,6 +399,9 @@ describe("MemorySettingsPage tab routing", () => {
       // Nothing moves until the router feeds the new tab back in.
       await element.updateComplete;
       expect(visibleTab(element)).toBe("overview");
+
+      selectTab(element, "memories");
+      expect(navigate).toHaveBeenCalledWith("memory", { search: "?tab=memories" });
     } finally {
       element.remove();
     }

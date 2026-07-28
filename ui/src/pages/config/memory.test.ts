@@ -42,6 +42,7 @@ function createProps(overrides: Partial<MemoryViewProps> = {}): MemoryViewProps 
     pluginsHref: "/settings/plugins",
     memoryImportHref: "/memory-import",
     overview: html`<div class="test-overview"></div>`,
+    memories: html`<div class="test-memories"></div>`,
     dreams: html`<div class="test-dreams"></div>`,
     editor: html`<div class="test-editor"></div>`,
     dreamingSettings: html`<div class="test-dreaming-settings"></div>`,
@@ -133,6 +134,9 @@ describe("renderMemory", () => {
     expect(
       renderInto(createProps({ activeTab: "overview" })).querySelector(".test-overview"),
     ).not.toBeNull();
+    expect(
+      renderInto(createProps({ activeTab: "memories" })).querySelector(".test-memories"),
+    ).not.toBeNull();
 
     const settings = renderInto(createProps({ activeTab: "settings" }));
     expect(settings.querySelector(".test-editor")).not.toBeNull();
@@ -149,6 +153,7 @@ describe("memoryTabForRoute", () => {
     expect(memoryTabForRoute({ tab: "search" })).toBe("settings");
     expect(memoryTabForRoute({ tab: "dreaming" })).toBe("dreams");
     expect(memoryTabForRoute({ tab: "overview" })).toBe("overview");
+    expect(memoryTabForRoute({ tab: "memories" })).toBe("memories");
     expect(memoryTabForRoute({ tab: "unknown" })).toBeNull();
   });
 
@@ -164,6 +169,7 @@ describe("memoryTabForRoute", () => {
 describe("memorySchemaKeysForTab", () => {
   it("reveals qmd sub-config only when qmd is the selected backend", () => {
     expect(memorySchemaKeysForTab("overview", "builtin")).toEqual([]);
+    expect(memorySchemaKeysForTab("memories", "builtin")).toEqual([]);
     expect(memorySchemaKeysForTab("dreams", "qmd")).toEqual([]);
     expect(memorySchemaKeysForTab("settings", "builtin")).toEqual(["citations", "search"]);
     expect(memorySchemaKeysForTab("settings", "qmd")).toEqual(["citations", "qmd", "search"]);

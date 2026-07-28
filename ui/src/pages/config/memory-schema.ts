@@ -8,7 +8,7 @@
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveSlotSelection } from "../../../../src/plugins/slots.ts";
 
-export type MemoryTab = "overview" | "dreams" | "settings";
+export type MemoryTab = "overview" | "memories" | "dreams" | "settings";
 
 export type MemoryBackend = "builtin" | "qmd";
 
@@ -26,7 +26,7 @@ export type MemoryEngineSelection =
 /** Scroll target for `memory.backend`, which Settings curates out of the editor. */
 export const MEMORY_BACKEND_ANCHOR_ID = "memory-backend";
 
-const MEMORY_TABS: readonly MemoryTab[] = ["overview", "dreams", "settings"];
+const MEMORY_TABS: readonly MemoryTab[] = ["overview", "memories", "dreams", "settings"];
 
 /** Reads a `?tab=` value from a settings-search destination or a shared link. */
 function normalizeMemoryTab(value: string | null | undefined): MemoryTab | null {

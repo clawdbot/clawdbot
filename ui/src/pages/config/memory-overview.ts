@@ -34,7 +34,7 @@ type MemoryOverviewProps = {
   status: MemoryOverviewStatus;
   onAgentChange: (agentId: string | null) => void;
   onRefresh: () => void;
-  onNavigate: (tab: "dreams" | "settings") => void;
+  onNavigate: (tab: "memories" | "dreams" | "settings") => void;
 };
 
 type DreamingStatus = NonNullable<DoctorMemoryStatusPayload["dreaming"]>;
@@ -247,6 +247,10 @@ function renderShortcuts(props: MemoryOverviewProps) {
   return renderSettingsSection(
     { title: t("memoryPage.overview.shortcuts.title") },
     html`
+      ${renderSettingsNavRow({
+        title: t("memoryPage.overview.shortcuts.memories"),
+        onClick: () => props.onNavigate("memories"),
+      })}
       ${renderSettingsNavRow({
         title: t("memoryPage.overview.shortcuts.diary"),
         onClick: () => props.onNavigate("dreams"),
