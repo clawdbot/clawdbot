@@ -247,6 +247,49 @@ describe("Agentic OS sessions_status registry fallback", () => {
     });
   });
 
+  it("lets exact registry-only killed evidence override an ok outcome", async () => {
+    const accepted = await trackedSession();
+    const sessionKey = accepted.session_key as string;
+    const runId = accepted.runId as string;
+    registry.addSubagentRunForTests({
+      ...terminalRun(runId, sessionKey, "ok"),
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
+    });
+
+    expect(
+      payload(await invoke("sessions_status", { session_key: sessionKey })).runtime_session,
+    ).toMatchObject({
+      key: sessionKey,
+      lifecycle_status: "failed",
+      runtime_status: "cancelled",
+      terminal: true,
+      started_at_ms: 22,
+      ended_at_ms: 25,
+    });
+  });
+
+  it("does not treat a steer-restart killed record as cancellation", async () => {
+    const accepted = await trackedSession();
+    const sessionKey = accepted.session_key as string;
+    const runId = accepted.runId as string;
+    registry.addSubagentRunForTests({
+      ...terminalRun(runId, sessionKey, "error"),
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
+      suppressAnnounceReason: "steer-restart",
+    });
+
+    expect(
+      payload(await invoke("sessions_status", { session_key: sessionKey })).runtime_session,
+    ).toMatchObject({
+      key: sessionKey,
+      lifecycle_status: "failed",
+      runtime_status: "failed",
+      terminal: true,
+      started_at_ms: 22,
+      ended_at_ms: 25,
+    });
+  });
+
   it("does not use a mismatched registry row when task and job cache are absent", async () => {
     const accepted = await trackedSession();
     const sessionKey = accepted.session_key as string;

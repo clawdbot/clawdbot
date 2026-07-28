@@ -139,14 +139,19 @@ function buildRegistryTerminalOutcome(entry: SubagentRunRecord | null | undefine
   if (!outcome || outcome.status === "unknown") {
     return undefined;
   }
+  const cancelled =
+    entry?.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
+    entry.suppressAnnounceReason !== "steer-restart";
   return buildAgentRunTerminalOutcomeFromWaitResult({
-    status: outcome.status === "ok" ? "ok" : outcome.status === "timeout" ? "timeout" : "error",
+    status: cancelled
+      ? "error"
+      : outcome.status === "ok"
+        ? "ok"
+        : outcome.status === "timeout"
+          ? "timeout"
+          : "error",
     error: outcome.status === "error" ? outcome.error : undefined,
-    stopReason:
-      entry?.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
-      entry.suppressAnnounceReason !== "steer-restart"
-        ? "stop"
-        : undefined,
+    stopReason: cancelled ? "stop" : undefined,
     startedAt: outcome.startedAt ?? entry?.execution?.startedAt ?? entry?.startedAt,
     endedAt: outcome.endedAt ?? entry?.execution?.endedAt ?? entry?.endedAt,
   });
