@@ -1116,7 +1116,25 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
             { allowEmbeddingBootstrapFallback: true },
           );
         } catch (err) {
-          log.warn(`memory sync failed (search-bootstrap): ${String(err)}`);
+          if (this.providerRequirement.mode === "optional" && this.shouldFallbackOnError(err)) {
+            await this.retireCurrentProvider().catch((retireErr: unknown) => {
+              const message = redactSensitiveText(formatErrorMessage(retireErr), {
+                mode: "tools",
+              });
+              log.warn(`memory search-bootstrap: failed to retire embedding provider: ${message}`);
+            });
+            this.markEmbeddingBootstrapFailure(err);
+            await this.syncAdmitted({ reason: "search", force: true }).catch(
+              (fallbackErr: unknown) => {
+                const message = redactSensitiveText(formatErrorMessage(fallbackErr), {
+                  mode: "tools",
+                });
+                log.warn(`memory sync failed (search-bootstrap-fallback): ${message}`);
+              },
+            );
+          } else {
+            log.warn(`memory sync failed (search-bootstrap): ${String(err)}`);
+          }
         }
         hasIndexedContent = this.hasIndexedContent();
       }

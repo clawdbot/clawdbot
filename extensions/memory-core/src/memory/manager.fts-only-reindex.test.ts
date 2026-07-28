@@ -226,6 +226,30 @@ describe("memory manager FTS-only reindex", () => {
     expect(createEmbeddingProviderMock).toHaveBeenCalledOnce();
   });
 
+  it("returns keyword matches when the first bootstrap embedding request fails", async () => {
+    providerAvailable = true;
+    providerEmbeddingError = new Error("embedding request failed during bootstrap");
+    const memoryManager = await createManager();
+    const debug: unknown[] = [];
+
+    const results = await memoryManager.search("Alpha topic", {
+      onDebug: (entry) => debug.push(entry),
+    });
+
+    expect(results).toEqual([expect.objectContaining({ path: "MEMORY.md", source: "memory" })]);
+    expect(providerQueryCalls).toBe(0);
+    expect(debug).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          embeddingBootstrap: expect.objectContaining({
+            degradedTo: "keyword-only",
+            reason: expect.stringContaining("embedding request failed during bootstrap"),
+          }),
+        }),
+      ]),
+    );
+  });
+
   it("keeps explicit required providers fail-closed when construction fails", async () => {
     providerConstructionError = Object.assign(
       new Error(
