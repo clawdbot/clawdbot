@@ -1,4 +1,3 @@
-// Memory Core plugin module maps transcript corpus entries onto session entry options.
 import type { SessionTranscriptCorpusEntry } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 
 export function buildCorpusSessionEntryOptions(entry: SessionTranscriptCorpusEntry) {
