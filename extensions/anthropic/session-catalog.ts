@@ -65,7 +65,7 @@ const MAX_CATALOG_DISCOVERY_FILES = 10_000;
 const MAX_CATALOG_DISCOVERY_CACHE_ENTRIES = 20_000;
 const MAX_CATALOG_JSON_CACHE_ENTRIES = 4_000;
 const MAX_CLAUDE_SESSION_SCAN_CACHE_ENTRIES = 8;
-const CLAUDE_SESSION_SCAN_TTL_MS = 5_000;
+const CLAUDE_SESSION_SCAN_TTL_MS = 15_000;
 const CLAUDE_METADATA_PREFIX_BYTES = 1024 * 1024;
 const CLAUDE_METADATA_READ_CHUNK_BYTES = 16 * 1024;
 const MAX_CATALOG_METADATA_SCAN_BYTES = 64 * 1024 * 1024;
@@ -791,7 +791,8 @@ async function listClaudeSessions(
   const cached = claudeSessionScanCache.get(root);
   // This tree stamp is the catalog cache's cheap freshness owner: exact child membership makes
   // same-tick adds, deletes, and renames visible even when a filesystem reuses the directory mtime.
-  // File appends and Desktop-only changes may stay stale for at most the five-second TTL.
+  // File appends and Desktop-only changes may keep this snapshot stale for at most 15 seconds,
+  // below the UI's 30-second cadence. Clients observe them on the first poll after cache expiry.
   if (
     options.forceRefresh !== true &&
     cached &&

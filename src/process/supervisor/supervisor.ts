@@ -156,27 +156,53 @@ export function createProcessSupervisor(): ProcessSupervisor {
     runId: string,
     startingRun: StartingRun,
   ): Promise<ManagedRun> => {
-    if (input.replaceExistingScope && scopeKey) {
-      // Scope admission already waited for predecessor startups. Do not
-      // cancel this replacement or later runs reserved behind its fence.
-      cancelActiveScope(scopeKey, "manual-cancel");
-    }
     const startedAtMs = Date.now();
+    const startingTerminationReason = startingRun.terminationReason;
     const record: RunRecord = {
       runId,
       sessionId: input.sessionId,
       backendId: input.backendId,
       scopeKey,
-      state: startingRun.terminationReason ? "exiting" : "starting",
-      ...(startingRun.terminationReason
-        ? { terminationReason: startingRun.terminationReason }
-        : {}),
+      state: startingTerminationReason ? "exiting" : "starting",
+      ...(startingTerminationReason ? { terminationReason: startingTerminationReason } : {}),
       startedAtMs,
       lastOutputAtMs: startedAtMs,
       createdAtMs: startedAtMs,
       updatedAtMs: startedAtMs,
     };
     registry.add(record);
+
+    if (startingTerminationReason) {
+      // A replacement can be cancelled behind its scope fence. Never launch
+      // its command or terminate the surviving scope after that cancellation.
+      const exit: RunExit = {
+        reason: startingTerminationReason,
+        exitCode: null,
+        exitSignal: null,
+        durationMs: Date.now() - startedAtMs,
+        stdout: "",
+        stderr: "",
+        timedOut: isTimeoutReason(startingTerminationReason),
+        noOutputTimedOut: startingTerminationReason === "no-output-timeout",
+      };
+      registry.finalize(runId, {
+        reason: exit.reason,
+        exitCode: exit.exitCode,
+        exitSignal: exit.exitSignal,
+      });
+      return {
+        runId,
+        startedAtMs,
+        wait: async () => exit,
+        cancel: () => undefined,
+      };
+    }
+
+    if (input.replaceExistingScope && scopeKey) {
+      // Scope admission already waited for predecessor startups. Do not
+      // cancel this replacement or later runs reserved behind its fence.
+      cancelActiveScope(scopeKey, "manual-cancel");
+    }
 
     let forcedReason: TerminationReason | null = startingRun.terminationReason ?? null;
     let settled = false;

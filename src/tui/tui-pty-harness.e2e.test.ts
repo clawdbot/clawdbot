@@ -364,6 +364,30 @@ describe.sequential("TUI PTY harness", () => {
   );
 
   it(
+    "recovers the visible conversation from session history after a Gateway event gap",
+    async () => {
+      const gapFixture = await startTuiFixture();
+      try {
+        await gapFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+        await gapFixture.run.write("history gap proof\r");
+        await gapFixture.waitForLogEntry((entry) => entry.method === "gapHistoryRecovered");
+        await gapFixture.run.waitForOutput("PTY_GAP_RECOVERED");
+
+        await gapFixture.run.write("after gap recovery proof\r");
+        await gapFixture.waitForLogEntry(
+          (entry) =>
+            entry.method === "sendChat" &&
+            objectFieldEquals(entry, "message", "after gap recovery proof"),
+        );
+        await gapFixture.run.waitForOutput("PTY_RESPONSE: after gap recovery proof");
+      } finally {
+        await gapFixture.cleanup();
+      }
+    },
+    STARTUP_TEST_TIMEOUT_MS,
+  );
+
+  it(
     "refreshes pending workspace skill approvals after an event gap",
     async () => {
       await fixture.run.write("skill approval gap proof\r");

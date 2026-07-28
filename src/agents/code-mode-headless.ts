@@ -32,6 +32,7 @@ import {
   createPendingBridgeStates,
   pendingBridgeStatesForSettlement,
   settledBridgeRequestsInCompletionOrder,
+  waitForPendingBridgeSettlement,
   type PendingBridgeState,
 } from "./code-mode-state.js";
 import {
@@ -297,10 +298,13 @@ export async function runCodeModeScriptHeadless(params: {
       enforceSnapshotPayloadLimits({ snapshotBytes: result.snapshotBytes, config, output });
       const pendingIds = new Set(pending.map((entry) => entry.id));
       const newRequests = result.pendingRequests.filter((request) => !pendingIds.has(request.id));
+      // Node discovery invokes the generic nodes tool for live status too;
+      // excluding list/get would bypass the same headless tool-call budget.
       const requestedToolCalls = newRequests.filter(
         (request) =>
           request.method === "call" ||
           request.method === "callValue" ||
+          request.method === "nodes" ||
           request.method === "namespace",
       ).length;
       toolCallCount += requestedToolCalls;
@@ -333,29 +337,13 @@ export async function runCodeModeScriptHeadless(params: {
           toolCallCount,
         });
       }
-      // Detached calls belong to an already-completed guest and must all run;
-      // an awaiting guest resumes at its actual first settled frontier.
-      const bridgeFrontier =
-        result.settlementMode.kind === "awaiting"
-          ? Promise.race(frontierPending.map((entry) => entry.promise))
-          : Promise.all(frontierPending.map((entry) => entry.promise)).then((settled) => {
-              const first = settled[0];
-              if (!first) {
-                throw new Error("code mode is waiting without pending bridge requests");
-              }
-              return first;
-            });
-      const firstSettled = await awaitHeadlessDeadline({
-        promise: bridgeFrontier,
+      await awaitHeadlessDeadline({
+        promise: waitForPendingBridgeSettlement(pending, result.settlementMode),
         deadline,
         signal: abortScope.signal,
       });
       const settledRequests = settledBridgeRequestsInCompletionOrder(pending);
-      if (!settledRequests.some((entry) => entry.id === firstSettled.id)) {
-        settledRequests.push(firstSettled);
-      }
-      const settledIds = new Set(settledRequests.map((entry) => entry.id));
-      pending = pending.filter((entry) => !settledIds.has(entry.id));
+      pending = pending.filter((entry) => !entry.settled);
       result = normalizeCodeModeWorkerResult(
         await runHeadlessWorkerLeg({
           input: {

@@ -40,6 +40,7 @@ export class TuiSessionRunCoordinator {
   private readonly historyReloadRunIds = new Set<string>();
   private readonly historyOwnedReloadRunIds = new Set<string>();
   private readonly historyDisplayedReloadRunIds = new Set<string>();
+  private readonly gapRecoveryReloadRunIds = new Set<string>();
   private readonly queuedHistoryReloadRunIds = new Set<string>();
   private readonly deferredHistoryRunEvents = new Map<string, ChatEvent>();
   private readonly sessionMessagePersistenceRunIds = new Set<string>();
@@ -298,6 +299,17 @@ export class TuiSessionRunCoordinator {
 
     const generation = this.historyReloadGeneration;
     const runIds = Array.from(this.queuedHistoryReloadRunIds);
+    // A second gap may arrive before this reload finishes; keep each drain's
+    // ownership separate so the next reload cannot lose its finalization.
+    const historyOwnedRunIds = new Set(
+      runIds.filter((runId) => this.historyOwnedReloadRunIds.delete(runId)),
+    );
+    const historyDisplayedRunIds = new Set(
+      runIds.filter((runId) => this.historyDisplayedReloadRunIds.delete(runId)),
+    );
+    const gapRecoveryRunIds = new Set(
+      runIds.filter((runId) => this.gapRecoveryReloadRunIds.delete(runId)),
+    );
     this.queuedHistoryReloadRunIds.clear();
     this.historyReloadQueued = false;
     this.historyReloadInFlight = true;
@@ -307,14 +319,17 @@ export class TuiSessionRunCoordinator {
         return;
       }
       for (const runId of runIds) {
+        if (this.queuedHistoryReloadRunIds.has(runId)) {
+          continue;
+        }
         this.historyReloadRunIds.delete(runId);
         const deferred = this.deferredHistoryRunEvents.get(runId);
         this.deferredHistoryRunEvents.delete(runId);
-        const historyOwned = this.historyOwnedReloadRunIds.delete(runId);
-        const previouslyDisplayed = this.historyDisplayedReloadRunIds.delete(runId);
+        const historyOwned = historyOwnedRunIds.has(runId);
+        const previouslyDisplayed = historyDisplayedRunIds.has(runId);
         const restoredInFlight = result.loaded && result.inFlightRunId === runId;
 
-        if (historyOwned && !restoredInFlight) {
+        if (historyOwned && !restoredInFlight && (result.loaded || !gapRecoveryRunIds.has(runId))) {
           this.context.finalizeHistoryOwnedRun({ runId, result, previouslyDisplayed });
         }
         if (deferred && (!result.loaded || historyOwned || restoredInFlight)) {
@@ -367,6 +382,22 @@ export class TuiSessionRunCoordinator {
     this.drainHistoryReloadQueue();
   }
 
+  queueGapHistoryReload(runIds: Iterable<string>, displayedRunIds: Iterable<string> = []): void {
+    if (!this.context.loadHistory) {
+      void this.context.refreshSessionInfo?.();
+      return;
+    }
+    const trackedRunIds = Array.from(runIds);
+    if (trackedRunIds.length === 0) {
+      this.queueHistoryReload();
+      return;
+    }
+    for (const runId of trackedRunIds) {
+      this.gapRecoveryReloadRunIds.add(runId);
+    }
+    this.queueHistoryReload(trackedRunIds, trackedRunIds, displayedRunIds);
+  }
+
   clear(): void {
     this.historyReloadGeneration += 1;
     this.sessionRuns.clear();
@@ -380,6 +411,7 @@ export class TuiSessionRunCoordinator {
     this.historyReloadRunIds.clear();
     this.historyOwnedReloadRunIds.clear();
     this.historyDisplayedReloadRunIds.clear();
+    this.gapRecoveryReloadRunIds.clear();
     this.queuedHistoryReloadRunIds.clear();
     this.deferredHistoryRunEvents.clear();
     this.confirmedStreamRunIds.clear();

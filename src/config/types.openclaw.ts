@@ -175,8 +175,6 @@ export type OpenClawConfig = {
       chatFollowUpMode?: "steer" | "queue";
       /** Ordered page and pinned-session entries shown in the Control UI sidebar. */
       sidebarEntries?: string[];
-      /** Expand advanced settings in schema-driven Control UI forms. */
-      showAdvancedSettings?: boolean;
     };
   };
   /** Secret providers, defaults, and ref-resolution settings. */
