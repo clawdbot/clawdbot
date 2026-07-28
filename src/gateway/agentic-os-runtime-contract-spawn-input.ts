@@ -59,10 +59,9 @@ export function parseAgenticOsSpawnInput(params: Record<string, unknown>) {
   if (metadata.task_digest !== taskDigest(task)) {
     return rejectConflict("session metadata task_digest does not match spawn task");
   }
-  const agentId =
-    typeof params.agentId === "string" && params.agentId.trim()
-      ? readAgentIdentity(params, "agentId")
-      : metadata.agent_id;
+  const agentId = Object.hasOwn(params, "agentId")
+    ? readAgentIdentity(params, "agentId")
+    : metadata.agent_id;
   if (agentId !== metadata.agent_id) {
     return rejectConflict("spawn agentId does not match session metadata agent_id");
   }

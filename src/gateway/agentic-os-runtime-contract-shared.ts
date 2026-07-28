@@ -140,7 +140,7 @@ export function stableJsonDigest(value: unknown): string {
   return `sha256:${createHash("sha256").update(stableJson(value)).digest("hex")}`;
 }
 
-export function stableJsonTextDigest(value: string): string {
+function stableJsonTextDigest(value: string): string {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;
 }
 
@@ -228,7 +228,7 @@ export function readPositiveInteger(params: Record<string, unknown>, key: string
   return value;
 }
 
-export function pickStrings<const T extends readonly string[]>(
+function pickStrings<const T extends readonly string[]>(
   params: Record<string, unknown>,
   fields: T,
 ): Record<T[number], string> {

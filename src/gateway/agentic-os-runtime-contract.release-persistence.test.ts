@@ -5,10 +5,14 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const findTaskByRunIdForStatusMock = vi.hoisted(() => vi.fn());
+const getLatestSubagentRunByChildSessionKeyMock = vi.hoisted(() => vi.fn());
 const spawnSubagentDirectMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../tasks/task-status-access.js", () => ({
   findTaskByRunIdForStatus: findTaskByRunIdForStatusMock,
+}));
+vi.mock("../agents/subagent-registry-read.js", () => ({
+  getLatestSubagentRunByChildSessionKey: getLatestSubagentRunByChildSessionKeyMock,
 }));
 vi.mock("../agents/subagent-spawn.js", () => ({
   spawnSubagentDirect: spawnSubagentDirectMock,
@@ -50,6 +54,10 @@ function persistedFingerprints(snapshot: {
   ].filter((value): value is string => typeof value === "string");
 }
 
+function stableJsonTextDigest(value: string): string {
+  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
+}
+
 describe("Agentic OS allow lease release persistence", () => {
   let runtimeStateDir: string | undefined;
 
@@ -57,6 +65,7 @@ describe("Agentic OS allow lease release persistence", () => {
     runtimeStateDir = mkdtempSync(path.join(tmpdir(), "openclaw-agentic-os-release-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", runtimeStateDir);
     findTaskByRunIdForStatusMock.mockReset();
+    getLatestSubagentRunByChildSessionKeyMock.mockReset();
     spawnSubagentDirectMock.mockReset();
     spawnSubagentDirectMock.mockImplementation(async () => {
       throw new Error("runner must not be invoked during hydrated replay");
@@ -128,7 +137,7 @@ describe("Agentic OS allow lease release persistence", () => {
     expect(restarted.releaseAgenticOsAllowLease(releaseParams)).toEqual(released);
   });
 
-  it("reconciles an orphaned durable spawn reservation into exact session replay", async () => {
+  it("reconciles a registry-only orphaned durable spawn reservation into exact session replay", async () => {
     const contract = await import("./agentic-os-runtime-contract.js");
     const shared = await import("./agentic-os-runtime-contract-shared.js");
     const acquired = contract.acquireAgenticOsAllowLease(acquireParams);
@@ -195,10 +204,15 @@ describe("Agentic OS allow lease release persistence", () => {
       spawn_reservation: reservedSession,
     });
     store.saveAgenticOsRuntimeSnapshot(snapshot);
-    findTaskByRunIdForStatusMock.mockReturnValue({
-      status: "running",
-      runId: reservedSession.runId,
-    });
+    findTaskByRunIdForStatusMock.mockReturnValue(undefined);
+    getLatestSubagentRunByChildSessionKeyMock.mockImplementation((childSessionKey: string) =>
+      childSessionKey === reservedSession.sessionKey
+        ? {
+            runId: reservedSession.runId,
+            childSessionKey: reservedSession.sessionKey,
+          }
+        : null,
+    );
 
     vi.resetModules();
     const restarted = await import("./agentic-os-runtime-contract.js");
@@ -218,7 +232,7 @@ describe("Agentic OS allow lease release persistence", () => {
       sessions: Array<Record<string, unknown>>;
     };
     const fingerprints = persistedFingerprints(migratedSnapshot);
-    expect(fingerprints).toContain(shared.stableJsonTextDigest(fingerprint));
+    expect(fingerprints).toContain(stableJsonTextDigest(fingerprint));
     expect(fingerprints).not.toContain(fingerprint);
     expect(fingerprints).toEqual(
       fingerprints.map(() => expect.stringMatching(/^sha256:[a-f0-9]{64}$/u)),
@@ -310,10 +324,15 @@ describe("Agentic OS allow lease release persistence", () => {
       spawn_reservation: reservedSession,
     });
     store.saveAgenticOsRuntimeSnapshot(snapshot);
-    findTaskByRunIdForStatusMock.mockReturnValue({
-      status: "running",
-      runId: reservedSession.runId,
-    });
+    findTaskByRunIdForStatusMock.mockReturnValue(undefined);
+    getLatestSubagentRunByChildSessionKeyMock.mockImplementation((childSessionKey: string) =>
+      childSessionKey === reservedSession.sessionKey
+        ? {
+            runId: reservedSession.runId,
+            childSessionKey: reservedSession.sessionKey,
+          }
+        : null,
+    );
 
     vi.resetModules();
     const restarted = await import("./agentic-os-runtime-contract.js");
@@ -333,7 +352,7 @@ describe("Agentic OS allow lease release persistence", () => {
       sessions: Array<Record<string, unknown>>;
     };
     const fingerprints = persistedFingerprints(migratedSnapshot);
-    expect(fingerprints).toContain(shared.stableJsonTextDigest(fingerprint));
+    expect(fingerprints).toContain(stableJsonTextDigest(fingerprint));
     expect(fingerprints).not.toContain(fingerprint);
     expect(fingerprints).toEqual(
       fingerprints.map(() => expect.stringMatching(/^sha256:[a-f0-9]{64}$/u)),

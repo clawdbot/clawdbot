@@ -185,6 +185,35 @@ describe("Agentic OS runtime contract spawn safeguards", () => {
     );
   });
 
+  it("rejects explicitly present invalid agentId before reserving the lease or spawning", async () => {
+    for (const [index, agentId] of [null, 123, "", "   ", "ai engineer"].entries()) {
+      const gatewayLeaseId = await acquireLease({
+        ...acquireParams,
+        client_lease_id: `lease-invalid-agent-${index}`,
+        idempotency_key: `lease-invalid-agent-idem-${index}`,
+      });
+      const spawnParams = spawnParamsFor(gatewayLeaseId, {
+        task: `verify invalid explicit agent ${index}`,
+        client_request_id: `spawn-invalid-agent-${index}`,
+        idempotency_key: `spawn-invalid-agent-idem-${index}`,
+      });
+      const rejected = await invoke("sessions_spawn", { ...spawnParams, agentId });
+
+      expect(rejected[0]).toBe(false);
+      expect(rejected[2]?.code).toBe("INVALID_REQUEST");
+      expect(rejected[2]?.message).toMatch(
+        /missing required string: agentId|invalid agent id: agentId/u,
+      );
+      expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+
+      const accepted = payload(await invoke("sessions_spawn", spawnParams));
+      expect(accepted.session_key).toBe(
+        spawnSubagentDirectMock.mock.calls[0]?.[1].preallocatedChildSessionKey,
+      );
+      spawnSubagentDirectMock.mockClear();
+    }
+  });
+
   it("rechecks lease expiry immediately before persisting the spawn reservation", async () => {
     const dateNow = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const gatewayLeaseId = await acquireLease({ ...acquireParams, ttl_ms: 60_000 });
