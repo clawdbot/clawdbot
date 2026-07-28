@@ -97,7 +97,7 @@ describe("gateway cron stop-and-drain automation ownership", () => {
   });
 
   it("does not unregister a replacement scheduler when a stale drain fails", async () => {
-    const pendingDrain = createDeferred<void>();
+    const pendingDrain = createDeferred();
     stopAllMock.mockImplementationOnce(() => pendingDrain.promise);
     stopAllMock.mockResolvedValue(undefined);
     const original = await startGatewayCron("stale");
