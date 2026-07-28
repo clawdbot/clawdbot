@@ -14,17 +14,23 @@ import {
   isLiveLocalIngressDrainOwner,
   registerLiveIngressDrainInstance,
 } from "./ingress-claim-owner.js";
+import {
+  commitIngressClaimWriteWithRetry,
+  IngressAdoptionLostError,
+} from "./ingress-claim-write.js";
+import {
+  type ActiveHandlerState,
+  resolveIngressDrainLaneKey,
+  sortedIngressDrainKeys,
+} from "./ingress-drain-state.js";
 import type {
   ChannelIngressQueue,
   ChannelIngressQueueClaim,
   ChannelIngressQueueRecord,
 } from "./ingress-queue.js";
 import {
-  DEFAULT_INGRESS_RETRY_BASE_MS,
-  DEFAULT_INGRESS_RETRY_MAX_MS,
   resolveIngressFailureDisposition,
   resolveIngressRetryDelayMs,
-  sleepIngressRetryDelay,
   type IngressNonRetryableFailure,
   type IngressRetryPolicyConfig,
 } from "./ingress-retry-policy.js";
@@ -32,27 +38,8 @@ import {
 /** Default claim→adoption stall before dead-lettering with handler-timeout. */
 export const DEFAULT_INGRESS_ADOPTION_STALL_MS = 5 * 60 * 1000;
 
-/** Bounded tombstone write retries — wedged ownership beats silent double-dispatch. */
-const INGRESS_TOMBSTONE_RETRY_MAX_ATTEMPTS = 8;
-
-/**
- * Closed error when adoption races a pre-adoption guillotine/supersede, or when
- * a claim-token fence rejects complete/fail (lease reclaimed by another owner).
- * Callers must stop the turn (abortSignal is also aborted when applicable).
- */
-class IngressAdoptionLostError extends Error {
-  readonly code: "guillotined" | "superseded" | "reclaimed";
-
-  constructor(code: "guillotined" | "superseded" | "reclaimed") {
-    super(`ingress adoption lost: ${code}`);
-    this.name = "IngressAdoptionLostError";
-    this.code = code;
-  }
-}
-
-export function isIngressAdoptionLostError(error: unknown): error is IngressAdoptionLostError {
-  return error instanceof IngressAdoptionLostError;
-}
+// Moved to ./ingress-claim-write.js; re-exported for existing importers.
+export { isIngressAdoptionLostError } from "./ingress-claim-write.js";
 
 /** Full pre-adoption → adoption ownership lifecycle for one claimed event. */
 type ChannelIngressDispatchLifecycle = {
@@ -140,35 +127,6 @@ export type ChannelIngressDrain = {
   dispose: () => void;
 };
 
-type ActiveHandlerState<TPayload, TMetadata> = {
-  eventId: string;
-  laneKey: string;
-  claim: ChannelIngressQueueClaim<TPayload, TMetadata>;
-  abortController: AbortController;
-  startedAt: number;
-  phase: "dispatching" | "deferred" | "adopted" | "settled";
-  task: Promise<void>;
-  stallTimer?: ReturnType<typeof setTimeout>;
-  claimRefreshTimer?: ReturnType<typeof setInterval>;
-  /** Closed code: pre-adoption stall watchdog has claimed settle ownership. */
-  guillotined: boolean;
-  /** Closed code: pre-adoption supersede has claimed settle ownership. */
-  superseded: boolean;
-  /** Single settle owner for complete / fail / release / supersede / guillotine. */
-  settleOnce: (fn: () => Promise<void>) => Promise<void>;
-};
-
-function resolveLaneKey<TPayload, TMetadata>(
-  record: ChannelIngressQueueRecord<TPayload, TMetadata>,
-  deriveLaneKey?: (record: ChannelIngressQueueRecord<TPayload, TMetadata>) => string | undefined,
-): string {
-  return deriveLaneKey?.(record) ?? record.laneKey ?? record.id;
-}
-
-function sortedKeys(keys: Iterable<string>): string[] {
-  return [...keys].toSorted((a, b) => a.localeCompare(b));
-}
-
 /**
  * Maps a drain lifecycle onto reply options.
  * Single surface: turnAdoptionLifecycle only.
@@ -218,7 +176,18 @@ export function createChannelIngressDrain<
   const scanLimit = options.scanLimit ?? 100;
   const startLimit = options.startLimit ?? 32;
   const activeByLane = new Map<string, ActiveHandlerState<TPayload, TMetadata>>();
+  // States displaced from activeByLane when deferredClaimDoesNotBlockLane lets a
+  // later same-lane event claim while an earlier one is still deferred. They keep
+  // their own stall/refresh timers and abort controller; tracking them here keeps
+  // stall guillotine, supersede, abort/dispose, and waitForIdle applied to every
+  // held claim — a displaced deferred claim must never become invisible.
+  const displacedActiveStates = new Set<ActiveHandlerState<TPayload, TMetadata>>();
   let disposed = false;
+
+  const allActiveStates = (): ActiveHandlerState<TPayload, TMetadata>[] => [
+    ...activeByLane.values(),
+    ...displacedActiveStates,
+  ];
 
   const log = (message: string) => {
     options.onLog?.(message);
@@ -243,7 +212,7 @@ export function createChannelIngressDrain<
     // Claim-token fencing prevents this owner from settling a recovered claim.
     deregisterLiveIngressDrainInstance(ownerId);
     const reason = toErrorObject(options.abortSignal?.reason, "ingress-drain-aborted");
-    for (const state of activeByLane.values()) {
+    for (const state of allActiveStates()) {
       if (state.phase === "dispatching" || state.phase === "deferred") {
         state.abortController.abort(reason);
       }
@@ -258,6 +227,7 @@ export function createChannelIngressDrain<
   const removeActive = (state: ActiveHandlerState<TPayload, TMetadata>) => {
     clearStallTimer(state);
     clearClaimRefresh(state);
+    displacedActiveStates.delete(state);
     if (activeByLane.get(state.laneKey) === state) {
       activeByLane.delete(state.laneKey);
     }
@@ -312,59 +282,22 @@ export function createChannelIngressDrain<
    */
   const isStopped = () => disposed || options.abortSignal?.aborted === true;
 
-  const commitClaimWriteWithRetry = async (params: {
+  const commitClaimWriteWithRetry = (params: {
     claim: ChannelIngressQueueClaim<TPayload, TMetadata>;
     label: "tombstone" | "dead-letter" | "release";
     write: () => Promise<boolean>;
     falseMeansReclaimed: boolean;
-  }): Promise<void> => {
-    let attempt = 0;
-    for (;;) {
-      // First write still runs after session abort: terminal complete/release
-      // (failed-retryable requeue, post-dispatch tombstone) must not be blocked.
-      // Stop only cuts retry backoffs (webhook stop / dispose mid-retry).
-      if (attempt > 0 && isStopped()) {
-        throw new Error("ingress drain stopped during claim write");
-      }
-      try {
-        const committed = await params.write();
-        if (!committed) {
-          if (params.falseMeansReclaimed) {
-            throw new IngressAdoptionLostError("reclaimed");
-          }
-          return;
-        }
-        return;
-      } catch (err) {
-        if (isIngressAdoptionLostError(err)) {
-          throw err;
-        }
-        attempt += 1;
-        if (isStopped() || attempt >= INGRESS_TOMBSTONE_RETRY_MAX_ATTEMPTS) {
-          if (attempt >= INGRESS_TOMBSTONE_RETRY_MAX_ATTEMPTS && !isStopped()) {
-            log(
-              `ingress drain: ${params.label} write failed for event ${params.claim.id} after ${attempt} attempt(s); holding claim: ${formatError(err)}`,
-            );
-          }
-          throw err;
-        }
-        const delayMs = Math.min(
-          DEFAULT_INGRESS_RETRY_MAX_MS,
-          DEFAULT_INGRESS_RETRY_BASE_MS * 2 ** (attempt - 1),
-        );
-        const displayId = params.claim.id.replace(/^0+(?=\d)/, "") || params.claim.id;
-        // Operator + test-visible: tombstone/complete retries after durable adoption.
-        log(
-          `ingress drain: ${params.label} retry ${attempt}/${INGRESS_TOMBSTONE_RETRY_MAX_ATTEMPTS} for event ${params.claim.id} in ${delayMs}ms: ${formatError(err)}`,
-        );
-        if (params.label === "tombstone") {
-          log(`completion retry ${attempt} scheduled for event ${displayId}`);
-        }
-        // Abortable sleep: webhook stop aborts options.abortSignal mid-backoff.
-        await sleepIngressRetryDelay(delayMs, options.abortSignal);
-      }
-    }
-  };
+  }): Promise<void> =>
+    commitIngressClaimWriteWithRetry({
+      claimId: params.claim.id,
+      label: params.label,
+      write: params.write,
+      falseMeansReclaimed: params.falseMeansReclaimed,
+      isStopped,
+      abortSignal: options.abortSignal,
+      log,
+      formatError,
+    });
 
   const completeClaimWithRetry = async (
     claim: ChannelIngressQueueClaim<TPayload, TMetadata>,
@@ -560,48 +493,69 @@ export function createChannelIngressDrain<
     };
   };
 
-  const supersedeActiveIfNeeded = async (
+  const trySupersedeState = async (
     candidate: ChannelIngressQueueRecord<TPayload, TMetadata>,
-    laneKey: string,
+    pending: ActiveHandlerState<TPayload, TMetadata>,
   ): Promise<boolean> => {
-    const pending = activeByLane.get(laneKey);
-    if (!pending || pending.phase === "adopted" || pending.phase === "settled") {
+    if (pending.phase === "adopted" || pending.phase === "settled") {
       return false;
     }
     if (!(await options.shouldSupersedePending?.(candidate, pending.claim))) {
       return false;
     }
     // Revalidate after async predicate: a late true must not kill an adopted turn
-    // or a different map entry that replaced this pending handler.
-    const stillPending = activeByLane.get(laneKey);
+    // or a state that settled / was removed while the predicate ran.
+    // Widened read: TS narrows `pending.phase` above and keeps the narrowing
+    // across the await, so compare against the full union explicitly.
+    const phaseAfterPredicate = pending.phase as ActiveHandlerState<TPayload, TMetadata>["phase"];
     if (
-      stillPending !== pending ||
-      stillPending.phase === "adopted" ||
-      stillPending.phase === "settled" ||
-      stillPending.guillotined ||
-      stillPending.superseded
+      (activeByLane.get(pending.laneKey) !== pending && !displacedActiveStates.has(pending)) ||
+      phaseAfterPredicate === "adopted" ||
+      phaseAfterPredicate === "settled" ||
+      pending.guillotined ||
+      pending.superseded
     ) {
       return false;
     }
     // Pre-adoption supersede only — after adoption core owns interruption.
     // Tombstone (complete), never release: requeue would replay the aborted turn.
-    stillPending.superseded = true;
-    clearStallTimer(stillPending);
+    pending.superseded = true;
+    clearStallTimer(pending);
     try {
-      stillPending.abortController.abort(new Error("ingress-superseded"));
+      pending.abortController.abort(new Error("ingress-superseded"));
     } catch {
       // ignore
     }
     try {
-      await stillPending.settleOnce(async () => {
-        await completeClaimWithRetry(stillPending.claim);
+      await pending.settleOnce(async () => {
+        await completeClaimWithRetry(pending.claim);
       });
     } catch (err) {
       log(
-        `ingress drain: failed to tombstone superseded event ${stillPending.eventId}: ${formatError(err)}`,
+        `ingress drain: failed to tombstone superseded event ${pending.eventId}: ${formatError(err)}`,
       );
     }
     return true;
+  };
+
+  const supersedeActiveIfNeeded = async (
+    candidate: ChannelIngressQueueRecord<TPayload, TMetadata>,
+    laneKey: string,
+  ): Promise<boolean> => {
+    // Supersede every pre-adoption state on the lane: the current map entry AND
+    // any displaced deferred states (deferredClaimDoesNotBlockLane). A deferred
+    // album head must stay supersedable even after a later album member claimed.
+    let supersededAny = false;
+    const pending = activeByLane.get(laneKey);
+    if (pending && (await trySupersedeState(candidate, pending))) {
+      supersededAny = true;
+    }
+    for (const state of displacedActiveStates) {
+      if (state.laneKey === laneKey && (await trySupersedeState(candidate, state))) {
+        supersededAny = true;
+      }
+    }
+    return supersededAny;
   };
 
   const runClaimed = (
@@ -699,17 +653,27 @@ export function createChannelIngressDrain<
       }
     })();
 
+    // A later same-lane claim is only possible when the previous state is
+    // deferred (deferredClaimDoesNotBlockLane) or settled. Keep the displaced
+    // state tracked so its claim stays abortable, supersedable, and awaited.
+    const displaced = activeByLane.get(laneKey);
+    if (displaced && displaced.phase !== "settled") {
+      displacedActiveStates.add(displaced);
+    }
     activeByLane.set(laneKey, state);
     return state;
   };
 
   const recoverStaleClaims = async (): Promise<number> => {
     const activeLanes = new Set(activeByLane.keys());
+    for (const state of displacedActiveStates) {
+      activeLanes.add(state.laneKey);
+    }
     return await queue.recoverStaleClaims({
       staleMs: 0,
       now: now(),
       shouldRecover: (claim) => {
-        const laneKey = resolveLaneKey(claim, options.deriveLaneKey);
+        const laneKey = resolveIngressDrainLaneKey(claim, options.deriveLaneKey);
         if (activeLanes.has(laneKey)) {
           return false;
         }
@@ -753,13 +717,22 @@ export function createChannelIngressDrain<
 
     const pending = await queue.listPending({ limit: "all", orderBy });
     const claims = await queue.listClaims();
-    const deferredLaneKeys = new Set(
-      [...activeByLane.values()]
-        .filter((state) => state.phase === "deferred")
-        .map((state) => state.laneKey),
-    );
+    // A lane is exempt from blocking only when EVERY live state on it is
+    // deferred (map entry plus displaced deferred states). One dispatching
+    // state re-blocks the lane even if a deferred claim is still held.
+    const deferredLaneKeys = new Set<string>();
+    const nonDeferredLaneKeys = new Set<string>();
+    for (const state of allActiveStates()) {
+      if (state.phase === "deferred") {
+        deferredLaneKeys.add(state.laneKey);
+      } else if (state.phase !== "settled") {
+        nonDeferredLaneKeys.add(state.laneKey);
+      }
+    }
     const laneBlockedWhileDeferred = (laneKey: string): boolean =>
-      options.deferredClaimDoesNotBlockLane !== true || !deferredLaneKeys.has(laneKey);
+      options.deferredClaimDoesNotBlockLane !== true ||
+      !deferredLaneKeys.has(laneKey) ||
+      nonDeferredLaneKeys.has(laneKey);
     const activeLaneKeys = new Set(
       [...activeByLane.values()]
         .filter((state) => state.phase !== "settled")
@@ -768,21 +741,21 @@ export function createChannelIngressDrain<
     );
     const claimedLaneKeys = new Set(
       claims
-        .map((claim) => resolveLaneKey(claim, options.deriveLaneKey))
+        .map((claim) => resolveIngressDrainLaneKey(claim, options.deriveLaneKey))
         .filter((laneKey) => laneBlockedWhileDeferred(laneKey)),
     );
     const retryDelayedLaneKeys = new Set<string>();
     for (const event of pending) {
       if (resolveIngressRetryDelayMs(event, options.retryPolicy, now()) > 0) {
-        retryDelayedLaneKeys.add(resolveLaneKey(event, options.deriveLaneKey));
+        retryDelayedLaneKeys.add(resolveIngressDrainLaneKey(event, options.deriveLaneKey));
       }
     }
 
     // Deterministic blocked set for claimNext lane serialization.
     const blockedLaneKeys = new Set<string>([
-      ...sortedKeys(activeLaneKeys),
-      ...sortedKeys(claimedLaneKeys),
-      ...sortedKeys(retryDelayedLaneKeys),
+      ...sortedIngressDrainKeys(activeLaneKeys),
+      ...sortedIngressDrainKeys(claimedLaneKeys),
+      ...sortedIngressDrainKeys(retryDelayedLaneKeys),
     ]);
 
     // Optional supersede scan: pending events may abort unadopted same-lane work.
@@ -791,7 +764,7 @@ export function createChannelIngressDrain<
       if (shouldStop()) {
         break;
       }
-      const laneKey = resolveLaneKey(event, options.deriveLaneKey);
+      const laneKey = resolveIngressDrainLaneKey(event, options.deriveLaneKey);
       if (await supersedeActiveIfNeeded(event, laneKey)) {
         blockedLaneKeys.delete(laneKey);
       }
@@ -818,7 +791,7 @@ export function createChannelIngressDrain<
         await queue.release(claimed, { recordAttempt: false });
         break;
       }
-      const laneKey = resolveLaneKey(claimed, options.deriveLaneKey);
+      const laneKey = resolveIngressDrainLaneKey(claimed, options.deriveLaneKey);
       const existing = activeByLane.get(laneKey);
       if (existing && existing.phase !== "settled") {
         if (await supersedeActiveIfNeeded(claimed, laneKey)) {
@@ -845,9 +818,9 @@ export function createChannelIngressDrain<
   return {
     recoverStaleClaims,
     drainOnce,
-    activeLaneKeys: () => new Set(activeByLane.keys()),
+    activeLaneKeys: () => new Set(allActiveStates().map((state) => state.laneKey)),
     waitForIdle: async () => {
-      const tasks = [...activeByLane.values()].map((state) => state.task);
+      const tasks = allActiveStates().map((state) => state.task);
       await Promise.allSettled(tasks);
     },
     dispose: () => {
@@ -855,7 +828,7 @@ export function createChannelIngressDrain<
       options.abortSignal?.removeEventListener("abort", abortActiveClaims);
       deregisterLiveIngressDrainInstance(ownerId);
       // Snapshot: removeActive mutates activeByLane during this sweep.
-      const activeStates = Array.from(activeByLane.values());
+      const activeStates = allActiveStates();
       for (const state of activeStates) {
         clearStallTimer(state);
         if (state.phase === "dispatching" || state.phase === "deferred") {

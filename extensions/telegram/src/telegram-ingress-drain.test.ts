@@ -164,7 +164,9 @@ describe("createTelegramIngressMonitor", () => {
       await queue.enqueue(eventIdB, payloadB, { laneKey: laneB });
 
       const dispatched: number[] = [];
-      let deferredParticipant: ReturnType<typeof createTelegramSpooledReplayDeferredParticipant>;
+      let deferredParticipant:
+        | ReturnType<typeof createTelegramSpooledReplayDeferredParticipant>
+        | undefined;
       const monitor = createTelegramIngressMonitor({
         queue,
         cfg,
@@ -180,7 +182,7 @@ describe("createTelegramIngressMonitor", () => {
               `test:${updateId}`,
             );
             expect(deferredParticipant).not.toBeNull();
-            return;
+            return undefined;
           }
           await lifecycle.onAdopted();
           return { kind: "completed" as const };
