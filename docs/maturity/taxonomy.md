@@ -461,7 +461,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>90%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "90%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Index](/gateway/index), [Architecture](/concepts/architecture), [Control Ui](/web/control-ui), [Webchat](/web/webchat), [Canvas](/refactor/canvas)
+    [Index](/gateway/index), [Architecture](/concepts/architecture), [Control Ui](/web/control-ui), [Webchat](/web/webchat), [Canvas](/plugins/reference/canvas)
 
     </div>
       </div>
@@ -1239,7 +1239,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Canvas](/plugins/reference/canvas), [Canvas](/refactor/canvas), [Configuration Reference](/gateway/configuration-reference)
+    [Canvas](/plugins/reference/canvas), [Configuration Reference](/gateway/configuration-reference)
 
     </div>
       </div>
