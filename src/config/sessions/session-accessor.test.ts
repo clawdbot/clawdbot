@@ -1351,14 +1351,13 @@ describe("session accessor seam", () => {
       {
         sessionId: "existing-session",
         updatedAt: 10,
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: "durable reply",
-        pendingFinalDeliveryCreatedAt: 11,
-        pendingFinalDeliveryLastAttemptAt: 12,
-        pendingFinalDeliveryAttemptCount: 2,
-        pendingFinalDeliveryLastError: "previous failure",
-        pendingFinalDeliveryContext: { channel: "discord", to: "channel-1" },
-        pendingFinalDeliveryIntentId: "intent-1",
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: "durable reply",
+          createdAt: 11,
+          context: { channel: "discord", to: "channel-1" },
+          intentId: "intent-1",
+        },
       },
     );
 
@@ -1373,13 +1372,6 @@ describe("session accessor seam", () => {
     }
     const currentWithoutPendingDelivery = { ...current };
     delete currentWithoutPendingDelivery.pendingFinalDelivery;
-    delete currentWithoutPendingDelivery.pendingFinalDeliveryAttemptCount;
-    delete currentWithoutPendingDelivery.pendingFinalDeliveryContext;
-    delete currentWithoutPendingDelivery.pendingFinalDeliveryCreatedAt;
-    delete currentWithoutPendingDelivery.pendingFinalDeliveryIntentId;
-    delete currentWithoutPendingDelivery.pendingFinalDeliveryLastAttemptAt;
-    delete currentWithoutPendingDelivery.pendingFinalDeliveryLastError;
-    delete currentWithoutPendingDelivery.pendingFinalDeliveryText;
     await replaceSessionEntry({ sessionKey, storePath }, currentWithoutPendingDelivery);
 
     const committed = await commitReplySessionInitialization({
@@ -1400,23 +1392,9 @@ describe("session accessor seam", () => {
       throw new Error("expected reply session initialization to commit");
     }
     expect(committed.sessionEntry.pendingFinalDelivery).toBeUndefined();
-    expect(committed.sessionEntry.pendingFinalDeliveryText).toBeUndefined();
-    expect(committed.sessionEntry.pendingFinalDeliveryCreatedAt).toBeUndefined();
-    expect(committed.sessionEntry.pendingFinalDeliveryLastAttemptAt).toBeUndefined();
-    expect(committed.sessionEntry.pendingFinalDeliveryAttemptCount).toBeUndefined();
-    expect(committed.sessionEntry.pendingFinalDeliveryLastError).toBeUndefined();
-    expect(committed.sessionEntry.pendingFinalDeliveryContext).toBeUndefined();
-    expect(committed.sessionEntry.pendingFinalDeliveryIntentId).toBeUndefined();
 
     const persisted = loadSessionEntry({ sessionKey, storePath });
     expect(persisted?.pendingFinalDelivery).toBeUndefined();
-    expect(persisted?.pendingFinalDeliveryText).toBeUndefined();
-    expect(persisted?.pendingFinalDeliveryCreatedAt).toBeUndefined();
-    expect(persisted?.pendingFinalDeliveryLastAttemptAt).toBeUndefined();
-    expect(persisted?.pendingFinalDeliveryAttemptCount).toBeUndefined();
-    expect(persisted?.pendingFinalDeliveryLastError).toBeUndefined();
-    expect(persisted?.pendingFinalDeliveryContext).toBeUndefined();
-    expect(persisted?.pendingFinalDeliveryIntentId).toBeUndefined();
   });
 
   it("does not merge old-session delivery metadata into a rotated session", async () => {
@@ -1439,11 +1417,13 @@ describe("session accessor seam", () => {
       { sessionKey, storePath },
       {
         ...current,
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: "old reply",
-        pendingFinalDeliveryCreatedAt: 21,
-        pendingFinalDeliveryContext: { channel: "discord", to: "channel-1" },
-        pendingFinalDeliveryIntentId: "intent-old",
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: "old reply",
+          createdAt: 21,
+          context: { channel: "discord", to: "channel-1" },
+          intentId: "intent-old",
+        },
       },
     );
 
@@ -1466,18 +1446,10 @@ describe("session accessor seam", () => {
     }
     expect(committed.sessionEntry.sessionId).toBe("new-session");
     expect(committed.sessionEntry.pendingFinalDelivery).toBeUndefined();
-    expect(committed.sessionEntry.pendingFinalDeliveryText).toBeUndefined();
-    expect(committed.sessionEntry.pendingFinalDeliveryCreatedAt).toBeUndefined();
-    expect(committed.sessionEntry.pendingFinalDeliveryContext).toBeUndefined();
-    expect(committed.sessionEntry.pendingFinalDeliveryIntentId).toBeUndefined();
 
     const persisted = loadSessionEntry({ sessionKey, storePath });
     expect(persisted?.sessionId).toBe("new-session");
     expect(persisted?.pendingFinalDelivery).toBeUndefined();
-    expect(persisted?.pendingFinalDeliveryText).toBeUndefined();
-    expect(persisted?.pendingFinalDeliveryCreatedAt).toBeUndefined();
-    expect(persisted?.pendingFinalDeliveryContext).toBeUndefined();
-    expect(persisted?.pendingFinalDeliveryIntentId).toBeUndefined();
   });
 
   it("commits reply session initialization from a guarded legacy alias snapshot", async () => {

@@ -2872,14 +2872,17 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
     const pendingEntries = state.persistSessionEntryMock.mock.calls
       .map((call) => (call[0] as { entry?: SessionEntry }).entry)
-      .filter((entry): entry is SessionEntry => entry?.pendingFinalDelivery === true);
+      .filter((entry): entry is SessionEntry => entry?.pendingFinalDelivery !== undefined);
     expect(pendingEntries).toContainEqual(
       expect.objectContaining({
-        pendingFinalDeliveryText: "ok",
-        pendingFinalDeliveryContext: {
-          channel: "discord",
-          to: "channel:1524410080953634829",
-          accountId: "main",
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: "ok",
+          context: {
+            channel: "discord",
+            to: "channel:1524410080953634829",
+            accountId: "main",
+          },
         },
       }),
     );
@@ -2951,13 +2954,12 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.runAgentAttemptMock.mockResolvedValue(makeEmptyResult("openai", "gpt-5.4"));
 
     setupBareStoredSession({
-      pendingFinalDelivery: true,
-      pendingFinalDeliveryCreatedAt: 2,
-      pendingFinalDeliveryLastAttemptAt: 3,
-      pendingFinalDeliveryAttemptCount: 4,
-      pendingFinalDeliveryLastError: "previous failure",
-      pendingFinalDeliveryContext: { channel: "tui" },
-      pendingFinalDeliveryIntentId: "intent-1",
+      pendingFinalDelivery: {
+        kind: "transport-only",
+        createdAt: 2,
+        context: { channel: "tui" },
+        intentId: "intent-1",
+      },
     });
     state.deliverAgentCommandResultMock.mockResolvedValue(undefined);
 
@@ -2972,13 +2974,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       expect.objectContaining({
         entry: expect.objectContaining({
           pendingFinalDelivery: undefined,
-          pendingFinalDeliveryText: undefined,
-          pendingFinalDeliveryCreatedAt: undefined,
-          pendingFinalDeliveryLastAttemptAt: undefined,
-          pendingFinalDeliveryAttemptCount: undefined,
-          pendingFinalDeliveryLastError: undefined,
-          pendingFinalDeliveryContext: undefined,
-          pendingFinalDeliveryIntentId: undefined,
         }),
       }),
     );

@@ -343,12 +343,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
       if (!entry) {
         throw new Error("Cannot clear pending delivery without a session entry");
       }
-      const noPendingTextForThisRun =
-        params.opts.deliver === true &&
-        pendingFinalDeliveryMarker.pendingFinalDeliveryTextForThisRun === undefined &&
-        entry.pendingFinalDelivery === true &&
-        !entry.pendingFinalDeliveryText;
-      if (deliveryResult?.deliverySucceeded === true || noPendingTextForThisRun) {
+      if (deliveryResult?.deliverySucceeded === true) {
         sessionEntry = await persistSessionEntry({
           sessionStore,
           sessionKey,
