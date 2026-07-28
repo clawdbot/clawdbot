@@ -1082,11 +1082,13 @@ private fun RealtimeTalkBubble(entry: WearRealtimeTalkEntry) {
   ) {
     Text(
       text =
-        if (isUser) {
-          stringResource(R.string.you)
-        } else {
-          stringResource(R.string.agent)
-        }.uppercase(),
+        localizedWearUppercase(
+          if (isUser) {
+            stringResource(R.string.you)
+          } else {
+            stringResource(R.string.agent)
+          },
+        ),
       color = if (isUser) foreground.copy(alpha = 0.72f) else colors.textMuted,
       fontSize = 9.sp,
       fontWeight = FontWeight.Bold,
@@ -1102,7 +1104,7 @@ private fun RealtimeTalkBubble(entry: WearRealtimeTalkEntry) {
     )
     if (entry.streaming) {
       Text(
-        text = stringResource(R.string.live).uppercase(),
+        text = localizedWearUppercase(stringResource(R.string.live)),
         color = colors.warning,
         fontSize = 9.sp,
         fontWeight = FontWeight.Bold,
@@ -1292,7 +1294,7 @@ private fun OpenClawHeader(pageLabel: String) {
     horizontalAlignment = Alignment.CenterHorizontally,
   ) {
     Text(
-      text = stringResource(R.string.app_name).uppercase(),
+      text = localizedWearUppercase(stringResource(R.string.app_name)),
       color = colors.text,
       fontSize = 16.sp,
       fontWeight = FontWeight.Bold,
@@ -1301,7 +1303,7 @@ private fun OpenClawHeader(pageLabel: String) {
       maxLines = 1,
     )
     Text(
-      text = pageLabel.uppercase(),
+      text = localizedWearUppercase(pageLabel),
       color = colors.textMuted,
       fontSize = 10.sp,
       fontWeight = FontWeight.SemiBold,
@@ -1396,7 +1398,7 @@ private fun ContextPickerRow(
       horizontalAlignment = Alignment.CenterHorizontally,
     ) {
       Text(
-        text = label.uppercase(),
+        text = localizedWearUppercase(label),
         color = OpenClawWearTheme.colors.textMuted,
         fontSize = 8.sp,
         fontWeight = FontWeight.Bold,
@@ -1531,11 +1533,13 @@ private fun MessageBubble(message: WearChatMessage) {
   ) {
     Text(
       text =
-        when (message.chatRole) {
-          WearChatRole.USER -> stringResource(R.string.you)
-          WearChatRole.ASSISTANT -> stringResource(R.string.agent)
-          WearChatRole.SYSTEM -> stringResource(R.string.system)
-        }.uppercase(),
+        localizedWearUppercase(
+          when (message.chatRole) {
+            WearChatRole.USER -> stringResource(R.string.you)
+            WearChatRole.ASSISTANT -> stringResource(R.string.agent)
+            WearChatRole.SYSTEM -> stringResource(R.string.system)
+          },
+        ),
       color = if (isUser) foreground.copy(alpha = 0.72f) else colors.textMuted,
       fontSize = 9.sp,
       fontWeight = FontWeight.Bold,
@@ -1565,7 +1569,7 @@ private fun StreamingBubble(text: String) {
         .padding(horizontal = 12.dp, vertical = 9.dp),
   ) {
     Text(
-      text = stringResource(R.string.agent_working).uppercase(),
+      text = localizedWearUppercase(stringResource(R.string.agent_working)),
       color = colors.warning,
       fontSize = 9.sp,
       fontWeight = FontWeight.Bold,
@@ -1607,7 +1611,7 @@ private fun ConnectionPanel(snapshot: WearConversationSnapshot) {
       )
       Spacer(modifier = Modifier.size(7.dp))
       Text(
-        text = stringResource(R.string.connection).uppercase(),
+        text = localizedWearUppercase(stringResource(R.string.connection)),
         color = colors.textMuted,
         fontSize = 10.sp,
         fontWeight = FontWeight.Bold,
@@ -1638,7 +1642,7 @@ private fun ConnectionPanel(snapshot: WearConversationSnapshot) {
 private fun PhoneBoundaryPanel() {
   Panel {
     Text(
-      text = stringResource(R.string.security_boundary).uppercase(),
+      text = localizedWearUppercase(stringResource(R.string.security_boundary)),
       color = OpenClawWearTheme.colors.textMuted,
       fontSize = 10.sp,
       fontWeight = FontWeight.Bold,
@@ -1674,7 +1678,7 @@ private fun ThemeModeSelector(
         .padding(horizontal = 12.dp),
   ) {
     Text(
-      text = stringResource(R.string.appearance).uppercase(),
+      text = localizedWearUppercase(stringResource(R.string.appearance)),
       color = colors.textMuted,
       fontSize = 10.sp,
       fontWeight = FontWeight.SemiBold,
