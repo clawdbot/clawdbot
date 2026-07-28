@@ -303,24 +303,21 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
       .toBe(true);
   });
 
-  it("keeps the mobile drawer inert while closed and announces its expanded state", async () => {
+  it("keeps the mobile drawer modal, keyboard-contained, and focus-restoring", async () => {
     const page = await openPage({ nativeNav: false, width: 900 });
     const navigation = page.locator(".shell-nav");
-    const backdrop = page.locator(".shell-nav-backdrop");
+    const drawer = navigation.locator("openclaw-modal-dialog.nav-drawer");
+    const dialog = page.getByRole("dialog", { name: "Navigation" });
     const trigger = page.locator(".chat-pane__nav-toggle").first();
 
     await expect.poll(() => navigation.getAttribute("inert")).toBe("");
-    await expect.poll(() => backdrop.getAttribute("inert")).toBe("");
+    await expect.poll(() => page.locator(".shell-nav-backdrop").count()).toBe(0);
+    await expect.poll(() => dialog.isVisible()).toBe(false);
     await page.locator(".shell-skip-link").focus();
     await page.keyboard.press("Tab");
     await expect
-      .poll(() =>
-        page.evaluate(() => ({
-          backdrop: document.activeElement?.matches(".shell-nav-backdrop") ?? false,
-          navigation: document.activeElement?.closest(".shell-nav") !== null,
-        })),
-      )
-      .toEqual({ backdrop: false, navigation: false });
+      .poll(() => page.evaluate(() => document.activeElement?.closest(".shell-nav") !== null))
+      .toBe(false);
 
     await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
     await expect.poll(() => trigger.getAttribute("aria-label")).toBe("Expand sidebar");
@@ -331,9 +328,35 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
       .poll(() => page.locator(".shell").getAttribute("class"))
       .toContain("shell--nav-drawer-open");
     await expect.poll(() => navigation.getAttribute("inert")).toBeNull();
-    await expect.poll(() => backdrop.getAttribute("inert")).toBeNull();
+    await expect.poll(() => dialog.isVisible()).toBe(true);
     await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
     await expect.poll(() => trigger.getAttribute("aria-label")).toBe("Collapse sidebar");
+    await expect
+      .poll(() => navigation.evaluate((element) => element.contains(document.activeElement)))
+      .toBe(true);
+
+    for (const key of ["Tab", "Tab", "Shift+Tab", "Shift+Tab"] as const) {
+      await page.keyboard.press(key);
+      await expect
+        .poll(() => navigation.evaluate((element) => element.contains(document.activeElement)))
+        .toBe(true);
+    }
+
+    expect(
+      await page.locator("#control-ui-main").evaluate((element) => {
+        element.focus();
+        return element === document.activeElement;
+      }),
+    ).toBe(false);
+
+    const row = navigation.locator(".sidebar-recent-session").first();
+    await row.hover();
+    await row.getByRole("button", { name: "Open thread menu" }).click();
+    const sessionMenu = page.getByRole("menu", { name: /Actions for/ });
+    await expect.poll(() => sessionMenu.isVisible()).toBe(true);
+    await page.keyboard.press("Escape");
+    await expect.poll(() => sessionMenu.count()).toBe(0);
+    await expect.poll(() => dialog.isVisible()).toBe(true);
 
     await page.keyboard.press("Escape");
     await expect
@@ -345,9 +368,17 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
       .poll(() => trigger.evaluate((element) => element === document.activeElement))
       .toBe(true);
 
+    await trigger.click();
+    await expect.poll(() => dialog.isVisible()).toBe(true);
+    await page.mouse.click(899, 450);
+    await expect.poll(() => dialog.isVisible()).toBe(false);
+    await expect
+      .poll(() => trigger.evaluate((element) => element === document.activeElement))
+      .toBe(true);
+
     await page.setViewportSize({ width: 1280, height: 900 });
     await expect.poll(() => navigation.getAttribute("inert")).toBeNull();
-    await expect.poll(() => backdrop.getAttribute("inert")).toBe("");
+    await expect.poll(() => drawer.count()).toBe(0);
   });
 
   it("keeps the sidebar rail beside a half-width native link browser", async () => {

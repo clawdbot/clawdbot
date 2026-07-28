@@ -13,6 +13,7 @@ import "../components/gateway-url-confirmation.ts";
 import "../components/github-link-hovercard-registration.ts";
 import "../components/login-gate.ts";
 import "../components/macos-titlebar-controls.ts";
+import "../components/modal-dialog.ts";
 import "../components/onboarding-memory-import.ts";
 import "../components/openclaw-mascot.ts";
 import "../components/resizable-divider.ts";
@@ -1203,14 +1204,6 @@ class OpenClawShell extends OpenClawLightDomElement {
     );
   }
 
-  private readonly handleShellKeydown = (event: KeyboardEvent) => {
-    if (event.defaultPrevented || event.key !== "Escape" || !this.navDrawerOpen) {
-      return;
-    }
-    event.preventDefault();
-    this.closeNavDrawer({ restoreFocus: true });
-  };
-
   private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
     if (!this.commandPalette && isCommandPaletteShortcut(event)) {
       event.preventDefault();
@@ -1802,6 +1795,77 @@ class OpenClawShell extends OpenClawLightDomElement {
     const inlineApproval = isSessionRouteId(activeRoute)
       ? findInlineApproval(overlaySnapshot.approvalQueue, this.activeSessionKey)
       : null;
+    const navigationContent = settingsTakeover
+      ? renderSettingsSidebar({
+          basePath: context.basePath,
+          activeRouteId: activeRoute,
+          activeSearch: this.routeState.location?.search ?? "",
+          activeHash: this.routeState.location?.hash ?? "",
+          offline: gatewaySnapshot.offlineStable,
+          queuedOutboxCount: storedOutboxes?.total ?? 0,
+          lastError: gatewaySnapshot.lastError,
+          version:
+            context.config.current.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? "",
+          updateAvailable: navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable,
+          updateRunning: overlaySnapshot.updateRunning,
+          onUpdate: () => void context.overlays.runUpdate(),
+          searchQuery: this.settingsSearchQuery,
+          searchBlockMatches: settingsSearchBlocks,
+          onExit: () => this.exitSettings(),
+          onRetryConnect: () => context.gateway.connect(),
+          onNavigate: (routeId, options) => this.navigate(routeId, options),
+          onPreload: (routeId) => context.preload(routeId),
+          onSearchQueryChange: (nextQuery) => {
+            void this.handleSettingsSearchQueryChange(nextQuery);
+          },
+          preloadTimers: this.settingsPreloadTimers,
+        })
+      : html`<openclaw-app-sidebar
+          .basePath=${context.basePath}
+          .activeRouteId=${activeRoute}
+          .activePluginTabId=${activePluginTabId}
+          .enabledRouteIds=${this.enabledRouteIds()}
+          .activeWorkboardBoardId=${workboardBoardIdFromPath(
+            this.routeState.location?.pathname ?? "",
+            context.basePath,
+          ) ?? ""}
+          .sessionKey=${this.activeSessionKey}
+          .connected=${gatewayConnected}
+          .offline=${gatewaySnapshot.offlineStable}
+          .outboxCountForSession=${outboxCountForSession}
+          .terminalAvailable=${terminalAvailable}
+          .catalogOpenTarget=${normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget)}
+          .canPairDevice=${gatewayConnected &&
+          hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null)}
+          .sidebarEntries=${navigationSnapshot.sidebarEntries}
+          .workboardBoards=${this.sidebarWorkboardSnapshot.boards}
+          .workboardBoardsReady=${this.sidebarWorkboardSnapshot.ready}
+          .workboardRenderers=${this.sidebarWorkboardRenderers}
+          .sidebarLiveActivity=${uiSettings.sidebarLiveActivity !== false}
+          .pinnedAgentIds=${navigationSnapshot.pinnedAgentIds}
+          .themeMode=${context.theme.mode}
+          .lobsterPetVisits=${uiSettings.lobsterPetVisits !== false}
+          .lobsterPetSounds=${uiSettings.lobsterPetSounds === true}
+          .gatewayVersion=${context.config.current.serverVersion ??
+          gatewaySnapshot.hello?.server?.version ??
+          null}
+          .devGitBranch=${context.config.current.devGitBranch}
+          .updateAvailable=${navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable}
+          .updateRunning=${overlaySnapshot.updateRunning}
+          .onUpdate=${() => void context.overlays.runUpdate()}
+          .onOpenApprovals=${this.openApprovals}
+          .onRetryConnect=${() => context.gateway.connect()}
+          .onOpenNewSession=${(agentId: string, target?: NewSessionTarget) =>
+            this.openNewSession(agentId, target)}
+          .draftSessionAgentId=${this.draftSessionAgentId()}
+          .onUpdateSidebarEntries=${(entries: string[]) =>
+            context.navigation.update({ sidebarEntries: entries })}
+          .onPairMobile=${() => void context.overlays.openDevicePairSetup()}
+          .onNavigate=${(routeId: string, options?: ApplicationNavigationOptions) =>
+            this.navigate(routeId, options)}
+          .onPreloadRoute=${(routeId: string) =>
+            isRouteId(routeId) ? context.preload(routeId) : Promise.resolve()}
+        ></openclaw-app-sidebar>`;
     // Optional tags stay mounted before definition. Lit replays their properties on upgrade,
     // and the upgraded panels catch the first toggle instead of dropping the event.
     return html`
@@ -1821,17 +1885,9 @@ class OpenClawShell extends OpenClawLightDomElement {
           ? "shell--onboarding"
           : ""} ${settingsTakeover ? "shell--settings" : ""}"
         style=${`--shell-nav-expanded-width: ${navigationSnapshot.navWidth}px`}
-        @keydown=${this.handleShellKeydown}
         @theme-change=${this.handleThemeChange}
       >
         <a class="shell-skip-link" href="#control-ui-main"> ${t("common.skipToMainContent")} </a>
-        <button
-          type="button"
-          class="shell-nav-backdrop"
-          aria-label=${t("nav.close")}
-          ?inert=${!mobileNavLayout || !navDrawerOpen}
-          @click=${() => this.closeNavDrawer({ restoreFocus: true })}
-        ></button>
         ${isNativeWebChromeHost() && !onboarding
           ? html`
               <openclaw-macos-titlebar-controls
@@ -1902,79 +1958,18 @@ class OpenClawShell extends OpenClawLightDomElement {
             `
           : nothing}
         <div class="shell-nav" ?inert=${navigationSurfaceHidden}>
-          ${settingsTakeover
-            ? renderSettingsSidebar({
-                basePath: context.basePath,
-                activeRouteId: activeRoute,
-                activeSearch: this.routeState.location?.search ?? "",
-                activeHash: this.routeState.location?.hash ?? "",
-                offline: gatewaySnapshot.offlineStable,
-                queuedOutboxCount: storedOutboxes?.total ?? 0,
-                lastError: gatewaySnapshot.lastError,
-                version:
-                  context.config.current.serverVersion ??
-                  gatewaySnapshot.hello?.server?.version ??
-                  "",
-                updateAvailable: navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable,
-                updateRunning: overlaySnapshot.updateRunning,
-                onUpdate: () => void context.overlays.runUpdate(),
-                searchQuery: this.settingsSearchQuery,
-                searchBlockMatches: settingsSearchBlocks,
-                onExit: () => this.exitSettings(),
-                onRetryConnect: () => context.gateway.connect(),
-                onNavigate: (routeId, options) => this.navigate(routeId, options),
-                onPreload: (routeId) => context.preload(routeId),
-                onSearchQueryChange: (nextQuery) => {
-                  void this.handleSettingsSearchQueryChange(nextQuery);
-                },
-                preloadTimers: this.settingsPreloadTimers,
-              })
-            : html`<openclaw-app-sidebar
-                .basePath=${context.basePath}
-                .activeRouteId=${activeRoute}
-                .activePluginTabId=${activePluginTabId}
-                .enabledRouteIds=${this.enabledRouteIds()}
-                .activeWorkboardBoardId=${workboardBoardIdFromPath(
-                  this.routeState.location?.pathname ?? "",
-                  context.basePath,
-                ) ?? ""}
-                .sessionKey=${this.activeSessionKey}
-                .connected=${gatewayConnected}
-                .offline=${gatewaySnapshot.offlineStable}
-                .outboxCountForSession=${outboxCountForSession}
-                .terminalAvailable=${terminalAvailable}
-                .catalogOpenTarget=${normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget)}
-                .canPairDevice=${gatewayConnected &&
-                hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null)}
-                .sidebarEntries=${navigationSnapshot.sidebarEntries}
-                .workboardBoards=${this.sidebarWorkboardSnapshot.boards}
-                .workboardBoardsReady=${this.sidebarWorkboardSnapshot.ready}
-                .workboardRenderers=${this.sidebarWorkboardRenderers}
-                .sidebarLiveActivity=${uiSettings.sidebarLiveActivity !== false}
-                .pinnedAgentIds=${navigationSnapshot.pinnedAgentIds}
-                .themeMode=${context.theme.mode}
-                .lobsterPetVisits=${uiSettings.lobsterPetVisits !== false}
-                .lobsterPetSounds=${uiSettings.lobsterPetSounds === true}
-                .gatewayVersion=${context.config.current.serverVersion ??
-                gatewaySnapshot.hello?.server?.version ??
-                null}
-                .devGitBranch=${context.config.current.devGitBranch}
-                .updateAvailable=${navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable}
-                .updateRunning=${overlaySnapshot.updateRunning}
-                .onUpdate=${() => void context.overlays.runUpdate()}
-                .onOpenApprovals=${this.openApprovals}
-                .onRetryConnect=${() => context.gateway.connect()}
-                .onOpenNewSession=${(agentId: string, target?: NewSessionTarget) =>
-                  this.openNewSession(agentId, target)}
-                .draftSessionAgentId=${this.draftSessionAgentId()}
-                .onUpdateSidebarEntries=${(entries: string[]) =>
-                  context.navigation.update({ sidebarEntries: entries })}
-                .onPairMobile=${() => void context.overlays.openDevicePairSetup()}
-                .onNavigate=${(routeId: string, options?: ApplicationNavigationOptions) =>
-                  this.navigate(routeId, options)}
-                .onPreloadRoute=${(routeId: string) =>
-                  isRouteId(routeId) ? context.preload(routeId) : Promise.resolve()}
-              ></openclaw-app-sidebar>`}
+          ${mobileNavLayout
+            ? html`<openclaw-modal-dialog
+                class="drawer nav-drawer"
+                .open=${navDrawerOpen}
+                .label=${t("palette.categories.navigation")}
+                @modal-cancel=${() => this.closeNavDrawer({ restoreFocus: true })}
+              >
+                <div class="shell-nav-modal__content" tabindex="-1" autofocus>
+                  ${navigationContent}
+                </div>
+              </openclaw-modal-dialog>`
+            : navigationContent}
         </div>
         ${!navCollapsed && !onboarding && !settingsTakeover
           ? html`

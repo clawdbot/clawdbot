@@ -63,6 +63,21 @@ export class OpenClawModalDialog extends OpenClawLitElement {
       border-radius: 0;
     }
 
+    :host(.nav-drawer) wa-dialog {
+      --width: min(86vw, 320px);
+    }
+
+    :host(.nav-drawer) wa-dialog::part(dialog) {
+      max-width: min(86vw, 320px);
+      margin: 0 auto 0 0;
+    }
+
+    ::slotted(.shell-nav-modal__content) {
+      display: block;
+      height: 100%;
+      min-height: 0;
+    }
+
     @media (max-width: 640px) {
       wa-dialog {
         --width: calc(100vw - 24px);
