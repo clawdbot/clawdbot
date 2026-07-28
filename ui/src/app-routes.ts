@@ -23,7 +23,7 @@ import { page as usagePage } from "./pages/usage/route.ts";
 import { page as workboardPage } from "./pages/workboard/route.ts";
 import { page as worktreesPage } from "./pages/worktrees/route.ts";
 
-export type AppRouteModule = {
+type AppRouteModule = {
   render: (data: unknown) => unknown;
 };
 

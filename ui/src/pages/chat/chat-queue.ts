@@ -80,7 +80,7 @@ export function readChatQueueForSession(
     : (host.chatQueueBySession?.[sessionKey] ?? []);
 }
 
-export function writeChatQueueForSession(
+function writeChatQueueForSession(
   host: ChatQueueSessionHost,
   sessionKey: string,
   queue: ChatQueueItem[],

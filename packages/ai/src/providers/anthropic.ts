@@ -1381,6 +1381,10 @@ function convertMessages(
   replayThinkingEnabled = true,
 ): MessageParam[] {
   const params: MessageParam[] = [];
+  // Param indexes for transient runtime-context carriers — excluded from
+  // cache_control breakpoint selection so the deepest breakpoint anchors on the
+  // last stable user turn, not the volatile carrier appended after it.
+  const cacheBreakpointOptOutParamIndexes = new Set<number>();
 
   // Transform messages for cross-provider compatibility
   const transformedMessages = transformMessages(messages, model, normalizeToolCallId);
@@ -1392,8 +1396,12 @@ function convertMessages(
     const msg = transformedMessages[i];
 
     if (msg.role === "user") {
+      const isRuntimeContextCarrier = msg.runtimeContextCarrier === true;
       if (typeof msg.content === "string") {
         if (msg.content.trim().length > 0) {
+          if (isRuntimeContextCarrier) {
+            cacheBreakpointOptOutParamIndexes.add(params.length);
+          }
           params.push({
             role: "user",
             content: sanitizeSurrogates(msg.content),
@@ -1424,6 +1432,9 @@ function convertMessages(
         });
         if (filteredBlocks.length === 0) {
           continue;
+        }
+        if (isRuntimeContextCarrier) {
+          cacheBreakpointOptOutParamIndexes.add(params.length);
         }
         params.push({
           role: "user",
@@ -1536,7 +1547,7 @@ function convertMessages(
 
     for (let i = params.length - 1; i >= 0; i--) {
       const message = params[i];
-      if (message.role !== "user") {
+      if (message.role !== "user" || cacheBreakpointOptOutParamIndexes.has(i)) {
         continue;
       }
 

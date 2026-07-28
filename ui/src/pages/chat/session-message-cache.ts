@@ -16,7 +16,7 @@ const MAX_CACHED_CHAT_MESSAGES = 100;
 
 export type ChatMessageCache = Map<string, unknown[]>;
 
-export type ChatMessageCacheTarget = {
+type ChatMessageCacheTarget = {
   sessionKey: string;
   agentId?: string | null;
 };

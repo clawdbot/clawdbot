@@ -839,6 +839,8 @@ export type DiagnosticSkillUsagePrivateData = Readonly<{
 }>;
 
 export type DiagnosticEventPrivateData = Readonly<{
+  /** Raw failure text for trusted diagnostics exporters; never part of the public event payload. */
+  errorMessage?: string;
   modelContent?: DiagnosticModelCallContent;
   skillUsage?: DiagnosticSkillUsagePrivateData;
   toolContent?: DiagnosticToolCallContent;

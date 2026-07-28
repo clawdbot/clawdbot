@@ -3894,10 +3894,18 @@ function handleApprovalRequest(params: {
 }
 
 function resolveCodexDynamicToolDirectNames(params: EmbeddedRunAttemptParams): string[] {
-  if (params.sourceReplyDeliveryMode !== "message_tool_only") {
-    return [];
+  const names: string[] = [];
+  // The ring-zero crestodian tool is the run's entire tool surface; register it
+  // directly instead of deferring it behind Codex tool_search discovery. This is
+  // structural: per-run configs cannot flip codexDynamicToolsLoading because the
+  // harness resolves plugin config from the live global config, not params.config.
+  if (params.crestodianTool) {
+    names.push("crestodian");
   }
-  return ["message"];
+  if (params.sourceReplyDeliveryMode === "message_tool_only") {
+    names.push("message");
+  }
+  return names;
 }
 
 export const testing = {

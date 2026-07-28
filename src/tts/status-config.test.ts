@@ -198,6 +198,35 @@ describe("resolveStatusTtsSnapshot", () => {
     });
   });
 
+  it("keeps truncated status detail fields well-formed at UTF-16 boundaries", async () => {
+    await withStatusTempHome(async () => {
+      const displayName = `${"d".repeat(92)}😀tail`;
+      const model = `${"m".repeat(92)}😀tail`;
+      const voice = `${"v".repeat(92)}😀tail`;
+      const snapshot = resolveStatusTtsSnapshot({
+        cfg: {
+          messages: {
+            tts: {
+              auto: "always",
+              provider: "elevenlabs",
+              providers: {
+                elevenlabs: {
+                  displayName,
+                  model,
+                  voice,
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+      });
+
+      expect(snapshot?.displayName).toBe(`${"d".repeat(92)}...`);
+      expect(snapshot?.model).toBe(`${"m".repeat(92)}...`);
+      expect(snapshot?.voice).toBe(`${"v".repeat(92)}...`);
+    });
+  });
+
   it("omits default OpenAI endpoint details from status", async () => {
     await withStatusTempHome(async () => {
       expect(

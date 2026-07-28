@@ -405,7 +405,7 @@ const TAIL_LINK_BLUR_CLASS = "chat-link-tail-blur";
 const FENCE_OPEN_RE = /^[ \t]{0,3}(`{3,}|~{3,})/;
 const FENCE_CONTAINER_PREFIX_RE = /^[ \t]{0,3}(?:(?:>\s?)|(?:(?:[-+*]|\d{1,9}[.)])[ \t]+))/;
 
-export type MarkdownCodeBlockChrome = "copy" | "none";
+type MarkdownCodeBlockChrome = "copy" | "none";
 
 export type MarkdownRenderOptions = {
   codeBlockChrome?: MarkdownCodeBlockChrome;
@@ -1407,7 +1407,7 @@ export function toSanitizedMarkdownHtml(
   return sanitized;
 }
 
-export function toEscapedPlainTextHtml(value: string): string {
+function toEscapedPlainTextHtml(value: string): string {
   return `<div class="markdown-plain-text-fallback">${escapeHtml(value.replace(/\r\n?/g, "\n"))}</div>`;
 }
 

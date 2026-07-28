@@ -45,6 +45,7 @@ import {
   stripSystemPromptCacheBoundary,
 } from "@openclaw/ai/internal/shared";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import OpenAI, { AzureOpenAI } from "openai";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
@@ -1885,6 +1886,7 @@ function buildOpenAIClientHeaders(
   context: Context,
   optionHeaders?: Record<string, string>,
   turnHeaders?: Record<string, string>,
+  sessionId?: string,
 ): Record<string, string> {
   const providerHeaders = { ...model.headers };
   if (model.provider === "github-copilot") {
@@ -1907,7 +1909,20 @@ function buildOpenAIClientHeaders(
     callerHeaders: Object.keys(callerHeaders).length > 0 ? callerHeaders : undefined,
     precedence: "caller-wins",
   }).headers;
-  return headers ?? {};
+  const resolvedHeaders = headers ?? {};
+  // This header routes ChatGPT Responses session affinity; without it requests land
+  // on arbitrary machines and prompt cache misses. codex-rs sends "session-id"
+  // (codex-rs/codex-api/src/requests/headers.rs), but backend accepts "session_id"; align with packages/ai openai-chatgpt-responses.
+  if (
+    sessionId &&
+    !Object.keys(resolvedHeaders).some(
+      (key) => normalizeLowercaseStringOrEmpty(key) === "session_id",
+    ) &&
+    usesNativeOpenAICodexResponsesBackend(model)
+  ) {
+    resolvedHeaders.session_id = sessionId;
+  }
+  return resolvedHeaders;
 }
 
 function resolveProviderTransportTurnState(
@@ -1975,12 +1990,13 @@ function createOpenAIResponsesClient(
   apiKey: string,
   optionHeaders?: Record<string, string>,
   turnHeaders?: Record<string, string>,
+  sessionId?: string,
 ) {
   return new OpenAI({
     apiKey,
     baseURL: model.baseUrl,
     dangerouslyAllowBrowser: true,
-    defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders),
+    defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders, sessionId),
     fetch: buildGuardedModelFetch(model),
     ...buildOpenAISdkClientOptions(model),
   });
@@ -2024,6 +2040,7 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
           apiKey,
           options?.headers,
           turnState?.headers,
+          options?.sessionId,
         );
         let params = buildOpenAIResponsesParams(
           model,

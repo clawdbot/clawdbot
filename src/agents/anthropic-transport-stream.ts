@@ -391,14 +391,15 @@ function convertAnthropicMessages(
   messages: Context["messages"],
   model: AnthropicTransportModel,
   isOAuthToken: boolean,
-  options?: {
+  options: {
     allowReasoningContentReplay?: boolean;
+    cacheBreakpointOptOutMessageIndexes: Set<number>;
     replayThinkingEnabled?: boolean;
   },
-) {
+): Array<Record<string, unknown>> {
   const params: Array<Record<string, unknown>> = [];
-  const allowReasoningContentReplay = options?.allowReasoningContentReplay === true;
-  const replayThinkingEnabled = options?.replayThinkingEnabled !== false;
+  const allowReasoningContentReplay = options.allowReasoningContentReplay === true;
+  const replayThinkingEnabled = options.replayThinkingEnabled !== false;
   const transformedMessages = transformTransportMessages(messages, model, normalizeToolCallId);
   const activeToolTurnAssistantIndex = replayThinkingEnabled
     ? -1
@@ -406,12 +407,17 @@ function convertAnthropicMessages(
   for (let i = 0; i < transformedMessages.length; i += 1) {
     const msg = transformedMessages[i];
     if (msg.role === "user") {
+      const isRuntimeContextCarrier = msg.runtimeContextCarrier === true;
       if (typeof msg.content === "string") {
         if (msg.content.trim().length > 0) {
-          params.push({
+          const userParam = {
             role: "user",
             content: sanitizeTransportPayloadText(msg.content),
-          });
+          };
+          if (isRuntimeContextCarrier) {
+            options.cacheBreakpointOptOutMessageIndexes.add(params.length);
+          }
+          params.push(userParam);
         }
         continue;
       }
@@ -445,10 +451,14 @@ function convertAnthropicMessages(
       if (filteredBlocks.length === 0) {
         continue;
       }
-      params.push({
+      const userParam = {
         role: "user",
         content: filteredBlocks,
-      });
+      };
+      if (isRuntimeContextCarrier) {
+        options.cacheBreakpointOptOutMessageIndexes.add(params.length);
+      }
+      params.push(userParam);
       continue;
     }
     if (msg.role === "assistant") {
@@ -998,14 +1008,17 @@ function buildAnthropicParams(
     cacheRetention: options?.cacheRetention,
     enableCacheControl: true,
   });
+  // Transient runtime-context carrier indexes skip cache anchoring so the breakpoint
+  // stays on the last stable user turn; conversion-to-policy must not splice messages.
+  const cacheBreakpointOptOutMessageIndexes = new Set<number>();
+  const messages = convertAnthropicMessages(context.messages, model, isOAuthToken, {
+    allowReasoningContentReplay: supportsReasoningContentReplay(model),
+    cacheBreakpointOptOutMessageIndexes,
+    replayThinkingEnabled,
+  });
   const params: Record<string, unknown> = {
     model: resolveAnthropicRequestModelId(model),
-    messages: ensureNonEmptyAnthropicMessages(
-      convertAnthropicMessages(context.messages, model, isOAuthToken, {
-        allowReasoningContentReplay: supportsReasoningContentReplay(model),
-        replayThinkingEnabled,
-      }),
-    ),
+    messages: ensureNonEmptyAnthropicMessages(messages),
     max_tokens: maxTokens,
     stream: true,
   };
@@ -1100,7 +1113,7 @@ function buildAnthropicParams(
       params.tool_choice = projectedToolChoice;
     }
   }
-  applyAnthropicPayloadPolicyToParams(params, payloadPolicy);
+  applyAnthropicPayloadPolicyToParams(params, payloadPolicy, cacheBreakpointOptOutMessageIndexes);
   return { params, toolProjection };
 }
 

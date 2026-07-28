@@ -23,6 +23,11 @@ type AimockRequestSnapshot = {
   toolOutputStructuredError?: true;
 };
 
+// Runtime-context delimiters are owned by src/agents/internal-runtime-context.ts.
+// This mock mirrors the wire shape so delimiter drift fails through QA timeouts.
+const INTERNAL_RUNTIME_CONTEXT_BEGIN = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
+const INTERNAL_RUNTIME_CONTEXT_END = "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+
 function stringifyContent(content: unknown): string {
   if (typeof content === "string") {
     return content;
@@ -57,10 +62,21 @@ function extractLastUserText(body: ChatCompletionRequest | null | undefined) {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message?.role === "user") {
-      return stringifyContent(message.content);
+      const text = stringifyContent(message.content);
+      if (!isInternalRuntimeContextCarrierText(text)) {
+        return text;
+      }
     }
   }
   return "";
+}
+
+function isInternalRuntimeContextCarrierText(text: string) {
+  const trimmed = text.trim();
+  return (
+    trimmed.includes(INTERNAL_RUNTIME_CONTEXT_BEGIN) &&
+    trimmed.endsWith(INTERNAL_RUNTIME_CONTEXT_END)
+  );
 }
 
 function extractAllInputText(body: ChatCompletionRequest | null | undefined) {

@@ -143,6 +143,12 @@ export type RunEmbeddedAgentParams = {
   /** Task working directory for tool/runtime execution. Defaults to workspaceDir. */
   cwd?: string;
   agentDir?: string;
+  /**
+   * Run config consumed by core paths (model selection, tools, plugin
+   * activation). Plugin harnesses resolve `plugins.entries.<id>.config` from
+   * the live global config, NOT from this object — per-run plugin-config
+   * overrides are unsupported; use an explicit run param instead.
+   */
   config?: OpenClawConfig;
   skillsSnapshot?: SkillSnapshot;
   prompt: string;

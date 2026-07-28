@@ -124,6 +124,7 @@ function nextTimerTick(): Promise<void> {
 
 describe("signal createSignalEventHandler inbound context", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     delete capture.ctx;
     sendTypingMock.mockReset().mockResolvedValue(true);
     sendReadReceiptMock.mockReset().mockResolvedValue(true);
@@ -185,6 +186,172 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(context.ChatType).toBe("direct");
     expect(context.To).toBe("+15550002222");
     expect(context.OriginatingTo).toBe("+15550002222");
+  });
+
+  it("sets ReplyToId from the inbound Signal timestamp", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550002222",
+        sourceName: "Bob",
+        timestamp: 1700000000001,
+        dataMessage: {
+          message: "hello",
+          attachments: [],
+        },
+      }),
+    );
+
+    const context = requireCapturedContext();
+    expect(context.MessageSid).toBe("1700000000001");
+    expect(context.ReplyToId).toBe("1700000000001");
+  });
+
+  it.each([
+    {
+      name: "dataMessage",
+      envelope: {
+        dataMessage: {
+          timestamp: 1700000000002,
+          message: "hello",
+          attachments: [],
+        },
+      },
+    },
+    {
+      name: "editMessage.dataMessage",
+      envelope: {
+        editMessage: {
+          dataMessage: {
+            timestamp: 1700000000002,
+            message: "hello",
+            attachments: [],
+          },
+        },
+      },
+    },
+  ])("falls back to $name timestamp for native reply metadata", async ({ envelope }) => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550002222",
+        sourceName: "Bob",
+        timestamp: undefined,
+        ...envelope,
+      }),
+    );
+
+    const context = requireCapturedContext();
+    expect(context.MessageSid).toBe("1700000000002");
+    expect(context.ReplyToId).toBe("1700000000002");
+    expect(context.Timestamp).toBe(1700000000002);
+  });
+
+  it("uses editMessage.targetSentTimestamp as the native reply target", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550002222",
+        sourceName: "Bob",
+        timestamp: 1700000000999,
+        editMessage: {
+          targetSentTimestamp: 1700000000002,
+          dataMessage: {
+            timestamp: 1700000000999,
+            message: "edited hello",
+            attachments: [],
+          },
+        },
+      }),
+    );
+
+    const context = requireCapturedContext();
+    expect(context.MessageSid).toBe("1700000000999");
+    expect(context.ReplyToId).toBe("1700000000002");
+    expect(context.Timestamp).toBe(1700000000999);
+  });
+
+  it("preserves the last debounced message body for native reply quote metadata", async () => {
+    vi.useFakeTimers();
+    const deliverRepliesMock = vi.fn().mockResolvedValue(undefined);
+    dispatchInboundMessageMock.mockImplementationOnce(async (params: any) => {
+      capture.ctx = params.ctx;
+      await Promise.resolve(params.replyOptions?.onReplyStart?.());
+      params.dispatcher.sendFinalReply({ text: "debounced reply" });
+      params.dispatcher.markComplete?.();
+      await params.dispatcher.waitForIdle?.();
+      return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+    });
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 10 } },
+          channels: { signal: { replyToMode: "batched" } },
+        } as any,
+        deliverReplies: deliverRepliesMock,
+        historyLimit: 0,
+      }),
+    );
+
+    try {
+      await handler(
+        createSignalReceiveEvent({
+          timestamp: 1700000000001,
+          dataMessage: {
+            message: "first debounced message",
+            attachments: [],
+          },
+        }),
+      );
+      await handler(
+        createSignalReceiveEvent({
+          timestamp: 1700000000002,
+          dataMessage: {
+            message: "second debounced message",
+            attachments: [],
+          },
+        }),
+      );
+
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(10);
+
+      await vi.waitFor(() => {
+        expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+      });
+      const context = requireCapturedContext();
+      expect(context.BodyForAgent).toBe("first debounced message\\nsecond debounced message");
+      expect(context.ReplyToId).toBe("1700000000002");
+      expect(context.ReplyThreading).toEqual({ implicitCurrentMessage: "allow" });
+      expect(deliverRepliesMock.mock.calls[0]?.[0]).toMatchObject({
+        replyContext: {
+          replyToId: "1700000000002",
+          author: "+15550001111",
+          body: "second debounced message",
+        },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps per-channel-peer direct-message last-route writes on the isolated session", async () => {

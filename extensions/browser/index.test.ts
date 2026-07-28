@@ -71,6 +71,7 @@ function createApi() {
     id: "browser",
     name: "Browser",
     source: "test",
+    rootDir: "/plugins/browser",
     config: {},
     runtime: {} as OpenClawPluginApi["runtime"],
     registerCli,
@@ -242,7 +243,11 @@ describe("browser plugin", () => {
       ],
     });
     await registrar({ program: {} as never });
-    expect(runtimeApiMocks.registerBrowserCli).toHaveBeenCalledWith({});
+    expect(runtimeApiMocks.registerBrowserCli).toHaveBeenCalledWith(
+      {},
+      process.argv,
+      "/plugins/browser",
+    );
   });
 
   it("registers browser.request as an admin gateway method and lazy-loads handler", async () => {

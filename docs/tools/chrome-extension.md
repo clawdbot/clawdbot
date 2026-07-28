@@ -91,20 +91,30 @@ openclaw config set browser.defaultProfile chrome
 - Revoke: click the button again, drag the tab out of the group, or dismiss
   Chrome's debugging banner. The agent loses access to that tab immediately.
 
-## Remote browser nodes
+## Remote / cross-machine
 
-The extension works whether Chrome runs on the Gateway host or on a separate
-[browser node host](/tools/browser#local-vs-remote-control). The relay is always
-loopback-only and runs **on the machine with the browser**:
+Chrome does not have to run on the Gateway host. Three topologies work:
 
-- **Same host** (Gateway + Chrome on one machine): pair on that machine.
-- **Remote node** (Chrome on a node, Gateway elsewhere): run
-  `openclaw browser extension path` / `pair` **on the node**, load and pair the
-  extension there. The Gateway proxies browser actions to the node over its
-  existing authenticated node link; the node's local relay drives the extension.
-  No new inbound port is opened on the node.
+- **Same host** (Gateway + Chrome on one machine): pair on that machine with
+  `openclaw browser extension pair`. The relay is loopback-only.
+- **Direct to a remote Gateway** (Chrome on your laptop, Gateway on a VPS, and
+  **nothing else on the laptop**): on the Gateway, run
+  `openclaw browser extension pair --gateway-url wss://your-gateway.example.com`.
+  It prints a `wss://…/browser/extension#<secret>` string; load and pair the
+  extension on the laptop. The extension connects **straight to the Gateway**
+  over `wss://` — no OpenClaw install, Node, CLI, or open inbound port on the
+  laptop. This is the managed-hosting path.
+- **Via a browser node host** (Chrome on a machine already running an OpenClaw
+  node): run `pair` on the node and pair locally; the Gateway proxies browser
+  actions to the node over its existing authenticated node link.
 
-The pairing token is per host, so each node prints its own string.
+The pairing secret is per host (the Gateway's, in the direct case), validated by
+the Gateway's `/browser/extension` route. For the direct path, serve the Gateway
+over TLS (`wss://`) so the pairing secret and CDP traffic are encrypted.
+The secret remains in the pairing string's URL fragment and is presented during
+the WebSocket handshake as a subprotocol credential, so normal proxy access
+logs do not receive it in the request URL. Ensure any reverse proxy preserves
+the standard `Sec-WebSocket-Protocol` header.
 
 ## Diagnostics
 
@@ -120,6 +130,8 @@ extension popup shows **Connected**.
 
 - The relay binds loopback only; both WebSocket sides are authenticated with the
   derived token, and the extension side is origin-checked to `chrome-extension://`.
+- Direct Gateway pairing does not accept the relay token in the request URL;
+  the bundled extension carries it in the WebSocket subprotocol list instead.
 - The agent can only see and drive tabs in the **OpenClaw tab group**. Your
   other tabs stay private.
 - Compared with the `user` (Chrome MCP) profile, which exposes your whole

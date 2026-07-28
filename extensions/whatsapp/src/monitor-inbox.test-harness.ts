@@ -39,6 +39,7 @@ export type MockSock = {
   ws: { close: AnyMockFn };
   sendPresenceUpdate: AnyMockFn;
   sendMessage: AnyMockFn;
+  fetchAccountReachoutTimelock: AnyMockFn;
   readMessages: AnyMockFn;
   groupMetadata: AnyMockFn;
   groupFetchAllParticipating: AnyMockFn;
@@ -217,6 +218,7 @@ function createMockSock(): MockSock {
     ws: { close: vi.fn() },
     sendPresenceUpdate: createResolvedMock(),
     sendMessage: createResolvedMock(),
+    fetchAccountReachoutTimelock: vi.fn().mockResolvedValue({ isActive: false }),
     readMessages: createResolvedMock(),
     groupMetadata: vi.fn().mockImplementation(async (jid: string) => ({
       id: jid,

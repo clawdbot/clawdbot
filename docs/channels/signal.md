@@ -250,6 +250,8 @@ Groups:
 - Container mode: the gateway sends via REST API and receives via WebSocket.
 - Inbound messages are normalized into the shared channel envelope.
 - Replies always route back to the same number or group.
+- Replies to inbound messages include native Signal quote metadata when the backend accepts the inbound timestamp and author; if quote metadata is missing or rejected, OpenClaw sends the reply as a normal message.
+- Configure native quote use with `channels.signal.replyToMode = off | first | all | batched`, or `channels.signal.replyToModeByChatType.direct/group` for per-chat-type overrides. Account-level values under `channels.signal.accounts.<id>` take precedence.
 
 ## Media + limits
 
@@ -432,6 +434,9 @@ Provider options:
 - `channels.signal.groups`: per-group overrides keyed by Signal group ID (or `"*"`). Supported fields: `requireMention`, `tools`, `toolsBySender`.
 - `channels.signal.accounts.<id>.groups`: per-account version of `channels.signal.groups` for multi-account setups.
 - `channels.signal.accounts.<id>.aliases`: per-account aliases, merged with top-level aliases.
+- `channels.signal.replyToMode`: native reply quote mode, `off | first | all | batched` (default: `all`).
+- `channels.signal.replyToModeByChatType.direct`, `channels.signal.replyToModeByChatType.group`: per-chat-type native reply quote overrides.
+- `channels.signal.accounts.<id>.replyToMode`, `channels.signal.accounts.<id>.replyToModeByChatType.direct`, `channels.signal.accounts.<id>.replyToModeByChatType.group`: per-account reply quote overrides.
 - `channels.signal.historyLimit`: max group messages to include as context (0 disables).
 - `channels.signal.dmHistoryLimit`: DM history limit in user turns. Per-user overrides: `channels.signal.dms["<phone_or_uuid>"].historyLimit`.
 - `channels.signal.textChunkLimit`: outbound chunk size in characters (default 4000).

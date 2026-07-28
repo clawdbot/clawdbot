@@ -1649,6 +1649,27 @@ describe("runCodexAppServerAttempt", () => {
     expect(sessionsYield).not.toHaveProperty("deferLoading");
   });
 
+  it("registers the ring-zero crestodian tool directly without a per-run plugin config", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    expect(testing.resolveCodexDynamicToolDirectNames(params)).toEqual([]);
+
+    params.crestodianTool = { surface: "cli", proposalRef: {}, directiveRef: {} };
+    expect(testing.resolveCodexDynamicToolDirectNames(params)).toEqual(["crestodian"]);
+
+    params.sourceReplyDeliveryMode = "message_tool_only";
+    expect(testing.resolveCodexDynamicToolDirectNames(params)).toEqual(["crestodian", "message"]);
+
+    const toolBridge = createCodexToolBridgeForTest(params, [
+      createRuntimeDynamicTool("crestodian"),
+    ]);
+    const crestodian = flattenSpecsWithNamespace(toolBridge.specs).find(
+      (tool) => tool.name === "crestodian",
+    );
+    expect(crestodian).not.toHaveProperty("namespace");
+    expect(crestodian).not.toHaveProperty("deferLoading");
+  });
+
   it("keeps the heartbeat schema deferred and stable across normal and heartbeat turns", async () => {
     testing.setOpenClawCodingToolsFactoryForTests((options) => [
       createRuntimeDynamicTool("message"),

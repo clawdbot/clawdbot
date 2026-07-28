@@ -211,7 +211,7 @@ function createNameProviderKey(name: string, provider?: string | null): string {
   return `${name.toLowerCase()}\u0000${provider?.trim().toLowerCase() ?? ""}`;
 }
 
-export type ChatModelDisplayLookup = ReadonlyMap<string, string>;
+type ChatModelDisplayLookup = ReadonlyMap<string, string>;
 
 export function buildCatalogDisplayLookup(catalog: ModelCatalogEntry[]): Map<string, string> {
   const nameToValues = new Map<string, Set<string>>();

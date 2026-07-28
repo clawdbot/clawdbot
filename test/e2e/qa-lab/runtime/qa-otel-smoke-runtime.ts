@@ -127,6 +127,8 @@ const REQUIRED_SPAN_NAMES = [
 const REQUIRED_METRIC_NAMES = ["openclaw.harness.duration_ms"] as const;
 const DIRECT_RUN_ID = "qa-otel-direct-run";
 const DIRECT_CALL_ID = "qa-otel-direct-call";
+const DIRECT_ERROR_MESSAGE = "QA OTEL provider stream failed";
+const DIRECT_ERROR_SECRET = "sk-1234567890abcdef";
 const DISALLOWED_ATTRIBUTE_KEYS = new Set([
   "openclaw.runId",
   "openclaw.chatId",
@@ -146,6 +148,7 @@ const DISALLOWED_ATTRIBUTE_KEYS = new Set([
 const DISALLOWED_BODY_NEEDLES = [
   "OTEL-QA-SECRET",
   "OTEL-QA-OK",
+  DIRECT_ERROR_SECRET,
   DIRECT_RUN_ID,
   DIRECT_CALL_ID,
 ];
@@ -1410,28 +1413,38 @@ async function runDirectTelemetryProducer(params: {
         },
       },
     );
-    emitTrustedDiagnosticEvent({
-      type: "run.completed",
-      runId: DIRECT_RUN_ID,
-      provider: "openai",
-      model: "gpt-5.5",
-      channel: "qa",
-      durationMs: 8,
-      outcome: "completed",
-      trace: runTrace,
-    });
-    emitTrustedDiagnosticEvent({
-      type: "harness.run.completed",
-      runId: DIRECT_RUN_ID,
-      harnessId: "qa-otel-direct",
-      pluginId: "diagnostics-otel",
-      provider: "openai",
-      model: "gpt-5.5",
-      channel: "qa",
-      durationMs: 10,
-      outcome: "completed",
-      trace: harnessTrace,
-    });
+    const failurePrivateData = {
+      errorMessage: `${DIRECT_ERROR_MESSAGE} OPENAI_API_KEY=${DIRECT_ERROR_SECRET}`,
+    };
+    emitTrustedDiagnosticEventWithPrivateData(
+      {
+        type: "run.completed",
+        runId: DIRECT_RUN_ID,
+        provider: "openai",
+        model: "gpt-5.5",
+        channel: "qa",
+        durationMs: 8,
+        outcome: "error",
+        errorCategory: "Error",
+        trace: runTrace,
+      },
+      failurePrivateData,
+    );
+    emitTrustedDiagnosticEventWithPrivateData(
+      {
+        type: "harness.run.completed",
+        runId: DIRECT_RUN_ID,
+        harnessId: "qa-otel-direct",
+        pluginId: "diagnostics-otel",
+        provider: "openai",
+        model: "gpt-5.5",
+        channel: "qa",
+        durationMs: 10,
+        outcome: "error",
+        trace: harnessTrace,
+      },
+      failurePrivateData,
+    );
     await waitForDiagnosticEventsDrained();
   } finally {
     await service.stop?.(context);
@@ -1627,6 +1640,23 @@ function assertSmoke(params: {
   });
   if (modelErrorSpans.length > 0) {
     failures.push("successful QA run exported model-call error attributes");
+  }
+
+  const failedRunSpans = params.spans.filter(
+    (span) =>
+      (span.name === "openclaw.run" || span.name === "openclaw.harness.run") &&
+      span.attributes["openclaw.error"] === `${DIRECT_ERROR_MESSAGE} OPENAI_API_KEY=***`,
+  );
+  if (failedRunSpans.length !== 2) {
+    const observed = params.spans
+      .filter((span) => span.name === "openclaw.run" || span.name === "openclaw.harness.run")
+      .map((span) => ({ name: span.name, error: span.attributes["openclaw.error"] }));
+    failures.push(
+      `run and harness spans did not export the redacted failure message: ${JSON.stringify(observed)}`,
+    );
+  }
+  if ((params.bodyText.metrics ?? []).some((body) => body.includes(DIRECT_ERROR_MESSAGE))) {
+    failures.push("run failure message leaked into OTLP metric attributes");
   }
 
   const serializedAttributes = JSON.stringify(params.spans.map((span) => span.attributes));

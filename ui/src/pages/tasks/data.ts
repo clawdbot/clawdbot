@@ -1,7 +1,7 @@
 export type TaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "timed_out";
 
 export type TaskRuntime = "subagent" | "cron" | "acp" | "cli";
-export type TaskTimestamp = number | string;
+type TaskTimestamp = number | string;
 
 export type TaskSummary = {
   id: string;

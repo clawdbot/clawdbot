@@ -45,13 +45,13 @@ type LogbookDayStatsPayload = {
   apps: Array<{ domain: string; ms: number }>;
 };
 
-export type LogbookTimelinePayload = {
+type LogbookTimelinePayload = {
   day: string;
   cards: LogbookCardPayload[];
   stats: LogbookDayStatsPayload;
 };
 
-export type LogbookDaysPayload = {
+type LogbookDaysPayload = {
   days: Array<{ day: string; cards: number; firstMs: number; lastMs: number }>;
 };
 

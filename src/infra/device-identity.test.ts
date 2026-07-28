@@ -141,6 +141,32 @@ describe("device identity crypto helpers", () => {
     });
   });
 
+  it("does not overwrite existing unrecognized identity files", async () => {
+    await withTempDir("openclaw-device-identity-unrecognized-", async (dir) => {
+      const identityPath = path.join(dir, "identity", "device.json");
+      fs.mkdirSync(path.dirname(identityPath), { recursive: true });
+      fs.writeFileSync(
+        identityPath,
+        `${JSON.stringify(
+          {
+            schema: "future-openclaw-device-identity",
+            stableDeviceId: "app-group-device-id",
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      const before = fs.readFileSync(identityPath, "utf8");
+
+      expect(loadDeviceIdentityIfPresent(identityPath)).toBeNull();
+      const loaded = loadOrCreateDeviceIdentity(identityPath);
+
+      expect(loaded.deviceId).not.toBe("app-group-device-id");
+      expect(fs.readFileSync(identityPath, "utf8")).toBe(before);
+    });
+  });
+
   it("does not migrate Swift raw-key identity files with mismatched key material", async () => {
     await withTempDir("openclaw-device-identity-swift-invalid-", async (dir) => {
       const identityPath = path.join(dir, "identity", "device.json");

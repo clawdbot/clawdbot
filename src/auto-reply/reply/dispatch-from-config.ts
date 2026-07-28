@@ -1463,6 +1463,8 @@ export async function dispatchReplyFromConfig(
   let dispatchLifecycleAbortController: AbortController | undefined;
   let preDispatchLifecycleInterrupted = false;
   const dispatchLifecycleWork = new Set<Promise<void>>();
+  const hasInboundAudioForTts = () =>
+    inboundAudio || dispatchReplyOperation?.acceptedSteeredInboundAudio === true;
   const trackDispatchLifecycleWork = (work: Promise<unknown>) => {
     if (!dispatchReplyOperation && !preDispatchLifecycleAdmission) {
       return;
@@ -2847,7 +2849,7 @@ export async function dispatchReplyFromConfig(
               cfg,
               channel: deliveryChannel,
               kind: "final",
-              inboundAudio,
+              inboundAudio: hasInboundAudioForTts(),
               ttsAuto: sessionTtsAuto,
               agentId: sessionAgentId,
               accountId: replyRoute.accountId,
@@ -3572,7 +3574,7 @@ export async function dispatchReplyFromConfig(
                         cfg,
                         channel: deliveryChannel,
                         kind: "tool",
-                        inboundAudio,
+                        inboundAudio: hasInboundAudioForTts(),
                         ttsAuto: sessionTtsAuto,
                         agentId: sessionAgentId,
                         accountId: replyRoute.accountId,
@@ -3821,7 +3823,7 @@ export async function dispatchReplyFromConfig(
                               cfg,
                               channel: deliveryChannel,
                               kind: "block",
-                              inboundAudio,
+                              inboundAudio: hasInboundAudioForTts(),
                               ttsAuto: sessionTtsAuto,
                               agentId: sessionAgentId,
                               accountId: replyRoute.accountId,
@@ -4028,7 +4030,7 @@ export async function dispatchReplyFromConfig(
             cfg,
             channel: deliveryChannel,
             kind: "final",
-            inboundAudio,
+            inboundAudio: hasInboundAudioForTts(),
             ttsAuto: sessionTtsAuto,
             agentId: sessionAgentId,
             accountId: replyRoute.accountId,

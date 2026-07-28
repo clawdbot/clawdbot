@@ -968,6 +968,124 @@ describe("openai transport stream", () => {
     expect(headers.accept).toBeUndefined();
   });
 
+  it("adds session_id header for the native ChatGPT/Codex Responses transport when a session id is present", () => {
+    const headers = testing.buildOpenAIClientHeaders(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
+        baseUrl: "https://chatgpt.com/backend-api",
+        headers: {},
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-chatgpt-responses">,
+      { systemPrompt: "", messages: [] } as never,
+      undefined,
+      undefined,
+      "session-abc-123",
+    );
+
+    expect(headers.session_id).toBe("session-abc-123");
+  });
+
+  it("omits the session_id header for the native ChatGPT/Codex Responses transport when no session id is available", () => {
+    const headers = testing.buildOpenAIClientHeaders(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
+        baseUrl: "https://chatgpt.com/backend-api",
+        headers: {},
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-chatgpt-responses">,
+      { systemPrompt: "", messages: [] } as never,
+    );
+
+    expect(headers.session_id).toBeUndefined();
+  });
+
+  it("does not add a session_id header for non-native OpenAI Responses transports even when a session id is present", () => {
+    const headers = testing.buildOpenAIClientHeaders(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        headers: {},
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      { systemPrompt: "", messages: [] } as never,
+      undefined,
+      undefined,
+      "session-abc-123",
+    );
+
+    expect(headers.session_id).toBeUndefined();
+  });
+
+  it("does not overwrite an existing session_id header on the native ChatGPT/Codex Responses transport", () => {
+    const headers = testing.buildOpenAIClientHeaders(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
+        baseUrl: "https://chatgpt.com/backend-api",
+        headers: {},
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-chatgpt-responses">,
+      { systemPrompt: "", messages: [] } as never,
+      { session_id: "caller-supplied-session" },
+      undefined,
+      "session-abc-123",
+    );
+
+    expect(headers.session_id).toBe("caller-supplied-session");
+  });
+
+  it("does not add a generated session_id header when the caller supplies a differently-cased one", () => {
+    const headers = testing.buildOpenAIClientHeaders(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
+        baseUrl: "https://chatgpt.com/backend-api",
+        headers: {},
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-chatgpt-responses">,
+      { systemPrompt: "", messages: [] } as never,
+      { Session_ID: "caller-supplied-session" },
+      undefined,
+      "session-abc-123",
+    );
+
+    expect(headers.Session_ID).toBe("caller-supplied-session");
+    expect(headers.session_id).toBeUndefined();
+  });
+
   it("adds SSE Accept only to native ChatGPT/Codex Responses stream requests", () => {
     const codexModel = {
       id: "gpt-5.5",

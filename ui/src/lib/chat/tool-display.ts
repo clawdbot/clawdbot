@@ -39,7 +39,7 @@ export type ToolDisplay = {
 };
 
 export type EmbedSandboxMode = ControlUiEmbedSandboxMode;
-export type ChatToolIconName = string;
+type ChatToolIconName = string;
 
 const EMOJI_ICON_MAP: Record<string, ChatToolIconName> = {
   "🧩": "puzzle",

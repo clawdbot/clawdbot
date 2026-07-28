@@ -200,7 +200,7 @@ export function parsePluginApprovalRequested(payload: unknown): ExecApprovalRequ
   };
 }
 
-export function pruneExecApprovalQueue(queue: ExecApprovalRequest[]): ExecApprovalRequest[] {
+function pruneExecApprovalQueue(queue: ExecApprovalRequest[]): ExecApprovalRequest[] {
   const now = Date.now();
   return queue.filter((entry) => entry.expiresAtMs > now);
 }

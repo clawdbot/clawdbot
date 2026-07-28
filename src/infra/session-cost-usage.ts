@@ -1233,6 +1233,17 @@ async function* readJsonlRecords(
   }
 }
 
+async function* readJsonlRecordsBestEffort(
+  filePath: string,
+): AsyncGenerator<Record<string, unknown>> {
+  try {
+    yield* readJsonlRecords(filePath);
+  } catch {
+    // Diagnostic readers return the records available before a stream failure.
+    // Durable cache scans use the strict reader so partial data is never marked fresh.
+  }
+}
+
 async function scanTranscriptFile(params: {
   filePath: string;
   config?: OpenClawConfig;
@@ -2651,7 +2662,7 @@ export async function loadSessionLogs(params: {
   const retentionLimit = limit * 2;
   const resolveCost = createUsageCostResolver(params.config);
 
-  for await (const parsed of readJsonlRecords(sessionFile)) {
+  for await (const parsed of readJsonlRecordsBestEffort(sessionFile)) {
     try {
       const message = parsed.message as Record<string, unknown> | undefined;
       if (!message) {

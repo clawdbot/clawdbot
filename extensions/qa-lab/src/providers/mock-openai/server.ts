@@ -113,6 +113,11 @@ type MockOpenAiRequestSnapshot = {
   toolOutputStructuredError?: true;
 };
 
+// Runtime-context delimiters are owned by src/agents/internal-runtime-context.ts.
+// This mock mirrors the wire shape so delimiter drift fails through QA timeouts.
+const INTERNAL_RUNTIME_CONTEXT_BEGIN = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
+const INTERNAL_RUNTIME_CONTEXT_END = "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+
 // Anthropic /v1/messages request/response shapes the mock actually needs.
 // This is a subset of the real Anthropic Messages API — just enough so the
 // QA suite can run its parity pack against a "baseline" Anthropic provider
@@ -368,7 +373,7 @@ function extractLastUserText(input: ResponsesInputItem[]) {
       continue;
     }
     const text = extractInputText(item.content);
-    if (text) {
+    if (text && !isInternalRuntimeContextCarrierText(text)) {
       return text;
     }
   }
@@ -378,11 +383,22 @@ function extractLastUserText(input: ResponsesInputItem[]) {
 function findLastUserIndex(input: ResponsesInputItem[]) {
   for (let index = input.length - 1; index >= 0; index -= 1) {
     const item = input[index];
-    if (item.role === "user" && Array.isArray(item.content)) {
+    if (item.role !== "user" || !Array.isArray(item.content)) {
+      continue;
+    }
+    if (!isInternalRuntimeContextCarrierText(extractInputText(item.content))) {
       return index;
     }
   }
   return -1;
+}
+
+function isInternalRuntimeContextCarrierText(text: string) {
+  const trimmed = text.trim();
+  return (
+    trimmed.includes(INTERNAL_RUNTIME_CONTEXT_BEGIN) &&
+    trimmed.endsWith(INTERNAL_RUNTIME_CONTEXT_END)
+  );
 }
 
 function isToolOutputContinuationText(text: string) {

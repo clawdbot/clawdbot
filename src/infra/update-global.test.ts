@@ -482,6 +482,140 @@ describe("update global helpers", () => {
     });
   });
 
+  it("keeps npm self-updates on the running package root when the PATH probe diverges", async () => {
+    await withMockedPlatform("darwin", async () => {
+      await withTempDir({ prefix: "openclaw-update-ephemeral-probe-" }, async (base) => {
+        // The running install lives in an nvm tree while `npm root -g` on
+        // PATH answers with a Homebrew Cellar root — the skew produced when a
+        // per-Node npm shim is executed by a foreign node (e.g. a launchd
+        // service PATH pairing nvm's npm with Homebrew's node). Installing
+        // into the Cellar root would create a brand-new tree the running
+        // install never loads from.
+        const nvmPrefix = path.join(base, "home", ".nvm", "versions", "node", "v24.5.0");
+        const nvmRoot = path.join(nvmPrefix, "lib", "node_modules");
+        const pkgRoot = path.join(nvmRoot, "openclaw");
+        const cellarRoot = path.join(
+          base,
+          "opt",
+          "homebrew",
+          "Cellar",
+          "node",
+          "26.3.1",
+          "lib",
+          "node_modules",
+        );
+        await fs.mkdir(pkgRoot, { recursive: true });
+
+        const runCommand = createNpmRootRunner({ defaultNpmRoot: cellarRoot });
+
+        await expect(
+          resolveGlobalInstallTarget({
+            manager: "npm",
+            runCommand,
+            timeoutMs: 1000,
+            pkgRoot,
+          }),
+        ).resolves.toEqual({
+          manager: "npm",
+          command: "npm",
+          globalRoot: nvmRoot,
+          packageRoot: pkgRoot,
+        });
+      });
+    });
+  });
+
+  it("keeps scoped npm self-updates on the running package root", async () => {
+    await withMockedPlatform("darwin", async () => {
+      await withTempDir({ prefix: "openclaw-update-scoped-probe-" }, async (base) => {
+        const nvmPrefix = path.join(base, "home", ".nvm", "versions", "node", "v24.5.0");
+        const nvmRoot = path.join(nvmPrefix, "lib", "node_modules");
+        const pkgRoot = path.join(nvmRoot, "@scope", "cli");
+        const cellarRoot = path.join(
+          base,
+          "opt",
+          "homebrew",
+          "Cellar",
+          "node",
+          "26.3.1",
+          "lib",
+          "node_modules",
+        );
+        await fs.mkdir(pkgRoot, { recursive: true });
+
+        const runCommand = createNpmRootRunner({ defaultNpmRoot: cellarRoot });
+
+        await expect(
+          resolveGlobalInstallTarget({
+            manager: "npm",
+            runCommand,
+            timeoutMs: 1000,
+            pkgRoot,
+            packageName: "@scope/cli",
+          }),
+        ).resolves.toEqual({
+          manager: "npm",
+          command: "npm",
+          globalRoot: nvmRoot,
+          packageRoot: pkgRoot,
+        });
+      });
+    });
+  });
+
+  it("keeps the npm probe when the package root is not globally installed", async () => {
+    await withMockedPlatform("darwin", async () => {
+      await withTempDir({ prefix: "openclaw-update-probe-only-" }, async (base) => {
+        const nvmPrefix = path.join(base, "home", ".nvm", "versions", "node", "v24.5.0");
+        const nvmRoot = path.join(nvmPrefix, "lib", "node_modules");
+        const pkgRoot = path.join(base, "checkout", "node_modules", "openclaw");
+        await fs.mkdir(pkgRoot, { recursive: true });
+
+        const runCommand = createNpmRootRunner({ defaultNpmRoot: nvmRoot });
+
+        await expect(
+          resolveGlobalInstallTarget({
+            manager: "npm",
+            runCommand,
+            timeoutMs: 1000,
+            pkgRoot,
+          }),
+        ).resolves.toEqual({
+          manager: "npm",
+          command: "npm",
+          globalRoot: nvmRoot,
+          packageRoot: path.join(nvmRoot, "openclaw"),
+        });
+      });
+    });
+  });
+
+  it("falls back to the running package root when the npm root probe fails", async () => {
+    await withMockedPlatform("darwin", async () => {
+      await withTempDir({ prefix: "openclaw-update-probe-failure-" }, async (base) => {
+        const globalRoot = path.join(base, "usr", "local", "lib", "node_modules");
+        const pkgRoot = path.join(globalRoot, "openclaw");
+        await fs.mkdir(pkgRoot, { recursive: true });
+
+        const runCommand: CommandRunner = async () => ({ stdout: "", stderr: "", code: 1 });
+
+        await expect(
+          resolveGlobalInstallTarget({
+            manager: "npm",
+            runCommand,
+            timeoutMs: 1000,
+            pkgRoot,
+          }),
+        ).resolves.toEqual({
+          manager: "npm",
+          command: "npm",
+          globalRoot,
+          packageRoot: pkgRoot,
+        });
+      });
+    });
+  });
+
   it("does not infer npm ownership from path shape alone when the owning npm binary is absent", async () => {
     await withTempDir({ prefix: "openclaw-update-npm-missing-bin-" }, async (base) => {
       const brewRoot = path.join(base, "opt", "homebrew", "lib", "node_modules");

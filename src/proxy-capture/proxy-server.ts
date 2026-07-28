@@ -14,6 +14,7 @@ const TRUTHY_ENV = new Set(["1", "true", "yes", "on"]);
 const DEBUG_PROXY_DIRECT_CONNECT_OVERRIDE =
   "OPENCLAW_DEBUG_PROXY_ALLOW_DIRECT_CONNECT_WITH_MANAGED_PROXY";
 const CAPTURE_BODY_PREVIEW_BYTES = 8192;
+const BAD_GATEWAY_BODY = "Bad Gateway\n";
 
 type BodyPreviewCapture = {
   chunks: Buffer[];
@@ -148,6 +149,24 @@ function finishBodyPreviewCapture(capture: BodyPreviewCapture): {
   };
 }
 
+function finishProxyResponseAfterUpstreamError(res: ServerResponse): void {
+  if (res.destroyed || res.writableEnded) {
+    return;
+  }
+  // HTTP status cannot be replaced after forwarding upstream headers. Closing
+  // the downstream prevents a partial 2xx body from looking complete.
+  if (res.headersSent) {
+    res.destroy();
+    return;
+  }
+  res.writeHead(502, {
+    Connection: "close",
+    "Content-Type": "text/plain; charset=utf-8",
+    "Content-Length": Buffer.byteLength(BAD_GATEWAY_BODY),
+  });
+  res.end(BAD_GATEWAY_BODY);
+}
+
 export async function startDebugProxyServer(params: {
   host?: string;
   port?: number;
@@ -240,6 +259,14 @@ export async function startDebugProxyServer(params: {
             });
             res.end();
           });
+          upstreamRes.on("error", (error) => {
+            recordTargetEvent({
+              direction: "inbound",
+              kind: "error",
+              errorText: error.message,
+            });
+            finishProxyResponseAfterUpstreamError(res);
+          });
           res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
         },
       );
@@ -268,8 +295,7 @@ export async function startDebugProxyServer(params: {
           kind: "error",
           errorText: error.message,
         });
-        res.statusCode = 502;
-        res.end(error.message);
+        finishProxyResponseAfterUpstreamError(res);
       });
       req.pipe(upstream);
     })();

@@ -466,6 +466,14 @@ function parseContainerSendTimestamp(raw: unknown): number | undefined {
   return timestamp;
 }
 
+function normalizeContainerQuoteTimestamp(raw: unknown): number | undefined {
+  return parseStrictNonNegativeInteger(raw) ?? undefined;
+}
+
+function normalizeContainerQuoteText(raw: unknown): string | undefined {
+  return typeof raw === "string" ? raw : undefined;
+}
+
 /**
  * Send message via bbernhard container REST API.
  */
@@ -476,6 +484,9 @@ export async function containerSendMessage(params: {
   message: string;
   textStyles?: Array<{ start: number; length: number; style: string }>;
   attachments?: string[];
+  quoteTimestamp?: number;
+  quoteAuthor?: string;
+  quoteMessage?: string;
   timeoutMs?: number;
 }): Promise<{ timestamp?: number }> {
   const payload: Record<string, unknown> = {
@@ -492,6 +503,11 @@ export async function containerSendMessage(params: {
   if (params.attachments && params.attachments.length > 0) {
     // Container API only accepts base64-encoded attachments, not file paths.
     payload.base64_attachments = await filesToBase64DataUris(params.attachments);
+  }
+  if (params.quoteTimestamp !== undefined && params.quoteAuthor) {
+    payload.quote_timestamp = params.quoteTimestamp;
+    payload.quote_author = params.quoteAuthor;
+    payload.quote_message = params.quoteMessage ?? "";
   }
 
   const result = await containerRestRequest<{ timestamp?: unknown }>(
@@ -668,6 +684,10 @@ export async function containerRpcRequest<T = unknown>(
         return { start: Number(start), length: Number(length), style };
       });
 
+      const quoteTimestamp = normalizeContainerQuoteTimestamp(
+        p.quoteTimestamp ?? p["quote-timestamp"],
+      );
+      const quoteAuthor = normalizeContainerQuoteText(p.quoteAuthor ?? p["quote-author"]);
       const result = await containerSendMessage({
         baseUrl: opts.baseUrl,
         account: (p.account as string) ?? "",
@@ -675,6 +695,9 @@ export async function containerRpcRequest<T = unknown>(
         message: (p.message as string) ?? "",
         textStyles,
         attachments: p.attachments as string[] | undefined,
+        quoteTimestamp,
+        quoteAuthor: quoteAuthor ? stripUuidPrefix(quoteAuthor) : undefined,
+        quoteMessage: normalizeContainerQuoteText(p.quoteMessage ?? p["quote-message"]),
         timeoutMs: opts.timeoutMs,
       });
       return result as T;

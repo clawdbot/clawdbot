@@ -7,6 +7,7 @@ import {
   normalizeNullableString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { MediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
 import { extractGeminiResponse } from "../../packages/media-understanding-common/src/output-extract.js";
 import {
@@ -100,7 +101,7 @@ function trimOutput(text: string, maxChars?: number): string {
   if (!maxChars || trimmed.length <= maxChars) {
     return trimmed;
   }
-  return trimmed.slice(0, maxChars).trim();
+  return truncateUtf16Safe(trimmed, maxChars).trim();
 }
 
 function extractSherpaOnnxText(raw: string): { matched: boolean; text: string } {

@@ -117,8 +117,12 @@ describe("ExtensionRelayBridge", () => {
 
     const attached = client.frames().find((frame) => frame.method === "Target.attachedToTarget");
     expect(attached).toBeTruthy();
-    const params = attached?.params as { targetInfo?: { targetId?: string }; sessionId?: string };
+    const params = attached?.params as {
+      targetInfo?: { targetId?: string; browserContextId?: string };
+      sessionId?: string;
+    };
     expect(params.targetInfo?.targetId).toBe("target-1");
+    expect(params.targetInfo?.browserContextId).toBe("openclaw-extension-context");
     expect(typeof params.sessionId).toBe("string");
   });
 
@@ -154,6 +158,94 @@ describe("ExtensionRelayBridge", () => {
     expect(forwarded).toMatchObject({ tabId: 1, method: "Page.navigate" });
     const response = client.frames().find((frame) => frame.id === 2);
     expect(response?.result).toMatchObject({ ok: true });
+  });
+
+  it("multiplexes Playwright page CDP sessions over the shared tab attachment", async () => {
+    const bridge = new ExtensionRelayBridge();
+    const { socket: extSocket, handlers } = wireExtension(bridge);
+    sendHello(handlers);
+
+    const client = new FakeSocket();
+    const cdp = bridge.attachCdpClientSocket(client);
+    cdp.onMessage(
+      JSON.stringify({ id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } }),
+    );
+    await flush();
+    cdp.onMessage(JSON.stringify({ id: 2, method: "Target.attachToBrowserTarget" }));
+    await flush();
+    const browserSessionId = (
+      client.frames().find((frame) => frame.id === 2)?.result as { sessionId?: string }
+    )?.sessionId;
+    expect(browserSessionId).toBeTruthy();
+
+    cdp.onMessage(
+      JSON.stringify({
+        id: 3,
+        sessionId: browserSessionId,
+        method: "Target.attachToTarget",
+        params: { targetId: "target-1", flatten: true },
+      }),
+    );
+    await flush();
+    const pageSessionId = (
+      client.frames().find((frame) => frame.id === 3)?.result as { sessionId?: string }
+    )?.sessionId;
+    expect(pageSessionId).toBeTruthy();
+    expect(pageSessionId).not.toBe(browserSessionId);
+
+    cdp.onMessage(
+      JSON.stringify({ id: 4, sessionId: pageSessionId, method: "Runtime.evaluate", params: {} }),
+    );
+    await flush();
+    expect(
+      extSocket
+        .frames()
+        .find((frame) => frame.type === "cdp" && frame.method === "Runtime.evaluate"),
+    ).toMatchObject({ tabId: 1, method: "Runtime.evaluate" });
+    expect(client.frames().find((frame) => frame.id === 4)?.result).toMatchObject({ ok: true });
+
+    handlers.onMessage(
+      JSON.stringify({
+        type: "cdpEvent",
+        tabId: 1,
+        method: "Runtime.consoleAPICalled",
+        params: { type: "log" },
+      }),
+    );
+    await flush();
+    expect(
+      client
+        .frames()
+        .find(
+          (frame) =>
+            frame.sessionId === pageSessionId && frame.method === "Runtime.consoleAPICalled",
+        ),
+    ).toMatchObject({ params: { type: "log" } });
+
+    const otherClient = new FakeSocket();
+    const otherCdp = bridge.attachCdpClientSocket(otherClient);
+    otherCdp.onMessage(
+      JSON.stringify({
+        id: 1,
+        method: "Target.detachFromTarget",
+        params: { sessionId: pageSessionId },
+      }),
+    );
+    await flush();
+    expect(otherClient.frames().find((frame) => frame.id === 1)?.error).toMatchObject({
+      code: -32001,
+    });
+
+    cdp.onMessage(
+      JSON.stringify({
+        id: 5,
+        sessionId: browserSessionId,
+        method: "Target.detachFromTarget",
+        params: { sessionId: pageSessionId },
+      }),
+    );
+    await flush();
+    expect(client.frames().find((frame) => frame.id === 5)?.result).toEqual({});
   });
 
   it("creates a tab inside the group and returns its synthetic target", async () => {

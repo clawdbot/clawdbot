@@ -281,7 +281,7 @@ function syncToolStreamMessages(host: ToolStreamHost) {
     .filter((msg): msg is Record<string, unknown> => Boolean(msg));
 }
 
-export function flushToolStreamSync(host: ToolStreamHost) {
+function flushToolStreamSync(host: ToolStreamHost) {
   if (host.toolStreamSyncTimer != null) {
     clearTimeout(host.toolStreamSyncTimer);
     host.toolStreamSyncTimer = null;

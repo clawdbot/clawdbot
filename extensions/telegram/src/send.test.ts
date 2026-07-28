@@ -2401,11 +2401,12 @@ describe("sendMessageTelegram", () => {
     vi.useRealTimers();
   });
 
-  it("retries wrapped pre-connect HttpError sends", async () => {
+  it("retries wrapped Undici connect timeout sends", async () => {
     vi.useFakeTimers();
     const chatId = "123";
-    const root = Object.assign(new Error("connect ECONNREFUSED api.telegram.org"), {
-      code: "ECONNREFUSED",
+    const root = Object.assign(new Error("Connect Timeout Error"), {
+      name: "ConnectTimeoutError",
+      code: "UND_ERR_CONNECT_TIMEOUT",
     });
     const fetchError = Object.assign(new TypeError("fetch failed"), { cause: root });
     const err = Object.assign(new Error("Network request for 'sendMessage' failed!"), {

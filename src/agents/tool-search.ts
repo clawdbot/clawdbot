@@ -2111,7 +2111,9 @@ function runCodeModeChild(params: {
     const child = spawn(process.execPath, buildCodeModeChildArgs(), {
       cwd: os.tmpdir(),
       env: {},
-      stdio: ["ignore", "pipe", "pipe", "ipc"],
+      // The worker returns logs/results over IPC and never writes stdout.
+      // Ignore it so an unused pipe cannot fill or surface unhandled errors.
+      stdio: ["ignore", "ignore", "pipe", "ipc"],
     });
     let stderrTail = "";
     let settled = false;
@@ -2153,6 +2155,9 @@ function runCodeModeChild(params: {
     child.stderr?.setEncoding("utf8");
     child.stderr?.on("data", (chunk: string) => {
       stderrTail = appendToolSearchCodeStderrTail(stderrTail, chunk);
+    });
+    child.stderr?.on("error", (error) => {
+      settle(() => reject(error));
     });
 
     child.on("error", (error) => {
@@ -2357,5 +2362,6 @@ export const testing = {
   applyToolSearchCatalog,
   addClientToolsToToolSearchCatalog,
   appendToolSearchCodeStderrTail,
+  runCodeModeChild,
 };
 export { testing as __testing };

@@ -54,6 +54,9 @@ export async function stopBrowserRuntime(params: {
     if (params.current.extensionRelays?.size) {
       const { stopExtensionRelays } = await getExtensionRelayModule();
       await stopExtensionRelays(params.current);
+      const { disposeGatewayExtensionRelay } =
+        await import("./extension-relay/gateway-relay-route.js");
+      disposeGatewayExtensionRelay();
     }
 
     if (params.closeServer && params.current.server) {

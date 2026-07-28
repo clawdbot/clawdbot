@@ -7,7 +7,6 @@ import {
   resolveAuthHintKind,
   resolvePairingHint,
   shouldShowInsecureContextHint,
-  shouldShowPairingHint,
 } from "./overview-hints.ts";
 
 afterEach(() => {
@@ -74,43 +73,31 @@ describe("resolveGatewayTokenForUrlEdit", () => {
   });
 });
 
-describe("shouldShowPairingHint", () => {
-  it("returns true for 'pairing required' close reason", () => {
-    expect(shouldShowPairingHint(false, "disconnected (1008): pairing required")).toBe(true);
-  });
-
-  it("matches case-insensitively", () => {
-    expect(shouldShowPairingHint(false, "Pairing Required")).toBe(true);
-  });
-
-  it("returns false when connected", () => {
-    expect(shouldShowPairingHint(true, "disconnected (1008): pairing required")).toBe(false);
-  });
-
-  it("returns false when lastError is null", () => {
-    expect(shouldShowPairingHint(false, null)).toBe(false);
-  });
-
-  it("returns false for unrelated errors", () => {
-    expect(shouldShowPairingHint(false, "disconnected (1006): no reason")).toBe(false);
-  });
-
-  it("returns false for auth errors", () => {
-    expect(shouldShowPairingHint(false, "disconnected (4008): unauthorized")).toBe(false);
-  });
-
-  it("returns true for structured pairing code", () => {
-    expect(
-      shouldShowPairingHint(
-        false,
-        "disconnected (4008): connect failed",
-        ConnectErrorDetailCodes.PAIRING_REQUIRED,
-      ),
-    ).toBe(true);
-  });
-});
-
 describe("resolvePairingHint", () => {
+  it.each([
+    ["close reason", "disconnected (1008): pairing required", undefined],
+    ["case-insensitive close reason", "Pairing Required", undefined],
+    [
+      "structured pairing code",
+      "disconnected (4008): connect failed",
+      ConnectErrorDetailCodes.PAIRING_REQUIRED,
+    ],
+  ])("detects pairing required from %s", (_name, lastError, lastErrorCode) => {
+    expect(resolvePairingHint(false, lastError, lastErrorCode)).toEqual({
+      kind: "pairing-required",
+      requestId: null,
+    });
+  });
+
+  it.each([
+    ["connected clients", true, "disconnected (1008): pairing required"],
+    ["missing errors", false, null],
+    ["unrelated errors", false, "disconnected (1006): no reason"],
+    ["auth errors", false, "disconnected (4008): unauthorized"],
+  ])("ignores %s", (_name, connected, lastError) => {
+    expect(resolvePairingHint(connected, lastError)).toBeNull();
+  });
+
   it("detects scope-upgrade pending approval and keeps the request id", () => {
     expect(
       resolvePairingHint(

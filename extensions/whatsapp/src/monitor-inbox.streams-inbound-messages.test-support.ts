@@ -1120,6 +1120,185 @@ describe("web monitor inbox", () => {
     }
   });
 
+  it("rejects direct sends before Baileys sendMessage when reachout timelock is active", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    sock.fetchAccountReachoutTimelock.mockResolvedValueOnce({
+      isActive: true,
+      enforcementType: "WEB_COMPANION_ONLY",
+      timeEnforcementEnds: new Date(Date.now() + 60_000),
+    });
+
+    try {
+      await expect(listener.sendMessage("+1555", "hello")).rejects.toThrow(
+        "WhatsApp reachout timelock is active",
+      );
+
+      expect(sock.fetchAccountReachoutTimelock).toHaveBeenCalledTimes(1);
+      expect(sock.sendMessage).not.toHaveBeenCalled();
+    } finally {
+      await listener.close();
+    }
+  });
+
+  it("uses connection.update reachout timelock state before direct sends", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    sock.ev.emit("connection.update", {
+      reachoutTimeLock: {
+        isActive: true,
+        enforcementType: "WEB_COMPANION_ONLY",
+      },
+    });
+
+    try {
+      await expect(listener.sendMessage("+1555", "hello")).rejects.toThrow(
+        "WhatsApp reachout timelock is active",
+      );
+
+      expect(sock.fetchAccountReachoutTimelock).not.toHaveBeenCalled();
+      expect(sock.sendMessage).not.toHaveBeenCalled();
+    } finally {
+      await listener.close();
+    }
+  });
+
+  it("allows direct sends after reachout timelock clears", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    sock.ev.emit("connection.update", {
+      reachoutTimeLock: {
+        isActive: true,
+        enforcementType: "WEB_COMPANION_ONLY",
+      },
+    });
+    sock.ev.emit("connection.update", {
+      reachoutTimeLock: {
+        isActive: false,
+      },
+    });
+
+    try {
+      await expect(listener.sendMessage("+1555", "hello")).resolves.toBeDefined();
+
+      expect(sock.fetchAccountReachoutTimelock).toHaveBeenCalledTimes(1);
+      expect(sock.sendMessage).toHaveBeenCalledTimes(1);
+    } finally {
+      await listener.close();
+    }
+  });
+
+  it("refreshes inactive reachout timelock state before later direct sends", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    sock.fetchAccountReachoutTimelock
+      .mockResolvedValueOnce({ isActive: false })
+      .mockResolvedValueOnce({
+        isActive: true,
+        enforcementType: "WEB_COMPANION_ONLY",
+        timeEnforcementEnds: new Date(Date.now() + 60_000),
+      });
+
+    try {
+      await expect(listener.sendMessage("+1555", "first")).resolves.toBeDefined();
+      await expect(listener.sendMessage("+1555", "second")).rejects.toThrow(
+        "WhatsApp reachout timelock is active",
+      );
+
+      expect(sock.fetchAccountReachoutTimelock).toHaveBeenCalledTimes(2);
+      expect(sock.sendMessage).toHaveBeenCalledTimes(1);
+    } finally {
+      await listener.close();
+    }
+  });
+
+  it("reuses a successful readiness preflight for the immediate direct send", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    sock.fetchAccountReachoutTimelock.mockResolvedValueOnce({ isActive: false });
+
+    try {
+      await listener.assertSendReady?.("+1555");
+      await expect(listener.sendMessage("+1555", "hello")).resolves.toBeDefined();
+
+      expect(sock.fetchAccountReachoutTimelock).toHaveBeenCalledTimes(1);
+      expect(sock.sendMessage).toHaveBeenCalledTimes(1);
+    } finally {
+      await listener.close();
+    }
+  });
+
+  it("invalidates readiness preflight when a later active timelock update arrives", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    sock.fetchAccountReachoutTimelock.mockResolvedValueOnce({ isActive: false });
+
+    try {
+      await listener.assertSendReady?.("+1555");
+      sock.ev.emit("connection.update", {
+        reachoutTimeLock: {
+          isActive: true,
+          enforcementType: "WEB_COMPANION_ONLY",
+        },
+      });
+
+      await expect(listener.sendMessage("+1555", "hello")).rejects.toThrow(
+        "WhatsApp reachout timelock is active",
+      );
+      expect(sock.fetchAccountReachoutTimelock).toHaveBeenCalledTimes(1);
+      expect(sock.sendMessage).not.toHaveBeenCalled();
+    } finally {
+      await listener.close();
+    }
+  });
+
+  it("does not apply account reachout timelock to group sends", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    sock.ev.emit("connection.update", {
+      reachoutTimeLock: {
+        isActive: true,
+        enforcementType: "WEB_COMPANION_ONLY",
+      },
+    });
+
+    try {
+      await expect(listener.sendMessage("120363401234567890@g.us", "hello")).resolves.toBeDefined();
+
+      expect(sock.fetchAccountReachoutTimelock).not.toHaveBeenCalled();
+      expect(sock.sendMessage).toHaveBeenCalledWith("120363401234567890@g.us", { text: "hello" });
+    } finally {
+      await listener.close();
+    }
+  });
+
+  it("blocks direct inbound composing presence when reachout timelock is active", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const socketRef = createSocketRef();
+    const { listener, sock, inbound } = await primeInboundReplyHandle({
+      onMessage,
+      socketRef,
+      upsertId: "reachout-composing",
+      retryPolicy: fastReconnectPolicy(2),
+    });
+    sock.ev.emit("connection.update", {
+      reachoutTimeLock: {
+        isActive: true,
+        enforcementType: "WEB_COMPANION_ONLY",
+      },
+    });
+    sock.sendPresenceUpdate.mockClear();
+
+    try {
+      await inbound.platform.sendComposing();
+
+      expect(sock.fetchAccountReachoutTimelock).not.toHaveBeenCalled();
+      expect(sock.sendPresenceUpdate).not.toHaveBeenCalled();
+    } finally {
+      await listener.close();
+    }
+  });
+
   it("times out stalled socket sends at the default Baileys query timeout", async () => {
     const onMessage = vi.fn(async () => undefined);
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);

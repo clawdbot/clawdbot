@@ -19,6 +19,7 @@ const loadWebMediaMock = vi.fn();
 let sendMessageWhatsApp: typeof import("./send.js").sendMessageWhatsApp;
 let sendPollWhatsApp: typeof import("./send.js").sendPollWhatsApp;
 let sendReactionWhatsApp: typeof import("./send.js").sendReactionWhatsApp;
+let sendTypingWhatsApp: typeof import("./send.js").sendTypingWhatsApp;
 let resetLogger: typeof import("openclaw/plugin-sdk/runtime-env").resetLogger;
 let setLoggerOverride: typeof import("openclaw/plugin-sdk/runtime-env").setLoggerOverride;
 
@@ -80,7 +81,8 @@ describe("web outbound", () => {
   );
 
   beforeAll(async () => {
-    ({ sendMessageWhatsApp, sendPollWhatsApp, sendReactionWhatsApp } = await import("./send.js"));
+    ({ sendMessageWhatsApp, sendPollWhatsApp, sendReactionWhatsApp, sendTypingWhatsApp } =
+      await import("./send.js"));
     ({ resetLogger, setLoggerOverride } = await import("openclaw/plugin-sdk/runtime-env"));
   });
 
@@ -137,6 +139,30 @@ describe("web outbound", () => {
     });
     expect(sendComposingTo).toHaveBeenCalledWith("+1555");
     expect(sendMessage).toHaveBeenCalledWith("+1555", "hi", undefined, undefined);
+  });
+
+  it("checks send readiness before composing or sending direct messages", async () => {
+    const assertSendReady = vi.fn(async () => {
+      throw new Error("WhatsApp reachout timelock is active");
+    });
+    hoisted.controllerListeners.set("default", {
+      assertSendReady,
+      sendComposingTo,
+      sendMessage,
+      sendPoll,
+      sendReaction,
+    });
+
+    await expect(
+      sendMessageWhatsApp("+1555", "hi", {
+        verbose: false,
+        cfg: WHATSAPP_TEST_CFG,
+      }),
+    ).rejects.toThrow("WhatsApp reachout timelock is active");
+
+    expect(assertSendReady).toHaveBeenCalledWith("+1555");
+    expect(sendComposingTo).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("returns the actual outbound key remote JID when Baileys resolves a LID target", async () => {
@@ -256,6 +282,46 @@ describe("web outbound", () => {
     });
     expect(sendComposingTo).not.toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("checks send readiness before standalone direct typing", async () => {
+    const assertSendReady = vi.fn(async () => {
+      throw new Error("WhatsApp reachout timelock is active");
+    });
+    hoisted.controllerListeners.set("default", {
+      assertSendReady,
+      sendComposingTo,
+      sendMessage,
+      sendPoll,
+      sendReaction,
+    });
+
+    await expect(
+      sendTypingWhatsApp("+1555", {
+        cfg: WHATSAPP_TEST_CFG,
+      }),
+    ).rejects.toThrow("WhatsApp reachout timelock is active");
+
+    expect(assertSendReady).toHaveBeenCalledWith("+1555");
+    expect(sendComposingTo).not.toHaveBeenCalled();
+  });
+
+  it("skips standalone newsletter typing without readiness checks", async () => {
+    const assertSendReady = vi.fn(async () => undefined);
+    hoisted.controllerListeners.set("default", {
+      assertSendReady,
+      sendComposingTo,
+      sendMessage,
+      sendPoll,
+      sendReaction,
+    });
+
+    await sendTypingWhatsApp("120363401234567890@newsletter", {
+      cfg: WHATSAPP_TEST_CFG,
+    });
+
+    expect(assertSendReady).not.toHaveBeenCalled();
+    expect(sendComposingTo).not.toHaveBeenCalled();
   });
 
   it("throws a helpful error when no active listener exists", async () => {
@@ -721,6 +787,30 @@ describe("web outbound", () => {
       durationSeconds: undefined,
       durationHours: undefined,
     });
+  });
+
+  it("checks send readiness before sending direct polls", async () => {
+    const assertSendReady = vi.fn(async () => {
+      throw new Error("WhatsApp reachout timelock is active");
+    });
+    hoisted.controllerListeners.set("default", {
+      assertSendReady,
+      sendComposingTo,
+      sendMessage,
+      sendPoll,
+      sendReaction,
+    });
+
+    await expect(
+      sendPollWhatsApp(
+        "+1555",
+        { question: "Lunch?", options: ["Pizza", "Sushi"] },
+        { verbose: false, cfg: WHATSAPP_TEST_CFG },
+      ),
+    ).rejects.toThrow("WhatsApp reachout timelock is active");
+
+    expect(assertSendReady).toHaveBeenCalledWith("+1555");
+    expect(sendPoll).not.toHaveBeenCalled();
   });
 
   it("redacts recipients and poll text in outbound logs", async () => {

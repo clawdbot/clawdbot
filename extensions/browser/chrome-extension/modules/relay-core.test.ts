@@ -2,7 +2,7 @@
 // extension-browser vitest glob (extensions/browser/**/*.test.ts).
 import { describe, expect, it } from "vitest";
 import {
-  buildRelayWsUrl,
+  buildRelayWsProtocols,
   nearestGroupColor,
   parsePairingString,
   reconnectDelayMs,
@@ -25,9 +25,11 @@ describe("parsePairingString", () => {
     if (!parsed) {
       throw new Error("expected pairing string to parse");
     }
-    expect(buildRelayWsUrl(parsed.relayUrl, parsed.token)).toBe(
-      `ws://127.0.0.1:${port}/extension?token=${token}`,
-    );
+    expect(parsed.relayUrl).toBe(`ws://127.0.0.1:${port}/extension`);
+    expect(buildRelayWsProtocols(parsed.token)).toEqual([
+      "openclaw-extension-relay",
+      `openclaw-extension-token.${token}`,
+    ]);
   });
 
   it("rejects malformed strings", () => {

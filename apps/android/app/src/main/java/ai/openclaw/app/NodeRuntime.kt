@@ -661,6 +661,7 @@ class NodeRuntime private constructor(
   val gatewayDefaultAgentId: StateFlow<String?> = _gatewayDefaultAgentId.asStateFlow()
   private val _gatewayAgents = MutableStateFlow<List<GatewayAgentSummary>>(emptyList())
   val gatewayAgents: StateFlow<List<GatewayAgentSummary>> = _gatewayAgents.asStateFlow()
+
   // Preserve an explicit user choice across metadata refreshes. Gateway reconnects
   // clear it so the newly connected gateway's canonical main agent wins again.
   @Volatile private var selectedChatAgentId: String? = null

@@ -718,6 +718,49 @@ describe("OpenAI-compatible completions params", () => {
     });
   });
 
+  it("anchors the OpenRouter Anthropic cache marker on the last stable user turn, skipping a trailing runtime-context carrier", async () => {
+    let capturedMessages: unknown;
+    const stream = streamOpenAICompletions(
+      {
+        ...createModel(32_000),
+        id: "anthropic/claude-sonnet-4.6",
+        provider: "openrouter",
+        baseUrl: "https://openrouter.ai/api/v1",
+      },
+      {
+        systemPrompt: "system",
+        messages: [
+          { role: "user", content: "stable question", timestamp: 1 },
+          {
+            role: "user",
+            content: "volatile current-turn metadata",
+            timestamp: 2,
+            runtimeContextCarrier: true,
+          },
+        ],
+      },
+      {
+        apiKey: "sk-test",
+        onPayload(payload) {
+          capturedMessages = (payload as { messages?: unknown }).messages;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    const messages = capturedMessages as Array<{ role: string; content: unknown }>;
+    const stableMsg = messages.find((m) => JSON.stringify(m.content).includes("stable question"));
+    const carrierMsg = messages.find((m) =>
+      JSON.stringify(m.content).includes("volatile current-turn metadata"),
+    );
+    // The stable user turn carries the cache breakpoint; the trailing carrier does not.
+    expect(JSON.stringify(stableMsg)).toContain("cache_control");
+    expect(JSON.stringify(carrierMsg)).not.toContain("cache_control");
+  });
+
   it("adds reasoning_content replay fields for Xiaomi MiMo assistant tool history", async () => {
     let capturedMessages: unknown;
     const stream = streamOpenAICompletions(

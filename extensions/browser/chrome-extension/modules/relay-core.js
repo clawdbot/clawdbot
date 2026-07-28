@@ -4,6 +4,8 @@
 
 /** Tab group shown to the user; membership == what the agent may touch. */
 export const OPENCLAW_TAB_GROUP_TITLE = "OpenClaw";
+export const EXTENSION_RELAY_PROTOCOL = "openclaw-extension-relay";
+const EXTENSION_RELAY_TOKEN_PROTOCOL_PREFIX = "openclaw-extension-token.";
 
 const CHROME_GROUP_COLORS = {
   grey: [128, 128, 128],
@@ -48,11 +50,9 @@ export function parsePairingString(raw) {
   return { relayUrl, token };
 }
 
-/** Build the authenticated relay WebSocket URL (token travels as query). */
-export function buildRelayWsUrl(relayUrl, token) {
-  const url = new URL(relayUrl);
-  url.searchParams.set("token", token);
-  return url.toString();
+/** Build WebSocket subprotocols without putting the relay secret in the request URL. */
+export function buildRelayWsProtocols(token) {
+  return [EXTENSION_RELAY_PROTOCOL, `${EXTENSION_RELAY_TOKEN_PROTOCOL_PREFIX}${token}`];
 }
 
 /** Exponential reconnect backoff: 1s, 2s, 4s ... capped at 30s. */

@@ -110,7 +110,7 @@ export type SkillsState = {
   skillCardErrors: Record<string, string>;
 };
 
-export type SkillMessage = {
+type SkillMessage = {
   kind: "success" | "error";
   message: string;
 };

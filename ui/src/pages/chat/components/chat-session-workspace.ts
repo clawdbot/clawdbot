@@ -33,7 +33,7 @@ export type SessionWorkspaceProps = {
   onOpenArtifact: (artifactId: string) => void;
 };
 
-export type SessionWorkspaceState = {
+type SessionWorkspaceState = {
   activeId: string | null;
   agentId: string;
   browserPath: string;

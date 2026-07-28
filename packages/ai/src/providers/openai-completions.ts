@@ -650,7 +650,11 @@ function buildParams(
   cacheRetention: CacheRetention = resolveCacheRetention(options?.cacheRetention),
 ) {
   const cacheControl = getCompatCacheControl(compat, cacheRetention);
+  // Transient runtime-context carrier indexes skip cache anchoring so the breakpoint
+  // stays on the last stable user turn; conversion-to-policy must not splice messages.
+  const cacheOptOutIndexes = new Set<number>();
   const messages = convertMessages(model, context, compat, {
+    cacheOptOutIndexes,
     preserveSystemPromptCacheBoundary: cacheControl !== undefined,
   });
 
@@ -731,7 +735,7 @@ function buildParams(
   }
 
   if (cacheControl) {
-    applyAnthropicCacheControl(messages, params.tools, cacheControl);
+    applyAnthropicCacheControl(messages, params.tools, cacheControl, cacheOptOutIndexes);
   }
 
   if (options?.toolChoice) {
@@ -842,10 +846,11 @@ function applyAnthropicCacheControl(
   messages: ChatCompletionMessageParam[],
   tools: OpenAI.Chat.Completions.ChatCompletionTool[] | undefined,
   cacheControl: OpenAICompatCacheControl,
+  cacheOptOutIndexes: ReadonlySet<number>,
 ): void {
   addCacheControlToSystemPrompt(messages, cacheControl);
   addCacheControlToLastTool(tools, cacheControl);
-  addCacheControlToLastConversationMessage(messages, cacheControl);
+  addCacheControlToLastConversationMessage(messages, cacheControl, cacheOptOutIndexes);
 }
 
 function addCacheControlToSystemPrompt(
@@ -863,9 +868,13 @@ function addCacheControlToSystemPrompt(
 function addCacheControlToLastConversationMessage(
   messages: ChatCompletionMessageParam[],
   cacheControl: OpenAICompatCacheControl,
+  cacheOptOutIndexes: ReadonlySet<number>,
 ): void {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
+    if (cacheOptOutIndexes.has(i)) {
+      continue;
+    }
     if (message.role === "user" || message.role === "assistant") {
       if (addCacheControlToMessage(message, cacheControl)) {
         return;
@@ -962,7 +971,10 @@ export function convertMessages(
   model: Model<"openai-completions">,
   context: Context,
   compat: ResolvedOpenAICompletionsCompat,
-  options: { preserveSystemPromptCacheBoundary?: boolean } = {},
+  options: {
+    cacheOptOutIndexes?: Set<number>;
+    preserveSystemPromptCacheBoundary?: boolean;
+  } = {},
 ): ChatCompletionMessageParam[] {
   const params: ChatCompletionMessageParam[] = [];
 
@@ -1017,11 +1029,16 @@ export function convertMessages(
     }
 
     if (msg.role === "user") {
+      const isRuntimeContextCarrier = msg.runtimeContextCarrier === true;
       if (typeof msg.content === "string") {
-        params.push({
+        const userParam: ChatCompletionMessageParam = {
           role: "user",
           content: sanitizeSurrogates(msg.content),
-        });
+        };
+        if (isRuntimeContextCarrier) {
+          options.cacheOptOutIndexes?.add(params.length);
+        }
+        params.push(userParam);
       } else {
         const content: ChatCompletionContentPart[] = msg.content.map(
           (item): ChatCompletionContentPart => {
@@ -1042,10 +1059,14 @@ export function convertMessages(
         if (content.length === 0) {
           continue;
         }
-        params.push({
+        const userParam: ChatCompletionMessageParam = {
           role: "user",
           content,
-        });
+        };
+        if (isRuntimeContextCarrier) {
+          options.cacheOptOutIndexes?.add(params.length);
+        }
+        params.push(userParam);
       }
     } else if (msg.role === "assistant") {
       // Some providers don't accept null content, use empty string instead

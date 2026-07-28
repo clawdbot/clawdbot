@@ -1,8 +1,10 @@
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 /**
  * Browser plugin registration helpers. This file keeps registration lazy while
  * advertising Browser tools, services, node-host commands, and audits.
  */
+import type { IncomingMessage, ServerResponse } from "node:http";
+import type { Duplex } from "node:stream";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   AnyAgentTool,
   OpenClawPluginApi,
@@ -202,7 +204,7 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
   api.registerCli(
     async ({ program }) => {
       const { registerBrowserCli } = await import("./src/cli/browser-cli.js");
-      registerBrowserCli(program);
+      registerBrowserCli(program, process.argv, api.rootDir);
     },
     { commands: ["browser"], descriptors: [BROWSER_CLI_DESCRIPTOR] },
   );
@@ -216,5 +218,24 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
       scope: BROWSER_REQUEST_GATEWAY_SCOPE,
     },
   );
+  // Remote extension relay: lets the Chrome extension connect directly to this
+  // gateway over wss:// (no node host on the browser machine). auth:"plugin"
+  // with no nodeCapability means the gateway does not pre-enforce token auth;
+  // the handler self-validates the host-local relay secret. Path kept in sync
+  // with GATEWAY_EXTENSION_RELAY_PATH (hardcoded here to stay lazy).
+  api.registerHttpRoute({
+    path: "/browser/extension",
+    auth: "plugin",
+    match: "exact",
+    handler: (_req: IncomingMessage, res: ServerResponse) => {
+      res.writeHead(426, { "Content-Type": "text/plain" });
+      res.end("Upgrade Required: connect the OpenClaw Chrome extension over WebSocket.");
+    },
+    handleUpgrade: async (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+      const { handleGatewayExtensionUpgrade } =
+        await import("./src/browser/extension-relay/gateway-relay-route.js");
+      return await handleGatewayExtensionUpgrade(req, socket, head);
+    },
+  });
   api.registerService(createLazyBrowserPluginService());
 }

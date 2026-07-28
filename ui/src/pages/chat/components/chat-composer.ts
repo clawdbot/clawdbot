@@ -66,7 +66,7 @@ const CHAT_ATTACHMENT_ACCEPT =
   "image/*,audio/*,application/pdf,text/*,.csv,.json,.md,.txt,.zip," +
   ".doc,.docx,.xls,.xlsx,.ppt,.pptx";
 
-export type ChatComposerProps = {
+type ChatComposerProps = {
   paneId: string;
   sessionKey: string;
   currentAgentId: string;
@@ -904,7 +904,7 @@ function renderSlashMenu(
   `;
 }
 
-export type ChatAttachmentControlsProps = {
+type ChatAttachmentControlsProps = {
   attachments?: ChatAttachment[];
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
 };

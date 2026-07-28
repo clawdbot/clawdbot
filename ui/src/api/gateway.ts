@@ -235,7 +235,7 @@ export type GatewayConnectAuth = {
   password?: string;
 };
 
-export type GatewayConnectDevice = {
+type GatewayConnectDevice = {
   id: string;
   publicKey: string;
   signature: string;
@@ -243,7 +243,7 @@ export type GatewayConnectDevice = {
   nonce: string;
 };
 
-export type GatewayConnectClientInfo = {
+type GatewayConnectClientInfo = {
   id: GatewayClientName;
   version: string;
   platform: string;
@@ -319,7 +319,7 @@ type GatewayRequestTiming = {
   errorCode?: string;
 };
 
-export type GatewayConnectTimingPhase =
+type GatewayConnectTimingPhase =
   | "socket-open"
   | "challenge"
   | "fallback"

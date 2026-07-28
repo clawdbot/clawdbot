@@ -90,6 +90,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -1100,6 +1110,15 @@ private fun ChatComposer(
     remember(value, commands) {
       matchingSlashCommands(input = value, commands = commands)
     }
+  val sendEnabled =
+    voiceNoteState !is VoiceNoteRecorderState.Recording &&
+      voiceNoteState !is VoiceNoteRecorderState.Preparing &&
+      pendingRunCount == 0 &&
+      if (healthOk) {
+        value.trim().isNotEmpty() || attachments.isNotEmpty()
+      } else {
+        value.trim().isNotEmpty() && attachments.isEmpty()
+      }
 
   Column(modifier = Modifier.fillMaxWidth().imePadding(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
     if (attachments.isNotEmpty()) {
@@ -1150,20 +1169,14 @@ private fun ChatComposer(
           onStartVoiceNote = onStartVoiceNote,
           recordVoiceNoteEnabled = recordVoiceNoteEnabled,
           onVoice = onVoice,
+          sendEnabled = sendEnabled,
+          onSend = onSend,
           modifier = Modifier.weight(1f),
         )
       }
       SendButton(
         // Offline, only text sends are enabled: they queue durably (text-only v1).
-        enabled =
-          voiceNoteState !is VoiceNoteRecorderState.Recording &&
-            voiceNoteState !is VoiceNoteRecorderState.Preparing &&
-            pendingRunCount == 0 &&
-            if (healthOk) {
-              value.trim().isNotEmpty() || attachments.isNotEmpty()
-            } else {
-              value.trim().isNotEmpty() && attachments.isEmpty()
-            },
+        enabled = sendEnabled,
         onClick = onSend,
       )
     }
@@ -1484,6 +1497,8 @@ private fun ChatInputPill(
   onStartVoiceNote: () -> Unit,
   recordVoiceNoteEnabled: Boolean,
   onVoice: () -> Unit,
+  sendEnabled: Boolean,
+  onSend: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
   Surface(
@@ -1515,7 +1530,12 @@ private fun ChatInputPill(
           cursorBrush = SolidColor(ClawTheme.colors.primary),
           minLines = 1,
           maxLines = 4,
-          modifier = Modifier.fillMaxWidth(),
+          modifier =
+            Modifier
+              .fillMaxWidth()
+              .onPreviewKeyEvent { event ->
+                handlePhysicalChatSend(event = event, sendEnabled = sendEnabled, onSend = onSend)
+              },
           decorationBox = { innerTextField ->
             Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
               if (value.isEmpty()) {
@@ -1539,6 +1559,19 @@ private fun ChatInputPill(
       }
     }
   }
+}
+
+/** Intercepts one unmodified hardware Enter before BasicTextField inserts a newline. */
+internal fun handlePhysicalChatSend(
+  event: KeyEvent,
+  sendEnabled: Boolean,
+  onSend: () -> Unit,
+): Boolean {
+  val enterKey = event.key == Key.Enter || event.key == Key.NumPadEnter
+  val modified = event.isShiftPressed || event.isCtrlPressed || event.isAltPressed || event.isMetaPressed
+  if (event.type != KeyEventType.KeyDown || event.nativeKeyEvent.repeatCount != 0 || !enterKey || modified) return false
+  if (sendEnabled) onSend()
+  return true
 }
 
 @Composable

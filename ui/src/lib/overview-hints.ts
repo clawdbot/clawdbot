@@ -74,15 +74,6 @@ export function resolvePairingHint(
   return null;
 }
 
-/** Whether the overview should show device-pairing guidance for this error. */
-export function shouldShowPairingHint(
-  connected: boolean,
-  lastError: string | null,
-  lastErrorCode?: string | null,
-): boolean {
-  return resolvePairingHint(connected, lastError, lastErrorCode) !== null;
-}
-
 /**
  * Return the overview auth hint to show, if any.
  *

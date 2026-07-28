@@ -159,6 +159,11 @@ vi.mock("../agents/agent-bundle-mcp-tools.js", () => ({
   disposeAllSessionMcpRuntimes: hoisted.disposeAllSessionMcpRuntimes,
 }));
 
+vi.mock("../plugins/installed-plugin-index-records.js", () => ({
+  loadInstalledPluginIndexInstallRecords: vi.fn(async () => ({})),
+  loadInstalledPluginIndexInstallRecordsSync: vi.fn(() => ({})),
+}));
+
 vi.mock("./server-cron.js", async () => {
   const actual = await vi.importActual<typeof import("./server-cron.js")>("./server-cron.js");
   return {

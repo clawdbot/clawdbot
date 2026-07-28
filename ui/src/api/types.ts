@@ -369,7 +369,7 @@ export type AgentsFilesSetResult = {
   file: AgentFileEntry;
 };
 
-export type SessionWorkspaceFileEntry = {
+type SessionWorkspaceFileEntry = {
   path: string;
   workspacePath?: string;
   name: string;
@@ -397,7 +397,7 @@ type SessionWorkspaceBrowserResult = {
   truncated?: boolean;
 };
 
-export type SessionWorkspaceArtifactEntry = {
+type SessionWorkspaceArtifactEntry = {
   id: string;
   type: string;
   title: string;

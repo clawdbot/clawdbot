@@ -404,6 +404,7 @@ jobs:
                     { check_name: "android-test-play", task: "test-play" },
                     { check_name: "android-test-third-party", task: "test-third-party" },
                     { check_name: "android-build-play", task: "build-play" },
+                    { check_name: "android-ktlint", task: "ktlint" },
                   ]
                 : [],
             ),
@@ -2087,6 +2088,10 @@ jobs:
               ;;
             build-play)
               ./gradlew --no-daemon --build-cache :app:assemblePlayDebug
+              ;;
+            ktlint)
+              # Mirrors `pnpm android:lint`; keeps formatting drift out of main (see PR #100304 sweep).
+              ./gradlew --no-daemon --build-cache :app:ktlintCheck :benchmark:ktlintCheck
               ;;
             *)
               echo "Unsupported Android task: $TASK" >&2

@@ -1930,6 +1930,48 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       };
     };
 
+  it("logs streaming transcripts without splitting UTF-16 surrogate pairs", async () => {
+    const manager = {
+      getActiveCalls: () => [],
+      getCallByProviderCallId: vi.fn(() => undefined),
+      endCall: vi.fn(async () => ({ success: true })),
+      speakInitialMessage: vi.fn(async () => {}),
+      processEvent: vi.fn(),
+    } as unknown as CallManager;
+    const config = createConfig({
+      provider: "twilio",
+      streaming: {
+        ...createConfig().streaming,
+        enabled: true,
+        providers: {
+          openai: {
+            apiKey: "test-key", // pragma: allowlist secret
+          },
+        },
+      },
+    });
+    const server = new VoiceCallWebhookServer(config, manager, createTwilioProvider(vi.fn()));
+    await server.start();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const transcript = `${"a".repeat(199)}\uD83D\uDE80tail`;
+      getMediaCallbacks(server).config.onTranscript?.("CA-utf16", transcript);
+
+      const transcriptLog = logSpy.mock.calls
+        .map(([message]) => String(message))
+        .find((message) => message.includes("Transcript for CA-utf16"));
+      expect(transcriptLog).toContain(`${"a".repeat(199)}...`);
+      expect(transcriptLog).not.toContain("\uD83D");
+      expect(transcriptLog).not.toContain("\uDE80");
+    } finally {
+      logSpy.mockRestore();
+      warnSpy.mockRestore();
+      await server.stop();
+    }
+  });
+
   it("suppresses barge-in clear while outbound conversation initial message is pending", async () => {
     const call = createCall(Date.now() - 1_000);
     call.callId = "call-barge";

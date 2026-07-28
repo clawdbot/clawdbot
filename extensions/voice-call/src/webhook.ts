@@ -13,6 +13,7 @@ import {
   normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   createWebhookInFlightLimiter,
   normalizeWebhookPath,
@@ -79,7 +80,7 @@ function sanitizeTranscriptForLog(value: string): string {
   if (sanitized.length <= TRANSCRIPT_LOG_MAX_CHARS) {
     return sanitized;
   }
-  return `${sanitized.slice(0, TRANSCRIPT_LOG_MAX_CHARS)}...`;
+  return `${truncateUtf16Safe(sanitized, TRANSCRIPT_LOG_MAX_CHARS)}...`;
 }
 
 function appendRecentTalkEventMetadata(call: CallRecord, event: TalkEvent): void {

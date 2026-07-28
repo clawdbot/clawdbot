@@ -209,7 +209,7 @@ export function createAnthropicServiceTierWrapper(
     }
 
     return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) =>
-      applyAnthropicPayloadPolicyToParams(payloadObj, payloadPolicy),
+      applyAnthropicPayloadPolicyToParams(payloadObj, payloadPolicy, new Set()),
     );
   };
 }

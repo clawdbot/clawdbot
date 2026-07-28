@@ -470,6 +470,8 @@ export function createOpenClawCodingTools(options?: {
   currentMessageId?: string | number;
   /** True when the current inbound turn carried audio media. */
   currentInboundAudio?: boolean;
+  /** Dynamic audio state for runs that can accept steered input after tool creation. */
+  hasCurrentInboundAudio?: () => boolean;
   /** Group id for channel-level tool policy resolution. */
   groupId?: string | null;
   /** Group channel label (e.g. #general) for channel-level tool policy resolution. */
@@ -1010,6 +1012,7 @@ export function createOpenClawCodingTools(options?: {
           currentThreadTs: options?.currentThreadTs,
           currentMessageId: options?.currentMessageId,
           currentInboundAudio: options?.currentInboundAudio,
+          hasCurrentInboundAudio: options?.hasCurrentInboundAudio,
           modelProvider: options?.modelProvider,
           modelId: options?.modelId,
           replyToMode: options?.replyToMode,

@@ -47,6 +47,7 @@ function createReplyOperation(): TestReplyOperation {
     abortSignal: new AbortController().signal,
     resetTriggered: false,
     terminalRecovery: false,
+    acceptedSteeredInboundAudio: false,
     phase: "queued",
     result: null,
     hasOwnedSessionId: vi.fn((sessionId: string) => sessionId === "session"),
@@ -65,6 +66,7 @@ function createReplyOperation(): TestReplyOperation {
     abortByUser: vi.fn(() => true),
     abortForRestart: vi.fn(() => true),
     markTerminalRecovery: vi.fn(),
+    markAcceptedSteeredInboundAudio: vi.fn(),
   };
 }
 

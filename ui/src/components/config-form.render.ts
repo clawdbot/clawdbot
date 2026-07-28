@@ -6,7 +6,7 @@ import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
 import { matchesNodeSearch, parseConfigSearchQuery, renderNode } from "./config-form.node.ts";
 import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared.ts";
 
-export type ConfigFormProps = {
+type ConfigFormProps = {
   schema: JsonSchema | null;
   uiHints: ConfigUiHints;
   value: Record<string, unknown> | null;

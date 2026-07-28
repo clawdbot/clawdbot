@@ -1,4 +1,6 @@
 // Telegram plugin module implements raw update log behavior.
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+
 const MAX_RAW_UPDATE_STRING = 500;
 const MAX_RAW_UPDATE_ARRAY = 20;
 const REDACTED_TELEGRAM_FIELD = "[redacted]";
@@ -80,7 +82,7 @@ export function stringifyTelegramRawUpdateForLog(update: unknown): string {
     }
     if (typeof value === "string") {
       return value.length > MAX_RAW_UPDATE_STRING
-        ? `${value.slice(0, MAX_RAW_UPDATE_STRING)}...`
+        ? `${truncateUtf16Safe(value, MAX_RAW_UPDATE_STRING)}...`
         : value;
     }
     if (Array.isArray(value)) {

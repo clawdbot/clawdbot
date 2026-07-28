@@ -681,32 +681,58 @@ export async function runSshSandboxCommand(
     });
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
+    let settled = false;
 
-    child.stdout.on("data", (chunk) => stdoutChunks.push(Buffer.from(chunk)));
-    child.stderr.on("data", (chunk) => stderrChunks.push(Buffer.from(chunk)));
-    child.on("error", reject);
-    child.on("close", (code) => {
-      const stdout = Buffer.concat(stdoutChunks);
-      const stderr = Buffer.concat(stderrChunks);
-      const exitCode = code ?? 0;
-      if (exitCode !== 0 && !params.allowFailure) {
-        reject(
-          Object.assign(new Error(buildSshFailureMessage(stderr.toString("utf8"), exitCode)), {
-            code: exitCode,
-            stdout,
-            stderr,
-          }),
-        );
+    // Child and stdio errors can race with close. Settle once so an unusable
+    // transport is terminated exactly once and later events stay harmless.
+    const finish = (complete: () => void, terminate = false) => {
+      if (settled) {
         return;
       }
-      resolve({ stdout, stderr, code: exitCode });
+      settled = true;
+      if (terminate) {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // Preserve the stream error that made the transport unusable.
+        }
+      }
+      complete();
+    };
+    const fail = (error: unknown, terminate = false) => {
+      finish(() => reject(toErrorObject(error, "Non-Error rejection")), terminate);
+    };
+
+    child.stdout.on("data", (chunk) => stdoutChunks.push(Buffer.from(chunk)));
+    child.stdout.on("error", (error) => fail(error, true));
+    child.stderr.on("data", (chunk) => stderrChunks.push(Buffer.from(chunk)));
+    child.stderr.on("error", (error) => fail(error, true));
+    child.on("error", fail);
+    child.on("close", (code) => {
+      finish(() => {
+        const stdout = Buffer.concat(stdoutChunks);
+        const stderr = Buffer.concat(stderrChunks);
+        const exitCode = code ?? 0;
+        if (exitCode !== 0 && !params.allowFailure) {
+          reject(
+            Object.assign(new Error(buildSshFailureMessage(stderr.toString("utf8"), exitCode)), {
+              code: exitCode,
+              stdout,
+              stderr,
+            }),
+          );
+          return;
+        }
+        resolve({ stdout, stderr, code: exitCode });
+      });
     });
 
-    if (params.stdin !== undefined) {
+    child.stdin?.on("error", (error) => fail(error, true));
+    try {
       child.stdin.end(params.stdin);
-      return;
+    } catch (error) {
+      fail(error, true);
     }
-    child.stdin.end();
   });
 }
 
@@ -790,20 +816,34 @@ export async function uploadDirectoryToSshTarget(params: {
     let sshClosed = false;
     let tarCode = 0;
     let sshCode = 0;
-
-    tar.stderr.on("data", (chunk) => tarStderr.push(Buffer.from(chunk)));
-    ssh.stdout.on("data", (chunk) => sshStdout.push(Buffer.from(chunk)));
-    ssh.stderr.on("data", (chunk) => sshStderr.push(Buffer.from(chunk)));
+    let settled = false;
 
     const fail = (error: unknown) => {
-      tar.kill("SIGKILL");
-      ssh.kill("SIGKILL");
+      if (settled) {
+        return;
+      }
+      settled = true;
+      for (const child of [tar, ssh]) {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // Preserve the pipeline error while still terminating the peer.
+        }
+      }
       reject(toErrorObject(error, "Non-Error rejection"));
     };
 
+    tar.stderr.on("data", (chunk) => tarStderr.push(Buffer.from(chunk)));
+    tar.stderr.on("error", fail);
+    tar.stdout.on("error", fail);
+    ssh.stdout.on("data", (chunk) => sshStdout.push(Buffer.from(chunk)));
+    ssh.stdout.on("error", fail);
+    ssh.stderr.on("data", (chunk) => sshStderr.push(Buffer.from(chunk)));
+    ssh.stderr.on("error", fail);
+    ssh.stdin?.on("error", fail);
+
     tar.on("error", fail);
     ssh.on("error", fail);
-    tar.stdout.pipe(ssh.stdin);
 
     tar.on("close", (code) => {
       tarClosed = true;
@@ -817,9 +857,10 @@ export async function uploadDirectoryToSshTarget(params: {
     });
 
     function maybeResolve() {
-      if (!tarClosed || !sshClosed) {
+      if (settled || !tarClosed || !sshClosed) {
         return;
       }
+      settled = true;
       if (tarCode !== 0) {
         reject(
           new Error(
@@ -837,6 +878,13 @@ export async function uploadDirectoryToSshTarget(params: {
         return;
       }
       resolve();
+    }
+
+    try {
+      // Readable pipe errors do not close the writable peer automatically.
+      tar.stdout.pipe(ssh.stdin);
+    } catch (error) {
+      fail(error);
     }
   });
 }

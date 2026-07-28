@@ -59,7 +59,7 @@ export type ChatRealtimeState = {
   toggleRealtimeTalk: () => Promise<void>;
 };
 
-export function createDefaultRealtimeTalkOptions(): RealtimeTalkOptions {
+function createDefaultRealtimeTalkOptions(): RealtimeTalkOptions {
   return {
     model: "",
     voice: "",

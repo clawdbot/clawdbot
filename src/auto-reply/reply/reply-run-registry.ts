@@ -1,10 +1,10 @@
 // Tracks active reply runs so stop, queue, and status commands can coordinate.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { createAbortError } from "../../infra/abort-signal.js";
 import {
   createAgentRunRestartAbortError,
   isAgentRunRestartAbortReason,
 } from "../../agents/run-termination.js";
+import { createAbortError } from "../../infra/abort-signal.js";
 import {
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
@@ -81,6 +81,11 @@ export type ReplyOperation = {
    * sibling recovery already in flight, not the proven stale leftover.
    */
   readonly terminalRecovery: boolean;
+  /**
+   * Sticky fact for audio accepted into this operation after its originating turn.
+   * Final delivery reads it because the original dispatch context cannot change.
+   */
+  readonly acceptedSteeredInboundAudio: boolean;
   readonly phase: ReplyOperationPhase;
   readonly result: ReplyOperationResult | null;
   /** True when this operation has owned the supplied session ID. */
@@ -88,6 +93,7 @@ export type ReplyOperation = {
   setPhase(next: "queued" | "preflight_compacting" | "memory_flushing" | "running"): void;
   /** Mark this operation as an in-flight terminal-session recovery. */
   markTerminalRecovery(): void;
+  markAcceptedSteeredInboundAudio(): void;
   updateSessionId(nextSessionId: string): void;
   attachBackend(handle: ReplyBackendHandle): void;
   detachBackend(handle: ReplyBackendHandle): void;
@@ -464,6 +470,7 @@ export function createReplyOperation(params: {
   let stateCleared = false;
   let retainFailureUntilComplete = false;
   let terminalRecovery = false;
+  let acceptedSteeredInboundAudio = false;
   const upstreamAbortSignal = params.upstreamAbortSignal;
   let upstreamAbortHandler: (() => void) | undefined;
   const detachUpstreamAbort = () => {
@@ -546,6 +553,9 @@ export function createReplyOperation(params: {
     get terminalRecovery() {
       return terminalRecovery;
     },
+    get acceptedSteeredInboundAudio() {
+      return acceptedSteeredInboundAudio;
+    },
     get phase() {
       return phase;
     },
@@ -564,6 +574,9 @@ export function createReplyOperation(params: {
     },
     markTerminalRecovery() {
       terminalRecovery = true;
+    },
+    markAcceptedSteeredInboundAudio() {
+      acceptedSteeredInboundAudio = true;
     },
     updateSessionId(nextSessionId) {
       if (result) {

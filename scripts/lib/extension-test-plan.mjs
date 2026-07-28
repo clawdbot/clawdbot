@@ -80,22 +80,26 @@ function isSkippedTrackedTestFile(relativePath) {
     .some((segment) => segment === "dist" || segment === "node_modules");
 }
 
-function listTrackedTestFiles(rootPath) {
-  const relativeRoot = normalizeRelative(path.relative(repoRoot, rootPath));
-  if (!isPathInsideRepo(relativeRoot)) {
-    return null;
+let trackedRepoTestFiles;
+
+function loadTrackedRepoTestFiles() {
+  if (trackedRepoTestFiles !== undefined) {
+    return trackedRepoTestFiles;
   }
 
-  const result = spawnSync("git", ["ls-files", "--", relativeRoot], {
+  const result = spawnSync("git", ["ls-files"], {
     cwd: repoRoot,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
   });
   if (result.status !== 0) {
-    return null;
+    trackedRepoTestFiles = null;
+    return trackedRepoTestFiles;
   }
 
-  return result.stdout
+  // Tracked repository metadata is immutable during one planner invocation.
+  // Reuse one inventory so broad extension plans do not fork Git per plugin.
+  trackedRepoTestFiles = result.stdout
     .split("\n")
     .map((line) => line.trim().replaceAll("\\", "/"))
     .filter(
@@ -104,6 +108,25 @@ function listTrackedTestFiles(rootPath) {
         !isSkippedTrackedTestFile(line) &&
         (line.endsWith(".test.ts") || line.endsWith(".test.tsx")),
     );
+  return trackedRepoTestFiles;
+}
+
+function listTrackedTestFiles(rootPath) {
+  const relativeRoot = normalizeRelative(path.relative(repoRoot, rootPath));
+  if (!isPathInsideRepo(relativeRoot)) {
+    return null;
+  }
+
+  const trackedFiles = loadTrackedRepoTestFiles();
+  if (trackedFiles === null) {
+    return null;
+  }
+
+  if (!relativeRoot) {
+    return trackedFiles;
+  }
+  const rootPrefix = `${relativeRoot}/`;
+  return trackedFiles.filter((file) => file.startsWith(rootPrefix));
 }
 
 function listFilesystemTestFiles(rootPath) {

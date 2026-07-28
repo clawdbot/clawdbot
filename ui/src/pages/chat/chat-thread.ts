@@ -55,8 +55,8 @@ type CachedChatItems = {
   items: ReturnType<typeof buildChatItems>;
 };
 
-export type RenderChatItem = ReturnType<typeof buildChatItems>[number];
-export type StreamRunRenderItem = {
+type RenderChatItem = ReturnType<typeof buildChatItems>[number];
+type StreamRunRenderItem = {
   kind: "stream-run";
   key: string;
   parts: Array<Extract<ChatItem, { kind: "stream" } | { kind: "reading-indicator" }>>;

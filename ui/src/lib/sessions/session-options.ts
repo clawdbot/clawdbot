@@ -23,7 +23,7 @@ type SessionAgentOptionsState = {
   sessionKey: string;
 };
 
-export type SessionAgentFilterOption = {
+type SessionAgentFilterOption = {
   id: string;
   label: string;
 };

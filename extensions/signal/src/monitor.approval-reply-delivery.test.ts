@@ -39,14 +39,23 @@ const cfg = {
   },
 } as OpenClawConfig;
 
-async function deliverReplyPayload(payload: ReplyPayload) {
+async function deliverReplyPayload(
+  payload: ReplyPayload,
+  options: {
+    config?: OpenClawConfig;
+    account?: string;
+    accountUuid?: string;
+    accountId?: string;
+  } = {},
+) {
   await deliverReplies({
-    cfg,
+    cfg: options.config ?? cfg,
     replies: [payload],
     target: approver,
     baseUrl: "http://127.0.0.1:8080",
-    account: botAccount,
-    accountId: "default",
+    account: Object.hasOwn(options, "account") ? options.account : botAccount,
+    accountUuid: options.accountUuid,
+    accountId: options.accountId ?? "default",
     runtime: { log: vi.fn() } as never,
     maxBytes: 8 * 1024 * 1024,
     textLimit: 4000,
@@ -96,6 +105,55 @@ describe("Signal monitor approval reply delivery", () => {
         agentId: "main",
         sessionKey: "agent:main:signal:direct:+15551230000",
       },
+    });
+  });
+
+  it("registers monitor approval replies for UUID-only linked accounts", async () => {
+    const accountUuid = "123e4567-e89b-12d3-a456-426614174000";
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "exec-monitor-uuid",
+      approvalSlug: "exec-uuid",
+      allowedDecisions: ["allow-once", "deny"],
+      command: "printf uuid",
+      host: "gateway",
+      agentId: "main",
+      sessionKey: "agent:main:signal:direct:+15551230000",
+    });
+    const uuidOnlyConfig = {
+      channels: {
+        signal: {
+          accounts: {
+            default: {
+              accountUuid,
+              allowFrom: [approver],
+            },
+          },
+        },
+      },
+      approvals: cfg.approvals,
+    } as OpenClawConfig;
+
+    await deliverReplyPayload(payload, {
+      config: uuidOnlyConfig,
+      account: undefined,
+      accountUuid,
+      accountId: "default",
+    });
+
+    const sentText = String(sendMocks.sendMessageSignal.mock.calls[0]?.[1] ?? "");
+    expect(sentText).toContain("React with:\n\n👍 Allow Once\n👎 Deny");
+    await expect(
+      resolveSignalApprovalReactionTargetWithPersistence({
+        accountId: "default",
+        conversationKey: approver,
+        messageId: "1700000000200",
+        reactionKey: "👍",
+        targetAuthorUuid: accountUuid,
+      }),
+    ).resolves.toMatchObject({
+      approvalId: "exec-monitor-uuid",
+      approvalKind: "exec",
+      decision: "allow-once",
     });
   });
 

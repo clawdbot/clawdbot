@@ -805,6 +805,24 @@ describe("message tool secret scoping", () => {
     expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
   });
 
+  it("reads steered inbound audio when the message action runs", async () => {
+    mockSendResult();
+    let hasCurrentInboundAudio = false;
+    const tool = createMessageTool({
+      currentInboundAudio: false,
+      hasCurrentInboundAudio: () => hasCurrentInboundAudio,
+      sourceReplyDeliveryMode: "message_tool_only",
+      currentChannelProvider: "whatsapp",
+      agentSessionKey: "agent:main:whatsapp:direct:123456789",
+      runMessageAction: mocks.runMessageAction as never,
+    });
+    hasCurrentInboundAudio = true;
+
+    await tool.execute("call1", { action: "send", message: "hi" });
+
+    expect(lastRunMessageActionInput()?.inboundAudio).toBe(true);
+  });
+
   it("adds a current-run idempotency key when the model omits one", async () => {
     mockSendResult();
 

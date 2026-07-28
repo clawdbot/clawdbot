@@ -39,6 +39,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
+  DiagnosticEventPrivateData,
   DiagnosticTraceContext,
   OpenClawPluginService,
   OpenClawPluginServiceContext,
@@ -80,6 +81,7 @@ const MAX_OTEL_CONTENT_ARRAY_ITEMS = 200;
 const MAX_OTEL_LOG_BODY_CHARS = 4 * 1024;
 const MAX_OTEL_LOG_ATTRIBUTE_COUNT = 64;
 const MAX_OTEL_LOG_ATTRIBUTE_VALUE_CHARS = 4 * 1024;
+const MAX_OTEL_ERROR_MESSAGE_CHARS = 4 * 1024;
 const LOG_RECORD_EXPORT_FAILURE_REPORT_INTERVAL_MS = 60_000;
 const OTEL_LOG_RAW_ATTRIBUTE_KEY_RE = /^[A-Za-z0-9_.:-]{1,64}$/u;
 const OTEL_LOG_ATTRIBUTE_KEY_RE = /^[A-Za-z0-9_.:-]{1,96}$/u;
@@ -681,6 +683,14 @@ function clampOtelLogText(value: string, maxChars: number): string {
 
 function normalizeOtelLogString(value: string, maxChars: number): string {
   return clampOtelLogText(redactSensitiveText(value), maxChars);
+}
+
+function normalizeOtelErrorMessage(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const normalized = normalizeOtelLogString(value.trim(), MAX_OTEL_ERROR_MESSAGE_CHARS);
+  return normalized || undefined;
 }
 
 function resolveContentCapturePolicy(value: unknown): OtelContentCapturePolicy {
@@ -3066,6 +3076,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const recordRunCompleted = (
         evt: Extract<DiagnosticEventPayload, { type: "run.completed" }>,
         metadata: DiagnosticEventMetadata,
+        privateData: DiagnosticEventPrivateData,
       ) => {
         const attrs: Record<string, string | number> = {
           "openclaw.outcome": evt.outcome,
@@ -3092,6 +3103,11 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         if (evt.errorCategory) {
           spanAttrs["openclaw.errorCategory"] = lowCardinalityAttr(evt.errorCategory, "other");
         }
+        // Redacted message goes on the span only, never the low-cardinality metric attrs.
+        const redactedError = normalizeOtelErrorMessage(privateData.errorMessage);
+        if (redactedError) {
+          spanAttrs["openclaw.error"] = redactedError;
+        }
         const trustedTrace = trustedTraceContext(evt, metadata);
         const trackedSpan = trustedTrace?.spanId
           ? activeTrustedSpans.get(trustedTrace.spanId)
@@ -3104,9 +3120,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           });
         setSpanAttrs(span, spanAttrs);
         if (evt.outcome === "error") {
+          const message =
+            redactedError ??
+            (evt.errorCategory ? redactSensitiveText(evt.errorCategory) : undefined);
           span.setStatus({
             code: SpanStatusCode.ERROR,
-            ...(evt.errorCategory ? { message: redactSensitiveText(evt.errorCategory) } : {}),
+            ...(message ? { message } : {}),
           });
         }
         if (trackedSpan && trustedTrace?.spanId) {
@@ -3149,6 +3168,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const recordHarnessRunCompleted = (
         evt: Extract<DiagnosticEventPayload, { type: "harness.run.completed" }>,
         metadata: DiagnosticEventMetadata,
+        privateData: DiagnosticEventPrivateData,
       ) => {
         harnessDurationHistogram.record(evt.durationMs, harnessRunMetricAttrs(evt));
         if (!tracesEnabled) {
@@ -3170,6 +3190,11 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           spanAttrs["openclaw.harness.items.completed"] = evt.itemLifecycle.completedCount;
           spanAttrs["openclaw.harness.items.active"] = evt.itemLifecycle.activeCount;
         }
+        // Redacted message goes on the span only, never the low-cardinality metric attrs.
+        const redactedError = normalizeOtelErrorMessage(privateData.errorMessage);
+        if (redactedError) {
+          spanAttrs["openclaw.error"] = redactedError;
+        }
         const trustedTrace = trustedTraceContext(evt, metadata);
         const trackedSpan = trustedTrace?.spanId
           ? activeTrustedSpans.get(trustedTrace.spanId)
@@ -3184,7 +3209,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         if (evt.outcome === "error") {
           span.setStatus({
             code: SpanStatusCode.ERROR,
-            message: "error",
+            message: redactedError ?? "error",
           });
         }
         if (trackedSpan && trustedTrace?.spanId) {
@@ -3197,6 +3222,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const recordHarnessRunError = (
         evt: Extract<DiagnosticEventPayload, { type: "harness.run.error" }>,
         metadata: DiagnosticEventMetadata,
+        privateData: DiagnosticEventPrivateData,
       ) => {
         const errorType = lowCardinalityAttr(evt.errorCategory, "other");
         const attrs = {
@@ -3208,9 +3234,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         if (!tracesEnabled) {
           return;
         }
+        // Redacted message goes on the span only; attrs above feed the metric.
+        const redactedError = normalizeOtelErrorMessage(privateData.errorMessage);
         const spanAttrs: Record<string, string | number | boolean> = {
           ...attrs,
           "error.type": errorType,
+          ...(redactedError ? { "openclaw.error": redactedError } : {}),
           ...(evt.cleanupFailed ? { "openclaw.harness.cleanup_failed": true } : {}),
         };
         const span =
@@ -3222,7 +3251,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         setSpanAttrs(span, spanAttrs);
         span.setStatus({
           code: SpanStatusCode.ERROR,
-          message: errorType,
+          message: redactedError ?? errorType,
         });
         span.end(evt.ts);
       };
@@ -3887,16 +3916,16 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               recordRunStarted(evt, metadata);
               return;
             case "run.completed":
-              recordRunCompleted(evt, metadata);
+              recordRunCompleted(evt, metadata, privateData);
               return;
             case "harness.run.started":
               recordHarnessRunStarted(evt, metadata);
               return;
             case "harness.run.completed":
-              recordHarnessRunCompleted(evt, metadata);
+              recordHarnessRunCompleted(evt, metadata, privateData);
               return;
             case "harness.run.error":
-              recordHarnessRunError(evt, metadata);
+              recordHarnessRunError(evt, metadata, privateData);
               return;
             case "context.assembled":
               recordContextAssembled(evt, metadata);

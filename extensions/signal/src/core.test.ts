@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createPluginSetupWizardStatus } from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   clearSignalApprovalReactionTargetsForTest,
@@ -546,6 +547,34 @@ describe("signal outbound", () => {
     ]);
   });
 
+  it("resolves account and chat-type scoped reply-to modes through plugin threading", () => {
+    const resolveReplyToMode = signalPlugin.threading?.resolveReplyToMode;
+    if (!resolveReplyToMode) {
+      throw new Error("signal threading.resolveReplyToMode unavailable");
+    }
+
+    const cfg = {
+      channels: {
+        signal: {
+          replyToMode: "first",
+          replyToModeByChatType: { direct: "all", group: "off" },
+          accounts: {
+            Work: {
+              replyToMode: "off",
+              replyToModeByChatType: { group: "all" },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveReplyToMode({ cfg, accountId: "work", chatType: "group" })).toBe("all");
+    expect(resolveReplyToMode({ cfg, accountId: "work", chatType: "direct" })).toBe("off");
+    expect(resolveReplyToMode({ cfg, accountId: "default", chatType: "direct" })).toBe("all");
+    expect(resolveReplyToMode({ cfg, accountId: "default", chatType: "group" })).toBe("off");
+    expect(resolveReplyToMode({ cfg, accountId: "default" })).toBe("first");
+  });
+
   it("chunks outbound text without requiring Signal runtime initialization", () => {
     clearSignalRuntime();
     const chunker = signalPlugin.outbound?.chunker;
@@ -554,6 +583,20 @@ describe("signal outbound", () => {
     }
 
     expect(chunker("alpha beta", 5)).toEqual(["alpha", "beta"]);
+  });
+
+  it("sanitizes internal assistant scaffolding before outbound delivery", () => {
+    const sanitizeText = signalPlugin.outbound?.sanitizeText;
+    if (!sanitizeText) {
+      throw new Error("signal outbound sanitizer unavailable");
+    }
+
+    expect(
+      sanitizeText({
+        text: "<think>private</think>Visible answer",
+        payload: { text: "<think>private</think>Visible answer" },
+      }),
+    ).toBe("Visible answer");
   });
 
   it("preserves the local approval prompt suppressor through attached-result composition", () => {
@@ -733,6 +776,97 @@ describe("signal outbound", () => {
         },
       }),
     ).toBeNull();
+  });
+
+  it("registers delivered approval reactions under the resolved default account", async () => {
+    const renderPresentation = signalPlugin.outbound?.renderPresentation;
+    const afterDeliverPayload = signalPlugin.outbound?.afterDeliverPayload;
+    if (!renderPresentation || !afterDeliverPayload) {
+      throw new Error("signal outbound approval delivery hooks unavailable");
+    }
+
+    clearSignalApprovalReactionTargetsForTest();
+    const cfg = {
+      channels: {
+        signal: {
+          defaultAccount: "work",
+          accounts: {
+            work: {
+              accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+              allowFrom: ["+15551230000"],
+            },
+          },
+        },
+      },
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "signal", to: "+15551230000" }],
+        },
+      },
+    } as OpenClawConfig;
+    const payload: ReplyPayload = {
+      text: ["Exec approval required", "ID: exec-1"].join("\n"),
+      channelData: {
+        execApproval: {
+          approvalId: "exec-1",
+          approvalSlug: "exec-1",
+          approvalKind: "exec",
+          allowedDecisions: ["allow-once", "deny"],
+        },
+      },
+    };
+    const renderedPayload =
+      (await renderPresentation({
+        ctx: {
+          cfg,
+          to: "+15551230000",
+          text: payload.text ?? "",
+          accountId: "work",
+          payload,
+        },
+        presentation: { blocks: [] },
+        payload,
+      })) ?? payload;
+
+    expect(renderedPayload.text).toContain("React with:\n\n👍 Allow Once\n👎 Deny");
+
+    await afterDeliverPayload({
+      cfg,
+      target: { channel: "signal", to: "+15551230000" },
+      payload: renderedPayload,
+      results: [
+        {
+          channel: "signal",
+          messageId: "1700000000001",
+          meta: { signalVisibleText: renderedPayload.text },
+        },
+      ],
+    });
+
+    await expect(
+      resolveSignalApprovalReactionTargetWithPersistence({
+        accountId: "work",
+        conversationKey: "+15551230000",
+        messageId: "1700000000001",
+        reactionKey: "👍",
+        targetAuthorUuid: "123e4567-e89b-12d3-a456-426614174000",
+      }),
+    ).resolves.toMatchObject({
+      approvalId: "exec-1",
+      decision: "allow-once",
+    });
+    await expect(
+      resolveSignalApprovalReactionTargetWithPersistence({
+        accountId: "default",
+        conversationKey: "+15551230000",
+        messageId: "1700000000001",
+        reactionKey: "👍",
+        targetAuthor: "+15550009999",
+      }),
+    ).resolves.toBeNull();
+    clearSignalApprovalReactionTargetsForTest();
   });
 
   it("declares message adapter durable text and media with receipt proofs", async () => {

@@ -76,7 +76,7 @@ export type RuntimeConfigCapability = {
   dispose: () => void;
 };
 
-export type LoadConfigOptions = {
+type LoadConfigOptions = {
   discardPendingChanges?: boolean;
 };
 

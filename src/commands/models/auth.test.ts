@@ -62,6 +62,7 @@ const mocks = vi.hoisted(() => ({
   listProfilesForProvider: vi.fn(),
   promoteAuthProfileInOrder: vi.fn(),
   clearAuthProfileCooldown: vi.fn(),
+  callGateway: vi.fn(),
   resolvePluginSetupProvider: vi.fn(),
   resolvePluginSetupRegistry: vi.fn(),
 }));
@@ -164,6 +165,10 @@ vi.mock("../onboard-helpers.js", () => ({
 
 vi.mock("../../infra/remote-env.js", () => ({
   isRemoteEnvironment: mocks.isRemoteEnvironment,
+}));
+
+vi.mock("../../gateway/call.js", () => ({
+  callGateway: mocks.callGateway,
 }));
 
 vi.mock("../../plugins/provider-oauth-flow.js", () => ({
@@ -419,6 +424,8 @@ describe("modelsAuthLoginCommand", () => {
     mocks.loadAuthProfileStoreForRuntime.mockReturnValue({ profiles: {}, usageStats: {} });
     mocks.listProfilesForProvider.mockReturnValue([]);
     mocks.clearAuthProfileCooldown.mockResolvedValue(undefined);
+    mocks.callGateway.mockReset();
+    mocks.callGateway.mockResolvedValue({});
   });
 
   afterEach(() => {
@@ -500,6 +507,25 @@ describe("modelsAuthLoginCommand", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       "Default model available: openai/gpt-5.5 (use --set-default to apply)",
     );
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      method: "models.authStatus",
+      params: { refresh: true },
+      timeoutMs: 3000,
+    });
+  });
+
+  it("keeps login successful when the running gateway cannot refresh auth state", async () => {
+    const runtime = createRuntime();
+    mocks.callGateway.mockRejectedValueOnce(new Error("gateway unavailable"));
+
+    await expect(modelsAuthLoginCommand({ provider: "openai" }, runtime)).resolves.toBeUndefined();
+
+    expect(mocks.upsertAuthProfileWithLock).toHaveBeenCalledOnce();
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      method: "models.authStatus",
+      params: { refresh: true },
+      timeoutMs: 3000,
+    });
   });
 
   it("creates store order for relogin when configured profiles would shadow the new profile", async () => {
@@ -1316,6 +1342,11 @@ describe("modelsAuthLoginCommand", () => {
         credential: expect.objectContaining({ type: "token", token: "openai-token" }),
       }),
     );
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      method: "models.authStatus",
+      params: { refresh: true },
+      timeoutMs: 3000,
+    });
   });
 
   it("writes pasted Anthropic setup-tokens and logs the preference note", async () => {
@@ -1454,6 +1485,11 @@ describe("modelsAuthLoginCommand", () => {
       mode: "api_key",
     });
     expect(runtime.log).toHaveBeenCalledWith("Auth profile: openai:manual (openai/api_key)");
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      method: "models.authStatus",
+      params: { refresh: true },
+      timeoutMs: 3000,
+    });
   });
 
   it("writes piped OpenAI Codex API keys to API-key profiles", async () => {

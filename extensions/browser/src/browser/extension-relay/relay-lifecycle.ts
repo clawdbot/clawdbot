@@ -33,10 +33,14 @@ export async function ensureExtensionRelayForProfile(
   profile: ResolvedBrowserProfile,
 ): Promise<ExtensionRelayHandle> {
   const map = relays(state);
-  // The host-local relay secret is created at browser-service startup and when
-  // pairing; ensure it here too so a relay started on demand always has a token.
-  const { ensureExtensionRelayToken } = await import("./relay-auth.js");
-  const token = state.resolved.extensionRelayToken ?? ensureExtensionRelayToken();
+  // The host-local relay secret can be rotated while Browser control stays up.
+  // Treat the file as authoritative so a fresh pairing string works without a
+  // service restart, and keep resolved config aligned for future profile reads.
+  const { ensureExtensionRelayToken, readExtensionRelayToken } = await import("./relay-auth.js");
+  const token = readExtensionRelayToken() ?? ensureExtensionRelayToken();
+  if (state.resolved.extensionRelayToken !== token) {
+    state.resolved = { ...state.resolved, extensionRelayToken: token };
+  }
   const existing = map.get(profile.name);
   if (existing) {
     if (existing.port === profile.cdpPort && existing.token === token) {

@@ -1600,6 +1600,43 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("uses accepted steered inbound audio for final TTS", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      SessionKey: "agent:main:whatsapp:direct:chat-1",
+      BodyForAgent: "text turn",
+    });
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      const operation = (
+        opts as
+          | {
+              replyOperation?: ReturnType<typeof createReplyOperation>;
+            }
+          | undefined
+      )?.replyOperation;
+      expect(operation?.acceptedSteeredInboundAudio).toBe(false);
+      operation?.markAcceptedSteeredInboundAudio();
+      return { text: "reply to steered audio" } satisfies ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: automaticDirectReplyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    const finalTtsCall = ttsMocks.maybeApplyTtsToPayload.mock.calls.find(
+      ([params]) => (params as { kind?: string }).kind === "final",
+    )?.[0] as { inboundAudio?: boolean } | undefined;
+    expect(finalTtsCall?.inboundAudio).toBe(true);
+    expect(firstFinalReplyPayload(dispatcher)?.mediaUrl).toBe("https://example.com/tts-synth.opus");
+  });
+
   it("passes reply policy to routed block delivery", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();

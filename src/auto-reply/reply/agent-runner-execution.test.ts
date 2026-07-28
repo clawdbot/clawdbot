@@ -466,6 +466,7 @@ function createMockReplyOperation(): {
       abortSignal: new AbortController().signal,
       resetTriggered: false,
       terminalRecovery: false,
+      acceptedSteeredInboundAudio: false,
       phase: "running",
       result: null,
       hasOwnedSessionId: vi.fn((sessionId: string) => sessionId === "session"),
@@ -482,6 +483,7 @@ function createMockReplyOperation(): {
       abortByUser: vi.fn(() => true),
       abortForRestart: vi.fn(() => true),
       markTerminalRecovery: vi.fn(),
+      markAcceptedSteeredInboundAudio: vi.fn(),
     },
   };
 }

@@ -1,5 +1,5 @@
 // Control UI chat module implements realtime talk conversation behavior.
-export type RealtimeTalkConversationRole = "user" | "assistant";
+type RealtimeTalkConversationRole = "user" | "assistant";
 
 export type RealtimeTalkConversationEntry = {
   id: string;

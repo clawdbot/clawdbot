@@ -218,9 +218,10 @@ function createHtmlParseError(operation = "sendMessage") {
   );
 }
 
-function createWrappedPreConnectHttpError(operation = "sendMessage") {
-  const root = Object.assign(new Error("getaddrinfo ENOTFOUND api.telegram.org"), {
-    code: "ENOTFOUND",
+function createWrappedConnectTimeoutHttpError(operation = "sendMessage") {
+  const root = Object.assign(new Error("Connect Timeout Error"), {
+    name: "ConnectTimeoutError",
+    code: "UND_ERR_CONNECT_TIMEOUT",
   });
   const fetchError = Object.assign(new TypeError("fetch failed"), { cause: root });
   return Object.assign(new Error(`Network request for '${operation}' failed!`), {
@@ -1027,12 +1028,12 @@ describe("deliverReplies", () => {
     expect(runtime.error).toHaveBeenCalledTimes(1);
   });
 
-  it("retries final text sends for wrapped pre-connect grammY HttpError envelopes", async () => {
+  it("retries final text sends for wrapped Undici connect timeouts", async () => {
     vi.useFakeTimers();
     const runtime = createRuntime();
     const sendMessage = vi
       .fn()
-      .mockRejectedValueOnce(createWrappedPreConnectHttpError("sendMessage"))
+      .mockRejectedValueOnce(createWrappedConnectTimeoutHttpError("sendMessage"))
       .mockResolvedValueOnce({
         message_id: 12,
         chat: { id: "123" },

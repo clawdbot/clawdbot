@@ -173,4 +173,19 @@ describe("stringifyTelegramRawUpdateForLog", () => {
       expect(rawLog).not.toContain(privateValue);
     }
   });
+
+  it("truncates long raw update strings without splitting UTF-16 surrogate pairs", () => {
+    const prefix = "a".repeat(499);
+    const rawLog = stringifyTelegramRawUpdateForLog({
+      update_id: 123,
+      diagnostic: `${prefix}\uD83D\uDE80tail`,
+    });
+    const parsed = JSON.parse(rawLog) as { diagnostic: string };
+
+    expect(parsed.diagnostic).toBe(`${prefix}...`);
+    expect(parsed.diagnostic).not.toContain("\uD83D");
+    expect(parsed.diagnostic).not.toContain("\uDE80");
+    expect(rawLog).not.toContain("\\ud83d");
+    expect(rawLog).not.toContain("\\ude80");
+  });
 });

@@ -239,7 +239,7 @@ describe("isSafeToRetrySendError", () => {
     ["ECONNRESET", "read ECONNRESET", false],
     ["ETIMEDOUT", "connect ETIMEDOUT", false],
     ["EPIPE", "write EPIPE", false],
-    ["UND_ERR_CONNECT_TIMEOUT", "connect timeout", false],
+    ["UND_ERR_CONNECT_TIMEOUT", "connect timeout", true],
   ])("returns %s => %s", (code, message, expected) => {
     expect(isSafeToRetrySendError(errorWithCode(message, code))).toBe(expected);
   });

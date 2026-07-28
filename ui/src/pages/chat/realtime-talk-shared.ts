@@ -20,7 +20,7 @@ export type RealtimeTalkCallbacks = {
   onTalkEvent?: (event: RealtimeTalkEvent) => void;
 };
 
-export type RealtimeTalkEventInput<TPayload = unknown> = {
+type RealtimeTalkEventInput<TPayload = unknown> = {
   type: RealtimeTalkEvent["type"];
   payload?: TPayload;
   turnId?: string;
@@ -31,7 +31,7 @@ export type RealtimeTalkEventInput<TPayload = unknown> = {
   parentId?: string;
 };
 
-export type RealtimeTalkAudioContract = {
+type RealtimeTalkAudioContract = {
   inputEncoding: "pcm16" | "g711_ulaw";
   inputSampleRateHz: number;
   outputEncoding: "pcm16" | "g711_ulaw";

@@ -145,6 +145,7 @@ function applyAnthropicCacheControlToMessages(
   messages: unknown,
   cacheControl: AnthropicEphemeralCacheControl,
   markerLimit: number,
+  cacheBreakpointOptOutMessageIndexes: ReadonlySet<number>,
 ): void {
   if (!Array.isArray(messages) || messages.length === 0 || markerLimit <= 0) {
     return;
@@ -159,7 +160,7 @@ function applyAnthropicCacheControlToMessages(
     }
 
     const record = message as Record<string, unknown>;
-    if (record.role !== "user") {
+    if (record.role !== "user" || cacheBreakpointOptOutMessageIndexes.has(i)) {
       continue;
     }
 
@@ -255,6 +256,7 @@ export function resolveAnthropicPayloadPolicy(
 export function applyAnthropicPayloadPolicyToParams(
   payloadObj: Record<string, unknown>,
   policy: AnthropicPayloadPolicy,
+  cacheBreakpointOptOutMessageIndexes: ReadonlySet<number>,
 ): void {
   if (
     policy.allowsServiceTier &&
@@ -281,6 +283,7 @@ export function applyAnthropicPayloadPolicyToParams(
     payloadObj.messages,
     policy.cacheControl,
     ANTHROPIC_CACHE_CONTROL_LIMIT - usedMarkers,
+    cacheBreakpointOptOutMessageIndexes,
   );
 }
 

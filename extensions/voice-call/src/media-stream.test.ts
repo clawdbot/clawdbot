@@ -444,6 +444,13 @@ describe("MediaStreamHandler security hardening", () => {
     expect(reason).toContain("forged line entry");
   });
 
+  it("truncates websocket close reason without splitting UTF-16 surrogate pairs", () => {
+    const reason = sanitizeLogText(`abc\uD83D\uDE80tail`, 4);
+    expect(reason).toBe("abc...");
+    expect(reason).not.toContain("\uD83D");
+    expect(reason).not.toContain("\uDE80");
+  });
+
   it("closes idle pre-start connections after timeout", async () => {
     const shouldAcceptStreamCalls: Array<{ callId: string; streamSid: string; token?: string }> =
       [];

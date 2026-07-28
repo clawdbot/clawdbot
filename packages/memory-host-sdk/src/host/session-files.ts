@@ -762,7 +762,7 @@ export async function buildSessionEntry(
       false;
     let generatedByCronRun =
       opts.generatedByCronRun ?? sessionStoreClassification?.generatedByCronRun ?? false;
-    const allowArchiveContentCronClassification =
+    const allowArchiveRecordCronClassification =
       isUsageCountedSessionArchiveTranscriptPath(absPath);
     for (let jsonlIdx = 0, lineStart = 0; lineStart <= raw.length; jsonlIdx++) {
       await yieldSessionEntryParseIfNeeded(jsonlIdx, parseYieldEveryLines);
@@ -784,7 +784,7 @@ export async function buildSessionEntry(
       }
       if (
         !generatedByCronRun &&
-        allowArchiveContentCronClassification &&
+        allowArchiveRecordCronClassification &&
         isCronRunGeneratedRecord(record)
       ) {
         generatedByCronRun = true;
@@ -815,16 +815,8 @@ export async function buildSessionEntry(
       if (rawText === null) {
         continue;
       }
-      if (
-        !generatedByCronRun &&
-        allowArchiveContentCronClassification &&
-        isGeneratedCronPromptMessage(normalizeSessionText(rawText), message.role)
-      ) {
-        generatedByCronRun = true;
-        collected.length = 0;
-        lineMap.length = 0;
-        messageTimestampsMs.length = 0;
-      }
+      // User text is not trusted archive-wide provenance. Per-message sanitization
+      // drops cron prompts without clearing unrelated content from the archive.
       const text = sanitizeSessionText(rawText, message.role);
       if (!text) {
         // Assistant-side machinery (silent replies, system wrappers) is already

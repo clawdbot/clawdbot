@@ -41,6 +41,7 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
+import { resolveBatchedReplyThreadingPolicy } from "openclaw/plugin-sdk/reply-reference";
 import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
 import { settleReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
@@ -56,6 +57,7 @@ import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/sess
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { normalizeE164, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { resolveSignalReplyToMode } from "../accounts.js";
 import {
   maybeResolveSignalApprovalReaction,
   resolveSignalApprovalConversationKey,
@@ -205,9 +207,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     groupName?: string;
     isGroup: boolean;
     bodyText: string;
+    nativeReplyBody?: string;
     commandBody: string;
     timestamp?: number;
     messageId?: string;
+    replyToId?: string;
+    isBatched?: boolean;
     mediaPath?: string;
     mediaType?: string;
     mediaPaths?: string[];
@@ -288,6 +293,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             limit: deps.historyLimit,
           })
         : undefined;
+    const replyThreading = resolveBatchedReplyThreadingPolicy(
+      resolveSignalReplyToMode({
+        cfg: deps.cfg,
+        accountId: deps.accountId,
+        chatType: entry.isGroup ? "group" : "direct",
+      }),
+      entry.isBatched === true,
+    );
     const media =
       entry.mediaPaths && entry.mediaPaths.length > 0
         ? entry.mediaPaths.map((path, index) => ({
@@ -330,6 +343,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
       reply: {
         to: signalTo,
+        replyToId: entry.replyToId ?? entry.messageId,
       },
       message: {
         body: combinedBody,
@@ -354,6 +368,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       media,
       extra: {
         GroupSubject: entry.isGroup ? (entry.groupName ?? undefined) : undefined,
+        ReplyThreading: replyThreading,
       },
     });
 
@@ -481,6 +496,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         },
       });
 
+    const nativeReplyContext = {
+      replyToId: ctxPayload.ReplyToId,
+      author: entry.senderRecipient,
+      body: entry.nativeReplyBody ?? entry.bodyText,
+      state: { hasReplied: false },
+    };
     const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
       ...replyPipeline,
       humanDelay: resolveHumanDelayConfig(deps.cfg, route.agentId),
@@ -492,10 +513,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           target: ctxPayload.To,
           baseUrl: deps.baseUrl,
           account: deps.account,
+          accountUuid: deps.accountUuid,
           accountId: deps.accountId,
           runtime: deps.runtime,
           maxBytes: deps.mediaMaxBytes,
           textLimit: deps.textLimit,
+          replyContext: nativeReplyContext,
+          chatType: entry.isGroup ? "group" : "direct",
         });
       },
       onError: (err, info) => {
@@ -674,6 +698,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         ...last,
         bodyText: combinedText,
         commandBody: combinedCommandBody,
+        isBatched: true,
+        nativeReplyBody: last.nativeReplyBody ?? last.bodyText,
         mediaPath: undefined,
         mediaType: undefined,
         mediaPaths: undefined,
@@ -1134,6 +1160,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         : typeof dataMessage.timestamp === "number"
           ? dataMessage.timestamp
           : undefined;
+    const nativeReplyTargetTimestamp =
+      typeof envelope.editMessage?.targetSentTimestamp === "number"
+        ? envelope.editMessage.targetSentTimestamp
+        : inboundTimestamp;
     if (deps.sendReadReceipts && !deps.readReceiptsViaDaemon && !isGroup && inboundTimestamp) {
       try {
         await sendReadReceiptSignal(`signal:${senderRecipient}`, inboundTimestamp, {
@@ -1156,6 +1186,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
 
     const senderName = envelope.sourceName ?? senderDisplay;
     const messageId = typeof inboundTimestamp === "number" ? String(inboundTimestamp) : undefined;
+    const replyToId =
+      typeof nativeReplyTargetTimestamp === "number"
+        ? String(nativeReplyTargetTimestamp)
+        : undefined;
     await inboundDebouncer.enqueue({
       senderName,
       senderDisplay,
@@ -1168,6 +1202,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       commandBody: messageText,
       timestamp: inboundTimestamp,
       messageId,
+      replyToId,
       mediaPath,
       mediaType,
       mediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,

@@ -90,14 +90,14 @@ export function buildCodexAppServerPlannerConfig(workspaceDir: string): OpenClaw
         model: { primary: CODEX_APP_SERVER_DEFAULT_MODEL_REF },
       },
     },
+    // `enabled` gates plugin activation for this run; do not add a `config`
+    // block here — harnesses resolve plugin config from the live global
+    // config, so per-run `plugins.entries.*.config` keys are silently ignored.
+    // The crestodian tool's direct registration is structural (crestodianTool
+    // run param -> resolveCodexDynamicToolDirectNames in the codex plugin).
     plugins: {
       entries: {
-        codex: {
-          enabled: true,
-          // Crestodian carries a single ring-zero tool; advertise it directly
-          // instead of hiding it behind the Codex tool-search index.
-          config: { codexDynamicToolsLoading: "direct" },
-        },
+        codex: { enabled: true },
       },
     },
     // The Codex app-server harness runs a local process; the ephemeral

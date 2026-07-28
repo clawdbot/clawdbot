@@ -13,7 +13,7 @@ import type { UsageSessionEntry, UsageTotals, UsageAggregates } from "./types.ts
 const CHARS_PER_TOKEN = 4;
 const DAY_MS = 86_400_000;
 
-export type UsageCostWindowSummary = {
+type UsageCostWindowSummary = {
   days: number;
   startDate: string;
   endDate: string;

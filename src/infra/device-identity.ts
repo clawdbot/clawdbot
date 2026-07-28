@@ -244,6 +244,10 @@ export function loadOrCreateDeviceIdentity(
       // Avoid overwriting recognizable but invalid identity files; callers can still use a fresh key.
       return generateIdentity();
     }
+    if (identityFileExists(filePath)) {
+      // Unrecognized existing files may hold a newer schema; never overwrite them either.
+      return generateIdentity();
+    }
   } catch {
     if (identityFileExists(filePath)) {
       return generateIdentity();

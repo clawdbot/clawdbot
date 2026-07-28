@@ -56,7 +56,7 @@ export type BorderRadiusStop = (typeof BORDER_RADIUS_STOPS)[number];
 export const TEXT_SCALE_STOPS = [90, 100, 110, 125, 140] as const;
 export type TextScaleStop = (typeof TEXT_SCALE_STOPS)[number];
 
-export const CHAT_AUTO_SCROLL_MODES = ["always", "near-bottom", "off"] as const;
+const CHAT_AUTO_SCROLL_MODES = ["always", "near-bottom", "off"] as const;
 export type ChatAutoScrollMode = (typeof CHAT_AUTO_SCROLL_MODES)[number];
 
 export function normalizeChatAutoScrollMode(value: unknown): ChatAutoScrollMode {
@@ -65,7 +65,7 @@ export function normalizeChatAutoScrollMode(value: unknown): ChatAutoScrollMode 
     : "near-bottom";
 }
 
-export const CHAT_SEND_SHORTCUTS = ["enter", "modifier-enter"] as const;
+const CHAT_SEND_SHORTCUTS = ["enter", "modifier-enter"] as const;
 export type ChatSendShortcut = (typeof CHAT_SEND_SHORTCUTS)[number];
 
 export function normalizeChatSendShortcut(value: unknown): ChatSendShortcut {
@@ -143,7 +143,7 @@ export function setLastActiveSessionKey(host: LastActiveSessionHost, next: strin
   host.applySettings({ ...host.settings, lastActiveSessionKey: trimmed });
 }
 
-export type ApplicationStartupLocation = {
+type ApplicationStartupLocation = {
   pathname: string;
   search: string;
   hash: string;

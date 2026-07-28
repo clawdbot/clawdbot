@@ -3,7 +3,7 @@ import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { SessionCapability } from "./index.ts";
 import { parseAgentSessionKey } from "./session-key.ts";
 
-export const SESSION_CUSTOM_GROUPS_STORAGE_KEY = "openclaw:sessions:custom-groups";
+const SESSION_CUSTOM_GROUPS_STORAGE_KEY = "openclaw:sessions:custom-groups";
 
 export function loadStoredSessionCustomGroups(): string[] {
   try {

@@ -1261,9 +1261,9 @@ export async function runReplyAgent(params: {
   };
 
   if (effectiveShouldSteer && isActive) {
-    const steerSessionId =
-      (sessionKey ? replyRunRegistry.resolveSessionId(sessionKey) : undefined) ??
-      followupRun.run.sessionId;
+    const activeReplyOperation =
+      providedReplyOperation ?? (sessionKey ? replyRunRegistry.get(sessionKey) : undefined);
+    const steerSessionId = activeReplyOperation?.sessionId ?? followupRun.run.sessionId;
     const steerOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
       steerSessionId,
       followupRun.prompt,
@@ -1276,6 +1276,9 @@ export async function runReplyAgent(params: {
       },
     );
     if (steerOutcome.queued) {
+      if (followupRun.currentInboundAudio === true) {
+        activeReplyOperation?.markAcceptedSteeredInboundAudio();
+      }
       await touchActiveSessionEntry();
       typing.cleanup();
       return undefined;

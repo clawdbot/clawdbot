@@ -123,6 +123,8 @@ export function createOpenClawTools(
     currentMessageId?: string | number;
     /** True when the current inbound turn carried audio media. */
     currentInboundAudio?: boolean;
+    /** Dynamic audio state for runs that can accept steered input after tool creation. */
+    hasCurrentInboundAudio?: () => boolean;
     /** Reply-to mode for auto-threading. */
     replyToMode?: "off" | "first" | "all" | "batched";
     /** Mutable ref to track if a reply was sent (for "first" mode). */
@@ -358,6 +360,7 @@ export function createOpenClawTools(
         currentChannelProvider: options?.agentChannel,
         currentThreadTs: options?.currentThreadTs,
         currentInboundAudio: options?.currentInboundAudio,
+        hasCurrentInboundAudio: options?.hasCurrentInboundAudio,
         agentThreadId: options?.agentThreadId,
         currentMessageId: options?.currentMessageId,
         replyToMode: options?.replyToMode,

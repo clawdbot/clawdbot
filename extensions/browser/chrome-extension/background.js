@@ -7,7 +7,7 @@
 // consent boundary: only grouped tabs are reported to (and driven by) OpenClaw.
 import {
   OPENCLAW_TAB_GROUP_TITLE,
-  buildRelayWsUrl,
+  buildRelayWsProtocols,
   nearestGroupColor,
   parsePairingString,
   reconnectDelayMs,
@@ -298,7 +298,7 @@ async function connectRelay() {
   setBadge("connecting");
   let ws;
   try {
-    ws = new WebSocket(buildRelayWsUrl(relayUrl, token));
+    ws = new WebSocket(relayUrl, buildRelayWsProtocols(token));
   } catch {
     setBadge("error");
     scheduleReconnect();

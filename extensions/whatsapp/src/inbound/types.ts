@@ -30,6 +30,7 @@ export type ActiveWebSendOptions = {
 };
 
 export type ActiveWebListener = {
+  assertSendReady?: (to: string) => Promise<void>;
   sendMessage: (
     to: string,
     text: string,

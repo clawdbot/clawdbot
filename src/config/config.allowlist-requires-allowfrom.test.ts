@@ -133,6 +133,43 @@ describe('account dmPolicy="allowlist" uses inherited allowFrom', () => {
   });
 });
 
+describe("signal reply-to config", () => {
+  it("accepts channel and account scoped reply-to modes", () => {
+    const result = SignalConfigSchema.safeParse({
+      replyToMode: "first",
+      replyToModeByChatType: { direct: "all", group: "first" },
+      accounts: {
+        work: {
+          replyToMode: "off",
+          replyToModeByChatType: { direct: "first", group: "off" },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects unreachable Signal channel reply-to overrides", () => {
+    const result = SignalConfigSchema.safeParse({
+      replyToModeByChatType: { channel: "off" },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects unreachable Signal account reply-to overrides", () => {
+    const result = SignalConfigSchema.safeParse({
+      accounts: {
+        work: {
+          replyToModeByChatType: { channel: "off" },
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+});
+
 describe("Discord mentionAliases schema", () => {
   it("accepts stable outbound mention aliases on top-level and account config", () => {
     expect(

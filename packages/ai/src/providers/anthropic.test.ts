@@ -1985,6 +1985,44 @@ describe("Anthropic provider", () => {
     ]);
   });
 
+  it("anchors the message cache breakpoint on the last stable user turn, skipping a trailing runtime-context carrier", async () => {
+    let capturedPayload: unknown;
+    const stream = streamSimpleAnthropic(
+      makeAnthropicModel(),
+      {
+        systemPrompt: "system",
+        messages: [
+          { role: "user", content: "stable question", timestamp: 0 },
+          {
+            role: "user",
+            content: "volatile current-turn metadata",
+            timestamp: 1,
+            runtimeContextCarrier: true,
+          },
+        ],
+      },
+      {
+        apiKey: "sk-ant-provider",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    const messages = (capturedPayload as { messages: { content: unknown }[] }).messages;
+    // Deepest breakpoint anchors on the stable user turn (converted to a block
+    // array with cache_control) so it stays a cacheable prefix next turn...
+    expect(messages[0]?.content).toEqual([
+      { type: "text", text: "stable question", cache_control: { type: "ephemeral" } },
+    ]);
+    // ...and NOT on the trailing volatile carrier, which is left uncached.
+    expect(messages[1]?.content).toBe("volatile current-turn metadata");
+  });
+
   it("emits start event only after message_start so pre-stream SSE errors arrive before any non-error event", async () => {
     function createSseEventResponse(lines: string): Response {
       return new Response(lines, {

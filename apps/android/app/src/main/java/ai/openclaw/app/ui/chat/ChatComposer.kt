@@ -61,6 +61,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -191,6 +192,21 @@ internal fun ChatComposer(
   val sendBusy = pendingRunCount > 0
   val recordingVoiceNote = voiceNoteState is VoiceNoteRecorderState.Recording
   val preparingVoiceNote = voiceNoteState is VoiceNoteRecorderState.Preparing
+  val sendCurrentInput = {
+    val message = input.trim()
+    val action = resolveSheetComposerSendAction(input = message)
+    if (action.sendMessage || attachments.isNotEmpty()) {
+      input = ""
+      sendScope.launch {
+        val accepted = onSend(message)
+        // Refused sends (offline queue full, enqueue failure) must not eat the draft;
+        // restore it unless the user already started typing something new.
+        if (!accepted && input.isEmpty()) {
+          input = message
+        }
+      }
+    }
+  }
 
   Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
     if (attachments.isNotEmpty()) {
@@ -219,7 +235,16 @@ internal fun ChatComposer(
       OutlinedTextField(
         value = input,
         onValueChange = { input = it },
-        modifier = Modifier.fillMaxWidth(),
+        modifier =
+          Modifier
+            .fillMaxWidth()
+            .onPreviewKeyEvent { event ->
+              handlePhysicalChatSend(
+                event = event,
+                sendEnabled = canSend,
+                onSend = sendCurrentInput,
+              )
+            },
         placeholder = { Text("Type a message…", style = mobileBodyStyle(), color = mobileTextTertiary) },
         minLines = 2,
         maxLines = 5,
@@ -321,21 +346,7 @@ internal fun ChatComposer(
       Spacer(modifier = Modifier.weight(1f))
 
       Button(
-        onClick = {
-          val message = input.trim()
-          val action = resolveSheetComposerSendAction(input = message)
-          if (action.sendMessage || attachments.isNotEmpty()) {
-            input = ""
-            sendScope.launch {
-              val accepted = onSend(message)
-              // Refused sends (offline queue full, enqueue failure) must not eat the draft;
-              // restore it unless the user already started typing something new.
-              if (!accepted && input.isEmpty()) {
-                input = message
-              }
-            }
-          }
-        },
+        onClick = sendCurrentInput,
         enabled = canSend && !recordingVoiceNote && !preparingVoiceNote,
         modifier = Modifier.height(44.dp),
         shape = RoundedCornerShape(14.dp),

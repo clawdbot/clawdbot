@@ -23,6 +23,7 @@ import {
   type TalkEventInput,
   type TalkSessionController,
 } from "openclaw/plugin-sdk/realtime-voice";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { type RawData, WebSocket, WebSocketServer } from "ws";
 
 /**
@@ -109,7 +110,7 @@ export function sanitizeLogText(value: string, maxChars: number): string {
   if (sanitized.length <= maxChars) {
     return sanitized;
   }
-  return `${sanitized.slice(0, maxChars)}...`;
+  return `${truncateUtf16Safe(sanitized, maxChars)}...`;
 }
 
 function normalizeWsMessageData(data: RawData): Buffer {

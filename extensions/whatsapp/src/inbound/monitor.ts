@@ -4,6 +4,7 @@ import type {
   MiscMessageGenerationOptions,
   proto,
   GroupMetadata,
+  ReachoutTimelockState,
   WAMessage,
   WAMessageKey,
   WASocket,
@@ -42,7 +43,12 @@ import {
   type WhatsAppSocketOperationAdapter,
   type WhatsAppSocketTimingOptions,
 } from "../socket-timing.js";
-import { resolveEquivalentWhatsAppDirectChatJids, resolveJidToE164 } from "../text-runtime.js";
+import {
+  resolveEquivalentWhatsAppDirectChatJids,
+  resolveJidToE164,
+  toWhatsappJid,
+  toWhatsappJidWithLid,
+} from "../text-runtime.js";
 import {
   checkInboundAccessControl,
   type AcceptedInboundAccessControlResult,
@@ -256,6 +262,33 @@ function logWhatsAppVerbose(enabled: boolean | undefined, message: string) {
 
 function isGroupJid(jid: string): boolean {
   return (typeof isJidGroup === "function" ? isJidGroup(jid) : jid.endsWith("@g.us")) === true;
+}
+
+function isDirectUserJid(jid: string): boolean {
+  return /^(\d+)(?::\d+)?@(s\.whatsapp\.net|c\.us|lid|hosted|hosted\.lid)$/i.test(jid.trim());
+}
+
+function getActiveReachoutTimelock(
+  state: ReachoutTimelockState | undefined,
+): ReachoutTimelockState | undefined {
+  if (state?.isActive !== true) {
+    return undefined;
+  }
+  const endsAt = state.timeEnforcementEnds?.getTime();
+  return endsAt === undefined || !Number.isFinite(endsAt) || endsAt > Date.now()
+    ? state
+    : undefined;
+}
+
+function formatReachoutTimelockError(state: ReachoutTimelockState): string {
+  const details = [
+    state.enforcementType ? `type=${state.enforcementType}` : undefined,
+    state.timeEnforcementEnds instanceof Date &&
+    Number.isFinite(state.timeEnforcementEnds.getTime())
+      ? `until=${state.timeEnforcementEnds.toISOString()}`
+      : undefined,
+  ].filter(Boolean);
+  return `WhatsApp reachout timelock is active; direct messages are temporarily blocked${details.length ? ` (${details.join(", ")})` : ""}`;
 }
 
 function recordAcceptedInboundActivity(accountId: string): void {
@@ -658,6 +691,95 @@ export async function attachWebInboxToSocket(
       () => {},
     );
   };
+  let reachoutTimeLock: ReachoutTimelockState | undefined;
+  let reachoutTimeLockFetch: Promise<ReachoutTimelockState | undefined> | undefined;
+  let reachoutTimeLockVersion = 0;
+  let verifiedSendReady:
+    | { jid: string; sock: WASocket; reachoutTimeLockVersion: number }
+    | undefined;
+  const rememberReachoutTimeLock = (state: ReachoutTimelockState | undefined) => {
+    reachoutTimeLock = state;
+    reachoutTimeLockVersion += 1;
+    verifiedSendReady = undefined;
+  };
+  const fetchReachoutTimeLock = async (
+    currentSock: WASocket,
+  ): Promise<ReachoutTimelockState | undefined> => {
+    if (typeof currentSock.fetchAccountReachoutTimelock !== "function") {
+      return undefined;
+    }
+    if (!reachoutTimeLockFetch) {
+      reachoutTimeLockFetch = currentSock
+        .fetchAccountReachoutTimelock()
+        .then((state) => {
+          rememberReachoutTimeLock(state);
+          return state;
+        })
+        .catch((err: unknown) => {
+          logWhatsAppVerbose(
+            options.verbose,
+            `Failed fetching WhatsApp reachout timelock before send: ${formatError(err)}`,
+          );
+          return undefined;
+        })
+        .finally(() => {
+          reachoutTimeLockFetch = undefined;
+        });
+    }
+    return await reachoutTimeLockFetch;
+  };
+  const rememberVerifiedSendReady = (jid: string, currentSock: WASocket) => {
+    verifiedSendReady = {
+      jid,
+      sock: currentSock,
+      reachoutTimeLockVersion,
+    };
+  };
+  const consumeVerifiedSendReady = (jid: string, currentSock: WASocket): boolean => {
+    if (
+      verifiedSendReady?.jid !== jid ||
+      verifiedSendReady.sock !== currentSock ||
+      verifiedSendReady.reachoutTimeLockVersion !== reachoutTimeLockVersion
+    ) {
+      return false;
+    }
+    verifiedSendReady = undefined;
+    return true;
+  };
+  const assertCanSendToJid = async (
+    jid: string,
+    currentSock: WASocket,
+    readinessOptions?: { rememberReady?: boolean; useVerifiedReady?: boolean },
+  ) => {
+    if (!isDirectUserJid(jid)) {
+      return;
+    }
+    if (readinessOptions?.useVerifiedReady && consumeVerifiedSendReady(jid, currentSock)) {
+      return;
+    }
+    const state =
+      getActiveReachoutTimelock(reachoutTimeLock) ?? (await fetchReachoutTimeLock(currentSock));
+    const activeState = getActiveReachoutTimelock(state);
+    if (activeState) {
+      throw new Error(formatReachoutTimelockError(activeState));
+    }
+    if (readinessOptions?.rememberReady && state) {
+      // The top-level direct send checks readiness before typing; consume this
+      // same socket/JID/version proof at the native send so inactive accounts
+      // are not queried twice for one outbound action.
+      rememberVerifiedSendReady(jid, currentSock);
+    }
+  };
+  const assertCanSendTo = async (to: string) => {
+    const currentSock = getCurrentSock();
+    if (!currentSock) {
+      throw new Error(RECONNECT_IN_PROGRESS_ERROR);
+    }
+    const jid = options.authDir
+      ? toWhatsappJidWithLid(to, { authDir: options.authDir })
+      : toWhatsappJid(to);
+    await assertCanSendToJid(jid, currentSock, { rememberReady: true });
+  };
 
   const sendTrackedMessage = async (
     jid: string,
@@ -669,6 +791,7 @@ export async function attachWebInboxToSocket(
       const currentSock = getCurrentSock();
       if (currentSock) {
         try {
+          await assertCanSendToJid(jid, currentSock, { useVerifiedReady: true });
           const result = await createWhatsAppSocketOperationTimeoutAdapter(
             currentSock,
             sendOperationTimeoutMs,
@@ -1246,10 +1369,12 @@ export async function attachWebInboxToSocket(
   ) => {
     const chatJid = inbound.remoteJid;
     const sendComposing = async () => {
-      if (!getCurrentSock()) {
+      const currentSock = getCurrentSock();
+      if (!currentSock) {
         return;
       }
       try {
+        await assertCanSendToJid(chatJid, currentSock);
         await sendApiSocketOperations.sendPresenceUpdate("composing", chatJid);
       } catch (err) {
         logWhatsAppVerbose(options.verbose, `Presence update failed: ${String(err)}`);
@@ -1508,6 +1633,9 @@ export async function attachWebInboxToSocket(
   };
   const handleConnectionUpdate = (update: Partial<import("baileys").ConnectionState>) => {
     try {
+      if ("reachoutTimeLock" in update) {
+        rememberReachoutTimeLock(update.reachoutTimeLock);
+      }
       if (update.connection === "close") {
         if (options.socketRef?.current === sock) {
           options.socketRef.current = null;
@@ -1682,6 +1810,7 @@ export async function attachWebInboxToSocket(
     signalClose: (reason?: WebListenerCloseReason) => {
       resolveClose(reason ?? { status: undefined, isLoggedOut: false, error: "closed" });
     },
+    assertSendReady: assertCanSendTo,
     sendComposingTo: sendApi.sendComposingTo,
     sendMessage: sendApi.sendMessage,
     sendPoll: sendApi.sendPoll,
