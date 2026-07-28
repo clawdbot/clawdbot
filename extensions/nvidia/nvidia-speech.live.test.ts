@@ -9,7 +9,7 @@ import {
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
-import { NVIDIA_DEFAULT_ASR_MODEL, NVIDIA_FALLBACK_ASR_MODEL } from "./nvidia-speech-config.js";
+import { NVIDIA_DEFAULT_ASR_MODEL } from "./nvidia-speech-config.js";
 
 const NVIDIA_API_KEY = process.env.NVIDIA_API_KEY?.trim() ?? "";
 const LIVE = isLiveTestEnabled() && NVIDIA_API_KEY.length > 0;
@@ -51,7 +51,7 @@ describeLive("nvidia speech plugin live", () => {
     });
 
     const normalized = normalizeTranscriptForMatch(transcript?.text ?? "");
-    expect([NVIDIA_DEFAULT_ASR_MODEL, NVIDIA_FALLBACK_ASR_MODEL]).toContain(transcript?.model);
+    expect(transcript?.model).toBe(NVIDIA_DEFAULT_ASR_MODEL);
     expectOpenClawLiveTranscriptMarker(normalized);
     expect(normalized).toContain("nvidia");
     expect(normalized).toContain("speech");

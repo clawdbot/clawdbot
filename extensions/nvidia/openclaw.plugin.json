@@ -267,7 +267,7 @@
     "nvidia": {
       "capabilities": ["audio"],
       "defaultModels": {
-        "audio": "nvidia/parakeet-tdt-0.6b-v2"
+        "audio": "nvidia/parakeet-ctc-1.1b-asr"
       },
       "autoPriority": {
         "audio": 55

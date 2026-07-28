@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   postMultipartRequest: vi.fn(),
@@ -19,7 +19,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => {
   };
 });
 
-import { NVIDIA_DEFAULT_ASR_MODEL, NVIDIA_FALLBACK_ASR_MODEL } from "./nvidia-speech-config.js";
+import { NVIDIA_DEFAULT_ASR_MODEL } from "./nvidia-speech-config.js";
 import { magpieSynthesize, transcribeNvidiaAudio } from "./nvidia-speech-http.runtime.js";
 
 function transcriptionRequest(overrides: Record<string, unknown> = {}) {
@@ -64,15 +64,10 @@ function okJson(text: string) {
 describe("NVIDIA speech HTTP runtime", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    delete process.env.NVIDIA_TDT_ASR_BASE_URL;
-    delete process.env.NVIDIA_CTC_ASR_BASE_URL;
+    delete process.env.NVIDIA_ASR_BASE_URL;
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("uses Parakeet TDT by default and forwards ASR customizations", async () => {
+  it("uses hosted Parakeet CTC by default and forwards ASR customizations", async () => {
     mocks.postTranscriptionRequest.mockResolvedValue(okJson("hello NVIDIA"));
 
     const result = await transcribeNvidiaAudio(
@@ -81,6 +76,7 @@ describe("NVIDIA speech HTTP runtime", () => {
           boostedWords: '["Nemotron","OpenClaw"]',
           boostedWordsScore: 1.5,
           wordTimeOffsets: true,
+          automaticPunctuation: true,
           customConfiguration: "foo:bar",
         },
       }),
@@ -90,46 +86,30 @@ describe("NVIDIA speech HTTP runtime", () => {
     expect(mocks.postTranscriptionRequest).toHaveBeenCalledTimes(1);
     const request = mocks.postTranscriptionRequest.mock.calls[0]?.[0];
     expect(request.url).toContain(
-      "d3fe9151-442b-4204-a70d-5fcc597fd610.invocation.api.nvcf.nvidia.com",
+      "1598d209-5e27-4d3c-8079-4751568b1081.invocation.api.nvcf.nvidia.com",
     );
     const form = request.body as FormData;
     expect(form.getAll("boosted_lm_words")).toEqual(["Nemotron", "OpenClaw"]);
     expect(form.get("boosted_lm_score")).toBe("1.5");
     expect(form.get("word_time_offsets")).toBe("true");
+    expect(form.get("enable_automatic_punctuation")).toBe("true");
     expect(form.get("custom_configuration")).toBe("foo:bar");
   });
 
-  it("falls back to Parakeet CTC 1.1b when TDT HTTP fails", async () => {
-    mocks.postTranscriptionRequest
-      .mockResolvedValueOnce({
-        response: new Response('{"detail":"not available"}', { status: 404 }),
-        release: vi.fn(),
-      })
-      .mockResolvedValueOnce(okJson("fallback transcript"));
-
-    const result = await transcribeNvidiaAudio(transcriptionRequest());
-
-    expect(result).toEqual({
-      text: "fallback transcript",
-      model: NVIDIA_FALLBACK_ASR_MODEL,
-    });
-    expect(mocks.postTranscriptionRequest).toHaveBeenCalledTimes(2);
-    expect(mocks.postTranscriptionRequest.mock.calls[1]?.[0]?.url).toContain(
-      "1598d209-5e27-4d3c-8079-4751568b1081.invocation.api.nvcf.nvidia.com",
-    );
-  });
-
-  it("uses only CTC when it is explicitly selected", async () => {
-    mocks.postTranscriptionRequest.mockResolvedValue(okJson("ctc transcript"));
+  it("uses an explicitly configured HTTP model and base URL", async () => {
+    mocks.postTranscriptionRequest.mockResolvedValue(okJson("self-hosted transcript"));
 
     const result = await transcribeNvidiaAudio(
-      transcriptionRequest({ model: NVIDIA_FALLBACK_ASR_MODEL }),
+      transcriptionRequest({
+        model: "nvidia/parakeet-tdt-0.6b-v2",
+        baseUrl: "https://speech.example/v1",
+      }),
     );
 
-    expect(result.model).toBe(NVIDIA_FALLBACK_ASR_MODEL);
+    expect(result.model).toBe("nvidia/parakeet-tdt-0.6b-v2");
     expect(mocks.postTranscriptionRequest).toHaveBeenCalledTimes(1);
-    expect(mocks.postTranscriptionRequest.mock.calls[0]?.[0]?.url).toContain(
-      "1598d209-5e27-4d3c-8079-4751568b1081.invocation.api.nvcf.nvidia.com",
+    expect(mocks.postTranscriptionRequest.mock.calls[0]?.[0]?.url).toBe(
+      "https://speech.example/v1/audio/transcriptions",
     );
   });
 
@@ -147,28 +127,6 @@ describe("NVIDIA speech HTTP runtime", () => {
     expect(mocks.postTranscriptionRequest.mock.calls[0]?.[0]?.url).toBe(
       "https://speech.example/v1/audio/transcriptions",
     );
-  });
-
-  it("shares the timeout budget with the CTC fallback", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
-    mocks.postTranscriptionRequest
-      .mockImplementationOnce(async () => {
-        vi.advanceTimersByTime(29_000);
-        return {
-          response: new Response('{"detail":"unavailable"}', { status: 503 }),
-          release: vi.fn(),
-        };
-      })
-      .mockResolvedValueOnce(okJson("fallback within deadline"));
-
-    await expect(transcribeNvidiaAudio(transcriptionRequest())).resolves.toMatchObject({
-      text: "fallback within deadline",
-      model: NVIDIA_FALLBACK_ASR_MODEL,
-    });
-
-    expect(mocks.postTranscriptionRequest.mock.calls[0]?.[0]?.timeoutMs).toBe(30_000);
-    expect(mocks.postTranscriptionRequest.mock.calls[1]?.[0]?.timeoutMs).toBe(1_000);
   });
 
   it("transcodes unsupported inbound audio to mono Opus before upload", async () => {

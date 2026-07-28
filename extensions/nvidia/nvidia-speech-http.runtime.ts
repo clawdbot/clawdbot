@@ -17,10 +17,8 @@ import {
   requireTranscriptionText,
 } from "openclaw/plugin-sdk/provider-http";
 import {
-  NVIDIA_CTC_ASR_BASE_URL,
+  NVIDIA_ASR_BASE_URL,
   NVIDIA_DEFAULT_ASR_MODEL,
-  NVIDIA_FALLBACK_ASR_MODEL,
-  NVIDIA_TDT_ASR_BASE_URL,
   normalizeNvidiaBaseUrl,
 } from "./nvidia-speech-config.js";
 
@@ -29,7 +27,7 @@ const QUERY_FIELD_ALIASES: Readonly<Record<string, string>> = {
   boostScore: "boosted_lm_score",
   customConfiguration: "custom_configuration",
   wordTimeOffsets: "word_time_offsets",
-  automaticPunctuation: "automatic_punctuation",
+  automaticPunctuation: "enable_automatic_punctuation",
   profanityFilter: "profanity_filter",
 };
 
@@ -137,10 +135,6 @@ async function normalizeNvidiaAsrAudio(
   };
 }
 
-function isCtcModel(model: string | undefined): boolean {
-  return model?.toLowerCase().includes("ctc") ?? false;
-}
-
 type AsrEndpoint = { baseUrl: string; model: string };
 
 function resolveAsrTranscriptionUrl(baseUrl: string): string {
@@ -149,32 +143,21 @@ function resolveAsrTranscriptionUrl(baseUrl: string): string {
     : `${baseUrl}/v1/audio/transcriptions`;
 }
 
-function resolveAsrEndpoints(req: AudioTranscriptionRequest): AsrEndpoint[] {
+function resolveAsrEndpoint(req: AudioTranscriptionRequest): AsrEndpoint {
   const requestBaseUrl = req.baseUrl ? normalizeNvidiaBaseUrl(req.baseUrl) : undefined;
   if (requestBaseUrl && requestBaseUrl !== NVIDIA_CHAT_BASE_URL) {
-    return [
-      {
-        baseUrl: requestBaseUrl,
-        model: isCtcModel(req.model) ? NVIDIA_FALLBACK_ASR_MODEL : NVIDIA_DEFAULT_ASR_MODEL,
-      },
-    ];
+    return {
+      baseUrl: requestBaseUrl,
+      model: req.model?.trim() || NVIDIA_DEFAULT_ASR_MODEL,
+    };
   }
-  const tdtBaseUrl = normalizeNvidiaBaseUrl(
-    process.env.NVIDIA_TDT_ASR_BASE_URL ?? NVIDIA_TDT_ASR_BASE_URL,
-  );
-  const ctcBaseUrl = normalizeNvidiaBaseUrl(
-    process.env.NVIDIA_CTC_ASR_BASE_URL ?? NVIDIA_CTC_ASR_BASE_URL,
-  );
-  if (isCtcModel(req.model)) {
-    return [{ baseUrl: ctcBaseUrl, model: NVIDIA_FALLBACK_ASR_MODEL }];
+  if (req.model && req.model !== NVIDIA_DEFAULT_ASR_MODEL) {
+    throw new Error(`NVIDIA ASR model ${req.model} requires an explicit HTTP base URL`);
   }
-  if (process.env.NVIDIA_TDT_ASR_BASE_URL && !process.env.NVIDIA_CTC_ASR_BASE_URL) {
-    return [{ baseUrl: tdtBaseUrl, model: NVIDIA_DEFAULT_ASR_MODEL }];
-  }
-  return [
-    { baseUrl: tdtBaseUrl, model: NVIDIA_DEFAULT_ASR_MODEL },
-    { baseUrl: ctcBaseUrl, model: NVIDIA_FALLBACK_ASR_MODEL },
-  ];
+  return {
+    baseUrl: normalizeNvidiaBaseUrl(process.env.NVIDIA_ASR_BASE_URL ?? NVIDIA_ASR_BASE_URL),
+    model: NVIDIA_DEFAULT_ASR_MODEL,
+  };
 }
 
 async function transcribeAtEndpoint(
@@ -243,32 +226,11 @@ export async function transcribeNvidiaAudio(
     ...req,
     timeoutMs: resolveRemainingTimeoutMs(),
   });
-  const endpoints = resolveAsrEndpoints(normalizedReq);
-  const primary = endpoints[0];
-  if (!primary) {
-    throw new Error("NVIDIA ASR has no configured endpoint");
-  }
-  try {
-    return await transcribeAtEndpoint(
-      { ...normalizedReq, timeoutMs: resolveRemainingTimeoutMs() },
-      primary,
-    );
-  } catch (primaryError) {
-    const fallback = endpoints[1];
-    if (!fallback) {
-      throw primaryError;
-    }
-    try {
-      return await transcribeAtEndpoint(
-        { ...normalizedReq, timeoutMs: resolveRemainingTimeoutMs() },
-        fallback,
-      );
-    } catch (fallbackError) {
-      throw new Error("NVIDIA ASR failed for Parakeet TDT and Parakeet CTC fallback", {
-        cause: fallbackError,
-      });
-    }
-  }
+  const endpoint = resolveAsrEndpoint(normalizedReq);
+  return await transcribeAtEndpoint(
+    { ...normalizedReq, timeoutMs: resolveRemainingTimeoutMs() },
+    endpoint,
+  );
 }
 
 type MagpieSynthesizeParams = {

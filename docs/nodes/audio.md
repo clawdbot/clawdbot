@@ -204,7 +204,7 @@ provider-wide rather than scoped to the audio model entry.
 }
 ```
 
-### Provider-only (NVIDIA Parakeet with word boosting)
+### Provider-only (NVIDIA Parakeet CTC with word boosting)
 
 ```json5
 {
@@ -213,7 +213,7 @@ provider-wide rather than scoped to the audio model entry.
       models: [
         {
           provider: "nvidia",
-          model: "nvidia/parakeet-tdt-0.6b-v2",
+          model: "nvidia/parakeet-ctc-1.1b-asr",
           capabilities: ["audio"],
           providerOptions: {
             nvidia: {
@@ -254,7 +254,7 @@ provider-wide rather than scoped to the audio model entry.
 - Deepgram picks up `DEEPGRAM_API_KEY` when `provider: "deepgram"` is used. Setup details: [Deepgram](/providers/deepgram).
 - Mistral setup details: [Mistral](/providers/mistral).
 - SenseAudio picks up `SENSEAUDIO_API_KEY` when `provider: "senseaudio"` is used. Setup details: [SenseAudio](/providers/senseaudio).
-- NVIDIA uses Parakeet TDT by default and falls back to Parakeet CTC 1.1B. Setup and customization details: [NVIDIA](/providers/nvidia).
+- NVIDIA uses its hosted Parakeet CTC 1.1B HTTP endpoint by default. Setup and customization details: [NVIDIA](/providers/nvidia).
 - NVIDIA accepts mono 16-bit PCM WAV and Ogg Opus directly; other formats require FFmpeg in a trusted system directory for conversion to mono Opus.
 - Audio providers can use defaults under `tools.media.audio` or override `baseUrl`, `headers`, `providerOptions`, and limits on their `tools.media.models[]` entry.
 - The built-in audio size cap is 20MB. An entry-level `maxBytes` override can change it; oversize audio is skipped for that model and the next entry is tried.

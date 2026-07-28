@@ -83,11 +83,10 @@ a realtime or streaming speech provider.
 
 ### Speech to text
 
-Inbound audio uses Parakeet TDT by default and retries with Parakeet CTC 1.1B
-when the TDT endpoint fails. To select CTC directly, set the CTC model in the
-entry. Provider-specific ASR options are passed through
-`providerOptions.nvidia`; word boosting accepts a JSON array or a comma-separated
-string.
+Inbound audio uses the hosted Parakeet CTC 1.1B HTTP endpoint by default.
+Provider-specific ASR options are passed through `providerOptions.nvidia`; word
+boosting accepts a JSON array or a comma-separated string. To use another ASR
+NIM such as Parakeet TDT, configure both its model and an HTTP-capable base URL.
 
 NVIDIA accepts mono 16-bit PCM WAV and Ogg Opus directly. OpenClaw converts
 other inbound formats, including MP3, M4A, and stereo WAV, to mono Opus with a
@@ -97,23 +96,24 @@ system-installed FFmpeg binary before upload.
 {
   tools: {
     media: {
-      audio: {
-        enabled: true,
-        models: [
-          {
-            provider: "nvidia",
-            model: "nvidia/parakeet-tdt-0.6b-v2",
-            providerOptions: {
-              nvidia: {
-                boostedWords: '["OpenClaw", "Nemotron", "Parakeet"]',
-                boostedWordsScore: 10,
-                automaticPunctuation: true,
-                wordTimeOffsets: true,
-                customConfiguration: "key:value",
-              },
+      models: [
+        {
+          provider: "nvidia",
+          model: "nvidia/parakeet-ctc-1.1b-asr",
+          capabilities: ["audio"],
+          providerOptions: {
+            nvidia: {
+              boostedWords: '["OpenClaw", "Nemotron", "Parakeet"]',
+              boostedWordsScore: 10,
+              automaticPunctuation: true,
+              wordTimeOffsets: true,
+              customConfiguration: "key:value",
             },
           },
-        ],
+        },
+      ],
+      audio: {
+        enabled: true,
       },
     },
   },
@@ -155,10 +155,9 @@ fields.
 For a self-hosted ASR NIM, set `tools.media.audio.baseUrl` (or the model entry's
 `baseUrl`) to its HTTP origin. An explicit request-scoped ASR URL is used by
 itself and never falls back to a hosted NVIDIA origin. To override the hosted
-defaults as a pair, set `NVIDIA_TDT_ASR_BASE_URL` and
-`NVIDIA_CTC_ASR_BASE_URL`; set `NVIDIA_TTS_BASE_URL` for Magpie. These
-endpoints must expose the matching HTTP `/v1/audio/transcriptions` or
-`/v1/audio/synthesize` route.
+hosted ASR default, set `NVIDIA_ASR_BASE_URL`; set `NVIDIA_TTS_BASE_URL` for
+Magpie. These endpoints must expose the matching HTTP
+`/v1/audio/transcriptions` or `/v1/audio/synthesize` route.
 
 ## Featured catalog
 
