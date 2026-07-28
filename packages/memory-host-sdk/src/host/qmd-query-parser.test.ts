@@ -25,6 +25,35 @@ complete`,
     expect(results).toEqual([{ docid: "abc", score: 0.5 }]);
   });
 
+  it.each([
+    {
+      name: "bracketed log prefix",
+      stdout: '[qmd] initializing search\n[{"docid":"abc","score":0.5}]',
+    },
+    {
+      name: "bracketed log with an empty array",
+      stdout: '[qmd] filters=[]\n[{"docid":"abc","score":0.5}]',
+    },
+    {
+      name: "bracketed log with result-shaped data",
+      stdout: '[qmd] previous=[{"docid":"stale","score":1}]\n[{"docid":"abc","score":0.5}]',
+    },
+    {
+      name: "leading no-results marker",
+      stdout: 'warning: no results found\n[{"docid":"abc","score":0.5}]',
+    },
+    {
+      name: "trailing no-results marker",
+      stdout: '[{"docid":"abc","score":0.5}]\nwarning: no results found',
+    },
+    {
+      name: "bracketed no-results marker",
+      stdout: '[qmd] warning: no results found\n[{"docid":"abc","score":0.5}]',
+    },
+  ])("preserves query results after a $name", ({ stdout }) => {
+    expect(parseQmdQueryJson(stdout, "")).toEqual([{ docid: "abc", score: 0.5 }]);
+  });
+
   it("preserves explicit qmd line metadata when present", () => {
     const results = parseQmdQueryJson(
       '[{"docid":"abc","score":0.5,"start_line":4,"end_line":6,"snippet":"@@ -10,1\\nignored"}]',
@@ -58,6 +87,9 @@ complete`,
   it("treats prefixed no-results marker output as an empty result set", () => {
     expect(parseQmdQueryJson("warning: no results found", "")).toStrictEqual([]);
     expect(parseQmdQueryJson("", "[qmd] warning: no results found\n")).toStrictEqual([]);
+    expect(
+      parseQmdQueryJson("[qmd] initializing search\nwarning: no results found", ""),
+    ).toStrictEqual([]);
   });
 
   it("keeps bounded stderr context UTF-16 safe", () => {
@@ -77,6 +109,12 @@ complete`,
 
   it("throws when stdout cannot be interpreted as qmd JSON", () => {
     expect(() => parseQmdQueryJson("this is not json", "")).toThrow(
+      /qmd query returned invalid JSON/i,
+    );
+  });
+
+  it("rejects malformed bracket-heavy stdout without repeated rescanning", () => {
+    expect(() => parseQmdQueryJson("[".repeat(4_096), "")).toThrow(
       /qmd query returned invalid JSON/i,
     );
   });

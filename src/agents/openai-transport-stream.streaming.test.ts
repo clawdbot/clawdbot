@@ -6,6 +6,7 @@ import {
   classifyAssistantFailoverReason,
   formatUserFacingAssistantErrorText,
 } from "./embedded-agent-helpers.js";
+import { streamWithIdleTimeout } from "./embedded-agent-runner/run/llm-idle-timeout.js";
 import {
   parseTransportChunkUsage,
   type CapturedStreamEvent,
@@ -180,6 +181,111 @@ describe("openai transport stream", () => {
       });
     }
   });
+
+  it.each(["reasoning_content", "reasoning"] as const)(
+    "keeps hidden local %s streams alive beyond the model idle timeout",
+    async (reasoningField) => {
+      const reasoningChunkCount = 5;
+      const reasoningChunkDelayMs = 35;
+      const idleTimeoutMs = 100;
+      const server = createServer((req, res) => {
+        req.resume();
+        req.on("end", () => {
+          res.writeHead(200, {
+            "content-type": "text/event-stream; charset=utf-8",
+            "cache-control": "no-cache",
+            connection: "keep-alive",
+          });
+
+          let reasoningChunksSent = 0;
+          const writeNextChunk = () => {
+            if (res.destroyed) {
+              return;
+            }
+            if (reasoningChunksSent < reasoningChunkCount) {
+              reasoningChunksSent += 1;
+              const reasoningChunk = {
+                id: "chatcmpl-local-reasoning",
+                object: "chat.completion.chunk",
+                created: 1,
+                model: "nemotron-local",
+                choices: [
+                  {
+                    index: 0,
+                    delta: { [reasoningField]: "private reasoning" },
+                    finish_reason: null,
+                  },
+                ],
+              };
+              res.write(`data: ${JSON.stringify(reasoningChunk)}\n\n`);
+              setTimeout(writeNextChunk, reasoningChunkDelayMs);
+              return;
+            }
+
+            res.write(
+              `data: ${JSON.stringify(makeCompletionsChunk({ role: "assistant", content: "OK" }))}\n\n`,
+            );
+            res.write(`data: ${JSON.stringify(makeCompletionsChunk({}, "stop"))}\n\n`);
+            res.write("data: [DONE]\n\n");
+            res.end();
+          };
+
+          writeNextChunk();
+        });
+      });
+
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      try {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("Missing loopback server address");
+        }
+        const model = makeCompletionsModel({
+          id: "nemotron-local",
+          name: "Local Nemotron",
+          provider: "inference",
+          baseUrl: `http://127.0.0.1:${address.port}/v1`,
+          reasoning: false,
+        });
+        const onIdleTimeout = vi.fn();
+        const streamFn = streamWithIdleTimeout(
+          createOpenAICompletionsTransportStreamFn(),
+          idleTimeoutMs,
+          onIdleTimeout,
+        );
+        const stream = streamFn(
+          model,
+          {
+            systemPrompt: "system",
+            messages: [{ role: "user", content: "Reply OK", timestamp: Date.now() }],
+            tools: [],
+          } as never,
+          { apiKey: "test-key" } as never,
+        );
+
+        let text = "";
+        let thinking = "";
+        for await (const event of stream as AsyncIterable<{ type: string; delta?: string }>) {
+          if (event.type === "text_delta") {
+            text += event.delta ?? "";
+          }
+          if (event.type === "thinking_delta") {
+            thinking += event.delta ?? "";
+          }
+        }
+
+        expect(text).toBe("OK");
+        expect(thinking).toBe("");
+        expect(onIdleTimeout).not.toHaveBeenCalled();
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    },
+  );
 
   it("refuses ModelStudio chat streams with no user or assistant payload turns", async () => {
     const model = makeCompletionsModel({

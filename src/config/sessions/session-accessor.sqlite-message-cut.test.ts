@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -36,13 +37,13 @@ afterEach(() => {
 
 function trackFullTranscriptLoads(env: NodeJS.ProcessEnv): () => number {
   const database = openOpenClawAgentDatabase({ agentId, env });
-  const prepare = vi.spyOn(database.db, "prepare");
-  return () =>
-    prepare.mock.calls.filter(
-      ([sql]) =>
-        sql.includes('select "event_json" from "transcript_events"') &&
-        sql.includes('order by "seq" asc'),
-    ).length;
+  const { counts } = trackSqliteStatementExecutions(database.db, ["loads"], (sqlText) =>
+    sqlText.includes('select "event_json" from "transcript_events"') &&
+    sqlText.includes('order by "seq" asc')
+      ? "loads"
+      : null,
+  );
+  return () => counts.loads;
 }
 
 async function createSiblingSession(params: {

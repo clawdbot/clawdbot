@@ -47,6 +47,7 @@ describe("gateway startup benchmark script", () => {
     expect(helpResult.stdout).toContain("OpenClaw Gateway startup benchmark");
     expect(helpResult.stdout).toContain("--case <id>");
     expect(helpResult.stdout).toContain("--cpu-prof-dir <dir>");
+    expect(helpResult.stdout).toContain("--heap-prof-dir <dir>");
     expect(helpResult.stdout).toContain("default (gateway default)");
     expect(helpResult.stdout).not.toContain("[gateway-startup-bench]");
     expect(helpResult.stderr).toBe("");
@@ -63,12 +64,15 @@ describe("gateway startup benchmark script", () => {
         "--output",
         "startup.json",
         "--json",
+        "--heap-prof-dir",
+        "profiles",
         "--runs",
         "2",
       ]),
     ).toMatchObject({
       cases: [{ id: "default" }],
       json: true,
+      heapProfDir: "profiles",
       output: "startup.json",
       runs: 2,
     });

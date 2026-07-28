@@ -30,7 +30,7 @@ overrides:
   qs: 6.15.3
   node-domexception: npm:@nolyfill/domexception@1.0.28
   typebox: 1.3.6
-  tar: 7.5.20
+  tar: 7.5.21
   tough-cookie: 4.1.4
   yauzl: 3.4.0
   protobufjs: 7.6.5
@@ -85,8 +85,8 @@ importers:
         specifier: workspace:*
         version: link:packages/ai
       '@openclaw/fs-safe':
-        specifier: 0.4.7
-        version: 0.4.7
+        specifier: 0.5.0
+        version: 0.5.0
       '@openclaw/proxyline':
         specifier: 0.3.4
         version: 0.3.4(undici@8.6.0)
@@ -186,9 +186,6 @@ importers:
       pretty-ms:
         specifier: 9.3.0
         version: 9.3.0
-      proper-lockfile:
-        specifier: 4.1.2
-        version: 4.1.2
       qrcode:
         specifier: 1.5.4
         version: 1.5.4
@@ -202,8 +199,8 @@ importers:
         specifier: 7.8.5
         version: 7.8.5
       tar:
-        specifier: 7.5.20
-        version: 7.5.20
+        specifier: 7.5.21
+        version: 7.5.21
       tree-sitter-bash:
         specifier: 0.25.1
         version: 0.25.1
@@ -274,9 +271,6 @@ importers:
       '@types/node':
         specifier: 26.1.1
         version: 26.1.1
-      '@types/proper-lockfile':
-        specifier: 4.1.4
-        version: 4.1.4
       '@types/semver':
         specifier: 7.7.1
         version: 7.7.1
@@ -3923,6 +3917,10 @@ packages:
     resolution: {integrity: sha512-UO+FCB8vF+VJngOzZuVTdkOapX/gPml0HFEjRj2qIeEmBlCkGLHjRJ4CZWFziRtcq3g4YioWra/6J3iwEH1JaA==}
     engines: {node: '>=22'}
 
+  '@openclaw/fs-safe@0.5.0':
+    resolution: {integrity: sha512-TPpFG8PkAKlM/eP7glzHhCeZnDX3sSqyjXgeoc0jeyii0y957/zePB62BIwc75gOFmxaeKLWkd4iF41/Ghlgjg==}
+    engines: {node: '>=22'}
+
   '@openclaw/libterminal@0.3.2':
     resolution: {integrity: sha512-RbxYPG22kuEgvW2Gx8FK2uApYSgDi+yRahfR0lW7pcdMZvAWL9/iLJRVLEMKc1uAA69mAA/IW5AtwQ9LUdHypA==}
     engines: {node: ^22.18.0 || >=24.11.0}
@@ -5154,9 +5152,6 @@ packages:
   '@types/node@26.1.1':
     resolution: {integrity: sha512-nxAkRSVkN1Y0JC1W8ky/fTfkGsMmcrRsbx+3XoZE+rMOX71kLYTV7fLXpqud1GpbpP5TuffXFqfX7fH2GgZREw==}
 
-  '@types/proper-lockfile@4.1.4':
-    resolution: {integrity: sha512-uo2ABllncSqg9F1D4nugVl9v93RmjxF6LJzQLMLDdPaXCUIDPeOJ21Gbqi43xNKzBi/WQ0Q0dICqufzQbMjipQ==}
-
   '@types/qs@6.15.1':
     resolution: {integrity: sha512-GZHUBZR9hckSUhrxmp1nG6NwdpM9fCunJwyThLW1X3AyHgd9IlHb6VANpQQqDr2o/qQp6McZ3y/IA2rVzKzSbw==}
 
@@ -5168,9 +5163,6 @@ packages:
 
   '@types/retry@0.12.0':
     resolution: {integrity: sha512-wWKOClTTiizcZhXnPY4wikVAwmdYHp8q6DmC+EJUzAMsycb7HB32Kh9RN4+0gExjmPmZSAQjgURXIGATPegAvA==}
-
-  '@types/retry@0.12.5':
-    resolution: {integrity: sha512-3xSjTp3v03X/lSQLkczaN9UIEwJMoMCA1+Nb5HfbJEQWogdeQIyVtTvxPXDQjZ5zws8rFQfVfRdz03ARihPJgw==}
 
   '@types/sarif@2.1.7':
     resolution: {integrity: sha512-kRz0VEkJqWLf1LLVN4pT1cg1Z9wAuvI6L97V3m2f5B76Tg8d413ddvLBPTEHAZJlnn4XSvu0FkZtViCQGVyrXQ==}
@@ -8433,8 +8425,8 @@ packages:
   tar-stream@3.2.0:
     resolution: {integrity: sha512-ojzvCvVaNp6aOTFmG7jaRD0meowIAuPc3cMMhSgKiVWws1GyHbGd/xvnyuRKcKlMpt3qvxx6r0hreCNITP9hIg==}
 
-  tar@7.5.20:
-    resolution: {integrity: sha512-9FcyK4PA6+WbzlTM9WhQm6vB5W7cP7dUiPsv1g7YDwEQnQ1CGpK3MGlKk/ITVWMk05kHZuBhmVhiv8LZoy/PFQ==}
+  tar@7.5.21:
+    resolution: {integrity: sha512-XdhtCvlMywwxpCW8YEq3lOXBJpUPTR2OHHcwLPO3HwsJqOHa2Ok/oJ7ruGzp+JrKoRPVCzJwAdEjqLW/vNRPHA==}
     engines: {node: '>=18'}
 
   teex@1.0.1:
@@ -10913,7 +10905,12 @@ snapshots:
   '@openclaw/fs-safe@0.4.7':
     optionalDependencies:
       jszip: 3.10.1
-      tar: 7.5.20
+      tar: 7.5.21
+
+  '@openclaw/fs-safe@0.5.0':
+    optionalDependencies:
+      jszip: 3.10.1
+      tar: 7.5.21
 
   '@openclaw/libterminal@0.3.2':
     dependencies:
@@ -11995,10 +11992,6 @@ snapshots:
     dependencies:
       undici-types: 8.3.0
 
-  '@types/proper-lockfile@4.1.4':
-    dependencies:
-      '@types/retry': 0.12.5
-
   '@types/qs@6.15.1': {}
 
   '@types/range-parser@1.2.7': {}
@@ -12008,8 +12001,6 @@ snapshots:
       csstype: 3.2.3
 
   '@types/retry@0.12.0': {}
-
-  '@types/retry@0.12.5': {}
 
   '@types/sarif@2.1.7': {}
 
@@ -12650,7 +12641,7 @@ snapshots:
       node-api-headers: 1.9.0
       rc: 1.2.8
       semver: 7.8.5
-      tar: 7.5.20
+      tar: 7.5.21
       url-join: 4.0.1
       which: 6.0.1
       yargs: 17.7.3
@@ -15923,7 +15914,7 @@ snapshots:
       - bare-buffer
       - react-native-b4a
 
-  tar@7.5.20:
+  tar@7.5.21:
     dependencies:
       '@isaacs/fs-minipass': 4.0.1
       chownr: 3.0.0

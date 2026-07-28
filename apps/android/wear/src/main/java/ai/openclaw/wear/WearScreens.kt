@@ -1826,43 +1826,6 @@ private fun ActionButton(
 }
 
 @Composable
-private fun CompactVoiceButton(
-  label: String,
-  enabled: Boolean,
-  onClick: () -> Unit,
-  modifier: Modifier = Modifier,
-) {
-  val colors = OpenClawWearTheme.colors
-  Button(
-    onClick = onClick,
-    enabled = enabled,
-    colors =
-      ButtonDefaults.buttonColors(
-        containerColor = colors.surfaceRaised,
-        contentColor = colors.text,
-        disabledContainerColor = colors.surface,
-        disabledContentColor = colors.textMuted,
-      ),
-    modifier =
-      modifier.border(
-        width = 1.dp,
-        color = if (enabled) colors.borderStrong else colors.border,
-        shape = RoundedCornerShape(24.dp),
-      ),
-    label = {
-      Text(
-        text = label,
-        modifier = Modifier.fillMaxWidth(),
-        fontSize = 12.sp,
-        fontWeight = FontWeight.SemiBold,
-        textAlign = TextAlign.Center,
-        maxLines = 1,
-      )
-    },
-  )
-}
-
-@Composable
 private fun SecondaryButton(
   label: String,
   enabled: Boolean,

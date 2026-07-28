@@ -1789,6 +1789,7 @@ Same-chat `/approve` also works in Slack channels and DMs that already support c
 - Channel topic/purpose metadata is treated as untrusted context and can be injected into routing context.
 - Agent View `app_context` entities are validated in Slack relevance order and exposed only as structured untrusted context; an omitted context clears the turn rather than reusing stale entities.
 - Thread starter and initial thread-history context seeding are filtered by configured sender allowlists when applicable.
+- Dedicated Web API reads used for probes, scope discovery, conversation classification, and delivery reconciliation have a 30-second deadline per request attempt. Transient failures can still retry, so the full operation may take longer. Shared Bolt and mutation-capable clients do not receive this default deadline because Slack may commit a mutation before a late response reaches OpenClaw.
 - Block actions, shortcuts, and modal interactions emit structured `Slack interaction: ...` system events with rich payload fields:
   - block actions: selected values, labels, picker values, and `workflow_*` metadata
   - global shortcuts: callback and actor metadata, routed to the actor's direct session

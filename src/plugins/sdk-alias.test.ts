@@ -2238,6 +2238,14 @@ describe("buildPluginLoaderAliasMap memoization", () => {
     expect(aliasA).not.toBe(aliasB);
   });
 
+  it("reuses one merged map for plugin entrypoints with the same effective SDK surface", () => {
+    const fixture = createPluginSdkAliasFixture();
+    const entryA = writePluginEntry(fixture.root, bundledPluginFile("a", "src/index.ts"));
+    const entryB = writePluginEntry(fixture.root, bundledPluginFile("b", "src/index.ts"));
+
+    expect(buildPluginLoaderAliasMap(entryB)).toBe(buildPluginLoaderAliasMap(entryA));
+  });
+
   it("returns different references when pluginSdkResolution differs", () => {
     const fixture = createPluginSdkAliasFixture();
     const entry = writePluginEntry(fixture.root, bundledPluginFile("res", "src/index.ts"));
@@ -2248,14 +2256,24 @@ describe("buildPluginLoaderAliasMap memoization", () => {
     expect(auto).not.toBe(dist);
   });
 
-  it("returns different references when argv1 differs", () => {
+  it("reuses one merged map when resolution modes have the same effective order", () => {
+    const fixture = createPluginSdkAliasFixture();
+    const entry = writePluginEntry(fixture.root, bundledPluginFile("same-order", "src/index.ts"));
+
+    const auto = buildPluginLoaderAliasMap(entry, undefined, undefined, "auto");
+    const source = buildPluginLoaderAliasMap(entry, undefined, undefined, "src");
+
+    expect(source).toBe(auto);
+  });
+
+  it("reuses a merged map when different argv hints resolve the same SDK surface", () => {
     const fixture = createPluginSdkAliasFixture();
     const entry = writePluginEntry(fixture.root, bundledPluginFile("argv", "src/index.ts"));
 
     const a = buildPluginLoaderAliasMap(entry, "/path/to/cli-a.mjs");
     const b = buildPluginLoaderAliasMap(entry, "/path/to/cli-b.mjs");
 
-    expect(a).not.toBe(b);
+    expect(a).toBe(b);
   });
 
   it("returns different references when an explicit dev source root differs", () => {
