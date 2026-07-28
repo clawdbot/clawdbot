@@ -26,6 +26,7 @@ function terminalFailureError(params: {
     requestUpdate: () => {},
     resolveFrameUrl: () => () => "",
     root: () => document,
+    ticketRefreshEnabled: () => true,
     widget: () => widget,
   });
   const internals = lifecycle as unknown as LifecycleInternals;

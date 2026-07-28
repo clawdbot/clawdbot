@@ -4810,7 +4810,12 @@ describe("active-memory plugin", () => {
     hoisted.sessionStore["agent:main:telegram:direct:12345"] = {
       sessionId: "session-a",
       updatedAt: 25,
-      channel: "telegram",
+      delivery: {
+        kind: "external",
+        route: { channel: "telegram" },
+        context: { channel: "telegram" },
+        origin: { provider: "telegram" },
+      },
     };
 
     await runPromptBuild(
@@ -4893,7 +4898,12 @@ describe("active-memory plugin", () => {
     hoisted.sessionStore["agent:main:telegram:direct:12345"] = {
       sessionId: "session-a",
       updatedAt: 25,
-      channel: "telegram",
+      delivery: {
+        kind: "external",
+        route: { channel: "telegram" },
+        context: { channel: "telegram" },
+        origin: { provider: "telegram" },
+      },
     };
 
     await runPromptBuild(
@@ -4911,9 +4921,11 @@ describe("active-memory plugin", () => {
     hoisted.sessionStore["agent:main:qqbot:direct:12345"] = {
       sessionId: "session-a",
       updatedAt: 25,
-      channel: "c2c:10D4F7C2",
-      origin: {
-        provider: "qqbot",
+      delivery: {
+        kind: "external",
+        route: { channel: "qqbot" },
+        context: { channel: "c2c:10D4F7C2" },
+        origin: { provider: "qqbot" },
       },
     };
 
@@ -4933,8 +4945,11 @@ describe("active-memory plugin", () => {
     hoisted.sessionStore["agent:main:telegram:direct:12345"] = {
       sessionId: "session-a",
       updatedAt: 25,
-      origin: {
-        provider: "webchat",
+      delivery: {
+        kind: "external",
+        route: { channel: "webchat" },
+        context: {},
+        origin: { provider: "webchat" },
       },
     };
 
@@ -4953,8 +4968,11 @@ describe("active-memory plugin", () => {
     hoisted.sessionStore["agent:main:telegram:direct:12345"] = {
       sessionId: "session-a",
       updatedAt: 25,
-      origin: {
-        provider: "webchat",
+      delivery: {
+        kind: "external",
+        route: { channel: "webchat" },
+        context: {},
+        origin: { provider: "webchat" },
       },
     };
 

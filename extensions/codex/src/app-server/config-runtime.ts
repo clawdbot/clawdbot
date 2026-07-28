@@ -490,6 +490,7 @@ export function codexAppServerStartOptionsKey(
 export function codexSandboxPolicyForTurn(
   mode: CodexAppServerSandboxMode,
   cwd: string,
+  nativeArgs: readonly string[] = [],
 ): CodexSandboxPolicy {
   if (mode === "danger-full-access") {
     return { type: "dangerFullAccess" };
@@ -497,12 +498,42 @@ export function codexSandboxPolicyForTurn(
   if (mode === "read-only") {
     return { type: "readOnly", networkAccess: false };
   }
+  let excludeTmpdirEnvVar = false;
+  let excludeSlashTmp = false;
+  for (let index = 0; index < nativeArgs.length; index += 1) {
+    const arg = nativeArgs[index];
+    const override =
+      arg === "-c" || arg === "--config"
+        ? nativeArgs[++index]
+        : arg?.startsWith("--config=")
+          ? arg.slice("--config=".length)
+          : undefined;
+    if (!override) {
+      continue;
+    }
+    const separator = override.indexOf("=");
+    if (separator < 0) {
+      continue;
+    }
+    const key = override.slice(0, separator).trim();
+    const value = override.slice(separator + 1).trim();
+    if (value !== "true" && value !== "false") {
+      continue;
+    }
+    if (key === "sandbox_workspace_write.exclude_tmpdir_env_var") {
+      excludeTmpdirEnvVar = value === "true";
+    } else if (key === "sandbox_workspace_write.exclude_slash_tmp") {
+      excludeSlashTmp = value === "true";
+    }
+  }
+  // Native turn/start overrides replace the thread's sandbox. Carry explicit
+  // Codex CLI root exclusions forward or /tmp silently becomes writable again.
   return {
     type: "workspaceWrite",
     writableRoots: [cwd],
     networkAccess: false,
-    excludeTmpdirEnvVar: false,
-    excludeSlashTmp: false,
+    excludeTmpdirEnvVar,
+    excludeSlashTmp,
   };
 }
 

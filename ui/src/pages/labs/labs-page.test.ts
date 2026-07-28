@@ -105,6 +105,12 @@ describe("LabsPage", () => {
     expect(codeModeToggle(page).checked).toBe(true);
   });
 
+  it("reads the per-model auto tier as enabled", async () => {
+    const { page } = await mountPage({ tools: { codeMode: { enabled: "auto" } } });
+
+    expect(codeModeToggle(page).checked).toBe(true);
+  });
+
   it("writes an explicit false in the RFC 7396 merge patch when disabling", async () => {
     const { page, runtimeConfig } = await mountPage({
       tools: { codeMode: { enabled: true } },

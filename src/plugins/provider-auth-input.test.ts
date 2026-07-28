@@ -1,5 +1,6 @@
 // Covers provider auth input collection and credential handling.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import {
   ensureApiKeyFromEnvOrPrompt,
@@ -13,13 +14,19 @@ import {
 const acceptAnyApiKeyInput = () => undefined;
 
 const resolveEnvApiKey = vi.hoisted(() =>
-  vi.fn((provider: string, env?: NodeJS.ProcessEnv) => {
-    if (provider !== "minimax") {
-      return null;
-    }
-    const apiKey = env?.MINIMAX_API_KEY?.trim();
-    return apiKey ? { apiKey, source: "env: MINIMAX_API_KEY" } : null;
-  }),
+  vi.fn(
+    (
+      provider: string,
+      env?: NodeJS.ProcessEnv,
+      _options?: { config?: OpenClawConfig; workspaceDir?: string },
+    ) => {
+      if (provider !== "minimax") {
+        return null;
+      }
+      const apiKey = env?.MINIMAX_API_KEY?.trim();
+      return apiKey ? { apiKey, source: "env: MINIMAX_API_KEY" } : null;
+    },
+  ),
 );
 
 vi.mock("../agents/model-auth-env.js", () => ({
@@ -243,6 +250,32 @@ describe("validateApiKeyInput", () => {
 });
 
 describe("ensureApiKeyFromEnvOrPrompt", () => {
+  it("resolves environment auth using the same config and workspace as provider runtime", async () => {
+    const workspaceDir = "/tmp/openclaw-provider-workspace";
+    const config: OpenClawConfig = {
+      agents: { defaults: { workspace: workspaceDir } },
+      plugins: { entries: { minimax: { enabled: true } } },
+    };
+    const env = { MINIMAX_API_KEY: "workspace-env-key" } as NodeJS.ProcessEnv;
+    const { confirm, text, setCredential } = createPromptAndCredentialSpies();
+
+    const result = await ensureMinimaxApiKey({
+      config,
+      env,
+      confirm,
+      text,
+      setCredential,
+    });
+
+    expect(result).toBe("workspace-env-key");
+    expect(resolveEnvApiKey).toHaveBeenCalledWith("minimax", env, {
+      config,
+      workspaceDir,
+    });
+    expect(setCredential).toHaveBeenCalledWith("workspace-env-key", "plaintext");
+    expect(text).not.toHaveBeenCalled();
+  });
+
   it("uses env credential when user confirms", async () => {
     const { result, setCredential, text } = await runEnsureMinimaxApiKeyFlow({
       confirmResult: true,

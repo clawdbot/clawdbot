@@ -29,26 +29,26 @@ Prefer the native route unless you explicitly need ACP/acpx behavior.
 
 Built-in acpx harness aliases (from the pinned `acpx` dependency):
 
-| Alias        | Wraps                                                                                                           |
-| ------------ | --------------------------------------------------------------------------------------------------------------- |
-| `claude`     | [Claude Code](https://claude.ai/code)                                                                           |
-| `codex`      | [Codex CLI](https://codex.openai.com)                                                                           |
-| `copilot`    | [GitHub Copilot CLI](https://docs.github.com/copilot/how-tos/copilot-chat/use-copilot-chat-in-the-command-line) |
-| `cursor`     | [Cursor CLI](https://cursor.com/docs/cli/acp) (`cursor-agent acp`)                                              |
-| `droid`      | [Factory Droid](https://www.factory.ai)                                                                         |
-| `fast-agent` | [fast-agent](https://fast-agent.ai)                                                                             |
-| `gemini`     | [Gemini CLI](https://github.com/google/gemini-cli)                                                              |
-| `iflow`      | [iFlow CLI](https://github.com/iflow-ai/iflow-cli)                                                              |
-| `kilocode`   | [Kilocode](https://kilocode.ai)                                                                                 |
-| `kimi`       | [Kimi CLI](https://github.com/MoonshotAI/kimi-cli)                                                              |
-| `kiro`       | [Kiro CLI](https://kiro.dev)                                                                                    |
-| `mux`        | [Mux](https://mux.coder.com)                                                                                    |
-| `opencode`   | [OpenCode](https://opencode.ai)                                                                                 |
-| `openclaw`   | OpenClaw ACP bridge (native `openclaw acp`)                                                                     |
-| `pi`         | [Pi Coding Agent](https://github.com/mariozechner/pi)                                                           |
-| `qoder`      | [Qoder CLI](https://docs.qoder.com/cli/acp)                                                                     |
-| `qwen`       | [Qwen Code](https://github.com/QwenLM/qwen-code)                                                                |
-| `trae`       | [Trae CLI](https://docs.trae.cn/cli)                                                                            |
+| Alias        | Wraps                                                                                                  |
+| ------------ | ------------------------------------------------------------------------------------------------------ |
+| `claude`     | [Claude Code](https://claude.ai/code)                                                                  |
+| `codex`      | [Codex CLI](https://developers.openai.com/codex/cli)                                                   |
+| `copilot`    | [GitHub Copilot CLI](https://docs.github.com/en/copilot/concepts/agents/copilot-cli/about-copilot-cli) |
+| `cursor`     | [Cursor CLI](https://cursor.com/docs/cli/acp) (`cursor-agent acp`)                                     |
+| `droid`      | [Factory Droid](https://www.factory.ai)                                                                |
+| `fast-agent` | [fast-agent](https://fast-agent.ai)                                                                    |
+| `gemini`     | [Gemini CLI](https://github.com/google-gemini/gemini-cli)                                              |
+| `iflow`      | [iFlow CLI](https://github.com/iflow-ai/iflow-cli)                                                     |
+| `kilocode`   | [Kilocode](https://kilocode.ai)                                                                        |
+| `kimi`       | [Kimi CLI](https://github.com/MoonshotAI/kimi-cli)                                                     |
+| `kiro`       | [Kiro CLI](https://kiro.dev)                                                                           |
+| `mux`        | [Mux](https://mux.coder.com)                                                                           |
+| `opencode`   | [OpenCode](https://opencode.ai)                                                                        |
+| `openclaw`   | OpenClaw ACP bridge (native `openclaw acp`)                                                            |
+| `pi`         | [Pi Coding Agent](https://github.com/earendil-works/pi)                                                |
+| `qoder`      | [Qoder CLI](https://docs.qoder.com/cli/acp)                                                            |
+| `qwen`       | [Qwen Code](https://github.com/QwenLM/qwen-code)                                                       |
+| `trae`       | [Trae CLI](https://docs.trae.cn/cli)                                                                   |
 
 `factory-droid` and `factorydroid` also resolve to the built-in `droid` adapter.
 

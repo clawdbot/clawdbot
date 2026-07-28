@@ -54,6 +54,7 @@ export function deferBackgroundCompactionCleanup(params: {
   pool: CopilotClientPool;
   cleanupByokProxy?: () => Promise<void>;
   cleanupToolBridge?: () => void;
+  deleteSessionOnIncompleteCleanup: boolean;
   finalizeNativeSubagents?: () => void;
   sdkSessionId?: string;
   session: SessionLike;
@@ -81,7 +82,11 @@ export function deferBackgroundCompactionCleanup(params: {
       } catch {}
       params.cleanupToolBridge?.();
       await params.cleanupByokProxy?.();
-      if (outcome !== "completed" && params.sdkSessionId) {
+      if (
+        outcome !== "completed" &&
+        params.deleteSessionOnIncompleteCleanup &&
+        params.sdkSessionId
+      ) {
         try {
           await params.handle.client.deleteSession(params.sdkSessionId);
         } catch {}

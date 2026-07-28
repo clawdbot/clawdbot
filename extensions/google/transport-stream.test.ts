@@ -2218,6 +2218,39 @@ describe("google transport stream", () => {
     });
   });
 
+  it("keeps Gemini function declaration bytes stable across discovery orders", () => {
+    const tools = [
+      {
+        name: "zeta_lookup",
+        description: "Look up the last value",
+        parameters: { type: "object", properties: { value: { type: "string" } } },
+      },
+      {
+        name: "alpha_lookup",
+        description: "Look up the first value",
+        parameters: { type: "object", properties: { query: { type: "string" } } },
+      },
+    ];
+    const buildParams = (orderedTools: typeof tools) =>
+      buildGoogleGenerativeAiParams(buildGeminiModel(), {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        tools: orderedTools,
+      } as never);
+
+    const first = buildParams(tools);
+    const reversed = buildParams(tools.toReversed());
+
+    expect(reversed.tools).toEqual(first.tools);
+    expect(first.tools).toEqual([
+      {
+        functionDeclarations: [
+          expect.objectContaining({ name: "alpha_lookup" }),
+          expect.objectContaining({ name: "zeta_lookup" }),
+        ],
+      },
+    ]);
+  });
+
   it("includes cachedContent in direct Gemini payloads when requested", () => {
     const params = buildGoogleGenerativeAiParams(
       buildGeminiModel(),

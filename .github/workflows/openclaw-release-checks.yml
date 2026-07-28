@@ -911,7 +911,7 @@ jobs:
       package_source_sha: ${{ needs.prepare_release_package.outputs.source_sha }}
       package_version: ${{ needs.prepare_release_package.outputs.package_version }}
       suite_profile: custom
-      docker_lanes: doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor published-upgrade-survivor root-managed-vps-upgrade update-restart-auth plugins-offline plugin-update plugin-binding-command-escape
+      docker_lanes: release-typed-onboarding doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor published-upgrade-survivor root-managed-vps-upgrade update-restart-auth plugins-offline plugin-update plugin-binding-command-escape
       published_upgrade_survivor_baselines: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'last-stable-4 2026.4.23 2026.5.2 2026.4.15' || '' }}
       published_upgrade_survivor_scenarios: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'reported-issues' || '' }}
       telegram_mode: mock-openai
@@ -1250,7 +1250,8 @@ jobs:
         run: node scripts/build-all.mjs qaRuntime
 
       - name: Run runtime-pair lane
-        id: runtime_parity_lane
+        id: candidate_runtime_pair
+        continue-on-error: true
         env:
           RUNTIME_PAIR_LANE: ${{ matrix.lane }}
         run: |
@@ -1281,21 +1282,57 @@ jobs:
 
           pnpm openclaw qa suite "${runtime_pair_args[@]}"
 
-          if [[ "$RUNTIME_PAIR_LANE" == "core" ]]; then
-            # Restart recovery owns an OpenClaw Gateway lifecycle; it is release-critical
-            # but cannot be compared against the Codex app-server runtime.
-            pnpm openclaw qa suite \
-              --provider-mode mock-openai \
-              --concurrency "${QA_PARITY_CONCURRENCY}" \
-              --model "${OPENCLAW_CI_OPENAI_MODEL}" \
-              --alt-model "openai/gpt-5.6-luna-alt" \
-              --scenario gateway-restart-inflight-run \
-              --output-dir ".artifacts/qa-e2e/openclaw-core-restart"
+      - name: Checkout trusted validator after candidate suite
+        if: always()
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          path: trusted-suite-validator
+          fetch-depth: 1
+
+      - name: Validate runtime-pair lane
+        id: runtime_parity_validation
+        if: always()
+        env:
+          CANDIDATE_SUITE_OUTCOME: ${{ steps.candidate_runtime_pair.outcome }}
+          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
+          RUNTIME_PAIR_LANE: ${{ matrix.lane }}
+        run: |
+          set -euo pipefail
+          output_dir="runtime-pair-${RUNTIME_PAIR_LANE}"
+          summary=".artifacts/qa-e2e/${output_dir}/qa-suite-summary.json"
+          validator_args=(
+            --summary "$summary"
+            --target-sha "$RELEASE_CHECK_TARGET_SHA"
+            --lane "$RUNTIME_PAIR_LANE"
+          )
+          if [[ "$CANDIDATE_SUITE_OUTCOME" != "success" ]]; then
+            validator_args+=(--require-explicit-gap)
+          fi
+          node trusted-suite-validator/scripts/validate-qa-runtime-pair-summary.mjs "${validator_args[@]}"
+          if [[ "$CANDIDATE_SUITE_OUTCOME" != "success" ]]; then
+            echo "::notice::Trusted workflow validation accepted frozen-candidate runtime-pair evidence after its suite failed."
           fi
 
+      - name: Run OpenClaw core restart proof
+        id: runtime_core_restart
+        if: matrix.lane == 'core' && steps.runtime_parity_validation.outcome == 'success'
+        run: |
+          # Restart recovery owns an OpenClaw Gateway lifecycle; it is release-critical
+          # but cannot be compared against the Codex app-server runtime.
+          pnpm openclaw qa suite \
+            --provider-mode mock-openai \
+            --concurrency "${QA_PARITY_CONCURRENCY}" \
+            --model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --alt-model "openai/gpt-5.6-luna-alt" \
+            --scenario gateway-restart-inflight-run \
+            --output-dir ".artifacts/qa-e2e/openclaw-core-restart"
+
       - name: Generate runtime-pair lane report
-        id: generate_runtime_parity_report
+        id: candidate_runtime_parity_report
         if: always()
+        continue-on-error: true
         env:
           RUNTIME_PAIR_LANE: ${{ matrix.lane }}
         run: |
@@ -1307,11 +1344,48 @@ jobs:
             echo "No soak runtime-pair summary was produced."
             exit 0
           fi
+          report_dir=".artifacts/qa-e2e/${output_dir}-report"
           pnpm openclaw qa parity-report \
             --repo-root . \
             --runtime-axis \
             --summary "$summary" \
-            --output-dir ".artifacts/qa-e2e/${output_dir}-report"
+            --output-dir "$report_dir"
+
+      - name: Checkout trusted validator after candidate report
+        if: always()
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          path: trusted-report-validator
+          fetch-depth: 1
+
+      - name: Validate runtime-pair lane report
+        id: generate_runtime_parity_report
+        if: always()
+        env:
+          CANDIDATE_REPORT_OUTCOME: ${{ steps.candidate_runtime_parity_report.outcome }}
+          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
+          RUNTIME_PAIR_LANE: ${{ matrix.lane }}
+        run: |
+          set -euo pipefail
+          output_dir="runtime-pair-${RUNTIME_PAIR_LANE}"
+          summary=".artifacts/qa-e2e/${output_dir}/qa-suite-summary.json"
+          report_dir=".artifacts/qa-e2e/${output_dir}-report"
+          validator_args=(
+            --summary "$summary"
+            --report-summary "$report_dir/qa-runtime-parity-summary.json"
+            --report-markdown "$report_dir/qa-runtime-parity-report.md"
+            --target-sha "$RELEASE_CHECK_TARGET_SHA"
+            --lane "$RUNTIME_PAIR_LANE"
+          )
+          if [[ "$CANDIDATE_REPORT_OUTCOME" != "success" ]]; then
+            validator_args+=(--require-explicit-gap)
+          fi
+          node trusted-report-validator/scripts/validate-qa-runtime-pair-summary.mjs "${validator_args[@]}"
+          if [[ "$CANDIDATE_REPORT_OUTCOME" != "success" ]]; then
+            echo "::notice::Trusted workflow validation accepted the frozen-candidate runtime-pair report after its reporter failed."
+          fi
 
       - name: Upload runtime-pair lane artifacts
         id: upload_runtime_parity_artifacts
@@ -1331,7 +1405,7 @@ jobs:
           RELEASE_CHECK_VARIANT: ${{ matrix.lane }}
           RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
           JOB_STATUS: ${{ job.status }}
-          RELEASE_CHECK_STEP_OUTCOMES: ${{ steps.runtime_parity_lane.outcome }} ${{ steps.generate_runtime_parity_report.outcome }} ${{ steps.upload_runtime_parity_artifacts.outcome }}
+          RELEASE_CHECK_STEP_OUTCOMES: ${{ steps.runtime_parity_validation.outcome }} ${{ steps.runtime_core_restart.outcome }} ${{ steps.generate_runtime_parity_report.outcome }} ${{ steps.upload_runtime_parity_artifacts.outcome }}
         run: *record_release_check_advisory_status
 
       - name: Upload runtime-pair lane status
@@ -2191,17 +2265,19 @@ jobs:
           release_check_result() {
             local name="$1"
             local fallback="$2"
+            # Skipped lanes produce no status variants; Bash 3 treats an empty
+            # array expansion as unbound when nounset is enabled.
+            if [[ "$fallback" == "skipped" ]]; then
+              printf 'skipped\n'
+              return
+            fi
             local saw=0
             local saw_failure=0
             local saw_cancelled=0
             local saw_skipped=0
-            local variants=()
-            if [[ "$fallback" != "skipped" ]]; then
-              if [[ "$name" == "qa_lab_parity_lane_release_checks" ]]; then
-                variants=(candidate baseline)
-              else
-                variants=("")
-              fi
+            local variants=("")
+            if [[ "$name" == "qa_lab_parity_lane_release_checks" ]]; then
+              variants=(candidate baseline)
             fi
             for variant in "${variants[@]}"; do
               suffix=""
@@ -2223,10 +2299,6 @@ jobs:
                 *) saw_failure=1 ;;
               esac
             done
-            if [[ "$fallback" == "skipped" ]]; then
-              printf 'skipped\n'
-              return
-            fi
             if [[ "$saw_failure" == "1" ]]; then
               printf 'failure\n'
             elif [[ "$saw_cancelled" == "1" ]]; then

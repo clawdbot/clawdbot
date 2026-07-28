@@ -13,7 +13,6 @@ const QA_SMOKE_CI_CHANNELS = ["matrix", OPENCLAW_CRABLINE_DEFAULT_CHANNEL] as co
 const QA_SMOKE_CI_SCENARIO_IDS = new Set([
   "control-ui-chat-flow-playwright",
   "system-agent-ring-zero-setup",
-  "dreaming-shadow-trial-report",
   "gateway-smoke",
   "model-switch-follow-up",
   "group-visible-reply-tool",

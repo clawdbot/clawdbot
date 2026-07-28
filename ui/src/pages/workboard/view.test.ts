@@ -143,15 +143,29 @@ describe("renderWorkboard", () => {
       } as unknown as GatewayBrowserClient,
     });
 
-    renderInto(container, props);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("board.get", { sessionKey }));
+    try {
+      renderInto(container, props);
+      // The dashboard element is lazily imported; on loaded CI runners that
+      // import can outlive vi.waitFor's default timeout. Await the definition
+      // and the upgraded element's first update, which acquires the provider
+      // and issues board.get synchronously.
+      await customElements.whenDefined("openclaw-workboard-card-dashboard");
+      const dashboard = container.querySelector("openclaw-workboard-card-dashboard");
+      expect(dashboard).not.toBeNull();
+      await dashboard!.updateComplete;
+      expect(request).toHaveBeenCalledWith("board.get", { sessionKey });
 
-    state.detailCardId = null;
-    renderInto(container, props);
-    await nextFrame();
+      state.detailCardId = null;
+      renderInto(container, props);
+      await nextFrame();
 
-    expect(removeListener).toHaveBeenCalledOnce();
-    container.remove();
+      expect(removeListener).toHaveBeenCalledOnce();
+    } finally {
+      // A leaked open drawer poisons later dialog tests in this shared jsdom
+      // document, so tear down even when an assertion above fails.
+      render(nothing, container);
+      container.remove();
+    }
   });
 
   it("keeps manual recovery refresh visible while data is loading", () => {
@@ -1809,6 +1823,147 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-board")).toBeTruthy();
   });
 
+  it.each([
+    {
+      name: "the selected named agent scope",
+      scopeAgentId: "writer",
+      agentFilter: "all",
+      expectedAgentId: "writer",
+    },
+    {
+      name: "the selected named agent filter",
+      scopeAgentId: null,
+      agentFilter: "ops",
+      expectedAgentId: "ops",
+    },
+    {
+      name: "the selected default agent scope",
+      scopeAgentId: "main",
+      agentFilter: "all",
+      expectedAgentId: "",
+    },
+    {
+      name: "the explicitly selected default agent filter",
+      scopeAgentId: null,
+      agentFilter: "main",
+      expectedAgentId: "main",
+    },
+    {
+      name: "the all-agents filter",
+      scopeAgentId: null,
+      agentFilter: "all",
+      expectedAgentId: "",
+    },
+    {
+      name: "the unassigned default-agent filter",
+      scopeAgentId: null,
+      agentFilter: "default",
+      expectedAgentId: "",
+    },
+    {
+      name: "a non-assignable system-agent diagnostic filter",
+      scopeAgentId: null,
+      agentFilter: "workboard-dispatcher",
+      expectedAgentId: "",
+    },
+  ])("initializes new cards from $name", ({ scopeAgentId, agentFilter, expectedAgentId }) => {
+    const { host, state } = createLoadedWorkboardState();
+    state.agentFilter = agentFilter;
+    const container = document.createElement("div");
+    const props = createWorkboardRenderProps(host, {
+      agentsList: {
+        defaultId: "main",
+        mainKey: "agent:main:main",
+        scope: "test",
+        agents: [
+          { id: "main", name: "Main" },
+          { id: "writer", name: "Writer" },
+          { id: "ops", name: "Ops" },
+          { id: "workboard-dispatcher", kind: "system", name: "Dispatcher" },
+        ],
+      },
+      scopeAgentId,
+    });
+
+    render(renderWorkboard(props), container);
+    container
+      .querySelector<HTMLButtonElement>(".workboard-toolbar__actions .btn.primary")
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    render(renderWorkboard(props), container);
+
+    expect(state.draftOpen).toBe(true);
+    expect(state.draftAgentId).toBe(expectedAgentId);
+    expect(
+      container.querySelector<HTMLElement & { value: string }>(
+        ".workboard-draft .workboard-agent-select",
+      )?.value,
+    ).toBe(expectedAgentId);
+  });
+
+  it.each([
+    {
+      name: "a selected named agent",
+      scopeAgentId: "writer",
+      defaultAgentId: "main",
+      expectedAgentId: "writer",
+    },
+    {
+      name: "the gateway's default agent",
+      scopeAgentId: "main",
+      defaultAgentId: "main",
+      expectedAgentId: "",
+    },
+    {
+      name: "a configured non-main default agent",
+      scopeAgentId: "research",
+      defaultAgentId: "research",
+      expectedAgentId: "",
+    },
+    {
+      name: "an unvalidated secondary agent filter",
+      scopeAgentId: null,
+      defaultAgentId: "main",
+      agentFilter: "ops",
+      expectedAgentId: "",
+    },
+    {
+      name: "a stale system-agent diagnostic filter",
+      scopeAgentId: null,
+      defaultAgentId: "main",
+      agentFilter: "workboard-dispatcher",
+      expectedAgentId: "",
+    },
+  ])(
+    "keeps $name while its roster has not loaded",
+    ({ scopeAgentId, defaultAgentId, agentFilter, expectedAgentId }) => {
+      const { host, state } = createLoadedWorkboardState();
+      state.agentFilter = agentFilter ?? "all";
+      if (agentFilter) {
+        state.cards = [createWorkboardCard({ agentId: agentFilter })];
+      }
+      const container = document.createElement("div");
+      const props = createWorkboardRenderProps(host, {
+        agentsList: null,
+        defaultAgentId,
+        scopeAgentId,
+      });
+
+      render(renderWorkboard(props), container);
+      container
+        .querySelector<HTMLButtonElement>(".workboard-toolbar__actions .btn.primary")
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      render(renderWorkboard(props), container);
+
+      expect(state.draftOpen).toBe(true);
+      expect(state.draftAgentId).toBe(expectedAgentId);
+      expect(
+        container.querySelector<HTMLElement & { value: string }>(
+          ".workboard-draft .workboard-agent-select",
+        )?.value,
+      ).toBe(expectedAgentId);
+    },
+  );
+
   it("applies card templates in the create modal", () => {
     const { host, state } = createLoadedWorkboardState();
     state.draftOpen = true;
@@ -2779,7 +2934,7 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-column")).toBeNull();
   });
 
-  it("keeps the panel in a neutral loading state while config enablement is unknown", () => {
+  it("shows the animated mascot while config enablement is unknown", () => {
     const container = document.createElement("div");
 
     render(
@@ -2795,7 +2950,11 @@ describe("renderWorkboard", () => {
       container,
     );
 
-    expect(container.textContent).toContain("Loading panel");
+    const loadingState = container.querySelector('[role="status"]');
+    expect(loadingState?.getAttribute("aria-label")).toBe("Loading…");
+    expect(loadingState?.querySelector("openclaw-mascot")?.getAttribute("mood")).toBe("thinking");
+    expect(loadingState?.textContent?.trim()).toBe("");
+    expect(container.textContent).not.toContain("Loading panel");
     expect(container.textContent).not.toContain("Workboard is disabled");
     expect(container.querySelector(".workboard-column")).toBeNull();
   });

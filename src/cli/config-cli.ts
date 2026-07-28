@@ -10,7 +10,13 @@ import { redactConfigObject } from "../config/redact-snapshot.js";
 import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { danger, info, success, warn } from "../globals.js";
-import { ExitError, type RuntimeEnv, defaultRuntime, writeRuntimeJson } from "../runtime.js";
+import {
+  ExitError,
+  type RuntimeEnv,
+  defaultRuntime,
+  writeRuntimeJson,
+  writeRuntimeStdout,
+} from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 import {
@@ -38,6 +44,7 @@ import {
 } from "./config-cli-runner.js";
 import { formatInvalidConfigRepairHint, loadValidConfig } from "./config-cli-validation.js";
 import { checkTouchedTextModelRefs } from "./config-model-validation.js";
+import { isConfigMachineOutput, isConfigSetJsonParseOnly } from "./config-output-mode.js";
 import {
   hasBatchMode,
   hasProviderBuilderOptions,
@@ -166,7 +173,7 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
       typeof res.value === "number" ||
       typeof res.value === "boolean"
     ) {
-      runtime.log(String(res.value));
+      writeRuntimeStdout(runtime, `${String(res.value)}\n`);
     } else {
       writeRuntimeJson(runtime, res.value ?? null);
     }
@@ -384,6 +391,7 @@ export function registerConfigCli(program: Command) {
       const { configureCommandFromSectionsArg } = await import("../commands/configure.js");
       await configureCommandFromSectionsArg(opts.section, defaultRuntime);
     });
+  setCommandJsonMode(cmd, "output", ({ argv }) => isConfigMachineOutput(argv));
 
   cmd
     .command("get")
@@ -394,7 +402,7 @@ export function registerConfigCli(program: Command) {
       await runConfigGet({ path, json: Boolean(opts.json) });
     });
 
-  setCommandJsonMode(cmd.command("set"), "parse-only")
+  setCommandJsonMode(cmd.command("set"), "parse-only", ({ argv }) => isConfigSetJsonParseOnly(argv))
     .description(CONFIG_SET_DESCRIPTION)
     .argument("[path]", "Config path (dot or bracket notation)")
     .argument("[value]", "Value (JSON/JSON5 or raw string)")

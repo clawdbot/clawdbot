@@ -11,6 +11,9 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import { SUBAGENT_ENDED_REASON_ERROR } from "../agents/subagent-lifecycle-events.js";
+import { createSubagentRegistryLifecycleController } from "../agents/subagent-registry-lifecycle.js";
+import type { SubagentRunRecord } from "../agents/subagent-registry.types.js";
 import {
   loadTranscriptEvents,
   persistSessionTranscriptTurn,
@@ -516,6 +519,98 @@ describe("session.message websocket events", () => {
       webOriginWs.close();
       missingCapsWs.close();
     }
+  });
+
+  test("broadcasts a recovered subagent terminal session to a subscribed gateway exactly once", async () => {
+    const storePath = await createSessionStoreFile();
+    const entry: SubagentRunRecord = {
+      runId: "run-recovered-subscriber",
+      childSessionKey: "agent:main:subagent:recovered-subscriber",
+      requesterSessionKey: "agent:main:parent",
+      requesterDisplayKey: "parent",
+      task: "finish recovered child work",
+      cleanup: "keep",
+      createdAt: 1_000,
+      startedAt: 2_000,
+    };
+    await writeSessionStore({
+      entries: {
+        [entry.childSessionKey]: {
+          sessionId: "sess-recovered-subscriber",
+          spawnedBy: entry.requesterSessionKey,
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+
+    const emitSubagentProgressEndedForRun = vi.fn(async () => {});
+    const controller = createSubagentRegistryLifecycleController({
+      runs: new Map([[entry.runId, entry]]),
+      resumedRuns: new Set(),
+      subagentAnnounceTimeoutMs: 1_000,
+      getRuntimeConfig: () => ({}),
+      persist: vi.fn(),
+      persistOrThrow: vi.fn(),
+      clearPendingLifecycleError: vi.fn(),
+      countPendingDescendantRuns: () => 0,
+      suppressAnnounceForSteerRestart: () => false,
+      resolveSubagentTask: () => ({ lookup: "available" }),
+      shouldEmitEndedHookForRun: () => false,
+      emitSubagentEndedHookForRun: vi.fn(async () => {}),
+      emitSubagentProgressEndedForRun,
+      notifyContextEngineSubagentEnded: vi.fn(async () => {}),
+      retireSupersededRun: vi.fn(async () => {}),
+      resumeSubagentRun: vi.fn(),
+      callGateway: async <T = Record<string, unknown>>() => ({}) as T,
+      captureSubagentCompletionReply: vi.fn(async () => undefined),
+      runSubagentAnnounceFlow: vi.fn(async () => false),
+      maybeWakeRequesterAfterAllChildrenSettled: vi.fn(async () => false),
+      warn: vi.fn(),
+    });
+    const completion = {
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "error" as const, error: "restart interrupted run" },
+      reason: SUBAGENT_ENDED_REASON_ERROR,
+      triggerCleanup: false,
+      recoverInterrupted: true,
+    } satisfies Parameters<typeof controller.completeSubagentRun>[0];
+
+    await withOperatorSessionSubscriber(async (ws) => {
+      const waitForRecoveredTerminal = (timeoutMs?: number) =>
+        onceMessage(
+          ws,
+          (message) =>
+            message.type === "event" &&
+            message.event === "sessions.changed" &&
+            (message.payload as { sessionKey?: string; reason?: string } | undefined)
+              ?.sessionKey === entry.childSessionKey &&
+            (message.payload as { reason?: string } | undefined)?.reason === "subagent-status",
+          timeoutMs,
+        );
+      const changedEvent = waitForRecoveredTerminal();
+
+      await controller.completeSubagentRun(completion);
+
+      const event = await changedEvent;
+      expectRecordFields(event.payload, {
+        sessionKey: entry.childSessionKey,
+        reason: "subagent-status",
+        status: "failed",
+        endedAt: completion.endedAt,
+        spawnedBy: entry.requesterSessionKey,
+      });
+      expect(emitSubagentProgressEndedForRun).toHaveBeenCalledExactlyOnceWith(entry);
+
+      // A resumed callback must not publish a second terminal event to an
+      // already-subscribed Control UI client for the same child generation.
+      await expectNoMessageWithin({
+        action: () => controller.completeSubagentRun(completion),
+        watch: waitForRecoveredTerminal,
+      });
+      expect(emitSubagentProgressEndedForRun).toHaveBeenCalledExactlyOnceWith(entry);
+    });
   });
 
   test("includes spawned session ownership metadata on lifecycle sessions.changed events", async () => {

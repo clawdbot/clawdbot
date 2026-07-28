@@ -8,6 +8,7 @@ import type {
 } from "../../../app/native-gateways.runtime.ts";
 import { isNativeWebChromeHost } from "../../../app/native-web-chrome.ts";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
+import type { ActorIdentityUser } from "../../../app/user-profile.ts";
 import {
   COMMAND_PALETTE_OPEN_EVENT,
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
@@ -31,6 +32,7 @@ type ChatPaneHeaderProps = {
   title: string;
   session: GatewaySessionRow | undefined;
   showOwnerChip?: boolean;
+  ownerUser?: ActorIdentityUser;
   catalog: boolean;
   editing: boolean;
   renameValue: string;
@@ -307,6 +309,8 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
       ${renderSessionOwnerChip(
         props.showOwnerChip ? props.session?.createdActor : undefined,
         "header",
+        "created",
+        props.ownerUser,
       )}
       ${!props.catalog && props.workspaceLabel
         ? html`

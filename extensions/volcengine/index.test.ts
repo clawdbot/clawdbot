@@ -6,8 +6,21 @@ import { describe, expect, it } from "vitest";
 import { VOLCENGINE_UNSUPPORTED_TOOL_SCHEMA_KEYWORDS } from "./api.js";
 import plugin from "./index.js";
 import { DOUBAO_CODING_MODEL_CATALOG, DOUBAO_MODEL_CATALOG } from "./models.js";
+import { VOLCENGINE_PROVIDER_CATALOG_ENTRIES } from "./provider-catalog.js";
 
 describe("volcengine plugin", () => {
+  it("preserves both provider-owned static catalogs and paired ordering", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(provider.catalog?.order).toBe("paired");
+    expect(provider.staticCatalog?.order).toBe("paired");
+    expect(await provider.staticCatalog?.run({} as never)).toEqual({
+      providers: Object.fromEntries(
+        VOLCENGINE_PROVIDER_CATALOG_ENTRIES.map(({ id, buildProvider }) => [id, buildProvider()]),
+      ),
+    });
+  });
+
   it("augments the catalog with bundled standard and plan models", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     expect(provider.auth?.[0]?.starterModel).toBe("volcengine-plan/ark-code-latest");

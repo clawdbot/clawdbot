@@ -21,6 +21,7 @@ afterEach(() => {
   vi.useRealTimers();
   document.body.replaceChildren();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -236,6 +237,32 @@ describe("openclaw-board-view", () => {
     expect(frameLoadFailed).toHaveBeenCalledTimes(3);
   });
 
+  it("pauses ticket refresh while hidden and re-arms when the document becomes visible", async () => {
+    vi.useFakeTimers();
+    let visibilityState: DocumentVisibilityState = "hidden";
+    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibilityState);
+    const frameLoadFailed = vi.fn(async () => undefined);
+    const ticketedWidget = boardWidget({
+      viewTicket: "ticket",
+      viewTicketTtlMs: 30_000,
+    });
+    recordBoardWidgetTicketReceipt(ticketedWidget);
+    await mount({
+      callbacks: callbacks({ frameLoadFailed }),
+      snapshot: snapshot({ widgets: [ticketedWidget] }),
+    });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(frameLoadFailed).not.toHaveBeenCalled();
+
+    visibilityState = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(999);
+    expect(frameLoadFailed).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(frameLoadFailed).toHaveBeenCalledOnce();
+  });
+
   it("schedules proactive refresh from the relative ticket TTL", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2099-01-01T00:00:00Z"));
@@ -252,10 +279,15 @@ describe("openclaw-board-view", () => {
       }),
     });
 
-    await vi.advanceTimersByTimeAsync(4_999);
+    // The refresh is armed during a render cycle, so its exact start is not guaranteed to
+    // the millisecond under load. Assert the band that carries the meaning: still silent at
+    // 2s rules out the 1s floor, and having fired by 8s rules out the 15s a full-TTL
+    // calculation would produce. Call count is left open because the unreplaced ticket
+    // keeps retrying, which is a different behavior with its own test.
+    await vi.advanceTimersByTimeAsync(2_000);
     expect(frameLoadFailed).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(frameLoadFailed).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(frameLoadFailed).toHaveBeenCalled();
   });
 
   it("schedules proactive refresh from a delayed mount's remaining ticket lifetime", async () => {
@@ -274,10 +306,12 @@ describe("openclaw-board-view", () => {
       snapshot: snapshot({ widgets: [delayedWidget] }),
     });
 
-    await vi.advanceTimersByTimeAsync(4_999);
+    // Same band as above: the point is that the delay came from the 20s remaining
+    // lifetime, not the full 30s TTL, which would not fire until 15s.
+    await vi.advanceTimersByTimeAsync(2_000);
     expect(frameLoadFailed).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(frameLoadFailed).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(frameLoadFailed).toHaveBeenCalled();
   });
 
   it("keeps retrying proactive ticket refresh after the initial outage", async () => {

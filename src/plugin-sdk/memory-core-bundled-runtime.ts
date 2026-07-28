@@ -48,6 +48,7 @@ export type ShortTermAuditIssue = {
     | "recall-store-unreadable"
     | "recall-store-empty"
     | "recall-store-invalid"
+    | "recall-store-dangling"
     | "recall-store-over-limit"
     | "recall-lock-stale"
     | "recall-lock-unreadable"
@@ -69,6 +70,7 @@ export type ShortTermAuditSummary = {
   conceptTaggedEntryCount: number;
   conceptTagScripts?: Record<string, unknown>;
   invalidEntryCount: number;
+  danglingEntryCount?: number;
   issues: ShortTermAuditIssue[];
   qmd?: {
     dbPath?: string;
@@ -80,6 +82,7 @@ export type ShortTermAuditSummary = {
 export type RepairShortTermPromotionArtifactsResult = {
   changed: boolean;
   removedInvalidEntries: number;
+  removedDanglingEntries?: number;
   removedOverflowEntries?: number;
   rewroteStore: boolean;
   removedStaleLock: boolean;

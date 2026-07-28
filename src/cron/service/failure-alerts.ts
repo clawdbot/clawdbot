@@ -97,18 +97,20 @@ export function resolveFailureAlert(
     : undefined;
   // Webhook destinations have no chat-channel identity. Announce destinations
   // must stay on their original channel when a job overrides its route.
-  const globalTo =
-    mode === "webhook" || !jobChannel || jobChannel === globalChannel
-      ? configuredGlobalTo
-      : undefined;
+  const inheritsGlobalRoute =
+    inheritsGlobalMode && (mode === "webhook" || !jobChannel || jobChannel === globalChannel);
+  const globalTo = inheritsGlobalRoute ? configuredGlobalTo : undefined;
   const deliveryTo = normalizeTo(job.delivery?.to);
   const deliveryChannel = resolveFailureAlertChannel(job.delivery?.channel, deliveryTo);
   const channel = jobChannel ?? globalChannel ?? deliveryChannel ?? "last";
-  const compatibleDeliveryTo =
-    channel === deliveryChannel || (channel === "last" && !deliveryChannel)
-      ? deliveryTo
-      : undefined;
+  const inheritsDeliveryChannel =
+    channel === deliveryChannel || (channel === "last" && !deliveryChannel);
+  const compatibleDeliveryTo = inheritsDeliveryChannel ? deliveryTo : undefined;
   const explicitTo = jobTo ?? globalTo;
+  const inheritedDeliveryAccountId =
+    mode !== "webhook" && !explicitTo && inheritsDeliveryChannel
+      ? job.delivery?.accountId
+      : undefined;
 
   // Announce alerts inherit the job delivery target; webhook alerts require an
   // explicit alert target so chat recipients are not reused as URLs.
@@ -121,7 +123,10 @@ export function resolveFailureAlert(
     channel,
     to: mode === "webhook" ? explicitTo : (explicitTo ?? compatibleDeliveryTo),
     mode,
-    accountId: jobConfig?.accountId ?? globalConfig?.accountId,
+    accountId:
+      jobConfig?.accountId ??
+      (inheritsGlobalRoute ? globalConfig?.accountId : undefined) ??
+      inheritedDeliveryAccountId,
     includeSkipped: jobConfig?.includeSkipped ?? globalConfig?.includeSkipped ?? false,
   };
 }

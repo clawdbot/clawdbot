@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorktreeRecord } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { SESSION_FACE_PREFERENCE_PARAM } from "../../lib/sessions/route-navigation.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import "./worktrees-page.ts";
 
@@ -112,6 +113,47 @@ afterEach(() => {
 });
 
 describe("WorktreesPage lifecycle", () => {
+  it("navigates a session-owned worktree with the face-preference marker", async () => {
+    // The owner key comes from a worktree record, not the cached session page, so its
+    // face is a guess: the in-app click must carry the marker while href stays clean.
+    const request = vi.fn(async (method: string) =>
+      method === "worktrees.list"
+        ? {
+            worktrees: [
+              {
+                ...worktree(),
+                ownerKind: "session" as const,
+                ownerId: "agent:main:thread:12345678-90ab-cdef-1234-567890abcdef",
+              },
+            ],
+          }
+        : {},
+    );
+    const context = {
+      ...contextWithGateway(gatewayWithClient({ request } as unknown as GatewayBrowserClient)),
+      // No cached sessions: the owner key is only known to the worktree record.
+      sessions: { state: { result: undefined } },
+      agents: { state: { agentsList: { mainKey: "main" } } },
+      agentSelection: { state: { selectedId: "main" } },
+    } as unknown as ApplicationContext;
+    const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
+    page.context = context;
+    document.body.append(page);
+    await waitForFast(() => expect(page.records.length).toBe(1));
+    await page.updateComplete;
+
+    const link = [...page.querySelectorAll("a")].find((anchor) =>
+      anchor.getAttribute("href")?.includes("12345678"),
+    );
+    expect(link?.getAttribute("href")).toBe("/chat/main/12345678");
+    link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+    expect(context.navigate).toHaveBeenCalledWith("chat", {
+      pathname: "/chat/main/12345678",
+      search: `?${SESSION_FACE_PREFERENCE_PARAM}=1`,
+    });
+  });
+
   it("serializes list refreshes and row mutations", async () => {
     const record = worktree();
     const removedRecord = {

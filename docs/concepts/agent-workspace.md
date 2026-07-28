@@ -76,8 +76,8 @@ Standard files OpenClaw expects inside the workspace:
   <Accordion title="IDENTITY.md - name, vibe, emoji">
     The agent's name, vibe, and emoji. Created/updated during the bootstrap ritual.
   </Accordion>
-  <Accordion title="TOOLS.md - local tool conventions">
-    Notes about your local tools and conventions. Does not control tool availability; it is only guidance.
+  <Accordion title="AGENTS.md Tools section - local tool conventions">
+    The `## Tools` section holds local environment notes and conventions. It does not control tool availability; it is only guidance.
   </Accordion>
   <Accordion title="BOOT.md - startup checklist">
     Optional startup checklist run automatically on gateway restart (when [internal hooks](/automation/hooks) are enabled). Keep it short; use the message tool for outbound sends.
@@ -137,7 +137,7 @@ Run these steps on the machine where the Gateway runs (that is where the workspa
     ```bash
     cd ~/.openclaw/workspace
     git init
-    git add AGENTS.md SOUL.md TOOLS.md IDENTITY.md USER.md memory/
+    git add AGENTS.md SOUL.md IDENTITY.md USER.md memory/
     git commit -m "Add agent workspace"
     ```
 

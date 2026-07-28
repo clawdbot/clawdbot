@@ -5,6 +5,7 @@ import type { SessionCreatedActor } from "../../packages/gateway-protocol/src/in
 import { resetProviderAuthAliasMapCacheForTest } from "../agents/provider-auth-aliases.test-support.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
@@ -32,6 +33,30 @@ const OPENAI_GPT_ID = "gpt-5.4";
 const EMPTY_CFG = {} as OpenClawConfig;
 
 type ApplySessionsPatchArgs = Parameters<typeof applySessionsPatchToStore>[0];
+type ProviderAuthMetadataSnapshot = NonNullable<
+  ApplySessionsPatchArgs["providerAuthMetadataSnapshot"]
+>;
+
+const EMPTY_PROVIDER_AUTH_METADATA_SNAPSHOT = {
+  plugins: [],
+} satisfies ProviderAuthMetadataSnapshot;
+const BYTEPLUS_PROVIDER_AUTH_METADATA_SNAPSHOT = {
+  plugins: [
+    {
+      id: "byteplus",
+      channels: [],
+      providers: ["byteplus", "byteplus-plan"],
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+      origin: "bundled",
+      rootDir: "/plugins/byteplus",
+      source: "test",
+      manifestPath: "/plugins/byteplus/openclaw.plugin.json",
+      providerAuthAliases: { "byteplus-plan": "byteplus" },
+    } satisfies PluginManifestRecord,
+  ],
+} satisfies ProviderAuthMetadataSnapshot;
 
 async function runPatch(params: {
   patch: ApplySessionsPatchArgs["patch"];
@@ -40,6 +65,7 @@ async function runPatch(params: {
   storeKey?: string;
   agentId?: string;
   loadGatewayModelCatalog?: ApplySessionsPatchArgs["loadGatewayModelCatalog"];
+  providerAuthMetadataSnapshot?: ApplySessionsPatchArgs["providerAuthMetadataSnapshot"];
   archivedBy?: SessionCreatedActor;
 }) {
   return applySessionsPatchToStore({
@@ -49,6 +75,7 @@ async function runPatch(params: {
     agentId: params.agentId,
     patch: params.patch,
     loadGatewayModelCatalog: params.loadGatewayModelCatalog,
+    providerAuthMetadataSnapshot: params.providerAuthMetadataSnapshot,
     archivedBy: params.archivedBy,
   });
 }
@@ -124,6 +151,7 @@ async function applyMainModelPatch(params: {
   cfg?: OpenClawConfig;
   model: string | null;
   catalogRefs?: string[];
+  providerAuthMetadataSnapshot?: ProviderAuthMetadataSnapshot;
 }) {
   return expectPatchOk(
     await runPatch({
@@ -132,6 +160,8 @@ async function applyMainModelPatch(params: {
       patch: { key: MAIN_SESSION_KEY, model: params.model },
       loadGatewayModelCatalog:
         params.catalogRefs === undefined ? undefined : loadCatalog(...params.catalogRefs),
+      providerAuthMetadataSnapshot:
+        params.providerAuthMetadataSnapshot ?? EMPTY_PROVIDER_AUTH_METADATA_SNAPSHOT,
     }),
   );
 }
@@ -711,6 +741,7 @@ describe("gateway sessions patch", () => {
       store,
       model: "byteplus-plan/ark-code-latest",
       catalogRefs: ["byteplus-plan/ark-code-latest"],
+      providerAuthMetadataSnapshot: BYTEPLUS_PROVIDER_AUTH_METADATA_SNAPSHOT,
     });
     expectModelSelection(entry, "byteplus-plan", "ark-code-latest");
     expectAuthOverride(entry, { profile: "byteplus:work", compactionCount: 2 });

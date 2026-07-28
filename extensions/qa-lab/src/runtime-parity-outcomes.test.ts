@@ -80,6 +80,71 @@ describe("runtime parity outcomes", () => {
     expect(isRuntimeParityResultPass(result)).toBe(false);
   });
 
+  it("keeps one explicitly known harness gap advisory when its paired runtime passes", async () => {
+    const result = await runRuntimeParityScenario({
+      scenarioId: "known-harness-gap",
+      runCell: async (runtime) => ({
+        status: runtime === "codex" ? "skip" : "pass",
+        ...(runtime === "codex"
+          ? {
+              details:
+                "known-harness-gap exec: Codex owns command execution natively\ntracking: #80319",
+            }
+          : {}),
+        cell: makeRuntimeParityCell(runtime),
+      }),
+    });
+
+    expect(result).toMatchObject({
+      cells: {
+        openclaw: { status: "pass" },
+        codex: { status: "skip" },
+      },
+      drift: "structural",
+      driftDetails: "known harness gap in codex runtime; paired runtime passed",
+    });
+    expect(isRuntimeParityResultPass(result)).toBe(true);
+  });
+
+  it("keeps unannotated, doubly skipped, and failed known-gap cells blocking", async () => {
+    const run = (params: {
+      codexDetails?: string;
+      openclawStatus?: "pass" | "skip";
+      codexRuntimeErrorClass?: string;
+    }) =>
+      runRuntimeParityScenario({
+        scenarioId: "blocking-skip",
+        runCell: async (runtime) => ({
+          status: runtime === "openclaw" ? (params.openclawStatus ?? "pass") : ("skip" as const),
+          ...(runtime === "codex" && params.codexDetails ? { details: params.codexDetails } : {}),
+          cell: {
+            ...makeRuntimeParityCell(runtime),
+            ...(runtime === "codex" && params.codexRuntimeErrorClass
+              ? { runtimeErrorClass: params.codexRuntimeErrorClass }
+              : {}),
+          },
+        }),
+      });
+
+    const unannotated = await run({ codexDetails: "implementation unavailable" });
+    expect(unannotated.drift).toBe("failure-mode");
+    expect(isRuntimeParityResultPass(unannotated)).toBe(false);
+
+    const bothSkipped = await run({
+      codexDetails: "known-harness-gap exec: tracked",
+      openclawStatus: "skip",
+    });
+    expect(bothSkipped.drift).toBe("failure-mode");
+    expect(isRuntimeParityResultPass(bothSkipped)).toBe(false);
+
+    const failed = await run({
+      codexDetails: "known-harness-gap exec: tracked",
+      codexRuntimeErrorClass: "auth",
+    });
+    expect(failed.drift).toBe("failure-mode");
+    expect(isRuntimeParityResultPass(failed)).toBe(false);
+  });
+
   it("requires every canonical runtime-pair cell status to pass", async () => {
     const result = await runRuntimeParityScenario({
       scenarioId: "complete-result-cells",

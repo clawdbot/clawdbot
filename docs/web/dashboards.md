@@ -24,6 +24,9 @@ thread's `/dashboard/<agent>/<sessionRef>` URL.
 
 The Chat or Dashboard face preference is stored server-side per thread. It
 therefore follows you when you connect to the same gateway from another device.
+Opening a thread from the sidebar, Sessions, Tasks, Workboard, or Worktrees
+applies that stored face even when the thread is outside the page of sessions
+already loaded by the browser.
 The active dashboard tab and remembered chat-dock position remain per-device UI
 state, so each browser can keep its own working layout.
 

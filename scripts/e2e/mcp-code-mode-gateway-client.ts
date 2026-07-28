@@ -106,7 +106,7 @@ async function readSessionLogMentions(stateDir: string): Promise<Record<string, 
       apiFileList: "API.list",
       apiFileRead: "API.read",
       mcpNamespace: "MCP.fixture",
-      mcpTool: "fixture__lookup_note",
+      mcpTool: "MCP.fixture.lookupNote",
       toolSearchPollution: 'tools.search("lookup note"',
     },
   });

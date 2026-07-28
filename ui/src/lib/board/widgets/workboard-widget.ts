@@ -20,6 +20,7 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
 
   @property({ attribute: false }) widget?: BoardViewWidget;
   @property({ attribute: false }) sessionKey = "";
+  @property({ type: Boolean }) canMutate = true;
   @property({ attribute: false }) hostRequestUpdate?: () => void;
 
   protected cards: WorkboardCard[] = [];
@@ -29,7 +30,7 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
   protected error = "";
   private loadAttempted = false;
 
-  private readonly workboardHost: WorkboardHost = {};
+  private workboardHost: WorkboardHost = {};
   private client: GatewayBrowserClient | null = null;
   private refreshGeneration = 0;
   private refreshPromise: Promise<void> | null = null;
@@ -68,6 +69,7 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
     this.refreshPromise = null;
     this.refreshPending = false;
     this.client = null;
+    this.workboardHost = {};
     this.loaded = false;
     this.loadAttempted = false;
     this.loading = false;
@@ -92,10 +94,11 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
 
   protected async moveCard(card: WorkboardCard, status: WorkboardStatus): Promise<void> {
     const client = this.client;
-    if (!client || card.status === status) {
+    if (!client || !this.canMutate || card.status === status) {
       return;
     }
-    const state = getWorkboardState(this.workboardHost);
+    const host = this.workboardHost;
+    const state = getWorkboardState(host);
     state.cards = [...this.cards];
     state.statuses = this.statuses;
     state.loaded = true;
@@ -109,14 +112,20 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
           .map((candidate) => candidate.position),
       ) + 1;
     await moveWorkboardCard({
-      host: this.workboardHost,
+      host,
       client,
       cardId: card.id,
       status,
       position,
-      requestUpdate: () => this.syncFromHost(),
+      requestUpdate: () => {
+        if (this.client === client && this.workboardHost === host) {
+          this.syncFromHost();
+        }
+      },
     });
-    this.syncFromHost();
+    if (this.client === client && this.workboardHost === host) {
+      this.syncFromHost();
+    }
   }
 
   private syncGateway(snapshot: ApplicationContext["gateway"]["snapshot"] | undefined): void {
@@ -125,6 +134,9 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
       return;
     }
     this.client = nextClient;
+    // Pending mutation state belongs to its connection; never let its completion
+    // block or replace cards loaded through the next Gateway client.
+    this.workboardHost = {};
     this.refreshGeneration += 1;
     this.refreshPromise = null;
     this.refreshPending = false;
@@ -160,7 +172,7 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
         if (generation !== this.refreshGeneration || client !== this.client) {
           return;
         }
-        this.cards = normalized.cards;
+        this.cards = normalized.cards.filter((card) => !card.metadata?.archivedAt);
         this.statuses = normalized.statuses;
         this.loaded = true;
       } catch (error) {

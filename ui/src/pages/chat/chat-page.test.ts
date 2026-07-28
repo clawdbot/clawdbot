@@ -408,6 +408,30 @@ describe("chat page split layout host", () => {
     );
   });
 
+  it("replaces into the canonical face namespace without adding history", async () => {
+    const page = new ChatPage();
+    const navigation = setNavigationContext(page);
+    // The loader resolved this session to its stored dashboard face while the route was
+    // matched under /chat, so the replacement has to be routed by the resolved face.
+    page.data = {
+      sessionKey: WORK_SESSION_KEY,
+      face: "dashboard",
+      canonicalLocation: {
+        pathname: "/dashboard/main/deploy-monitor-12345678",
+        search: "",
+        hash: "",
+      },
+    };
+    document.body.append(page);
+    await page.updateComplete;
+
+    expect(navigation.replace).toHaveBeenCalledWith("dashboard", {
+      pathname: "/dashboard/main/deploy-monitor-12345678",
+      search: "",
+      hash: "",
+    });
+  });
+
   it("keeps catalog identity when consuming a route draft", async () => {
     const page = new ChatPage();
     const navigation = setNavigationContext(page);

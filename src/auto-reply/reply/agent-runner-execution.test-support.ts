@@ -81,8 +81,11 @@ vi.mock("../../agents/cli-runner.js", () => ({
   runCliAgent: (params: unknown) => state.runCliAgentMock(params),
 }));
 
-vi.mock("../../agents/model-fallback.js", () => ({
+vi.mock("../../agents/model-fallback-runner.js", () => ({
   runWithModelFallback: (params: unknown) => state.runWithModelFallbackMock(params),
+}));
+
+vi.mock("../../agents/model-fallback-attempt.js", () => ({
   isFallbackSummaryError: (err: unknown) =>
     err instanceof Error &&
     err.name === "FallbackSummaryError" &&
@@ -253,8 +256,32 @@ vi.mock("./reply-media-paths.runtime.js", () => ({
   createReplyMediaPathNormalizer: () => (payload: unknown) => payload,
 }));
 
-export async function getRunAgentTurnWithFallback() {
-  return (await import("./agent-runner-execution.js")).runAgentTurnWithFallback;
+export async function getExecuteAgentTurnForTest() {
+  const execute = (await import("./agent-runner-execution.js")).executeAgentTurn;
+  return async (...args: Parameters<typeof execute>) => {
+    const execution = await execute(...args);
+    const outcome = execution.outcome;
+    if (outcome.kind === "settled") {
+      return {
+        kind: "success" as const,
+        runId: execution.runId,
+        runResult: outcome.result,
+        fallbackProvider: outcome.resolved.provider,
+        fallbackModel: outcome.resolved.model,
+        ...(outcome.fallback.exhausted ? { fallbackExhausted: true as const } : {}),
+        fallbackAttempts: outcome.fallback.attempts,
+        didLogHeartbeatStrip: outcome.didLogHeartbeatStrip,
+        autoCompactionCount: outcome.autoCompactionCount,
+        directlySentBlockKeys: outcome.directlySentBlockKeys,
+        directlySentBlockPayloads: outcome.directlySentBlockPayloads,
+        terminalFailurePayload: outcome.terminalFailurePayload,
+      };
+    }
+    if (outcome.kind === "rejected") {
+      return { kind: "final" as const, payload: outcome.payload };
+    }
+    return { kind: "final" as const, payload: { text: "NO_REPLY" } };
+  };
 }
 
 export type FallbackRunnerParams = {

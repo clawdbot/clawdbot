@@ -400,7 +400,7 @@ describe("AppSidebar session catalog pagination", () => {
         .mockResolvedValueOnce(
           catalogPage([{ threadId: "thread-3", name: "Reappeared" }], "page-2"),
         )
-        .mockResolvedValueOnce(catalogErrorPage("Replay failed"));
+        .mockResolvedValue(catalogErrorPage("Replay failed"));
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
       gateway.publish({
         hello: {

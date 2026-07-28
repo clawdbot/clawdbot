@@ -54,7 +54,7 @@ export function validateMcpCodeModeResult(
   assert(mentions.apiFileList > 0, "session log lacks API.list usage");
   assert(mentions.apiFileRead > 0, "session log lacks API.read usage");
   assert(mentions.mcpNamespace > 0, "session log lacks MCP.fixture usage");
-  assert(mentions.mcpTool > 0, "session log lacks fixture__lookup_note call");
+  assert(mentions.mcpTool > 0, "session log lacks MCP.fixture.lookupNote call");
   assert(mentions.apiCall === 0, "agent should not call MCP.$api when API files are available");
   assert(mentions.toolSearchPollution === 0, "agent should not use tools.search for MCP lookup");
   return finalText;

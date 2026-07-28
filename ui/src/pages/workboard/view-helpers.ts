@@ -28,6 +28,7 @@ export type WorkboardProps = {
   pluginEnabled: boolean | null;
   pluginEnablementError?: string | null;
   agentsList: AgentsListResult | null;
+  defaultAgentId?: string | null;
   sessions: GatewaySessionRow[];
   scopeAgentId?: string | null;
   showAgentFilter?: boolean;

@@ -18,8 +18,20 @@ const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? descri
 let browser: Browser;
 let server: ControlUiE2eServer;
 
-function configResponse(thinkingDefault: "low" | "high", hash: string) {
-  const config = { agents: { defaults: { model: "openai/gpt-5.5", thinkingDefault } } };
+function configResponse(
+  thinkingDefault: "low" | "high",
+  hash: string,
+  fastModeDefault?: boolean | "auto",
+) {
+  const config = {
+    agents: {
+      defaults: {
+        model: "openai/gpt-5.5",
+        thinkingDefault,
+        ...(fastModeDefault === undefined ? {} : { fastModeDefault }),
+      },
+    },
+  };
   return {
     config,
     hash,
@@ -165,4 +177,56 @@ describeControlUiE2e("Control UI General settings thinking persistence mocked Ga
       await context.close();
     }
   });
+
+  it.each([
+    { initial: false, initialLabel: "Standard", next: true, nextLabel: "Fast" },
+    { initial: true, initialLabel: "Fast", next: "auto" as const, nextLabel: "Auto" },
+    { initial: "auto" as const, initialLabel: "Auto", next: false, nextLabel: "Standard" },
+  ])(
+    "persists agents.defaults.fastModeDefault from $initialLabel to $nextLabel",
+    async ({ initial, initialLabel, next, nextLabel }) => {
+      const context = await browser.newContext({
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+      });
+      const page = await context.newPage();
+      const initialConfig = configResponse("low", "hash-1", initial);
+      const gateway = await installMockGateway(page, {
+        methodResponses: { "config.get": initialConfig },
+      });
+
+      try {
+        const response = await page.goto(`${server.baseUrl}config`);
+        expect(response?.status()).toBe(200);
+
+        const modelCard = page.locator("#settings-general-model");
+        const initialButton = modelCard.getByRole("radio", { name: initialLabel, exact: true });
+        await initialButton.waitFor();
+        expect(await initialButton.getAttribute("aria-checked")).toBe("true");
+
+        await modelCard.getByRole("radio", { name: nextLabel, exact: true }).click();
+
+        const raw = requestRaw(await gateway.waitForRequest("config.set"));
+        expect(raw).toEqual({
+          agents: {
+            defaults: {
+              model: "openai/gpt-5.5",
+              thinkingDefault: "low",
+              fastModeDefault: next,
+            },
+          },
+        });
+        expect(raw.agents).not.toHaveProperty("defaults.fastMode");
+
+        const reloadResponse = await page.reload();
+        expect(reloadResponse?.status()).toBe(200);
+        const persistedButton = modelCard.getByRole("radio", { name: nextLabel, exact: true });
+        await persistedButton.waitFor();
+        expect(await persistedButton.getAttribute("aria-checked")).toBe("true");
+      } finally {
+        await context.close();
+      }
+    },
+  );
 });

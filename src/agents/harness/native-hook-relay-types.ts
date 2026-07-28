@@ -14,7 +14,7 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
-const NATIVE_HOOK_RELAY_EVENTS = [
+export const NATIVE_HOOK_RELAY_EVENTS = [
   "pre_tool_use",
   "post_tool_use",
   "permission_request",
@@ -78,7 +78,7 @@ export type NativeHookRelayRegistration = {
   }) => void | Promise<void>;
 };
 
-type NativeHookRelayRegistrationHandle = NativeHookRelayRegistration & {
+export type NativeHookRelayRegistrationHandle = NativeHookRelayRegistration & {
   generation?: string;
   shouldRelayEvent: (event: NativeHookRelayEvent) => boolean;
   commandForEvent: (
@@ -117,7 +117,7 @@ type NativeHookRelayCommandOptions = {
   timeoutMs?: number;
 };
 
-export type NativeHookRelayCommandForEventOptions = {
+type NativeHookRelayCommandForEventOptions = {
   timeoutMs?: number;
 };
 

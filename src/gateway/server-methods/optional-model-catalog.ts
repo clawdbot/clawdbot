@@ -59,9 +59,11 @@ function startOptionalServerMethodModelCatalogValueLoad<T>(params: {
 
 function startOptionalServerMethodModelCatalogLoad(
   context: GatewayRequestContext,
+  loadParams?: Parameters<GatewayRequestContext["loadGatewayModelCatalog"]>[0],
 ): OptionalServerMethodModelCatalogLoad<ModelCatalogEntry[]> {
   return startOptionalServerMethodModelCatalogValueLoad({
-    load: () => context.loadGatewayModelCatalog(),
+    load: () =>
+      loadParams ? context.loadGatewayModelCatalog(loadParams) : context.loadGatewayModelCatalog(),
     normalize: normalizeOptionalModelCatalog,
   });
 }
@@ -117,7 +119,7 @@ export async function loadOptionalServerMethodModelCatalog(
   options?: LoadOptionalServerMethodModelCatalogOptions<ModelCatalogEntry[]>,
 ): Promise<ModelCatalogEntry[] | undefined> {
   return await loadOptionalServerMethodModelCatalogValue(context, surface, options, () =>
-    startOptionalServerMethodModelCatalogLoad(context),
+    startOptionalServerMethodModelCatalogLoad(context, options?.loadParams),
   );
 }
 
