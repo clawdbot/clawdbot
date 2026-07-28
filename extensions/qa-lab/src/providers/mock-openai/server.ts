@@ -1204,52 +1204,34 @@ async function buildResponsesPayload(
     }
     return events;
   }
-  if (canCallSessionsSpawn && /subagent fanout synthesis check/i.test(allInputText)) {
-    const fanoutNamespace = resolveSubagentFanoutPhaseNamespace(allInputText);
-    const fanoutPhase = scenarioState.subagentFanoutPhaseByNamespace.get(fanoutNamespace) ?? 0;
-    const buildFanoutSpawn = (worker: "alpha" | "beta") => {
-      const args = {
-        task: subagentFanoutTaskForProvider(providerVariant, worker),
-        label: worker === "alpha" ? "qa-fanout-alpha" : "qa-fanout-beta",
-        mode: "run",
-        thread: false,
-      };
-      if (hasDeclaredTool(body, "sessions_spawn")) {
-        return buildToolCallEventsWithArgs("sessions_spawn", args);
-      }
-      if (hasDeclaredTool(body, "exec")) {
-        return buildToolCallEventsWithArgs("exec", {
+  const fanoutNamespace = resolveSubagentFanoutPhaseNamespace(allInputText);
+  const successfulBetaSpawn = hasSuccessfulSessionsSpawnToolResult(input, "qa-fanout-beta");
+  if (successfulBetaSpawn) {
+    scenarioState.subagentFanoutPhaseByNamespace.set(fanoutNamespace, 2);
+    return buildAssistantEvents("subagent-1: ok\nsubagent-2: ok");
+  }
+  const successfulAlphaSpawn = hasSuccessfulSessionsSpawnToolResult(input, "qa-fanout-alpha");
+  const fanoutRequested = /subagent fanout synthesis check/i.test(allInputText);
+  if (
+    (fanoutRequested || successfulAlphaSpawn) &&
+    (hasDeclaredTool(body, "sessions_spawn") || hasDeclaredTool(body, "exec"))
+  ) {
+    const worker = successfulAlphaSpawn ? "beta" : "alpha";
+    if (successfulAlphaSpawn) {
+      scenarioState.subagentFanoutPhaseByNamespace.set(fanoutNamespace, 1);
+    }
+    const args = {
+      task: subagentFanoutTaskForProvider(providerVariant, worker),
+      label: worker === "alpha" ? "qa-fanout-alpha" : "qa-fanout-beta",
+      mode: "run",
+      thread: false,
+    };
+    return hasDeclaredTool(body, "sessions_spawn")
+      ? buildToolCallEventsWithArgs("sessions_spawn", args)
+      : buildToolCallEventsWithArgs("exec", {
           language: "javascript",
           code: `return await tools.callValue("openclaw:core:sessions_spawn", ${JSON.stringify(args)});`,
         });
-      }
-      return null;
-    };
-    if (fanoutPhase === 0) {
-      if (hasSuccessfulSessionsSpawnToolResult(input, "qa-fanout-alpha")) {
-        scenarioState.subagentFanoutPhaseByNamespace.set(fanoutNamespace, 1);
-        return buildFanoutSpawn("beta") ?? buildAssistantEvents("");
-      }
-      const alphaSpawn = buildFanoutSpawn("alpha");
-      if (alphaSpawn) {
-        return alphaSpawn;
-      }
-    }
-    if (fanoutPhase === 1) {
-      if (hasSuccessfulSessionsSpawnToolResult(input, "qa-fanout-beta")) {
-        scenarioState.subagentFanoutPhaseByNamespace.set(fanoutNamespace, 2);
-      } else {
-        const betaSpawn = buildFanoutSpawn("beta");
-        if (betaSpawn) {
-          return betaSpawn;
-        }
-      }
-    }
-  }
-  const fanoutNamespace = resolveSubagentFanoutPhaseNamespace(allInputText);
-  if ((scenarioState.subagentFanoutPhaseByNamespace.get(fanoutNamespace) ?? 0) === 2 && prompt) {
-    scenarioState.subagentFanoutPhaseByNamespace.set(fanoutNamespace, 3);
-    return buildAssistantEvents("subagent-1: ok\nsubagent-2: ok");
   }
   const explicitSessionsSpawnArgs = buildExplicitSessionsSpawnArgs(prompt);
   if (explicitSessionsSpawnArgs && !toolOutput) {

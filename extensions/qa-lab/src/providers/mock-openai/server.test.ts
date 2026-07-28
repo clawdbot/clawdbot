@@ -3027,7 +3027,7 @@ describe("qa mock openai server", () => {
     expect(outputText(await final.json())).toBe("subagent-1: ok\nsubagent-2: ok");
   });
 
-  it("completes subagent fanout from a continuation turn without tool output", async () => {
+  it("restarts subagent fanout when a continuation omits tool evidence", async () => {
     const server = await startMockServer();
 
     const prompt =
@@ -3068,7 +3068,7 @@ describe("qa mock openai server", () => {
       ],
     });
     expect(phaseOnlyFinal.status).toBe(200);
-    expect(await phaseOnlyFinal.text()).toContain('\\"label\\":\\"qa-fanout-beta\\"');
+    expect(await phaseOnlyFinal.text()).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
   });
 
   it("completes subagent fanout when beta completion arrives on a generic follow-up turn", async () => {
@@ -5405,9 +5405,7 @@ describe("qa mock openai server", () => {
       completedSpawn("agent:qa:subagent:alpha"),
     );
     const beta = requireExecSpawn(await send(afterAlpha), "qa-fanout-beta");
-    const final = await send(
-      appendResult(afterAlpha, beta, completedSpawn("agent:qa:subagent:beta")),
-    );
+    const final = await send(appendResult([], beta, completedSpawn("agent:qa:subagent:beta")));
     expect(final.stop_reason).toBe("end_turn");
     expect(final.content.find((block) => block.type === "text")?.text).toBe(
       "subagent-1: ok\nsubagent-2: ok",
