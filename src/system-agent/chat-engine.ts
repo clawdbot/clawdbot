@@ -5,7 +5,10 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { WizardSession, type WizardStep } from "../wizard/session.js";
-import type { SetupMemoryImportOutcome } from "../wizard/setup.memory-import.js";
+import type {
+  MemoryImportProviderOutcome,
+  SetupMemoryImportOutcome,
+} from "../wizard/setup.memory-import.js";
 import {
   cleanupSystemAgentSession,
   createSystemAgentSession,
@@ -102,6 +105,7 @@ export type SystemAgentChatEngineOptions = {
   runMemoryImportWizard?: (
     prompter: WizardPrompterLike,
     beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
+    onProviderOutcome: (outcome: MemoryImportProviderOutcome) => void,
   ) => Promise<HostedMemoryImportOutcome>;
   /** Exact route/credential that passed the host's live inference gate. */
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
@@ -148,6 +152,7 @@ type ActiveWizardBridge = {
   completion: {
     status: HostedWizardCompletion;
     memoryImport?: HostedMemoryImportOutcome;
+    memoryImportProviders?: MemoryImportProviderOutcome[];
   };
   /** Channel to auto-answer in the first selection step ("connect telegram"). */
   autoSelectChannel?: string;
@@ -371,6 +376,7 @@ async function defaultGatewaySetupWizardRunner(
 async function defaultMemoryImportWizardRunner(
   prompter: WizardPrompterLike,
   beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
+  onProviderOutcome: (outcome: MemoryImportProviderOutcome) => void,
 ): Promise<HostedMemoryImportOutcome> {
   const [
     { resolveAgentWorkspaceDir, resolveDefaultAgentId },
@@ -384,11 +390,12 @@ async function defaultMemoryImportWizardRunner(
     import("node:fs/promises"),
   ]);
   const snapshot = await readSetupConfigFileSnapshot();
-  if (!snapshot.exists || !snapshot.valid) {
+  if (!snapshot.exists || !snapshot.valid || !snapshot.hash) {
     throw new Error(
       "Memory import requires a valid saved config. Run `openclaw doctor --fix`, then retry.",
     );
   }
+  const baseHash = snapshot.hash;
   const config = snapshot.sourceConfig ?? snapshot.config;
   const agentId = resolveDefaultAgentId(config);
   const workspace = resolveAgentWorkspaceDir(config, agentId);
@@ -412,9 +419,19 @@ async function defaultMemoryImportWizardRunner(
     config,
     prompter,
     runtime,
-    // File copies are the persistent effect, so freeze inference authority at
-    // every provider apply rather than once at wizard start or completion.
-    beforeApply: async () => await beforePersistentApply(runtime),
+    // File copies are the persistent effect, so freeze both authority and the
+    // planned target immediately before every provider apply. The whole-config
+    // hash is intentionally strict, matching hosted config-wizard drift rules.
+    beforeApply: async () => {
+      await beforePersistentApply(runtime);
+      const currentSnapshot = await readSetupConfigFileSnapshot();
+      if (!currentSnapshot.exists || !currentSnapshot.valid || currentSnapshot.hash !== baseHash) {
+        throw new Error(
+          "configuration changed during memory import; nothing further was copied — retry to import against the current setup",
+        );
+      }
+    },
+    onProviderOutcome,
   });
 }
 
@@ -422,7 +439,18 @@ function formatItemCount(count: number): string {
   return `${count} ${count === 1 ? "item" : "items"}`;
 }
 
-function formatMemoryImportProviders(providers: SetupMemoryImportOutcome["providers"]): string {
+type ConfirmedMemoryImportProviderOutcome = Extract<
+  MemoryImportProviderOutcome,
+  { migrated: number }
+>;
+
+function hasConfirmedMemoryImportCount(
+  provider: MemoryImportProviderOutcome,
+): provider is ConfirmedMemoryImportProviderOutcome {
+  return provider.copiesIndeterminate !== true;
+}
+
+function formatMemoryImportProviders(providers: ConfirmedMemoryImportProviderOutcome[]): string {
   return providers
     .map((provider) => `${provider.label} (${formatItemCount(provider.migrated)})`)
     .join(", ");
@@ -1509,10 +1537,13 @@ export class SystemAgentChatEngine {
       await this.requirePersistentApplyInference(runtime);
     };
     const runWizard = this.opts.runMemoryImportWizard ?? defaultMemoryImportWizardRunner;
+    const providerOutcomes: MemoryImportProviderOutcome[] = [];
     return await this.startHostedWizard({
       kind: "memory-import",
       label: "memory import",
-      run: (prompter) => runWizard(prompter, beforePersistentApply),
+      memoryImportProviders: providerOutcomes,
+      run: (prompter) =>
+        runWizard(prompter, beforePersistentApply, (outcome) => providerOutcomes.push(outcome)),
     });
   }
 
@@ -1520,10 +1551,16 @@ export class SystemAgentChatEngine {
     kind: ActiveWizardBridge["kind"];
     label: string;
     autoSelectChannel?: string;
+    memoryImportProviders?: MemoryImportProviderOutcome[];
     run: (prompter: WizardPrompterLike) => Promise<HostedWizardRunResult>;
   }): Promise<string> {
     this.lastSensitiveChannel = undefined;
-    const completion: ActiveWizardBridge["completion"] = { status: "applied" };
+    const completion: ActiveWizardBridge["completion"] = {
+      status: "applied",
+      ...(params.memoryImportProviders
+        ? { memoryImportProviders: params.memoryImportProviders }
+        : {}),
+    };
     const session = new WizardSession(async (prompter) => {
       const result = await params.run(prompter);
       if (typeof result === "string") {
@@ -1649,6 +1686,9 @@ export class SystemAgentChatEngine {
                   ];
         return [...success, verify ?? ""].filter(Boolean).join("\n");
       }
+      if (bridge.kind === "memory-import") {
+        await this.auditMemoryImportProviders(bridge.completion.memoryImportProviders ?? []);
+      }
       if (result.status === "cancelled") {
         return `${label[0]?.toUpperCase() ?? "S"}${label.slice(1)} setup cancelled. Nothing was changed beyond completed steps.`;
       }
@@ -1701,6 +1741,62 @@ export class SystemAgentChatEngine {
     return bridge.step ? renderWizardStep(bridge.step) : "";
   }
 
+  private async auditMemoryImportProviders(
+    providers: MemoryImportProviderOutcome[],
+  ): Promise<void> {
+    const confirmedProviders = providers.filter(hasConfirmedMemoryImportCount);
+    const importedProviders = confirmedProviders.filter((provider) => provider.migrated > 0);
+    const indeterminateProviders = providers.filter(
+      (provider) => provider.copiesIndeterminate === true,
+    );
+    const importedItems = importedProviders.reduce(
+      (total, provider) => total + provider.migrated,
+      0,
+    );
+    if (importedItems === 0 && indeterminateProviders.length === 0) {
+      return;
+    }
+    const providerSummary = formatMemoryImportProviders(importedProviders);
+    const indeterminateSummary = indeterminateProviders
+      .map((provider) => `${provider.label} (copy count indeterminate)`)
+      .join(", ");
+    const auditSummary =
+      indeterminateProviders.length > 0
+        ? `Memory import failed partway via chat: ${[
+            providerSummary ? `confirmed ${providerSummary}` : "",
+            indeterminateSummary,
+          ]
+            .filter(Boolean)
+            .join("; ")}`
+        : `Imported memory via chat: ${providerSummary}`;
+    try {
+      const appendAuditEntry =
+        this.opts.appendAuditEntry ?? (await import("./audit.js")).appendSystemAgentAuditEntry;
+      await appendAuditEntry({
+        operation: "memory.import",
+        summary: auditSummary,
+        details: {
+          ...(indeterminateProviders.length > 0
+            ? { confirmedItems: importedItems, copiesIndeterminate: true }
+            : { totalItems: importedItems }),
+          providers: providers.map((provider) =>
+            provider.copiesIndeterminate === true
+              ? { providerId: provider.providerId, copiesIndeterminate: true }
+              : {
+                  providerId: provider.providerId,
+                  items: provider.migrated,
+                  ...(provider.failure ? { partial: true } : {}),
+                },
+          ),
+        },
+      });
+    } catch (error) {
+      // Copies may already have occurred. Audit failure must not replace the
+      // truthful import outcome with a user-facing audit error.
+      log.warn(`memory import completed without audit entry: ${formatErrorMessage(error)}`);
+    }
+  }
+
   private async finishMemoryImportWizard(
     outcome: HostedMemoryImportOutcome | undefined,
   ): Promise<string> {
@@ -1720,13 +1816,28 @@ export class SystemAgentChatEngine {
       return "Memory import skipped. Nothing was copied.";
     }
 
-    const importedProviders = outcome.providers.filter((provider) => provider.migrated > 0);
-    const failedProviders = outcome.providers.filter((provider) => provider.failure);
+    const confirmedProviders = outcome.providers.filter(hasConfirmedMemoryImportCount);
+    const importedProviders = confirmedProviders.filter((provider) => provider.migrated > 0);
+    const failedProviders = confirmedProviders.filter((provider) => provider.failure);
+    const indeterminateProviders = outcome.providers.filter(
+      (provider) => provider.copiesIndeterminate === true,
+    );
     const importedItems = importedProviders.reduce(
       (total, provider) => total + provider.migrated,
       0,
     );
+    const providerSummary = formatMemoryImportProviders(importedProviders);
+    await this.auditMemoryImportProviders(outcome.providers);
+
     if (importedItems === 0) {
+      if (indeterminateProviders.length > 0) {
+        return [
+          "Memory import failed partway. Some files may have been copied before the failure.",
+          `Copy counts are indeterminate for: ${indeterminateProviders
+            .map((provider) => provider.label)
+            .join(", ")}.`,
+        ].join("\n");
+      }
       if (failedProviders.length > 0) {
         return [
           "Memory import did not complete. No files were copied.",
@@ -1736,38 +1847,21 @@ export class SystemAgentChatEngine {
       return "Nothing was imported. No files were copied.";
     }
 
-    const providerSummary = formatMemoryImportProviders(importedProviders);
-    try {
-      const appendAuditEntry =
-        this.opts.appendAuditEntry ?? (await import("./audit.js")).appendSystemAgentAuditEntry;
-      await appendAuditEntry({
-        operation: "memory.import",
-        summary: `Imported memory via chat: ${providerSummary}`,
-        details: {
-          totalItems: importedItems,
-          providers: importedProviders.map((provider) => ({
-            providerId: provider.providerId,
-            items: provider.migrated,
-          })),
-        },
-      });
-    } catch (error) {
-      // Copies already completed. Audit failure must not turn truthful import
-      // success into a user-facing failure.
-      log.warn(`memory import completed without audit entry: ${formatErrorMessage(error)}`);
-    }
-
     // Memory import copies files and does not change config, so post-write
     // config verification does not apply.
     const sourceSummary =
       importedProviders.length === 1 ? importedProviders[0]!.label : providerSummary;
     return [
       `Imported ${formatItemCount(importedItems)} from ${sourceSummary}.`,
-      failedProviders.length > 0
-        ? `Some providers did not complete: ${failedProviders
+      indeterminateProviders.length > 0
+        ? `Memory import failed partway for ${indeterminateProviders
             .map((provider) => provider.label)
-            .join(", ")}.`
-        : "",
+            .join(", ")}; some additional files may have been copied before the failure.`
+        : failedProviders.length > 0
+          ? `Some providers did not complete: ${failedProviders
+              .map((provider) => provider.label)
+              .join(", ")}.`
+          : "",
     ]
       .filter(Boolean)
       .join("\n");

@@ -976,6 +976,76 @@ describe("SystemAgentChatEngine", () => {
     expect(copyEffect).not.toHaveBeenCalled();
   });
 
+  it("stops a hosted memory copy when config drifts after planning", async () => {
+    const workspace = useTempStateDir();
+    const baseConfig: OpenClawConfig = {
+      ...sharedVerifiedInferenceConfig,
+      agents: {
+        ...sharedVerifiedInferenceConfig.agents,
+        defaults: { workspace },
+      },
+    };
+    let currentHash = "memory-base-hash";
+    const copyEffect = vi.fn();
+    const appendAuditEntry = vi.fn(async () => "state/openclaw.sqlite");
+    mocks.readSetupConfigFileSnapshot.mockImplementation(async () => ({
+      exists: true,
+      valid: true,
+      hash: currentHash,
+      config: baseConfig,
+      sourceConfig: baseConfig,
+    }));
+    mocks.runSetupMemoryImportStep.mockImplementation(async (params: MemoryImportStepParams) => {
+      const confirmed = await params.prompter.confirm({
+        message: "Import detected memory?",
+        initialValue: true,
+      });
+      if (!confirmed) {
+        return { status: "skipped", providers: [] };
+      }
+      params.onProviderOutcome?.({
+        providerId: "claude",
+        label: "Claude",
+        failure: "copy failed after partial progress",
+        copiesIndeterminate: true,
+      });
+      currentHash = "changed-during-wizard";
+      await params.beforeApply?.();
+      copyEffect();
+      return {
+        status: "completed",
+        providers: [{ providerId: "codex", label: "Codex", migrated: 1, skipped: 0 }],
+      };
+    });
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      appendAuditEntry,
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const confirm = await engine.handle("import memory");
+    expect(confirm.text).toContain("Import detected memory?");
+
+    const stopped = await engine.handle("yes");
+
+    expect(stopped.text).toContain("Memory import setup stopped");
+    expect(stopped.text).toContain(
+      "configuration changed during memory import; nothing further was copied",
+    );
+    expect(copyEffect).not.toHaveBeenCalled();
+    expect(appendAuditEntry).toHaveBeenCalledWith({
+      operation: "memory.import",
+      summary: "Memory import failed partway via chat: Claude (copy count indeterminate)",
+      details: {
+        confirmedItems: 0,
+        copiesIndeterminate: true,
+        providers: [{ providerId: "claude", copiesIndeterminate: true }],
+      },
+    });
+  });
+
   it("reports nothing to import without writing config or audit", async () => {
     const appendAuditEntry = vi.fn(async () => "state/openclaw.sqlite");
     const engine = new SystemAgentChatEngine({
@@ -1028,6 +1098,42 @@ describe("SystemAgentChatEngine", () => {
     expect(reply.text).toContain("Failed providers: Codex, Claude");
     expect(reply.text).not.toContain("Done");
     expect(appendAuditEntry).not.toHaveBeenCalled();
+  });
+
+  it("audits an apply failure with indeterminate partial-copy progress", async () => {
+    const appendAuditEntry = vi.fn(async () => "state/openclaw.sqlite");
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      appendAuditEntry,
+      runMemoryImportWizard: async () => ({
+        status: "completed",
+        providers: [
+          {
+            providerId: "codex",
+            label: "Codex",
+            failure: "copy failed after writing one file",
+            copiesIndeterminate: true,
+          },
+        ],
+      }),
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const reply = await engine.handle("memory import");
+
+    expect(reply.text).toContain("Memory import failed partway");
+    expect(reply.text).toContain("Some files may have been copied before the failure");
+    expect(reply.text).not.toContain("No files were copied");
+    expect(appendAuditEntry).toHaveBeenCalledWith({
+      operation: "memory.import",
+      summary: "Memory import failed partway via chat: Codex (copy count indeterminate)",
+      details: {
+        confirmedItems: 0,
+        copiesIndeterminate: true,
+        providers: [{ providerId: "codex", copiesIndeterminate: true }],
+      },
+    });
   });
 
   it("keeps a successful memory-import result when audit persistence fails", async () => {

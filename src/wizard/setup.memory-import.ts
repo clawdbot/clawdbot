@@ -20,13 +20,22 @@ type MemoryImportOffer = {
   conflicts: number;
 };
 
-export type MemoryImportProviderOutcome = {
+type MemoryImportProviderOutcomeBase = {
   providerId: string;
   label: string;
-  migrated: number;
-  skipped: number;
-  failure?: string;
 };
+
+export type MemoryImportProviderOutcome =
+  | (MemoryImportProviderOutcomeBase & {
+      migrated: number;
+      skipped: number;
+      failure?: string;
+      copiesIndeterminate?: false;
+    })
+  | (MemoryImportProviderOutcomeBase & {
+      failure: string;
+      copiesIndeterminate: true;
+    });
 
 export type SetupMemoryImportOutcome = {
   status: "completed" | "nothing-to-import" | "skipped";
@@ -46,6 +55,8 @@ export async function runSetupMemoryImportStep(params: {
   runtime: RuntimeEnv;
   /** Recheck host authority at the copy boundary; onboarding intentionally omits this hook. */
   beforeApply?: () => Promise<void>;
+  /** Observe completed provider attempts without changing onboarding behavior. */
+  onProviderOutcome?: (outcome: MemoryImportProviderOutcome) => void;
 }): Promise<SetupMemoryImportOutcome> {
   const agentId = resolveDefaultAgentId(params.config);
   const providers = listMemoryMigrationProviders(params.config);
@@ -135,13 +146,25 @@ export async function runSetupMemoryImportStep(params: {
   const summaryLines: string[] = [];
   const failureLines: string[] = [];
   const providerOutcomes: MemoryImportProviderOutcome[] = [];
+  const recordProviderOutcome = (outcome: MemoryImportProviderOutcome) => {
+    providerOutcomes.push(outcome);
+    params.onProviderOutcome?.(outcome);
+  };
   for (const offer of selectedOffers) {
     const progress = params.prompter.progress(
       t("wizard.memoryImport.importing", { label: offer.provider.label }),
     );
+    // Host authority and config-drift guards run before the apply attempt and
+    // must stop the hosted wizard rather than masquerade as copy failures.
     try {
       await params.beforeApply?.();
-      const result = await applyProviderMemoryImport({
+    } catch (error) {
+      progress.stop(t("wizard.memoryImport.importFailed", { label: offer.provider.label }));
+      throw error;
+    }
+    let result: Awaited<ReturnType<typeof applyProviderMemoryImport>>;
+    try {
+      result = await applyProviderMemoryImport({
         provider: offer.provider,
         config: params.config,
         agentId,
@@ -149,58 +172,16 @@ export async function runSetupMemoryImportStep(params: {
         overwrite: false,
         preflightPlan: offer.plan,
       });
-      summaryLines.push(
-        t("wizard.memoryImport.summaryLine", {
-          label: offer.provider.label,
-          migrated: result.summary.migrated,
-          skipped: result.summary.skipped,
-          target: result.target ?? offer.plan.target ?? workspace,
-        }),
-      );
-      // Conflicts count as incomplete: a selected item was skipped because its
-      // target appeared between planning and copying.
-      const incomplete = result.summary.errors + result.summary.conflicts;
-      if (incomplete > 0) {
-        const reason = t("wizard.memoryImport.partialFailure", { count: incomplete });
-        providerOutcomes.push({
-          providerId: offer.provider.id,
-          label: offer.provider.label,
-          migrated: result.summary.migrated,
-          skipped: result.summary.skipped,
-          failure: reason,
-        });
-        failureLines.push(
-          t("wizard.memoryImport.failureLine", {
-            label: offer.provider.label,
-            reason,
-          }),
-        );
-        progress.stop(t("wizard.memoryImport.importFailed", { label: offer.provider.label }));
-        await params.prompter.note(
-          t("wizard.memoryImport.applyFailed", {
-            label: offer.provider.label,
-            reason,
-          }),
-          t("wizard.memoryImport.errorTitle"),
-        );
-      } else {
-        providerOutcomes.push({
-          providerId: offer.provider.id,
-          label: offer.provider.label,
-          migrated: result.summary.migrated,
-          skipped: result.summary.skipped,
-        });
-        progress.stop(t("wizard.memoryImport.imported", { label: offer.provider.label }));
-      }
     } catch (error) {
       const reason = formatErrorMessage(error);
-      providerOutcomes.push({
+      recordProviderOutcome({
         providerId: offer.provider.id,
         label: offer.provider.label,
-        migrated: 0,
-        skipped: 0,
         failure: reason,
+        copiesIndeterminate: true,
       });
+      // Preserve the onboarding notes: only the structured outcome distinguishes
+      // an apply throw whose partial copy count cannot be recovered.
       summaryLines.push(
         t("wizard.memoryImport.summaryLine", {
           label: offer.provider.label,
@@ -223,6 +204,50 @@ export async function runSetupMemoryImportStep(params: {
         }),
         t("wizard.memoryImport.errorTitle"),
       );
+      continue;
+    }
+    summaryLines.push(
+      t("wizard.memoryImport.summaryLine", {
+        label: offer.provider.label,
+        migrated: result.summary.migrated,
+        skipped: result.summary.skipped,
+        target: result.target ?? offer.plan.target ?? workspace,
+      }),
+    );
+    // Conflicts count as incomplete: a selected item was skipped because its
+    // target appeared between planning and copying.
+    const incomplete = result.summary.errors + result.summary.conflicts;
+    if (incomplete > 0) {
+      const reason = t("wizard.memoryImport.partialFailure", { count: incomplete });
+      recordProviderOutcome({
+        providerId: offer.provider.id,
+        label: offer.provider.label,
+        migrated: result.summary.migrated,
+        skipped: result.summary.skipped,
+        failure: reason,
+      });
+      failureLines.push(
+        t("wizard.memoryImport.failureLine", {
+          label: offer.provider.label,
+          reason,
+        }),
+      );
+      progress.stop(t("wizard.memoryImport.importFailed", { label: offer.provider.label }));
+      await params.prompter.note(
+        t("wizard.memoryImport.applyFailed", {
+          label: offer.provider.label,
+          reason,
+        }),
+        t("wizard.memoryImport.errorTitle"),
+      );
+    } else {
+      recordProviderOutcome({
+        providerId: offer.provider.id,
+        label: offer.provider.label,
+        migrated: result.summary.migrated,
+        skipped: result.summary.skipped,
+      });
+      progress.stop(t("wizard.memoryImport.imported", { label: offer.provider.label }));
     }
   }
 

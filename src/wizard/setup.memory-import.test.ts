@@ -225,36 +225,69 @@ describe("runSetupMemoryImportStep", () => {
     expect(order).toEqual(["guard", "apply:codex", "guard", "apply:claude"]);
   });
 
-  it("does not copy when the host authority recheck fails", async () => {
+  it("stops before copying when the host authority recheck fails", async () => {
     const codex = provider("codex", "Codex");
     mocks.providers = [codex];
     mocks.planProviderMemoryImport.mockResolvedValue({
       detection: { found: true, source: "/source/codex" },
       plan: planFor("codex"),
     });
-    const prompter = createWizardPrompter({ confirm: vi.fn(async () => true) });
-
-    const outcome = await runSetupMemoryImportStep({
-      config,
-      prompter,
-      runtime: runtime(),
-      beforeApply: async () => {
-        throw new Error("inference authority changed");
-      },
+    const stop = vi.fn();
+    const prompter = createWizardPrompter({
+      confirm: vi.fn(async () => true),
+      progress: vi.fn(() => ({ update: vi.fn(), stop })),
     });
 
-    expect(mocks.applyProviderMemoryImport).not.toHaveBeenCalled();
-    expect(outcome).toEqual({
-      status: "completed",
-      providers: [
-        {
-          providerId: "codex",
-          label: "Codex",
-          migrated: 0,
-          skipped: 0,
-          failure: "inference authority changed",
+    await expect(
+      runSetupMemoryImportStep({
+        config,
+        prompter,
+        runtime: runtime(),
+        beforeApply: async () => {
+          throw new Error("inference authority changed");
         },
-      ],
+      }),
+    ).rejects.toThrow("inference authority changed");
+
+    expect(mocks.applyProviderMemoryImport).not.toHaveBeenCalled();
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it("preserves a confirmed outcome when later rendering fails", async () => {
+    const codex = provider("codex", "Codex");
+    mocks.providers = [codex];
+    mocks.planProviderMemoryImport.mockResolvedValue({
+      detection: { found: true, source: "/source/codex" },
+      plan: planFor("codex"),
+    });
+    mocks.applyProviderMemoryImport.mockImplementation(async ({ preflightPlan }) =>
+      applied(preflightPlan),
+    );
+    const onProviderOutcome = vi.fn();
+    const prompter = createWizardPrompter({
+      confirm: vi.fn(async () => true),
+      progress: vi.fn(() => ({
+        update: vi.fn(),
+        stop: () => {
+          throw new Error("progress renderer failed");
+        },
+      })),
+    });
+
+    await expect(
+      runSetupMemoryImportStep({
+        config,
+        prompter,
+        runtime: runtime(),
+        onProviderOutcome,
+      }),
+    ).rejects.toThrow("progress renderer failed");
+
+    expect(onProviderOutcome).toHaveBeenCalledWith({
+      providerId: "codex",
+      label: "Codex",
+      migrated: 1,
+      skipped: 0,
     });
   });
 
@@ -281,9 +314,8 @@ describe("runSetupMemoryImportStep", () => {
       {
         providerId: "codex",
         label: "Codex",
-        migrated: 0,
-        skipped: 0,
         failure: "copy unavailable",
+        copiesIndeterminate: true,
       },
       { providerId: "claude", label: "Claude", migrated: 1, skipped: 0 },
     ]);
