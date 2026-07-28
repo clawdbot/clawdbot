@@ -304,7 +304,11 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     )
     .option("--rem", "Write grounded per-day REM previews to DREAMS.md", false)
     .option("--apply", "Stage candidates and write DREAMS.md diary entries", false)
-    .option("--rollback", "Remove staged grounded candidates and backfill diary entries", false)
+    .option(
+      "--rollback",
+      "Remove all grounded backfill candidates and shared backfill diary entries",
+      false,
+    )
     .option(
       "--archive-files <path...>",
       "Also inspect foreign transcript archive files conservatively",

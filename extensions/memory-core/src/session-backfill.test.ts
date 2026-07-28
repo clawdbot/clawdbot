@@ -105,6 +105,53 @@ describe("runSessionBackfill", () => {
     expect(result.days.map((day) => day.day)).toEqual(["2026-01-01", "2026-01-02"]);
   });
 
+  it("applies the total cap after finding the oldest candidate across sources", async () => {
+    const workspaceDir = await createIsolatedWorkspace("oldest-cap-");
+    const archiveFiles: string[] = [];
+    for (let sourceIndex = 0; sourceIndex < 16; sourceIndex += 1) {
+      const transcriptPath = path.join(
+        workspaceDir,
+        `a-newer-${sourceIndex.toString().padStart(2, "0")}.jsonl`,
+      );
+      archiveFiles.push(transcriptPath);
+      await writeTranscript(
+        transcriptPath,
+        Array.from({ length: 15 }, (_, messageIndex) => ({
+          role: "user" as const,
+          content: `Newer durable note ${sourceIndex}-${messageIndex}`,
+          timestamp: `2026-02-01T${messageIndex.toString().padStart(2, "0")}:00:00.000Z`,
+          owner: true,
+        })),
+      );
+    }
+    const oldestPath = path.join(workspaceDir, "z-oldest.jsonl");
+    archiveFiles.push(oldestPath);
+    await writeTranscript(oldestPath, [
+      {
+        role: "user",
+        content: "Oldest durable note must win the cap",
+        timestamp: "2026-01-01T12:00:00.000Z",
+        owner: true,
+      },
+    ]);
+
+    const result = await runSessionBackfill({
+      agentId: "main",
+      workspaceDir,
+      archiveFiles,
+      limitDays: 1,
+      timezone: "UTC",
+    });
+
+    expect(result.days).toEqual([
+      {
+        day: "2026-01-01",
+        candidateCount: 1,
+        topCandidates: ["User: Oldest durable note must win the cap"],
+      },
+    ]);
+  });
+
   it("accepts only provably owner-authored foreign transcript turns", async () => {
     const workspaceDir = await createIsolatedWorkspace("provenance-");
     const transcriptPath = path.join(workspaceDir, "untrusted.jsonl");

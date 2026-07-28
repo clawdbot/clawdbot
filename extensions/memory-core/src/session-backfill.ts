@@ -219,8 +219,7 @@ async function collectSessionBackfillCandidates(params: {
   to?: string;
   timezone?: string;
 }): Promise<Map<string, SessionBackfillCandidate[]>> {
-  const byDay = new Map<string, SessionBackfillCandidate[]>();
-  let remaining = SESSION_INGESTION_MAX_MESSAGES_PER_SWEEP;
+  const candidates: SessionBackfillCandidate[] = [];
   const perFileCap = Math.min(
     SESSION_INGESTION_MAX_MESSAGES_PER_FILE,
     Math.max(
@@ -230,9 +229,6 @@ async function collectSessionBackfillCandidates(params: {
   );
 
   for (const source of params.sources) {
-    if (remaining <= 0) {
-      break;
-    }
     const entry = await buildSessionEntry(source.absolutePath, {
       sessionKind: source.sessionKind,
       ...(source.generatedByDreamingNarrative !== undefined
@@ -254,7 +250,7 @@ async function collectSessionBackfillCandidates(params: {
     const lines = entry.content.length > 0 ? entry.content.split("\n") : [];
     let fileCount = 0;
     for (let index = 0; index < lines.length; index += 1) {
-      if (fileCount >= perFileCap || remaining <= 0) {
+      if (fileCount >= perFileCap) {
         break;
       }
       const snippet = normalizeSessionCorpusSnippet(lines[index] ?? "");
@@ -292,8 +288,7 @@ async function collectSessionBackfillCandidates(params: {
         lineNumber,
         snippet,
       });
-      const bucket = byDay.get(day) ?? [];
-      bucket.push({
+      candidates.push({
         day,
         hash,
         ...(legacyHash ? { legacyHash } : {}),
@@ -303,11 +298,29 @@ async function collectSessionBackfillCandidates(params: {
         scope: source.scope,
         snippet,
       });
-      byDay.set(day, bucket);
       seen.add(hash);
       fileCount += 1;
-      remaining -= 1;
     }
+  }
+  const selected = candidates
+    .toSorted((a, b) => {
+      if (a.day !== b.day) {
+        return a.day.localeCompare(b.day);
+      }
+      if (a.provenance.observedAt !== b.provenance.observedAt) {
+        return a.provenance.observedAt - b.provenance.observedAt;
+      }
+      if (a.scope !== b.scope) {
+        return a.scope.localeCompare(b.scope);
+      }
+      return a.lineNumber - b.lineNumber;
+    })
+    .slice(0, SESSION_INGESTION_MAX_MESSAGES_PER_SWEEP);
+  const byDay = new Map<string, SessionBackfillCandidate[]>();
+  for (const candidate of selected) {
+    const bucket = byDay.get(candidate.day) ?? [];
+    bucket.push(candidate);
+    byDay.set(candidate.day, bucket);
   }
   return byDay;
 }
@@ -440,6 +453,8 @@ export async function runSessionBackfill(
   }
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
   if (params.rollback) {
+    // Backfill diary markers and grounded-only candidates are a shared artifact
+    // class with rem-backfill; the stable removal APIs intentionally clear both.
     const [diary, staged] = await Promise.all([
       removeBackfillDiaryEntries({ workspaceDir }),
       removeGroundedShortTermCandidates({ workspaceDir }),

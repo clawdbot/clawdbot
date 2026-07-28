@@ -151,16 +151,16 @@ openclaw memory session-backfill --agent <id> [--from YYYY-MM-DD] [--to YYYY-MM-
 openclaw memory session-backfill --agent <id> --rollback [--json]
 ```
 
-| Flag                        | Default      | Effect                                                                                  |
-| --------------------------- | ------------ | --------------------------------------------------------------------------------------- |
-| `--from YYYY-MM-DD`         |              | Include messages on or after this day in the dreaming timezone.                         |
-| `--to YYYY-MM-DD`           |              | Include messages on or before this day in the dreaming timezone.                        |
-| `--limit-days <n>`          | `92`         | Process at most this many hash-untracked days, oldest first.                            |
-| `--archive-files <path...>` |              | Also inspect foreign transcript files; only provably owner-authored turns are eligible. |
-| `--rem`                     |              | Write deterministic grounded per-day previews to `DREAMS.md` only.                      |
-| `--apply`                   | preview only | Stage trusted candidates and write reversible `DREAMS.md` diary blocks.                 |
-| `--rollback`                |              | Remove grounded staged backfill candidates and backfill diary blocks.                   |
-| `--json`                    |              | Print machine-readable per-day counts and top candidates.                               |
+| Flag                        | Default      | Effect                                                                                                        |
+| --------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------- |
+| `--from YYYY-MM-DD`         |              | Include messages on or after this day in the dreaming timezone.                                               |
+| `--to YYYY-MM-DD`           |              | Include messages on or before this day in the dreaming timezone.                                              |
+| `--limit-days <n>`          | `92`         | Process at most this many hash-untracked days, oldest first.                                                  |
+| `--archive-files <path...>` |              | Also inspect foreign transcript files; only provably owner-authored turns are eligible.                       |
+| `--rem`                     |              | Write deterministic grounded per-day previews to `DREAMS.md` only.                                            |
+| `--apply`                   | preview only | Stage trusted candidates and write reversible `DREAMS.md` diary blocks.                                       |
+| `--rollback`                |              | Remove all grounded backfill candidates and shared backfill diary blocks, including `rem-backfill` artifacts. |
+| `--json`                    |              | Print machine-readable per-day counts and top candidates.                                                     |
 
 The command reads the selected agent's canonical session store, including
 retained SQLite transcript identities from session rotation. It uses the same
@@ -173,6 +173,11 @@ owner provenance are excluded.
 staging state, and reversible diary entries in `DREAMS.md`. It never writes
 `MEMORY.md` or `USER.md`; durable promotion remains a separate `memory promote`
 or dreaming decision.
+
+Backfill rollback is intentionally shared with `memory rem-backfill`: both
+commands use the same grounded-only staging class and diary markers. Run
+`session-backfill --rollback` only when you intend to clear both commands'
+grounded backfill artifacts from that workspace.
 
 ## Dreaming
 
