@@ -267,6 +267,32 @@ describe("createBundleMcpToolRuntime", () => {
     );
   });
 
+  it("keeps image content when MCP tools also return structuredContent", async () => {
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        result: {
+          content: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
+          structuredContent: { chart: "sales-q3", points: 42 },
+          isError: false,
+        },
+      }),
+    });
+
+    const result = await expectDefined(runtime.tools[0], "runtime.tools[0] test invariant").execute(
+      "call-bundle-probe",
+      {},
+      undefined,
+      undefined,
+    );
+
+    expectTextContentBlock(
+      result.content[0],
+      `structuredContent:\n${JSON.stringify({ chart: "sales-q3", points: 42 }, null, 2)}`,
+    );
+    expect(result.content[1]).toEqual({ type: "image", data: "aW1hZ2U=", mimeType: "image/png" });
+    expect(result.content).toHaveLength(2);
+  });
+
   it("keeps structuredContent visible when MCP tools also return text content", async () => {
     const runtime = await materializeBundleMcpToolsForRun({
       runtime: makeToolRuntime({
