@@ -32,6 +32,7 @@ import {
   resolveModelAliasFromPair,
   resolveModelRefFromString,
 } from "./model-selection-resolve.js";
+import { inferUniqueProviderFromConfiguredModels } from "./model-selection-shared.js";
 
 const MAX_FALLBACK_CANDIDATE_CACHE_ENTRIES = 256;
 const fallbackCandidateCache = new Map<string, ModelFallbackCandidate[]>();
@@ -372,10 +373,23 @@ function resolveFallbackCandidatesUncached(
       ? params.fallbacksOverride
       : resolveAgentModelFallbackValues(params.cfg?.agents?.defaults?.model);
   for (const raw of modelFallbacks) {
+    // A bare (slash-less) fallback id should infer its provider from the configured models --
+    // matching the auth/selection path (resolveBareModelDefaultProvider) -- instead of inheriting
+    // the primary's provider, which yields a dead route when the model is configured under a
+    // different provider.
+    const trimmedFallback = normalizeOptionalString(raw);
+    const fallbackDefaultProvider =
+      trimmedFallback && !trimmedFallback.includes("/")
+        ? (inferUniqueProviderFromConfiguredModels({
+            cfg: params.cfg ?? ({} as OpenClawConfig),
+            model: trimmedFallback,
+            manifestPlugins: params.manifestPlugins,
+          }) ?? defaultProvider)
+        : defaultProvider;
     const resolved = resolveModelRefFromString({
       cfg: params.cfg,
       raw,
-      defaultProvider,
+      defaultProvider: fallbackDefaultProvider,
       aliasIndex,
       allowPluginNormalization: allowPluginModelAliases,
       manifestPlugins: params.manifestPlugins,
