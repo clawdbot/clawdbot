@@ -11,6 +11,10 @@ import {
   resolveCodexAppServerClientInstanceId,
 } from "./client.js";
 import { isSystemAgentOnlyCodexDynamicToolAllowlist } from "./dynamic-tool-profile.js";
+import {
+  applyCodexNativeSkillIsolation,
+  resolveCodexNativeSkillIsolation,
+} from "./native-skill-isolation.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
   isCodexPluginThreadBindingStale,
@@ -128,6 +132,22 @@ export async function startOrResumeThread(
                 error: formatErrorMessage(error),
               }),
           });
+    const nativeSkillIsolation = await lifecycleTiming.measure("native-skill-isolation", () =>
+      resolveCodexNativeSkillIsolation({
+        client: params.client,
+        codexHome: params.appServer.start.env?.CODEX_HOME,
+        cwd: params.cwd,
+        home: params.appServer.start.env?.HOME,
+        signal: params.signal,
+        userProfile: params.appServer.start.env?.USERPROFILE,
+      }),
+    );
+    const nativeSkillIsolationFingerprint = nativeSkillIsolation
+      ? fingerprintJsonObject({
+          version: 1,
+          disabledUserSkillPaths: nativeSkillIsolation.disabledUserSkillPaths,
+        })
+      : undefined;
     const legacyUserMcpServersFingerprint =
       legacyFingerprintUserMcpServersConfigPatch(userMcpServersConfigPatch);
     const userMcpServersFingerprint =
@@ -218,11 +238,14 @@ export async function startOrResumeThread(
         nativeHookRelayGeneration: params.nativeHookRelayGeneration,
       };
       const config = lifecycleTiming.measureSync("merge-thread-config", () =>
-        mergeCodexThreadConfigs(
-          params.config,
-          userMcpServersConfigPatch,
-          pluginThreadConfig?.configPatch,
-          finalConfigPatch.configPatch,
+        applyCodexNativeSkillIsolation(
+          mergeCodexThreadConfigs(
+            params.config,
+            userMcpServersConfigPatch,
+            pluginThreadConfig?.configPatch,
+            finalConfigPatch.configPatch,
+          ),
+          nativeSkillIsolation,
         ),
       );
       return await materializePendingSupervisionBranch({
@@ -257,6 +280,7 @@ export async function startOrResumeThread(
           dynamicToolsFingerprint,
           dynamicToolsContainDeferred,
           webSearchThreadConfigFingerprint,
+          nativeSkillIsolationFingerprint,
           userMcpServersFingerprint,
           mcpServersFingerprint:
             params.mcpServersFingerprintEvaluated === true
@@ -293,6 +317,16 @@ export async function startOrResumeThread(
       }
       binding = undefined;
     };
+    if (
+      binding?.threadId &&
+      binding.nativeSkillIsolationFingerprint !== nativeSkillIsolationFingerprint
+    ) {
+      embeddedAgentLog.debug(
+        "codex app-server native skill isolation changed; starting a new thread",
+        { threadId: binding.threadId },
+      );
+      await clearCurrentBinding("rotating stale native skill isolation");
+    }
     if (
       binding?.threadId &&
       (binding.ringZeroConfigFingerprint !== ringZeroConfigFingerprint ||
@@ -669,6 +703,7 @@ export async function startOrResumeThread(
           dynamicToolsFingerprint,
           dynamicToolsContainDeferred,
           webSearchThreadConfigFingerprint,
+          nativeSkillIsolationFingerprint,
           userMcpServersFingerprint,
           ringZeroConfigFingerprint,
           ringZeroClientInstanceId,
@@ -678,6 +713,7 @@ export async function startOrResumeThread(
           hostSystemAgentActive,
           ringZeroActive,
           ringZeroInheritedMcpServerNames,
+          nativeSkillIsolation,
           lifecycleTiming,
           normalizeBindingModelProvider,
           throwIfAborted,
@@ -701,6 +737,7 @@ export async function startOrResumeThread(
       dynamicToolsFingerprint,
       dynamicToolsContainDeferred,
       webSearchThreadConfigFingerprint,
+      nativeSkillIsolationFingerprint,
       userMcpServersFingerprint,
       ringZeroConfigFingerprint,
       ringZeroClientInstanceId,
@@ -710,6 +747,7 @@ export async function startOrResumeThread(
       hostSystemAgentActive,
       ringZeroActive,
       ringZeroInheritedMcpServerNames,
+      nativeSkillIsolation,
       lifecycleTiming,
       normalizeBindingModelProvider,
       throwIfAborted,

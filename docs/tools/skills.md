@@ -90,9 +90,9 @@ matches your desired visibility:
 | Extra dirs     | `skills.load.extraDirs`      | All agents using that config   |
 
 When `OPENCLAW_STATE_DIR` points somewhere other than the default
-`~/.openclaw`, OpenClaw does not load the home-scoped `~/.agents/skills` root.
-Workspace, project, bundled, extra, and state-owned managed skills continue to
-load normally.
+`~/.openclaw`, session skill indexes exclude home-scoped personal or
+compatibility skill roots such as `~/.agents/skills`. Workspace, project,
+bundled, extra, and state-owned managed skills continue to load normally.
 
 ## Agent allowlists
 

@@ -12,6 +12,10 @@ import {
   isCodexAppServerConnectionClosedError,
   resolveCodexAppServerClientInstanceId,
 } from "./client.js";
+import {
+  applyCodexNativeSkillIsolation,
+  type CodexNativeSkillIsolation,
+} from "./native-skill-isolation.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
@@ -60,6 +64,7 @@ type ThreadRequestContext = {
   dynamicToolsFingerprint: string;
   dynamicToolsContainDeferred: boolean;
   webSearchThreadConfigFingerprint?: string;
+  nativeSkillIsolationFingerprint?: string;
   userMcpServersFingerprint?: string;
   ringZeroConfigFingerprint?: string;
   ringZeroClientInstanceId?: string;
@@ -69,6 +74,7 @@ type ThreadRequestContext = {
   hostSystemAgentActive: boolean;
   ringZeroActive: boolean;
   ringZeroInheritedMcpServerNames: string[];
+  nativeSkillIsolation?: CodexNativeSkillIsolation;
   lifecycleTiming: CodexThreadLifecycleTimingTracker;
   normalizeBindingModelProvider: (
     authProfileId: string | undefined,
@@ -118,6 +124,7 @@ export async function resumeExistingCodexThread(
     dynamicToolsFingerprint,
     dynamicToolsContainDeferred,
     webSearchThreadConfigFingerprint,
+    nativeSkillIsolationFingerprint,
     userMcpServersFingerprint,
     ringZeroConfigFingerprint,
     ringZeroClientInstanceId,
@@ -127,6 +134,7 @@ export async function resumeExistingCodexThread(
     hostSystemAgentActive,
     ringZeroActive,
     ringZeroInheritedMcpServerNames,
+    nativeSkillIsolation,
     lifecycleTiming,
     normalizeBindingModelProvider,
     throwIfAborted,
@@ -152,11 +160,14 @@ export async function resumeExistingCodexThread(
       params.pluginThreadConfig?.enabled && resumeBinding.pluginAppPolicyContext
         ? buildCodexPluginAppsConfigPatchFromPolicyContext(resumeBinding.pluginAppPolicyContext)
         : undefined;
-    const resumeConfig = mergeCodexThreadConfigs(
-      params.config,
-      userMcpServersConfigPatch,
-      pluginAppsConfigPatch,
-      finalConfigPatch.configPatch,
+    const resumeConfig = applyCodexNativeSkillIsolation(
+      mergeCodexThreadConfigs(
+        params.config,
+        userMcpServersConfigPatch,
+        pluginAppsConfigPatch,
+        finalConfigPatch.configPatch,
+      ),
+      nativeSkillIsolation,
     );
     const resumeParams = lifecycleTiming.measureSync("thread-resume-params", () =>
       buildThreadResumeParams(params.params, {
@@ -242,6 +253,7 @@ export async function resumeExistingCodexThread(
       dynamicToolsFingerprint,
       dynamicToolsContainDeferred,
       webSearchThreadConfigFingerprint,
+      nativeSkillIsolationFingerprint,
       userMcpServersFingerprint,
       mcpServersFingerprint: nextMcpServersFingerprint,
       ringZeroConfigFingerprint,
@@ -384,6 +396,7 @@ export async function startFreshCodexThread(
     dynamicToolsFingerprint,
     dynamicToolsContainDeferred,
     webSearchThreadConfigFingerprint,
+    nativeSkillIsolationFingerprint,
     userMcpServersFingerprint,
     ringZeroConfigFingerprint,
     ringZeroClientInstanceId,
@@ -393,6 +406,7 @@ export async function startFreshCodexThread(
     hostSystemAgentActive,
     ringZeroActive,
     ringZeroInheritedMcpServerNames,
+    nativeSkillIsolation,
     lifecycleTiming,
     normalizeBindingModelProvider,
     throwIfAborted,
@@ -411,11 +425,14 @@ export async function startFreshCodexThread(
     nativeHookRelayGeneration: params.nativeHookRelayGeneration,
   };
   const config = lifecycleTiming.measureSync("merge-thread-config", () =>
-    mergeCodexThreadConfigs(
-      params.config,
-      userMcpServersConfigPatch,
-      pluginThreadConfig?.configPatch,
-      finalConfigPatch.configPatch,
+    applyCodexNativeSkillIsolation(
+      mergeCodexThreadConfigs(
+        params.config,
+        userMcpServersConfigPatch,
+        pluginThreadConfig?.configPatch,
+        finalConfigPatch.configPatch,
+      ),
+      nativeSkillIsolation,
     ),
   );
   const startParams = lifecycleTiming.measureSync("thread-start-params", () =>
@@ -492,6 +509,7 @@ export async function startFreshCodexThread(
           dynamicToolsFingerprint,
           dynamicToolsContainDeferred,
           webSearchThreadConfigFingerprint,
+          nativeSkillIsolationFingerprint,
           userMcpServersFingerprint,
           mcpServersFingerprint: nextMcpServersFingerprint,
           ringZeroConfigFingerprint,
@@ -542,6 +560,7 @@ export async function startFreshCodexThread(
       response.modelProvider ?? requestModelProvider ?? startModelProvider ?? modelProvider,
     dynamicToolsFingerprint,
     dynamicToolsContainDeferred,
+    nativeSkillIsolationFingerprint,
     userMcpServersFingerprint,
     mcpServersFingerprint: nextMcpServersFingerprint,
     ringZeroConfigFingerprint,
