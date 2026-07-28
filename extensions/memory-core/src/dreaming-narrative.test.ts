@@ -126,14 +126,6 @@ async function flushNarrativeSettleTimers<T>(operation: Promise<T>): Promise<T> 
   return operation;
 }
 
-async function expectPathMissing(targetPath: string): Promise<void> {
-  const accessResult = await fs
-    .access(targetPath)
-    .then(() => "exists")
-    .catch((error: unknown) => (error as { code?: unknown }).code);
-  expect(accessResult).toBe("ENOENT");
-}
-
 afterEach(() => {
   vi.restoreAllMocks();
   restoreNarrativeTestEnv();
