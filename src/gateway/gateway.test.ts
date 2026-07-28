@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WizardStartResult } from "../../packages/gateway-protocol/src/index.js";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
@@ -20,6 +21,7 @@ import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getPairedDevice } from "../infra/device-pairing.js";
 import { clearGatewaySubagentRuntime } from "../plugins/runtime/gateway-bindings.test-fixtures.js";
+import { createDeferred } from "../test-utils/deferred.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { callGateway } from "./call.js";
 import { startGatewayServer } from "./server.js";
@@ -908,6 +910,85 @@ module.exports = {
         processExit.mockRestore();
         await disconnectGatewayClient(client);
         await server.close({ reason: "wizard runtime isolation E2E complete" });
+        await removeGatewayTempHome(tempHome);
+        envSnapshot.restore();
+      }
+    },
+  );
+
+  it(
+    "keeps a cancelled wizard owner until settlement before allowing a replacement",
+    { timeout: GATEWAY_E2E_TIMEOUT_MS },
+    async () => {
+      const { envSnapshot, tempHome } = await setupGatewayTempHome({
+        prefix: "openclaw-wizard-cancel-home-",
+        minimalGateway: true,
+      });
+      const wizardToken = nextGatewayId("wiz-cancel");
+      const runnerSettled = [createDeferred(), createDeferred()] as const;
+      let runnerIndex = 0;
+      const port = await getFreeGatewayPort();
+      const server = await startGatewayServer(port, {
+        bind: "loopback",
+        auth: { mode: "token", token: wizardToken },
+        controlUiEnabled: false,
+        wizardRunner: async (_opts, _runtime, prompter) => {
+          const settlement = runnerSettled[runnerIndex++];
+          if (!settlement) {
+            throw new Error("wizard runner started more than twice");
+          }
+          prompter.progress("working");
+          await settlement.promise;
+        },
+      });
+      const client = await connectGatewayClient({
+        url: `ws://127.0.0.1:${port}`,
+        token: wizardToken,
+        clientDisplayName: "vitest-wizard-cancel",
+      });
+      try {
+        const start = await client.request<WizardStartResult>("wizard.start", { mode: "local" });
+        expect(start).toMatchObject({ done: false, status: "running" });
+
+        await expect(
+          client.request("wizard.cancel", { sessionId: start.sessionId }),
+        ).resolves.toMatchObject({ status: "cancelled" });
+        await expect(client.request("wizard.start", { mode: "local" })).rejects.toMatchObject({
+          code: "UNAVAILABLE",
+        });
+
+        runnerSettled[0].resolve();
+        let replacement: WizardStartResult | undefined;
+        await expect
+          .poll(
+            async () => {
+              try {
+                replacement = await client.request<WizardStartResult>("wizard.start", {
+                  mode: "local",
+                });
+                return replacement.status;
+              } catch {
+                return "blocked";
+              }
+            },
+            { timeout: 5_000 },
+          )
+          .toBe("running");
+        if (!replacement) {
+          throw new Error("replacement wizard did not start");
+        }
+        expect(replacement).toMatchObject({ done: false, status: "running" });
+        await expect(client.request("health", {})).resolves.toBeDefined();
+
+        await expect(
+          client.request("wizard.cancel", { sessionId: replacement.sessionId }),
+        ).resolves.toMatchObject({ status: "cancelled" });
+        runnerSettled[1].resolve();
+      } finally {
+        runnerSettled[0].resolve();
+        runnerSettled[1].resolve();
+        await disconnectGatewayClient(client);
+        await server.close({ reason: "wizard cancellation lifecycle complete" });
         await removeGatewayTempHome(tempHome);
         envSnapshot.restore();
       }
