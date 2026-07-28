@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   loadTranscriptEventRowsAfterSeqSync,
   readTranscriptEventAtSeqSync,
 } from "../config/sessions/session-accessor.js";
-import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import {
   isCanonicalSessionTranscriptEntry,
   isSessionTranscriptLeafControl,

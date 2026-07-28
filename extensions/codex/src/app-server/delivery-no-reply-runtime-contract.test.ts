@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
-import { DELIVERY_NO_REPLY_RUNTIME_CONTRACT } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import {
+  DELIVERY_NO_REPLY_RUNTIME_CONTRACT,
+  installSessionManagerFileCompat,
+} from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { isSilentReplyPayloadText } from "openclaw/plugin-sdk/reply-chunking";
 import { afterEach, describe, expect, it } from "vitest";
@@ -14,13 +17,15 @@ const THREAD_ID = "thread-delivery-contract";
 const TURN_ID = "turn-delivery-contract";
 const tempDirs = new Set<string>();
 
+installSessionManagerFileCompat();
+
 type ProjectorNotification = Parameters<CodexAppServerEventProjector["handleNotification"]>[0];
 
 async function createParams(): Promise<EmbeddedRunAttemptParams> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-delivery-contract-"));
   tempDirs.add(tempDir);
   const sessionFile = path.join(tempDir, "session.jsonl");
-  SessionManager.open(sessionFile);
+  SessionManager.openFile(sessionFile);
   return {
     prompt: DELIVERY_NO_REPLY_RUNTIME_CONTRACT.prompt,
     sessionId: DELIVERY_NO_REPLY_RUNTIME_CONTRACT.sessionId,

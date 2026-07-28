@@ -52,7 +52,9 @@ export function discussionInfoForBinding(
   const baseUrl = normalizedServerBaseUrl(account);
   return {
     state: "open",
-    embedUrl: `${baseUrl}/embed/channel/${encodeURIComponent(binding.workspaceRouteId)}/${encodeURIComponent(binding.channelRouteId)}`,
+    // Only this provider may opt into host-owned theme parameters; signed
+    // discussion URLs from other providers must remain opaque.
+    embedUrl: `${baseUrl}/embed/channel/${encodeURIComponent(binding.workspaceRouteId)}/${encodeURIComponent(binding.channelRouteId)}?openclawHostTheme=1`,
     openUrl: `${baseUrl}/app/${encodeURIComponent(binding.workspaceRouteId)}/${encodeURIComponent(binding.channelRouteId)}`,
   };
 }

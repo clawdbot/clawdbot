@@ -17,7 +17,6 @@ import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js"
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { normalizeThinkLevel } from "../auto-reply/thinking.shared.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
@@ -48,7 +47,7 @@ import { createEventHandlers } from "./tui-event-handlers.js";
 import {
   formatGoalFooter,
   formatModelFooter,
-  sanitizeRenderableText,
+  formatTuiErrorMessage,
   formatTokens,
 } from "./tui-formatters.js";
 import {
@@ -1458,7 +1457,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       onError: (err) => {
         if (!isTuiTerminalLossError(err)) {
           try {
-            process.stderr.write(`openclaw tui shutdown failed: ${String(err)}\n`);
+            process.stderr.write(`openclaw tui shutdown failed: ${formatTuiErrorMessage(err)}\n`);
           } catch {
             // Best effort only; exit must still complete.
           }
@@ -1528,7 +1527,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     tui.requestRender();
   };
   const notifySubmitError = (action: TuiSubmitAction, error: unknown) => {
-    const message = sanitizeRenderableText(formatErrorMessage(error));
+    const message = formatTuiErrorMessage(error);
     chatLog.addSystem(`${action} submit failed: ${message}`);
     tui.requestRender();
   };
@@ -1680,7 +1679,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
         if (!ownsConnection()) {
           return;
         }
-        chatLog.addSystem(`session event subscribe failed: ${String(err)}`);
+        chatLog.addSystem(`session event subscribe failed: ${formatTuiErrorMessage(err)}`);
       }
       if (!ownsConnection()) {
         return;
@@ -1701,7 +1700,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
         if (!ownsConnection()) {
           return;
         }
-        chatLog.addSystem(`plugin approval refresh failed: ${String(err)}`);
+        chatLog.addSystem(`plugin approval refresh failed: ${formatTuiErrorMessage(err)}`);
       }
       if (!ownsConnection()) {
         return;
@@ -1712,7 +1711,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
         if (!ownsConnection()) {
           return;
         }
-        chatLog.addSystem(`task suggestion refresh failed: ${String(err)}`);
+        chatLog.addSystem(`task suggestion refresh failed: ${formatTuiErrorMessage(err)}`);
       }
       if (!ownsConnection()) {
         return;
@@ -1744,7 +1743,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       if (!ownsConnection()) {
         return;
       }
-      chatLog.addSystem(`startup failed: ${String(err)}`);
+      chatLog.addSystem(`startup failed: ${formatTuiErrorMessage(err)}`);
       if (activityStatus === "starting up") {
         setActivityStatus("idle");
       }
@@ -1795,12 +1794,12 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       try {
         await pluginApprovals?.refresh();
       } catch (err) {
-        chatLog.addSystem(`plugin approval refresh failed: ${String(err)}`);
+        chatLog.addSystem(`plugin approval refresh failed: ${formatTuiErrorMessage(err)}`);
       }
       try {
         await taskSuggestions?.refresh();
       } catch (err) {
-        chatLog.addSystem(`task suggestion refresh failed: ${String(err)}`);
+        chatLog.addSystem(`task suggestion refresh failed: ${formatTuiErrorMessage(err)}`);
       }
     })();
     tui.requestRender();

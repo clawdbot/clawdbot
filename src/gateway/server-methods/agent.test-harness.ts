@@ -10,7 +10,6 @@ import {
 } from "../../agents/subagent-registry.test-helpers.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { SessionTranscriptStats } from "../../config/sessions/session-accessor.js";
-import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
@@ -394,10 +393,7 @@ export function expectStringFieldContains(
 }
 
 export function expectSqliteSessionFileMarkerForEntry(entry: Record<string, unknown> | undefined) {
-  const sessionFile = entry?.sessionFile;
-  expect(sessionFile).toBeTypeOf("string");
-  const marker = parseSqliteSessionFileMarker(sessionFile as string);
-  expect(marker?.sessionId).toBe(entry?.sessionId);
+  expect(entry).not.toHaveProperty("sessionFile");
 }
 
 export function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {

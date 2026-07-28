@@ -202,11 +202,13 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/security-runtime` | Deprecated broad barrel for trust, DM gating, root-bounded file/path helpers including create-only writes, sync/async atomic file replacement, sibling temp writes, cross-device move fallback, private file-store helpers, symlink-parent guards, external-content, sensitive text redaction, constant-time secret comparison, and secret-collection helpers; prefer focused security/SSRF/secret subpaths |
     | `plugin-sdk/ssrf-policy` | Host allowlist and private-network SSRF policy helpers |
     | `plugin-sdk/ssrf-dispatcher` | Private-local after July 2026; Narrow pinned-dispatcher helpers without the broad infra runtime surface |
-    | `plugin-sdk/ssrf-runtime` | Pinned-dispatcher, SSRF-guarded fetch, SSRF error, and SSRF policy helpers |
+    | `plugin-sdk/ssrf-runtime` | Pinned-dispatcher, SSRF-guarded fetch, SSRF error, SSRF policy helpers, and loopback/private host classification |
     | `plugin-sdk/secret-input` | Secret input parsing helpers |
     | `plugin-sdk/webhook-ingress` | Webhook request/target helpers and raw websocket/body coercion |
     | `plugin-sdk/webhook-request-guards` | Request body size/timeout helpers and `runDetachedWebhookWork` for tracked post-ack processing |
   </Accordion>
+
+Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It accepts `localhost`, IPv4 loopback literals across `127.0.0.0/8`, `::1`, bracketed IPv6, and IPv4-mapped IPv6 loopback literals. It parses IP literals rather than matching text prefixes, so a DNS name such as `127.0.0.1.evil.com` is not loopback. Use `isPrivateOrLoopbackHost(host)` only when private-network hosts such as RFC 1918 addresses are also valid.
 
   <Accordion title="Runtime and storage subpaths">
     | Subpath | Key exports |

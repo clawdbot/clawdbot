@@ -70,6 +70,8 @@ export {
   loadSqliteTranscriptEventRowsAfterSeqSync,
   loadSqliteTranscriptEvents,
   loadSqliteTranscriptEventsSync,
+  loadSqliteTranscriptHeaderSync,
+  loadSqliteTranscriptTailEventsSync,
   readSqliteTranscriptEventAtSeqSync,
   readSqliteTranscriptStatsSync,
 } from "./session-accessor.sqlite-read.js";

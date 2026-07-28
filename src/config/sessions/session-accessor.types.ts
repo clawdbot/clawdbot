@@ -152,16 +152,15 @@ export type SessionTranscriptReadScope = Omit<SessionTranscriptRuntimeScope, "se
   /** Canonical key when the caller has a session-store identity for this read. */
   sessionKey?: string;
   /** Entry already loaded by hot callers; avoids rereading the session store. */
-  sessionEntry?: Pick<SessionEntry, "sessionFile"> & Partial<Pick<SessionEntry, "sessionId">>;
+  sessionEntry?: Partial<Pick<SessionEntry, "sessionId">>;
 };
 
-export type SessionTranscriptReadTarget = Omit<
-  SessionTranscriptRuntimeTarget,
-  "agentId" | "sessionKey"
-> & {
+export interface SessionTranscriptReadTarget {
   agentId?: string;
+  sessionId: string;
   sessionKey?: string;
-};
+  storePath: string;
+}
 
 export type SessionTranscriptWriteScope = Omit<SessionTranscriptAccessScope, "sessionId"> & {
   /** Optional for appenders that resolve it from the session entry. */
@@ -333,8 +332,11 @@ export type SessionTranscriptWriteLockAccessorContext = {
 };
 
 export type SessionTranscriptWriteTransactionContext = {
-  /** Canonical marker for the same agent database owned by the transaction. */
-  sessionFile: string;
+  /** Canonical transcript identity owned by the transaction. */
+  agentId: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
 };
 
 export type SessionTranscriptTurnUpdateMode = "inline" | "file-only" | "none";
@@ -350,7 +352,6 @@ export type SessionTranscriptTurnMessageAppend = TranscriptMessageAppendOptions<
 
 export type SessionTranscriptTurnWriteContext = {
   agentId?: string;
-  sessionFile: string;
   sessionId?: string;
   sessionKey?: string;
   storePath?: string;
@@ -388,20 +389,19 @@ export type SessionTranscriptTurnPersistOptions = {
   touchSessionEntry?: boolean;
 };
 
-export type SessionTranscriptTurnPersistResult = {
+export interface SessionTranscriptTurnPersistResult {
   appendedCount: number;
   messages: TranscriptMessageAppendResult<unknown>[];
   rejectedReason?: "session-rebound";
   sessionEntry: SessionEntry | undefined;
-  sessionFile: string;
-};
+}
 
-export type SessionTranscriptRuntimeTarget = {
+export interface SessionTranscriptRuntimeTarget {
   agentId: string;
-  sessionFile: string;
   sessionId: string;
   sessionKey: string;
-};
+  storePath: string;
+}
 
 export type SessionTranscriptManualTrimResult =
   | {
@@ -795,6 +795,8 @@ export type SessionEntryCreateWithTranscriptPrepareResult<TError = string> =
 export type SessionEntryCreateWithTranscriptOptions = {
   /** Protect the newly created row from maintenance during its initial write. */
   activeSessionKey?: string;
+  /** Working directory stored in the initial transcript header. */
+  cwd?: string;
   /** SQLite commits are authoritative; retained for the shared caller contract. */
   requireWriteSuccess?: boolean;
 };

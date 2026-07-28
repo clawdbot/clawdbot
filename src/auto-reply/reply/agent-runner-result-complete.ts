@@ -105,6 +105,7 @@ export async function completeReplyAgentRun(input: {
   if (autoCompactionCount > 0) {
     const previousSessionId = activeSessionEntry?.sessionId ?? followupRun.run.sessionId;
     const count = await incrementRunCompactionCount({
+      agentId: followupRun.run.agentId,
       cfg,
       sessionEntry: activeSessionEntry,
       sessionStore: activeSessionStore,
@@ -115,7 +116,6 @@ export async function completeReplyAgentRun(input: {
       lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
       contextTokensUsed,
       newSessionId: runResult.meta?.agentMeta?.sessionId,
-      newSessionFile: runResult.meta?.agentMeta?.sessionFile,
     });
     const refreshedSessionEntry =
       sessionKey && activeSessionStore ? activeSessionStore[sessionKey] : undefined;
@@ -125,7 +125,7 @@ export async function completeReplyAgentRun(input: {
         key: queueKey,
         previousSessionId,
         nextSessionId: refreshedSessionEntry.sessionId,
-        nextSessionFile: refreshedSessionEntry.sessionFile,
+        nextSessionFile: queueKey,
       });
     }
 
@@ -241,7 +241,9 @@ export async function completeReplyAgentRun(input: {
   const sessionUsage =
     traceAuthorized && activeSessionEntry?.traceLevel === "raw"
       ? await accumulateSessionUsageFromTranscript({
+          agentId: followupRun.run.agentId,
           sessionId: runResult.meta?.agentMeta?.sessionId ?? followupRun.run.sessionId,
+          sessionKey: followupRun.run.sessionKey,
           storePath,
           sessionFile: followupRun.run.sessionFile,
         })

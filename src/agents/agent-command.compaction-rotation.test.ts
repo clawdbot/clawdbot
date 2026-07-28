@@ -4,15 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   listSessionEntries,
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import {
-  formatSqliteSessionFileMarker,
-  parseSqliteSessionFileMarker,
-} from "../config/sessions/sqlite-marker.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import type { runAgentAttempt } from "./command/attempt-execution.runtime.js";
@@ -414,7 +411,6 @@ describe("agentCommand compaction transcript rotation", () => {
     expect(sessionKey).toBe("agent:main:explicit:old-session");
     expect(rotatedEntry).toMatchObject({
       sessionId: "rotated-session",
-      sessionFile: rotatedSessionFile,
       usageFamilyKey: "agent:main:explicit:old-session",
       usageFamilySessionIds: ["old-session", "rotated-session"],
       compactionCount: 1,
@@ -551,11 +547,6 @@ describe("agentCommand compaction transcript rotation", () => {
     const successorSessionId = "post-compaction-session";
     const sessionKey = `agent:main:explicit:${sessionId}`;
     const text = "reply carried across successful compaction";
-    const successorSessionFile = formatSqliteSessionFileMarker({
-      agentId: "main",
-      sessionId: successorSessionId,
-      storePath: requireStorePath(),
-    });
     let successorBeforeCleanup: SessionEntry | undefined;
     let compactionSetupError: Error | undefined;
     state.runAgentAttemptMock.mockResolvedValueOnce(makeResult({ sessionId, text }));
@@ -567,7 +558,6 @@ describe("agentCommand compaction transcript rotation", () => {
       successorBeforeCleanup = {
         ...params.sessionEntry,
         sessionId: successorSessionId,
-        sessionFile: successorSessionFile,
         updatedAt: Date.now(),
       };
       await replaceSessionEntry(
@@ -598,14 +588,12 @@ describe("agentCommand compaction transcript rotation", () => {
     expect(result).toMatchObject({ deliverySucceeded: true });
     expect(state.deliveryFreshEntries.at(-1)).toMatchObject({
       sessionId: successorSessionId,
-      sessionFile: successorSessionFile,
       pendingFinalDelivery: true,
       pendingFinalDeliveryText: text,
     });
     const storedSuccessor = findStoredSessionEntry(sessionKey);
     expect(storedSuccessor).toMatchObject({
       sessionId: successorSessionId,
-      sessionFile: successorSessionFile,
     });
     expect(storedSuccessor?.pendingFinalDelivery).toBeUndefined();
     expect(storedSuccessor?.pendingFinalDeliveryText).toBeUndefined();
@@ -905,17 +893,11 @@ describe("agentCommand compaction transcript rotation", () => {
 
   it("resumes the next turn from the rotated successor", async () => {
     const storePath = requireStorePath();
-    const rotatedSessionFile = formatSqliteSessionFileMarker({
-      agentId: "main",
-      sessionId: "rotated-session",
-      storePath,
-    });
     const sessionKey = "agent:main:explicit:old-session";
     await replaceSessionEntry(
       { sessionKey, storePath },
       {
         sessionId: "rotated-session",
-        sessionFile: rotatedSessionFile,
         updatedAt: Date.now(),
         usageFamilyKey: sessionKey,
         usageFamilySessionIds: ["old-session", "rotated-session"],
@@ -936,27 +918,35 @@ describe("agentCommand compaction transcript rotation", () => {
     });
 
     const secondAttempt = state.runAgentAttemptMock.mock.calls[0]?.[0] as
-      | { sessionId?: string; sessionFile?: string; sessionKey?: string }
+      | {
+          sessionId?: string;
+          sessionKey?: string;
+          sessionTarget?: {
+            agentId?: string;
+            sessionId?: string;
+            sessionKey?: string;
+            storePath?: string;
+          };
+        }
       | undefined;
     expect(secondAttempt).toMatchObject({
       sessionId: "rotated-session",
       sessionKey,
     });
-    expect(parseSqliteSessionFileMarker(secondAttempt?.sessionFile)).toMatchObject({
+    expect(secondAttempt?.sessionTarget).toMatchObject({
       agentId: "main",
       sessionId: "rotated-session",
+      sessionKey,
       storePath,
     });
     expect(state.deliveryFreshEntries.at(-1)).toMatchObject({
       sessionId: "rotated-session",
-      sessionFile: rotatedSessionFile,
     });
     const persisted = Object.fromEntries(
       listSessionEntries({ storePath }).map(({ entry, sessionKey: key }) => [key, entry]),
     );
     expect(persisted[sessionKey]).toMatchObject({
       sessionId: "rotated-session",
-      sessionFile: rotatedSessionFile,
     });
   });
 });

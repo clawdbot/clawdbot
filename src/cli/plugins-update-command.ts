@@ -35,6 +35,7 @@ import {
   withoutPluginInstallRecords,
   withPluginInstallRecords,
 } from "../plugins/installed-plugin-index-records.js";
+import { configReferencesNpmInstallPath } from "../plugins/installs.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../plugins/registry-refresh.js";
 import {
@@ -296,9 +297,15 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
           pluginConfigReferencesId(mutationSnapshot.snapshot.sourceConfig, pluginId))
       );
     });
+    const pluginLoadPathMayMutate = pluginSelection.pluginIds.some((pluginId) =>
+      configReferencesNpmInstallPath({
+        config: cfg,
+        install: pluginInstallRecords[pluginId],
+      }),
+    );
     // Manual update records stay in the index unless scoped-package compatibility
-    // migrates authored references from a legacy id.
-    const pluginConfigMayMutate = pluginIdMigrationMayMutate;
+    // migrates authored references or moves an explicit prior managed root.
+    const pluginConfigMayMutate = pluginIdMigrationMayMutate || pluginLoadPathMayMutate;
     const blockedReasons = new Set<string>();
     if (pluginConfigMayMutate && pluginMutation.mode === "blocked") {
       blockedReasons.add(pluginMutation.reason);

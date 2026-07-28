@@ -121,6 +121,7 @@ describe("runNodeDaemonInstall", () => {
 
     expect(mocks.buildNodeInstallPlan).toHaveBeenCalledWith(
       expect.objectContaining({
+        contextPath: undefined,
         tls: false,
         tlsFingerprint: undefined,
       }),
@@ -149,9 +150,33 @@ describe("runNodeDaemonInstall", () => {
 
     expect(mocks.buildNodeInstallPlan).toHaveBeenCalledWith(
       expect.objectContaining({
+        contextPath: "/saved",
         tls: true,
         tlsFingerprint: "saved-fingerprint",
       }),
+    );
+  });
+
+  it("installs an explicitly plaintext node for a saved TLS gateway", async () => {
+    await runNodeDaemonInstall({ force: true, tls: false });
+
+    expect(mocks.buildNodeInstallPlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        host: "saved-gateway.local",
+        port: 18789,
+        contextPath: "/saved",
+        tls: false,
+        tlsFingerprint: undefined,
+      }),
+    );
+  });
+
+  it("rejects a TLS fingerprint when installing an explicitly plaintext node", async () => {
+    await runNodeDaemonInstall({ force: true, tls: false, tlsFingerprint: "new-fingerprint" });
+
+    expect(mocks.buildNodeInstallPlan).not.toHaveBeenCalled();
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("--no-tls cannot be combined with --tls-fingerprint"),
     );
   });
 });

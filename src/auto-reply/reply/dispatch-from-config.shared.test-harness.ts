@@ -248,7 +248,12 @@ const transcriptMocks = vi.hoisted(() => ({
   persistAcpDispatchTranscript: vi.fn(async (_params: unknown) => undefined),
   appendAssistantMessageToSessionTranscript: vi.fn(async (_params: unknown) => ({
     ok: true,
-    sessionFile: "/tmp/session.jsonl",
+    target: {
+      agentId: "main",
+      sessionId: "test-session",
+      sessionKey: "agent:main",
+      storePath: "/tmp/sessions.json",
+    },
     messageId: "message-1",
   })),
 }));

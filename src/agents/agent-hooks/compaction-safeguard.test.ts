@@ -79,10 +79,11 @@ afterEach(() => {
 function stubSessionManager(): ExtensionContext["sessionManager"] {
   const stub: ExtensionContext["sessionManager"] = {
     getCwd: () => "/stub",
-    getSessionDir: () => "/stub",
     getSessionId: () => "stub-id",
-    getSessionFile: () => undefined,
+    getSessionTarget: () => undefined,
     getLeafId: () => null,
+    getAppendParentId: () => null,
+    getAppendMode: () => undefined,
     getLeafEntry: () => undefined,
     getEntry: () => undefined,
     getLabel: () => undefined,
