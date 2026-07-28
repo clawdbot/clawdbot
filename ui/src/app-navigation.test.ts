@@ -371,7 +371,7 @@ describe("subtitleForRoute", () => {
       "skill-workshop": "Review, refine, and apply proposals before they become live skills.",
       nodes: "Paired devices, pairing approvals, and exec bindings.",
       config: "Language and shortcuts to core settings.",
-      profile: "Your agent's stats, streaks, and life in the reef.",
+      profile: "Your display name, avatar, and identity on this gateway.",
       communications: "Messages, talk, and voice settings.",
       appearance: "Theme, UI, and setup wizard settings.",
       lobsterdex: "Every lobster palette that has visited this browser.",

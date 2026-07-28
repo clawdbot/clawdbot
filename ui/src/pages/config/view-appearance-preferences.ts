@@ -11,6 +11,7 @@ import { LOBSTER_PALETTE_LORE } from "../../components/lobster-pet-lore.ts";
 import {
   LOBSTER_PET_PALETTES,
   canonicalLobsterLook,
+  lobsterLookStyle,
   lobsterPaletteName,
   renderLobsterSvg,
 } from "../../components/lobster-pet.ts";
@@ -286,6 +287,7 @@ export function renderLobsterPetSection(props: ConfigProps) {
             <div class="lobsterdex__gallery">
               <div class="lobsterdex">
                 ${LOBSTER_PET_PALETTES.map((palette) => {
+                  const look = canonicalLobsterLook(palette);
                   const entry = dexEntries.get(palette.id);
                   const seen = entry !== undefined;
                   const shinySeen = entry?.shinySeenAt != null;
@@ -309,11 +311,11 @@ export function renderLobsterPetSection(props: ConfigProps) {
                         class="lobsterdex__mini lobster-pet--palette-${palette.id} ${seen
                           ? ""
                           : "lobsterdex__mini--unseen"}"
-                        style="--lob-shell:${palette.shell};--lob-claw:${palette.claw}"
+                        style=${lobsterLookStyle(look)}
                         tabindex="0"
                         aria-label=${ariaLabel}
                       >
-                        ${renderLobsterSvg(canonicalLobsterLook(palette), { standalone: true })}
+                        ${renderLobsterSvg(look, { standalone: true })}
                         ${shinySeen
                           ? html`<span class="lobsterdex__mini-star" aria-hidden="true">✦</span>`
                           : nothing}

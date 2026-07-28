@@ -380,6 +380,23 @@ describe("findSettingsSearchBlocks", () => {
     ]);
   });
 
+  it("routes profile statistics searches to Usage", () => {
+    const matches = findSettingsSearchBlocks({
+      query: "usage statistics",
+      schema: null,
+      value: null,
+      uiHints: {},
+    });
+
+    expect(matches).toEqual([
+      expect.objectContaining({
+        routeId: "usage",
+        label: "Usage statistics",
+        hash: "",
+      }),
+    ]);
+  });
+
   it("does not create block results for an empty query", () => {
     expect(
       findSettingsSearchBlocks({

@@ -7,7 +7,7 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/cont
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { SessionsRouteData } from "./sessions/sessions-page.ts";
 import type { SkillsRouteData } from "./skills/skills-page.ts";
-import { USAGE_PAYLOAD_TTL_MS, type UsageRefreshReason } from "./usage/refresh-policy.ts";
+import type { UsageRefreshReason } from "./usage/refresh-policy.ts";
 import type { UsageRouteData } from "./usage/usage-page.ts";
 import "./cron/cron-page.ts";
 import "./debug/debug-page.ts";
@@ -16,6 +16,9 @@ import "./sessions/sessions-page.ts";
 import "./skills/skills-page.ts";
 import "./tasks/tasks-page.ts";
 import "./usage/usage-page.ts";
+
+// Mirrors the module-private default usage TTL asserted below.
+const USAGE_PAYLOAD_TTL_MS = 5 * 60_000;
 
 type TestPage = HTMLElement & {
   context: ApplicationContext;

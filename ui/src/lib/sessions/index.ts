@@ -57,7 +57,6 @@ export {
   requestSessionUsage,
   requestSessionUsageLogs,
   requestSessionUsageTimeSeries,
-  requestSessionsUsage,
 } from "./usage.ts";
 
 type SessionState = {
