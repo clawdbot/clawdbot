@@ -3,6 +3,19 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { DoctorMemoryStatusPayload } from "../../../../src/gateway/server-methods/doctor.ts";
+
+// The hero derives its lobster from lobsterPetSeed, which mixes in a random
+// per-load salt, so the palette (and with it sprite geometry like the sleeping
+// eye peek) varies per test process. Pin a canonical look so pose assertions
+// stay deterministic.
+vi.mock("../../components/lobster-pet.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../components/lobster-pet.ts")>();
+  return {
+    ...actual,
+    createLobsterPetLook: () => actual.canonicalLobsterLook(actual.LOBSTER_PET_PALETTES[0]),
+  };
+});
+
 import { renderMemoryOverview, type MemoryOverviewStatus } from "./memory-overview.ts";
 
 function fixturePayload(): DoctorMemoryStatusPayload {
