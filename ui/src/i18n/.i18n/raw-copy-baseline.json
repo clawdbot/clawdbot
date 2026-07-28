@@ -513,13 +513,6 @@
       "text": "Tab"
     },
     {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer-view.ts",
-      "text": "Replying to"
-    },
-    {
       "count": 2,
       "kind": "html-text",
       "name": "text",
