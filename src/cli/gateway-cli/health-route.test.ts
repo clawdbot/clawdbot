@@ -4,6 +4,9 @@ import { runGatewayHealthJsonRoute } from "./health-route.js";
 
 function createRuntime() {
   return {
+    log: vi.fn(),
+    error: vi.fn(),
+    writeStdout: vi.fn(),
     writeJson: vi.fn(),
     exit: vi.fn(),
   };

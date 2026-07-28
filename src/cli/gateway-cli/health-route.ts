@@ -1,9 +1,9 @@
 // Route-first machine-readable Gateway health command.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { RuntimeEnv } from "../../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import type { GatewayRpcOpts } from "./call.js";
 
-export type GatewayHealthJsonRouteArgs = {
+type GatewayHealthJsonRouteArgs = {
   rpc: GatewayRpcOpts;
   localPortOverride?: number;
 };
@@ -50,7 +50,7 @@ export async function runGatewayHealthJsonRoute(
   const rpc = await resolveRouteRpcOptions(args, deps);
   try {
     const callGateway = deps.callGateway ?? (await import("./call.js")).callGatewayCli;
-    runtime.writeJson(await callGateway("health", rpc));
+    writeRuntimeJson(runtime, await callGateway("health", rpc));
   } catch (error) {
     const [healthModule, configModule, callModule] = await Promise.all([
       deps.emitReachableGatewayAuthDiagnostic ? undefined : import("../../commands/health.js"),
@@ -87,7 +87,7 @@ export async function runGatewayHealthJsonRoute(
     const payload =
       formatGatewayClientRequestErrorJson?.(error) ?? formatGatewayTransportErrorJson?.(error);
     if (payload) {
-      runtime.writeJson(payload);
+      writeRuntimeJson(runtime, payload);
       runtime.exit(1);
       return;
     }
