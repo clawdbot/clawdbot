@@ -34,6 +34,7 @@ import {
 import { createPanelRefreshStatus, type PanelRefreshStatus } from "./panel-refresh-status.ts";
 import {
   applySessionCatalogHostEvent as applySessionCatalogHostEventToData,
+  applySessionCatalogPresence as applySessionCatalogPresenceToData,
   loadMoreSessionCatalog as loadMoreSessionCatalogData,
   refreshSessionCatalogs as refreshSessionCatalogData,
   resolveSessionCatalogAgentId,
@@ -335,9 +336,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   }
 
   handleSessionCatalogPresence(payload: unknown): void {
-    if (this.sessionCatalogLive.observePresence(payload)) {
-      scheduleSessionCatalogRefresh(this);
-    }
+    applySessionCatalogPresenceToData(this, payload);
   }
 
   private readonly handleCatalogSessionContinued = (

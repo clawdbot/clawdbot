@@ -141,6 +141,15 @@ export function updateSessionCatalogData(owner: SessionCatalogDataOwner, defer =
   void owner.refreshSessionCatalogs();
 }
 
+export function applySessionCatalogPresence(
+  owner: SessionCatalogDataOwner,
+  payload: unknown,
+): void {
+  if (owner.sessionCatalogLive.observePresence(payload)) {
+    scheduleSessionCatalogRefresh(owner);
+  }
+}
+
 export function applySessionCatalogHostEvent(
   owner: SessionCatalogDataOwner,
   payload: unknown,
