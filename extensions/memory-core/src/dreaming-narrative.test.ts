@@ -126,6 +126,14 @@ async function flushNarrativeSettleTimers<T>(operation: Promise<T>): Promise<T> 
   return operation;
 }
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  const accessResult = await fs
+    .access(targetPath)
+    .then(() => "exists")
+    .catch((error: unknown) => (error as { code?: unknown }).code);
+  expect(accessResult).toBe("ENOENT");
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   restoreNarrativeTestEnv();
@@ -404,8 +412,8 @@ describe("runDreamNarrative", () => {
     const logger = createMockLogger();
     const nowMs = Date.parse("2026-04-05T03:00:00Z");
     const workspaceHash = createHash("sha1").update(workspaceDir).digest("hex").slice(0, 12);
-    const expectedRunKey = `dreaming-narrative-light-${workspaceHash}`;
-    const expectedSessionKey = `agent:main:${expectedRunKey}`;
+    const expectedRunKey = `dreaming-narrative-main-light-${workspaceHash}`;
+    const expectedSessionKey = `agent:main:dreaming-narrative-light-${workspaceHash}`;
 
     await runDreamNarrative({
       agentId: "main",
@@ -423,8 +431,9 @@ describe("runDreamNarrative", () => {
 
     expect(subagent.run).toHaveBeenCalledOnce();
     const runOptions = mockObjectArg(subagent.run, "subagent run");
-    // The runId stays unscoped so the orphan-transcript scrub marker keeps matching.
+    // The runId keeps the scrub marker's `dreaming-narrative-` prefix ahead of the agent scope.
     expect(runOptions.idempotencyKey).toBe(`${expectedRunKey}-${nowMs}`);
+    expect(runOptions.idempotencyKey).toMatch(/^dreaming-narrative-/);
     expect(runOptions.sessionKey).toBe(expectedSessionKey);
     expect(runOptions.lane).toBe(`dreaming-narrative:${expectedSessionKey}`);
     expect(runOptions.lightContext).toBe(true);
@@ -447,7 +456,7 @@ describe("runDreamNarrative", () => {
     const logger = createMockLogger();
     const nowMs = Date.parse("2026-04-05T03:00:00Z");
     const workspaceHash = createHash("sha1").update(workspaceDir).digest("hex").slice(0, 12);
-    const runKey = `dreaming-narrative-rem-${workspaceHash}`;
+    const sessionSuffix = `dreaming-narrative-rem-${workspaceHash}`;
 
     await runDreamNarrative({
       agentId: "researcher",
@@ -460,13 +469,16 @@ describe("runDreamNarrative", () => {
     });
 
     expect(mockObjectArg(subagent.run, "subagent run").sessionKey).toBe(
-      `agent:researcher:${runKey}`,
+      `agent:researcher:${sessionSuffix}`,
     );
     expect(mockObjectArg(subagent.deleteSession, "delete session")).toEqual({
-      sessionKey: `agent:researcher:${runKey}`,
+      sessionKey: `agent:researcher:${sessionSuffix}`,
     });
-    // The scrub marker keys off the runId, which must stay free of the agent scope.
-    expect(mockObjectArg(subagent.run, "subagent run").idempotencyKey).toBe(`${runKey}-${nowMs}`);
+    // The runId names its owning agent too, so two agents sharing a workspace cannot collide
+    // on one run; the scrub marker still matches because the agent scope follows the prefix.
+    expect(mockObjectArg(subagent.run, "subagent run").idempotencyKey).toBe(
+      `dreaming-narrative-researcher-rem-${workspaceHash}-${nowMs}`,
+    );
     expectLogExcludes(logger.warn, "narrative generation failed");
   });
 
@@ -1145,6 +1157,31 @@ describe("runDreamNarrative ownership gate", () => {
     expect(content).not.toContain("An ownerless sweep still leaves a trace.");
     expect(content).toContain("A memory trace surfaced, but details were unavailable in this run.");
     expectLogIncludes(logger.info, "no owning agent id");
+  });
+
+  it("stays a no-op for an ownerless sweep with nothing to narrate", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const subagent = {
+      run: vi.fn(),
+      waitForRun: vi.fn(),
+      getSessionMessages: vi.fn(),
+      deleteSession: vi.fn(),
+    };
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+    await runDreamNarrative({
+      subagent,
+      workspaceDir,
+      data: { phase: "light", snippets: [] },
+      nowMs: Date.parse("2026-04-05T03:00:00Z"),
+      timezone: "UTC",
+      logger,
+    });
+
+    // Empty narrative data is a no-op with or without an owner; the ownership fallback must
+    // not invent a diary entry for material that never existed.
+    expect(subagent.run).not.toHaveBeenCalled();
+    await expectPathMissing(path.join(workspaceDir, "DREAMS.md"));
   });
 });
 

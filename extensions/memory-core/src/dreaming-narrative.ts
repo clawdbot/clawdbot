@@ -269,17 +269,23 @@ async function startNarrativeRunOrFallback(params: {
   }
 }
 
+function buildNarrativeWorkspaceHash(workspaceDir: string): string {
+  return createHash("sha1").update(workspaceDir).digest("hex").slice(0, 12);
+}
+
 /**
- * Deterministic narrative identity, also the runId prefix `scrubDreamingNarrativeArtifacts`
- * matches through DREAMING_TRANSCRIPT_RUN_MARKER. Keep it free of the agent scope so the
- * marker stays stable no matter which agent owns the workspace.
+ * Deterministic run identity, which the gateway also uses as the runId.
+ * The agent scope goes after `DREAMING_SESSION_KEY_PREFIX` so the orphan-transcript scrub
+ * keeps matching DREAMING_TRANSCRIPT_RUN_MARKER, while two agents that share one workspace
+ * cannot collide on a run they own through different agent-scoped sessions.
  */
 function buildNarrativeRunKey(params: {
+  agentId: string;
   workspaceDir: string;
   phase: NarrativePhaseData["phase"];
 }): string {
-  const workspaceHash = createHash("sha1").update(params.workspaceDir).digest("hex").slice(0, 12);
-  return `${DREAMING_SESSION_KEY_PREFIX}${params.phase}-${workspaceHash}`;
+  const workspaceHash = buildNarrativeWorkspaceHash(params.workspaceDir);
+  return `${DREAMING_SESSION_KEY_PREFIX}${params.agentId}-${params.phase}-${workspaceHash}`;
 }
 
 /**
@@ -292,7 +298,8 @@ function buildNarrativeSessionKey(params: {
   workspaceDir: string;
   phase: NarrativePhaseData["phase"];
 }): string {
-  return `agent:${params.agentId}:${buildNarrativeRunKey(params)}`;
+  const workspaceHash = buildNarrativeWorkspaceHash(params.workspaceDir);
+  return `agent:${params.agentId}:${DREAMING_SESSION_KEY_PREFIX}${params.phase}-${workspaceHash}`;
 }
 
 // ── Prompt building ────────────────────────────────────────────────────
@@ -844,13 +851,10 @@ export type DreamNarrativeRequest = {
 };
 
 async function generateAndAppendDreamNarrative(params: DreamNarrativeRequest): Promise<void> {
+  // `runDreamNarrative` is the only entry point and already dropped empty narrative data.
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
-
-  if (params.data.snippets.length === 0 && !params.data.promotions?.length) {
-    return;
-  }
-
   const runKey = buildNarrativeRunKey({
+    agentId: params.agentId,
     workspaceDir: params.workspaceDir,
     phase: params.data.phase,
   });
@@ -1062,6 +1066,11 @@ export async function runDreamNarrative(
   params: Omit<DreamNarrativeRequest, "agentId"> & { agentId?: string; detached?: boolean },
 ): Promise<void> {
   const { agentId, detached, ...rest } = params;
+  // Nothing to narrate is a no-op on every path; checking ownership first would let an
+  // ownerless empty sweep append a diary entry for material that never existed.
+  if (rest.data.snippets.length === 0 && !rest.data.promotions?.length) {
+    return;
+  }
   if (!agentId) {
     // Narrative sessions are stored per agent, so an ownerless sweep cannot start one.
     // Write the local diary fallback instead of skipping the entry without a trace.
