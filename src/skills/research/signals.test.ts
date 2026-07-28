@@ -390,6 +390,22 @@ describe("durable instruction signals", () => {
     expect(proposal.content).toContain("- export FOO=bar.");
   });
 
+  it("preserves a literal trailing-dot command argument", () => {
+    const proposal = expectDefined(
+      proposals([user("Remember to run git add .")])[0],
+      "literal dot argument",
+    );
+    expect(proposal.content).toContain("- Run git add .");
+  });
+
+  it("accepts an explicitly marked directive outside the action vocabulary", () => {
+    const proposal = expectDefined(
+      proposals([user("Remember to call the release webhook before publishing.")])[0],
+      "explicit directive",
+    );
+    expect(proposal.content).toContain("- Call the release webhook before publishing.");
+  });
+
   it("rejects an ambiguous noun phrase after never", () => {
     expect(proposals([user("From now on, never private notes.")])).toHaveLength(0);
   });

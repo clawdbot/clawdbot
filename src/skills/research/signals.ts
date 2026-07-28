@@ -193,8 +193,11 @@ function normalizeRule(value: string, explicit = false): string | undefined {
   const request = compact.match(/^(?:can|could|would|will) you\s+(.+)$/i);
   let rule = (request?.[1] ?? compact)
     .replace(/^(?:(?:also|always|make sure to|please|just|remember to)\s+)+/i, "")
-    .replace(/[.!?]+$/, "")
     .trim();
+  const literalDotArgument = /^run\s+\S+.*\s\.$/i.test(rule);
+  if (!literalDotArgument) {
+    rule = rule.replace(/[.!?]+$/, "");
+  }
   if (
     !rule ||
     (compact.endsWith("?") && !request && !IMPERATIVE_RULE.test(rule)) ||
@@ -237,7 +240,8 @@ function normalizeRule(value: string, explicit = false): string | undefined {
   } else if (/\bin parentheses$/i.test(rule) && !IMPERATIVE_RULE.test(rule)) {
     rule = `Include ${rule}`;
   }
-  return `${commandShaped ? rule : rule.charAt(0).toUpperCase() + rule.slice(1)}.`;
+  const normalized = commandShaped ? rule : rule.charAt(0).toUpperCase() + rule.slice(1);
+  return literalDotArgument ? normalized : `${normalized}.`;
 }
 
 function normalizeRuleList(value: string, splitList: boolean, explicit = false): string[] {
@@ -265,6 +269,10 @@ function normalizeRuleList(value: string, splitList: boolean, explicit = false):
 
 function parseInstruction(instruction: string) {
   const compactInstruction = compactWhitespace(instruction.split("\uE000", 1)[0] ?? instruction);
+  const explicitActionMarker =
+    /\b(?:remember to|make sure to)\b|^(?:(?:can|could|would|will) you\s+|please\s+)?always\b|[,;:—–-]\s+always\b/i.test(
+      compactInstruction,
+    );
   const isolatedInstruction = stripSignalMarkers(compactInstruction);
   const actorEvent = isolatedInstruction.match(
     new RegExp(
@@ -335,11 +343,11 @@ function parseInstruction(instruction: string) {
     /^(?:i need you to|i want you to|you|(?:can|could|would|will) you)\s+(?:to\s+)?always\s+(.+)$/i,
   );
   if (actorRequest?.[1]) {
-    return { rules: normalizeRuleList(actorRequest[1].replace(/\?$/, ""), false) };
+    return { rules: normalizeRuleList(actorRequest[1].replace(/\?$/, ""), false, true) };
   }
   const policyRule = text.match(/^(?:policy:\s*|make it a rule to\s+)(.+)$/i)?.[1];
   if (policyRule) {
-    return { rules: normalizeRuleList(policyRule, false) };
+    return { rules: normalizeRuleList(policyRule, false, true) };
   }
 
   const still = text.match(
@@ -430,7 +438,7 @@ function parseInstruction(instruction: string) {
     }
     return {
       taskClass: cleanTaskClass(contextualAlways[1]),
-      rules: normalizeRuleList(contextualAlways[2], false),
+      rules: normalizeRuleList(contextualAlways[2], false, true),
     };
   }
 
@@ -500,7 +508,7 @@ function parseInstruction(instruction: string) {
       ? { rules: normalizeRuleList(explicitFix, false) }
       : undefined;
   }
-  const rules = normalizeRuleList(text, false);
+  const rules = normalizeRuleList(text, false, explicitActionMarker);
   return rules.length > 0 ? { rules } : undefined;
 }
 
