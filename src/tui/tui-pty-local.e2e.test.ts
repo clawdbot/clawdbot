@@ -1541,7 +1541,7 @@ describe("TUI PTY real backends", () => {
         expect(sendResults.map((result) => result.status)).toEqual(["started", "started"]);
         // Let both Gateway submissions reach the active-turn queue before the
         // parent response opens the collect debounce window.
-        await sleep(SUBMISSION_SETTLE_MS);
+        await sleep(1_000);
         fixture.mockModel.releaseFirstResponse();
         await waitFor({
           timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
