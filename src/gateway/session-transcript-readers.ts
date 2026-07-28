@@ -5,13 +5,14 @@ import {
   readSessionTranscriptMessageEventCount,
   readSessionTranscriptMessageEventPage,
   readSessionTranscriptMessageEvents,
+  resolveConcreteSessionStorePath,
   resolveSessionTranscriptReadTarget,
   waitForSessionTranscriptProjection,
   type SessionTranscriptMessageEvent,
   type SessionTranscriptReadScope,
   type TranscriptEvent,
 } from "../config/sessions/session-accessor.js";
-import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { aggregateSqliteUsageSnapshots } from "./session-transcript-derived-readers.js";
 import type {
@@ -87,27 +88,18 @@ export function resolveTranscriptReadTarget(
   scope: SessionTranscriptReadScope,
 ): ResolvedTranscriptReadTarget {
   const target = resolveSessionTranscriptReadTarget(scope);
-  const marker = parseSqliteSessionFileMarker(target.sessionFile);
-  const storePath = resolveConcreteReadStorePath(scope.storePath);
   return {
-    agentId: target.agentId ?? marker?.agentId,
-    sessionFile: target.sessionFile,
-    sessionId: marker?.sessionId ?? target.sessionId,
+    agentId: target.agentId,
+    sessionFile: target.sessionKey ?? target.sessionId,
+    sessionId: target.sessionId,
     ...(target.sessionKey ? { sessionKey: target.sessionKey } : {}),
-    ...((storePath ?? marker?.storePath) ? { storePath: storePath ?? marker?.storePath } : {}),
+    storePath: target.storePath,
   };
 }
 
-function resolveConcreteReadStorePath(storePath: string | undefined): string | undefined {
-  const trimmed = storePath?.trim();
-  if (!trimmed || trimmed === "(multiple)" || trimmed.includes("{agentId}")) {
-    return undefined;
-  }
-  return trimmed;
-}
-
 export function isSqliteReadTarget(target: ResolvedTranscriptReadTarget): boolean {
-  return parseSqliteSessionFileMarker(target.sessionFile) !== undefined;
+  void target;
+  return true;
 }
 
 export function toTranscriptReadScope(
@@ -666,6 +658,23 @@ export async function readSessionTitleFieldsFromTranscriptAsync(
 export async function readLatestSessionUsageFromTranscriptAsync(
   scope: SessionTranscriptReadScope,
 ): Promise<SessionTranscriptUsageSnapshot | null> {
+  const artifactFile = scope.sessionFile?.trim();
+  const concreteStorePath = resolveConcreteSessionStorePath(scope.storePath);
+  const targetAgentId = scope.agentId?.trim() || resolveAgentIdFromSessionKey(scope.sessionKey);
+  const hasCompleteTarget = Boolean(targetAgentId && scope.sessionKey?.trim() && concreteStorePath);
+  if (
+    !hasCompleteTarget &&
+    artifactFile &&
+    path.isAbsolute(artifactFile) &&
+    artifactFile.endsWith(".jsonl")
+  ) {
+    return await readLatestSessionUsageFromTranscriptAsyncFile(
+      scope.sessionId,
+      concreteStorePath,
+      artifactFile,
+      undefined,
+    );
+  }
   const target = resolveTranscriptReadTarget(scope);
   if (isSqliteReadTarget(target)) {
     return readSqliteAggregateUsageSnapshot(target);
@@ -715,3 +724,4 @@ export function readSessionPreviewItemsFromTranscript(
     maxChars,
   );
 }
+import path from "node:path";

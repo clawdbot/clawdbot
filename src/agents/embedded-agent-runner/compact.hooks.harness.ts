@@ -8,7 +8,6 @@ import { clearAgentHarnesses } from "../harness/registry.js";
 import type { AgentHarness } from "../harness/types.js";
 import type { ModelAuthMode } from "../model-auth.js";
 import type { AgentRuntimePlan, BuildAgentRuntimePlanParams } from "../runtime-plan/types.js";
-import type { CompactionTranscriptRotation } from "./compaction-successor-transcript.js";
 
 type MockResolvedModel = {
   model: {
@@ -295,7 +294,12 @@ async function runCompactWithSafetyTimeoutMock(
 }
 export const compactWithSafetyTimeoutMock = vi.fn(runCompactWithSafetyTimeoutMock);
 export const rotateTranscriptAfterCompactionMock: Mock<
-  (_params?: unknown) => Promise<CompactionTranscriptRotation>
+  (_params?: unknown) => Promise<{
+    rotated: boolean;
+    sessionId?: string;
+    sessionFile?: string;
+    leafId?: string;
+  }>
 > = vi.fn(async () => ({
   rotated: false,
 }));
@@ -781,20 +785,22 @@ export async function loadCompactHooksHarness(): Promise<{
     resolveSandboxContext: resolveSandboxContextMock,
   }));
 
-  vi.doMock("../session-file-repair.js", () => ({
-    repairSessionFileIfNeeded: vi.fn(async () => {}),
-  }));
-
-  vi.doMock("../session-write-lock.js", () => ({
-    acquireSessionWriteLock: acquireSessionWriteLockMock,
-    resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 0),
-    resolveSessionWriteLockAcquireTimeoutMs: vi.fn(() => 60_000),
-    resolveSessionWriteLockOptions: vi.fn(() => ({
-      timeoutMs: 60_000,
-      staleMs: 1_800_000,
-      maxHoldMs: 300_000,
-    })),
-  }));
+  vi.doMock("../session-write-lock.js", async () => {
+    const { resolveSessionWriteLockTargetKey } = await vi.importActual<
+      typeof import("../session-write-lock.js")
+    >("../session-write-lock.js");
+    return {
+      acquireSessionWriteLock: acquireSessionWriteLockMock,
+      resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 0),
+      resolveSessionWriteLockAcquireTimeoutMs: vi.fn(() => 60_000),
+      resolveSessionWriteLockOptions: vi.fn(() => ({
+        timeoutMs: 60_000,
+        staleMs: 1_800_000,
+        maxHoldMs: 300_000,
+      })),
+      resolveSessionWriteLockTargetKey,
+    };
+  });
 
   vi.doMock("../../context-engine/init.js", () => ({
     ensureContextEnginesInitialized: vi.fn(),
@@ -936,16 +942,6 @@ export async function loadCompactHooksHarness(): Promise<{
     };
   });
 
-  vi.doMock("./compaction-successor-transcript.js", async () => {
-    const actual = await vi.importActual<typeof import("./compaction-successor-transcript.js")>(
-      "./compaction-successor-transcript.js",
-    );
-    return {
-      ...actual,
-      rotateTranscriptAfterCompaction: rotateTranscriptAfterCompactionMock,
-    };
-  });
-
   vi.doMock("./wait-for-idle-before-flush.js", () => ({
     flushPendingToolResultsAfterIdle: vi.fn(async () => {}),
   }));
@@ -1066,11 +1062,6 @@ export async function loadCompactHooksHarness(): Promise<{
     buildModelAliasLines: vi.fn(() => []),
     resolveModel: resolveModelMock,
     resolveModelAsync: resolveModelAsyncMock,
-  }));
-
-  vi.doMock("./session-manager-cache.js", () => ({
-    prewarmSessionFile: vi.fn(async () => {}),
-    trackSessionManagerAccess: vi.fn(),
   }));
 
   vi.doMock("./system-prompt.js", () => ({

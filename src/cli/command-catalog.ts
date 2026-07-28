@@ -240,7 +240,12 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["config", "get"],
     exact: true,
-    policy: { ensureCliPath: false, networkProxy: "bypass" },
+    policy: {
+      bypassConfigGuard: true,
+      routeConfigGuard: "always",
+      ensureCliPath: false,
+      networkProxy: "bypass",
+    },
     route: { id: "config-get" },
   },
   {

@@ -260,7 +260,7 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
       import("../agents/sessions/index.js"),
       import("../agents/embedded-agent.js"),
     ]);
-    const sessionManager = SessionManager.open(target.sessionFile);
+    const sessionManager = SessionManager.open(target);
     for (const message of params.messages.slice(0, -1)) {
       sessionManager.appendMessage(toRunnerHistoryMessage(message, selection));
     }

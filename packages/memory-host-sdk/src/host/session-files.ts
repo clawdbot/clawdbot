@@ -76,6 +76,10 @@ export type BuildSessionEntryOptions = {
   generatedByCronRun?: boolean;
   /** Session key for identity-backed transcript readers. */
   sessionKey?: string;
+  /** Direct SQLite identity for live runtime transcripts. */
+  agentId?: string;
+  sessionId?: string;
+  storePath?: string;
   /** Activity timestamp for transcript sources that do not have filesystem stats. */
   updatedAtMs?: number;
   /** Override for tests or specialized callers that need a tighter parse yield cadence. */
@@ -301,6 +305,9 @@ function classifySessionTranscriptCorpusEntries(
   const dreamingTranscriptPaths = new Set<string>();
   const cronRunTranscriptPaths = new Set<string>();
   for (const entry of corpusEntries) {
+    if (entry.transcriptSource === "sqlite") {
+      continue;
+    }
     const normalizedPath = normalizeComparablePath(entry.sessionFile);
     if (entry.generatedByDreamingNarrative) {
       dreamingTranscriptPaths.add(normalizedPath);
@@ -353,9 +360,9 @@ function classifySessionTranscriptFromSessionStore(absPath: string): {
 }
 
 export async function listSessionFilesForAgent(agentId: string): Promise<string[]> {
-  return (await listSessionTranscriptCorpusEntriesForAgent(agentId)).map(
-    (entry) => entry.sessionFile,
-  );
+  return (await listSessionTranscriptCorpusEntriesForAgent(agentId))
+    .filter((entry) => entry.transcriptSource !== "sqlite")
+    .map((entry) => entry.sessionFile);
 }
 
 function extractAgentIdFromSessionPath(absPath: string): string | null {
@@ -662,21 +669,31 @@ function resolveSessionEntryParseYieldLines(opts: BuildSessionEntryOptions): num
   return SESSION_ENTRY_PARSE_YIELD_LINES;
 }
 
+function resolveBuildSessionSqliteIdentity(absPath: string, opts: BuildSessionEntryOptions) {
+  if (opts.agentId && opts.sessionId && opts.storePath) {
+    return {
+      agentId: opts.agentId,
+      sessionId: opts.sessionId,
+      ...(opts.sessionKey ? { sessionKey: opts.sessionKey } : {}),
+      storePath: opts.storePath,
+    };
+  }
+  const marker = parseSqliteSessionFileMarker(absPath);
+  return marker && opts.sessionKey ? { ...marker, sessionKey: opts.sessionKey } : marker;
+}
+
 export function statSessionEntrySync(
   absPath: string,
   opts: BuildSessionEntryOptions = {},
 ): SessionFileState | null {
-  const sqliteMarker = parseSqliteSessionFileMarker(absPath);
-  if (sqliteMarker) {
+  const sqliteIdentity = resolveBuildSessionSqliteIdentity(absPath, opts);
+  if (sqliteIdentity) {
     const stats = readTranscriptStatsSync({
-      agentId: sqliteMarker.agentId,
-      sessionId: sqliteMarker.sessionId,
-      ...(opts.sessionKey ? { sessionKey: opts.sessionKey } : {}),
-      storePath: sqliteMarker.storePath,
+      ...sqliteIdentity,
     });
     return {
       absPath,
-      path: sessionPathForSessionIdentity(sqliteMarker.agentId, sqliteMarker.sessionId),
+      path: sessionPathForSessionIdentity(sqliteIdentity.agentId, sqliteIdentity.sessionId),
       mtimeMs: opts.updatedAtMs ?? stats.maxSeq,
       size: stats.sizeBytes,
     };
@@ -712,25 +729,19 @@ export async function buildSessionEntry(
   opts: BuildSessionEntryOptions = {},
 ): Promise<SessionFileEntry | null> {
   try {
-    const sqliteMarker = parseSqliteSessionFileMarker(absPath);
-    const rawSource = sqliteMarker
+    const sqliteIdentity = resolveBuildSessionSqliteIdentity(absPath, opts);
+    const rawSource = sqliteIdentity
       ? (() => {
           const stats = readTranscriptStatsSync({
-            agentId: sqliteMarker.agentId,
-            sessionId: sqliteMarker.sessionId,
-            ...(opts.sessionKey ? { sessionKey: opts.sessionKey } : {}),
-            storePath: sqliteMarker.storePath,
+            ...sqliteIdentity,
           });
           const records = loadTranscriptEventsSync({
-            agentId: sqliteMarker.agentId,
-            sessionId: sqliteMarker.sessionId,
-            ...(opts.sessionKey ? { sessionKey: opts.sessionKey } : {}),
-            storePath: sqliteMarker.storePath,
+            ...sqliteIdentity,
           });
           const raw = serializeTranscriptEvents(records);
           return {
             mtimeMs: opts.updatedAtMs ?? stats.maxSeq,
-            path: sessionPathForSessionIdentity(sqliteMarker.agentId, sqliteMarker.sessionId),
+            path: sessionPathForSessionIdentity(sqliteIdentity.agentId, sqliteIdentity.sessionId),
             raw,
             size: stats.sizeBytes,
           };
@@ -778,15 +789,15 @@ export async function buildSessionEntry(
     const messageTimestampsMs: number[] = [];
     const parseYieldEveryLines = resolveSessionEntryParseYieldLines(opts);
     const sqliteSessionKey =
-      sqliteMarker && !opts.sessionKey
+      sqliteIdentity && !opts.sessionKey
         ? resolveTranscriptSessionKeyBySessionId({
-            agentId: sqliteMarker.agentId,
-            sessionId: sqliteMarker.sessionId,
-            storePath: sqliteMarker.storePath,
+            agentId: sqliteIdentity.agentId,
+            sessionId: sqliteIdentity.sessionId,
+            storePath: sqliteIdentity.storePath,
           })
         : undefined;
     const sessionStoreClassification =
-      !sqliteMarker &&
+      !sqliteIdentity &&
       (opts.generatedByDreamingNarrative === undefined || opts.generatedByCronRun === undefined)
         ? classifySessionTranscriptFromSessionStore(absPath)
         : null;

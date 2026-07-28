@@ -36,6 +36,7 @@ import { cleanupSystemAgentSession, createSystemAgentSession } from "./agent-tur
 import { runSystemAgentTurnWithDeps } from "./agent-turn.test-support.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import { applySystemAgentModelSelection } from "./setup-apply.js";
+import { runSetupInferenceTest } from "./setup-inference-persist.js";
 import { resolveSetupInferenceProbeStreamParams } from "./setup-inference-probe.js";
 import {
   SetupInferenceActivationIndeterminateError,
@@ -2034,7 +2035,9 @@ describe("activateSetupInference", () => {
       expect.objectContaining({
         runId: expect.stringMatching(/^probe-setup-inference-/),
         sessionId: expect.stringMatching(/^probe-setup-inference-/),
-        sessionKey: expect.stringMatching(/^temp:setup-inference:probe-setup-inference-/),
+        sessionKey: expect.stringMatching(
+          /^agent:main:setup-inference:incognito-probe-setup-inference-/,
+        ),
         lane: "session:probe-setup-inference:anthropic",
       }),
     );
@@ -2043,6 +2046,33 @@ describe("activateSetupInference", () => {
     expect(probeCall?.sessionId).toBe(probeCall?.runId);
     expect(probeCall?.sessionId).toHaveLength(58);
     expect(transformConfig).not.toHaveBeenCalled();
+  });
+
+  it("uses the effective route agent for setup probe identity", async () => {
+    const runEmbeddedAgent = vi.fn(async () => ({ payloads: [] }));
+
+    await runSetupInferenceTest({
+      plan: {
+        runner: "embedded",
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        modelRef: "anthropic/claude-sonnet-4-6",
+        config: {},
+        agentId: "execution-agent",
+        routeAgentId: "route-agent",
+      },
+      tempDir: await makeTempDir(),
+      deps: { runEmbeddedAgent: runEmbeddedAgent as never },
+      authProfileStateMode: "read-only",
+      requireExecutionOwner: false,
+    });
+
+    expect(runEmbeddedAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "route-agent",
+        sessionKey: expect.stringMatching(/^agent:route-agent:setup-inference:incognito-/),
+      }),
+    );
   });
 
   it.each([

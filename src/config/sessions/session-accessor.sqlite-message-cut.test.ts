@@ -526,24 +526,4 @@ describe("SQLite session message cuts", () => {
       rewindSessionToMessage({ agentId, env, entryId, sessionKey }),
     ).resolves.toMatchObject({ status });
   });
-
-  it("returns a typed error for legacy JSONL transcript storage", async () => {
-    const { env } = await createSession();
-    await upsertSessionEntry(
-      { agentId, env, sessionKey },
-      {
-        sessionFile: "/tmp/legacy-session.jsonl",
-      },
-    );
-
-    await expect(
-      rewindSessionToMessage({ agentId, env, entryId: "user-2", sessionKey }),
-    ).resolves.toMatchObject({ status: "unsupported-storage" });
-    await expect(listSessionBranches({ agentId, env, sessionKey })).resolves.toMatchObject({
-      status: "unsupported-storage",
-    });
-    await expect(
-      switchSessionBranch({ agentId, env, leafEntryId: "assistant-2", sessionKey }),
-    ).resolves.toMatchObject({ status: "unsupported-storage" });
-  });
 });

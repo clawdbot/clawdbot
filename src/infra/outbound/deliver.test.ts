@@ -43,7 +43,11 @@ import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 
 const mocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn<() => Promise<SessionTranscriptAppendResult>>(
-    async () => ({ ok: true, sessionFile: "x", messageId: "m" }),
+    async () => ({
+      ok: true,
+      target: { sessionId: "x", sessionKey: "x", storePath: "/tmp/sessions.json" },
+      messageId: "m",
+    }),
   ),
 }));
 const hookMocks = vi.hoisted(() => ({

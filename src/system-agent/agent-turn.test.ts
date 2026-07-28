@@ -268,13 +268,12 @@ describe("runSystemAgentTurn", () => {
       mocks.runEmbeddedAgent.mock.calls[1]?.[0]?.sessionFile,
       "missing second embedded transcript path",
     );
-    expect(firstPath).toContain(`${first.sessionId}.jsonl`);
-    expect(secondPath).toContain(`${second.sessionId}.jsonl`);
+    expect(firstPath).toBe(`in-memory:${first.sessionId}`);
+    expect(secondPath).toBe(`in-memory:${second.sessionId}`);
     expect(firstPath).not.toBe(secondPath);
-
-    await fs.promises.writeFile(firstPath, "transcript");
+    expect(first.sessionManager).not.toBe(second.sessionManager);
     await cleanupSystemAgentSession(first);
-    await expect(fs.promises.access(firstPath)).rejects.toThrow();
+    expect(first.sessionManager).toBeUndefined();
   });
 
   it("uses the default agent CLI route while keeping OpenClaw session identity", async () => {
@@ -331,7 +330,7 @@ describe("runSystemAgentTurn", () => {
       sessionKey: "agent:openclaw:main",
       sessionId: session.sessionId,
       workspaceDir: path.join(stateDir, "openclaw", "workspace"),
-      sessionFile: path.join(stateDir, "openclaw", "sessions", `${session.sessionId}.jsonl`),
+      sessionFile: `in-memory:${session.sessionId}`,
       messageChannel: "openclaw",
       messageProvider: "openclaw",
     });
@@ -405,7 +404,7 @@ describe("runSystemAgentTurn", () => {
   });
 
   it("resumes Claude's native transcript through fresh per-turn processes", async () => {
-    const stateDir = useTempStateDir();
+    useTempStateDir();
     const config = {
       agents: {
         defaults: {
@@ -454,13 +453,10 @@ describe("runSystemAgentTurn", () => {
       disableCliLiveSession: true,
       cleanupCliLiveSessionOnRunEnd: true,
     });
-    const transcript = path.join(stateDir, "openclaw", "sessions", `${session.sessionId}.jsonl`);
-    await fs.promises.writeFile(transcript, "transcript");
-
     await cleanupSystemAgentSession(session);
 
     expect(session.cliSession).toBeUndefined();
-    await expect(fs.promises.access(transcript)).rejects.toThrow();
+    expect(session.sessionManager).toBeUndefined();
   });
 
   it("runs a canonical Anthropic model through its configured Claude CLI runtime", async () => {
@@ -825,7 +821,7 @@ describe("runSystemAgentTurn", () => {
       sessionKey: "agent:openclaw:main",
       sessionId: session.sessionId,
       workspaceDir: path.join(stateDir, "openclaw", "workspace"),
-      sessionFile: path.join(stateDir, "openclaw", "sessions", `${session.sessionId}.jsonl`),
+      sessionFile: `in-memory:${session.sessionId}`,
       messageChannel: "openclaw",
       messageProvider: "openclaw",
       toolsAllow: ["openclaw"],

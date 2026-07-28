@@ -786,8 +786,8 @@ describe("state migrations", () => {
     expect(Object.getOwnPropertyDescriptor(mergedStore, "__proto__")?.value.sessionId).toBe(
       "prototype-row",
     );
-    expect(Object.getOwnPropertyDescriptor(mergedStore, "__proto__")?.value.sessionFile).toBe(
-      path.join(stateDir, "agents", "worker-1", "sessions", "trace.jsonl"),
+    expect(Object.getOwnPropertyDescriptor(mergedStore, "__proto__")?.value).not.toHaveProperty(
+      "sessionFile",
     );
     expect(mergedStore["agent:worker-1:acp:task"]?.acp).toBeUndefined();
 

@@ -293,6 +293,16 @@ describe("command-path-policy", () => {
     });
   });
 
+  it("keeps routed and Commander config reads ahead of observing startup guards", () => {
+    expectResolvedPolicy(["config", "get"], {
+      bypassConfigGuard: true,
+      routeConfigGuard: "always",
+      ensureCliPath: false,
+      loadPlugins: "never",
+      networkProxy: "bypass",
+    });
+  });
+
   it("defaults unknown command paths to network proxy routing", () => {
     expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "googlemeet", "login"])).toBe(
       "default",

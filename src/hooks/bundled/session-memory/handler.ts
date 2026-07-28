@@ -9,15 +9,17 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  resolveDefaultAgentId,
   resolveAgentIdByWorkspacePath,
   resolveAgentWorkspaceDir,
 } from "../../../agents/agent-scope.js";
 import { resolveStateDir } from "../../../config/paths.js";
-import { loadTranscriptEvents } from "../../../config/sessions/session-accessor.js";
+import { resolveStorePath } from "../../../config/sessions/paths.js";
 import {
-  parseSqliteSessionFileMarker,
-  type SqliteSessionFileMarker,
-} from "../../../config/sessions/sqlite-marker.js";
+  loadTranscriptEvents,
+  readSessionTranscriptBoundedMessageTailPage,
+  type TranscriptEvent,
+} from "../../../config/sessions/session-accessor.js";
 import { selectVisibleTranscriptEvents } from "../../../config/sessions/transcript-visible-events.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isVitestRuntimeEnv } from "../../../infra/env.js";
@@ -32,13 +34,12 @@ import { shortenHomePath } from "../../../utils.js";
 import { resolveHookConfig } from "../../config.js";
 import type { HookHandler } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
-import {
-  findPreviousSessionFile,
-  getRecentSessionContentFromEvents,
-  getRecentSessionContentWithResetFallback,
-} from "./transcript.js";
+import { countSessionMemoryMessages, getRecentSessionContentFromEvents } from "./transcript.js";
 
 const log = createSubsystemLogger("hooks/session-memory");
+const SESSION_MEMORY_CAPTURE_MAX_BYTES = 8 * 1024 * 1024;
+const SESSION_MEMORY_CAPTURE_PAGE_MESSAGES = 256;
+const SESSION_MEMORY_CAPTURE_MAX_SCANNED_MESSAGES = 4_096;
 
 function pickDateTimePart(
   parts: Intl.DateTimeFormatPart[],
@@ -120,23 +121,84 @@ async function resolveAvailableMemoryFilename(params: {
 }
 
 async function getRecentSqliteSessionContent(
-  marker: SqliteSessionFileMarker,
+  scope: { agentId: string; sessionId: string; sessionKey: string; storePath: string },
   messageCount: number,
+  capturedEvents?: TranscriptEvent[],
 ): Promise<string | null> {
   try {
+    const events = capturedEvents ?? (await loadTranscriptEvents({ ...scope }));
+    const latestResetIndex = capturedEvents
+      ? -1
+      : events.findLastIndex(
+          (event) =>
+            Boolean(event) &&
+            typeof event === "object" &&
+            !Array.isArray(event) &&
+            (event as { type?: unknown }).type === "reset",
+        );
+    const retiredEvents = latestResetIndex >= 0 ? events.slice(0, latestResetIndex) : events;
     return getRecentSessionContentFromEvents(
-      selectVisibleTranscriptEvents(
-        await loadTranscriptEvents({
-          agentId: marker.agentId,
-          sessionId: marker.sessionId,
-          storePath: marker.storePath,
-        }),
-      ),
+      selectVisibleTranscriptEvents(retiredEvents),
       messageCount,
     );
   } catch {
     return null;
   }
+}
+
+// The bounded reader already projects the active branch, but message pages
+// omit intervening control ancestors. Relink this snapshot so the shared
+// visibility selector can validate it without dropping active messages.
+function relinkCapturedActiveMessageEvents(events: TranscriptEvent[]): TranscriptEvent[] {
+  let parentId: string | null = null;
+  return events.map((event, index) => {
+    if (!event || typeof event !== "object" || Array.isArray(event)) {
+      return event;
+    }
+    const record = event as Record<string, unknown>;
+    if (record.type !== "message") {
+      return event;
+    }
+    const id = typeof record.id === "string" ? record.id : `session-memory-${index + 1}`;
+    const linked = { ...record, id, parentId } as TranscriptEvent;
+    parentId = id;
+    return linked;
+  });
+}
+
+function captureRecentSessionMemoryEvents(
+  scope: { agentId: string; sessionId: string; sessionKey: string; storePath: string },
+  messageCount: number,
+): TranscriptEvent[] {
+  const captured: TranscriptEvent[] = [];
+  let capturedBytes = 0;
+  let offset = 0;
+  let totalMessages = Number.POSITIVE_INFINITY;
+  while (
+    offset < totalMessages &&
+    offset < SESSION_MEMORY_CAPTURE_MAX_SCANNED_MESSAGES &&
+    capturedBytes < SESSION_MEMORY_CAPTURE_MAX_BYTES &&
+    countSessionMemoryMessages(
+      selectVisibleTranscriptEvents(relinkCapturedActiveMessageEvents(captured)),
+    ) < messageCount
+  ) {
+    const page = readSessionTranscriptBoundedMessageTailPage(scope, {
+      maxBytes: SESSION_MEMORY_CAPTURE_MAX_BYTES - capturedBytes,
+      maxMessages: Math.min(
+        SESSION_MEMORY_CAPTURE_PAGE_MESSAGES,
+        SESSION_MEMORY_CAPTURE_MAX_SCANNED_MESSAGES - offset,
+      ),
+      offset,
+    });
+    totalMessages = page.totalMessages;
+    if (page.scannedMessages === 0) {
+      break;
+    }
+    captured.unshift(...page.events.map(({ event }) => event));
+    capturedBytes += page.serializedBytes;
+    offset += page.scannedMessages;
+  }
+  return relinkCapturedActiveMessageEvents(captured);
 }
 
 function resolveDisplaySessionKey(params: {
@@ -167,7 +229,10 @@ export async function flushSessionMemoryWritesForTest(): Promise<void> {
   await Promise.allSettled(pendingSessionMemoryWrites);
 }
 
-async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<void> {
+async function saveSessionMemoryNow(
+  event: Parameters<HookHandler>[0],
+  capturedEvents?: TranscriptEvent[],
+): Promise<void> {
   try {
     log.debug("Hook triggered for reset/new command", { action: event.action });
 
@@ -177,7 +242,14 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
       typeof context.workspaceDir === "string" && context.workspaceDir.trim().length > 0
         ? context.workspaceDir
         : undefined;
-    const agentId = resolveAgentIdFromSessionKey(event.sessionKey);
+    const agentId =
+      typeof context.agentId === "string" && context.agentId.trim()
+        ? context.agentId.trim()
+        : resolveAgentIdFromSessionKey(event.sessionKey, resolveDefaultAgentId(cfg ?? {}));
+    const contextStorePath =
+      typeof context.storePath === "string" && context.storePath.trim()
+        ? context.storePath.trim()
+        : undefined;
     const workspaceDir =
       contextWorkspaceDir ||
       (cfg
@@ -202,39 +274,15 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
       string,
       unknown
     >;
-    const currentSessionId = sessionEntry.sessionId as string;
-    let currentSessionFile = (sessionEntry.sessionFile as string) || undefined;
-
-    // If sessionFile is empty or looks like a new/reset file, try to find the previous session file.
-    if (!currentSessionFile || currentSessionFile.includes(".reset.")) {
-      const sessionsDirs = new Set<string>();
-      if (currentSessionFile) {
-        sessionsDirs.add(path.dirname(currentSessionFile));
-      }
-      sessionsDirs.add(path.join(workspaceDir, "sessions"));
-
-      for (const sessionsDir of sessionsDirs) {
-        const recoveredSessionFile = await findPreviousSessionFile({
-          sessionsDir,
-          currentSessionFile,
-          sessionId: currentSessionId,
-        });
-        if (!recoveredSessionFile) {
-          continue;
-        }
-        currentSessionFile = recoveredSessionFile;
-        log.debug("Found previous session file", { file: currentSessionFile });
-        break;
-      }
-    }
+    const currentSessionId =
+      typeof sessionEntry.sessionId === "string" && sessionEntry.sessionId.trim()
+        ? sessionEntry.sessionId.trim()
+        : undefined;
 
     log.debug("Session context resolved", {
       sessionId: currentSessionId,
-      sessionFile: currentSessionFile,
       hasCfg: Boolean(cfg),
     });
-
-    const sessionFile = currentSessionFile || undefined;
 
     // Read message count from hook config (default: 15)
     const hookConfig = resolveHookConfig(cfg, "session-memory");
@@ -246,13 +294,17 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
     let slug: string | null = null;
     let sessionContent: string | null = null;
 
-    if (sessionFile) {
-      const sqliteMarker = parseSqliteSessionFileMarker(sessionFile);
-      // SQLite-backed runtime sessions carry a marker in the legacy sessionFile
-      // slot; file artifact helpers only run for real transcript paths.
-      sessionContent = sqliteMarker
-        ? await getRecentSqliteSessionContent(sqliteMarker, messageCount)
-        : await getRecentSessionContentWithResetFallback(sessionFile, messageCount);
+    if (currentSessionId) {
+      sessionContent = await getRecentSqliteSessionContent(
+        {
+          agentId,
+          sessionId: currentSessionId,
+          sessionKey: event.sessionKey,
+          storePath: contextStorePath ?? resolveStorePath(cfg?.session?.store, { agentId }),
+        },
+        messageCount,
+        capturedEvents,
+      );
       log.debug("Session content loaded", {
         length: sessionContent?.length ?? 0,
         messageCount,
@@ -338,7 +390,43 @@ const saveSessionToMemory: HookHandler = (event) => {
     return;
   }
 
-  const writePromise = saveSessionMemoryNow(event);
+  let capturedEvents: TranscriptEvent[] | undefined;
+  try {
+    const context = event.context || {};
+    const sessionEntry = (context.previousSessionEntry || context.sessionEntry || {}) as Record<
+      string,
+      unknown
+    >;
+    const sessionId =
+      typeof sessionEntry.sessionId === "string" && sessionEntry.sessionId.trim()
+        ? sessionEntry.sessionId.trim()
+        : undefined;
+    if (sessionId) {
+      const cfg = context.cfg as OpenClawConfig | undefined;
+      const agentId =
+        typeof context.agentId === "string" && context.agentId.trim()
+          ? context.agentId.trim()
+          : resolveAgentIdFromSessionKey(event.sessionKey, resolveDefaultAgentId(cfg ?? {}));
+      const storePath =
+        typeof context.storePath === "string" && context.storePath.trim()
+          ? context.storePath.trim()
+          : resolveStorePath(cfg?.session?.store, { agentId });
+      const hookConfig = resolveHookConfig(cfg, "session-memory");
+      const messageCount =
+        typeof hookConfig?.messages === "number" && hookConfig.messages > 0
+          ? hookConfig.messages
+          : 15;
+      capturedEvents = captureRecentSessionMemoryEvents(
+        { agentId, sessionId, sessionKey: event.sessionKey, storePath },
+        messageCount,
+      );
+    }
+  } catch {
+    // Projection reads verify indexedSeq against the latest committed seq in
+    // one transaction. An in-flight rebuild throws here and schedules repair,
+    // so the async writer falls back to the authoritative transcript rows.
+  }
+  const writePromise = saveSessionMemoryNow(event, capturedEvents);
   pendingSessionMemoryWrites.add(writePromise);
   void writePromise.finally(() => {
     pendingSessionMemoryWrites.delete(writePromise);

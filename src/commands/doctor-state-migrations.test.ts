@@ -805,7 +805,7 @@ describe("doctor legacy state migrations", () => {
     const targetDir = path.join(root, "agents", "main", "sessions");
     const store = JSON.parse(
       fs.readFileSync(path.join(targetDir, "sessions.json"), "utf-8"),
-    ) as Record<string, { sessionId: string; sessionFile?: string }>;
+    ) as Record<string, { sessionId: string }>;
 
     migratedLegacySessionsCase = { result, targetDir, legacySessionsDir, store };
   });
@@ -820,8 +820,8 @@ describe("doctor legacy state migrations", () => {
     expect(store["agent:main:main"]?.sessionId).toBe("b");
     expect(store["agent:main:+1555"]?.sessionId).toBe("a");
     expect(store["agent:main:+1666"]?.sessionId).toBe("b");
-    expect(store["agent:main:+1555"]?.sessionFile).toBe(path.join(targetDir, "a.jsonl"));
-    expect(store["agent:main:+1666"]?.sessionFile).toBe(path.join(targetDir, "b.jsonl"));
+    expect(store["agent:main:+1555"]).not.toHaveProperty("sessionFile");
+    expect(store["agent:main:+1666"]).not.toHaveProperty("sessionFile");
     expect(store["+1555"]).toBeUndefined();
     expect(store["+1666"]).toBeUndefined();
     expect(store["agent:main:slack:channel:c123"]?.sessionId).toBe("c");
@@ -829,7 +829,7 @@ describe("doctor legacy state migrations", () => {
     expect(store["agent:main:subagent:xyz"]?.sessionId).toBe("e");
   });
 
-  it("repairs stale transcript paths left by a shipped legacy migration", async () => {
+  it("removes stale transcript paths left by a shipped legacy migration", async () => {
     const root = await makeTempRoot();
     const legacyDir = path.join(root, "sessions");
     const targetDir = path.join(root, "agents", "main", "sessions");
@@ -860,8 +860,8 @@ describe("doctor legacy state migrations", () => {
     expect(result.changes).toContain("Repaired migrated session transcript paths");
     const store = JSON.parse(
       fs.readFileSync(path.join(targetDir, "sessions.json"), "utf8"),
-    ) as Record<string, { sessionFile?: string }>;
-    expect(store["agent:main:main"]?.sessionFile).toBe(path.join(targetDir, "legacy.jsonl"));
+    ) as Record<string, object>;
+    expect(store["agent:main:main"]).not.toHaveProperty("sessionFile");
   });
 
   it("does not bind stale session metadata to a colliding target transcript", async () => {
