@@ -389,7 +389,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
   });
 
-  it("delivers core no-visible-reply fallback for disallowed empty group turns", async () => {
+  it("delivers core no-visible-reply fallback for disallowed empty mentioned group turns", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => undefined);
@@ -398,6 +398,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       Surface: "feishu",
       Provider: "feishu",
       SessionKey: "agent:main:feishu:group:oc_group",
+      WasMentioned: true,
     });
 
     const result = await dispatchReplyFromConfig({
@@ -423,6 +424,112 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       counts: { tool: 0, block: 0, final: 0 },
       noVisibleReplyFallbackDelivered: true,
     });
+    expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
+  });
+
+  it("keeps ambient group turns silent even when silence policy is disallow", async () => {
+    setNoAbort();
+    // The fallback exists for a user who asked and got nothing. An undirected
+    // group turn never draws a visible failure notice, regardless of silence
+    // policy (#114799: ambient HamVerBot group chatter drew fallback spam).
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => undefined);
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      Surface: "telegram",
+      Provider: "telegram",
+      SessionKey: "agent:main:telegram:group:oc_group",
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: {
+        agents: {
+          defaults: {
+            silentReply: {
+              group: "disallow",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+    expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
+  });
+
+  it("keeps room_event turns silent even when silence policy is disallow", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => undefined);
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      Surface: "telegram",
+      Provider: "telegram",
+      SessionKey: "agent:main:telegram:group:oc_group",
+      InboundEventKind: "room_event",
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: {
+        agents: {
+          defaults: {
+            silentReply: {
+              group: "disallow",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalledWith({
+      text: NO_VISIBLE_REPLY_FALLBACK_TEXT,
+    });
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+    expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
+  });
+
+  it("keeps room_event turns silent even when they carry a mention", async () => {
+    setNoAbort();
+    // A room_event is ambient by construction; a stray WasMentioned/direct
+    // classification must not promote it to a directed turn (only a command
+    // turn does, matching the room_event source-reply suppression bypass).
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => undefined);
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      Surface: "telegram",
+      Provider: "telegram",
+      SessionKey: "agent:main:telegram:group:oc_group",
+      InboundEventKind: "room_event",
+      WasMentioned: true,
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: {
+        agents: {
+          defaults: {
+            silentReply: {
+              group: "disallow",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalledWith({
+      text: NO_VISIBLE_REPLY_FALLBACK_TEXT,
+    });
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
     expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
   });
 
@@ -525,6 +632,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       Surface: "telegram",
       Provider: "telegram",
       SessionKey: "agent:main:telegram:group:oc_group",
+      WasMentioned: true,
     });
 
     const result = await dispatchReplyFromConfig({
@@ -636,6 +744,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       OriginatingChannel: "telegram",
       OriginatingTo: "telegram:999",
       SessionKey: "agent:main:slack:group:oc_group",
+      WasMentioned: true,
     });
 
     const result = await dispatchReplyFromConfig({
@@ -677,6 +786,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       OriginatingChannel: "telegram",
       OriginatingTo: "telegram:999",
       SessionKey: "agent:main:slack:group:oc_group",
+      WasMentioned: true,
     });
 
     const result = await dispatchReplyFromConfig({
@@ -712,6 +822,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       OriginatingChannel: "telegram",
       OriginatingTo: "telegram:999",
       SessionKey: "agent:main:slack:group:oc_group",
+      WasMentioned: true,
     });
 
     const result = await dispatchReplyFromConfig({
@@ -749,6 +860,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       OriginatingChannel: "telegram",
       OriginatingTo: "telegram:999",
       SessionKey: "agent:main:slack:group:oc_group",
+      WasMentioned: true,
     });
 
     const result = await dispatchReplyFromConfig({
@@ -790,6 +902,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       Surface: "telegram",
       Provider: "telegram",
       SessionKey: "agent:main:telegram:group:oc_group",
+      WasMentioned: true,
     });
 
     const result = await dispatchReplyFromConfig({
@@ -827,6 +940,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       Surface: "telegram",
       Provider: "telegram",
       SessionKey: "agent:main:telegram:group:oc_group",
+      WasMentioned: true,
     });
 
     const result = await dispatchReplyFromConfig({
@@ -861,6 +975,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       Surface: "telegram",
       Provider: "telegram",
       SessionKey: "agent:main:telegram:group:oc_group",
+      WasMentioned: true,
     });
 
     const result = await dispatchReplyFromConfig({
@@ -905,6 +1020,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       OriginatingChannel: "telegram",
       OriginatingTo: "telegram:999",
       SessionKey: "agent:main:slack:group:oc_group",
+      WasMentioned: true,
     });
 
     const result = await dispatchReplyFromConfig({
@@ -951,6 +1067,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       Surface: "telegram",
       Provider: "telegram",
       SessionKey: "agent:main:telegram:group:oc_group",
+      WasMentioned: true,
     });
 
     const result = await dispatchReplyFromConfig({
@@ -991,6 +1108,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       Surface: "telegram",
       Provider: "telegram",
       SessionKey: "agent:main:telegram:group:oc_group",
+      WasMentioned: true,
     });
 
     const result = await dispatchReplyFromConfig({
@@ -1029,6 +1147,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       Surface: "telegram",
       Provider: "telegram",
       SessionKey: "agent:main:telegram:group:oc_group",
+      WasMentioned: true,
     });
 
     const result = await dispatchReplyFromConfig({

@@ -45,6 +45,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     markInboundDedupeReplayUnsafe,
     maybeApplyTtsWithFinalizationLease,
     normalizeReplyMediaPayload,
+    noVisibleReplyFallbackDirected,
     preserveProgressCallbackStartOrder,
     reasoningPayloadsEnabled,
     recordAgentDispatchCompleted,
@@ -279,8 +280,11 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
 
   await waitForPendingDirectBlockReplyDelivery(getDispatchAbortSignal());
   // Observed delivery is plugin-attested visibility, a trust level the transport
-  // ledger intentionally does not own.
+  // ledger intentionally does not own. Directedness gates both the fallback and
+  // eligibility: only a turn that positively addressed the bot may surface a
+  // visible failure notice.
   const noVisibleReplyFallbackAllowed = () =>
+    noVisibleReplyFallbackDirected &&
     !suppressDelivery &&
     !sendPolicyDenied &&
     sourceReplyDeliveryMode !== "message_tool_only" &&
@@ -377,7 +381,8 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       // eligible, while any settled visible delivery clears it. An aborted or
       // timed-out settle leaves delivery unresolved, and a fallback reported as
       // delivered must not stay recoverable — either could double-send.
-      ...(queuedSettleResult === "settled" &&
+      ...(noVisibleReplyFallbackDirected &&
+      queuedSettleResult === "settled" &&
       !turnLedger.hasVisibleDelivery() &&
       !noVisibleReplyFallbackDelivered &&
       !getObservedReplyDelivery() &&
