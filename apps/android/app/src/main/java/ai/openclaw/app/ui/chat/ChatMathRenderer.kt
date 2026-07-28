@@ -437,7 +437,7 @@ private class ChatMathWebViewBackend(
   ) {
     if (
       host.get() == null ||
-        !WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)
+      !WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)
     ) {
       completion(ChatMathRenderResult.TransientFailure)
       return
@@ -495,7 +495,7 @@ private class ChatMathWebViewBackend(
             ) {
               if (
                 url == KATEX_SHELL_URL &&
-                  WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)
+                WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)
               ) {
                 ready = true
                 evaluateActiveRender()
