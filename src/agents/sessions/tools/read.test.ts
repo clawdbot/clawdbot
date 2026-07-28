@@ -119,6 +119,49 @@ describe("read tool", () => {
     );
   });
 
+  it("notes the omission when the run model cannot see images", async () => {
+    // Embedded-runner runs never wire an ExtensionContext, so the capability
+    // has to arrive via options; without the note the model only sees a
+    // wire-level placeholder and hallucinates around it.
+    const tempDir = tempDirs.make("openclaw-read-nonvision-");
+    const filePath = path.join(tempDir, "pixel.png");
+    await fs.writeFile(filePath, Buffer.from(ONE_PIXEL_PNG_BASE64, "base64"));
+    const tool = createReadToolDefinition(tempDir, {
+      autoResizeImages: false,
+      modelSupportsImages: false,
+    });
+    const result = await tool.execute(
+      "call-nonvision",
+      { path: filePath },
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    expect(textContent(result)).toContain("does not support images");
+    expect(result.content.some((part) => part.type === "image")).toBe(true);
+  });
+
+  it("stays quiet when the run model supports images", async () => {
+    const tempDir = tempDirs.make("openclaw-read-vision-");
+    const filePath = path.join(tempDir, "pixel.png");
+    await fs.writeFile(filePath, Buffer.from(ONE_PIXEL_PNG_BASE64, "base64"));
+    const tool = createReadToolDefinition(tempDir, {
+      autoResizeImages: false,
+      modelSupportsImages: true,
+    });
+    const result = await tool.execute(
+      "call-vision",
+      { path: filePath },
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    expect(textContent(result)).not.toContain("does not support images");
+    expect(result.content.some((part) => part.type === "image")).toBe(true);
+  });
+
   it("shell-quotes the long-first-line fallback path", async () => {
     // The fallback command is shown to the model; quote the path so suggested
     // follow-up commands cannot execute path text as shell syntax.

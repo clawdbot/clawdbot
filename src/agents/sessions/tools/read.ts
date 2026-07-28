@@ -156,6 +156,12 @@ export interface ReadToolOptions {
   autoResizeImages?: boolean;
   /** Custom operations for file reading. Default: local filesystem */
   operations?: ReadOperations;
+  /**
+   * Image-input capability of the run's resolved model. The embedded-runner
+   * path never wires an ExtensionContext, so without this the non-vision note
+   * below can never fire there and the model only gets a wire-level placeholder.
+   */
+  modelSupportsImages?: boolean;
 }
 
 type ReadRenderArgs = { path?: string; file_path?: string; offset?: number; limit?: number };
@@ -188,8 +194,12 @@ function trimTrailingEmptyLines(lines: string[]): string[] {
   return lines.slice(0, end);
 }
 
-function getNonVisionImageNote(model: Model | undefined): string | undefined {
-  if (!model || model.input.includes("image")) {
+function getNonVisionImageNote(
+  model: Model | undefined,
+  modelSupportsImages?: boolean,
+): string | undefined {
+  const supportsImages = modelSupportsImages ?? (model ? model.input.includes("image") : undefined);
+  if (supportsImages !== false) {
     return undefined;
   }
   return "[Current model does not support images. The image will be omitted from this request.]";
@@ -380,7 +390,10 @@ export function createReadToolDefinition(
               : undefined;
             let content: (TextContent | ImageContent)[];
             let truncationDetails: TruncationResult | undefined;
-            const nonVisionImageNote = getNonVisionImageNote(ctx?.model);
+            const nonVisionImageNote = getNonVisionImageNote(
+              ctx?.model,
+              options?.modelSupportsImages,
+            );
             if (mimeType) {
               // Read image as binary.
               const buffer = await ops.readFile(absolutePath);

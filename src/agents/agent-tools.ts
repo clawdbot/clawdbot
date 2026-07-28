@@ -647,6 +647,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             root: sandboxRoot,
             bridge: sandboxFsBridge!,
             modelContextWindowTokens: options?.modelContextWindowTokens,
+            modelSupportsImages: options?.modelHasVision,
             imageSanitization,
           });
           const guarded = workspaceOnly
@@ -663,7 +664,9 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
           );
           continue;
         }
-        const freshReadTool = createReadTool(codingRoot);
+        const freshReadTool = createReadTool(codingRoot, {
+          modelSupportsImages: options?.modelHasVision,
+        });
         const wrapped = createOpenClawReadTool(freshReadTool, {
           modelContextWindowTokens: options?.modelContextWindowTokens,
           imageSanitization,

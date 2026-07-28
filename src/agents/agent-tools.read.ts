@@ -881,6 +881,7 @@ type SandboxToolParams = {
   root: string;
   bridge: SandboxFsBridge;
   modelContextWindowTokens?: number;
+  modelSupportsImages?: boolean;
   imageSanitization?: ImageSanitizationLimits;
 };
 
@@ -888,6 +889,7 @@ type SandboxToolParams = {
 export function createSandboxedReadTool(params: SandboxToolParams) {
   const base = createReadTool(params.root, {
     operations: createSandboxReadOperations(params),
+    modelSupportsImages: params.modelSupportsImages,
   }) as unknown as AnyAgentTool;
   return createOpenClawReadTool(base, {
     modelContextWindowTokens: params.modelContextWindowTokens,
