@@ -1371,7 +1371,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       const isCandidate =
         message.poll?.kind === "vote" || Boolean(resolveIMessageReactionContext(message, bodyText));
       if (!isCandidate) {
-        return;
+        return undefined;
       }
       if (suppressStaleIngress(message, receivedAt, provenance)) {
         return { kind: "completed" };
@@ -1386,7 +1386,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           return { kind: "completed" };
         }
         if (!conversation) {
-          return;
+          return undefined;
         }
         const waited = await waitForIMessageApprovalControlBinding({
           accountId: accountInfo.accountId,

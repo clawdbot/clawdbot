@@ -418,6 +418,7 @@ function bindIMessageApprovalEntry(params: {
   approvalKind: "exec" | "plugin";
   allowedDecisions: readonly ExecApprovalReplyDecision[];
   expiresAtMs: number;
+  pollTargetWasRegisteredDuringDelivery?: boolean;
 }): true | null {
   const accountId = params.entry.accountId?.trim();
   if (!accountId) {
@@ -451,7 +452,8 @@ function bindIMessageApprovalEntry(params: {
           )
           .some(Boolean);
   const pollBound = params.entry.poll
-    ? registerIMessageApprovalPollTarget({
+    ? params.pollTargetWasRegisteredDuringDelivery ||
+      registerIMessageApprovalPollTarget({
         accountId,
         conversation: params.entry.conversation,
         pollGuid: params.entry.poll.pollGuid,
@@ -603,6 +605,10 @@ export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
           approvalKind: view.approvalKind,
           allowedDecisions: pendingPayload.allowedDecisions,
           expiresAtMs: view.expiresAtMs,
+          // Poll delivery registers before returning so an immediate vote can
+          // overtake the blocked chat lane. Never recreate that target here:
+          // the vote may already have resolved and removed it at this await.
+          pollTargetWasRegisteredDuringDelivery: Boolean(entry.poll),
         });
         if (bound) {
           // Generic bindPending runs after delivery. Mark this exact entry so

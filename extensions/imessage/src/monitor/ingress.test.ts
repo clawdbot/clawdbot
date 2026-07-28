@@ -179,7 +179,7 @@ describe("iMessage durable ingress", () => {
       const firstStarted = deferred();
       const releaseFirst = deferred();
       const voteStarted = deferred();
-      const dispatch = vi.fn(async (message: { id?: number }) => {
+      const dispatch = vi.fn(async (message: { id?: number | null }) => {
         if (message.id === 101) {
           firstStarted.resolve();
           await releaseFirst.promise;
@@ -194,7 +194,7 @@ describe("iMessage durable ingress", () => {
         dispatch,
         dispatchPriority: async (message) => {
           if (message.id !== 102) {
-            return;
+            return undefined;
           }
           voteStarted.resolve();
           return { kind: "completed" } as const;
@@ -215,7 +215,9 @@ describe("iMessage durable ingress", () => {
         await expect(
           Promise.race([
             voteStarted.promise.then(() => true),
-            new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 1_000)),
+            new Promise<boolean>((resolve) => {
+              setTimeout(() => resolve(false), 1_000);
+            }),
           ]),
         ).resolves.toBe(true);
       } finally {
@@ -230,7 +232,7 @@ describe("iMessage durable ingress", () => {
       const firstStarted = deferred();
       const releaseFirst = deferred();
       const unrelatedChecked = deferred();
-      const dispatch = vi.fn(async (message: { id?: number }) => {
+      const dispatch = vi.fn(async (message: { id?: number | null }) => {
         if (message.id === 101) {
           firstStarted.resolve();
           await releaseFirst.promise;

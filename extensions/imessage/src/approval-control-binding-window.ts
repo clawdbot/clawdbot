@@ -10,6 +10,13 @@ type BindingWindow = {
 
 const pendingByConversation = new Map<string, Set<BindingWindow>>();
 
+function approvalControlBindingAbortError(signal: AbortSignal | undefined): Error {
+  const reason = signal?.reason;
+  return reason instanceof Error
+    ? reason
+    : new Error("iMessage approval control binding aborted", { cause: reason });
+}
+
 function bindingKeys(accountId: string, conversation: IMessageApprovalConversationKey): string[] {
   const account = accountId.trim();
   return account
@@ -59,20 +66,21 @@ export async function waitForIMessageApprovalControlBinding(params: {
   conversation: IMessageApprovalConversationKey;
   abortSignal?: AbortSignal;
 }): Promise<boolean> {
-  const windows = new Set(
-    bindingKeys(params.accountId, params.conversation).flatMap((key) => [
-      ...(pendingByConversation.get(key) ?? []),
-    ]),
-  );
+  const windows = new Set<BindingWindow>();
+  for (const key of bindingKeys(params.accountId, params.conversation)) {
+    for (const window of pendingByConversation.get(key) ?? []) {
+      windows.add(window);
+    }
+  }
   if (windows.size === 0) {
     return false;
   }
   if (params.abortSignal?.aborted) {
-    throw params.abortSignal.reason;
+    throw approvalControlBindingAbortError(params.abortSignal);
   }
   let detachAbort = () => {};
   const aborted = new Promise<never>((_resolve, reject) => {
-    const onAbort = () => reject(params.abortSignal?.reason);
+    const onAbort = () => reject(approvalControlBindingAbortError(params.abortSignal));
     params.abortSignal?.addEventListener("abort", onAbort, { once: true });
     detachAbort = () => params.abortSignal?.removeEventListener("abort", onAbort);
   });

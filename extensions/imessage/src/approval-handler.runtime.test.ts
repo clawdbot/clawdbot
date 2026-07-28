@@ -413,6 +413,12 @@ describe("imessageApprovalNativeRuntime", () => {
     };
 
     beforeEach(() => {
+      clearIMessageApprovalPollTargetsForTest();
+      approvalResolverMock.resolveIMessageApproval.mockReset();
+      approvalResolverMock.resolveIMessageApproval.mockResolvedValue({
+        applied: true,
+        approval: {},
+      });
       sendMock.sendMessageIMessage.mockReset();
       sendMock.sendMessageIMessage.mockResolvedValue({
         messageId: "prompt-guid",
@@ -515,6 +521,69 @@ describe("imessageApprovalNativeRuntime", () => {
           decision: "allow-once",
         }),
       );
+    });
+
+    it("does not recreate a poll target after an immediate vote resolves it", async () => {
+      let immediateVote: Promise<boolean> | undefined;
+      actionsMock.sendPoll.mockImplementationOnce(async () => {
+        queueMicrotask(() => {
+          queueMicrotask(() => {
+            immediateVote = maybeResolveIMessageApprovalPollVote({
+              cfg: pollDeliverArgs.cfg,
+              accountId: "default",
+              message: {
+                sender: "+15551230000",
+                chat_guid: "iMessage;-;+15551230000",
+                poll: {
+                  kind: "vote",
+                  original_guid: "poll-guid",
+                  votes: [
+                    {
+                      option_id: "id-deny",
+                      participant: "+15551230000",
+                      event_type: "selected",
+                    },
+                  ],
+                },
+              } as never,
+            });
+          });
+        });
+        return {
+          messageId: "poll-guid",
+          pollOptions: [
+            { id: "id-allow", text: "👍 Allow Once" },
+            { id: "id-deny", text: "👎 Deny" },
+          ],
+        };
+      });
+
+      await imessageApprovalNativeRuntime.transport.deliverPending(pollDeliverArgs);
+      await vi.waitFor(() => expect(immediateVote).toBeDefined());
+      await expect(immediateVote).resolves.toBe(true);
+
+      await expect(
+        maybeResolveIMessageApprovalPollVote({
+          cfg: pollDeliverArgs.cfg,
+          accountId: "default",
+          message: {
+            sender: "+15551230000",
+            chat_guid: "iMessage;-;+15551230000",
+            poll: {
+              kind: "vote",
+              original_guid: "poll-guid",
+              votes: [
+                {
+                  option_id: "id-deny",
+                  participant: "+15551230000",
+                  event_type: "selected",
+                },
+              ],
+            },
+          } as never,
+        }),
+      ).resolves.toBe(true);
+      expect(approvalResolverMock.resolveIMessageApproval).toHaveBeenCalledTimes(1);
     });
 
     it("keeps the tapback hint when the bridge has no poll selector", async () => {

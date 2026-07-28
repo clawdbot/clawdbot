@@ -14,7 +14,7 @@ export type IMessageApprovalGatewayRuntime = {
     method: "approval.resolve",
     params: {
       id: string;
-      kind: "exec" | "plugin";
+      kind: "exec" | "plugin" | "system-agent";
       decision: ExecApprovalReplyDecision;
     },
     options?: { clientDisplayName?: string },

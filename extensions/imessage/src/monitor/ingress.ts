@@ -221,6 +221,8 @@ export function createIMessageDurableIngress(options: {
       if (!event.message || event.receivedAt === undefined) {
         throw new IMessageIngressPayloadError(`iMessage ingress payload ${record.id} is invalid.`);
       }
+      const message = event.message;
+      const receivedAt = event.receivedAt;
       if (lifecycle.abortSignal.aborted) {
         throw lifecycle.abortSignal.reason;
       }
@@ -230,9 +232,9 @@ export function createIMessageDurableIngress(options: {
         record.laneKey ?? record.id,
         async () =>
           await options.dispatchPriority?.(
-            event.message,
+            message,
             lifecycle,
-            event.receivedAt,
+            receivedAt,
             event.catchup ? { catchup: true } : {},
           ),
       );
@@ -241,9 +243,9 @@ export function createIMessageDurableIngress(options: {
       }
       return await dispatchAdmissionQueue.enqueue(record.laneKey ?? record.id, async () => {
         return await options.dispatch(
-          event.message,
+          message,
           lifecycle,
-          event.receivedAt,
+          receivedAt,
           event.catchup ? { catchup: true } : {},
         );
       });
