@@ -4,12 +4,15 @@ import {
   clearCliSessionMock,
   clearFastTestEnv,
   getCliSessionBindingMock,
+  ensureAgentWorkspaceMock,
+  ensureRuntimePluginsLoadedMock,
   isCliProviderMock,
   loadRunCronIsolatedAgentTurn,
   makeCronSession,
   makeCronSessionEntry,
   isThinkingLevelSupportedMock,
   loadModelCatalogMock,
+  loadModelCatalogOwnerMock,
   resolveAgentConfigMock,
   resolveAgentModelFallbacksOverrideMock,
   resolveAllowedModelRefMock,
@@ -144,6 +147,64 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     restoreFastTestEnv(previousFastTestEnv);
   });
 
+  it("builds cron context from the published replacement owner", async () => {
+    const callerConfig = { agents: { defaults: { model: "anthropic/caller" } } };
+    const ownerConfig = {
+      agents: {
+        defaults: { model: "google/gemini-2.0-flash" },
+        list: [{ id: "main", default: true, workspace: "/tmp/replacement-workspace" }],
+      },
+    };
+    const ownerCatalog = [{ provider: "google", id: "gemini-2.0-flash", name: "Gemini 2.0 Flash" }];
+    loadModelCatalogOwnerMock.mockResolvedValueOnce({
+      agentId: "main",
+      agentDir: "/tmp/owner-agent",
+      workspaceDir: "/tmp/replacement-workspace",
+      config: ownerConfig,
+      modelCatalog: { entries: ownerCatalog, routeVariants: [] },
+    });
+    ensureAgentWorkspaceMock.mockImplementationOnce(async ({ dir }: { dir: string }) => ({ dir }));
+    runWithModelFallbackMock.mockResolvedValueOnce(makeSuccessfulRunResult());
+
+    const result = await runCronIsolatedAgentTurn(makeParams({ cfg: callerConfig }));
+
+    expect(result.status).toBe("ok");
+    expect(loadModelCatalogOwnerMock).toHaveBeenCalledWith({
+      config: callerConfig,
+      readOnly: true,
+    });
+    expect(ensureAgentWorkspaceMock).toHaveBeenCalledWith(
+      expect.objectContaining({ dir: "/tmp/replacement-workspace" }),
+    );
+    expect(ensureRuntimePluginsLoadedMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining(ownerConfig),
+        workspaceDir: "/tmp/replacement-workspace",
+      }),
+    );
+    expect(resolveCronSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ cfg: ownerConfig, agentId: "main" }),
+    );
+  });
+
+  it("rejects a replacement owner that changes an explicitly requested agent", async () => {
+    const callerConfig = {
+      agents: { list: [{ id: "main", default: true }, { id: "worker" }] },
+    };
+    loadModelCatalogOwnerMock.mockResolvedValueOnce({
+      agentId: "main",
+      agentDir: "/tmp/main-agent",
+      workspaceDir: "/tmp/main-workspace",
+      config: callerConfig,
+      modelCatalog: { entries: [], routeVariants: [] },
+    });
+
+    await expect(
+      runCronIsolatedAgentTurn(makeParams({ cfg: callerConfig, agentId: "worker" })),
+    ).rejects.toThrow("cron model catalog owner changed from worker to main");
+    expect(runWithModelFallbackMock).not.toHaveBeenCalled();
+  });
+
   it("passes the cron payload model override to runWithModelFallback", async () => {
     // Track the provider/model passed to runWithModelFallback
     let capturedProvider: string | undefined;
@@ -194,7 +255,6 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
         phase: "model_call_started",
         provider: "google",
         model: "gemini-2.0-flash",
-        firstModelCallStarted: true,
       });
       return {
         payloads: [{ text: "summary done" }],
@@ -216,7 +276,6 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
         phase: "model_call_started",
         provider: "google",
         model: "gemini-2.0-flash",
-        firstModelCallStarted: true,
       }),
     ).toBe(true);
   });
@@ -258,7 +317,6 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
         phase: "model_call_started",
         provider: "google",
         model: "gemini-2.0-flash",
-        firstModelCallStarted: true,
       });
       return {
         payloads: [{ text: "summary done" }],
@@ -278,7 +336,6 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     expect(
       hasPhaseWithFields(phases, {
         phase: "model_call_started",
-        firstModelCallStarted: true,
       }),
     ).toBe(false);
 
@@ -302,7 +359,6 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     expect(
       hasPhaseWithFields(phases, {
         phase: "model_call_started",
-        firstModelCallStarted: true,
       }),
     ).toBe(true);
   });
@@ -442,6 +498,27 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     expect(embeddedCall.provider).toBe("ollama");
     expect(embeddedCall.model).toBe("qwen3:0.6b");
     expect(embeddedCall.thinkLevel).toBe("medium");
+  });
+
+  it("passes the resolved default thinking level to the embedded agent runner", async () => {
+    resolveThinkingDefaultMock.mockReturnValue("low");
+    isThinkingLevelSupportedMock.mockReturnValue(true);
+    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => ({
+      result: await run(provider, model),
+      provider,
+      model,
+      attempts: [],
+    }));
+
+    await runCronIsolatedAgentTurn(makeParams());
+
+    expect(resolveThinkingDefaultMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "google",
+        model: "gemini-2.0-flash",
+      }),
+    );
+    expect(firstMockArg(runEmbeddedAgentMock).thinkLevel).toBe("low");
   });
 
   it("uses a stored cron-session thinking preference before configured defaults", async () => {

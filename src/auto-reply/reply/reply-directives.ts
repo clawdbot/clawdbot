@@ -7,7 +7,6 @@ import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../tokens.js";
 export type ReplyDirectiveParseResult = {
   text: string;
   mediaUrls?: string[];
-  mediaUrl?: string;
   reaction?: {
     emoji: string;
     replyToCurrent?: boolean;
@@ -109,7 +108,6 @@ export function parseReplyDirectives(
   return {
     text,
     mediaUrls: split.mediaUrls,
-    mediaUrl: split.mediaUrl,
     reaction: reactionParsed.reaction,
     replyToId: replyParsed.replyToId ?? reactionParsed.reaction?.replyToId,
     replyToCurrent:

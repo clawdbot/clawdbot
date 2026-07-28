@@ -1,5 +1,6 @@
 // Coverage for the overflow compaction retry loop in runEmbeddedAgent.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AssistantMessage } from "../../llm/types.js";
 import {
   makeAttemptResult,
   makeCompactionSuccess,
@@ -11,6 +12,7 @@ import {
   overflowBaseRunParams as baseParams,
   loadRunOverflowCompactionHarness,
   mockedCompactDirect,
+  mockedClassifyFailoverReason,
   mockedContextEngine,
   mockedIsCompactionFailureError,
   mockedIsLikelyContextOverflowError,
@@ -24,6 +26,9 @@ import {
   warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
+
+const REASONING_ONLY_RETRY_INSTRUCTION =
+  "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
 
@@ -122,6 +127,91 @@ describe("overflow compaction in run loop", () => {
     );
     expectLogIncludes(mockedLog.info, "auto-compaction succeeded");
     // Should not be an error result
+    expect(result.meta.error).toBeUndefined();
+  });
+
+  it("uses the canonical assistant classifier when the legacy text heuristic misses", async () => {
+    mockedIsLikelyContextOverflowError.mockReturnValue(false);
+    const assistantError = {
+      role: "assistant",
+      content: [],
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5",
+      usage: {
+        input: 1,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 1,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "error",
+      errorMessage: "400 Your input exceeds the context window of this model",
+      timestamp: 1,
+    } satisfies AssistantMessage;
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          currentAttemptCompletedAssistant: assistantError,
+          lastAssistant: assistantError,
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult());
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted session",
+        firstKeptEntryId: "entry-5",
+        tokensBefore: 150_000,
+      }),
+    );
+
+    const result = await runEmbeddedAgent(baseParams);
+
+    expect(mockedCompactDirect).toHaveBeenCalledOnce();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.meta.error).toBeUndefined();
+  });
+
+  it("recovers a canonical zero-output length overflow through the caller", async () => {
+    mockedIsLikelyContextOverflowError.mockReturnValue(false);
+    const assistantOverflow = {
+      role: "assistant",
+      content: [],
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5",
+      usage: {
+        input: 199_000,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 199_000,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "length",
+      timestamp: 1,
+    } satisfies AssistantMessage;
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          currentAttemptCompletedAssistant: assistantOverflow,
+          lastAssistant: assistantOverflow,
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult());
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted session",
+        firstKeptEntryId: "entry-5",
+        tokensBefore: 199_000,
+      }),
+    );
+
+    const result = await runEmbeddedAgent(baseParams);
+
+    expect(mockedCompactDirect).toHaveBeenCalledOnce();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(result.meta.error).toBeUndefined();
   });
 
@@ -597,6 +687,78 @@ describe("overflow compaction in run loop", () => {
     expect(result.meta.error).toBeUndefined();
   });
 
+  it("does not suppress an unpersisted reasoning continuation after precheck compaction", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedResolveModelAsync.mockResolvedValue({
+      model: {
+        id: "kimi-for-coding",
+        provider: "kimi",
+        contextWindow: 262144,
+        api: "anthropic-messages",
+      },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    });
+    const overflowError = makeOverflowError(
+      "Context overflow: prompt too large for the model (precheck).",
+    );
+    mockedRunEmbeddedAttempt
+      .mockImplementationOnce(async (attemptParams) => {
+        (
+          attemptParams as {
+            onUserMessagePersisted?: (message: ReturnType<typeof makeUserMessage>) => void;
+          }
+        ).onUserMessagePersisted?.(makeUserMessage());
+        return makeAttemptResult({
+          assistantTexts: [],
+          lastAssistant: {
+            role: "assistant",
+            stopReason: "end_turn",
+            provider: "kimi",
+            model: "kimi-for-coding",
+            api: "anthropic-messages",
+            content: [
+              {
+                type: "thinking",
+                thinking: "internal reasoning",
+                thinkingSignature: JSON.stringify({ id: "rs_precheck", type: "reasoning" }),
+              },
+            ],
+          } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        });
+      })
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          promptError: overflowError,
+          promptErrorSource: "precheck",
+          preflightRecovery: { route: "compact_only" },
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted before continuation submission",
+        firstKeptEntryId: "entry-5",
+        tokensBefore: 150000,
+      }),
+    );
+
+    await runEmbeddedAgent({
+      ...baseParams,
+      currentMessageId: "telegram-msg-continuation-precheck",
+      provider: "kimi",
+      model: "kimi-for-coding",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    for (const index of [1, 2]) {
+      const retryParams = requireMockCallArg(mockedRunEmbeddedAttempt, index);
+      expect(retryParams.prompt).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
+      expect(retryParams.suppressNextUserMessagePersistence).toBe(false);
+    }
+  });
+
   it("retries after successful compaction on likely-overflow promptError variants", async () => {
     const overflowHintError = new Error("Context window exceeded: requested 12000 tokens");
 
@@ -661,7 +823,7 @@ describe("overflow compaction in run loop", () => {
     expect(
       requireMockCallArg(mockedSessionLikelyHasOversizedToolResults, 0).contextWindowTokens,
     ).toBe(200000);
-    expectTruncationScopeSessionFile(0, "/tmp/session.json");
+    expectTruncationScopeSessionFile(0, baseParams.sessionKey);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expectLogIncludes(mockedLog.info, "Truncated 1 tool result(s)");
     expect(result.meta.error).toBeUndefined();
@@ -707,7 +869,7 @@ describe("overflow compaction in run loop", () => {
     const oversizedArgs = requireMockCallArg(mockedSessionLikelyHasOversizedToolResults, 0);
     const messages = oversizedArgs.messages as Array<{ role?: string }>;
     expect(messages.filter((message) => message.role === "toolResult")).toHaveLength(3);
-    expectTruncationScopeSessionFile(0, "/tmp/session.json");
+    expectTruncationScopeSessionFile(0, baseParams.sessionKey);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expectLogIncludes(mockedLog.info, "Truncated 2 tool result(s)");
     expect(result.meta.error).toBeUndefined();
@@ -848,7 +1010,7 @@ describe("overflow compaction in run loop", () => {
     const result = await runEmbeddedAgent(baseParams);
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    expectTruncationScopeSessionFile(0, "/tmp/session.json");
+    expectTruncationScopeSessionFile(0, baseParams.sessionKey);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expectLogIncludes(mockedLog.info, "post-compaction tool-result truncation succeeded");
     expect(result.meta.error).toBeUndefined();
@@ -1204,3 +1366,4 @@ describe("overflow compaction in run loop", () => {
     expect(result.meta.error).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

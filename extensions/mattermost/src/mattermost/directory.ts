@@ -1,7 +1,7 @@
 // Mattermost plugin module implements directory behavior.
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { listMattermostAccountIds, resolveMattermostAccount } from "./accounts.js";
+import { inspectMattermostAccount, listMattermostAccountIds } from "./accounts.js";
 import {
   createMattermostClient,
   fetchMattermostMe,
@@ -23,7 +23,7 @@ function buildClient(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): MattermostClient | null {
-  const account = resolveMattermostAccount({ cfg: params.cfg, accountId: params.accountId });
+  const account = inspectMattermostAccount({ cfg: params.cfg, accountId: params.accountId });
   if (!account.enabled || !account.botToken || !account.baseUrl) {
     return null;
   }
@@ -134,6 +134,9 @@ export async function listMattermostDirectoryPeers(
   // All bots see the same user list, so one client suffices (unlike channels
   // where private channel membership varies per bot).
   const client = clients[0];
+  if (!client) {
+    return [];
+  }
   try {
     const me = await fetchMattermostMe(client);
     const teams = await client.request<{ id: string }[]>("/users/me/teams");
@@ -141,7 +144,11 @@ export async function listMattermostDirectoryPeers(
       return [];
     }
     // Uses first team — multi-team setups may need iteration in the future
-    const teamId = teams[0].id;
+    const team = teams[0];
+    if (!team) {
+      return [];
+    }
+    const teamId = team.id;
     const q = normalizeLowercaseStringOrEmpty(params.query);
 
     let users: MattermostUser[];

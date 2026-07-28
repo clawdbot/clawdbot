@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EmbeddedPluginApprovalBroker } from "./embedded-plugin-approval-broker.js";
 
@@ -27,7 +28,10 @@ describe("EmbeddedPluginApprovalBroker", () => {
       request: requestPayload(),
       timeoutMs: 5_000,
     });
-    const approval = broker.listPending()[0];
+    const approval = expectDefined(
+      broker.listPending()[0],
+      "broker.listPending()[0] test invariant",
+    );
 
     expect(approval?.request.toolName).toBe("skill_workshop");
     expect(events[0]).toEqual({
@@ -49,7 +53,10 @@ describe("EmbeddedPluginApprovalBroker", () => {
       request: requestPayload(),
       timeoutMs: 5_000,
     });
-    const approval = broker.listPending()[0];
+    const approval = expectDefined(
+      broker.listPending()[0],
+      "broker.listPending()[0] test invariant",
+    );
 
     expect(broker.resolve(approval?.id, "allow-always")).toBe(false);
     broker.stop();
@@ -62,7 +69,10 @@ describe("EmbeddedPluginApprovalBroker", () => {
       request: requestPayload(),
       timeoutMs: 5_000,
     });
-    const approval = broker.listPending()[0];
+    const approval = expectDefined(
+      broker.listPending()[0],
+      "broker.listPending()[0] test invariant",
+    );
 
     expect(broker.resolve(approval?.id, "deny")).toBe(true);
     await expect(resultPromise).resolves.toMatchObject({ decision: "deny" });

@@ -89,4 +89,43 @@ describe("agent file requests", () => {
     expect(state.agentFileContents).toEqual({});
     expect(state.agentFileSaving).toBe(false);
   });
+
+  it("commits the submitted draft when it stays current", async () => {
+    const client = {
+      request: vi.fn().mockResolvedValue({ ok: true, ...fileResult("submitted") }),
+    } as unknown as GatewayBrowserClient;
+    const state = createState(client);
+    state.agentFileContents = { "AGENTS.md": "original" };
+    state.agentFileDrafts = { "AGENTS.md": "submitted" };
+
+    await saveAgentFile(state, "main", "AGENTS.md", "submitted");
+
+    expect(state.agentFileContents).toEqual({ "AGENTS.md": "submitted" });
+    expect(state.agentFileDrafts).toEqual({ "AGENTS.md": "submitted" });
+    expect(state.agentFileSaving).toBe(false);
+  });
+
+  it("preserves edits made while a save is pending", async () => {
+    let resolveSave!: (value: AgentsFilesSetResult) => void;
+    const client = {
+      request: vi.fn(
+        () =>
+          new Promise<AgentsFilesSetResult>((resolve) => {
+            resolveSave = resolve;
+          }),
+      ),
+    } as unknown as GatewayBrowserClient;
+    const state = createState(client);
+    state.agentFileContents = { "AGENTS.md": "original" };
+    state.agentFileDrafts = { "AGENTS.md": "submitted" };
+
+    const save = saveAgentFile(state, "main", "AGENTS.md", "submitted");
+    state.agentFileDrafts = { "AGENTS.md": "typed while saving" };
+    resolveSave({ ok: true, ...fileResult("submitted") });
+    await save;
+
+    expect(state.agentFileContents).toEqual({ "AGENTS.md": "submitted" });
+    expect(state.agentFileDrafts).toEqual({ "AGENTS.md": "typed while saving" });
+    expect(state.agentFileSaving).toBe(false);
+  });
 });

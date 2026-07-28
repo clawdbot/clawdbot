@@ -1,10 +1,12 @@
 package ai.openclaw.app
 
-import ai.openclaw.app.gateway.GatewayConnectErrorDetails
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.i18n.verbatimText
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -218,6 +220,29 @@ class GatewayExecApprovalRuntimeTest {
     }
 
   @Test
+  fun cancelledApprovalRefreshPreservesOwnerStateWithoutPublishingFailure() =
+    runBlocking {
+      val runtime = createTestRuntime()
+      seedConnectedRuntime(runtime, unifiedMethods)
+      seedApproval(runtime)
+      val requestStarted = CompletableDeferred<Unit>()
+      runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+        check(method == "exec.approval.list")
+        requestStarted.complete(Unit)
+        throw CancellationException("approval gateway generation retired")
+      }
+
+      runtime.refreshExecApprovals()
+      withTimeout(2_000) { requestStarted.await() }
+      waitUntil { !runtime.execApprovalsRefreshing.value }
+
+      val retainedApproval = runtime.execApprovals.value.single()
+      assertNull(runtime.execApprovalsErrorText.value)
+      assertEquals("approval-1", retainedApproval.id)
+      assertNull(retainedApproval.errorText)
+    }
+
+  @Test
   fun reconnectListHydrationPublishesTerminalForRetainedUnknownWrite() =
     runBlocking {
       val runtime = createTestRuntime()
@@ -292,7 +317,7 @@ class GatewayExecApprovalRuntimeTest {
       }
 
       runtime.resolveExecApproval("approval-1", "deny")
-      withTimeout(2_000) { resolveStarted.await() }
+      withTimeout(10_000) { resolveStarted.await() }
 
       // GatewaySession runs onDisconnected before failing the retired socket's
       // request waiters. Recreate that production ordering on the same stable ID.
@@ -346,7 +371,7 @@ class GatewayExecApprovalRuntimeTest {
       }
 
       runtime.resolveExecApproval("approval-1", "deny")
-      withTimeout(2_000) { resolveStarted.await() }
+      withTimeout(10_000) { resolveStarted.await() }
       runtime.refreshExecApprovals()
       withTimeout(2_000) { refreshReadCompleted.await() }
       waitUntil { !runtime.execApprovalsRefreshing.value }
@@ -418,7 +443,7 @@ class GatewayExecApprovalRuntimeTest {
       }
 
       runtime.resolveExecApproval("approval-1", "deny")
-      withTimeout(2_000) { resolveStarted.await() }
+      withTimeout(10_000) { resolveStarted.await() }
       runtime.refreshExecApprovals()
       withTimeout(2_000) { retainedReadStarted.await() }
 
@@ -604,7 +629,7 @@ class GatewayExecApprovalRuntimeTest {
       }
 
       runtime.resolveExecApproval("approval-1", "allow-once")
-      withTimeout(2_000) { resolveStarted.await() }
+      withTimeout(10_000) { resolveStarted.await() }
       invokeApprovalEvent(
         runtime,
         "exec.approval.resolved",
@@ -653,7 +678,7 @@ class GatewayExecApprovalRuntimeTest {
       }
 
       runtime.resolveExecApproval("approval-1", "allow-once")
-      withTimeout(2_000) { resolveStarted.await() }
+      withTimeout(10_000) { resolveStarted.await() }
       invokeApprovalEvent(
         runtime,
         "exec.approval.resolved",
@@ -756,7 +781,7 @@ class GatewayExecApprovalRuntimeTest {
       }
 
       runtime.resolveExecApproval("approval-1", "allow-once")
-      withTimeout(2_000) { resolveStarted.await() }
+      withTimeout(10_000) { resolveStarted.await() }
       // Replacement hello on the same stable endpoint: the epoch bump makes the
       // already-resolved publish a no-op, leaving only the pending-write record.
       invokeReplaceGatewayMethods(runtime, legacyMethods)
@@ -1166,7 +1191,7 @@ class GatewayExecApprovalRuntimeTest {
   ): GatewayExecApprovalSummary =
     GatewayExecApprovalSummary(
       id = id,
-      commandText = commandText,
+      commandText = verbatimText(commandText),
       commandPreview = "echo",
       warningText = null,
       allowedDecisions = listOf("allow-once", "allow-always", "deny"),
@@ -1178,7 +1203,8 @@ class GatewayExecApprovalRuntimeTest {
     )
 
   private suspend fun waitUntil(condition: () -> Boolean) {
-    withTimeout(3_000) {
+    // Generous ceiling for loaded CI runners; passing tests exit on first poll.
+    withTimeout(10_000) {
       while (!condition()) delay(10)
     }
   }
@@ -1307,8 +1333,8 @@ class GatewayExecApprovalRuntimeTest {
     }
     """.trimIndent()
 
-  private fun gatewayErrorDetails(reason: String): GatewayConnectErrorDetails =
-    GatewayConnectErrorDetails(
+  private fun gatewayErrorDetails(reason: String): GatewayErrorDetails =
+    GatewayErrorDetails(
       code = null,
       canRetryWithDeviceToken = false,
       recommendedNextStep = null,

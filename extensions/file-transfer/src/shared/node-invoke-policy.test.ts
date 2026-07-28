@@ -5,7 +5,7 @@ import { gzipSync } from "node:zlib";
 import type { OpenClawPluginNodeInvokePolicyContext } from "openclaw/plugin-sdk/plugin-entry";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { appendFileTransferAudit } from "./audit.js";
-import { createFileTransferNodeInvokePolicy, testing } from "./node-invoke-policy.js";
+import { createFileTransferNodeInvokePolicy } from "./node-invoke-policy.js";
 
 vi.mock("./audit.js", () => ({
   appendFileTransferAudit: vi.fn(async () => undefined),
@@ -155,13 +155,6 @@ function requireInvokeParams(
 }
 
 describe("file-transfer node invoke policy", () => {
-  it("maps only transfer payload sizes into audit records", () => {
-    expect(testing.readAuditSizeBytes("file.fetch", { size: 3 })).toBe(3);
-    expect(testing.readAuditSizeBytes("file.write", { size: 4 })).toBe(4);
-    expect(testing.readAuditSizeBytes("dir.fetch", { tarBytes: 999 }, 5)).toBe(5);
-    expect(testing.readAuditSizeBytes("dir.list", { size: 6 })).toBeUndefined();
-  });
-
   it("injects policy-owned limits before invoking the node", async () => {
     const policy = createFileTransferNodeInvokePolicy();
     const { ctx, invokeNode } = createCtx({
@@ -270,11 +263,95 @@ describe("file-transfer node invoke policy", () => {
     expect(invokeNode).not.toHaveBeenCalled();
   });
 
-  it("uses plugin approvals for ask-on-miss before invoking the node", async () => {
+  it.each(["allow-once", "allow-always"] as const)(
+    "uses exact %s plugin approval once across preflight and final invoke",
+    async (decision) => {
+      const policy = createFileTransferNodeInvokePolicy();
+      const approvals = {
+        request: vi.fn(async () => ({ id: "approval-1", decision })),
+      };
+      const { ctx, invokeNode } = createCtx({
+        params: { path: "/tmp/new.txt" },
+        pluginConfig: {
+          nodes: {
+            "node-1": {
+              ask: "on-miss",
+              allowReadPaths: ["/allowed/**"],
+              maxBytes: 256,
+            },
+          },
+        },
+        approvals,
+      });
+
+      const result = await policy.handle(ctx);
+
+      expect(result.ok).toBe(true);
+      expect(approvals.request).toHaveBeenCalledTimes(1);
+      expect(invokeNode).toHaveBeenCalledTimes(2);
+      const approvalCalls = approvals.request.mock.calls as unknown[][];
+      const approvalRequest = requireRecord(approvalCalls[0]?.[0], "approval request");
+      expectRecordFields(approvalRequest, {
+        title: "Read file: /tmp/new.txt",
+        severity: "info",
+        toolName: "file.fetch",
+      });
+      expect(invokeNode).toHaveBeenNthCalledWith(1, {
+        params: {
+          path: "/tmp/new.txt",
+          followSymlinks: false,
+          maxBytes: 256,
+          preflightOnly: true,
+        },
+      });
+      expect(invokeNode).toHaveBeenNthCalledWith(2, {
+        params: {
+          path: "/tmp/new.txt",
+          followSymlinks: false,
+          maxBytes: 256,
+        },
+      });
+    },
+  );
+
+  it.each([
+    {
+      label: "explicit deny",
+      decision: "deny",
+      code: "APPROVAL_DENIED",
+      message: "file.fetch APPROVAL_DENIED: operator denied the prompt",
+    },
+    {
+      label: "null decision",
+      decision: null,
+      code: "APPROVAL_UNAVAILABLE",
+      message:
+        "file.fetch APPROVAL_UNAVAILABLE: no operator client connected to approve the request",
+    },
+    {
+      label: "undefined decision",
+      decision: undefined,
+      code: "APPROVAL_UNAVAILABLE",
+      message:
+        "file.fetch APPROVAL_UNAVAILABLE: no operator client connected to approve the request",
+    },
+    {
+      label: "arbitrary truthy string",
+      decision: "accept",
+      code: "APPROVAL_DENIED",
+      message: "file.fetch APPROVAL_DENIED: invalid approval decision",
+    },
+    {
+      label: "arbitrary truthy object",
+      decision: { action: "accept" },
+      code: "APPROVAL_DENIED",
+      message: "file.fetch APPROVAL_DENIED: invalid approval decision",
+    },
+  ])("fails closed for $label", async ({ decision, code, message }) => {
     const policy = createFileTransferNodeInvokePolicy();
     const approvals = {
-      request: vi.fn(async () => ({ id: "approval-1", decision: "allow-once" as const })),
-    };
+      request: vi.fn(async () => ({ id: "approval-1", decision })),
+    } as unknown as NonNullable<OpenClawPluginNodeInvokePolicyContext["approvals"]>;
     const { ctx, invokeNode } = createCtx({
       params: { path: "/tmp/new.txt" },
       pluginConfig: {
@@ -282,7 +359,6 @@ describe("file-transfer node invoke policy", () => {
           "node-1": {
             ask: "on-miss",
             allowReadPaths: ["/allowed/**"],
-            maxBytes: 256,
           },
         },
       },
@@ -291,29 +367,9 @@ describe("file-transfer node invoke policy", () => {
 
     const result = await policy.handle(ctx);
 
-    expect(result.ok).toBe(true);
-    const approvalCalls = approvals.request.mock.calls as unknown[][];
-    const approvalRequest = requireRecord(approvalCalls[0]?.[0], "approval request");
-    expectRecordFields(approvalRequest, {
-      title: "Read file: /tmp/new.txt",
-      severity: "info",
-      toolName: "file.fetch",
-    });
-    expect(invokeNode).toHaveBeenNthCalledWith(1, {
-      params: {
-        path: "/tmp/new.txt",
-        followSymlinks: false,
-        maxBytes: 256,
-        preflightOnly: true,
-      },
-    });
-    expect(invokeNode).toHaveBeenNthCalledWith(2, {
-      params: {
-        path: "/tmp/new.txt",
-        followSymlinks: false,
-        maxBytes: 256,
-      },
-    });
+    expectResultFields(result, { ok: false, code, message });
+    expect(approvals.request).toHaveBeenCalledTimes(1);
+    expect(invokeNode).not.toHaveBeenCalled();
   });
 
   it("marks node transport failures as unavailable", async () => {

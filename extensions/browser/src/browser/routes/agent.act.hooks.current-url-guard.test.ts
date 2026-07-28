@@ -18,6 +18,7 @@ const pathMocks = vi.hoisted(() => ({
 const pwMocks = vi.hoisted(() => ({
   armDialogViaPlaywright: vi.fn(async () => {}),
   armFileUploadViaPlaywright: vi.fn(async () => {}),
+  uploadViaPlaywright: vi.fn(async () => {}),
   clickViaPlaywright: vi.fn(async () => {}),
   setInputFilesViaPlaywright: vi.fn(async () => {}),
 }));
@@ -98,6 +99,7 @@ const blockedHookCases = [
       pathMocks.resolveExistingUploadPaths,
       chromeMcpMocks.uploadChromeMcpFile,
       pwMocks.armFileUploadViaPlaywright,
+      pwMocks.uploadViaPlaywright,
       pwMocks.clickViaPlaywright,
       pwMocks.setInputFilesViaPlaywright,
     ],

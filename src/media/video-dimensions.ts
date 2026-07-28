@@ -2,7 +2,7 @@
 import { runFfprobe } from "./ffmpeg-exec.js";
 
 /** Positive video dimensions reported by ffprobe for the first video stream. */
-export type VideoDimensions = {
+type VideoDimensions = {
   width: number;
   height: number;
 };
@@ -15,7 +15,7 @@ function parsePositiveDimension(value: unknown): number | undefined {
 }
 
 /** Parses ffprobe JSON output, accepting only positive integer first-stream dimensions. */
-export function parseFfprobeVideoDimensions(stdout: string): VideoDimensions | undefined {
+function parseFfprobeVideoDimensions(stdout: string): VideoDimensions | undefined {
   let parsed: unknown;
   try {
     parsed = JSON.parse(stdout);

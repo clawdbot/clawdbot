@@ -13,7 +13,11 @@ OpenClaw "presence" is a lightweight, best-effort view of:
 - **user-visible clients connected to the Gateway** (mac app, WebChat, nodes, etc.)
 
 Presence renders live connection metadata in the Control UI **Devices** page
-and the macOS app's **Instances** tab.
+(under **Settings → Devices**) and the macOS app's **Instances** tab.
+
+This page covers the Gateway client roster. To detect the Mac you most recently
+used and route node alerts there, see
+[Active computer presence](/nodes/presence).
 
 ## Presence fields (what shows up)
 
@@ -54,7 +58,14 @@ stay tracked because test suites use them as stand-ins for real clients.
 ### 3) `system-event` beacons
 
 Clients can send richer periodic beacons via the `system-event` method. The mac
-app uses this to report host name, IP, and `lastInputSeconds`.
+app uses this to report host name, IP, version, and liveness metadata. Physical
+input activity is not part of this generic beacon; the purpose-specific native
+node event described in [Active computer presence](/nodes/presence) owns it. The
+Mac tags these beacons with `system-presence-clear-last-input`; current Gateways
+use that backward-compatible marker to remove any input recency retained from an
+older app. The beacon also carries a fixed 30-day value so older Gateways that
+ignore the tag overwrite exact recency instead of retaining it. No new activity
+is sampled for this compatibility value.
 
 ### 4) Node connects (role: node)
 
@@ -113,6 +124,9 @@ indicator (Active/Idle/Stale) based on the age of the last update.
 ## Related
 
 <CardGroup cols={2}>
+  <Card title="Active computer presence" href="/nodes/presence" icon="computer-mouse">
+    How physical Mac input selects an active node and routes connection alerts.
+  </Card>
   <Card title="Typing indicators" href="/concepts/typing-indicators" icon="ellipsis">
     When typing indicators are sent and how to tune them.
   </Card>

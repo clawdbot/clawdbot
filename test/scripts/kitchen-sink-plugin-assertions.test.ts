@@ -260,8 +260,12 @@ function toGitBashPath(value: string) {
   if (!match) {
     return value;
   }
-
-  return `/${match[1].toLowerCase()}/${match[2].replaceAll("\\", "/")}`;
+  const drive = match[1];
+  const suffix = match[2];
+  if (drive === undefined || suffix === undefined) {
+    return value;
+  }
+  return `/${drive.toLowerCase()}/${suffix.replaceAll("\\", "/")}`;
 }
 
 describe("kitchen-sink plugin assertions", () => {

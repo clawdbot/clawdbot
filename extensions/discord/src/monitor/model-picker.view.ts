@@ -63,13 +63,13 @@ type DiscordModelPickerRenderShellParams = {
   trailingRows?: DiscordModelPickerRow[];
 };
 
-export type DiscordModelPickerRenderedView = {
+type DiscordModelPickerRenderedView = {
   layout: DiscordModelPickerLayout;
   content?: string;
   components: TopLevelComponents[];
 };
 
-export type DiscordModelPickerProviderViewParams = {
+type DiscordModelPickerProviderViewParams = {
   command: DiscordModelPickerCommandContext;
   userId: string;
   data: ModelsProviderData;
@@ -79,7 +79,7 @@ export type DiscordModelPickerProviderViewParams = {
   layout?: DiscordModelPickerLayout;
 };
 
-export type DiscordModelPickerModelViewParams = {
+type DiscordModelPickerModelViewParams = {
   command: DiscordModelPickerCommandContext;
   userId: string;
   data: ModelsProviderData;
@@ -103,10 +103,14 @@ function parseCurrentModelRef(raw?: string): DiscordModelPickerCurrentModelRef |
   if (!match) {
     return null;
   }
-  const provider = normalizeProviderId(match[1]);
+  const providerText = match[1];
+  const model = match[2];
+  if (providerText === undefined || model === undefined) {
+    return null;
+  }
+  const provider = normalizeProviderId(providerText);
   // Preserve the model suffix exactly as entered after "/" so select defaults
   // continue to mirror the stored ref for Discord interactions.
-  const model = match[2];
   if (!provider || !model) {
     return null;
   }
@@ -873,7 +877,7 @@ export function renderDiscordModelPickerModelsView(
   });
 }
 
-export type DiscordModelPickerRecentsViewParams = {
+type DiscordModelPickerRecentsViewParams = {
   command: DiscordModelPickerCommandContext;
   userId: string;
   data: ModelsProviderData;
@@ -938,8 +942,7 @@ export function renderDiscordModelPickerRecentsView(
   );
 
   // Recent model buttons — slot 2+.
-  for (let i = 0; i < dedupedQuickModels.length; i++) {
-    const modelRef = dedupedQuickModels[i];
+  for (const [i, modelRef] of dedupedQuickModels.entries()) {
     rows.push(
       new Row([
         createModelPickerButton({
@@ -1009,3 +1012,4 @@ export function toDiscordModelPickerMessagePayload(
     components: view.components,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

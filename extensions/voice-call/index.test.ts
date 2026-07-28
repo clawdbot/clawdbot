@@ -10,14 +10,19 @@ import type { VoiceCallRuntime } from "./runtime-entry.js";
 import type { CallRecord } from "./src/types.js";
 
 let runtimeStub: VoiceCallRuntime;
+const callGatewayFromCliMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./runtime-entry.js", () => ({
   createVoiceCallRuntime: vi.fn(async () => runtimeStub),
 }));
 
+vi.mock("openclaw/plugin-sdk/gateway-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/gateway-runtime")>()),
+  callGatewayFromCli: callGatewayFromCliMock,
+}));
+
 import plugin from "./index.js";
 import { createVoiceCallRuntime } from "./runtime-entry.js";
-import { testing as voiceCallCliTesting } from "./src/cli.js";
 
 const noopLogger = {
   info: vi.fn(),
@@ -25,8 +30,6 @@ const noopLogger = {
   error: vi.fn(),
   debug: vi.fn(),
 };
-
-const callGatewayFromCliMock = vi.fn();
 
 type Registered = {
   methods: Map<string, unknown>;
@@ -243,13 +246,11 @@ describe("voice-call plugin", () => {
     runtimeStub = createRuntimeStub();
     callGatewayFromCliMock.mockReset();
     callGatewayFromCliMock.mockRejectedValue(new Error("connect ECONNREFUSED 127.0.0.1:18789"));
-    voiceCallCliTesting.setCallGatewayFromCliForTests(callGatewayFromCliMock);
     vi.mocked(createVoiceCallRuntime).mockReset();
     vi.mocked(createVoiceCallRuntime).mockImplementation(async () => runtimeStub);
   });
 
   afterEach(() => {
-    voiceCallCliTesting.setCallGatewayFromCliForTests();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     delete (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.voice-call.runtime")];
@@ -259,6 +260,33 @@ describe("voice-call plugin", () => {
     delete (globalThis as Record<PropertyKey, unknown>)[
       Symbol.for("openclaw.voice-call.runtimeStopPromise")
     ];
+  });
+
+  it("defaults canonical plugin config to an enabled mock runtime", async () => {
+    const { service } = setup({});
+
+    await service?.start(createServiceContext());
+
+    expect(createVoiceCallRuntime).toHaveBeenCalledTimes(1);
+    expect(firstRuntimeConfig()).toMatchObject({
+      enabled: true,
+      provider: "mock",
+    });
+  });
+
+  it.each([
+    ["provider log", { enabled: true, provider: "log" }],
+    [
+      "twilio.from",
+      {
+        enabled: true,
+        provider: "mock",
+        twilio: { from: "+15550001234" },
+      },
+    ],
+  ])("rejects legacy %s config instead of normalizing it at runtime", (_label, config) => {
+    expect(() => setup(config)).toThrow();
+    expect(createVoiceCallRuntime).not.toHaveBeenCalled();
   });
 
   it("reuses a started runtime across plugin registration contexts", async () => {
@@ -728,40 +756,6 @@ describe("voice-call plugin", () => {
     expect(error?.message).toContain("last state=completed");
     expect(error?.message).toContain("endReason=completed");
     expect(error?.message).not.toContain("endedAt=");
-  });
-
-  it("normalizes legacy config through runtime creation and warns to run doctor", async () => {
-    const { methods } = setup({
-      enabled: true,
-      provider: "log",
-      twilio: {
-        from: "+15550001234",
-      },
-      streaming: {
-        enabled: true,
-        sttProvider: "openai",
-        openaiApiKey: "sk-test", // pragma: allowlist secret
-      },
-    });
-    const handler = methods.get("voicecall.status") as
-      | ((ctx: {
-          params: Record<string, unknown>;
-          respond: ReturnType<typeof vi.fn>;
-        }) => Promise<void>)
-      | undefined;
-    const respond = vi.fn();
-
-    await handler?.({ params: { callId: "call-1" }, respond });
-
-    expect(vi.mocked(createVoiceCallRuntime)).toHaveBeenCalledTimes(1);
-    const runtimeConfig = firstRuntimeConfig();
-    expect(runtimeConfig?.enabled).toBe(true);
-    expect(runtimeConfig?.provider).toBe("mock");
-    expect(runtimeConfig?.fromNumber).toBe("+15550001234");
-    expect(runtimeConfig?.streaming?.enabled).toBe(true);
-    expect(runtimeConfig?.streaming?.provider).toBe("openai");
-    expect(runtimeConfig?.streaming?.providers?.openai?.apiKey).toBe("sk-test");
-    expectWarningIncludes('Run "openclaw doctor --fix"');
   });
 
   it("freezes the invoking agent on tool-created calls", async () => {
@@ -1289,3 +1283,4 @@ describe("voice-call plugin", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

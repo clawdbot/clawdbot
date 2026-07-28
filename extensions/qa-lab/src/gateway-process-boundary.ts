@@ -4,16 +4,17 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 
 const PROCESS_BOUNDARY_VERSION = 1;
 const PROCESS_BOUNDARY_START_TIMEOUT_MS = 30_000;
 const PROCESS_BOUNDARY_CONTROL_TIMEOUT_MS = 10_000;
 const PROCESS_BOUNDARY_TERMINATE_TIMEOUT_MS = 45_000;
 const PROCESS_BOUNDARY_TERMINATE_RETRY_INTERVAL_MS = 1_000;
-export const QA_GATEWAY_PROCESS_BOUNDARY_MIN_QUARANTINE_TTL_MS = 2 * 60 * 60 * 1_000;
-export const QA_GATEWAY_PROCESS_BOUNDARY_RETAIN_LEASE_PREFIX = "retain-credential-lease-";
+const QA_GATEWAY_PROCESS_BOUNDARY_MIN_QUARANTINE_TTL_MS = 2 * 60 * 60 * 1_000;
+const QA_GATEWAY_PROCESS_BOUNDARY_RETAIN_LEASE_PREFIX = "retain-credential-lease-";
 
-export type QaGatewayLinuxProcessBoundary = {
+type QaGatewayLinuxProcessBoundary = {
   kind: "linux-proc-v1";
   evidenceDir: string;
   expectedGid: number;
@@ -85,7 +86,7 @@ export type QaGatewayVerifiedProcessIdentity = {
   preEntryCmdlineSha256: string;
 };
 
-export type QaGatewayProcessBoundaryPreparedSpawn = {
+type QaGatewayProcessBoundaryPreparedSpawn = {
   command: QaGatewayProcessCommand;
   commandBytes: Buffer;
   commandFilePath: string;
@@ -114,12 +115,6 @@ type QaGatewayProcessBoundaryEvidenceLaunch = {
   exitedAt?: string;
   quiescedAt?: string;
   terminalState?: "failed-before-ready" | "ready-exited";
-};
-
-type QaGatewayProcStat = {
-  pgrp: number;
-  startTicks: string;
-  state: string;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -241,30 +236,6 @@ function parseQaGatewayProcessRuntimeProof(value: unknown): QaGatewayProcessRunt
   };
 }
 
-export function parseQaGatewayProcStat(raw: string): QaGatewayProcStat {
-  const closeParen = raw.lastIndexOf(")");
-  if (closeParen < 0) {
-    throw new Error("invalid /proc stat command name");
-  }
-  const fields = raw
-    .slice(closeParen + 1)
-    .trim()
-    .split(/\s+/u);
-  if (fields.length < 20) {
-    throw new Error("invalid /proc stat field count");
-  }
-  const pgrp = Number(fields[2]);
-  const startTicks = fields[19];
-  if (!Number.isSafeInteger(pgrp) || pgrp <= 1 || !/^[0-9]+$/.test(startTicks)) {
-    throw new Error("invalid /proc stat process identity");
-  }
-  return {
-    state: fields[0],
-    pgrp,
-    startTicks,
-  };
-}
-
 async function assertContainedPath(root: string, target: string, label: string) {
   const rootPath = await fs.realpath(root);
   const targetPath = await fs.realpath(target);
@@ -289,25 +260,16 @@ async function assertRegularFile(params: {
 }
 
 async function writeAtomicFile(pathName: string, contents: Buffer | string, mode: number) {
-  const temporaryPath = `${pathName}.tmp-${process.pid}-${randomUUID()}`;
-  const handle = await fs.open(
-    temporaryPath,
-    fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY,
+  const dirMode = (await fs.stat(path.dirname(pathName))).mode & 0o7777;
+  await replaceFileAtomic({
+    filePath: pathName,
+    content: contents,
+    dirMode,
     mode,
-  );
-  let closed = false;
-  try {
-    await handle.writeFile(contents);
-    await handle.sync();
-    await handle.close();
-    closed = true;
-    await fs.rename(temporaryPath, pathName);
-  } finally {
-    if (!closed) {
-      await handle.close().catch(() => {});
-    }
-    await fs.rm(temporaryPath, { force: true }).catch(() => {});
-  }
+    tempPrefix: `${path.basename(pathName)}.qa-boundary`,
+    syncParentDir: true,
+    syncTempFile: true,
+  });
 }
 
 async function readJsonFile(pathName: string) {
@@ -877,13 +839,4 @@ export async function shouldRetainQaGatewayCredentialLease(env: NodeJS.ProcessEn
   }
 }
 
-const testing = {
-  commandLineBytes,
-  normalizeEnvKeys,
-  parseQaGatewayProcessHandoff,
-  parseQaGatewayProcessRuntimeProof,
-  parseQaGatewayProcessSandboxProof,
-  parseQaGatewayProcStat,
-};
-
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -9,7 +9,7 @@ type TargetedSyncProgress = {
   report: (update: MemorySyncProgressUpdate) => void;
 };
 
-export function clearMemorySyncedArchiveFiles(params: {
+function clearMemorySyncedArchiveFiles(params: {
   sessionsDirtyFiles: Set<string>;
   targetArchiveFiles?: Iterable<string> | null;
 }): boolean {

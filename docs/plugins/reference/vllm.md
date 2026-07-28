@@ -16,7 +16,7 @@ Adds vLLM model provider support to OpenClaw.
 
 ## Surface
 
-providers: vllm
+providers: `vllm`
 
 ## Related docs
 

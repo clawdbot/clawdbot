@@ -2,8 +2,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { testing, cleanupLegacyPluginDependencyState } from "./plugin-dependency-cleanup.js";
+import {
+  cleanupLegacyPluginDependencyState,
+  detectLegacyPluginDependencyStateIssues,
+  legacyPluginDependencyStateIssueToHealthFinding,
+} from "./plugin-dependency-cleanup.js";
+import { collectLegacyPluginDependencyTargets } from "./plugin-dependency-cleanup.test-support.js";
 
 async function expectPathMissing(targetPath: string): Promise<void> {
   try {
@@ -79,7 +85,7 @@ describe("cleanupLegacyPluginDependencyState", () => {
       OPENCLAW_PLUGIN_STAGE_DIR: explicitStageDir,
       STATE_DIRECTORY: stateDirectory,
     };
-    const targets = await testing.collectLegacyPluginDependencyTargets(env, { packageRoot });
+    const targets = await collectLegacyPluginDependencyTargets(env, { packageRoot });
     expect(targets).toContain(legacyRuntimeRoot);
     expect(targets).toContain(legacyLocalRoot);
     expect(targets).toContain(legacyExtensionNodeModules);
@@ -89,7 +95,7 @@ describe("cleanupLegacyPluginDependencyState", () => {
     expect(targets).toContain(path.join(stateDirectory, "plugin-runtime-deps"));
     expect(targets).not.toContain(thirdPartyNodeModules);
 
-    const issues = await testing.detectLegacyPluginDependencyStateIssues({ env, packageRoot });
+    const issues = await detectLegacyPluginDependencyStateIssues({ env, packageRoot });
     expect(issues).toContainEqual({
       kind: "legacy-plugin-dependency-state",
       path: legacyRuntimeRoot,
@@ -153,7 +159,7 @@ describe("cleanupLegacyPluginDependencyState", () => {
     await fs.mkdir(legacyRuntimeRoot, { recursive: true });
     await fs.mkdir(packageRoot, { recursive: true });
 
-    const [issue] = await testing.detectLegacyPluginDependencyStateIssues({
+    const [issue] = await detectLegacyPluginDependencyStateIssues({
       env: { OPENCLAW_STATE_DIR: stateDir },
       packageRoot,
     });
@@ -162,7 +168,9 @@ describe("cleanupLegacyPluginDependencyState", () => {
       kind: "legacy-plugin-dependency-state",
       path: legacyRuntimeRoot,
     });
-    expect(testing.legacyPluginDependencyStateIssueToHealthFinding(issue)).toEqual({
+    expect(
+      legacyPluginDependencyStateIssueToHealthFinding(expectDefined(issue, "issue test invariant")),
+    ).toEqual({
       checkId: "core/doctor/legacy-plugin-dependencies",
       severity: "warning",
       message: `Legacy plugin dependency state remains at ${legacyRuntimeRoot}.`,
@@ -237,7 +245,7 @@ describe("cleanupLegacyPluginDependencyState", () => {
     await fs.writeFile(path.join(externalPlugin, ".openclaw-runtime-deps.json"), "{}");
     await fs.symlink(externalPlugin, linkedPlugin, "dir");
 
-    const targets = await testing.collectLegacyPluginDependencyTargets(
+    const targets = await collectLegacyPluginDependencyTargets(
       { OPENCLAW_STATE_DIR: stateDir },
       { packageRoot },
     );

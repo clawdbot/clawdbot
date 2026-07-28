@@ -1,15 +1,15 @@
 // Provides config test helpers for temporary homes and fixture writes.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
+import { withTempHome as withTempHomeBase } from "../plugin-sdk/test-env.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
-import { clearPluginSetupRegistryCache } from "../plugins/setup-registry.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { resetConfigRuntimeState, type OpenClawConfig } from "./config.js";
 
 function resetConfigTestRuntimeState(): void {
   resetConfigRuntimeState();
   resetPluginLoaderTestStateForTest();
-  clearPluginSetupRegistryCache();
+  clearPluginMetadataLifecycleCaches();
 }
 
 export async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {

@@ -1,5 +1,6 @@
 // Integration proof for tools.effective global sessions scoped to non-default agents.
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installGatewayTestHooks, testState, writeSessionStore } from "../test-helpers.js";
 import { getGatewayConfigModule, sessionStoreEntry } from "../test/server-sessions.test-helpers.js";
@@ -115,7 +116,10 @@ describe("tools.effective global agent integration", () => {
     });
 
     const respond = vi.fn();
-    await toolsEffectiveHandlers["tools.effective"]({
+    await expectDefined(
+      toolsEffectiveHandlers["tools.effective"],
+      'toolsEffectiveHandlers["tools.effective"] test invariant',
+    )({
       params: { sessionKey: "global", agentId: "work" },
       respond: respond as never,
       context: { getRuntimeConfig } as never,
@@ -156,7 +160,10 @@ describe("tools.effective global agent integration", () => {
 
     const requestTools = async (id: string) => {
       const respond = vi.fn();
-      await toolsEffectiveHandlers["tools.effective"]({
+      await expectDefined(
+        toolsEffectiveHandlers["tools.effective"],
+        'toolsEffectiveHandlers["tools.effective"] test invariant',
+      )({
         params: { sessionKey: "global", agentId: "work" },
         respond: respond as never,
         context: { getRuntimeConfig } as never,
@@ -208,7 +215,10 @@ describe("tools.effective global agent integration", () => {
     });
 
     const respond = vi.fn();
-    await toolsEffectiveHandlers["tools.effective"]({
+    await expectDefined(
+      toolsEffectiveHandlers["tools.effective"],
+      'toolsEffectiveHandlers["tools.effective"] test invariant',
+    )({
       params: { sessionKey: "agent:main:abc", agentId: "work" },
       respond: respond as never,
       context: { getRuntimeConfig } as never,

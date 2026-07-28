@@ -5,6 +5,7 @@ import { Command, Option } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { routeLogsToStderr } from "../logging/console.js";
+import { formatConsoleDiagnosticLine } from "../logging/json-console-line.js";
 import {
   buildFishOptionCompletionLine,
   buildFishSubcommandCompletionLine,
@@ -35,13 +36,12 @@ export function getCompletionScript(shell: CompletionShell, program: Command): s
   return generateFishCompletion(program);
 }
 
-function splitOptionFlags(flags: string): string[] {
-  return flags.split(/[ ,|]+/u).filter(Boolean);
+function completionFlags(option: Option): string[] {
+  return [option.short, option.long].filter((flag): flag is string => Boolean(flag));
 }
 
-function preferredCompletionFlag(flags: string): string {
-  const parts = splitOptionFlags(flags);
-  return parts.find((flag) => flag.startsWith("--")) ?? parts[0] ?? flags;
+function preferredCompletionFlag(option: Option): string {
+  return option.long ?? option.short ?? option.flags;
 }
 
 function fishWords(values: readonly string[]): string {
@@ -53,7 +53,7 @@ function completionOptionFlags(options: Command["options"], wantsValue: boolean)
     if ((option.required || option.optional) !== wantsValue) {
       return [];
     }
-    return splitOptionFlags(option.flags).filter((flag) => flag.startsWith("-"));
+    return completionFlags(option);
   });
 }
 
@@ -93,7 +93,22 @@ function collectFishPathOptionFlags(
   return [...flags];
 }
 
-function generateFishPathHelper(rootCmd: string): string {
+function generateFishPathHelper(rootCmd: string, program: Command): string {
+  const knownCommandPaths = collectBashCompletionContexts(program, [])
+    .flatMap((context) => context.pathVariants)
+    .map((pathSegments) => `'${pathSegments.join(" ").replaceAll("'", "'\\''")}'`)
+    .join(" ");
+  const rejectDescendantCommands = knownCommandPaths
+    ? `
+  if test (count $command_tokens) -gt (count $expected)
+    set -l next_index (math (count $expected) + 1)
+    set -l candidate_path (string join " " $expected $command_tokens[$next_index])
+    switch "$candidate_path"
+      case ${knownCommandPaths}
+        return 1
+    end
+  end`
+    : "";
   // Fish needs a helper to ignore option values while matching nested command paths.
   return `
 function __${rootCmd}_command_path_matches
@@ -132,11 +147,14 @@ function __${rootCmd}_command_path_matches
     end
     set -a command_tokens $token
   end
-  for i in (seq (count $expected))
-    if test "$command_tokens[$i]" != "$expected[$i]"
-      return 1
+  if test (count $expected) -gt 0
+    for i in (seq (count $expected))
+      if test "$command_tokens[$i]" != "$expected[$i]"
+        return 1
+      end
     end
   end
+${rejectDescendantCommands}
   return 0
 end
 `;
@@ -148,7 +166,8 @@ function fishCommandPathCondition(
   parents: readonly string[],
 ): string {
   const valueOptions = collectFishPathOptionFlags(program, parents, true);
-  return `__${rootCmd}_command_path_matches ${parents.join(" ")} -- ${fishWords(valueOptions)}`.trimEnd();
+  const commandPath = parents.length > 0 ? ` ${parents.join(" ")}` : "";
+  return `__${rootCmd}_command_path_matches${commandPath} -- ${fishWords(valueOptions)}`.trimEnd();
 }
 
 async function writeCompletionCache(params: {
@@ -167,7 +186,8 @@ async function writeCompletionCache(params: {
 }
 
 function writeCompletionRegistrationWarning(message: string): void {
-  process.stderr.write(`[completion] ${message}\n`);
+  const diagnostic = `[completion] ${message}`;
+  process.stderr.write(`${formatConsoleDiagnosticLine({ level: "warn", message: diagnostic })}\n`);
 }
 
 async function registerSubcommandsForCompletion(program: Command): Promise<void> {
@@ -210,6 +230,15 @@ export function registerCompletionCli(program: Command) {
       // Route logs to stderr so plugin loading messages do not corrupt
       // the completion script written to stdout.
       routeLogsToStderr();
+
+      // Cached installation needs only the existing script; loading the command tree can
+      // introduce unrelated plugin failures before the cache can be checked or installed.
+      if (options.install && !options.writeState) {
+        const targetShell = options.shell ?? resolveShellFromEnv();
+        await installCompletion(targetShell, Boolean(options.yes), program.name());
+        return;
+      }
+
       const shell = options.shell ?? "zsh";
 
       // Completion needs the full Commander command tree (including nested subcommands).
@@ -307,12 +336,12 @@ fi
 function generateZshArgs(cmd: Command): string {
   return (cmd.options || [])
     .map((opt) => {
-      const flags = opt.flags.split(/[ ,|]+/);
-      const name = flags.find((f) => f.startsWith("--")) || flags[0];
-      const short = flags.find((f) => f.startsWith("-") && !f.startsWith("--"));
+      const flags = completionFlags(opt);
+      const name = preferredCompletionFlag(opt);
+      const alternate = flags.find((flag) => flag !== name);
       const desc = escapeZshDoubleQuotedDescription(opt.description);
-      if (short) {
-        return `"(${name} ${short})"{${name},${short}}"[${desc}]"`;
+      if (alternate) {
+        return `"(${name} ${alternate})"{${name},${alternate}}"[${desc}]"`;
       }
       return `"${name}[${desc}]"`;
     })
@@ -396,7 +425,7 @@ function generateBashCompletion(program: Command): string {
   const rootCmd = program.name();
   const rootCompletions = [
     ...program.commands.flatMap((command) => commandNameVariants(command)),
-    ...program.options.map((option) => preferredCompletionFlag(option.flags)),
+    ...program.options.flatMap((option) => completionFlags(option)),
   ];
   const rootValueOptions = completionOptionFlags(program.options, true);
   const contexts = collectBashCompletionContexts(program, rootValueOptions);
@@ -451,7 +480,7 @@ function collectBashCompletionContexts(
   const visit = (cmd: Command, pathVariants: string[][], inheritedValueOptions: string[]) => {
     const completions = [
       ...cmd.commands.flatMap((command) => commandNameVariants(command)),
-      ...cmd.options.map((option) => preferredCompletionFlag(option.flags)),
+      ...cmd.options.flatMap((option) => completionFlags(option)),
     ];
     const valueOptions = [
       ...new Set([...inheritedValueOptions, ...completionOptionFlags(cmd.options, true)]),
@@ -506,11 +535,23 @@ function generatePowerShellCompletion(program: Command): string {
   const segments: string[] = [];
   const formatPowerShellArray = (entries: string[]) =>
     entries.length > 0 ? `@(${entries.map((entry) => `'${entry}'`).join(",")})` : "@()";
+  const rootValueOptions = completionOptionFlags(program.options, true);
+  const contexts = collectBashCompletionContexts(program, rootValueOptions);
+  const commandPathCases = contexts
+    .flatMap((context) =>
+      context.pathVariants.map(
+        (pathSegments) => `            '${pathSegments.join(" ")}' {
+                $commandPath = $candidatePath
+                $valueOptions = ${formatPowerShellArray(context.valueOptions)}
+            }`,
+      ),
+    )
+    .join("\n");
 
   const visit = (cmd: Command, pathVariants: string[][]) => {
     // Command completion for this level
     const subCommands = cmd.commands.flatMap((c) => commandNameVariants(c));
-    const options = cmd.options.map((o) => preferredCompletionFlag(o.flags));
+    const options = cmd.options.flatMap((option) => completionFlags(option));
     const allCompletions = formatPowerShellArray([...subCommands, ...options]);
 
     if ([...subCommands, ...options].length > 0) {
@@ -544,22 +585,31 @@ Register-ArgumentCompleter -Native -CommandName ${rootCmd} -ScriptBlock {
     
     $commandElements = $commandAst.CommandElements
     $commandPath = ""
-    
-    # Reconstruct command path (simple approximation)
-    # Skip the executable name
+    $valueOptions = ${formatPowerShellArray(rootValueOptions)}
+
+    # Skip option values so global and nested flags cannot hide the command path.
     for ($i = 1; $i -lt $commandElements.Count; $i++) {
         $element = $commandElements[$i].Extent.Text
-        if ($element -like "-*") { break }
-        if ($i -eq $commandElements.Count - 1 -and $wordToComplete -ne "") { break } # Don't include current word being typed
-        $commandPath += "$element "
+        if ($i -eq $commandElements.Count - 1 -and $wordToComplete -ne "") { break }
+        if ($element -like "-*") {
+            $flag = ($element -split '=', 2)[0]
+            if ($element -notlike '*=*' -and $valueOptions -contains $flag) {
+                $i++
+            }
+            continue
+        }
+
+        $candidatePath = if ($commandPath -eq '') { $element } else { "$commandPath $element" }
+        switch ($candidatePath) {
+${commandPathCases}
+        }
     }
-    $commandPath = $commandPath.Trim()
     
     # Root command
     if ($commandPath -eq "") {
          $completions = ${formatPowerShellArray([
            ...program.commands.flatMap((command) => commandNameVariants(command)),
-           ...program.options.map((option) => preferredCompletionFlag(option.flags)),
+           ...program.options.flatMap((option) => completionFlags(option)),
          ])}
          $completions | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
             [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterName', $_)
@@ -573,15 +623,13 @@ Register-ArgumentCompleter -Native -CommandName ${rootCmd} -ScriptBlock {
 
 function generateFishCompletion(program: Command): string {
   const rootCmd = program.name();
-  const segments: string[] = [generateFishPathHelper(rootCmd)];
+  const segments: string[] = [generateFishPathHelper(rootCmd, program)];
 
   const visit = (cmd: Command, parentVariants: string[][]) => {
     // One condition per alias-expanded parent path so completion keeps working
     // after the user typed an alias segment.
     const conditions = parentVariants.map((parents) =>
-      parents.length === 0
-        ? "__fish_use_subcommand"
-        : fishCommandPathCondition(program, rootCmd, parents),
+      fishCommandPathCondition(program, rootCmd, parents),
     );
     for (const condition of conditions) {
       // Subcommands (canonical names and aliases)
@@ -603,7 +651,7 @@ function generateFishCompletion(program: Command): string {
           buildFishOptionCompletionLine({
             rootCmd,
             condition,
-            flags: opt.flags,
+            flags: completionFlags(opt),
             description: opt.description,
           }),
         );

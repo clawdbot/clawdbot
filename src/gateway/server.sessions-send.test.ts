@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import { testing as agentStepTesting } from "../agents/tools/agent-step.js";
+import { testing as agentStepTesting } from "../agents/tools/agent-step.test-support.js";
 import { runSessionsSendA2AFlow } from "../agents/tools/sessions-send-tool.a2a.js";
 import {
   loadSessionEntry,
@@ -198,36 +198,43 @@ describe("sessions_send gateway loopback", () => {
         accountId?: string | null;
         threadId?: string | number | null;
       }> = [];
+      const whatsappPlugin = createOutboundTestPlugin({
+        id: "whatsapp",
+        label: "WhatsApp",
+        outbound: {
+          deliveryMode: "direct",
+          resolveTarget: ({ to }) => {
+            const target = to?.trim();
+            return target
+              ? { ok: true, to: target }
+              : { ok: false, error: new Error("missing target") };
+          },
+          sendText: async (ctx) => {
+            sendCalls.push({
+              to: ctx.to,
+              text: ctx.text,
+              accountId: ctx.accountId,
+              threadId: ctx.threadId,
+            });
+            return { channel: "whatsapp", messageId: "wa-proof-msg" };
+          },
+        },
+        messaging: {
+          normalizeTarget: (raw) => raw,
+        },
+      });
       setTestPluginRegistry(
         createTestRegistry([
           {
             pluginId: "whatsapp",
             source: "test",
-            plugin: createOutboundTestPlugin({
-              id: "whatsapp",
-              label: "WhatsApp",
-              outbound: {
-                deliveryMode: "direct",
-                resolveTarget: ({ to }) => {
-                  const target = to?.trim();
-                  return target
-                    ? { ok: true, to: target }
-                    : { ok: false, error: new Error("missing target") };
-                },
-                sendText: async (ctx) => {
-                  sendCalls.push({
-                    to: ctx.to,
-                    text: ctx.text,
-                    accountId: ctx.accountId,
-                    threadId: ctx.threadId,
-                  });
-                  return { channel: "whatsapp", messageId: "wa-proof-msg" };
-                },
+            plugin: {
+              ...whatsappPlugin,
+              config: {
+                ...whatsappPlugin.config,
+                listAccountIds: () => ["work"],
               },
-              messaging: {
-                normalizeTarget: (raw) => raw,
-              },
-            }),
+            },
           },
         ]),
       );

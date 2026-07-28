@@ -17,9 +17,9 @@ import { getLoadedPwAiModule } from "./pw-ai-module.js";
 import type { PlaywrightConnectionRetirement } from "./pw-session.js";
 import type { BrowserServerState, ProfileRuntimeState } from "./server-context.types.js";
 
-export type ProfileLifecycleTerminal = "deleted" | "config-removed";
+type ProfileLifecycleTerminal = "deleted" | "config-removed";
 
-export type ProfileLifecycleActor = {
+type ProfileLifecycleActor = {
   generation: number;
   configRevision: number;
   controller: AbortController;
@@ -51,7 +51,7 @@ type ProfileTransitionOptions = {
   rollbackTerminalOnFailure?: boolean;
 };
 
-export type ProfileTransitionResult = {
+type ProfileTransitionResult = {
   stopped: boolean;
 };
 
@@ -198,7 +198,7 @@ function createLease(actor: ProfileLifecycleActor): () => void {
 }
 
 /** Create the single lifecycle owner for one resolved Browser profile. */
-export function createProfileRuntimeState(profile: ResolvedBrowserProfile): ProfileRuntimeState {
+function createProfileRuntimeState(profile: ResolvedBrowserProfile): ProfileRuntimeState {
   const runtime: ProfileRuntimeState = {
     profile,
     running: null,

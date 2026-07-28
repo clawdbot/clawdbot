@@ -111,7 +111,7 @@ function buildTasksText(params: { sessionKey: string; agentId: string }): string
   return lines.join("\n");
 }
 
-export async function buildTasksReply(params: HandleCommandsParams): Promise<ReplyPayload> {
+async function buildTasksReply(params: HandleCommandsParams): Promise<ReplyPayload> {
   const agentId = resolveSessionAgentId({
     sessionKey: params.sessionKey,
     config: params.cfg,

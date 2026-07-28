@@ -201,7 +201,7 @@ struct GatewayChannelConnectTests {
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
-        return try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": tempDir.path]) {
+        return try await DeviceIdentityStore.withStateDirectory(tempDir) {
             try await operation()
         }
     }
@@ -242,6 +242,39 @@ struct GatewayChannelConnectTests {
         let params = try #require(recorder.snapshot())
         #expect(params["minProtocol"] as? Int == GATEWAY_MIN_PROTOCOL_VERSION)
         #expect(params["maxProtocol"] as? Int == GATEWAY_PROTOCOL_VERSION)
+    }
+
+    @Test func `node connect advertises worker path environment`() async throws {
+        let recorder = ConnectParamsRecorder()
+        let session = GatewayTestWebSocketSession(
+            taskFactory: {
+                GatewayTestWebSocketTask(
+                    sendHook: { _, message, sendIndex in
+                        guard sendIndex == 0 else { return }
+                        recorder.record(message)
+                    })
+            })
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: ["system"],
+            commands: ["system.run"],
+            pathEnv: "/opt/homebrew/bin:/usr/bin:/bin",
+            permissions: [:],
+            clientId: "openclaw-macos",
+            clientMode: "node",
+            clientDisplayName: "macOS Test",
+            includeDeviceIdentity: false)
+        let channel = try GatewayChannelActor(
+            url: #require(URL(string: "ws://example.invalid")),
+            token: nil,
+            session: WebSocketSessionBox(session: session),
+            connectOptions: options)
+
+        try await channel.connect()
+
+        let params = try #require(recorder.snapshot())
+        #expect(params["pathEnv"] as? String == "/opt/homebrew/bin:/usr/bin:/bin")
     }
 
     @Test func `concurrent connect shares failure`() async throws {
@@ -345,6 +378,7 @@ struct GatewayChannelConnectTests {
                 "operator.read",
                 "operator.write",
                 "operator.approvals",
+                "operator.questions",
                 "operator.pairing",
             ])
         }
@@ -369,7 +403,9 @@ struct GatewayChannelConnectTests {
         try await channel.connect()
 
         #expect(capture.snapshot() == [
+            "operator.admin",
             "operator.approvals",
+            "operator.questions",
             "operator.read",
             "operator.write",
         ])

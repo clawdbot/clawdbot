@@ -1,7 +1,6 @@
 // Register maintenance tests cover maintenance command registration in the CLI program.
 import { Command } from "commander";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV } from "../../commands/doctor-invocation.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerMaintenanceCommands } from "./register.maintenance.js";
 
 const mocks = vi.hoisted(() => ({
@@ -69,10 +68,6 @@ describe("registerMaintenanceCommands doctor action", () => {
     vi.clearAllMocks();
   });
 
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
   it("exits with code 0 after successful doctor run", async () => {
     doctorCommand.mockResolvedValue(undefined);
 
@@ -106,28 +101,6 @@ describe("registerMaintenanceCommands doctor action", () => {
     const [runtimeArg, options] = commandCall(doctorCommand);
     expect(runtimeArg).toBe(runtime);
     expect(options.repair).toBe(true);
-    expect(options.crossStateDirImports).toBe(true);
-  });
-
-  it("denies cross-state imports when an automation parent disables them", async () => {
-    doctorCommand.mockResolvedValue(undefined);
-    vi.stubEnv(DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV, "1");
-
-    await runMaintenanceCli(["doctor", "--fix", "--non-interactive"]);
-
-    const [, options] = commandCall(doctorCommand);
-    expect(options.repair).toBe(true);
-    expect(options.crossStateDirImports).toBe(false);
-  });
-
-  it("denies cross-state imports for older update parents", async () => {
-    doctorCommand.mockResolvedValue(undefined);
-    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
-
-    await runMaintenanceCli(["doctor", "--fix", "--non-interactive"]);
-
-    const [, options] = commandCall(doctorCommand);
-    expect(options.crossStateDirImports).toBe(false);
   });
 
   it("passes session sqlite options to doctor command", async () => {
@@ -320,15 +293,16 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });
 
-  it("passes noOpen to dashboard command", async () => {
+  it("passes output options to dashboard command", async () => {
     dashboardCommand.mockResolvedValue(undefined);
 
-    await runMaintenanceCli(["dashboard", "--no-open"]);
+    await runMaintenanceCli(["dashboard", "--no-open", "--json"]);
 
     expect(dashboardCommand).toHaveBeenCalledTimes(1);
     const [runtimeArg, options] = commandCall(dashboardCommand);
     expect(runtimeArg).toBe(runtime);
     expect(options.noOpen).toBe(true);
+    expect(options.json).toBe(true);
   });
 
   it("passes reset options to reset command", async () => {

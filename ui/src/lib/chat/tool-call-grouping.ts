@@ -10,7 +10,7 @@ import {
   type ToolCallKind,
 } from "./tool-call-view.ts";
 
-export type ToolGroupSummaryInput = {
+type ToolGroupSummaryInput = {
   name: string;
   args?: unknown;
   isError?: boolean;

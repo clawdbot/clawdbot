@@ -12,7 +12,7 @@ describe("QA provider image generation config", () => {
 
     expect(patch.plugins.allow).toEqual(["acpx", "memory-core", "openai", "qa-channel"]);
     expect(patch.plugins.entries?.openai).toEqual({ enabled: true });
-    expect(patch.agents.defaults.imageGenerationModel.primary).toBe("openai/gpt-image-1");
+    expect(patch.agents.defaults.mediaModels.image.primary).toBe("openai/gpt-image-1");
     expect(patch.models?.providers["mock-openai"]?.baseUrl).toBe("http://127.0.0.1:44080/v1");
     expect(patch.models?.providers.openai?.baseUrl).toBe("http://127.0.0.1:44080/v1");
   });
@@ -33,6 +33,28 @@ describe("QA provider image generation config", () => {
       "qa-channel",
     ]);
   });
+
+  it("keeps forced Codex text routing reproducible while images use the mock", () => {
+    const patch = buildQaImageGenerationConfigPatch({
+      providerMode: "mock-openai",
+      providerBaseUrl: "http://127.0.0.1:44080/v1",
+      requiredPluginIds: ["qa-channel"],
+      existingPluginIds: ["codex", "openai"],
+      forcedRuntime: "codex",
+    });
+
+    expect(patch.models?.mode).toBe("merge");
+    expect(patch.models?.providers["mock-openai"]).toBeUndefined();
+    expect(patch.models?.providers.openai?.baseUrl).toBe("https://api.openai.com/v1");
+    expect(patch.models?.providers.openai?.request).toBeUndefined();
+    expect(
+      patch.models?.providers.openai?.models.find((model) => model.id === "gpt-5.6-luna-alt")
+        ?.baseUrl,
+    ).toBeUndefined();
+    expect(
+      patch.models?.providers.openai?.models.find((model) => model.id === "gpt-image-1")?.baseUrl,
+    ).toBe("http://127.0.0.1:44080/v1");
+  });
   it("routes AIMock image generation through the OpenAI image provider", () => {
     const patch = buildQaImageGenerationConfigPatch({
       providerMode: "aimock",
@@ -42,7 +64,7 @@ describe("QA provider image generation config", () => {
 
     expect(patch.plugins.allow).toEqual(["acpx", "memory-core", "openai"]);
     expect(patch.plugins.entries).toEqual({ openai: { enabled: true } });
-    expect(patch.agents.defaults.imageGenerationModel.primary).toBe("openai/gpt-image-1");
+    expect(patch.agents.defaults.mediaModels.image.primary).toBe("openai/gpt-image-1");
     expect(patch.models?.providers.aimock?.baseUrl).toBe("http://127.0.0.1:45080/v1");
     expect(patch.models?.providers["mock-openai"]).toBeUndefined();
   });
@@ -61,7 +83,7 @@ describe("QA provider image generation config", () => {
         },
       },
     });
-    expect(patch.agents.defaults.imageGenerationModel.primary).toBe("openai/gpt-image-1");
+    expect(patch.agents.defaults.mediaModels.image.primary).toBe("openai/gpt-image-1");
     expect(patch).not.toHaveProperty("models");
   });
 });

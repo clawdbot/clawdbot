@@ -1,14 +1,12 @@
 /**
- * Curated automation ideas for the cron page.
+ * Curated automation ideas for the Automations page.
  *
- * Pure UI data: each card pre-fills the quick-create wizard draft. Nothing
- * here talks to the gateway or adds config surface.
+ * Pure UI data: each idea prefills the inline create form. Nothing here talks
+ * to the gateway or adds config surface.
  */
 
-import { html } from "lit";
 import { t } from "../../i18n/index.ts";
-import { SCHEDULE_PRESETS } from "./quick-create.ts";
-import type { CronQuickCreateDraft, DeliveryPresetId, SchedulePresetId } from "./quick-create.ts";
+import type { CronFormState } from "../../lib/cron/index.ts";
 
 type CronSuggestion = {
   id: string;
@@ -16,15 +14,28 @@ type CronSuggestion = {
   nameKey: string;
   taglineKey: string;
   promptKey: string;
-  schedulePreset: SchedulePresetId;
-  deliveryPreset: DeliveryPresetId;
+  scheduleKey: string;
+  schedule: Partial<CronFormState>;
+};
+
+// Schedule shapes ported from the retired quick-create presets.
+const WEEKDAY_MORNINGS: Partial<CronFormState> = {
+  scheduleKind: "cron",
+  cronExpr: "0 9 * * 1-5",
+};
+const EVERY_MORNING: Partial<CronFormState> = { scheduleKind: "cron", cronExpr: "0 8 * * *" };
+const WEEKLY: Partial<CronFormState> = { scheduleKind: "cron", cronExpr: "0 9 * * 1" };
+const HOURLY: Partial<CronFormState> = {
+  scheduleKind: "every",
+  everyAmount: "1",
+  everyUnit: "hours",
 };
 
 function suggestion(
   id: string,
   emoji: string,
-  schedulePreset: SchedulePresetId,
-  deliveryPreset: DeliveryPresetId,
+  scheduleKey: string,
+  schedule: Partial<CronFormState>,
 ): CronSuggestion {
   return {
     id,
@@ -32,73 +43,35 @@ function suggestion(
     nameKey: `cron.suggestions.ideas.${id}.name`,
     taglineKey: `cron.suggestions.ideas.${id}.tagline`,
     promptKey: `cron.suggestions.ideas.${id}.prompt`,
-    schedulePreset,
-    deliveryPreset,
+    scheduleKey,
+    schedule,
   };
 }
 
 export const CRON_SUGGESTIONS: CronSuggestion[] = [
-  suggestion("repoPulse", "🐙", "weekdays", "notify"),
-  suggestion("standupGhostwriter", "👻", "weekdays", "notify"),
-  suggestion("hackerNewsScout", "🔭", "every-morning", "notify"),
-  suggestion("dependencyRadar", "🛰️", "weekly", "notify"),
-  suggestion("watchdog", "🦉", "hourly", "notify"),
-  suggestion("polyglotMinute", "🗣️", "every-morning", "notify"),
+  suggestion("repoPulse", "🐙", "cron.suggestions.schedules.weekdayMornings", WEEKDAY_MORNINGS),
+  suggestion(
+    "standupGhostwriter",
+    "👻",
+    "cron.suggestions.schedules.weekdayMornings",
+    WEEKDAY_MORNINGS,
+  ),
+  suggestion("hackerNewsScout", "🔭", "cron.suggestions.schedules.everyMorning", EVERY_MORNING),
+  suggestion("dependencyRadar", "🛰️", "cron.suggestions.schedules.weekly", WEEKLY),
+  suggestion("watchdog", "🦉", "cron.suggestions.schedules.hourly", HOURLY),
+  suggestion("polyglotMinute", "🗣️", "cron.suggestions.schedules.everyMorning", EVERY_MORNING),
 ];
 
-export function suggestionDraft(idea: CronSuggestion): Partial<CronQuickCreateDraft> {
+export function suggestionFormPatch(idea: CronSuggestion): Partial<CronFormState> {
   return {
-    prompt: t(idea.promptKey),
     name: t(idea.nameKey),
-    schedulePreset: idea.schedulePreset,
-    deliveryPreset: idea.deliveryPreset,
+    payloadText: t(idea.promptKey),
+    payloadKind: "agentTurn",
+    sessionTarget: "isolated",
+    deliveryMode: "announce",
+    wakeMode: "now",
+    deleteAfterRun: false,
+    enabled: true,
+    ...idea.schedule,
   };
-}
-
-function scheduleLabel(preset: SchedulePresetId): string {
-  const match = SCHEDULE_PRESETS.find((entry) => entry.id === preset);
-  return match ? t(match.labelKey) : preset;
-}
-
-type CronSuggestionsProps = {
-  expanded: boolean;
-  busy: boolean;
-  onUse: (draft: Partial<CronQuickCreateDraft>) => void;
-};
-
-export function renderCronSuggestions(props: CronSuggestionsProps) {
-  return html`
-    <details class="card cron-ideas" data-test-id="cron-ideas" ?open=${props.expanded}>
-      <summary class="cron-ideas__summary">
-        <span class="cron-ideas__spark" aria-hidden="true">✨</span>
-        <span class="cron-ideas__copy">
-          <span class="cron-ideas__title">${t("cron.suggestions.title")}</span>
-          <span class="cron-ideas__hint">${t("cron.suggestions.hint")}</span>
-        </span>
-      </summary>
-      <div class="cron-ideas__grid">
-        ${CRON_SUGGESTIONS.map(
-          (idea) => html`
-            <button
-              type="button"
-              class="cron-idea"
-              data-test-id=${`cron-idea-${idea.id}`}
-              ?disabled=${props.busy}
-              @click=${() => props.onUse(suggestionDraft(idea))}
-            >
-              <span class="cron-idea__emoji" aria-hidden="true">${idea.emoji}</span>
-              <span class="cron-idea__body">
-                <span class="cron-idea__name">${t(idea.nameKey)}</span>
-                <span class="cron-idea__tagline">${t(idea.taglineKey)}</span>
-              </span>
-              <span class="cron-idea__footer">
-                <span class="chip">${scheduleLabel(idea.schedulePreset)}</span>
-                <span class="cron-idea__cta">${t("cron.suggestions.use")}</span>
-              </span>
-            </button>
-          `,
-        )}
-      </div>
-    </details>
-  `;
 }

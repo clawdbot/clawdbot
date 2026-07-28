@@ -56,6 +56,26 @@
       }
     },
     {
+      "name": "@openclaw/codex",
+      "description": "OpenClaw Codex app-server harness and native session catalog",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "codex",
+          "label": "Codex"
+        },
+        "contracts": {
+          "migrationProviders": ["codex"]
+        },
+        "install": {
+          "npmSpec": "@openclaw/codex",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.5.1-beta.1"
+        }
+      }
+    },
+    {
       "name": "@openclaw/copilot",
       "description": "OpenClaw GitHub Copilot agent runtime plugin",
       "source": "official",
@@ -206,7 +226,8 @@
             "firecrawl"
           ],
           "webSearchProviders": [
-            "firecrawl"
+            "firecrawl",
+            "firecrawl-free"
           ],
           "tools": [
             "firecrawl_search",
@@ -230,6 +251,20 @@
             "docsUrl": "https://docs.openclaw.ai/tools/firecrawl",
             "credentialPath": "plugins.entries.firecrawl.config.webSearch.apiKey",
             "autoDetectOrder": 60
+          },
+          {
+            "id": "firecrawl-free",
+            "label": "Firecrawl Search (Free)",
+            "hint": "Free web search via Firecrawl's hosted starter tier — no API key required",
+            "onboardingScopes": [
+              "text-inference"
+            ],
+            "requiresCredential": false,
+            "envVars": [],
+            "placeholder": "(no key needed)",
+            "signupUrl": "https://www.firecrawl.dev/",
+            "docsUrl": "https://docs.openclaw.ai/tools/firecrawl",
+            "credentialPath": ""
           }
         ],
         "install": {

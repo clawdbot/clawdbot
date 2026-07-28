@@ -2,19 +2,19 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { WorkerProfile, WorkerSshEndpoint } from "../../plugins/types.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { hashWorkerCredential } from "./credential.js";
-import {
-  createWorkerEnvironmentStore,
-  type WorkerEnvironmentBootstrapReceipt,
-  type WorkerEnvironmentProfileSnapshot,
-  type WorkerEnvironmentSshEndpoint,
-  type WorkerEnvironmentStore,
-} from "./store.js";
+import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
+
+type WorkerEnvironmentBootstrapReceipt = WorkerAdmissionHandshake;
+type WorkerEnvironmentProfileSnapshot = WorkerProfile;
+type WorkerEnvironmentSshEndpoint = WorkerSshEndpoint;
 
 const HOST_KEY = ["ssh-ed25519", "AAAA"].join(" ");
 const SSH_ENDPOINT: WorkerEnvironmentSshEndpoint = {
@@ -299,6 +299,15 @@ describe("worker environment store", () => {
       to: "attached",
       patch: attachedPatch("shared-session", firstReady.environmentId),
     });
+    const secondReady = makeReady("worker-owner-b", "lease-owner-b");
+    expect(() =>
+      store.transition({
+        environmentId: secondReady.environmentId,
+        from: secondReady.state,
+        to: "attached",
+        patch: attachedPatch("shared-session", secondReady.environmentId),
+      }),
+    ).toThrow("already attached to worker environment worker-owner-a");
     store.transition({
       environmentId: first.environmentId,
       from: first.state,
@@ -314,7 +323,6 @@ describe("worker environment store", () => {
     database.db
       .prepare("DELETE FROM worker_environments WHERE environment_id = ?")
       .run(first.environmentId);
-    const secondReady = makeReady("worker-owner-b", "lease-owner-b");
     const second = store.transition({
       environmentId: secondReady.environmentId,
       from: secondReady.state,

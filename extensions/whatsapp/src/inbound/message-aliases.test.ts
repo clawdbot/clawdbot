@@ -26,7 +26,7 @@ function createCanonicalMessage(overrides: Partial<WebInboundCallbackMessage> = 
         fileName: "image.jpg",
         url: "https://example.com/image.jpg",
       },
-      untrustedStructuredContext: [
+      channelStructuredContext: [
         {
           label: "WhatsApp contact",
           source: "whatsapp",
@@ -88,11 +88,13 @@ const callbackMessageWithoutAdmissionFacts = {
   },
 };
 
-// @ts-expect-error Callback messages must provide admission or deprecated admission fields.
-const invalidCallbackMessage: WebInboundCallbackMessage = callbackMessageWithoutAdmissionFacts;
-void invalidCallbackMessage;
-
 describe("WhatsApp inbound flat aliases", () => {
+  it("rejects callback messages without admission facts", () => {
+    expectTypeOf(
+      callbackMessageWithoutAdmissionFacts,
+    ).not.toMatchTypeOf<WebInboundCallbackMessage>();
+  });
+
   it("keeps deprecated admission fields typed on monitor callbacks", () => {
     expectTypeOf<MonitorWebInboxMessage>().toMatchTypeOf<{
       admission: NonNullable<WebInboundCallbackMessage["admission"]>;
@@ -142,6 +144,62 @@ describe("WhatsApp inbound flat aliases", () => {
 
     expect(Object.keys(msg)).toContain("body");
     expect(Object.keys(msg)).toContain("chatId");
+  });
+
+  it("keeps the deprecated structured-context alias live in both directions", () => {
+    const msg = createCanonicalMessage();
+    const legacyValue = [
+      {
+        label: "Legacy metadata",
+        payload: { value: "legacy" },
+      },
+    ];
+
+    expect(msg.untrustedStructuredContext).toEqual(msg.payload.channelStructuredContext);
+    msg.untrustedStructuredContext = legacyValue;
+    expect(msg.payload.channelStructuredContext).toEqual(legacyValue);
+
+    const currentValue = [
+      {
+        label: "Current metadata",
+        payload: { value: "current" },
+      },
+    ];
+    msg.payload.channelStructuredContext = currentValue;
+    expect(msg.untrustedStructuredContext).toEqual(currentValue);
+  });
+
+  it("normalizes the shipped nested structured-context key with new-name precedence", () => {
+    const deprecatedValue = [
+      {
+        label: "Deprecated nested metadata",
+        payload: { value: "deprecated" },
+      },
+    ];
+    const currentValue = [
+      {
+        label: "Current nested metadata",
+        payload: { value: "current" },
+      },
+    ];
+    const deprecatedOnly = createCanonicalMessage({
+      payload: {
+        body: "hello",
+        untrustedStructuredContext: deprecatedValue,
+      },
+    });
+    const msg = createCanonicalMessage({
+      payload: {
+        body: "hello",
+        channelStructuredContext: currentValue,
+        untrustedStructuredContext: deprecatedValue,
+      },
+    });
+
+    expect(deprecatedOnly.payload.channelStructuredContext).toEqual(deprecatedValue);
+    expect(deprecatedOnly.payload.untrustedStructuredContext).toEqual(deprecatedValue);
+    expect(msg.payload.channelStructuredContext).toEqual(currentValue);
+    expect(msg.payload.untrustedStructuredContext).toEqual(currentValue);
   });
 
   it("keeps deprecated admission top-level fields aligned with admission", () => {
@@ -263,6 +321,12 @@ describe("WhatsApp inbound flat aliases", () => {
       sendMedia: vi.fn(async () => createAcceptedWhatsAppSendResult("media", "media-legacy")),
       mediaPath: "/tmp/legacy.jpg",
       mediaType: "image/jpeg",
+      untrustedStructuredContext: [
+        {
+          label: "Legacy metadata",
+          payload: { value: "legacy" },
+        },
+      ],
       isBatched: true,
     };
 
@@ -278,6 +342,15 @@ describe("WhatsApp inbound flat aliases", () => {
       path: "/tmp/legacy.jpg",
       type: "image/jpeg",
     });
+    expect(normalized.payload.channelStructuredContext).toEqual([
+      {
+        label: "Legacy metadata",
+        payload: { value: "legacy" },
+      },
+    ]);
+    expect(normalized.untrustedStructuredContext).toEqual(
+      normalized.payload.channelStructuredContext,
+    );
     expect(normalized.platform).toMatchObject({
       chatJid: "15550000002@s.whatsapp.net",
       recipientJid: "+15550000001",

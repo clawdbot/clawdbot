@@ -1,4 +1,5 @@
 // Msteams tests cover inbound media plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../attachments.js", () => ({
@@ -27,7 +28,11 @@ import {
   downloadMSTeamsGraphMedia,
   extractMSTeamsHtmlAttachmentIds,
 } from "../attachments.js";
-import { resolveMSTeamsInboundMedia, resolveMSTeamsInboundMediaBody } from "./inbound-media.js";
+import {
+  mergeMSTeamsMediaFacts,
+  resolveMSTeamsInboundMedia,
+  resolveMSTeamsInboundMediaBody,
+} from "./inbound-media.js";
 
 // Channel context by default: the Graph fallback is a channel/group code path,
 // so its trigger tests must run against a channel conversation, not a DM.
@@ -75,23 +80,19 @@ function firstBotFrameworkAttachmentCall() {
 }
 
 describe("resolveMSTeamsInboundMedia graph fallback trigger", () => {
-  it("replaces a failed attachment placeholder without marking mention-only HTML", () => {
+  it("adds an unavailable notice from structured media counts", () => {
     expect(
       resolveMSTeamsInboundMediaBody({
-        body: "<media:document>",
-        mediaPlaceholder: "<media:document>",
-        materializedMediaPlaceholder: "",
-        expectedMediaCount: 1,
-        mediaCount: 0,
+        body: "",
+        nativeMedia: [{ kind: "document" }],
+        materializedMedia: [{ kind: "document" }],
       }),
     ).toBe("[msteams attachment unavailable]");
     expect(
       resolveMSTeamsInboundMediaBody({
         body: "hello",
-        mediaPlaceholder: "<media:document>",
-        materializedMediaPlaceholder: "",
-        expectedMediaCount: 0,
-        mediaCount: 0,
+        nativeMedia: [],
+        materializedMedia: [],
       }),
     ).toBe("hello");
   });
@@ -99,20 +100,216 @@ describe("resolveMSTeamsInboundMedia graph fallback trigger", () => {
   it("preserves successful media while exposing partial download failures", () => {
     expect(
       resolveMSTeamsInboundMediaBody({
-        body: "<media:document> (2 files)",
-        mediaPlaceholder: "<media:document> (2 files)",
-        materializedMediaPlaceholder: "<media:document>",
-        expectedMediaCount: 2,
-        mediaCount: 1,
+        body: "",
+        nativeMedia: [{ kind: "document" }, { kind: "document" }],
+        materializedMedia: [
+          { path: "/tmp/report.pdf", contentType: "application/pdf", kind: "document" },
+          { kind: "document" },
+        ],
       }),
-    ).toBe("<media:document>\n\n[msteams attachment unavailable]");
+    ).toBe("[msteams attachment unavailable]");
+  });
+
+  it("counts availability from the final identity-merged fact slots", () => {
+    expect(
+      resolveMSTeamsInboundMediaBody({
+        body: "",
+        nativeMedia: [{ kind: "image" }, { kind: "document" }],
+        materializedMedia: [
+          { kind: "image" },
+          {
+            path: "/tmp/report.pdf",
+            contentType: "application/pdf",
+            kind: "document",
+          },
+        ],
+      }),
+    ).toBe("[msteams attachment unavailable]");
+  });
+
+  it("replaces aligned facts positionally and retains Graph-discovered failures", () => {
+    expect(
+      mergeMSTeamsMediaFacts(
+        [{ kind: "document" }],
+        [
+          { path: "/tmp/report.pdf", contentType: "application/pdf", kind: "document" },
+          { kind: "image" },
+        ],
+      ),
+    ).toEqual([
+      { path: "/tmp/report.pdf", contentType: "application/pdf", kind: "document" },
+      { kind: "image" },
+    ]);
+  });
+
+  it("matches fallback results by resource identity instead of unrelated array position", () => {
+    expect(
+      mergeMSTeamsMediaFacts(
+        [{ kind: "image" }, { kind: "document", sourceId: "attachment-1" }],
+        [
+          {
+            path: "/tmp/report.pdf",
+            contentType: "application/pdf",
+            kind: "document",
+            sourceId: "attachment-1",
+          },
+        ],
+        { positionallyAligned: false },
+      ),
+    ).toEqual([
+      { kind: "image" },
+      {
+        path: "/tmp/report.pdf",
+        contentType: "application/pdf",
+        kind: "document",
+        sourceId: "attachment-1",
+      },
+    ]);
+  });
+
+  it("replaces an unambiguous id-less fallback slot", () => {
+    expect(
+      mergeMSTeamsMediaFacts(
+        [{ kind: "document" }],
+        [
+          {
+            path: "/tmp/report.pdf",
+            contentType: "application/pdf",
+            kind: "document",
+            sourceId: "graph-attachment-1",
+          },
+        ],
+        { positionallyAligned: false },
+      ),
+    ).toEqual([
+      {
+        path: "/tmp/report.pdf",
+        contentType: "application/pdf",
+        kind: "document",
+        sourceId: "graph-attachment-1",
+      },
+    ]);
+  });
+
+  it("consumes multiple id-less fallback slots in stable same-kind order", () => {
+    expect(
+      mergeMSTeamsMediaFacts(
+        [{ kind: "document" }, { kind: "document" }],
+        [
+          {
+            path: "/tmp/first.pdf",
+            contentType: "application/pdf",
+            kind: "document",
+            sourceId: "graph-attachment-1",
+          },
+          {
+            path: "/tmp/second.pdf",
+            contentType: "application/pdf",
+            kind: "document",
+            sourceId: "graph-attachment-2",
+          },
+        ],
+        { positionallyAligned: false },
+      ),
+    ).toEqual([
+      {
+        path: "/tmp/first.pdf",
+        contentType: "application/pdf",
+        kind: "document",
+        sourceId: "graph-attachment-1",
+      },
+      {
+        path: "/tmp/second.pdf",
+        contentType: "application/pdf",
+        kind: "document",
+        sourceId: "graph-attachment-2",
+      },
+    ]);
+  });
+
+  it("keeps an explicitly distinct fallback resource separate", () => {
+    expect(
+      mergeMSTeamsMediaFacts(
+        [{ kind: "document", sourceId: "activity-attachment-1" }],
+        [
+          {
+            path: "/tmp/other.pdf",
+            contentType: "application/pdf",
+            kind: "document",
+            sourceId: "graph-attachment-2",
+          },
+        ],
+        { positionallyAligned: false },
+      ),
+    ).toEqual([
+      { kind: "document", sourceId: "activity-attachment-1" },
+      {
+        path: "/tmp/other.pdf",
+        contentType: "application/pdf",
+        kind: "document",
+        sourceId: "graph-attachment-2",
+      },
+    ]);
+  });
+
+  it("refines an appended fallback fact with the same identity", () => {
+    expect(
+      mergeMSTeamsMediaFacts(
+        [],
+        [
+          { kind: "image", sourceId: "graph-image-1" },
+          {
+            path: "/tmp/image.png",
+            contentType: "image/png",
+            kind: "image",
+            sourceId: "graph-image-1",
+          },
+        ],
+        { positionallyAligned: false },
+      ),
+    ).toEqual([
+      {
+        path: "/tmp/image.png",
+        contentType: "image/png",
+        kind: "image",
+        sourceId: "graph-image-1",
+      },
+    ]);
+  });
+
+  it("preserves multiple id-less fallback facts when there are no native slots", () => {
+    expect(
+      mergeMSTeamsMediaFacts([], [{ kind: "image" }, { kind: "image" }], {
+        positionallyAligned: false,
+      }),
+    ).toEqual([{ kind: "image" }, { kind: "image" }]);
+  });
+
+  it("applies a pathless fallback refinement to an unresolved slot", () => {
+    expect(
+      mergeMSTeamsMediaFacts(
+        [{ kind: "document" }],
+        [{ kind: "image", contentType: "image/png", sourceId: "graph-image-1" }],
+        { positionallyAligned: false },
+      ),
+    ).toEqual([{ kind: "image", contentType: "image/png", sourceId: "graph-image-1" }]);
+  });
+
+  it("preserves the advertised kind when a pathless fallback has no type evidence", () => {
+    expect(
+      mergeMSTeamsMediaFacts(
+        [{ kind: "image", sourceId: "hosted-image-1" }],
+        [{ kind: "document", sourceId: "hosted-image-1" }],
+        { positionallyAligned: false },
+      ),
+    ).toEqual([{ kind: "image", sourceId: "hosted-image-1" }]);
   });
 
   it("triggers Graph fallback when HTML contains <attachment> tags", async () => {
     vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([]);
     vi.mocked(extractMSTeamsHtmlAttachmentIds).mockReturnValueOnce(["att-0"]);
     vi.mocked(downloadMSTeamsGraphMedia).mockResolvedValue({
-      media: [{ path: "/tmp/img.png", contentType: "image/png", placeholder: "[image]" }],
+      media: [{ path: "/tmp/img.png", contentType: "image/png", kind: "image" }],
     });
 
     await resolveMSTeamsInboundMedia({
@@ -235,7 +432,7 @@ describe("resolveMSTeamsInboundMedia graph fallback trigger", () => {
 
   it("does not resolve Graph team identity when direct media succeeds", async () => {
     vi.mocked(downloadMSTeamsAttachments).mockResolvedValueOnce([
-      { path: "/tmp/direct.png", contentType: "image/png", placeholder: "<media:image>" },
+      { path: "/tmp/direct.png", contentType: "image/png", kind: "image" },
     ]);
     const resolveTeamAadGroupId = vi.fn(async () => "team-aad-guid");
 
@@ -314,7 +511,7 @@ describe("resolveMSTeamsInboundMedia graph fallback trigger", () => {
 
   it("does NOT trigger Graph fallback when direct download succeeds", async () => {
     vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([
-      { path: "/tmp/img.png", contentType: "image/png", placeholder: "[image]" },
+      { path: "/tmp/img.png", contentType: "image/png", kind: "image" },
     ]);
     vi.mocked(downloadMSTeamsGraphMedia).mockClear();
 
@@ -382,7 +579,7 @@ describe("resolveMSTeamsInboundMedia bot framework DM routing", () => {
         {
           path: "/tmp/report.pdf",
           contentType: "application/pdf",
-          placeholder: "<media:document>",
+          kind: "document",
         },
       ],
       attachmentCount: 1,
@@ -405,7 +602,7 @@ describe("resolveMSTeamsInboundMedia bot framework DM routing", () => {
     expect(call?.attachmentIds).toEqual(["att-0", "att-1"]);
     expect(downloadMSTeamsGraphMedia).not.toHaveBeenCalled();
     expect(mediaList).toHaveLength(1);
-    expect(mediaList[0].path).toBe("/tmp/report.pdf");
+    expect(expectDefined(mediaList[0], "MSTeams inbound media").path).toBe("/tmp/report.pdf");
   });
 
   it("skips Graph fallback for an 'a:' conversation without an exact Graph chat ID", async () => {

@@ -176,7 +176,7 @@ export async function countSessionLogMentions(params: {
         continue;
       }
       for (const [key, needle] of Object.entries(params.needles)) {
-        counts[key] += countOccurrences(scanText, needle);
+        counts[key] = (counts[key] ?? 0) + countOccurrences(scanText, needle);
       }
     }
   }
@@ -246,7 +246,7 @@ async function countSqliteTranscriptMentions(params: {
         continue;
       }
       for (const [key, needle] of Object.entries(params.needles)) {
-        counts[key] += countOccurrences(scanText, needle);
+        counts[key] = (counts[key] ?? 0) + countOccurrences(scanText, needle);
       }
     }
     return counts;

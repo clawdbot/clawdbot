@@ -261,16 +261,10 @@ export function resolveAcpxPluginConfig(params: {
     }),
   );
 
-  // Lowercase probeAgent so lookups match the registry keys built above, which
-  // also go through normalizeLowercaseStringOrEmpty. Without this, a user who
-  // writes `probeAgent: "OpenCode"` would silently miss the stored "opencode"
-  // key.
-  const probeAgent = normalizeLowercaseStringOrEmpty(normalized.probeAgent) || undefined;
-
   return {
     cwd,
     stateDir,
-    probeAgent,
+    probeAgent: normalized.probeAgent,
     permissionMode: normalized.permissionMode ?? DEFAULT_PERMISSION_MODE,
     nonInteractivePermissions:
       normalized.nonInteractivePermissions ?? DEFAULT_NON_INTERACTIVE_POLICY,

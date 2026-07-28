@@ -62,7 +62,7 @@ type IndexedMatrixApprovalReactionTarget = {
   expiresAtMs: number;
 };
 
-export type MatrixApprovalReactionTargetRef = {
+type MatrixApprovalReactionTargetRef = {
   accountId: string;
   roomId: string;
   eventId: string;
@@ -367,9 +367,4 @@ export async function resolveMatrixApprovalReactionTargetWithPersistence(params:
     target,
     reactionKey: params.reactionKey,
   });
-}
-
-export function clearMatrixApprovalReactionTargetsForTest(): void {
-  matrixApprovalReactionTargetIndex.clear();
-  matrixApprovalReactionTargets.clearForTest();
 }

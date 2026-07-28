@@ -1,7 +1,13 @@
 // Runtime import tests cover lazy runtime import caching and failure handling.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { toSafeImportPath } from "./import-specifier.js";
-import { importRuntimeModule, resolveRuntimeImportSpecifier } from "./runtime-import.js";
+import { importRuntimeModule } from "./runtime-import.js";
+
+async function captureRuntimeImportSpecifier(baseUrl: string, parts: readonly string[]) {
+  const importModule = vi.fn(async (specifier: string) => ({ specifier }));
+  await importRuntimeModule(baseUrl, parts, importModule);
+  return importModule.mock.calls[0]?.[0];
+}
 
 describe("runtime-import", () => {
   afterEach(() => {
@@ -22,33 +28,36 @@ describe("runtime-import", () => {
     );
   });
 
-  it("resolves runtime imports from Windows absolute base paths", () => {
+  it("resolves runtime imports from Windows absolute base paths", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
     expect(
-      resolveRuntimeImportSpecifier("C:\\Users\\alice\\openclaw\\dist\\subagent-registry.js", [
-        "./subagent-registry.runtime.js",
-      ]),
+      await captureRuntimeImportSpecifier(
+        "C:\\Users\\alice\\openclaw\\dist\\subagent-registry.js",
+        ["./subagent-registry.runtime.js"],
+      ),
     ).toBe("file:///C:/Users/alice/openclaw/dist/subagent-registry.runtime.js");
   });
 
-  it("resolves runtime imports from file URL base paths", () => {
+  it("resolves runtime imports from file URL base paths", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
     expect(
-      resolveRuntimeImportSpecifier("file:///C:/Users/alice/openclaw/dist/subagent-registry.js", [
-        "./subagent-registry.runtime.js",
-      ]),
+      await captureRuntimeImportSpecifier(
+        "file:///C:/Users/alice/openclaw/dist/subagent-registry.js",
+        ["./subagent-registry.runtime.js"],
+      ),
     ).toBe("file:///C:/Users/alice/openclaw/dist/subagent-registry.runtime.js");
   });
 
-  it("resolves absolute Windows runtime import parts directly", () => {
+  it("resolves absolute Windows runtime import parts directly", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
     expect(
-      resolveRuntimeImportSpecifier("file:///C:/Users/alice/openclaw/dist/subagent-registry.js", [
-        "D:\\OpenClaw\\dist\\subagent-registry.runtime.js",
-      ]),
+      await captureRuntimeImportSpecifier(
+        "file:///C:/Users/alice/openclaw/dist/subagent-registry.js",
+        ["D:\\OpenClaw\\dist\\subagent-registry.runtime.js"],
+      ),
     ).toBe("file:///D:/OpenClaw/dist/subagent-registry.runtime.js");
   });
 

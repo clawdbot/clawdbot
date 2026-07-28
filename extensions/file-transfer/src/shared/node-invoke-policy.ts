@@ -1,15 +1,16 @@
 // File Transfer plugin module implements node invoke policy behavior.
-import { spawn } from "node:child_process";
 import crypto from "node:crypto";
+import { StringDecoder } from "node:string_decoder";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type {
   OpenClawPluginNodeInvokePolicy,
   OpenClawPluginNodeInvokePolicyContext,
   OpenClawPluginNodeInvokePolicyResult,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { appendBoundedTextTail, projectBoundedTextTail } from "./append-bounded-text-tail.js";
+import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
+import { projectBoundedTextTail } from "./append-bounded-text-tail.js";
 import { appendFileTransferAudit, type FileTransferAuditOp } from "./audit.js";
-import { consumeChildOutput } from "./child-output.js";
 import {
   FILE_TRANSFER_NODE_INVOKE_COMMANDS,
   type FileTransferNodeInvokeCommand,
@@ -154,28 +155,37 @@ async function requestApproval(input: {
     severity: input.kind === "write" ? "warning" : "info",
     toolName: input.op,
   });
+  const approvalDecision: unknown = approval.decision;
 
-  if (approval.decision === "deny" || approval.decision === null || !approval.decision) {
+  if (approvalDecision !== "allow-once" && approvalDecision !== "allow-always") {
+    const unavailable = approvalDecision === null || approvalDecision === undefined;
+    const deniedByOperator = approvalDecision === "deny";
+    const reason = deniedByOperator
+      ? "operator denied"
+      : unavailable
+        ? "no operator available"
+        : "invalid approval decision";
     await appendFileTransferAudit({
       op: input.op,
       nodeId: input.ctx.nodeId,
       nodeDisplayName,
       requestedPath: input.path,
       decision: "denied:approval",
-      reason: approval.decision === "deny" ? "operator denied" : "no operator available",
+      reason,
       durationMs: Date.now() - input.startedAt,
     });
     return {
       ok: false,
-      code: approval.decision === "deny" ? "APPROVAL_DENIED" : "APPROVAL_UNAVAILABLE",
-      message:
-        approval.decision === "deny"
+      code: unavailable ? "APPROVAL_UNAVAILABLE" : "APPROVAL_DENIED",
+      message: unavailable
+        ? `${input.op} APPROVAL_UNAVAILABLE: no operator client connected to approve the request`
+        : deniedByOperator
           ? `${input.op} APPROVAL_DENIED: operator denied the prompt`
-          : `${input.op} APPROVAL_UNAVAILABLE: no operator client connected to approve the request`,
+          : `${input.op} APPROVAL_DENIED: invalid approval decision`,
     };
   }
 
-  if (approval.decision === "allow-always") {
+  if (approvalDecision === "allow-always") {
     try {
       await persistAllowAlways({
         nodeId: input.ctx.nodeId,
@@ -228,7 +238,7 @@ async function requestApproval(input: {
     nodeId: input.ctx.nodeId,
     nodeDisplayName,
     requestedPath: input.path,
-    decision: approval.decision === "allow-always" ? "allowed:always" : "allowed:once",
+    decision: approvalDecision === "allow-always" ? "allowed:always" : "allowed:once",
     durationMs: Date.now() - input.startedAt,
   });
   return {
@@ -353,141 +363,89 @@ async function listDirFetchArchiveEntries(
       reason: `dir.fetch archive sha256 mismatch: payload says ${payload.sha256.toLowerCase()}, decoded ${sha256}`,
     };
   }
-  return await new Promise<
-    | { ok: true; entries: string[]; sizeBytes: number; sha256: string }
-    | { ok: false; code: string; reason: string }
-  >((resolve) => {
-    const tarBin = process.platform !== "win32" ? "/usr/bin/tar" : "tar";
-    const child = spawn(tarBin, ["-tzf", "-"], { stdio: ["pipe", "pipe", "pipe"] });
-    const entries: string[] = [];
-    let pending = "";
-    let outputBytes = 0;
-    let stderr = "";
-    let settled = false;
-    const finish = (
-      result:
-        | { ok: true; entries: string[]; sizeBytes: number; sha256: string }
-        | { ok: false; code: string; reason: string },
-    ): void => {
-      if (settled) {
-        return;
+  const tarBin = process.platform !== "win32" ? "/usr/bin/tar" : "tar";
+  const entries: string[] = [];
+  const decoder = new StringDecoder("utf8");
+  let pending = "";
+  let outputBytes = 0;
+  let outputTooLarge = false;
+  let entriesTooMany = false;
+  const appendLine = (line: string): boolean => {
+    const entry = normalizeTarEntryPath(line);
+    if (entry === null) {
+      return true;
+    }
+    entries.push(entry);
+    entriesTooMany = entries.length > DIR_FETCH_MAX_ENTRIES;
+    return !entriesTooMany;
+  };
+  const result = await runCommandWithTimeout([tarBin, "-tzf", "-"], {
+    input: tarBuffer,
+    maxOutputBytes: { stderr: DIR_FETCH_ARCHIVE_LIST_STDERR_TAIL_CHARS },
+    onOutputChunk: (chunk, stream) => {
+      if (stream !== "stdout") {
+        return true;
       }
-      settled = true;
-      clearTimeout(watchdog);
-      resolve(result);
-    };
-    const stopChild = (): void => {
-      try {
-        child.kill("SIGKILL");
-      } catch {
-        /* gone */
-      }
-    };
-    const appendLine = (line: string): boolean => {
-      if (settled) {
+      outputBytes += chunk.byteLength;
+      if (outputBytes > DIR_FETCH_ARCHIVE_LIST_MAX_OUTPUT_BYTES) {
+        outputTooLarge = true;
         return false;
       }
-      const entry = normalizeTarEntryPath(line);
-      if (entry !== null) {
-        entries.push(entry);
-        if (entries.length > DIR_FETCH_MAX_ENTRIES) {
-          stopChild();
-          finish({
-            ok: false,
-            code: "ARCHIVE_ENTRIES_TOO_MANY",
-            reason: `dir.fetch archive contains more than ${DIR_FETCH_MAX_ENTRIES} entries`,
-          });
-          return false;
-        }
-      }
-      return true;
+      const lines = `${pending}${decoder.write(chunk)}`.split("\n");
+      pending = lines.pop() ?? "";
+      return lines.every(appendLine);
+    },
+    outputCapture: { stdout: "discard", stderr: "tail" },
+    tolerateOutputError: { stderr: true },
+    timeoutMs: DIR_FETCH_ARCHIVE_LIST_TIMEOUT_MS,
+  }).catch((error: unknown) => ({ error }));
+  if (!("termination" in result)) {
+    return {
+      ok: false,
+      code: "ARCHIVE_ENTRIES_UNREADABLE",
+      reason: `tar -tzf error: ${formatErrorMessage(result.error)}`,
     };
-    const watchdog = setTimeout(() => {
-      stopChild();
-      finish({
-        ok: false,
-        code: "ARCHIVE_ENTRIES_UNREADABLE",
-        reason: "tar -tzf timed out",
-      });
-    }, DIR_FETCH_ARCHIVE_LIST_TIMEOUT_MS);
-    consumeChildOutput(child.stdout, {
-      onData: (chunk) => {
-        if (settled) {
-          return;
-        }
-        outputBytes += chunk.byteLength;
-        if (outputBytes > DIR_FETCH_ARCHIVE_LIST_MAX_OUTPUT_BYTES) {
-          stopChild();
-          finish({
-            ok: false,
-            code: "ARCHIVE_ENTRIES_UNREADABLE",
-            reason: "tar -tzf output too large",
-          });
-          return;
-        }
-        const lines = `${pending}${chunk.toString()}`.split("\n");
-        pending = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!appendLine(line)) {
-            return;
-          }
-        }
-      },
-      onError: (error) => {
-        stopChild();
-        finish({
-          ok: false,
-          code: "ARCHIVE_ENTRIES_UNREADABLE",
-          reason: `tar -tzf stdout error: ${String(error)}`,
-        });
-      },
-    });
-    consumeChildOutput(child.stderr, {
-      onData: (chunk) => {
-        stderr = appendBoundedTextTail(stderr, chunk, DIR_FETCH_ARCHIVE_LIST_STDERR_TAIL_CHARS);
-      },
-      onError: (error) => {
-        stderr = `[stderr unavailable: ${String(error)}]`;
-      },
-    });
-    child.on("close", (code) => {
-      if (settled) {
-        return;
-      }
-      if (code !== 0) {
-        finish({
-          ok: false,
-          code: "ARCHIVE_ENTRIES_UNREADABLE",
-          reason: `tar -tzf exited ${code}: ${projectBoundedTextTail(stderr, DIR_FETCH_ARCHIVE_LIST_ERROR_STDERR_CHARS)}`,
-        });
-        return;
-      }
-      if (pending) {
-        if (!appendLine(pending)) {
-          return;
-        }
-      }
-      finish({ ok: true, entries, sizeBytes, sha256 });
-    });
-    child.on("error", (error) => {
-      finish({
-        ok: false,
-        code: "ARCHIVE_ENTRIES_UNREADABLE",
-        reason: `tar -tzf error: ${String(error)}`,
-      });
-    });
-    child.stdin.on("error", (error: NodeJS.ErrnoException) => {
-      if (settled && error.code === "EPIPE") {
-        return;
-      }
-      finish({
-        ok: false,
-        code: "ARCHIVE_ENTRIES_UNREADABLE",
-        reason: `tar -tzf input error: ${String(error)}`,
-      });
-    });
-    child.stdin.end(tarBuffer);
-  });
+  }
+  if (result.termination === "timeout") {
+    return { ok: false, code: "ARCHIVE_ENTRIES_UNREADABLE", reason: "tar -tzf timed out" };
+  }
+  if (entriesTooMany) {
+    return {
+      ok: false,
+      code: "ARCHIVE_ENTRIES_TOO_MANY",
+      reason: `dir.fetch archive contains more than ${DIR_FETCH_MAX_ENTRIES} entries`,
+    };
+  }
+  if (outputTooLarge) {
+    return {
+      ok: false,
+      code: "ARCHIVE_ENTRIES_UNREADABLE",
+      reason: "tar -tzf output too large",
+    };
+  }
+  if (result.termination !== "exit") {
+    return {
+      ok: false,
+      code: "ARCHIVE_ENTRIES_UNREADABLE",
+      reason: `tar -tzf error: ${result.termination}`,
+    };
+  }
+  if (result.code !== 0) {
+    return {
+      ok: false,
+      code: "ARCHIVE_ENTRIES_UNREADABLE",
+      reason: `tar -tzf exited ${result.code}: ${projectBoundedTextTail(result.stderr, DIR_FETCH_ARCHIVE_LIST_ERROR_STDERR_CHARS)}`,
+    };
+  }
+  appendLine(pending + decoder.end());
+  if (entries.length > DIR_FETCH_MAX_ENTRIES) {
+    return {
+      ok: false,
+      code: "ARCHIVE_ENTRIES_TOO_MANY",
+      reason: `dir.fetch archive contains more than ${DIR_FETCH_MAX_ENTRIES} entries`,
+    };
+  }
+  return { ok: true, entries, sizeBytes, sha256 };
 }
 
 async function validateDirFetchEntries(input: {
@@ -1006,7 +964,4 @@ export function createFileTransferNodeInvokePolicy(): OpenClawPluginNodeInvokePo
   };
 }
 
-export const testing = {
-  listDirFetchArchiveEntries,
-  readAuditSizeBytes,
-};
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

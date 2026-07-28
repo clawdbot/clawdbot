@@ -5,11 +5,11 @@
   "description": "OpenClaw xAI plugin",
   "type": "module",
   "dependencies": {
-    "typebox": "1.3.3"
+    "typebox": "1.3.6",
+    "ws": "8.21.1"
   },
   "devDependencies": {
-    "@openclaw/plugin-sdk": "workspace:*",
-    "ws": "8.21.0"
+    "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {
     "extensions": [

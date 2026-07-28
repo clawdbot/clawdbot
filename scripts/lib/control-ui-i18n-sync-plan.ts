@@ -1,3 +1,5 @@
+import { expectDefined } from "../../packages/normalization-core/src/expect.js";
+
 export interface TranslationMap {
   [key: string]: string | TranslationMap;
 }
@@ -69,6 +71,21 @@ export function shouldReuseExistingTranslation(options: {
   isFallback: boolean;
 }): boolean {
   return !options.isFallback || (!options.allowTranslate && !options.force);
+}
+
+export function resolveLocaleMetaProvenance(options: {
+  didTranslate: boolean;
+  model: string;
+  previousMeta: LocaleMeta | null;
+  provider: string;
+}): { model: string; provider: string } {
+  if (options.didTranslate) {
+    return { model: options.model, provider: options.provider };
+  }
+  return {
+    model: options.previousMeta?.model ?? options.model,
+    provider: options.previousMeta?.provider ?? options.provider,
+  };
 }
 
 export function createControlUiLocaleSyncPlan(input: {
@@ -251,7 +268,7 @@ function setNestedValue(root: TranslationMap, dottedKey: string, value: string):
   const parts = dottedKey.split(".");
   let cursor: TranslationMap = root;
   for (let index = 0; index < parts.length - 1; index += 1) {
-    const key = parts[index];
+    const key = expectDefined(parts[index], `translation key segment at index ${index}`);
     const next = cursor[key];
     if (!next || typeof next === "string") {
       const replacement: TranslationMap = {};
@@ -261,7 +278,7 @@ function setNestedValue(root: TranslationMap, dottedKey: string, value: string):
     }
     cursor = next;
   }
-  cursor[parts.at(-1)!] = value;
+  cursor[expectDefined(parts.at(-1), "translation leaf key")] = value;
 }
 
 function renderTranslationValue(value: string | TranslationMap, indent = 0): string {

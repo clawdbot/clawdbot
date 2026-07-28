@@ -1,4 +1,5 @@
 // Imessage tests cover doctor contract api plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract-api.js";
@@ -49,8 +50,16 @@ describe("imessage normalizeCompatibilityConfig streaming aliases", () => {
     });
     expect(imessage.chunkMode).toBeUndefined();
     expect(imessage.blockStreaming).toBeUndefined();
-    const personal = (imessage.accounts as Record<string, Record<string, unknown>>).personal;
-    expect(personal.streaming).toEqual({ block: { coalesce: { idleMs: 250 } } });
+    const personal = expectDefined(
+      (imessage.accounts as Record<string, Record<string, unknown>>).personal,
+      "personal iMessage account",
+    );
+    // iMessage deep-merges root+account streaming at runtime
+    // (mergeIMessageStreamingConfig), so migration keeps the account object
+    // account-local instead of seeding root values into it.
+    expect(personal.streaming).toEqual({
+      block: { coalesce: { idleMs: 250 } },
+    });
     expect(personal.blockStreamingCoalesce).toBeUndefined();
     for (const change of [
       "Moved channels.imessage.chunkMode → channels.imessage.streaming.chunkMode.",

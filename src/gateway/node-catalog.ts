@@ -294,6 +294,8 @@ function buildEffectiveKnownNode(entry: {
     pendingDeclaredCommands: pendingNodePairing?.commands,
     pendingDeclaredPermissions: pendingNodePairing?.permissions,
     connectedAtMs: live?.connectedAtMs,
+    lastActiveAtMs: live?.lastActiveAtMs,
+    presenceUpdatedAtMs: live?.presenceUpdatedAtMs,
     lastSeenAtMs: lastSeen.lastSeenAtMs,
     lastSeenReason: lastSeen.lastSeenReason,
     approvedAtMs: nodePairing?.approvedAtMs ?? devicePairing?.approvedAtMs,
@@ -389,10 +391,7 @@ export function listKnownNodes(catalog: KnownNodeCatalog): NodeListNode[] {
 }
 
 /** Returns the merged catalog entry for diagnostics that need source details. */
-export function getKnownNodeEntry(
-  catalog: KnownNodeCatalog,
-  nodeId: string,
-): KnownNodeEntry | null {
+function getKnownNodeEntry(catalog: KnownNodeCatalog, nodeId: string): KnownNodeEntry | null {
   return catalog.entriesById.get(nodeId) ?? null;
 }
 

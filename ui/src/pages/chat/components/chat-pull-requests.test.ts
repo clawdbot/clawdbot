@@ -2,9 +2,13 @@
 
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ControlUiSessionPullRequest } from "../../../../../src/gateway/control-ui-contract.js";
+import type {
+  ControlUiSessionBranch,
+  ControlUiSessionPullRequest,
+} from "../../../../../src/gateway/control-ui-contract.js";
 import {
   chatPullRequestId,
+  createPullRequestBranch,
   dismissChatPullRequest,
   listDismissedChatPullRequests,
   renderChatPullRequests,
@@ -28,6 +32,44 @@ function pullRequest(
     ...overrides,
   };
 }
+
+function sessionBranch(overrides: Partial<ControlUiSessionBranch> = {}): ControlUiSessionBranch {
+  return {
+    owner: "openclaw",
+    repo: "openclaw",
+    branch: "claude/cloud-workers-live-events",
+    additions: 2819,
+    deletions: 205,
+    createUrl: "https://github.com/openclaw/openclaw/pull/new/claude/cloud-workers-live-events",
+    ...overrides,
+  };
+}
+
+describe("createPullRequestBranch", () => {
+  it("passes the branch through when no live PR exists", () => {
+    const branch = sessionBranch();
+    expect(createPullRequestBranch([], branch)).toBe(branch);
+    expect(createPullRequestBranch([pullRequest({ state: "merged" })], branch)).toBe(branch);
+    expect(createPullRequestBranch([pullRequest({ state: "closed" })], branch)).toBe(branch);
+  });
+
+  it("hides the row while an open or draft PR exists, even a dismissed one", () => {
+    expect(createPullRequestBranch([pullRequest()], sessionBranch())).toBeUndefined();
+    expect(
+      createPullRequestBranch([pullRequest({ state: "draft" })], sessionBranch()),
+    ).toBeUndefined();
+  });
+
+  it("does not second-guess diff counts; the gateway owns branch emptiness", () => {
+    expect(
+      createPullRequestBranch([], sessionBranch({ additions: 0, deletions: 0 })),
+    ).toBeDefined();
+    expect(
+      createPullRequestBranch([], sessionBranch({ additions: undefined, deletions: undefined })),
+    ).toBeDefined();
+    expect(createPullRequestBranch([], undefined)).toBeUndefined();
+  });
+});
 
 describe("renderChatPullRequests", () => {
   let container: HTMLDivElement;
@@ -197,6 +239,80 @@ describe("renderChatPullRequests", () => {
       container,
     );
     expect(container.querySelector(".chat-pr__warning")).not.toBeNull();
+  });
+
+  it("renders a Create PR branch row with locale-formatted diff stats", () => {
+    render(
+      renderChatPullRequests({
+        pullRequests: [],
+        branch: sessionBranch(),
+        rateLimited: false,
+        expanded: false,
+        onExpand: () => {},
+        onDismiss: () => {},
+      }),
+      container,
+    );
+    const row = container.querySelector('.chat-pr[data-state="branch"]');
+    expect(row?.querySelector(".chat-pr__repo")?.textContent).toBe("openclaw");
+    expect(row?.querySelector(".chat-pr__branch")?.textContent).toBe(
+      "claude/cloud-workers-live-events",
+    );
+    // Thousands separators match GitHub's diff-stat rendering.
+    expect(row?.querySelector(".chat-pr__additions")?.textContent).toBe(
+      `+${(2819).toLocaleString()}`,
+    );
+    expect(row?.querySelector(".chat-pr__deletions")?.textContent).toBe(
+      `−${(205).toLocaleString()}`,
+    );
+    const create = row?.querySelector<HTMLAnchorElement>(".chat-pr__create");
+    expect(create?.getAttribute("href")).toBe(
+      "https://github.com/openclaw/openclaw/pull/new/claude/cloud-workers-live-events",
+    );
+    expect(create?.textContent?.trim()).toBe("Create PR");
+    expect(row?.querySelector(".chat-pr__warning")).toBeNull();
+    // The branch row is not dismissible; it reflects the checkout itself.
+    expect(row?.querySelector(".chat-pr__dismiss")).toBeNull();
+  });
+
+  it("hides the Create PR link while the branch has no createUrl", () => {
+    render(
+      renderChatPullRequests({
+        pullRequests: [],
+        // Unpushed branch with local changed files: the gateway omits
+        // createUrl because GitHub's pull/new page would 404.
+        branch: sessionBranch({ createUrl: undefined, additions: 12, deletions: 3 }),
+        rateLimited: false,
+        expanded: false,
+        onExpand: () => {},
+        onDismiss: () => {},
+      }),
+      container,
+    );
+    const row = container.querySelector('.chat-pr[data-state="branch"]');
+    expect(row?.querySelector(".chat-pr__branch")?.textContent).toBe(
+      "claude/cloud-workers-live-events",
+    );
+    expect(row?.querySelector(".chat-pr__additions")?.textContent).toBe("+12");
+    expect(row?.querySelector(".chat-pr__create")).toBeNull();
+  });
+
+  it("marks the branch row stale when GitHub is rate limited", () => {
+    render(
+      renderChatPullRequests({
+        pullRequests: [],
+        branch: sessionBranch(),
+        rateLimited: true,
+        expanded: false,
+        onExpand: () => {},
+        onDismiss: () => {},
+      }),
+      container,
+    );
+    const row = container.querySelector('.chat-pr[data-state="branch"]');
+    // While rate limited, "no PR found" is unreliable; the warning says so.
+    expect(row?.querySelector(".chat-pr__warning")).not.toBeNull();
+    expect(row?.querySelector(".chat-pr__create")).not.toBeNull();
   });
 
   it("dismisses a chip through the X button", () => {

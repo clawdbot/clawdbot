@@ -29,12 +29,12 @@ const AUDIT_IDENTITY_DOMAIN = "openclaw.audit.identity.v1";
 // around a nested creation would leave a cached key that was never persisted.
 const identityByDatabase = new WeakMap<DatabaseSync, AuditIdentityKey>();
 
-export type AuditIdentityKey = {
+type AuditIdentityKey = {
   keyId: string;
   key: Uint8Array;
 };
 
-export type AuditIdentityKind = "account" | "actor" | "conversation" | "message" | "target";
+type AuditIdentityKind = "account" | "actor" | "conversation" | "message" | "target";
 
 function registerAuditIdentityKeyForRedaction(key: Uint8Array): void {
   const bytes = Buffer.from(key);

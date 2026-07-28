@@ -5,7 +5,6 @@
   "description": "OpenClaw oc:// workspace path plugin",
   "type": "module",
   "dependencies": {
-    "commander": "15.0.0",
     "jsonc-parser": "3.3.1",
     "markdown-it": "14.3.0",
     "yaml": "2.9.0"

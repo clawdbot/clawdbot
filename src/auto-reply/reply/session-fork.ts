@@ -24,7 +24,7 @@ function assertParentSessionForkAllowed(parentEntry: SessionEntry): void {
   }
 }
 
-export type ParentForkDecision = SessionParentForkDecision;
+type ParentForkDecision = SessionParentForkDecision;
 
 type ParentForkDecisionParams = {
   parentEntry: SessionEntry;
@@ -45,9 +45,9 @@ type ForkSessionFromParentParams = {
   targetStorePath?: string;
 };
 
-export type ForkedParentSessionEntry = ParentForkedSessionTranscript;
+type ForkedParentSessionEntry = ParentForkedSessionTranscript;
 
-export type ForkSessionEntryFromParentResult =
+type ForkSessionEntryFromParentResult =
   | {
       status: "forked";
       fork: ForkedParentSessionEntry;
@@ -66,7 +66,7 @@ export type ForkSessionEntryFromParentResult =
   | { status: "missing-parent" }
   | { status: "failed" };
 
-export type ForkSessionEntryFromParentParams = Omit<ForkSessionFromParentParams, "parentEntry"> & {
+type ForkSessionEntryFromParentParams = Omit<ForkSessionFromParentParams, "parentEntry"> & {
   parentSessionKey: string;
   parentStoreKeys?: readonly string[];
   sessionKey: string;

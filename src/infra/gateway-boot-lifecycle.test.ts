@@ -9,19 +9,21 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import {
-  GATEWAY_BOOT_LIFECYCLE_RETENTION_MS,
-  GATEWAY_BOOT_LOOP_UNCLEAN_THRESHOLD,
-  GATEWAY_BOOT_LOOP_WINDOW_MS,
   GATEWAY_CRASH_LOOP_BREAKER_REASON,
   GATEWAY_CRASH_LOOP_RECOVERED_REASON,
   completeGatewayBootLifecycle,
+  formatGatewayCrashLoopManualChannelStartHint,
   inspectGatewayCrashLoopBreaker,
   recordGatewayBootStart,
-  type GatewayBootLifecycleOutcome,
 } from "./gateway-boot-lifecycle.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 
 type GatewayBootLifecycleTestDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_boot_lifecycle">;
+type GatewayBootLifecycleOutcome = Parameters<typeof completeGatewayBootLifecycle>[1]["outcome"];
+
+const GATEWAY_BOOT_LOOP_UNCLEAN_THRESHOLD = 3;
+const GATEWAY_BOOT_LOOP_WINDOW_MS = 5 * 60_000;
+const GATEWAY_BOOT_LIFECYCLE_RETENTION_MS = 24 * 60 * 60_000;
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
@@ -217,5 +219,27 @@ describe("gateway crash-loop breaker", () => {
     expect(rows).toHaveLength(2);
     expect(rows).toContain("kept");
     expect(rows).not.toContain("old");
+  });
+});
+
+describe("formatGatewayCrashLoopManualChannelStartHint", () => {
+  it("uses a placeholder when no channel is known", () => {
+    expect(formatGatewayCrashLoopManualChannelStartHint()).toContain(
+      `--params '{"channel":"<id>"}'`,
+    );
+  });
+
+  it("names the channel being suppressed", () => {
+    expect(formatGatewayCrashLoopManualChannelStartHint({ channelId: "telegram" })).toContain(
+      `--params '{"channel":"telegram"}'`,
+    );
+  });
+
+  // Suppression is reported per account; omitting accountId would tell operators to run a command
+  // that starts the channel's default account instead of the one the warning named.
+  it("carries the account when suppression is account-scoped", () => {
+    expect(
+      formatGatewayCrashLoopManualChannelStartHint({ channelId: "telegram", accountId: "work" }),
+    ).toContain(`--params '{"channel":"telegram","accountId":"work"}'`);
   });
 });

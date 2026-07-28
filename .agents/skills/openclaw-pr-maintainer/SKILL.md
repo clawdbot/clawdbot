@@ -80,6 +80,8 @@ gh api -X POST "repos/openclaw/openclaw/issues/<number>/assignees" -f 'assignees
 
 In generic issue/PR triage, hot queues, landable shortlists, or "what is still open", exclude PRs authored by maintainers with broad repository access until 14 days after `created_at`. Prefer external contributors' PRs. An ordinary request for landing candidates does not override the age gate. Continue suppressing maintainer-authored issues by default.
 
+Treat live repository permission as the source of truth. Before surfacing a finalist whose access is not already known, check `gh api repos/openclaw/openclaw/collaborators/<login>/permission`; suppress write, maintain, or admin access even when the login is absent from the fast-path list below. Read or triage access alone does not trigger suppression unless the login is explicitly listed.
+
 Suppress by default when the opener/author is one of:
 
 - `@vincentkoc`
@@ -89,6 +91,8 @@ Suppress by default when the opener/author is one of:
 - `@shakkernerd`
 - `@mbelinky`
 - `@joshavant`
+- `@pgondhi987`
+- `@mmaps`
 - `@ngutman`
 - `@vignesh07`
 - `@huntharo`
@@ -280,6 +284,10 @@ gh search issues --repo openclaw/openclaw --match title,body --limit 50 \
 
 ## Follow PR review and landing hygiene
 
+- `scripts/pr` requires `git`, `gh`, `jq`, `rg` (ripgrep), `pnpm`, and `node`
+  on the maintainer host. Let its preflight fail loudly when one is missing.
+  Tests that source `scripts/pr-lib/*` directly must provide the same command
+  surface instead of weakening the production wrapper for a minimal test image.
 - At the start of code-changing or landing work that will need tests or heavy
   proof, classify source trust and pre-warm the safe backend through `$crabbox`
   in the background. Trusted maintainer code defaults to Blacksmith Testbox;

@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createCanvasTool } from "./tool.js";
+import { CANVAS_JSONL_MAX_BYTES, createCanvasTool } from "./tool.js";
 
 const VALID_A2UI_V08_JSONL = [
   JSON.stringify({
@@ -80,6 +80,25 @@ describe("Canvas tool", () => {
     },
   );
 
+  it("rejects jsonlPath files above the shared bounded-read limit", async () => {
+    tempRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-canvas-tool-"));
+    const workspaceDir = path.join(tempRoot, "workspace");
+    await mkdir(workspaceDir);
+    await writeFile(
+      path.join(workspaceDir, "events.jsonl"),
+      Buffer.alloc(CANVAS_JSONL_MAX_BYTES + 1),
+    );
+    const tool = createCanvasTool({ workspaceDir });
+
+    await expect(
+      tool.execute("tool-call-1", {
+        action: "a2ui_push",
+        jsonlPath: "events.jsonl",
+      }),
+    ).rejects.toThrow(`exceeds ${CANVAS_JSONL_MAX_BYTES} bytes`);
+    expect(mocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
   it("applies configured image limits to canvas snapshots", async () => {
     mocks.callGatewayTool.mockResolvedValue({
       payload: {
@@ -112,6 +131,21 @@ describe("Canvas tool", () => {
     expect(imageResultParams?.path).toMatch(/openclaw-canvas-snapshot-.*\.png$/);
     expect(imageResultParams?.details).toEqual({ format: "png" });
     expect(imageResultParams?.imageSanitization).toEqual({ maxDimensionPx: 1600 });
+  });
+
+  it("rejects malformed snapshot base64 before creating an image result", async () => {
+    mocks.callGatewayTool.mockResolvedValue({
+      payload: {
+        format: "png",
+        base64: "Zm9=",
+      },
+    });
+    const tool = createCanvasTool();
+
+    await expect(tool.execute("tool-call-1", { action: "snapshot" })).rejects.toThrow(
+      /invalid canvas\.snapshot payload/i,
+    );
+    expect(mocks.imageResultFromFile).not.toHaveBeenCalled();
   });
 
   it("normalizes numeric string params before invoking node canvas commands", async () => {
@@ -168,8 +202,23 @@ describe("Canvas tool", () => {
     );
   });
 
-  it("dispatches valid A2UI v0.8 JSONL unchanged", async () => {
+  it("preserves an empty canvas eval result", async () => {
+    mocks.callGatewayTool.mockResolvedValue({ payload: { result: "" } });
     const tool = createCanvasTool();
+
+    const result = await tool.execute("tool-call-1", {
+      action: "eval",
+      javaScript: `""`,
+    });
+
+    expect(result).toEqual({
+      content: [{ type: "text", text: "" }],
+      details: { result: "" },
+    });
+  });
+
+  it("dispatches valid A2UI v0.8 JSONL unchanged", async () => {
+    const tool = createCanvasTool({ agentSessionKey: "agent:main:canvas" });
 
     await tool.execute("tool-call-1", {
       action: "a2ui_push",
@@ -185,6 +234,7 @@ describe("Canvas tool", () => {
         command: "canvas.a2ui.pushJSONL",
         params: { jsonl: VALID_A2UI_V08_JSONL },
         idempotencyKey: expect.any(String),
+        sessionKey: "agent:main:canvas",
       },
     );
   });

@@ -369,9 +369,10 @@ export function addSignalApprovalReactionHintToText(params: {
 }
 
 function resolveStandaloneApprovalPromptKind(text: string): ApprovalKind | null {
+  // Strip bold markers (**Exec approval required**) before matching the header.
   const firstLine = text
     .split(/\r?\n/)
-    .map((line) => line.trim())
+    .map((line) => line.replace(/\*\*/g, "").trim())
     .find(Boolean);
   if (/^(?:🔒\s*)?Exec approval required$/.test(firstLine ?? "")) {
     return "exec";
@@ -406,7 +407,8 @@ function extractSignalApprovalPromptBinding(text: string): {
   approvalKind: ApprovalKind;
   allowedDecisions: ExecApprovalReplyDecision[];
 } | null {
-  const lines = text.split(/\r?\n/);
+  // Strip bold markers (**ID:** …) before matching the canonical ID header.
+  const lines = text.split(/\r?\n/).map((line) => line.replace(/\*\*/g, ""));
   const idHeaderMatch = lines
     .map((line) => line.match(APPROVAL_ID_LINE_RE))
     .find((match): match is RegExpMatchArray => Boolean(match));
@@ -414,6 +416,9 @@ function extractSignalApprovalPromptBinding(text: string): {
     return null;
   }
   const approvalId = idHeaderMatch[1];
+  if (!approvalId) {
+    return null;
+  }
   const approvalKind = resolveStandaloneApprovalPromptKind(text);
   if (!approvalKind) {
     return null;
@@ -421,10 +426,12 @@ function extractSignalApprovalPromptBinding(text: string): {
   const allowedDecisions: ExecApprovalReplyDecision[] = [];
   for (const line of lines) {
     const match = line.match(APPROVE_REPLY_COMMAND_LINE_RE);
-    if (!match || match[1] !== approvalId) {
+    const commandApprovalId = match?.[1];
+    const decisionList = match?.[2];
+    if (commandApprovalId !== approvalId || !decisionList) {
       continue;
     }
-    for (const decisionText of match[2].split(/[\s|,]+/)) {
+    for (const decisionText of decisionList.split(/[\s|,]+/)) {
       const decision = normalizeApprovalDecision(decisionText);
       if (decision && !allowedDecisions.includes(decision)) {
         allowedDecisions.push(decision);
@@ -993,3 +1000,4 @@ export function clearSignalApprovalReactionTargetsForTest(): void {
   signalApprovalReactionTargets.clearForTest();
   resolverRuntimeLoader.clear();
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

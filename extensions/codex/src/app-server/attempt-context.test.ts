@@ -16,7 +16,6 @@ import {
   buildCodexSystemPromptReport,
   readContextEngineThreadBootstrapProjection,
   readMirroredSessionHistoryMessages,
-  remapCodexContextFilePath,
   resolveContextEngineBootstrapProjectionDecision,
 } from "./attempt-context.js";
 import type { CodexDynamicToolSpec } from "./protocol.js";
@@ -93,8 +92,6 @@ describe("Codex app-server attempt context", () => {
         bootstrapFiles: [],
         contextFiles: [],
         promptContextFiles: [],
-        developerInstructionFiles: [],
-        heartbeatReferenceFiles: [],
       },
       skillsPrompt: "",
       tools,
@@ -181,12 +178,14 @@ describe("Codex app-server attempt context", () => {
         sessionKey: "agent:marketing-agent:session-1",
         sessionAgentId: "marketing-agent",
         memoryToolNames: ["memory_search", "memory_get"],
+        sandboxed: true,
       });
 
       expect(context.memoryToolRouted).toBe(true);
       expect(observedContext).toMatchObject({
         agentId: "marketing-agent",
         agentSessionKey: "agent:marketing-agent:session-1",
+        sandboxed: true,
       });
       expect(context.memoryCollaborationInstructions).toContain(
         "agent=marketing-agent session=agent:marketing-agent:session-1",
@@ -194,35 +193,6 @@ describe("Codex app-server attempt context", () => {
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
-  });
-
-  it("remaps Codex bootstrap files under dot-prefixed workspace directories", () => {
-    expect(
-      remapCodexContextFilePath({
-        file: {
-          path: "/real/workspace/..context/SOUL.md",
-          content: "Soul voice goes here.",
-        },
-        sourceWorkspaceDir: "/real/workspace",
-        targetWorkspaceDir: "/sandbox/workspace",
-      }),
-    ).toEqual({
-      path: "/sandbox/workspace/..context/SOUL.md",
-      content: "Soul voice goes here.",
-    });
-    expect(
-      remapCodexContextFilePath({
-        file: {
-          path: "/outside/SOUL.md",
-          content: "outside",
-        },
-        sourceWorkspaceDir: "/real/workspace",
-        targetWorkspaceDir: "/sandbox/workspace",
-      }),
-    ).toEqual({
-      path: "/outside/SOUL.md",
-      content: "outside",
-    });
   });
 
   it("reads and compares thread-bootstrap context-engine projections", () => {

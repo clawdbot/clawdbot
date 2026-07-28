@@ -1,18 +1,19 @@
 // Whatsapp plugin module implements outbound media contract behavior.
 import path from "node:path";
 import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
-import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS, runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
-import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
+import { mediaKindFromMime, normalizeMimeType } from "openclaw/plugin-sdk/media-mime";
+import type { MediaKind } from "openclaw/plugin-sdk/media-mime";
+import {
+  MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
+  transcodeAudioBufferToOpus,
+} from "openclaw/plugin-sdk/media-runtime";
+import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
+import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveWhatsAppDocumentFileName } from "./document-filename.js";
-import { formatError } from "./session-errors.js";
-import { isWhatsAppSocketOperationTimeoutError } from "./socket-timing.js";
 import {
   sanitizeAssistantVisibleText,
   sanitizeAssistantVisibleTextWithProfile,
   stripToolCallXmlTags,
-  sleep,
 } from "./text-runtime.js";
 
 type WhatsAppOutboundPayloadLike = {
@@ -46,7 +47,7 @@ export type DeliverableWhatsAppOutboundPayload<T extends WhatsAppOutboundPayload
 
 type CanonicalWhatsAppLoadedMedia = {
   buffer: Buffer;
-  kind: "image" | "audio" | "video" | "document";
+  kind: Exclude<MediaKind, "sticker" | "unknown">;
   mimetype: string;
   fileName?: string;
 };
@@ -83,17 +84,15 @@ export function normalizeWhatsAppPayloadTextPreservingIndentation(
   return normalized.trim() ? normalized : "";
 }
 
-export function resolveWhatsAppOutboundMediaUrls(
+// The direct API accepts both fields as additive candidates, with mediaUrl first.
+// Keep that contract separate from channel ReplyPayload mediaUrls precedence.
+export function resolveAdditiveWhatsAppMediaUrls(
   payload: Pick<WhatsAppOutboundPayloadLike, "mediaUrl" | "mediaUrls">,
 ): string[] {
-  const primaryMediaUrl = payload.mediaUrl?.trim();
-  const mediaUrls = (payload.mediaUrls ? [...payload.mediaUrls] : [])
-    .map((entry) => entry.trim())
-    .filter((entry): entry is string => Boolean(entry));
-  const orderedMediaUrls = [primaryMediaUrl, ...mediaUrls].filter((entry): entry is string =>
-    Boolean(entry),
-  );
-  return uniqueStrings(orderedMediaUrls);
+  return normalizeUniqueStringEntries([
+    ...(payload.mediaUrl ? [payload.mediaUrl] : []),
+    ...(payload.mediaUrls ?? []),
+  ]);
 }
 
 // Keep new WhatsApp outbound-media behavior in this helper so payload, gateway, and auto-reply paths stay aligned.
@@ -103,7 +102,10 @@ export function normalizeWhatsAppOutboundPayload<T extends WhatsAppOutboundPaylo
     normalizeText?: (text: string | undefined) => string;
   },
 ): NormalizedWhatsAppOutboundPayload<T> {
-  const mediaUrls = resolveWhatsAppOutboundMediaUrls(payload);
+  const preferredMediaUrls = normalizeUniqueStringEntries(payload.mediaUrls);
+  const mediaUrls = normalizeUniqueStringEntries(
+    resolveOutboundMediaUrls({ mediaUrl: payload.mediaUrl, mediaUrls: preferredMediaUrls }),
+  );
   const normalizeText = options?.normalizeText ?? normalizeWhatsAppPayloadText;
   return {
     ...payload,
@@ -115,7 +117,7 @@ export function normalizeWhatsAppOutboundPayload<T extends WhatsAppOutboundPaylo
 
 function inferWhatsAppMediaKind(
   media: WhatsAppLoadedMediaLike,
-): "image" | "audio" | "video" | "document" {
+): CanonicalWhatsAppLoadedMedia["kind"] {
   if (
     media.kind === "image" ||
     media.kind === "audio" ||
@@ -124,17 +126,10 @@ function inferWhatsAppMediaKind(
   ) {
     return media.kind;
   }
-  const contentType = normalizeContentType(media.contentType);
-  if (contentType.startsWith("image/")) {
-    return "image";
-  }
-  if (contentType.startsWith("audio/")) {
-    return "audio";
-  }
-  if (contentType.startsWith("video/")) {
-    return "video";
-  }
-  return "document";
+  const inferredKind = mediaKindFromMime(normalizeMimeType(media.contentType));
+  return !inferredKind || inferredKind === "sticker" || inferredKind === "unknown"
+    ? "document"
+    : inferredKind;
 }
 
 function normalizeWhatsAppLoadedMedia(
@@ -190,16 +185,12 @@ export async function prepareWhatsAppOutboundMedia(
   };
 }
 
-function normalizeContentType(value: string | undefined): string {
-  return value?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
-}
-
 function isWhatsAppNativeVoiceAudio(params: {
   contentType?: string;
   fileName?: string;
   mediaUrl?: string;
 }): boolean {
-  const contentType = normalizeContentType(params.contentType);
+  const contentType = normalizeMimeType(params.contentType);
   if (contentType === "audio/ogg" || contentType === "audio/opus") {
     return true;
   }
@@ -212,45 +203,16 @@ async function transcodeToWhatsAppVoiceOpus(params: {
   buffer: Buffer;
   fileName: string;
 }): Promise<Buffer> {
-  return await withTempWorkspace(
-    { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "whatsapp-voice-" },
-    async (workspace) => {
-      const ext = path.extname(params.fileName).toLowerCase();
-      const inputExt = ext && ext.length <= 12 ? ext : ".audio";
-      const inputPath = await workspace.write(`input${inputExt}`, params.buffer);
-      await writeExternalFileWithinRoot({
-        rootDir: workspace.dir,
-        path: WHATSAPP_VOICE_FILE_NAME,
-        write: async (outputPath) => {
-          await runFfmpeg([
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-y",
-            "-i",
-            inputPath,
-            "-vn",
-            "-sn",
-            "-dn",
-            "-t",
-            String(MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS),
-            "-ar",
-            String(WHATSAPP_VOICE_SAMPLE_RATE_HZ),
-            "-ac",
-            "1",
-            "-c:a",
-            "libopus",
-            "-b:a",
-            WHATSAPP_VOICE_BITRATE,
-            "-f",
-            "ogg",
-            outputPath,
-          ]);
-        },
-      });
-      return await workspace.read(WHATSAPP_VOICE_FILE_NAME);
-    },
-  );
+  return await transcodeAudioBufferToOpus({
+    audioBuffer: params.buffer,
+    inputFileName: params.fileName,
+    tempPrefix: "whatsapp-voice-",
+    outputFileName: WHATSAPP_VOICE_FILE_NAME,
+    maxDurationSeconds: MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
+    sampleRateHz: WHATSAPP_VOICE_SAMPLE_RATE_HZ,
+    channels: 1,
+    bitrate: WHATSAPP_VOICE_BITRATE,
+  });
 }
 
 function deriveWhatsAppDocumentFileName(mediaUrl: string | undefined): string | undefined {
@@ -266,48 +228,4 @@ function deriveWhatsAppDocumentFileName(mediaUrl: string | undefined): string | 
     const fileName = withoutQueryOrFragment.split(/[\\/]/).pop();
     return fileName || undefined;
   }
-}
-
-function isRetryableWhatsAppOutboundError(error: unknown): boolean {
-  if (isWhatsAppSocketOperationTimeoutError(error)) {
-    return false;
-  }
-  return /closed|reset|timed\s*out|disconnect/i.test(formatError(error));
-}
-
-export async function sendWhatsAppOutboundWithRetry<T>(params: {
-  send: () => Promise<T>;
-  onRetry?: (params: {
-    attempt: number;
-    maxAttempts: number;
-    backoffMs: number;
-    error: unknown;
-    errorText: string;
-  }) => Promise<void> | void;
-  maxAttempts?: number;
-}): Promise<T> {
-  const maxAttempts = params.maxAttempts ?? 3;
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    try {
-      return await params.send();
-    } catch (error) {
-      lastError = error;
-      const errorText = formatError(error);
-      const isLastAttempt = attempt === maxAttempts;
-      if (!isRetryableWhatsAppOutboundError(error) || isLastAttempt) {
-        throw error;
-      }
-      const backoffMs = 500 * attempt;
-      await params.onRetry?.({
-        attempt,
-        maxAttempts,
-        backoffMs,
-        error,
-        errorText,
-      });
-      await sleep(backoffMs);
-    }
-  }
-  throw lastError;
 }

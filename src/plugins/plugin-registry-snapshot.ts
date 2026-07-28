@@ -2,7 +2,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
@@ -11,6 +10,7 @@ import { buildLegacyBundledRootPath } from "./bundled-load-path-aliases.js";
 import { listBundledSourceOverlayDirs } from "./bundled-source-overlays.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { discoverConfiguredPluginLoadPaths, type PluginDiscoveryResult } from "./discovery.js";
 import { fileSignatureMatches, hashJson } from "./installed-plugin-index-hash.js";
 import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
@@ -27,7 +27,6 @@ import {
   extractPluginInstallRecordsFromInstalledPluginIndex,
   hasMissingConfigPathActivationMetadata,
   isInstalledPluginEnabled,
-  listInstalledPluginRecords,
   loadInstalledPluginIndexWithDiscovery,
   resolveInstalledPluginIndexPolicyHash,
   type InstalledPluginIndex,
@@ -39,15 +38,12 @@ import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { getPackageManifestMetadata, type PackageManifest } from "./manifest.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import type { PluginRegistrySnapshotSource } from "./plugin-registry-snapshot.types.js";
-import { fileFingerprint } from "./plugin-snapshot-fingerprint.js";
-import { resolvePluginCacheInputs } from "./roots.js";
 
 export type PluginRegistrySnapshot = InstalledPluginIndex;
 export type PluginRegistryRecord = InstalledPluginIndexRecord;
-export type PluginRegistryInspection = InstalledPluginIndexStoreInspection;
+type PluginRegistryInspection = InstalledPluginIndexStoreInspection;
 export type { PluginRegistrySnapshotSource } from "./plugin-registry-snapshot.types.js";
-export type PluginRegistrySnapshotDiagnosticCode =
-  | "persisted-registry-disabled"
+type PluginRegistrySnapshotDiagnosticCode =
   | "persisted-registry-missing"
   | "persisted-registry-stale-policy"
   | "persisted-registry-stale-source";
@@ -58,15 +54,13 @@ export type PluginRegistrySnapshotDiagnostic = {
   message: string;
 };
 
-export type PluginRegistrySnapshotResult = {
+type PluginRegistrySnapshotResult = {
   snapshot: PluginRegistrySnapshot;
   source: PluginRegistrySnapshotSource;
   diagnostics: readonly PluginRegistrySnapshotDiagnostic[];
   discovery?: PluginDiscoveryResult;
 };
 
-export const DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV = "OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY";
-const MAX_PLUGIN_REGISTRY_SNAPSHOT_MEMOS = 8;
 const REGISTRY_SNAPSHOT_MEMO_ENV_KEYS = [
   "APPDATA",
   "HOME",
@@ -75,7 +69,6 @@ const REGISTRY_SNAPSHOT_MEMO_ENV_KEYS = [
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
   "OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS",
-  DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV,
   "OPENCLAW_HOME",
   "OPENCLAW_NIX_MODE",
   "OPENCLAW_STATE_DIR",
@@ -88,17 +81,15 @@ type PluginRegistrySnapshotMemo = {
   result: PluginRegistrySnapshotResult;
 };
 
-let pluginRegistrySnapshotMemos: PluginRegistrySnapshotMemo[] = [];
+let pluginRegistrySnapshotMemo: PluginRegistrySnapshotMemo | undefined;
 
 function clearLoadPluginRegistrySnapshotMemo(): void {
-  pluginRegistrySnapshotMemos = [];
+  pluginRegistrySnapshotMemo = undefined;
+  // A retired registry must not leave its published metadata graph behind.
+  clearCurrentPluginMetadataSnapshot();
 }
 
 registerPluginMetadataProcessMemoLifecycleClear(clearLoadPluginRegistrySnapshotMemo);
-
-function formatDeprecatedPersistedRegistryDisableWarning(): string {
-  return `${DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV} is a deprecated break-glass compatibility switch; use \`openclaw plugins registry --refresh\` or \`openclaw doctor --fix\` to repair registry state.`;
-}
 
 export type LoadPluginRegistryParams = LoadInstalledPluginIndexParams &
   InstalledPluginIndexStoreOptions & {
@@ -106,14 +97,9 @@ export type LoadPluginRegistryParams = LoadInstalledPluginIndexParams &
     preferPersisted?: boolean;
   };
 
-export type GetPluginRecordParams = LoadPluginRegistryParams & {
+type GetPluginRecordParams = LoadPluginRegistryParams & {
   pluginId: string;
 };
-
-function hasEnvFlag(env: NodeJS.ProcessEnv, name: string): boolean {
-  const value = env[name]?.trim().toLowerCase();
-  return Boolean(value && value !== "0" && value !== "false" && value !== "no");
-}
 
 function pickRegistrySnapshotMemoEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   return Object.fromEntries(
@@ -144,92 +130,25 @@ function resolvePluginRegistrySnapshotMemoKey(
   if (!canMemoizePluginRegistrySnapshot(params)) {
     return undefined;
   }
-  const persistedReadsEnabled =
-    params.preferPersisted !== false && !hasEnvFlag(env, DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV);
-  const persistedRegistryFingerprint = persistedReadsEnabled
-    ? hashJson(
-        readPersistedInstalledPluginIndexSync({
-          env,
-          ...(params.stateDir ? { stateDir: params.stateDir } : {}),
-        }),
-      )
-    : "disabled";
   return hashJson({
     config: params.config ?? null,
     cwd: process.cwd(),
     env: pickRegistrySnapshotMemoEnv(env),
     hostContractVersion: resolveCompatibilityHostVersion(env),
     preferPersisted: params.preferPersisted ?? null,
-    // Plugin manifests are process-stable inside the Gateway, while the persisted
-    // registry envelope can change through explicit refresh/install flows.
-    registry: persistedRegistryFingerprint,
-    pluginRoots: fingerprintPluginSourceRoots(params, env),
+    // Install, reload, and persisted-index writes clear this memo explicitly.
+    // Polling roots or SQLite here would put discovery back on every hot lookup.
     stateDir: params.stateDir ? resolveUserPath(params.stateDir, env) : null,
     workspaceDir: params.workspaceDir ? resolveUserPath(params.workspaceDir, env) : null,
   });
 }
 
-function fingerprintPluginSourceRoots(
-  params: LoadPluginRegistryParams,
-  env: NodeJS.ProcessEnv,
-): unknown {
-  const workspaceDir = params.workspaceDir ? resolveUserPath(params.workspaceDir, env) : undefined;
-  const cacheInputs = resolvePluginCacheInputs({
-    workspaceDir,
-    loadPaths: normalizePluginsConfig(params.config?.plugins).loadPaths,
-    env,
-  });
-  return {
-    global: sourceRootFingerprint(cacheInputs.roots.global),
-    loadPaths: cacheInputs.loadPaths.map((entry) => sourceRootFingerprint(entry)),
-    stock: cacheInputs.roots.stock ? sourceRootFingerprint(cacheInputs.roots.stock) : null,
-    workspace: cacheInputs.roots.workspace
-      ? sourceRootFingerprint(cacheInputs.roots.workspace)
-      : null,
-  };
-}
-
-function sourceRootFingerprint(rootPath: string): unknown {
-  return {
-    root: fileFingerprint(rootPath),
-    // Directory mtimes can be too coarse on some Linux filesystems. Include only
-    // immediate child names/kinds so same-tick plugin installs invalidate the
-    // process memo without rereading manifests on hot registry lookups.
-    children: directoryChildFingerprint(rootPath),
-  };
-}
-
-function directoryChildFingerprint(directoryPath: string): unknown {
-  try {
-    return fs
-      .readdirSync(directoryPath, { withFileTypes: true })
-      .map((entry) => [entry.name, entry.isDirectory() ? "dir" : entry.isFile() ? "file" : "other"])
-      .toSorted(([left], [right]) =>
-        expectDefined(left, "plugin registry snapshot left").localeCompare(
-          expectDefined(right, "plugin registry snapshot right"),
-        ),
-      );
-  } catch {
-    return "unreadable";
-  }
-}
-
 function findPluginRegistrySnapshotMemo(
   key: string | undefined,
 ): PluginRegistrySnapshotResult | undefined {
-  if (!key) {
-    return undefined;
-  }
-  const index = pluginRegistrySnapshotMemos.findIndex((memo) => memo.key === key);
-  if (index === -1) {
-    return undefined;
-  }
-  const [memo] = pluginRegistrySnapshotMemos.splice(index, 1);
-  if (!memo) {
-    return undefined;
-  }
-  pluginRegistrySnapshotMemos.unshift(memo);
-  return memo.result;
+  return key && pluginRegistrySnapshotMemo?.key === key
+    ? pluginRegistrySnapshotMemo.result
+    : undefined;
 }
 
 function rememberPluginRegistrySnapshotMemo(
@@ -239,10 +158,7 @@ function rememberPluginRegistrySnapshotMemo(
   if (!key) {
     return result;
   }
-  pluginRegistrySnapshotMemos = [
-    { key, result },
-    ...pluginRegistrySnapshotMemos.filter((memo) => memo.key !== key),
-  ].slice(0, MAX_PLUGIN_REGISTRY_SNAPSHOT_MEMOS);
+  pluginRegistrySnapshotMemo = { key, result };
   return result;
 }
 
@@ -405,7 +321,7 @@ function isAllowedPersistedBundledPluginRoot(
   }
   if (sourcePluginOptsOutOfBundledDist(path.join(legacyRoot, relativePluginRoot))) {
     // Older index records lack packageBuild. Re-derive once so runtime loading
-    // and Crestodian fingerprint the same source-only artifact.
+    // and OpenClaw fingerprint the same source-only artifact.
     return false;
   }
   // Discovery prefers a built plugin whenever the same child exists in the
@@ -562,8 +478,7 @@ export function loadPluginRegistrySnapshotWithMetadata(
   }
   const diagnostics: PluginRegistrySnapshotDiagnostic[] = [];
   const disabledByCaller = params.preferPersisted === false;
-  const disabledByEnv = hasEnvFlag(env, DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV);
-  const persistedReadsEnabled = !disabledByCaller && !disabledByEnv;
+  const persistedReadsEnabled = !disabledByCaller;
   const persistedInstallRecordReadsEnabled = persistedReadsEnabled;
   let persistedIndex: InstalledPluginIndex | null;
   if (persistedInstallRecordReadsEnabled) {
@@ -649,14 +564,6 @@ export function loadPluginRegistrySnapshotWithMetadata(
         message: "Persisted plugin registry is missing or invalid; using derived plugin index.",
       });
     }
-  } else {
-    diagnostics.push({
-      level: "warn",
-      code: "persisted-registry-disabled",
-      message: disabledByEnv
-        ? `${formatDeprecatedPersistedRegistryDisableWarning()} Using legacy derived plugin index.`
-        : "Persisted plugin registry reads are disabled by the caller; using derived plugin index.",
-    });
   }
 
   const derived = loadInstalledPluginIndexWithDiscovery({
@@ -682,13 +589,6 @@ export function loadPluginRegistrySnapshot(
 ): PluginRegistrySnapshot {
   return resolveSnapshot(params);
 }
-
-export function listPluginRecords(
-  params: LoadPluginRegistryParams = {},
-): readonly PluginRegistryRecord[] {
-  return listInstalledPluginRecords(resolveSnapshot(params));
-}
-
 export function getPluginRecord(params: GetPluginRecordParams): PluginRegistryRecord | undefined {
   return getInstalledPluginRecord(resolveSnapshot(params), params.pluginId);
 }

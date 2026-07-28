@@ -24,6 +24,28 @@ describe("followup delivery context", () => {
     );
   });
 
+  it("never collect-batches runs bound to different tool targets", () => {
+    const first = createQueueTestRun({ prompt: "first" });
+    first.run.toolBindings = { browser: { kind: "tab", targetId: "tab-a" } };
+    const second = createQueueTestRun({ prompt: "second" });
+    second.run.toolBindings = { browser: { kind: "tab", targetId: "tab-b" } };
+
+    expect(resolveFollowupDeliveryContextKey(first)).not.toBe(
+      resolveFollowupDeliveryContextKey(second),
+    );
+  });
+
+  it("canonicalizes equivalent tool bindings", () => {
+    const first = createQueueTestRun({ prompt: "first" });
+    first.run.toolBindings = { browser: { targetId: "tab-a", kind: "tab" } };
+    const second = createQueueTestRun({ prompt: "second" });
+    second.run.toolBindings = { browser: { kind: "tab", targetId: "tab-a" } };
+
+    expect(resolveFollowupDeliveryContextKey(first)).toBe(
+      resolveFollowupDeliveryContextKey(second),
+    );
+  });
+
   it("separates runs with different parent policy provenance", () => {
     const first = createQueueTestRun({ prompt: "first" });
     first.run.spawnedBy = "agent:main:telegram:group:first";

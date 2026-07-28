@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   appendBoundedReproOutput,
@@ -112,7 +113,11 @@ describe("zai fallback repro command resolution", () => {
     expect(exitCode).toBe(0);
     expect(calls).toEqual(["run1", "run2"]);
     expect(tempRoots).toHaveLength(1);
-    await expect(fs.stat(tempRoots[0])).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      fs.stat(expectDefined(tempRoots[0], "Z.AI fallback temp root")),
+    ).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("fails when run 1 does not leave tool result evidence", async () => {

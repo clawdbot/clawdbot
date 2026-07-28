@@ -4,12 +4,13 @@ OpenClaw's visual language is a **dark-first, glass-surface system** built aroun
 
 ## Contents
 
-| File                                     | What it covers                                                                          |
-| ---------------------------------------- | --------------------------------------------------------------------------------------- |
-| [glass-surfaces.md](./glass-surfaces.md) | Two glass tiers, exact CSS values, no-solid-panels rule, `@supports` fallback           |
-| [color-tokens.md](./color-tokens.md)     | All design tokens with values, usage, contrast ratios, and anti-patterns                |
-| [motion.md](./motion.md)                 | Duration scale, easing functions, `prefers-reduced-motion` pattern, animation inventory |
-| [accessibility.md](./accessibility.md)   | WCAG checklist: contrast, focus, tap targets, ARIA, skip link, focus trap               |
+| File                                       | What it covers                                                                          |
+| ------------------------------------------ | --------------------------------------------------------------------------------------- |
+| [glass-surfaces.md](./glass-surfaces.md)   | Two glass tiers, exact CSS values, no-solid-panels rule, `@supports` fallback           |
+| [color-tokens.md](./color-tokens.md)       | All design tokens with values, usage, contrast ratios, and anti-patterns                |
+| [motion.md](./motion.md)                   | Duration scale, easing functions, `prefers-reduced-motion` pattern, animation inventory |
+| [accessibility.md](./accessibility.md)     | WCAG checklist: contrast, focus, tap targets, ARIA, skip link, focus trap               |
+| [settings-design.md](./settings-design.md) | Settings page anatomy: sections, groups, rows, controls, status dots, migration rules   |
 
 ## Guiding Principles
 

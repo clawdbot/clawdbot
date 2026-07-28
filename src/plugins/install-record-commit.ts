@@ -12,7 +12,6 @@ import {
   type TransformConfigFileWithRetryParams,
 } from "../config/config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
-import { extractShippedPluginInstallConfigRecords } from "../config/plugin-install-config-migration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -347,6 +346,23 @@ export async function commitPluginInstallRecordsWithConfig(params: {
   });
 }
 
+/** Persist plugin install records without rewriting the user-authored config file. */
+export async function commitPluginInstallRecordsOnly(params: {
+  previousInstallRecords?: Record<string, PluginInstallRecord>;
+  nextInstallRecords: Record<string, PluginInstallRecord>;
+  verifyConfigFresh?: () => Promise<void>;
+}): Promise<void> {
+  await commitPluginInstallRecordsWithWriter({
+    previousInstallRecords: params.previousInstallRecords,
+    nextInstallRecords: params.nextInstallRecords,
+    nextConfig: {},
+    commit: async () => {
+      await params.verifyConfigFresh?.();
+      return undefined;
+    },
+  });
+}
+
 /** Commit config while migrating any pending install records into the install index. */
 export async function commitConfigWriteWithPendingPluginInstalls(params: {
   nextConfig: OpenClawConfig;
@@ -360,7 +376,7 @@ export async function commitConfigWriteWithPendingPluginInstalls(params: {
   movedInstallRecords: boolean;
   persistedHash: string | null;
 }> {
-  const sourceInstallRecords = extractShippedPluginInstallConfigRecords(params.sourceConfig);
+  const sourceInstallRecords = params.sourceConfig?.plugins?.installs ?? {};
   const nextPendingConfig = params.sourceConfig
     ? stripPendingPluginInstallRecords(
         params.nextConfig,

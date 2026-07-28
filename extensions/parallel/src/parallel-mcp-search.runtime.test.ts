@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 
@@ -31,17 +32,19 @@ vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => {
   };
 });
 
-import {
-  extractMcpToolPayload,
-  iterMcpMessages,
-  runParallelMcpSearch,
-  selectMcpEnvelope,
-} from "./parallel-mcp-search.runtime.js";
+import { runParallelMcpSearch } from "./parallel-mcp-search.runtime.js";
 
 function jsonResponse(body: unknown, headers?: Record<string, string>): Response {
   return new Response(JSON.stringify(body), {
     status: 200,
     headers: { "Content-Type": "application/json", ...headers },
+  });
+}
+
+function rawResponse(body: string, contentType: string): Response {
+  return new Response(body, {
+    status: 200,
+    headers: { "Content-Type": contentType },
   });
 }
 
@@ -78,127 +81,71 @@ function headerOf(call: EndpointCall, name: string): string | undefined {
   return (call.init.headers as Record<string, string>)[name];
 }
 
-function boundaryJsonPayload(base: Record<string, unknown>): {
-  payload: Record<string, unknown>;
-  truncatedJson: string;
-} {
-  const empty = { ...base, detail: "" };
-  const jsonPrefix = JSON.stringify(empty).slice(0, -2);
-  const detailPrefix = "x".repeat(499 - jsonPrefix.length);
-  return {
-    payload: { ...base, detail: `${detailPrefix}😀tail` },
-    truncatedJson: `${jsonPrefix}${detailPrefix}`,
-  };
+function requireEndpointCall(index: number): EndpointCall {
+  return expectDefined(endpointMockState.calls[index], `Parallel MCP endpoint call ${index}`);
 }
-
-function thrownMessage(run: () => unknown): string {
-  try {
-    run();
-  } catch (error) {
-    return error instanceof Error ? error.message : String(error);
-  }
-  throw new Error("Expected call to throw.");
-}
-
-describe("iterMcpMessages", () => {
-  it("parses a single JSON object body", () => {
-    expect(iterMcpMessages('{"id":"a","result":{}}')).toEqual([{ id: "a", result: {} }]);
-  });
-
-  it("flattens a JSON array batch", () => {
-    expect(iterMcpMessages('[{"id":"a"},{"id":"b"}]')).toEqual([{ id: "a" }, { id: "b" }]);
-  });
-
-  it("parses SSE events with concatenated data lines", () => {
-    const sse = [
-      "event: message",
-      'data: {"id":"a",',
-      'data: "result":{}}',
-      "",
-      'data: {"id":"b"}',
-      "",
-    ].join("\n");
-    expect(iterMcpMessages(sse)).toEqual([{ id: "a", result: {} }, { id: "b" }]);
-  });
-
-  it("skips unparseable chunks and empty bodies", () => {
-    expect(iterMcpMessages("")).toEqual([]);
-    expect(iterMcpMessages("not json")).toEqual([]);
-    expect(iterMcpMessages("data: {bad json}\n\n")).toEqual([]);
-  });
-});
-
-describe("selectMcpEnvelope", () => {
-  it("returns the message whose id matches, skipping notifications", () => {
-    const body = [
-      '{"jsonrpc":"2.0","method":"notifications/progress"}',
-      '{"jsonrpc":"2.0","id":"other","result":{"n":1}}',
-      '{"jsonrpc":"2.0","id":"want","result":{"n":2}}',
-    ]
-      .map((line) => `data: ${line}`)
-      .join("\n\n");
-    expect(selectMcpEnvelope(body, "want")).toMatchObject({ id: "want", result: { n: 2 } });
-  });
-
-  it("falls back to the last result-bearing message when no id matches", () => {
-    const body = '{"id":"x","result":{"first":true}}\n';
-    expect(selectMcpEnvelope(body, "missing")).toMatchObject({ result: { first: true } });
-  });
-
-  it("returns {} when there is no result or error message", () => {
-    expect(selectMcpEnvelope('{"method":"notifications/initialized"}', "any")).toEqual({});
-  });
-});
-
-describe("extractMcpToolPayload", () => {
-  it("prefers structuredContent", () => {
-    expect(extractMcpToolPayload({ result: { structuredContent: { results: [1] } } })).toEqual({
-      results: [1],
-    });
-  });
-
-  it("parses the first JSON-parseable text block", () => {
-    expect(
-      extractMcpToolPayload({
-        result: {
-          content: [
-            { type: "text", text: "not json" },
-            { type: "text", text: '{"ok":true}' },
-          ],
-        },
-      }),
-    ).toEqual({ ok: true });
-  });
-
-  it("throws on a JSON-RPC error", () => {
-    const { payload, truncatedJson } = boundaryJsonPayload({ code: -1, message: "boom" });
-
-    expect(thrownMessage(() => extractMcpToolPayload({ error: payload }))).toBe(
-      `Parallel MCP error: ${truncatedJson}`,
-    );
-  });
-
-  it("throws on a tool-level isError", () => {
-    const { payload, truncatedJson } = boundaryJsonPayload({ isError: true });
-
-    expect(thrownMessage(() => extractMcpToolPayload({ result: payload }))).toBe(
-      `Parallel MCP tool error: ${truncatedJson}`,
-    );
-  });
-
-  it("throws when there is no parseable content", () => {
-    const { payload, truncatedJson } = boundaryJsonPayload({ content: [] });
-
-    expect(thrownMessage(() => extractMcpToolPayload({ result: payload }))).toBe(
-      `Parallel MCP returned no parseable content: ${truncatedJson}`,
-    );
-  });
-});
 
 describe("runParallelMcpSearch", () => {
   beforeEach(() => {
     endpointMockState.calls = [];
     endpointMockState.responses = [];
+  });
+
+  it("handles SSE notifications, multiline events, JSON batches, and structured payloads", async () => {
+    endpointMockState.responses.push(
+      rawResponse(
+        [
+          'data: {"jsonrpc":"2.0","method":"notifications/progress"}',
+          "",
+          'data: {"jsonrpc":"2.0","id":"ignored",',
+          'data: "result":{"protocolVersion":"2025-06-18"}}',
+          "",
+        ].join("\n"),
+        "text/event-stream",
+      ),
+      jsonResponse({ jsonrpc: "2.0" }),
+      jsonResponse([
+        { jsonrpc: "2.0", method: "notifications/progress" },
+        {
+          jsonrpc: "2.0",
+          id: "ignored",
+          result: {
+            structuredContent: {
+              search_id: "search_sse",
+              results: [{ url: "https://example.com", title: "Example", excerpts: ["hi"] }],
+            },
+          },
+        },
+      ]),
+    );
+
+    await expect(
+      runParallelMcpSearch({ searchQueries: ["test"], maxResults: 5 }),
+    ).resolves.toMatchObject({
+      search_id: "search_sse",
+      results: [{ url: "https://example.com", title: "Example" }],
+    });
+  });
+
+  it.each([
+    [{ error: { code: -1, message: "boom" } }, "Parallel MCP error"],
+    [{ result: { isError: true } }, "Parallel MCP tool error"],
+    [{ result: { content: [] } }, "Parallel MCP returned no parseable content"],
+  ])("surfaces bounded tool-envelope failures", async (envelope, expectedPrefix) => {
+    const detail = `${"x".repeat(600)}😀tail`;
+    const detailedEnvelope =
+      "error" in envelope
+        ? { error: { ...envelope.error, detail } }
+        : { result: { ...envelope.result, detail } };
+    endpointMockState.responses.push(
+      jsonResponse({ result: { protocolVersion: "2025-06-18" } }),
+      jsonResponse({}),
+      jsonResponse(detailedEnvelope),
+    );
+
+    await expect(runParallelMcpSearch({ searchQueries: ["test"], maxResults: 5 })).rejects.toThrow(
+      expectedPrefix,
+    );
   });
 
   it("runs the 3-step handshake and maps results into the REST-compatible shape", async () => {
@@ -247,17 +194,17 @@ describe("runParallelMcpSearch", () => {
       "tools/call",
     ]);
     // Server session id + a negotiated protocol version are echoed post-init.
-    expect(headerOf(endpointMockState.calls[1], "Mcp-Session-Id")).toBe("server-session-1");
-    expect(headerOf(endpointMockState.calls[2], "Mcp-Session-Id")).toBe("server-session-1");
-    expect(headerOf(endpointMockState.calls[2], "MCP-Protocol-Version")).toBe("2025-06-18");
+    expect(headerOf(requireEndpointCall(1), "Mcp-Session-Id")).toBe("server-session-1");
+    expect(headerOf(requireEndpointCall(2), "Mcp-Session-Id")).toBe("server-session-1");
+    expect(headerOf(requireEndpointCall(2), "MCP-Protocol-Version")).toBe("2025-06-18");
     // No bearer token on the anonymous free path.
-    expect(headerOf(endpointMockState.calls[0], "Authorization")).toBeUndefined();
+    expect(headerOf(requireEndpointCall(0), "Authorization")).toBeUndefined();
     // Every call identifies OpenClaw at the HTTP layer (not just node).
     for (const call of endpointMockState.calls) {
       expect(headerOf(call, "User-Agent")).toMatch(/^openclaw-parallel\//);
     }
     // tools/call carries the documented web_search args.
-    const callArgs = (readBody(endpointMockState.calls[2]).params as Record<string, unknown>)
+    const callArgs = (readBody(requireEndpointCall(2)).params as Record<string, unknown>)
       .arguments as Record<string, unknown>;
     expect(callArgs).toMatchObject({
       objective: "find examples",
@@ -285,7 +232,7 @@ describe("runParallelMcpSearch", () => {
 
     await runParallelMcpSearch({ searchQueries: ["alpha", "beta"], maxResults: 5 });
 
-    const callArgs = (readBody(endpointMockState.calls[2]).params as Record<string, unknown>)
+    const callArgs = (readBody(requireEndpointCall(2)).params as Record<string, unknown>)
       .arguments as Record<string, unknown>;
     expect(callArgs.objective).toBe("alpha beta");
   });
@@ -309,7 +256,7 @@ describe("runParallelMcpSearch", () => {
       maxResults: 5,
       sessionId: callerSessionId,
     });
-    const callArgs = (readBody(endpointMockState.calls[2]).params as Record<string, unknown>)
+    const callArgs = (readBody(requireEndpointCall(2)).params as Record<string, unknown>)
       .arguments as Record<string, unknown>;
     expect(callArgs.session_id).toBe(callerSessionId);
     expect(response.session_id).toBe(callerSessionId);
@@ -339,8 +286,8 @@ describe("runParallelMcpSearch", () => {
       "initialize",
       "notifications/initialized",
     ]);
-    expect(headerOf(endpointMockState.calls[1], "Mcp-Session-Id")).toBe("server-session-1");
-    expect(headerOf(endpointMockState.calls[1], "MCP-Protocol-Version")).toBe("2025-06-18");
+    expect(headerOf(requireEndpointCall(1), "Mcp-Session-Id")).toBe("server-session-1");
+    expect(headerOf(requireEndpointCall(1), "MCP-Protocol-Version")).toBe("2025-06-18");
   });
 
   it("bounds initialize error bodies without using response.text()", async () => {

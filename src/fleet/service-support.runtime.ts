@@ -36,7 +36,7 @@ const HEALTH_TIMEOUT_MS = 1_000;
 const CELL_CONFIG_MAX_BYTES = 4 * 1024 * 1024;
 const FLEET_OPERATION_HEARTBEAT_MS = 60_000;
 
-export type FleetHealthResult =
+type FleetHealthResult =
   | { status: "ok"; url: string; httpStatus: number }
   | { status: "failed"; url: string; error: string; httpStatus?: number }
   | { status: "skipped"; url: string; reason: string };
@@ -341,7 +341,7 @@ export function assertCurrentReservation(env: NodeJS.ProcessEnv, expected: Fleet
   }
 }
 
-export function requirePositiveResource(
+function requirePositiveResource(
   value: string,
   label: string,
   context: "upgrade" | "restore" = "upgrade",
@@ -375,7 +375,7 @@ export function requireInspectedAttemptId(
   return attemptId;
 }
 
-export function requirePidsLimit(
+function requirePidsLimit(
   value: number | undefined,
   context: "upgrade" | "restore" = "upgrade",
 ): number {
@@ -385,7 +385,7 @@ export function requirePidsLimit(
   return value;
 }
 
-export function rebuildInspectedEnvironment(
+function rebuildInspectedEnvironment(
   environment: Readonly<Record<string, string>>,
   labels: Readonly<Record<string, string>>,
   token: string,
@@ -457,7 +457,7 @@ export async function verifyReplacementHealthy(params: {
   checkpoint: () => void;
   timeoutMs: number;
   pollMs: number;
-  context: "upgrade" | "restore";
+  context: "upgrade" | "restore" | "create";
 }): Promise<void> {
   const deadline = params.now() + params.timeoutMs;
   for (;;) {

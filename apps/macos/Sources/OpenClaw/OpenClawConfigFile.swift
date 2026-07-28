@@ -183,11 +183,6 @@ enum OpenClawConfigFile {
         }
     }
 
-    static func loadGatewayDict() -> [String: Any] {
-        let root = self.loadDict()
-        return root["gateway"] as? [String: Any] ?? [:]
-    }
-
     static func updateGatewayDict(_ mutate: (inout [String: Any]) -> Void) {
         var root = self.loadDict()
         var gateway = root["gateway"] as? [String: Any] ?? [:]
@@ -360,16 +355,6 @@ extension OpenClawConfigFile {
         root["browser"] = browser
         self.saveDict(root)
         self.logger.debug("browser control updated enabled=\(enabled)")
-    }
-
-    static func gatewayPassword() -> String? {
-        let root = self.loadDict()
-        guard let gateway = root["gateway"] as? [String: Any],
-              let remote = gateway["remote"] as? [String: Any]
-        else {
-            return nil
-        }
-        return remote["password"] as? String
     }
 
     static func gatewayPort() -> Int? {

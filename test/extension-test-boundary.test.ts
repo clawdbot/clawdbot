@@ -94,7 +94,7 @@ function findExtensionImports(source: string): string[] {
   return [
     ...source.matchAll(/from\s+["']((?:\.\.\/)+extensions\/[^"']+)["']/g),
     ...source.matchAll(/import\(\s*["']((?:\.\.\/)+extensions\/[^"']+)["']\s*\)/g),
-  ].map((match) => match[1]);
+  ].flatMap((match) => (match[1] === undefined ? [] : [match[1]]));
 }
 
 function isAllowedExtensionPublicImport(specifier: string): boolean {
@@ -107,7 +107,7 @@ function findPluginSdkImports(source: string): string[] {
   return [
     ...source.matchAll(/from\s+["']((?:\.\.\/)+plugin-sdk\/[^"']+)["']/g),
     ...source.matchAll(/import\(\s*["']((?:\.\.\/)+plugin-sdk\/[^"']+)["']\s*\)/g),
-  ].map((match) => match[1]);
+  ].flatMap((match) => (match[1] === undefined ? [] : [match[1]]));
 }
 
 function findBundledPluginPublicSurfaceImports(source: string): string[] {
@@ -124,7 +124,7 @@ function findRelativeSrcImports(source: string): string[] {
     ...source.matchAll(/from\s+["']((?:\.\.?\/)+src\/[^"']+)["']/g),
     ...source.matchAll(/import\(\s*["']((?:\.\.?\/)+src\/[^"']+)["']\s*\)/g),
     ...source.matchAll(/vi\.(?:mock|doMock)\s*\(\s*["']((?:\.\.?\/)+src\/[^"']+)["']/g),
-  ].map((match) => match[1]);
+  ].flatMap((match) => (match[1] === undefined ? [] : [match[1]]));
 }
 
 function getImportBasename(importPath: string): string {
@@ -333,9 +333,8 @@ describe("non-extension test boundaries", () => {
     expect(offenders).toStrictEqual([]);
   });
 
-  it("keeps extension tests off legacy broad testing barrels and repo helper bridges", () => {
+  it("keeps extension tests off the legacy test alias and repo helper bridges", () => {
     const bannedPatterns = [
-      /["']openclaw\/plugin-sdk\/testing["']/u,
       /["']openclaw\/plugin-sdk\/test-utils["']/u,
       /["'](?:\.\.\/)+(?:test\/helpers\/channels\/)[^"']+["']/u,
       /["'](?:\.\.\/)+(?:src\/channels\/plugins\/contracts\/test-helpers\/)[^"']+["']/u,
@@ -377,12 +376,8 @@ describe("non-extension test boundaries", () => {
       "openclaw/plugin-sdk/channel-config-primitives",
     ];
     const bundledProviderSchemaNames = new Set([
-      "DiscordConfigSchema",
       "GoogleChatConfigSchema",
       "IMessageConfigSchema",
-      "MSTeamsConfigSchema",
-      "SignalConfigSchema",
-      "SlackConfigSchema",
       "TelegramConfigSchema",
       "WhatsAppConfigSchema",
     ]);

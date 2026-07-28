@@ -349,19 +349,38 @@ describe("buildTimeoutAbortSignal", () => {
     }
   });
 
-  it("does not log when a parent signal aborts first", async () => {
+  it("preserves the parent reason when a parent signal aborts first", async () => {
     const parent = new AbortController();
+    const reason = new Error("parent stopped");
     const { signal, cleanup } = buildTimeoutAbortSignal({
       timeoutMs: 25,
       signal: parent.signal,
       operation: "unit-test",
     });
 
-    parent.abort();
+    parent.abort(reason);
     await vi.advanceTimersByTimeAsync(25);
 
     expect(signal?.aborted).toBe(true);
-    expect(signal?.reason).not.toMatchObject({ name: "TimeoutError" });
+    expect(signal?.reason).toBe(reason);
+    expect(warn).not.toHaveBeenCalled();
+
+    cleanup();
+  });
+
+  it("preserves an already-aborted parent reason", () => {
+    const parent = new AbortController();
+    const reason = new Error("parent already stopped");
+    parent.abort(reason);
+
+    const { signal, cleanup } = buildTimeoutAbortSignal({
+      timeoutMs: 25,
+      signal: parent.signal,
+      operation: "unit-test",
+    });
+
+    expect(signal?.aborted).toBe(true);
+    expect(signal?.reason).toBe(reason);
     expect(warn).not.toHaveBeenCalled();
 
     cleanup();

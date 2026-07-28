@@ -7,6 +7,8 @@ import {
   type SlackSystemEventTestOverrides,
 } from "./system-event-test-harness.js";
 
+const SLACK_INGRESS_LIFECYCLE_CONTEXT_KEY = "openclawIngressLifecycle";
+
 const { messageQueueMock, messageAllowMock, inboundInfoSpy } = vi.hoisted(() => ({
   messageQueueMock: vi.fn(),
   messageAllowMock: vi.fn(),
@@ -56,7 +58,6 @@ vi.mock("openclaw/plugin-sdk/text-chunking", () => ({
 }));
 
 let registerSlackMessageEvents: typeof import("./messages.js").registerSlackMessageEvents;
-let formatSlackInboundLogLine: typeof import("./messages.js").formatSlackInboundLogLine;
 
 function inboundLogLines(): string[] {
   return inboundInfoSpy.mock.calls
@@ -119,7 +120,7 @@ function resetMessageMocks(): void {
 }
 
 beforeAll(async () => {
-  ({ registerSlackMessageEvents, formatSlackInboundLogLine } = await import("./messages.js"));
+  ({ registerSlackMessageEvents } = await import("./messages.js"));
 });
 
 beforeEach(() => {
@@ -242,6 +243,47 @@ async function runMessageCase(input: MessageCase = {}): Promise<void> {
 }
 
 describe("registerSlackMessageEvents", () => {
+  it("forwards durable ingress ownership and propagates dispatch failure", async () => {
+    const harness = createSlackSystemEventTestHarness();
+    const dispatchError = new Error("transient dispatch failure");
+    const handleSlackMessage = vi.fn(async () => {
+      throw dispatchError;
+    });
+    registerSlackMessageEvents({ ctx: harness.ctx, handleSlackMessage });
+    const handler = requireMessageHandler(harness.getHandler("message") as MessageHandler | null);
+    const turnAdoptionLifecycle = {
+      admission: "exclusive",
+      abortSignal: new AbortController().signal,
+      onAdopted: vi.fn(),
+      onDeferred: vi.fn(),
+      onAbandoned: vi.fn(),
+    };
+
+    await expect(
+      handler({
+        event: {
+          type: "message",
+          channel: "D1",
+          channel_type: "im",
+          user: "U1",
+          text: "hello",
+          ts: "123.456",
+        },
+        body: {},
+        context: { [SLACK_INGRESS_LIFECYCLE_CONTEXT_KEY]: turnAdoptionLifecycle },
+      }),
+    ).rejects.toBe(dispatchError);
+
+    expect(handleSlackMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "D1", ts: "123.456" }),
+      expect.objectContaining({
+        source: "message",
+        awaitDispatch: true,
+        turnAdoptionLifecycle,
+      }),
+    );
+  });
+
   it("accepts two org workspaces and preserves each listener scope", async () => {
     const { handler, handleSlackMessage } = createEnterpriseHandlers("message");
     const clients = [{ id: "one" }, { id: "two" }];
@@ -719,20 +761,5 @@ describe("registerSlackMessageEvents", () => {
     expect(inboundLogLines()).toEqual([
       "Inbound app_mention slack:T_TEST:channel:C123:user:unknown -> bot:U_BOT (channel, 14 chars)",
     ]);
-  });
-
-  it("formats the inbound receipt line with channel, sender, body length, and bot identity", () => {
-    expect(
-      formatSlackInboundLogLine({
-        workspaceId: "T123",
-        channelId: "C456",
-        channelType: "channel",
-        userId: "U789",
-        botUserId: "U_BOT",
-        bodyChars: 42,
-      }),
-    ).toBe(
-      "Inbound app_mention slack:T123:channel:C456:user:U789 -> bot:U_BOT (channel, 42 chars)",
-    );
   });
 });

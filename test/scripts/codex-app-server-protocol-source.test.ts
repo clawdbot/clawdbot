@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { stageCodexAppServerProtocolArtifacts } from "../../scripts/lib/codex-app-server-protocol-artifacts.js";
 import {
   buildCodexProtocolExportArgs,
   canonicalizeCodexAppServerProtocolJson,
@@ -25,6 +26,48 @@ afterEach(() => {
   } else {
     process.env.OPENCLAW_CODEX_REPO = originalOpenClawCodexRepo;
   }
+});
+
+describe("Codex app-server generated artifact staging", () => {
+  it("copies JSON bytes and normalizes nested TypeScript files in one pass", async () => {
+    const sourceRoot = createTempDir("openclaw-protocol-artifacts-source-");
+    const targetRoot = createTempDir("openclaw-protocol-artifacts-target-");
+    const typescriptRoot = path.join(targetRoot, "typescript");
+    const jsonRoot = path.join(targetRoot, "json");
+    const rootTypeScript = [
+      'import type { Root } from "./Root";',
+      "export type { Parent } from '../Parent.js';",
+      'export * as v2 from "./v2.js";',
+      "export type Nullable = string | null | null;",
+      "",
+    ].join("\n");
+    const nestedTypeScript = 'export type { Shared } from "../Shared";\n';
+    const json = '{\n  "z": 1,\n  "a": 2\n}\n';
+    fs.mkdirSync(path.join(sourceRoot, "v2"), { recursive: true });
+    fs.writeFileSync(path.join(sourceRoot, "index.ts"), rootTypeScript);
+    fs.writeFileSync(path.join(sourceRoot, "v2/Thing.ts"), nestedTypeScript);
+    fs.writeFileSync(path.join(sourceRoot, "v2/Thing.json"), json);
+    fs.writeFileSync(path.join(sourceRoot, "README.md"), "ignored\n");
+
+    await stageCodexAppServerProtocolArtifacts(sourceRoot, { jsonRoot, typescriptRoot });
+
+    expect(fs.readFileSync(path.join(typescriptRoot, "index.ts"), "utf8")).toBe(
+      [
+        'import type { Root } from "./Root.js";',
+        "export type { Parent } from '../Parent.js';",
+        'export * as v2 from "./v2/index.js";',
+        "export type Nullable = string | null;",
+        "",
+      ].join("\n"),
+    );
+    expect(fs.readFileSync(path.join(typescriptRoot, "v2/Thing.ts"), "utf8")).toBe(
+      'export type { Shared } from "../Shared.js";\n',
+    );
+    expect(fs.readFileSync(path.join(jsonRoot, "v2/Thing.json"), "utf8")).toBe(json);
+    expect(fs.existsSync(path.join(typescriptRoot, "README.md"))).toBe(false);
+    expect(fs.existsSync(path.join(jsonRoot, "README.md"))).toBe(false);
+    expect(fs.readFileSync(path.join(sourceRoot, "index.ts"), "utf8")).toBe(rootTypeScript);
+  });
 });
 
 describe("codex app-server protocol source resolver", () => {

@@ -30,14 +30,6 @@ enum ChatLinkPreviewResult: Equatable {
 
 struct ChatLinkPreviewThumbnail: @unchecked Sendable {
     let image: CGImage
-
-    var pixelWidth: Int {
-        self.image.width
-    }
-
-    var pixelHeight: Int {
-        self.image.height
-    }
 }
 
 enum ChatLinkPreviewImageResult: @unchecked Sendable {
@@ -352,7 +344,6 @@ extension [UInt8] {
 }
 
 func chatLinkPreviewRedirectURL(
-    response: HTTPURLResponse,
     request: URLRequest,
     redirectCount: Int,
     hostPolicy: (URL) -> Bool = chatLinkPreviewAllowsHost) -> URL?
@@ -568,13 +559,12 @@ private final class ChatLinkPreviewSessionDelegate: NSObject, URLSessionDataDele
     func urlSession(
         _: URLSession,
         task _: URLSessionTask,
-        willPerformHTTPRedirection response: HTTPURLResponse,
+        willPerformHTTPRedirection _: HTTPURLResponse,
         newRequest request: URLRequest,
         completionHandler: @escaping @Sendable (URLRequest?) -> Void)
     {
         let nextURL = self.lock.withLock {
             let url = chatLinkPreviewRedirectURL(
-                response: response,
                 request: request,
                 redirectCount: self.redirectCount,
                 hostPolicy: self.hostPolicy)
@@ -835,7 +825,9 @@ struct ChatLinkPreview: View {
             self.model.expanded = true
         } label: {
             HStack(spacing: 6) {
-                Text("Preview · \(self.domain)")
+                Text(verbatim: String(
+                    format: String(localized: "Preview · %@"),
+                    self.domain))
                     .font(OpenClawChatTypography.captionSemiBold)
                     .foregroundStyle(OpenClawChatTheme.assistantText.opacity(0.65))
                     .lineLimit(1)
@@ -853,7 +845,10 @@ struct ChatLinkPreview: View {
                     .strokeBorder(OpenClawChatTheme.divider, lineWidth: 1))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Expand link preview for \(self.domain)")
+        .accessibilityLabel(
+            String(
+                format: String(localized: "Expand link preview for %@"),
+                self.domain))
     }
 
     private var expandedCard: some View {
@@ -908,7 +903,10 @@ struct ChatLinkPreview: View {
                     .strokeBorder(OpenClawChatTheme.divider, lineWidth: 1))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Open \(self.domain)")
+        .accessibilityLabel(
+            String(
+                format: String(localized: "Open %@"),
+                self.domain))
     }
 
     private var domain: String {

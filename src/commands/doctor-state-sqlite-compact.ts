@@ -1,22 +1,21 @@
 /** Explicit doctor maintenance for the canonical shared state SQLite database. */
 import fs from "node:fs";
-import type { DatabaseSync } from "node:sqlite";
+import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
+import { clearOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
 import {
-  createNewerSqliteSchemaVersionError,
-  readSqliteUserVersion,
-} from "../infra/sqlite-user-version.js";
-import {
+  assertOpenClawStateDatabaseForMaintenance,
+  clearOpenClawStateDatabaseOpenFailure,
   ensureOpenClawStatePermissions,
   isOpenClawStateDatabaseOpen,
-  OPENCLAW_STATE_SCHEMA_VERSION,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   compactDoctorSqliteFile,
   type DoctorSqliteCompactSnapshot,
 } from "./doctor-sqlite-compact.js";
+import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
 
-export type DoctorStateSqliteCompactReport =
+type DoctorStateSqliteCompactReport =
   | {
       mode: "compact";
       path: string;
@@ -29,7 +28,6 @@ export type DoctorStateSqliteCompactReport =
       integrityCheck: "ok";
       mode: "compact";
       path: string;
-      quickCheck: "ok";
       reclaimedBytes: number;
       skipped: false;
     };
@@ -38,10 +36,16 @@ type DoctorStateSqliteCompactOptions = {
   env?: NodeJS.ProcessEnv;
 };
 
+type DoctorStateSqliteCompactDeps = {
+  busyTimeoutMs?: number;
+  withMaintenanceLock?: typeof withDoctorSqliteMaintenanceLock;
+};
+
 /** Compact only the canonical shared state database resolved for this invocation. */
-export function runDoctorStateSqliteCompact(
+export async function runDoctorStateSqliteCompact(
   options: DoctorStateSqliteCompactOptions = {},
-): DoctorStateSqliteCompactReport {
+  deps: DoctorStateSqliteCompactDeps = {},
+): Promise<DoctorStateSqliteCompactReport> {
   const env = options.env ?? process.env;
   const sqlitePath = resolveOpenClawStateSqlitePath(env);
   const stat = readCanonicalStateDatabaseStat(sqlitePath);
@@ -56,23 +60,41 @@ export function runDoctorStateSqliteCompact(
   if (!stat.isFile()) {
     throw new Error(`Canonical OpenClaw state database is not a regular file: ${sqlitePath}`);
   }
-  if (isOpenClawStateDatabaseOpen()) {
-    throw new Error(
-      "The shared OpenClaw state database is already open in this process. Stop OpenClaw and retry.",
-    );
-  }
+  const withMaintenanceLock = deps.withMaintenanceLock ?? withDoctorSqliteMaintenanceLock;
+  return await withMaintenanceLock({
+    env,
+    operation: "state SQLite compaction",
+    protectedPaths: resolveSqliteDatabaseFilePaths(sqlitePath),
+    run: () => {
+      if (isOpenClawStateDatabaseOpen()) {
+        throw new Error(
+          "The shared OpenClaw state database is already open in this process. Stop OpenClaw and retry.",
+        );
+      }
 
-  const compact = compactDoctorSqliteFile({
-    afterMutation: () => ensureOpenClawStatePermissions(sqlitePath, env),
-    sqlitePath,
-    validateBeforeMutation: (database) => validateCanonicalStateDatabase(database, sqlitePath),
+      const compact = compactDoctorSqliteFile({
+        afterSuccess: () => {
+          if (!clearOpenClawDatabaseQuarantine(sqlitePath, { env })) {
+            throw new Error(
+              `OpenClaw state database ${sqlitePath} was compacted, but its persisted quarantine record could not be cleared. Rerun openclaw doctor --fix so the database is not refused again.`,
+            );
+          }
+          clearOpenClawStateDatabaseOpenFailure(sqlitePath);
+          ensureOpenClawStatePermissions(sqlitePath, env);
+        },
+        ...(deps.busyTimeoutMs !== undefined ? { busyTimeoutMs: deps.busyTimeoutMs } : {}),
+        sqlitePath,
+        validateBeforeMutation: (database) =>
+          assertOpenClawStateDatabaseForMaintenance(database, { pathname: sqlitePath }),
+      });
+      return {
+        ...compact,
+        mode: "compact",
+        path: sqlitePath,
+        skipped: false,
+      };
+    },
   });
-  return {
-    ...compact,
-    mode: "compact",
-    path: sqlitePath,
-    skipped: false,
-  };
 }
 
 function readCanonicalStateDatabaseStat(sqlitePath: string): fs.Stats | undefined {
@@ -83,39 +105,5 @@ function readCanonicalStateDatabaseStat(sqlitePath: string): fs.Stats | undefine
       return undefined;
     }
     throw error;
-  }
-}
-
-function validateCanonicalStateDatabase(database: DatabaseSync, sqlitePath: string): void {
-  const userVersion = readSqliteUserVersion(database);
-  if (userVersion > OPENCLAW_STATE_SCHEMA_VERSION) {
-    throw createNewerSqliteSchemaVersionError(
-      "OpenClaw state database",
-      sqlitePath,
-      userVersion,
-      OPENCLAW_STATE_SCHEMA_VERSION,
-    );
-  }
-  if (userVersion !== OPENCLAW_STATE_SCHEMA_VERSION) {
-    throw new Error(
-      `OpenClaw state database ${sqlitePath} uses schema version ${userVersion}; run openclaw doctor --fix before compacting it.`,
-    );
-  }
-
-  const metadata = database
-    .prepare("SELECT role, schema_version FROM schema_meta WHERE meta_key = 'primary' LIMIT 1")
-    .get() as { role?: unknown; schema_version?: unknown } | undefined;
-  if (metadata?.role !== "global") {
-    const role = typeof metadata?.role === "string" ? metadata.role : "missing";
-    throw new Error(
-      `OpenClaw state database ${sqlitePath} has schema role ${role}; expected global.`,
-    );
-  }
-  if (metadata.schema_version !== OPENCLAW_STATE_SCHEMA_VERSION) {
-    const schemaVersion =
-      typeof metadata.schema_version === "number" ? metadata.schema_version : "invalid";
-    throw new Error(
-      `OpenClaw state database ${sqlitePath} metadata schema version ${schemaVersion} does not match ${OPENCLAW_STATE_SCHEMA_VERSION}; run openclaw doctor --fix before compacting it.`,
-    );
   }
 }

@@ -19,6 +19,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as v8 from "node:v8";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 
 type Mode = "production" | "closure-extracted" | "closure-inline" | "synthetic-leak";
 type Abortable = <T>(signal: AbortSignal, promise: Promise<T>) => Promise<T>;
@@ -65,7 +66,7 @@ function parseArgs(argv: string[]): Options {
   };
   const seenValueFlags = new Set<string>();
   for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
+    const arg = expectDefined(argv[i], `embedded abort benchmark argument at index ${i}`);
     const next = argv[i + 1];
     if (VALUE_FLAGS.has(arg)) {
       if (seenValueFlags.has(arg)) {

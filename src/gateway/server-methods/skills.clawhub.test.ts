@@ -279,6 +279,7 @@ describe("skills gateway handlers (clawhub)", () => {
       slug: "calendar",
       version: "1.2.3",
       force: false,
+      logger: expect.objectContaining({ warn: expect.any(Function) }),
       config: {},
     });
     expect(ok).toBe(true);
@@ -291,6 +292,35 @@ describe("skills gateway handlers (clawhub)", () => {
     expect(result?.slug).toBe("calendar");
     expect(result?.version).toBe("1.2.3");
     expect(result?.warning).toBe("Review ClawHub security details before installing.");
+  });
+
+  it("deduplicates concurrent exact ClawHub installs across reconnects", async () => {
+    let finishInstall: ((value: unknown) => void) | undefined;
+    installSkillFromClawHubMock.mockReturnValue(
+      new Promise((resolve) => {
+        finishInstall = resolve;
+      }),
+    );
+
+    const params = {
+      source: "clawhub",
+      slug: "calendar",
+      version: "1.2.3",
+    } as const;
+    const first = callSkillsHandler("skills.install", params);
+    const reconnectRetry = callSkillsHandler("skills.install", params);
+
+    await vi.waitFor(() => expect(installSkillFromClawHubMock).toHaveBeenCalledTimes(1));
+    finishInstall?.({
+      ok: true,
+      slug: "calendar",
+      version: "1.2.3",
+      targetDir: "/tmp/workspace/skills/calendar",
+    });
+
+    const [firstResult, retryResult] = await Promise.all([first, reconnectRetry]);
+    expect(firstResult.ok).toBe(true);
+    expect(retryResult.ok).toBe(true);
   });
 
   it("returns ClawHub skill install trust warnings in Gateway error details", async () => {
@@ -347,6 +377,7 @@ describe("skills gateway handlers (clawhub)", () => {
       version: "1.2.3",
       force: false,
       acknowledgeClawHubRisk: true,
+      logger: expect.objectContaining({ warn: expect.any(Function) }),
       config: {},
     });
     expect(ok).toBe(true);
@@ -378,6 +409,7 @@ describe("skills gateway handlers (clawhub)", () => {
       slug: "calendar",
       version: "1.2.3",
       force: false,
+      logger: expect.objectContaining({ warn: expect.any(Function) }),
       config: {},
     });
     expect(ok).toBe(true);
@@ -435,6 +467,7 @@ describe("skills gateway handlers (clawhub)", () => {
     expect(updateSkillsFromClawHubMock).toHaveBeenCalledWith({
       workspaceDir: "/tmp/workspace",
       slug: "calendar",
+      logger: expect.objectContaining({ warn: expect.any(Function) }),
       config: {},
     });
     expect(ok).toBe(true);
@@ -483,6 +516,7 @@ describe("skills gateway handlers (clawhub)", () => {
       workspaceDir: "/tmp/workspace",
       slug: "calendar",
       acknowledgeClawHubRisk: true,
+      logger: expect.objectContaining({ warn: expect.any(Function) }),
       config: {},
     });
     expect(ok).toBe(true);

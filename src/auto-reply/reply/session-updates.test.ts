@@ -1,4 +1,5 @@
 // Tests session update fanout and persisted lifecycle records.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createReplySessionEntryHandle } from "./session-entry-handle.js";
 
@@ -128,8 +129,14 @@ describe("ensureSkillSnapshot", () => {
       },
     });
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
-    const [[workspaceDir, snapshotParams]] = buildWorkspaceSkillSnapshotMock.mock
-      .calls as unknown as Array<[string, { agentId?: string }]>;
+    const [workspaceDir, snapshotParams] = expectDefined(
+      (
+        buildWorkspaceSkillSnapshotMock.mock.calls as unknown as Array<
+          [string, { agentId?: string }]
+        >
+      )[0],
+      "(buildWorkspaceSkillSnapshotMock.mock.calls as unknown as Array<\n        [string, { agentId?: string }]\n      >)[0] test invariant",
+    );
     expect(workspaceDir).toBe(TEST_WORKSPACE_DIR);
     expect(snapshotParams.agentId).toBe("writer");
     expect(resolveAgentIdFromSessionKeyMock).not.toHaveBeenCalled();

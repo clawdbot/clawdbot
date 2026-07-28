@@ -1,4 +1,5 @@
 // Browser tests cover pw tools core.interactions.navigation guard plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   getPwToolsCoreNavigationGuardMocks,
@@ -9,7 +10,11 @@ import {
 } from "./pw-tools-core.test-harness.js";
 
 installPwToolsCoreTestHooks();
-const mod = await import("./pw-tools-core.js");
+const mod = await import("./pw-tools-core.interactions.js");
+
+function requireInvocationOrder(mock: { invocationCallOrder: number[] }, context: string): number {
+  return expectDefined(mock.invocationCallOrder[0], context);
+}
 
 function createMutableFrame(initialUrl: string) {
   let currentUrl = initialUrl;
@@ -21,6 +26,26 @@ function createMutableFrame(initialUrl: string) {
       currentUrl = nextUrl;
     },
   };
+}
+
+async function runWithVirtualNavigationGrace<T>(run: () => Promise<T>): Promise<T> {
+  vi.useFakeTimers();
+  try {
+    // Observe rejection before advancing the production grace timer to avoid a transient
+    // unhandled rejection; timing-specific cases below still advance exact durations.
+    const settled = run().then(
+      (value) => ({ status: "fulfilled" as const, value }),
+      (reason: unknown) => ({ status: "rejected" as const, reason }),
+    );
+    await vi.runAllTimersAsync();
+    const result = await settled;
+    if (result.status === "rejected") {
+      throw result.reason;
+    }
+    return result.value;
+  } finally {
+    vi.useRealTimers();
+  }
 }
 
 describe("pw-tools-core interaction navigation guard", () => {
@@ -575,8 +600,11 @@ describe("pw-tools-core interaction navigation guard", () => {
         },
       );
       expect(
-        getPwToolsCoreSessionMocks().withPageNavigationRequestGuard.mock.invocationCallOrder[0],
-      ).toBeLessThan(page.evaluate.mock.invocationCallOrder[0]);
+        requireInvocationOrder(
+          getPwToolsCoreSessionMocks().withPageNavigationRequestGuard.mock,
+          "navigation request guard invocation",
+        ),
+      ).toBeLessThan(requireInvocationOrder(page.evaluate.mock, "page evaluation invocation"));
     } finally {
       vi.useRealTimers();
     }
@@ -837,12 +865,14 @@ describe("pw-tools-core interaction navigation guard", () => {
     getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely.mockRejectedValueOnce(blocked);
 
     await expect(
-      mod.clickViaPlaywright({
-        cdpUrl: "http://127.0.0.1:18792",
-        targetId: "T1",
-        ref: "1",
-        ssrfPolicy: { allowPrivateNetwork: false },
-      }),
+      runWithVirtualNavigationGrace(() =>
+        mod.clickViaPlaywright({
+          cdpUrl: "http://127.0.0.1:18792",
+          targetId: "T1",
+          ref: "1",
+          ssrfPolicy: { allowPrivateNetwork: false },
+        }),
+      ),
     ).rejects.toThrow("blocked interaction navigation");
 
     expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith({
@@ -910,12 +940,14 @@ describe("pw-tools-core interaction navigation guard", () => {
     };
     setPwToolsCoreCurrentPage(page);
 
-    const result = await mod.evaluateViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "T1",
-      fn: "() => location.href = 'http://127.0.0.1:9222/json/version'",
-      ssrfPolicy: { allowPrivateNetwork: false },
-    });
+    const result = await runWithVirtualNavigationGrace(() =>
+      mod.evaluateViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        fn: "() => location.href = 'http://127.0.0.1:9222/json/version'",
+        ssrfPolicy: { allowPrivateNetwork: false },
+      }),
+    );
 
     expect(result).toBe("ok");
     expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith({
@@ -1117,12 +1149,14 @@ describe("pw-tools-core interaction navigation guard", () => {
     setPwToolsCoreCurrentRefLocator({ click });
     setPwToolsCoreCurrentPage(page);
 
-    await mod.clickViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "T1",
-      ref: "1",
-      ssrfPolicy: { allowPrivateNetwork: false },
-    });
+    await runWithVirtualNavigationGrace(() =>
+      mod.clickViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        ref: "1",
+        ssrfPolicy: { allowPrivateNetwork: false },
+      }),
+    );
 
     expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:18792",
@@ -1144,12 +1178,14 @@ describe("pw-tools-core interaction navigation guard", () => {
     setPwToolsCoreCurrentRefLocator({ click });
     setPwToolsCoreCurrentPage(page);
 
-    await mod.clickViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "T1",
-      ref: "1",
-      ssrfPolicy: { allowPrivateNetwork: false },
-    });
+    await runWithVirtualNavigationGrace(() =>
+      mod.clickViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        ref: "1",
+        ssrfPolicy: { allowPrivateNetwork: false },
+      }),
+    );
 
     expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:18792",
@@ -1188,12 +1224,14 @@ describe("pw-tools-core interaction navigation guard", () => {
     setPwToolsCoreCurrentRefLocator({ click });
     setPwToolsCoreCurrentPage(page);
 
-    await mod.clickViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "T1",
-      ref: "1",
-      ssrfPolicy: { allowPrivateNetwork: false },
-    });
+    await runWithVirtualNavigationGrace(() =>
+      mod.clickViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        ref: "1",
+        ssrfPolicy: { allowPrivateNetwork: false },
+      }),
+    );
 
     expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:18792",
@@ -1211,12 +1249,14 @@ describe("pw-tools-core interaction navigation guard", () => {
     };
     setPwToolsCoreCurrentPage(page);
 
-    const result = await mod.evaluateViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "T1",
-      fn: "() => 1",
-      ssrfPolicy: { allowPrivateNetwork: false },
-    });
+    const result = await runWithVirtualNavigationGrace(() =>
+      mod.evaluateViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        fn: "() => 1",
+        ssrfPolicy: { allowPrivateNetwork: false },
+      }),
+    );
 
     expect(result).toBe("ok");
     expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith({
@@ -1227,8 +1267,11 @@ describe("pw-tools-core interaction navigation guard", () => {
       targetId: "T1",
     });
     expect(
-      getPwToolsCoreSessionMocks().withPageNavigationRequestGuard.mock.invocationCallOrder[0],
-    ).toBeLessThan(page.evaluate.mock.invocationCallOrder[0]);
+      requireInvocationOrder(
+        getPwToolsCoreSessionMocks().withPageNavigationRequestGuard.mock,
+        "navigation request guard invocation",
+      ),
+    ).toBeLessThan(requireInvocationOrder(page.evaluate.mock, "page evaluation invocation"));
   });
 
   it("propagates the SSRF policy through batch interaction actions", async () => {
@@ -1239,12 +1282,14 @@ describe("pw-tools-core interaction navigation guard", () => {
     setPwToolsCoreCurrentRefLocator({ click });
     setPwToolsCoreCurrentPage(page);
 
-    await mod.batchViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "T1",
-      ssrfPolicy: { allowPrivateNetwork: false },
-      actions: [{ kind: "click", ref: "1" }],
-    });
+    await runWithVirtualNavigationGrace(() =>
+      mod.batchViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        ssrfPolicy: { allowPrivateNetwork: false },
+        actions: [{ kind: "click", ref: "1" }],
+      }),
+    );
 
     expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:18792",
@@ -1332,12 +1377,14 @@ describe("pw-tools-core interaction navigation guard", () => {
     setPwToolsCoreCurrentPage(page);
     setPwToolsCoreCurrentRefLocator({ click });
 
-    const result = await mod.executeActViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "T1",
-      action: { kind: "click", ref: "1" },
-      ssrfPolicy: { allowPrivateNetwork: false },
-    });
+    const result = await runWithVirtualNavigationGrace(() =>
+      mod.executeActViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        action: { kind: "click", ref: "1" },
+        ssrfPolicy: { allowPrivateNetwork: false },
+      }),
+    );
 
     expect(result.downloads).toEqual([
       {
@@ -1384,12 +1431,14 @@ describe("pw-tools-core interaction navigation guard", () => {
     setPwToolsCoreCurrentPage(page);
     setPwToolsCoreCurrentRefLocator(locator);
 
-    await mod.executeActViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "T1",
-      action,
-      ssrfPolicy: { allowPrivateNetwork: false },
-    });
+    await runWithVirtualNavigationGrace(() =>
+      mod.executeActViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        action,
+        ssrfPolicy: { allowPrivateNetwork: false },
+      }),
+    );
 
     expect(drain).toHaveBeenCalledWith({
       firstEventGraceMs: 0,
@@ -1464,6 +1513,40 @@ describe("pw-tools-core interaction navigation guard", () => {
     });
     expect(dispose).toHaveBeenCalledOnce();
     releaseHover();
+  });
+
+  it("retains the download grace when an executable wait aborts", async () => {
+    const ctrl = new AbortController();
+    ctrl.abort(new Error("aborted by test"));
+    const page = {
+      url: vi.fn(() => "https://example.com"),
+      waitForFunction: vi.fn(async () => {}),
+    };
+    const drain = vi.fn(async () => undefined);
+    const dispose = vi.fn();
+    getPwToolsCoreSessionMocks().beginActionDownloadCaptureOnPage.mockReturnValueOnce({
+      drain,
+      dispose,
+    });
+    setPwToolsCoreCurrentPage(page);
+
+    const task = mod.executeActViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      action: { kind: "wait", fn: "() => false" },
+      evaluateEnabled: true,
+      ssrfPolicy: { allowPrivateNetwork: false },
+      signal: ctrl.signal,
+    });
+
+    await expect(task).rejects.toThrow("aborted by test");
+    expect(drain).toHaveBeenCalledWith({
+      firstEventGraceMs: 250,
+      maxWaitMs: 1_000,
+      quietMs: 250,
+    });
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(page.waitForFunction).not.toHaveBeenCalled();
   });
 
   it("does not add a second download grace after a settled guarded failure", async () => {
@@ -1653,3 +1736,4 @@ describe("pw-tools-core interaction navigation guard", () => {
     expect(dispose).toHaveBeenCalledOnce();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

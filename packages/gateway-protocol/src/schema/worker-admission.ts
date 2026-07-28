@@ -1,35 +1,56 @@
-import { Type, type Static } from "typebox";
+import { Type, type Static, type TProperties } from "typebox";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../client-info.js";
+import { closedObject } from "./closed-object.js";
+import { withSince } from "./since.js";
+import {
+  LiveIntegerSchema,
+  LiveSequenceSchema,
+  LiveTextSchema,
+  WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
+  WorkerAdmissionFailureReasonSchema,
+  WorkerErrorResponseFrameSchema,
+  WorkerErrorShapeSchema,
+  WorkerFrameIdSchema,
+  WorkerIdentifierSchema,
+  WorkerProtocolCloseReasonSchema,
+  WorkerTranscriptAssistantDiagnosticSchema,
+  WorkerTranscriptUsageSchema,
+} from "./worker-protocol-primitives.js";
+
+export {
+  WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH,
+  WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH,
+  WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
+  WorkerAdmissionFailureReasonSchema,
+  WorkerProtocolCloseReasonSchema,
+} from "./worker-protocol-primitives.js";
 
 // Additive RPCs require exact build-bound features; bump only for an incompatible base set.
 export const WORKER_RPC_SET_VERSION = 1;
 export const WORKER_HEARTBEAT_INTERVAL_MS = 15_000;
-export const WORKER_PROTOCOL_METHODS = ["worker.heartbeat", "worker.transcript.commit"] as const;
+export const WORKER_PROTOCOL_METHODS = [
+  "worker.heartbeat",
+  "worker.transcript.commit",
+  "worker.live-event",
+] as const;
 export const WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE = "worker-transcript-commit-v1";
+export const WORKER_LIVE_EVENT_PROTOCOL_FEATURE = "worker-live-event-v1";
+export const WORKER_LAUNCH_V2_PROTOCOL_FEATURE = "worker-launch-v2";
 export const WORKER_PROTOCOL_FEATURES = [
   "worker-heartbeat-v1",
   WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
+  WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
+  WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
+  "worker-inference-v1",
 ] as const;
-export const WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH = 256;
-export const WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH = 128;
 export const WORKER_PROTOCOL_MAX_METHOD_LENGTH = 64;
-export const WORKER_PROTOCOL_MAX_PAYLOAD_BYTES = 64 * 1024;
 export const WORKER_PROTOCOL_MAX_FEATURES = 64;
 export const WORKER_PROTOCOL_MAX_FEATURE_LENGTH = 128;
 export const WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES = 64;
 export const WORKER_TRANSCRIPT_MAX_CONTENT_PARTS = 128;
 export const WORKER_TRANSCRIPT_MAX_JSON_DEPTH = 32;
 
-const WorkerIdentifierSchema = Type.String({
-  minLength: 1,
-  maxLength: WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH,
-  pattern: "^\\S(?:.*\\S)?$",
-});
 const WorkerCredentialSchema = Type.String({ minLength: 16, maxLength: 256 });
-const WorkerFrameIdSchema = Type.String({
-  minLength: 1,
-  maxLength: WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH,
-});
 const WorkerProtocolFeatureSchema = Type.String({
   minLength: 1,
   maxLength: WORKER_PROTOCOL_MAX_FEATURE_LENGTH,
@@ -41,148 +62,84 @@ const WorkerBundleHashSchema = Type.String({
 });
 
 /** Build identity presented by a worker before the gateway admits it. */
-export const WorkerAdmissionHandshakeSchema = Type.Object(
-  {
+export const WorkerAdmissionHandshakeSchema = withSince(
+  "2026.7",
+  closedObject({
     bundleHash: WorkerBundleHashSchema,
     openclawVersion: Type.String({ minLength: 1, maxLength: 128 }),
     protocolFeatures: Type.Array(WorkerProtocolFeatureSchema, {
       maxItems: WORKER_PROTOCOL_MAX_FEATURES,
       uniqueItems: true,
     }),
-  },
-  { additionalProperties: false },
+  }),
 );
+
+const WorkerConnectAdmissionCommonProperties = {
+  environmentId: WorkerIdentifierSchema,
+  credential: WorkerCredentialSchema,
+  ownerEpoch: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+  rpcSetVersion: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+  handshake: WorkerAdmissionHandshakeSchema,
+};
+
+const WorkerConnectAdmissionSchema = Type.Union([
+  closedObject({
+    ...WorkerConnectAdmissionCommonProperties,
+    sessionId: Type.Null(),
+    runId: Type.Null(),
+  }),
+  closedObject({
+    ...WorkerConnectAdmissionCommonProperties,
+    sessionId: WorkerIdentifierSchema,
+    runId: WorkerIdentifierSchema,
+  }),
+]);
 
 /** Dedicated first-frame payload accepted only on the worker ingress. */
-export const WorkerConnectParamsSchema = Type.Object(
-  {
-    minProtocol: Type.Integer({ minimum: 1 }),
-    maxProtocol: Type.Integer({ minimum: 1 }),
-    client: Type.Object(
-      {
-        id: Type.Literal(GATEWAY_CLIENT_IDS.WORKER),
-        version: Type.String({ minLength: 1, maxLength: 128 }),
-        platform: Type.String({ minLength: 1, maxLength: 128 }),
-        mode: Type.Literal(GATEWAY_CLIENT_MODES.WORKER),
-      },
-      { additionalProperties: false },
-    ),
-    role: Type.Literal("worker"),
-    admission: Type.Object(
-      {
-        environmentId: WorkerIdentifierSchema,
-        credential: WorkerCredentialSchema,
-        sessionId: Type.Union([WorkerIdentifierSchema, Type.Null()]),
-        ownerEpoch: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
-        rpcSetVersion: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
-        handshake: WorkerAdmissionHandshakeSchema,
-      },
-      { additionalProperties: false },
-    ),
-  },
-  { additionalProperties: false },
-);
+const WorkerConnectParamsSchema = closedObject({
+  minProtocol: Type.Integer({ minimum: 1 }),
+  maxProtocol: Type.Integer({ minimum: 1 }),
+  client: closedObject({
+    id: Type.Literal(GATEWAY_CLIENT_IDS.WORKER),
+    version: Type.String({ minLength: 1, maxLength: 128 }),
+    platform: Type.String({ minLength: 1, maxLength: 128 }),
+    mode: Type.Literal(GATEWAY_CLIENT_MODES.WORKER),
+  }),
+  role: Type.Literal("worker"),
+  admission: WorkerConnectAdmissionSchema,
+});
 
-export const WorkerConnectRequestFrameSchema = Type.Object(
-  {
-    type: Type.Literal("req"),
-    id: WorkerFrameIdSchema,
-    method: Type.Literal("connect"),
-    params: WorkerConnectParamsSchema,
-  },
-  { additionalProperties: false },
-);
-
-export const WorkerAdmissionFailureReasonSchema = Type.Union([
-  Type.Literal("invalid-credential"),
-  Type.Literal("credential-expired"),
-  Type.Literal("environment-mismatch"),
-  Type.Literal("environment-unavailable"),
-  Type.Literal("bundle-mismatch"),
-  Type.Literal("version-mismatch"),
-  Type.Literal("session-mismatch"),
-  Type.Literal("owner-epoch-mismatch"),
-  Type.Literal("rpc-set-mismatch"),
-  Type.Literal("protocol-features-mismatch"),
-]);
-
-export const WorkerProtocolCloseReasonSchema = Type.Union([
-  WorkerAdmissionFailureReasonSchema,
-  Type.Literal("invalid-handshake"),
-  Type.Literal("protocol-mismatch"),
-  Type.Literal("gateway-unavailable"),
-  Type.Literal("invalid-frame"),
-  Type.Literal("slow-consumer"),
-  Type.Literal("method-not-allowed"),
-  Type.Literal("invalid-heartbeat"),
-  Type.Literal("credential-replaced"),
-  Type.Literal("gateway-shutdown"),
-]);
-
-const WorkerErrorCodeSchema = Type.Union([
-  Type.Literal("INVALID_REQUEST"),
-  Type.Literal("UNAVAILABLE"),
-]);
-
-const WorkerErrorDetailsSchema = Type.Object(
-  { reason: WorkerProtocolCloseReasonSchema },
-  { additionalProperties: false },
-);
-
-export const WorkerErrorShapeSchema = Type.Object(
-  {
-    code: WorkerErrorCodeSchema,
-    message: Type.String({ minLength: 1, maxLength: 256 }),
-    details: WorkerErrorDetailsSchema,
-    retryable: Type.Optional(Type.Boolean()),
-    retryAfterMs: Type.Optional(Type.Integer({ minimum: 0 })),
-  },
-  { additionalProperties: false },
-);
+export const WorkerConnectRequestFrameSchema = closedObject({
+  type: Type.Literal("req"),
+  id: WorkerFrameIdSchema,
+  method: Type.Literal("connect"),
+  params: WorkerConnectParamsSchema,
+});
 
 /** Minimal admission response; workers never receive the general gateway snapshot. */
-export const WorkerHelloOkSchema = Type.Object(
-  {
-    type: Type.Literal("worker-hello-ok"),
-    environmentId: WorkerIdentifierSchema,
-    sessionId: Type.Union([WorkerIdentifierSchema, Type.Null()]),
-    ownerEpoch: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
-    rpcSetVersion: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
-    protocolFeatures: Type.Array(WorkerProtocolFeatureSchema, {
-      maxItems: WORKER_PROTOCOL_MAX_FEATURES,
-      uniqueItems: true,
-    }),
-    credentialExpiresAtMs: Type.Integer({ minimum: 0 }),
-    policy: Type.Object(
-      {
-        heartbeatIntervalMs: Type.Integer({ minimum: 1 }),
-        maxPayload: Type.Integer({ minimum: 1 }),
-      },
-      { additionalProperties: false },
-    ),
-  },
-  { additionalProperties: false },
-);
+const WorkerHelloOkSchema = closedObject({
+  type: Type.Literal("worker-hello-ok"),
+  environmentId: WorkerIdentifierSchema,
+  sessionId: Type.Union([WorkerIdentifierSchema, Type.Null()]),
+  ownerEpoch: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+  rpcSetVersion: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+  protocolFeatures: Type.Array(WorkerProtocolFeatureSchema, {
+    maxItems: WORKER_PROTOCOL_MAX_FEATURES,
+    uniqueItems: true,
+  }),
+  credentialExpiresAtMs: Type.Integer({ minimum: 0 }),
+  policy: closedObject({
+    heartbeatIntervalMs: Type.Integer({ minimum: 1 }),
+    maxPayload: Type.Integer({ minimum: 1 }),
+  }),
+});
 
-const WorkerErrorResponseFrameSchema = Type.Object(
-  {
-    type: Type.Literal("res"),
-    id: WorkerFrameIdSchema,
-    ok: Type.Literal(false),
-    error: WorkerErrorShapeSchema,
-  },
-  { additionalProperties: false },
-);
-
-const WorkerAdmissionSuccessResponseFrameSchema = Type.Object(
-  {
-    type: Type.Literal("res"),
-    id: WorkerFrameIdSchema,
-    ok: Type.Literal(true),
-    payload: WorkerHelloOkSchema,
-  },
-  { additionalProperties: false },
-);
+const WorkerAdmissionSuccessResponseFrameSchema = closedObject({
+  type: Type.Literal("res"),
+  id: WorkerFrameIdSchema,
+  ok: Type.Literal(true),
+  payload: WorkerHelloOkSchema,
+});
 
 export const WorkerAdmissionResponseFrameSchema = Type.Union([
   WorkerAdmissionSuccessResponseFrameSchema,
@@ -195,218 +152,126 @@ const WorkerStatusSchema = Type.Union([
   Type.Literal("draining"),
 ]);
 
-export const WorkerHeartbeatParamsSchema = Type.Object(
-  {
-    sentAtMs: Type.Integer({ minimum: 0 }),
-    status: WorkerStatusSchema,
-  },
-  { additionalProperties: false },
-);
+export const WorkerHeartbeatParamsSchema = closedObject({
+  sentAtMs: Type.Integer({ minimum: 0 }),
+  status: WorkerStatusSchema,
+});
 
-export const WorkerHeartbeatResultSchema = Type.Object(
-  {
-    receivedAtMs: Type.Integer({ minimum: 0 }),
-    status: Type.Literal("ok"),
-    ownerEpoch: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
-  },
-  { additionalProperties: false },
-);
+const WorkerHeartbeatResultSchema = closedObject({
+  receivedAtMs: Type.Integer({ minimum: 0 }),
+  status: Type.Literal("ok"),
+  ownerEpoch: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+});
 
-export const WorkerHeartbeatRequestFrameSchema = Type.Object(
-  {
-    type: Type.Literal("req"),
-    id: WorkerFrameIdSchema,
-    method: Type.Literal(WORKER_PROTOCOL_METHODS[0]),
-    params: WorkerHeartbeatParamsSchema,
-  },
-  { additionalProperties: false },
-);
+export const WorkerHeartbeatRequestFrameSchema = closedObject({
+  type: Type.Literal("req"),
+  id: WorkerFrameIdSchema,
+  method: Type.Literal(WORKER_PROTOCOL_METHODS[0]),
+  params: WorkerHeartbeatParamsSchema,
+});
 
-const WorkerHeartbeatSuccessResponseFrameSchema = Type.Object(
-  {
-    type: Type.Literal("res"),
-    id: WorkerFrameIdSchema,
-    ok: Type.Literal(true),
-    payload: WorkerHeartbeatResultSchema,
-  },
-  { additionalProperties: false },
-);
+const WorkerHeartbeatSuccessResponseFrameSchema = closedObject({
+  type: Type.Literal("res"),
+  id: WorkerFrameIdSchema,
+  ok: Type.Literal(true),
+  payload: WorkerHeartbeatResultSchema,
+});
 
 export const WorkerHeartbeatResponseFrameSchema = Type.Union([
   WorkerHeartbeatSuccessResponseFrameSchema,
   WorkerErrorResponseFrameSchema,
 ]);
 
-const WorkerTranscriptTextContentSchema = Type.Object(
-  {
-    type: Type.Literal("text"),
-    text: Type.String({ maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES }),
-    textSignature: Type.Optional(
-      Type.String({ minLength: 1, maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES }),
-    ),
-  },
-  { additionalProperties: false },
-);
+const WorkerTranscriptTextContentSchema = closedObject({
+  type: Type.Literal("text"),
+  text: Type.String({ maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES }),
+  textSignature: Type.Optional(
+    Type.String({ minLength: 1, maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES }),
+  ),
+});
 
-const WorkerTranscriptThinkingContentSchema = Type.Object(
-  {
-    type: Type.Literal("thinking"),
-    thinking: Type.String({ maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES }),
-    thinkingSignature: Type.Optional(
-      Type.String({ minLength: 1, maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES }),
-    ),
-    redacted: Type.Optional(Type.Boolean()),
-  },
-  { additionalProperties: false },
-);
+const WorkerTranscriptThinkingContentSchema = closedObject({
+  type: Type.Literal("thinking"),
+  thinking: Type.String({ maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES }),
+  thinkingSignature: Type.Optional(
+    Type.String({ minLength: 1, maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES }),
+  ),
+  redacted: Type.Optional(Type.Boolean()),
+});
 
-const WorkerTranscriptImageContentSchema = Type.Object(
-  {
-    type: Type.Literal("image"),
-    data: Type.String({ minLength: 1, maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES }),
-    mimeType: Type.String({ minLength: 1, maxLength: 256 }),
-  },
-  { additionalProperties: false },
-);
+const WorkerTranscriptImageContentSchema = closedObject({
+  type: Type.Literal("image"),
+  data: Type.String({ minLength: 1, maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES }),
+  mimeType: Type.String({ minLength: 1, maxLength: 256 }),
+});
 
-const WorkerTranscriptToolCallSchema = Type.Object(
-  {
-    type: Type.Literal("toolCall"),
-    id: WorkerIdentifierSchema,
-    name: WorkerIdentifierSchema,
-    arguments: Type.Record(Type.String({ minLength: 1, maxLength: 256 }), Type.Unknown()),
-    thoughtSignature: Type.Optional(
-      Type.String({ minLength: 1, maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES }),
-    ),
-    executionMode: Type.Optional(
-      Type.Union([Type.Literal("sequential"), Type.Literal("parallel")]),
-    ),
-  },
-  { additionalProperties: false },
-);
+const WorkerTranscriptToolCallSchema = closedObject({
+  type: Type.Literal("toolCall"),
+  id: WorkerIdentifierSchema,
+  name: WorkerIdentifierSchema,
+  arguments: Type.Record(Type.String({ minLength: 1, maxLength: 256 }), Type.Unknown()),
+  thoughtSignature: Type.Optional(
+    Type.String({ minLength: 1, maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES }),
+  ),
+  executionMode: Type.Optional(Type.Union([Type.Literal("sequential"), Type.Literal("parallel")])),
+});
 
-const WorkerTranscriptUsageSchema = Type.Object(
-  {
-    input: Type.Number({ minimum: 0 }),
-    output: Type.Number({ minimum: 0 }),
-    cacheRead: Type.Number({ minimum: 0 }),
-    cacheWrite: Type.Number({ minimum: 0 }),
-    contextUsage: Type.Optional(
-      Type.Union([
-        Type.Object(
-          {
-            state: Type.Literal("available"),
-            promptTokens: Type.Number({ minimum: 0 }),
-            totalTokens: Type.Number({ minimum: 0 }),
-          },
-          { additionalProperties: false },
-        ),
-        Type.Object({ state: Type.Literal("unavailable") }, { additionalProperties: false }),
-      ]),
-    ),
-    totalTokens: Type.Number({ minimum: 0 }),
-    cost: Type.Object(
-      {
-        input: Type.Number({ minimum: 0 }),
-        output: Type.Number({ minimum: 0 }),
-        cacheRead: Type.Number({ minimum: 0 }),
-        cacheWrite: Type.Number({ minimum: 0 }),
-        total: Type.Number({ minimum: 0 }),
-        totalOrigin: Type.Optional(Type.Literal("provider-billed")),
-      },
-      { additionalProperties: false },
-    ),
-  },
-  { additionalProperties: false },
-);
+const WorkerTranscriptUserMessageSchema = closedObject({
+  role: Type.Literal("user"),
+  content: Type.Array(
+    Type.Union([WorkerTranscriptTextContentSchema, WorkerTranscriptImageContentSchema]),
+    { minItems: 1, maxItems: WORKER_TRANSCRIPT_MAX_CONTENT_PARTS },
+  ),
+  timestamp: Type.Integer({ minimum: 0 }),
+});
 
-const WorkerTranscriptAssistantDiagnosticSchema = Type.Object(
-  {
-    type: WorkerIdentifierSchema,
-    timestamp: Type.Integer({ minimum: 0 }),
-    error: Type.Optional(
-      Type.Object(
-        {
-          name: Type.Optional(Type.String({ maxLength: 256 })),
-          message: Type.String({ maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES }),
-          stack: Type.Optional(Type.String({ maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES })),
-          code: Type.Optional(Type.Union([Type.String({ maxLength: 256 }), Type.Number()])),
-        },
-        { additionalProperties: false },
-      ),
-    ),
-    details: Type.Optional(
-      Type.Record(Type.String({ minLength: 1, maxLength: 256 }), Type.Unknown()),
-    ),
-  },
-  { additionalProperties: false },
-);
-
-const WorkerTranscriptUserMessageSchema = Type.Object(
-  {
-    role: Type.Literal("user"),
-    content: Type.Array(
-      Type.Union([WorkerTranscriptTextContentSchema, WorkerTranscriptImageContentSchema]),
-      { minItems: 1, maxItems: WORKER_TRANSCRIPT_MAX_CONTENT_PARTS },
-    ),
-    timestamp: Type.Integer({ minimum: 0 }),
-  },
-  { additionalProperties: false },
-);
-
-const WorkerTranscriptAssistantMessageSchema = Type.Object(
-  {
-    role: Type.Literal("assistant"),
-    content: Type.Array(
-      Type.Union([
-        WorkerTranscriptTextContentSchema,
-        WorkerTranscriptThinkingContentSchema,
-        WorkerTranscriptToolCallSchema,
-      ]),
-      { maxItems: WORKER_TRANSCRIPT_MAX_CONTENT_PARTS },
-    ),
-    api: WorkerIdentifierSchema,
-    provider: WorkerIdentifierSchema,
-    model: WorkerIdentifierSchema,
-    responseModel: Type.Optional(WorkerIdentifierSchema),
-    responseId: Type.Optional(WorkerIdentifierSchema),
-    diagnostics: Type.Optional(
-      Type.Array(WorkerTranscriptAssistantDiagnosticSchema, {
-        maxItems: WORKER_TRANSCRIPT_MAX_CONTENT_PARTS,
-      }),
-    ),
-    usage: WorkerTranscriptUsageSchema,
-    stopReason: Type.Union([
-      Type.Literal("stop"),
-      Type.Literal("length"),
-      Type.Literal("toolUse"),
-      Type.Literal("error"),
-      Type.Literal("aborted"),
+const WorkerTranscriptAssistantMessageSchema = closedObject({
+  role: Type.Literal("assistant"),
+  content: Type.Array(
+    Type.Union([
+      WorkerTranscriptTextContentSchema,
+      WorkerTranscriptThinkingContentSchema,
+      WorkerTranscriptToolCallSchema,
     ]),
-    errorMessage: Type.Optional(Type.String({ maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES })),
-    errorCode: Type.Optional(Type.String({ maxLength: 256 })),
-    errorType: Type.Optional(Type.String({ maxLength: 256 })),
-    errorBody: Type.Optional(Type.String({ maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES })),
-    timestamp: Type.Integer({ minimum: 0 }),
-  },
-  { additionalProperties: false },
-);
+    { maxItems: WORKER_TRANSCRIPT_MAX_CONTENT_PARTS },
+  ),
+  api: WorkerIdentifierSchema,
+  provider: WorkerIdentifierSchema,
+  model: WorkerIdentifierSchema,
+  responseModel: Type.Optional(WorkerIdentifierSchema),
+  responseId: Type.Optional(WorkerIdentifierSchema),
+  diagnostics: Type.Optional(
+    Type.Array(WorkerTranscriptAssistantDiagnosticSchema, {
+      maxItems: WORKER_TRANSCRIPT_MAX_CONTENT_PARTS,
+    }),
+  ),
+  usage: WorkerTranscriptUsageSchema,
+  stopReason: Type.Union([
+    Type.Literal("stop"),
+    Type.Literal("length"),
+    Type.Literal("toolUse"),
+    Type.Literal("error"),
+    Type.Literal("aborted"),
+  ]),
+  errorMessage: Type.Optional(Type.String({ maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES })),
+  errorCode: Type.Optional(Type.String({ maxLength: 256 })),
+  errorType: Type.Optional(Type.String({ maxLength: 256 })),
+  errorBody: Type.Optional(Type.String({ maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES })),
+  timestamp: Type.Integer({ minimum: 0 }),
+});
 
-const WorkerTranscriptToolResultMessageSchema = Type.Object(
-  {
-    role: Type.Literal("toolResult"),
-    toolCallId: WorkerIdentifierSchema,
-    toolName: WorkerIdentifierSchema,
-    content: Type.Array(
-      Type.Union([WorkerTranscriptTextContentSchema, WorkerTranscriptImageContentSchema]),
-      { maxItems: WORKER_TRANSCRIPT_MAX_CONTENT_PARTS },
-    ),
-    details: Type.Optional(Type.Unknown()),
-    isError: Type.Boolean(),
-    timestamp: Type.Integer({ minimum: 0 }),
-  },
-  { additionalProperties: false },
-);
+const WorkerTranscriptToolResultMessageSchema = closedObject({
+  role: Type.Literal("toolResult"),
+  toolCallId: WorkerIdentifierSchema,
+  toolName: WorkerIdentifierSchema,
+  content: Type.Array(
+    Type.Union([WorkerTranscriptTextContentSchema, WorkerTranscriptImageContentSchema]),
+    { maxItems: WORKER_TRANSCRIPT_MAX_CONTENT_PARTS },
+  ),
+  details: Type.Optional(Type.Unknown()),
+  isError: Type.Boolean(),
+  timestamp: Type.Integer({ minimum: 0 }),
+});
 
 export const WorkerTranscriptMessageSchema = Type.Union([
   WorkerTranscriptUserMessageSchema,
@@ -414,29 +279,23 @@ export const WorkerTranscriptMessageSchema = Type.Union([
   WorkerTranscriptToolResultMessageSchema,
 ]);
 
-export const WorkerTranscriptCommitParamsSchema = Type.Object(
-  {
-    runEpoch: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
-    seq: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
-    baseLeafId: Type.Union([WorkerIdentifierSchema, Type.Null()]),
-    messages: Type.Array(WorkerTranscriptMessageSchema, {
-      minItems: 1,
-      maxItems: WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES,
-    }),
-  },
-  { additionalProperties: false },
-);
+export const WorkerTranscriptCommitParamsSchema = closedObject({
+  runEpoch: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+  seq: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+  baseLeafId: Type.Union([WorkerIdentifierSchema, Type.Null()]),
+  messages: Type.Array(WorkerTranscriptMessageSchema, {
+    minItems: 1,
+    maxItems: WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES,
+  }),
+});
 
-export const WorkerTranscriptCommitResultSchema = Type.Object(
-  {
-    entryIds: Type.Array(WorkerIdentifierSchema, {
-      minItems: 1,
-      maxItems: WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES,
-    }),
-    newLeafId: WorkerIdentifierSchema,
-  },
-  { additionalProperties: false },
-);
+export const WorkerTranscriptCommitResultSchema = closedObject({
+  entryIds: Type.Array(WorkerIdentifierSchema, {
+    minItems: 1,
+    maxItems: WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES,
+  }),
+  newLeafId: WorkerIdentifierSchema,
+});
 
 export const WorkerTranscriptCommitErrorReasonSchema = Type.Union([
   Type.Literal("stale-base-leaf"),
@@ -445,51 +304,328 @@ export const WorkerTranscriptCommitErrorReasonSchema = Type.Union([
   Type.Literal("session-not-attached"),
 ]);
 
-export const WorkerTranscriptCommitErrorShapeSchema = Type.Object(
-  {
-    code: Type.Literal("INVALID_REQUEST"),
-    message: Type.String({ minLength: 1, maxLength: 256 }),
-    details: Type.Object(
-      { reason: WorkerTranscriptCommitErrorReasonSchema },
-      { additionalProperties: false },
-    ),
-  },
-  { additionalProperties: false },
-);
+export const WorkerTranscriptCommitErrorShapeSchema = closedObject({
+  code: Type.Literal("INVALID_REQUEST"),
+  message: Type.String({ minLength: 1, maxLength: 256 }),
+  details: closedObject({ reason: WorkerTranscriptCommitErrorReasonSchema }),
+});
 
-export const WorkerTranscriptCommitRequestFrameSchema = Type.Object(
-  {
-    type: Type.Literal("req"),
-    id: WorkerFrameIdSchema,
-    method: Type.Literal(WORKER_PROTOCOL_METHODS[1]),
-    params: WorkerTranscriptCommitParamsSchema,
-  },
-  { additionalProperties: false },
-);
+export const WorkerTranscriptCommitRequestFrameSchema = closedObject({
+  type: Type.Literal("req"),
+  id: WorkerFrameIdSchema,
+  method: Type.Literal(WORKER_PROTOCOL_METHODS[1]),
+  params: WorkerTranscriptCommitParamsSchema,
+});
 
-const WorkerTranscriptCommitSuccessResponseFrameSchema = Type.Object(
-  {
-    type: Type.Literal("res"),
-    id: WorkerFrameIdSchema,
-    ok: Type.Literal(true),
-    payload: WorkerTranscriptCommitResultSchema,
-  },
-  { additionalProperties: false },
-);
+const WorkerTranscriptCommitSuccessResponseFrameSchema = closedObject({
+  type: Type.Literal("res"),
+  id: WorkerFrameIdSchema,
+  ok: Type.Literal(true),
+  payload: WorkerTranscriptCommitResultSchema,
+});
 
-const WorkerTranscriptCommitErrorResponseFrameSchema = Type.Object(
-  {
-    type: Type.Literal("res"),
-    id: WorkerFrameIdSchema,
-    ok: Type.Literal(false),
-    error: WorkerTranscriptCommitErrorShapeSchema,
-  },
-  { additionalProperties: false },
-);
+const WorkerTranscriptCommitErrorResponseFrameSchema = closedObject({
+  type: Type.Literal("res"),
+  id: WorkerFrameIdSchema,
+  ok: Type.Literal(false),
+  error: WorkerTranscriptCommitErrorShapeSchema,
+});
 
 export const WorkerTranscriptCommitResponseFrameSchema = Type.Union([
   WorkerTranscriptCommitSuccessResponseFrameSchema,
   WorkerTranscriptCommitErrorResponseFrameSchema,
+  WorkerErrorResponseFrameSchema,
+]);
+
+function workerLiveObject<const Properties extends TProperties>(properties: Properties) {
+  return closedObject(properties);
+}
+
+const OptionalLiveTextSchema = Type.Optional(LiveTextSchema);
+const OptionalLiveIntegerSchema = Type.Optional(LiveIntegerSchema);
+
+const LiveIdentifierSchema = Type.String({
+  minLength: 1,
+  maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
+  pattern: "^\\S(?:.*\\S)?$",
+});
+
+const WorkerLiveAssistantPayloadSchema = workerLiveObject({
+  text: LiveTextSchema,
+  delta: LiveTextSchema,
+  replace: Type.Optional(Type.Literal(true)),
+  mediaUrls: Type.Optional(
+    Type.Array(LiveIdentifierSchema, {
+      maxItems: WORKER_TRANSCRIPT_MAX_CONTENT_PARTS,
+    }),
+  ),
+  phase: Type.Optional(Type.Union([Type.Literal("commentary"), Type.Literal("final_answer")])),
+  itemId: Type.Optional(WorkerIdentifierSchema),
+});
+
+const WorkerLiveThinkingPayloadSchema = workerLiveObject({
+  text: LiveTextSchema,
+  delta: LiveTextSchema,
+});
+
+const WorkerLiveToolCommonProperties = {
+  name: WorkerIdentifierSchema,
+  toolCallId: WorkerIdentifierSchema,
+  hideFromChannelProgress: Type.Optional(Type.Literal(true)),
+};
+
+const WorkerLiveToolPayloadSchema = Type.Union([
+  workerLiveObject({
+    ...WorkerLiveToolCommonProperties,
+    phase: Type.Literal("start"),
+    args: Type.Unknown(),
+  }),
+  workerLiveObject({
+    ...WorkerLiveToolCommonProperties,
+    phase: Type.Literal("update"),
+    partialResult: Type.Unknown(),
+  }),
+  workerLiveObject({
+    ...WorkerLiveToolCommonProperties,
+    phase: Type.Literal("result"),
+    meta: OptionalLiveTextSchema,
+    isError: Type.Boolean(),
+    result: Type.Unknown(),
+    toolErrorSummary: OptionalLiveTextSchema,
+  }),
+]);
+
+const WorkerLiveApprovalCommonProperties = {
+  kind: Type.Union([Type.Literal("exec"), Type.Literal("plugin"), Type.Literal("unknown")]),
+  title: LiveTextSchema,
+  itemId: Type.Optional(WorkerIdentifierSchema),
+  toolCallId: Type.Optional(WorkerIdentifierSchema),
+  approvalId: Type.Optional(WorkerIdentifierSchema),
+  approvalSlug: Type.Optional(WorkerIdentifierSchema),
+  command: OptionalLiveTextSchema,
+  host: OptionalLiveTextSchema,
+  reason: OptionalLiveTextSchema,
+  scope: Type.Optional(Type.Union([Type.Literal("turn"), Type.Literal("session")])),
+  message: OptionalLiveTextSchema,
+};
+
+const WorkerLiveApprovalPayloadSchema = Type.Union([
+  workerLiveObject({
+    ...WorkerLiveApprovalCommonProperties,
+    phase: Type.Literal("requested"),
+    status: Type.Union([Type.Literal("pending"), Type.Literal("unavailable")]),
+  }),
+  workerLiveObject({
+    ...WorkerLiveApprovalCommonProperties,
+    phase: Type.Literal("resolved"),
+    status: Type.Union([Type.Literal("approved"), Type.Literal("denied"), Type.Literal("failed")]),
+  }),
+]);
+
+const WorkerLiveLifecycleStartPayloadSchema = workerLiveObject({
+  phase: Type.Literal("start"),
+  startedAt: LiveIntegerSchema,
+});
+
+const WorkerLiveFallbackReasonSchema = Type.Union([
+  Type.Literal("auth"),
+  Type.Literal("auth_permanent"),
+  Type.Literal("format"),
+  Type.Literal("rate_limit"),
+  Type.Literal("overloaded"),
+  Type.Literal("billing"),
+  Type.Literal("server_error"),
+  Type.Literal("timeout"),
+  Type.Literal("context_overflow"),
+  Type.Literal("model_not_found"),
+  Type.Literal("session_expired"),
+  Type.Literal("empty_response"),
+  Type.Literal("no_error_details"),
+  Type.Literal("unclassified"),
+  Type.Literal("unknown"),
+]);
+
+const WorkerLiveFallbackAttemptSchema = workerLiveObject({
+  provider: LiveIdentifierSchema,
+  model: LiveIdentifierSchema,
+  error: LiveTextSchema,
+  reason: Type.Optional(WorkerLiveFallbackReasonSchema),
+  authMode: Type.Optional(LiveIdentifierSchema),
+  status: OptionalLiveIntegerSchema,
+  code: Type.Optional(Type.String({ minLength: 1, maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES })),
+});
+
+const WorkerLiveFallbackCommonProperties = {
+  selectedProvider: LiveIdentifierSchema,
+  selectedModel: LiveIdentifierSchema,
+  activeProvider: LiveIdentifierSchema,
+  activeModel: LiveIdentifierSchema,
+};
+
+const WorkerLiveLifecycleFallbackPayloadSchema = workerLiveObject({
+  ...WorkerLiveFallbackCommonProperties,
+  phase: Type.Literal("fallback"),
+  reasonSummary: LiveTextSchema,
+  attemptSummaries: Type.Array(LiveTextSchema, {
+    maxItems: WORKER_TRANSCRIPT_MAX_CONTENT_PARTS,
+  }),
+  attempts: Type.Array(WorkerLiveFallbackAttemptSchema, {
+    maxItems: WORKER_TRANSCRIPT_MAX_CONTENT_PARTS,
+  }),
+});
+
+const WorkerLiveLifecycleFallbackClearedPayloadSchema = workerLiveObject({
+  ...WorkerLiveFallbackCommonProperties,
+  phase: Type.Literal("fallback_cleared"),
+  previousActiveModel: Type.Optional(LiveIdentifierSchema),
+});
+
+const WorkerLiveLifecycleFallbackStepPayloadSchema = workerLiveObject({
+  phase: Type.Literal("fallback_step"),
+  fallbackStepType: Type.Literal("fallback_step"),
+  fallbackStepFromModel: LiveIdentifierSchema,
+  fallbackStepToModel: Type.Optional(LiveIdentifierSchema),
+  fallbackStepFromFailureReason: Type.Optional(WorkerLiveFallbackReasonSchema),
+  fallbackStepFromFailureDetail: OptionalLiveTextSchema,
+  fallbackStepChainPosition: OptionalLiveIntegerSchema,
+  fallbackStepFinalOutcome: Type.Union([
+    Type.Literal("next_fallback"),
+    Type.Literal("succeeded"),
+    Type.Literal("chain_exhausted"),
+  ]),
+});
+
+const WorkerLiveLifecycleTerminalCommonProperties = {
+  startedAt: OptionalLiveIntegerSchema,
+  endedAt: LiveIntegerSchema,
+  stopReason: Type.Optional(WorkerIdentifierSchema),
+  yielded: Type.Optional(Type.Literal(true)),
+  timeoutPhase: Type.Optional(
+    Type.Union([
+      Type.Literal("queue"),
+      Type.Literal("preflight"),
+      Type.Literal("provider"),
+      Type.Literal("post_turn"),
+      Type.Literal("gateway_draining"),
+    ]),
+  ),
+  providerStarted: Type.Optional(Type.Boolean()),
+  aborted: Type.Optional(Type.Boolean()),
+  toolErrorSummary: OptionalLiveTextSchema,
+  livenessState: Type.Optional(
+    Type.Union([
+      Type.Literal("working"),
+      Type.Literal("paused"),
+      Type.Literal("blocked"),
+      Type.Literal("abandoned"),
+    ]),
+  ),
+  replayInvalid: Type.Optional(Type.Literal(true)),
+};
+
+const WorkerLiveLifecycleTerminalPayloadSchema = Type.Union([
+  workerLiveObject({
+    ...WorkerLiveLifecycleTerminalCommonProperties,
+    phase: Type.Literal("finishing"),
+    error: OptionalLiveTextSchema,
+  }),
+  workerLiveObject({
+    ...WorkerLiveLifecycleTerminalCommonProperties,
+    phase: Type.Literal("end"),
+  }),
+  workerLiveObject({
+    ...WorkerLiveLifecycleTerminalCommonProperties,
+    phase: Type.Literal("error"),
+    error: LiveTextSchema,
+    fallbackExhaustedFailure: Type.Optional(Type.Literal(true)),
+  }),
+]);
+
+const WorkerLiveLifecyclePayloadSchema = Type.Union([
+  WorkerLiveLifecycleStartPayloadSchema,
+  WorkerLiveLifecycleFallbackPayloadSchema,
+  WorkerLiveLifecycleFallbackClearedPayloadSchema,
+  WorkerLiveLifecycleFallbackStepPayloadSchema,
+  WorkerLiveLifecycleTerminalPayloadSchema,
+]);
+
+export const WorkerLiveEventSchema = Type.Union([
+  workerLiveObject({ kind: Type.Literal("assistant"), payload: WorkerLiveAssistantPayloadSchema }),
+  workerLiveObject({ kind: Type.Literal("thinking"), payload: WorkerLiveThinkingPayloadSchema }),
+  workerLiveObject({ kind: Type.Literal("tool"), payload: WorkerLiveToolPayloadSchema }),
+  workerLiveObject({ kind: Type.Literal("approval"), payload: WorkerLiveApprovalPayloadSchema }),
+  workerLiveObject({ kind: Type.Literal("lifecycle"), payload: WorkerLiveLifecyclePayloadSchema }),
+]);
+
+export const WorkerLiveEventParamsSchema: Type.TObject<{
+  readonly runEpoch: typeof LiveIntegerSchema;
+  readonly lastAckedSeq: typeof LiveIntegerSchema;
+  readonly seq: typeof LiveSequenceSchema;
+  readonly runId: typeof WorkerIdentifierSchema;
+  readonly event: typeof WorkerLiveEventSchema;
+}> = workerLiveObject({
+  runEpoch: LiveIntegerSchema,
+  lastAckedSeq: LiveIntegerSchema,
+  seq: LiveSequenceSchema,
+  runId: WorkerIdentifierSchema,
+  event: WorkerLiveEventSchema,
+});
+
+export const WorkerLiveEventResultSchema = workerLiveObject({
+  ackedSeq: LiveIntegerSchema,
+});
+
+export const WorkerLiveEventErrorDetailsSchema = Type.Union([
+  workerLiveObject({
+    reason: Type.Union([
+      Type.Literal("epoch-mismatch"),
+      Type.Literal("session-not-attached"),
+      Type.Literal("invalid-event"),
+      Type.Literal("capacity-exceeded"),
+    ]),
+  }),
+  workerLiveObject({
+    reason: Type.Literal("resync-required"),
+    ackedSeq: LiveIntegerSchema,
+    expectedSeq: LiveSequenceSchema,
+  }),
+]);
+
+export const WorkerLiveEventErrorShapeSchema = workerLiveObject({
+  code: Type.Literal("INVALID_REQUEST"),
+  message: Type.String({ minLength: 1, maxLength: 256 }),
+  details: WorkerLiveEventErrorDetailsSchema,
+});
+
+export const WorkerLiveEventRequestFrameSchema: Type.TObject<{
+  readonly type: Type.TLiteral<"req">;
+  readonly id: typeof WorkerFrameIdSchema;
+  readonly method: Type.TLiteral<(typeof WORKER_PROTOCOL_METHODS)[2]>;
+  readonly params: typeof WorkerLiveEventParamsSchema;
+}> = workerLiveObject({
+  type: Type.Literal("req"),
+  id: WorkerFrameIdSchema,
+  method: Type.Literal(WORKER_PROTOCOL_METHODS[2]),
+  params: WorkerLiveEventParamsSchema,
+});
+
+const WorkerLiveEventSuccessResponseFrameSchema = workerLiveObject({
+  type: Type.Literal("res"),
+  id: WorkerFrameIdSchema,
+  ok: Type.Literal(true),
+  payload: WorkerLiveEventResultSchema,
+});
+
+const WorkerLiveEventErrorResponseFrameSchema = workerLiveObject({
+  type: Type.Literal("res"),
+  id: WorkerFrameIdSchema,
+  ok: Type.Literal(false),
+  error: WorkerLiveEventErrorShapeSchema,
+});
+
+export const WorkerLiveEventResponseFrameSchema = Type.Union([
+  WorkerLiveEventSuccessResponseFrameSchema,
+  WorkerLiveEventErrorResponseFrameSchema,
   WorkerErrorResponseFrameSchema,
 ]);
 
@@ -520,3 +656,10 @@ export type WorkerTranscriptCommitRequestFrame = Static<
 export type WorkerTranscriptCommitResponseFrame = Static<
   typeof WorkerTranscriptCommitResponseFrameSchema
 >;
+export type WorkerLiveEvent = Static<typeof WorkerLiveEventSchema>;
+export type WorkerLiveEventParams = Static<typeof WorkerLiveEventParamsSchema>;
+export type WorkerLiveEventResult = Static<typeof WorkerLiveEventResultSchema>;
+export type WorkerLiveEventErrorDetails = Static<typeof WorkerLiveEventErrorDetailsSchema>;
+export type WorkerLiveEventErrorShape = Static<typeof WorkerLiveEventErrorShapeSchema>;
+export type WorkerLiveEventRequestFrame = Static<typeof WorkerLiveEventRequestFrameSchema>;
+export type WorkerLiveEventResponseFrame = Static<typeof WorkerLiveEventResponseFrameSchema>;

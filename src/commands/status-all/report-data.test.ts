@@ -6,7 +6,6 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../agents/exec-defaults.js", () => ({
-  canExecRequestNode: () => false,
   resolveNodeExecEligibility: () => ({ canExec: false }),
 }));
 vi.mock("../../config/config.js", () => ({

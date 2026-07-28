@@ -651,6 +651,14 @@ export async function steerControlledSubagentRun(params: {
       error: ownershipError,
     };
   }
+  if (params.entry.collect) {
+    return {
+      status: "forbidden",
+      runId: params.entry.runId,
+      sessionKey: params.entry.childSessionKey,
+      error: "Collector subagents cannot be steered; use agents_wait or cancel the task.",
+    };
+  }
   if (params.controller.controlScope !== "children") {
     return {
       status: "forbidden",
@@ -835,6 +843,12 @@ export async function sendControlledSubagentMessage(params: {
   if (ownershipError) {
     return { status: "forbidden" as const, error: ownershipError };
   }
+  if (params.entry.collect) {
+    return {
+      status: "forbidden" as const,
+      error: "Collector subagents cannot receive follow-up messages; use agents_wait.",
+    };
+  }
   if (params.controller.controlScope !== "children") {
     return {
       status: "forbidden" as const,
@@ -916,7 +930,7 @@ export async function sendControlledSubagentMessage(params: {
   }
 }
 
-export const testing = {
+const testing = {
   setDepsForTest(
     overrides?: Partial<{
       callGateway: GatewayCaller;
@@ -934,4 +948,8 @@ export const testing = {
       : defaultSubagentControlDeps;
   },
 };
-export { testing as __testing };
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.subagentControlTestApi")] =
+    testing;
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

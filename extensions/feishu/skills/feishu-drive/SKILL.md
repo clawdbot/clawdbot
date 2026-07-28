@@ -48,7 +48,9 @@ root-list cursors are not forwarded.
 { "action": "info", "file_token": "ABC123", "type": "docx" }
 ```
 
-Searches for the file in the root directory. Note: file must be in root or use `list` to browse folders first.
+Looks up file metadata directly by token and type, regardless of which shared folder contains it.
+Shortcuts are the exception: Feishu's metadata API does not support the `shortcut` type, so shortcut
+info retains the root-directory lookup behavior.
 
 `type`: `doc`, `docx`, `sheet`, `bitable`, `folder`, `file`, `mindnote`, `shortcut`
 
@@ -101,7 +103,8 @@ channels:
 ## Permissions
 
 - `drive:drive` - Full access (create, move, delete)
-- `drive:drive:readonly` - Read only (list, info)
+- `drive:drive:readonly` - Read only (list and root-level info fallback)
+- `drive:drive.metadata:readonly` - Direct `info` lookup outside the root (not needed with `drive:drive`)
 
 ## Known Limitations
 

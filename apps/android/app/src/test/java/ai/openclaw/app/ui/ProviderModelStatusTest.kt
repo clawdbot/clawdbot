@@ -158,6 +158,25 @@ class ProviderModelStatusTest {
   }
 
   @Test
+  fun configuredModelCopyHandlesZeroOneAndMany() {
+    assertEquals("No configured models", configuredModelsCountText(0))
+    assertEquals("1 configured model", configuredModelsCountText(1))
+    assertEquals("2 configured models", configuredModelsCountText(2))
+    assertEquals(
+      "No configured models. Refresh to recheck availability.",
+      configuredModelsOverviewText(0),
+    )
+    assertEquals(
+      "1 configured model. Refresh to recheck availability.",
+      configuredModelsOverviewText(1),
+    )
+    assertEquals(
+      "2 configured models. Refresh to recheck availability.",
+      configuredModelsOverviewText(2),
+    )
+  }
+
+  @Test
   fun videoCapabilitySurvivesGatewayParsingAndRendering() {
     val payload =
       Json
@@ -170,22 +189,52 @@ class ProviderModelStatusTest {
     assertEquals("video", modelCapabilities(model))
   }
 
+  @Test
+  fun modelCapabilitiesLocalizeControlledLabelsWithoutChangingGatewayMetadata() {
+    val model =
+      model(
+        provider = "custom-provider",
+        id = "model/internal-id",
+        name = "Model Display Name",
+        supportsReasoning = true,
+        supportsVision = true,
+        supportsAudio = true,
+        supportsVideo = true,
+        supportsDocuments = true,
+        contextTokens = 128_000,
+      )
+
+    assertEquals(
+      "reasoning / image / audio / video / document / 128k context",
+      modelCapabilities(model),
+    )
+    assertEquals("custom-provider", model.provider)
+    assertEquals("model/internal-id", model.id)
+    assertEquals("Model Display Name", model.name)
+  }
+
   private fun model(
     provider: String,
     id: String,
     name: String = id,
     available: Boolean? = null,
+    supportsReasoning: Boolean = false,
+    supportsVision: Boolean = false,
+    supportsAudio: Boolean = false,
+    supportsVideo: Boolean = false,
+    supportsDocuments: Boolean = false,
+    contextTokens: Long? = null,
   ): GatewayModelSummary =
     GatewayModelSummary(
       id = id,
       name = name,
       provider = provider,
-      supportsVision = false,
-      supportsAudio = false,
-      supportsVideo = false,
-      supportsDocuments = false,
-      supportsReasoning = false,
-      contextTokens = null,
+      supportsVision = supportsVision,
+      supportsAudio = supportsAudio,
+      supportsVideo = supportsVideo,
+      supportsDocuments = supportsDocuments,
+      supportsReasoning = supportsReasoning,
+      contextTokens = contextTokens,
       available = available,
     )
 }

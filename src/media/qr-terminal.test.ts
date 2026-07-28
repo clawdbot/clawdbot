@@ -40,9 +40,4 @@ describe("renderQrTerminal", () => {
     expect(create).toHaveBeenCalledWith("openclaw");
     expect(toString).not.toHaveBeenCalled();
   });
-
-  it("rejects empty QR text", async () => {
-    await expect(renderQrTerminal("")).rejects.toThrow("QR text must not be empty.");
-    expect(toString).not.toHaveBeenCalled();
-  });
 });

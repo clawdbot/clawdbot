@@ -5,12 +5,18 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { cellAuthSecretDir, cellOwnerId } from "./cell-profile.js";
 import type { FleetContainerInspectResult, FleetContainerRuntime } from "./containers.runtime.js";
-import { deleteFleetCell, getFleetCell } from "./registry.js";
-import { createFleetService } from "./service.runtime.js";
+import { deleteFleetCell, getFleetCell, listFleetCells } from "./registry.js";
+import { createFleetService as createFleetServiceRuntime } from "./service.runtime.js";
+
+type FleetServiceOptions = NonNullable<Parameters<typeof createFleetServiceRuntime>[0]>;
 
 let root: string;
 const TEST_ATTEMPT_ID = "22222222222222222222222222222222";
 const NEXT_ATTEMPT_ID = "44444444444444444444444444444444";
+
+function createFleetService(options: FleetServiceOptions = {}) {
+  return createFleetServiceRuntime({ probePort: async () => true, ...options });
+}
 
 function fleetLabels(tenant = "acme", attemptId = TEST_ATTEMPT_ID): Record<string, string> {
   return {
@@ -26,6 +32,7 @@ function runningInspection(
 ): Extract<FleetContainerInspectResult, { kind: "ok" }> {
   return {
     kind: "ok",
+    containerId: "container-id",
     state: "running",
     running: true,
     labels: fleetLabels(),
@@ -57,7 +64,13 @@ function createContainerMock(
   },
 ) {
   const assertLocal = vi.fn<FleetContainerRuntime["assertLocal"]>(async () => undefined);
-  const inspect = vi.fn<FleetContainerRuntime["inspect"]>(async () => initialInspection);
+  const inspections = new Map<string, FleetContainerInspectResult>();
+  const removedContainers = new Set<string>();
+  const inspect = vi.fn<FleetContainerRuntime["inspect"]>(async (_runtime, name) =>
+    removedContainers.has(name)
+      ? { kind: "missing", state: "missing" }
+      : (inspections.get(name) ?? initialInspection),
+  );
   const networks = new Map<
     string,
     Extract<Awaited<ReturnType<FleetContainerRuntime["inspectNetwork"]>>, { kind: "ok" }>
@@ -66,7 +79,23 @@ function createContainerMock(
     async (_runtime, name) => networks.get(name) ?? { kind: "missing" },
   );
   const isDockerRootless = vi.fn<FleetContainerRuntime["isDockerRootless"]>(async () => false);
-  const run = vi.fn<FleetContainerRuntime["run"]>(async () => undefined);
+  const run = vi.fn<FleetContainerRuntime["run"]>(async (profile, start) => {
+    removedContainers.delete(profile.containerName);
+    inspections.set(
+      profile.containerName,
+      runningInspection({
+        state: start ? "running" : "created",
+        running: start,
+        labels: fleetLabels(profile.tenantId, profile.attemptId),
+        environment: { ...profile.environment },
+        containerId: `container-${profile.attemptId}`,
+        imageId: `sha256:${profile.attemptId}`,
+        memory: profile.memory,
+        cpus: profile.cpus,
+        pidsLimit: profile.pidsLimit,
+      }),
+    );
+  });
   const pull = vi.fn<FleetContainerRuntime["pull"]>(async () => undefined);
   const createNetwork = vi.fn<FleetContainerRuntime["createNetwork"]>(
     async (_runtime, name, labels, options) => {
@@ -81,11 +110,18 @@ function createContainerMock(
   const removeNetwork = vi.fn<FleetContainerRuntime["removeNetwork"]>(async (_runtime, name) => {
     networks.delete(name);
   });
-  const start = vi.fn<FleetContainerRuntime["start"]>(async () => undefined);
+  const start = vi.fn<FleetContainerRuntime["start"]>(async (_runtime, name) => {
+    const current = await inspect("docker", name);
+    if (current.kind === "ok") {
+      inspections.set(name, { ...current, state: "running", running: true });
+    }
+  });
   const stop = vi.fn<FleetContainerRuntime["stop"]>(async () => undefined);
   const restart = vi.fn<FleetContainerRuntime["restart"]>(async () => undefined);
   const logs = vi.fn<FleetContainerRuntime["logs"]>(async () => undefined);
-  const remove = vi.fn<FleetContainerRuntime["remove"]>(async () => {
+  const remove = vi.fn<FleetContainerRuntime["remove"]>(async (_runtime, name) => {
+    inspections.delete(name);
+    removedContainers.add(name);
     inspect.mockResolvedValue({ kind: "missing", state: "missing" });
   });
   return {
@@ -128,10 +164,15 @@ describe("fleet service", () => {
   beforeEach(async () => {
     root = await tempRoot.setup();
     env = { ...process.env, OPENCLAW_STATE_DIR: root };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => new Response(null, { status: 200 })),
+    );
   });
 
   afterEach(async () => {
     closeOpenClawStateDatabaseForTest();
+    vi.unstubAllGlobals();
     await tempRoot.cleanup();
   });
 
@@ -221,9 +262,134 @@ describe("fleet service", () => {
     expect(result.token).toMatch(/^[a-f0-9]{32}$/u);
   });
 
+  it("health-gates started creates and skips the gate with --no-start", async () => {
+    const containers = createContainerMock();
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(null, { status: 200 }));
+    const service = createFleetService({
+      env,
+      containers: containers.runtime,
+      fetch: fetchMock,
+      probePort: async () => true,
+    });
+
+    await expect(
+      service.create({ tenant: "healthy", gatewayToken: "token" }),
+    ).resolves.toMatchObject({ tenant: "healthy", started: true });
+    expect(fetchMock).toHaveBeenCalledOnce();
+
+    fetchMock.mockClear();
+    await expect(
+      service.create({ tenant: "stopped", gatewayToken: "token", start: false }),
+    ).resolves.toMatchObject({ tenant: "stopped", started: false });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps an unhealthy created cell and its runtime evidence", async () => {
+    const containers = createContainerMock();
+    let clock = 0;
+    const service = createFleetService({
+      env,
+      containers: containers.runtime,
+      fetch: vi.fn<typeof fetch>(async () => new Response(null, { status: 503 })),
+      now: () => (clock += 50_000),
+      sleep: async () => {},
+      probePort: async () => true,
+    });
+
+    await expect(service.create({ tenant: "sick", gatewayToken: "token" })).rejects.toThrow(
+      "Fleet cell sick was created but did not become healthy within 60s; inspect it with `openclaw fleet status sick` or `openclaw fleet logs sick`, or remove it with `openclaw fleet rm sick --force`.",
+    );
+
+    expect(getFleetCell(env, "sick")).toBeDefined();
+    expect(containers.remove).not.toHaveBeenCalled();
+    expect(containers.removeNetwork).not.toHaveBeenCalled();
+  });
+
+  it("rejects busy explicit ports before reservation and propagates probe errors", async () => {
+    const containers = createContainerMock();
+    const busy = createFleetService({
+      env,
+      containers: containers.runtime,
+      probePort: async () => false,
+    });
+    await expect(
+      busy.create({ tenant: "busy", port: 20_000, gatewayToken: "token" }),
+    ).rejects.toThrow("Host port 20000 is already in use on 127.0.0.1 by another process.");
+    expect(getFleetCell(env, "busy")).toBeUndefined();
+
+    const failure = new Error("bind permission denied");
+    const broken = createFleetService({
+      env,
+      containers: containers.runtime,
+      probePort: async () => {
+        throw failure;
+      },
+    });
+    await expect(broken.create({ tenant: "broken", gatewayToken: "token" })).rejects.toBe(failure);
+    expect(getFleetCell(env, "broken")).toBeUndefined();
+  });
+
+  it("skips probe-busy ports during automatic allocation", async () => {
+    const containers = createContainerMock();
+    const probePort = vi.fn(async (port: number) => port !== 19_100);
+    const service = createFleetService({ env, containers: containers.runtime, probePort });
+
+    const result = await service.create({ tenant: "acme", gatewayToken: "token" });
+
+    expect(probePort.mock.calls.map(([port]) => port)).toEqual([19_100, 19_101]);
+    expect(result.port).toBe(19_101);
+    expect(getFleetCell(env, "acme")?.hostPort).toBe(19_101);
+  });
+
+  it("keeps scanning past long busy runs instead of capping attempts", async () => {
+    const containers = createContainerMock();
+    const probePort = vi.fn(async (port: number) => port >= 19_130);
+    const service = createFleetService({ env, containers: containers.runtime, probePort });
+
+    const result = await service.create({ tenant: "acme", gatewayToken: "token" });
+
+    expect(result.port).toBe(19_130);
+    expect(probePort).toHaveBeenCalledTimes(31);
+  });
+
+  it("retries automatic allocation when another tenant reserves the probed port", async () => {
+    const containers = createContainerMock();
+    let releaseFirstProbes: (() => void) | undefined;
+    let firstProbeCount = 0;
+    const firstProbes = new Promise<void>((resolve) => {
+      releaseFirstProbes = resolve;
+    });
+    const probePort = vi.fn(async (port: number) => {
+      if (port === 19_100 && (firstProbeCount += 1) < 2) {
+        await firstProbes;
+      } else if (port === 19_100) {
+        releaseFirstProbes?.();
+      }
+      return true;
+    });
+    const service = createFleetService({ env, containers: containers.runtime, probePort });
+
+    const [alpha, beta] = await Promise.all([
+      service.create({ tenant: "alpha", gatewayToken: "alpha-token" }),
+      service.create({ tenant: "beta", gatewayToken: "beta-token" }),
+    ]);
+
+    expect(new Set([alpha.port, beta.port])).toEqual(new Set([19_100, 19_101]));
+    expect(
+      listFleetCells(env)
+        .map((cell) => cell.hostPort)
+        .toSorted((left, right) => left - right),
+    ).toEqual([19_100, 19_101]);
+  });
+
   it("threads disk and Podman internal networking into provisioning", async () => {
     const containers = createContainerMock();
-    const service = createFleetService({ env, containers: containers.runtime, now: () => 1000 });
+    const service = createFleetService({
+      env,
+      containers: containers.runtime,
+      fetch: vi.fn<typeof fetch>(async () => new Response(null, { status: 200 })),
+      now: () => 1000,
+    });
     await service.create({
       tenant: "acme",
       runtime: "podman",
@@ -313,7 +479,12 @@ describe("fleet service", () => {
 
     const status = await service.status("acme");
 
-    expect(status.container).toEqual({ state: "running", running: true, managed: true });
+    expect(status.container).toEqual({
+      state: "running",
+      running: true,
+      managed: true,
+      imageId: "sha256:old-image-id",
+    });
     expect(status.health).toEqual({
       status: "ok",
       url: "http://127.0.0.1:19100/healthz",
@@ -328,7 +499,10 @@ describe("fleet service", () => {
 
   it("reports failed and skipped health outcomes without probing a stopped cell", async () => {
     const containers = createContainerMock();
-    const fetchMock = vi.fn<typeof fetch>(async () => new Response(null, { status: 503 }));
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+      .mockResolvedValue(new Response(null, { status: 503 }));
     const service = createFleetService({
       env,
       containers: containers.runtime,
@@ -336,6 +510,7 @@ describe("fleet service", () => {
       now: () => 1000,
     });
     await service.create({ tenant: "acme", gatewayToken: "token" });
+    fetchMock.mockClear();
     containers.inspect.mockResolvedValue(runningInspection({ state: "exited", running: false }));
 
     await expect(service.status("acme")).resolves.toMatchObject({
@@ -347,6 +522,17 @@ describe("fleet service", () => {
     await expect(service.status("acme")).resolves.toMatchObject({
       health: { status: "failed", httpStatus: 503, error: "HTTP 503" },
     });
+  });
+
+  it("omits imageId for missing and unmanaged status", async () => {
+    const containers = createContainerMock();
+    const service = createFleetService({ env, containers: containers.runtime, now: () => 1000 });
+    await service.create({ tenant: "acme", gatewayToken: "token" });
+
+    containers.inspect.mockResolvedValue(runningInspection({ labels: {} }));
+    expect((await service.status("acme")).container).not.toHaveProperty("imageId");
+    containers.inspect.mockResolvedValue({ kind: "missing", state: "missing" });
+    expect((await service.status("acme")).container).not.toHaveProperty("imageId");
   });
 
   it.each(["start", "stop", "restart"] as const)("runs the %s lifecycle action", async (action) => {
@@ -361,7 +547,7 @@ describe("fleet service", () => {
     expect(containers[action]).toHaveBeenCalledWith("docker", "openclaw-cell-acme");
   });
 
-  it("streams logs only after proving container ownership", async () => {
+  it("pins logs to the inspected container generation after proving ownership", async () => {
     const containers = createContainerMock();
     const service = createFleetService({ env, containers: containers.runtime, now: () => 1000 });
     await service.create({ tenant: "acme", gatewayToken: "token" });
@@ -371,7 +557,7 @@ describe("fleet service", () => {
       service.logs({ tenant: "acme", follow: true, tail: 100, since: "10m" }),
     ).resolves.toBeUndefined();
 
-    expect(containers.logs).toHaveBeenCalledWith("docker", "openclaw-cell-acme", {
+    expect(containers.logs).toHaveBeenCalledWith("docker", "container-id", {
       follow: true,
       tail: 100,
       since: "10m",
@@ -402,6 +588,7 @@ describe("fleet service", () => {
     const containers = createContainerMock();
     const service = createFleetService({ env, containers: containers.runtime, now: () => 1000 });
     await service.create({ tenant: "acme", gatewayToken: "token" });
+    containers.inspect.mockClear();
     containers.assertLocal.mockRejectedValue(new Error("daemon unavailable"));
 
     await expect(service.logs({ tenant: "acme" })).rejects.toThrow(/daemon unavailable/iu);
@@ -457,6 +644,28 @@ describe("fleet service", () => {
     });
     expect(profile?.environment).not.toHaveProperty("NODE_VERSION");
     expect(getFleetCell(env, "acme")?.image).toBe("ghcr.io/openclaw/openclaw:v2");
+  });
+
+  it("passes digest-pinned images verbatim to create and upgrade", async () => {
+    const containers = createContainerMock();
+    const digest = `ghcr.io/openclaw/openclaw@sha256:${"a".repeat(64)}`;
+    const service = createFleetService({
+      env,
+      containers: containers.runtime,
+      generateAttemptId: () => NEXT_ATTEMPT_ID,
+    });
+
+    await service.create({ tenant: "acme", image: digest, gatewayToken: "old-token" });
+    expect(containers.run.mock.calls[0]?.[0].image).toBe(digest);
+
+    containers.run.mockClear();
+    containers.inspect
+      .mockResolvedValueOnce(runningInspection())
+      .mockResolvedValueOnce(runningInspection({ labels: fleetLabels("acme", NEXT_ATTEMPT_ID) }));
+    await service.upgrade("acme");
+
+    expect(containers.pull).toHaveBeenCalledWith("docker", digest);
+    expect(containers.run.mock.calls[0]?.[0].image).toBe(digest);
   });
 
   it("restores the immutable old image when replacement fails", async () => {
@@ -552,12 +761,14 @@ describe("fleet service", () => {
 
   it("restores the previous cell when the replacement crashes after starting", async () => {
     const containers = createContainerMock();
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+      .mockRejectedValue(new Error("connect ECONNREFUSED"));
     const service = createFleetService({
       env,
       containers: containers.runtime,
-      fetch: vi.fn<typeof fetch>(async () => {
-        throw new Error("connect ECONNREFUSED");
-      }),
+      fetch: fetchMock,
       sleep: async () => {},
       now: () => 1000,
       generateAttemptId: () => NEXT_ATTEMPT_ID,
@@ -585,10 +796,14 @@ describe("fleet service", () => {
   it("restores the previous cell when the replacement never becomes healthy", async () => {
     const containers = createContainerMock();
     let clock = 0;
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+      .mockResolvedValue(new Response(null, { status: 503 }));
     const service = createFleetService({
       env,
       containers: containers.runtime,
-      fetch: vi.fn<typeof fetch>(async () => new Response(null, { status: 503 })),
+      fetch: fetchMock,
       sleep: async () => {},
       now: () => (clock += 50_000),
       generateAttemptId: () => NEXT_ATTEMPT_ID,

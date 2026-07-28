@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import type {
   OpenClawPluginNodeHostCommand,
@@ -19,7 +20,7 @@ import {
 } from "openclaw/plugin-sdk/windows-spawn";
 import { formatCodexDisplayText } from "./command-formatters.js";
 
-export const CODEX_CLI_SESSIONS_LIST_COMMAND = "codex.cli.sessions.list";
+const CODEX_CLI_SESSIONS_LIST_COMMAND = "codex.cli.sessions.list";
 export const CODEX_CLI_SESSION_RESUME_COMMAND = "codex.cli.session.resume";
 
 const DEFAULT_SESSION_LIMIT = 10;
@@ -28,7 +29,7 @@ const DEFAULT_RESUME_TIMEOUT_MS = 20 * 60_000;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 const activeResumeSessions = new Set<string>();
 
-export type CodexCliSessionSummary = {
+type CodexCliSessionSummary = {
   sessionId: string;
   updatedAt?: string;
   lastMessage?: string;
@@ -37,12 +38,12 @@ export type CodexCliSessionSummary = {
   messageCount: number;
 };
 
-export type CodexCliSessionsListResult = {
+type CodexCliSessionsListResult = {
   sessions: CodexCliSessionSummary[];
   codexHome: string;
 };
 
-export type CodexCliSessionResumeResult = {
+type CodexCliSessionResumeResult = {
   ok: true;
   sessionId: string;
   text: string;
@@ -118,6 +119,7 @@ export async function listCodexCliSessionsOnNode(params: {
       filter: params.filter,
     },
     timeoutMs: 15_000,
+    scopes: ["operator.write"],
   });
   return { node, result: parseCodexCliSessionsListResult(raw) };
 }
@@ -162,6 +164,7 @@ export async function resumeCodexCliSessionOnNode(params: {
       timeoutMs: params.timeoutMs,
     },
     timeoutMs: (params.timeoutMs ?? DEFAULT_RESUME_TIMEOUT_MS) + 5_000,
+    scopes: ["operator.write"],
   });
   const payload = unwrapNodeInvokePayload(raw);
   if (!isRecord(payload) || payload.ok !== true || typeof payload.text !== "string") {
@@ -319,7 +322,7 @@ async function runCodexExecResume(params: {
   }
 }
 
-export function resolveCodexCliResumeSpawnInvocation(
+function resolveCodexCliResumeSpawnInvocation(
   args: string[],
   runtime: CodexCliResumeSpawnRuntime = DEFAULT_RESUME_SPAWN_RUNTIME,
 ): { command: string; args: string[]; shell?: boolean; windowsHide?: boolean } {
@@ -594,7 +597,7 @@ async function resolveCodexCliNode(params: {
   if (usable.length > 1) {
     throw new Error("Multiple Codex CLI-capable nodes connected. Pass --host <node-id>.");
   }
-  return usable[0];
+  return expectDefined(usable[0], "single usable Codex CLI node");
 }
 
 function parseCodexCliSessionsListResult(raw: unknown): CodexCliSessionsListResult {

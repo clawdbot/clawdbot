@@ -168,6 +168,7 @@ final class RealtimeTalkRelaySession {
     private var outputSessionId = 0
     private var pendingOutputChunks: [Data] = []
     private var pendingOutputDone = false
+    private var pendingPlaybackMarks: [String] = []
     private var audioSender: RealtimeAudioSender?
     private var isClosed = false
     private var lifecycleGeneration: UInt64 = 0
@@ -306,6 +307,7 @@ final class RealtimeTalkRelaySession {
             task.cancel()
         }
         self.audioSendTasks.removeAll()
+        self.pendingPlaybackMarks.removeAll()
         let audioSender = self.audioSender
         self.audioSender = nil
         Task { await audioSender?.close() }
@@ -435,7 +437,11 @@ final class RealtimeTalkRelaySession {
         case "audioDone":
             self.finishOutputPlaybackStream()
         case "clear":
+            let marks = self.takePendingPlaybackMarks()
             self.stopOutputPlayback()
+            self.acknowledgePlaybackMarks(marks)
+        case "mark":
+            self.handlePlaybackMark(payload)
         case "transcript":
             self.handleTranscriptEvent(payload)
         case "toolCall":
@@ -893,6 +899,45 @@ final class RealtimeTalkRelaySession {
         self.outputPlaybackExpectedEndMs = 0
         self.outputEnvelope?.cancel()
         self.onSpeakingChanged(false)
+        self.acknowledgePlaybackMarks(self.takePendingPlaybackMarks())
+    }
+
+    private func takePendingPlaybackMarks() -> [String] {
+        let marks = self.pendingPlaybackMarks
+        self.pendingPlaybackMarks.removeAll()
+        return marks
+    }
+
+    private func handlePlaybackMark(_ payload: [String: AnyCodable]) {
+        guard let markName = payload["markName"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !markName.isEmpty
+        else { return }
+        if self.isOutputPlaying {
+            self.pendingPlaybackMarks.append(markName)
+        } else {
+            self.acknowledgePlaybackMarks([markName])
+        }
+    }
+
+    private func acknowledgePlaybackMarks(_ marks: [String]) {
+        guard !marks.isEmpty,
+              let relaySessionId = self.relaySessionId,
+              let startupTransport = self.startupTransport
+        else { return }
+        for markName in marks {
+            Task { [startupTransport] in
+                let payload = ["sessionId": relaySessionId, "markName": markName]
+                guard let data = try? JSONSerialization.data(withJSONObject: payload),
+                      let json = String(data: data, encoding: .utf8)
+                else { return }
+                do {
+                    _ = try await startupTransport.request("talk.session.acknowledgeMark", json, 8)
+                } catch {
+                    GatewayDiagnostics.log(
+                        "talk realtime: mark acknowledgement failed=\(Self.safeLogMessage(error.localizedDescription))")
+                }
+            }
+        }
     }
 
     private func stopOutputPlayback() {

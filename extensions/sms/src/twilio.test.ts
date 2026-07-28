@@ -1,15 +1,16 @@
 // Sms tests cover twilio plugin behavior.
+import { createHmac } from "node:crypto";
+import type { IncomingMessage } from "node:http";
+import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildTwilioInboundMessage,
-  computeTwilioSignature,
   listTwilioIncomingPhoneNumbers,
   listTwilioMessages,
-  parseTwilioFormBody,
+  readTwilioWebhookForm,
   resolveTwilioWebhookSignatureUrl,
   retrieveTwilioMessagingService,
   sendSmsViaTwilio,
-  TwilioSmsApiError,
   verifyTwilioSignature,
 } from "./twilio.js";
 import type { ResolvedSmsAccount } from "./types.js";
@@ -53,6 +54,26 @@ function readUrlEncodedRequestBody(init: RequestInit | undefined): URLSearchPara
   throw new Error("Expected Twilio request body to be URL-encoded.");
 }
 
+function computeTestTwilioSignature(params: {
+  url: string;
+  authToken: string;
+  form: Record<string, string>;
+}): string {
+  const data =
+    params.url +
+    Object.keys(params.form)
+      .toSorted()
+      .map((key) => `${key}${params.form[key] ?? ""}`)
+      .join("");
+  return createHmac("sha1", params.authToken).update(data).digest("base64");
+}
+
+async function readTestTwilioForm(body: string): Promise<Record<string, string>> {
+  const req = Readable.from([body]) as IncomingMessage;
+  req.headers = { "content-length": String(Buffer.byteLength(body)) };
+  return await readTwilioWebhookForm(req);
+}
+
 function cancelTrackedTextResponse(
   text: string,
   init?: ResponseInit,
@@ -80,8 +101,8 @@ describe("Twilio SMS helpers", () => {
     fetchWithSsrFGuardMock.mockReset();
   });
 
-  it("parses Twilio form bodies and inbound messages", () => {
-    const form = parseTwilioFormBody(
+  it("parses Twilio form bodies and inbound messages", async () => {
+    const form = await readTestTwilioForm(
       "From=%2B15551234567&To=%2B15557654321&Body=hello+there&MessageSid=SM123",
     );
 
@@ -123,7 +144,7 @@ describe("Twilio SMS helpers", () => {
       MessageSid: "SM123",
       To: "+15557654321",
     };
-    const signature = computeTwilioSignature({
+    const signature = computeTestTwilioSignature({
       url: "https://gateway.example.com/webhooks/sms",
       authToken: "secret",
       form,
@@ -145,13 +166,21 @@ describe("Twilio SMS helpers", () => {
         form,
       }),
     ).toBe(false);
+    expect(
+      verifyTwilioSignature({
+        signature: signature.slice(0, -1),
+        url: "https://gateway.example.com/webhooks/sms",
+        authToken: "secret",
+        form,
+      }),
+    ).toBe(false);
   });
 
-  it("preserves signed form values before signature verification", () => {
-    const form = parseTwilioFormBody(
+  it("preserves signed form values before signature verification", async () => {
+    const form = await readTestTwilioForm(
       "From=%2B15551234567&To=%2B15557654321&Body=+hello+&MessageSid=SM123&WaId=",
     );
-    const signature = computeTwilioSignature({
+    const signature = computeTestTwilioSignature({
       url: "https://gateway.example.com/webhooks/sms",
       authToken: "secret",
       form,
@@ -459,6 +488,7 @@ describe("Twilio SMS helpers", () => {
       }),
     ).rejects.toMatchObject({
       name: "TwilioSmsApiError",
+      message: "Twilio SMS send failed (400): The message From/To pair violates a blacklist rule.",
       httpStatus: 400,
       twilioCode: 21610,
       responseText: JSON.stringify({
@@ -626,18 +656,6 @@ describe("Twilio SMS helpers", () => {
 
     expect(tracked.wasCanceled()).toBe(true);
     expect(release).toHaveBeenCalledTimes(1);
-  });
-
-  it("exposes a typed Twilio SMS API error", () => {
-    const error = new TwilioSmsApiError(
-      429,
-      JSON.stringify({ code: 20429, message: "Too many requests" }),
-    );
-
-    expect(error).toBeInstanceOf(TwilioSmsApiError);
-    expect(error.message).toBe("Twilio SMS send failed (429): Too many requests");
-    expect(error.httpStatus).toBe(429);
-    expect(error.twilioCode).toBe(20429);
   });
 
   it("requires successful Twilio sends to include a Message SID", async () => {

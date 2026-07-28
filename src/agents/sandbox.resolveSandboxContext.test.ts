@@ -9,6 +9,7 @@ import { registerSandboxBackend } from "./sandbox/backend.js";
 import { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandbox/context.js";
 
 const updateRegistryMock = vi.hoisted(() => vi.fn());
+const readRegisteredSandboxRuntimeIdsMock = vi.hoisted(() => vi.fn(async () => [] as string[]));
 const syncSkillsToWorkspaceMock = vi.hoisted(() =>
   vi.fn<() => Promise<SkillUsagePath[]>>(async () => []),
 );
@@ -27,6 +28,7 @@ const browserProfilesMock = vi.hoisted(() => ({
 }));
 
 vi.mock("./sandbox/registry.js", () => ({
+  readRegisteredSandboxRuntimeIds: readRegisteredSandboxRuntimeIdsMock,
   updateRegistry: updateRegistryMock,
 }));
 
@@ -39,7 +41,6 @@ vi.mock("../plugin-sdk/browser-control-auth.js", () => browserControlAuthMock);
 vi.mock("../plugin-sdk/browser-profiles.js", () => browserProfilesMock);
 
 vi.mock("./exec-defaults.js", () => ({
-  canExecRequestNode: vi.fn(() => false),
   resolveNodeExecEligibility: resolveNodeExecEligibilityMock,
 }));
 
@@ -207,23 +208,25 @@ describe("resolveSandboxContext", () => {
 
   it("resolves a registered non-docker backend", async () => {
     resolveNodeExecEligibilityMock.mockClear();
-    const restore = registerSandboxBackend("test-backend", {
-      factory: async () => ({
-        id: "test-backend",
-        runtimeId: "test-runtime",
-        runtimeLabel: "Test Runtime",
-        workdir: "/runtime/workspace",
-        buildExecSpec: async () => ({
-          argv: ["test-backend", "exec"],
-          env: process.env,
-          stdinMode: "pipe-closed",
-        }),
-        runShellCommand: async () => ({
-          stdout: Buffer.alloc(0),
-          stderr: Buffer.alloc(0),
-          code: 0,
-        }),
+    readRegisteredSandboxRuntimeIdsMock.mockResolvedValue(["registered-runtime"]);
+    const backendFactory = vi.fn(async () => ({
+      id: "test-backend",
+      runtimeId: "test-runtime",
+      runtimeLabel: "Test Runtime",
+      workdir: "/runtime/workspace",
+      buildExecSpec: async () => ({
+        argv: ["test-backend", "exec"],
+        env: process.env,
+        stdinMode: "pipe-closed" as const,
       }),
+      runShellCommand: async () => ({
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.alloc(0),
+        code: 0,
+      }),
+    }));
+    const restore = registerSandboxBackend("test-backend", {
+      factory: backendFactory,
       resolveWorkdir: () => "/runtime/workspace",
     });
     try {
@@ -252,6 +255,11 @@ describe("resolveSandboxContext", () => {
       expect(result?.runtimeId).toBe("test-runtime");
       expect(result?.containerName).toBe("test-runtime");
       expect(result?.backend?.id).toBe("test-backend");
+      expect(backendFactory).toHaveBeenCalledWith(
+        expect.objectContaining({
+          registeredRuntimeIds: ["registered-runtime"],
+        }),
+      );
       expect(resolveNodeExecEligibilityMock).toHaveBeenCalledWith(
         expect.objectContaining({
           execOverrides: { host: "node", node: "build-node", security: "allowlist" },
@@ -265,6 +273,7 @@ describe("resolveSandboxContext", () => {
       });
       expect(workspace?.containerWorkdir).toBe("/runtime/workspace");
     } finally {
+      readRegisteredSandboxRuntimeIdsMock.mockResolvedValue([]);
       restore();
     }
   }, 15_000);

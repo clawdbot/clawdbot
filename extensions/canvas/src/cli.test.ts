@@ -139,6 +139,28 @@ describe("canvas CLI", () => {
     expect(writtenFiles).toHaveLength(0);
   });
 
+  it("rejects malformed node-controlled snapshot base64 before writing", async () => {
+    const program = new Command();
+    program.exitOverride();
+    const nodes = program.command("nodes");
+    const { deps, writtenFiles } = createCanvasCliDeps();
+    vi.mocked(deps.callGatewayCli).mockResolvedValueOnce({
+      payload: {
+        format: "png",
+        base64: "Zh==",
+      },
+    });
+
+    registerNodesCanvasCommands(nodes, deps);
+
+    await expect(
+      program.parseAsync(["nodes", "canvas", "snapshot", "--node", "ios-node"], {
+        from: "user",
+      }),
+    ).rejects.toThrow(/invalid canvas\.snapshot payload/i);
+    expect(writtenFiles).toHaveLength(0);
+  });
+
   it("rejects unsupported snapshot formats before invoking the node", async () => {
     const program = new Command();
     program.exitOverride();
@@ -154,6 +176,22 @@ describe("canvas CLI", () => {
     ).rejects.toThrow(/invalid format: gif/i);
     expect(deps.callGatewayCli).not.toHaveBeenCalled();
     expect(writtenFiles).toHaveLength(0);
+  });
+
+  it("prints an empty canvas eval result instead of a success placeholder", async () => {
+    const program = new Command();
+    program.exitOverride();
+    const nodes = program.command("nodes");
+    const { deps, runtime } = createCanvasCliDeps();
+    vi.mocked(deps.callGatewayCli).mockResolvedValueOnce({ payload: { result: "" } });
+
+    registerNodesCanvasCommands(nodes, deps);
+    await program.parseAsync(["nodes", "canvas", "eval", `""`, "--node", "ios-node"], {
+      from: "user",
+    });
+
+    expect(runtime.log).toHaveBeenCalledWith("");
+    expect(runtime.log).not.toHaveBeenCalledWith("canvas eval ok");
   });
 
   it.each([

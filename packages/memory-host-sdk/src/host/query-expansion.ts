@@ -1,5 +1,5 @@
 // Memory Host SDK module implements query expansion behavior.
-import { normalizeLowercaseStringOrEmpty } from "./string-utils.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 /**
  * Query expansion for FTS-only search mode.

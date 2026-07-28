@@ -3,7 +3,7 @@ import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/s
 import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
-export type ConnectedNodePluginTool = {
+type ConnectedNodePluginTool = {
   nodeId: string;
   displayName?: string;
   platform?: string;
@@ -228,9 +228,4 @@ export function listConnectedNodePluginTools(): ConnectedNodePluginTool[] {
 
 export function getConnectedNodePluginToolsVersion(): number {
   return snapshotVersion;
-}
-
-export function resetConnectedNodePluginToolsForTest(): void {
-  toolsByNodeId.clear();
-  bumpSnapshotVersion();
 }

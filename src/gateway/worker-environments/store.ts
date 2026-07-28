@@ -34,10 +34,10 @@ import {
   type WorkerEnvironmentUnleasedState,
 } from "./state.js";
 
-export type WorkerEnvironmentProfileSnapshot = WorkerProfile;
-export type WorkerEnvironmentSshEndpoint = WorkerSshEndpoint;
-export type WorkerEnvironmentBootstrapReceipt = WorkerAdmissionHandshake;
-export type WorkerEnvironmentTeardownTerminalState = "destroyed" | "failed";
+type WorkerEnvironmentProfileSnapshot = WorkerProfile;
+type WorkerEnvironmentSshEndpoint = WorkerSshEndpoint;
+type WorkerEnvironmentBootstrapReceipt = WorkerAdmissionHandshake;
+type WorkerEnvironmentTeardownTerminalState = "destroyed" | "failed";
 type RecordIdentity = { environmentId: string; providerId: string; profileId: string };
 type RecordBase = RecordIdentity & {
   profileSnapshot: WorkerEnvironmentProfileSnapshot;
@@ -55,6 +55,14 @@ type Ssh = WorkerEnvironmentSshEndpoint;
 type UnleasedRecord = { state: WorkerEnvironmentUnleasedState; leaseId: null; sshEndpoint: null };
 type LeasedRecord = { state: WorkerEnvironmentLeasedState; leaseId: string; sshEndpoint: Ssh };
 export type WorkerEnvironmentRecord = RecordBase & (UnleasedRecord | LeasedRecord);
+export class WorkerSessionAlreadyAttachedError extends Error {
+  constructor(
+    readonly sessionId: string,
+    readonly environmentId: string,
+  ) {
+    super(`Session ${sessionId} is already attached to worker environment ${environmentId}`);
+  }
+}
 export type WorkerEnvironmentTransitionPatch = {
   leaseId?: string | null;
   sshEndpoint?: WorkerEnvironmentSshEndpoint | null;
@@ -466,6 +474,57 @@ function listRows(db: DatabaseSync, reconcile: boolean): WorkerEnvironmentRecord
   ).rows.map(fromRow);
 }
 
+function compareAttachmentAuthority(
+  left: WorkerEnvironmentRecord,
+  right: WorkerEnvironmentRecord,
+): number {
+  if (left.ownerEpoch !== right.ownerEpoch) {
+    return left.ownerEpoch > right.ownerEpoch ? -1 : 1;
+  }
+  if (left.stateChangedAtMs !== right.stateChangedAtMs) {
+    return left.stateChangedAtMs > right.stateChangedAtMs ? -1 : 1;
+  }
+  if (left.environmentId === right.environmentId) {
+    return 0;
+  }
+  return left.environmentId < right.environmentId ? -1 : 1;
+}
+
+function reconcileAttachedSessionOwners(db: DatabaseSync, nowMs: number): void {
+  const ownersBySession = new Map<string, WorkerEnvironmentRecord[]>();
+  for (const record of listRows(db, false)) {
+    if (record.state !== "attached") {
+      continue;
+    }
+    const sessionId = record.attachedSessionIds[0];
+    if (!sessionId) {
+      continue;
+    }
+    const owners = ownersBySession.get(sessionId) ?? [];
+    owners.push(record);
+    ownersBySession.set(sessionId, owners);
+  }
+  for (const owners of ownersBySession.values()) {
+    if (owners.length < 2) {
+      continue;
+    }
+    const [, ...duplicates] = owners.toSorted(compareAttachmentAuthority);
+    for (const duplicate of duplicates) {
+      // Repair multiple owners admitted before attachment uniqueness.
+      // Demotion fences the loser before startup snapshots it.
+      update(db, duplicate.environmentId, "attached", {
+        owner_epoch: nextGlobalOwnerEpoch(db),
+        state: "idle",
+        attached_session_ids_json: json([]),
+        updated_at_ms: nowMs,
+        state_changed_at_ms: nowMs,
+        idle_since_at_ms: nowMs,
+      });
+      revokeCredential(db, duplicate.environmentId);
+    }
+  }
+}
+
 export function createWorkerEnvironmentStore(
   options: { database?: OpenClawStateDatabase; now?: () => number } = {},
 ) {
@@ -474,6 +533,7 @@ export function createWorkerEnvironmentStore(
   const read = () => openOpenClawStateDatabase({ path }).db;
   const write = <T>(operation: (db: DatabaseSync) => T): T =>
     runOpenClawStateWriteTransaction(({ db }) => operation(db), { path });
+  write((db) => reconcileAttachedSessionOwners(db, now()));
   const writeCredential = (
     input: CredentialInput & {
       environmentId: string;
@@ -688,6 +748,22 @@ export function createWorkerEnvironmentStore(
               ? current.attachedSessionIds
               : normalizeAttachedSessionIds(patch.attachedSessionIds);
         assertShape(to, leaseId, sshEndpoint, bootstrapReceipt, attachedSessionIds);
+        const [attachedSessionId] = attachedSessionIds;
+        if (to === "attached" && attachedSessionId) {
+          // Change session ownership atomically with worker state.
+          const existingOwner = listRows(db, false).find(
+            (record) =>
+              record.environmentId !== environmentId &&
+              record.state === "attached" &&
+              record.attachedSessionIds[0] === attachedSessionId,
+          );
+          if (existingOwner) {
+            throw new WorkerSessionAlreadyAttachedError(
+              attachedSessionId,
+              existingOwner.environmentId,
+            );
+          }
+        }
         const revokesCredential =
           clearsBootstrapReceipt ||
           to === "attached" ||
@@ -810,3 +886,4 @@ export function createWorkerEnvironmentStore(
 }
 
 export type WorkerEnvironmentStore = ReturnType<typeof createWorkerEnvironmentStore>;
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

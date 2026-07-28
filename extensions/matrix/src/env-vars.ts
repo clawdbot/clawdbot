@@ -84,7 +84,11 @@ export function listMatrixEnvAccountIds(env: NodeJS.ProcessEnv = process.env): s
     if (!match) {
       continue;
     }
-    const accountId = decodeMatrixEnvAccountToken(match[1]);
+    const encodedAccountId = match[1];
+    if (!encodedAccountId) {
+      continue;
+    }
+    const accountId = decodeMatrixEnvAccountToken(encodedAccountId);
     if (accountId) {
       ids.add(accountId);
     }

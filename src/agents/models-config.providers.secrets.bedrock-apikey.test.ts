@@ -4,7 +4,6 @@ import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
 import type { ProviderConfig } from "./models-config.providers.secret-helpers.js";
 import {
   resolveApiKeyFromCredential,
-  resolveAwsSdkApiKeyVarName,
   resolveMissingProviderApiKey,
 } from "./models-config.providers.secret-helpers.js";
 
@@ -137,26 +136,6 @@ describe("resolveMissingProviderApiKey — aws-sdk auth", () => {
     });
 
     expect(result.apiKey).toBe("AWS_ACCESS_KEY_ID");
-  });
-});
-
-describe("resolveAwsSdkApiKeyVarName", () => {
-  it("returns undefined when AWS auth env markers are absent", () => {
-    expect(resolveAwsSdkApiKeyVarName({})).toBeUndefined();
-  });
-
-  it("preserves the AWS auth env precedence order", () => {
-    expect(
-      resolveAwsSdkApiKeyVarName({
-        AWS_BEARER_TOKEN_BEDROCK: "bearer",
-        AWS_PROFILE: "default",
-      }),
-    ).toBe("AWS_BEARER_TOKEN_BEDROCK");
-    expect(
-      resolveAwsSdkApiKeyVarName({
-        AWS_PROFILE: "default",
-      }),
-    ).toBe("AWS_PROFILE");
   });
 });
 

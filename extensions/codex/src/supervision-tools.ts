@@ -1,3 +1,6 @@
+import { resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { jsonResult, readStringParam, type AnyAgentTool } from "openclaw/plugin-sdk/core";
 /**
  * Compatibility tools for the retired Codex Supervisor plugin.
  *
@@ -6,9 +9,7 @@
  * continuation belongs to the Codex harness, which installs approval and tool
  * handlers before it starts or resumes the harness-owned Codex thread.
  */
-import { resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { jsonResult, readStringParam, type AnyAgentTool } from "openclaw/plugin-sdk/core";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 import {
@@ -26,13 +27,12 @@ import {
 import { requestCodexAppServerJson } from "./app-server/request.js";
 
 /** Legacy endpoint env retained for the shipped Supervisor tool contract. */
-export const LEGACY_CODEX_SUPERVISOR_ENDPOINTS_ENV = "OPENCLAW_CODEX_SUPERVISOR_ENDPOINTS";
+const LEGACY_CODEX_SUPERVISOR_ENDPOINTS_ENV = "OPENCLAW_CODEX_SUPERVISOR_ENDPOINTS";
 /** Legacy standalone-MCP transcript gate. Agent tools use canonical config. */
-export const LEGACY_CODEX_SUPERVISOR_RAW_TRANSCRIPTS_ENV =
+const LEGACY_CODEX_SUPERVISOR_RAW_TRANSCRIPTS_ENV =
   "OPENCLAW_CODEX_SUPERVISOR_ALLOW_RAW_TRANSCRIPTS";
 /** Legacy standalone-MCP write gate. Agent tools use canonical config. */
-export const LEGACY_CODEX_SUPERVISOR_WRITE_CONTROLS_ENV =
-  "OPENCLAW_CODEX_SUPERVISOR_ALLOW_WRITE_CONTROLS";
+const LEGACY_CODEX_SUPERVISOR_WRITE_CONTROLS_ENV = "OPENCLAW_CODEX_SUPERVISOR_ALLOW_WRITE_CONTROLS";
 
 export const CODEX_SUPERVISION_COMPAT_TOOL_NAMES = [
   "codex_endpoint_probe",
@@ -145,7 +145,7 @@ type EndpointRequest = <T = unknown>(
   requestParams?: unknown,
 ) => Promise<T>;
 
-export type CodexSupervisionToolsOptions = {
+type CodexSupervisionToolsOptions = {
   getPluginConfig: () => unknown;
   getRuntimeConfig?: () => OpenClawConfig | undefined;
   /** Trusted owner bit supplied by the plugin tool context. */
@@ -753,7 +753,7 @@ async function resolveEndpointForThread(params: {
     }
   }
   if (matches.length === 1) {
-    return matches[0];
+    return expectDefined(matches[0], "single matching Codex supervision endpoint");
   }
   if (matches.length > 1) {
     throw new Error(`Codex thread id is ambiguous across endpoints: ${params.threadId}`);
@@ -763,8 +763,7 @@ async function resolveEndpointForThread(params: {
 
 function findInProgressTurnId(thread: Record<string, unknown>): string | undefined {
   const turns = asRecordArray(thread.turns);
-  for (let index = turns.length - 1; index >= 0; index -= 1) {
-    const turn = turns[index];
+  for (const turn of turns.toReversed()) {
     if (turn.status === "inProgress" && typeof turn.id === "string") {
       return turn.id;
     }
@@ -806,7 +805,7 @@ function redactString(value: string): string {
 }
 
 /** Redacts secret-bearing fields before legacy tool results leave the plugin. */
-export function redactCodexSupervisionValue(value: unknown, key = ""): unknown {
+function redactCodexSupervisionValue(value: unknown, key = ""): unknown {
   if (typeof value === "string") {
     return /authorization|password|secret|token|api[-_]?key/i.test(key)
       ? "[redacted]"
@@ -1223,3 +1222,4 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
     },
   ];
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

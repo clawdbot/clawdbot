@@ -656,21 +656,6 @@ function normalizeParseOptions(
     : undefined;
 }
 
-/** Parses one canonical call prefix while allowing unrelated visible suffix text. */
-export function parsePlainTextToolCallPrefix(
-  text: string,
-  start = 0,
-  options?: PlainTextToolCallParseOptions,
-  structuralLineBreaks?: StructuralLineBreakOptions,
-): PlainTextToolCallBlock | null {
-  return parsePlainTextToolCallBlockAtAnySyntax(
-    text,
-    start,
-    normalizeParseOptions(options),
-    structuralLineBreaks,
-  );
-}
-
 export function parseStandalonePlainTextToolCallBlocks(
   text: string,
   options?: PlainTextToolCallParseOptions,

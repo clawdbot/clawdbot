@@ -16,7 +16,7 @@ Adds Groq model provider support to OpenClaw.
 
 ## Surface
 
-providers: groq; contracts: mediaUnderstandingProviders
+providers: `groq`; contracts: `mediaUnderstandingProviders`
 
 ## Related docs
 

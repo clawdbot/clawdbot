@@ -3,7 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { lockState, unlockWorktree } from "./git-lock.js";
 import {
@@ -12,13 +13,13 @@ import {
   releaseWorktreeRunLeaseRow,
 } from "./registry.js";
 import {
-  __testing,
   abortWorktreeRemoval,
   acquireWorktreeRunLease,
   claimWorktreeRemoval,
   hasLiveWorktreeRunLease,
   resolveWorktreeIdForPath,
 } from "./run-lease.js";
+import { testing as runLeaseTesting } from "./run-lease.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
 
 const execFileAsync = promisify(execFile);
@@ -41,23 +42,35 @@ async function initializeRepository(root: string): Promise<string> {
 }
 
 describe("worktree run lease", () => {
+  const templateTempDirs = useAutoCleanupTempDirTracker(afterAll);
+  const caseTempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+    afterEach(() => {
+      runLeaseTesting.resetForTest();
+      closeOpenClawStateDatabaseForTest();
+      cleanup();
+    });
+  });
+  let templateRepo: string;
   let root: string;
   let repo: string;
   let env: NodeJS.ProcessEnv;
   let service: ManagedWorktreeService;
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     const tempRoot = await fs.realpath(os.tmpdir());
-    root = await fs.mkdtemp(path.join(tempRoot, "openclaw-run-lease-"));
-    repo = await initializeRepository(root);
-    env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "openclaw-state") };
-    service = new ManagedWorktreeService({ env });
+    const templateRoot = templateTempDirs.make("openclaw-run-lease-template-", tempRoot);
+    templateRepo = await initializeRepository(templateRoot);
   });
 
-  afterEach(async () => {
-    __testing.resetForTest();
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(root, { recursive: true, force: true });
+  beforeEach(async () => {
+    const tempRoot = await fs.realpath(os.tmpdir());
+    root = caseTempDirs.make("openclaw-run-lease-", tempRoot);
+    repo = path.join(root, "repo");
+    // Each case keeps a private .git directory; only repository construction is shared.
+    await fs.cp(templateRepo, repo, { recursive: true });
+    repo = await fs.realpath(repo);
+    env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "openclaw-state") };
+    service = new ManagedWorktreeService({ env });
   });
 
   async function createSessionWorktree(): Promise<{ id: string; path: string }> {
@@ -113,7 +126,7 @@ describe("worktree run lease", () => {
       startTime: 4242,
       now: 1,
     });
-    __testing.setDeadPidResolverForTest((pid) => pid === 987_654);
+    runLeaseTesting.setDeadPidResolverForTest((pid) => pid === 987_654);
 
     expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
     expect(() =>
@@ -130,7 +143,7 @@ describe("worktree run lease", () => {
       startTime: 111,
       now: 1,
     });
-    __testing.setProcessStartTimeResolverForTest(() => 222);
+    runLeaseTesting.setProcessStartTimeResolverForTest(() => 222);
 
     expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
 
@@ -166,7 +179,7 @@ describe("worktree run lease", () => {
   it("recovers admission when the remover died before finalizing the removal", async () => {
     const created = await createSessionWorktree();
     claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover", force: true });
-    __testing.setDeadPidResolverForTest((pid) => pid === process.pid);
+    runLeaseTesting.setDeadPidResolverForTest((pid) => pid === process.pid);
 
     const lease = await acquireWorktreeRunLease(created.id, { env });
     expect(lease.token).toBeTruthy();
@@ -196,7 +209,7 @@ describe("worktree run lease", () => {
     const record = getRegistryWorktree(env, created.id)!;
 
     let attempts = 0;
-    __testing.setReleaseRowImplForTest((rowEnv, id, token) => {
+    runLeaseTesting.setReleaseRowImplForTest((rowEnv, id, token) => {
       attempts += 1;
       if (attempts === 1) {
         throw new Error("simulated state database failure");
@@ -216,7 +229,7 @@ describe("worktree run lease", () => {
     const record = getRegistryWorktree(env, created.id)!;
 
     let fail = true;
-    __testing.setReleaseRowImplForTest((rowEnv, id, token) => {
+    runLeaseTesting.setReleaseRowImplForTest((rowEnv, id, token) => {
       if (fail) {
         throw new Error("simulated state database failure");
       }
@@ -231,7 +244,7 @@ describe("worktree run lease", () => {
     ).toThrow("worktree is busy");
 
     fail = false;
-    await __testing.drainPendingCleanupsForTest();
+    await runLeaseTesting.drainPendingCleanupsForTest();
     expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
     expect(await lockState(record)).toEqual({ kind: "none" });
     expect(() =>
@@ -261,7 +274,7 @@ describe("worktree run lease", () => {
     const record = getRegistryWorktree(env, created.id)!;
 
     let failUnlock = true;
-    __testing.setUnlockImplForTest(async (rec) => {
+    runLeaseTesting.setUnlockImplForTest(async (rec) => {
       if (failUnlock) {
         throw new Error("simulated git unlock failure");
       }
@@ -273,7 +286,7 @@ describe("worktree run lease", () => {
     expect(await lockState(record)).toEqual({ kind: "live", pid: process.pid });
 
     failUnlock = false;
-    await __testing.drainPendingCleanupsForTest();
+    await runLeaseTesting.drainPendingCleanupsForTest();
     expect(await lockState(record)).toEqual({ kind: "none" });
   });
 
@@ -283,7 +296,7 @@ describe("worktree run lease", () => {
     const record = getRegistryWorktree(env, created.id)!;
 
     let failUnlock = true;
-    __testing.setUnlockImplForTest(async (rec) => {
+    runLeaseTesting.setUnlockImplForTest(async (rec) => {
       if (failUnlock) {
         throw new Error("simulated git unlock failure");
       }
@@ -295,7 +308,7 @@ describe("worktree run lease", () => {
 
     const second = await acquireWorktreeRunLease(created.id, { env });
     failUnlock = false;
-    await __testing.drainPendingCleanupsForTest();
+    await runLeaseTesting.drainPendingCleanupsForTest();
     expect(await lockState(record)).toEqual({ kind: "live", pid: process.pid });
 
     await second.release();
@@ -319,9 +332,9 @@ describe("worktree run lease", () => {
     const created = await createSessionWorktree();
     claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover-a", force: false });
 
-    __testing.setDeadPidResolverForTest((pid) => pid === process.pid);
+    runLeaseTesting.setDeadPidResolverForTest((pid) => pid === process.pid);
     claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover-b", force: false });
-    __testing.setDeadPidResolverForTest(null);
+    runLeaseTesting.setDeadPidResolverForTest(null);
 
     abortWorktreeRemoval(env, created.id, "remover-a");
     await expect(acquireWorktreeRunLease(created.id, { env })).rejects.toThrow(

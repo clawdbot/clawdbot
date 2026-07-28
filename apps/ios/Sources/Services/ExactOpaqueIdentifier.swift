@@ -16,6 +16,21 @@ struct ExactOpaqueIdentifierKey: Hashable, Sendable {
     func hash(into hasher: inout Hasher) {
         hasher.combine(self.bytes)
     }
+
+    var notificationComponent: String {
+        let hexDigits = Array("0123456789ABCDEF".utf8)
+        // Keep dots encoded so gateway and approval components cannot collapse into
+        // the same notification identifier when their separator moves.
+        let encoded = self.bytes.flatMap { byte -> [UInt8] in
+            switch byte {
+            case 0x30...0x39, 0x41...0x5A, 0x61...0x7A, 0x2D, 0x5F, 0x7E:
+                [byte]
+            default:
+                [0x25, hexDigits[Int(byte >> 4)], hexDigits[Int(byte & 0x0F)]]
+            }
+        }
+        return String(encoded.map { Character(UnicodeScalar($0)) })
+    }
 }
 
 enum ExactOpaqueIdentifier {

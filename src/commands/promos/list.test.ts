@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { RuntimeEnv } from "../../runtime.js";
+import type { OutputRuntimeEnv } from "../../runtime.js";
 
 const mocks = vi.hoisted(() => ({
   fetchClawHubPromotions: vi.fn(),
@@ -19,12 +19,22 @@ const { promosListCommand } = await import("./list.js");
 
 function makeRuntime() {
   const lines: string[] = [];
-  const runtime = {
-    log: vi.fn((line: string) => lines.push(line)),
+  const stdout: string[] = [];
+  const writeStdout = vi.fn((value: string): void => {
+    stdout.push(value);
+  });
+  const runtime: OutputRuntimeEnv = {
+    log: vi.fn((...args: unknown[]): void => {
+      lines.push(args.map(String).join(" "));
+    }),
     error: vi.fn(),
     exit: vi.fn(),
-  } as unknown as RuntimeEnv;
-  return { runtime, lines };
+    writeStdout,
+    writeJson: vi.fn((value: unknown, space = 2) => {
+      writeStdout(JSON.stringify(value, null, space > 0 ? space : undefined));
+    }),
+  };
+  return { runtime, lines, stdout };
 }
 
 const promotion = {
@@ -83,11 +93,14 @@ describe("promosListCommand", () => {
     mocks.fetchClawHubPromotions.mockRejectedValue(
       new ClawHubRequestError({ path: "/api/v1/promotions", status: 404, body: "not found" }),
     );
-    const { runtime, lines } = makeRuntime();
+    const { runtime, lines, stdout } = makeRuntime();
 
     await promosListCommand({ json: true }, runtime);
 
-    expect(JSON.parse(lines.join("\n"))).toEqual({ promotions: [] });
+    expect(lines).toEqual([]);
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.writeStdout).toHaveBeenCalledOnce();
+    expect(JSON.parse(stdout.join(""))).toEqual({ promotions: [] });
   });
 
   it("strips terminal control sequences from remote promotion text", async () => {
@@ -107,13 +120,16 @@ describe("promosListCommand", () => {
     expect(output).toContain("Free");
   });
 
-  it("emits JSON with --json", async () => {
+  it("writes JSON to stdout with --json", async () => {
     mocks.fetchClawHubPromotions.mockResolvedValue([promotion]);
-    const { runtime, lines } = makeRuntime();
+    const { runtime, lines, stdout } = makeRuntime();
 
     await promosListCommand({ json: true }, runtime);
 
-    const parsed = JSON.parse(lines.join("\n")) as { promotions: Array<{ slug: string }> };
+    expect(lines).toEqual([]);
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.writeStdout).toHaveBeenCalledOnce();
+    const parsed = JSON.parse(stdout.join("")) as { promotions: Array<{ slug: string }> };
     expect(parsed.promotions[0]?.slug).toBe("spring-models");
   });
 });

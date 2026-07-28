@@ -7,8 +7,10 @@ const TELEGRAM_APPROVAL_CALLBACK_PREFIX = "tga1:";
 
 export type TelegramApprovalCallback = Extract<MessagePresentationAction, { type: "approval" }>;
 
+// `(?![\s\S])` is an absolute end-of-input anchor; `$` also matches before a
+// final line terminator, which would make the fixed-length alias slice corrupt it.
 const TELEGRAM_APPROVE_ALLOW_ALWAYS_PATTERN =
-  /^\/approve(?:@[^\s]+)?\s+[A-Za-z0-9][A-Za-z0-9._:-]*\s+allow-always$/i;
+  /^\/approve(?:@[^\s]+)?\s+[A-Za-z0-9][A-Za-z0-9._:-]*\s+allow-always(?![\s\S])/i;
 
 export function fitsTelegramCallbackData(value: string): boolean {
   return Buffer.byteLength(value, "utf8") <= TELEGRAM_CALLBACK_DATA_MAX_BYTES;
@@ -78,9 +80,6 @@ export function parseTelegramApprovalCallbackData(
 }
 
 export function rewriteTelegramApprovalDecisionAlias(value: string): string {
-  if (!value.endsWith(" allow-always")) {
-    return value;
-  }
   if (!TELEGRAM_APPROVE_ALLOW_ALWAYS_PATTERN.test(value)) {
     return value;
   }

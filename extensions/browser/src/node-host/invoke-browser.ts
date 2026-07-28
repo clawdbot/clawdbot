@@ -60,18 +60,11 @@ function resolveBrowserProxyConfig() {
 
 let browserControlReady: Promise<void> | null = null;
 
-// Keep the production singleton but give tests a cheap reset seam so they do
-// not need to reload the entire module graph between cases.
-/** Resets the cached Browser control startup promise for tests. */
-export function resetBrowserProxyCommandStateForTests(): void {
-  browserControlReady = null;
-}
-
 async function ensureBrowserControlService(): Promise<void> {
   if (browserControlReady) {
     return browserControlReady;
   }
-  browserControlReady = (async () => {
+  const startup = (async () => {
     const cfg = loadBrowserConfigForRuntimeRefresh();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
     if (!resolved.enabled) {
@@ -82,7 +75,15 @@ async function ensureBrowserControlService(): Promise<void> {
       throw new Error("browser control disabled");
     }
   })();
-  return browserControlReady;
+  const sharedStartup = startup.catch((error: unknown) => {
+    // A failed attempt must not poison later calls or clear a newer shared startup.
+    if (browserControlReady === sharedStartup) {
+      browserControlReady = null;
+    }
+    throw error;
+  });
+  browserControlReady = sharedStartup;
+  return sharedStartup;
 }
 
 function isProfileAllowed(params: { allowProfiles: string[]; profile?: string | null }) {
@@ -150,6 +151,7 @@ function isWsBackedBrowserProxyPath(path: string): boolean {
   return (
     path === "/act" ||
     path === "/download" ||
+    path === "/extract" ||
     path === "/navigate" ||
     path === "/pdf" ||
     path === "/screenshot" ||

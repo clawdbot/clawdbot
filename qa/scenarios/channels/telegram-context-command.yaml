@@ -2,10 +2,11 @@ title: Telegram context command reply
 
 scenario:
   id: telegram-context-command
-  surface: channel-framework
-  category: channel-framework.channel-actions-commands-and-approvals
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
   coverage:
-    primary: [channels.native-commands]
+    primary:
+      - channels.channel-native-commands
   objective: Verify Telegram context help reaches native command routing.
   successCriteria:
     - The context command returns the context list shortcut.

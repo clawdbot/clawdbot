@@ -1,4 +1,5 @@
 // Browser tests cover browser request.shared control state plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getFreePort } from "../browser/test-port.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -46,10 +47,6 @@ vi.mock("../browser/chrome.js", () => ({
   stopOpenClawChrome: vi.fn(async () => {}),
 }));
 
-vi.mock("../browser/pw-ai-state.js", () => ({
-  isPwAiLoaded: vi.fn(() => false),
-}));
-
 const { startBrowserControlServerFromConfig, stopBrowserControlServer } =
   await import("../server.js");
 const { stopBrowserControlService } = await import("../control-service.js");
@@ -84,7 +81,10 @@ function browserConfig(params: {
 
 async function browserRequestStatus(): Promise<unknown> {
   const respond = vi.fn();
-  await browserHandlers["browser.request"]({
+  await expectDefined(
+    browserHandlers["browser.request"],
+    "browser request handler",
+  )({
     params: {
       method: "GET",
       path: "/",

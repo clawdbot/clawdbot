@@ -2,12 +2,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import {
-  hasNodeErrorCode,
-  isNodeError,
-  isNotFoundPathError,
   isPathInside,
-  isSymlinkOpenError,
   normalizeWindowsPathForComparison,
+  normalizeWindowsPathPreservingCase,
 } from "./path-guards.js";
 
 function setPlatform(platform: NodeJS.Platform): void {
@@ -28,38 +25,33 @@ describe("normalizeWindowsPathForComparison", () => {
   });
 });
 
-describe("node path error helpers", () => {
+describe("normalizeWindowsPathPreservingCase", () => {
+  // Callers create files from paths derived off this, so case must survive. The
+  // equivalence case below pins that case is the *only* thing that differs from the
+  // comparison variant; these rows pin the concrete shapes.
   it.each([
-    [{ code: "ENOENT" }, true],
-    [{ message: "nope" }, false],
-  ])("detects node-style error %j", (value, expected) => {
-    expect(isNodeError(value)).toBe(expected);
+    ["\\\\?\\C:\\Users\\Peter/Repo", "C:\\Users\\Peter\\Repo"],
+    ["\\\\?\\UNC\\Server\\Share\\Folder", "\\\\Server\\Share\\Folder"],
+    ["\\\\?\\unc\\Server\\Share\\Folder", "\\\\Server\\Share\\Folder"],
+    ["C:\\Users\\User\\OpenClaw\\src/Components", "C:\\Users\\User\\OpenClaw\\src\\Components"],
+    ["C:\\Users\\User\\OpenClaw  ", "C:\\Users\\User\\OpenClaw"],
+  ])("normalizes windows path %s without lowercasing", (input, expected) => {
+    expect(normalizeWindowsPathPreservingCase(input)).toBe(expected);
   });
 
-  it.each([
-    [{ code: "ENOENT" }, "ENOENT", true],
-    [{ code: "ENOENT" }, "EACCES", false],
-  ])("matches node error code for %j", (value, code, expected) => {
-    expect(hasNodeErrorCode(value, code)).toBe(expected);
-  });
-
-  it.each([
-    [{ code: "ENOENT" }, true],
-    [{ code: "ENOTDIR" }, true],
-    [{ code: "EACCES" }, false],
-    [{ code: 404 }, false],
-  ])("classifies not-found path error for %j", (value, expected) => {
-    expect(isNotFoundPathError(value)).toBe(expected);
-  });
-
-  it.each([
-    [{ code: "ELOOP" }, true],
-    [{ code: "EINVAL" }, true],
-    [{ code: "ENOTSUP" }, true],
-    [{ code: "ENOENT" }, false],
-    [{ code: null }, false],
-  ])("classifies symlink-open error for %j", (value, expected) => {
-    expect(isSymlinkOpenError(value)).toBe(expected);
+  it("matches the comparison variant except for case", () => {
+    for (const input of [
+      "\\\\?\\C:\\Users\\Peter/Repo",
+      "\\\\?\\UNC\\Server\\Share\\Folder",
+      "\\\\?\\unc\\Server\\Share\\Folder",
+      "C:\\Users\\User\\OpenClaw\\src/Components",
+      "C:\\Users\\User\\OpenClaw  ",
+      "  C:\\Users\\User\\OpenClaw  ",
+    ]) {
+      expect(normalizeWindowsPathPreservingCase(input).toLowerCase()).toBe(
+        normalizeWindowsPathForComparison(input),
+      );
+    }
   });
 });
 

@@ -198,24 +198,15 @@ describe("noteDevicePairingHealth", () => {
   });
 
   it("warns when the local cached device token predates the gateway rotation", async () => {
-    await withApprovedOperatorPairing(async ({ stateDir, identity }) => {
+    await withApprovedOperatorPairing(async ({ identity }) => {
+      const now = vi.spyOn(Date, "now").mockReturnValue(1);
       storeDeviceAuthToken({
         deviceId: identity.deviceId,
         role: "operator",
         token: "stale-local-token",
         scopes: ["operator.read"],
       });
-      const deviceAuthPath = path.join(stateDir, "identity", "device-auth.json");
-      const store = JSON.parse(await fs.readFile(deviceAuthPath, "utf8")) as {
-        version: 1;
-        deviceId: string;
-        tokens: Record<
-          string,
-          { token: string; role: string; scopes: string[]; updatedAtMs: number }
-        >;
-      };
-      store.tokens.operator.updatedAtMs = 1;
-      await fs.writeFile(deviceAuthPath, `${JSON.stringify(store, null, 2)}\n`, "utf8");
+      now.mockRestore();
 
       const rotated = await rotateDeviceToken({
         deviceId: identity.deviceId,

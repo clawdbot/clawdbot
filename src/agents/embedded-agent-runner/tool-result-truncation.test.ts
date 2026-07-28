@@ -4,70 +4,70 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { convertToLlm } from "../../../packages/agent-core/src/harness/messages.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   appendTranscriptMessage,
   loadTranscriptEvents,
   replaceSessionEntry,
   replaceTranscriptEvents,
 } from "../../config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import type { SessionEntry as SessionStoreEntry } from "../../config/sessions/types.js";
 import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { estimateStringChars } from "../../utils/cjk-chars.js";
 import { formatFullOutputFooter } from "../sessions/tools/tool-contracts.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import {
+  calculateMaxToolResultCharsWithCap,
+  resolveAutoLiveToolResultMaxChars,
+} from "../tool-result-limits.js";
 import { buildRuntimeContextCustomMessage } from "./run/runtime-context-prompt.js";
 import {
+  clearEmbeddedSessionPromptStates,
   getEmbeddedSessionPromptState,
-  testing as sessionPromptStateTesting,
+  type ToolResultPromptProjectionState,
 } from "./session-prompt-state.js";
 
-let truncateToolResultText: typeof import("./tool-result-truncation.js").truncateToolResultText;
 let truncateToolResultMessage: typeof import("./tool-result-truncation.js").truncateToolResultMessage;
-let calculateMaxToolResultChars: typeof import("./tool-result-truncation.js").calculateMaxToolResultChars;
-let calculateMaxToolResultCharsWithCap: typeof import("./tool-result-truncation.js").calculateMaxToolResultCharsWithCap;
-let resolveAutoLiveToolResultMaxChars: typeof import("./tool-result-truncation.js").resolveAutoLiveToolResultMaxChars;
-let getToolResultTextLength: typeof import("./tool-result-truncation.js").getToolResultTextLength;
 let truncateOversizedToolResultsInMessages: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInMessages;
-let truncateOversizedToolResultsInRuntimeTranscript: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInRuntimeTranscript;
-let truncateOversizedToolResultsInSession: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInSession;
 let truncateOversizedToolResultsInActiveTarget: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInActiveTarget;
 let sessionLikelyHasOversizedToolResults: typeof import("./tool-result-truncation.js").sessionLikelyHasOversizedToolResults;
 let estimateToolResultReductionPotential: typeof import("./tool-result-truncation.js").estimateToolResultReductionPotential;
 let DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS: typeof import("./tool-result-truncation.js").DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
 let resolveLiveToolResultMaxChars: typeof import("./tool-result-truncation.js").resolveLiveToolResultMaxChars;
 let resolveLiveToolResultAggregateMaxChars: typeof import("./tool-result-truncation.js").resolveLiveToolResultAggregateMaxChars;
-let createToolResultPromptProjectionState: typeof import("./tool-result-truncation.js").createToolResultPromptProjectionState;
+let toolResultWarningDedupe: typeof import("./tool-result-truncation.js").toolResultWarningDedupe;
 let tmpDir: string | undefined;
 
 async function loadFreshToolResultTruncationModuleForTest() {
   // Load after each setup so module-level constants and mocks stay isolated
   // across persisted-session and live-truncation tests.
   ({
-    truncateToolResultText,
     truncateToolResultMessage,
-    calculateMaxToolResultChars,
-    calculateMaxToolResultCharsWithCap,
-    resolveAutoLiveToolResultMaxChars,
-    getToolResultTextLength,
     truncateOversizedToolResultsInMessages,
-    truncateOversizedToolResultsInRuntimeTranscript,
-    truncateOversizedToolResultsInSession,
     truncateOversizedToolResultsInActiveTarget,
     sessionLikelyHasOversizedToolResults,
     estimateToolResultReductionPotential,
     DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
     resolveLiveToolResultMaxChars,
     resolveLiveToolResultAggregateMaxChars,
-    createToolResultPromptProjectionState,
+    toolResultWarningDedupe,
   } = await import("./tool-result-truncation.js"));
 }
 
 let testTimestamp = 1;
 const nextTimestamp = () => testTimestamp++;
+
+function createPromptProjectionStateForTest(): ToolResultPromptProjectionState {
+  return {
+    replacements: new Map(),
+    frozen: new Set(),
+    ambiguousBaseKeys: new Set(),
+    sourceTextByKey: new Map(),
+  };
+}
 
 beforeEach(async () => {
   testTimestamp = 1;
@@ -75,7 +75,9 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  sessionPromptStateTesting.reset();
+  toolResultWarningDedupe.promptPressure.clear();
+  toolResultWarningDedupe.sessionRecovery.clear();
+  clearEmbeddedSessionPromptStates(["session-99495", "session-99495-shrink"]);
   if (tmpDir) {
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
     tmpDir = undefined;
@@ -95,6 +97,28 @@ function makeToolResult(text: string, toolCallId = "call_1", details?: unknown):
     timestamp: nextTimestamp(),
   };
 }
+
+describe("tool-result warning dedupe", () => {
+  const warningDedupeLimit = 1_024;
+
+  it.each([
+    ["prompt pressure", () => toolResultWarningDedupe.promptPressure],
+    ["session recovery", () => toolResultWarningDedupe.sessionRecovery],
+  ])("bounds and evicts the oldest %s warning keys", (_name, getCache) => {
+    const cache = getCache();
+
+    for (let index = 0; index <= warningDedupeLimit; index += 1) {
+      expect(cache.check(`session-${index}`)).toBe(false);
+    }
+
+    expect(cache.size()).toBe(warningDedupeLimit);
+    expect(cache.peek("session-0")).toBe(false);
+    expect(cache.peek("session-1")).toBe(true);
+    expect(cache.peek(`session-${warningDedupeLimit}`)).toBe(true);
+    expect(cache.check("session-0")).toBe(false);
+    expect(cache.check(`session-${warningDedupeLimit}`)).toBe(true);
+  });
+});
 
 function textWithFullOutputFooter(text: string, fullOutputPath: string): string {
   return `${text}\n\n[Showing truncated output. ${formatFullOutputFooter(fullOutputPath)}]`;
@@ -127,6 +151,30 @@ function getFirstToolResultText(message: AgentMessage | ToolResultMessage): stri
   }
   const firstBlock = message.content[0];
   return firstBlock && "text" in firstBlock ? firstBlock.text : "";
+}
+
+function truncateToolResultText(
+  text: string,
+  maxChars: number,
+  options?: Parameters<typeof truncateToolResultMessage>[2],
+): string {
+  return getFirstToolResultText(truncateToolResultMessage(makeToolResult(text), maxChars, options));
+}
+
+function calculateMaxToolResultChars(contextWindowTokens: number): number {
+  return resolveLiveToolResultMaxChars({ contextWindowTokens });
+}
+
+function getToolResultTextLength(message: AgentMessage): number {
+  if (message.role !== "toolResult") {
+    return 0;
+  }
+  return message.content.reduce((length, block) => {
+    if (!block || typeof block !== "object" || !("text" in block)) {
+      return length;
+    }
+    return length + (typeof block.text === "string" ? block.text.length : 0);
+  }, 0);
 }
 
 async function createTmpDir(): Promise<string> {
@@ -199,6 +247,15 @@ describe("truncateToolResultText", () => {
         minKeepChars: 0,
       }),
     ).toBe("");
+  });
+
+  it("reports the full omission count when only a suffix fits", () => {
+    expect(
+      truncateToolResultText("x".repeat(100), 4, {
+        suffix: (truncatedChars) => `[${truncatedChars}]`,
+        minKeepChars: 1,
+      }),
+    ).toBe("[100");
   });
 
   it("keeps both head and tail cuts on complete code points", () => {
@@ -310,6 +367,94 @@ describe("truncateToolResultMessage", () => {
     expect(String(firstBlock.text).length).toBeLessThan(oversized.length);
     expect(firstBlock.content).toBe(firstBlock.text);
   });
+
+  it("truncates dense CJK by weighted budget while leaving same-size ASCII unchanged", () => {
+    const maxChars = 16_000;
+    const asciiMessage = makeToolResult("a".repeat(maxChars));
+    expect(truncateToolResultMessage(asciiMessage, maxChars)).toBe(asciiMessage);
+
+    const cjk = "你".repeat(maxChars);
+    const cjkMessage = makeToolResult(cjk);
+    const result = truncateToolResultMessage(cjkMessage, maxChars);
+    const resultText = getFirstToolResultText(result);
+
+    expect(result).not.toBe(cjkMessage);
+    expect(resultText.length).toBeLessThan(cjk.length);
+    expect(estimateStringChars(resultText)).toBeLessThanOrEqual(maxChars);
+    expect(resultText).toContain("truncated");
+  });
+
+  it("shares weighted budget across mixed ASCII and CJK blocks", () => {
+    const msg = {
+      ...makeToolResult("unused"),
+      content: [
+        { type: "text", text: "你".repeat(1_000) },
+        { type: "text", text: "a".repeat(4_000) },
+      ],
+    } as ToolResultMessage;
+
+    const result = truncateToolResultMessage(msg, 4_000);
+    expect(result.role).toBe("toolResult");
+    if (result.role !== "toolResult") {
+      throw new Error("expected toolResult");
+    }
+    const estimated = result.content.reduce(
+      (sum, block) => sum + (block.type === "text" ? estimateStringChars(block.text) : 0),
+      0,
+    );
+    expect(estimated).toBeLessThanOrEqual(4_000);
+    expect(result.content).toHaveLength(2);
+  });
+
+  it("reserves omission notices before preserving multiple small blocks", () => {
+    const msg = {
+      ...makeToolResult("unused"),
+      content: [
+        { type: "text", text: "a".repeat(50) },
+        { type: "text", text: "b".repeat(50) },
+        { type: "text", text: "c".repeat(500) },
+      ],
+    } as ToolResultMessage;
+
+    const result = truncateToolResultMessage(msg, 100, {
+      suffix: "!",
+      minKeepChars: 99,
+    });
+    expect(result.role).toBe("toolResult");
+    if (result.role !== "toolResult") {
+      throw new Error("expected toolResult");
+    }
+    const texts = result.content.map((block) => (block.type === "text" ? block.text : ""));
+    expect(texts[2]).toContain("!");
+    expect(texts.every((text) => text.length > 0)).toBe(true);
+    expect(texts.reduce((sum, text) => sum + estimateStringChars(text), 0)).toBeLessThanOrEqual(
+      100,
+    );
+  });
+
+  it("does not let empty text blocks consume omission-notice budget", () => {
+    const msg = {
+      ...makeToolResult("unused"),
+      content: [
+        ...Array.from({ length: 150 }, () => ({ type: "text" as const, text: "" })),
+        { type: "text" as const, text: "x".repeat(500) },
+      ],
+    } as ToolResultMessage;
+
+    const result = truncateToolResultMessage(msg, 100, {
+      suffix: "!",
+      minKeepChars: 0,
+    });
+    expect(result.role).toBe("toolResult");
+    if (result.role !== "toolResult") {
+      throw new Error("expected toolResult");
+    }
+    expect(
+      result.content.slice(0, -1).every((block) => block.type !== "text" || block.text === ""),
+    ).toBe(true);
+    const lastBlock = result.content.at(-1);
+    expect(lastBlock?.type === "text" ? lastBlock.text : "").toMatch(/!$/u);
+  });
 });
 
 describe("calculateMaxToolResultChars", () => {
@@ -343,24 +488,6 @@ describe("calculateMaxToolResultChars", () => {
     expect(result).toBe(32_000);
   });
 
-  it("resolves per-agent tool-result cap overrides", () => {
-    const result = resolveLiveToolResultMaxChars({
-      contextWindowTokens: 128_000,
-      cfg: {
-        agents: {
-          defaults: {
-            contextLimits: {
-              toolResultMaxChars: 24_000,
-            },
-          },
-          list: [{ id: "writer" }],
-        },
-      },
-      agentId: "writer",
-    });
-    expect(result).toBe(24_000);
-  });
-
   it.each([
     { contextWindowTokens: 20_000, perResultMaxChars: 16_000, aggregateMaxChars: 64_000 },
     { contextWindowTokens: 128_000, perResultMaxChars: 32_000, aggregateMaxChars: 256_000 },
@@ -380,6 +507,13 @@ describe("calculateMaxToolResultChars", () => {
 });
 
 describe("sessionLikelyHasOversizedToolResults", () => {
+  it("detects dense CJK that fits the raw character cap", () => {
+    const messages: AgentMessage[] = [makeToolResult("你".repeat(5_000))];
+    expect(sessionLikelyHasOversizedToolResults({ messages, contextWindowTokens: 50_000 })).toBe(
+      true,
+    );
+  });
+
   it("returns true for individually oversized tool results", () => {
     const messages: AgentMessage[] = [makeToolResult("x".repeat(500_000))];
     expect(sessionLikelyHasOversizedToolResults({ messages, contextWindowTokens: 128_000 })).toBe(
@@ -547,6 +681,23 @@ describe("truncateOversizedToolResultsInMessages", () => {
     }
   });
 
+  it("applies the aggregate cap to CJK-weighted prompt history", () => {
+    const messages = Array.from({ length: 6 }, (_, index) =>
+      makeToolResult("你".repeat(3_000), `call_${index}`),
+    );
+
+    const result = truncateOversizedToolResultsInMessages(messages, 20_000);
+    const estimated = result.messages.reduce(
+      (sum, message) =>
+        sum +
+        (message.role === "toolResult" ? estimateStringChars(getFirstToolResultText(message)) : 0),
+      0,
+    );
+
+    expect(result.aggregateTruncatedCount).toBeGreaterThan(0);
+    expect(estimated).toBeLessThanOrEqual(result.aggregateBudgetChars);
+  });
+
   it("bounds aggregate tool-result text in prompt history without rewriting callers", () => {
     // Live replay truncates cloned tool-result messages; the source array keeps
     // full content for UI and transcript persistence.
@@ -590,7 +741,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
       makeToolResult("y".repeat(15_000), "current_2"),
     ];
     const messages = [...prefix, ...suffix];
-    const projectionState = createToolResultPromptProjectionState();
+    const projectionState = createPromptProjectionStateForTest();
 
     const first = truncateOversizedToolResultsInMessages(
       messages,
@@ -614,7 +765,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
     );
     expect(messages).toEqual([...prefix, ...suffix]);
 
-    const stableState = createToolResultPromptProjectionState();
+    const stableState = createPromptProjectionStateForTest();
     const stableHistory = [
       makeToolResult("a".repeat(4_000), "stable_1"),
       makeToolResult("b".repeat(4_000), "stable_2"),
@@ -701,7 +852,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
   });
 
   it("preserves fresh trailing tool results when aggregate history is already saturated", () => {
-    const projectionState = createToolResultPromptProjectionState();
+    const projectionState = createPromptProjectionStateForTest();
     const history: AgentMessage[] = [];
     for (let index = 0; index < 50; index++) {
       history.push(makeAssistantMessage(`call ${index}`));
@@ -739,7 +890,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
   });
 
   it("preserves fresh tool results through a trailing runtime context carrier", () => {
-    const projectionState = createToolResultPromptProjectionState();
+    const projectionState = createPromptProjectionStateForTest();
     const history: AgentMessage[] = [];
     for (let index = 0; index < 50; index++) {
       history.push(makeAssistantMessage(`call ${index}`));
@@ -814,7 +965,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
   });
 
   it("preserves multiple fresh tool results before queued steering", () => {
-    const projectionState = createToolResultPromptProjectionState();
+    const projectionState = createPromptProjectionStateForTest();
     const history: AgentMessage[] = [];
     for (let index = 0; index < 50; index++) {
       history.push(makeAssistantMessage(`call ${index}`));
@@ -884,7 +1035,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
   });
 
   it("shrinks deferred fresh results when frozen history cannot satisfy the hard cap", () => {
-    const projectionState = createToolResultPromptProjectionState();
+    const projectionState = createPromptProjectionStateForTest();
     const history: AgentMessage[] = [
       makeToolResult("a".repeat(4_000), "history_a"),
       makeToolResult("b".repeat(4_000), "history_b"),
@@ -939,7 +1090,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
   });
 
   it("caps oversized fresh trailing tool results without clearing them for aggregate recovery", () => {
-    const projectionState = createToolResultPromptProjectionState();
+    const projectionState = createPromptProjectionStateForTest();
     const history: AgentMessage[] = [];
     for (let index = 0; index < 50; index++) {
       history.push(makeAssistantMessage(`call ${index}`));
@@ -976,7 +1127,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
   });
 
   it("leaves fresh trailing batches intact when only they exceed the aggregate budget", () => {
-    const projectionState = createToolResultPromptProjectionState();
+    const projectionState = createPromptProjectionStateForTest();
     const messages: AgentMessage[] = [makeUserMessage("run several tools")];
     for (let index = 0; index < 5; index++) {
       messages.push(makeToolResult(String(index).repeat(8_000), `fresh_${index}`));
@@ -1043,9 +1194,11 @@ describe("truncateOversizedToolResultsInMessages", () => {
     await fs.writeFile(spillPath, "partial web output", { mode: 0o600 });
     const messages: AgentMessage[] = [
       makeToolResult(textWithFullOutputFooter("a".repeat(100), spillPath), "partial_spill_1", {
-        fullOutputPath: spillPath,
-        spilledChars: 2_000_000,
-        spillTruncated: true,
+        spill: {
+          path: spillPath,
+          chars: 2_000_000,
+          truncated: true,
+        },
       }),
       makeToolResult("b".repeat(100), "partial_spill_2"),
       makeToolResult("c".repeat(100), "partial_spill_3"),
@@ -1202,7 +1355,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
   });
 
   it("does not restore filtered image blocks when reusing a projection", () => {
-    const projectionState = createToolResultPromptProjectionState();
+    const projectionState = createPromptProjectionStateForTest();
     const source = makeToolResult("x".repeat(15_000), "image_call");
     source.content = [
       { type: "image", data: "filtered-after-conversion" },
@@ -1235,7 +1388,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
   });
 
   it("freezes #99495 ambiguous-key projections across filtered history", () => {
-    const projectionState = createToolResultPromptProjectionState();
+    const projectionState = createPromptProjectionStateForTest();
     const duplicate = (text: string) => ({
       role: "toolResult" as const,
       toolCallId: "duplicate-call",
@@ -1297,7 +1450,7 @@ describe("truncateOversizedToolResultsInSession", () => {
 
     const listener = vi.fn();
     const cleanup = onInternalSessionTranscriptUpdate(listener);
-    const result = await truncateOversizedToolResultsInRuntimeTranscript({
+    const result = await truncateOversizedToolResultsInActiveTarget({
       scope: { ...scope, sessionFile },
       contextWindowTokens: 100,
     });
@@ -1306,11 +1459,10 @@ describe("truncateOversizedToolResultsInSession", () => {
     expect(result.truncated).toBe(true);
     expect(result.truncatedCount).toBeGreaterThan(0);
     expect(listener).toHaveBeenCalledWith({
-      sessionFile,
       sessionKey,
       agentId: "main",
       sessionId,
-      target: { agentId: "main", sessionId, sessionKey },
+      target: { agentId: "main", sessionId, sessionKey, storePath },
     });
 
     const toolResultTexts = (await loadTranscriptEvents(scope))
@@ -1328,34 +1480,6 @@ describe("truncateOversizedToolResultsInSession", () => {
 
     expect(toolResultTexts.some((text) => text.includes("truncated"))).toBe(true);
     expect(toolResultTexts.join("").length).toBeLessThan(medium.length * 3);
-  });
-
-  it("dispatches explicit file transcript targets to file-backed truncation", async () => {
-    const dir = await createTmpDir();
-    const sm = SessionManager.create(dir, dir);
-    sm.appendMessage(makeUserMessage("hello"));
-    sm.appendMessage(makeAssistantMessage("calling tools"));
-    sm.appendMessage(makeToolResult("x".repeat(500_000), "call_1"));
-    const sessionFile = sm.getSessionFile()!;
-
-    const result = await truncateOversizedToolResultsInActiveTarget({
-      scope: {
-        agentId: "main",
-        sessionFile,
-        sessionId: "explicit-file-session",
-        sessionKey: "agent:main:explicit-file",
-      },
-      contextWindowTokens: 100,
-    });
-
-    expect(result.truncated).toBe(true);
-    expect(result.truncatedCount).toBeGreaterThan(0);
-    const toolResult = SessionManager.open(sessionFile)
-      .getBranch()
-      .find((entry) => entry.type === "message" && entry.message.role === "toolResult");
-    expect(
-      toolResult?.type === "message" ? getFirstToolResultText(toolResult.message) : "",
-    ).toContain("truncated");
   });
 
   it("honors SQLite leaf controls when truncating runtime transcripts", async () => {
@@ -1414,7 +1538,7 @@ describe("truncateOversizedToolResultsInSession", () => {
       },
     ]);
 
-    const result = await truncateOversizedToolResultsInRuntimeTranscript({
+    const result = await truncateOversizedToolResultsInActiveTarget({
       scope: { ...scope, sessionFile },
       contextWindowTokens: 100,
     });
@@ -1442,243 +1566,6 @@ describe("truncateOversizedToolResultsInSession", () => {
     expect(selectedTool ? getFirstToolResultText(selectedTool) : "").toContain("truncated");
     expect(inactiveTool ? getFirstToolResultText(inactiveTool) : "").toBe(inactiveLarge);
   });
-
-  it("readably truncates aggregate medium tool results in a session file", async () => {
-    // Persisted truncation rewrites JSONL directly and emits the transcript
-    // update event instead of reopening through SessionManager internals.
-    const dir = await createTmpDir();
-    const sm = SessionManager.create(dir, dir);
-    sm.appendMessage(makeUserMessage("hello"));
-    sm.appendMessage(makeAssistantMessage("calling tools"));
-    const medium = "alpha beta gamma delta epsilon ".repeat(600);
-    sm.appendMessage(makeToolResult(medium, "call_1"));
-    sm.appendMessage(makeToolResult(medium, "call_2"));
-    sm.appendMessage(makeToolResult(medium, "call_3"));
-    const sessionFile = sm.getSessionFile()!;
-
-    const beforeBranch = SessionManager.open(sessionFile).getBranch();
-    const beforeLengths = beforeBranch
-      .filter((entry) => entry.type === "message")
-      .map((entry) =>
-        entry.type === "message" && entry.message.role === "toolResult"
-          ? getToolResultTextLength(entry.message)
-          : 0,
-      )
-      .filter((length) => length > 0);
-
-    const openSpy = vi.spyOn(SessionManager, "open").mockImplementation(() => {
-      throw new Error("SessionManager.open should not be used for persisted truncation");
-    });
-    const listener = vi.fn();
-    const cleanup = onInternalSessionTranscriptUpdate(listener);
-    const result = await truncateOversizedToolResultsInSession({
-      sessionFile,
-      sessionKey: "agent:main:test",
-      contextWindowTokens: 100,
-    });
-    cleanup();
-    openSpy.mockRestore();
-
-    expect(result.truncated).toBe(true);
-    expect(result.truncatedCount).toBeGreaterThan(0);
-    expect(listener).toHaveBeenCalledWith({ sessionFile, sessionKey: "agent:main:test" });
-
-    const afterBranch = SessionManager.open(sessionFile).getBranch();
-    const afterToolResults = afterBranch.filter(
-      (entry) => entry.type === "message" && entry.message.role === "toolResult",
-    );
-    const afterLengths = afterToolResults.map((entry) =>
-      entry.type === "message" ? getToolResultTextLength(entry.message) : 0,
-    );
-
-    expect(afterLengths.reduce((sum, value) => sum + value, 0)).toBeLessThan(
-      beforeLengths.reduce((sum, value) => sum + value, 0),
-    );
-    expect(
-      afterToolResults.some((entry) =>
-        entry.type === "message"
-          ? getFirstToolResultText(entry.message).includes("truncated")
-          : false,
-      ),
-    ).toBe(true);
-    expect(
-      afterToolResults.some((entry) =>
-        entry.type === "message"
-          ? getFirstToolResultText(entry.message).includes("[compacted:")
-          : false,
-      ),
-    ).toBe(false);
-  });
-
-  it("prefers truncating older aggregate tool-result entries before newer results", async () => {
-    // Newer tool results are more likely to matter to the current turn, so
-    // aggregate recovery spends the cut on older results first.
-    const dir = await createTmpDir();
-    const sm = SessionManager.create(dir, dir);
-    sm.appendMessage(makeUserMessage("hello"));
-    sm.appendMessage(makeAssistantMessage("calling tools"));
-    const olderLarge = "older-large ".repeat(1_000);
-    const newerEnough = "newer-enough ".repeat(500);
-    sm.appendMessage(makeToolResult(olderLarge, "call_1"));
-    sm.appendMessage(makeToolResult(newerEnough, "call_2"));
-    const sessionFile = sm.getSessionFile()!;
-
-    const beforeBranch = SessionManager.open(sessionFile).getBranch();
-    const beforeToolResults = beforeBranch.filter(
-      (entry) => entry.type === "message" && entry.message.role === "toolResult",
-    );
-    const beforeTexts = beforeToolResults.map((entry) =>
-      entry.type === "message" ? getFirstToolResultText(entry.message) : "",
-    );
-
-    const result = await truncateOversizedToolResultsInSession({
-      sessionFile,
-      contextWindowTokens: 128_000,
-      maxCharsOverride: DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
-      aggregateMaxCharsOverride: DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
-    });
-
-    expect(result.truncated).toBe(true);
-    expect(result.truncatedCount).toBe(1);
-
-    const afterBranch = SessionManager.open(sessionFile).getBranch();
-    const afterToolResults = afterBranch.filter(
-      (entry) => entry.type === "message" && entry.message.role === "toolResult",
-    );
-    const afterTexts = afterToolResults.map((entry) =>
-      entry.type === "message" ? getFirstToolResultText(entry.message) : "",
-    );
-
-    expect(afterTexts[0]).not.toBe(beforeTexts[0]);
-    expect(afterTexts[0]).toContain("truncated");
-    expect(afterTexts[1]).toBe(beforeTexts[1]);
-  });
-
-  it("allows persisted-session recovery truncation to shrink below the old 2k floor", async () => {
-    const dir = await createTmpDir();
-    const sm = SessionManager.create(dir, dir);
-    sm.appendMessage(makeUserMessage("hello"));
-    sm.appendMessage(makeAssistantMessage("calling tools"));
-    sm.appendMessage(makeToolResult("x".repeat(500_000), "call_1"));
-    const sessionFile = sm.getSessionFile()!;
-
-    const result = await truncateOversizedToolResultsInSession({
-      sessionFile,
-      contextWindowTokens: 100,
-    });
-
-    expect(result.truncated).toBe(true);
-    const afterBranch = SessionManager.open(sessionFile).getBranch();
-    const toolResult = afterBranch.find(
-      (entry) => entry.type === "message" && entry.message.role === "toolResult",
-    );
-    expect(toolResult?.type).toBe("message");
-    if (!toolResult || toolResult.type !== "message") {
-      throw new Error("expected truncated tool result");
-    }
-    const text = getFirstToolResultText(toolResult.message);
-    expect(text.length).toBeLessThan(2_000);
-    expect(text).toContain("truncated");
-  });
-
-  it("leaves protected trailing batches intact during persisted aggregate recovery", async () => {
-    const dir = await createTmpDir();
-    const sm = SessionManager.create(dir, dir);
-    const firstKeptEntryId = sm.appendMessage(makeUserMessage("hello"));
-    sm.appendMessage(makeAssistantMessage("calling tools"));
-    const beforeTexts = Array.from({ length: 5 }, (_, index) => String(index).repeat(8_000));
-    for (const [index, text] of beforeTexts.entries()) {
-      sm.appendMessage(makeToolResult(text, `fresh_${index}`));
-    }
-    sm.appendCompaction("summary", firstKeptEntryId, 10);
-    const sessionFile = sm.getSessionFile()!;
-
-    const result = await truncateOversizedToolResultsInSession({
-      sessionFile,
-      contextWindowTokens: 1_000_000,
-      maxCharsOverride: 8_000,
-      aggregateMaxCharsOverride: 32_000,
-      protectTrailingToolResults: true,
-    });
-
-    expect(result.truncated).toBe(false);
-    const afterBranch = SessionManager.open(sessionFile).getBranch();
-    const afterTexts = afterBranch
-      .filter((entry) => entry.type === "message" && entry.message.role === "toolResult")
-      .map((entry) => (entry.type === "message" ? getFirstToolResultText(entry.message) : ""));
-
-    expect(afterTexts).toEqual(beforeTexts);
-  });
-
-  it("combines oversized and aggregate recovery truncation in the same session rewrite", async () => {
-    const dir = await createTmpDir();
-    const sm = SessionManager.create(dir, dir);
-    sm.appendMessage(makeUserMessage("hello"));
-    sm.appendMessage(makeAssistantMessage("calling tools"));
-    sm.appendMessage(makeToolResult("x".repeat(500_000), "call_1"));
-    const medium = "alpha beta gamma delta epsilon ".repeat(800);
-    sm.appendMessage(makeToolResult(medium, "call_2"));
-    sm.appendMessage(makeToolResult(medium, "call_3"));
-    const sessionFile = sm.getSessionFile()!;
-
-    const result = await truncateOversizedToolResultsInSession({
-      sessionFile,
-      contextWindowTokens: 100,
-    });
-
-    expect(result.truncated).toBe(true);
-    expect(result.truncatedCount).toBe(3);
-
-    const afterBranch = SessionManager.open(sessionFile).getBranch();
-    const toolResults = afterBranch.filter(
-      (entry) => entry.type === "message" && entry.message.role === "toolResult",
-    );
-    const toolTexts = toolResults.map((entry) =>
-      entry.type === "message" ? getFirstToolResultText(entry.message) : "",
-    );
-
-    expect(toolTexts[0]).toContain("truncated");
-    expect(toolTexts[1].length).toBeGreaterThan(0);
-    expect(toolTexts[2].length).toBeGreaterThan(0);
-  });
-
-  it("lets aggregate recovery honor a tiny explicit cap during persisted rewrite", async () => {
-    const dir = await createTmpDir();
-    const sm = SessionManager.create(dir, dir);
-    sm.appendMessage(makeUserMessage("hello"));
-    sm.appendMessage(makeAssistantMessage("calling tools"));
-    const medium = "alpha beta gamma delta epsilon ".repeat(800);
-    sm.appendMessage(makeToolResult(medium, "call_1"));
-    sm.appendMessage(makeToolResult(medium, "call_2"));
-    sm.appendMessage(makeToolResult(medium, "call_3"));
-    const sessionFile = sm.getSessionFile()!;
-
-    const result = await truncateOversizedToolResultsInSession({
-      sessionFile,
-      contextWindowTokens: 128_000,
-      maxCharsOverride: 120,
-      aggregateMaxCharsOverride: 120,
-    });
-
-    expect(result.truncated).toBe(true);
-    const afterBranch = SessionManager.open(sessionFile).getBranch();
-    const toolResults = afterBranch.filter(
-      (entry) => entry.type === "message" && entry.message.role === "toolResult",
-    );
-    const totalChars = toolResults.reduce(
-      (sum, entry) => sum + (entry.type === "message" ? getToolResultTextLength(entry.message) : 0),
-      0,
-    );
-
-    expect(totalChars).toBeLessThanOrEqual(120);
-    expect(
-      toolResults.some((entry) =>
-        entry.type === "message"
-          ? getFirstToolResultText(entry.message).includes("truncated")
-          : false,
-      ),
-    ).toBe(true);
-  });
 });
 
 describe("truncateToolResultText head+tail strategy", () => {
@@ -1702,3 +1589,4 @@ describe("truncateToolResultText head+tail strategy", () => {
     expect(result).toContain("truncated");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

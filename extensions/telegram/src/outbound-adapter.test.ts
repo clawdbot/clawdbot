@@ -1,4 +1,5 @@
 // Telegram tests cover outbound adapter plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { verifyDurableFinalCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import { adaptMessagePresentationForChannel } from "openclaw/plugin-sdk/interactive-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,11 +8,13 @@ const sendMessageTelegramMock = vi.fn();
 const pinMessageTelegramMock = vi.fn();
 const reactMessageTelegramMock = vi.fn();
 const sendPollTelegramMock = vi.fn();
+const sendLocationTelegramMock = vi.fn();
 
 vi.mock("./send.js", () => ({
   pinMessageTelegram: (...args: unknown[]) => pinMessageTelegramMock(...args),
   reactMessageTelegram: (...args: unknown[]) => reactMessageTelegramMock(...args),
   sendPollTelegram: (...args: unknown[]) => sendPollTelegramMock(...args),
+  sendLocationTelegram: (...args: unknown[]) => sendLocationTelegramMock(...args),
   sendMessageTelegram: (...args: unknown[]) => sendMessageTelegramMock(...args),
 }));
 
@@ -66,6 +69,7 @@ describe("telegramOutbound", () => {
     reactMessageTelegramMock.mockReset();
     sendPollTelegramMock.mockReset();
     sendMessageTelegramMock.mockReset();
+    sendLocationTelegramMock.mockReset();
   });
 
   it("forwards mediaLocalRoots in direct media sends", async () => {
@@ -351,8 +355,16 @@ describe("telegramOutbound", () => {
       "Done",
       expect.objectContaining({ accountId: "ops", replyToMessageId: 777 }),
     );
-    expect(reactMessageTelegramMock.mock.invocationCallOrder[0]).toBeLessThan(
-      sendMessageTelegramMock.mock.invocationCallOrder[0],
+    expect(
+      expectDefined(
+        reactMessageTelegramMock.mock.invocationCallOrder[0],
+        "Telegram reaction invocation",
+      ),
+    ).toBeLessThan(
+      expectDefined(
+        sendMessageTelegramMock.mock.invocationCallOrder[0],
+        "Telegram send invocation",
+      ),
     );
   });
 
@@ -469,14 +481,22 @@ describe("telegramOutbound", () => {
       blocks: [
         {
           type: "buttons" as const,
-          buttons: [{ label: "Launch", webApp: { url: "https://example.com/app" } }],
+          buttons: [
+            {
+              label: "Launch",
+              action: {
+                type: "web-app" as const,
+                url: "https://node.tailnet.ts.net/__openclaw__/mcp-app#opaque-ticket",
+              },
+            },
+          ],
         },
       ],
     };
     const rendered = await telegramOutbound.renderPresentation?.({
       payload: { text: "Open app:" },
       presentation,
-      ctx: {} as never,
+      ctx: { to: "12345" } as never,
     });
     if (!rendered) {
       throw new Error("expected rendered Telegram presentation");
@@ -492,7 +512,14 @@ describe("telegramOutbound", () => {
 
     const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "Open app:");
     expect(options.buttons).toEqual([
-      [{ text: "Launch", web_app: { url: "https://example.com/app" } }],
+      [
+        {
+          text: "Launch",
+          web_app: {
+            url: "https://node.tailnet.ts.net/__openclaw__/mcp-app#opaque-ticket",
+          },
+        },
+      ],
     ]);
   });
 
@@ -768,6 +795,151 @@ describe("telegramOutbound", () => {
     expect(options.mediaUrl).toBe("file:///tmp/note.ogg");
     expect(options.asVoice).toBe(true);
     expect(result).toEqual({ channel: "telegram", messageId: "tg-voice", chatId: "12345" });
+  });
+
+  it("forwards videoAsNote payload media to Telegram video-note sends", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-video-note", chatId: "12345" });
+
+    const result = await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      payload: {
+        mediaUrl: "file:///tmp/note.mp4",
+        videoAsNote: true,
+      },
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "");
+    expect(options.mediaUrl).toBe("file:///tmp/note.mp4");
+    expect(options.asVideoNote).toBe(true);
+    expect(result).toEqual({
+      channel: "telegram",
+      messageId: "tg-video-note",
+      chatId: "12345",
+    });
+  });
+
+  it.each([
+    { name: "no attachment", mediaUrls: [] },
+    {
+      name: "multiple attachments",
+      mediaUrls: ["file:///tmp/one.mp4", "file:///tmp/two.mp4"],
+    },
+  ])("rejects video-note payloads with $name", async ({ mediaUrls }) => {
+    await expect(
+      telegramOutbound.sendPayload!({
+        cfg: {} as never,
+        to: "12345",
+        text: "",
+        payload: { mediaUrls, videoAsNote: true },
+        deps: { sendTelegram: sendMessageTelegramMock },
+      }),
+    ).rejects.toThrow("Telegram video notes require exactly one media attachment.");
+    expect(sendMessageTelegramMock).not.toHaveBeenCalled();
+  });
+
+  it("maps portable locations to Telegram native sends", async () => {
+    sendLocationTelegramMock.mockResolvedValueOnce({
+      messageId: "tg-location",
+      chatId: "12345",
+    });
+    const location = {
+      latitude: 48.858844,
+      longitude: 2.294351,
+      name: "Eiffel Tower",
+      address: "Champ de Mars",
+    };
+    const promptContextSource = {
+      transcriptMessageId: "assistant-location",
+      deliverySignature: resolveTelegramPromptContextDeliverySignature({ location }),
+    };
+
+    const result = await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      payload: {
+        location,
+        channelData: {
+          telegram: { quoteText: "quoted location", promptContextSource },
+        },
+      },
+      accountId: "ops",
+      replyToId: "41",
+    });
+
+    expect(sendLocationTelegramMock).toHaveBeenCalledWith(
+      "12345",
+      location,
+      expect.objectContaining({
+        cfg: {},
+        accountId: "ops",
+        buttons: undefined,
+        quoteText: "quoted location",
+        replyToMessageId: 41,
+        promptContextProjectionPlan: expect.objectContaining({
+          finalPart: true,
+          cursor: expect.objectContaining({
+            source: { transcriptMessageId: "assistant-location" },
+          }),
+        }),
+      }),
+    );
+    expect(sendMessageTelegramMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      channel: "telegram",
+      messageId: "tg-location",
+      chatId: "12345",
+    });
+  });
+
+  it("sends cross-context location markers before the native location", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({
+      messageId: "tg-marker",
+      chatId: "12345",
+    });
+    sendLocationTelegramMock.mockResolvedValueOnce({
+      messageId: "tg-location",
+      chatId: "12345",
+    });
+    const location = { latitude: 1, longitude: 2 };
+
+    const result = await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "[from telegram:origin] ",
+      payload: {
+        text: "[from telegram:origin] ",
+        location,
+        channelData: { telegram: { quoteText: "quoted location" } },
+      },
+      replyToId: "41",
+    });
+
+    expect(sendMessageTelegramMock).toHaveBeenCalledWith(
+      "12345",
+      "[from telegram:origin] ",
+      expect.objectContaining({
+        replyToMessageId: undefined,
+        replyToIdSource: undefined,
+        replyToMode: undefined,
+      }),
+    );
+    expect(sendLocationTelegramMock).toHaveBeenCalledWith(
+      "12345",
+      location,
+      expect.objectContaining({
+        quoteText: "quoted location",
+        replyToMessageId: 41,
+      }),
+    );
+    expect(result).toEqual({
+      channel: "telegram",
+      messageId: "tg-location",
+      chatId: "12345",
+    });
   });
 
   it("backs declared durable final capabilities with delivery proofs", async () => {

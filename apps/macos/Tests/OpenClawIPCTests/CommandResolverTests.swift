@@ -40,6 +40,25 @@ import Testing
         #expect(cmd.prefix(2).elementsEqual([openclawPath.path, "gateway"]))
     }
 
+    @Test func `source checkout entrypoint wins when package bin link is absent`() throws {
+        let defaults = self.makeLocalDefaults()
+        let tmp = try makeTempDirForTests()
+        let sourceEntrypoint = tmp.appendingPathComponent("openclaw.mjs")
+        let staleGlobalBin = tmp.appendingPathComponent("global/bin")
+        try makeExecutableForTests(at: sourceEntrypoint)
+        try makeExecutableForTests(at: staleGlobalBin.appendingPathComponent("openclaw"))
+
+        let cmd = CommandResolver.openclawCommand(
+            subcommand: "node",
+            extraArgs: ["worker"],
+            defaults: defaults,
+            configRoot: [:],
+            searchPaths: [staleGlobalBin.path],
+            projectRoot: tmp)
+
+        #expect(cmd == [sourceEntrypoint.path, "node", "worker"])
+    }
+
     @Test func `falls back to node and script`() throws {
         let defaults = self.makeLocalDefaults()
 
@@ -48,7 +67,7 @@ import Testing
         let nodePath = tmp.appendingPathComponent("node_modules/.bin/node")
         let scriptPath = tmp.appendingPathComponent("bin/openclaw.js")
         try makeExecutableForTests(at: nodePath)
-        try "#!/bin/sh\necho v22.19.0\n".write(to: nodePath, atomically: true, encoding: .utf8)
+        try "#!/bin/sh\necho v22.22.3\n".write(to: nodePath, atomically: true, encoding: .utf8)
         try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: nodePath.path)
         try makeExecutableForTests(at: scriptPath)
 
@@ -143,7 +162,7 @@ import Testing
         let binDir = tmp.appendingPathComponent("bin")
         let nodePath = binDir.appendingPathComponent("node")
         try makeExecutableForTests(at: nodePath)
-        try "#!/bin/sh\necho v22.19.0\n".write(to: nodePath, atomically: true, encoding: .utf8)
+        try "#!/bin/sh\necho v22.22.3\n".write(to: nodePath, atomically: true, encoding: .utf8)
         try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: nodePath.path)
 
         let cmd = CommandResolver.openclawCommand(
@@ -196,7 +215,7 @@ import Testing
 
     @Test func `node manager runtimes precede system runtimes`() throws {
         let home = try makeTempDirForTests()
-        let nodeManagerBin = home.appendingPathComponent(".nvm/versions/node/v22.19.0/bin")
+        let nodeManagerBin = home.appendingPathComponent(".nvm/versions/node/v22.22.3/bin")
         try makeExecutableForTests(at: nodeManagerBin.appendingPathComponent("node"))
 
         let paths = CommandResolver.preferredPaths(

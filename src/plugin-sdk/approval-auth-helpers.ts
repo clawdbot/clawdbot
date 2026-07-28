@@ -1,8 +1,28 @@
 // Approval auth helpers resolve actor and channel identity for approval requests.
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
+import { resolveApprovalApprovers } from "./approval-approvers.js";
 import type { OpenClawConfig } from "./config-runtime.js";
 
 type ApprovalKind = "exec" | "plugin";
+type ApproverInput = string | number;
+type ApprovalApproverInputs = {
+  explicit?: readonly ApproverInput[] | null;
+  allowFrom?: readonly ApproverInput[] | null;
+  extraAllowFrom?: readonly ApproverInput[] | null;
+  defaultTo?: string | null;
+};
+type ApprovalContext = {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+};
+type ApprovalActorContext = ApprovalContext & {
+  senderId?: string | null;
+};
+type ChannelApprovalAuth = {
+  resolveApprovers: (context: ApprovalContext) => string[];
+  isAuthorizedSender: (context: ApprovalActorContext) => boolean;
+  approvalAuth: ReturnType<typeof createResolvedApproverActionAuthAdapter>;
+};
 type ApprovalAuthorizationResult = {
   /** Whether the actor may perform the approval action. */
   authorized: boolean;
@@ -95,6 +115,84 @@ export function createResolvedApproverActionAuthAdapter(params: {
         authorized: false,
         reason: `❌ You are not authorized to approve ${approvalKind} requests on ${params.channelLabel}.`,
       } as const;
+    },
+  };
+}
+
+// Builds account-scoped approver resolution, sender checks, and action auth.
+export function createChannelApprovalAuth(params: {
+  channelLabel: string;
+  resolveInputs: (params: ApprovalContext) => ApprovalApproverInputs;
+  normalizeApprover: (value: ApproverInput) => string | undefined;
+  normalizeDefaultTo?: (value: string) => string | undefined;
+  normalizeSenderId?: (value: string) => string | undefined;
+  isWildcardAuthorized?: (params: {
+    purpose: "sender" | "action";
+    senderId?: string;
+    inputs: ApprovalApproverInputs;
+    approvers: readonly string[];
+  }) => boolean;
+}): ChannelApprovalAuth {
+  const normalizeSenderId =
+    params.normalizeSenderId ?? ((value: string) => params.normalizeApprover(value));
+  const resolveApprovers = (context: ApprovalContext): string[] => {
+    const inputs = params.resolveInputs(context);
+    return resolveApprovalApprovers({
+      ...inputs,
+      normalizeApprover: params.normalizeApprover,
+      normalizeDefaultTo: params.normalizeDefaultTo,
+    });
+  };
+  const isAuthorizedSender = (context: ApprovalActorContext): boolean => {
+    const inputs = params.resolveInputs(context);
+    const approvers = resolveApprovalApprovers({
+      ...inputs,
+      normalizeApprover: params.normalizeApprover,
+      normalizeDefaultTo: params.normalizeDefaultTo,
+    });
+    const senderId = context.senderId ? normalizeSenderId(context.senderId) : undefined;
+    if (
+      params.isWildcardAuthorized?.({ purpose: "sender", senderId, inputs, approvers }) === true
+    ) {
+      return true;
+    }
+    return Boolean(senderId && approvers.includes(senderId));
+  };
+  return {
+    resolveApprovers,
+    isAuthorizedSender,
+    approvalAuth: {
+      authorizeActorAction(input: {
+        cfg: OpenClawConfig;
+        accountId?: string | null;
+        senderId?: string | null;
+        action: "approve";
+        approvalKind: ApprovalKind;
+      }) {
+        const inputs = params.resolveInputs(input);
+        const approvers = resolveApprovalApprovers({
+          ...inputs,
+          normalizeApprover: params.normalizeApprover,
+          normalizeDefaultTo: params.normalizeDefaultTo,
+        });
+        const senderId = input.senderId ? normalizeSenderId(input.senderId) : undefined;
+        if (
+          params.isWildcardAuthorized?.({ purpose: "action", senderId, inputs, approvers }) === true
+        ) {
+          return { authorized: true } as const;
+        }
+        if (approvers.length === 0) {
+          // Empty approver sets are implicit same-chat fallback, not explicit approver bypass.
+          return markImplicitSameChatApprovalAuthorization({ authorized: true });
+        }
+        if (senderId && approvers.includes(senderId)) {
+          return { authorized: true } as const;
+        }
+        return {
+          authorized: false,
+          reason: `❌ You are not authorized to approve ${input.approvalKind} requests on ${params.channelLabel}.`,
+        } as const;
+      },
     },
   };
 }

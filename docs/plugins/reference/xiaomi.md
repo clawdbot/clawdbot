@@ -16,7 +16,7 @@ Adds Xiaomi, Xiaomi Token Plan model provider support to OpenClaw.
 
 ## Surface
 
-providers: xiaomi, xiaomi-token-plan; contracts: speechProviders, usageProviders
+providers: `xiaomi`, `xiaomi-token-plan`; contracts: `speechProviders`, `usageProviders`
 
 ## Related docs
 

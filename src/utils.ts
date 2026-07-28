@@ -5,12 +5,14 @@ import path from "node:path";
 import { pathExists as fsSafePathExists } from "./infra/fs-safe.js";
 import {
   resolveEffectiveHomeDir,
-  resolveHomeRelativePath,
   resolveRequiredHomeDir,
+  resolveUserPath,
 } from "./infra/home-dir.js";
 import { isPlainObject } from "./infra/plain-object.js";
 export { escapeRegExp } from "./shared/regexp.js";
 export { sleep } from "./utils/sleep.js";
+export { isRecord } from "@openclaw/normalization-core/record-coerce";
+export { resolveUserPath };
 
 /** Creates a directory tree if it does not already exist. */
 export async function ensureDir(dir: string) {
@@ -44,14 +46,6 @@ export function safeParseJson<T>(raw: string): T | null {
 
 export { isPlainObject };
 
-/**
- * Type guard for Record<string, unknown> (less strict than isPlainObject).
- * Accepts any non-null object that isn't an array.
- */
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 /** Normalizes phone-like input into the loose E.164 shape used by channel helpers. */
 export function normalizeE164(number: string): string {
   const withoutPrefix = number.replace(/^[a-z][a-z0-9-]*:/i, "").trim();
@@ -63,18 +57,6 @@ export function normalizeE164(number: string): string {
 // bundles can import them without pulling in filesystem code. Re-exported here
 // to preserve the historical `utils.ts` import surface.
 export { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-
-/** Resolves `~` and OpenClaw home-relative paths with injectable env/home sources. */
-export function resolveUserPath(
-  input: string,
-  env: NodeJS.ProcessEnv = process.env,
-  homedir: () => string = os.homedir,
-): string {
-  if (!input) {
-    return "";
-  }
-  return resolveHomeRelativePath(input, { env, homedir });
-}
 
 /** Resolves the OpenClaw config directory from state/config env overrides or home. */
 export function resolveConfigDir(

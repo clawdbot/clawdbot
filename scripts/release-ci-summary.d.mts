@@ -1,4 +1,25 @@
 #!/usr/bin/env node
+export function runReleaseCiGh(
+  args: string[],
+  params?: {
+    execFileSyncImpl?: (
+      command: string,
+      args: string[],
+      options: {
+        encoding: "utf8";
+        env: NodeJS.ProcessEnv;
+        killSignal: "SIGKILL";
+        maxBuffer: number;
+        stdio: unknown;
+        timeout: number;
+      },
+    ) => string;
+    stdio?: unknown;
+    timeoutMs?: number;
+  },
+): string;
+export function githubRestArgs(pathSuffix: string, repository?: string): string[];
+export function artifactDownloadArgs(artifactId: string | number, repository?: string): string[];
 export function validateParentRunBinding(
   parentView: unknown,
   parentRest: unknown,
@@ -83,6 +104,7 @@ export function validateEvidenceReuseChain(
   currentManifest: unknown,
   selectedManifest: unknown,
   rootManifest: unknown,
+  compareCommits?: unknown,
 ): unknown;
 export function selectedChildKeys(parentJobs: unknown): Set<string>;
 export function manifestChildEntries<Child extends { manifestKey: string; name: string }>(

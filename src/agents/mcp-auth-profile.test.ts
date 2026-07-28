@@ -1,4 +1,5 @@
 /** Tests auth-profile backed MCP bearer projection. */
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveMcpBearerBundleConfig, withMcpAuthProfileBearer } from "./mcp-auth-profile.js";
 import * as mcpHttpFetch from "./mcp-http-fetch.js";
@@ -148,7 +149,10 @@ describe("mcp auth profile bearer projection", () => {
       },
     });
 
-    const server = resolved.config.mcpServers.ducktape;
+    const server = expectDefined(
+      resolved.config.mcpServers.ducktape,
+      "resolved.config.mcpServers.ducktape test invariant",
+    );
     expect(server.auth).toBeUndefined();
     expect(server.oauth).toBeUndefined();
     expect(server.headers).toEqual({

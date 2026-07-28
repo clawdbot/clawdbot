@@ -1,6 +1,10 @@
 // Telegram Mini App bootstrap page.
+import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
+
 export const TELEGRAM_MINIAPP_EXPIRED_MESSAGE =
   "This link expired. Reopen the dashboard from your bot chat.";
+
+const TELEGRAM_MINIAPP_AUTH_TIMEOUT_MS = 15_000;
 
 export function renderTelegramMiniAppPage(params: {
   accountId: string;
@@ -41,11 +45,18 @@ export function renderTelegramMiniAppPage(params: {
       showExpired();
     } else {
       webApp.ready();
+      // AbortController works in WebViews that predate AbortSignal.timeout.
+      // Clear the timer after either outcome so a successful handoff is not aborted later.
+      const authController = new AbortController();
+      const authTimeout = setTimeout(function () {
+        authController.abort();
+      }, ${TELEGRAM_MINIAPP_AUTH_TIMEOUT_MS});
       fetch("auth", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ initData, accountId }),
-        credentials: "same-origin"
+        credentials: "same-origin",
+        signal: authController.signal
       }).then(async (response) => {
         if (!response.ok) {
           throw new Error("auth failed");
@@ -56,26 +67,11 @@ export function renderTelegramMiniAppPage(params: {
         next.hash = "gatewayUrl=" + encodeURIComponent(payload.gatewayUrl) +
           "&bootstrapToken=" + encodeURIComponent(payload.bootstrapToken);
         location.replace(next.toString());
-      }).catch(showExpired);
+      }).catch(showExpired).then(function () {
+        clearTimeout(authTimeout);
+      });
     }
   </script>
 </body>
 </html>`;
-}
-
-function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (char) => {
-    switch (char) {
-      case "&":
-        return "&amp;";
-      case "<":
-        return "&lt;";
-      case ">":
-        return "&gt;";
-      case '"':
-        return "&quot;";
-      default:
-        return "&#39;";
-    }
-  });
 }

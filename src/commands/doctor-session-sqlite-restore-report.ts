@@ -3,7 +3,6 @@ import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import {
   resolveSessionSqliteMigrationRunsDir,
   restoreSessionSqliteMigrationRuns,
-  sessionSqliteMigrationTargetKey,
 } from "./doctor-session-sqlite-migration-run.js";
 import { readSqliteEntryCount, resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
 import type {
@@ -13,16 +12,16 @@ import type {
 
 export async function restoreDoctorSessionSqliteTargets(params: {
   env: NodeJS.ProcessEnv;
-  restoreAllManifests: boolean;
   targets: readonly SessionStoreTarget[];
 }): Promise<DoctorSessionSqliteReport> {
   const targetReports = params.targets.map((target) => createEmptyTargetReport(target));
-  const targetKeys = params.restoreAllManifests
-    ? undefined
-    : new Set(params.targets.map((target) => sessionSqliteMigrationTargetKey(target)));
+  const trustedTargets = params.targets.map((target) => ({
+    ...target,
+    sqlitePath: resolveTargetSqlitePath(target),
+  }));
   const restore = restoreSessionSqliteMigrationRuns({
     env: params.env,
-    targetKeys,
+    trustedTargets,
   });
   const reportTarget =
     targetReports[0] ??

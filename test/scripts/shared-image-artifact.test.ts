@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 
 const HELPER = resolve("scripts/docker/shared-image-artifact.sh");
@@ -342,7 +343,10 @@ describe("shared Docker image artifacts", () => {
         },
         {
           env: expectedArchiveEnv(fixture),
-          imageRefs: [IMAGE_REFS[0], "openclaw-docker-e2e-functional:wrong"],
+          imageRefs: [
+            expectDefined(IMAGE_REFS[0], "first shared Docker image reference"),
+            "openclaw-docker-e2e-functional:wrong",
+          ],
           expected: "image ref 1",
         },
         {

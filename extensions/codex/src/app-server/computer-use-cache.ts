@@ -7,7 +7,7 @@ import {
   resolveMacOSDesktopCodexBundledMarketplaceCandidates,
 } from "./desktop-app-paths.js";
 
-export type CodexComputerUsePluginCacheRepairResult =
+type CodexComputerUsePluginCacheRepairResult =
   | {
       status: "disabled" | "explicit_marketplace" | "independent" | "source_missing" | "shared";
       changed: boolean;
@@ -26,7 +26,7 @@ export type CodexComputerUsePluginCacheRepairResult =
       warnings: string[];
     };
 
-export const DEFAULT_CODEX_COMPUTER_USE_BUNDLED_MARKETPLACE_PATH =
+const DEFAULT_CODEX_COMPUTER_USE_BUNDLED_MARKETPLACE_PATH =
   resolveMacOSDesktopCodexBundledMarketplaceCandidates("darwin")[0] ?? "";
 
 const DEFAULT_BUNDLED_MARKETPLACE_NAME = "openai-bundled";

@@ -1,5 +1,6 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.i18n.resolveNativeText
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -39,7 +40,7 @@ class GatewayExecApprovalParsingTest {
       )
 
     assertEquals(listOf("approval-1", "approval-2"), rows.map { it.id })
-    assertEquals(listOf("Command request", "Command request"), rows.map { it.commandText })
+    assertEquals(listOf("Command request", "Command request"), rows.map { it.commandText.resolveNativeText() })
     assertTrue(rows.all { it.commandPreview == null })
     assertTrue(rows.all { it.allowedDecisions.isEmpty() })
     assertTrue(rows.all { it.host == null && it.nodeId == null && it.agentId == null })
@@ -56,7 +57,7 @@ class GatewayExecApprovalParsingTest {
 
     val pending = snapshot as GatewayExecApprovalSnapshot.Pending
     assertEquals("approval-1", pending.id)
-    assertEquals("rm -rf build", pending.summary.commandText)
+    assertEquals("rm -rf build", pending.summary.commandText.resolveNativeText())
     assertEquals("rm build", pending.summary.commandPreview)
     assertEquals("This command can delete files.", pending.summary.warningText)
     assertEquals(listOf("allow-once", "allow-always", "deny"), pending.summary.allowedDecisions)

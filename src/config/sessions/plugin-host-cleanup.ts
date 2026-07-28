@@ -5,7 +5,7 @@ import { normalizeSessionEntrySlotKey } from "../../plugins/session-entry-slot-k
 import type { SessionEntry } from "./types.js";
 
 /** Cleanup variants owned by plugin host lifecycle paths. */
-export type PluginHostSessionCleanupMode = "plugin-owned-state" | "promoted-slots";
+type PluginHostSessionCleanupMode = "plugin-owned-state" | "promoted-slots";
 
 export type PluginHostSessionCleanupStoreParams = {
   /** Agent that owns the resolved session store target. */
@@ -71,7 +71,7 @@ function clearPromotedSessionEntrySlots(
     options.includeStoredSlotKeys === false && sessionEntrySlotKeys
       ? new Set(sessionEntrySlotKeys)
       : collectPromotedSessionEntrySlotKeys(entry, pluginId, sessionEntrySlotKeys);
-  const entryRecord = entry as Record<string, unknown>;
+  const entryRecord = entry as unknown as Record<string, unknown>;
   for (const slotKey of slotKeys) {
     delete entryRecord[slotKey];
   }
@@ -152,7 +152,7 @@ function hasPromotedSessionEntrySlot(
   if (slotKeys.size === 0) {
     return false;
   }
-  const entryRecord = entry as Record<string, unknown>;
+  const entryRecord = entry as unknown as Record<string, unknown>;
   for (const slotKey of slotKeys) {
     if (Object.hasOwn(entryRecord, slotKey)) {
       return true;

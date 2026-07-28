@@ -10,15 +10,12 @@ import {
   spyRuntimeLogs,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { readShortTermRecallEntries, recordShortTermRecalls } from "./short-term-promotion.js";
 import {
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
-} from "./dreaming-state.js";
-import {
-  readShortTermRecallEntries,
-  recordShortTermRecalls,
-  testing as shortTermTesting,
-} from "./short-term-promotion.js";
+  shortTermTestState as shortTermTesting,
+} from "./test-helpers.js";
 
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
 const getRuntimeConfig = vi.hoisted(() => vi.fn(() => ({})));
@@ -42,31 +39,43 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 }
 
 vi.mock("./cli.host.runtime.js", async () => {
-  const [runtimeCli, runtimeCore, runtimeFiles] = await Promise.all([
+  const [
+    {
+      defaultRuntime,
+      formatErrorMessage,
+      setVerbose,
+      shortenHomeInString,
+      shortenHomePath,
+      theme,
+      withManager,
+      withProgress,
+      withProgressTotals,
+    },
+    { resolveSessionTranscriptsDirForAgent, resolveStateDir },
+    { listMemoryFiles, normalizeExtraMemoryPaths },
+  ] = await Promise.all([
     import("openclaw/plugin-sdk/memory-core-host-runtime-cli"),
     import("openclaw/plugin-sdk/memory-core-host-runtime-core"),
     import("openclaw/plugin-sdk/memory-core-host-runtime-files"),
   ]);
   return {
-    colorize: runtimeCli.colorize,
-    defaultRuntime: runtimeCli.defaultRuntime,
-    formatErrorMessage: runtimeCli.formatErrorMessage,
+    defaultRuntime,
+    formatErrorMessage,
     getMemorySearchManager,
-    isRich: runtimeCli.isRich,
-    listMemoryFiles: runtimeFiles.listMemoryFiles,
+    listMemoryFiles,
     getRuntimeConfig,
-    normalizeExtraMemoryPaths: runtimeFiles.normalizeExtraMemoryPaths,
+    normalizeExtraMemoryPaths,
     resolveCommandSecretRefsViaGateway,
     resolveDefaultAgentId,
-    resolveSessionTranscriptsDirForAgent: runtimeCore.resolveSessionTranscriptsDirForAgent,
-    resolveStateDir: runtimeCore.resolveStateDir,
-    setVerbose: runtimeCli.setVerbose,
-    shortenHomeInString: runtimeCli.shortenHomeInString,
-    shortenHomePath: runtimeCli.shortenHomePath,
-    theme: runtimeCli.theme,
-    withManager: runtimeCli.withManager,
-    withProgress: runtimeCli.withProgress,
-    withProgressTotals: runtimeCli.withProgressTotals,
+    resolveSessionTranscriptsDirForAgent,
+    resolveStateDir,
+    setVerbose,
+    shortenHomeInString,
+    shortenHomePath,
+    theme,
+    withManager,
+    withProgress,
+    withProgressTotals,
   };
 });
 
@@ -83,8 +92,14 @@ let qmdCaseId = 0;
 beforeAll(async () => {
   await configureMemoryCoreDreamingStateForTests();
   ({ registerMemoryCli } = await import("./cli.js"));
-  ({ defaultRuntime, isVerbose, setVerbose } =
-    await import("openclaw/plugin-sdk/memory-core-host-runtime-cli"));
+  const {
+    defaultRuntime: loadedDefaultRuntime,
+    isVerbose: loadedIsVerbose,
+    setVerbose: loadedSetVerbose,
+  } = await import("openclaw/plugin-sdk/memory-core-host-runtime-cli");
+  defaultRuntime = loadedDefaultRuntime;
+  isVerbose = loadedIsVerbose;
+  setVerbose = loadedSetVerbose;
   fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-cli-fixtures-"));
   workspaceFixtureRoot = path.join(fixtureRoot, "workspace");
   qmdFixtureRoot = path.join(fixtureRoot, "qmd");
@@ -117,7 +132,7 @@ afterAll(async () => {
 });
 
 describe("memory cli", () => {
-  const inactiveMemorySecretDiagnostic = "agents.defaults.memorySearch.remote.apiKey inactive"; // pragma: allowlist secret
+  const inactiveMemorySecretDiagnostic = "memory.search.remote.apiKey inactive"; // pragma: allowlist secret
 
   function firstMockCallArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
     const call = mock.mock.calls[0];
@@ -500,14 +515,16 @@ describe("memory cli", () => {
 
   it("resolves configured memory SecretRefs through gateway snapshot", async () => {
     const config = {
-      agents: {
-        defaults: {
-          memorySearch: {
-            remote: {
-              apiKey: { source: "env", provider: "default", id: "MEMORY_REMOTE_API_KEY" },
-            },
+      memory: {
+        search: {
+          remote: {
+            apiKey: { source: "env", provider: "default", id: "MEMORY_REMOTE_API_KEY" },
           },
         },
+      },
+
+      agents: {
+        defaults: {},
       },
     };
     getRuntimeConfig.mockReturnValue(config);
@@ -527,10 +544,7 @@ describe("memory cli", () => {
     expect(secretRefsCall.config).toBe(config);
     expect(secretRefsCall.commandName).toBe("memory status");
     expect(secretRefsCall.targetIds).toStrictEqual(
-      new Set([
-        "agents.defaults.memorySearch.remote.apiKey",
-        "agents.list[].memorySearch.remote.apiKey",
-      ]),
+      new Set(["memory.search.remote.apiKey", "agents.entries.*.memory.search.remote.apiKey"]),
     );
   });
 
@@ -789,7 +803,8 @@ describe("memory cli", () => {
       await runMemoryCli(["status"]);
 
       expectLogged(log, "Recall store: 1 entries");
-      expectLogged(log, "Dreaming: off");
+      // Dreaming is on by default, so status prints the phase-config detail line.
+      expectLogged(log, "Dreaming: light=");
       expect(close).toHaveBeenCalled();
     });
   });
@@ -996,6 +1011,12 @@ describe("memory cli", () => {
 
   it("repairs invalid recall metadata and stale locks with status --fix", async () => {
     await withTempWorkspace(async (workspaceDir) => {
+      await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "2026-04-03.md"),
+        "QMD router cache note\n",
+        "utf-8",
+      );
       await shortTermTesting.writeRawRecallStore(workspaceDir, {
         version: 1,
         updatedAt: "2026-04-04T00:00:00.000Z",
@@ -1462,6 +1483,21 @@ describe("memory cli", () => {
     });
   });
 
+  it("passes the host SQLite lease hook to CLI memory managers", async () => {
+    const close = vi.fn(async () => {});
+    mockManager({ search: vi.fn(async () => []), close });
+    const withLease = vi.fn();
+
+    await runMemoryCli(["search", "hello"], { withLease });
+
+    expect(getMemorySearchManager).toHaveBeenCalledWith({
+      cfg: {},
+      agentId: "main",
+      purpose: "cli",
+      withLease,
+    });
+  });
+
   it("accepts --query for memory search", async () => {
     const close = vi.fn(async () => {});
     const search = vi.fn(async () => []);
@@ -1741,8 +1777,10 @@ describe("memory cli", () => {
       expect(payload?.sourceFiles).toEqual([historyPath]);
       expect(payload?.historicalImport?.importedFileCount).toBe(1);
       expect(payload?.historicalImport?.importedSignalCount).toBeGreaterThan(0);
-      expect(payload?.deep?.candidates?.[0]?.snippet).toContain("Happy Together");
-      expect(payload?.deep?.candidates?.[0]?.path).toBe("memory/2025-01-01-vendor-pitch.md");
+      const calendarCandidate = payload?.deep?.candidates?.find((candidate) =>
+        candidate.snippet?.includes("Happy Together"),
+      );
+      expect(calendarCandidate?.path).toBe("memory/2025-01-01-vendor-pitch.md");
       expect(close).toHaveBeenCalled();
     });
   });
@@ -2322,18 +2360,7 @@ describe("memory cli", () => {
     });
   });
 
-  async function waitFor<T>(task: () => Promise<T>, timeoutMs = 1500): Promise<T> {
-    let value: T | undefined;
-    await vi.waitFor(
-      async () => {
-        value = await task();
-      },
-      { interval: 1, timeout: timeoutMs },
-    );
-    return value as T;
-  }
-
-  it("records short-term recall entries from memory search hits", async () => {
+  it("awaits short-term recall persistence before memory search returns", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const close = vi.fn(async () => {});
       const search = vi.fn(async () => [
@@ -2367,11 +2394,7 @@ describe("memory cli", () => {
 
       await runMemoryCli(["search", "glacier", "--json"]);
 
-      const entries = await waitFor(async () => {
-        const recalled = await readShortTermRecallEntries({ workspaceDir });
-        expect(recalled).toHaveLength(1);
-        return recalled;
-      });
+      const entries = await readShortTermRecallEntries({ workspaceDir });
       expect(entries).toHaveLength(1);
       const entry = entries[0];
       if (!entry) {
@@ -2389,6 +2412,8 @@ describe("memory cli", () => {
         lastRecalledAt: "<now>",
         recallDays: ["<today>"],
         queryHashes: ["<hash>"],
+        claimHash: entry.claimHash ? "<claim>" : undefined,
+        provenance: entry.provenance ? { ...entry.provenance, observedAt: 0 } : undefined,
       }).toEqual({
         key: "memory:memory/2026-04-03.md:1:2",
         path: "memory/2026-04-03.md",
@@ -2405,7 +2430,11 @@ describe("memory cli", () => {
         lastRecalledAt: "<now>",
         queryHashes: ["<hash>"],
         recallDays: ["<today>"],
+        claimHash: "<claim>",
         conceptTags: ["backup", "backups", "glacier", "s3"],
+        // Memory-source recalls default to agent provenance (workspace files
+        // are owner-controlled); see mergeRecallProvenance.
+        provenance: { originClass: "agent", sessionKind: "unknown", observedAt: 0 },
       });
       expect(close).toHaveBeenCalled();
     });
@@ -2457,3 +2486,4 @@ describe("memory cli", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

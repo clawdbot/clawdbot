@@ -1,15 +1,10 @@
 /** Covers cloud-worker provider manifest ownership, uniqueness, and lookup ordering. */
 import { describe, expect, it } from "vitest";
 import { createPluginRecord } from "./loader-records.js";
-import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { createPluginRegistry } from "./registry.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type { WorkerProvider } from "./types.js";
-import {
-  listWorkerProviderRegistrations,
-  resolveDurableWorkerProviderAutoEnabledReasons,
-  resolveWorkerProvider,
-} from "./worker-provider-registry.js";
+import { resolveDurableWorkerProviderAutoEnabledReasons } from "./worker-provider-registry.js";
 
 function createTestRegistry() {
   return createPluginRegistry({
@@ -48,17 +43,6 @@ function createOwner(id: string, workerProviders: string[] = []) {
 }
 
 describe("worker provider registry", () => {
-  it("registers providers declared by the plugin manifest", () => {
-    const pluginRegistry = createTestRegistry();
-    const provider = createWorkerProvider("static-ssh");
-
-    pluginRegistry.registerWorkerProvider(createOwner("owner", ["static-ssh"]), provider);
-
-    expect(listWorkerProviderRegistrations(pluginRegistry.registry)).toEqual([
-      expect.objectContaining({ pluginId: "owner", provider }),
-    ]);
-  });
-
   it("rejects registrations missing manifest ownership", () => {
     const pluginRegistry = createTestRegistry();
 
@@ -159,27 +143,6 @@ describe("worker provider registry", () => {
         message: "worker provider already registered: static-ssh (first)",
       }),
     );
-  });
-
-  it("lists deterministically and resolves normalized provider ids", () => {
-    const registry = createEmptyPluginRegistry();
-    const alphaA = createWorkerProvider("alpha");
-    const beta = createWorkerProvider("beta");
-    registry.workerProviders.set("beta", { pluginId: "b-owner", provider: beta, source: "b" });
-    registry.workerProviders.set("alpha", {
-      pluginId: "a-owner",
-      provider: alphaA,
-      source: "a",
-    });
-
-    expect(
-      listWorkerProviderRegistrations(registry).map((entry) => [entry.provider.id, entry.pluginId]),
-    ).toEqual([
-      ["alpha", "a-owner"],
-      ["beta", "b-owner"],
-    ]);
-    expect(resolveWorkerProvider(registry, " ALPHA ")).toBe(alphaA);
-    expect(resolveWorkerProvider(registry, "__proto__")).toBeUndefined();
   });
 
   it("auto-enables only bundled owners needed by durable leases", () => {

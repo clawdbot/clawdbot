@@ -90,13 +90,16 @@ async function waitForSandboxCdp(params: {
   const url = `http://127.0.0.1:${params.cdpPort}/json/version`;
   while (Date.now() < deadline) {
     try {
+      // Keep a stalled request inside the outer browser startup deadline.
+      const requestTimeoutMs = Math.max(1, Math.min(1000, deadline - Date.now()));
       const ctrl = new AbortController();
-      const t = setTimeout(ctrl.abort.bind(ctrl), 1000);
+      const t = setTimeout(ctrl.abort.bind(ctrl), requestTimeoutMs);
       try {
         const res = await fetch(url, {
           headers: { Authorization: buildSandboxCdpAuthHeader(params.authToken) },
           signal: ctrl.signal,
         });
+        await res.body?.cancel().catch(() => undefined);
         if (res.ok) {
           return true;
         }
@@ -263,7 +266,7 @@ export async function ensureSandboxBrowser(params: {
       vncPort: params.cfg.browser.vncPort,
       noVncPort: params.cfg.browser.noVncPort,
       headless: params.cfg.browser.headless,
-      enableNoVnc: params.cfg.browser.enableNoVnc,
+      noVncEnabled: params.cfg.browser.noVncEnabled,
       autoStartTimeoutMs: params.cfg.browser.autoStartTimeoutMs,
       cdpSourceRange,
     },
@@ -386,7 +389,7 @@ export async function ensureSandboxBrowser(params: {
       args.push("-p", `127.0.0.1::${params.cfg.browser.noVncPort}`);
     }
     args.push("-e", `OPENCLAW_BROWSER_HEADLESS=${params.cfg.browser.headless ? "1" : "0"}`);
-    args.push("-e", `OPENCLAW_BROWSER_ENABLE_NOVNC=${params.cfg.browser.enableNoVnc ? "1" : "0"}`);
+    args.push("-e", `OPENCLAW_BROWSER_ENABLE_NOVNC=${params.cfg.browser.noVncEnabled ? "1" : "0"}`);
     args.push("-e", `OPENCLAW_BROWSER_CDP_PORT=${params.cfg.browser.cdpPort}`);
     args.push("-e", `${CDP_AUTH_TOKEN_ENV_KEY}=${cdpAuthToken}`);
     args.push(

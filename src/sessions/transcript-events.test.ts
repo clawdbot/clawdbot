@@ -1,7 +1,6 @@
 // Transcript event tests cover transcript event parsing and compaction.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  emitInternalSessionTranscriptUpdate,
   emitSessionTranscriptUpdate,
   onInternalSessionTranscriptUpdate,
   onSessionTranscriptUpdate,
@@ -101,7 +100,7 @@ describe("transcript events", () => {
     const listener = vi.fn();
     cleanup.push(onInternalSessionTranscriptUpdate(listener));
 
-    emitInternalSessionTranscriptUpdate({
+    emitSessionTranscriptUpdate({
       target: {
         agentId: " main ",
         sessionId: " sess-1 ",

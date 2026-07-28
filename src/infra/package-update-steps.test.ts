@@ -2,12 +2,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { writePackageDistInventory } from "./package-dist-inventory.js";
 import {
   markPackagePostInstallDoctorAdvisory,
   runGlobalPackageUpdateSteps,
-  type PackageUpdateStepResult,
 } from "./package-update-steps.js";
 import {
   createDeferredConfiguredPluginRepairDoctorResult,
@@ -18,6 +17,10 @@ import {
   type CommandRunner,
   type ResolvedGlobalInstallTarget,
 } from "./update-global.js";
+
+type PackageUpdateStepResult = Awaited<
+  ReturnType<typeof runGlobalPackageUpdateSteps>
+>["steps"][number];
 
 async function writePackageRoot(packageRoot: string, version: string): Promise<void> {
   await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
@@ -436,6 +439,7 @@ describe("runGlobalPackageUpdateSteps", () => {
           "npm",
           "i",
           "-g",
+          "--allow-scripts=./openclaw-2.0.0.tgz",
           "--prefix",
           stagePrefix,
           path.join(packDir, "openclaw-2.0.0.tgz"),
@@ -444,6 +448,7 @@ describe("runGlobalPackageUpdateSteps", () => {
           "--loglevel=error",
           "--min-release-age=0",
         ]);
+        expect(cwd).toBe(packDir);
         await writePackageRoot(path.join(stagePrefix, "lib", "node_modules", "openclaw"), "2.0.0");
         await fs.mkdir(path.join(stagePrefix, "bin"), { recursive: true });
         await fs.symlink(
@@ -701,7 +706,15 @@ describe("runGlobalPackageUpdateSteps", () => {
           if (name !== "global update") {
             throw new Error(`unexpected step ${name}`);
           }
-          expect(argv).toEqual(["pnpm", "add", "-g", "--global-dir", globalDir, "openclaw@2.0.0"]);
+          expect(argv).toEqual([
+            "pnpm",
+            "add",
+            "-g",
+            "--global-dir",
+            globalDir,
+            "--allow-build=openclaw",
+            "openclaw@2.0.0",
+          ]);
           await writePackageRoot(packageRoot, "2.0.0");
           return {
             name,

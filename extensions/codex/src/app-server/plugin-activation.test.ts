@@ -6,11 +6,8 @@ import {
   CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
   type ResolvedCodexPluginPolicy,
 } from "./config.js";
-import {
-  ensureCodexAppsSubstrateConfig,
-  ensureCodexPluginActivation,
-  upsertTomlBoolean,
-} from "./plugin-activation.js";
+import { ensureCodexPluginActivation } from "./plugin-activation.js";
+import { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import type { v2 } from "./protocol.js";
 
 describe("Codex plugin activation", () => {
@@ -96,15 +93,23 @@ describe("Codex plugin activation", () => {
   it("installs a migration-authorized local curated plugin and refreshes runtime state", async () => {
     const calls: Array<{ method: string; params: unknown }> = [];
     const appCache = new CodexAppInventoryCache();
+    const metadataCache = new CodexPluginMetadataCache();
+    let pluginListCalls = 0;
     const result = await ensureCodexPluginActivation({
       identity: identity("google-calendar"),
       appCache,
       appCacheKey: "runtime",
+      metadataCache,
       request: async (method, params) => {
         calls.push({ method, params });
         if (method === "plugin/list") {
+          pluginListCalls += 1;
+          expect(params).toEqual({});
           return pluginList([
-            pluginSummary("google-calendar", { installed: false, enabled: false }),
+            pluginSummary("google-calendar", {
+              installed: pluginListCalls > 1,
+              enabled: pluginListCalls > 1,
+            }),
           ]);
         }
         if (method === "plugin/install") {
@@ -146,6 +151,10 @@ describe("Codex plugin activation", () => {
       "config/mcpServer/reload",
       "app/list",
     ]);
+    expect(pluginListCalls).toBe(2);
+    expect(
+      metadataCache.read("runtime", "curated-global")?.response.marketplaces[0]?.plugins[0],
+    ).toMatchObject({ installed: true, enabled: true });
     expect(appCache.getRevision()).toBeGreaterThan(0);
   });
 
@@ -290,6 +299,38 @@ describe("Codex plugin activation", () => {
     ]);
   });
 
+  it("settles a missing plugin from the remote curated marketplace snapshot", async () => {
+    const metadataCache = new CodexPluginMetadataCache();
+    const request = vi.fn(async (_method: string, params: unknown) => {
+      expect(params).toEqual({});
+      return {
+        marketplaces: [
+          {
+            name: "openai-curated-remote",
+            path: null,
+            interface: null,
+            plugins: [],
+          },
+        ],
+        marketplaceLoadErrors: [],
+        featuredPluginIds: [],
+      } satisfies v2.PluginListResponse;
+    });
+    const activationParams = {
+      identity: identity("google-calendar"),
+      request,
+      metadataCache,
+      appCacheKey: "runtime",
+    };
+
+    const first = await ensureCodexPluginActivation(activationParams);
+    const second = await ensureCodexPluginActivation(activationParams);
+
+    expect(first.reason).toBe("plugin_missing");
+    expect(second.reason).toBe("plugin_missing");
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
   it("requires workspace-directory plugins to be activated outside OpenClaw", async () => {
     const request = vi.fn(async () => {
       throw new Error("workspace activation must not call app-server");
@@ -309,27 +350,6 @@ describe("Codex plugin activation", () => {
     });
     expect(result.diagnostics[0]?.message).toContain("installed and enabled outside OpenClaw");
     expect(request).not.toHaveBeenCalled();
-  });
-
-  it("upserts native apps substrate config without clobbering other toml", async () => {
-    const existing = 'model = "gpt-5.5"\n\n[features]\nother = true\n';
-    expect(upsertTomlBoolean(existing, "features", "apps", true)).toBe(
-      'model = "gpt-5.5"\n\n[features]\nother = true\napps = true\n',
-    );
-
-    const writes: Array<{ path: string; content: string }> = [];
-    const result = await ensureCodexAppsSubstrateConfig({
-      codexHome: "/codex-home",
-      readFile: vi.fn(async () => existing),
-      mkdir: vi.fn(async () => undefined),
-      writeFile: vi.fn(async (filePath, content) => {
-        writes.push({ path: String(filePath), content: String(content) });
-      }),
-    });
-
-    expect(result).toEqual({ changed: true, configPath: "/codex-home/config.toml" });
-    expect(writes[0]?.content).toContain("[features]\nother = true\napps = true");
-    expect(writes[0]?.content).toContain("[apps._default]\nenabled = true");
   });
 });
 

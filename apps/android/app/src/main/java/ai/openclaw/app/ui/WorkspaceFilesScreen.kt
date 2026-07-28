@@ -3,6 +3,7 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.GatewayWorkspaceEntry
 import ai.openclaw.app.GatewayWorkspaceFile
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.chat.ChatCodeBlock
 import ai.openclaw.app.ui.chat.rememberBase64ImageState
 import ai.openclaw.app.ui.design.ClawEmptyState
@@ -140,7 +141,7 @@ private fun WorkspaceDirectoryScreen(
 
   LaunchedEffect(path, isConnected, refreshNonce) {
     if (!isConnected) {
-      errorText = "Connect the gateway to browse workspace files."
+      errorText = nativeString("Connect the gateway to browse workspace files.")
       return@LaunchedEffect
     }
     loading = true
@@ -150,7 +151,7 @@ private fun WorkspaceDirectoryScreen(
       entries = listing.entries
       totalEntries = listing.totalEntries
     } catch (_: Throwable) {
-      errorText = "Could not load this folder."
+      errorText = nativeString("Could not load this folder.")
     } finally {
       loading = false
     }
@@ -171,10 +172,10 @@ private fun WorkspaceDirectoryScreen(
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-          ClawPlainIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", onClick = onBack)
+          ClawPlainIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = nativeString("Back"), onClick = onBack)
           Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
             Text(
-              text = if (path.isEmpty()) "Files" else path.substringAfterLast('/'),
+              text = if (path.isEmpty()) nativeString("Files") else path.substringAfterLast('/'),
               style = ClawTheme.type.display.copy(fontSize = 24.sp, lineHeight = 28.sp),
               color = ClawTheme.colors.text,
             )
@@ -195,7 +196,7 @@ private fun WorkspaceDirectoryScreen(
           } else if (isConnected) {
             ClawPlainIconButton(
               icon = Icons.Outlined.Refresh,
-              contentDescription = "Refresh",
+              contentDescription = nativeString("Refresh"),
               onClick = {
                 if (!isWorkspaceDirectoryRequestInFlight(loading, loadingMore)) {
                   loading = true
@@ -209,13 +210,13 @@ private fun WorkspaceDirectoryScreen(
 
       errorText?.let { message ->
         item {
-          ClawEmptyState(title = "Files unavailable", body = message)
+          ClawEmptyState(title = nativeString("Files unavailable"), body = message)
         }
       }
 
       if (errorText == null && !loading && entries.isEmpty()) {
         item {
-          ClawEmptyState(title = "Empty folder", body = "This folder has no files yet.")
+          ClawEmptyState(title = nativeString("Empty folder"), body = nativeString("This folder has no files yet."))
         }
       }
 
@@ -246,7 +247,7 @@ private fun WorkspaceDirectoryScreen(
                       entries = entries + listing.entries.filter { it.path !in known }
                       totalEntries = listing.totalEntries
                     } catch (_: Throwable) {
-                      errorText = "Could not load this folder."
+                      errorText = nativeString("Could not load this folder.")
                     } finally {
                       loadingMore = false
                     }
@@ -255,9 +256,9 @@ private fun WorkspaceDirectoryScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
           ) {
-            Text(text = "Load more", style = ClawTheme.type.body, color = ClawTheme.colors.text)
+            Text(text = nativeString("Load more"), style = ClawTheme.type.body, color = ClawTheme.colors.text)
             Text(
-              text = "${entries.size} of $totalEntries",
+              text = nativeString("\${entries.size} of \$totalEntries", entries.size, totalEntries),
               style = ClawTheme.type.caption,
               color = ClawTheme.colors.textMuted,
             )
@@ -334,7 +335,7 @@ private fun WorkspaceFilePreview(
     try {
       file = viewModel.fetchWorkspaceFile(path)
     } catch (_: Throwable) {
-      errorText = "This file cannot be previewed. It may be binary or too large."
+      errorText = nativeString("This file cannot be previewed. It may be binary or too large.")
     } finally {
       loading = false
     }
@@ -350,7 +351,7 @@ private fun WorkspaceFilePreview(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
-        ClawPlainIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", onClick = onBack)
+        ClawPlainIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = nativeString("Back"), onClick = onBack)
         Text(
           text = path.substringAfterLast('/'),
           style = ClawTheme.type.display.copy(fontSize = 20.sp, lineHeight = 24.sp, lineBreak = androidx.compose.ui.text.style.LineBreak.Heading),
@@ -361,7 +362,7 @@ private fun WorkspaceFilePreview(
         file?.let { loaded ->
           ClawPlainIconButton(
             icon = Icons.Outlined.Share,
-            contentDescription = "Share file",
+            contentDescription = nativeString("Share file"),
             onClick = { shareWorkspaceFile(context, loaded) },
           )
         }
@@ -373,7 +374,7 @@ private fun WorkspaceFilePreview(
             CircularProgressIndicator(modifier = Modifier.size(22.dp))
           }
         errorText != null ->
-          ClawEmptyState(title = "No preview", body = errorText.orEmpty())
+          ClawEmptyState(title = nativeString("No preview"), body = errorText.orEmpty())
         file != null ->
           WorkspaceFileContent(file = file ?: return@Column)
       }
@@ -392,7 +393,7 @@ private fun WorkspaceFileContent(file: GatewayWorkspaceFile) {
           contentDescription = file.name,
           modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
         )
-      imageState.failed -> ClawEmptyState(title = "No preview", body = "This image could not be decoded.")
+      imageState.failed -> ClawEmptyState(title = nativeString("No preview"), body = nativeString("This image could not be decoded."))
       else -> CircularProgressIndicator(modifier = Modifier.size(22.dp))
     }
   } else {

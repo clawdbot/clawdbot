@@ -1,4 +1,4 @@
-import type { CronJob, GatewaySessionRow, PresenceEntry } from "../api/types.ts";
+import type { CronJob, GatewaySessionRow } from "../api/types.ts";
 // Control UI module implements presenter behavior.
 import { t } from "../i18n/index.ts";
 import { resolveCronJobLastRunStatus } from "../lib/cron-status.ts";
@@ -9,11 +9,6 @@ import {
   formatMs,
   formatUnknownText,
 } from "../lib/format.ts";
-
-export function formatPresenceAge(entry: PresenceEntry): string {
-  const ts = entry.ts ?? null;
-  return ts ? formatRelativeTimestamp(ts) : t("common.na");
-}
 
 export function formatNextRun(ms?: number | null) {
   if (!ms) {
@@ -68,6 +63,9 @@ export function formatCronSchedule(job: CronJob) {
     // without this branch they fall through and render "Cron undefined".
     return `On exit: ${s.command}${s.cwd ? ` (cwd: ${s.cwd})` : ""}`;
   }
+  if (s.kind === "stream") {
+    return `Stream: ${s.command.join(" ")}${s.cwd ? ` (cwd: ${s.cwd})` : ""}`;
+  }
   return `Cron ${s.expr}${s.tz ? ` (${s.tz})` : ""}`;
 }
 
@@ -78,6 +76,12 @@ export function formatCronPayload(job: CronJob) {
   }
   if (p.kind === "command") {
     return `Command: ${p.argv.join(" ")}`;
+  }
+  if (p.kind === "script") {
+    return `Script: ${p.script}`;
+  }
+  if (p.kind === "heartbeat") {
+    return "Heartbeat monitor";
   }
   const base = `Agent: ${p.message}`;
   const delivery = job.delivery;

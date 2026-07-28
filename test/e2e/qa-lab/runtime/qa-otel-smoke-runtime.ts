@@ -446,7 +446,11 @@ class ProtoReader {
     let result = 0;
     let shift = 0;
     while (this.offset < this.buffer.length) {
-      const byte = this.buffer[this.offset++];
+      const byte = this.buffer.at(this.offset);
+      if (byte === undefined) {
+        throw new Error("truncated protobuf varint");
+      }
+      this.offset += 1;
       result += (byte & 0x7f) * 2 ** shift;
       if ((byte & 0x80) === 0) {
         return result;
@@ -1724,8 +1728,6 @@ async function main() {
       id: "qa-otel-smoke",
       title: "QA OTEL smoke evidence",
       sourcePath: "test/e2e/qa-lab/runtime/qa-otel-smoke-runtime.ts",
-      primaryCoverageIds: ["telemetry.otel"],
-      secondaryCoverageIds: ["telemetry.plugin-sdk-runtime-exports"],
       docsRefs: ["docs/gateway/opentelemetry.md", "docs/concepts/qa-e2e-automation.md"],
       codeRefs: [
         "test/e2e/qa-lab/runtime/qa-otel-smoke-runtime.ts",

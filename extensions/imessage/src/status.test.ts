@@ -12,7 +12,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { resolveIMessageAccount } from "./accounts.js";
 import * as channelRuntimeModule from "./channel.runtime.js";
 import * as clientModule from "./client.js";
-import { clearIMessagePrivateApiCache, probeIMessage, probeIMessagePrivateApi } from "./probe.js";
+import { probeIMessage, probeIMessagePrivateApi } from "./probe.js";
 import { createIMessageSetupWizardProxy } from "./setup-core.js";
 import { imessageSetupWizard } from "./setup-surface.js";
 import { probeIMessageStatusAccount } from "./status-core.js";
@@ -104,8 +104,7 @@ describe("createIMessageRpcClient", () => {
   });
 
   it("promotes Full Disk Access rpc banners to the public probe error", async () => {
-    const { IMessageRpcClient, PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR } =
-      await import("./client.js");
+    const { IMessageRpcClient } = await import("./client.js");
     const client = new IMessageRpcClient();
     const internals = client as unknown as {
       handleLine: (line: string) => void;
@@ -116,7 +115,9 @@ describe("createIMessageRpcClient", () => {
       "imsg cannot access /Users/alice/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
     );
 
-    expect(internals.buildCloseError(1, null).message).toBe(PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR);
+    expect(internals.buildCloseError(1, null).message).toBe(
+      "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
+    );
   });
 
   it.each([
@@ -517,7 +518,6 @@ describe("imessage setup status", () => {
 describe("probeIMessage", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    clearIMessagePrivateApiCache();
     spawnMock.mockClear();
     vi.spyOn(setupRuntime, "detectBinary").mockResolvedValue(true);
     vi.spyOn(processRuntime, "runCommandWithTimeout").mockResolvedValue({
@@ -720,7 +720,9 @@ describe("probeIMessage", () => {
       available: false,
     });
 
-    expect(runCommand).toHaveBeenCalledTimes(4);
+    // Each uncached probe runs status plus both side-effect-free CLI capability
+    // checks (send-rich attachment and poll caption suppression).
+    expect(runCommand).toHaveBeenCalledTimes(6);
   });
 
   it("propagates imsg's status message when advanced features are unavailable", async () => {
@@ -753,6 +755,92 @@ describe("probeIMessage", () => {
     await expect(probeIMessagePrivateApi("imsg-status-message-test", 1000)).resolves.toMatchObject({
       available: false,
       statusMessage: note,
+    });
+  });
+
+  it("detects poll caption suppression from the exact poll send help contract", async () => {
+    const runCommand = vi
+      .spyOn(processRuntime, "runCommandWithTimeout")
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          advanced_features: true,
+          v2_ready: true,
+          selectors: { pollPayloadMessage: true },
+          rpc_methods: ["chats.list"],
+        }),
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      })
+      .mockResolvedValueOnce({
+        stdout: "send-rich --file",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      })
+      .mockResolvedValueOnce({
+        stdout: "poll send --question <text> --option <text> --no-comment",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      });
+
+    await expect(
+      probeIMessagePrivateApi("imsg-poll-no-comment-supported", 1000),
+    ).resolves.toMatchObject({
+      cliCapabilities: { pollSendSupportsNoComment: true },
+    });
+    expect(runCommand).toHaveBeenNthCalledWith(
+      3,
+      ["imsg-poll-no-comment-supported", "poll", "send", "--help"],
+      { timeoutMs: 1000 },
+    );
+  });
+
+  it("does not infer poll caption suppression from selectors when the flag is absent", async () => {
+    vi.spyOn(processRuntime, "runCommandWithTimeout")
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          advanced_features: true,
+          v2_ready: true,
+          selectors: { pollPayloadMessage: true },
+          rpc_methods: ["chats.list"],
+        }),
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      })
+      .mockResolvedValueOnce({
+        stdout: "send-rich --file",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      })
+      .mockResolvedValueOnce({
+        stdout: "poll send --question <text> --option <text>",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      });
+
+    await expect(
+      probeIMessagePrivateApi("imsg-poll-no-comment-absent", 1000),
+    ).resolves.toMatchObject({
+      available: true,
+      selectors: { pollPayloadMessage: true },
+      cliCapabilities: { pollSendSupportsNoComment: false },
     });
   });
 

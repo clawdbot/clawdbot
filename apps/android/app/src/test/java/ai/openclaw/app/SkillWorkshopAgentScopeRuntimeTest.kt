@@ -1,6 +1,7 @@
 package ai.openclaw.app
 
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.i18n.NativeText
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -31,6 +32,53 @@ class SkillWorkshopAgentScopeRuntimeTest {
       .edit()
       .clear()
       .commit()
+  }
+
+  @Test
+  fun gatewayActionsCarryClosedLocalizedPresentation() {
+    val cases =
+      listOf(
+        SkillWorkshopGatewayAction.Apply to Triple("apply", "applied", "Proposal applied."),
+        SkillWorkshopGatewayAction.Reject to Triple("reject", "rejected", "Proposal rejected."),
+        SkillWorkshopGatewayAction.Quarantine to Triple("quarantine", "quarantined", "Proposal quarantined."),
+      )
+
+    for ((action, expected) in cases) {
+      val (methodSuffix, expectedStatus, noticeSource) = expected
+      assertEquals(methodSuffix, action.methodSuffix)
+      assertEquals(expectedStatus, action.expectedStatus)
+      assertEquals(NativeText.Resource(noticeSource, emptyList()), action.notice)
+      assertEquals(NativeText.Resource(methodSuffix, emptyList()), action.verb)
+      assertEquals(
+        NativeText.Resource(
+          source = "Gateway returned status '\$statusLabel' after \${action.verb}.",
+          formatArgs = listOf(NativeText.Verbatim("future_status"), action.verb),
+        ),
+        skillWorkshopUnexpectedStatusText("future_status", action),
+      )
+      assertEquals(
+        NativeText.Resource(
+          source = "Could not \${action.verb} Skill Workshop proposal.",
+          formatArgs = listOf(action.verb),
+        ),
+        skillWorkshopActionFailureText(action),
+      )
+    }
+  }
+
+  @Test
+  fun missingGatewayActionStatusUsesLocalizedUnknownFallback() {
+    assertEquals(
+      NativeText.Resource(
+        source = "Gateway returned status '\$statusLabel' after \${action.verb}.",
+        formatArgs =
+          listOf(
+            NativeText.Resource(source = "unknown", formatArgs = emptyList()),
+            SkillWorkshopGatewayAction.Apply.verb,
+          ),
+      ),
+      skillWorkshopUnexpectedStatusText(null, SkillWorkshopGatewayAction.Apply),
+    )
   }
 
   @Test

@@ -2,7 +2,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { expectDefined } from "@openclaw/normalization-core";
 import { tryReadJsonSync } from "../../../infra/json-files.js";
 import {
   normalizeBundledPluginStringList,
@@ -53,7 +52,7 @@ const RUNNING_FROM_BUILT_ARTIFACT =
   CURRENT_MODULE_PATH.includes(`${path.sep}dist${path.sep}`) ||
   CURRENT_MODULE_PATH.includes(`${path.sep}dist-runtime${path.sep}`);
 
-export type BundledCapabilityManifest = Pick<
+type BundledCapabilityManifest = Pick<
   PluginManifest,
   | "id"
   | "autoEnableWhenConfiguredProviders"
@@ -122,7 +121,7 @@ function normalizeSetupProviderEnvVars(setup: PluginManifest["setup"]): Record<s
   );
 }
 
-export function buildBundledPluginContractSnapshot(
+function buildBundledPluginContractSnapshot(
   manifest: BundledCapabilityManifest,
 ): BundledPluginContractSnapshot {
   return {
@@ -181,7 +180,7 @@ export function buildBundledPluginContractSnapshot(
   };
 }
 
-export function hasBundledPluginContractSnapshotCapabilities(
+function hasBundledPluginContractSnapshotCapabilities(
   entry: BundledPluginContractSnapshot,
 ): boolean {
   return (
@@ -210,37 +209,3 @@ export const BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS: readonly BundledPluginContractSn
   BUNDLED_CAPABILITY_MANIFESTS.map(buildBundledPluginContractSnapshot)
     .filter(hasBundledPluginContractSnapshotCapabilities)
     .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));
-
-export const BUNDLED_LEGACY_PLUGIN_ID_ALIASES = Object.fromEntries(
-  BUNDLED_CAPABILITY_MANIFESTS.flatMap((manifest) =>
-    (manifest.legacyPluginIds ?? []).map(
-      (legacyPluginId) => [legacyPluginId, manifest.id] as const,
-    ),
-  ).toSorted(([left], [right]) => left.localeCompare(right)),
-) as Readonly<Record<string, string>>;
-
-export const BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS = Object.fromEntries(
-  BUNDLED_CAPABILITY_MANIFESTS.flatMap((manifest) =>
-    (manifest.autoEnableWhenConfiguredProviders ?? []).map((providerId) => [
-      providerId,
-      manifest.id,
-    ]),
-  ).toSorted(([left], [right]) =>
-    expectDefined(left, "bundled capability metadata left").localeCompare(
-      expectDefined(right, "bundled capability metadata right"),
-    ),
-  ),
-) as Readonly<Record<string, string>>;
-
-type BundledContractIdSnapshotKey = Exclude<
-  keyof Omit<BundledPluginContractSnapshot, "pluginId">,
-  "providerEnvVars"
->;
-
-export function resolveBundledContractSnapshotPluginIds(
-  key: BundledContractIdSnapshotKey,
-): string[] {
-  return BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter((entry) => entry[key].length > 0)
-    .map((entry) => entry.pluginId)
-    .toSorted((left, right) => left.localeCompare(right));
-}

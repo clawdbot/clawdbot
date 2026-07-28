@@ -31,10 +31,6 @@ export function findCaptionlessSlackAudioFile(message: SlackMessageEvent): Slack
   return message.files?.slice(0, MAX_SLACK_MEDIA_FILES).find(isSlackAudioFile);
 }
 
-export function hasCaptionlessSlackAudio(message: SlackMessageEvent): boolean {
-  return Boolean(findCaptionlessSlackAudioFile(message));
-}
-
 export function formatSlackAudioTranscriptForAgent(params: {
   transcript: string;
   rawBody: string;
@@ -81,8 +77,7 @@ export async function resolveSlackPreflightAudioTranscript(params: {
     const { transcribeFirstAudio } = await loadSlackPreflightAudioRuntime();
     const transcript = await transcribeFirstAudio({
       ctx: {
-        MediaPaths: params.media.map((entry) => entry.path),
-        MediaTypes: params.media.map((entry) => entry.contentType ?? ""),
+        media: [...params.media],
         Provider: "slack",
         Surface: "slack",
         OriginatingChannel: "slack",

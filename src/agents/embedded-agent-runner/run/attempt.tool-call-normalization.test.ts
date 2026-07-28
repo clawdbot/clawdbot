@@ -1,4 +1,6 @@
 // Coverage for normalizing tool calls before and during model replay.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -163,7 +165,9 @@ describe("wrapStreamFnPromoteStandaloneTextToolCalls", () => {
       arguments: { command: "cat /proc/mounts 2>/dev/null | head -20" },
       partialArgs: '{"command":"cat /proc/mounts 2>/dev/null | head -20"}',
     });
-    expect(String(content[1].id)).toMatch(/^call_[a-f0-9]{24}$/);
+    expect(String(expectDefined(content[1], "content[1] test invariant").id)).toMatch(
+      /^call_[a-f0-9]{24}$/,
+    );
     expect(content[2]).toMatchObject({
       type: "toolCall",
       name: "exec",
@@ -1246,6 +1250,108 @@ describe("sanitizeReplayToolCallIdsForStream", () => {
     });
   });
 
+  it("pairs repeated raw ids before assigning provider-safe occurrence ids", () => {
+    const rawId = "exec_0";
+    const out = sanitizeReplayToolCallIdsForStream({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "toolUse", id: rawId, name: "exec", input: { cmd: "first" } }],
+        } as never,
+        {
+          role: "assistant",
+          content: [{ type: "toolUse", id: rawId, name: "exec", input: { cmd: "second" } }],
+        } as never,
+        {
+          role: "toolResult",
+          toolCallId: rawId,
+          toolUseId: rawId,
+          toolName: "exec",
+          content: [{ type: "text", text: "second result" }],
+          isError: false,
+        } as never,
+      ],
+      mode: "strict",
+      repairToolUseResultPairing: true,
+    });
+
+    expect(out.map((message) => message.role)).toEqual([
+      "assistant",
+      "toolResult",
+      "assistant",
+      "toolResult",
+    ]);
+    expect(assistantToolUseSummaries(out[0])).toEqual([
+      { type: "toolUse", id: "exec0", name: "exec" },
+    ]);
+    expect(toolResultSummary(out[1])).toMatchObject({
+      toolCallId: "exec0",
+      isError: true,
+    });
+    expect(assistantToolUseSummaries(out[2])).toEqual([
+      { type: "toolUse", id: "exec02", name: "exec" },
+    ]);
+    expect(toolResultSummary(out[3])).toEqual({
+      role: "toolResult",
+      toolCallId: "exec02",
+      toolUseId: "exec02",
+      toolName: "exec",
+      isError: false,
+    });
+    expect(requireToolResultMessage(out[3]).content).toEqual([
+      { type: "text", text: "second result" },
+    ]);
+  });
+
+  it("keeps same-turn repeated calls and results aligned after id rewriting", () => {
+    const rawId = "exec_0";
+    const out = sanitizeReplayToolCallIdsForStream({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "toolUse", id: rawId, name: "exec", input: { cmd: "first" } },
+            { type: "toolUse", id: rawId, name: "exec", input: { cmd: "second" } },
+          ],
+        } as never,
+        {
+          role: "toolResult",
+          toolCallId: rawId,
+          toolUseId: rawId,
+          toolName: "exec",
+          content: [{ type: "text", text: "first result" }],
+          isError: false,
+        } as never,
+        {
+          role: "toolResult",
+          toolCallId: rawId,
+          toolUseId: rawId,
+          toolName: "exec",
+          content: [{ type: "text", text: "second result" }],
+          isError: false,
+        } as never,
+      ],
+      mode: "strict",
+      repairToolUseResultPairing: true,
+    });
+
+    expect(out.map((message) => message.role)).toEqual(["assistant", "toolResult", "toolResult"]);
+    expect(assistantToolUseSummaries(out[0])).toEqual([
+      { type: "toolUse", id: "exec0", name: "exec" },
+      { type: "toolUse", id: "exec02", name: "exec" },
+    ]);
+    expect(toolResultSummary(out[1])).toMatchObject({
+      toolCallId: "exec0",
+      toolUseId: "exec0",
+      isError: false,
+    });
+    expect(toolResultSummary(out[2])).toMatchObject({
+      toolCallId: "exec02",
+      toolUseId: "exec02",
+      isError: false,
+    });
+  });
+
   it("preserves signed-thinking replay ids when requested by provider policy", () => {
     const rawId = "call_1";
     const out = sanitizeReplayToolCallIdsForStream({
@@ -1622,3 +1728,4 @@ describe("sanitizeOpenAIResponsesReplayForStream", () => {
     expect(danglingResult.content).toEqual([{ type: "text", text: "aborted" }]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

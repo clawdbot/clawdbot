@@ -6,16 +6,25 @@ import {
   WorkerAdmissionResponseFrameSchema,
   WorkerHeartbeatRequestFrameSchema,
   WorkerHeartbeatResponseFrameSchema,
+  WorkerLiveEventRequestFrameSchema,
+  WorkerLiveEventResponseFrameSchema,
   WorkerProtocolCloseReasonSchema,
   WorkerTranscriptCommitRequestFrameSchema,
   WorkerTranscriptCommitResponseFrameSchema,
+  WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
+  WORKER_PROTOCOL_FEATURES,
   WORKER_RPC_SET_VERSION,
   WORKER_TRANSCRIPT_MAX_JSON_DEPTH,
   validateWorkerAdmissionHandshake,
   validateWorkerConnectRequestFrame,
   validateWorkerHeartbeatParams,
+  validateWorkerLiveEventParams,
   validateWorkerTranscriptCommitParams,
 } from "../index.js";
+import {
+  WORKER_INFERENCE_MAX_OUTPUT_TOKENS,
+  validateWorkerInferenceStartParams,
+} from "./worker-inference.js";
 
 const bundleHash = "a".repeat(64);
 const handshake: WorkerAdmissionHandshake = {
@@ -38,6 +47,7 @@ const connectParams = {
     environmentId: "worker-1",
     credential,
     sessionId: null,
+    runId: null,
     ownerEpoch: 1,
     rpcSetVersion: WORKER_RPC_SET_VERSION,
     handshake,
@@ -93,6 +103,61 @@ const transcriptMessages = [
     timestamp: 3,
   },
 ];
+const liveBase = { runEpoch: 2, lastAckedSeq: 0, seq: 1, runId: "r" };
+const models = {
+  selectedProvider: "p",
+  selectedModel: "m",
+  activeProvider: "q",
+  activeModel: "n",
+};
+const event = (kind: string, payload: Record<string, unknown>) => ({ kind, payload });
+const params = (liveEvent: unknown, overrides: Record<string, unknown> = {}) => ({
+  ...liveBase,
+  event: liveEvent,
+  ...overrides,
+});
+const tool = (phase: string, payload: Record<string, unknown>) =>
+  event("tool", { phase, name: "t", toolCallId: "c", ...payload });
+
+const inferenceIdentity = {
+  runEpoch: 2,
+  sessionId: "session-1",
+  runId: "run-1",
+  turnId: "turn-1",
+};
+const inferenceStart = {
+  ...inferenceIdentity,
+  modelRef: { provider: "fixture-provider", model: "fixture-model" },
+  context: {
+    messages: [{ role: "user" as const, content: "Run the probe.", timestamp: 1 }],
+  },
+  options: { temperature: 0.5, maxTokens: 1_024, reasoning: "medium" as const },
+};
+const approval = (phase: string, status: string) =>
+  event("approval", { phase, kind: "exec", status, title: "x" });
+const lifecycle = (phase: string, payload: Record<string, unknown> = {}) =>
+  event("lifecycle", { phase, ...payload });
+const fallbackStep = (outcome: string) =>
+  lifecycle("fallback_step", {
+    fallbackStepType: "fallback_step",
+    fallbackStepFromModel: "p/m",
+    fallbackStepFinalOutcome: outcome,
+  });
+const assistant = event("assistant", { text: "x", delta: "x" });
+const validateLive = validateWorkerLiveEventParams;
+const liveError = (details: Record<string, unknown>) => ({
+  ok: false,
+  error: { code: "INVALID_REQUEST", message: "x", details },
+});
+const liveRequest = (value: unknown) =>
+  Value.Check(WorkerLiveEventRequestFrameSchema, {
+    type: "req",
+    id: "l",
+    method: "worker.live-event",
+    params: value,
+  });
+const liveResponse = (value: Record<string, unknown>) =>
+  Value.Check(WorkerLiveEventResponseFrameSchema, { type: "res", id: "l", ...value });
 
 describe("worker admission handshake schema", () => {
   it("accepts the bootstrap receipt and future unique feature names", () => {
@@ -127,6 +192,29 @@ describe("worker protocol schemas", () => {
         params: connectParams,
       }),
     ).toBe(true);
+    const missingRunId = structuredClone(connectParams);
+    Reflect.deleteProperty(missingRunId.admission, "runId");
+    expect(
+      validateWorkerConnectRequestFrame({
+        type: "req",
+        id: "connect-missing-run",
+        method: "connect",
+        params: missingRunId,
+      }),
+    ).toBe(false);
+    for (const admission of [
+      { ...connectParams.admission, sessionId: null, runId: "run-1" },
+      { ...connectParams.admission, sessionId: "session-1", runId: null },
+    ]) {
+      expect(
+        validateWorkerConnectRequestFrame({
+          type: "req",
+          id: "connect-mismatched-session-run",
+          method: "connect",
+          params: { ...connectParams, admission },
+        }),
+      ).toBe(false);
+    }
     expect(
       Value.Check(WorkerAdmissionResponseFrameSchema, {
         type: "res",
@@ -157,19 +245,19 @@ describe("worker protocol schemas", () => {
   });
 
   it("accepts semantic transcript commits and generated-id responses", () => {
-    const params = {
+    const commitParams = {
       runEpoch: 2,
       seq: 1,
       baseLeafId: null,
       messages: transcriptMessages,
     };
-    expect(validateWorkerTranscriptCommitParams(params)).toBe(true);
+    expect(validateWorkerTranscriptCommitParams(commitParams)).toBe(true);
     expect(
       Value.Check(WorkerTranscriptCommitRequestFrameSchema, {
         type: "req",
         id: "commit-1",
         method: "worker.transcript.commit",
-        params,
+        params: commitParams,
       }),
     ).toBe(true);
     expect(
@@ -206,6 +294,102 @@ describe("worker protocol schemas", () => {
     ).toBe(true);
   });
 
+  it("validates the additive live-event protocol", () => {
+    expect(WORKER_RPC_SET_VERSION).toBe(1);
+    expect(WORKER_PROTOCOL_FEATURES).toContain("worker-live-event-v1");
+    expect(WORKER_PROTOCOL_FEATURES).toContain(WORKER_LAUNCH_V2_PROTOCOL_FEATURE);
+    for (const validEvent of [
+      assistant,
+      event("thinking", { text: "x", delta: "x" }),
+      tool("start", { args: {} }),
+      tool("update", { partialResult: { output: "x" } }),
+      tool("result", { result: { output: "x" }, isError: false }),
+      approval("requested", "pending"),
+      approval("resolved", "approved"),
+      lifecycle("start", { startedAt: 1 }),
+      lifecycle("fallback", {
+        ...models,
+        reasonSummary: "x",
+        attemptSummaries: ["x"],
+        attempts: [{ provider: "p", model: "m", error: "x", authMode: "key" }],
+      }),
+      lifecycle("fallback_cleared", models),
+      fallbackStep("next_fallback"),
+      lifecycle("finishing", { endedAt: 2, error: "x" }),
+      lifecycle("end", { endedAt: 3 }),
+      lifecycle("error", { endedAt: 4, error: "x" }),
+    ]) {
+      expect(validateLive(params(validEvent))).toBe(true);
+    }
+    expect(liveRequest(params(assistant))).toBe(true);
+    expect(liveResponse({ ok: true, payload: { ackedSeq: 3 } })).toBe(true);
+    for (const details of [
+      { reason: "epoch-mismatch" },
+      { reason: "session-not-attached" },
+      { reason: "invalid-event" },
+      { reason: "capacity-exceeded" },
+      { reason: "resync-required", ackedSeq: 3, expectedSeq: 4 },
+    ]) {
+      expect(liveResponse(liveError(details))).toBe(true);
+    }
+    expect(liveResponse(liveError({ reason: "later" }))).toBe(false);
+    expect(liveResponse({ ok: true, payload: { ackedSeq: -1 } })).toBe(false);
+    for (const [field, value] of [
+      ["runEpoch", -1],
+      ["lastAckedSeq", -1],
+      ["lastAckedSeq", Number.MAX_SAFE_INTEGER + 1],
+      ["seq", 0],
+      ["seq", Number.MAX_SAFE_INTEGER + 1],
+    ] as const) {
+      expect(validateLive(params(assistant, { [field]: value }))).toBe(false);
+    }
+    for (const invalid of [
+      params(event("unknown", {})),
+      params(tool("start", { args: {}, partialResult: {} })),
+      params(approval("requested", "approved")),
+      params(lifecycle("end", { endedAt: 4, error: "stopped" })),
+      params(fallbackStep("retrying")),
+      params({ ...assistant, seq: 8 }),
+      params(assistant, { sessionKey: "x" }),
+      {
+        runEpoch: liveBase.runEpoch,
+        seq: liveBase.seq,
+        runId: liveBase.runId,
+        event: assistant,
+      },
+    ]) {
+      expect(validateLive(invalid)).toBe(false);
+    }
+    const cyclic: { self?: unknown } = {};
+    cyclic.self = cyclic;
+    for (const [value, keyword] of [
+      [Number.POSITIVE_INFINITY, "finite"],
+      [cyclic, "acyclic"],
+    ] as const) {
+      expect(validateLive(params(tool("update", { partialResult: value })))).toBe(false);
+      expect(validateLive.errors?.[0]).toMatchObject({ keyword });
+    }
+  });
+
+  it("accepts only a model reference and constrained inference options", () => {
+    expect(
+      validateWorkerInferenceStartParams({
+        ...inferenceStart,
+        options: { ...inferenceStart.options, reasoning: "adaptive" },
+      }),
+    ).toBe(true);
+    const route = { baseUrl: "https://invalid.example", headers: { "x-route": "override" } };
+    for (const candidate of [
+      { ...inferenceStart, model: { provider: "p", id: "m", ...route } },
+      { ...inferenceStart, modelRef: { ...inferenceStart.modelRef, ...route } },
+      { ...inferenceStart, options: { ...inferenceStart.options, ...route } },
+      { ...inferenceStart, options: { ...inferenceStart.options, arbitrary: true } },
+      { ...inferenceStart, options: { maxTokens: WORKER_INFERENCE_MAX_OUTPUT_TOKENS + 1 } },
+    ]) {
+      expect(validateWorkerInferenceStartParams(candidate)).toBe(false);
+    }
+  });
+
   it.each([
     { runEpoch: 2, seq: 1, baseLeafId: null, messages: [] },
     { runEpoch: 2, seq: 0, baseLeafId: null, messages: transcriptMessages },
@@ -237,8 +421,8 @@ describe("worker protocol schemas", () => {
     for (let depth = 0; depth <= WORKER_TRANSCRIPT_MAX_JSON_DEPTH; depth += 1) {
       nested = { nested };
     }
-    const assistant = transcriptMessages[1];
-    if (!assistant || assistant.role !== "assistant") {
+    const transcriptAssistant = transcriptMessages[1];
+    if (!transcriptAssistant || transcriptAssistant.role !== "assistant") {
       throw new Error("expected assistant transcript fixture");
     }
     const candidate = {
@@ -247,7 +431,7 @@ describe("worker protocol schemas", () => {
       baseLeafId: null,
       messages: [
         {
-          ...assistant,
+          ...transcriptAssistant,
           content: [
             {
               type: "toolCall" as const,
@@ -291,6 +475,7 @@ describe("worker protocol schemas", () => {
 
   it("keeps worker close reasons closed", () => {
     expect(Value.Check(WorkerProtocolCloseReasonSchema, "credential-replaced")).toBe(true);
+    expect(Value.Check(WorkerProtocolCloseReasonSchema, "placement-mismatch")).toBe(true);
     expect(Value.Check(WorkerProtocolCloseReasonSchema, "not-a-worker-reason")).toBe(false);
   });
 });

@@ -1,5 +1,5 @@
 // Mattermost tests cover target resolution plugin behavior.
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveMattermostAccount = vi.fn();
 const createMattermostClient = vi.fn();
@@ -17,20 +17,12 @@ vi.mock("./client.js", () => ({
 }));
 
 describe("mattermost target resolution", () => {
-  let isExplicitMattermostTarget: typeof import("./target-resolution.js").isExplicitMattermostTarget;
-  let isMattermostId: typeof import("./target-resolution.js").isMattermostId;
-  let parseMattermostApiStatus: typeof import("./target-resolution.js").parseMattermostApiStatus;
+  let parseMattermostTarget: typeof import("./target-resolution.js").parseMattermostTarget;
   let resolveMattermostOpaqueTarget: typeof import("./target-resolution.js").resolveMattermostOpaqueTarget;
-  let resetMattermostOpaqueTargetCacheForTests: typeof import("./target-resolution.js").resetMattermostOpaqueTargetCacheForTests;
 
   beforeAll(async () => {
-    ({
-      isExplicitMattermostTarget,
-      isMattermostId,
-      parseMattermostApiStatus,
-      resolveMattermostOpaqueTarget,
-      resetMattermostOpaqueTargetCacheForTests,
-    } = await import("./target-resolution.js"));
+    ({ parseMattermostTarget, resolveMattermostOpaqueTarget } =
+      await import("./target-resolution.js"));
   });
 
   beforeEach(() => {
@@ -40,19 +32,35 @@ describe("mattermost target resolution", () => {
     normalizeMattermostBaseUrl.mockClear();
   });
 
-  afterEach(() => {
-    resetMattermostOpaqueTargetCacheForTests();
+  it("recognizes ID-shaped values", () => {
+    expect(parseMattermostTarget("abcd1234abcd1234abcd1234ab")).toEqual({
+      kind: "channel",
+      id: "abcd1234abcd1234abcd1234ab",
+    });
+    expect(parseMattermostTarget("short")).toEqual({ kind: "channel-name", name: "short" });
   });
 
-  it("recognizes explicit targets and ID-shaped values", () => {
-    expect(isExplicitMattermostTarget("@alice")).toBe(true);
-    expect(isExplicitMattermostTarget("#town-square")).toBe(true);
-    expect(isExplicitMattermostTarget("mattermost:chan")).toBe(true);
-    expect(isExplicitMattermostTarget(" plain ")).toBe(false);
-    expect(isMattermostId("abcd1234abcd1234abcd1234ab")).toBe(true);
-    expect(isMattermostId("short")).toBe(false);
-    expect(parseMattermostApiStatus(new Error("Mattermost API 404 Not Found"))).toBe(404);
-    expect(parseMattermostApiStatus(new Error("other error"))).toBeUndefined();
+  it.each(["@alice", "#town-square", "mattermost:chan"])(
+    "skips explicit target %s before account resolution",
+    async (input) => {
+      await expect(resolveMattermostOpaqueTarget({ input })).resolves.toBeNull();
+      expect(resolveMattermostAccount).not.toHaveBeenCalled();
+      expect(createMattermostClient).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not cache non-404 lookup failures", async () => {
+    createMattermostClient.mockReturnValue({ client: true });
+    fetchMattermostUser.mockRejectedValue(new Error("other error"));
+    const params = {
+      input: "defg1234abcd1234abcd1234ab",
+      token: "token",
+      baseUrl: "https://mm.example.com",
+    };
+
+    await expect(resolveMattermostOpaqueTarget(params)).resolves.toMatchObject({ kind: "channel" });
+    await expect(resolveMattermostOpaqueTarget(params)).resolves.toMatchObject({ kind: "channel" });
+    expect(fetchMattermostUser).toHaveBeenCalledTimes(2);
   });
 
   it("resolves opaque ids as users and caches the result", async () => {
@@ -138,6 +146,8 @@ describe("mattermost target resolution", () => {
 
   it("uses account resolution when token/base url are not passed", async () => {
     resolveMattermostAccount.mockReturnValue({
+      accountId: "acct-1",
+      enabled: true,
       baseUrl: "https://mm.example.com",
       botToken: "token",
     });
@@ -155,5 +165,26 @@ describe("mattermost target resolution", () => {
       cfg: { channels: { mattermost: {} } },
       accountId: "acct-1",
     });
+  });
+
+  it("rejects disabled accounts before cache or provider access", async () => {
+    resolveMattermostAccount.mockReturnValue({
+      accountId: "disabled",
+      enabled: false,
+      baseUrl: "https://mm.example.com",
+      botToken: "token",
+    });
+
+    await expect(
+      resolveMattermostOpaqueTarget({
+        input: "disabled12abcd1234abcd1234",
+        cfg: { channels: { mattermost: {} } },
+        accountId: "disabled",
+      }),
+    ).rejects.toThrow('Mattermost account "disabled" is disabled');
+
+    expect(normalizeMattermostBaseUrl).not.toHaveBeenCalled();
+    expect(createMattermostClient).not.toHaveBeenCalled();
+    expect(fetchMattermostUser).not.toHaveBeenCalled();
   });
 });

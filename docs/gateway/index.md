@@ -284,7 +284,7 @@ Do not also let `openclaw doctor --fix` install a user-level gateway service for
   </Tab>
 </Tabs>
 
-Invalid configuration errors exit with code `78`. Linux systemd units use `RestartPreventExitStatus=78` to stop relaunching until the config is fixed. launchd and Windows Task Scheduler do not have an equivalent per-exit-code stop rule, so the Gateway also persists rapid unclean boot history and suppresses channel/provider account auto-start after repeated startup failures. In that safe mode the control plane still starts for inspection and repair, config hot reloads and `secrets.reload` refuse automatic channel restarts, and an explicit operator `channels.start` request can override the suppression.
+Invalid configuration errors exit with code `78`. Linux systemd units use `RestartPreventExitStatus=78` to stop relaunching until the config is fixed. launchd and Windows Task Scheduler do not have an equivalent per-exit-code stop rule, so the Gateway also persists rapid unclean boot history and suppresses channel/provider account auto-start after repeated startup failures. In that safe mode the control plane still starts for inspection and repair, config hot reloads and `secrets.reload` refuse automatic channel restarts, and an explicit operator `channels.start` request can override the suppression. Step-by-step recovery lives in [Restart recovery](/gateway/restart-recovery#safety-valves-and-observability).
 
 ## Dev profile quick path
 
@@ -304,9 +304,9 @@ Defaults include isolated state/config and base gateway port `19001`.
   a generated dump of every callable helper route.
 - Requests: `req(method, params)` → `res(ok/payload|error)`.
 - Common events include `connect.challenge`, `agent`, `chat`,
-  `session.message`, `session.operation`, `session.tool`, `sessions.changed`,
-  `presence`, `tick`, `health`, `heartbeat`, pairing/approval lifecycle events,
-  and `shutdown`.
+  `session.message`, `session.operation`, `session.tool`, opt-in
+  `session.approval`, `sessions.changed`, `presence`, `tick`, `health`,
+  `heartbeat`, pairing/approval lifecycle events, and `shutdown`.
 
 Agent runs are two-stage:
 

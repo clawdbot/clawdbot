@@ -3,10 +3,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
   timestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateToVisibleWidth, visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
@@ -24,8 +21,9 @@ import { formatTimestamp } from "../../logging/timestamps.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
+import { parseDurationMs as parseSharedDurationMs } from "../parse-duration.js";
 
-export function parseCronCommandArgv(value: unknown): string[] | undefined {
+function parseCronArgv(value: unknown, flag: string): string[] | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
@@ -33,16 +31,24 @@ export function parseCronCommandArgv(value: unknown): string[] | undefined {
   try {
     parsed = JSON.parse(value);
   } catch {
-    throw new Error("--command-argv must be a JSON array of strings");
+    throw new Error(`${flag} must be a JSON array of strings`);
   }
   if (
     !Array.isArray(parsed) ||
     parsed.length === 0 ||
     parsed.some((entry) => typeof entry !== "string" || entry.length === 0)
   ) {
-    throw new Error("--command-argv must be a non-empty JSON array of non-empty strings");
+    throw new Error(`${flag} must be a non-empty JSON array of non-empty strings`);
   }
   return parsed;
+}
+
+export function parseCronCommandArgv(value: unknown): string[] | undefined {
+  return parseCronArgv(value, "--command-argv");
+}
+
+export function parseCronStreamCommandArgv(value: unknown): string[] | undefined {
+  return parseCronArgv(value, "--stream-command");
 }
 
 export function parseCronCommandEnv(values: unknown): Record<string, string> | undefined {
@@ -222,37 +228,16 @@ export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
   }
 }
 
-export function parseDurationMs(input: string): number | null {
-  const raw = input.trim();
-  if (!raw) {
+export function parsePositiveCronDurationMs(input: string): number | null {
+  try {
+    const result = parseSharedDurationMs(input);
+    if (result <= 0) {
+      return null;
+    }
+    return result;
+  } catch {
     return null;
   }
-  const match = raw.match(/^(\d+(?:\.\d+)?)(ms|s|m|h|d)$/i);
-  if (!match) {
-    return null;
-  }
-  const n = Number.parseFloat(match[1] ?? "");
-  if (!Number.isFinite(n) || n <= 0) {
-    return null;
-  }
-  const unit = normalizeLowercaseStringOrEmpty(match[2] ?? "");
-  const factor =
-    unit === "ms"
-      ? 1
-      : unit === "s"
-        ? 1000
-        : unit === "m"
-          ? 60_000
-          : unit === "h"
-            ? 3_600_000
-            : 86_400_000;
-  const result = Math.floor(n * factor);
-  if (!Number.isFinite(result) || result <= 0) {
-    // A finite mantissa can still overflow to Infinity for a large unit (e.g. a long
-    // pure-digit string with "d"); tiny positive values can also floor to 0ms.
-    return null;
-  }
-  return result;
 }
 
 export function parseCronStaggerMs(params: {
@@ -265,7 +250,7 @@ export function parseCronStaggerMs(params: {
   if (!params.staggerRaw) {
     return undefined;
   }
-  const parsed = parseDurationMs(params.staggerRaw);
+  const parsed = parsePositiveCronDurationMs(params.staggerRaw);
   if (!parsed) {
     throw new Error("Invalid --stagger; use e.g. 30s, 1m, 5m");
   }
@@ -324,7 +309,7 @@ export function parseAt(input: string, tz?: string): string | null {
     return timestampMsToIsoString(absolute) ?? null;
   }
   const durationInput = raw.startsWith("+") ? raw.slice(1) : raw;
-  const dur = parseDurationMs(durationInput);
+  const dur = parsePositiveCronDurationMs(durationInput);
   if (dur !== null) {
     const expiresAt = resolveExpiresAtMsFromDurationMs(dur);
     return timestampMsToIsoString(expiresAt) ?? null;
@@ -411,6 +396,10 @@ const formatSchedule = (schedule: CronSchedule | undefined, hasTrigger = false) 
   if (schedule?.kind === "on-exit") {
     const cwd = schedule.cwd ? ` @ ${schedule.cwd}` : "";
     return `on-exit ${schedule.command}${cwd}`;
+  }
+  if (schedule?.kind === "stream") {
+    const cwd = schedule.cwd ? ` @ ${schedule.cwd}` : "";
+    return `stream ${schedule.command.join(" ")}${cwd}`;
   }
   if (schedule?.kind !== "cron") {
     return "-";

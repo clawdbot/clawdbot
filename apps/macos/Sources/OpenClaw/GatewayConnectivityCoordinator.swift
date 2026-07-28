@@ -1,13 +1,11 @@
 import Foundation
 import Observation
-import OSLog
 
 @MainActor
 @Observable
 final class GatewayConnectivityCoordinator {
     static let shared = GatewayConnectivityCoordinator()
 
-    private let logger = Logger(subsystem: "ai.openclaw", category: "gateway.connectivity")
     private var endpointTask: Task<Void, Never>?
     private var lastResolvedURL: URL?
     private var lastRouteRevision: UInt64?

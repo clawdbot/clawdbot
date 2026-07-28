@@ -1,8 +1,26 @@
 // Hooks CLI tests cover hook command registration and output behavior.
-import { describe, expect, it } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { Command } from "commander";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HookStatusReport } from "../hooks/hooks-status.js";
-import { formatHookInfo, formatHooksCheck, formatHooksList } from "./hooks-cli.js";
+import {
+  formatHookInfo,
+  formatHooksCheck,
+  formatHooksList,
+  registerHooksCli,
+} from "./hooks-cli.js";
 import { createEmptyInstallChecks } from "./requirements-test-fixtures.js";
+
+const runPluginInstallCommandMock = vi.hoisted(() => vi.fn());
+const runPluginUpdateCommandMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./plugins-install-command.js", () => ({
+  runPluginInstallCommand: runPluginInstallCommandMock,
+}));
+
+vi.mock("./plugins-update-command.js", () => ({
+  runPluginUpdateCommand: runPluginUpdateCommandMock,
+}));
 
 const report: HookStatusReport = {
   workspaceDir: "/tmp/workspace",
@@ -31,6 +49,11 @@ const report: HookStatusReport = {
     },
   ],
 };
+
+beforeEach(() => {
+  runPluginInstallCommandMock.mockReset();
+  runPluginUpdateCommandMock.mockReset();
+});
 
 function createPluginManagedHookReport(): HookStatusReport {
   return {
@@ -87,7 +110,7 @@ describe("hooks cli formatting", () => {
       managedHooksDir: "/tmp/hooks",
       hooks: [
         {
-          ...report.hooks[0],
+          ...expectDefined(report.hooks[0], "report.hooks[0] test invariant"),
           name: "typo-hook",
           events: ["command:nwe", "command:new"],
           unknownEvents: ["command:nwe"],
@@ -105,5 +128,21 @@ describe("hooks cli formatting", () => {
     const output = formatHookInfo(pluginReport, "plugin-hook", {});
     expect(output).toContain("voice-call");
     expect(output).toContain("Managed by plugin");
+  });
+
+  it("forwards --force through the deprecated install alias", async () => {
+    runPluginInstallCommandMock.mockResolvedValueOnce(undefined);
+    const program = new Command().exitOverride();
+    registerHooksCli(program);
+
+    await program.parseAsync(["hooks", "install", "npm:demo-hooks", "--force"], {
+      from: "user",
+    });
+
+    expect(runPluginInstallCommandMock).toHaveBeenCalledWith({
+      raw: "npm:demo-hooks",
+      opts: expect.objectContaining({ force: true }),
+      invalidateRuntimeCache: false,
+    });
   });
 });

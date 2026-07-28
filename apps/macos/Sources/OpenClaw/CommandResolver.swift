@@ -14,10 +14,6 @@ enum CommandResolver {
         return nil
     }
 
-    static func runtimeResolution() -> Result<RuntimeResolution, RuntimeResolutionError> {
-        RuntimeLocator.resolve(searchPaths: self.preferredPaths())
-    }
-
     static func runtimeResolution(searchPaths: [String]?) -> Result<RuntimeResolution, RuntimeResolutionError> {
         RuntimeLocator.resolve(searchPaths: searchPaths ?? self.preferredPaths())
     }
@@ -83,6 +79,13 @@ enum CommandResolver {
             current: current,
             projectRoot: projectRoot,
             validatedExecutable: validatedExecutable)
+    }
+
+    /// Version-manager trees can make discovery arbitrarily slow. Async callers
+    /// must leave their actor before touching the filesystem or the UI can stall.
+    @concurrent
+    static func preferredPathsAsync() async -> [String] {
+        self.preferredPaths()
     }
 
     static func preferredPaths(
@@ -238,33 +241,17 @@ enum CommandResolver {
         #if DEBUG
         let root = projectRoot ?? self.projectRoot()
         let candidate = root.appendingPathComponent("node_modules/.bin").appendingPathComponent(self.helperName).path
-        return FileManager().isExecutableFile(atPath: candidate) ? candidate : nil
+        if FileManager().isExecutableFile(atPath: candidate) {
+            return candidate
+        }
+        // pnpm does not create a self-referential node_modules/.bin link for
+        // this package. Source builds still need the checkout CLI, not a stale
+        // globally installed binary with a different private command surface.
+        let sourceEntrypoint = root.appendingPathComponent("openclaw.mjs").path
+        return FileManager().isExecutableFile(atPath: sourceEntrypoint) ? sourceEntrypoint : nil
         #else
         return nil
         #endif
-    }
-
-    static func nodeCliPath() -> String? {
-        let root = self.projectRoot()
-        let candidates = [
-            root.appendingPathComponent("openclaw.mjs").path,
-            root.appendingPathComponent("bin/openclaw.js").path,
-        ]
-        for candidate in candidates where FileManager().isReadableFile(atPath: candidate) {
-            return candidate
-        }
-        return nil
-    }
-
-    static func hasAnyOpenClawInvoker(searchPaths: [String]? = nil) -> Bool {
-        if self.openclawExecutable(searchPaths: searchPaths) != nil { return true }
-        if self.findExecutable(named: "pnpm", searchPaths: searchPaths) != nil { return true }
-        if self.findExecutable(named: "node", searchPaths: searchPaths) != nil,
-           self.nodeCliPath() != nil
-        {
-            return true
-        }
-        return false
     }
 
     static func openclawNodeCommand(

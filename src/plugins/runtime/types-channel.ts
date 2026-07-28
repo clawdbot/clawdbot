@@ -5,32 +5,36 @@
  * inside the owning plugin package instead of hanging off core runtime slots
  * keyed by plugin id.
  */
+import type {
+  IsControlCommandMessage,
+  ShouldComputeCommandAuthorized,
+} from "../../auto-reply/command-detection.runtime-types.js";
+import type { ShouldHandleTextCommands } from "../../auto-reply/commands-registry.runtime-types.js";
+import type { DispatchReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.types.js";
+import type {
+  BuildMentionRegexes,
+  MatchesMentionPatterns,
+  MatchesMentionWithExplicit,
+} from "../../auto-reply/reply/mentions.types.js";
+import type { CreateReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.runtime-types.js";
+import type { LoadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.types.js";
+import type { ResolveMarkdownTableMode } from "../../config/markdown-tables.types.js";
+import type {
+  ReadSessionUpdatedAt,
+  RecordSessionMetaFromInbound,
+  UpdateLastRoute,
+} from "../../config/sessions/runtime-types.js";
+import type {
+  ReadChannelAllowFromStoreForAccount,
+  RemoveChannelAllowFromStoreEntryForAccount,
+  UpsertChannelPairingRequestForAccount,
+} from "../../pairing/pairing-store.types.js";
+
 type DispatchReplyWithBufferedBlockDispatcher =
   import("../../auto-reply/reply/provider-dispatcher.types.js").DispatchReplyWithBufferedBlockDispatcher;
-type CreateReplyDispatcherWithTyping =
-  import("../../auto-reply/reply/reply-dispatcher.runtime-types.js").CreateReplyDispatcherWithTyping;
-type ReadChannelAllowFromStoreForAccount =
-  import("../../pairing/pairing-store.types.js").ReadChannelAllowFromStoreForAccount;
-type UpsertChannelPairingRequestForAccount =
-  import("../../pairing/pairing-store.types.js").UpsertChannelPairingRequestForAccount;
-type ShouldHandleTextCommands =
-  import("../../auto-reply/commands-registry.runtime-types.js").ShouldHandleTextCommands;
-type IsControlCommandMessage =
-  import("../../auto-reply/command-detection.runtime-types.js").IsControlCommandMessage;
-type ShouldComputeCommandAuthorized =
-  import("../../auto-reply/command-detection.runtime-types.js").ShouldComputeCommandAuthorized;
-type BuildMentionRegexes = import("../../auto-reply/reply/mentions.types.js").BuildMentionRegexes;
-type MatchesMentionPatterns =
-  import("../../auto-reply/reply/mentions.types.js").MatchesMentionPatterns;
-type MatchesMentionWithExplicit =
-  import("../../auto-reply/reply/mentions.types.js").MatchesMentionWithExplicit;
-type ReadSessionUpdatedAt = import("../../config/sessions/runtime-types.js").ReadSessionUpdatedAt;
-type RecordSessionMetaFromInbound =
-  import("../../config/sessions/runtime-types.js").RecordSessionMetaFromInbound;
-type UpdateLastRoute = import("../../config/sessions/runtime-types.js").UpdateLastRoute;
 type RecordInboundSession = import("../../channels/session.types.js").RecordInboundSession;
 
-export type RuntimeThreadBindingLifecycleRecord =
+type RuntimeThreadBindingLifecycleRecord =
   | import("../../infra/outbound/session-binding.types.js").SessionBindingRecord
   | {
       boundAt: number;
@@ -39,13 +43,13 @@ export type RuntimeThreadBindingLifecycleRecord =
       maxAgeMs?: number;
     };
 
-export type PluginRuntimeChannelContextKey = {
+type PluginRuntimeChannelContextKey = {
   channelId: string;
   accountId?: string | null;
   capability: string;
 };
 
-export type PluginRuntimeChannelContextEvent = {
+type PluginRuntimeChannelContextEvent = {
   type: "registered" | "unregistered";
   key: {
     channelId: string;
@@ -55,7 +59,7 @@ export type PluginRuntimeChannelContextEvent = {
   context?: unknown;
 };
 
-export type PluginRuntimeChannelContextRegistry = {
+type PluginRuntimeChannelContextRegistry = {
   register: (
     params: PluginRuntimeChannelContextKey & {
       context: unknown;
@@ -82,7 +86,7 @@ export type PluginRuntimeChannel = {
     resolveChunkMode: typeof import("../../auto-reply/chunk.js").resolveChunkMode;
     resolveTextChunkLimit: typeof import("../../auto-reply/chunk.js").resolveTextChunkLimit;
     hasControlCommand: typeof import("../../auto-reply/command-detection.js").hasControlCommand;
-    resolveMarkdownTableMode: import("../../config/markdown-tables.types.js").ResolveMarkdownTableMode;
+    resolveMarkdownTableMode: ResolveMarkdownTableMode;
     convertMarkdownTables: typeof import("../../../packages/markdown-core/src/tables.js").convertMarkdownTables;
   };
   reply: {
@@ -105,7 +109,7 @@ export type PluginRuntimeChannel = {
      * manually preserve source reply delivery metadata such as
      * `sourceReplyDeliveryMode`.
      */
-    dispatchReplyFromConfig: import("../../auto-reply/reply/dispatch-from-config.types.js").DispatchReplyFromConfig;
+    dispatchReplyFromConfig: DispatchReplyFromConfig;
     withReplyDispatcher: typeof import("../../auto-reply/dispatch-dispatcher.js").withReplyDispatcher;
     settleReplyDispatcher: typeof import("../../auto-reply/dispatch-dispatcher.js").settleReplyDispatcher;
     /**
@@ -115,8 +119,6 @@ export type PluginRuntimeChannel = {
      */
     finalizeInboundContext: typeof import("../../auto-reply/reply/inbound-context.js").finalizeInboundContext;
     formatAgentEnvelope: typeof import("../../auto-reply/envelope.js").formatAgentEnvelope;
-    /** @deprecated Prefer `BodyForAgent` + structured user-context blocks (do not build plaintext envelopes for prompts). */
-    formatInboundEnvelope: typeof import("../../auto-reply/envelope.js").formatInboundEnvelope;
     resolveEnvelopeFormatOptions: typeof import("../../auto-reply/envelope.js").resolveEnvelopeFormatOptions;
   };
   routing: {
@@ -126,6 +128,7 @@ export type PluginRuntimeChannel = {
   pairing: {
     buildPairingReply: typeof import("../../pairing/pairing-messages.js").buildPairingReply;
     readAllowFromStore: ReadChannelAllowFromStoreForAccount;
+    removeAllowFromStoreEntry: RemoveChannelAllowFromStoreEntryForAccount;
     upsertPairingRequest: UpsertChannelPairingRequestForAccount;
   };
   media: {
@@ -177,13 +180,15 @@ export type PluginRuntimeChannel = {
     shouldHandleTextCommands: ShouldHandleTextCommands;
   };
   outbound: {
-    loadAdapter: import("../../channels/plugins/outbound/load.types.js").LoadChannelOutboundAdapter;
+    loadAdapter: LoadChannelOutboundAdapter;
   };
   inbound: {
     buildContext: typeof import("../../channels/inbound-event/context.js").buildChannelInboundEventContext;
     run: typeof import("../../channels/turn/kernel.js").runChannelInboundEvent;
     /** @deprecated Prefer `run` for raw inbound events or `dispatchReply` for assembled contexts. */
     runPreparedReply: typeof import("../../channels/turn/kernel.js").runPreparedInboundReply;
+    dispatch: typeof import("../../channels/turn/kernel.js").dispatchChannelInboundTurn;
+    /** Compatibility escape hatch; prefer `dispatch`, which keeps session wiring in core. */
     dispatchReply: typeof import("../../channels/turn/kernel.js").dispatchChannelInboundReply;
   };
   threadBindings: {

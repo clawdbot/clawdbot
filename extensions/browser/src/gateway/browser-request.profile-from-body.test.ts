@@ -1,4 +1,5 @@
 // Browser tests cover browser request.profile from body plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -82,7 +83,10 @@ async function runBrowserRequest(
 ) {
   const respond = vi.fn();
   const nodeRegistry = createContext(invokeResult, connectedNodes);
-  await browserHandlers["browser.request"]({
+  await expectDefined(
+    browserHandlers["browser.request"],
+    "browser request handler",
+  )({
     params,
     respond: respond as never,
     context: { nodeRegistry } as never,
@@ -276,6 +280,57 @@ describe("browser.request profile selection", () => {
     expect(invoke.params?.method).toBe("GET");
     expect(invoke.params?.path).toBe("/profiles");
     expect(firstRespondCall(respond)[0]).toBe(true);
+  });
+
+  it("falls back to host dispatch when an auto-selected node has no browser host", async () => {
+    const { respond, nodeRegistry } = await runBrowserRequest(
+      { method: "GET", path: "/" },
+      {
+        ok: false,
+        error: {
+          code: "UNAVAILABLE",
+          message: "Browser control host is not reachable on 127.0.0.1:18791.",
+        },
+      },
+    );
+
+    expect(nodeRegistry.invoke).toHaveBeenCalledOnce();
+    expect(startBrowserControlServiceFromConfigMock).toHaveBeenCalledOnce();
+    expect(firstRespondCall(respond)[2]?.message).toBe("browser control is disabled");
+  });
+
+  it("preserves a configured node failure instead of falling back to the host", async () => {
+    loadConfigMock.mockReturnValue({
+      gateway: { nodes: { browser: { mode: "auto", node: "node-1" } } },
+    });
+    const { respond } = await runBrowserRequest(
+      { method: "GET", path: "/" },
+      {
+        ok: false,
+        error: {
+          code: "UNAVAILABLE",
+          message: "Browser control host is not reachable on 127.0.0.1:18791.",
+        },
+      },
+    );
+
+    expect(startBrowserControlServiceFromConfigMock).not.toHaveBeenCalled();
+    expect(firstRespondCall(respond)[2]?.message).toContain(
+      "Browser control host is not reachable",
+    );
+  });
+
+  it("preserves ambiguous auto-selected node failures", async () => {
+    const { respond } = await runBrowserRequest(
+      { method: "GET", path: "/" },
+      {
+        ok: false,
+        error: { code: "UNAVAILABLE", message: "node invoke timed out" },
+      },
+    );
+
+    expect(startBrowserControlServiceFromConfigMock).not.toHaveBeenCalled();
+    expect(firstRespondCall(respond)[2]?.message).toBe("UNAVAILABLE: node invoke timed out");
   });
 
   it("maps validated node-proxy route failures like local route failures", async () => {

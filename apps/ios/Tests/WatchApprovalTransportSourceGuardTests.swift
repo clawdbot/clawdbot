@@ -1,15 +1,6 @@
 import Foundation
 import Testing
-
-private struct TestSnapshotCorrelation: Hashable {
-    let requestID: [UInt8]
-    let gatewayID: [UInt8]
-
-    init(requestID: String, gatewayID: String) {
-        self.requestID = Array(requestID.utf8)
-        self.gatewayID = Array(gatewayID.utf8)
-    }
-}
+@testable import OpenClaw
 
 struct WatchApprovalTransportSourceGuardTests {
     @Test func `watch approval loading and screenshot proof are visible`() throws {
@@ -26,9 +17,10 @@ struct WatchApprovalTransportSourceGuardTests {
         #expect(appSource.contains("id: \"watch-screenshot-approval\""))
         #expect(appSource.contains("pendingApprovalCount: approvals.count"))
         #expect(approvalFace.contains("self.store.isExecApprovalReviewLoading"))
-        #expect(approvalFace.contains("title: \"Loading approval\""))
-        #expect(approvalFace.contains("self.approvalCount > 0"))
-        #expect(approvalFace.contains("title: \"Approval not loaded\""))
+        #expect(approvalFace.contains("title: .localized(\"Loading approval\")"))
+        #expect(approvalFace.contains(
+            "self.approvalCount > 0 || self.store.shouldShowExecApprovalReviewStatus"))
+        #expect(approvalFace.contains("title: .localized(\"Approval not loaded\")"))
         #expect(approvalFace.contains("Approval details have not loaded"))
         #expect(approvalFace.contains("WatchSecondaryButton(title: \"Review again\")"))
     }
@@ -122,17 +114,6 @@ struct WatchApprovalTransportSourceGuardTests {
             "WatchGatewayID.key(snapshot.gatewayStableID) == WatchGatewayID.key(token.gatewayStableID)"))
     }
 
-    @Test func `lost requested snapshot ignores unrelated accepted snapshots`() {
-        let requested = TestSnapshotCorrelation(requestID: "request-a", gatewayID: "gateway-a")
-        let unrelatedRequest = TestSnapshotCorrelation(requestID: "request-b", gatewayID: "gateway-a")
-        let unrelatedOwner = TestSnapshotCorrelation(requestID: "request-a", gatewayID: "gateway-b")
-        var accepted: Set<TestSnapshotCorrelation> = [unrelatedRequest, unrelatedOwner]
-
-        #expect(accepted.remove(requested) == nil)
-        accepted.insert(requested)
-        #expect(accepted.remove(requested) == requested)
-    }
-
     @Test func `watch applies retry reset only to its exact active attempt`() throws {
         let storeSource = try Self.readWatchSource("WatchInboxStore.swift")
         let promptConsume = try Self.extract(
@@ -176,10 +157,23 @@ struct WatchApprovalTransportSourceGuardTests {
         #expect(!parser.contains("?? []"))
     }
 
-    @Test func `watch approval ids remain exact opaque values`() throws {
+    @Test func `watch preserves semantic approval outcomes through receiver parsing`() throws {
+        let receiverSource = try Self.readWatchSource("WatchConnectivityReceiver.swift")
+        let parser = try Self.extract(
+            receiverSource,
+            from: "private static func parseExecApprovalResolvedPayload(",
+            to: "private static func parseExecApprovalExpiredPayload(")
+
+        #expect(parser.contains(
+            "WatchExecApprovalResolvedMessage.parseTransportOutcome(payload[\"outcome\"])"))
+        #expect(parser.contains("outcome: outcome"))
+    }
+
+    @Test func `watch reuses exact compound identifier policy`() throws {
         let receiverSource = try Self.readWatchSource("WatchConnectivityReceiver.swift")
         let storeSource = try Self.readWatchSource("WatchInboxStore.swift")
         let messagesSource = try Self.readWatchSource("WatchInboxMessages.swift")
+        let viewSource = try Self.readWatchSource("WatchInboxView.swift")
         let parser = try Self.extract(
             receiverSource,
             from: "private static func parseExecApprovalItem(",
@@ -196,20 +190,13 @@ struct WatchApprovalTransportSourceGuardTests {
             storeSource,
             from: "private func restorePersistedState()",
             to: "private func persistState()")
-        // The identity validators live in WatchInboxMessages.swift since the
-        // message/model types were split out of WatchInboxStore.swift.
-        let approvalValidator = try Self.extract(
-            messagesSource,
-            from: "enum WatchApprovalID {",
-            to: "enum WatchGatewayID {")
-        let gatewayValidator = try Self.extract(
-            messagesSource,
-            from: "enum WatchGatewayID {",
-            to: "struct WatchExecApprovalIdentityKey:")
-
         let prefixed = "\u{001C}approval"
-        #expect(prefixed != "approval")
-        #expect(Array(prefixed.utf8) != Array("approval".utf8))
+        #expect(ExecApprovalIdentifier.exact(prefixed) == prefixed)
+        #expect(ExecApprovalIdentifier.exact(" approval ") == " approval ")
+        #expect(ExecApprovalIdentifier.exact(".") == nil)
+        #expect(GatewayStableIdentifier.exact(" gateway ") == " gateway ")
+        #expect(messagesSource.contains("typealias WatchApprovalID = ExecApprovalIdentifier"))
+        #expect(messagesSource.contains("typealias WatchGatewayID = GatewayStableIdentifier"))
         #expect(parser.contains("WatchApprovalID.exact(payload[\"id\"] as? String)"))
         #expect(!parser.contains("id = (payload[\"id\"] as? String)?.trimmingCharacters"))
         #expect(ownerKey.contains("WatchApprovalID.key(approvalId)"))
@@ -218,26 +205,10 @@ struct WatchApprovalTransportSourceGuardTests {
         #expect(snapshotConsume.contains("let hasCanonicalRequestCorrelation ="))
         #expect(snapshotConsume.contains("guard hasCanonicalRequestCorrelation else { return true }"))
         #expect(restore.contains("WatchApprovalID.exact(record.approvalID) != nil"))
-        #expect(approvalValidator.contains("!value.isEmpty"))
-        #expect(approvalValidator.contains("value != \".\","))
-        #expect(approvalValidator.contains("value != \"..\""))
-        #expect(!approvalValidator.contains("trimmingCharacters"))
-        #expect(!approvalValidator.contains("isECMAScriptTrimScalar"))
-        #expect(gatewayValidator.contains("guard let value, !value.isEmpty"))
-        #expect(!gatewayValidator.contains("WatchApprovalID.exact"))
-        #expect(!gatewayValidator.contains("value != \".\""))
-        #expect(!gatewayValidator.contains("trimmingCharacters"))
-        #expect(Array(" approval ".utf8) != Array("approval".utf8))
-    }
-
-    @Test func `watch canonical-equivalent approval IDs remain independently targetable`() throws {
-        let storeSource = try Self.readWatchSource("WatchInboxStore.swift")
-        let messagesSource = try Self.readWatchSource("WatchInboxMessages.swift")
-        let viewSource = try Self.readWatchSource("WatchInboxView.swift")
         let composedID = "approval-\u{00E9}"
         let decomposedID = "approval-e\u{0301}"
-        let composedKey = Data(composedID.utf8)
-        let decomposedKey = Data(decomposedID.utf8)
+        let composedKey = ExactOpaqueIdentifierKey(composedID)
+        let decomposedKey = ExactOpaqueIdentifierKey(decomposedID)
         #expect(composedID == decomposedID)
         #expect(composedKey != decomposedKey)
 
@@ -246,22 +217,26 @@ struct WatchApprovalTransportSourceGuardTests {
         let remainingID = try #require(pending[decomposedKey])
         #expect(Array(remainingID.utf8) == Array(decomposedID.utf8))
 
-        // Byte-exact identity types live in WatchInboxMessages.swift after the split.
-        #expect(messagesSource.contains("self.bytes = Array(rawValue.utf8)"))
+        #expect(messagesSource.contains("typealias WatchOpaqueUTF8Key = ExactOpaqueIdentifierKey"))
         #expect(messagesSource.contains("var id: WatchExecApprovalIdentityKey"))
         #expect(messagesSource.contains("var approvalID: WatchApprovalID.Key"))
         #expect(messagesSource.contains("var gatewayID: WatchGatewayID.Key"))
         #expect(storeSource.contains("WatchApprovalID.key(tombstone.approvalId) == key.approvalID"))
+        #expect(storeSource.contains("WatchGatewayID.key(tombstone.gatewayStableID) == key.gatewayID"))
         #expect(storeSource.contains("approvalKey.notificationComponent"))
+        #expect(storeSource.contains("gatewayKey.notificationComponent"))
         #expect(!storeSource.contains("record.id == approval.id"))
         #expect(!messagesSource.contains("record.id == approval.id"))
         #expect(!storeSource.contains("tombstone.approvalId == key.approvalId"))
+        #expect(receiverSource.contains("WatchGatewayID.exact(payload[\"gatewayStableID\"] as? String)"))
+        #expect(!receiverSource.contains("gatewayStableID?.trimmingCharacters"))
         #expect(viewSource.contains("record.approvalID"))
         #expect(viewSource.contains("$0.id == self.record.id"))
     }
 
     @Test func `watch requires full accessible command review before allow`() throws {
         let viewSource = try Self.readWatchSource("WatchInboxView.swift")
+        let detailScrollSource = try Self.readWatchSource("WatchDetailScroll.swift")
         let typographySource = try Self.readWatchSource("WatchClawTypography.swift")
         let approvalFace = try Self.extract(
             viewSource,
@@ -271,17 +246,16 @@ struct WatchApprovalTransportSourceGuardTests {
             viewSource,
             from: "private struct WatchApprovalCommandReview: View",
             to: "private enum WatchExecApprovalDisplay")
-        let approvalDetail = try Self.extract(
-            viewSource,
-            from: "private struct WatchExecApprovalDetailView: View",
-            to: "private struct WatchDetailScroll")
+        let approvalDetailStart = try #require(
+            viewSource.range(of: "private struct WatchExecApprovalDetailView: View"))
+        let approvalDetail = String(viewSource[approvalDetailStart.lowerBound...])
         let decisionButton = try Self.extract(
             viewSource,
             from: "private struct WatchDecisionButton: View",
             to: "private struct WatchTinyStatus")
         let detailScrollStart = try #require(
-            viewSource.range(of: "private struct WatchDetailScroll<Content: View>: View"))
-        let detailScroll = String(viewSource[detailScrollStart.lowerBound...])
+            detailScrollSource.range(of: "struct WatchDetailScroll<Content: View>: View"))
+        let detailScroll = String(detailScrollSource[detailScrollStart.lowerBound...])
 
         #expect(approvalFace.contains("WatchSecondaryLabel(title: \"Review Command\")"))
         #expect(approvalFace.contains(
@@ -316,32 +290,10 @@ struct WatchApprovalTransportSourceGuardTests {
         #expect(detailScroll.contains("self.content"))
     }
 
-    @Test func `watch compounds exact owner and approval identity`() throws {
-        let storeSource = try Self.readWatchSource("WatchInboxStore.swift")
-        let messagesSource = try Self.readWatchSource("WatchInboxMessages.swift")
-        let receiverSource = try Self.readWatchSource("WatchConnectivityReceiver.swift")
-        let sameApprovalID = Data("approval-same".utf8)
-        let composedOwner = Data("gateway-\u{00E9}".utf8)
-        let decomposedOwner = Data("gateway-e\u{0301}".utf8)
-        #expect(composedOwner != decomposedOwner)
-        #expect(Set([[composedOwner, sameApprovalID], [decomposedOwner, sameApprovalID]]).count == 2)
-
-        // The compound identity key type lives in WatchInboxMessages.swift after the split.
-        #expect(messagesSource.contains("struct WatchExecApprovalIdentityKey: Hashable"))
-        #expect(storeSource.contains("selectedExecApprovalGatewayStableID"))
-        #expect(storeSource.contains("gatewayKey.notificationComponent"))
-        #expect(storeSource.contains("WatchGatewayID.key(tombstone.gatewayStableID) == key.gatewayID"))
-        #expect(storeSource.contains("\"watch.execApproval.\\(record.approvalID)\""))
-        #expect(receiverSource.contains("WatchGatewayID.exact(payload[\"gatewayStableID\"] as? String)"))
-        #expect(!receiverSource.contains("gatewayStableID?.trimmingCharacters"))
-        #expect(!storeSource.contains("isECMAScriptTrimScalar"))
-        #expect(!messagesSource.contains("isECMAScriptTrimScalar"))
-        #expect(Array("\u{0085}gateway".utf8) != Array("gateway".utf8))
-    }
-
     @Test func `watch notification identity frames dotted components`() throws {
         let storeSource = try Self.readWatchSource("WatchInboxStore.swift")
         let messagesSource = try Self.readWatchSource("WatchInboxMessages.swift")
+        let identifierSource = try Self.readIOSServiceSource("ExactOpaqueIdentifier.swift")
         let promptConsume = try Self.extract(
             storeSource,
             from: "func consume(\n        execApprovalPrompt",
@@ -350,12 +302,14 @@ struct WatchApprovalTransportSourceGuardTests {
         let rawRight = "a" + "." + "b.c"
         #expect(rawLeft == rawRight)
 
-        let framedLeft = Self.notificationComponent("a.b") + "." + Self.notificationComponent("c")
-        let framedRight = Self.notificationComponent("a") + "." + Self.notificationComponent("b.c")
+        let framedLeft = ExactOpaqueIdentifierKey("a.b").notificationComponent + "."
+            + ExactOpaqueIdentifierKey("c").notificationComponent
+        let framedRight = ExactOpaqueIdentifierKey("a").notificationComponent + "."
+            + ExactOpaqueIdentifierKey("b.c").notificationComponent
         #expect(framedLeft != framedRight)
-        // The notification-component percent encoder lives in WatchInboxMessages.swift.
-        #expect(messagesSource.contains("0x2D, 0x5F, 0x7E"))
-        #expect(!messagesSource.contains("0x2D, 0x2E, 0x5F, 0x7E"))
+        #expect(messagesSource.contains("typealias WatchOpaqueUTF8Key = ExactOpaqueIdentifierKey"))
+        #expect(identifierSource.contains("0x2D, 0x5F, 0x7E"))
+        #expect(!identifierSource.contains("0x2D, 0x2E, 0x5F, 0x7E"))
         #expect(!storeSource.contains("0x2D, 0x2E, 0x5F, 0x7E"))
         #expect(storeSource.contains("gatewayKey.notificationComponent).\\(approvalKey.notificationComponent"))
         #expect(storeSource.contains("legacyExecApprovalNotificationIdentifier"))
@@ -412,27 +366,20 @@ struct WatchApprovalTransportSourceGuardTests {
             "Self.gatewayIDsMatch(approval.gatewayStableID, snapshotGatewayID)"))
     }
 
-    private static func notificationComponent(_ rawValue: String) -> String {
-        let hexDigits = Array("0123456789ABCDEF".utf8)
-        var encoded: [UInt8] = []
-        for byte in rawValue.utf8 {
-            switch byte {
-            case 0x30...0x39, 0x41...0x5A, 0x61...0x7A, 0x2D, 0x5F, 0x7E:
-                encoded.append(byte)
-            default:
-                encoded.append(0x25)
-                encoded.append(hexDigits[Int(byte >> 4)])
-                encoded.append(hexDigits[Int(byte & 0x0F)])
-            }
-        }
-        return String(decoding: encoded, as: UTF8.self)
-    }
-
     private static func readWatchSource(_ filename: String) throws -> String {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("WatchApp/Sources")
+            .appendingPathComponent(filename)
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    private static func readIOSServiceSource(_ filename: String) throws -> String {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/Services")
             .appendingPathComponent(filename)
         return try String(contentsOf: url, encoding: .utf8)
     }

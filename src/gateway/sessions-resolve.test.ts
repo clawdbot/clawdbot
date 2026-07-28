@@ -1,5 +1,6 @@
 // Session resolve tests cover canonical/legacy key lookup, store migration,
 // agent scoping, listed-session selection, and protocol error mapping.
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -81,9 +82,13 @@ describe("resolveSessionKeyFromResolveParams", () => {
       store: targetStore,
     }));
     hoisted.canonicalizeSessionEntryAliasesMock.mockImplementation(async () => {
-      targetStore[canonicalKey] = targetStore[legacyKey] ?? targetStore[canonicalKey];
+      const entry = expectDefined(
+        targetStore[legacyKey] ?? targetStore[canonicalKey],
+        "canonical session entry",
+      );
+      targetStore[canonicalKey] = entry;
       delete targetStore[legacyKey];
-      return { canonicalKey, entry: targetStore[canonicalKey] };
+      return { canonicalKey, entry };
     });
   });
 

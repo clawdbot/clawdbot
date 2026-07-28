@@ -12,7 +12,7 @@ import type { TrustedMessageAuditEvent } from "./message-audit-events.js";
 const log = createSubsystemLogger("audit/events");
 let persistenceFailureWarned = false;
 
-export type AuditEventRecorder = AgentEventAuditRecorder & {
+type AuditEventRecorder = AgentEventAuditRecorder & {
   recordMessage: (event: TrustedMessageAuditEvent) => void;
 };
 
@@ -58,8 +58,4 @@ export function createAuditEventRecorder(options: {
       });
     },
   };
-}
-
-export function resetAuditEventRecorderForTest(): void {
-  persistenceFailureWarned = false;
 }

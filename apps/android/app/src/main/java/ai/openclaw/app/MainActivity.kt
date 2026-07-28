@@ -1,5 +1,6 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.OpenClawTheme
 import ai.openclaw.app.ui.RootScreen
 import android.content.Intent
@@ -34,6 +35,9 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
@@ -46,6 +50,8 @@ class MainActivity : AppCompatActivity() {
   private var didStartViewModelCollectors = false
   private var foreground = false
   private val pendingIntentRouter = MainActivityPendingIntentRouter()
+  private val shareLaunchMutex = Mutex()
+  private val shareLaunchSlots = Semaphore(MAX_PENDING_CHAT_SHARES)
   private val runtimeUiStarter = MainActivityRuntimeUiStarter()
   private var screenshotScene: AndroidScreenshotScene? = null
 
@@ -118,7 +124,7 @@ class MainActivity : AppCompatActivity() {
         initializedViewModel?.let { handleLaunchIntent(viewModel = it, intent = routedIntent) }
       }
     if (!accepted) {
-      Toast.makeText(this, "Too many shares are waiting to be added.", Toast.LENGTH_SHORT).show()
+      Toast.makeText(this, nativeString("Too many shares are waiting to be added."), Toast.LENGTH_SHORT).show()
     }
   }
 
@@ -195,10 +201,24 @@ class MainActivity : AppCompatActivity() {
     viewModel: MainViewModel,
     intent: Intent?,
   ) {
-    parseShareLaunchIntent(intent)?.let { request ->
-      if (!viewModel.handleShareLaunch(request)) {
-        Toast.makeText(this, "Too many shares are waiting to be added.", Toast.LENGTH_SHORT).show()
+    if (intent?.isShareLaunchIntent() == true) {
+      if (!shareLaunchSlots.tryAcquire()) {
+        Toast.makeText(this, nativeString("Too many shares are waiting to be added."), Toast.LENGTH_SHORT).show()
+        return
       }
+      val owner = viewModel.captureChatShareOwner()
+      lifecycleScope
+        .launch {
+          shareLaunchMutex.withLock {
+            val request =
+              withContext(Dispatchers.IO) {
+                parseShareLaunchIntent(intent, contentResolver::getType)
+              } ?: return@withLock
+            if (!viewModel.handleShareLaunch(request, owner)) {
+              Toast.makeText(this@MainActivity, nativeString("Too many shares are waiting to be added."), Toast.LENGTH_SHORT).show()
+            }
+          }
+        }.invokeOnCompletion { shareLaunchSlots.release() }
       return
     }
     parseHomeDestinationIntent(intent)?.let { destination ->

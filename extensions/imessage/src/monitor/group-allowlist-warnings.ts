@@ -80,9 +80,3 @@ export function warnGroupAllowlistDropPerChatOnce(params: {
   );
   return true;
 }
-
-/** Test helper. Keeps warning-cache state deterministic across test files. */
-export function resetGroupAllowlistWarningsForTesting(): void {
-  startupWarned.clear();
-  perChatWarned.clear();
-}

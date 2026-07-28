@@ -1,5 +1,6 @@
 // Release Workflow Matrix Plan tests cover release workflow matrix plan script behavior.
 import { readFileSync } from "node:fs";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { createReleaseWorkflowMatrixPlan } from "../../scripts/plan-release-workflow-matrix.mjs";
@@ -50,9 +51,14 @@ type WorkflowDocument = {
   };
 };
 
+function requiredJob(definition: WorkflowDocument, name: string): WorkflowJob {
+  return expectDefined(definition.jobs[name], `release workflow job ${name}`);
+}
+
 // Direct dispatches build from the selected ref. Only trusted workflow callers
 // may provide the complete immutable package artifact tuple.
 const WORKFLOW_CALL_ONLY_INPUTS = new Set([
+  "prepare_only",
   "package_artifact_name",
   "package_artifact_id",
   "package_artifact_digest",
@@ -62,6 +68,12 @@ const WORKFLOW_CALL_ONLY_INPUTS = new Set([
   "package_source_sha",
   "package_sha256",
   "package_version",
+  "shared_image_artifact_name",
+  "shared_image_artifact_id",
+  "shared_image_artifact_digest",
+  "shared_image_artifact_run_id",
+  "shared_image_artifact_run_attempt",
+  "shared_image_archive_sha256",
 ]);
 
 const PROFILE_EXPECTATIONS = [
@@ -179,14 +191,15 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     expect(definition.env.OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG).toBe(
       "${{ inputs.allow_unreleased_changelog }}",
     );
-    const packageStep = definition.jobs.prepare_docker_e2e_image.steps.find(
+    const packageStep = requiredJob(definition, "prepare_docker_e2e_image").steps.find(
       (step: WorkflowStep) => step.name === "Pack OpenClaw package for Docker E2E",
     );
-    expect(packageStep!.env!.ALLOW_UNRELEASED_CHANGELOG).toBe(
+    const requiredPackageStep = expectDefined(packageStep, "Docker E2E package step");
+    expect(requiredPackageStep.env?.ALLOW_UNRELEASED_CHANGELOG).toBe(
       "${{ inputs.allow_unreleased_changelog }}",
     );
-    expect(packageStep!.run).toContain("package_args+=(--allow-unreleased-changelog)");
-    expect(packageStep!.run).toContain("grep -Fq");
+    expect(requiredPackageStep.run).toContain("package_args+=(--allow-unreleased-changelog)");
+    expect(requiredPackageStep.run).toContain("grep -Fq");
   });
 
   it.each(PROFILE_EXPECTATIONS)(
@@ -260,7 +273,10 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
 
   it("keeps stable Anthropic Docker proof blocking and full proof advisory", () => {
     const jobs = workflow().jobs;
-    const dockerLiveJob = jobs.validate_live_docker_provider_suites;
+    const dockerLiveJob = expectDefined(
+      jobs.validate_live_docker_provider_suites,
+      "live Docker provider suites job",
+    );
     const anthropicEntries = dockerLiveJob.strategy.matrix.include
       .filter((entry: MatrixEntry) => entry.suite_group === "live-gateway-anthropic-docker")
       .map((entry: MatrixEntry) => ({
@@ -309,24 +325,28 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
 
   it("wires filtered matrices into the reusable live and E2E workflow", () => {
     const jobs = workflow().jobs;
-    const planner = jobs.plan_release_workflow_matrices;
+    const planner = expectDefined(
+      jobs.plan_release_workflow_matrices,
+      "release matrix planner job",
+    );
+    const dockerE2e = expectDefined(jobs.validate_docker_e2e, "Docker E2E validation job");
+    const liveModels = expectDefined(
+      jobs.validate_live_models_docker,
+      "live Docker models validation job",
+    );
 
     expect(planner.outputs.docker_e2e_matrix).toBe("${{ steps.plan.outputs.docker_e2e_matrix }}");
     expect(planner.outputs.live_models_matrix).toBe("${{ steps.plan.outputs.live_models_matrix }}");
-    expect(jobs.validate_docker_e2e.needs).toContain("plan_release_workflow_matrices");
-    expect(jobs.validate_live_models_docker.needs).toContain("plan_release_workflow_matrices");
-    expect(jobs.validate_docker_e2e.strategy.matrix).toBe(
+    expect(dockerE2e.needs).toContain("plan_release_workflow_matrices");
+    expect(liveModels.needs).toContain("plan_release_workflow_matrices");
+    expect(dockerE2e.strategy.matrix).toBe(
       "${{ fromJson(needs.plan_release_workflow_matrices.outputs.docker_e2e_matrix) }}",
     );
-    expect(jobs.validate_live_models_docker.strategy.matrix).toBe(
+    expect(liveModels.strategy.matrix).toBe(
       "${{ fromJson(needs.plan_release_workflow_matrices.outputs.live_models_matrix) }}",
     );
-    expect(jobs.validate_live_models_docker.env.OPENCLAW_LIVE_MODELS).toBe(
-      "${{ matrix.models || 'modern' }}",
-    );
-    expect(jobs.validate_live_models_docker.env.OPENCLAW_LIVE_MAX_MODELS).toBe(
-      "${{ matrix.max_models || '6' }}",
-    );
+    expect(liveModels.env.OPENCLAW_LIVE_MODELS).toBe("${{ matrix.models || 'modern' }}");
+    expect(liveModels.env.OPENCLAW_LIVE_MAX_MODELS).toBe("${{ matrix.max_models || '6' }}");
   });
 
   it("requires new release-profile matrices to use a planner or an explicit allowlist", () => {

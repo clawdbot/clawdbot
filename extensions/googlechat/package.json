@@ -8,7 +8,6 @@
   },
   "type": "module",
   "dependencies": {
-    "gaxios": "7.1.5",
     "google-auth-library": "10.9.0",
     "zod": "4.4.3"
   },
@@ -31,6 +30,17 @@
     "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "googlechat",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "GOOGLE_CHAT_SERVICE_ACCOUNT",
+            "GOOGLE_CHAT_SERVICE_ACCOUNT_FILE"
+          ]
+        }
+      },
+      "approvalFlags": [
+        "native"
+      ],
       "label": "Google Chat",
       "selectionLabel": "Google Chat (Chat API)",
       "detailLabel": "Google Chat",
@@ -50,24 +60,48 @@
         "groupAllowFromFallbackToAllowFrom": false,
         "warnOnEmptyGroupSenderAllowlist": false
       },
-      "cliAddOptions": [
-        {
-          "flags": "--webhook-path <path>",
-          "description": "Google Chat webhook path"
-        },
-        {
-          "flags": "--webhook-url <url>",
-          "description": "Google Chat webhook URL"
-        },
-        {
-          "flags": "--audience-type <type>",
-          "description": "Google Chat audience type (app-url|project-number)"
-        },
-        {
-          "flags": "--audience <value>",
-          "description": "Google Chat audience value (app URL or project number)"
-        }
-      ]
+      "setup": {
+        "fields": [
+          {
+            "key": "token",
+            "kind": "string",
+            "sensitive": true,
+            "cli": { "flags": "--token <json>", "description": "Google Chat service account JSON" }
+          },
+          {
+            "key": "tokenFile",
+            "kind": "string",
+            "sensitive": true,
+            "cli": { "flags": "--token-file <path>", "description": "Google Chat service account file" }
+          },
+          {
+            "key": "audienceType",
+            "kind": "choice",
+            "choices": ["app-url", "project-number"],
+            "cli": { "flags": "--audience-type <type>", "description": "Google Chat audience type" }
+          },
+          {
+            "key": "audience",
+            "kind": "string",
+            "cli": { "flags": "--audience <value>", "description": "Google Chat audience value" }
+          },
+          {
+            "key": "webhookPath",
+            "kind": "string",
+            "cli": { "flags": "--webhook-path <path>", "description": "Google Chat webhook path" }
+          },
+          {
+            "key": "webhookUrl",
+            "kind": "string",
+            "cli": { "flags": "--webhook-url <url>", "description": "Google Chat webhook URL" }
+          },
+          {
+            "key": "useEnv",
+            "kind": "boolean",
+            "cli": { "flags": "--use-env", "description": "Use Google Chat environment credentials" }
+          }
+        ]
+      }
     },
     "install": {
       "npmSpec": "@openclaw/googlechat",

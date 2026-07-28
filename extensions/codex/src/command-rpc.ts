@@ -159,7 +159,7 @@ export async function readCodexStatusProbes(
   return { models, account, limits, mcps, skills };
 }
 
-export async function safeValue<T>(read: () => Promise<T>): Promise<SafeValue<T>> {
+async function safeValue<T>(read: () => Promise<T>): Promise<SafeValue<T>> {
   try {
     return { ok: true, value: await read() };
   } catch (error) {

@@ -14,14 +14,37 @@
 //   slash commands through gateway HTTP routes).
 // - blockStreaming=true does not imply a streaming adapter (coalesce tuning
 //   is optional).
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import { listBundledPackageChannelMetadata } from "../../../plugins/bundled-package-channel-metadata.js";
 import {
   getBundledChannelPluginAsync,
   listBundledChannelPluginIds,
 } from "./test-helpers/bundled-channel-plugin-loader.js";
 
+const sanitizeAssistantVisibleTextMock = vi.hoisted(() =>
+  vi.fn((text: string) => `shared-sanitizer:${text}`),
+);
+
+vi.mock("openclaw/plugin-sdk/text-chunking", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-chunking")>();
+  return { ...actual, sanitizeAssistantVisibleText: sanitizeAssistantVisibleTextMock };
+});
+
 const CHAT_TYPES = new Set(["direct", "group", "channel", "thread"]);
 const bundledChannelPluginIds = listBundledChannelPluginIds();
+const packageMetadataById = new Map(
+  listBundledPackageChannelMetadata().map((channel) => [channel.id, channel]),
+);
+const SHARED_SANITIZER_CHANNEL_IDS = [
+  "nextcloud-talk",
+  "zalo",
+  "irc",
+  "feishu",
+  "signal",
+  "twitch",
+  "matrix",
+  "slack",
+] as const;
 
 describe("bundled channel plugin shape coherence", () => {
   const plugins = new Map<string, Awaited<ReturnType<typeof getBundledChannelPluginAsync>>>();
@@ -36,6 +59,22 @@ describe("bundled channel plugin shape coherence", () => {
     expect(bundledChannelPluginIds.length).toBeGreaterThan(0);
   });
 
+  it.each(SHARED_SANITIZER_CHANNEL_IDS)(
+    "%s wires outbound sanitizeText through the shared sanitizer",
+    (id) => {
+      const sanitizeText = plugins.get(id)?.outbound?.sanitizeText;
+      if (!sanitizeText) {
+        throw new Error(`Missing outbound sanitizeText hook for ${id}`);
+      }
+      const text = `visible:${id}`;
+
+      sanitizeAssistantVisibleTextMock.mockClear();
+
+      expect(sanitizeText({ text, payload: { text } })).toBe(`shared-sanitizer:${text}`);
+      expect(sanitizeAssistantVisibleTextMock).toHaveBeenCalledExactlyOnceWith(text);
+    },
+  );
+
   describe.each(bundledChannelPluginIds)("%s", (id) => {
     it("keeps plugin identity aligned with the catalog id", () => {
       const plugin = plugins.get(id);
@@ -49,6 +88,17 @@ describe("bundled channel plugin shape coherence", () => {
     it("ships non-empty docs metadata", () => {
       const plugin = plugins.get(id);
       expect(plugin?.meta.docsPath.trim()).toBeTruthy();
+    });
+
+    it("keeps runtime and lazy setup metadata on the same channel-owned contract", () => {
+      const plugin = plugins.get(id);
+      const packageSetup = packageMetadataById.get(id)?.setup;
+      if (!plugin?.setup && !plugin?.setupContract && !packageSetup) {
+        return;
+      }
+      expect(plugin?.setupContract, `${id} must expose setupContract`).toBeDefined();
+      expect(packageSetup, `${id} must expose package setup metadata`).toBeDefined();
+      expect(plugin?.setupContract?.metadata).toEqual(packageSetup);
     });
 
     it("declares known chat types", () => {

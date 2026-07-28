@@ -1,9 +1,3 @@
-export function mapWithConcurrency<Item, Result>(
-  items: Item[],
-  concurrency: number,
-  mapper: (item: Item, index: number) => Promise<Result>,
-): Promise<Result[]>;
-
 export function collectSourceFileContents(params: {
   repoRoot: string;
   scanRoots: string[];

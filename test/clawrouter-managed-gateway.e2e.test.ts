@@ -227,7 +227,8 @@ async function waitForGatewayReadiness(
   instance: OpenClawTestInstance,
 ): Promise<{ ready: boolean; failing: string[] }> {
   const url = `http://127.0.0.1:${instance.port}/readyz`;
-  for (let attempt = 0; attempt < 200; attempt += 1) {
+  // Preserve the 10-second readiness budget while detecting startup sooner.
+  for (let attempt = 0; attempt < 1_000; attempt += 1) {
     try {
       const response = await fetch(url);
       if (response.ok) {
@@ -236,7 +237,7 @@ async function waitForGatewayReadiness(
     } catch {
       // The listener can open before startup readiness settles.
     }
-    await delay(50);
+    await delay(10);
   }
   throw new Error(`gateway did not become ready: ${instance.logs()}`);
 }

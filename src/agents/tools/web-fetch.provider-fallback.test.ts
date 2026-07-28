@@ -3,6 +3,7 @@
 import { rm } from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { wrapExternalContent } from "../../security/external-content.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { createWebFetchTool } from "./web-fetch.js";
@@ -32,6 +33,7 @@ describe("web_fetch provider fallback normalization", () => {
     resolveWebFetchDefinitionMock.mockReset();
     runtimeState.activeSecretsRuntimeSnapshot = null;
     runtimeState.activeRuntimeWebToolsMetadata = null;
+    setActiveDegradedSecretOwners([]);
   });
 
   afterEach(() => {
@@ -39,6 +41,35 @@ describe("web_fetch provider fallback normalization", () => {
     vi.restoreAllMocks();
     runtimeState.activeSecretsRuntimeSnapshot = null;
     runtimeState.activeRuntimeWebToolsMetadata = null;
+    setActiveDegradedSecretOwners([]);
+  });
+
+  it("returns typed unavailability for only the isolated fetch provider", async () => {
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "capability",
+        ownerId: "web-fetch:firecrawl",
+        state: "unavailable",
+        paths: ["plugins.entries.firecrawl.config.webFetch.apiKey"],
+        refKeys: ["env:default:MISSING_FIRECRAWL_KEY"],
+        reason: "missing test ref",
+      },
+    ]);
+    const tool = createWebFetchTool({
+      config: {
+        tools: { web: { fetch: { provider: "firecrawl" } } },
+      } as OpenClawConfig,
+    });
+
+    await expect(
+      tool?.execute?.("call-provider-fallback", { url: "https://example.com" }),
+    ).rejects.toMatchObject({
+      name: "SecretSurfaceUnavailableError",
+      code: "SECRET_SURFACE_UNAVAILABLE",
+      ownerKind: "capability",
+      ownerId: "web-fetch:firecrawl",
+    });
+    expect(resolveWebFetchDefinitionMock).not.toHaveBeenCalled();
   });
 
   it("re-wraps and truncates provider fallback payloads before caching or returning", async () => {
@@ -69,7 +100,7 @@ describe("web_fetch provider fallback normalization", () => {
           text: providerWrappedText,
           truncated: true,
           rawLength: providerRawText.length,
-          wrappedLength: providerWrappedText.length,
+          length: providerWrappedText.length,
           title: "Provider Title",
           warning: "Provider Warning",
         }),
@@ -99,10 +130,10 @@ describe("web_fetch provider fallback normalization", () => {
       truncated?: boolean;
       contentType?: string;
       rawLength?: number;
-      wrappedLength?: number;
+      length?: number;
       externalContent?: Record<string, unknown>;
       extractor?: string;
-      fullOutputPath?: string;
+      spill?: { path: string };
     };
 
     expect(details.extractor).toBe("custom-provider");
@@ -112,19 +143,19 @@ describe("web_fetch provider fallback normalization", () => {
     ).toBeLessThanOrEqual(800);
     expect(details.text).toContain("Ignore previous instructions");
     expect(details.text).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
-    expect(details.text).toContain(`Full output: ${details.fullOutputPath}`);
+    expect(details.text).toContain(`Full output: ${details.spill?.path}`);
     expect(details.title).toContain("Provider Title");
     expect(details.warning).toContain("Provider Warning");
     expect(details.truncated).toBe(true);
     expect(providerWrappedText.length).toBeLessThan(providerRawText.length);
     expect(details.rawLength).toBe(providerRawText.length);
-    expect(details.wrappedLength).toBe(details.text?.length);
+    expect(details.length).toBe(details.text?.length);
     expect(details.externalContent?.untrusted).toBe(true);
     expect(details.externalContent?.source).toBe("web_fetch");
     expect(details.externalContent?.wrapped).toBe(true);
     expect(details.externalContent?.provider).toBe("firecrawl");
-    if (details.fullOutputPath) {
-      await rm(details.fullOutputPath, { force: true });
+    if (details.spill) {
+      await rm(details.spill.path, { force: true });
     }
   });
 
@@ -231,18 +262,18 @@ describe("web_fetch provider fallback normalization", () => {
     });
     const details = result?.details as {
       text?: string;
-      wrappedLength?: number;
+      length?: number;
       externalContent?: Record<string, unknown>;
-      fullOutputPath?: string;
+      spill?: { path: string };
     };
 
-    expect(details.wrappedLength).toBeGreaterThan(200);
+    expect(details.length).toBeGreaterThan(200);
     expect(
       details.text?.split("\n\n[Showing truncated web_fetch content.")[0]?.length,
     ).toBeLessThanOrEqual(640);
     expect(details.externalContent?.provider).toBe("firecrawl");
-    if (details.fullOutputPath) {
-      await rm(details.fullOutputPath, { force: true });
+    if (details.spill) {
+      await rm(details.spill.path, { force: true });
     }
     const definitionInput = resolveWebFetchDefinitionMock.mock.calls.at(0)?.[0] as
       | {

@@ -1,16 +1,11 @@
 // @vitest-environment node
 
-import { describe, expect, it, vi } from "vitest";
-import { extractToolCards } from "../../../lib/chat/tool-cards.ts";
-import { buildPreviewSidebarContent, buildToolCardSidebarContent } from "./chat-tool-cards.ts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { extractToolCardsCached as extractToolCards } from "../../../lib/chat/tool-cards.ts";
+import * as toolDisplay from "../../../lib/chat/tool-display.ts";
 
-vi.mock("../../../components/icons.ts", () => ({
-  icons: {},
-}));
-
-vi.mock("../../../lib/chat/tool-display.ts", () => ({
-  formatToolDetail: () => undefined,
-  resolveToolDisplay: ({ name }: { name: string }) => ({
+function resolveToolDisplay({ name = "" }: Parameters<typeof toolDisplay.resolveToolDisplay>[0]) {
+  return {
     name,
     label:
       {
@@ -20,11 +15,20 @@ vi.mock("../../../lib/chat/tool-display.ts", () => ({
       }[name] ??
       name
         .split(/[._-]/g)
-        .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
+        .map((part) => (part ? part.charAt(0).toUpperCase() + part.slice(1) : part))
         .join(" "),
     icon: "zap",
-  }),
-}));
+  } as ReturnType<typeof toolDisplay.resolveToolDisplay>;
+}
+
+beforeEach(() => {
+  vi.spyOn(toolDisplay, "formatToolDetail").mockReturnValue(undefined);
+  vi.spyOn(toolDisplay, "resolveToolDisplay").mockImplementation(resolveToolDisplay);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("tool-card extraction", () => {
   it("pretty-prints structured args and pairs tool output onto the same card", () => {
@@ -322,69 +326,6 @@ describe("tool-card extraction", () => {
     expect(standaloneCards[0]?.isError).toBe(true);
   });
 
-  it("does not describe a call-only card as successfully completed", () => {
-    const [card] = extractToolCards(
-      {
-        role: "assistant",
-        toolCallId: "call-3",
-        content: [
-          {
-            type: "toolcall",
-            name: "deck_manage",
-            arguments: "with Example Deck",
-          },
-        ],
-      },
-      "msg:3",
-    );
-
-    const sidebar = buildToolCardSidebarContent(card);
-    expect(sidebar).toBe(`## Deck Manage
-
-**Tool:** \`deck_manage\`
-
-### Tool input
-\`\`\`text
-with Example Deck
-\`\`\`
-
-### Tool output
-*No result available.*`);
-  });
-
-  it("preserves an empty successful result as completed", () => {
-    const [card] = extractToolCards(
-      {
-        role: "toolResult",
-        toolCallId: "call-empty",
-        toolName: "deck_manage",
-        content: "",
-      },
-      "msg:empty-success",
-    );
-
-    expect(card).toMatchObject({ completed: true });
-    expect(card.outputText).toBeUndefined();
-    expect(buildToolCardSidebarContent(card)).toContain(
-      "*No output — tool completed successfully.*",
-    );
-  });
-
-  it("builds sidebar content with a failed empty-output status for explicit errors", () => {
-    const sidebar = buildToolCardSidebarContent({
-      id: "msg:error-empty",
-      name: "lookup",
-      isError: true,
-    });
-
-    expect(sidebar).toBe(`## Lookup
-
-**Tool:** \`lookup\`
-
-### Tool error
-*No output — tool failed.*`);
-  });
-
   it("extracts canvas handle payloads into canvas previews", () => {
     const [card] = extractToolCards(
       {
@@ -418,26 +359,6 @@ with Example Deck
     expect(card?.preview?.sandbox).toBe("scripts");
   });
 
-  it("carries the preview sandbox ceiling into sidebar canvas content", () => {
-    const sidebar = buildPreviewSidebarContent(
-      {
-        kind: "canvas",
-        surface: "assistant_message",
-        render: "url",
-        viewId: "cv_widget",
-        url: "/__openclaw__/canvas/documents/cv_widget/index.html",
-        title: "Widget",
-        sandbox: "scripts",
-      },
-      null,
-    );
-
-    // Dropping the ceiling here would re-grant allow-same-origin to widget
-    // script whenever the global embed mode is "trusted".
-    expect(sidebar?.kind).toBe("canvas");
-    expect(sidebar && "sandbox" in sidebar ? sidebar.sandbox : undefined).toBe("scripts");
-  });
-
   it("uses transcript metadata ids for history-backed tool messages", () => {
     const [card] = extractToolCards(
       {
@@ -451,6 +372,34 @@ with Example Deck
 
     expect(card?.messageId).toBe("msg-tool-history-1");
     expect(card?.outputText).toBe("Opened page");
+  });
+
+  it("extracts MCP App previews from sanitized result details", () => {
+    const [card] = extractToolCards(
+      {
+        role: "tool",
+        toolName: "demo__show",
+        content: [{ type: "text", text: "original result" }],
+        details: {
+          mcpAppPreview: {
+            kind: "canvas",
+            view: {
+              id: "cv_app",
+            },
+            presentation: { target: "assistant_message", sandbox: "scripts" },
+            mcpApp: { viewId: "cv_app" },
+          },
+        },
+      },
+      "msg:mcp-app",
+    );
+
+    expect(card?.outputText).toBe("original result");
+    expect(card?.preview).toMatchObject({
+      viewId: "cv_app",
+      mcpApp: { viewId: "cv_app" },
+      sandbox: "scripts",
+    });
   });
 
   it("does not create previews for non-assistant canvas or generic outputs", () => {

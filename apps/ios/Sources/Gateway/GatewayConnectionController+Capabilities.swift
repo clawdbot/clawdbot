@@ -39,11 +39,11 @@ extension GatewayConnectionController {
         let requiresTLS = !trimmedHost.isEmpty && !LoopbackHost.isLocalNetworkHost(trimmedHost)
         let effectiveTLS = requestedTLS || requiresTLS
         let helperText: String? = if requiresTLS {
-            "Secure connection is required for this host."
+            String(localized: "Secure connection is required for this host.")
         } else if effectiveTLS {
             nil
         } else {
-            "Use only on a trusted private network."
+            String(localized: "Use only on a trusted private network.")
         }
         return GatewayManualTransportPresentation(
             requiresTLS: requiresTLS,
@@ -138,6 +138,9 @@ extension GatewayConnectionController {
         if Self.motionAvailable() {
             caps.append(OpenClawCapability.motion.rawValue)
         }
+        if HealthAuthorization.isEnabled {
+            caps.append(OpenClawCapability.health.rawValue)
+        }
 
         return caps
     }
@@ -197,6 +200,9 @@ extension GatewayConnectionController {
             commands.append(OpenClawMotionCommand.activity.rawValue)
             commands.append(OpenClawMotionCommand.pedometer.rawValue)
         }
+        if caps.contains(OpenClawCapability.health.rawValue) {
+            commands.append(OpenClawHealthCommand.summary.rawValue)
+        }
 
         return commands
     }
@@ -206,7 +212,7 @@ extension GatewayConnectionController {
         permissions["camera"] = AVCaptureDevice.authorizationStatus(for: .video) == .authorized
         permissions["microphone"] = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         permissions["speechRecognition"] = SFSpeechRecognizer.authorizationStatus() == .authorized
-        let locationStatus = CLLocationManager().authorizationStatus
+        let locationStatus = self.locationAuthorizationSnapshot.authorizationStatus
         let locationServicesEnabled = await Self.locationServicesEnabled()
         permissions["location"] = Self.isLocationAvailable(
             servicesEnabled: locationServicesEnabled,
@@ -218,20 +224,14 @@ extension GatewayConnectionController {
         permissions["contacts"] = contactsStatus == .authorized || contactsStatus == .limited
 
         let calendarStatus = EKEventStore.authorizationStatus(for: .event)
-        permissions["calendar"] = Self.hasEventKitAccess(calendarStatus)
+        permissions["calendar"] = Self.hasEventKitReadAccess(calendarStatus)
         let remindersStatus = EKEventStore.authorizationStatus(for: .reminder)
-        permissions["reminders"] = Self.hasEventKitAccess(remindersStatus)
+        permissions["reminders"] = Self.hasEventKitReadAccess(remindersStatus)
 
         let motionStatus = CMMotionActivityManager.authorizationStatus()
         let pedometerStatus = CMPedometer.authorizationStatus()
         permissions["motion"] =
             motionStatus == .authorized || pedometerStatus == .authorized
-
-        let watchStatus = WatchMessagingService.currentStatusSnapshot()
-        permissions["watchSupported"] = watchStatus.supported
-        permissions["watchPaired"] = watchStatus.paired
-        permissions["watchAppInstalled"] = watchStatus.appInstalled
-        permissions["watchReachable"] = watchStatus.reachable
 
         return permissions
     }
@@ -252,8 +252,8 @@ extension GatewayConnectionController {
         }
     }
 
-    private static func hasEventKitAccess(_ status: EKAuthorizationStatus) -> Bool {
-        status == .fullAccess || status == .writeOnly
+    private static func hasEventKitReadAccess(_ status: EKAuthorizationStatus) -> Bool {
+        status == .fullAccess
     }
 
     private static func motionAvailable() -> Bool {
@@ -273,6 +273,14 @@ extension GatewayConnectionController {
 
     func _test_currentCommands() -> [String] {
         self.currentCommands()
+    }
+
+    func _test_currentPermissions() async -> [String: Bool] {
+        await self.currentPermissions()
+    }
+
+    static func _test_hasEventKitReadAccess(_ status: EKAuthorizationStatus) -> Bool {
+        self.hasEventKitReadAccess(status)
     }
 
     static func _test_isLocationAvailable(servicesEnabled: Bool, status: CLAuthorizationStatus) -> Bool {

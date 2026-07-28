@@ -22,7 +22,7 @@ import {
   listControlledSubagentRuns,
   sendControlledSubagentMessage,
   steerControlledSubagentRun,
-} from "./subagent-control.js";
+} from "./subagent-control.test-support.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_KILLED,
@@ -32,7 +32,8 @@ import {
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
-} from "./subagent-registry.js";
+} from "./subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(),
@@ -248,6 +249,35 @@ describe("sendControlledSubagentMessage", () => {
   afterEach(() => {
     resetSubagentRegistryForTests({ persist: false });
     testing.setDepsForTest();
+  });
+
+  it("rejects follow-up messages for collector runs", async () => {
+    const result = await sendControlledSubagentMessage({
+      cfg: {} as OpenClawConfig,
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      entry: {
+        runId: "run-collector",
+        childSessionKey: "agent:worker:subagent:collector",
+        controllerSessionKey: "agent:main:main",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "collect",
+        cleanup: "keep",
+        collect: true,
+        createdAt: Date.now(),
+      },
+      message: "change direction",
+    });
+
+    expect(result).toEqual({
+      status: "forbidden",
+      error: "Collector subagents cannot receive follow-up messages; use agents_wait.",
+    });
   });
 
   it("rejects runs controlled by another session", async () => {
@@ -1409,7 +1439,8 @@ describe("killAllControlledSubagentRuns", () => {
   });
 
   it("continues bulk cancellation after one registry persistence failure", async () => {
-    let persistenceAttempts = 0;
+    let failNextPersistence = true;
+    let persistedAfterFailure = false;
     subagentRegistryTesting.setDepsForTest({
       cleanupBrowserSessionsForLifecycleEnd: async () => {},
       ensureContextEnginesInitialized: () => {},
@@ -1417,10 +1448,11 @@ describe("killAllControlledSubagentRuns", () => {
       getSubagentRunsSnapshotForRead: (runs) => new Map(runs),
       persistSubagentRunsToDisk: () => {},
       persistSubagentRunsToDiskOrThrow: () => {
-        persistenceAttempts += 1;
-        if (persistenceAttempts === 1) {
+        if (failNextPersistence) {
+          failNextPersistence = false;
           throw new Error("sqlite busy");
         }
+        persistedAfterFailure = true;
       },
       restoreSubagentRunsFromDisk: () => 0,
       resolveContextEngine: async () => ({
@@ -1464,7 +1496,7 @@ describe("killAllControlledSubagentRuns", () => {
     });
 
     expect(result).toEqual({ status: "ok", killed: 1, labels: ["second bulk task"] });
-    expect(persistenceAttempts).toBe(2);
+    expect(persistedAfterFailure).toBe(true);
     expect(getSubagentRunByChildSessionKey(first.childSessionKey)?.endedAt).toBeUndefined();
     expect(getSubagentRunByChildSessionKey(second.childSessionKey)?.endedAt).toBeTypeOf("number");
   });
@@ -1726,6 +1758,38 @@ describe("steerControlledSubagentRun", () => {
   afterEach(() => {
     resetSubagentRegistryForTests({ persist: false });
     testing.setDepsForTest();
+  });
+
+  it("rejects steering collector runs", async () => {
+    const entry: SubagentRunRecord = {
+      runId: "run-collector",
+      childSessionKey: "agent:worker:subagent:collector",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "collect",
+      cleanup: "keep",
+      collect: true,
+      createdAt: Date.now(),
+    };
+    const result = await steerControlledSubagentRun({
+      cfg: {} as OpenClawConfig,
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      entry,
+      message: "change direction",
+    });
+
+    expect(result).toEqual({
+      status: "forbidden",
+      runId: entry.runId,
+      sessionKey: entry.childSessionKey,
+      error: "Collector subagents cannot be steered; use agents_wait or cancel the task.",
+    });
   });
 
   it("returns an error and clears the restart marker when run remap fails", async () => {
@@ -2170,3 +2234,4 @@ describe("listControlledSubagentRuns", () => {
     },
   );
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

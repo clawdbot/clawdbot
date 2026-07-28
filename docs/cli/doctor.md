@@ -10,6 +10,10 @@ title: "Doctor"
 
 Health checks and quick fixes for the gateway, channels, plugins, skills, model routing, local state, and config migrations. Use it whenever something is not behaving as expected and you want one command to explain what is wrong.
 
+When Gateway status reports degraded SecretRef owners, doctor prints a **Secret runtime degradation** warning with every cold or stale owner, affected config path, redacted reason, and the `openclaw secrets reload` retry command.
+
+When channel ingress events are dead-lettered, doctor names each affected channel account and points to [`openclaw channels dead-letters list`](/cli/channels#inbound-dead-letters) for inspection and recovery.
+
 Related:
 
 - Troubleshooting: [Troubleshooting](/gateway/troubleshooting)
@@ -197,13 +201,27 @@ finish safely, startup exits and tells you to run the same image once with
 `openclaw doctor --fix` against the same mounted state/config before restarting
 the container normally.
 
+## Legacy state migration
+
+`openclaw doctor --fix` is the only owner for persistent file-to-SQLite migrations. It validates and claims each recognized source, writes and verifies canonical rows, records a migration receipt, then removes the retired source. Runtime code does not perform lazy imports or fallback reads.
+
+This includes retired MCP OAuth files under `<state-dir>/mcp-oauth/*.json`. Stop the Gateway before repair. Doctor imports valid credentials into `<state-dir>/state/openclaw.sqlite`, preserves an existing canonical SQLite session when both stores exist, drops the obsolete persisted OAuth `state` value, and uses its receipt to prevent a recreated stale file from resurrecting logged-out credentials. Retired `.lock` sidecars fail closed: if Doctor reports a stale owner, verify that no older OpenClaw process is running, remove that sidecar, and rerun Doctor.
+
 ## Shared state SQLite compaction
+
+See [Database schemas](/reference/database-schemas) for schema versioning, integrity checks, and downgrade recovery.
 
 `openclaw doctor --state-sqlite compact` is explicit offline maintenance for
 the canonical shared state database at
 `<state-dir>/state/openclaw.sqlite`. It does not accept an arbitrary database
 path, is never invoked by normal Gateway operation, and is not part of
-`openclaw doctor --fix`.
+`openclaw doctor --fix`. The command acquires the same state ownership lock as
+Gateway startup and holds it through validation, checkpointing, `VACUUM`, and
+the final integrity checks. It refuses to run while a Gateway or another
+SQLite maintenance command owns that lock. The state lock remains active when
+`OPENCLAW_ALLOW_MULTI_GATEWAY=1` skips the per-config Gateway singleton, so an
+operator shell does not need to inherit the Gateway service's environment for
+maintenance to detect it.
 
 Stop the Gateway and create a verified backup first:
 
@@ -224,13 +242,14 @@ The command:
    process and retry if the checkpoint is busy.
 4. Sets `auto_vacuum` to `INCREMENTAL`, runs a full `VACUUM`, and checkpoints
    again.
-5. Runs both `quick_check` and `integrity_check`, then reapplies owner-only
-   permissions to the database and SQLite sidecar files.
+5. Runs `quick_check`, `integrity_check`, and `foreign_key_check`, then
+   reapplies owner-only permissions to the database and SQLite sidecar files.
 
 JSON output reports the database and WAL sizes, freelist pages, page size, and
-`auto_vacuum` value before and after compaction, plus reclaimed bytes and both
-verification results. SQLite reports `auto_vacuum` as `0` for none, `1` for
-full, and `2` for incremental.
+`auto_vacuum` value before and after compaction, plus reclaimed bytes and the
+`quick_check` and `integrity_check` results. `foreign_key_check` is enforced
+fail-closed and has no separate success field. SQLite reports `auto_vacuum` as
+`0` for none, `1` for full, and `2` for incremental.
 
 Compaction fails without mutation when the schema is old, newer than the
 running OpenClaw build, or belongs to an agent database. Run
@@ -290,8 +309,18 @@ SQLite deletes reclaim pages inside the database first; they do not necessarily
 shrink the database file immediately. After deleting or archiving large
 transcripts, run `openclaw doctor --session-sqlite compact --session-sqlite-all-agents`
 to checkpoint WAL files, run `VACUUM`, and report before/after database and WAL
-sizes. This is explicit doctor maintenance so normal Gateway writes do not pause
-for background vacuum work.
+sizes. Compaction requires a regular file with the current agent schema, the
+selected agent's durable owner metadata, and no open handle in the doctor
+process. The destructive `import`, `compact`, `recover`, and `restore` modes
+hold the same state ownership lock as Gateway startup for their full operation;
+`inspect`, `dry-run`, and `validate` remain read-only and do not take it. Stop
+the Gateway first. Destructive modes fail instead of racing live writes or
+racing another maintenance command. A destructive `--session-sqlite-store`
+target must be inside the active state directory; set `OPENCLAW_STATE_DIR` to
+the store's owning state directory before maintaining another installation.
+Existing hard-linked targets are rejected because another path can share the
+same database inode outside the locked state directory. The same ownership
+checks cover SQLite WAL, shared-memory, and rollback-journal sidecars.
 
 Each import writes a manifest under
 `~/.openclaw/session-sqlite-migration-runs/` before moving transcript artifacts
@@ -307,11 +336,19 @@ manifest's archived artifacts, validates the affected targets, refreshes the
 sanitized `.failure.md` and `.failure.json` reports, and prepares a GitHub issue
 body that avoids transcript contents, raw environment, secrets, and unbounded
 config. When no failed migration manifest exists but a selected agent SQLite
-database is corrupt or not a database, recovery preserves the DB, WAL, and SHM
-files by renaming them with a `.corrupt-<timestamp>` suffix so the next startup
-can create a fresh database. With `--github-issue --yes`, doctor uses the GitHub
-CLI to create the issue in `openclaw/openclaw`; without confirmation it writes
-the local support report and prints a prefilled issue URL.
+database is corrupt, not a database, or has journal sidecars without a main
+database, recovery copies the complete file set to a temporary inspection
+directory. SQLite can roll back a valid hot journal in that disposable copy
+before `quick_check`, `integrity_check`, and `foreign_key_check` run, while the
+original forensic files remain untouched. Failed integrity checks or orphaned
+sidecars preserve the DB, WAL, SHM, and rollback-journal files by renaming the
+whole discovered set with one `.corrupt-<timestamp>` suffix. A caught rename
+failure rolls already-moved files back before reporting failure, so a
+recoverable file set is not silently split. Stop the Gateway before recovery;
+copying or renaming an actively changing SQLite file set is unsafe and behaves
+differently across operating systems. With `--github-issue --yes`, doctor uses
+the GitHub CLI to create the issue in `openclaw/openclaw`; without confirmation
+it writes the local support report and prints a prefilled issue URL.
 
 `restore` remains the lower-level undo operation. It uses manifest
 `sourcePath -> archivePath` records, moves archived artifacts back only when the
@@ -346,7 +383,9 @@ compare restored legacy artifacts with the SQLite rows before importing.
 - `--lint` is stricter than `--non-interactive`: always read-only, never prompts, never applies safe migrations. Use `doctor --fix` or `doctor --repair` when you want doctor to make changes.
 - Doctor does not execute `exec` SecretRefs while checking secrets by default. Use `--allow-exec` (with or without `--lint`) only when you intentionally want doctor to run those configured secret resolvers.
 - Any config write (including a `--fix` repair) rotates a backup to `~/.openclaw/openclaw.json.bak` (with a numbered `.bak.1`..`.bak.4` ring). `--fix` also drops unknown config keys reported by schema validation, listing each removal; it skips this while an update is in progress so partially written upgrade state is not stripped before its migration finishes.
+- If `openclaw.json` cannot be parsed and no last-known-good config can be recovered, `doctor --fix` preserves the original as `openclaw.json.clobbered.<timestamp>`, leaves the current file unchanged, and exits with an error instead of writing a partial replacement.
 - Set `OPENCLAW_SERVICE_REPAIR_POLICY=external` when another supervisor owns the gateway lifecycle. Doctor still reports gateway/service health and applies non-service repairs, but skips service install/start/restart/bootstrap and legacy service cleanup.
+- Doctor reports the managed Gateway's applied heap limit and the adaptive derivation used for the current host or container memory limit. Use `openclaw gateway status` for the same report outside a repair pass.
 - On Linux, doctor ignores inactive extra gateway-like systemd units and does not rewrite command/entrypoint metadata for a running systemd gateway service during repair. Stop the service first, or use `openclaw gateway install --force` to replace the active launcher.
 - `doctor --fix --non-interactive` reports missing or stale gateway service definitions but does not install or rewrite them outside update repair mode. Run `openclaw gateway install` for a missing service, or `openclaw gateway install --force` to replace the launcher.
 - State integrity checks detect orphan transcript files in the sessions directory. Archiving them as `.deleted.<timestamp>` requires interactive confirmation; `--fix`, `--yes`, and headless runs leave them in place.
@@ -355,7 +394,8 @@ compare restored legacy artifacts with the SQLite rows before importing.
 - Doctor reports cron jobs still marked in-flight (`state.runningAtMs`), which can make `openclaw cron list` show them as `running`. This check is read-only: if no Gateway is currently executing a marked job, the next cron service startup records the interrupted run and clears the marker.
 - On Linux, doctor warns when the user's crontab still runs the unmaintained legacy `~/.openclaw/bin/ensure-whatsapp.sh`, which can misreport `Gateway inactive` when cron lacks the systemd user-bus environment.
 - When WhatsApp is enabled, doctor checks for a degraded Gateway event loop with local `openclaw-tui` clients still running. `doctor --fix` stops only verified local TUI clients so WhatsApp replies are not queued behind stale TUI refresh loops.
-- Doctor rewrites legacy `openai-codex/*` model refs to canonical `openai/*` refs across primary models, fallbacks, image/video generation models, heartbeat/subagent/compaction overrides, hooks, channel model overrides, and stale session route pins. `--fix` also migrates legacy `openai-codex:*` auth profiles and `auth.order.openai-codex` entries to `openai:*`, moves Codex intent onto provider/model-scoped `agentRuntime.id: "codex"` entries, removes stale whole-agent/session runtime pins, and keeps repaired OpenAI agent refs on Codex auth routing instead of direct OpenAI API-key auth.
+- When HTTP(S) proxy environment variables are present but `tools.web.fetch.useTrustedEnvProxy` is disabled, doctor explains that `web_fetch` still uses direct routing, runs a short direct TLS connectivity probe, and names the explicit opt-in. It never enables proxy trust automatically.
+- Doctor rewrites legacy `codex/*` and `openai-codex/*` model refs to canonical `openai/*` refs across primary models, fallbacks, model allowlists, image/video generation models, heartbeat/subagent/compaction overrides, hooks, channel model overrides, cron payloads, and stale session/transcript route pins. `--fix` also merges legacy `models.providers.codex` and `models.providers.openai-codex` config when safe, migrates legacy `openai-codex:*` auth profiles and `auth.order.openai-codex` entries to `openai:*`, moves Codex intent onto provider/model-scoped `agentRuntime.id: "codex"` entries, removes stale whole-agent/session runtime pins, and keeps repaired OpenAI agent refs on Codex auth routing instead of direct OpenAI API-key auth.
 - Doctor reports nonempty `auth.order.<provider>` lists whose referenced profiles are all gone while compatible stored credentials exist. `doctor --fix` deletes only those stale overrides, restoring automatic per-agent credential selection; explicit empty orders, partially live lists, and orders without a compatible stored credential stay unchanged. If an active SQLite auth store is unreadable or malformed, doctor explains why it skipped this repair. Restart a running Gateway before rechecking auth status if its config reload mode does not apply the write automatically.
 - Doctor cleans legacy plugin dependency staging state from older OpenClaw versions and relinks the host `openclaw` package for managed npm plugins that declare it as a peer dependency. It also repairs missing downloadable plugins referenced by config (`plugins.entries`, configured channels, configured provider/search settings, configured agent runtimes). During package updates, doctor skips package-manager plugin repair until the package swap completes; rerun `openclaw doctor --fix` afterward if a configured plugin still needs recovery. If a download fails, doctor reports the install error and preserves the configured plugin entry for the next repair attempt.
 - Doctor repairs stale plugin config by removing missing plugin ids from `plugins.allow`/`plugins.deny`/`plugins.entries`, plus matching dangling channel config, heartbeat targets, and channel model overrides, when plugin discovery is healthy.

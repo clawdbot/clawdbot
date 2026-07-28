@@ -2,9 +2,10 @@
 // shared delivery hook, target routing, Markdown rendering, and media captions
 // cannot drift apart unnoticed.
 import http from "node:http";
+import { expectDefined } from "@openclaw/normalization-core";
+import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createTestRegistry,
-  deliverOutboundPayloads,
   releasePinnedPluginChannelRegistry,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/channel-test-helpers";
@@ -65,7 +66,7 @@ describe("tlon outbound assistant-visible sanitization", () => {
           expect(request.headers.cookie).toBe("urbauth-~zod=test-cookie");
           const payload = JSON.parse(body) as CapturedPoke[];
           expect(payload).toHaveLength(1);
-          pokes.push(payload[0]);
+          pokes.push(expectDefined(payload[0], "Urbit HTTP poke"));
           response.writeHead(204, { Connection: "close" });
           response.end();
           return;
@@ -101,7 +102,7 @@ describe("tlon outbound assistant-visible sanitization", () => {
       },
     } as OpenClawConfig;
 
-    await deliverOutboundPayloads({
+    await sendDurableMessageBatch({
       cfg,
       channel: "tlon",
       to: "~sampel-palnet",
@@ -120,7 +121,7 @@ describe("tlon outbound assistant-visible sanitization", () => {
       skipQueue: true,
     });
 
-    await deliverOutboundPayloads({
+    await sendDurableMessageBatch({
       cfg,
       channel: "tlon",
       to: "chat/~host-ship/general",
@@ -132,7 +133,7 @@ describe("tlon outbound assistant-visible sanitization", () => {
       skipQueue: true,
     });
 
-    await deliverOutboundPayloads({
+    await sendDurableMessageBatch({
       cfg,
       channel: "tlon",
       to: "~sampel-palnet",
@@ -153,18 +154,18 @@ describe("tlon outbound assistant-visible sanitization", () => {
       { app: "chat", mark: "chat-dm-action" },
     ]);
 
-    const dmJson = JSON.stringify(pokes[0].json);
+    const dmJson = JSON.stringify(expectDefined(pokes[0], "DM poke").json);
     expect(dmJson).toContain('"bold":["Done."]');
     expect(dmJson).not.toContain("search private repos");
     expect(dmJson).toContain("documented example (agent)");
 
-    const groupJson = JSON.stringify(pokes[1].json);
+    const groupJson = JSON.stringify(expectDefined(pokes[1], "group poke").json);
     expect(groupJson).toContain('"tag":"h2"');
     expect(groupJson).toContain("All good.");
     expect(groupJson).not.toContain("tool_call");
     expect(groupJson).not.toContain("private_exec");
 
-    const mediaJson = JSON.stringify(pokes[2].json);
+    const mediaJson = JSON.stringify(expectDefined(pokes[2], "media poke").json);
     expect(mediaJson).toContain('"bold":["Caption."]');
     expect(mediaJson).toContain('"src":"https://media.example/image.png"');
     expect(mediaJson).not.toContain("read private file");

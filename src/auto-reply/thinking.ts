@@ -18,16 +18,12 @@ export {
   normalizeUsageDisplay,
   normalizeVerboseLevel,
   resolveEffectiveResponseUsage,
-  resolveMessagesResponseUsageDefault,
   resolveResponseUsageMode,
 } from "./thinking.shared.js";
 export type {
   ElevatedLevel,
   FastMode,
-  NoticeLevel,
   ReasoningLevel,
-  ResponseUsageDefaultConfig,
-  ResponseUsageInput,
   TraceLevel,
   ThinkLevel,
   ThinkingCatalogEntry,
@@ -37,16 +33,11 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import {
-  resolveProviderBinaryThinking,
-  resolveProviderDefaultThinkingLevel,
-  resolveProviderThinkingProfile,
-  resolveProviderXHighThinking,
-} from "../plugins/provider-thinking.js";
+import { resolveProviderThinkingProfile } from "../plugins/provider-thinking.js";
 import type { ProviderThinkingProfile } from "../plugins/provider-thinking.types.js";
 
 /** UI-facing thinking level option. */
-export type ThinkingLevelOption = {
+type ThinkingLevelOption = {
   id: ThinkLevel;
   label: string;
 };
@@ -159,16 +150,6 @@ function buildOffOnlyThinkingProfile(): ResolvedThinkingProfile {
   };
 }
 
-function buildBinaryThinkingProfile(defaultLevel?: ThinkLevel | null): ResolvedThinkingProfile {
-  return {
-    levels: [
-      { id: "off", label: "off", rank: THINKING_LEVEL_RANKS.off },
-      { id: "low", label: "on", rank: THINKING_LEVEL_RANKS.low },
-    ],
-    defaultLevel,
-  };
-}
-
 function appendProfileLevel(profile: ResolvedThinkingProfile, id: ThinkLevel) {
   if (profile.levels.some((level) => level.id === id)) {
     return;
@@ -183,6 +164,7 @@ export function resolveThinkingProfile(params: {
   model?: string | null;
   catalog?: ThinkingCatalogEntry[];
   agentRuntime?: string | null;
+  providerPolicySource?: "active" | "active-or-bundled";
 }): ResolvedThinkingProfile {
   const context = resolveThinkingPolicyContext(params);
   if (!context.normalizedProvider) {
@@ -192,14 +174,21 @@ export function resolveThinkingProfile(params: {
     provider: context.normalizedProvider,
     modelId: context.modelId,
     agentRuntime: params.agentRuntime,
+    api: context.api,
     reasoning: context.reasoning,
     ...(context.params ? { params: context.params } : {}),
     compat: context.compat,
   };
-  const providerProfile = resolveProviderThinkingProfile({
+  const providerProfileParams = {
     provider: context.normalizedProvider,
     context: providerContext,
-  });
+  };
+  const providerProfile =
+    params.providerPolicySource === "active"
+      ? resolveProviderThinkingProfile(providerProfileParams, {
+          allowPublicArtifactFallback: false,
+        })
+      : resolveProviderThinkingProfile(providerProfileParams);
   // Any anthropic-messages catalog row routes through the canonical Claude
   // resolver: Claude families get the proper profile (incl. xhigh/adaptive/max);
   // non-Claude models on the anthropic-messages transport collapse to the Claude
@@ -225,35 +214,8 @@ export function resolveThinkingProfile(params: {
     return buildOffOnlyThinkingProfile();
   }
 
-  const defaultLevel = resolveProviderDefaultThinkingLevel({
-    provider: context.normalizedProvider,
-    context: providerContext,
-  });
-  const binaryDecision = resolveProviderBinaryThinking({
-    provider: context.normalizedProvider,
-    context: {
-      provider: context.normalizedProvider,
-      modelId: context.modelId,
-    },
-  });
-  const profile =
-    binaryDecision === true
-      ? buildBinaryThinkingProfile(defaultLevel)
-      : buildBaseThinkingProfile(defaultLevel);
-  if (binaryDecision !== true && catalogSupportsXHigh(context.compat)) {
-    appendProfileLevel(profile, "xhigh");
-  }
-  const policyContext = {
-    provider: context.normalizedProvider,
-    modelId: context.modelKey || context.modelId,
-  };
-  if (
-    binaryDecision !== true &&
-    resolveProviderXHighThinking({
-      provider: context.normalizedProvider,
-      context: policyContext,
-    }) === true
-  ) {
+  const profile = buildBaseThinkingProfile();
+  if (catalogSupportsXHigh(context.compat)) {
     appendProfileLevel(profile, "xhigh");
   }
   return profile;
@@ -380,12 +342,14 @@ export function resolveSupportedThinkingLevel(params: {
   level: ThinkLevel;
   catalog?: ThinkingCatalogEntry[];
   agentRuntime?: string | null;
+  providerPolicySource?: "active" | "active-or-bundled";
 }): ThinkLevel {
   const profile = resolveThinkingProfile({
     provider: params.provider,
     model: params.model,
     catalog: params.catalog,
     agentRuntime: params.agentRuntime,
+    providerPolicySource: params.providerPolicySource,
   });
   return resolveSupportedThinkingLevelFromProfile(profile, params.level);
 }

@@ -3,7 +3,6 @@ import {
   renderMessagePresentationChartFallbackText,
   renderMessagePresentationFallbackText,
   renderMessagePresentationTableFallbackText,
-  normalizeMessagePresentation,
   type MessagePresentation,
   type MessagePresentationBlock,
   type MessagePresentationChartBlock,
@@ -129,21 +128,6 @@ export function renderSlackMessagePresentationTableFallbackText(
   block: MessagePresentationTableBlock,
 ): string {
   return renderMessagePresentationTableFallbackText(escapeSlackPresentationTableBlock(block));
-}
-
-/** Render only table data that must move out of native Slack blocks. */
-export function renderSlackMessagePresentationTablesFallbackText(params: {
-  presentation?: unknown;
-  text?: string | null;
-}): string {
-  const presentation = normalizeMessagePresentation(params.presentation);
-  const blocks = presentation?.blocks.filter(
-    (block): block is MessagePresentationTableBlock => block.type === "table",
-  );
-  return renderSlackMessagePresentationFallbackText({
-    text: params.text,
-    ...(blocks?.length ? { presentation: { blocks } } : {}),
-  });
 }
 
 export function renderSlackMessagePresentationFallbackText(params: {

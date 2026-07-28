@@ -14,6 +14,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { hasRetryableConnectionErrorCode } from "../infra/retryable-network-errors.js";
 import { normalizeBlockedLivenessWaitStatus } from "../shared/agent-liveness.js";
 import {
   isOpenClawInternalSourceReplyMirrorAssistantMessage,
@@ -32,14 +33,6 @@ import {
 import { extractAssistantText, stripToolMessages } from "./tools/chat-history-text.js";
 
 type GatewayCaller = typeof callGateway;
-
-const defaultRunWaitDeps = {
-  callGateway,
-};
-
-let runWaitDeps: {
-  callGateway: GatewayCaller;
-} = defaultRunWaitDeps;
 
 function resolveRunWaitTimeoutMs(value: number | undefined): number {
   return clampTimerTimeoutMs(parseFiniteNumber(value) ?? 1) ?? 1;
@@ -139,7 +132,6 @@ const RECOVERABLE_AGENT_WAIT_ERROR_PATTERNS: readonly RegExp[] = [
   /gateway not connected/i,
   /no active .* listener/i,
   /socket hang up/i,
-  /\b(ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EHOSTUNREACH|ENETUNREACH)\b/i,
 ];
 
 /** Return true for transient gateway/transport failures that callers may retry. */
@@ -151,7 +143,10 @@ export function isRecoverableAgentWaitError(error: string | undefined): boolean 
   if (message.includes("gateway timeout")) {
     return false;
   }
-  return RECOVERABLE_AGENT_WAIT_ERROR_PATTERNS.some((pattern) => pattern.test(message));
+  return (
+    hasRetryableConnectionErrorCode(message) ||
+    RECOVERABLE_AGENT_WAIT_ERROR_PATTERNS.some((pattern) => pattern.test(message))
+  );
 }
 
 function normalizePendingRunIds(runIds: Iterable<string>): string[] {
@@ -336,7 +331,7 @@ export async function readLatestAssistantReplySnapshot(params: {
   stopAtTranscriptArtifact?: boolean;
   callGateway?: GatewayCaller;
 }): Promise<AssistantReplySnapshot> {
-  const history = await (params.callGateway ?? runWaitDeps.callGateway)<{
+  const history = await (params.callGateway ?? callGateway)<{
     messages: Array<unknown>;
   }>({
     method: "chat.history",
@@ -371,7 +366,7 @@ export async function waitForAgentRun(params: {
 }): Promise<AgentWaitResult> {
   const timeoutMs = resolveRunWaitTimeoutMs(params.timeoutMs);
   try {
-    const wait = await (params.callGateway ?? runWaitDeps.callGateway)({
+    const wait = await (params.callGateway ?? callGateway)({
       method: "agent.wait",
       params: {
         runId: params.runId,
@@ -466,16 +461,3 @@ export async function waitForAgentRunsToDrain(params: {
     deadlineAtMs,
   };
 }
-
-/** Test-only dependency injection for gateway calls. */
-export const testing = {
-  setDepsForTest(overrides?: Partial<{ callGateway: GatewayCaller }>) {
-    runWaitDeps = overrides
-      ? {
-          ...defaultRunWaitDeps,
-          ...overrides,
-        }
-      : defaultRunWaitDeps;
-  },
-};
-export { testing as __testing };

@@ -5,7 +5,7 @@ import { normalizeToolParameterSchema } from "@openclaw/ai/internal/openai";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
-import { setPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
+import { getPluginToolMeta, setPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
 import { matchesMcpToolFilterPattern } from "./agent-bundle-mcp-filter.js";
 import {
   buildSafeToolName,
@@ -19,8 +19,73 @@ import type {
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
 import { mcpContentBlockToAgentContent } from "./mcp-content.js";
+import { buildMcpAppCanvasPayload, fetchMcpAppView } from "./mcp-ui-resource.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
+function isAppOnlyTool(tool: McpCatalogTool): boolean {
+  return tool.uiVisibility !== undefined && !tool.uiVisibility.includes("model");
+}
+
+async function releaseRuntimeLease(params: {
+  runtime: SessionMcpRuntime;
+  releaseLease?: () => void;
+}): Promise<void> {
+  params.releaseLease?.();
+  // Lease retirement is a lifecycle-only edge. Keep the manager graph out of
+  // read-only CLI startup paths that load tool materialization metadata.
+  const { completeDeferredSessionMcpRuntimeRetirement } =
+    await import("./agent-bundle-mcp-manager-api.js");
+  await completeDeferredSessionMcpRuntimeRetirement(params.runtime).catch((error: unknown) => {
+    logWarn(`bundle-mcp: deferred runtime cleanup failed: ${String(error)}`);
+  });
+}
+
+function buildAppToolPolicyProjections(params: {
+  catalog: McpToolCatalog;
+  modelTools: readonly AnyAgentTool[];
+  reservedToolNames?: Iterable<string>;
+}): AnyAgentTool[] {
+  const tools = params.modelTools.filter(
+    (tool) => getPluginToolMeta(tool)?.mcp?.operation === "tool",
+  );
+  const reservedNames = normalizeReservedToolNames([
+    ...(params.reservedToolNames ?? []),
+    ...params.modelTools.map((tool) => tool.name),
+  ]);
+  const appOnlyTools = params.catalog.tools.filter(isAppOnlyTool).toSorted((a, b) => {
+    const serverOrder = a.safeServerName.localeCompare(b.safeServerName);
+    return serverOrder || a.toolName.localeCompare(b.toolName);
+  });
+  for (const tool of appOnlyTools) {
+    const name = buildSafeToolName({
+      serverName: tool.safeServerName,
+      toolName: tool.toolName,
+      reservedNames,
+    });
+    reservedNames.add(normalizeLowercaseStringOrEmpty(name));
+    const projection: AnyAgentTool = {
+      name,
+      label: tool.title ?? tool.toolName,
+      description: tool.description || tool.fallbackDescription,
+      parameters: normalizeToolParameterSchema(tool.inputSchema),
+      execute: async () => {
+        throw new Error("MCP App policy projections cannot execute tools");
+      },
+    };
+    setPluginToolMeta(projection, {
+      pluginId: "bundle-mcp",
+      optional: false,
+      mcp: {
+        serverName: tool.serverName,
+        safeServerName: tool.safeServerName,
+        toolName: tool.toolName,
+        operation: "tool",
+      },
+    });
+    tools.push(projection);
+  }
+  return tools.toSorted((a, b) => a.name.localeCompare(b.name));
+}
 
 function toAgentToolResult(params: {
   serverName: string;
@@ -206,6 +271,9 @@ export function buildBundleMcpToolsFromCatalog(params: {
   });
 
   for (const tool of sortedCatalogTools) {
+    if (isAppOnlyTool(tool)) {
+      continue;
+    }
     const originalName = tool.toolName.trim();
     if (!originalName) {
       continue;
@@ -330,9 +398,8 @@ export function buildBundleMcpToolsFromCatalog(params: {
     }
   }
 
-  // Sort tools deterministically by name so the tools block in API requests is stable across
-  // turns (defensive — listTools() order is usually stable but not guaranteed).
-  // Cannot fix name collisions: collision suffixes above are order-dependent.
+  // Sort deterministically by name: keeps the API tools block stable across turns
+  // (listTools() order is not guaranteed). Collision suffixes above stay order-dependent.
   tools.sort((a, b) => a.name.localeCompare(b.name));
   return tools;
 }
@@ -343,26 +410,57 @@ export async function materializeBundleMcpToolsForRun(params: {
   disposeRuntime?: () => Promise<void>;
 }): Promise<BundleMcpToolRuntime> {
   let disposed = false;
+  let allowedAppToolsByServer: Map<string, Set<string>> | undefined;
   const releaseLease = params.runtime.acquireLease?.();
   params.runtime.markUsed();
   let catalog;
   try {
     catalog = await params.runtime.getCatalog();
   } catch (error) {
-    releaseLease?.();
+    await releaseRuntimeLease({ runtime: params.runtime, releaseLease });
     throw error;
   }
+  const reservedToolNames = params.reservedToolNames
+    ? Array.from(params.reservedToolNames)
+    : undefined;
   const tools = buildBundleMcpToolsFromCatalog({
     catalog,
-    reservedToolNames: params.reservedToolNames,
-    createExecute: (tool) => async (_toolCallId: string, input: unknown) => {
+    reservedToolNames,
+    createExecute: (tool) => async (toolCallId: string, input: unknown) => {
       params.runtime.markUsed();
       const result = await params.runtime.callTool(tool.serverName, tool.toolName, input);
-      return toAgentToolResult({
+      const agentResult = toAgentToolResult({
         serverName: tool.serverName,
         toolName: tool.toolName,
         result,
       });
+      // Requester-scoped servers never mint app views (outlive run; no requester id on view boundary).
+      const scopedServer = params.runtime.isRequesterScopedServer?.(tool.serverName) === true;
+      if (params.runtime.mcpAppsEnabled && tool.uiResourceUri && !scopedServer) {
+        const allowedAppToolNames = allowedAppToolsByServer
+          ? (allowedAppToolsByServer.get(tool.serverName) ?? new Set<string>())
+          : undefined;
+        const view = await fetchMcpAppView({
+          runtime: params.runtime,
+          serverName: tool.serverName,
+          toolName: tool.toolName,
+          uiResourceUri: tool.uiResourceUri,
+          toolCallId,
+          toolInput: input,
+          toolResult: result,
+          ...(allowedAppToolNames ? { allowedAppToolNames } : {}),
+        });
+        if (view) {
+          (agentResult.details as Record<string, unknown>).mcpAppPreview = buildMcpAppCanvasPayload(
+            {
+              ...view,
+              ...(params.runtime.sessionKey ? { originSessionKey: params.runtime.sessionKey } : {}),
+              ...(result["_meta"] !== undefined ? { resultMetaState: "unavailable" as const } : {}),
+            },
+          );
+        }
+      }
+      return agentResult;
     },
     createResourceListExecute: params.runtime.listResources
       ? (serverName) => async () => {
@@ -409,18 +507,39 @@ export async function materializeBundleMcpToolsForRun(params: {
         }
       : undefined,
   });
+  const appTools = buildAppToolPolicyProjections({
+    catalog,
+    modelTools: tools,
+    reservedToolNames,
+  });
 
   return {
     tools,
+    appTools,
     ...(catalog.diagnostics && catalog.diagnostics.length > 0
       ? { diagnostics: catalog.diagnostics }
       : {}),
+    restrictAppTools: (allowedTools) => {
+      const next = new Map<string, Set<string>>();
+      for (const allowedTool of allowedTools) {
+        const mcp = getPluginToolMeta(allowedTool)?.mcp;
+        if (!mcp || mcp.operation !== "tool") {
+          continue;
+        }
+        const names = next.get(mcp.serverName) ?? new Set<string>();
+        names.add(mcp.toolName);
+        next.set(mcp.serverName, names);
+      }
+      allowedAppToolsByServer = next;
+    },
     dispose: async () => {
       if (disposed) {
         return;
       }
       disposed = true;
-      releaseLease?.();
+      // Reset/delete can request retirement while this run owns the lease.
+      // Dispose as soon as the final run, view, or request lease has released.
+      await releaseRuntimeLease({ runtime: params.runtime, releaseLease });
       await params.disposeRuntime?.();
     },
   };

@@ -4,7 +4,7 @@ import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gatewa
 
 type SessionRequestClient = Pick<GatewayBrowserClient, "request">;
 
-export type SessionUsageQuery = {
+type SessionUsageQuery = {
   startDate: string;
   endDate: string;
   scope: "instance" | "family";
@@ -60,7 +60,7 @@ function isOlderGatewayWithoutUsageTimeZone(
   );
 }
 
-export async function requestSessionsUsage(
+async function requestSessionsUsage(
   client: SessionRequestClient,
   params: Record<string, unknown>,
 ): Promise<SessionsUsageResult> {

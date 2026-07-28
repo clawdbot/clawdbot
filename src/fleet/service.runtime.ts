@@ -1,9 +1,11 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import { createServer } from "node:net";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { backupFleetCell, restoreFleetCell } from "./backup.runtime.js";
 import {
+  allocateHostPort,
   buildCellEnvironment,
   cellAuthSecretDir,
   cellContainerName,
@@ -30,6 +32,7 @@ import {
 import { runFleetDoctor } from "./doctor.runtime.js";
 import {
   deleteFleetCell,
+  getFleetCell,
   listFleetCells,
   reserveFleetCell,
   updateFleetCellImage,
@@ -62,8 +65,23 @@ const OFFICIAL_IMAGE_GID = 1_000;
 // Mirrors the compose healthcheck contract: an upgrade commits only after /healthz
 // answers. The deadline bounds how long a broken image can hold the cell before
 // restore without rolling back slow-booting cells prematurely.
-const UPGRADE_VERIFY_TIMEOUT_MS = 60_000;
-const UPGRADE_VERIFY_POLL_MS = 1_000;
+const CELL_VERIFY_TIMEOUT_MS = 60_000;
+const CELL_VERIFY_POLL_MS = 1_000;
+
+async function probeLoopbackPort(port: number): Promise<boolean> {
+  return await new Promise<boolean>((resolve) => {
+    const server = createServer();
+    server.once("error", (error: NodeJS.ErrnoException) => {
+      // The probe exists only to catch the one legible failure early (address in
+      // use). Anything else - e.g. EACCES on a privileged port an unprivileged CLI
+      // cannot bind but a rootful daemon can - defers to the authoritative runtime bind.
+      resolve(error.code !== "EADDRINUSE");
+    });
+    server.listen(port, "127.0.0.1", () => {
+      server.close(() => resolve(true));
+    });
+  });
+}
 
 export type FleetCreateOptions = {
   tenant: string;
@@ -80,7 +98,7 @@ export type FleetCreateOptions = {
   start?: boolean;
 };
 
-export type FleetCreateResult = {
+type FleetCreateResult = {
   tenant: string;
   containerName: string;
   port: number;
@@ -93,7 +111,7 @@ export type FleetCreateResult = {
   nextStep: string;
 };
 
-export type FleetListEntry = {
+type FleetListEntry = {
   tenant: string;
   state: string;
   port: number;
@@ -106,7 +124,7 @@ export type FleetHealthResult =
   | { status: "failed"; url: string; error: string; httpStatus?: number }
   | { status: "skipped"; url: string; reason: string };
 
-export type FleetStatusResult = {
+type FleetStatusResult = {
   tenant: string;
   containerName: string;
   runtime: FleetContainerRuntimeName;
@@ -114,10 +132,11 @@ export type FleetStatusResult = {
   image: string;
   created: string;
   dataDir: string;
-  container:
+  container: { imageId?: string } & (
     | { state: string; running: boolean; managed: boolean }
     | { state: "missing"; running: false; managed: false }
-    | { state: "unknown"; running: false; managed: false; error: string };
+    | { state: "unknown"; running: false; managed: false; error: string }
+  );
   health: FleetHealthResult;
 };
 
@@ -130,14 +149,14 @@ export type FleetLogsOptions = {
   since?: string;
 };
 
-export type FleetActionResult = {
+type FleetActionResult = {
   tenant: string;
   action: FleetLifecycleAction | "upgrade" | "rm";
   image?: string;
   dataPurged?: boolean;
 };
 
-export type FleetServiceOptions = {
+type FleetServiceOptions = {
   env?: NodeJS.ProcessEnv;
   containers?: FleetContainerRuntime;
   fetch?: typeof fetch;
@@ -147,6 +166,7 @@ export type FleetServiceOptions = {
   getuid?: () => number | undefined;
   getgid?: () => number | undefined;
   sleep?: (ms: number) => Promise<void>;
+  probePort?: (port: number) => Promise<boolean>;
   selinuxEnabled?: () => Promise<boolean>;
   updateImage?: typeof updateFleetCellImage;
 };
@@ -169,6 +189,7 @@ export function createFleetService(options: FleetServiceOptions = {}) {
       }));
   const selinuxEnabled = options.selinuxEnabled ?? detectHostSelinux;
   const updateImage = options.updateImage ?? updateFleetCellImage;
+  const probePort = options.probePort ?? probeLoopbackPort;
 
   return {
     async create(createOptions: FleetCreateOptions): Promise<FleetCreateResult> {
@@ -198,16 +219,57 @@ export function createFleetService(options: FleetServiceOptions = {}) {
         operation: async (checkpoint) => {
           checkpoint();
           const stateDir = resolveStateDir(env);
-          const record = reserveFleetCell(env, {
+          const usedPorts = new Set(listFleetCells(env).map((cell) => cell.hostPort));
+          const reservation = {
             tenantId,
             createdAtMs: now(),
             image,
             runtime,
-            requestedPort: createOptions.port,
             containerName: cellContainerName(tenantId),
             dataDir: cellDataDir(stateDir, tenantId),
-          });
+          };
+          let record: ReturnType<typeof reserveFleetCell> | undefined;
+          if (createOptions.port !== undefined) {
+            const candidatePort = allocateHostPort(usedPorts, createOptions.port);
+            if (!(await probePort(candidatePort))) {
+              throw new Error(
+                `Host port ${candidatePort} is already in use on 127.0.0.1 by another process.`,
+              );
+            }
+            // The probe is best-effort UX; the runtime bind remains authoritative across this TOCTOU gap.
+            record = reserveFleetCell(env, { ...reservation, requestedPort: candidatePort });
+          } else {
+            const unavailablePorts = new Set(usedPorts);
+            // The exclusion set only grows, so this terminates: allocateHostPort throws
+            // its range-exhaustion error once every port through 65535 is excluded.
+            while (!record) {
+              for (const cell of listFleetCells(env)) {
+                unavailablePorts.add(cell.hostPort);
+              }
+              const candidate = allocateHostPort(unavailablePorts);
+              if (!(await probePort(candidate))) {
+                unavailablePorts.add(candidate);
+                continue;
+              }
+              try {
+                // The probe is best-effort UX; the runtime bind remains authoritative across this TOCTOU gap.
+                record = reserveFleetCell(env, { ...reservation, requestedPort: candidate });
+              } catch (error) {
+                if (getFleetCell(env, tenantId)) {
+                  throw error;
+                }
+                const candidateWasReserved = listFleetCells(env).some(
+                  (cell) => cell.hostPort === candidate,
+                );
+                if (!candidateWasReserved) {
+                  throw error;
+                }
+                unavailablePorts.add(candidate);
+              }
+            }
+          }
 
+          let result: FleetCreateResult;
           let networkAttempted = false;
           let containerAttempted = false;
           try {
@@ -272,7 +334,7 @@ export function createFleetService(options: FleetServiceOptions = {}) {
               assertCurrentReservation(env, record);
             }
             const url = `http://127.0.0.1:${record.hostPort}`;
-            return {
+            result = {
               tenant: tenantId,
               containerName: record.containerName,
               port: record.hostPort,
@@ -326,6 +388,30 @@ export function createFleetService(options: FleetServiceOptions = {}) {
             }
             throw error;
           }
+          if (result.started) {
+            try {
+              await verifyReplacementHealthy({
+                containers,
+                record,
+                attemptId,
+                fetchImpl,
+                now,
+                sleep,
+                checkpoint,
+                timeoutMs: CELL_VERIFY_TIMEOUT_MS,
+                pollMs: CELL_VERIFY_POLL_MS,
+                context: "create",
+              });
+            } catch (error) {
+              // Unlike upgrade/restore, create has no previous container to bring back;
+              // keep the sick cell (container + registry row) as diagnosable evidence.
+              throw new Error(
+                `Fleet cell ${tenantId} was created but did not become healthy within 60s; inspect it with \`openclaw fleet status ${tenantId}\` or \`openclaw fleet logs ${tenantId}\`, or remove it with \`openclaw fleet rm ${tenantId} --force\`.`,
+                { cause: error },
+              );
+            }
+          }
+          return result;
         },
       });
     },
@@ -392,6 +478,7 @@ export function createFleetService(options: FleetServiceOptions = {}) {
           state: managed ? inspection.state : "unknown",
           running: inspection.running,
           managed,
+          ...(managed ? { imageId: inspection.imageId } : {}),
         };
         health =
           managed && inspection.running
@@ -441,7 +528,6 @@ export function createFleetService(options: FleetServiceOptions = {}) {
         },
       });
     },
-
     async logs(logOptions: FleetLogsOptions): Promise<void> {
       const record = requireCell(env, validateTenantId(logOptions.tenant));
       await containers.assertLocal(record.runtime);
@@ -451,7 +537,8 @@ export function createFleetService(options: FleetServiceOptions = {}) {
         await containers.inspect(record.runtime, record.containerName),
       );
       const gatewayCredential = inspection.environment.OPENCLAW_GATEWAY_TOKEN;
-      await containers.logs(record.runtime, record.containerName, {
+      // Pin the inspected generation so a concurrent restore cannot redirect the stream.
+      await containers.logs(record.runtime, inspection.containerId, {
         follow: logOptions.follow,
         tail: logOptions.tail,
         since: logOptions.since,
@@ -536,8 +623,8 @@ export function createFleetService(options: FleetServiceOptions = {}) {
               now,
               sleep,
               checkpoint,
-              timeoutMs: UPGRADE_VERIFY_TIMEOUT_MS,
-              pollMs: UPGRADE_VERIFY_POLL_MS,
+              timeoutMs: CELL_VERIFY_TIMEOUT_MS,
+              pollMs: CELL_VERIFY_POLL_MS,
               context: "upgrade",
             });
             checkpoint();
@@ -709,5 +796,4 @@ export function createFleetService(options: FleetServiceOptions = {}) {
     },
   };
 }
-
-export type FleetService = ReturnType<typeof createFleetService>;
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,4 +1,6 @@
 // Cron model override tests cover model selection overrides for scheduled runs.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
@@ -180,7 +182,10 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     // [2] post-run telemetry.  Index 1 is what a concurrent sessions_list
     // would read while the agent run is in flight.
     expect(persistedSnapshots.length).toBeGreaterThanOrEqual(3);
-    const preRunSnapshot = persistedSnapshots[1];
+    const preRunSnapshot = expectDefined(
+      persistedSnapshots[1],
+      "persistedSnapshots[1] test invariant",
+    );
     expect(preRunSnapshot.model).toBe("claude-sonnet-4-6");
     expect(preRunSnapshot.modelProvider).toBe("anthropic");
     expect(preRunSnapshot.systemSent).toBe(true);

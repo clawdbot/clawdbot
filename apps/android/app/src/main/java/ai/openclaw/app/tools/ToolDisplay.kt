@@ -1,5 +1,7 @@
 package ai.openclaw.app.tools
 
+import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.takeUtf16Safe
 import android.content.Context
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -72,13 +74,13 @@ object ToolDisplayRegistry {
     val fallback = config.fallback
 
     val emoji = spec?.emoji ?: fallback?.emoji ?: "🧩"
-    val title = spec?.title ?: titleFromName(trimmedName)
-    val label = spec?.label ?: trimmedName
+    val title = spec?.title?.let(::nativeString) ?: titleFromName(trimmedName)
+    val label = spec?.label?.let(::nativeString) ?: trimmedName
 
     val actionRaw = args?.get("action")?.asStringOrNull()?.trim()
     val action = actionRaw?.takeIf { it.isNotEmpty() }
     val actionSpec = action?.let { spec?.actions?.get(it) }
-    val verb = normalizeVerb(actionSpec?.label ?: action)
+    val verb = normalizeVerb(actionSpec?.label?.let(::nativeString) ?: action)
 
     var detail: String? = null
     if (key == "read") {
@@ -206,7 +208,12 @@ object ToolDisplayRegistry {
             ?.trim()
             .orEmpty()
         if (firstLine.isEmpty()) return null
-        return if (firstLine.length > 160) "${firstLine.take(157)}…" else firstLine
+        if (firstLine.length <= 160) {
+          return firstLine
+        }
+        // Keep the 160-code-unit preview cap without splitting a surrogate pair.
+        val preview = firstLine.takeUtf16Safe(157)
+        return "$preview…"
       }
       val raw = value.contentOrNull?.trim().orEmpty()
       raw.toBooleanStrictOrNull()?.let { return it.toString() }

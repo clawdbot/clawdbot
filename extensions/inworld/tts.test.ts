@@ -1,4 +1,5 @@
 // Inworld tests cover tts plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
@@ -175,7 +176,7 @@ describe("listInworldVoices", () => {
 
     const voices = await listInworldVoices({ apiKey: "test-key" });
     expect(voices).toHaveLength(1);
-    expect(voices[0].id).toBe("Dennis");
+    expect(expectDefined(voices[0], "Inworld voice").id).toBe("Dennis");
   });
 
   it("returns empty array when no voices present", async () => {
@@ -233,6 +234,15 @@ describe("inworldTTS", () => {
 
     expect(buffer).toEqual(
       Buffer.concat([Buffer.from("audio-chunk-1"), Buffer.from("audio-chunk-2")]),
+    );
+  });
+
+  it("rejects malformed base64 audio chunks", async () => {
+    const body = JSON.stringify({ result: { audioContent: "not-base64!" } });
+    queueGuardedResponse(new Response(body, { status: 200 }));
+
+    await expect(inworldTTS({ text: "test", apiKey: "fixture-api-key" })).rejects.toThrow(
+      "Inworld TTS returned malformed base64 audio data",
     );
   });
 

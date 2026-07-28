@@ -1,11 +1,7 @@
 // Memory Wiki tests cover gateway plugin behavior.
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  applyMemoryWikiMutation,
-  normalizeMemoryWikiMutationInput,
-  type ApplyMemoryWikiMutation,
-} from "./apply.js";
+import { applyMemoryWikiMutation, normalizeMemoryWikiMutationInput } from "./apply.js";
 import { registerMemoryWikiGatewayMethods } from "./gateway.js";
 import { listMemoryWikiImportInsights } from "./import-insights.js";
 import { listMemoryWikiImportRuns } from "./import-runs.js";
@@ -15,6 +11,8 @@ import { searchMemoryWiki } from "./query.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import { resolveMemoryWikiStatus } from "./status.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
+
+type ApplyMemoryWikiMutation = ReturnType<typeof normalizeMemoryWikiMutationInput>;
 
 vi.mock("./apply.js", () => ({
   applyMemoryWikiMutation: vi.fn(),

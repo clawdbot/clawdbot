@@ -13,6 +13,10 @@ vi.mock("./openai-chatgpt-device-code.js", () => ({
 }));
 
 let buildOpenAIProvider: typeof import("./openai-provider.js").buildOpenAIProvider;
+const CODEX_PROVIDER_CONFIG = {
+  api: "openai-chatgpt-responses",
+  baseUrl: "https://chatgpt.com/backend-api/codex",
+} as const;
 
 describe("OpenAI provider Codex transport hooks", () => {
   beforeAll(async () => {
@@ -108,6 +112,7 @@ describe("OpenAI provider Codex transport hooks", () => {
         provider: "openai",
         modelId,
         authProfileMode: "oauth",
+        providerConfig: CODEX_PROVIDER_CONFIG,
         modelRegistry: { find: () => null },
       } as never);
 
@@ -118,7 +123,7 @@ describe("OpenAI provider Codex transport hooks", () => {
         baseUrl: "https://chatgpt.com/backend-api/codex",
         input: ["text", "image"],
         contextWindow: 372_000,
-        contextTokens: 372_000,
+        contextTokens: 272_000,
         maxTokens: 128_000,
         thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
       });
@@ -132,6 +137,7 @@ describe("OpenAI provider Codex transport hooks", () => {
       provider: "openai",
       modelId: "gpt-5.6",
       authProfileMode: "oauth",
+      providerConfig: CODEX_PROVIDER_CONFIG,
       modelRegistry: { find: () => null },
     } as never);
 
@@ -147,6 +153,7 @@ describe("OpenAI provider Codex transport hooks", () => {
       provider: "openai",
       modelId: "gpt-5.6-luna",
       authProfileMode: "oauth",
+      providerConfig: CODEX_PROVIDER_CONFIG,
       modelRegistry: {
         find: () => ({
           id: "gpt-5.6-luna",

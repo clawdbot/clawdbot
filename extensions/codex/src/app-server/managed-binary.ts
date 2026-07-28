@@ -7,6 +7,7 @@ import { access } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { CodexAppServerStartOptions, CodexManagedCommandOrder } from "./config.js";
 import { MANAGED_CODEX_APP_SERVER_PACKAGE } from "./version.js";
 
@@ -57,7 +58,7 @@ export async function resolveManagedCodexAppServerStartOptions(
     pathExists,
     platform,
   });
-  const commandPath = commandPaths[0];
+  const commandPath = expectDefined(commandPaths[0], "resolved managed Codex command path");
   const managedFallbackCommandPaths = commandPaths.slice(1);
 
   return {
@@ -178,7 +179,7 @@ function resolvePackageJsonFromRoot(packageName: string, root: string): string |
 }
 
 /** Returns the preferred and fallback managed Codex binary paths for a plugin root. */
-export function resolveManagedCodexAppServerPaths(params: {
+function resolveManagedCodexAppServerPaths(params: {
   platform?: NodeJS.Platform;
   pluginRoot?: string;
   managedCommandOrder?: CodexManagedCommandOrder;
@@ -314,11 +315,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-/** Internal helpers exposed for managed-binary path-resolution tests. */
-export const testing = {
-  resolveDefaultCodexPluginRoot,
-};
-
 function isDistExtensionRoot(pluginRoot: string, platform: NodeJS.Platform): boolean {
   const pathApi = pathForPlatform(platform);
   const extensionsDir = pathApi.dirname(pluginRoot);
@@ -365,4 +361,3 @@ async function commandPathExists(filePath: string, platform: NodeJS.Platform): P
     return false;
   }
 }
-export { testing as __testing };

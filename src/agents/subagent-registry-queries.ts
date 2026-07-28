@@ -4,12 +4,19 @@
  * Keeps tree traversal and filtering independent from persistence and mutable process state.
  */
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import { isDeliverySuspended } from "./subagent-delivery-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 import { hasSubagentRunEnded, isLiveUnendedSubagentRun } from "./subagent-run-liveness.js";
 
 function resolveControllerSessionKey(entry: SubagentRunRecord): string {
   return entry.controllerSessionKey?.trim() || entry.requesterSessionKey;
+}
+
+function resolveConcurrencyOwnerSessionKey(entry: SubagentRunRecord): string {
+  return entry.collect
+    ? entry.swarmRequesterSessionKey?.trim() || resolveControllerSessionKey(entry)
+    : resolveControllerSessionKey(entry);
 }
 
 /** Lists requester-owned runs, optionally scoped to the lifetime of a requester run. */
@@ -33,18 +40,20 @@ export function listRunsForRequesterFromRuns(
   const lowerBound = requesterRunMatchesScope?.startedAt ?? requesterRunMatchesScope?.createdAt;
   const upperBound = requesterRunMatchesScope?.endedAt;
 
-  return [...runs.values()].filter((entry) => {
+  const results: SubagentRunRecord[] = [];
+  for (const entry of runs.values()) {
     if (entry.requesterSessionKey !== key) {
-      return false;
+      continue;
     }
     if (typeof lowerBound === "number" && entry.createdAt < lowerBound) {
-      return false;
+      continue;
     }
     if (typeof upperBound === "number" && entry.createdAt > upperBound) {
-      return false;
+      continue;
     }
-    return true;
-  });
+    results.push(entry);
+  }
+  return results;
 }
 
 /** Lists runs controlled by the normalized controller session key. */
@@ -56,7 +65,13 @@ export function listRunsForControllerFromRuns(
   if (!key) {
     return [];
   }
-  return [...runs.values()].filter((entry) => resolveControllerSessionKey(entry) === key);
+  const results: SubagentRunRecord[] = [];
+  for (const entry of runs.values()) {
+    if (resolveControllerSessionKey(entry) === key) {
+      results.push(entry);
+    }
+  }
+  return results;
 }
 
 type LatestRunPair = {
@@ -371,6 +386,7 @@ export function shouldIgnorePostCompletionAnnounceForSessionFromRuns(
 export function countActiveRunsForSessionFromRuns(
   runs: Map<string, SubagentRunRecord>,
   controllerSessionKey: string,
+  options?: { collect?: boolean },
 ): number {
   const key = controllerSessionKey.trim();
   if (!key) {
@@ -388,8 +404,13 @@ export function countActiveRunsForSessionFromRuns(
   };
 
   const latestByChildSessionKey = new Map<string, SubagentRunRecord>();
+  // Records already carry collect, and spawn admission is not request-hot, so a
+  // filtered snapshot is simpler than maintaining a second registry index.
   for (const entry of runs.values()) {
-    if (resolveControllerSessionKey(entry) !== key) {
+    if (options?.collect !== undefined && (entry.collect === true) !== options.collect) {
+      continue;
+    }
+    if (resolveConcurrencyOwnerSessionKey(entry) !== key) {
       continue;
     }
     const existing = latestByChildSessionKey.get(entry.childSessionKey);
@@ -414,7 +435,7 @@ export function countActiveRunsForSessionFromRuns(
 function forEachDescendantRun(
   runs: Map<string, SubagentRunRecord>,
   rootSessionKey: string,
-  visitor: (runId: string, entry: SubagentRunRecord) => void,
+  visitor: (runId: string, entry: SubagentRunRecord) => void | boolean,
 ): boolean {
   const root = rootSessionKey.trim();
   if (!root) {
@@ -446,7 +467,10 @@ function forEachDescendantRun(
       ) {
         continue;
       }
-      visitor(runId, entry);
+      // A visitor may stop the traversal early by returning true.
+      if (visitor(runId, entry) === true) {
+        return true;
+      }
       const childKey = entry.childSessionKey.trim();
       if (!childKey || visited.has(childKey)) {
         continue;
@@ -479,18 +503,30 @@ export function countActiveDescendantRunsFromRuns(
 function countPendingDescendantRunsInternal(
   runs: Map<string, SubagentRunRecord>,
   rootSessionKey: string,
-  excludeRunId?: string,
+  options?: {
+    excludeRunId?: string;
+    treatSuspendedDeliveryAsSettled?: boolean;
+    stopAtFirst?: boolean;
+  },
 ): number {
-  const excludedRunId = excludeRunId?.trim();
+  const excludedRunId = options?.excludeRunId?.trim();
   let count = 0;
   if (
     !forEachDescendantRun(runs, rootSessionKey, (runId, entry) => {
-      const runEnded = hasSubagentRunEnded(entry);
-      const cleanupCompleted = typeof entry.cleanupCompletedAt === "number";
-      const runPending = runEnded ? !cleanupCompleted : isLiveUnendedSubagentRun(entry);
-      if (runPending && runId !== excludedRunId) {
-        count += 1;
+      if (runId === excludedRunId) {
+        return undefined;
       }
+      const runPending = hasSubagentRunEnded(entry)
+        ? typeof entry.cleanupCompletedAt !== "number" &&
+          !(options?.treatSuspendedDeliveryAsSettled === true && isDeliverySuspended(entry))
+        : isLiveUnendedSubagentRun(entry);
+      if (runPending) {
+        count += 1;
+        if (options?.stopAtFirst === true) {
+          return true;
+        }
+      }
+      return undefined;
     })
   ) {
     return 0;
@@ -512,7 +548,27 @@ export function countPendingDescendantRunsExcludingRunFromRuns(
   rootSessionKey: string,
   excludeRunId: string,
 ): number {
-  return countPendingDescendantRunsInternal(runs, rootSessionKey, excludeRunId);
+  return countPendingDescendantRunsInternal(runs, rootSessionKey, { excludeRunId });
+}
+
+/**
+ * True when any descendant below a root session has not reached a terminal
+ * settle. Differs from the pending count in one way: a run whose final
+ * delivery was suspended counts as settled — suspension is terminal for
+ * automatic announce retries, so requester-drain decisions must not wait on it.
+ */
+export function hasDescendantRunAwaitingSettleFromRuns(
+  runs: Map<string, SubagentRunRecord>,
+  rootSessionKey: string,
+  excludeRunId?: string,
+): boolean {
+  return (
+    countPendingDescendantRunsInternal(runs, rootSessionKey, {
+      excludeRunId,
+      treatSuspendedDeliveryAsSettled: true,
+      stopAtFirst: true,
+    }) > 0
+  );
 }
 
 /** Lists latest descendant runs under a requester/session tree. */

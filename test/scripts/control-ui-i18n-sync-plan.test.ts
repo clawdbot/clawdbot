@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createControlUiLocaleSyncPlan,
   flattenTranslations,
+  resolveLocaleMetaProvenance,
   type LocaleEntry,
   type LocaleMeta,
   type TranslationMemoryEntry,
@@ -50,6 +51,27 @@ function localeMeta(overrides: Partial<LocaleMeta> = {}): LocaleMeta {
 }
 
 describe("createControlUiLocaleSyncPlan", () => {
+  it("preserves provenance when a configured provider performs no translation", () => {
+    const previousMeta = localeMeta();
+
+    expect(
+      resolveLocaleMetaProvenance({
+        didTranslate: false,
+        model: "next-model",
+        previousMeta,
+        provider: "next-provider",
+      }),
+    ).toEqual({ model: previousMeta.model, provider: previousMeta.provider });
+    expect(
+      resolveLocaleMetaProvenance({
+        didTranslate: true,
+        model: "next-model",
+        previousMeta,
+        provider: "next-provider",
+      }),
+    ).toEqual({ model: "next-model", provider: "next-provider" });
+  });
+
   it("plans reuse and renders deterministic locale artifacts", () => {
     const sourceFlat = flattenTranslations({
       group: {

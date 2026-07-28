@@ -304,6 +304,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       supportsBargeIn: true,
       handlesInputAudioBargeIn: true,
       supportsToolCalls: true,
+      supportsVideoFrames: true,
     });
   });
 
@@ -376,7 +377,14 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     bridge.close();
 
     expect(resolveProviderAuthProfileApiKeyMock.mock.calls).toEqual([
-      [{ provider: "openai", cfg: {}, profileTypes: ["api_key"] }],
+      [
+        {
+          provider: "openai",
+          cfg: {},
+          profileTypes: ["api_key"],
+          includeExternalCliAuth: false,
+        },
+      ],
     ]);
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
     const socket = FakeWebSocket.instances[0];
@@ -398,7 +406,14 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     );
 
     expect(resolveProviderAuthProfileApiKeyMock.mock.calls).toEqual([
-      [{ provider: "openai", cfg: {}, profileTypes: ["api_key"] }],
+      [
+        {
+          provider: "openai",
+          cfg: {},
+          profileTypes: ["api_key"],
+          includeExternalCliAuth: false,
+        },
+      ],
     ]);
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
     expect(FakeWebSocket.instances).toHaveLength(0);
@@ -441,7 +456,14 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     bridge.close();
 
     expect(resolveProviderAuthProfileApiKeyMock.mock.calls).toEqual([
-      [{ provider: "openai", cfg: {}, profileTypes: ["api_key"] }],
+      [
+        {
+          provider: "openai",
+          cfg: {},
+          profileTypes: ["api_key"],
+          includeExternalCliAuth: false,
+        },
+      ],
     ]);
     const socket = FakeWebSocket.instances[0];
     const options = socket?.args[1] as { headers?: Record<string, string> } | undefined;
@@ -700,7 +722,33 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       provider: "openai",
       cfg,
       profileTypes: ["api_key"],
+      includeExternalCliAuth: false,
     });
+  });
+
+  it("requires Platform auth for browser sessions", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+
+    await expect(
+      provider.createBrowserSession?.({
+        providerConfig: {},
+      }),
+    ).rejects.toThrow("OpenAI Realtime voice requires an OpenAI Platform API key");
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it("reports an unresolved Platform credential without trying another auth route", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "keychain:openclaw:OPENAI_REALTIME_MISSING_TEST");
+    execFileSyncMock.mockImplementationOnce(() => {
+      throw new Error("keychain unavailable");
+    });
+    const provider = buildOpenAIRealtimeVoiceProvider();
+
+    await expect(
+      provider.createBrowserSession?.({
+        providerConfig: {},
+      }),
+    ).rejects.toThrow("OpenAI Realtime voice requires an OpenAI Platform API key");
   });
 
   it("treats OpenAI API-key auth profiles as configured for browser realtime sessions", () => {
@@ -713,6 +761,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       provider: "openai",
       cfg,
       profileTypes: ["api_key"],
+      includeExternalCliAuth: false,
     });
   });
 
@@ -867,6 +916,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     const bridge = provider.createBridge({
       providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
       instructions: "Be helpful.",
+      language: "de",
       onAudio: vi.fn(),
       onClearAudio: vi.fn(),
       onReady,
@@ -901,7 +951,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expectRecordFields(inputAudio, "session audio input", {
       format: { type: "audio/pcmu" },
       noise_reduction: null,
-      transcription: { model: "gpt-4o-mini-transcribe" },
+      transcription: { model: "gpt-4o-mini-transcribe", language: "de" },
     });
     expect(requireNestedRecord(session, ["audio", "output"])).toEqual({
       format: { type: "audio/pcmu" },
@@ -1098,6 +1148,55 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     );
     expect(bridge.isConnected()).toBe(true);
 
+    bridge.close();
+  });
+
+  it("cancels a pending reconnect and allows a later explicit connect", async () => {
+    vi.useFakeTimers();
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const onError = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onError,
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    socket.readyState = FakeWebSocket.CLOSED;
+    socket.emit("close", 1006, Buffer.from("transient drop"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(1);
+
+    bridge.close();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(vi.getTimerCount()).toBe(0);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(onError).not.toHaveBeenCalled();
+
+    const reconnecting = bridge.connect();
+    const reconnectedSocket = FakeWebSocket.instances[1];
+    if (!reconnectedSocket) {
+      throw new Error("expected bridge to reconnect after close");
+    }
+    reconnectedSocket.readyState = FakeWebSocket.OPEN;
+    reconnectedSocket.emit("open");
+    reconnectedSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await reconnecting;
+
+    expect(bridge.isConnected()).toBe(true);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(onError).not.toHaveBeenCalled();
     bridge.close();
   });
 
@@ -1667,6 +1766,55 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       "assistant",
       "hello from current realtime events",
       true,
+    );
+  });
+
+  it.each([
+    ["invalid alphabet", "not-base64!"],
+    ["non-canonical pad bits", "ZE=="],
+  ])("terminates the session for %s in output audio", async (_scenario, delta) => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const onAudio = vi.fn();
+    const onError = vi.fn();
+    const onClose = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio,
+      onClearAudio: vi.fn(),
+      onError,
+      onClose,
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "response.output_audio.delta",
+          item_id: "item_1",
+          delta,
+        }),
+      ),
+    );
+
+    expect(onAudio).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "OpenAI realtime stream returned malformed base64 audio data",
+      }),
+    );
+    expect(onClose).toHaveBeenCalledWith("error");
+    expect(socket.closed).toBe(true);
+    await expect(bridge.connect()).rejects.toThrow(
+      "OpenAI realtime stream returned malformed base64 audio data",
     );
   });
 
@@ -2758,3 +2906,4 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { normalizeChannelId as normalizeBundledChannelId } from "../../channels/registry.js";
+import { readFileWindowFully } from "../../infra/file-read.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
 import { resolveLogFile } from "../../logging/log-tail.js";
@@ -87,8 +88,8 @@ async function readTailLines(file: string, limit: number): Promise<string[]> {
       return [];
     }
     const buffer = Buffer.alloc(length);
-    const readResult = await handle.read(buffer, 0, length, start);
-    const text = buffer.toString("utf8", 0, readResult.bytesRead);
+    const bytesRead = await readFileWindowFully(handle, buffer, start);
+    const text = buffer.toString("utf8", 0, bytesRead);
     let lines = text.split("\n");
     if (start > 0 && prefix !== "\n") {
       lines = lines.slice(1);

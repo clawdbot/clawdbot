@@ -1,6 +1,7 @@
 // Browser tests cover profiles service plugin behavior.
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -198,10 +199,11 @@ describe("BrowserProfilesService", () => {
       expect(Object.hasOwn(createdProfiles, profileName)).toBe(true);
 
       writeConfigFile.mockClear();
+      const createdProfile = expectDefined(createdProfiles[profileName], "created browser profile");
       vi.mocked(getRuntimeConfig).mockReturnValue({
         browser: {
           defaultProfile: "openclaw",
-          profiles: { [profileName]: createdProfiles[profileName] },
+          profiles: { [profileName]: createdProfile },
         },
       });
       await service.deleteProfile(profileName);
@@ -272,18 +274,6 @@ describe("BrowserProfilesService", () => {
     expect(writeConfigFile).toHaveBeenCalled();
   });
 
-  it("allocates from configured cdpPortRangeStart for new local profiles", async () => {
-    const { result, state } = await createWorkProfileWithConfig({
-      resolved: resolveBrowserConfig({ cdpPortRangeStart: 19000 }),
-      browserConfig: { cdpPortRangeStart: 19000, profiles: {} },
-    });
-
-    expect(result.cdpPort).toBe(19001);
-    expect(result.isRemote).toBe(false);
-    expect(state.resolved.profiles.work?.cdpPort).toBe(19001);
-    expect(writeConfigFile).toHaveBeenCalled();
-  });
-
   it("allocates local ports from the rebased config snapshot", async () => {
     const resolved = resolveBrowserConfig({});
     const { ctx, state } = createCtx(resolved);
@@ -308,12 +298,11 @@ describe("BrowserProfilesService", () => {
   });
 
   it("allocates local ports from the rebased CDP range end", async () => {
-    const resolved = resolveBrowserConfig({ cdpPortRangeStart: 19000 });
+    const resolved = resolveBrowserConfig({});
     const { ctx, state } = createCtx(resolved);
     vi.mocked(getRuntimeConfig)
       .mockReturnValueOnce({
         browser: {
-          cdpPortRangeStart: 19000,
           profiles: {},
         },
       } as OpenClawConfig)
@@ -417,7 +406,6 @@ describe("BrowserProfilesService", () => {
     const resolvedProfile = state.resolved.profiles["chrome-live"];
     expect(resolvedProfile?.driver).toBe("existing-session");
     expect(resolvedProfile?.attachOnly).toBe(true);
-    expect(typeof resolvedProfile?.color).toBe("string");
     const profiles = writtenBrowserConfig().profiles as Record<
       string,
       { attachOnly?: boolean; driver?: string }
@@ -501,7 +489,6 @@ describe("BrowserProfilesService", () => {
     expect(resolvedProfile?.driver).toBe("existing-session");
     expect(resolvedProfile?.attachOnly).toBe(true);
     expect(resolvedProfile?.userDataDir).toBe(userDataDir);
-    expect(typeof resolvedProfile?.color).toBe("string");
   });
 
   it("rejects userDataDir for non-existing-session profiles", async () => {

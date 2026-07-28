@@ -10,11 +10,14 @@ import {
   resetPluginTtsAndThreadMocks,
   runtimePluginMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
+import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 let createReplyOperation: typeof import("./reply-run-registry.js").createReplyOperation;
-let replyRunTesting: typeof import("./reply-run-registry.js").__testing;
+let expireStaleReplyOperation: typeof import("./reply-run-registry.js").expireStaleReplyOperation;
+let replyRunRegistry: typeof import("./reply-run-registry.js").replyRunRegistry;
+let replyRunTesting: typeof import("./reply-run-registry.test-support.js").testing;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 
 const sessionKey = "agent:main:telegram:direct:1";
@@ -23,7 +26,9 @@ function setNoAbort() {
   mocks.tryFastAbortFromMessage.mockResolvedValue(noAbortResult);
 }
 
-function createVisibleDispatchParams(replyResolver: () => Promise<ReplyPayload>) {
+function createVisibleDispatchParams(
+  replyResolver: NonNullable<DispatchFromConfigParams["replyResolver"]>,
+) {
   return {
     ctx: buildTestCtx({
       Provider: "telegram",
@@ -35,12 +40,7 @@ function createVisibleDispatchParams(replyResolver: () => Promise<ReplyPayload>)
       MessageThreadId: "501.000",
       BodyForAgent: "second telegram direct turn",
     }),
-    cfg: {
-      diagnostics: {
-        stuckSessionWarnMs: 1_000,
-        stuckSessionAbortMs: 1_000,
-      },
-    } as OpenClawConfig,
+    cfg: {} as OpenClawConfig,
     dispatcher: createDispatcher(),
     replyResolver,
   };
@@ -49,8 +49,9 @@ function createVisibleDispatchParams(replyResolver: () => Promise<ReplyPayload>)
 describe("dispatchReplyFromConfig stale visible admission recovery", () => {
   beforeAll(async () => {
     ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
-    ({ createReplyOperation, __testing: replyRunTesting } =
+    ({ createReplyOperation, expireStaleReplyOperation, replyRunRegistry } =
       await import("./reply-run-registry.js"));
+    ({ testing: replyRunTesting } = await import("./reply-run-registry.test-support.js"));
     ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
   });
 
@@ -80,8 +81,14 @@ describe("dispatchReplyFromConfig stale visible admission recovery", () => {
       resetTriggered: false,
     });
     activeOperation.setPhase("running");
+    const waitChanges: boolean[] = [];
     const replyResolver = vi.fn(async () => ({ text: "telegram reply" }) satisfies ReplyPayload);
-    const dispatchParams = createVisibleDispatchParams(replyResolver);
+    const dispatchParams = {
+      ...createVisibleDispatchParams(replyResolver),
+      replyOptions: {
+        onReplyAdmissionWaitChange: (waiting: boolean) => waitChanges.push(waiting),
+      },
+    };
     let settled = false;
 
     const resultPromise = dispatchReplyFromConfig(dispatchParams).then((result) => {
@@ -89,9 +96,10 @@ describe("dispatchReplyFromConfig stale visible admission recovery", () => {
       return result;
     });
 
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(120_000);
 
     expect(settled).toBe(false);
+    expect(waitChanges).toEqual([true]);
     expect(replyResolver).not.toHaveBeenCalled();
     expect(diagnosticMocks.requestStuckDiagnosticSessionRecovery).not.toHaveBeenCalled();
 
@@ -104,6 +112,7 @@ describe("dispatchReplyFromConfig stale visible admission recovery", () => {
     });
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    expect(waitChanges).toEqual([true, false]);
   });
 
   it("reclaims stale visible reply work through admission and dispatches the turn", async () => {
@@ -129,5 +138,33 @@ describe("dispatchReplyFromConfig stale visible admission recovery", () => {
     });
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends overload feedback when stuck recovery expires the active reply", async () => {
+    let resolverStarted: () => void = () => {};
+    const resolverStartedPromise = new Promise<void>((resolve) => {
+      resolverStarted = resolve;
+    });
+    const dispatchParams = createVisibleDispatchParams(async (_ctx, options) => {
+      resolverStarted();
+      await new Promise<void>((resolve) => {
+        options?.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+      const error = new Error("reply expired");
+      error.name = "AbortError";
+      throw error;
+    });
+
+    const dispatchPromise = dispatchReplyFromConfig(dispatchParams);
+    await resolverStartedPromise;
+    const operation = replyRunRegistry.get(sessionKey);
+    expect(operation).toBeDefined();
+    expect(expireStaleReplyOperation(operation!, "stuck_recovery")).toBe(true);
+
+    await expect(dispatchPromise).resolves.toMatchObject({ queuedFinal: true });
+    expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledWith({
+      text: "⚠️ Your reply was dropped because the gateway was overloaded. Please retry.",
+      isError: true,
+    });
   });
 });

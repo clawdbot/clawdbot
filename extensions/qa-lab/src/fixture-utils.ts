@@ -1,8 +1,9 @@
 // Qa Lab plugin module provides reusable fixture utilities.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
+import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 
 export type QaFixtureFetchJsonOptions = {
   fetchImpl?: (url: string, init: RequestInit) => Promise<Response>;
@@ -311,7 +312,7 @@ async function countNeedlesInFile(filePath: string, needles: Record<string, stri
       continue;
     }
     for (const [key, needle] of Object.entries(needles)) {
-      counts[key] += countOccurrences(scanText, needle);
+      counts[key] = (counts[key] ?? 0) + countOccurrences(scanText, needle);
     }
   }
   return counts;
@@ -331,7 +332,7 @@ function countNeedlesInSqliteTranscriptEvents(
   const counts = createCounts(needles);
   let db: DatabaseSync | null = null;
   try {
-    db = new DatabaseSync(sqlitePath, { readOnly: true });
+    db = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
     const hasTranscriptEvents = db
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'transcript_events'")
       .get();
@@ -348,7 +349,7 @@ function countNeedlesInSqliteTranscriptEvents(
         continue;
       }
       for (const [key, needle] of Object.entries(needles)) {
-        counts[key] += countOccurrences(scanText, needle);
+        counts[key] = (counts[key] ?? 0) + countOccurrences(scanText, needle);
       }
     }
     return counts;

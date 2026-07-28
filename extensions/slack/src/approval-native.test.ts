@@ -3,11 +3,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  normalizeSessionDeliveryState,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveSlackApprovalKind } from "./approval-native-gates.js";
-import { slackApprovalCapability, testing } from "./approval-native.js";
+import { slackApprovalCapability } from "./approval-native.js";
 
 function buildConfig(
   overrides?: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["slack"]>>,
@@ -98,26 +100,6 @@ async function resolvePluginOriginTarget(sessionKey: string) {
 }
 
 describe("slack native approval adapter", () => {
-  it("derives approval ownership from payload shape instead of id spelling", () => {
-    expect(
-      resolveSlackApprovalKind({
-        ...createExecApprovalRequest(),
-        id: "plugin:misleading-exec-id",
-      }),
-    ).toBe("exec");
-    expect(
-      resolveSlackApprovalKind({
-        id: "opaque-plugin-id",
-        request: {
-          title: "Plugin approval",
-          description: "Allow access",
-        },
-        createdAtMs: 0,
-        expiresAtMs: 1000,
-      }),
-    ).toBe("plugin");
-  });
-
   it("subscribes the native runtime to exec and plugin approval events", () => {
     expect(slackApprovalCapability.nativeRuntime?.eventKinds).toEqual(["exec", "plugin"]);
   });
@@ -233,15 +215,6 @@ describe("slack native approval adapter", () => {
       to: "channel:C123",
       threadId: "1712345678.123456",
     });
-  });
-
-  it("rejects origin delivery when Slack thread ids differ in the fractional timestamp", () => {
-    expect(
-      testing.slackTargetsMatch(
-        { to: "channel:C123", threadId: "1712345678.123456" },
-        { to: "channel:C123", threadId: "1712345678.1234567" },
-      ),
-    ).toBe(false);
   });
 
   it("resolves approver dm targets", async () => {
@@ -697,8 +670,9 @@ describe("slack native approval adapter", () => {
       entry: {
         sessionId: "sess",
         updatedAt: Date.now(),
-        lastChannel: "slack",
-        lastAccountId: "work",
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "slack", accountId: "work" },
+        }),
       },
     });
 
@@ -749,18 +723,6 @@ describe("slack native approval adapter", () => {
     ).toBe(true);
   });
 
-  it("falls back to the session-bound origin target for plugin approvals", () => {
-    expect(
-      testing.resolveSessionSlackOriginTarget({
-        to: "channel:C123",
-        threadId: "1712345678.123456",
-      }),
-    ).toEqual({
-      to: "channel:C123",
-      threadId: "1712345678.123456",
-    });
-  });
-
   it("resolves Slack app conversation plugin approvals to the live D-channel thread", async () => {
     const target = await slackApprovalCapability.native?.resolveOriginTarget?.({
       cfg: buildConfig({ allowFrom: ["U123OWNER"] }),
@@ -786,55 +748,6 @@ describe("slack native approval adapter", () => {
       to: "channel:D0ACP6B1T8V",
       threadId: "1712345678.123456",
     });
-  });
-
-  it("prefers Slack app conversation D-channel turn source over user-scoped session route", () => {
-    expect(
-      testing.resolveTurnSourceSlackOriginTarget({
-        id: "plugin:req-1",
-        request: {
-          title: "Plugin approval",
-          description: "Allow access",
-          sessionKey: "agent:main:slack:direct:u123owner:thread:1712345678.123456",
-          turnSourceChannel: "slack",
-          turnSourceTo: "D0ACP6B1T8V",
-          turnSourceAccountId: "default",
-          turnSourceThreadId: "1712345678.123456",
-        },
-        createdAtMs: 0,
-        expiresAtMs: 1000,
-      }),
-    ).toEqual({
-      to: "channel:D0ACP6B1T8V",
-      threadId: "1712345678.123456",
-    });
-  });
-
-  it("does not treat Slack D-channel and user route targets as matching across threads", () => {
-    expect(
-      testing.slackTargetsMatch(
-        { to: "channel:D0ACP6B1T8V", threadId: "1712349999.123456" },
-        { to: "user:U123OWNER", threadId: "1712345678.123456" },
-      ),
-    ).toBe(false);
-  });
-
-  it("does not treat same-second Slack D-channel and user route targets as the same thread", () => {
-    expect(
-      testing.slackTargetsMatch(
-        { to: "channel:D0ACP6B1T8V", threadId: "1712345678.999999" },
-        { to: "user:U123OWNER", threadId: "1712345678.123456" },
-      ),
-    ).toBe(false);
-  });
-
-  it("does not treat same-second Slack channel route targets as the same thread", () => {
-    expect(
-      testing.slackTargetsMatch(
-        { to: "channel:C123ROOM", threadId: "1712345678.999999" },
-        { to: "channel:C123ROOM", threadId: "1712345678.123456" },
-      ),
-    ).toBe(false);
   });
 
   it("falls back to the session-key origin target for plugin approvals when the store is missing", async () => {
@@ -1094,16 +1007,44 @@ describe("slack native approval adapter", () => {
     ).toBe(true);
   });
 
-  it("suppresses plugin forwarding fallback for the persisted native origin target", () => {
+  it("keeps plugin forwarding fallback when the native origin thread timestamp differs", () => {
+    const shouldSuppress = slackApprovalCapability.delivery?.shouldSuppressForwardingFallback;
+    if (!shouldSuppress) {
+      throw new Error("slack native delivery suppression unavailable");
+    }
+
     expect(
-      testing.slackTargetsMatch(
-        { to: "channel:CSTORED", threadId: "1712345678.123456" },
-        testing.resolveSessionSlackOriginTarget({
-          to: "channel:CSTORED",
-          threadId: "1712345678.123456",
+      shouldSuppress({
+        cfg: buildConfig({
+          allowFrom: ["U123OWNER"],
+          execApprovals: {
+            enabled: true,
+            approvers: ["U999EXEC"],
+            target: "dm",
+          },
         }),
-      ),
-    ).toBe(true);
+        approvalKind: "plugin",
+        target: {
+          channel: "slack",
+          to: "channel:C123ROOM",
+          accountId: "default",
+          threadId: "1712345678.1234567",
+        },
+        request: {
+          id: "plugin:approval-1",
+          request: {
+            title: "Plugin approval",
+            description: "Allow access",
+            turnSourceChannel: "slack",
+            turnSourceTo: "channel:C123ROOM",
+            turnSourceAccountId: "default",
+            turnSourceThreadId: "1712345678.123456",
+          },
+          createdAtMs: 0,
+          expiresAtMs: 1_000,
+        },
+      }),
+    ).toBe(false);
   });
 
   it("suppresses explicit plugin forwarding targets when native Slack plugin delivery is active", () => {
@@ -1280,3 +1221,4 @@ describe("slack native approval adapter", () => {
     ).toEqual({ authorized: true });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

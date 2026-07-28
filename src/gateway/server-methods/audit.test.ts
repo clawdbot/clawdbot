@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { auditHandlers, testApi } from "./audit.js";
 
@@ -9,7 +10,10 @@ const accountRef = `hmac-sha256:v1:${"a".repeat(32)}:${"b".repeat(64)}`;
 
 async function runAuditHandler(method: "audit.activity.list" | "audit.list", params: object) {
   const respond = vi.fn();
-  await auditHandlers[method]({ params, respond } as never);
+  await expectDefined(
+    auditHandlers[method],
+    "auditHandlers[method] test invariant",
+  )({ params, respond } as never);
   return respond;
 }
 
@@ -193,6 +197,15 @@ describe("audit gateway methods", () => {
         expect.any(Object),
       );
       expect(listAuditEvents).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["audit.list", "audit.activity.list"] as const)(
+    "trims whitespace around cursor digits for %s",
+    async (method) => {
+      const respond = await runAuditHandler(method, { cursor: "  11  " });
+      expect(respond).toHaveBeenCalledWith(true, expect.anything());
+      expect(listAuditEvents).toHaveBeenCalledWith(expect.objectContaining({ cursor: 11 }));
     },
   );
 });

@@ -1,15 +1,10 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   isTrustedMessageActionTurnIngress,
   mintMessageActionTurnCapability,
-  resetMessageActionTurnCapabilitiesForTest,
   resolveMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "./message-action-turn-capability.js";
-
-afterEach(() => {
-  resetMessageActionTurnCapabilitiesForTest();
-});
 
 describe("message action turn capability", () => {
   it("admits channel ingress but rejects Gateway and internal run sources", () => {
@@ -32,6 +27,7 @@ describe("message action turn capability", () => {
         currentChannelProvider: "matrix",
         currentChannelId: "!room-1:example.org",
         currentChatType: "direct",
+        currentSourceTurnId: "channel-user:v1:source-1",
       },
       nowMs: 1000,
       ttlMs: 5000,
@@ -55,6 +51,7 @@ describe("message action turn capability", () => {
         currentChannelProvider: "matrix",
         currentChannelId: "!room-1:example.org",
         currentChatType: "direct",
+        currentSourceTurnId: "channel-user:v1:source-1",
       },
     });
 

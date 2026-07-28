@@ -10,7 +10,7 @@ import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   adaptMessagePresentationForChannel,
-  normalizeInteractiveReply,
+  normalizeLegacyInteractiveReply,
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
 } from "openclaw/plugin-sdk/interactive-runtime";
@@ -28,6 +28,7 @@ import {
 import { resolveDiscordChannelId } from "../targets.js";
 import { tryHandleDiscordMessageActionGuildAdmin } from "./handle-action.guild-admin.js";
 import type { DiscordMessagingActionOptions } from "./runtime.messaging.shared.js";
+import { readDiscordAutoArchiveDurationParam } from "./runtime.shared.js";
 
 const providerId = "discord";
 
@@ -152,7 +153,7 @@ export async function handleDiscordMessageAction(
       ? undefined
       : (params.components ??
         presentationComponents ??
-        buildDiscordInteractiveComponents(normalizeInteractiveReply(params.interactive)));
+        buildDiscordInteractiveComponents(normalizeLegacyInteractiveReply(params.interactive)));
     const hasComponents =
       Boolean(rawComponents) &&
       (typeof rawComponents === "function" || typeof rawComponents === "object");
@@ -385,7 +386,7 @@ export async function handleDiscordMessageAction(
     const name = readStringParam(params, "threadName", { required: true });
     const messageId = readStringParam(params, "messageId");
     const content = readStringParam(params, "message");
-    const autoArchiveMinutes = readPositiveIntegerParam(params, "autoArchiveMin");
+    const autoArchiveMinutes = readDiscordAutoArchiveDurationParam(params, "autoArchiveMin");
     const appliedTags = readStringArrayParam(params, "appliedTags");
     const result = await handleDiscordAction(
       {

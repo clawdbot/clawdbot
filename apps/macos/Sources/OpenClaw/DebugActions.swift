@@ -4,7 +4,6 @@ import SwiftUI
 
 enum DebugActions {
     private static let verboseDefaultsKey = "openclaw.debug.verboseMain"
-    private static let sessionMenuLimit = 12
     private static let onboardingSeenKey = "openclaw.onboardingSeen"
 
     @MainActor
@@ -206,24 +205,6 @@ enum DebugActions {
         return path
     }
 
-    // MARK: - Sessions (thinking / verbose)
-
-    static func recentSessions(limit: Int = sessionMenuLimit) async -> [SessionRow] {
-        guard let snapshot = try? await SessionLoader.loadSnapshot(limit: limit) else { return [] }
-        return Array(snapshot.rows.prefix(limit))
-    }
-
-    static func updateSession(
-        key: String,
-        thinking: String?,
-        verbose: String?) async throws
-    {
-        var params: [String: AnyHashable] = ["key": AnyHashable(key)]
-        params["thinkingLevel"] = thinking.map(AnyHashable.init) ?? AnyHashable(NSNull())
-        params["verboseLevel"] = verbose.map(AnyHashable.init) ?? AnyHashable(NSNull())
-        _ = try await ControlChannel.shared.request(method: "sessions.patch", params: params)
-    }
-
     // MARK: - Port diagnostics
 
     typealias PortListener = PortGuardian.ReportListener
@@ -243,15 +224,6 @@ enum DebugActions {
         return .failure(.message(detail))
     }
 
-    @MainActor
-    static func openSessionStoreInCode() {
-        let path = SessionLoader.defaultStorePath
-        let proc = Process()
-        proc.launchPath = "/usr/bin/env"
-        proc.arguments = ["code", path]
-        try? proc.run()
-    }
-
     #if DEBUG
     @MainActor
     static func showPairingPanelDemo() {
@@ -261,16 +233,30 @@ enum DebugActions {
                 kind: .node,
                 requestId: "demo-node-1",
                 subjectId: "19cec1c3301a7469d4fd71f5f81339508390dadda91b34aee15faf2849dccdc7",
-                displayName: "Peter's MacBook Pro",
+                displayName: "Demo Mac",
                 platform: "macos 26.5",
                 deviceFamily: "Mac",
                 modelIdentifier: "MacBookPro18,3",
                 version: "2026.6.11",
                 coreVersion: "2026.6.10",
-                remoteIp: "192.168.1.42",
+                remoteIp: "192.0.2.42",
                 role: nil,
                 scopes: [],
-                caps: ["screen", "camera", "file"],
+                caps: [
+                    "canvas",
+                    "screen",
+                    "computer",
+                    "codex-app-server-threads",
+                    "claude-sessions",
+                    "browser",
+                    "codex-cli-sessions",
+                    "file",
+                    "local-inference",
+                    "mcp",
+                    "opencode-sessions",
+                    "pi-sessions",
+                    "system",
+                ],
                 commands: ["system.run", "system.notify"],
                 isRepair: false,
                 previouslyPaired: false,

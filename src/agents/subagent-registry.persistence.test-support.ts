@@ -23,7 +23,7 @@ function resolveSubagentSessionStorePath(stateDir: string, agentId: string): str
 export async function readSubagentSessionStore(storePath: string): Promise<SessionStore> {
   return Object.fromEntries(
     listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
-  ) as SessionStore;
+  ) as unknown as SessionStore;
 }
 
 /** Writes or updates one SQLite-backed subagent session entry for persistence tests. */
@@ -75,6 +75,11 @@ export function createSubagentRegistryTestDeps(
     ensureContextEnginesInitialized: vi.fn(),
     ensureRuntimePluginsLoaded: vi.fn(),
     getRuntimeConfig: vi.fn(() => ({})),
+    getGatewayRecoveryRuntime: vi.fn(() => ({
+      dispatchAgent: vi.fn(),
+      waitForAgent: vi.fn(),
+      sendRecoveryNotice: vi.fn(),
+    })),
     resolveAgentTimeoutMs: vi.fn(() => 100),
     resolveContextEngine: vi.fn(async () => ({
       info: { id: "test", name: "Test", version: "0.0.1" },

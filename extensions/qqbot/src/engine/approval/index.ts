@@ -265,8 +265,13 @@ export function resolveApprovalTarget(
   if (!m) {
     return null;
   }
-  const type: ChatScope = m[1].toLowerCase() === "group" ? "group" : "c2c";
-  return { type, id: m[2] };
+  const scope = m[1];
+  const id = m[2];
+  if (scope === undefined || id === undefined) {
+    return null;
+  }
+  const type: ChatScope = scope.toLowerCase() === "group" ? "group" : "c2c";
+  return { type, id };
 }
 
 // ============ Interaction Parser ============
@@ -284,8 +289,18 @@ export function parseApprovalButtonData(buttonData: string): ParsedApprovalActio
     return null;
   }
   let approvalId: string;
+  const kind = m[1];
+  const encodedId = m[2];
+  const decision = m[3];
+  if (
+    (kind !== "exec" && kind !== "plugin") ||
+    encodedId === undefined ||
+    (decision !== "allow-once" && decision !== "allow-always" && decision !== "deny")
+  ) {
+    return null;
+  }
   try {
-    approvalId = decodeURIComponent(m[2]);
+    approvalId = decodeURIComponent(encodedId);
   } catch {
     return null;
   }
@@ -294,7 +309,7 @@ export function parseApprovalButtonData(buttonData: string): ParsedApprovalActio
   }
   return {
     approvalId,
-    approvalKind: m[1] as ApprovalKind,
-    decision: m[3] as ApprovalDecision,
+    approvalKind: kind,
+    decision,
   };
 }

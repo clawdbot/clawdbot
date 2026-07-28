@@ -7,6 +7,10 @@ export type AgentExecutionAuthBinding = {
   authProfileId?: string;
   /** Exact embedded harness that completed the successful turn, including openclaw. */
   agentHarnessId?: string;
+  /** Exact model selected by the successful embedded run. */
+  modelId?: string;
+  /** Exact transport used to select that run's credential. */
+  modelApi?: string;
   /** Non-reversible identity hash; credential material never leaves the runner. */
   authFingerprint?: string;
   /** Runtime-owned principal/session shape used when credentials are intentionally opaque. */

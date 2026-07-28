@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { createGatewaySession } from "../../gateway/session-create-service.js";
 import {
@@ -20,21 +20,22 @@ function createDeferred(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve };
 }
 
-function assertRecoveryInitializerTypeContract(
-  create: ReturnType<typeof createRuntimeAgent>["session"]["createSessionEntry"],
-): void {
-  // @ts-expect-error Recovery must return the final trusted plugin extension patch.
-  void create({
-    cfg: {},
-    key: "type-contract-only",
-    recoverMatchingInitialEntry: true,
-    initialEntry: { agentHarnessId: "codex" },
-    afterCreate: async () => {},
-  });
-}
-void assertRecoveryInitializerTypeContract;
-
 describe("plugin runtime session creation", () => {
+  it("requires recovery initialization to return the final trusted patch", () => {
+    type CreateSessionParams = Parameters<
+      ReturnType<typeof createRuntimeAgent>["session"]["createSessionEntry"]
+    >[0];
+    const invalidRecoveryInitializer = {
+      cfg: {},
+      key: "type-contract-only",
+      recoverMatchingInitialEntry: true as const,
+      initialEntry: { agentHarnessId: "codex" },
+      afterCreate: async () => {},
+    };
+
+    expectTypeOf(invalidRecoveryInitializer).not.toMatchTypeOf<CreateSessionParams>();
+  });
+
   it("creates a canonical transcript with trusted initial session state", async () => {
     await withOpenClawTestState({ label: "plugin-runtime-session-create" }, async () => {
       const runtime = createRuntimeAgent();
@@ -83,6 +84,7 @@ describe("plugin runtime session creation", () => {
         sessionId: created.entry.sessionId,
         entry: {
           agentHarnessId: "codex",
+          delivery: { kind: "none" },
           modelSelectionLocked: true,
           label: "Native Codex thread",
           pluginExtensions: {
@@ -117,8 +119,6 @@ describe("plugin runtime session creation", () => {
       expect(
         runtime.session.getSessionEntry({ sessionKey: key, readConsistency: "latest" }),
       ).toEqual(created.entry);
-      expect(stored?.sessionFile).toBeTruthy();
-      expect(stored?.sessionFile).toContain(`sqlite:main:${created.sessionId}:`);
     });
   });
 
@@ -129,6 +129,8 @@ describe("plugin runtime session creation", () => {
       const created = await runtime.session.createSessionEntry({
         cfg: {},
         key,
+        execNode: "node-a",
+        execCwd: "/work/on-node",
         initialEntry: {
           cliBackendId: "claude-cli",
           model: "claude-opus-4-8",
@@ -142,10 +144,17 @@ describe("plugin runtime session creation", () => {
         },
       });
       expect(created.entry).toMatchObject({
+        createdVia: "plugin",
+        createdActor: { type: "system", id: "anthropic" },
+        createdAt: expect.any(Number),
         pluginOwnerId: "anthropic",
         providerOverride: "claude-cli",
         modelOverride: "claude-opus-4-8",
+        modelOverrideRouteResolution: "resolved",
         modelSelectionLocked: true,
+        execHost: "node",
+        execNode: "node-a",
+        execCwd: "/work/on-node",
         cliSessionBindings: {
           "claude-cli": {
             sessionId: "claude-source",
@@ -161,8 +170,6 @@ describe("plugin runtime session creation", () => {
     await withOpenClawTestState({ label: "plugin-runtime-session-create-rollback" }, async () => {
       const runtime = createRuntimeAgent();
       const key = "agent:main:dashboard:codex-binding-failure";
-      let sessionFile: string | undefined;
-
       await expect(
         runtime.session.createSessionEntry({
           cfg: {},
@@ -171,8 +178,7 @@ describe("plugin runtime session creation", () => {
             agentHarnessId: "codex",
             modelSelectionLocked: true,
           },
-          afterCreate: async (created) => {
-            sessionFile = created.entry.sessionFile;
+          afterCreate: async () => {
             throw new Error("native binding failed");
           },
         }),
@@ -181,8 +187,6 @@ describe("plugin runtime session creation", () => {
       expect(runtime.session.getSessionEntry({ sessionKey: key, readConsistency: "latest" })).toBe(
         undefined,
       );
-      expect(sessionFile).toBeTruthy();
-      expect(fs.existsSync(sessionFile ?? "")).toBe(false);
     });
   });
 
@@ -192,7 +196,6 @@ describe("plugin runtime session creation", () => {
       const key = "agent:main:catalog-adopt:claude:rollback";
       const storePath = runtime.session.resolveStorePath(undefined, { agentId: "main" });
       let sessionId: string | undefined;
-      let sessionFile: string | undefined;
 
       await expect(
         runtime.session.createSessionEntry({
@@ -211,7 +214,6 @@ describe("plugin runtime session creation", () => {
           },
           afterCreate: async (created) => {
             sessionId = created.sessionId;
-            sessionFile = created.entry.sessionFile;
             throw new Error("history import failed");
           },
         }),
@@ -220,8 +222,6 @@ describe("plugin runtime session creation", () => {
       expect(
         runtime.session.getSessionEntry({ sessionKey: key, readConsistency: "latest" }),
       ).toBeUndefined();
-      expect(sessionFile).toBeTruthy();
-      expect(sessionFile).toContain(`sqlite:main:${sessionId}:`);
       await expect(
         loadTranscriptEvents({
           agentId: "main",
@@ -239,15 +239,12 @@ describe("plugin runtime session creation", () => {
       async () => {
         const runtime = createRuntimeAgent();
         const key = "agent:main:dashboard:unlocked-binding-failure";
-        let sessionFile: string | undefined;
-
         await expect(
           runtime.session.createSessionEntry({
             cfg: {},
             key,
             initialEntry: { agentHarnessId: "codex" },
-            afterCreate: async (created) => {
-              sessionFile = created.entry.sessionFile;
+            afterCreate: async () => {
               throw new Error("unlocked native binding failed");
             },
           }),
@@ -256,8 +253,6 @@ describe("plugin runtime session creation", () => {
         expect(
           runtime.session.getSessionEntry({ sessionKey: key, readConsistency: "latest" }),
         ).toBeUndefined();
-        expect(sessionFile).toBeTruthy();
-        expect(fs.existsSync(sessionFile ?? "")).toBe(false);
       },
     );
   });
@@ -299,8 +294,6 @@ describe("plugin runtime session creation", () => {
       async () => {
         const runtime = createRuntimeAgent();
         const key = "agent:main:dashboard:codex-final-patch-failure";
-        let sessionFile: string | undefined;
-
         await expect(
           runtime.session.createSessionEntry({
             cfg: {},
@@ -312,8 +305,7 @@ describe("plugin runtime session creation", () => {
                 codex: { supervision: { initializing: true } },
               },
             },
-            afterCreate: async (created) => {
-              sessionFile = created.entry.sessionFile;
+            afterCreate: async () => {
               return {
                 pluginExtensions: {
                   codex: { supervision: { invalidJsonValue: 1n as never } },
@@ -326,8 +318,6 @@ describe("plugin runtime session creation", () => {
         expect(
           runtime.session.getSessionEntry({ sessionKey: key, readConsistency: "latest" }),
         ).toBeUndefined();
-        expect(sessionFile).toBeTruthy();
-        expect(fs.existsSync(sessionFile ?? "")).toBe(false);
       },
     );
   });
@@ -338,15 +328,12 @@ describe("plugin runtime session creation", () => {
       async () => {
         const runtime = createRuntimeAgent();
         const key = "agent:main:dashboard:unlocked-final-patch-failure";
-        let sessionFile: string | undefined;
-
         await expect(
           runtime.session.createSessionEntry({
             cfg: {},
             key,
             initialEntry: { agentHarnessId: "codex" },
-            afterCreate: async (created) => {
-              sessionFile = created.entry.sessionFile;
+            afterCreate: async () => {
               return {
                 pluginExtensions: {
                   codex: { supervision: { invalidJsonValue: 1n as never } },
@@ -359,8 +346,6 @@ describe("plugin runtime session creation", () => {
         expect(
           runtime.session.getSessionEntry({ sessionKey: key, readConsistency: "latest" }),
         ).toBeUndefined();
-        expect(sessionFile).toBeTruthy();
-        expect(fs.existsSync(sessionFile ?? "")).toBe(false);
       },
     );
   });
@@ -600,6 +585,7 @@ describe("plugin runtime session creation", () => {
         const existing = {
           sessionId: "foreign-workspace-initializer",
           updatedAt: Date.now(),
+          delivery: { kind: "none" as const },
           initializationPending: true as const,
           agentHarnessId: "codex",
           modelSelectionLocked: true,
@@ -647,6 +633,7 @@ describe("plugin runtime session creation", () => {
         const existing = {
           sessionId: "foreign-initializer",
           updatedAt: Date.now(),
+          delivery: { kind: "none" as const },
           initializationPending: true as const,
           agentHarnessId: "codex",
           modelSelectionLocked: true,
@@ -695,6 +682,7 @@ describe("plugin runtime session creation", () => {
       const existing = {
         sessionId: "foreign-initializer",
         updatedAt: Date.now(),
+        delivery: { kind: "none" as const },
         initializationPending: true as const,
         modelSelectionLocked: true,
         pluginOwnerId: "other-plugin",

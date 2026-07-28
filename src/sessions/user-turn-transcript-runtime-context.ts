@@ -12,7 +12,7 @@ const RUNTIME_USER_TURN_TRANSCRIPT_RECORDER = Symbol.for(
   "openclaw.runtimeUserTurnTranscriptRecorder",
 );
 
-export type RuntimeUserTurnTranscriptContext = {
+type RuntimeUserTurnTranscriptContext = {
   message: PersistedUserTurnMessage;
   recorder: UserTurnTranscriptRecorder;
 };

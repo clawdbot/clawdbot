@@ -2,10 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { buildSlackBlocksFallbackText, renderSlackBlockFallbackText } from "./blocks-fallback.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
-import {
-  encodeSlackModalPrivateMetadata,
-  parseSlackModalPrivateMetadata,
-} from "./modal-metadata.js";
+import { parseSlackModalPrivateMetadata } from "./modal-metadata.js";
 
 describe("buildSlackBlocksFallbackText", () => {
   it("prefers header text", () => {
@@ -61,6 +58,48 @@ describe("buildSlackBlocksFallbackText", () => {
         },
       ] as never),
     ).toBe("Pipeline report (table)\n- Account: Acme; ARR: 125000");
+  });
+
+  it("renders inbound table cells as bounded delimiter-safe TSV", () => {
+    const table = {
+      type: "table",
+      rows: [
+        [
+          { type: "raw_text", text: "Name" },
+          { type: "raw_number", value: 42 },
+          { type: "raw_text", text: "Note" },
+        ],
+        [
+          {
+            type: "rich_text",
+            elements: [
+              {
+                type: "rich_text_section",
+                elements: [
+                  { type: "text", text: "Ada" },
+                  { type: "text", text: " " },
+                  { type: "user", user_id: "U123" },
+                ],
+              },
+            ],
+          },
+          { type: "raw_number", value: 7, text: "seven" },
+          { type: "raw_text", text: "A\tB\nC\\D" },
+        ],
+      ],
+    };
+
+    expect(renderSlackBlockFallbackText(table, { nativeDataFormat: "plain" })).toBe(
+      ["Name\t42\tNote", "Ada <@U123>\tseven\tA\\tB\\nC\\\\D"].join("\n"),
+    );
+    expect(renderSlackBlockFallbackText(table)).toBe(
+      ["Name\t42\tNote", "Ada &lt;@U123&gt;\tseven\tA\\tB\\nC\\\\D"].join("\n"),
+    );
+  });
+
+  it("rejects inbound tables outside Slack's published row limit", () => {
+    const rows = Array.from({ length: 101 }, () => [{ type: "raw_text", text: "cell" }]);
+    expect(renderSlackBlockFallbackText({ type: "table", rows })).toBeUndefined();
   });
 
   it("uses only visible action labels and select placeholders", () => {
@@ -278,34 +317,5 @@ describe("parseSlackModalPrivateMetadata", () => {
       userId: "U123",
       pluginInteractiveData: "dean.contract:confirm",
     });
-  });
-});
-
-describe("encodeSlackModalPrivateMetadata", () => {
-  it("encodes only known non-empty fields", () => {
-    expect(
-      JSON.parse(
-        encodeSlackModalPrivateMetadata({
-          sessionKey: "agent:main:slack:channel:C1",
-          channelId: "",
-          channelType: "im",
-          userId: "U123",
-          pluginInteractiveData: "dean.contract:confirm",
-        }),
-      ),
-    ).toEqual({
-      sessionKey: "agent:main:slack:channel:C1",
-      channelType: "im",
-      userId: "U123",
-      pluginInteractiveData: "dean.contract:confirm",
-    });
-  });
-
-  it("throws when encoded payload exceeds Slack metadata limit", () => {
-    expect(() =>
-      encodeSlackModalPrivateMetadata({
-        sessionKey: `agent:main:${"x".repeat(4000)}`,
-      }),
-    ).toThrow(/cannot exceed 3000 chars/i);
   });
 });

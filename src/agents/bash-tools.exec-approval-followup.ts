@@ -8,7 +8,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import {
   resolveExternalBestEffortDeliveryTarget,
@@ -84,7 +84,7 @@ function formatUnknownError(error: unknown): string {
 }
 
 /** Builds the prompt used to resume an agent after an approved async exec completes. */
-export function buildExecApprovalFollowupPrompt(resultText: string): string {
+function buildExecApprovalFollowupPrompt(resultText: string): string {
   const trimmed = resultText.trim();
   if (isExecDeniedResultText(trimmed)) {
     return buildExecDeniedFollowupPrompt(trimmed);
@@ -130,7 +130,7 @@ function isExecApprovalFollowupDirectDeliveryStale(params: {
       agentId: resolveAgentIdFromSessionKey(sessionKey),
     });
     const resolvedSessionId = normalizeOptionalString(
-      loadSessionEntry({
+      loadSessionEntryReadOnly({
         storePath,
         sessionKey,
         clone: false,

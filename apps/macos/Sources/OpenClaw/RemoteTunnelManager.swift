@@ -27,10 +27,6 @@ actor RemoteTunnelManager {
     private var lastRestartAt: Date?
     private let restartBackoffSeconds: TimeInterval = 2.0
 
-    func controlTunnelPortIfRunning() async -> UInt16? {
-        await self.controlTunnelRouteIfRunning()?.localPort
-    }
-
     func controlTunnelRouteIfRunning() async -> Route? {
         guard let configuration = try? RemotePortTunnel.configuration(
             remotePort: GatewayEnvironment.gatewayPort())

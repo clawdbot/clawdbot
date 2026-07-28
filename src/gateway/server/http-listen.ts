@@ -22,8 +22,17 @@ export async function listenGatewayHttpServer(params: {
   bindHost: string;
   port: number;
   retryEaddrinuse?: boolean;
+  serviceName?: string;
+  endpointScheme?: "http" | "https" | "ws" | "wss";
 }) {
-  const { httpServer, bindHost, port, retryEaddrinuse = true } = params;
+  const {
+    httpServer,
+    bindHost,
+    port,
+    retryEaddrinuse = true,
+    serviceName = "gateway",
+    endpointScheme = "ws",
+  } = params;
   const maxRetries = retryEaddrinuse ? EADDRINUSE_MAX_RETRIES : 0;
 
   for (const attempt of Array.from({ length: maxRetries + 1 }, (_, index) => index)) {
@@ -52,12 +61,12 @@ export async function listenGatewayHttpServer(params: {
       }
       if (code === "EADDRINUSE") {
         throw new GatewayLockError(
-          `another gateway instance is already listening on ws://${bindHost}:${port}`,
+          `another ${serviceName} instance is already listening on ${endpointScheme}://${bindHost}:${port}`,
           err,
         );
       }
       throw new GatewayLockError(
-        `failed to bind gateway socket on ws://${bindHost}:${port}: ${String(err)}`,
+        `failed to bind ${serviceName} socket on ${endpointScheme}://${bindHost}:${port}: ${String(err)}`,
         err,
       );
     }

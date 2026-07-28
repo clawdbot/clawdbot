@@ -34,12 +34,8 @@ const DEFAULT_CHUNK_MODE: ChunkMode = "length";
 
 type ProviderChunkConfig = {
   textChunkLimit?: number;
-  chunkMode?: ChunkMode;
   streaming?: unknown;
-  accounts?: Record<
-    string,
-    { textChunkLimit?: number; chunkMode?: ChunkMode; streaming?: unknown }
-  >;
+  accounts?: Record<string, { textChunkLimit?: number; streaming?: unknown }>;
 };
 
 function resolveChunkLimitForProvider(
@@ -96,17 +92,12 @@ function resolveChunkModeForProvider(
   const accounts = cfgSection.accounts;
   if (accounts && typeof accounts === "object") {
     const direct = resolveAccountEntry(accounts, normalizedAccountId);
-    // Flat `chunkMode` is the canonical schema shape for channels without a
-    // nested streaming config (signal, irc, googlechat, whatsapp, SDK plugins),
-    // so it stays a first-class read here, not legacy compat. Core must not
-    // hardcode per-channel gating; nested-only channels reject flat keys in
-    // their strict schemas, so validated runtime config never carries them.
-    const directMode = resolveChannelStreamingChunkMode(direct) ?? direct?.chunkMode;
+    const directMode = resolveChannelStreamingChunkMode(direct);
     if (directMode) {
       return directMode;
     }
   }
-  return resolveChannelStreamingChunkMode(cfgSection) ?? cfgSection.chunkMode;
+  return resolveChannelStreamingChunkMode(cfgSection);
 }
 
 export function resolveChunkMode(
@@ -209,8 +200,10 @@ export function chunkByParagraph(
   }
   const splitLongParagraphs = opts?.splitLongParagraphs !== false;
 
-  // Normalize to \n so blank line detection is consistent.
-  const normalized = text.replace(/\r\n?/g, "\n");
+  // U+2029 PARAGRAPH SEPARATOR maps to a blank-line boundary; U+2028 LINE
+  // SEPARATOR and CR/CRLF map to a single newline.
+  // Normalize in two steps so consecutive U+2028\u2029 also produces a blank line.
+  const normalized = text.replace(/\u2029/g, "\n\n").replace(/\r\n?|\u2028/g, "\n");
 
   // Fast-path: if there are no blank-line paragraph separators, do not split.
   // (We *do not* early-return based on `limit` — newline mode is about paragraph

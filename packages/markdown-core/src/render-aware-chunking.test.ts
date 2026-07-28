@@ -72,6 +72,19 @@ describe("renderMarkdownIRChunksWithinLimit", () => {
     expect(chunks.map((chunk) => chunk.source.text)).toEqual(["README.md", "<"]);
   });
 
+  it("preserves separator whitespace in the initial rendered-size split", () => {
+    const ir = markdownToIR("alpha beta gamma");
+    const chunks = renderMarkdownIRChunksWithinLimit({
+      ir,
+      limit: 10,
+      renderChunk: (chunk) => chunk.text,
+      measureRendered: (rendered) => rendered.length,
+    });
+
+    expect(chunks.map((chunk) => chunk.source.text)).toEqual(["alpha ", "beta gamma"]);
+    expect(chunks.map((chunk) => chunk.source.text).join("")).toBe(ir.text);
+  });
+
   it("normalizes non-finite limits before chunking", () => {
     const ir = markdownToIR("abc");
     const chunks = renderMarkdownIRChunksWithinLimit({

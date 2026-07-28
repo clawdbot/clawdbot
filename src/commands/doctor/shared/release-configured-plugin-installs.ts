@@ -255,7 +255,7 @@ function addEligiblePluginId(cfg: OpenClawConfig, pluginIds: Set<string>, plugin
 }
 
 /** Return true when this config has not yet crossed the configured-plugin install release gate. */
-export function shouldRunConfiguredPluginInstallReleaseStep(params: {
+function shouldRunConfiguredPluginInstallReleaseStep(params: {
   currentVersion?: string | null;
   touchedVersion?: string | null;
   releaseVersion?: string;
@@ -273,7 +273,7 @@ export function shouldRunConfiguredPluginInstallReleaseStep(params: {
 }
 
 /** Collect plugin/channel ids implied by config for the release install backfill step. */
-export function collectReleaseConfiguredPluginIds(params: {
+function collectReleaseConfiguredPluginIds(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): ReleaseConfiguredPluginIds {

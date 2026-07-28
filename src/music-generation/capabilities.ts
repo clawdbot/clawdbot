@@ -13,9 +13,7 @@ import type {
  * these helpers choose the active mode and return the matching capability block.
  */
 /** Resolve generation mode from the presence of input images. */
-export function resolveMusicGenerationMode(params: {
-  inputImageCount?: number;
-}): MusicGenerationMode {
+function resolveMusicGenerationMode(params: { inputImageCount?: number }): MusicGenerationMode {
   return (params.inputImageCount ?? 0) > 0 ? "edit" : "generate";
 }
 

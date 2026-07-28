@@ -1,4 +1,5 @@
 // Xai provider module implements model/runtime integration.
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import {
   isProviderAuthProfileConfigured,
   type OpenClawConfig,
@@ -13,6 +14,7 @@ import {
   type SpeechProviderPlugin,
   type SpeechSynthesisTarget,
 } from "openclaw/plugin-sdk/speech";
+import { resolveSpeechProviderApiKey } from "openclaw/plugin-sdk/speech-core";
 import {
   asFiniteNumberInRange,
   normalizeLowercaseStringOrEmpty,
@@ -25,10 +27,10 @@ import {
   XAI_BASE_URL,
   XAI_TTS_FALLBACK_VOICES,
   xaiTTS,
+  xaiTTSStream,
 } from "./tts.js";
 
 const XAI_SPEECH_RESPONSE_FORMATS = ["mp3", "wav", "pcm", "mulaw", "alaw"] as const;
-const DEFAULT_GENERATED_AUDIO_MAX_BYTES = 16 * 1024 * 1024;
 
 type XaiSpeechResponseFormat = (typeof XAI_SPEECH_RESPONSE_FORMATS)[number];
 
@@ -63,13 +65,15 @@ function normalizeXaiSpeechResponseFormat(value: unknown): XaiSpeechResponseForm
 }
 
 function resolveSpeechResponseFormat(
-  _target: SpeechSynthesisTarget,
+  target: SpeechSynthesisTarget,
   configuredFormat?: XaiSpeechResponseFormat,
 ): XaiSpeechResponseFormat {
-  if (configuredFormat) {
-    return configuredFormat;
+  // Voice-note consumers may transcode without raw codec/rate metadata.
+  // Keep streamed output and buffered fallback self-describing.
+  if (target === "voice-note") {
+    return "mp3";
   }
-  return "mp3";
+  return configuredFormat ?? "mp3";
 }
 
 function responseFormatToFileExtension(
@@ -95,7 +99,7 @@ function normalizeXaiProviderConfig(rawConfig: Record<string, unknown>): XaiTtsP
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: xai?.apiKey,
-      path: "messages.tts.providers.xai.apiKey",
+      path: "tts.providers.xai.apiKey",
     }),
     baseUrl: normalizeXaiTtsBaseUrl(
       trimToUndefined(xai?.baseUrl) ?? trimToUndefined(process.env.XAI_BASE_URL) ?? XAI_BASE_URL,
@@ -133,14 +137,8 @@ function readXaiOverrides(overrides: SpeechProviderOverrides | undefined): XaiTt
   };
 }
 
-function resolveGeneratedAudioMaxBytes(req: {
-  cfg: { agents?: { defaults?: { mediaMaxMb?: number } } };
-}): number {
-  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * 1024 * 1024);
-  }
-  return DEFAULT_GENERATED_AUDIO_MAX_BYTES;
+function resolveDirectXaiAudioApiKey(configApiKey?: string): string | undefined {
+  return resolveSpeechProviderApiKey(configApiKey, process.env.XAI_API_KEY);
 }
 
 function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
@@ -237,7 +235,7 @@ export function buildXaiSpeechProvider(): SpeechProviderPlugin {
       });
     },
     isConfigured: ({ providerConfig, cfg }) =>
-      Boolean(readXaiProviderConfig(providerConfig).apiKey || process.env.XAI_API_KEY) ||
+      Boolean(resolveDirectXaiAudioApiKey(readXaiProviderConfig(providerConfig).apiKey)) ||
       isProviderAuthProfileConfigured({ provider: "xai", cfg }),
     synthesize: async (req) => {
       const config = readXaiProviderConfig(req.providerConfig);
@@ -253,13 +251,37 @@ export function buildXaiSpeechProvider(): SpeechProviderPlugin {
         speed: overrides.speed ?? config.speed,
         responseFormat,
         timeoutMs: req.timeoutMs,
-        maxBytes: resolveGeneratedAudioMaxBytes(req),
+        maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
       });
       return {
         audioBuffer,
         outputFormat: responseFormat,
         fileExtension: responseFormatToFileExtension(responseFormat),
         voiceCompatible: false,
+      };
+    },
+    streamSynthesize: async (req) => {
+      const config = readXaiProviderConfig(req.providerConfig);
+      const overrides = readXaiOverrides(req.providerOverrides);
+      const responseFormat = resolveSpeechResponseFormat(req.target, config.responseFormat);
+      const apiKey = await resolveXaiAudioApiKey(config.apiKey, req.cfg);
+      const stream = await xaiTTSStream({
+        text: req.text,
+        apiKey,
+        baseUrl: config.baseUrl,
+        voiceId: overrides.voiceId ?? config.voiceId,
+        language: overrides.language ?? config.language,
+        speed: overrides.speed ?? config.speed,
+        responseFormat,
+        timeoutMs: req.timeoutMs,
+        maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
+      });
+      return {
+        audioStream: stream.audioStream,
+        outputFormat: responseFormat,
+        fileExtension: responseFormatToFileExtension(responseFormat),
+        voiceCompatible: false,
+        release: stream.release,
       };
     },
     synthesizeTelephony: async (req) => {
@@ -277,7 +299,7 @@ export function buildXaiSpeechProvider(): SpeechProviderPlugin {
         speed: overrides.speed ?? config.speed,
         responseFormat: outputFormat,
         timeoutMs: req.timeoutMs,
-        maxBytes: resolveGeneratedAudioMaxBytes(req),
+        maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
       });
       return { audioBuffer, outputFormat, sampleRate };
     },
@@ -285,14 +307,14 @@ export function buildXaiSpeechProvider(): SpeechProviderPlugin {
 }
 
 // Resolve an xAI bearer for `/v1/tts`:
-// 1. Configured `messages.tts.providers.xai.apiKey` (or talk equivalent)
+// 1. Configured `tts.providers.xai.apiKey` (or talk equivalent)
 // 2. `XAI_API_KEY` env var
 // 3. xAI OAuth auth profile (cfg-scoped)
 async function resolveOptionalXaiAudioApiKey(
   configApiKey: string | undefined,
   cfg?: OpenClawConfig,
 ): Promise<string | undefined> {
-  const direct = trimToUndefined(configApiKey) ?? trimToUndefined(process.env.XAI_API_KEY);
+  const direct = resolveDirectXaiAudioApiKey(configApiKey);
   if (direct) {
     return direct;
   }

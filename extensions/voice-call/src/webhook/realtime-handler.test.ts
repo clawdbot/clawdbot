@@ -1,9 +1,10 @@
 // Voice Call tests cover realtime handler plugin behavior.
 import http from "node:http";
+import { expectDefined } from "@openclaw/normalization-core";
 import type {
   RealtimeVoiceBridge,
-  RealtimeVoiceForcedConsultCoordinator,
   RealtimeVoiceProviderPlugin,
+  RealtimeVoiceSessionHarness,
   RealtimeVoiceToolCallEvent,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -15,7 +16,26 @@ import type { CallRecord, NormalizedEvent } from "../types.js";
 import { connectWs, startUpgradeWsServer, waitForClose } from "../websocket-test-support.js";
 import { RealtimeCallHandler } from "./realtime-handler.js";
 
+const realtimeVoiceHarnessTestHooks = vi.hoisted(() => ({
+  onCreate: undefined as ((harness: RealtimeVoiceSessionHarness) => void) | undefined,
+}));
+
+vi.mock("openclaw/plugin-sdk/realtime-voice", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/realtime-voice")>();
+  return {
+    ...actual,
+    createRealtimeVoiceSessionHarness: (
+      params: Parameters<typeof actual.createRealtimeVoiceSessionHarness>[0],
+    ) => {
+      const harness = actual.createRealtimeVoiceSessionHarness(params);
+      realtimeVoiceHarnessTestHooks.onCreate?.(harness);
+      return harness;
+    },
+  };
+});
+
 afterEach(() => {
+  realtimeVoiceHarnessTestHooks.onCreate = undefined;
   vi.useRealTimers();
 });
 
@@ -144,7 +164,7 @@ const startRealtimeServer = async (
   }
 
   return await startUpgradeWsServer({
-    urlPath: match[1],
+    urlPath: expectDefined(match[1], "realtime stream path"),
     onUpgrade: (request, socket, head) => {
       handler.handleWebSocketUpgrade(request, socket, head);
     },
@@ -369,7 +389,7 @@ describe("RealtimeCallHandler path routing", () => {
       throw new Error("Failed to extract realtime stream path");
     }
     const server = await startUpgradeWsServer({
-      urlPath: match[1],
+      urlPath: expectDefined(match[1], "realtime stream path"),
       onUpgrade: (request, socket, head) => {
         handler.handleWebSocketUpgrade(request, socket, head);
       },
@@ -1252,6 +1272,10 @@ describe("RealtimeCallHandler path routing", () => {
           }) => void;
         }
       | undefined;
+    let sessionHarness: RealtimeVoiceSessionHarness | undefined;
+    realtimeVoiceHarnessTestHooks.onCreate = (harness) => {
+      sessionHarness = harness;
+    };
     const submitToolResult = vi.fn();
     const createBridge = vi.fn(
       (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
@@ -1278,17 +1302,6 @@ describe("RealtimeCallHandler path routing", () => {
     });
     const consult = vi.fn(async () => ({ text: "should not run" }));
     handler.registerToolHandler("openclaw_agent_consult", consult);
-    const coordinator = (
-      handler as unknown as {
-        forcedConsultCoordinator(callId: string): RealtimeVoiceForcedConsultCoordinator;
-      }
-    ).forcedConsultCoordinator(call.callId);
-    const cancelled = coordinator.prepare("cancelled question");
-    if (!cancelled) {
-      throw new Error("expected forced consult handle");
-    }
-    coordinator.markStarted(cancelled);
-    coordinator.markCancelled(cancelled);
     const server = await startRealtimeServer(handler);
 
     try {
@@ -1302,7 +1315,19 @@ describe("RealtimeCallHandler path routing", () => {
         );
         await waitForRealtimeTest(() => {
           expect(createBridge).toHaveBeenCalled();
+          expect(sessionHarness).toBeDefined();
         });
+
+        const coordinator = expectDefined(
+          sessionHarness,
+          "voice-call realtime session harness",
+        ).forcedConsults;
+        const cancelled = coordinator.prepare("cancelled question");
+        if (!cancelled) {
+          throw new Error("expected forced consult handle");
+        }
+        coordinator.markStarted(cancelled);
+        coordinator.markCancelled(cancelled);
 
         callbacks?.onToolCall?.({
           itemId: "item-cancelled",
@@ -1891,3 +1916,4 @@ describe("RealtimeCallHandler websocket hardening", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

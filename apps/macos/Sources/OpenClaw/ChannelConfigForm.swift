@@ -88,7 +88,7 @@ struct ConfigSchemaForm: View {
                     if sortedKeys.isEmpty, self.mode == .channelQuick, self.isChannelRoot(path) {
                         self.renderChannelQuickEmptyState()
                     }
-                    if self.shouldRenderAdditionalProperties(schema, path: path, value: value) {
+                    if self.shouldRenderAdditionalProperties(schema, value: value) {
                         self.renderAdditionalProperties(schema, path: path, value: value)
                     }
                 })
@@ -98,8 +98,8 @@ struct ConfigSchemaForm: View {
             if self.isChannelQuickLeaf(path) {
                 return AnyView(
                     SettingsCardToggleRow(
-                        title: label ?? "Enabled",
-                        subtitle: help,
+                        title: label.map(SettingsTextValue.verbatim) ?? "Enabled",
+                        subtitle: help.map(SettingsTextValue.verbatim),
                         binding: self.boolBinding(path, defaultValue: schema.explicitDefault as? Bool)))
             }
             return AnyView(
@@ -202,7 +202,6 @@ struct ConfigSchemaForm: View {
 
     private func shouldRenderAdditionalProperties(
         _ schema: ConfigSchemaNode,
-        path: ConfigPath,
         value: Any?) -> Bool
     {
         guard schema.allowsAdditionalProperties else { return false }
@@ -256,7 +255,7 @@ struct ConfigSchemaForm: View {
                 }
             }
 
-            if self.shouldRenderAdditionalProperties(schema, path: path, value: value) {
+            if self.shouldRenderAdditionalProperties(schema, value: value) {
                 self.renderAdditionalProperties(schema, path: path, value: value)
             }
         }
@@ -300,7 +299,10 @@ struct ConfigSchemaForm: View {
         subtitle: String?,
         @ViewBuilder control: () -> some View) -> some View
     {
-        SettingsCardRow(title: title ?? "Value", subtitle: subtitle) {
+        SettingsCardRow(
+            title: title.map(SettingsTextValue.verbatim) ?? "Value",
+            subtitle: subtitle.map(SettingsTextValue.verbatim))
+        {
             control()
         }
     }

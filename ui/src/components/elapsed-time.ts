@@ -3,21 +3,17 @@ import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { formatDurationCompact } from "../lib/format.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
+import { PollController } from "../lit/poll-controller.ts";
 
 class ElapsedTime extends OpenClawLightDomContentsElement {
   @property({ type: Number }) startMs: number | null = null;
   @property({ type: Number }) endMs: number | null = null;
 
-  private timer: number | null = null;
+  private readonly polling = new PollController(this, 1_000, () => this.requestUpdate(), false);
 
   override connectedCallback() {
     super.connectedCallback();
     this.syncTimer();
-  }
-
-  override disconnectedCallback() {
-    this.stopTimer();
-    super.disconnectedCallback();
   }
 
   override updated() {
@@ -26,17 +22,10 @@ class ElapsedTime extends OpenClawLightDomContentsElement {
 
   private syncTimer() {
     const ticking = this.isConnected && this.startMs != null && this.endMs == null;
-    if (ticking && this.timer == null) {
-      this.timer = window.setInterval(() => this.requestUpdate(), 1_000);
-    } else if (!ticking) {
-      this.stopTimer();
-    }
-  }
-
-  private stopTimer() {
-    if (this.timer != null) {
-      window.clearInterval(this.timer);
-      this.timer = null;
+    if (ticking) {
+      this.polling.start();
+    } else {
+      this.polling.stop();
     }
   }
 

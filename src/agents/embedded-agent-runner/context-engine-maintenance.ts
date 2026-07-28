@@ -3,6 +3,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveStorePath } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveContextEngineOwnerPluginId } from "../../context-engine/registry.js";
 import type {
@@ -132,7 +133,7 @@ async function disposeDeferredMaintenanceContextEngine(
   }
 }
 
-export function createDeferredTurnMaintenanceAbortSignal(params?: {
+function createDeferredTurnMaintenanceAbortSignal(params?: {
   processLike?: DeferredTurnMaintenanceProcessLike;
 }): {
   abortSignal?: AbortSignal;
@@ -197,7 +198,7 @@ export function createDeferredTurnMaintenanceAbortSignal(params?: {
   };
 }
 
-export function resetDeferredTurnMaintenanceStateForTest(): void {
+function resetDeferredTurnMaintenanceStateForTest(): void {
   activeDeferredTurnMaintenanceRuns.clear();
   const processLike = process as DeferredTurnMaintenanceProcessLike;
   const state = processLike[DEFERRED_TURN_MAINTENANCE_ABORT_STATE_KEY];
@@ -207,6 +208,15 @@ export function resetDeferredTurnMaintenanceStateForTest(): void {
   state.controllers.clear();
   unregisterDeferredTurnMaintenanceAbortSignalHandlers(processLike, state);
   delete processLike[DEFERRED_TURN_MAINTENANCE_ABORT_STATE_KEY];
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.contextEngineMaintenanceTestApi")
+  ] = {
+    createDeferredTurnMaintenanceAbortSignal,
+    resetDeferredTurnMaintenanceStateForTest,
+  };
 }
 
 export async function waitForDeferredTurnMaintenanceForSession(sessionKey?: string): Promise<void> {
@@ -276,7 +286,7 @@ function promoteTurnMaintenanceTaskVisibility(params: {
  * Attach runtime-owned transcript rewrite helpers to an existing
  * context-engine runtime context payload.
  */
-export function buildContextEngineMaintenanceRuntimeContext(params: {
+function buildContextEngineMaintenanceRuntimeContext(params: {
   sessionId: string;
   sessionKey?: string;
   sessionTarget?: ContextEngineSessionTarget;
@@ -314,16 +324,22 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
           ? await params.withSessionManagerRewriteLock(rewriteSessionManagerEntries)
           : rewriteSessionManagerEntries();
       }
+      const runtimeAgentId = params.sessionTarget?.agentId ?? params.agentId;
+      const runtimeStorePath =
+        params.sessionTarget?.storePath ??
+        (runtimeAgentId
+          ? resolveStorePath(params.config?.session?.store, { agentId: runtimeAgentId })
+          : undefined);
       const rewriteRuntimeTranscriptEntries = async () =>
         await rewriteTranscriptEntriesInRuntimeTranscript({
           scope: {
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey ?? params.sessionId,
+            sessionId: params.sessionTarget?.sessionId ?? params.sessionId,
+            sessionKey: params.sessionTarget?.sessionKey ?? params.sessionKey ?? params.sessionId,
             sessionFile: params.sessionFile,
-            ...(params.agentId ? { agentId: params.agentId } : {}),
+            ...(runtimeAgentId ? { agentId: runtimeAgentId } : {}),
+            ...(runtimeStorePath ? { storePath: runtimeStorePath } : {}),
           },
           request,
-          config: params.config,
         });
       return await rewriteRuntimeTranscriptEntries();
     },

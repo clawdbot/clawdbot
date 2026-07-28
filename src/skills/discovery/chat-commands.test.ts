@@ -7,7 +7,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 let listSkillCommandsForAgents: typeof import("./chat-commands.js").listSkillCommandsForAgents;
 let listSkillCommandsForWorkspace: typeof import("./chat-commands.js").listSkillCommandsForWorkspace;
 let resolveSkillCommandInvocation: typeof import("./chat-commands.js").resolveSkillCommandInvocation;
-let skillCommandsTesting: typeof import("./chat-commands.js").testing;
 
 const tempDirs: string[] = [];
 const resolveNodeExecEligibilityMock = vi.hoisted(() =>
@@ -162,12 +161,8 @@ vi.mock("./agent-filter.js", () => ({
 }));
 
 beforeAll(async () => {
-  ({
-    listSkillCommandsForAgents,
-    listSkillCommandsForWorkspace,
-    resolveSkillCommandInvocation,
-    testing: skillCommandsTesting,
-  } = await import("./chat-commands.js"));
+  ({ listSkillCommandsForAgents, listSkillCommandsForWorkspace, resolveSkillCommandInvocation } =
+    await import("./chat-commands.js"));
 });
 
 afterAll(async () => {
@@ -455,40 +450,5 @@ describe("listSkillCommandsForWorkspace", () => {
         execOverrides: { security: "allowlist" },
       }),
     );
-  });
-});
-
-describe("dedupeBySkillName", () => {
-  it("keeps the first entry when multiple commands share a skillName", () => {
-    const input = [
-      { name: "github", skillName: "github", description: "GitHub" },
-      { name: "github_2", skillName: "github", description: "GitHub" },
-      { name: "weather", skillName: "weather", description: "Weather" },
-      { name: "weather_2", skillName: "weather", description: "Weather" },
-    ];
-    const output = skillCommandsTesting.dedupeBySkillName(input);
-    expect(output.map((e) => e.name)).toEqual(["github", "weather"]);
-  });
-
-  it("matches skillName case-insensitively", () => {
-    const input = [
-      { name: "ClawHub", skillName: "ClawHub", description: "ClawHub" },
-      { name: "clawhub_2", skillName: "clawhub", description: "ClawHub" },
-    ];
-    const output = skillCommandsTesting.dedupeBySkillName(input);
-    expect(output).toHaveLength(1);
-    expect(output[0]?.name).toBe("ClawHub");
-  });
-
-  it("passes through commands with an empty skillName", () => {
-    const input = [
-      { name: "a", skillName: "", description: "A" },
-      { name: "b", skillName: "", description: "B" },
-    ];
-    expect(skillCommandsTesting.dedupeBySkillName(input)).toHaveLength(2);
-  });
-
-  it("returns an empty array for empty input", () => {
-    expect(skillCommandsTesting.dedupeBySkillName([])).toStrictEqual([]);
   });
 });

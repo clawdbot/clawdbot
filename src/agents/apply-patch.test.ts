@@ -11,7 +11,8 @@ import {
   createRebindableDirectoryAlias,
   withRealpathSymlinkRebindRace,
 } from "../test-utils/symlink-rebind-race.js";
-import { applyPatch, createApplyPatchTool } from "./apply-patch.js";
+import { createApplyPatchTool } from "./apply-patch.js";
+import { applyPatch } from "./apply-patch.test-support.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>) {
@@ -39,19 +40,24 @@ function buildAddFilePatch(targetPath: string): string {
 *** End Patch`;
 }
 
-function createMemoryPatchSandbox(initialFiles: Record<string, string> = {}) {
-  const files = new Map<string, string>(
+function createMemoryPatchSandbox(initialFiles: Record<string, string | Buffer> = {}) {
+  const files = new Map<string, string | Buffer>(
     Object.entries(initialFiles).map(([filePath, contents]) => [`/sandbox/${filePath}`, contents]),
   );
   const writeFile = vi.fn(async ({ filePath, data }) => {
-    files.set(filePath, Buffer.isBuffer(data) ? data.toString("utf8") : data);
+    files.set(filePath, Buffer.isBuffer(data) ? Buffer.from(data) : data);
   });
   const bridge: SandboxFsBridge = {
     resolvePath: ({ filePath }) => ({
       relativePath: filePath,
       containerPath: `/sandbox/${filePath}`,
     }),
-    readFile: async ({ filePath }) => Buffer.from(files.get(filePath) ?? "", "utf8"),
+    readFile: async ({ filePath }) => {
+      const contents = files.get(filePath);
+      return typeof contents === "string"
+        ? Buffer.from(contents, "utf8")
+        : Buffer.from(contents ?? "");
+    },
     writeFile,
     remove: async ({ filePath }) => {
       files.delete(filePath);
@@ -106,6 +112,68 @@ async function expectMissingPath(operation: Promise<unknown>) {
 }
 
 describe("applyPatch", () => {
+  const priceUpdatePatch = `*** Begin Patch
+*** Update File: source.txt
+@@
+-price: 5
++price: 7
+*** End Patch`;
+
+  it.each([
+    { name: "workspace-confined host", workspaceOnly: true },
+    { name: "unconfined host", workspaceOnly: false },
+  ])("preserves a valid UTF-8 BOM in $name updates", async ({ workspaceOnly }) => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "source.txt");
+      await fs.writeFile(filePath, Buffer.from("\uFEFFheading\nprice: 5\n", "utf8"));
+
+      await applyPatch(priceUpdatePatch, { cwd: dir, workspaceOnly });
+
+      await expect(fs.readFile(filePath)).resolves.toEqual(
+        Buffer.from("\uFEFFheading\nprice: 7\n", "utf8"),
+      );
+    });
+  });
+
+  it.each([
+    { name: "workspace-confined host", workspaceOnly: true },
+    { name: "unconfined host", workspaceOnly: false },
+  ])("rejects invalid UTF-8 in $name updates without changing bytes", async ({ workspaceOnly }) => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "source.txt");
+      const original = Buffer.concat([
+        Buffer.from("heading\nprice: 5\n"),
+        Buffer.from([0xff, 0xfe]),
+      ]);
+      await fs.writeFile(filePath, original);
+
+      await expect(applyPatch(priceUpdatePatch, { cwd: dir, workspaceOnly })).rejects.toThrow(
+        /not valid UTF-8/,
+      );
+      await expect(fs.readFile(filePath)).resolves.toEqual(original);
+    });
+  });
+
+  it("preserves a valid UTF-8 BOM in sandbox updates", async () => {
+    const memory = createMemoryPatchSandbox({
+      "source.txt": Buffer.from("\uFEFFheading\nprice: 5\n", "utf8"),
+    });
+
+    await applyPatch(priceUpdatePatch, memory.options);
+
+    expect(memory.files.get("/sandbox/source.txt")).toBe("\uFEFFheading\nprice: 7\n");
+  });
+
+  it("rejects invalid sandbox UTF-8 before writing or changing bytes", async () => {
+    const original = Buffer.concat([Buffer.from("heading\nprice: 5\n"), Buffer.from([0xff, 0xfe])]);
+    const memory = createMemoryPatchSandbox({ "source.txt": original });
+
+    await expect(applyPatch(priceUpdatePatch, memory.options)).rejects.toThrow(/not valid UTF-8/);
+
+    expect(memory.writeFile).not.toHaveBeenCalled();
+    expect(memory.files.get("/sandbox/source.txt")).toEqual(original);
+  });
+
   it("adds a file", async () => {
     const memory = createMemoryPatchSandbox();
     const patch = `*** Begin Patch
@@ -267,6 +335,34 @@ describe("applyPatch", () => {
     await applyPatch(patch, memory.options);
 
     expect(memory.files.get("/sandbox/source.txt")).toBe("a\nafter-a\nb\nafter-b\nc\n");
+  });
+
+  it("normalizes supported punctuation while matching update hunks", async () => {
+    const cases = [
+      ["a\u2010\u2011\u2012\u2013\u2014\u2015\u2212b", "a-------b"],
+      ["a\u2018\u2019\u201A\u201Bb", "a''''b"],
+      ["a\u201C\u201D\u201E\u201Fb", 'a""""b'],
+      [
+        "a\u00A0\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u202F\u205F\u3000b",
+        "a             b",
+      ],
+    ] as const;
+
+    for (const [sourceLine, patchLine] of cases) {
+      const memory = createMemoryPatchSandbox({
+        "source.txt": `${sourceLine}\n`,
+      });
+      const patch = `*** Begin Patch
+*** Update File: source.txt
+@@
+-${patchLine}
++updated
+*** End Patch`;
+
+      await applyPatch(patch, memory.options);
+
+      expect(memory.files.get("/sandbox/source.txt")).toBe("updated\n");
+    }
   });
 
   it("supports end-of-file inserts", async () => {

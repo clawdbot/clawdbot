@@ -12,14 +12,14 @@ type CodexAppServerRuntimeOptionsParams = NonNullable<
   Parameters<typeof resolveCodexAppServerRuntimeOptions>[0]
 >;
 
-export type CodexBindingAppServerConnection = {
+type CodexBindingAppServerConnection = {
   appServer: CodexAppServerRuntimeOptions;
   usesSupervisionConnection: boolean;
   requestAuthProfileId: string | undefined;
   clientAuthProfileId: string | null | undefined;
 };
 
-export type CodexSupervisionModelSelection = {
+type CodexSupervisionModelSelection = {
   model: string;
   modelProvider: string;
 };

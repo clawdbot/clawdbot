@@ -1,4 +1,6 @@
 // Coverage for replay-safe Codex app-server recovery retries.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeModelFallbackCfg } from "../test-helpers/model-fallback-config-fixture.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
@@ -26,8 +28,11 @@ function codexClientClosedAttempt(
   // turn ended before completion and no user-visible side effect escaped.
   return makeAttemptResult({
     assistantTexts: [],
-    promptError: new Error("codex app-server client closed before turn completed"),
-    promptErrorSource: "prompt",
+    terminal: {
+      kind: "failed",
+      source: "prompt",
+      error: new Error("codex app-server client closed before turn completed"),
+    },
     codexAppServerFailure: {
       kind: "client_closed_before_turn_completed",
       transport: "stdio",
@@ -46,10 +51,16 @@ function codexTurnCompletionIdleTimeoutAttempt(
   // because only the former indicates Codex may have lost the final event.
   return makeAttemptResult({
     assistantTexts: [],
-    aborted: true,
-    timedOut: true,
-    promptError: new Error("codex app-server turn idle timed out waiting for turn/completed"),
-    promptErrorSource: "prompt",
+    terminal: {
+      kind: "timeout",
+      phase: "prompt",
+      source: "runtime",
+      aborted: true,
+      failure: {
+        source: "prompt",
+        error: new Error("codex app-server turn idle timed out waiting for turn/completed"),
+      },
+    },
     promptTimeoutOutcome: {
       message: CODEX_MISSING_TERMINAL_MESSAGE,
     },
@@ -67,7 +78,6 @@ function codexTurnCompletionIdleTimeoutAttempt(
 
 function successAttempt(): EmbeddedRunAttemptResult {
   return makeAttemptResult({
-    promptError: null,
     assistantTexts: ["Done."],
   });
 }
@@ -75,8 +85,7 @@ function successAttempt(): EmbeddedRunAttemptResult {
 function ordinaryPromptFailureAttempt(): EmbeddedRunAttemptResult {
   return makeAttemptResult({
     assistantTexts: [],
-    promptError: new Error("codex exploded"),
-    promptErrorSource: "prompt",
+    terminal: { kind: "failed", source: "prompt", error: new Error("codex exploded") },
   });
 }
 
@@ -132,7 +141,9 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     const replyOperation = {
       freezeAbort,
       markDeferredMaintenanceWaitEnded: vi.fn(),
+      markGlobalLaneWaitEnded: vi.fn(),
       markWaitingForDeferredMaintenance: vi.fn(),
+      markWaitingForGlobalLane: vi.fn(),
     } as unknown as NonNullable<Parameters<typeof runEmbeddedAgent>[0]["replyOperation"]>;
     mockedRunEmbeddedAttempt
       .mockImplementationOnce(async () => {
@@ -203,7 +214,9 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     const replyOperation = {
       abortByUser,
       markDeferredMaintenanceWaitEnded: vi.fn(),
+      markGlobalLaneWaitEnded: vi.fn(),
       markWaitingForDeferredMaintenance: vi.fn(),
+      markWaitingForGlobalLane: vi.fn(),
     } as unknown as NonNullable<Parameters<typeof runEmbeddedAgent>[0]["replyOperation"]>;
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
       asAttemptParams(attemptParams).onAttemptAbort?.();
@@ -235,7 +248,9 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     const replyOperation = {
       abortByUser,
       markDeferredMaintenanceWaitEnded: vi.fn(),
+      markGlobalLaneWaitEnded: vi.fn(),
       markWaitingForDeferredMaintenance: vi.fn(),
+      markWaitingForGlobalLane: vi.fn(),
     } as unknown as NonNullable<Parameters<typeof runEmbeddedAgent>[0]["replyOperation"]>;
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
       controller.abort(upstreamAbort);
@@ -273,7 +288,10 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
 
     expect(
       (
-        mockedRunEmbeddedAttempt.mock.calls[1][0] as {
+        expectDefined(
+          mockedRunEmbeddedAttempt.mock.calls[1],
+          "mockedRunEmbeddedAttempt.mock.calls[1] test invariant",
+        )[0] as {
           suppressNextUserMessagePersistence?: boolean;
         }
       ).suppressNextUserMessagePersistence,
@@ -304,7 +322,10 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
 
     expect(
       (
-        mockedRunEmbeddedAttempt.mock.calls[1][0] as {
+        expectDefined(
+          mockedRunEmbeddedAttempt.mock.calls[1],
+          "mockedRunEmbeddedAttempt.mock.calls[1] test invariant",
+        )[0] as {
           suppressNextUserMessagePersistence?: boolean;
         }
       ).suppressNextUserMessagePersistence,
@@ -462,7 +483,6 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     mockedClassifyFailoverReason.mockReturnValue("timeout");
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       codexTurnCompletionIdleTimeoutAttempt({
-        timedOut: true,
         didSendViaMessagingTool: true,
         replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
         promptTimeoutOutcome: {

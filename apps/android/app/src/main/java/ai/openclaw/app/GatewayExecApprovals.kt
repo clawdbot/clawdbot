@@ -1,5 +1,9 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.i18n.NativeText
+import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.i18n.nativeText
+import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.node.asObjectOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -15,7 +19,7 @@ import java.util.concurrent.atomic.AtomicLong
 
 data class GatewayExecApprovalSummary(
   val id: String,
-  val commandText: String,
+  val commandText: NativeText,
   val commandPreview: String?,
   val warningText: String?,
   val allowedDecisions: List<String>,
@@ -236,7 +240,7 @@ internal fun parseGatewayExecApprovalListEntry(item: JsonElement): GatewayExecAp
   // details, so rendering waits for the reviewer-safe unified approval projection.
   return GatewayExecApprovalSummary(
     id = id,
-    commandText = gatewayExecApprovalCommandRequestText(),
+    commandText = nativeText("Command request"),
     commandPreview = null,
     warningText = null,
     allowedDecisions = emptyList(),
@@ -248,7 +252,39 @@ internal fun parseGatewayExecApprovalListEntry(item: JsonElement): GatewayExecAp
   )
 }
 
-private fun gatewayExecApprovalCommandRequestText(): String = "Command request"
+internal fun gatewayExecApprovalTextForDisplay(text: String): String =
+  when (text) {
+    "Approval allowed and saved." -> nativeString("Approval allowed and saved.")
+    "Approval allowed once." -> nativeString("Approval allowed once.")
+    "A prior response already allowed this command and saved the choice." ->
+      nativeString("A prior response already allowed this command and saved the choice.")
+    "A prior response already allowed this command once." ->
+      nativeString("A prior response already allowed this command once.")
+    "Gateway recorded approval and saved the choice." ->
+      nativeString("Gateway recorded approval and saved the choice.")
+    "Gateway recorded approval once." -> nativeString("Gateway recorded approval once.")
+    "Approval denied." -> nativeString("Approval denied.")
+    "A prior response already denied this approval." ->
+      nativeString("A prior response already denied this approval.")
+    "Gateway recorded a denial." -> nativeString("Gateway recorded a denial.")
+    "This approval expired before it could be resolved." ->
+      nativeString("This approval expired before it could be resolved.")
+    "This approval was cancelled before it could be resolved." ->
+      nativeString("This approval was cancelled before it could be resolved.")
+    "A prior response already resolved this approval." ->
+      nativeString("A prior response already resolved this approval.")
+    "Command request" -> nativeString("Command request")
+    "Resolution outcome unknown. Actions stay disabled until the Gateway record is verified." ->
+      nativeString("Resolution outcome unknown. Actions stay disabled until the Gateway record is verified.")
+    "The Gateway still shows this approval as pending. Review it before trying again." ->
+      nativeString("The Gateway still shows this approval as pending. Review it before trying again.")
+    "Could not load approval details. Refresh and try again." ->
+      nativeString("Could not load approval details. Refresh and try again.")
+    "Could not load approvals." -> nativeString("Could not load approvals.")
+    "Could not resolve approval. Refresh and try again." ->
+      nativeString("Could not resolve approval. Refresh and try again.")
+    else -> text
+  }
 
 internal fun parseGatewayExecApprovalGetPayload(
   payloadJson: String,
@@ -309,7 +345,7 @@ internal fun parseLegacyGatewayExecApprovalGetPayload(
     GatewayExecApprovalSnapshot.Pending(
       GatewayExecApprovalSummary(
         id = id,
-        commandText = commandText,
+        commandText = verbatimText(commandText),
         commandPreview = commandPreview.value?.takeIf { it != commandText },
         warningText = null,
         allowedDecisions = allowedDecisions,
@@ -414,7 +450,7 @@ private fun parseGatewayExecApprovalPresentation(
   val agentId = presentation.optionalString("agentId", requireNonEmpty = true) ?: return null
   return GatewayExecApprovalSummary(
     id = id,
-    commandText = commandText,
+    commandText = verbatimText(commandText),
     commandPreview = commandPreview.value?.takeIf { it != commandText },
     warningText = warningText.value,
     allowedDecisions = allowedDecisions,

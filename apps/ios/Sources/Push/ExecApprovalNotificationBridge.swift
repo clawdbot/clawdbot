@@ -1,7 +1,8 @@
 import Foundation
+import OpenClawProtocol
 @preconcurrency import UserNotifications
 
-private struct ExecApprovalNotificationUTF8Key: Hashable {
+private struct ApprovalNotificationUTF8Key: Hashable {
     let bytes: [UInt8]
 
     init(_ rawValue: String) {
@@ -29,105 +30,204 @@ private struct ExecApprovalNotificationUTF8Key: Hashable {
     }
 }
 
-private enum ExecApprovalNotificationID {
+private enum ApprovalNotificationID {
     static func validated(_ rawValue: String?) -> String? {
         ExecApprovalIdentifier.exact(rawValue)
     }
 
-    static func key(_ rawValue: String?) -> ExecApprovalNotificationUTF8Key? {
-        self.validated(rawValue).map(ExecApprovalNotificationUTF8Key.init)
+    static func key(_ rawValue: String?) -> ApprovalNotificationUTF8Key? {
+        self.validated(rawValue).map(ApprovalNotificationUTF8Key.init)
     }
 }
 
-struct ExecApprovalNotificationPrompt: Codable, Equatable, Hashable {
+struct ApprovalNotificationPrompt: Codable, Equatable, Hashable {
     let approvalId: String
     let gatewayDeviceId: String?
+    let kind: ApprovalKind
+
+    init(
+        approvalId: String,
+        gatewayDeviceId: String?,
+        kind: ApprovalKind = .exec)
+    {
+        self.approvalId = approvalId
+        self.gatewayDeviceId = gatewayDeviceId
+        self.kind = kind
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case approvalId
+        case gatewayDeviceId
+        case kind
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.approvalId = try container.decode(String.self, forKey: .approvalId)
+        self.gatewayDeviceId = try container.decodeIfPresent(String.self, forKey: .gatewayDeviceId)
+        // Persisted exec recovery pushes predate the kind tag.
+        self.kind = try container.decodeIfPresent(ApprovalKind.self, forKey: .kind) ?? .exec
+    }
 
     static func == (lhs: Self, rhs: Self) -> Bool {
-        let sameApprovalID = ExecApprovalNotificationUTF8Key(lhs.approvalId) ==
-            ExecApprovalNotificationUTF8Key(rhs.approvalId)
-        let sameGatewayID = lhs.gatewayDeviceId.map(ExecApprovalNotificationUTF8Key.init) ==
-            rhs.gatewayDeviceId.map(ExecApprovalNotificationUTF8Key.init)
-        return sameApprovalID && sameGatewayID
+        let sameApprovalID = ApprovalNotificationUTF8Key(lhs.approvalId) ==
+            ApprovalNotificationUTF8Key(rhs.approvalId)
+        let sameGatewayID = lhs.gatewayDeviceId.map(ApprovalNotificationUTF8Key.init) ==
+            rhs.gatewayDeviceId.map(ApprovalNotificationUTF8Key.init)
+        return lhs.kind == rhs.kind && sameApprovalID && sameGatewayID
     }
 
     func hash(into hasher: inout Hasher) {
-        hasher.combine(ExecApprovalNotificationUTF8Key(self.approvalId))
-        hasher.combine(self.gatewayDeviceId.map(ExecApprovalNotificationUTF8Key.init))
+        hasher.combine(self.kind)
+        hasher.combine(ApprovalNotificationUTF8Key(self.approvalId))
+        hasher.combine(self.gatewayDeviceId.map(ApprovalNotificationUTF8Key.init))
     }
 }
 
-enum ExecApprovalNotificationBridge {
-    static let requestedKind = "exec.approval.requested"
-    static let resolvedKind = "exec.approval.resolved"
-    static let categoryIdentifier = "openclaw.exec-approval"
-    static let reviewActionIdentifier = "openclaw.exec-approval.review"
+typealias ExecApprovalNotificationPrompt = ApprovalNotificationPrompt
 
-    // A disjoint top-level namespace prevents encoded v2 identifiers from aliasing
-    // arbitrary owner/id combinations created by the legacy dotted format.
-    private static let encodedRequestPrefix = "exec.approval-v2."
-    private static let legacyRequestPrefix = "exec.approval."
+private struct ApprovalNotificationConfiguration {
+    let kind: ApprovalKind
+    let requestedKind: String
+    let resolvedKind: String
+    let categoryIdentifier: String
+    let reviewActionIdentifier: String
+    let encodedRequestPrefix: String
+    let legacyRequestPrefix: String
+}
 
-    static func registerCategory(center: UNUserNotificationCenter = .current()) {
-        let category = UNNotificationCategory(
-            identifier: categoryIdentifier,
-            actions: [
-                UNNotificationAction(
-                    identifier: reviewActionIdentifier,
-                    title: "Review",
-                    options: [.foreground]),
-            ],
-            intentIdentifiers: [],
-            options: [])
-
-        center.getNotificationCategories { categories in
-            var updated = categories
-            updated.update(with: category)
+enum ApprovalNotificationBridge {
+    static func registerCategories(center: UNUserNotificationCenter = .current()) {
+        let categories = [
+            ExecApprovalNotificationBridge.configuration,
+            PluginApprovalNotificationBridge.configuration,
+        ].map(self.category(for:))
+        center.getNotificationCategories { existingCategories in
+            var updated = existingCategories
+            for category in categories {
+                updated.update(with: category)
+            }
             center.setNotificationCategories(updated)
         }
     }
 
-    static func shouldPresentNotification(userInfo: [AnyHashable: Any]) -> Bool {
-        self.parsePush(userInfo: userInfo, expectedKind: self.requestedKind) != nil
-    }
-
     static func parsePrompt(
         actionIdentifier: String,
-        userInfo: [AnyHashable: Any]) -> ExecApprovalNotificationPrompt?
+        userInfo: [AnyHashable: Any]) -> ApprovalNotificationPrompt?
     {
-        guard actionIdentifier == UNNotificationDefaultActionIdentifier
-            || actionIdentifier == self.reviewActionIdentifier
-        else {
-            return nil
-        }
-        return self.parseRequestedPush(userInfo: userInfo)
+        self.parsePrompt(
+            actionIdentifier: actionIdentifier,
+            userInfo: userInfo,
+            configuration: ExecApprovalNotificationBridge.configuration)
+            ?? self.parsePrompt(
+                actionIdentifier: actionIdentifier,
+                userInfo: userInfo,
+                configuration: PluginApprovalNotificationBridge.configuration)
     }
 
-    static func parseRequestedPush(userInfo: [AnyHashable: Any]) -> ExecApprovalNotificationPrompt? {
-        self.parsePush(userInfo: userInfo, expectedKind: self.requestedKind)
+    static func parseRequestedPush(userInfo: [AnyHashable: Any]) -> ApprovalNotificationPrompt? {
+        let exec = ExecApprovalNotificationBridge.configuration
+        let plugin = PluginApprovalNotificationBridge.configuration
+        return self.parsePush(userInfo: userInfo, expectedKind: exec.requestedKind, configuration: exec)
+            ?? self.parsePush(
+                userInfo: userInfo,
+                expectedKind: plugin.requestedKind,
+                configuration: plugin)
     }
 
-    static func parseResolvedPush(userInfo: [AnyHashable: Any]) -> ExecApprovalNotificationPrompt? {
-        self.parsePush(userInfo: userInfo, expectedKind: self.resolvedKind)
+    static func parseResolvedPush(userInfo: [AnyHashable: Any]) -> ApprovalNotificationPrompt? {
+        let exec = ExecApprovalNotificationBridge.configuration
+        let plugin = PluginApprovalNotificationBridge.configuration
+        return self.parsePush(userInfo: userInfo, expectedKind: exec.resolvedKind, configuration: exec)
+            ?? self.parsePush(
+                userInfo: userInfo,
+                expectedKind: plugin.resolvedKind,
+                configuration: plugin)
     }
 
     @MainActor
     static func removeNotifications(
-        for push: ExecApprovalNotificationPrompt,
+        for push: ApprovalNotificationPrompt,
         notificationCenter: NotificationCentering,
         includingLegacyOwnerless: Bool = false) async
     {
-        guard let requestIdentifier = self.localRequestIdentifier(for: push) else { return }
+        guard let configuration = configuration(for: push.kind) else { return }
+        await self.removeNotifications(
+            for: push,
+            notificationCenter: notificationCenter,
+            includingLegacyOwnerless: includingLegacyOwnerless,
+            configuration: configuration)
+    }
+
+    fileprivate static func shouldPresentNotification(
+        userInfo: [AnyHashable: Any],
+        configuration: ApprovalNotificationConfiguration) -> Bool
+    {
+        self.parsePush(
+            userInfo: userInfo,
+            expectedKind: configuration.requestedKind,
+            configuration: configuration) != nil
+    }
+
+    fileprivate static func parsePrompt(
+        actionIdentifier: String,
+        userInfo: [AnyHashable: Any],
+        configuration: ApprovalNotificationConfiguration) -> ApprovalNotificationPrompt?
+    {
+        guard actionIdentifier == UNNotificationDefaultActionIdentifier
+            || actionIdentifier == configuration.reviewActionIdentifier
+        else {
+            return nil
+        }
+        return self.parsePush(
+            userInfo: userInfo,
+            expectedKind: configuration.requestedKind,
+            configuration: configuration)
+    }
+
+    fileprivate static func parseRequestedPush(
+        userInfo: [AnyHashable: Any],
+        configuration: ApprovalNotificationConfiguration) -> ApprovalNotificationPrompt?
+    {
+        self.parsePush(
+            userInfo: userInfo,
+            expectedKind: configuration.requestedKind,
+            configuration: configuration)
+    }
+
+    fileprivate static func parseResolvedPush(
+        userInfo: [AnyHashable: Any],
+        configuration: ApprovalNotificationConfiguration) -> ApprovalNotificationPrompt?
+    {
+        self.parsePush(
+            userInfo: userInfo,
+            expectedKind: configuration.resolvedKind,
+            configuration: configuration)
+    }
+
+    @MainActor
+    fileprivate static func removeNotifications(
+        for push: ApprovalNotificationPrompt,
+        notificationCenter: NotificationCentering,
+        includingLegacyOwnerless: Bool,
+        configuration: ApprovalNotificationConfiguration) async
+    {
+        guard push.kind == configuration.kind,
+              let requestIdentifier = localRequestIdentifier(for: push, configuration: configuration)
+        else { return }
         let legacyOwner = push.gatewayDeviceId ?? "legacy"
         var pendingIdentifiers = [
             requestIdentifier,
-            "\(self.legacyRequestPrefix)\(legacyOwner).\(push.approvalId)",
+            "\(configuration.legacyRequestPrefix)\(legacyOwner).\(push.approvalId)",
         ]
         if includingLegacyOwnerless {
-            pendingIdentifiers.append("\(self.legacyRequestPrefix)\(push.approvalId)")
-            if let ownerlessIdentifier = self.localRequestIdentifier(for: ExecApprovalNotificationPrompt(
-                approvalId: push.approvalId,
-                gatewayDeviceId: nil))
+            pendingIdentifiers.append("\(configuration.legacyRequestPrefix)\(push.approvalId)")
+            if let ownerlessIdentifier = localRequestIdentifier(
+                for: ApprovalNotificationPrompt(
+                    approvalId: push.approvalId,
+                    gatewayDeviceId: nil,
+                    kind: push.kind),
+                configuration: configuration)
             {
                 pendingIdentifiers.append(ownerlessIdentifier)
             }
@@ -139,11 +239,14 @@ enum ExecApprovalNotificationBridge {
 
         let delivered = await notificationCenter.deliveredNotifications()
         let identifiers = delivered.compactMap { snapshot -> String? in
-            guard let requestedPush = self.parseRequestedPush(userInfo: snapshot.userInfo) else { return nil }
+            guard let requestedPush = self.parseRequestedPush(
+                userInfo: snapshot.userInfo,
+                configuration: configuration)
+            else { return nil }
             let matchesCurrentOwner = requestedPush == push
             let matchesLegacyOwnerless = includingLegacyOwnerless &&
-                ExecApprovalNotificationUTF8Key(requestedPush.approvalId) ==
-                ExecApprovalNotificationUTF8Key(push.approvalId) &&
+                ApprovalNotificationUTF8Key(requestedPush.approvalId) ==
+                ApprovalNotificationUTF8Key(push.approvalId) &&
                 requestedPush.gatewayDeviceId == nil
             guard matchesCurrentOwner || matchesLegacyOwnerless else { return nil }
             return snapshot.identifier
@@ -151,17 +254,44 @@ enum ExecApprovalNotificationBridge {
         await notificationCenter.removeDeliveredNotifications(withIdentifiers: identifiers)
     }
 
-    static func approvalID(from userInfo: [AnyHashable: Any]) -> String? {
+    private static func category(
+        for configuration: ApprovalNotificationConfiguration) -> UNNotificationCategory
+    {
+        UNNotificationCategory(
+            identifier: configuration.categoryIdentifier,
+            actions: [
+                UNNotificationAction(
+                    identifier: configuration.reviewActionIdentifier,
+                    title: "Review",
+                    options: [.foreground]),
+            ],
+            intentIdentifiers: [],
+            options: [])
+    }
+
+    private static func configuration(for kind: ApprovalKind) -> ApprovalNotificationConfiguration? {
+        switch kind {
+        case .exec:
+            ExecApprovalNotificationBridge.configuration
+        case .plugin:
+            PluginApprovalNotificationBridge.configuration
+        case .systemAgent:
+            nil
+        }
+    }
+
+    private static func approvalID(from userInfo: [AnyHashable: Any]) -> String? {
         let raw = self.openClawPayload(userInfo: userInfo)?["approvalId"] as? String
-        return ExecApprovalNotificationID.validated(raw)
+        return ApprovalNotificationID.validated(raw)
     }
 
     private static func parsePush(
         userInfo: [AnyHashable: Any],
-        expectedKind: String) -> ExecApprovalNotificationPrompt?
+        expectedKind: String,
+        configuration: ApprovalNotificationConfiguration) -> ApprovalNotificationPrompt?
     {
-        guard let payload = self.openClawPayload(userInfo: userInfo),
-              self.payloadKind(userInfo: userInfo) == expectedKind,
+        guard let payload = openClawPayload(userInfo: userInfo),
+              payloadKind(userInfo: userInfo) == expectedKind,
               let approvalId = approvalID(from: userInfo)
         else {
             return nil
@@ -175,21 +305,26 @@ enum ExecApprovalNotificationBridge {
         } else {
             gatewayDeviceId = nil
         }
-        return ExecApprovalNotificationPrompt(
+        return ApprovalNotificationPrompt(
             approvalId: approvalId,
-            gatewayDeviceId: gatewayDeviceId)
+            gatewayDeviceId: gatewayDeviceId,
+            kind: configuration.kind)
     }
 
-    private static func localRequestIdentifier(for push: ExecApprovalNotificationPrompt) -> String? {
+    private static func localRequestIdentifier(
+        for push: ApprovalNotificationPrompt,
+        configuration: ApprovalNotificationConfiguration) -> String?
+    {
         let owner = push.gatewayDeviceId ?? "legacy"
-        guard let approvalComponent = ExecApprovalNotificationID.key(push.approvalId)?.notificationComponent else {
+        guard let approvalComponent = ApprovalNotificationID.key(push.approvalId)?.notificationComponent else {
             return nil
         }
-        let ownerComponent = ExecApprovalNotificationUTF8Key(owner).notificationComponent
-        return "\(self.encodedRequestPrefix)\(ownerComponent.utf8.count):\(ownerComponent).\(approvalComponent)"
+        let ownerComponent = ApprovalNotificationUTF8Key(owner).notificationComponent
+        return "\(configuration.encodedRequestPrefix)\(ownerComponent.utf8.count):" +
+            "\(ownerComponent).\(approvalComponent)"
     }
 
-    static func payloadKind(userInfo: [AnyHashable: Any]) -> String {
+    private static func payloadKind(userInfo: [AnyHashable: Any]) -> String {
         let raw = self.openClawPayload(userInfo: userInfo)?["kind"] as? String
         let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? "unknown" : trimmed
@@ -206,5 +341,113 @@ enum ExecApprovalNotificationBridge {
             }
         }
         return nil
+    }
+}
+
+enum ExecApprovalNotificationBridge {
+    static let requestedKind = "exec.approval.requested"
+    static let resolvedKind = "exec.approval.resolved"
+    static let categoryIdentifier = "openclaw.exec-approval"
+    static let reviewActionIdentifier = "openclaw.exec-approval.review"
+
+    fileprivate static let configuration = ApprovalNotificationConfiguration(
+        kind: .exec,
+        requestedKind: ExecApprovalNotificationBridge.requestedKind,
+        resolvedKind: ExecApprovalNotificationBridge.resolvedKind,
+        categoryIdentifier: ExecApprovalNotificationBridge.categoryIdentifier,
+        reviewActionIdentifier: ExecApprovalNotificationBridge.reviewActionIdentifier,
+        encodedRequestPrefix: "exec.approval-v2.",
+        legacyRequestPrefix: "exec.approval.")
+
+    static func shouldPresentNotification(userInfo: [AnyHashable: Any]) -> Bool {
+        ApprovalNotificationBridge.shouldPresentNotification(
+            userInfo: userInfo,
+            configuration: self.configuration)
+    }
+
+    static func parsePrompt(
+        actionIdentifier: String,
+        userInfo: [AnyHashable: Any]) -> ApprovalNotificationPrompt?
+    {
+        ApprovalNotificationBridge.parsePrompt(
+            actionIdentifier: actionIdentifier,
+            userInfo: userInfo,
+            configuration: self.configuration)
+    }
+
+    static func parseRequestedPush(userInfo: [AnyHashable: Any]) -> ApprovalNotificationPrompt? {
+        ApprovalNotificationBridge.parseRequestedPush(
+            userInfo: userInfo,
+            configuration: self.configuration)
+    }
+
+    @MainActor
+    static func removeNotifications(
+        for push: ApprovalNotificationPrompt,
+        notificationCenter: NotificationCentering,
+        includingLegacyOwnerless: Bool = false) async
+    {
+        await ApprovalNotificationBridge.removeNotifications(
+            for: push,
+            notificationCenter: notificationCenter,
+            includingLegacyOwnerless: includingLegacyOwnerless,
+            configuration: self.configuration)
+    }
+}
+
+enum PluginApprovalNotificationBridge {
+    static let requestedKind = "plugin.approval.requested"
+    static let resolvedKind = "plugin.approval.resolved"
+    static let categoryIdentifier = "openclaw.plugin-approval"
+    static let reviewActionIdentifier = "openclaw.plugin-approval.review"
+
+    fileprivate static let configuration = ApprovalNotificationConfiguration(
+        kind: .plugin,
+        requestedKind: PluginApprovalNotificationBridge.requestedKind,
+        resolvedKind: PluginApprovalNotificationBridge.resolvedKind,
+        categoryIdentifier: PluginApprovalNotificationBridge.categoryIdentifier,
+        reviewActionIdentifier: PluginApprovalNotificationBridge.reviewActionIdentifier,
+        encodedRequestPrefix: "plugin.approval-v2.",
+        legacyRequestPrefix: "plugin.approval.")
+
+    static func shouldPresentNotification(userInfo: [AnyHashable: Any]) -> Bool {
+        ApprovalNotificationBridge.shouldPresentNotification(
+            userInfo: userInfo,
+            configuration: self.configuration)
+    }
+
+    static func parsePrompt(
+        actionIdentifier: String,
+        userInfo: [AnyHashable: Any]) -> ApprovalNotificationPrompt?
+    {
+        ApprovalNotificationBridge.parsePrompt(
+            actionIdentifier: actionIdentifier,
+            userInfo: userInfo,
+            configuration: self.configuration)
+    }
+
+    static func parseRequestedPush(userInfo: [AnyHashable: Any]) -> ApprovalNotificationPrompt? {
+        ApprovalNotificationBridge.parseRequestedPush(
+            userInfo: userInfo,
+            configuration: self.configuration)
+    }
+
+    static func parseResolvedPush(userInfo: [AnyHashable: Any]) -> ApprovalNotificationPrompt? {
+        ApprovalNotificationBridge.parseResolvedPush(
+            userInfo: userInfo,
+            configuration: self.configuration)
+    }
+
+    @MainActor
+    static func removeNotifications(
+        for push: ApprovalNotificationPrompt,
+        notificationCenter: NotificationCentering,
+        includingLegacyOwnerless: Bool = false) async
+    {
+        await ApprovalNotificationBridge.removeNotifications(
+            for: push,
+            notificationCenter: notificationCenter,
+            includingLegacyOwnerless: includingLegacyOwnerless,
+            configuration: self.configuration)
     }
 }

@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
-import OpenClawKit
 import Testing
+@testable import OpenClawKit
 
 extension NSLock {
     fileprivate func withDeviceRetryLock<T>(_ body: () -> T) -> T {
@@ -108,7 +108,7 @@ struct GatewayChannelDeviceTokenRetryTests {
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
-        try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": tempDir.path]) {
+        try await DeviceIdentityStore.withStateDirectory(tempDir) {
             let identity = DeviceIdentityStore.loadOrCreate()
             let key = SymmetricKey(size: .bits256)
             let url = try #require(URL(string: "ws://example.invalid"))
@@ -172,7 +172,7 @@ struct GatewayChannelDeviceTokenRetryTests {
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
-        try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": tempDir.path]) {
+        try await DeviceIdentityStore.withStateDirectory(tempDir) {
             let identity = DeviceIdentityStore.loadOrCreate()
             _ = DeviceAuthStore.storeToken(
                 deviceId: identity.deviceId,

@@ -85,4 +85,41 @@ describe("runMigrationApply", () => {
       expect.anything(),
     );
   });
+
+  it("returns partial item failures to embedded callers with report metadata", async () => {
+    const partial = buildEmptyPlan();
+    partial.summary = { ...partial.summary, total: 1, errors: 1 };
+    partial.items = [
+      {
+        id: "memory:one",
+        kind: "memory",
+        action: "copy",
+        status: "error",
+        reason: "copy failed",
+        details: { recoveryPath: "/tmp/staged-memory" },
+      },
+    ];
+    const provider: MigrationProviderPlugin = {
+      id: "codex",
+      label: "Codex",
+      plan: vi.fn(async () => buildEmptyPlan()),
+      apply: vi.fn(async () => partial),
+    };
+
+    const result = await runMigrationApply({
+      runtime: createNonExitingRuntime(),
+      opts: {
+        yes: true,
+        json: true,
+        noBackup: true,
+        allowPartialResult: true,
+      },
+      providerId: "codex",
+      provider,
+    });
+
+    expect(result.summary.errors).toBe(1);
+    expect(result.items[0]?.details?.recoveryPath).toBe("/tmp/staged-memory");
+    expect(result.reportDir).toContain("codex");
+  });
 });

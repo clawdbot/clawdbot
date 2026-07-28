@@ -109,22 +109,6 @@ export type ContextEngineRuntimeSettings = {
   };
 };
 
-export class ContextEngineRuntimeSettingsUnavailableError extends Error {
-  readonly code = "context_engine_runtime_settings_unavailable";
-  constructor(message?: string) {
-    super(message);
-    this.name = "ContextEngineRuntimeSettingsUnavailableError";
-  }
-}
-
-export class ContextEngineRuntimeSettingsUnsupportedError extends Error {
-  readonly code = "context_engine_runtime_settings_unsupported";
-  constructor(message?: string) {
-    super(message);
-    this.name = "ContextEngineRuntimeSettingsUnsupportedError";
-  }
-}
-
 export type CompactResult = {
   ok: boolean;
   compacted: boolean;
@@ -290,7 +274,7 @@ export type ContextEnginePromptCacheInfo = {
   expiresAt?: number;
 };
 
-export type ContextEngineTranscriptStorageInfo = {
+type ContextEngineTranscriptStorageInfo = {
   /**
    * Authoritative transcript backend for this runtime turn.
    *

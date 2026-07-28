@@ -1,5 +1,4 @@
 import Foundation
-import OpenClawIPC
 import OSLog
 
 /// Lightweight SemVer helper (major.minor.patch only) for gateway compatibility checks.
@@ -266,63 +265,6 @@ enum GatewayEnvironment {
         }
 
         return nil
-    }
-
-    static func installGlobal(version: Semver?, statusHandler: @escaping @Sendable (String) -> Void) async {
-        await self.installGlobal(versionString: version?.description, statusHandler: statusHandler)
-    }
-
-    static func installGlobal(versionString: String?, statusHandler: @escaping @Sendable (String) -> Void) async {
-        let preferred = CommandResolver.preferredPaths().joined(separator: ":")
-        let trimmed = versionString?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let target: String = if let trimmed, !trimmed.isEmpty {
-            trimmed
-        } else {
-            "latest"
-        }
-        let npm = CommandResolver.findExecutable(named: "npm")
-        let pnpm = CommandResolver.findExecutable(named: "pnpm")
-        let bun = CommandResolver.findExecutable(named: "bun")
-        let (label, cmd): (String, [String]) =
-            if let npm {
-                ("npm", [npm, "install", "-g", "openclaw@\(target)"])
-            } else if let pnpm {
-                ("pnpm", [pnpm, "add", "-g", "openclaw@\(target)"])
-            } else if let bun {
-                ("bun", [bun, "add", "-g", "openclaw@\(target)"])
-            } else {
-                ("npm", ["npm", "install", "-g", "openclaw@\(target)"])
-            }
-
-        statusHandler("Installing openclaw@\(target) via \(label)…")
-
-        func summarize(_ text: String) -> String? {
-            let lines = text
-                .split(whereSeparator: \.isNewline)
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-            guard let last = lines.last else { return nil }
-            let normalized = last.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-            return normalized.count > 200 ? String(normalized.prefix(199)) + "…" : normalized
-        }
-
-        let response = await ShellExecutor.runDetailed(command: cmd, cwd: nil, env: ["PATH": preferred], timeout: 300)
-        if response.success {
-            statusHandler("Installed openclaw@\(target)")
-        } else {
-            if response.timedOut {
-                statusHandler("Install failed: timed out. Check your internet connection and try again.")
-                return
-            }
-
-            let exit = response.exitCode.map { "exit \($0)" } ?? (response.errorMessage ?? "failed")
-            let detail = summarize(response.stderr) ?? summarize(response.stdout)
-            if let detail {
-                statusHandler("Install failed (\(exit)): \(detail)")
-            } else {
-                statusHandler("Install failed (\(exit))")
-            }
-        }
     }
 
     // MARK: - Internals

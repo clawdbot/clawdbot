@@ -1,7 +1,7 @@
 import type { ContentBlock } from "@modelcontextprotocol/sdk/types.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
-export type McpAgentContentBlock = AgentToolResult<unknown>["content"][number];
+type McpAgentContentBlock = AgentToolResult<unknown>["content"][number];
 
 /** Converts the full MCP content union into the agent text/image contract. */
 export function mcpContentBlockToAgentContent(block: ContentBlock): McpAgentContentBlock {

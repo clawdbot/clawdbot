@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RunningChrome } from "./chrome.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import {
-  createProfileRuntimeState,
   enqueueProfileStart,
   getProfileLifecycle,
   getOrCreateProfileRuntime,
@@ -125,7 +124,13 @@ function runtimeState(
   running: RunningChrome | null,
   lastTargetId: string | null,
 ) {
-  return { ...createProfileRuntimeState(profile), running, lastTargetId };
+  const runtime = { profile, running, lastTargetId };
+  getProfileLifecycle(runtime);
+  return runtime;
+}
+
+function createTestProfileRuntimeState(profile: ResolvedBrowserProfile) {
+  return runtimeState(profile, null, null);
 }
 
 describe("server-context hot-reload profiles", () => {
@@ -233,7 +238,6 @@ describe("server-context hot-reload profiles", () => {
               profile,
               running: { pid: 123 } as never,
               lastTargetId: "tab-1",
-              reconcile: null,
             },
           ],
         ]),
@@ -515,7 +519,7 @@ describe("server-context hot-reload profiles", () => {
     const cfg = getRuntimeConfig();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
     const work = requireValue(resolveProfile(resolved, "work"), "work profile missing");
-    const runtime = createProfileRuntimeState(work);
+    const runtime = createTestProfileRuntimeState(work);
     const state: BrowserServerState = {
       server: null,
       port: 18791,
@@ -543,7 +547,7 @@ describe("server-context hot-reload profiles", () => {
     const cfg = getRuntimeConfig();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
     const workA = requireValue(resolveProfile(resolved, "work"), "work A missing");
-    const runtime = createProfileRuntimeState(workA);
+    const runtime = createTestProfileRuntimeState(workA);
     const state: BrowserServerState = {
       server: null,
       port: 18791,
@@ -600,7 +604,7 @@ describe("server-context hot-reload profiles", () => {
     const cfg = getRuntimeConfig();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
     const workA = requireValue(resolveProfile(resolved, "work"), "work A missing");
-    const runtime = createProfileRuntimeState(workA);
+    const runtime = createTestProfileRuntimeState(workA);
     const state: BrowserServerState = {
       server: null,
       port: 18791,
@@ -661,7 +665,7 @@ describe("server-context hot-reload profiles", () => {
     const cfg = getRuntimeConfig();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
     const workA = requireValue(resolveProfile(resolved, "work"), "work profile missing");
-    const oldRuntime = createProfileRuntimeState(workA);
+    const oldRuntime = createTestProfileRuntimeState(workA);
     const state: BrowserServerState = {
       server: null,
       port: 18791,
@@ -738,7 +742,7 @@ describe("server-context hot-reload profiles", () => {
     const cfg = getRuntimeConfig();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
     const workA = requireValue(resolveProfile(resolved, "work"), "work profile missing");
-    const oldRuntime = createProfileRuntimeState(workA);
+    const oldRuntime = createTestProfileRuntimeState(workA);
     const state: BrowserServerState = {
       server: null,
       port: 18791,
@@ -778,7 +782,7 @@ describe("server-context hot-reload profiles", () => {
     const cfg = getRuntimeConfig();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
     const workA = requireValue(resolveProfile(resolved, "work"), "work profile missing");
-    const runtime = createProfileRuntimeState(workA);
+    const runtime = createTestProfileRuntimeState(workA);
     const state: BrowserServerState = {
       server: null,
       port: 18791,

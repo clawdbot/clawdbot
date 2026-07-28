@@ -64,7 +64,6 @@ extension VoiceWakeOverlayController {
         token: UUID,
         transcript: String,
         autoSendAfter delay: TimeInterval?,
-        sendChime: VoiceWakeChime = .none,
         attributed: NSAttributedString? = nil)
     {
         guard self.guardToken(token, context: "final") else { return }

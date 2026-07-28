@@ -62,7 +62,7 @@ describe("prepareCliBundleMcpConfig", () => {
       workspaceDir,
       config: { plugins: { enabled: false } },
       exclusiveConfig: {
-        mcpServers: { openclaw: { command: "node", args: ["crestodian.mjs"] } },
+        mcpServers: { openclaw: { command: "node", args: ["openclaw.mjs"] } },
       },
     });
 
@@ -72,7 +72,7 @@ describe("prepareCliBundleMcpConfig", () => {
       mcpServers?: Record<string, { args?: string[] }>;
     };
     expect(Object.keys(raw.mcpServers ?? {})).toEqual(["openclaw"]);
-    expect(raw.mcpServers?.openclaw?.args).toEqual(["crestodian.mjs"]);
+    expect(raw.mcpServers?.openclaw?.args).toEqual(["openclaw.mjs"]);
     expect(prepared.mcpConfigHash).toMatch(/^[0-9a-f]{64}$/);
 
     await prepared.cleanup?.();

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type {
   ControlUiGitHubPreview,
@@ -36,7 +37,10 @@ describe("controlUi.githubPreview", () => {
     const handlers = createControlUiHandlers(loadPreview);
     const respond = vi.fn<RespondFn>();
 
-    await handlers["controlUi.githubPreview"](
+    await expectDefined(
+      handlers["controlUi.githubPreview"],
+      'handlers["controlUi.githubPreview"] test invariant',
+    )(
       requestOptions(
         { kind: "issue", number: 99815, owner: "openclaw", repo: "openclaw" },
         respond,
@@ -57,7 +61,10 @@ describe("controlUi.githubPreview", () => {
     const handlers = createControlUiHandlers(loadPreview);
     const respond = vi.fn<RespondFn>();
 
-    await handlers["controlUi.githubPreview"](
+    await expectDefined(
+      handlers["controlUi.githubPreview"],
+      'handlers["controlUi.githubPreview"] test invariant',
+    )(
       requestOptions(
         { kind: "issue", number: 1, owner: "openclaw/evil", repo: "openclaw" },
         respond,
@@ -77,7 +84,10 @@ describe("controlUi.githubPreview", () => {
     );
     const respond = vi.fn<RespondFn>();
 
-    await handlers["controlUi.githubPreview"](
+    await expectDefined(
+      handlers["controlUi.githubPreview"],
+      'handlers["controlUi.githubPreview"] test invariant',
+    )(
       requestOptions({ kind: "pull", number: 99816, owner: "openclaw", repo: "openclaw" }, respond),
     );
 
@@ -113,9 +123,10 @@ describe("controlUi.sessionPullRequests", () => {
     const handlers = createControlUiHandlers(vi.fn(), loadPullRequests);
     const respond = vi.fn<RespondFn>();
 
-    await handlers["controlUi.sessionPullRequests"](
-      requestOptions({ sessionKey: "agent:main:main", agentId: "main" }, respond),
-    );
+    await expectDefined(
+      handlers["controlUi.sessionPullRequests"],
+      'handlers["controlUi.sessionPullRequests"] test invariant',
+    )(requestOptions({ sessionKey: "agent:main:main", agentId: "main" }, respond));
 
     expect(loadPullRequests).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
@@ -129,7 +140,10 @@ describe("controlUi.sessionPullRequests", () => {
     const handlers = createControlUiHandlers(vi.fn(), loadPullRequests);
     const respond = vi.fn<RespondFn>();
 
-    await handlers["controlUi.sessionPullRequests"](requestOptions({ sessionKey: "  " }, respond));
+    await expectDefined(
+      handlers["controlUi.sessionPullRequests"],
+      'handlers["controlUi.sessionPullRequests"] test invariant',
+    )(requestOptions({ sessionKey: "  " }, respond));
 
     expect(loadPullRequests).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(false, undefined, {
@@ -145,9 +159,10 @@ describe("controlUi.sessionPullRequests", () => {
     );
     const respond = vi.fn<RespondFn>();
 
-    await handlers["controlUi.sessionPullRequests"](
-      requestOptions({ sessionKey: "agent:main:main" }, respond),
-    );
+    await expectDefined(
+      handlers["controlUi.sessionPullRequests"],
+      'handlers["controlUi.sessionPullRequests"] test invariant',
+    )(requestOptions({ sessionKey: "agent:main:main" }, respond));
 
     expect(respond).toHaveBeenCalledWith(false, undefined, {
       code: "UNAVAILABLE",

@@ -1,18 +1,12 @@
 // SSH-verified node pairing policy and verifier tests (probe injected).
 import crypto from "node:crypto";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { describe, expect, test } from "vitest";
 import {
   deriveDeviceIdFromPublicKey,
   publicKeyRawBase64UrlFromPem,
 } from "../infra/device-identity.js";
 import type { FreshNodePairingEligibilityParams } from "./node-pairing-auto-approve.js";
-import {
-  planNodePairingSshVerify,
-  resetNodePairingSshVerifyStateForTests,
-  resolveNodePairingSshVerifyPolicy,
-  startNodePairingSshVerify,
-  type NodePairingSshVerifyPlan,
-} from "./node-pairing-ssh-verify.js";
+import { planNodePairingSshVerify, startNodePairingSshVerify } from "./node-pairing-ssh-verify.js";
 import type {
   NodeIdentityProbeParams,
   NodeIdentityProbeResult,
@@ -46,7 +40,7 @@ function makeEligibility(
   };
 }
 
-function makePlan(host = "192.168.1.20"): NodePairingSshVerifyPlan {
+function makePlan(host = "192.168.1.20"): NonNullable<ReturnType<typeof planNodePairingSshVerify>> {
   return {
     policy: { user: "tester", timeoutMs: 1_000 },
     host,
@@ -62,44 +56,6 @@ function probeReturning(result: NodeIdentityProbeResult) {
   return { probe, calls };
 }
 
-beforeEach(() => {
-  resetNodePairingSshVerifyStateForTests();
-});
-
-afterEach(() => {
-  resetNodePairingSshVerifyStateForTests();
-});
-
-describe("resolveNodePairingSshVerifyPolicy", () => {
-  test("is enabled by default and honors explicit true", () => {
-    for (const raw of [undefined, true] as const) {
-      const policy = resolveNodePairingSshVerifyPolicy(raw);
-      expect(policy).not.toBeNull();
-      expect(policy?.user.length).toBeGreaterThan(0);
-      expect(policy?.timeoutMs).toBe(7_000);
-    }
-  });
-
-  test("false disables the policy", () => {
-    expect(resolveNodePairingSshVerifyPolicy(false)).toBeNull();
-  });
-
-  test("object form overrides user, identity, timeout, and cidrs", () => {
-    const policy = resolveNodePairingSshVerifyPolicy({
-      user: "peter",
-      identity: "/keys/probe",
-      timeoutMs: 1234,
-      cidrs: ["10.0.0.0/8", "  "],
-    });
-    expect(policy).toEqual({
-      user: "peter",
-      identity: "/keys/probe",
-      timeoutMs: 1234,
-      cidrs: ["10.0.0.0/8"],
-    });
-  });
-});
-
 describe("planNodePairingSshVerify", () => {
   test("plans a probe for an eligible private-network node pairing", () => {
     const plan = planNodePairingSshVerify({
@@ -107,6 +63,8 @@ describe("planNodePairingSshVerify", () => {
       eligibility: makeEligibility(),
     });
     expect(plan?.host).toBe("192.168.1.20");
+    expect(plan?.policy.user.length).toBeGreaterThan(0);
+    expect(plan?.policy.timeoutMs).toBe(7_000);
   });
 
   test("strips the IPv4-mapped IPv6 prefix from the probe target", () => {
@@ -173,6 +131,25 @@ describe("planNodePairingSshVerify", () => {
         eligibility: makeEligibility({ reportedClientIp: "10.1.2.3" }),
       })?.host,
     ).toBe("10.1.2.3");
+  });
+
+  test("passes user, identity, timeout, and normalized cidrs into the probe policy", () => {
+    const plan = planNodePairingSshVerify({
+      config: {
+        user: "peter",
+        identity: "/keys/probe",
+        timeoutMs: 1_234,
+        cidrs: ["10.0.0.0/8", "  "],
+      },
+      eligibility: makeEligibility({ reportedClientIp: "10.1.2.3" }),
+    });
+
+    expect(plan?.policy).toEqual({
+      user: "peter",
+      identity: "/keys/probe",
+      timeoutMs: 1_234,
+      cidrs: ["10.0.0.0/8"],
+    });
   });
 });
 

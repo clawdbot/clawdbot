@@ -47,7 +47,7 @@ type SlackSystemEventAuthorization =
       channelName?: string;
     };
 
-let slackChannelMembersCache = new WeakMap<
+const slackChannelMembersCache = new WeakMap<
   SlackMonitorContext,
   Map<string, SlackChannelMembersCacheEntry>
 >();
@@ -201,13 +201,6 @@ export async function resolveSlackEffectiveAllowFrom(
     storeAllowFrom = [];
   }
   return normalizeAllowListLower([...base, ...storeAllowFrom]);
-}
-
-export function clearSlackAllowFromCacheForTest(): void {
-  slackChannelMembersCache = new WeakMap<
-    SlackMonitorContext,
-    Map<string, SlackChannelMembersCacheEntry>
-  >();
 }
 
 async function fetchSlackChannelMemberIds(

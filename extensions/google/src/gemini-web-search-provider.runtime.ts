@@ -172,7 +172,7 @@ function resolveGeminiTimeRangeFilter(
 
 function resolveGeminiRuntimeApiKey(gemini?: GeminiConfig): string | undefined {
   return (
-    readConfiguredSecretString(gemini?.apiKey, "tools.web.search.gemini.apiKey") ??
+    readConfiguredSecretString(gemini?.apiKey, "plugins.entries.google.config.webSearch.apiKey") ??
     readProviderEnvValue(["GEMINI_API_KEY"]) ??
     readConfiguredSecretString(gemini?.providerApiKey, "models.providers.google.apiKey")
   );

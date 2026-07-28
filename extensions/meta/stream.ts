@@ -18,7 +18,7 @@ function ensureMetaResponsesReplayFields(payloadObj: Record<string, unknown>): v
   payloadObj.store = false;
 }
 
-export function createMetaResponsesWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+function createMetaResponsesWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) =>
     streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {

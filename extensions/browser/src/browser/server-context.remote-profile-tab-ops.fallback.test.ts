@@ -1,4 +1,5 @@
 // Browser tests cover server context.remote profile tab ops.fallback plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { withBrowserFetchPreconnect } from "../../test-fetch.js";
 import {
@@ -269,14 +270,15 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
     const { remote } = deps.createRemoteRouteHarness(fetchMock);
     const opened = await remote.openTab("https://1.example");
     expect(opened.targetId).toBe("T1");
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/json/version");
   });
 
   it("passes configured remote CDP timeouts when opening tabs through raw CDP", async () => {
     vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
     const createTargetViaCdp = vi
       .spyOn(deps.cdpModule, "createTargetViaCdp")
-      .mockResolvedValue({ targetId: "T_REMOTE" });
+      .mockResolvedValue({ targetId: "T_REMOTE", finalUrl: "https://example.com" });
     const { state, remote } = deps.createRemoteRouteHarness(
       vi.fn(
         deps.createJsonListFetchMock([
@@ -302,8 +304,8 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
       ssrfPolicy: {
         allowPrivateNetwork: true,
         allowedHostnames: ["1.1.1.1"],
-        hostnameAllowlist: ["1.1.1.1"],
       },
+      waitForNavigationResult: true,
       timeouts: {
         httpTimeoutMs: 4321,
         handshakeTimeoutMs: 8765,
@@ -315,7 +317,7 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
     vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
     const createTargetViaCdp = vi
       .spyOn(deps.cdpModule, "createTargetViaCdp")
-      .mockResolvedValue({ targetId: "T_ATTACH" });
+      .mockResolvedValue({ targetId: "T_ATTACH", finalUrl: "https://example.com" });
     const state = deps.makeState("openclaw");
     state.resolved.remoteCdpTimeoutMs = 2345;
     state.resolved.remoteCdpHandshakeTimeoutMs = 6789;
@@ -345,6 +347,8 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
       cdpUrl: "http://127.0.0.1:18800",
       url: "https://example.com",
       ssrfPolicy: undefined,
+      signal: expect.any(AbortSignal),
+      waitForNavigationResult: true,
       timeouts: {
         httpTimeoutMs: 2345,
         handshakeTimeoutMs: 6789,
@@ -356,7 +360,7 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
     vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
     const createTargetViaCdp = vi
       .spyOn(deps.cdpModule, "createTargetViaCdp")
-      .mockResolvedValue({ targetId: "T_LOCAL" });
+      .mockResolvedValue({ targetId: "T_LOCAL", finalUrl: "http://127.0.0.1:3000" });
     const state = deps.makeState("openclaw");
     const fetchMock = vi.fn(
       deps.createJsonListFetchMock([
@@ -378,6 +382,8 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
       cdpUrl: "http://127.0.0.1:18800",
       url: "http://127.0.0.1:3000",
       ssrfPolicy: undefined,
+      signal: expect.any(AbortSignal),
+      waitForNavigationResult: true,
     });
   });
 
@@ -412,9 +418,11 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
 
     expect(Date.now() - startedAt).toBeLessThan(700);
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [fetchUrl, fetchInit] =
-      (fetchMock.mock.calls as Array<[string | URL, RequestInit & { dispatcher?: unknown }]>)[0] ??
-      [];
+    const call = expectDefined(
+      (fetchMock.mock.calls as Array<[string | URL, RequestInit & { dispatcher?: unknown }]>)[0],
+      "remote profile fetch call",
+    );
+    const [fetchUrl, fetchInit] = call;
     expect(String(fetchUrl)).toBe(
       "https://1.1.1.1:9222/chrome/json/new?token=abc&url=https%3A%2F%2Fexample.com",
     );

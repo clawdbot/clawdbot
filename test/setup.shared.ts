@@ -15,7 +15,6 @@ vi.mock("../src/llm/oauth.js", () => ({
       ...args,
     ),
   ),
-  resetOAuthProviders: vi.fn(),
 }));
 
 vi.mock("@mariozechner/clipboard", () => ({

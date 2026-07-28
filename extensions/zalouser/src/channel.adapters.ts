@@ -6,6 +6,10 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
+  resolveScopeRequireMention,
+  resolveScopeToolsPolicy,
+} from "openclaw/plugin-sdk/channel-policy";
+import {
   createEmptyChannelResult,
   type ChannelOutboundAdapter,
   type OutboundDeliveryResult,
@@ -35,7 +39,7 @@ import {
   normalizeAccountId,
   sendPayloadWithChunkedTextAndMedia,
 } from "./channel-api.js";
-import { buildZalouserGroupCandidates, findZalouserGroupEntry } from "./group-policy.js";
+import { buildZalouserGroupCandidates, resolveZalouserGroupScope } from "./group-policy.js";
 import { resolveZalouserReactionMessageIds } from "./message-sid.js";
 import { writeQrDataUrlToTempFile } from "./qr-temp-file.js";
 import { getZalouserRuntime } from "./runtime.js";
@@ -89,18 +93,17 @@ function toZalouserMessageSendResult(result: ZaloSendResult): ChannelMessageSend
   };
 }
 
-function resolveZalouserGroupPolicyEntry(params: ChannelGroupContext) {
+function resolveZalouserGroupPolicyScope(params: ChannelGroupContext) {
   const account = resolveZalouserAccountSync({
     cfg: params.cfg,
     accountId: params.accountId ?? undefined,
   });
-  const groups = account.config.groups ?? {};
-  return findZalouserGroupEntry(
-    groups,
+  return resolveZalouserGroupScope(
+    account.config.groups,
     buildZalouserGroupCandidates({
       groupId: params.groupId,
       groupChannel: params.groupChannel,
-      includeWildcard: true,
+      // The adapter falls back to the "*" entry when no candidate matches.
       allowNameMatching: isDangerousNameMatchingEnabled(account.config),
     }),
   );
@@ -109,15 +112,11 @@ function resolveZalouserGroupPolicyEntry(params: ChannelGroupContext) {
 function resolveZalouserGroupToolPolicy(
   params: ChannelGroupContext,
 ): GroupToolPolicyConfig | undefined {
-  return resolveZalouserGroupPolicyEntry(params)?.tools;
+  return resolveScopeToolsPolicy(resolveZalouserGroupPolicyScope(params));
 }
 
 function resolveZalouserRequireMention(params: ChannelGroupContext): boolean {
-  const entry = resolveZalouserGroupPolicyEntry(params);
-  if (typeof entry?.requireMention === "boolean") {
-    return entry.requireMention;
-  }
-  return true;
+  return resolveScopeRequireMention(resolveZalouserGroupPolicyScope(params));
 }
 
 async function sendZalouserTextFromContext({
