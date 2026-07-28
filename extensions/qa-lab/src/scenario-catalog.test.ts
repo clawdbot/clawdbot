@@ -337,23 +337,18 @@ describe("qa scenario catalog", () => {
 
   it("reserves Gateway-hosted Control UI proof for the real Gateway flow", () => {
     const coverageId = `${browserUi}.gateway-hosted-ui-control`;
-    const scenarios = readQaScenarioPack().scenarios;
+    const primaryOwnerIds = readQaScenarioPack()
+      .scenarios.filter((scenario) => scenario.coverage?.primary.includes(coverageId))
+      .map((scenario) => scenario.id);
+    expect(primaryOwnerIds).toStrictEqual(["control-ui-qa-channel-image-roundtrip"]);
 
-    expect(
-      scenarios
-        .filter((scenario) => scenario.coverage?.primary.includes(coverageId))
-        .map((scenario) => scenario.id),
-    ).toStrictEqual(["control-ui-qa-channel-image-roundtrip"]);
-
-    for (const scenarioId of [
-      "control-ui-chat-flow-playwright",
-      "control-ui-plan-replay-reconnect",
+    for (const scenario of [
+      readQaScenarioById("control-ui-chat-flow-playwright"),
+      readQaScenarioById("control-ui-plan-replay-reconnect"),
     ]) {
-      const scenario = readQaScenarioById(scenarioId);
-
-      expect(scenario.execution.kind, scenarioId).toBe("playwright");
-      expect(scenario.coverage?.primary, scenarioId).not.toContain(coverageId);
-      expect(scenario.coverage?.secondary, scenarioId).toContain(coverageId);
+      expect(scenario.execution.kind, scenario.id).toBe("playwright");
+      expect(scenario.coverage?.primary, scenario.id).not.toContain(coverageId);
+      expect(scenario.coverage?.secondary, scenario.id).toContain(coverageId);
     }
 
     const hostedScenario = readQaScenarioById("control-ui-qa-channel-image-roundtrip");
