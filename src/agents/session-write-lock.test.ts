@@ -191,15 +191,16 @@ describe("acquireSessionWriteLock", () => {
   it("reuses locks across symlinked session paths", async () => {
     await withSymlinkedSessionPaths(
       async ({ sessionReal, sessionLink, realLockPath, linkLockPath }) => {
+        const reentrantOwner = "session:symlink-alias-test";
         const lockA = await acquireSessionWriteLock({
           sessionFile: sessionReal,
           timeoutMs: 500,
-          allowReentrant: true,
+          reentrantOwner,
         });
         const lockB = await acquireSessionWriteLock({
           sessionFile: sessionLink,
           timeoutMs: 500,
-          allowReentrant: true,
+          reentrantOwner,
         });
 
         await expect(fs.access(realLockPath)).resolves.toBeUndefined();
@@ -220,15 +221,16 @@ describe("acquireSessionWriteLock", () => {
 
   it("keeps the lock file until the last release", async () => {
     await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
+      const reentrantOwner = "session:final-release-test";
       const lockA = await acquireSessionWriteLock({
         sessionFile,
         timeoutMs: 500,
-        allowReentrant: true,
+        reentrantOwner,
       });
       const lockB = await acquireSessionWriteLock({
         sessionFile,
         timeoutMs: 500,
-        allowReentrant: true,
+        reentrantOwner,
       });
 
       await expectLockRemovedOnlyAfterFinalRelease({

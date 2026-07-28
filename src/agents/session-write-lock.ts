@@ -1353,6 +1353,8 @@ export async function acquireSessionWriteLock(params: {
   timeoutMs?: number;
   staleMs?: number;
   maxHoldMs?: number;
+  /** Process-local identity for intentional nesting on retained file-lock targets. */
+  reentrantOwner?: string;
   allowReentrant?: boolean;
   signal?: AbortSignal;
   targetKind?: "file" | "session-key";
@@ -1425,7 +1427,7 @@ export async function acquireSessionWriteLock(params: {
         timeoutMs: acquireAttemptTimeoutMs,
         retry: { minTimeout: 50, maxTimeout: 1000, factor: 1 },
         staleRecovery: "remove-if-unchanged",
-        allowReentrant,
+        reentrantOwner: params.reentrantOwner,
         metadata: { maxHoldMs },
         payload: () => {
           const createdAt = new Date().toISOString();
