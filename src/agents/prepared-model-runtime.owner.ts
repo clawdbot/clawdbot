@@ -51,6 +51,8 @@ export type PreparedModelRuntimeSnapshot = Readonly<{
   workspaceDir?: string;
   /** Run-prepared repository root; null means discovery completed without a match. */
   repoRoot?: string | null;
+  /** Stable identity derived from repoRoot; null means the run is outside a repository. */
+  projectKey?: string | null;
   config: OpenClawConfig;
   metadataSnapshot: PluginMetadataSnapshot;
   messageToolCatalog?: PreparedMessageToolCatalog;

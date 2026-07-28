@@ -35,6 +35,7 @@ export {
   normalizeExtraMemoryPaths,
   parseEmbedding,
   readMemoryFile,
+  readCuratedProjectMemoryCandidates,
   readCuratedMemoryTriggerCandidates,
   readMemoryRecallMetadata,
   retryTransientMemoryRead,

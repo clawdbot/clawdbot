@@ -62,6 +62,7 @@ export {
 } from "./host/memory-schema.js";
 export { loadSqliteVecExtension } from "./host/sqlite-vec.js";
 export {
+  readCuratedProjectMemoryCandidates,
   readCuratedMemoryTriggerCandidates,
   readMemoryRecallMetadata,
 } from "./host/memory-recall-metadata.js";

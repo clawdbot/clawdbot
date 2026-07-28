@@ -818,6 +818,8 @@ export function buildAgentSystemPrompt(params: {
   preparedMemoryPrompt?: PreparedMemoryPromptSection;
   /** Watched same-agent group sessions prepared before synchronous prompt assembly. */
   preparedWatchedSessions?: PreparedWatchedSessionsPrompt;
+  /** Per-turn learned facts restricted to the currently active repository. */
+  projectMemoryBootstrap?: string[];
   promptContribution?: ProviderSystemPromptContribution;
 }) {
   const acpEnabled = params.acpEnabled === true;
@@ -1057,16 +1059,19 @@ export function buildAgentSystemPrompt(params: {
   const skillWorkshopSection = availableTools.has(SKILL_WORKSHOP_TOOL_NAME)
     ? buildSkillWorkshopPromptSection()
     : [];
-  const memorySection = buildMemorySection({
-    isMinimal,
-    includeMemorySection: params.includeMemorySection,
-    availableTools,
-    citationsMode: params.memoryCitationsMode,
-    agentId: params.runtimeInfo?.agentId,
-    agentSessionKey: params.runtimeInfo?.sessionKey,
-    sandboxed: params.sandboxInfo?.enabled === true,
-    prepared: params.preparedMemoryPrompt,
-  });
+  const memorySection = [
+    ...buildMemorySection({
+      isMinimal,
+      includeMemorySection: params.includeMemorySection,
+      availableTools,
+      citationsMode: params.memoryCitationsMode,
+      agentId: params.runtimeInfo?.agentId,
+      agentSessionKey: params.runtimeInfo?.sessionKey,
+      sandboxed: params.sandboxInfo?.enabled === true,
+      prepared: params.preparedMemoryPrompt,
+    }),
+    ...normalizeStringEntries(params.projectMemoryBootstrap),
+  ];
   const docsSection = buildDocsSection({
     docsPath: params.docsPath,
     sourcePath: params.sourcePath,

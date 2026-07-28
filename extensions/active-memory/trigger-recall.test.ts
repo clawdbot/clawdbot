@@ -82,6 +82,48 @@ describe("active-memory trigger recall", () => {
     expect(provenanceMatches.map((entry) => entry.path)).toEqual(["memory/owner.md"]);
   });
 
+  it("gates tagged entries to the active project while leaving global entries unchanged", () => {
+    const activeKey = "github.com/openclaw/openclaw";
+    const sameProject = result({ projectKey: activeKey, startLine: 1 });
+    const foreignProject = result({ projectKey: "github.com/example/other", startLine: 2 });
+    const global = result({ startLine: 3 });
+
+    expect(
+      selectStrongTriggerMatches(
+        "when booking a flight",
+        [sameProject, foreignProject, global],
+        [activeKey],
+      ).map((entry) => entry.startLine),
+    ).toEqual([1, 3]);
+    expect(
+      selectStrongTriggerMatches(
+        "when booking a flight",
+        [sameProject, foreignProject, global],
+        [],
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("requires every project on a mixed chunk to be active before trigger injection", () => {
+    const mixed = result({
+      projectKey: "github.com/openclaw/openclaw; github.com/example/other",
+    });
+    expect(
+      selectStrongTriggerMatches(
+        "when booking a flight",
+        [mixed],
+        ["github.com/openclaw/openclaw"],
+      ),
+    ).toEqual([]);
+    expect(
+      selectStrongTriggerMatches(
+        "when booking a flight",
+        [mixed],
+        ["github.com/openclaw/openclaw", "github.com/example/other"],
+      ),
+    ).toHaveLength(1);
+  });
+
   it("searches lexical-only so the reply path never embeds the query", async () => {
     hoisted.search.mockResolvedValue([result()]);
     hoisted.listTriggerCandidates.mockResolvedValue([]);
@@ -90,11 +132,15 @@ describe("active-memory trigger recall", () => {
       agentId: "main",
       query: "flight booking",
       message: "Help when booking a flight",
+      activeProjectKeys: ["github.com/openclaw/openclaw"],
     });
     expect(hoisted.search).toHaveBeenCalledWith(
       "flight booking",
       expect.objectContaining({ lexicalOnly: true, qmdSearchModeOverride: "search" }),
     );
+    expect(hoisted.listTriggerCandidates).toHaveBeenCalledWith({
+      activeProjectKeys: ["github.com/openclaw/openclaw"],
+    });
   });
 
   it("skips backends that cannot enumerate curated trigger candidates", async () => {

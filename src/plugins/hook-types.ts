@@ -259,6 +259,8 @@ export type PluginHookAgentContext = {
   sessionKey?: string;
   sessionId?: string;
   workspaceDir?: string;
+  /** Run-prepared repository identities; empty when the turn is outside a repository. */
+  activeProjectKeys?: string[];
   modelProviderId?: string;
   modelId?: string;
   messageProvider?: string;

@@ -16,6 +16,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { extractKeywords } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
+  readCuratedProjectMemoryCandidates,
   readMemoryFile,
   readCuratedMemoryTriggerCandidates,
   readMemoryRecallMetadata,
@@ -1115,6 +1116,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       sessionKey?: string;
       /** Keyword/FTS only: skip query embedding and vector search (reply-path contract). */
       lexicalOnly?: boolean;
+      activeProjectKeys?: string[];
       qmdSearchModeOverride?: "query" | "search" | "vsearch";
       onDebug?: (debug: MemorySearchRuntimeDebug) => void;
       /** When set, only these chunk sources are considered (must be enabled for this manager). */
@@ -1440,6 +1442,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         textWeight: hybrid.textWeight,
         mmr: hybrid.mmr,
         temporalDecay: hybrid.temporalDecay,
+        activeProjectKeys: opts?.activeProjectKeys,
       });
       const strict = merged.filter((entry) => entry.score >= minScore);
       if (strict.length > 0 || keywordResults.length === 0) {
@@ -1479,9 +1482,41 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     return results.filter((entry) => entry.score >= relaxedMinScore).slice(0, maxResults);
   }
 
-  async listTriggerCandidates(opts?: { limit?: number }): Promise<MemorySearchResult[]> {
+  async listTriggerCandidates(opts?: {
+    limit?: number;
+    activeProjectKeys?: string[];
+  }): Promise<MemorySearchResult[]> {
     const limit = Math.max(1, Math.min(512, Math.floor(opts?.limit ?? 512)));
-    return readCuratedMemoryTriggerCandidates(this.db, limit).map((row) => {
+    return readCuratedMemoryTriggerCandidates(this.db, limit, opts?.activeProjectKeys).map(
+      (row) => {
+        const result: MemorySearchResult = {
+          path: row.path,
+          startLine: row.start_line,
+          endLine: row.end_line,
+          score: 0,
+          snippet: row.text,
+          source: "memory",
+        };
+        if (typeof row.importance === "number") {
+          result.importance = row.importance;
+        }
+        if (typeof row.triggers === "string" && row.triggers.trim()) {
+          result.triggers = row.triggers.trim();
+        }
+        if (typeof row.project_key === "string" && row.project_key.trim()) {
+          result.projectKey = row.project_key.trim();
+        }
+        return result;
+      },
+    );
+  }
+
+  async listCuratedProjectCandidates(opts: {
+    activeProjectKeys: string[];
+    limit?: number;
+  }): Promise<MemorySearchResult[]> {
+    const limit = Math.max(1, Math.min(512, Math.floor(opts.limit ?? 48)));
+    return readCuratedProjectMemoryCandidates(this.db, limit, opts.activeProjectKeys).map((row) => {
       const result: MemorySearchResult = {
         path: row.path,
         startLine: row.start_line,
@@ -1495,6 +1530,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       }
       if (typeof row.triggers === "string" && row.triggers.trim()) {
         result.triggers = row.triggers.trim();
+      }
+      if (typeof row.project_key === "string" && row.project_key.trim()) {
+        result.projectKey = row.project_key.trim();
       }
       return result;
     });
@@ -1599,6 +1637,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         ...(typeof row?.importance === "number" ? { importance: row.importance } : {}),
         ...(typeof row?.triggers === "string" && row.triggers.trim()
           ? { triggers: row.triggers.trim() }
+          : {}),
+        ...(typeof row?.project_key === "string" && row.project_key.trim()
+          ? { projectKey: row.project_key.trim() }
           : {}),
       };
     });
@@ -1808,6 +1849,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     textWeight: number;
     mmr?: { enabled: boolean; lambda: number };
     temporalDecay?: { enabled: boolean; halfLifeDays: number };
+    activeProjectKeys?: string[];
   }): Promise<MemorySearchResult[]> {
     return mergeHybridResults({
       vector: params.vector.map((r) => ({
@@ -1820,6 +1862,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         vectorScore: r.score,
         importance: r.importance,
         triggers: r.triggers,
+        projectKey: r.projectKey,
         exactPathSpecificity: resolveExactPathSpecificity(params.query, r.path),
         ...(r.provenance ? { provenance: r.provenance } : {}),
       })),
@@ -1833,6 +1876,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         textScore: r.textScore,
         importance: r.importance,
         triggers: r.triggers,
+        projectKey: r.projectKey,
         rankingScore: r.score,
         pathScore: r.pathScore,
         exactPathSpecificity: r.exactPathSpecificity,
@@ -1844,6 +1888,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         classifyMemoryMultimodalPath(path, this.settings.multimodal) !== null,
       mmr: params.mmr,
       temporalDecay: params.temporalDecay,
+      activeProjectKeys: params.activeProjectKeys,
       workspaceDir: this.workspaceDir,
     }).then((entries) => entries.map((entry) => entry as MemorySearchResult));
   }

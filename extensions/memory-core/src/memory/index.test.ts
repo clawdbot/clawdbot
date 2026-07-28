@@ -619,8 +619,8 @@ describe("memory index", () => {
     await fs.writeFile(
       path.join(workspaceDir, "MEMORY.md"),
       [
-        "- Keep the gateway local. <!-- trigger: gateway setup, local access --> <!-- importance: 4 -->",
-        "- Preserve loopback binding. <!-- trigger: local access; network safety --> <!-- importance: 9 -->",
+        "- Keep the gateway local. <!-- trigger: gateway setup, local access --> <!-- importance: 4 --> <!-- project: GitHub.com/OpenClaw/OpenClaw -->",
+        "- Preserve loopback binding. <!-- trigger: local access; network safety --> <!-- importance: 9 --> <!-- project: github.com/openclaw/openclaw -->",
       ].join("\n"),
     );
     await fs.writeFile(
@@ -629,7 +629,14 @@ describe("memory index", () => {
     );
     await fs.writeFile(
       path.join(memoryDir, "2026-01-12.md"),
-      "- Daily note. <!-- trigger: should not inject --> <!-- importance: 10 -->\n",
+      "- Daily note. <!-- trigger: should not inject --> <!-- importance: 10 --> <!-- project: github.com/openclaw/openclaw -->\n",
+    );
+    await fs.writeFile(
+      path.join(memoryDir, "2026-01-13.md"),
+      [
+        "- Uppercase path. <!-- project: path:/Users/Alice/Repo -->",
+        "- Lowercase path. <!-- project: path:/Users/alice/repo -->",
+      ].join("\n"),
     );
 
     const manager = await getFreshManager(createCfg({ provider: "none" }));
@@ -638,7 +645,7 @@ describe("memory index", () => {
       const db = Reflect.get(manager, "db") as DatabaseSync;
       const rows = db
         .prepare(
-          `SELECT chunk.path, chunk.importance, chunk.triggers,
+          `SELECT chunk.path, chunk.importance, chunk.triggers, chunk.project_key AS projectKey,
                   provenance.origin_class AS originClass
            FROM memory_index_chunks AS chunk
            JOIN memory_index_chunk_provenance AS provenance
@@ -650,22 +657,32 @@ describe("memory index", () => {
         path: string;
         importance: number | null;
         triggers: string | null;
+        projectKey: string | null;
         originClass: string;
       }>;
 
       expect(rows.find((row) => row.path === "MEMORY.md")).toMatchObject({
         importance: 9,
         triggers: "gateway setup; local access; network safety",
+        projectKey: "github.com/openclaw/openclaw",
         originClass: "agent",
       });
       expect(rows.find((row) => row.path === "USER.md")).toMatchObject({
         importance: 7,
         triggers: "writing style",
+        projectKey: null,
         originClass: "agent",
       });
       expect(rows.find((row) => row.path === "memory/2026-01-12.md")).toMatchObject({
         importance: null,
         triggers: null,
+        projectKey: "github.com/openclaw/openclaw",
+        originClass: "agent",
+      });
+      expect(rows.find((row) => row.path === "memory/2026-01-13.md")).toMatchObject({
+        importance: null,
+        triggers: null,
+        projectKey: "path:/Users/Alice/Repo; path:/Users/alice/repo",
         originClass: "agent",
       });
     } finally {

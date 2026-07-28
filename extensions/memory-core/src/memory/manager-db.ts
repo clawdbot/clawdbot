@@ -199,11 +199,11 @@ export async function publishMemoryDatabaseTables(params: {
         DELETE FROM main.memory_index_chunks;
         INSERT INTO main.memory_index_chunks (
           id, path, source, start_line, end_line, hash, model, text, embedding,
-          importance, triggers, updated_at
+          importance, triggers, project_key, updated_at
         )
         SELECT
           id, path, source, start_line, end_line, hash, model, text, embedding,
-          importance, triggers, updated_at
+          importance, triggers, project_key, updated_at
         FROM ${MEMORY_REINDEX_SCHEMA}.memory_index_chunks;
 
         DELETE FROM main.memory_index_chunk_provenance;

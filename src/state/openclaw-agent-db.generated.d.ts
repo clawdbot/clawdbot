@@ -151,6 +151,7 @@ export interface MemoryIndexChunks {
   importance: number | null;
   model: string;
   path: string;
+  project_key: string | null;
   source: Generated<string>;
   start_line: number;
   text: string;

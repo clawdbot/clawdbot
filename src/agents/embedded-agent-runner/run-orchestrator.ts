@@ -31,6 +31,7 @@ import {
   acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
 } from "../prepared-model-runtime.js";
+import { resolveProjectKey } from "../project-memory-scope.js";
 import {
   applyAgentRunSessionTargetIdentity,
   resolveAgentRunSessionTarget,
@@ -226,14 +227,17 @@ async function runEmbeddedAgentInternal(
         });
         params = rebound.runParams;
         const workspaceResolution = rebound.workspaceResolution;
+        const repoRoot =
+          resolveSystemPromptRepoRoot({
+            config: rebound.runParams.config,
+            workspaceDir: workspaceResolution.workspaceDir,
+            cwd: rebound.runParams.cwd,
+          }) ?? null;
+        const projectKey = repoRoot ? await resolveProjectKey(repoRoot) : null;
         const preparedModelRuntime = Object.freeze({
           ...preparedModelRuntimeOwnerSnapshot,
-          repoRoot:
-            resolveSystemPromptRepoRoot({
-              config: rebound.runParams.config,
-              workspaceDir: workspaceResolution.workspaceDir,
-              cwd: rebound.runParams.cwd,
-            }) ?? null,
+          repoRoot,
+          projectKey,
         });
         const preparedAgentId = workspaceResolution.agentId;
         const resolvedWorkspace = workspaceResolution.workspaceDir;

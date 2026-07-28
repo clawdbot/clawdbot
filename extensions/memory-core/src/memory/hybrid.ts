@@ -22,6 +22,7 @@ type HybridVectorResult = {
   vectorScore: number;
   importance?: number;
   triggers?: string;
+  projectKey?: string;
   exactPathSpecificity?: ExactPathSpecificity;
   provenance?: MemoryEntryProvenance;
 };
@@ -36,6 +37,7 @@ type HybridKeywordResult = {
   textScore: number;
   importance?: number;
   triggers?: string;
+  projectKey?: string;
   rankingScore?: number;
   pathScore?: number;
   exactPathSpecificity?: ExactPathSpecificity;
@@ -79,6 +81,7 @@ export async function mergeHybridResults(params: {
   temporalDecay?: Partial<TemporalDecayConfig>;
   /** Test hook for deterministic time-dependent behavior */
   nowMs?: number;
+  activeProjectKeys?: string[];
 }): Promise<
   Array<{
     path: string;
@@ -91,6 +94,7 @@ export async function mergeHybridResults(params: {
     source: HybridSource;
     importance?: number;
     triggers?: string;
+    projectKey?: string;
     provenance?: MemoryEntryProvenance;
   }>
 > {
@@ -112,6 +116,7 @@ export async function mergeHybridResults(params: {
       hasKeyword: boolean;
       importance?: number;
       triggers?: string;
+      projectKey?: string;
       provenance?: MemoryEntryProvenance;
     }
   >();
@@ -133,6 +138,7 @@ export async function mergeHybridResults(params: {
       hasKeyword: false,
       importance: r.importance,
       triggers: r.triggers,
+      projectKey: r.projectKey,
       ...(r.provenance ? { provenance: r.provenance } : {}),
     });
   }
@@ -151,6 +157,7 @@ export async function mergeHybridResults(params: {
       existing.hasKeyword = true;
       existing.importance ??= r.importance;
       existing.triggers ??= r.triggers;
+      existing.projectKey ??= r.projectKey;
       if (!existing.provenance && r.provenance) {
         existing.provenance = r.provenance;
       }
@@ -174,6 +181,7 @@ export async function mergeHybridResults(params: {
         hasKeyword: true,
         importance: r.importance,
         triggers: r.triggers,
+        projectKey: r.projectKey,
         ...(r.provenance ? { provenance: r.provenance } : {}),
       });
     }
@@ -222,6 +230,7 @@ export async function mergeHybridResults(params: {
       source: entry.source,
       importance: entry.importance,
       triggers: entry.triggers,
+      projectKey: entry.projectKey,
     };
     if (entry.provenance) {
       Object.assign(result, { provenance: entry.provenance });
@@ -237,7 +246,10 @@ export async function mergeHybridResults(params: {
     workspaceDir: params.workspaceDir,
     nowMs: params.nowMs,
   });
-  const rankable = applyImportanceMultiplier(decayed).map((entry) => {
+  const rankable = applyProjectMultiplier(
+    applyImportanceMultiplier(decayed),
+    params.activeProjectKeys,
+  ).map((entry) => {
     // Specificity owns cross-tier precedence. Keep the decayed weighted score
     // separately for within-tier ranking while exact public scores stay at 1.
     const exactPathTieScore = entry.score;
@@ -296,4 +308,38 @@ export async function mergeHybridResults(params: {
       ...entry
     }) => entry,
   );
+}
+
+export function projectMultiplier(
+  projectKey: string | null | undefined,
+  activeProjectKeys: readonly string[] | undefined,
+): number {
+  if (!projectKey || !activeProjectKeys || activeProjectKeys.length === 0) {
+    return 1;
+  }
+  const storedProjectKeys = splitProjectKeys(projectKey);
+  return storedProjectKeys.some((key) => activeProjectKeys.includes(key)) ? 1.15 : 0.9;
+}
+
+export function splitProjectKeys(projectKey: string | null | undefined): string[] {
+  return projectKey
+    ? [
+        ...new Set(
+          projectKey
+            .split(";")
+            .map((key) => key.trim())
+            .filter(Boolean),
+        ),
+      ]
+    : [];
+}
+
+export function applyProjectMultiplier<T extends { score: number; projectKey?: string }>(
+  results: T[],
+  activeProjectKeys?: readonly string[],
+): T[] {
+  return results.map((entry) => ({
+    ...entry,
+    score: entry.score * projectMultiplier(entry.projectKey, activeProjectKeys),
+  }));
 }

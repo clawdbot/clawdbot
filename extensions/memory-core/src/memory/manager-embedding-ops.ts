@@ -98,6 +98,7 @@ type MemoryIndexEntry = MemoryIndexWorkItem["entry"];
 type IndexedMemoryChunk = MemoryChunk & {
   importance: number | null;
   triggers: string | null;
+  projectKey: string | null;
 };
 
 type PreparedMemoryIndexEntry = {
@@ -107,36 +108,63 @@ type PreparedMemoryIndexEntry = {
   structuredInputBytes?: number;
 };
 
+function normalizeProjectAnnotationKey(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed || /[\r\n<>]/u.test(trimmed)) {
+    return null;
+  }
+  return trimmed.startsWith("path:") ? trimmed : trimmed.toLowerCase();
+}
+
 function resolveChunkRecallMetadata(params: {
   curatedRoot: boolean;
+  projectScopeEligible: boolean;
   content?: string;
   chunk: MemoryChunk;
-}): Pick<IndexedMemoryChunk, "importance" | "triggers"> {
-  if (!params.curatedRoot || params.content === undefined) {
-    return { importance: null, triggers: null };
+}): Pick<IndexedMemoryChunk, "importance" | "triggers" | "projectKey"> {
+  if ((!params.curatedRoot && !params.projectScopeEligible) || params.content === undefined) {
+    return { importance: null, triggers: null, projectKey: null };
   }
 
   const phrases = new Set<string>();
+  const projectKeys = new Set<string>();
   let importance: number | null = null;
   const lines = params.content.replace(/\r\n/gu, "\n").split("\n");
   for (const line of lines.slice(params.chunk.startLine - 1, params.chunk.endLine)) {
     const annotationSuffix = line.match(
-      /(?:\s*<!--\s*(?:trigger|importance)\s*:[\s\S]*?-->\s*)+$/iu,
+      /(?:\s*<!--\s*(?:trigger|importance|project)\s*:[\s\S]*?-->\s*)+$/iu,
     )?.[0];
     if (!annotationSuffix) {
       continue;
     }
     for (const match of annotationSuffix.matchAll(
-      /<!--\s*(trigger|importance)\s*:\s*([\s\S]*?)\s*-->/giu,
+      /<!--\s*(trigger|importance|project)\s*:\s*([\s\S]*?)\s*-->/giu,
     )) {
       const kind = match[1]?.toLowerCase();
       const value = match[2]?.trim() ?? "";
       if (kind === "trigger") {
+        if (!params.curatedRoot) {
+          continue;
+        }
         for (const phrase of value.split(/[,;]/u).map((entry) => entry.trim())) {
           if (phrase) {
             phrases.add(phrase);
           }
         }
+        continue;
+      }
+      if (kind === "project") {
+        if (params.projectScopeEligible) {
+          for (const rawKey of value.split(";")) {
+            const projectKey = normalizeProjectAnnotationKey(rawKey);
+            if (projectKey) {
+              projectKeys.add(projectKey);
+            }
+          }
+        }
+        continue;
+      }
+      if (!params.curatedRoot) {
         continue;
       }
       if (/^\d+$/u.test(value)) {
@@ -153,6 +181,9 @@ function resolveChunkRecallMetadata(params: {
   return {
     importance,
     triggers: phrases.size > 0 ? [...phrases].join("; ") : null,
+    // Preserve every scope on mixed chunks: ranking can boost on any match,
+    // while lane-1 requires all keys active so no sibling project's text leaks.
+    projectKey: projectKeys.size > 0 ? [...projectKeys].join("; ") : null,
   };
 }
 
@@ -969,8 +1000,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         );
         this.db
           .prepare(
-            `INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at, importance, triggers)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at, importance, triggers, project_key)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                hash=excluded.hash,
                model=excluded.model,
@@ -978,7 +1009,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
                embedding=excluded.embedding,
                updated_at=excluded.updated_at,
                importance=excluded.importance,
-               triggers=excluded.triggers`,
+               triggers=excluded.triggers,
+               project_key=excluded.project_key`,
           )
           .run(
             id,
@@ -993,6 +1025,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
             now,
             chunk.importance,
             chunk.triggers,
+            chunk.projectKey,
           );
         const provenance = chunk.provenance ?? {
           originClass: "untrusted" as const,
@@ -1070,6 +1103,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         ...multimodalChunk.chunk,
         importance: null,
         triggers: null,
+        projectKey: null,
       };
       chunk.provenance = this.resolveChunkProvenance(
         entry,
@@ -1115,6 +1149,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           chunk,
           resolveChunkRecallMetadata({
             curatedRoot: pathClassification.curatedRoot,
+            projectScopeEligible:
+              options.source === "memory" &&
+              entry.path.replaceAll("\\", "/").toUpperCase() !== "USER.MD",
             content,
             chunk,
           }),

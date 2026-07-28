@@ -95,6 +95,7 @@ export function buildEmbeddedSystemPrompt(params: {
   memoryCitationsMode?: MemoryCitationsMode;
   preparedMemoryPrompt?: PreparedMemoryPromptSection;
   preparedWatchedSessions?: PreparedWatchedSessionsPrompt;
+  projectMemoryBootstrap?: string[];
   promptContribution?: ProviderSystemPromptContribution;
 }): string {
   return buildConfiguredAgentSystemPrompt({
@@ -142,6 +143,7 @@ export function buildEmbeddedSystemPrompt(params: {
     memoryCitationsMode: params.memoryCitationsMode,
     preparedMemoryPrompt: params.preparedMemoryPrompt,
     preparedWatchedSessions: params.preparedWatchedSessions,
+    projectMemoryBootstrap: params.projectMemoryBootstrap,
     promptContribution: params.promptContribution,
   });
 }
