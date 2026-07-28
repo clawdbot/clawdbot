@@ -273,7 +273,10 @@ export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
     ...[...categories.keys()]
       .filter((name) => !knownGroups.includes(name))
       .toSorted((a, b) => a.localeCompare(b)),
-  ];
+  ]
+    // Filter out categories that have no rows for the current scoped selection
+    .filter((category) => (categories.get(category) ?? []).length > 0);
+
   const orderedSections: SidebarSessionSection<Row>[] = orderedCategories.map((category) => ({
     id: `category:${category}`,
     category,
