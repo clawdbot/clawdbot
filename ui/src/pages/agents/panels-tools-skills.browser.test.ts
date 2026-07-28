@@ -1,8 +1,19 @@
 // Control UI tests cover agents panels tools skills behavior.
 import { render } from "lit";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { SkillStatusEntry } from "../../api/types.ts";
 import { renderAgentSkills, renderAgentTools } from "./panels-tools-skills.ts";
+
+// Clicking a runtime chip drives `panels-tools-skills.ts` to set the window
+// fragment to that tool's anchor. The repo `ui` shard runs this file in the
+// shared jsdom graph (`test/vitest/vitest.ui.config.ts`, isolate:false), so a
+// fragment left behind leaks into any later file that asserts on the ambient
+// hash.
+afterEach(() => {
+  if (window.location.hash) {
+    window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+  }
+});
 
 function createBaseParams(overrides: Partial<Parameters<typeof renderAgentTools>[0]> = {}) {
   return {
