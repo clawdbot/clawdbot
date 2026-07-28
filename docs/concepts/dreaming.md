@@ -124,10 +124,11 @@ Session backfill uses canonical retained transcript identities, including
 sessions preserved across rotation. Messages are bucketed in the configured
 dreaming timezone and share live ingestion's tracked message hashes and signal
 caps, so bounded reruns continue forward without re-ingesting prior messages.
-Foreign files supplied with `--archive-files` are treated conservatively:
-only messages with structural owner provenance, plus the agent responses in
-those owner turns, can become candidates. Tool output, web content, and
-non-owner turns never enter short-term staging.
+Foreign files supplied with `--archive-files` are treated conservatively. Their
+embedded ownership fields are caller-controlled and therefore remain untrusted;
+without an authenticated provenance contract, they cannot enter short-term
+staging. Tool output, web content, and non-owner turns are excluded from the
+canonical session path as well.
 
 The Control UI exposes the same diary backfill/reset flow on the agent's Memory tab (Agents page) so you can inspect results in the dream scene before deciding whether grounded candidates deserve promotion. A distinct grounded Scene lane shows which staged short-term entries came from historical replay, which promoted items were grounded-led, and lets you clear only grounded-only staged entries without touching live short-term state.
 

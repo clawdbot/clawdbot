@@ -156,7 +156,7 @@ openclaw memory session-backfill --agent <id> --rollback [--json]
 | `--from YYYY-MM-DD`         |              | Include messages on or after this day in the dreaming timezone.                                               |
 | `--to YYYY-MM-DD`           |              | Include messages on or before this day in the dreaming timezone.                                              |
 | `--limit-days <n>`          | `92`         | Process at most this many hash-untracked days, oldest first.                                                  |
-| `--archive-files <path...>` |              | Also inspect foreign transcript files; only provably owner-authored turns are eligible.                       |
+| `--archive-files <path...>` |              | Also inspect foreign transcript files as untrusted input; embedded owner metadata is not accepted.            |
 | `--rem`                     |              | Write deterministic grounded per-day previews to `DREAMS.md` only.                                            |
 | `--apply`                   | preview only | Stage trusted candidates and write reversible `DREAMS.md` diary blocks.                                       |
 | `--rollback`                |              | Remove all grounded backfill candidates and shared backfill diary blocks, including `rem-backfill` artifacts. |
@@ -165,9 +165,11 @@ openclaw memory session-backfill --agent <id> --rollback [--json]
 The command reads the selected agent's canonical session store, including
 retained SQLite transcript identities from session rotation. It uses the same
 tracked message hashes and per-run caps as live session ingestion, so repeated
-`--apply` runs skip already ingested messages. Owner and agent lines are
-eligible; tool output, web or non-owner input, and turns without trustworthy
-owner provenance are excluded.
+`--apply` runs skip already ingested messages. Owner and agent lines from the
+canonical store are eligible; tool output, web or non-owner input, and turns
+without trustworthy owner provenance are excluded. Foreign archive files have
+no authenticated owner-provenance contract, so their embedded ownership fields
+remain untrusted and cannot be staged.
 
 `--apply` writes only the session corpus under `memory/.dreams/`, short-term
 staging state, and reversible diary entries in `DREAMS.md`. It never writes

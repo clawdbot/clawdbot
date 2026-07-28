@@ -1,9 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { formatSqliteSessionFileMarker } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runSessionBackfill } from "./session-backfill.js";
 import { readShortTermRecallEntries } from "./short-term-promotion.js";
@@ -34,6 +38,39 @@ async function writeTranscript(filePath: string, messages: TranscriptMessage[]):
   await fs.writeFile(filePath, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
 }
 
+async function seedCanonicalTranscript(
+  sessionId: string,
+  messages: TranscriptMessage[],
+): Promise<void> {
+  const agentId = "main";
+  const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
+  const storePath = path.join(sessionsDir, "sessions.json");
+  const sessionKey = `agent:${agentId}:session-backfill:${sessionId}`;
+  const updatedAt = Math.max(
+    Date.now(),
+    ...messages.map((message) => Date.parse(message.timestamp)),
+  );
+  await fs.mkdir(sessionsDir, { recursive: true });
+  const sessionFile = formatSqliteSessionFileMarker({ agentId, sessionId, storePath });
+  const entry = { sessionFile, sessionId, updatedAt };
+  await upsertSessionEntry({ agentId, sessionKey, storePath, entry });
+  for (const message of messages) {
+    await appendSessionTranscriptMessageByIdentity({
+      agentId,
+      sessionId,
+      sessionKey,
+      storePath,
+      message: {
+        role: message.role,
+        content: message.content,
+        timestamp: message.timestamp,
+        ...(message.owner ? { __openclaw: { senderIsOwner: true } } : {}),
+      },
+    });
+  }
+  await upsertSessionEntry({ agentId, sessionKey, storePath, entry });
+}
+
 async function createIsolatedWorkspace(prefix: string): Promise<string> {
   const workspaceDir = await harness.createTempWorkspace(prefix);
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, "state"));
@@ -52,8 +89,7 @@ afterEach(() => {
 describe("runSessionBackfill", () => {
   it("buckets messages in the configured timezone and processes days oldest first", async () => {
     const workspaceDir = await createIsolatedWorkspace("timezone-");
-    const transcriptPath = path.join(workspaceDir, "foreign.jsonl");
-    await writeTranscript(transcriptPath, [
+    await seedCanonicalTranscript("timezone", [
       {
         role: "user",
         content: "Late New York note",
@@ -71,7 +107,6 @@ describe("runSessionBackfill", () => {
     const result = await runSessionBackfill({
       agentId: "main",
       workspaceDir,
-      archiveFiles: [transcriptPath],
       timezone: "America/New_York",
     });
 
@@ -83,9 +118,8 @@ describe("runSessionBackfill", () => {
 
   it("honors the day limit before moving to newer unprocessed days", async () => {
     const workspaceDir = await createIsolatedWorkspace("limit-");
-    const transcriptPath = path.join(workspaceDir, "limited.jsonl");
-    await writeTranscript(
-      transcriptPath,
+    await seedCanonicalTranscript(
+      "limited",
       ["2026-01-01", "2026-01-02", "2026-01-03"].map((day) => ({
         role: "user" as const,
         content: `Durable note for ${day}`,
@@ -97,7 +131,6 @@ describe("runSessionBackfill", () => {
     const result = await runSessionBackfill({
       agentId: "main",
       workspaceDir,
-      archiveFiles: [transcriptPath],
       limitDays: 2,
       timezone: "UTC",
     });
@@ -107,15 +140,9 @@ describe("runSessionBackfill", () => {
 
   it("applies the total cap after finding the oldest candidate across sources", async () => {
     const workspaceDir = await createIsolatedWorkspace("oldest-cap-");
-    const archiveFiles: string[] = [];
     for (let sourceIndex = 0; sourceIndex < 16; sourceIndex += 1) {
-      const transcriptPath = path.join(
-        workspaceDir,
-        `a-newer-${sourceIndex.toString().padStart(2, "0")}.jsonl`,
-      );
-      archiveFiles.push(transcriptPath);
-      await writeTranscript(
-        transcriptPath,
+      await seedCanonicalTranscript(
+        `a-newer-${sourceIndex.toString().padStart(2, "0")}`,
         Array.from({ length: 15 }, (_, messageIndex) => ({
           role: "user" as const,
           content: `Newer durable note ${sourceIndex}-${messageIndex}`,
@@ -124,9 +151,7 @@ describe("runSessionBackfill", () => {
         })),
       );
     }
-    const oldestPath = path.join(workspaceDir, "z-oldest.jsonl");
-    archiveFiles.push(oldestPath);
-    await writeTranscript(oldestPath, [
+    await seedCanonicalTranscript("z-oldest", [
       {
         role: "user",
         content: "Oldest durable note must win the cap",
@@ -138,7 +163,6 @@ describe("runSessionBackfill", () => {
     const result = await runSessionBackfill({
       agentId: "main",
       workspaceDir,
-      archiveFiles,
       limitDays: 1,
       timezone: "UTC",
     });
@@ -152,7 +176,7 @@ describe("runSessionBackfill", () => {
     ]);
   });
 
-  it("accepts only provably owner-authored foreign transcript turns", async () => {
+  it("keeps self-asserted owner metadata in foreign transcripts untrusted", async () => {
     const workspaceDir = await createIsolatedWorkspace("provenance-");
     const transcriptPath = path.join(workspaceDir, "untrusted.jsonl");
     await writeTranscript(transcriptPath, [
@@ -191,17 +215,13 @@ describe("runSessionBackfill", () => {
       timezone: "UTC",
     });
 
-    expect(result.candidateCount).toBe(2);
-    expect(result.days[0]?.topCandidates).toEqual([
-      "User: Owner confirmed durable preference",
-      "Assistant: Agent response in the owner turn",
-    ]);
+    expect(result.candidateCount).toBe(0);
+    expect(result.days).toEqual([]);
   });
 
   it("stages idempotently, converges duplicate facts, and rolls back staged artifacts", async () => {
     const workspaceDir = await createIsolatedWorkspace("apply-");
-    const transcriptPath = path.join(workspaceDir, "repeat.jsonl");
-    await writeTranscript(transcriptPath, [
+    await seedCanonicalTranscript("repeat", [
       {
         role: "user",
         content: "The preferred editor is Nova",
@@ -219,7 +239,6 @@ describe("runSessionBackfill", () => {
     const first = await runSessionBackfill({
       agentId: "main",
       workspaceDir,
-      archiveFiles: [transcriptPath],
       apply: true,
       nowMs: Date.parse("2026-03-02T12:00:00.000Z"),
       timezone: "UTC",
@@ -234,7 +253,6 @@ describe("runSessionBackfill", () => {
     const second = await runSessionBackfill({
       agentId: "main",
       workspaceDir,
-      archiveFiles: [transcriptPath],
       apply: true,
       nowMs: Date.parse("2026-03-02T12:00:00.000Z"),
       timezone: "UTC",

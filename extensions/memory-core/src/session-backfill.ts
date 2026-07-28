@@ -56,6 +56,7 @@ export type MemorySessionBackfillOptions = {
 type SessionBackfillSource = {
   agentId: string;
   absolutePath: string;
+  foreign: boolean;
   sessionPath: string;
   scope: string;
   legacyScope?: string;
@@ -149,6 +150,7 @@ function sourceFromCorpusEntry(entry: SessionTranscriptCorpusEntry): SessionBack
   return {
     agentId: entry.agentId,
     absolutePath: entry.sessionFile,
+    foreign: false,
     sessionPath,
     scope:
       entry.transcriptSource === "sqlite"
@@ -173,6 +175,7 @@ function sourceFromArchiveFile(agentId: string, archiveFile: string): SessionBac
   return {
     agentId,
     absolutePath,
+    foreign: true,
     sessionPath,
     // Foreign files do not inherit canonical session identity from a matching basename.
     scope: `archive:${agentId}:${absolutePath.replaceAll("\\", "/")}`,
@@ -195,6 +198,7 @@ async function listSessionBackfillSources(params: {
     const source = sourceFromArchiveFile(params.agentId, archiveFile);
     if (!canonicalPaths.has(source.absolutePath)) {
       sources.push(source);
+      canonicalPaths.add(source.absolutePath);
     }
   }
   return sources.toSorted((a, b) =>
@@ -259,11 +263,16 @@ async function collectSessionBackfillCandidates(params: {
       }
       const lineNumber = entry.lineMap[index] ?? index + 1;
       const timestampMs = entry.messageTimestampsMs[index] ?? 0;
-      const provenance = entry.lineProvenance[index] ?? {
+      const parsedProvenance = entry.lineProvenance[index] ?? {
         originClass: "untrusted" as const,
         sessionKind: "interactive" as const,
         observedAt: timestampMs || entry.mtimeMs,
       };
+      // Foreign JSONL is caller-controlled, so embedded owner metadata is not
+      // authenticated. Only the canonical session store can establish trust.
+      const provenance = source.foreign
+        ? { ...parsedProvenance, originClass: "untrusted" as const }
+        : parsedProvenance;
       if (provenance.originClass !== "owner" && provenance.originClass !== "agent") {
         continue;
       }
