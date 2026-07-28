@@ -185,10 +185,17 @@ export function resolveSessionDisplayName(
   const derivedTitle = normalizeOptionalString(row?.derivedTitle) ?? "";
   const { prefix, fallbackName } = parseSessionKey(key);
 
-  const applyTypedPrefix = (name: string): string => {
+  const applyTypedPrefix = (rawName: string): string => {
     if (!prefix) {
-      return name;
+      return rawName;
     }
+    // Persisted automation sessions carry pre-rename "Cron:"/"Cron Job:"
+    // labels; strip them so the renamed prefix does not double up as
+    // "Automation: Cron: …".
+    const name =
+      prefix === "Automation:"
+        ? rawName.replace(/^cron(\s+job)?:\s*/i, "").trim() || rawName
+        : rawName;
     const prefixPattern = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\s*`, "i");
     if (prefix === "Subagent:" && options.includeSubagentPrefix === false) {
       return name.replace(prefixPattern, "").trim() || fallbackName;
