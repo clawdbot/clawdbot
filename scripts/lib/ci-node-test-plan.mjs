@@ -1167,7 +1167,7 @@ const SPLIT_NODE_SHARDS = new Map([
       ...createGatewayServerSplitShards(),
       {
         shardName: "agentic-cli",
-        configs: ["test/vitest/vitest.cli.config.ts"],
+        configs: ["test/vitest/vitest.cli.config.ts", "test/vitest/vitest.cli-process.config.ts"],
         requiresDist: false,
       },
       {
