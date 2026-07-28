@@ -135,7 +135,7 @@ describe("buildWorkspaceSkillSnapshot", () => {
         buildHomeSnapshot,
       );
       expectSnapshotNamesAndPrompt(defaultSnapshot, { contains: ["personal-compat"] });
-      expect(defaultSnapshot.resolvedSkills[0]?.filePath).toBe(
+      expect(defaultSnapshot.resolvedSkills?.[0]?.filePath).toBe(
         await fs.realpath(path.join(personalSkillDir, "SKILL.md")),
       );
 
