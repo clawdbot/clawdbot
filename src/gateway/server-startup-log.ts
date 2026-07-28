@@ -99,7 +99,12 @@ export function formatAgentModelStartupLog(
     ...manifestContext,
   });
   const modelRef = `${provider}/${model}`;
-  const modelDetails = formatAgentModelStartupDetails({ cfg, provider, model });
+  const modelDetails = formatAgentModelStartupDetails({
+    cfg,
+    provider,
+    model,
+    ...manifestContext,
+  });
   return {
     message: `agent model: ${modelRef} (${modelDetails})`,
     consoleMessage: `agent model: ${chalk.whiteBright(modelRef)} (${modelDetails})`,
@@ -152,11 +157,13 @@ function isConfiguredReasoningDisabled(params: {
 }
 
 /** Format model thinking and fast-mode details for the Gateway startup banner. */
-export function formatAgentModelStartupDetails(params: {
-  cfg: OpenClawConfig;
-  provider: string;
-  model: string;
-}): string {
+export function formatAgentModelStartupDetails(
+  params: {
+    cfg: OpenClawConfig;
+    provider: string;
+    model: string;
+  } & ModelManifestNormalizationContext,
+): string {
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
   const defaultAgentConfig = resolveAgentConfig(params.cfg, defaultAgentId);
   const explicitThinking = resolveExplicitStartupThinking({
@@ -167,7 +174,10 @@ export function formatAgentModelStartupDetails(params: {
   });
   let thinking = explicitThinking;
   if (thinking === undefined) {
-    const configuredCatalog = buildConfiguredModelCatalog({ cfg: params.cfg });
+    const configuredCatalog = buildConfiguredModelCatalog({
+      cfg: params.cfg,
+      manifestPlugins: params.manifestPlugins,
+    });
     // Catalog reasoning=false is authoritative; avoid loading provider policy artifacts
     // only to discard their default below.
     if (
