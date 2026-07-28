@@ -21,6 +21,8 @@ export type TalkRealtimeProviderOption = {
   aliases: readonly string[];
   models: readonly string[];
   voices: readonly string[];
+  /** Empty when the catalog does not declare transports for the provider. */
+  transports: readonly string[];
   defaultModel: string | null;
 };
 

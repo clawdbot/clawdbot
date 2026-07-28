@@ -1479,6 +1479,7 @@ async function createChatPickerScenario(
               label: "OpenAI Realtime Voice",
               configured: true,
               defaultModel: "gpt-realtime-2.1",
+              transports: ["webrtc", "gateway-relay"],
               models: [
                 "gpt-realtime-2.1",
                 "gpt-realtime-2.1-mini",
@@ -1507,6 +1508,7 @@ async function createChatPickerScenario(
               label: "xAI Grok Voice",
               configured: false,
               defaultModel: "grok-voice-latest",
+              transports: ["gateway-relay"],
               voices: ["eve", "ara", "rex", "sal", "leo"],
               modes: ["realtime"],
               brains: ["agent-consult"],

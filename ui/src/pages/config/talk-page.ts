@@ -8,7 +8,7 @@ import { property, state } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { resolveTalkRealtimeSelection } from "./talk-schema.ts";
+import { isTalkGptLiveModel, resolveTalkRealtimeSelection } from "./talk-schema.ts";
 import {
   renderTalk,
   selectedTalkProviderOption,
@@ -45,9 +45,13 @@ function toProviderOption(
     aliases: provider.aliases ?? [],
     models: provider.models ?? [],
     voices: provider.voices ?? [],
+    transports: provider.transports ?? [],
     defaultModel: provider.defaultModel ?? null,
   };
 }
+
+/** Transports whose sessions are client-owned (`talk.client.create`). */
+const TALK_CLIENT_OWNED_TRANSPORTS = new Set(["webrtc", "provider-websocket"]);
 
 class TalkSettingsPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -59,6 +63,7 @@ class TalkSettingsPage extends OpenClawLightDomElement {
   @state() private catalog: TalkCatalogState = { kind: "unavailable" };
 
   private connection: CatalogConnection | null = null;
+  private catalogRequestId = 0;
   /** `undefined` = baseline not yet observed; `null` = no snapshot hash. */
   private lastCatalogConfigHash: string | null | undefined;
   private readonly subscriptions = new SubscriptionsController(this)
@@ -116,9 +121,13 @@ class TalkSettingsPage extends OpenClawLightDomElement {
   }
 
   private async loadCatalog(client: GatewayClient, connection: CatalogConnection) {
+    // Initial load, config-hash refresh, and focus refresh can overlap on the
+    // same connection; only the newest request may write the catalog, or a
+    // slow older response would overwrite a fresher one.
+    const requestId = ++this.catalogRequestId;
     try {
       const result = await client.request<TalkCatalogResult>("talk.catalog", {});
-      this.applyCatalog(connection, {
+      this.applyCatalog(connection, requestId, {
         kind: "ready",
         ready: result.realtime.ready === true,
         activeProvider: result.realtime.activeProvider ?? null,
@@ -127,12 +136,20 @@ class TalkSettingsPage extends OpenClawLightDomElement {
     } catch {
       // The catalog only powers the pickers; the page still renders the raw
       // configured values when it cannot be read.
-      this.applyCatalog(connection, { kind: "unavailable" });
+      this.applyCatalog(connection, requestId, { kind: "unavailable" });
     }
   }
 
-  private applyCatalog(connection: CatalogConnection, catalog: TalkCatalogState) {
-    if (!this.isConnected || this.connection !== connection) {
+  private applyCatalog(
+    connection: CatalogConnection,
+    requestId: number,
+    catalog: TalkCatalogState,
+  ) {
+    if (
+      !this.isConnected ||
+      this.connection !== connection ||
+      this.catalogRequestId !== requestId
+    ) {
       return;
     }
     this.catalog = catalog;
@@ -174,6 +191,13 @@ class TalkSettingsPage extends OpenClawLightDomElement {
     const runtimeConfig = this.context.runtimeConfig;
     if (model !== null) {
       runtimeConfig.patchForm(["talk", "realtime", "model"], model);
+      // GPT-Live is WebRTC-only; a configured relay or provider-websocket
+      // transport would make the just-picked model fail at session create, so
+      // clearing it lets the default client-owned WebRTC path apply.
+      const transport = this.liveSelection().transport;
+      if (isTalkGptLiveModel(model) && transport && transport !== "webrtc") {
+        runtimeConfig.removeFormValue(["talk", "realtime", "transport"]);
+      }
       return;
     }
     runtimeConfig.removeFormValue(["talk", "realtime", "model"]);
@@ -197,9 +221,21 @@ class TalkSettingsPage extends OpenClawLightDomElement {
   }
 
   private selectedProviderConfigKeys(): string[] {
-    const selection = resolveTalkRealtimeSelection(this.configObject);
+    const selection = this.liveSelection();
     const option = selectedTalkProviderOption(this.catalog, selection);
     return talkProviderConfigKeys(selection, option);
+  }
+
+  /**
+   * Mutation helpers must read the live form draft, not the configObject prop:
+   * the form updates immutably and the prop only refreshes on the next render,
+   * so a same-tick read through the prop sees pre-write values.
+   */
+  private liveSelection() {
+    const form = this.context.runtimeConfig.state.configForm;
+    const configObject =
+      form && typeof form === "object" ? (form as Record<string, unknown>) : this.configObject;
+    return resolveTalkRealtimeSelection(configObject);
   }
 
   /**
@@ -219,6 +255,20 @@ class TalkSettingsPage extends OpenClawLightDomElement {
       return;
     }
     runtimeConfig.patchForm(["talk", "realtime", "provider"], providerId);
+    // A relay-only provider (no client-owned transport) needs the transport
+    // written explicitly: an unset transport routes to talk.client.create,
+    // which such a provider cannot serve.
+    const option =
+      this.catalog.kind === "ready"
+        ? this.catalog.providers.find((provider) => provider.id === providerId)
+        : undefined;
+    const relayOnly =
+      option !== undefined &&
+      option.transports.length > 0 &&
+      !option.transports.some((transport) => TALK_CLIENT_OWNED_TRANSPORTS.has(transport));
+    if (relayOnly) {
+      runtimeConfig.patchForm(["talk", "realtime", "transport"], "gateway-relay");
+    }
   }
 
   override render() {

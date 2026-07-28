@@ -15,6 +15,8 @@ export type TalkRealtimeSelection = {
   model: string | null;
   /** Top-level `speakerVoice` / `speakerVoiceId` override only. */
   speakerVoice: string | null;
+  /** Raw configured `talk.realtime.transport`. */
+  transport: string | null;
   /** Per-provider fallback values keyed by the raw config map key. */
   providerEntries: Record<string, TalkProviderEntryValues>;
 };
@@ -61,6 +63,7 @@ export function resolveTalkRealtimeSelection(
     model: readTrimmedString(realtime?.model),
     speakerVoice:
       readTrimmedString(realtime?.speakerVoice) ?? readTrimmedString(realtime?.speakerVoiceId),
+    transport: readTrimmedString(realtime?.transport),
     providerEntries,
   };
 }
