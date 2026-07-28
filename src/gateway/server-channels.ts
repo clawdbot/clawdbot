@@ -254,6 +254,7 @@ export type ChannelManager = {
   isAmbientAutostartSuppressed: (channelId: string) => boolean;
   markChannelLoggedOut: (channelId: ChannelId, cleared: boolean, accountId?: string) => void;
   isManuallyStopped: (channelId: ChannelId, accountId: string) => boolean;
+  isAutoRestartScheduled: (channelId: ChannelId, accountId: string) => boolean;
   resetRestartAttempts: (channelId: ChannelId, accountId: string) => void;
   isHealthMonitorEnabled: (channelId: ChannelId, accountId: string) => boolean;
 };
@@ -276,6 +277,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   const manuallyStopped = new Set<string>();
   const recoveryStopTimedOut = new Set<string>();
   const recoveryStartRequested = new Set<string>();
+  // Accounts whose crash recovery is already owned by the retry supervisor below
+  // (backoff sleep plus its replacement start). `restartPending` cannot answer
+  // this: the timed-out-stop recovery sets it too, and that one needs the health
+  // monitor to keep driving it.
+  const pendingAutoRestarts = new Set<string>();
   let autostartSuppression: ChannelAutostartSuppression | null = null;
   let ambientAutostartSuppressedChannelIds = new Set(
     opts.ambientAutostartSuppressedChannelIds ?? [],
@@ -873,6 +879,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 restartPending: true,
                 reconnectAttempts: restart.attempts,
               });
+              pendingAutoRestarts.add(rKey);
               try {
                 await sleepWithAbort(retry.delayMs, retry.signal);
                 if (manuallyStopped.has(rKey)) {
@@ -893,6 +900,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 });
               } catch {
                 // abort or startup failure — next crash will retry
+              } finally {
+                pendingAutoRestarts.delete(rKey);
               }
             })
             .finally(() => {
@@ -1216,7 +1225,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     return manuallyStopped.has(restartKey(channelId, accountId));
   };
 
-  const resetRestartAttemptsForTest = (channelId: ChannelId, accountId: string): void => {
+  const isAutoRestartScheduled = (channelId: ChannelId, accountId: string): boolean => {
+    return pendingAutoRestarts.has(restartKey(channelId, accountId));
+  };
+
+  const resetRestartAttempts = (channelId: ChannelId, accountId: string): void => {
     restarts.delete(restartKey(channelId, accountId));
   };
 
@@ -1236,7 +1249,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       ambientAutostartSuppressedChannelIds.has(channelId),
     markChannelLoggedOut,
     isManuallyStopped: isManuallyStoppedFlag,
-    resetRestartAttempts: resetRestartAttemptsForTest,
+    isAutoRestartScheduled,
+    resetRestartAttempts,
     isHealthMonitorEnabled,
   };
 }
