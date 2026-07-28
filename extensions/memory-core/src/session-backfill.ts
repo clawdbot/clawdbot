@@ -558,6 +558,9 @@ export async function runSessionBackfill(
   if (!workspaceDir) {
     throw new Error("Memory session-backfill requires a resolvable workspace directory.");
   }
+  if (params.rem && params.apply) {
+    throw new Error("Memory session-backfill --rem cannot be combined with --apply.");
+  }
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
   if (params.rollback) {
     // Backfill diary markers and grounded-only candidates are a shared artifact

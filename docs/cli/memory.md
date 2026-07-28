@@ -147,7 +147,7 @@ from the oldest unprocessed day to the newest.
 
 ```bash
 openclaw memory session-backfill --agent <id> [--from YYYY-MM-DD] [--to YYYY-MM-DD] \
-  [--limit-days <n>] [--archive-files <path...>] [--rem] [--apply] [--json]
+  [--limit-days <n>] [--archive-files <path...>] [--rem | --apply] [--json]
 openclaw memory session-backfill --agent <id> --rollback [--json]
 ```
 
@@ -174,7 +174,7 @@ remain untrusted and cannot be staged.
 `--apply` writes only the session corpus under `memory/.dreams/`, short-term
 staging state, and reversible diary entries in `DREAMS.md`. It never writes
 `MEMORY.md` or `USER.md`; durable promotion remains a separate `memory promote`
-or dreaming decision.
+or dreaming decision. `--rem` and `--apply` are mutually exclusive.
 
 Backfill rollback is intentionally shared with `memory rem-backfill`: both
 commands use the same grounded-only staging class and diary markers. Run

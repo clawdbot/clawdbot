@@ -88,6 +88,19 @@ afterEach(() => {
 });
 
 describe("runSessionBackfill", () => {
+  it("keeps REM preview mode mutually exclusive with apply", async () => {
+    const workspaceDir = await createIsolatedWorkspace("rem-apply-");
+
+    await expect(
+      runSessionBackfill({
+        agentId: "main",
+        workspaceDir,
+        rem: true,
+        apply: true,
+      }),
+    ).rejects.toThrow("Memory session-backfill --rem cannot be combined with --apply.");
+  });
+
   it("buckets messages in the configured timezone and processes days oldest first", async () => {
     const workspaceDir = await createIsolatedWorkspace("timezone-");
     await seedCanonicalTranscript("timezone", [
