@@ -1014,7 +1014,7 @@ describe("openai image generation provider", () => {
     expect(result.images).toHaveLength(1);
   });
 
-  it("forwards output and OpenAI-only options on multipart edits", async () => {
+  it("forwards supported OpenAI options on multipart edits", async () => {
     mockGeneratedPngResponse();
 
     const provider = buildOpenAIImageGenerationProvider();
@@ -1029,7 +1029,6 @@ describe("openai image generation provider", () => {
       providerOptions: {
         openai: {
           background: "transparent",
-          moderation: "auto",
           outputCompression: 75,
           user: "end-user-99",
         },
@@ -1043,12 +1042,36 @@ describe("openai image generation provider", () => {
     expect(form.get("quality")).toBe("high");
     expect(form.get("output_format")).toBe("webp");
     expect(form.get("background")).toBe("transparent");
-    expect(form.get("moderation")).toBe("auto");
+    expect(form.get("moderation")).toBeNull();
     expect(form.get("output_compression")).toBe("75");
     expect(form.get("user")).toBe("end-user-99");
     expect(result.images[0]?.mimeType).toBe("image/webp");
     expect(result.images[0]?.fileName).toBe("image-1.webp");
   });
+
+  it.each(["low", "auto"] as const)(
+    "rejects unsupported %s moderation before submitting a multipart image edit",
+    async (moderation) => {
+      mockGeneratedPngResponse();
+
+      const provider = buildOpenAIImageGenerationProvider();
+      await expect(
+        provider.generateImage({
+          provider: "openai",
+          model: "gpt-image-2",
+          prompt: "Edit without unsupported moderation",
+          cfg: {},
+          inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+          providerOptions: {
+            openai: { moderation },
+          },
+        }),
+      ).rejects.toThrow("OpenAI image edits do not support moderation.");
+
+      expect(postMultipartRequestMock).not.toHaveBeenCalled();
+      expect(postJsonRequestMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("falls back to Codex OAuth image generation through Responses streaming", async () => {
     mockCodexAuthOnly();

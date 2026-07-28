@@ -107,6 +107,66 @@ function readNonNegativeCount(value: unknown): number | null {
     : null;
 }
 
+function assertQaSuiteSummaryHasExecutedScenarios(
+  summary: unknown,
+  summaryPath: string,
+  errorCode: "summary_failure_count_missing" | "summary_blocking_count_missing",
+  optionalScenarioNames?: ReadonlySet<string>,
+): void {
+  if (!summary || typeof summary !== "object") {
+    return;
+  }
+  const payload = summary as {
+    counts?: { total?: unknown; passed?: unknown; failed?: unknown; skipped?: unknown };
+    scenarios?: unknown;
+    entries?: unknown;
+  };
+  const total = readNonNegativeCount(payload.counts?.total);
+  const passed = readNonNegativeCount(payload.counts?.passed);
+  const failed = readNonNegativeCount(payload.counts?.failed);
+  const skipped = readNonNegativeCount(payload.counts?.skipped);
+  const scenarios = Array.isArray(payload.scenarios)
+    ? (payload.scenarios as QaSuiteReportOnlyScenario[])
+    : undefined;
+  const entries = Array.isArray(payload.entries)
+    ? (payload.entries as QaEvidenceEntryStatus[])
+    : undefined;
+  const hasExecutedScenario =
+    scenarios?.some((scenario) => scenario.status !== "skip" && scenario.status !== "skipped") ===
+      true ||
+    entries?.some((entry) => entry.result?.status === "pass" || entry.result?.status === "fail") ===
+      true ||
+    (passed ?? 0) > 0 ||
+    (failed ?? 0) > 0 ||
+    (total !== null && total > 0 && (skipped === null || total > skipped));
+  const hasBlockingNonOptionalSkip =
+    errorCode === "summary_blocking_count_missing" &&
+    scenarios?.some(
+      (scenario) =>
+        (scenario.status === "skip" || scenario.status === "skipped") &&
+        !isQaSuiteReportOnlyOptionalScenario(scenario, optionalScenarioNames),
+    ) === true;
+  const hasBlockingNonPassEvidence =
+    errorCode === "summary_blocking_count_missing" &&
+    entries?.some(
+      (entry) => typeof entry.result?.status === "string" && entry.result.status !== "pass",
+    ) === true;
+
+  // Optional skips are not execution: only a real scenario, evidence result,
+  // or positive legacy count may clear a zero-work suite. Unverified skips
+  // remain blocking, including package runs that expose evidence entries only.
+  if (
+    total === 0 ||
+    scenarios?.length === 0 ||
+    (!hasExecutedScenario && !hasBlockingNonOptionalSkip && !hasBlockingNonPassEvidence)
+  ) {
+    throw new QaSuiteArtifactError(
+      errorCode,
+      `QA summary at ${summaryPath} did not include any executed scenarios.`,
+    );
+  }
+}
+
 function isQaSuiteBlockingStatus(status: unknown): boolean {
   return status !== "pass";
 }
@@ -222,6 +282,7 @@ function readQaSuiteFailedOrSkippedScenarioCountFromSummary(summary: unknown): n
 
 export async function readQaSuiteFailedScenarioCountFromFile(summaryPath: string): Promise<number> {
   const payload = await readQaSuiteSummaryFile(summaryPath);
+  assertQaSuiteSummaryHasExecutedScenarios(payload, summaryPath, "summary_failure_count_missing");
   const failedScenarioCount = readQaSuiteFailedScenarioCountFromSummary(payload);
   if (failedScenarioCount !== null) {
     return failedScenarioCount;
@@ -237,6 +298,12 @@ export async function readQaSuiteFailedOrSkippedScenarioCountFromFile(
   options?: { optionalScenarioNames?: ReadonlySet<string> },
 ): Promise<number> {
   const payload = await readQaSuiteSummaryFile(summaryPath);
+  assertQaSuiteSummaryHasExecutedScenarios(
+    payload,
+    summaryPath,
+    "summary_blocking_count_missing",
+    options?.optionalScenarioNames,
+  );
   const blockingScenarioCount = readQaSuiteFailedOrSkippedScenarioCountFromSummary(payload);
   if (blockingScenarioCount !== null) {
     const optionalScenarioNames = options?.optionalScenarioNames;

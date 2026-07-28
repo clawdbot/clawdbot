@@ -115,6 +115,80 @@ describe("deliverMatrixReplies", () => {
     expect(sendOptions(2).threadId).toBeUndefined();
   });
 
+  it("shares the first reply across separately dispatched, chunked payloads", async () => {
+    chunkMatrixTextMock.mockImplementation((text: string) => ({
+      trimmedText: text.trim(),
+      convertedText: text,
+      singleEventLimit: 4000,
+      fitsInSingleEvent: true,
+      chunks: text.split("|"),
+    }));
+    const hasRepliedRef = { value: false };
+    const delivery = {
+      cfg,
+      roomId: "room:1",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "first" as const,
+      replyToId: "reply-1",
+      hasRepliedRef,
+    };
+
+    await deliverMatrixReplies({ ...delivery, replies: [{ text: "first-a|first-b" }] });
+    await deliverMatrixReplies({ ...delivery, replies: [{ text: "second" }] });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(3);
+    expect(sendOptions(0).replyToId).toBe("reply-1");
+    expect(sendOptions(1).replyToId).toBe("reply-1");
+    expect(sendOptions(2).replyToId).toBeUndefined();
+    expect(hasRepliedRef.value).toBe(true);
+  });
+
+  it("does not consume the first reply when Matrix delivery fails", async () => {
+    const hasRepliedRef = { value: false };
+    const delivery = {
+      cfg,
+      replies: [{ text: "retry me" }],
+      roomId: "room:1",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "first" as const,
+      replyToId: "reply-1",
+      hasRepliedRef,
+    };
+    sendMessageMatrixMock.mockRejectedValueOnce(new Error("Matrix unavailable"));
+
+    await expect(deliverMatrixReplies(delivery)).rejects.toThrow("Matrix unavailable");
+    expect(hasRepliedRef.value).toBe(false);
+
+    await expect(deliverMatrixReplies(delivery)).resolves.toBe(true);
+    expect(sendOptions(0).replyToId).toBe("reply-1");
+    expect(sendOptions(1).replyToId).toBe("reply-1");
+    expect(hasRepliedRef.value).toBe(true);
+  });
+
+  it("preserves native thread fallback after the first reply has been consumed", async () => {
+    const hasRepliedRef = { value: true };
+
+    await deliverMatrixReplies({
+      cfg,
+      replies: [{ text: "thread follow-up" }],
+      roomId: "room:3",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "first",
+      replyToId: "reply-thread",
+      threadId: "thread-77",
+      hasRepliedRef,
+    });
+
+    expect(sendOptions(0).replyToId).toBe("reply-thread");
+    expect(sendOptions(0).threadId).toBe("thread-77");
+  });
+
   it("keeps replyToId on every reply when replyToMode=all", async () => {
     await deliverMatrixReplies({
       cfg,

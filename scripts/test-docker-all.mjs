@@ -1608,6 +1608,8 @@ async function main() {
     return;
   }
 
+  // Planning can report unsupported scenarios, but execution cannot pass when
+  // frozen-target omissions leave no selected lane to run.
   if (scheduledLanes.length === 0) {
     await writeSummary({
       chunk: releaseChunk || undefined,
@@ -1618,9 +1620,11 @@ async function main() {
       profile,
       selectedLanes: selectedLaneNames.length > 0 ? selectedLaneNames : undefined,
       startedAt: runStartedAt,
-      status: "passed",
+      status: "failed",
     });
-    return;
+    throw new Error(
+      `resolved zero runnable Docker lanes; frozen target does not support: ${omittedUnsupportedLanes.join(", ")}`,
+    );
   }
 
   await runPhase(

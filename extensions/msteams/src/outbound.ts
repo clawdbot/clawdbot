@@ -29,6 +29,12 @@ function asObjectRecord(value: unknown): Record<string, unknown> | undefined {
 
 const MSTEAMS_TEXT_CHUNK_LIMIT = 4000;
 
+function resolveMSTeamsEffectiveTextChunkLimit(configuredLimit?: number): number {
+  return typeof configuredLimit === "number" && configuredLimit > 0
+    ? Math.min(configuredLimit, MSTEAMS_TEXT_CHUNK_LIMIT)
+    : MSTEAMS_TEXT_CHUNK_LIMIT;
+}
+
 type MSTeamsSendConfig = Parameters<typeof sendMessageMSTeams>[0]["cfg"];
 type MSTeamsSendResult = { messageId: string; conversationId: string };
 type MSTeamsMediaSendOptions = {
@@ -76,6 +82,8 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
   chunker: chunkTextForOutbound,
   chunkerMode: "markdown",
   textChunkLimit: MSTEAMS_TEXT_CHUNK_LIMIT,
+  resolveEffectiveTextChunkLimit: ({ fallbackLimit }) =>
+    resolveMSTeamsEffectiveTextChunkLimit(fallbackLimit),
   pollMaxOptions: 12,
   deliveryCapabilities: {
     durableFinal: {
@@ -156,7 +164,10 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
       const send = resolveMSTeamsTextSend({ cfg, deps });
       const chunks = resolveTextChunksWithFallback(
         text,
-        chunkTextForOutbound(text, MSTEAMS_TEXT_CHUNK_LIMIT),
+        chunkTextForOutbound(
+          text,
+          resolveMSTeamsEffectiveTextChunkLimit(cfg.channels?.msteams?.textChunkLimit),
+        ),
       );
       let result: Awaited<ReturnType<MSTeamsTextSendFn>>;
       for (const chunk of chunks) {

@@ -38,6 +38,7 @@ export async function deliverMatrixReplies(params: {
   runtime: RuntimeEnv;
   textLimit: number;
   replyToMode: "off" | "first" | "all" | "batched";
+  hasRepliedRef?: { value: boolean };
   threadId?: string;
   replyToId?: string;
   accountId?: string;
@@ -57,7 +58,7 @@ export async function deliverMatrixReplies(params: {
       params.runtime.log?.(message);
     }
   };
-  let hasReplied = false;
+  const hasRepliedRef = params.hasRepliedRef ?? { value: false };
   let deliveredAny = false;
   for (const reply of params.replies) {
     if (reply.isReasoning === true || shouldSuppressReasoningReplyText(reply.text)) {
@@ -87,11 +88,10 @@ export async function deliverMatrixReplies(params: {
         : [];
 
     const shouldIncludeReply = (id?: string) =>
-      Boolean(id) && (params.threadId || params.replyToMode === "all" || !hasReplied);
+      Boolean(id) && (params.threadId || params.replyToMode === "all" || !hasRepliedRef.value);
     const replyToIdForReply = shouldIncludeReply(replyToId) ? replyToId : undefined;
 
     if (mediaList.length === 0) {
-      let sentTextChunk = false;
       const { chunks } = chunkMatrixText(rawText, {
         cfg: params.cfg,
         accountId: params.accountId,
@@ -110,10 +110,9 @@ export async function deliverMatrixReplies(params: {
           accountId: params.accountId,
         });
         deliveredAny = true;
-        sentTextChunk = true;
-      }
-      if (replyToIdForReply && !hasReplied && sentTextChunk) {
-        hasReplied = true;
+        if (replyToIdForReply) {
+          hasRepliedRef.value = true;
+        }
       }
       continue;
     }
@@ -132,10 +131,10 @@ export async function deliverMatrixReplies(params: {
         accountId: params.accountId,
       });
       deliveredAny = true;
+      if (replyToIdForReply) {
+        hasRepliedRef.value = true;
+      }
       first = false;
-    }
-    if (replyToIdForReply && !hasReplied) {
-      hasReplied = true;
     }
   }
   return deliveredAny;

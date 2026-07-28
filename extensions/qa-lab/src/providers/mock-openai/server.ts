@@ -127,7 +127,6 @@ import {
   extractAllToolOutputText,
   extractUserTextAfterLatestToolOutput,
   extractAllUserTexts,
-  extractSystemInputText,
   extractAllInputTexts,
   extractInstructionsText,
   extractAllRequestTexts,
@@ -175,6 +174,10 @@ async function buildResponsesPayload(
       ? extractLatestToolOutput(input)
       : "");
   const toolJson = parseToolOutputJson(scenarioToolOutput);
+  const memoryToolUnavailable =
+    toolJson?.unavailable === true ||
+    toolJson?.disabled === true ||
+    (typeof toolJson?.error === "string" && toolJson.error.trim().length > 0);
   const promptExactReplyDirective = extractExactReplyDirective(prompt);
   const promptExactMarkerDirective = extractExactMarkerDirective(prompt);
   const allUserText = extractAllUserTexts(input).join("\n");
@@ -1052,19 +1055,44 @@ async function buildResponsesPayload(
         corpus: "sessions",
       });
     }
+    if (memoryToolUnavailable) {
+      return buildAssistantEvents("NONE");
+    }
     const results = Array.isArray(toolJson?.results)
       ? (toolJson.results as Array<Record<string, unknown>>)
       : [];
     const preferredSessionResult = results.find((result) => {
       const resultPath = typeof result.path === "string" ? result.path : undefined;
-      return result.source === "sessions" || resultPath?.startsWith("sessions/");
+      if (result.source !== "sessions" && !resultPath?.startsWith("sessions/")) {
+        return false;
+      }
+      const memoryText =
+        typeof result.snippet === "string"
+          ? result.snippet
+          : typeof result.text === "string"
+            ? result.text
+            : "";
+      return extractOrbitCode(memoryText) !== null;
     });
-    if (preferredSessionResult) {
+    const sessionMemoryText =
+      typeof preferredSessionResult?.snippet === "string"
+        ? preferredSessionResult.snippet
+        : typeof preferredSessionResult?.text === "string"
+          ? preferredSessionResult.text
+          : "";
+    const retrievedOrbitCode =
+      extractOrbitCode(sessionMemoryText) ??
+      (typeof toolJson?.text === "string" ? extractOrbitCode(toolJson.text) : null);
+    if (retrievedOrbitCode) {
       return buildAssistantEvents(
-        "Protocol note: I checked memory and the current Project Nebula codename is ORBIT-10.",
+        `Protocol note: I checked memory and the current Project Nebula codename is ${retrievedOrbitCode}.`,
       );
     }
-    const first = results[0];
+    const first =
+      results.find((result) => {
+        const resultPath = typeof result.path === "string" ? result.path : undefined;
+        return result.source === "sessions" || resultPath?.startsWith("sessions/");
+      }) ?? results[0];
     if (
       typeof first?.path === "string" &&
       (typeof first.startLine === "number" || typeof first.endLine === "number")
@@ -1081,6 +1109,7 @@ async function buildResponsesPayload(
         lines: 4,
       });
     }
+    return buildAssistantEvents("NONE");
   }
   if (/thread memory check/i.test(allInputText)) {
     if (!scenarioToolOutput) {
@@ -1089,10 +1118,10 @@ async function buildResponsesPayload(
         maxResults: 3,
       });
     }
-    const transcriptOrbitCode =
-      extractOrbitCode(scenarioToolOutput) ??
-      extractOrbitCode(extractUserTextAfterLatestToolOutput(input)) ??
-      extractOrbitCode(extractSystemInputText(input));
+    if (memoryToolUnavailable) {
+      return buildAssistantEvents("NONE");
+    }
+    const transcriptOrbitCode = extractOrbitCode(scenarioToolOutput);
     if (transcriptOrbitCode) {
       return buildAssistantEvents(
         `Protocol note: I checked memory in-thread and the hidden thread codename is ${transcriptOrbitCode}.`,
@@ -1118,6 +1147,7 @@ async function buildResponsesPayload(
         lines: 4,
       });
     }
+    return buildAssistantEvents("NONE");
   }
   if (
     QA_IMAGE_GENERATION_PROMPT_RE.test(allInputText) &&

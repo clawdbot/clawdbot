@@ -1422,7 +1422,7 @@ describe("qa cli runtime", () => {
     }
   });
 
-  it("keeps full host suite exit code clear for report-only optional tool skips", async () => {
+  it("rejects a full host suite containing only report-only optional tool skips", async () => {
     const priorExitCode = process.exitCode;
     process.exitCode = undefined;
     await fs.writeFile(
@@ -1443,6 +1443,40 @@ describe("qa cli runtime", () => {
       flowSuiteRuntimeResult({
         reportPath: suiteReportPath,
         summaryPath: suiteSummaryPath,
+      }),
+    );
+
+    try {
+      await expect(runQaSuiteCommand({ repoRoot: "/tmp/openclaw-repo" })).rejects.toThrow(
+        "did not include any executed scenarios",
+      );
+      expect(process.exitCode).toBeUndefined();
+    } finally {
+      process.exitCode = priorExitCode;
+    }
+  });
+
+  it("keeps full host suite exit code clear for a real pass and an optional tool skip", async () => {
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+    const optionalScenario = {
+      name: "Runtime tool fixture — image_generate",
+      status: "skip" as const,
+      details: "image_generate mock provider report-only: tool unavailable",
+    };
+    await fs.writeFile(
+      suiteSummaryPath,
+      JSON.stringify({
+        counts: { total: 2, passed: 1, failed: 0, skipped: 1 },
+        scenarios: [QA_PASSING_SUITE_SCENARIO, optionalScenario],
+      }),
+      "utf8",
+    );
+    runQaSuite.mockResolvedValueOnce(
+      flowSuiteRuntimeResult({
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+        scenarios: [QA_PASSING_SUITE_SCENARIO, optionalScenario],
       }),
     );
 

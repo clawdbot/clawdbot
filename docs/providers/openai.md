@@ -641,8 +641,11 @@ Use the same `--output-format` and `--background` flags with
 `openclaw infer image edit` when starting from an input file.
 `--openai-background` remains available as an OpenAI-specific alias. Use
 `--quality low|medium|high|auto` to control OpenAI Images quality and cost.
-Use `--openai-moderation low|auto` to pass OpenAI's moderation hint from either
-`image generate` or `image edit`.
+Use `--openai-moderation low|auto` with `image generate` to pass OpenAI's
+moderation hint. The direct OpenAI Images API does not support moderation for
+`image edit`; explicitly supplying it fails rather than silently ignoring the
+requested option. ChatGPT/Codex OAuth image edits use the Responses backend,
+which supports the moderation hint.
 
 For ChatGPT/Codex OAuth installs, keep the same `openai/gpt-image-2` ref. When
 an `openai` OAuth profile is configured, OpenClaw resolves that stored OAuth

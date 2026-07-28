@@ -234,7 +234,22 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     const configuredAgentsOnly = p.configuredAgentsOnly === true;
     const payload = await measureDiagnosticsTimelineSpan(
       "gateway.sessions.list",
-      async () => {
+      async function listVisibleSessions(
+        remainingVisibilityRetries = 1,
+      ): Promise<Awaited<ReturnType<typeof listSessionsFromStoreAsync>>> {
+        const modelCatalog = await measureDiagnosticsTimelineSpan(
+          "gateway.sessions.list.model_catalog",
+          () =>
+            loadOptionalServerMethodModelCatalog(
+              context,
+              "sessions.list",
+              p.agentId ? { loadParams: { agentId: p.agentId } } : undefined,
+            ),
+          {
+            config: cfg,
+            phase: "sessions.list",
+          },
+        );
         const { durableStorePath, storePath, store } = measureDiagnosticsTimelineSpanSync(
           "gateway.sessions.list.store_load",
           () =>
@@ -255,19 +270,6 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         const listStore = configuredAgentsOnly
           ? filterSessionStoreToConfiguredAgents(cfg, store)
           : store;
-        const modelCatalog = await measureDiagnosticsTimelineSpan(
-          "gateway.sessions.list.model_catalog",
-          () =>
-            loadOptionalServerMethodModelCatalog(
-              context,
-              "sessions.list",
-              p.agentId ? { loadParams: { agentId: p.agentId } } : undefined,
-            ),
-          {
-            config: cfg,
-            phase: "sessions.list",
-          },
-        );
         const result = await measureDiagnosticsTimelineSpan(
           "gateway.sessions.list.rows",
           () =>
@@ -430,6 +432,14 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                 !session.incognito &&
                 (session.visibility !== "draft" || session.sharingRole === "owner"),
             );
+        if (visibleSessions.length !== sessions.length) {
+          if (remainingVisibilityRetries === 0) {
+            throw new Error("session visibility changed during list reconciliation");
+          }
+          // Rebuild the complete canonical page so totals, offsets, creator
+          // facets, and replacement rows describe the same visible snapshot.
+          return await listVisibleSessions(remainingVisibilityRetries - 1);
+        }
         return {
           ...result,
           sessions: visibleSessions,
