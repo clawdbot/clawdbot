@@ -36,6 +36,15 @@ async function roundedWidth(locator: Locator): Promise<number> {
   return Math.round((await locator.boundingBox())?.width ?? 0);
 }
 
+async function waitForSettingsSidebar(page: Page) {
+  const sidebar = page.locator(".settings-sidebar");
+  const search = sidebar.getByRole("searchbox", { name: "Search settings" });
+  await sidebar.waitFor({ state: "visible" });
+  // The route shell can paint before the takeover controls settle on a loaded CI host.
+  await search.waitFor({ state: "visible" });
+  return { search, sidebar };
+}
+
 function visibleDrawerButton(page: Page) {
   return page.locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible").first();
 }
@@ -160,12 +169,11 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
 
     try {
       await page.goto(`${server.baseUrl}settings/general`);
-      const settingsSidebar = page.locator(".settings-sidebar");
+      const { search: settingsSearchInput, sidebar: settingsSidebar } =
+        await waitForSettingsSidebar(page);
       const settingsSearchShell = settingsSidebar.locator(".settings-sidebar__search");
-      const settingsSearchInput = settingsSidebar.locator(".settings-sidebar__search-input");
       const settingsNav = settingsSidebar.locator(".settings-sidebar__nav");
       const firstSettingsLink = settingsSidebar.locator(".settings-sidebar__item").first();
-      await settingsSidebar.waitFor();
       await expect
         .poll(() =>
           page
@@ -333,8 +341,8 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await expect.poll(() => identityCard.isVisible()).toBe(true);
       await openSettingsFromIdentity();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/general");
-      const settingsSidebar = page.locator(".settings-sidebar");
-      await expect.poll(() => settingsSidebar.isVisible()).toBe(true);
+      const { search: settingsSearch, sidebar: settingsSidebar } =
+        await waitForSettingsSidebar(page);
       await expect.poll(() => sidebar.isVisible()).toBe(false);
       await expect
         .poll(() =>
@@ -347,12 +355,8 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await captureUiProof(page, "01a-settings-takeover.png");
       await captureSettingsSidebarProof(settingsSidebar, "01a-settings-search-initial.png");
       await holdUiProof(page);
-      const settingsSearch = settingsSidebar.getByRole("searchbox", {
-        name: "Search settings",
-      });
       const settingsLinks = settingsSidebar.locator(".settings-sidebar__item");
       const allSettingsLabels = await trimmedTextContents(settingsLinks);
-      await expect.poll(() => settingsSearch.isVisible()).toBe(true);
       await expect
         .poll(() =>
           settingsSearch.evaluate((input) => {
