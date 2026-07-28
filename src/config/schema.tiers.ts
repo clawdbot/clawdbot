@@ -57,7 +57,8 @@ agents.entries.*.tools.exec.applyPatch.workspaceOnly agents.entries.*.tools.exec
 agents.entries.*.tools.exec.mode agents.entries.*.tools.exec.strictInlineEval
 agents.entries.*.tools.exec.reviewer.model agents.entries.*.tools.exec.reviewer.model.primary
 agents.entries.*.tools.fs.workspaceOnly agents.entries.*.tools.message
-agents.entries.*.tools.profile agents.entries.*.tools.sandbox.tools
+agents.entries.*.tools.profile agents.entries.*.tools.sandbox.tools.alsoAllow
+agents.entries.*.tools.sandbox.tools.deny
 agents.entries.*.tts.auto
 agents.entries.*.tts.modelOverrides agents.entries.*.tts.persona
 agents.entries.*.tts.personas.*.providers.*.apiKey agents.entries.*.tts.provider
