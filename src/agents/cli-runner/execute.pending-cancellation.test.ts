@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createProcessSupervisor } from "../../process/supervisor/supervisor.js";
-import type { ManagedRun, SpawnProcessAdapter } from "../../process/supervisor/types.js";
 import { createDeferred } from "../../test-utils/deferred.js";
 import { executeDeps } from "./execute-deps.js";
 import { executePreparedCliRun } from "./execute.js";
@@ -17,7 +16,11 @@ vi.mock("../../process/supervisor/adapters/child.js", () => ({
   createChildAdapter: createChildAdapterMock,
 }));
 
-type TestAdapter = SpawnProcessAdapter & {
+type ChildAdapter = Awaited<
+  ReturnType<typeof import("../../process/supervisor/adapters/child.js").createChildAdapter>
+>;
+
+type TestAdapter = ChildAdapter & {
   emitStdout: (chunk: string) => void;
   settle: (code: number | null, signal?: NodeJS.Signals | null) => void;
 };
@@ -134,7 +137,7 @@ describe("local CLI pending process cancellation", () => {
 
   it("cancels a child adapter that is still starting by the caller run id", async () => {
     const controller = new AbortController();
-    const startup = createDeferred<SpawnProcessAdapter>();
+    const startup = createDeferred<ChildAdapter>();
     const adapter = createTestAdapter();
     const cancel = vi.spyOn(supervisor, "cancel");
     createChildAdapterMock.mockReturnValueOnce(startup.promise);
@@ -174,7 +177,7 @@ describe("local CLI pending process cancellation", () => {
       throw new Error("Expected the resumed CLI supervisor scope");
     }
 
-    const firstStartup = createDeferred<SpawnProcessAdapter>();
+    const firstStartup = createDeferred<ChildAdapter>();
     const firstAdapter = createTestAdapter();
     const cancel = vi.spyOn(supervisor, "cancel");
     const spawn = vi.spyOn(supervisor, "spawn");
