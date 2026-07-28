@@ -15,7 +15,13 @@ import type {
 
 type SessionLock = Awaited<ReturnType<typeof acquireSessionWriteLock>>;
 type AcquireSessionWriteLock = typeof acquireSessionWriteLock;
-type LockOptions = Parameters<AcquireSessionWriteLock>[0];
+type SessionKeyLockOptions = Extract<
+  Parameters<AcquireSessionWriteLock>[0],
+  { targetKind: "session-key" }
+>;
+type LockOptions = Omit<SessionKeyLockOptions, "targetKind"> & {
+  targetKind?: "session-key";
+};
 const PROMPT_DISPOSE_SETTLE_TIMEOUT_MS = 5_000;
 
 export type EmbeddedAttemptSessionFileOwner = {
