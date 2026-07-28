@@ -610,7 +610,7 @@ private fun VoiceHomeMode(
     modifier = Modifier.fillMaxSize(),
   ) {
     val layout = wearVoiceLayout(maxWidth = maxWidth, fontScale = fontScale)
-    val voiceControlOffset = 16.dp
+    val voiceControlOffset = if (fontScale > 1.1f) 20.dp else 16.dp
     Row(
       modifier =
         Modifier
