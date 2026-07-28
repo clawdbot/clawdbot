@@ -1,6 +1,278 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "%1$lld Running · %2$lld Done · %3$lld Failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        }
+      }
+    },
+    "%1$lld more workers": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld more workers"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        }
+      }
+    },
     "%@ (override)": {
       "localizations": {
         "en": {
@@ -1629,6 +1901,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "1 gateway hittades i ditt nätverk — klicka för att välja den."
+          }
+        }
+      }
+    },
+    "1 more worker": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 more worker"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
           }
         }
       }
@@ -5301,6 +5709,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Avancerat"
+          }
+        }
+      }
+    },
+    "Advanced options": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Advanced options"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Advanced options"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Advanced options"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Advanced options"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Advanced options"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Advanced options"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Advanced options"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Advanced options"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Advanced options"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Advanced options"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Advanced options"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Advanced options"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Advanced options"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Advanced options"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Advanced options"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Advanced options"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Advanced options"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Advanced options"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Advanced options"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Advanced options"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Advanced options"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Advanced options"
           }
         }
       }
@@ -22033,142 +22577,6 @@
         }
       }
     },
-    "Checks the real remote websocket and auth handshake.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Checks the real remote websocket and auth handshake."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "检查真实的远程 websocket 和身份验证握手。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "檢查實際的遠端 websocket 與驗證交握。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Verifica o websocket remoto real e o handshake de autenticação."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Prüft den echten Remote-Websocket und den Auth-Handshake."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Comprueba el websocket remoto real y el intercambio de autenticación."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "実際のリモート websocket と認証ハンドシェイクを確認します。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "실제 원격 websocket 및 인증 핸드셰이크를 확인합니다."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Vérifie le websocket distant réel et l’échange d’authentification."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "वास्तविक रिमोट websocket और auth handshake की जाँच करता है."
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "يتحقق من websocket البعيد الفعلي ومصافحة المصادقة."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Controlla il websocket remoto reale e l'handshake di autenticazione."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gerçek uzak websocket'i ve kimlik doğrulama el sıkışmasını denetler."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Перевіряє справжній віддалений websocket і рукостискання автентифікації."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Memeriksa websocket jarak jauh yang sebenarnya dan handshake autentikasi."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sprawdza rzeczywisty zdalny websocket i uzgadnianie uwierzytelniania."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ตรวจสอบ websocket ระยะไกลจริงและการจับมือยืนยันตัวตน"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kiểm tra websocket từ xa thực và bắt tay xác thực."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Controleert de echte externe websocket en authenticatie-handshake."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "وب‌سوکت راه دور واقعی و دست‌دهی احراز هویت را بررسی می‌کند."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Проверяет реальный удаленный websocket и handshake аутентификации."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kontrollerar den riktiga fjärr-websocketen och autentiseringshandskakningen."
-          }
-        }
-      }
-    },
     "Choose Image File": {
       "localizations": {
         "en": {
@@ -32501,6 +32909,278 @@
           "stringUnit": {
             "state": "translated",
             "value": "Det gick inte att öppna Gateway-fönstret"
+          }
+        }
+      }
+    },
+    "Could Not Set Primary Gateway": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could Not Set Primary Gateway"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Set Primary Gateway"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Set Primary Gateway"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Set Primary Gateway"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Set Primary Gateway"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Set Primary Gateway"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Set Primary Gateway"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Set Primary Gateway"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Set Primary Gateway"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Set Primary Gateway"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Set Primary Gateway"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Set Primary Gateway"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Set Primary Gateway"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Set Primary Gateway"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Set Primary Gateway"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Set Primary Gateway"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Set Primary Gateway"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Set Primary Gateway"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Set Primary Gateway"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Set Primary Gateway"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Set Primary Gateway"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Set Primary Gateway"
+          }
+        }
+      }
+    },
+    "Could Not Switch Gateway": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could Not Switch Gateway"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Switch Gateway"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Switch Gateway"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Switch Gateway"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Switch Gateway"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Switch Gateway"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Switch Gateway"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Switch Gateway"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Switch Gateway"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Switch Gateway"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Switch Gateway"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Switch Gateway"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Switch Gateway"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Switch Gateway"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Switch Gateway"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Switch Gateway"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Switch Gateway"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Switch Gateway"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Switch Gateway"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Switch Gateway"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Switch Gateway"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Could Not Switch Gateway"
           }
         }
       }
@@ -47873,6 +48553,142 @@
         }
       }
     },
+    "Failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Failed"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Failed"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Failed"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Failed"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Failed"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Failed"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Failed"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Failed"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Failed"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Failed"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Failed"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Failed"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Failed"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Failed"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Failed"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Failed"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Failed"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Failed"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Failed"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Failed"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Failed"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Failed"
+          }
+        }
+      }
+    },
     "Fallback": {
       "localizations": {
         "en": {
@@ -56305,138 +57121,138 @@
         }
       }
     },
-    "Hide Advanced": {
+    "Hide advanced options": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Hide Advanced"
+            "value": "Hide advanced options"
           }
         },
         "zh-CN": {
           "stringUnit": {
-            "state": "translated",
-            "value": "隐藏高级选项"
+            "state": "new",
+            "value": "Hide advanced options"
           }
         },
         "zh-TW": {
           "stringUnit": {
-            "state": "translated",
-            "value": "隱藏進階"
+            "state": "new",
+            "value": "Hide advanced options"
           }
         },
         "pt-BR": {
           "stringUnit": {
-            "state": "translated",
-            "value": "Ocultar avançado"
+            "state": "new",
+            "value": "Hide advanced options"
           }
         },
         "de": {
           "stringUnit": {
-            "state": "translated",
-            "value": "Erweitert ausblenden"
+            "state": "new",
+            "value": "Hide advanced options"
           }
         },
         "es": {
           "stringUnit": {
-            "state": "translated",
-            "value": "Ocultar avanzado"
+            "state": "new",
+            "value": "Hide advanced options"
           }
         },
         "ja-JP": {
           "stringUnit": {
-            "state": "translated",
-            "value": "詳細を非表示"
+            "state": "new",
+            "value": "Hide advanced options"
           }
         },
         "ko": {
           "stringUnit": {
-            "state": "translated",
-            "value": "고급 설정 숨기기"
+            "state": "new",
+            "value": "Hide advanced options"
           }
         },
         "fr": {
           "stringUnit": {
-            "state": "translated",
-            "value": "Masquer les options avancées"
+            "state": "new",
+            "value": "Hide advanced options"
           }
         },
         "hi": {
           "stringUnit": {
-            "state": "translated",
-            "value": "उन्नत छिपाएँ"
+            "state": "new",
+            "value": "Hide advanced options"
           }
         },
         "ar": {
           "stringUnit": {
-            "state": "translated",
-            "value": "إخفاء الخيارات المتقدمة"
+            "state": "new",
+            "value": "Hide advanced options"
           }
         },
         "it": {
           "stringUnit": {
-            "state": "translated",
-            "value": "Nascondi avanzate"
+            "state": "new",
+            "value": "Hide advanced options"
           }
         },
         "tr": {
           "stringUnit": {
-            "state": "translated",
-            "value": "Gelişmişi Gizle"
+            "state": "new",
+            "value": "Hide advanced options"
           }
         },
         "uk": {
           "stringUnit": {
-            "state": "translated",
-            "value": "Сховати розширені налаштування"
+            "state": "new",
+            "value": "Hide advanced options"
           }
         },
         "id": {
           "stringUnit": {
-            "state": "translated",
-            "value": "Sembunyikan Lanjutan"
+            "state": "new",
+            "value": "Hide advanced options"
           }
         },
         "pl": {
           "stringUnit": {
-            "state": "translated",
-            "value": "Ukryj zaawansowane"
+            "state": "new",
+            "value": "Hide advanced options"
           }
         },
         "th": {
           "stringUnit": {
-            "state": "translated",
-            "value": "ซ่อนขั้นสูง"
+            "state": "new",
+            "value": "Hide advanced options"
           }
         },
         "vi": {
           "stringUnit": {
-            "state": "translated",
-            "value": "Ẩn nâng cao"
+            "state": "new",
+            "value": "Hide advanced options"
           }
         },
         "nl": {
           "stringUnit": {
-            "state": "translated",
-            "value": "Geavanceerd verbergen"
+            "state": "new",
+            "value": "Hide advanced options"
           }
         },
         "fa": {
           "stringUnit": {
-            "state": "translated",
-            "value": "پنهان کردن پیشرفته"
+            "state": "new",
+            "value": "Hide advanced options"
           }
         },
         "ru": {
           "stringUnit": {
-            "state": "translated",
-            "value": "Скрыть дополнительные настройки"
+            "state": "new",
+            "value": "Hide advanced options"
           }
         },
         "sv": {
           "stringUnit": {
-            "state": "translated",
-            "value": "Dölj avancerat"
+            "state": "new",
+            "value": "Hide advanced options"
           }
         }
       }
@@ -81737,6 +82553,142 @@
         }
       }
     },
+    "Only needed when the gateway requires token auth.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only needed when the gateway requires token auth."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Only needed when the gateway requires token auth."
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Only needed when the gateway requires token auth."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Only needed when the gateway requires token auth."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Only needed when the gateway requires token auth."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Only needed when the gateway requires token auth."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Only needed when the gateway requires token auth."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Only needed when the gateway requires token auth."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Only needed when the gateway requires token auth."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Only needed when the gateway requires token auth."
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Only needed when the gateway requires token auth."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Only needed when the gateway requires token auth."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Only needed when the gateway requires token auth."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Only needed when the gateway requires token auth."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Only needed when the gateway requires token auth."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Only needed when the gateway requires token auth."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Only needed when the gateway requires token auth."
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Only needed when the gateway requires token auth."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Only needed when the gateway requires token auth."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Only needed when the gateway requires token auth."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Only needed when the gateway requires token auth."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Only needed when the gateway requires token auth."
+          }
+        }
+      }
+    },
     "Open": {
       "localizations": {
         "en": {
@@ -91257,6 +92209,142 @@
         }
       }
     },
+    "Paste the token from your gateway": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paste the token from your gateway"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Paste the token from your gateway"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Paste the token from your gateway"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Paste the token from your gateway"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Paste the token from your gateway"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Paste the token from your gateway"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Paste the token from your gateway"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Paste the token from your gateway"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Paste the token from your gateway"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Paste the token from your gateway"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Paste the token from your gateway"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Paste the token from your gateway"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Paste the token from your gateway"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Paste the token from your gateway"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Paste the token from your gateway"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Paste the token from your gateway"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Paste the token from your gateway"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Paste the token from your gateway"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Paste the token from your gateway"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Paste the token from your gateway"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Paste the token from your gateway"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Paste the token from your gateway"
+          }
+        }
+      }
+    },
     "Path": {
       "localizations": {
         "en": {
@@ -97101,6 +98189,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Frågesammanfattning"
+          }
+        }
+      }
+    },
+    "Queued": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Queued"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Queued"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Queued"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Queued"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Queued"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Queued"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Queued"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Queued"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Queued"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Queued"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Queued"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Queued"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Queued"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Queued"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Queued"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Queued"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Queued"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Queued"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Queued"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Queued"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Queued"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Queued"
           }
         }
       }
@@ -129881,6 +131105,142 @@
         }
       }
     },
+    "Swarm": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Swarm"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        }
+      }
+    },
     "Switch this Mac app to a local Gateway before importing browser cookies.": {
       "localizations": {
         "en": {
@@ -146609,6 +147969,142 @@
         }
       }
     },
+    "Unphased": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unphased"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        }
+      }
+    },
     "Unpin": {
       "localizations": {
         "en": {
@@ -151093,6 +152589,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Detaljnivå"
+          }
+        }
+      }
+    },
+    "Verify OpenClaw can reach this gateway.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verify OpenClaw can reach this gateway."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Verify OpenClaw can reach this gateway."
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Verify OpenClaw can reach this gateway."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Verify OpenClaw can reach this gateway."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Verify OpenClaw can reach this gateway."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Verify OpenClaw can reach this gateway."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Verify OpenClaw can reach this gateway."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Verify OpenClaw can reach this gateway."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Verify OpenClaw can reach this gateway."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Verify OpenClaw can reach this gateway."
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Verify OpenClaw can reach this gateway."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Verify OpenClaw can reach this gateway."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Verify OpenClaw can reach this gateway."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Verify OpenClaw can reach this gateway."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Verify OpenClaw can reach this gateway."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Verify OpenClaw can reach this gateway."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Verify OpenClaw can reach this gateway."
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Verify OpenClaw can reach this gateway."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Verify OpenClaw can reach this gateway."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Verify OpenClaw can reach this gateway."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Verify OpenClaw can reach this gateway."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Verify OpenClaw can reach this gateway."
           }
         }
       }

@@ -409,6 +409,278 @@
         }
       }
     },
+    "%1$lld Running · %2$lld Done · %3$lld Failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+          }
+        }
+      }
+    },
+    "%1$lld more workers": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld more workers"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld more workers"
+          }
+        }
+      }
+    },
     "%@ (override)": {
       "localizations": {
         "en": {
@@ -6797,6 +7069,142 @@
           "stringUnit": {
             "state": "new",
             "value": "'queued', 'sending', 'awaiting_confirmation', 'failed'"
+          }
+        }
+      }
+    },
+    "1 more worker": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 more worker"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "1 more worker"
           }
         }
       }
@@ -174353,6 +174761,142 @@
         }
       }
     },
+    "Swarm": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Swarm"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Swarm"
+          }
+        }
+      }
+    },
     "Switch Gateway": {
       "localizations": {
         "en": {
@@ -192845,6 +193389,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Okänd"
+          }
+        }
+      }
+    },
+    "Unphased": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unphased"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Unphased"
           }
         }
       }
