@@ -931,16 +931,17 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result.noVisibleReplyFallbackDelivered).toBe(true);
   });
 
-  it("delivers fallback when a queued streamed block fails delivery", async () => {
+  it("delivers fallback when a queued streamed block is cancelled before delivery", async () => {
     setNoAbort();
     // A generated block only proves visibility once its delivery settles; a
-    // transport failure used to suppress the fallback silently (#114768 corner 2).
-    const deliver = vi.fn(async (_payload: ReplyPayload, info: { kind: string }) => {
-      if (info.kind === "block") {
-        throw new Error("transport down");
-      }
+    // pre-transport cancellation used to suppress the fallback silently
+    // (#114768 corner 2). Started-then-failed sends stay conservative: they may
+    // have shown partial content, so they do not trigger the fallback.
+    const deliver = vi.fn(async (_payload: ReplyPayload) => {});
+    const dispatcher = createReplyDispatcher({
+      deliver,
+      beforeDeliver: async (payload, info) => (info.kind === "block" ? null : payload),
     });
-    const dispatcher = createReplyDispatcher({ deliver });
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       await opts?.onBlockReply?.({ text: "Streamed answer content." });
       return undefined;

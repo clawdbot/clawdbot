@@ -718,9 +718,9 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
         }),
     });
 
-    // The failed final settles invisible, so the no-visible-reply fallback is
-    // attempted through the same failing transport before the turn ends.
-    expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 2 });
+    // A started-then-failed transport send may have shown partial content, so
+    // the ledger stays conservative and no fallback rides the same transport.
+    expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
     expect(sessionStoreMocks.updateSessionEntry).toHaveBeenCalledOnce();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBeUndefined();

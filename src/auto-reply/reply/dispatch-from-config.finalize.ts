@@ -288,19 +288,22 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     !getObservedReplyDelivery() &&
     !turnLedger.hasVisibleDelivery() &&
     !turnLedger.hasForeignQueuedAdmissions();
+  let queuedSettleResult: Awaited<ReturnType<typeof turnLedger.settleQueued>> = "settled";
   if (noVisibleReplyFallbackAllowed()) {
     // Only a turn that still looks empty pays for settlement: pending admissions
-    // must resolve (beforeDeliver cancellation, transport failure) before the
+    // must resolve (beforeDeliver cancellation, pre-transport failure) before the
     // silence verdict. Turns with settled visibility or a policy-suppressed
     // fallback skip the wait, so deliveries that legitimately outlive the turn
     // (queued same-session mirroring) cannot deadlock the gate on themselves.
-    await turnLedger.settleQueued(getDispatchAbortSignal());
+    queuedSettleResult = await turnLedger.settleQueued(getDispatchAbortSignal());
   }
   let counts = dispatcher.getQueuedCounts();
   let noVisibleReplyFallbackDelivered = false;
   // Visible agent turns must never end silently: empty model completions get a
   // core fallback final. emptyFinalAllowedAsSilent is the only sanctioned silence.
-  if (noVisibleReplyFallbackAllowed()) {
+  // An aborted or timed-out settle leaves delivery state unknown; admission
+  // then keeps its legacy trust and the turn ends without a fallback.
+  if (queuedSettleResult === "settled" && noVisibleReplyFallbackAllowed()) {
     try {
       throwIfDispatchOperationAborted();
       const fallbackPayload: ReplyPayload = { text: NO_VISIBLE_REPLY_FALLBACK_TEXT };
@@ -327,12 +330,13 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
         if (fallbackSend.queued) {
           // Settlement decides the flag: a beforeDeliver hook can still cancel
           // the admitted fallback, and a cancelled fallback must keep the
-          // eligibility flag alive for channel-level recovery. The abort-aware
-          // ledger wait keeps a wedged transport from blocking finalization;
-          // untracked dispatchers keep admission as their strongest fact.
-          await turnLedger.settleQueued(getDispatchAbortSignal());
+          // eligibility flag alive for channel-level recovery. The bounded
+          // abort-aware wait keeps a wedged transport from blocking
+          // finalization; on abort/timeout (and for untracked dispatchers)
+          // admission stays the strongest fact so channels cannot double-send.
+          const fallbackSettle = await turnLedger.settleQueued(getDispatchAbortSignal());
           throwIfDispatchOperationAborted();
-          if (turnLedger.hasVisibleDelivery()) {
+          if (fallbackSettle !== "settled" || turnLedger.hasVisibleDelivery()) {
             queuedFinal = true;
             noVisibleReplyFallbackDelivered = true;
             // Re-snapshot so the delivered fallback is reflected in reported counts,

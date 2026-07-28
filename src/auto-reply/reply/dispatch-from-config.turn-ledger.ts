@@ -11,11 +11,17 @@ import {
 } from "./reply-dispatcher.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 
+// Failsafe for transports that never settle: the completion barrier bounds
+// delivery waits at the operation layer, and finalization must not out-wait it.
+const SETTLE_QUEUED_TIMEOUT_MS = 30_000;
+
 type LedgerQueuedSend = {
   queued: boolean;
   /** Present only when the core dispatcher exposes this payload's settlement. */
   outcome?: Promise<ReplyDispatchDeliveryOutcome>;
 };
+
+type LedgerSettleResult = "settled" | "aborted" | "timed-out";
 
 type ReplyTurnLedger = {
   /** Enqueue on the dispatcher and record the payload's settled visibility. */
@@ -23,8 +29,9 @@ type ReplyTurnLedger = {
   /** Record a routed transport result; routed sends settle at their call site. */
   recordRoutedDelivery: (payload: ReplyPayload, delivered: boolean) => void;
   /** Resolve every admitted payload's outcome so the fallback gate decides after
-   * beforeDeliver hooks and transport delivery, not at admission. */
-  settleQueued: (abortSignal?: AbortSignal) => Promise<void>;
+   * beforeDeliver hooks and transport delivery, not at admission. Only a
+   * "settled" result proves the visibility verdict is complete. */
+  settleQueued: (abortSignal?: AbortSignal) => Promise<LedgerSettleResult>;
   /** True once any settled, contentful, non-suppressed delivery exists. */
   hasVisibleDelivery: () => boolean;
   /** True when the dispatcher admitted payloads the dispatch pipeline never sent
@@ -69,7 +76,11 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLed
       }
       pendingOutcomes.push(
         capture.promise.then((outcome) => {
-          if (contentful && outcome === "delivered") {
+          // "failed-deliver" means the transport send started and then rejected;
+          // chunked sends may already have shown partial content, so only
+          // outcomes that never reached the transport ("cancelled",
+          // "failed-before-deliver") count as proven-invisible.
+          if (contentful && outcome !== "cancelled" && outcome !== "failed-before-deliver") {
             visibleDeliveries += 1;
           }
         }),
@@ -83,33 +94,54 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLed
     },
     async settleQueued(abortSignal) {
       // Outcome promises resolve when the dispatcher send chain settles each
-      // payload; the wait is bounded by the per-stage beforeDeliver deadlines and
+      // payload, normally bounded by the per-stage beforeDeliver deadlines and
       // the transport sends the turn's completion barrier already waits for.
       // Late progress stragglers can admit payloads while earlier deliveries
       // settle, so drain until no new outcomes appeared mid-wait.
-      let settledCount = 0;
-      while (settledCount < pendingOutcomes.length) {
-        if (abortSignal?.aborted) {
-          return;
+      let timedOut = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const deadline = new Promise<void>((resolve) => {
+        timer = setTimeout(() => {
+          timedOut = true;
+          resolve();
+        }, SETTLE_QUEUED_TIMEOUT_MS);
+        timer.unref?.();
+      });
+      let removeAbortListener: (() => void) | undefined;
+      const aborted = abortSignal
+        ? new Promise<void>((resolve) => {
+            const onAbort = () => resolve();
+            abortSignal.addEventListener("abort", onAbort, { once: true });
+            removeAbortListener = () => abortSignal.removeEventListener("abort", onAbort);
+          })
+        : undefined;
+      try {
+        let settledCount = 0;
+        while (settledCount < pendingOutcomes.length) {
+          if (abortSignal?.aborted) {
+            return "aborted";
+          }
+          if (timedOut) {
+            return "timed-out";
+          }
+          const batch = pendingOutcomes.slice(settledCount);
+          const batchTarget = pendingOutcomes.length;
+          const settled = Promise.all(batch).then(() => undefined);
+          await Promise.race([settled, deadline, ...(aborted ? [aborted] : [])]);
+          if (abortSignal?.aborted) {
+            return "aborted";
+          }
+          if (timedOut) {
+            return "timed-out";
+          }
+          settledCount = batchTarget;
         }
-        const batch = pendingOutcomes.slice(settledCount);
-        settledCount = pendingOutcomes.length;
-        const settled = Promise.all(batch).then(() => undefined);
-        if (!abortSignal) {
-          await settled;
-          continue;
+        return "settled";
+      } finally {
+        if (timer) {
+          clearTimeout(timer);
         }
-        let removeAbortListener: (() => void) | undefined;
-        const aborted = new Promise<void>((resolve) => {
-          const onAbort = () => resolve();
-          abortSignal.addEventListener("abort", onAbort, { once: true });
-          removeAbortListener = () => abortSignal.removeEventListener("abort", onAbort);
-        });
-        try {
-          await Promise.race([settled, aborted]);
-        } finally {
-          removeAbortListener?.();
-        }
+        removeAbortListener?.();
       }
     },
     hasVisibleDelivery: () => visibleDeliveries > 0,

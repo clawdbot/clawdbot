@@ -42,18 +42,59 @@ describe("createReplyTurnLedger", () => {
     await dispatcher.waitForIdle();
   });
 
-  it("does not count a failed delivery as visible", async () => {
+  it("does not count a pre-transport failure as visible", async () => {
+    const deliver = vi.fn(async () => {});
     const dispatcher = createReplyDispatcher({
-      deliver: async () => {
-        throw new Error("transport down");
+      deliver,
+      beforeDeliver: async () => {
+        throw new Error("hook exploded");
       },
     });
     const ledger = createReplyTurnLedger(dispatcher);
     expect(ledger.sendQueued("block", { text: "streamed" }).queued).toBe(true);
     await ledger.settleQueued();
+    expect(deliver).not.toHaveBeenCalled();
     expect(ledger.hasVisibleDelivery()).toBe(false);
     dispatcher.markComplete();
     await dispatcher.waitForIdle();
+  });
+
+  it("conservatively counts a started-then-failed delivery as visible", async () => {
+    // Chunked transports may show partial content before rejecting; core cannot
+    // prove invisibility, so the fallback must stay quiet.
+    const dispatcher = createReplyDispatcher({
+      deliver: async () => {
+        throw new Error("transport down mid-send");
+      },
+    });
+    const ledger = createReplyTurnLedger(dispatcher);
+    expect(ledger.sendQueued("block", { text: "streamed" }).queued).toBe(true);
+    await ledger.settleQueued();
+    expect(ledger.hasVisibleDelivery()).toBe(true);
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+  });
+
+  it("times out instead of waiting forever on a transport that never settles", async () => {
+    vi.useFakeTimers();
+    try {
+      let releaseDeliver!: () => void;
+      const stalled = new Promise<void>((resolve) => {
+        releaseDeliver = resolve;
+      });
+      const dispatcher = createReplyDispatcher({ deliver: () => stalled });
+      const ledger = createReplyTurnLedger(dispatcher);
+      ledger.sendQueued("final", { text: "hello" });
+      const settle = ledger.settleQueued();
+      await vi.advanceTimersByTimeAsync(30_000);
+      await expect(settle).resolves.toBe("timed-out");
+      releaseDeliver();
+      dispatcher.markComplete();
+      await vi.runAllTimersAsync();
+      await dispatcher.waitForIdle();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps admission as the visibility fact for untracked dispatchers", () => {
@@ -109,7 +150,7 @@ describe("createReplyTurnLedger", () => {
     const abortController = new AbortController();
     const settled = ledger.settleQueued(abortController.signal);
     abortController.abort();
-    await settled;
+    await expect(settled).resolves.toBe("aborted");
     expect(ledger.hasVisibleDelivery()).toBe(false);
     releaseDeliver();
     dispatcher.markComplete();
