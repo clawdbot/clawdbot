@@ -18,9 +18,6 @@ const LOBSTER_PET_PALETTE_IDS: LobsterPetPaletteId[] = [
   "crimson",
   "blue",
   "gold",
-  "tangerine",
-  "calico",
-  "abyss",
   "lumen",
   "magma",
   "oilslick",
@@ -40,6 +37,7 @@ const LOBSTER_PET_PALETTE_IDS: LobsterPetPaletteId[] = [
   "sourdough",
   "zombie",
   "plush",
+  "balloon",
   "cryptid",
   "flatpack",
   "tinfoil",
@@ -50,6 +48,8 @@ const LOBSTER_PET_PALETTE_IDS: LobsterPetPaletteId[] = [
   "pixel",
   "blueprint",
   "phosphor",
+  "ascii",
+  "portal",
   "notexture",
   "loading",
   "eclipse",
@@ -137,6 +137,7 @@ describe("lobster pet variants", () => {
       "sourdough",
       "zombie",
       "plush",
+      "balloon",
       "cryptid",
       "flatpack",
       "tinfoil",
@@ -147,6 +148,8 @@ describe("lobster pet variants", () => {
       "pixel",
       "blueprint",
       "phosphor",
+      "ascii",
+      "portal",
       "notexture",
       "loading",
       "eclipse",
@@ -162,6 +165,10 @@ describe("lobster pet variants", () => {
     );
     const goldenRetroWeight = expectDefined(weights.get("goldenretro"), "golden retro weight");
     const retroWeight = expectDefined(weights.get("retro"), "retro weight");
+    const totalWeight = [...weights.values()].reduce((sum, weight) => sum + weight, 0);
+    const crimsonWeight = expectDefined(weights.get("crimson"), "crimson weight");
+    expect(totalWeight).toBeCloseTo(79.15, 10);
+    expect(crimsonWeight / totalWeight).toBeGreaterThan(0.25);
     expect(goldenRetroWeight).toBeLessThan(retroWeight);
     for (const [paletteId, weight] of weights) {
       if (paletteId !== "retro" && paletteId !== "goldenretro") {
@@ -207,7 +214,7 @@ describe("lobster pet variants", () => {
       body: "#ff4f40",
       clawLeft: "#4a7dfc",
       clawRight: "#f4b840",
-      antennae: "#ff8c2e",
+      antennae: "#3f9d63",
     });
   });
 
