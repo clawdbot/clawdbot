@@ -1,103 +1,58 @@
-// Research signal helpers normalize skill names and extract research-worthy signals.
 import { createHash } from "node:crypto";
+import { truncateUtf8Prefix } from "../../utils/utf8-truncate.js";
 import { normalizeSkillIndexName } from "../discovery/skill-index.js";
 import { compactWhitespace, extractTranscriptText } from "./text.js";
 
-// Durable signals arrive in two shapes: prospective rules ("from now on...") and reactive
-// corrections ("that's not what I asked", "you're still using X", "I thought we were...").
-const DURABLE_ACTION =
-  "(?:add|apply|archive|build|calculate|capture|check|close|configure|confirm|contain|convert|copy|create|delete|deploy|disclose|draft|emit|encrypt|ensure|export|fix|focus|format|generate|include|inspect|keep|link|mask|merge|move|notify|open|optimize|prefer|provide|publish|put|read|record|redact|remove|rename|replace|require|return|run|sanitize|save|scrub|send|set|share|sign|sort|switch|treat|update|upload|use|validate|verify|wrap|write)";
-const GERUND_ACTIONS: Record<string, string> = {
-  adding: "add",
-  building: "build",
-  doing: "do",
-  exporting: "export",
-  formatting: "format",
-  making: "make",
-  publishing: "publish",
-  sanitizing: "sanitize",
-  sending: "send",
-  uploading: "upload",
-  using: "use",
-};
-const PROSPECTIVE_PATTERNS = [
-  /\bnext time\b/i,
-  /\bfrom now on\b/i,
-  /\bgoing forward\b/i,
+const SIGNAL_PATTERNS = [
+  /(?:^|[.;—–-]\s+)next time\b|\bnext time\s+(?:during|for|in|under|when|while|you)\b|\bnext time[.!?]*$/i,
+  /\b(?:from now on|going forward)\b/i,
   /\bremember to\b/i,
   /\bmake sure to\b/i,
-  new RegExp(
-    `(?:^|,\\s)(?:(?:can|could|would) you\\s+|please\\s+|you\\s+)?always\\b.{0,80}\\b${DURABLE_ACTION}\\b`,
-    "i",
-  ),
-  new RegExp(`\\bi (?:need|want) you to always\\s+${DURABLE_ACTION}\\b`, "i"),
-  new RegExp(`^(?:make it a rule to|policy:)\\s+always\\s+${DURABLE_ACTION}\\b`, "i"),
-  new RegExp(`\\b(?:when|whenever|for|on)\\b.{0,120}\\balways\\s+${DURABLE_ACTION}\\b`, "i"),
-  new RegExp(`^(?!i\\b).+\\b(?:must|should)\\s+always\\s+${DURABLE_ACTION}\\b`, "i"),
-  /\bprefer\b.{0,120}\b(when|for|instead|use)\b/i,
+  /^(?:(?:(?:can|could|would) you\s+|please\s+|you\s+)?always\s+\w+\s+\S+|(?!i\b).+\b(?:must|should)\s+always\s+\w+|i (?:need|want) you to always\s+\w+|(?:for|on|when|whenever)\b.+(?:\balways\s+|,\s+please\s+)\w+|(?:make it a rule to|policy:)\s+always\s+\w+)/i,
+  /\bprefer\b.{0,120}\b(?:for|instead|use|when)\b/i,
   /\bwhen asked\b/i,
-];
-
-const REACTIVE_PATTERNS = [
+  /^(?!(?:can|could|would|will)\b)[a-z][\w-]*\s+.+\bnext time\s+[a-z]/i,
   /\b(?:that|this|it)(?:'s| is| was)? (?:wrong|not what i (?:asked|meant|said|wanted))\b/i,
-  /\bdon'?t\b.{0,60}\bagain\b/i,
-  /\bstop [a-z]+ing\b/i,
-  /\bstill (?:using|doing|making|ignoring)\b/i,
-  /\b(?:i|we) (?:told|asked) you\b/i,
+  /\bdon['’]?t\b.{0,60}\bagain\b/i,
+  /\bstop\s+[a-z]+ing\b/i,
+  /\bstill (?:doing|ignoring|making|using)\b/i,
+  /\b(?:i|we) (?:asked|told) you\b/i,
   /\brepeat myself\b/i,
-  /\bshould (?:not|never) (?:have|be)\b/i,
-  /\bi thought (?:we|you) (?:were|was|would|agreed)\b/i,
+  /\bshould (?:not|never) (?:be|have)\b/i,
+  /\bi thought (?:we|you) (?:agreed|was|were|would)\b/i,
 ];
 
-const CORRECTION_PATTERNS = [...PROSPECTIVE_PATTERNS, ...REACTIVE_PATTERNS];
+const IMPERATIVE_ACTIONS =
+  "add|address|apply|archive|avoid|build|calculate|capture|check|close|configure|confirm|contain|convert|copy|create|delete|deploy|disclose|draft|emit|encrypt|ensure|export|fix|focus|format|generate|handle|include|inspect|keep|link|mask|merge|move|notify|open|optimize|prefer|process|provide|publish|put|read|record|redact|remove|rename|replace|require|return|review|run|sanitize|save|scrub|send|set|share|sign|sort|switch|treat|update|upload|use|validate|verify|wrap|write";
+const IMPERATIVE_RULE = new RegExp(`^(?:${IMPERATIVE_ACTIONS})\\b`, "i");
+const FORMAT_OUTPUT =
+  /^(?:[A-Z][A-Z0-9.+-]*(?:\s+\d+)?|csv|Csv|json|Json|markdown|Markdown|text|Text|toml|Toml|xml|Xml|yaml|Yaml)\s+(?:output|Output)$/;
+const RULE_SHORTHAND =
+  /^(?:always|do not|don['’]?t|never|not|only use|sorted|stop)\b|^no\s+(?:\w+ing\b|.+\boutput$)|\bin parentheses$/i;
+const UNMARKED_FIX = /^(?!i\b|it\b|th\w+\b|we\b|you\b)[a-z][\w-]*\s+\S+/i;
+const COMMAND_SHAPED =
+  /^(?:git|gh|node|npm|openclaw|pnpm)\s+|^[a-z][\w-]*\s+(?:-|\.?\/|https?:\/\/|[A-Z_][A-Z0-9_]*=)/;
 
-// Bound the sweep so a long session cannot flood the workshop with proposals.
-const MAX_CAPTURED_INSTRUCTIONS = 8;
-const DEFAULT_MAX_PROPOSALS = 3;
-const DESCRIPTION_MAX_BYTES = 160;
-// An existing skill must share at least this much vocabulary before a correction routes to it.
-const SKILL_MATCH_MIN_SCORE = 2;
-
-const SKILL_MATCH_STOPWORDS = new Set([
-  "and",
-  "are",
-  "before",
-  "but",
-  "for",
-  "from",
-  "have",
-  "into",
-  "not",
-  "should",
-  "that",
-  "the",
-  "them",
-  "then",
-  "they",
-  "this",
-  "was",
-  "were",
-  "what",
-  "when",
-  "with",
-  "you",
-  "your",
-]);
-
-const TOPIC_STOPWORDS = new Set([
-  ...SKILL_MATCH_STOPWORDS,
-  ...DURABLE_ACTION.slice(3, -1).split("|"),
-  ...Object.keys(GERUND_ACTIONS),
-  ..."a again all allow always an as ask asked attaching capture check checking chronologically do doing done final first going handling i include including inspect link make making must my never next now on only optimize parentheses please prefer processing read record reformat reply replying save sort sorted still stop testing time to use using verify week workflow write".split(
+const MATCH_STOPWORDS = new Set(
+  "and are as before but for from have into not should that the them then they this was were what when with you your".split(
+    " ",
+  ),
+);
+const TASK_CLASS_STOPWORDS = new Set([
+  ...MATCH_STOPWORDS,
+  ..."a again all always an ask asked attaching chronologically do doing done every going handling i it make making must my never next now on only parentheses please processing reply replying still stop time to we week".split(
     " ",
   ),
 ]);
-const TASK_CLASS_STOPWORDS = new Set([...SKILL_MATCH_STOPWORDS, "as"]);
+const TOPIC_STOPWORDS = new Set([
+  ...TASK_CLASS_STOPWORDS,
+  ...IMPERATIVE_ACTIONS.split("|"),
+  ..."adding after allow building checking doing exporting formatting including inspecting making optimizing publishing reading recording reformat sanitizing saving sending sharing sorting testing uploading using verifying while without workflow writing".split(
+    " ",
+  ),
+]);
 
-type WorkspaceSkillSummary = {
-  name: string;
-  description?: string;
-};
+type WorkspaceSkillSummary = { name: string; description?: string };
 
 export type DurableInstruction = {
   skillName: string;
@@ -109,22 +64,63 @@ export type DurableInstruction = {
   existingSkill: boolean;
 };
 
-type NormalizedInstruction = {
-  skillName: string;
-  title: string;
-  rules: string[];
-  taskClass?: string;
-};
-
 function extractInstruction(text: string): string | undefined {
   const trimmed = compactWhitespace(text);
-  if (trimmed.length < 24 || trimmed.length > 1200) {
-    return undefined;
+  return trimmed.length >= 12 &&
+    trimmed.length <= 1200 &&
+    SIGNAL_PATTERNS.some((pattern) => pattern.test(trimmed))
+    ? trimmed.replace(/^ok[,. ]+/i, "")
+    : undefined;
+}
+
+function splitInstructionCandidates(value: string): string[] {
+  const protectedText = compactWhitespace(value)
+    .replace(
+      /\s*(?:[;—–-]\s+|,\s+but\s+)(?=(?:from now on|going forward|next time|remember to|make sure to)\b)/gi,
+      ". ",
+    )
+    .replace(
+      /\b(?:(?:Dr|Jr|Mr|Mrs|Ms|Mt|Prof|Sr|St|etc|e\.g|i\.e|vs)\.|(?:[A-Z]\.){2,})/gi,
+      (match) => match.replaceAll(".", "\u0000"),
+    )
+    .replace(/\s\.(?=\s+(?:-|&&|\|\||[A-Za-z]))/g, " \uE001");
+  const sentences = protectedText
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.replaceAll("\u0000", ".").replaceAll("\uE001", "."));
+  const candidates: string[] = [];
+  for (let index = 0; index < sentences.length; index += 1) {
+    const sentence = sentences[index] ?? "";
+    const next = sentences[index + 1];
+    const bareComplaint =
+      /(?:\b(?:that|this|it)(?:'s| is| was)? (?:wrong|not what i (?:asked|meant|said|wanted)(?: for)?)|^(?:you(?:'re|’re| are)\s+)?still (?:doing|ignoring|making|using)\b.+)[.!?]*$/i.test(
+        sentence,
+      );
+    const nextIsFix = next && !extractInstruction(next) && UNMARKED_FIX.test(next);
+    if (bareComplaint && nextIsFix) {
+      candidates.push(`${sentence.replace(/[.!?]+$/, "")}, ${next}`);
+      index += 1;
+    } else {
+      candidates.push(sentence);
+    }
   }
-  if (!CORRECTION_PATTERNS.some((pattern) => pattern.test(trimmed))) {
-    return undefined;
-  }
-  return trimmed.replace(/^ok[,. ]+/i, "");
+  return candidates;
+}
+
+function isUnmarkedDirective(value: string): boolean {
+  const text = compactWhitespace(value).replace(/^also\s+/i, "");
+  const directive = new RegExp(
+    `^(?:always|do not|don['’]?t|never|only use|please|stop|${IMPERATIVE_ACTIONS}|git|gh|node|npm|openclaw|pnpm)\\b`,
+    "i",
+  ).test(text);
+  return (
+    !text.endsWith("?") &&
+    (directive || /^[a-z][\w-]*\s+(?:-|\.?\/|https?:\/\/|[A-Z_][A-Z0-9_]*=)/.test(text))
+  );
+}
+
+function skillTokensMatch(a: string, b: string): boolean {
+  const singularMatch = a === `${b}s` || b === `${a}s` || a === `${b}es` || b === `${a}es`;
+  return a === b || (a !== "news" && b !== "news" && singularMatch);
 }
 
 function tokenizeForSkillMatch(value: string): string[] {
@@ -132,29 +128,16 @@ function tokenizeForSkillMatch(value: string): string[] {
     .toLowerCase()
     .split(/[^a-z0-9]+/)
     .flatMap((token) => (token === "pr" || token === "prs" ? ["pull", "request"] : [token]))
-    .filter((token) => token.length >= 3 && !SKILL_MATCH_STOPWORDS.has(token));
+    .filter((token) => token.length >= 3 && !MATCH_STOPWORDS.has(token));
 }
 
-// Cheap singular/plural equivalence keeps "coaches" matching a "coach-distiller" skill.
-function skillTokensMatch(a: string, b: string): boolean {
-  if (a === b) {
-    return true;
-  }
-  if ((a === "new" && b === "news") || (a === "news" && b === "new")) {
-    return false;
-  }
-  return a === `${b}s` || b === `${a}s` || a === `${b}es` || b === `${a}es`;
-}
-
-// Routes a correction to the existing skill it is most plausibly about. Skill-name vocabulary
-// counts double so "signal" routes to signal-scout even when the description barely overlaps.
 function matchExistingSkill(
   instruction: string,
   skills: readonly WorkspaceSkillSummary[],
 ): WorkspaceSkillSummary | undefined {
+  const instructionTokens = new Set(tokenizeForSkillMatch(instruction));
   let best: WorkspaceSkillSummary | undefined;
   let bestScore = 0;
-  const instructionTokens = new Set(tokenizeForSkillMatch(instruction));
   for (const skill of skills) {
     const nameTokens = tokenizeForSkillMatch(skill.name.replace(/-/g, " "));
     const descriptionTokens = tokenizeForSkillMatch(skill.description ?? "");
@@ -171,157 +154,207 @@ function matchExistingSkill(
       best = skill;
     }
   }
-  return bestScore >= SKILL_MATCH_MIN_SCORE ? best : undefined;
-}
-
-function titleFromSkillName(skillName: string): string {
-  const preservedNames: Record<string, string> = {
-    api: "API",
-    ci: "CI",
-    gif: "GIF",
-    github: "GitHub",
-    iso: "ISO",
-    qa: "QA",
-    url: "URL",
-  };
-  return skillName
-    .split("-")
-    .map((part) => preservedNames[part] ?? part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
+  return bestScore >= 2 ? best : undefined;
 }
 
 function cleanTaskClass(value: string): string {
   return compactWhitespace(value)
     .replace(/^(?:i|we|you)\s+(?:ask|asked)\s+(?:you\s+)?for\s+/i, "")
-    .replace(/^working\s+(?:on|with)\s+/i, "")
-    .replace(/^(?:i|we|you)\s+(?:handle|process|review|write)\s+/i, "")
     .replace(/^(?:i|we|you)(?:['’]re| are)\s+(?:handling|processing|reviewing|writing)\s+/i, "")
-    .replace(/^(?:handling|processing|reviewing|writing)\s+/i, "")
+    .replace(/^(?:i|we|you)\s+(?:handle|process|review|write)\s+/i, "")
+    .replace(/^(?:handling|processing|reviewing|working (?:on|with)|writing)\s+/i, "")
     .replace(/^asked (?:for|to)\s+/i, "")
-    .replace(/^asked$/i, "")
     .replace(/^(?:a|an|every|the|this|these|those|my|your|our)\s+/i, "")
     .replace(/[.!?]+$/, "")
     .trim();
 }
 
-function taskClassAsObject(value: string): string {
-  return /[A-Z]/.test(value.slice(1)) ? value : `${value.charAt(0).toLowerCase()}${value.slice(1)}`;
+function stripSignalMarkers(value: string): string {
+  const compact = compactWhitespace(value).replace(
+    /^(?:can|could|would|will) you\s+(?=(?:from now on|going forward|next time|remember to|make sure to)\b)/i,
+    "",
+  );
+  return (
+    compact.match(
+      /(?:^|[.!?;:—–-]\s+|,\s+(?:but\s+)?)((?:from now on|going forward|next time|remember to|make sure to)\b(?=[\s,:;—–-]*\w).*)$/i,
+    )?.[1] ?? compact
+  )
+    .replace(/^(?:from now on|going forward|next time|remember to|make sure to)\b[\s,:;—–-]*/i, "")
+    .replace(/\s*,?\s+(?:from now on|going forward|next time)[.!?]*$/i, "")
+    .trim();
 }
 
-function splitCorrection(
-  instruction: string,
-): { taskClass?: string; ruleText: string; splitRuleList?: boolean } | undefined {
-  const postfixContinuation = instruction.match(
-    /^(.+?)\s+(?:from now on|going forward|next time)\s*,?\s+and\s+(.+?)[.!?]*$/i,
+function normalizeRule(value: string, explicit = false): string | undefined {
+  const compact = compactWhitespace(value);
+  const request = compact.match(/^(?:can|could|would|will) you\s+(.+)$/i);
+  let rule = (request?.[1] ?? compact)
+    .replace(/^(?:(?:also|always|make sure to|please|just|remember to)\s+)+/i, "")
+    .replace(/[.!?]+$/, "")
+    .trim();
+  if (
+    !rule ||
+    (compact.endsWith("?") && !request && !IMPERATIVE_RULE.test(rule)) ||
+    /^(?:i|we)\s+always\b/i.test(rule)
+  ) {
+    return undefined;
+  }
+  const commandShaped = COMMAND_SHAPED.test(rule);
+  if (
+    !explicit &&
+    (!IMPERATIVE_RULE.test(rule) || /\b(?:are|is|was|were) still\b/i.test(rule)) &&
+    !commandShaped &&
+    !RULE_SHORTHAND.test(rule) &&
+    !FORMAT_OUTPUT.test(rule)
+  ) {
+    return undefined;
+  }
+  if (/^only use\b/i.test(rule)) {
+    rule = rule.replace(/^only use\b/i, "Use only");
+  } else if (/^don['’]?t\s+/i.test(rule)) {
+    rule = `Do not ${rule.replace(/^don['’]?t\s+/i, "")}`;
+  } else if (/^not\s+/i.test(rule)) {
+    rule = `Do not ${rule.replace(/^not\s+/i, "")}`;
+  } else if (/^never\s+/i.test(rule)) {
+    const prohibited = rule.replace(/^never\s+/i, "");
+    if (/^(?:csv|json|markdown|text|toml|xml|yaml)(?:\s+output)?$/i.test(prohibited)) {
+      rule = `Do not use ${prohibited}`;
+    } else if (IMPERATIVE_RULE.test(prohibited)) {
+      rule = `Do not ${prohibited}`;
+    } else {
+      return undefined;
+    }
+  } else if (/^no\s+(.+)$/i.test(rule)) {
+    const prohibited = rule.replace(/^no\s+/i, "");
+    rule = `Do not ${prohibited.endsWith("output") ? "use" : "allow"} ${prohibited}`;
+  } else if (/^sorted\b/i.test(rule)) {
+    rule = rule.replace(/^sorted\b/i, "Sort");
+  } else if (FORMAT_OUTPUT.test(rule)) {
+    rule = `Use ${rule}`;
+  } else if (/\bin parentheses$/i.test(rule) && !IMPERATIVE_RULE.test(rule)) {
+    rule = `Include ${rule}`;
+  }
+  return `${commandShaped ? rule : rule.charAt(0).toUpperCase() + rule.slice(1)}.`;
+}
+
+function normalizeRuleList(value: string, splitList: boolean, explicit = false): string[] {
+  const commaClauses = value.split(/\s*,\s*/);
+  const independentClause = (clause: string) =>
+    IMPERATIVE_RULE.test(clause) ||
+    /^(?:always|do not|don['’]?t|never|only use|sorted)\b|\bin parentheses$/i.test(clause) ||
+    FORMAT_OUTPUT.test(clause);
+  const clauses =
+    splitList && commaClauses.length > 1 && commaClauses.every(independentClause)
+      ? commaClauses
+      : value.split(/\s*,\s*(?=never\b)/i);
+  const leadingUse = /^(?:only\s+)?use\b/i.test(clauses[0] ?? "");
+  return clauses
+    .map((clause, index) => {
+      const nounOnlyNever = index > 0 && leadingUse && clause.match(/^never\s+(.+)$/i)?.[1];
+      const scopedClause =
+        nounOnlyNever && !IMPERATIVE_RULE.test(nounOnlyNever)
+          ? `never use ${nounOnlyNever}`
+          : clause;
+      return normalizeRule(scopedClause, explicit);
+    })
+    .filter((rule): rule is string => Boolean(rule));
+}
+
+function parseInstruction(instruction: string) {
+  const compactInstruction = compactWhitespace(instruction.split("\uE000", 1)[0] ?? instruction);
+  const isolatedInstruction = stripSignalMarkers(compactInstruction);
+  const actorEvent = isolatedInstruction.match(
+    new RegExp(
+      `^you\\s+(${IMPERATIVE_ACTIONS}|work on)\\s+(.+),\\s+((?:always|do not|don['’]?t|make sure to|never|please)\\s+.+|(?:${IMPERATIVE_ACTIONS})\\b.+)$`,
+      "i",
+    ),
+  );
+  if (actorEvent?.[1] && actorEvent[2] && actorEvent[3]) {
+    return {
+      taskClass: cleanTaskClass(actorEvent[2]),
+      rules: normalizeRuleList(actorEvent[3], false),
+    };
+  }
+  const progressiveEvent = isolatedInstruction.match(
+    /^you(?:'re|’re| are)\s+(handling|processing|reviewing|writing|exporting)\s+(.+?),\s*(?:always\s+)?(.+)$/i,
+  );
+  if (progressiveEvent?.[1] && progressiveEvent[2] && progressiveEvent[3]) {
+    return {
+      taskClass: cleanTaskClass(progressiveEvent[2]),
+      rules: normalizeRuleList(progressiveEvent[3], false),
+    };
+  }
+  const postfixActor = compactInstruction.match(
+    new RegExp(`^(.+?)\\s+next time you\\s+(${IMPERATIVE_ACTIONS}|work on)\\s+(.+?)[.!?]*$`, "i"),
+  );
+  if (postfixActor?.[1] && postfixActor[2] && postfixActor[3]) {
+    return {
+      taskClass: cleanTaskClass(postfixActor[3]),
+      rules: normalizeRuleList(postfixActor[1], false),
+    };
+  }
+  const postfixPassive = compactInstruction.match(
+    /^(?!(?:always|from now on|going forward|make sure to|remember to)\b)(.+?)\s+(?:from now on|going forward|next time)\s+(.+?(?:\s+(?:is|are|was|were)\s+(?:[a-z]+ed|built|done|given|kept|known|made|read|run|sent|set|shown|taken|written)|\s+(?:runs?|happens?)))[.!?]*$/i,
+  );
+  if (postfixPassive?.[1] && postfixPassive[2]) {
+    return {
+      taskClass: cleanTaskClass(postfixPassive[2]),
+      rules: normalizeRuleList(postfixPassive[1], false),
+    };
+  }
+  const text = isolatedInstruction.replace(/^also\s+/i, "");
+
+  const postfixScope = compactInstruction.match(
+    /^(.+?)\s*,?\s+(?:from now on|going forward|next time)\s*,?\s*(?:during|for|in|under|when|while)\s+(.+?)[.!?]*$/i,
+  );
+  if (postfixScope?.[1] && postfixScope[2]) {
+    const scopeParts = postfixScope[2].split(/\s*,\s+and\s+/i);
+    const continuations = scopeParts.slice(1);
+    const hasContinuations = continuations.length > 0 && continuations.every(isUnmarkedDirective);
+    const continuationRules = hasContinuations
+      ? continuations.flatMap((continuation) => normalizeRuleList(continuation, false))
+      : [];
+    return {
+      taskClass: cleanTaskClass(hasContinuations ? (scopeParts[0] ?? "") : postfixScope[2]),
+      rules: [...normalizeRuleList(postfixScope[1], false), ...continuationRules],
+    };
+  }
+  const postfixContinuation = compactInstruction.match(
+    /^(.+?)\s*,?\s+(?:from now on|going forward|next time)\s*,?\s+and\s+(.+)$/i,
   );
   if (postfixContinuation?.[1] && postfixContinuation[2]) {
-    return { ruleText: `${postfixContinuation[1]} and ${postfixContinuation[2]}` };
-  }
-
-  const postfixEvent = instruction.match(
-    new RegExp(
-      `^(.+?)\\s+(?:from now on|going forward|next time)[\\s,:;—–-]+you\\s+(?:handle|process|review|work on|write|${DURABLE_ACTION})\\s+(.+?)[.!?]*$`,
-      "i",
-    ),
-  );
-  if (postfixEvent?.[1] && postfixEvent[2]) {
     return {
-      taskClass: cleanTaskClass(postfixEvent[2]),
-      ruleText: postfixEvent[1].replace(/[\s,:;—–-]+$/, ""),
+      rules: normalizeRuleList(`${postfixContinuation[1]}, ${postfixContinuation[2]}`, true),
     };
   }
 
-  const postfixScoped = instruction.match(
-    /^(.+?)\s+(?:from now on|going forward|next time)[\s,:;—–-]+(?:during|for|in|under|when|while)\s+(.+?)[.!?]*$/i,
+  const actorRequest = text.match(
+    /^(?:i need you to|i want you to|you|(?:can|could|would|will) you)\s+(?:to\s+)?always\s+(.+)$/i,
   );
-  if (postfixScoped?.[1] && postfixScoped[2]) {
-    const scopedParts = postfixScoped[2].match(/^(.+?),\s+and\s+(.+)$/);
-    const trailingCandidate = scopedParts?.[2];
-    const trailingIsDirective = trailingCandidate
-      ? new RegExp(`^(?:always|do not|don['’]?t|never|${DURABLE_ACTION})\\b`, "i").test(
-          trailingCandidate,
-        )
-      : false;
-    const taskClass = trailingIsDirective
-      ? (scopedParts?.[1] ?? postfixScoped[2])
-      : postfixScoped[2];
-    const trailingRule = trailingIsDirective
-      ? trailingCandidate?.replace(/,\s+and\s+/g, ", ")
-      : undefined;
-    return {
-      taskClass: cleanTaskClass(taskClass ?? postfixScoped[2]),
-      ruleText: trailingRule
-        ? `${postfixScoped[1].replace(/[\s,:;—–-]+$/, "")}, ${trailingRule}`
-        : postfixScoped[1].replace(/[\s,:;—–-]+$/, ""),
-      splitRuleList: Boolean(trailingRule),
-    };
+  if (actorRequest?.[1]) {
+    return { rules: normalizeRuleList(actorRequest[1].replace(/\?$/, ""), false) };
   }
-
-  const genericPostfixEvent = instruction.match(
-    new RegExp(
-      `^(${DURABLE_ACTION}\\b.+?)\\s+(?:from now on|going forward|next time)[\\s,:;—–-]+(?!(?:always|do not|don['’]?t|never|${DURABLE_ACTION})\\b)(.+?)[.!?]*$`,
-      "i",
-    ),
-  );
-  const genericTaskClass = genericPostfixEvent?.[2]?.trim();
-  const genericTaskIsDirective = genericTaskClass
-    ? new RegExp(`^(?:always|do not|don['’]?t|never|${DURABLE_ACTION})\\b`, "i").test(
-        genericTaskClass,
-      )
-    : false;
-  if (genericPostfixEvent?.[1] && genericTaskClass && !genericTaskIsDirective) {
-    return {
-      taskClass: cleanTaskClass(genericTaskClass),
-      ruleText: genericPostfixEvent[1].replace(/[\s,:;—–-]+$/, ""),
-    };
+  const policyRule = text.match(/^(?:policy:\s*|make it a rule to\s+)(.+)$/i)?.[1];
+  if (policyRule) {
+    return { rules: normalizeRuleList(policyRule, false) };
   }
-
-  const postfixMarker = instruction.match(
-    /^(.+?)\s+(?:from now on|going forward|next time)[.!?]*$/i,
-  );
-  if (postfixMarker?.[1]) {
-    return {
-      ruleText: postfixMarker[1].replace(/[\s,:;—–-]+$/, ""),
-    };
-  }
-
-  const correctionClause = instruction
-    .replace(/^.*?\b(?=(?:from now on|going forward|next time)\b)/i, (prefix) => {
-      const durablePrefix = /^\s*(?:always|do not|don['’]?t|never)\b/i.test(prefix);
-      return durablePrefix ? prefix : "";
-    })
-    .replace(
-      /(?:^(?:from now on|going forward|next time)\b|(?<=[.!?;]\s)(?:from now on|going forward|next time)\b)[\s,:;—–-]*/i,
-      "",
-    )
-    .replace(
-      new RegExp(
-        `^(?:please|could you|can you|would you)\\s+(?=(?:always|don['’]?t|make sure to|remember to|stop|${DURABLE_ACTION})\\b)`,
-        "i",
-      ),
-      "",
-    )
-    .replace(/^(?:make it a rule to|policy:)\s+(?=always\b)/i, "")
-    .replace(
-      /^(?:i\s+(?:have|need|want)\s+you\s+to|(?:we|you)\s+(?:have|need|want)\s+to)\s+(?=stop [a-z]+ing\b)/i,
-      "",
-    );
-  const text = correctionClause.replace(/^(?:remember to|make sure to)\b[\s,:;—–-]*/i, "").trim();
 
   const still = text.match(
     new RegExp(
-      `^(?:you(?:'re|’re| are)\\s+)?still (using|doing|making|ignoring)\\s+(.+?)(?:\\s+[—–-]\\s+|[,;:]\\s+|[.!?]\\s+)(?=(?:always|cut that out|do not|don['’]?t|never|only|they should|${DURABLE_ACTION})\\b)(.+)$`,
+      `^(?:you(?:'re|’re| are)\\s+)?still (using|doing|making|ignoring)\\s+(.+)(?:\\s+[—–-]\\s+|[,;:]\\s+)(cut that out(?:\\s+of\\s+.+)?|they should not be included\\s+.+|(?:do not|don['’]?t|never|only use)\\s+.+|(?:always\\s+)?(?:${IMPERATIVE_ACTIONS})\\s+.+?)[.!?]*$`,
       "i",
     ),
   );
   if (still?.[1] && still[2] && still[3]) {
     const taskClass = cleanTaskClass(still[2]);
     const replacement = still[3].replace(/[.!?]+$/, "");
-    const excluded = replacement.match(/^they should not be included\s+(.+)$/i)?.[1];
-    if (still[1].toLowerCase() === "using" && excluded) {
-      return { taskClass, ruleText: `Do not use ${taskClass} or include them ${excluded}` };
+    if (/^they should not be included\s+/i.test(replacement)) {
+      return {
+        taskClass,
+        rules: [
+          `Do not use ${taskClass} or include them ${replacement.replace(/^they should not be included\s+/i, "")}.`,
+        ],
+      };
     }
-    const removedFrom = replacement.match(/^cut that out(?: of (.+))?$/i)?.[1];
     if (/^cut that out/i.test(replacement)) {
       const verbs: Record<string, string> = {
         doing: "do",
@@ -329,417 +362,208 @@ function splitCorrection(
         making: "make",
         using: "use",
       };
+      const scope = replacement.match(/^cut that out\s+of\s+(.+)$/i)?.[1];
       return {
         taskClass,
-        ruleText: `Do not ${verbs[still[1].toLowerCase()]} ${taskClass}${removedFrom ? ` in ${removedFrom}` : ""}`,
+        rules: [
+          `Do not ${verbs[still[1].toLowerCase()]} ${taskClass}${scope ? ` in ${scope}` : ""}.`,
+        ],
       };
     }
-    return { taskClass, ruleText: replacement };
-  }
-
-  const replacement = text.match(
-    /^(?:that|this|it)(?:'s| is| was)? (?:wrong|not what i (?:asked|meant|said|wanted)(?: for)?)(?:\s+[—–-]\s+|[,;:]\s+|[.!?]\s+)(.+)$/i,
-  )?.[1];
-  if (replacement) {
-    if (/^(?:i|it|the|these|they|this|those|we|you)\b/i.test(replacement)) {
-      return undefined;
-    }
-    return { ruleText: replacement };
+    return { taskClass, rules: normalizeRuleList(replacement, false) };
   }
 
   const reflection = text.match(
-    /^i thought (?:we|you) (?:(?:were|was)\s+|would\s+|agreed(?:\s+to)?\s+)(.+?)\s+[—–-]\s+(.+)$/i,
+    /^i thought (?:we|you) (?:were|was|would|agreed(?: to)?)\s+(.+?)(?:\s+[—–-]\s+(.+))?$/i,
   );
-  if (reflection?.[1] && reflection[2]) {
+  if (reflection?.[1]) {
+    if (!reflection[2] && /^i thought (?:we|you) (?:were|was)\b/i.test(text)) {
+      return undefined;
+    }
+    const replacement = reflection[2] ?? reflection[1];
     return {
-      taskClass: cleanTaskClass(reflection[1].replace(/^working on\s+/i, "")),
-      ruleText: reflection[2],
+      taskClass: reflection[2]
+        ? cleanTaskClass(reflection[1].replace(/^working on\s+/i, ""))
+        : undefined,
+      rules: normalizeRuleList(replacement, false),
     };
   }
 
-  const agreedFix = text.match(/^i thought (?:we|you) agreed(?: to)?\s+(.+)$/i)?.[1];
-  if (agreedFix) {
-    return { ruleText: agreedFix };
-  }
-
-  const thoughtWouldFix = text.match(/^i thought (?:we|you) would\s+(.+)$/i)?.[1];
-  if (thoughtWouldFix) {
-    return { ruleText: thoughtWouldFix };
-  }
-
-  const stop = text.match(/^stop ([a-z]+ing)\s+(.+)$/i);
+  const stop = text.match(
+    /^(?:(?:(?:i need|i want) you to|(?:we|you) need to|please)\s+)?stop ([a-z]+ing)\s+(.+)$/i,
+  );
   if (stop?.[1] && stop[2]) {
-    const verb = GERUND_ACTIONS[stop[1].toLowerCase()];
-    const taskClass = cleanTaskClass(stop[2].split(/\s+(?:before|until|without)\b/i)[0] ?? stop[2]);
+    const target = stop[2].replace(/[.!?]+$/, "");
+    const taskClass = cleanTaskClass(target.split(/\s+(?:before|until|without)\b/i)[0] ?? target);
     return {
       taskClass,
-      ruleText: verb ? `Do not ${verb} ${stop[2]}` : `Stop ${stop[1].toLowerCase()} ${stop[2]}`,
+      rules: [`Stop ${stop[1].toLowerCase()} ${target}.`],
     };
   }
 
-  const invented = text.match(/^(.+?) should never have been invented\s+(.+)$/i);
-  if (invented?.[1] && invented[2]) {
-    const subject = cleanTaskClass(invented[1]);
-    return { taskClass: subject, ruleText: `Do not invent ${subject} ${invented[2]}` };
-  }
-
-  const told = text.match(/^(?:i|we) told you (.+?) (?:are|is) (.+?), there is no (.+)$/i);
-  if (told?.[1] && told[2] && told[3]) {
-    const subject = cleanTaskClass(told[1]);
-    return { taskClass: subject, ruleText: `Treat ${subject} as ${told[2]}, not ${told[3]}` };
-  }
-
-  const toldFix = text.match(/^(?:i|we) told you to\s+(.+)$/i)?.[1];
-  if (toldFix) {
-    return { ruleText: toldFix };
-  }
-
-  const toldNegativeFix = text.match(
-    /^(?:i|we) told you (?:never to|not to|don['’]?t)\s+(.+)$/i,
-  )?.[1];
-  if (toldNegativeFix) {
-    return { ruleText: `Do not ${toldNegativeFix}` };
-  }
-
-  const askedFix = text.match(/^(?:i|we) asked you to\s+(.+)$/i)?.[1];
-  if (askedFix) {
-    return { ruleText: askedFix };
-  }
-
-  const askedNegativeFix = text.match(
-    /^(?:i|we) asked you (?:never to|not to|don['’]?t)\s+(.+)$/i,
-  )?.[1];
-  if (askedNegativeFix) {
-    return { ruleText: `Do not ${askedNegativeFix}` };
-  }
-
-  const repeatedProhibition = text.match(/^don['’]?t\s+(.+?)\s+again[.!?]*$/i)?.[1];
-  if (repeatedProhibition) {
-    return { ruleText: `Do not ${repeatedProhibition}` };
-  }
-
-  const repeatedFix = text.match(
-    new RegExp(
-      `^.*\\brepeat myself\\b(?:\\s+[—–-]\\s+|[,;:]\\s+|[.!?]\\s+)((?:always|do not|don['’]?t|never|${DURABLE_ACTION})\\b.+)$`,
-      "i",
-    ),
-  )?.[1];
-  if (repeatedFix) {
-    return { ruleText: repeatedFix };
-  }
-
-  // A repeated complaint without a replacement describes a failure, not a reusable fix.
-  if (/\brepeat myself\b/i.test(text)) {
-    return undefined;
-  }
-
-  const directEvent = text.match(
-    new RegExp(
-      `^(?:(?:you(?:'re|’re| are)\\s+)?(?:handling|processing|reviewing|writing)|(?:you\\s+)?(?:handle|process|review|work on|write)|you\\s+${DURABLE_ACTION})\\s+([^.!?]+?),\\s+(?=(?:always|do not|don['’]?t|make sure to|never|${DURABLE_ACTION})\\b)(.+)$`,
-      "i",
-    ),
+  const contextualDirective = text.match(
+    /^(?!.*:)(?:for|on|when|whenever)\s+(.+),\s+((?:(?:always|do not|don['’]?t|make sure to|never|please)\s+|[a-z]+\s+).+)$/i,
   );
-  if (directEvent?.[1] && directEvent[2]) {
-    return { taskClass: cleanTaskClass(directEvent[1]), ruleText: directEvent[2] };
+  if (contextualDirective?.[1] && contextualDirective[2]) {
+    return {
+      taskClass: cleanTaskClass(contextualDirective[1]),
+      rules: normalizeRuleList(contextualDirective[2], false),
+    };
   }
 
-  const colonContext = text.match(/^(?:when|whenever|for|on)\s+(.+?)\s*:\s*(.+)$/i);
-  const contextual =
-    colonContext ??
-    text.match(
-      new RegExp(
-        `^(?:when|whenever|for|on)\\s+(.+?),\\s+(?=(?:always|do not|don['’]?t|make sure to|never|${DURABLE_ACTION})\\b)(.+)$`,
-        "i",
-      ),
-    ) ??
-    text.match(/^(?:when|whenever|for|on)\s+(.+?)\s+always\s+(.+)$/i);
-  if (contextual?.[1] && contextual[2]) {
+  const contextual = text.match(/^(?:for|on|when|whenever)\s+(.+?)(\s*:\s*|,\s+)(.+)$/i);
+  if (contextual?.[1] && contextual[3]) {
     return {
       taskClass: cleanTaskClass(contextual[1]),
-      ruleText: contextual[2],
-      splitRuleList: Boolean(colonContext),
+      rules: normalizeRuleList(contextual[3], contextual[2]?.includes(":") === true),
     };
   }
 
-  const modal = text.match(/^([^.!?]+?)\s+(?:must|should)(?:\s+always)?\s+(.+)$/i);
+  const contextualAlways = text.match(/^(?:for|on|when|whenever)\s+(.+?)\s+always\s+(.+)$/i);
+  if (contextualAlways?.[1] && contextualAlways[2]) {
+    if (/\b(?:i|we)$/i.test(contextualAlways[1])) {
+      return undefined;
+    }
+    return {
+      taskClass: cleanTaskClass(contextualAlways[1]),
+      rules: normalizeRuleList(contextualAlways[2], false),
+    };
+  }
+
+  const modal = text.match(/^(?!i\s)([^.!?]+?)\s+(?:must|should)(?:\s+always)?\s+(.+)$/i);
   if (modal?.[1] && modal[2]) {
     const taskClass = cleanTaskClass(modal[1]);
-    const taskObject = taskClassAsObject(taskClass);
-    const substantiveTaskClass = deriveTopicTokens(taskClass, TASK_CLASS_STOPWORDS).length > 0;
-    const pastPerfectPassive = modal[2].match(/^(?:never|not) have been\s+(.+)$/i)?.[1];
-    if (pastPerfectPassive) {
-      return { taskClass, ruleText: `Do not allow ${taskObject} to be ${pastPerfectPassive}` };
+    const predicate = modal[2].replace(/[.!?]+$/, "");
+    if (/^(?:not|never) have been\b/i.test(predicate)) {
+      return undefined;
     }
-    const negativePassive = modal[2].match(/^(?:not|never) be\s+(.+)$/i)?.[1];
-    if (negativePassive) {
-      return { taskClass, ruleText: `Do not allow ${taskObject} to be ${negativePassive}` };
-    }
-    const positivePassive = modal[2].match(/^be\s+(.+)$/i)?.[1];
-    if (positivePassive) {
-      return { taskClass, ruleText: `Require ${taskObject} to be ${positivePassive}` };
-    }
-    const negativeActive = modal[2].match(/^not\s+(.+)$/i)?.[1];
-    if (negativeActive) {
-      const prohibition = `Do not ${negativeActive.replace(/[.!?]+$/, "")}`;
+    if (/^(?:not|never) have\s+/i.test(predicate)) {
+      const missing = predicate.replace(/^(?:not|never) have\s+/i, "");
       return {
         taskClass,
-        ruleText: substantiveTaskClass ? `For ${taskObject}: ${prohibition}` : prohibition,
+        rules: [`Do not allow ${taskClass} to have ${missing}.`],
       };
     }
-    return { taskClass, ruleText: modal[2] };
-  }
-
-  const directedAlways = text.match(/^you always\s+(.+)$/i)?.[1];
-  if (directedAlways) {
-    return { ruleText: directedAlways };
-  }
-
-  const requestedAlways = text.match(/^i (?:need|want) you to always\s+(.+)$/i)?.[1];
-  if (requestedAlways) {
-    return { ruleText: requestedAlways };
+    if (/^(?:not|never) be\s+/i.test(predicate)) {
+      return {
+        taskClass,
+        rules: [
+          `Do not allow ${taskClass} to be ${predicate.replace(/^(?:not|never) be\s+/i, "")}.`,
+        ],
+      };
+    }
+    if (/^be\s+/i.test(predicate)) {
+      return {
+        taskClass,
+        rules: [`Require ${taskClass} to be ${predicate.replace(/^be\s+/i, "")}.`],
+      };
+    }
+    if (/^not\s+/i.test(predicate)) {
+      const prohibition = `Do not ${predicate.replace(/^not\s+/i, "")}.`;
+      const scope = /^(?:i|we|you)$/i.test(taskClass) ? "" : `For ${taskClass}: `;
+      return {
+        taskClass,
+        rules: [`${scope}${prohibition}`],
+      };
+    }
+    return { taskClass, rules: normalizeRuleList(predicate, false) };
   }
 
   const event = text.match(/^(.+?)\s+(?:runs?|happens?),\s+(.+)$/i);
   if (event?.[1] && event[2]) {
-    return { taskClass: cleanTaskClass(event[1]), ruleText: event[2] };
+    return { taskClass: cleanTaskClass(event[1]), rules: normalizeRuleList(event[2], false) };
   }
 
-  const reactive = REACTIVE_PATTERNS.some((pattern) => pattern.test(text));
-  const prospective =
-    PROSPECTIVE_PATTERNS.some((pattern) => pattern.test(text)) ||
-    /\b(?:from now on|going forward|next time|remember to|make sure to)\b/i.test(instruction);
-  return reactive && !prospective ? undefined : { ruleText: text };
+  const replacement = text.match(
+    /^(?:that|this|it)(?:'s| is| was)? (?:wrong|not what i (?:asked|meant|said|wanted)(?: for)?)(?:\s*[—–-]\s*|[.!?,;:]\s+)(.+)$/i,
+  )?.[1];
+  if (replacement && !/^(?:i|it|the|these|they|this|those|we|you)\b/i.test(replacement)) {
+    return { rules: normalizeRuleList(replacement, false, true) };
+  }
+
+  const directFix = text.match(
+    /^(?:i|we) (?:asked|told) you (?:to\s+|not to\s+|never to\s+|don['’]?t\s+)(.+)$/i,
+  );
+  if (directFix?.[1]) {
+    const negative = /\b(?:(?:not|never) to|don['’]?t)\s+/i.test(text);
+    const rule = `${negative ? "Do not " : ""}${directFix[1]}`;
+    return { rules: normalizeRuleList(rule, false, true) };
+  }
+
+  if (/\brepeat myself\b/i.test(text)) {
+    const explicitFix = text.match(/\brepeat myself\b.*?(?:\s+[—–-]\s+|[,;:]\s*)(.+)$/i)?.[1];
+    return explicitFix && isUnmarkedDirective(explicitFix)
+      ? { rules: normalizeRuleList(explicitFix, false) }
+      : undefined;
+  }
+  const rules = normalizeRuleList(text, false);
+  return rules.length > 0 ? { rules } : undefined;
 }
 
-function splitInstructionSentences(value: string): string[] {
-  const protectedValue = compactWhitespace(value)
-    .replace(/\s\.(?=\s+(?:-|&&|\|\||;))/, (match) => match.replace(".", "\u0000"))
-    .replace(/(?:\b(?:Dr|Jr|Mr|Mrs|Ms|Prof|Sr|St|e\.g|i\.e|vs)\.|\b(?:[A-Z]\.){2,})/g, (match) =>
-      match.replace(/\./g, "\u0000"),
-    );
-  return protectedValue.split(/(?<=[.!?])\s+/).map((sentence) => sentence.replace(/\u0000/g, "."));
-}
-
-function normalizeRule(value: string, explicitMarker = false): string | undefined {
-  const firstSentence = splitInstructionSentences(value)[0] ?? "";
-  const directiveQuestion = new RegExp(
-    `^(?:always|please|make sure to|${DURABLE_ACTION})\\b`,
-    "i",
-  ).test(firstSentence);
-  if (/\?$/.test(firstSentence) && !directiveQuestion) {
-    return undefined;
-  }
-  let rule = firstSentence
-    .replace(/^(?:(?:also|always|make sure to|please|just)\s+)+/i, "")
-    .replace(/[.!?]+$/, "")
-    .trim();
-  if (!rule) {
-    return undefined;
-  }
-  if (explicitMarker && /^(?:i|it|the|these|they|this|those|we|you)\b/i.test(rule)) {
-    return undefined;
-  }
-  const alreadyImperative = new RegExp(`^(?:do not|${DURABLE_ACTION})\\b`, "i").test(rule);
-  const scopedImperative = new RegExp(`^For .+?:\\s+(?:do not|${DURABLE_ACTION})\\b`, "i").test(
-    rule,
-  );
-  const safeShorthand =
-    /^(?:only use|no|don['’]?t|not|never|sorted|stop)\b|\boutput$|\bin parentheses$/i.test(rule);
-  const commandShaped =
-    /^(?:gh|git|node|npm|openclaw|pnpm)\s+/.test(rule) ||
-    /^[a-z][\w-]*\s+(?:-|\.?\/|https?:\/\/|[A-Z_][A-Z0-9_]*=)/.test(rule);
-  if (
-    explicitMarker &&
-    !alreadyImperative &&
-    !scopedImperative &&
-    !safeShorthand &&
-    !commandShaped
-  ) {
-    return undefined;
-  }
-  const stopAction = rule.match(/^stop\s+([a-z]+ing)\s+(.+)$/i);
-  if (stopAction?.[1] && stopAction[2]) {
-    const verb = GERUND_ACTIONS[stopAction[1].toLowerCase()];
-    rule = verb
-      ? `Do not ${verb} ${stopAction[2]}`
-      : `Stop ${stopAction[1].toLowerCase()} ${stopAction[2]}`;
-  } else if (/^only use\b/i.test(rule)) {
-    rule = rule.replace(/^only use\b/i, "Use only");
-  } else if (/^no\s+(.+)$/i.test(rule)) {
-    const prohibited = rule.replace(/^no\s+/i, "");
-    if (/^\w+ing\b/i.test(prohibited)) {
-      rule = `Do not allow ${prohibited}`;
-    } else if (/\boutput$/i.test(prohibited)) {
-      rule = `Do not use ${prohibited}`;
-    } else {
-      return undefined;
-    }
-  } else if (/^don['’]?t\s+/i.test(rule)) {
-    rule = `Do not ${rule.replace(/^don['’]?t\s+/i, "")}`;
-  } else if (/^not\s+/i.test(rule)) {
-    rule = `Do not ${rule.replace(/^not\s+/i, "")}`;
-  } else if (/^never\s+/i.test(rule)) {
-    const prohibited = rule.replace(/^never\s+/i, "");
-    const prohibitedIsAction = new RegExp(`^${DURABLE_ACTION}\\b`, "i").test(prohibited);
-    const nounShorthand = /^(?:csv|json|markdown|text|toml|xml|yaml)(?:\s+output)?$/i.test(
-      prohibited,
-    );
-    if (!prohibitedIsAction && !nounShorthand) {
-      return undefined;
-    }
-    rule = `${nounShorthand && !prohibitedIsAction ? "Do not use" : "Do not"} ${prohibited}`;
-  } else if (/^sorted\b/i.test(rule)) {
-    rule = rule.replace(/^sorted\b/i, "Sort");
-  } else if (/\boutput$/i.test(rule) && !alreadyImperative && !scopedImperative) {
-    rule = `Use ${rule}`;
-  } else if (/\bin parentheses$/i.test(rule) && !alreadyImperative && !scopedImperative) {
-    rule = `Include ${rule}`;
-  }
-  const sentenceCase =
-    /^[A-Z]/.test(rule) || new RegExp(`^(?:For\\b|do not\\b|${DURABLE_ACTION}\\b)`, "i").test(rule);
-  return `${sentenceCase && !commandShaped ? rule.charAt(0).toUpperCase() + rule.slice(1) : rule}.`;
-}
-
-function normalizeRules(
-  ruleText: string,
-  splitRuleList: boolean,
-  explicitMarker: boolean,
-): string[] {
-  const sentences = splitInstructionSentences(ruleText);
-  const directiveLead = new RegExp(
-    `^(?:(?:also|please|make sure to)\\s+)?(?:always|do not|don['’]?t|never|no|stop|${DURABLE_ACTION})\\b`,
-    "i",
-  );
-  const contextualDirective = new RegExp(
-    `^(?:for|on|when|whenever)\\b.+\\balways\\s+${DURABLE_ACTION}\\b`,
-    "i",
-  );
-  const modalDirective = new RegExp(
-    `^(?!I\\b).+\\b(?:must|should)\\s+always\\s+${DURABLE_ACTION}\\b`,
-    "i",
-  );
-  const directiveSentences = sentences.filter(
-    (sentence, index) =>
-      index === 0 ||
-      directiveLead.test(sentence) ||
-      contextualDirective.test(sentence) ||
-      modalDirective.test(sentence),
-  );
-  const clauses = directiveSentences.flatMap((sentence) => {
-    const contextual = sentence.match(/^(?:for|on|when|whenever)\s+(.+?),\s+always\s+(.+)$/i);
-    const modal = sentence.match(/^(.+?)\s+(?:must|should)\s+always\s+(.+)$/i);
-    const sentenceForClauses =
-      contextual?.[1] && contextual[2]
-        ? `For ${cleanTaskClass(contextual[1])}: ${contextual[2].charAt(0).toUpperCase()}${contextual[2].slice(1)}`
-        : modal?.[1] && modal[2]
-          ? `For ${cleanTaskClass(modal[1])}: ${modal[2].charAt(0).toUpperCase()}${modal[2].slice(1)}`
-          : sentence;
-    const candidateClauses = sentenceForClauses.split(/\s*,\s*/).filter(Boolean);
-    const independentClause = new RegExp(
-      `^(?:sorted|${DURABLE_ACTION})\\b|\\boutput$|\\bin parentheses$`,
-      "i",
-    );
-    const splitIndependentList =
-      splitRuleList &&
-      candidateClauses.length > 1 &&
-      candidateClauses.every((clause) => independentClause.test(clause));
-    return splitIndependentList
-      ? candidateClauses
-      : sentenceForClauses.split(/\s*,\s*(?=never\b)/i);
-  });
-  const firstClauseUses = /^\s*(?:always\s+)?use\b/i.test(clauses[0] ?? "");
-  return clauses
-    .map((clause, index) => {
-      const neverShorthand = index > 0 && firstClauseUses && clause.match(/^never\s+(.+)$/i)?.[1];
-      return normalizeRule(
-        neverShorthand ? `Do not use ${neverShorthand}` : clause,
-        explicitMarker,
-      );
-    })
-    .filter((rule): rule is string => Boolean(rule));
-}
-
-function deriveTopicTokens(value: string, stopwords = TOPIC_STOPWORDS): string[] {
-  const withoutTemporaryArtifacts = value
+function deriveTopicTokens(value: string, dropLeadingAction = false): string[] {
+  const classLevelValue = value
     .replace(
-      /\b(attempt|build|execution|incident|job|run|session|task|trace)\s+((?:id\s+|#)?)([a-z0-9][a-z0-9-]*)\b/gi,
-      (match, taskClass: string, marker: string, identifier: string) => {
-        const stableArchitecture = /^(?:aarch64|arm64|riscv64|x64|x86)$/i.test(identifier);
-        const opaqueArtifactClass = /^(?:incident|job|run|task|trace)$/i.test(taskClass);
-        const identifierShaped =
-          !stableArchitecture &&
-          (marker.length > 0 ||
-            /^\d+$/.test(identifier) ||
-            /^[a-f0-9]{7,}$/i.test(identifier) ||
-            /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(identifier) ||
-            /^[a-z]{2,10}-\d{2,}$/i.test(identifier) ||
-            (opaqueArtifactClass &&
-              identifier.length >= 6 &&
-              (identifier.match(/\d/g)?.length ?? 0) >= 2));
-        return identifierShaped ? taskClass : match;
+      /\b(attempt|build|execution|incident|job|run|session|task|trace)\s+(?:(?:id\s+|#)\s*)[a-z0-9-]+\b/gi,
+      "$1",
+    )
+    .replace(
+      /\b(attempt|build|execution|incident|job|run|session|task|trace)\s+([a-z0-9-]+)\b/gi,
+      (match, taskClass: string, identifier: string) => {
+        const digitCount = identifier.match(/\d/g)?.length ?? 0;
+        const transient =
+          /^\d+$/.test(identifier) ||
+          /^[a-f0-9]{7,}$/i.test(identifier) ||
+          (/^(?:attempt|execution|incident|job|run|session|task|trace)$/i.test(taskClass) &&
+            identifier.length >= 8 &&
+            digitCount >= 2);
+        return transient ? taskClass : match;
       },
     )
     .replace(/\b\d{4}-\d{2}-\d{2}\b/g, "")
-    .replace(
-      /\b(?:[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}|(?:bug|inc|issue|ticket)-\d{2,})\b/gi,
-      "",
-    );
-  const namespace = withoutTemporaryArtifacts.match(/\b[a-z0-9]+hub\b/i)?.[0];
+    .replace(/\b(?:bug|inc|incident|issue|ticket)-\d+\b/gi, "")
+    .replace(/\b[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\b/gi, "");
+  const topicValue = classLevelValue;
+  const namespace = topicValue.match(/\b[a-z0-9]+hub\b/i)?.[0];
   if (namespace) {
     return [namespace.toLowerCase()];
   }
-  return withoutTemporaryArtifacts
+  const leadingWord = dropLeadingAction
+    ? topicValue.match(/^([a-z][a-z0-9-]*)\b/i)?.[1]?.toLowerCase()
+    : undefined;
+  const tokens = topicValue
     .normalize("NFKD")
     .replace(/\p{M}/gu, "")
     .replace(/[’']/g, "")
     .toLowerCase()
     .split(/[^a-z0-9]+/)
-    .filter((token) => token && !stopwords.has(token));
+    .filter(
+      (token) => token && !(dropLeadingAction ? TOPIC_STOPWORDS : TASK_CLASS_STOPWORDS).has(token),
+    );
+  const commandTopic = COMMAND_SHAPED.test(topicValue);
+  return leadingWord && !commandTopic && tokens[0] === leadingWord ? tokens.slice(1) : tokens;
 }
 
-function normalizeInstruction(instruction: string): NormalizedInstruction | undefined {
-  const parsed = splitCorrection(instruction);
-  if (!parsed) {
-    return undefined;
-  }
-  const explicitMarker =
-    /\b(?:from now on|going forward|next time|remember to|make sure to)\b/i.test(instruction);
-  let rules = normalizeRules(parsed.ruleText, parsed.splitRuleList === true, explicitMarker);
-  const taskClassTokens = parsed.taskClass
-    ? deriveTopicTokens(parsed.taskClass, TASK_CLASS_STOPWORDS)
-    : [];
-  const topicTokens =
-    taskClassTokens.length > 0 ? taskClassTokens : deriveTopicTokens(rules.join(" "));
-  const namespaceOnly =
-    parsed.taskClass !== undefined &&
-    topicTokens.length === 1 &&
-    /\b[a-z0-9]+hub\b/i.test(parsed.taskClass) &&
-    compactWhitespace(parsed.taskClass).split(/\s+/).length > 1;
-  if (namespaceOnly) {
-    rules = rules.map((rule) => (/^For\b/.test(rule) ? rule : `For ${parsed.taskClass}: ${rule}`));
-  }
-  const rawSkillName = normalizeSkillIndexName(topicTokens.join("-"));
-  if (!rawSkillName || rules.length === 0) {
-    return undefined;
-  }
-  const skillName =
-    rawSkillName.length <= 64
-      ? rawSkillName
-      : `${rawSkillName.slice(0, 55).replace(/-+$/, "")}-${createHash("sha256").update(rawSkillName).digest("hex").slice(0, 8)}`;
-  return {
-    skillName,
-    title: titleFromSkillName(skillName),
-    rules,
-    ...(parsed.taskClass && taskClassTokens.length > 0 ? { taskClass: parsed.taskClass } : {}),
-  };
+function boundSkillName(value: string): string {
+  const normalized = normalizeSkillIndexName(value);
+  return normalized.length <= 64
+    ? normalized
+    : `${normalized.slice(0, 55).replace(/-+$/, "")}-${createHash("sha256").update(normalized).digest("hex").slice(0, 8)}`;
+}
+
+function titleFromSkillName(skillName: string): string {
+  return skillName
+    .split("-")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ")
+    .replace(/\b(?:Api|Ci|Gif|Iso|Qa|Url)\b/g, (value) => value.toUpperCase())
+    .replace("Github", "GitHub");
 }
 
 function buildDescription(title: string, rules: readonly string[]): string {
   const clauses: string[] = [];
   for (const rule of rules) {
     const next = [...clauses, rule.replace(/\.$/, "")];
-    const candidate = `${title}: ${next.join("; ")}.`;
-    if (Buffer.byteLength(candidate, "utf8") > DESCRIPTION_MAX_BYTES) {
+    if (Buffer.byteLength(`${title}: ${next.join("; ")}.`, "utf8") > 160) {
       break;
     }
     clauses.push(next.at(-1) ?? "");
@@ -747,39 +571,22 @@ function buildDescription(title: string, rules: readonly string[]): string {
   if (clauses.length > 0) {
     return `${title}: ${clauses.join("; ")}.`;
   }
-  const suffix = ": Apply the captured instructions.";
-  const titleWords = title.split(/\s+/);
-  while (
-    titleWords.length > 1 &&
-    Buffer.byteLength(`${titleWords.join(" ")}${suffix}`, "utf8") > DESCRIPTION_MAX_BYTES
-  ) {
-    titleWords.pop();
-  }
-  const boundedTitle =
-    Buffer.byteLength(`${titleWords.join(" ")}${suffix}`, "utf8") <= DESCRIPTION_MAX_BYTES
-      ? titleWords.join(" ")
-      : "Task";
-  return `${boundedTitle}${suffix}`;
+  const availableBytes = 160 - Buffer.byteLength(`${title}: …`, "utf8");
+  return `${title}: ${truncateUtf8Prefix(rules[0]?.replace(/\.$/, "") ?? "", availableBytes)
+    .replace(/\s+\S*$/, "")
+    .trimEnd()}…`;
 }
 
-function findEquivalentGroupName(
-  skillName: string,
-  groupNames: Iterable<string>,
-): string | undefined {
-  const tokens = skillName.split("-");
-  for (const candidate of groupNames) {
-    const candidateTokens = candidate.split("-");
-    if (
-      candidateTokens.length === tokens.length &&
-      tokens.every((token, index) => skillTokensMatch(token, candidateTokens[index] ?? ""))
-    ) {
-      return candidate;
-    }
-  }
-  return undefined;
+function findEquivalentName(name: string, candidates: Iterable<string>): string | undefined {
+  const tokens = name.split("-");
+  return [...candidates].find(
+    (candidate) =>
+      candidate.split("-").length === tokens.length &&
+      tokens.every((token, index) => skillTokensMatch(token, candidate.split("-")[index] ?? "")),
+  );
 }
 
-function buildInstructionGroup(params: {
+function buildProposal(params: {
   skillName: string;
   title: string;
   rules: string[];
@@ -787,10 +594,10 @@ function buildInstructionGroup(params: {
   existingSkill: boolean;
 }): DurableInstruction | undefined {
   const skillName = normalizeSkillIndexName(params.skillName);
-  if (!skillName) {
+  const rules = [...new Set(params.rules)];
+  if (!skillName || rules.length === 0) {
     return undefined;
   }
-  const rules = [...new Set(params.rules)];
   return {
     skillName,
     description: buildDescription(params.title, rules),
@@ -812,137 +619,114 @@ function buildInstructionGroup(params: {
   };
 }
 
-/** Cheaply extracts candidate durable instructions from transcript text, newest last. */
 export function extractDurableInstructions(messages: unknown[]): string[] {
-  const transcript = extractTranscriptText(messages);
-  const userTexts = transcript.filter((entry) => entry.role === "user").map((entry) => entry.text);
   const instructions: string[] = [];
-  for (const rawText of userTexts) {
-    const habitPattern =
-      /^(?:FYI,\s*)?(?:for|on|when|whenever)\b(?:(?!\balways\b).)+?(?:,\s*|\s+)i always\b/i;
-    const text = splitInstructionSentences(rawText)
-      .flatMap((sentence) => {
-        if (!habitPattern.test(sentence)) {
-          return [sentence];
-        }
-        const markerIndex = sentence.search(/\b(?:from now on|going forward|next time)\b/i);
-        return markerIndex >= 0 ? [sentence.slice(markerIndex)] : [];
-      })
-      .join(" ");
-    if (!text) {
+  for (const entry of extractTranscriptText(messages)) {
+    if (entry.role !== "user") {
       continue;
     }
-    const candidates: string[] = [];
-    let buffered: string[] = [];
-    const splitSentences = splitInstructionSentences(text);
-    const leadingInstruction = extractInstruction(splitSentences[0] ?? "");
-    const leadingSentenceNormalizes = Boolean(
-      leadingInstruction && normalizeInstruction(leadingInstruction),
-    );
-    const flushBuffered = () => {
-      if (buffered.length > 0) {
-        candidates.push(buffered.join(" "));
-        buffered = [];
-      }
-    };
-    for (const [index, sentence] of splitSentences.entries()) {
-      const independentlyScoped =
-        index > 0 &&
-        (/^(?:for|on|when|whenever)\b.+\balways\b/i.test(sentence) ||
-          /\b(?:from now on|going forward|next time)\b/i.test(sentence) ||
-          /^(?!I\b).+\b(?:must|should)\s+always\b/i.test(sentence) ||
-          (!leadingSentenceNormalizes &&
-            PROSPECTIVE_PATTERNS.some((pattern) => pattern.test(sentence))));
-      if (independentlyScoped) {
-        flushBuffered();
-        buffered.push(sentence);
-      } else {
-        buffered.push(sentence);
-      }
-    }
-    flushBuffered();
-    for (const candidate of candidates) {
-      const instruction = extractInstruction(candidate);
-      if (instruction && normalizeInstruction(instruction) && !instructions.includes(instruction)) {
+    const active = { enabled: false, taskClass: "" };
+    for (const sentence of splitInstructionCandidates(entry.text)) {
+      const markedInstruction = extractInstruction(sentence);
+      const instruction =
+        markedInstruction ??
+        (active.enabled &&
+        sentence.length >= 12 &&
+        sentence.length <= 1200 &&
+        isUnmarkedDirective(sentence)
+          ? active.taskClass
+            ? `For ${active.taskClass}: ${compactWhitespace(sentence)}\uE000${compactWhitespace(sentence)}`
+            : compactWhitespace(sentence)
+          : undefined);
+      const parsed = instruction ? parseInstruction(instruction) : undefined;
+      const bareComplaint =
+        markedInstruction &&
+        /(?:\b(?:not what i (?:asked|meant|said|wanted)|repeat myself)\b|^(?:you(?:'re|’re| are)\s+)?still (?:doing|ignoring|making|using)\b)/i.test(
+          markedInstruction,
+        );
+      active.enabled = Boolean(parsed?.rules.length || bareComplaint);
+      active.taskClass = parsed?.taskClass ?? (markedInstruction ? "" : active.taskClass);
+      const taskTokens = parsed?.taskClass ? deriveTopicTokens(parsed.taskClass) : [];
+      const topicTokens =
+        taskTokens.length > 0 ? taskTokens : deriveTopicTokens(parsed?.rules.join(" ") ?? "", true);
+      if (
+        instruction &&
+        parsed &&
+        parsed.rules.length > 0 &&
+        topicTokens.length > 0 &&
+        !instructions.includes(instruction)
+      ) {
         instructions.push(instruction);
       }
     }
   }
-  return instructions.slice(-MAX_CAPTURED_INSTRUCTIONS);
+  return instructions.slice(-8);
 }
 
-/** Routes and groups already-extracted instructions into one proposal per target skill. */
 export function groupDurableInstructionProposals(params: {
   instructions: readonly string[];
   existingSkills?: readonly WorkspaceSkillSummary[];
   maxProposals?: number;
 }): DurableInstruction[] {
-  if (params.instructions.length === 0) {
-    return [];
-  }
-
   const groups = new Map<
     string,
     { title: string; rules: string[]; instructions: string[]; existingSkill: boolean }
   >();
   for (const instruction of params.instructions) {
-    const normalized = normalizeInstruction(instruction);
-    if (!normalized) {
+    const parsed = parseInstruction(instruction);
+    if (!parsed || parsed.rules.length === 0) {
+      continue;
+    }
+    const taskTokens = parsed.taskClass ? deriveTopicTokens(parsed.taskClass) : [];
+    const topicTokens =
+      taskTokens.length > 0 ? taskTokens : deriveTopicTokens(parsed.rules.join(" "), true);
+    const inferredName = boundSkillName(topicTokens.join("-"));
+    if (!inferredName) {
       continue;
     }
     const existingSkills = params.existingSkills ?? [];
-    const exact = existingSkills.find(
-      (skill) => normalizeSkillIndexName(skill.name) === normalized.skillName,
+    const equivalentExistingName = findEquivalentName(
+      inferredName,
+      existingSkills.map((skill) => normalizeSkillIndexName(skill.name)),
     );
-    const equivalent = existingSkills.find((skill) => {
-      const candidate = normalizeSkillIndexName(skill.name);
-      if (!candidate) {
-        return false;
-      }
-      const normalizedTokens = normalized.skillName.split("-");
-      const candidateTokens = candidate.split("-");
-      return (
-        normalizedTokens.length === candidateTokens.length &&
-        normalizedTokens.every((token, index) =>
-          skillTokensMatch(token, candidateTokens[index] ?? ""),
-        )
-      );
-    });
-    const fuzzy = exact || equivalent ? undefined : matchExistingSkill(instruction, existingSkills);
-    const existing = exact ?? equivalent ?? fuzzy;
-    const rules =
-      fuzzy && normalized.taskClass
-        ? normalized.rules.map((rule) =>
-            /^For\b/.test(rule) ? rule : `For ${normalized.taskClass}: ${rule}`,
-          )
-        : normalized.rules;
+    const equivalentExisting = existingSkills.find(
+      (skill) => normalizeSkillIndexName(skill.name) === equivalentExistingName,
+    );
+    const fuzzyExisting = equivalentExisting
+      ? undefined
+      : matchExistingSkill(instruction, existingSkills);
+    const existing = equivalentExisting ?? fuzzyExisting;
     const skillName =
-      existing?.name ??
-      findEquivalentGroupName(normalized.skillName, groups.keys()) ??
-      normalized.skillName;
-    const title = existing ? titleFromSkillName(existing.name) : normalized.title;
+      existing?.name ?? findEquivalentName(inferredName, groups.keys()) ?? inferredName;
+    const namespaceOnly =
+      parsed.taskClass &&
+      skillName.split("-").length === 1 &&
+      /\b[a-z0-9]+hub\b/i.test(parsed.taskClass);
+    const preserveTaskScope = taskTokens.length > 0 && Boolean(namespaceOnly || fuzzyExisting);
+    const rules = preserveTaskScope
+      ? parsed.rules.map((rule) =>
+          /^For\b/.test(rule) ? rule : `For ${parsed.taskClass}: ${rule}`,
+        )
+      : parsed.rules;
     const group = groups.get(skillName);
     if (group) {
-      group.instructions.push(instruction);
+      group.instructions.push(instruction.split("\uE000").at(-1) ?? instruction);
       group.rules.push(...rules);
-      // Re-insert so the recency cap ranks topics by their latest correction, not their first.
       groups.delete(skillName);
       groups.set(skillName, group);
     } else {
       groups.set(skillName, {
-        title,
+        title: titleFromSkillName(existing?.name ?? skillName),
         rules: [...rules],
-        instructions: [instruction],
+        instructions: [instruction.split("\uE000").at(-1) ?? instruction],
         existingSkill: Boolean(existing),
       });
     }
   }
 
-  const maxProposals = params.maxProposals ?? DEFAULT_MAX_PROPOSALS;
   const proposals: DurableInstruction[] = [];
-  // Most recent groups win when the cap bites; later corrections carry the freshest intent.
-  for (const [skillName, group] of [...groups.entries()].slice(-maxProposals)) {
-    const proposal = buildInstructionGroup({ skillName, ...group });
+  for (const [skillName, group] of [...groups.entries()].slice(-(params.maxProposals ?? 3))) {
+    const proposal = buildProposal({ skillName, ...group });
     if (proposal) {
       proposals.push(proposal);
     }
