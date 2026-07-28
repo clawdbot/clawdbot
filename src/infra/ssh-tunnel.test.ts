@@ -49,6 +49,17 @@ describe("parseSshTarget", () => {
     expect(parseSshTarget("-oProxyCommand=echo")).toBeNull();
   });
 
+  it("rejects targets that cannot be embedded in ssh config directives", () => {
+    expect(parseSshTarget("example.com\n  ProxyCommand touch marker")).toBeNull();
+    expect(parseSshTarget("example.com\r  ProxyCommand touch marker")).toBeNull();
+    expect(parseSshTarget("example.com\n  ProxyCommand touch marker:2222")).toBeNull();
+    expect(parseSshTarget("me\nProxyCommand=touch@example.com")).toBeNull();
+    expect(parseSshTarget("bad host")).toBeNull();
+    expect(parseSshTarget("host/name")).toBeNull();
+    expect(parseSshTarget("host\\name")).toBeNull();
+    expect(parseSshTarget("me name@example.com")).toBeNull();
+  });
+
   it("rejects hostnames with stray leading or trailing colons", () => {
     // Default-port branch: the whole host part keeps the stray colon.
     expect(parseSshTarget("host:")).toBeNull();
