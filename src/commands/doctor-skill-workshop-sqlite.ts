@@ -8,6 +8,7 @@ import {
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pathExists, root, type Root } from "../infra/fs-safe.js";
+import { removePathWithinRoot } from "../infra/fs-safe-remove.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
   hashSkillProposalContent,
@@ -191,8 +192,7 @@ export async function migrateLegacySkillWorkshopProposals(params: {
     if (!(await pathExists(path.join(stateDir, MANIFEST_PATH)))) {
       return { changes: [], warnings: [], detected: 0, migrated: 0 };
     }
-    const stateRoot = await root(stateDir);
-    await stateRoot.remove(MANIFEST_PATH);
+    await removePathWithinRoot({ rootDir: stateDir, relativePath: MANIFEST_PATH });
     return {
       changes: ["Removed the empty legacy Skill Workshop proposal index."],
       warnings: [],
@@ -240,11 +240,13 @@ export async function migrateLegacySkillWorkshopProposals(params: {
       warnings.push(`Failed to migrate Skill Workshop proposal ${proposalId}: ${String(error)}`);
     }
   }
-  await stateRoot.remove(MANIFEST_PATH).catch((error: unknown) => {
-    if (!isNotFoundError(error)) {
-      warnings.push(`Failed to remove legacy Skill Workshop proposal index: ${String(error)}`);
-    }
-  });
+  await removePathWithinRoot({ rootDir: stateDir, relativePath: MANIFEST_PATH }).catch(
+    (error: unknown) => {
+      if (!isNotFoundError(error)) {
+        warnings.push(`Failed to remove legacy Skill Workshop proposal index: ${String(error)}`);
+      }
+    },
+  );
   return {
     changes:
       migrated > 0
