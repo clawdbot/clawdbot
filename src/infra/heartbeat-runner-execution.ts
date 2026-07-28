@@ -250,6 +250,16 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     heartbeat,
     opts.sessionKey,
   );
+  // Restart recovery owns the session before its delayed dispatch; automatic
+  // heartbeats must not race the interrupted turn while that owner is pending.
+  if (
+    shouldHonorActiveReplyRuns &&
+    recentSessionEntry?.status === "running" &&
+    recentSessionEntry.abortedLastRun === true &&
+    recentSessionEntry.mainRestartRecovery
+  ) {
+    return { kind: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT } as const;
+  }
   const HEARTBEAT_DEFER_WINDOW_MS = 30_000;
   const pendingFinalDeliveryText =
     recentSessionEntry?.pendingFinalDelivery?.kind === "replayable"

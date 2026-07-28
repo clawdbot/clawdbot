@@ -422,6 +422,30 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(hoisted.startGatewayMemoryBackend).not.toHaveBeenCalled();
   });
 
+  it("stops restart recovery with gateway-lifetime sidecars", async () => {
+    const recoverySidecar = { stop: vi.fn() };
+    hoisted.scheduleRestartAbortedMainSessionRecovery.mockReturnValueOnce(recoverySidecar);
+    const onGatewayLifetimeSidecars = vi.fn();
+
+    await startGatewayPostAttachRuntime({
+      ...createPostAttachParams(),
+      onGatewayLifetimeSidecars,
+    });
+
+    await waitForGatewayTestState(() => {
+      expect(onGatewayLifetimeSidecars).toHaveBeenCalledOnce();
+    });
+    const lifetimeSidecars = onGatewayLifetimeSidecars.mock.calls[0]?.[0] as
+      | Array<{ stop: () => Promise<void> | void }>
+      | undefined;
+    expect(lifetimeSidecars).toContain(recoverySidecar);
+
+    for (const sidecar of lifetimeSidecars ?? []) {
+      await sidecar.stop();
+    }
+    expect(recoverySidecar.stop).toHaveBeenCalledOnce();
+  });
+
   it("logs one startup outcome summary after sidecar registration and before readiness", async () => {
     const events: string[] = [];
     const outcomeMessages: string[] = [];

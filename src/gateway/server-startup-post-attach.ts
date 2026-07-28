@@ -1209,10 +1209,11 @@ export async function startGatewayPostAttachRuntime(
             loaderStatsAfter.sourceTransformFallbacks - loaderStatsBefore.sourceTransformFallbacks,
           ],
         ]);
+        let mainSessionRecoverySidecar: GatewayPostReadySidecarHandle | undefined;
         try {
           const { scheduleRestartAbortedMainSessionRecovery } =
             await loadMainSessionRestartRecoveryModule();
-          scheduleRestartAbortedMainSessionRecovery({
+          mainSessionRecoverySidecar = scheduleRestartAbortedMainSessionRecovery({
             cfg: params.cfgAtStart,
             gatewayRuntime: params.recoveryRuntime,
           });
@@ -1234,7 +1235,10 @@ export async function startGatewayPostAttachRuntime(
           reportPluginServices(result.pluginServices);
         }
         const postReadySidecars = [...result.postReadySidecars];
-        const gatewayLifetimeSidecars = [scheduleContextCachePrewarm(params)];
+        const gatewayLifetimeSidecars = [
+          scheduleContextCachePrewarm(params),
+          ...(mainSessionRecoverySidecar ? [mainSessionRecoverySidecar] : []),
+        ];
         if (workerEnvironmentSidecar) {
           gatewayLifetimeSidecars.push(workerEnvironmentSidecar);
         }

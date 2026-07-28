@@ -308,17 +308,25 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
   maxRetries?: number;
   stateDir?: string;
   gatewayRuntime: GatewayRecoveryRuntime;
-}): void {
+}): { stop: () => void } {
   const initialDelay = params.delayMs ?? DEFAULT_RECOVERY_DELAY_MS;
   const maxRetries = params.maxRetries ?? MAX_RECOVERY_RETRIES;
   const resumedSessionKeys = new Set<string>();
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   // Only reconcile rows that existed before this startup recovery was scheduled.
   // Fresh runs started by this gateway are protected again by the active-run check.
   const startupRecoveryCutoffMs = Date.now();
 
   const runRecoveryAttempt = (attempt: number, delay: number) => {
+    if (stopped) {
+      return;
+    }
     const exhaustedTargets = new Map<string, ExhaustedRestartRecoveryTarget>();
     const reconcileExhaustedTargets = async () => {
+      if (stopped) {
+        return;
+      }
       const outcomes = await Promise.allSettled(
         [...exhaustedTargets.values()].map((target) =>
           runWithGatewayIndependentRootWorkAdmission(
@@ -357,6 +365,9 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
         }),
     )
       .then(async (result) => {
+        if (stopped) {
+          return;
+        }
         if (result.failed > 0 && attempt < maxRetries) {
           scheduleAttempt(attempt + 1, delay * RETRY_BACKOFF_MULTIPLIER);
         } else if (result.failed > 0 && attempt === maxRetries && exhaustedTargets.size > 0) {
@@ -365,6 +376,9 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
         }
       })
       .catch(async (err: unknown) => {
+        if (stopped) {
+          return;
+        }
         if (attempt < maxRetries) {
           log.warn(`main-session restart recovery failed: ${String(err)}`);
           scheduleAttempt(attempt + 1, delay * RETRY_BACKOFF_MULTIPLIER);
@@ -376,14 +390,30 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
   };
 
   const scheduleAttempt = (attempt: number, delay: number) => {
+    if (stopped) {
+      return;
+    }
     if (delay <= 0) {
       runRecoveryAttempt(attempt, delay);
       return;
     }
-    setTimeout(() => {
+    timer = setTimeout(() => {
+      timer = undefined;
       runRecoveryAttempt(attempt, delay);
-    }, delay).unref?.();
+    }, delay);
+    timer.unref?.();
   };
 
   scheduleAttempt(1, initialDelay);
+  return {
+    stop: () => {
+      // Restart recovery belongs to its startup generation; stale timers must
+      // never claim a session after that gateway begins draining.
+      stopped = true;
+      if (timer) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+    },
+  };
 }

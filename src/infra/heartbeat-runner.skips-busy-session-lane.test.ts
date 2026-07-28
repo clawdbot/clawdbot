@@ -87,6 +87,36 @@ function createBusyLaneSnapshot(lane: string): CommandLaneSnapshot {
 }
 
 describe("heartbeat runner skips when target session lane is busy", () => {
+  it("defers automatic heartbeat while main-session restart recovery owns the session", async () => {
+    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+      const cfg = createHeartbeatTelegramConfig();
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: "123",
+        status: "running",
+        abortedLastRun: true,
+        mainRestartRecovery: {
+          cycleId: "restart-cycle",
+          revision: 1,
+          chargedAttempts: 0,
+        },
+      });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: {
+          getQueueSize: vi.fn((_lane?: string) => 0),
+          nowMs: () => Date.now(),
+          getReplyFromConfig: replySpy,
+        } as HeartbeatDeps,
+      });
+
+      expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT });
+      expect(replySpy).not.toHaveBeenCalled();
+    });
+  });
+
   it("returns cron-in-progress when cron has an active job", async () => {
     await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
       const cfg = createHeartbeatTelegramConfig();

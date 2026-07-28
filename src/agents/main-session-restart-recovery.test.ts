@@ -2145,6 +2145,41 @@ describe("main-session-restart-recovery", () => {
     expect(customStore["agent:main:main"]?.abortedLastRun).toBe(false);
   });
 
+  it("cancels startup recovery when its gateway lifecycle stops", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeMainSession({
+      sessionsDir,
+      pendingFinalDelivery: {
+        kind: "replayable",
+        text: "interrupted response",
+        createdAt: Date.now(),
+      },
+    });
+
+    vi.useFakeTimers();
+    try {
+      const recovery = scheduleRestartAbortedMainSessionRecovery({
+        cfg: {},
+        delayMs: 5_000,
+        stateDir: tmpDir,
+      });
+
+      recovery.stop();
+      recovery.stop();
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(
+        loadSessionEntry({
+          sessionKey: "agent:main:main",
+          storePath: path.join(sessionsDir, "sessions.json"),
+        }),
+      ).toMatchObject({ status: "running", abortedLastRun: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("admits each scheduled recovery attempt as independent root work", async () => {
     const sessionsDir = await makeSessionsDir();
     await writeMainSession({
