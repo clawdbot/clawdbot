@@ -180,6 +180,72 @@ describe("createDraftStreamLoop", () => {
     expect(sendOrEditStreamMessage).toHaveBeenCalledExactlyOnceWith("in flight");
   });
 
+  it("throttles queued text that arrives during an in-flight background send", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    let releaseFirstSend: (() => void) | undefined;
+    const firstSendPending = new Promise<void>((resolve) => {
+      releaseFirstSend = resolve;
+    });
+    const sendOrEditStreamMessage = vi.fn(async () => {
+      if (sendOrEditStreamMessage.mock.calls.length === 1) {
+        await firstSendPending;
+      }
+      return true;
+    });
+    const loop = createDraftStreamLoop({
+      throttleMs: 100,
+      isStopped: () => false,
+      sendOrEditStreamMessage,
+    });
+
+    loop.update("first");
+    await flushMicrotasks();
+    loop.update("second");
+    await vi.advanceTimersByTimeAsync(0);
+    releaseFirstSend?.();
+    await flushMicrotasks();
+
+    expect(sendOrEditStreamMessage).toHaveBeenCalledExactlyOnceWith("first");
+
+    await vi.advanceTimersByTimeAsync(99);
+    expect(sendOrEditStreamMessage).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(sendOrEditStreamMessage).toHaveBeenNthCalledWith(2, "second");
+    loop.stop();
+  });
+
+  it("lets an explicit flush drain queued text without waiting for the throttle", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    let releaseFirstSend: (() => void) | undefined;
+    const firstSendPending = new Promise<void>((resolve) => {
+      releaseFirstSend = resolve;
+    });
+    const sendOrEditStreamMessage = vi.fn(async () => {
+      if (sendOrEditStreamMessage.mock.calls.length === 1) {
+        await firstSendPending;
+      }
+      return true;
+    });
+    const loop = createDraftStreamLoop({
+      throttleMs: 100,
+      isStopped: () => false,
+      sendOrEditStreamMessage,
+    });
+
+    loop.update("first");
+    await flushMicrotasks();
+    loop.update("final");
+    const flushPending = loop.flush();
+    releaseFirstSend?.();
+    await flushPending;
+
+    expect(sendOrEditStreamMessage).toHaveBeenCalledTimes(2);
+    expect(sendOrEditStreamMessage).toHaveBeenNthCalledWith(2, "final");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("contains synchronous sender failures from background flushes", async () => {
     await captureUnhandledRejections(async (rejections) => {
       const error = new Error("send failed");
