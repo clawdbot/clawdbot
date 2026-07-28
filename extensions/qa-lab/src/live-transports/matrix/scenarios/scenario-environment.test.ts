@@ -123,7 +123,11 @@ describe("matrix scenario environment", () => {
     expect(gateway.call).toHaveBeenCalledWith(
       "config.patch",
       expect.objectContaining({
-        replacePaths: ["channels.matrix", "messages"],
+        replacePaths: [
+          "channels.matrix",
+          "channels.matrix.accounts.sut.groupAllowFrom",
+          "messages",
+        ],
       }),
       { timeoutMs: 60_000 },
     );
