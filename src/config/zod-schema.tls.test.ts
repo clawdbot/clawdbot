@@ -16,6 +16,14 @@ describe("gateway.tls schema", () => {
     expect(res.ok).toBe(false);
   });
 
+  it("rejects whitespace-only caPath", () => {
+    const res = validateConfigObject({ gateway: { tls: { enabled: true, caPath: "   " } } });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toMatch(/caPath/);
+    }
+  });
+
   it("accepts a non-empty certPath", () => {
     const res = validateConfigObject({
       gateway: { tls: { enabled: true, certPath: "/etc/ssl/cert.pem" } },
