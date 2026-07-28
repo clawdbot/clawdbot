@@ -112,9 +112,22 @@ There is also a grounded historical backfill lane for review and recovery work:
     - `memory rem-backfill --path ...` writes reversible grounded diary entries into `DREAMS.md`.
     - `memory rem-backfill --path ... --stage-short-term` stages grounded durable candidates into the same short-term evidence store the normal deep phase uses.
     - `memory rem-backfill --rollback` and `--rollback-short-term` remove those staged backfill artifacts without touching ordinary diary entries or live short-term recall.
+    - `memory session-backfill --agent <id>` previews trusted candidates from the agent's retained session history, oldest unprocessed day first.
+    - `memory session-backfill --agent <id> --apply` stages those candidates through the normal short-term store and writes reversible diary blocks without changing `MEMORY.md` or `USER.md`.
+    - `memory session-backfill --agent <id> --rem` writes a deterministic grounded preview per day to `DREAMS.md` without staging candidates or calling a model.
+    - `memory session-backfill --agent <id> --rollback` removes the grounded staged candidates and diary blocks created by backfill.
 
   </Accordion>
 </AccordionGroup>
+
+Session backfill uses canonical retained transcript identities, including
+sessions preserved across rotation. Messages are bucketed in the configured
+dreaming timezone and share live ingestion's tracked message hashes and signal
+caps, so bounded reruns continue forward without re-ingesting prior messages.
+Foreign files supplied with `--archive-files` are treated conservatively:
+only messages with structural owner provenance, plus the agent responses in
+those owner turns, can become candidates. Tool output, web content, and
+non-owner turns never enter short-term staging.
 
 The Control UI exposes the same diary backfill/reset flow on the agent's Memory tab (Agents page) so you can inspect results in the dream scene before deciding whether grounded candidates deserve promotion. A distinct grounded Scene lane shows which staged short-term entries came from historical replay, which promoted items were grounded-led, and lets you clear only grounded-only staged entries without touching live short-term state.
 
