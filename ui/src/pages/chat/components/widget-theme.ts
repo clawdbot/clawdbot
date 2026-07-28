@@ -53,7 +53,7 @@ function collectWidgetThemeTokens(read: (hostVar: string) => string): Record<str
   return tokens;
 }
 
-function buildWidgetThemeMessage(): {
+export function buildWidgetThemeMessage(): {
   type: "openclaw:widget-theme";
   mode: "light" | "dark";
   tokens: Record<string, string>;

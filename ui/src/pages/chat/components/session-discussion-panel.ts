@@ -6,7 +6,7 @@ import type {
 } from "../../../../../packages/gateway-protocol/src/index.js";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
-import { postWidgetTheme } from "./widget-theme.ts";
+import { buildWidgetThemeMessage, postWidgetTheme } from "./widget-theme.ts";
 
 type SessionDiscussionInfoLoader = (sessionKey: string) => Promise<SessionDiscussionInfo>;
 type SessionDiscussionOpener = (sessionKey: string) => Promise<SessionDiscussionInfo>;
@@ -57,6 +57,10 @@ function resolveDiscussionEmbedUrl(value: string | undefined): string | null {
     document.documentElement.dataset.themeMode === "light" ? "light" : "dark",
   );
   url.searchParams.set("hostOrigin", window.location.origin);
+  const themeTokens = buildWidgetThemeMessage().tokens;
+  if (Object.keys(themeTokens).length > 0) {
+    url.searchParams.set("themeTokens", JSON.stringify(themeTokens));
+  }
   return url.href;
 }
 
@@ -84,7 +88,7 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
     this.themeObserver = new MutationObserver(() => this.postDiscussionTheme());
     this.themeObserver.observe(document.documentElement, {
       attributes: true,
-      attributeFilter: ["data-theme", "data-theme-mode"],
+      attributeFilter: ["data-theme", "data-theme-mode", "style"],
     });
   }
 
