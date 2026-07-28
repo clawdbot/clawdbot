@@ -154,7 +154,7 @@ describe("final recovery-point capture", () => {
       },
     };
     expect(() => parseFinalRecoveryPointRequest(JSON.stringify(base))).toThrow(
-      "unique, normalized, and sorted",
+      "inventory is invalid",
     );
     expect(() =>
       parseFinalRecoveryPointRequest(
