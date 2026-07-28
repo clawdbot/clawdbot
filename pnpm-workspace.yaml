@@ -141,7 +141,7 @@ overrides:
   qs: 6.15.3
   node-domexception: "npm:@nolyfill/domexception@1.0.28"
   typebox: 1.3.6
-  tar: 7.5.20
+  tar: 7.5.21
   tough-cookie: 4.1.4
   yauzl: 3.4.0
   protobufjs: 7.6.5
