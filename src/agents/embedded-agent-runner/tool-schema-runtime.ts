@@ -4,12 +4,14 @@
 import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { PluginLruCache, createPluginCacheKey } from "../../plugins/plugin-cache-primitives.js";
-import type { ProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
+import {
+  resolveProviderToolSchemaNormalizeCacheKey,
+  type ProviderRuntimePluginHandle,
+} from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
   inspectProviderToolSchemasWithPlugin,
   normalizeProviderToolSchemasWithPlugin,
-  resolveProviderToolSchemaNormalizeCacheKey,
 } from "../../plugins/provider-runtime.js";
 import type { ProviderToolSchemaDiagnostic } from "../../plugins/types.js";
 import type { AgentTool } from "../runtime/index.js";

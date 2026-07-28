@@ -17,8 +17,15 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../plugins/provider-runtime.js", () => ({
   inspectProviderToolSchemasWithPlugin: mocks.inspectProviderToolSchemasWithPlugin,
   normalizeProviderToolSchemasWithPlugin: mocks.normalizeProviderToolSchemasWithPlugin,
-  resolveProviderToolSchemaNormalizeCacheKey: mocks.resolveProviderToolSchemaNormalizeCacheKey,
 }));
+
+vi.mock("../../plugins/provider-hook-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../plugins/provider-hook-runtime.js")>();
+  return {
+    ...actual,
+    resolveProviderToolSchemaNormalizeCacheKey: mocks.resolveProviderToolSchemaNormalizeCacheKey,
+  };
+});
 
 vi.mock("./logger.js", () => ({
   log: mocks.log,
