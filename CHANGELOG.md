@@ -51,6 +51,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Nostr durable ingress startup:** classify queue-open failures before legacy replay migration so the gateway reports unavailable inbound admission instead of a healthy Nostr account that cannot receive messages.
 - **OpenAI Realtime Talk auth:** remove the non-public Codex OAuth realtime fallback and require an OpenAI Platform API key for Talk, Voice Call, and Discord realtime voice, preventing OAuth-only gateways from advertising a browser session that the live service rejects. Fixes #115021.
 - **Codex native controls:** stop misclassifying valid thinking/fast runtime controls as provider overrides so Codex routes keep their native controls, while provider-native objects and invalid values stay fail-closed. Thanks @VACInc. (#107588)
 - **State snapshot verification:** run SQLite snapshot verification in a separate process so worker-thread file closes no longer drop the Gateway's POSIX WAL locks, eliminating spurious WAL misses and I/O errors. Thanks @VACInc. (#114016)
