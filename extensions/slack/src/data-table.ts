@@ -377,6 +377,7 @@ function escapeCompactFallbackCell(value: string): string {
 }
 
 function escapeSlackBasicTableCell(value: string, mrkdwnSafe: boolean): string {
+  // escapeSlackMrkdwn doubles backslashes before the TSV layer escapes row delimiters.
   const escaped = mrkdwnSafe ? escapeSlackMrkdwn(value) : value.replaceAll("\\", "\\\\");
   return escaped.replaceAll("\t", "\\t").replaceAll("\r", "\\r").replaceAll("\n", "\\n");
 }
