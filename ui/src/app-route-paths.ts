@@ -152,6 +152,40 @@ export function routeIdFromPath(pathname: string, basePath = ""): RouteId | null
   return null;
 }
 
+function collectRoutePaths(): string[] {
+  return APP_ROUTE_IDS.flatMap((routeId) => {
+    const definition = APP_ROUTE_DEFINITIONS[routeId];
+    const paths: string[] = [definition.path];
+    if ("aliases" in definition) {
+      paths.push(...definition.aliases);
+    }
+    return paths;
+  });
+}
+
+// A candidate mount base that is a registered route ("/custodian"), or that
+// sits at or below a multi-segment route namespace ("/settings", including
+// "/settings/other"), is really a root-mounted deep link whose suffix happens
+// to match a route path or alias. Descendants of leaf routes stay valid mount
+// directories so "/apps/openclaw" keeps working. Inference is a last-resort
+// fallback for pages served without the injected base path (vite dev, static
+// hosting); accepted tradeoff: namespaces nested under a real mount prefix
+// ("/ui/settings/other/config") are not rescued here.
+function isRouteOwnedBasePath(basePath: string): boolean {
+  const routePaths = collectRoutePaths().map((path) => normalizePath(path));
+  if (routePaths.includes(basePath)) {
+    return true;
+  }
+  const segments = basePath.split("/").filter(Boolean);
+  for (let count = 1; count <= segments.length; count += 1) {
+    const ancestor = `/${segments.slice(0, count).join("/")}`;
+    if (routePaths.some((path) => path.startsWith(`${ancestor}/`))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function inferBasePathFromPathname(pathname: string): string {
   const isMountRoot = pathname.trim().endsWith("/");
   const normalizedPath = normalizePath(pathname);
@@ -162,14 +196,7 @@ export function inferBasePathFromPathname(pathname: string): string {
     return "";
   }
   const segments = normalizedPath.split("/").filter(Boolean);
-  const routePaths = APP_ROUTE_IDS.flatMap((routeId) => {
-    const definition = APP_ROUTE_DEFINITIONS[routeId];
-    const paths: string[] = [definition.path];
-    if ("aliases" in definition) {
-      paths.push(...definition.aliases);
-    }
-    return paths;
-  });
+  const routePaths = collectRoutePaths();
   for (let index = 0; index < segments.length; index += 1) {
     const candidate = `/${segments.slice(index).join("/")}`;
     const routePath = routePaths.find((path) => normalizePath(path) === candidate);
@@ -189,9 +216,20 @@ export function inferBasePathFromPathname(pathname: string): string {
     ) {
       return "";
     }
-    return index ? `/${segments.slice(0, index).join("/")}` : "";
+    if (index === 0) {
+      return "";
+    }
+    const basePath = `/${segments.slice(0, index).join("/")}`;
+    // Mis-inferring a route-owned base ("/settings/config" -> "/settings" via
+    // the "/config" alias) rescopes stored gateway settings and asset URLs, so
+    // a connected browser deep-links straight into the login gate.
+    return isRouteOwnedBasePath(basePath) ? "" : basePath;
   }
-  return isMountRoot && segments.length ? `/${segments.join("/")}` : "";
+  if (!isMountRoot || segments.length === 0) {
+    return "";
+  }
+  const mountRootBase = `/${segments.join("/")}`;
+  return isRouteOwnedBasePath(mountRootBase) ? "" : mountRootBase;
 }
 
 export function locationForRoute(routeId: RouteId, basePath: string): RouteLocation {
