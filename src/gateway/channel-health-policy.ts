@@ -72,19 +72,19 @@ export function evaluateChannelHealth(
   if (!isManagedAccount(snapshot)) {
     return { healthy: true, reason: "unmanaged" };
   }
-  // Transport liveness and inbound admission are independent failure domains: a
-  // channel can hold a healthy socket and still admit nothing. This outranks every
-  // lifecycle window below because a channel that cannot receive is broken whether
-  // it is running, restarting, or inside its connect grace. Absence is "unknown",
-  // never "fine" -- see `ingressUnavailable` on ChannelAccountSnapshot.
-  if (snapshot.ingressUnavailable === true) {
-    return { healthy: false, reason: "ingress-unavailable" };
-  }
   if (!snapshot.running && snapshot.terminalDisconnect) {
     return { healthy: false, reason: "terminal-disconnect" };
   }
   if (!snapshot.running) {
     return { healthy: false, reason: "not-running" };
+  }
+  // Transport liveness and inbound admission are independent failure domains: a
+  // running channel can hold a healthy socket and still admit nothing, which every
+  // check below reads as healthy. Deliberately scoped to running accounts so a
+  // stopped one keeps its lifecycle reason and readiness keeps its restart-backoff
+  // grace. Absence is "unknown", never "fine" -- see ChannelAccountSnapshot.
+  if (snapshot.ingressUnavailable === true) {
+    return { healthy: false, reason: "ingress-unavailable" };
   }
   const activeRuns =
     typeof snapshot.activeRuns === "number" && Number.isFinite(snapshot.activeRuns)

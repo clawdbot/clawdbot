@@ -286,6 +286,19 @@ describe("evaluateChannelHealth", () => {
       expect(evaluation).toEqual({ healthy: false, reason: "ingress-unavailable" });
     });
 
+    it("leaves a stopped account on its lifecycle reason", () => {
+      // Readiness deliberately keeps a restart-backoff window green, so the ingress
+      // dimension must not shadow not-running and start flapping it.
+      const evaluation = evaluateHealth({
+        running: false,
+        enabled: true,
+        configured: true,
+        restartPending: true,
+        ingressUnavailable: true,
+      });
+      expect(evaluation).toEqual({ healthy: false, reason: "not-running" });
+    });
+
     it("outranks a busy short-circuit so an in-flight run cannot hide dead ingress", () => {
       const evaluation = evaluateHealth(
         connectedAccount({ ingressUnavailable: true, activeRuns: 1, lastRunActivityAt: 99_000 }),
@@ -319,7 +332,7 @@ describe("evaluateChannelHealth", () => {
 
     it("stays healthy for a disabled account so unmanaged still wins", () => {
       const evaluation = evaluateHealth({
-        running: false,
+        running: true,
         enabled: false,
         configured: true,
         ingressUnavailable: true,

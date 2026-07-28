@@ -522,8 +522,9 @@ describe("channel ingress monitor", () => {
     expect((startError as Error).cause).toBe(denial);
     expect(isChannelIngressUnavailableError(startError)).toBe(true);
     // A channel plugin is free to wrap the start failure in its own error.
-    expect(isChannelIngressUnavailableError(new Error("slack start failed", { cause: startError })))
-      .toBe(true);
+    expect(
+      isChannelIngressUnavailableError(new Error("slack start failed", { cause: startError })),
+    ).toBe(true);
     expect(isChannelIngressUnavailableError(denial)).toBe(false);
     expect(monitor.isRunning()).toBe(false);
     // An armed poll timer would have retried the denied factory many times over this window.
