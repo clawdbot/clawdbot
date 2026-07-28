@@ -261,12 +261,28 @@ async function defaultSearchSetupWizardRunner(
   await runHostedConfigWizard({
     label: "Web search setup",
     beforePersistentApply,
-    run: async ({ baseConfig, runtime }) => ({
-      nextConfig: await runSearchSetupFlow(baseConfig, runtime, prompter, {
+    run: async ({ baseConfig, runtime }) => {
+      const result = await runSearchSetupFlow(baseConfig, runtime, prompter, {
         preserveDisabledSearchState: false,
         beforePersistentEffect: async () => await beforePersistentApply(runtime),
-      }),
-    }),
+      });
+      if (result.outcome === "install-failed") {
+        const failure = result.reason === "timed-out" ? "timed out" : "failed";
+        throw new Error(`web search provider ${result.providerId} installation ${failure}`);
+      }
+      if (result.outcome === "kept-current") {
+        const reason =
+          result.reason === "no-providers"
+            ? "no web search providers are available under the current plugin policy"
+            : result.reason === "provider-unavailable"
+              ? "the selected web search provider is no longer available"
+              : result.reason === "provider-install-skipped"
+                ? `web search provider ${result.providerId} installation was skipped`
+                : "the current web search configuration was kept";
+        throw new Error(reason);
+      }
+      return { nextConfig: result.config };
+    },
   });
 }
 

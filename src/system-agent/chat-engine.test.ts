@@ -842,9 +842,12 @@ describe("SystemAgentChatEngine", () => {
         expect(key).toBe("search-secret-value");
         await options.beforePersistentEffect?.();
         return {
-          ...config,
-          tools: { web: { search: { enabled: true, provider } } },
-        } as OpenClawConfig;
+          outcome: "completed",
+          config: {
+            ...config,
+            tools: { web: { search: { enabled: true, provider } } },
+          } as OpenClawConfig,
+        };
       },
     );
     mocks.writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) => config);
@@ -877,6 +880,40 @@ describe("SystemAgentChatEngine", () => {
     );
     expect(JSON.stringify(engine.historySince(0))).not.toContain("search-secret-value");
     expect(JSON.stringify(engine.historySince(0))).toContain("<redacted secret>");
+  });
+
+  it("reports a failed hosted search-provider install without writing or auditing", async () => {
+    const baseConfig: OpenClawConfig = {};
+    const appendAuditEntry = vi.fn(async () => "state/openclaw.sqlite");
+    mocks.readSetupConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      hash: "search-base-hash",
+      config: baseConfig,
+      sourceConfig: baseConfig,
+    });
+    mocks.runSearchSetupFlow.mockResolvedValue({
+      outcome: "install-failed",
+      config: baseConfig,
+      providerId: "brave",
+      reason: "failed",
+    });
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      appendAuditEntry,
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const reply = await engine.handle("configure search");
+
+    expect(reply.text).toContain(
+      "Web search setup stopped: Error: web search provider brave installation failed",
+    );
+    expect(reply.text).not.toContain("Done — web search setup is complete");
+    expect(mocks.writeWizardConfigFile).not.toHaveBeenCalled();
+    expect(appendAuditEntry).not.toHaveBeenCalled();
   });
 
   it("hands CLI search credentials to the masked terminal wizard", async () => {

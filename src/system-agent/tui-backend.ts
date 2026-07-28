@@ -438,12 +438,15 @@ async function runSetupHandoff(
       );
     }
     const baseConfig = snapshot.sourceConfig ?? snapshot.config;
-    const nextConfig = await runSearchSetupFlow(baseConfig, runtime, createClackPrompter(), {
+    const searchSetup = await runSearchSetupFlow(baseConfig, runtime, createClackPrompter(), {
       preserveDisabledSearchState: false,
       beforePersistentEffect,
     });
+    if (searchSetup.outcome !== "completed") {
+      return;
+    }
     await beforePersistentEffect();
-    await writeWizardConfigFile(nextConfig, {
+    await writeWizardConfigFile(searchSetup.config, {
       allowConfigSizeDrop: false,
       baseHash: snapshot.hash,
       migrationBaseConfig: baseConfig,
