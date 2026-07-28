@@ -1770,6 +1770,50 @@
           "minHostVersion": ">=2026.6.9"
         }
       }
+    },
+    {
+      "name": "@openclaw/apiario-provider",
+      "description": "OpenClaw Apiario provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "apiario",
+          "label": "Apiario"
+        },
+        "providers": [
+          {
+            "id": "apiario",
+            "name": "Apiario",
+            "docs": "/providers/apiario",
+            "categories": ["cloud", "llm"],
+            "envVars": ["APIARIO_API_KEY"],
+            "authChoices": [
+              {
+                "provider": "apiario",
+                "method": "api-key",
+                "choiceId": "apiario-api-key",
+                "appGuidedSecret": true,
+                "choiceLabel": "Apiario API Key",
+                "choiceHint": "Use sua chave da API do Apiario",
+                "groupId": "apiario",
+                "groupLabel": "Apiario",
+                "groupHint": "Apiario Dev",
+                "optionKey": "apiarioApiKey",
+                "cliFlag": "--apiario-api-key",
+                "cliOption": "--apiario-api-key <key>",
+                "cliDescription": "Apiario API Key"
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/apiario-provider",
+          "npmSpec": "@openclaw/apiario-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.8"
+        }
+      }
     }
   ]
 }

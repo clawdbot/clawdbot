@@ -1,0 +1,64 @@
+{
+  "id": "apiario",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["apiario"],
+  "modelCatalog": {
+    "providers": {
+      "apiario": {
+        "baseUrl": "https://api.apiario.dev/v1",
+        "api": "openai-completions",
+        "defaultUtilityModel": "apiario/default",
+        "models": [
+          {
+            "id": "apiario/default",
+            "name": "Apiário Default",
+            "input": ["text"],
+            "contextWindow": 128000,
+            "maxTokens": 4096,
+            "compat": {
+              "supportsTemperature": true,
+              "supportsSystemPrompt": true,
+              "supportsStreaming": true
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "apiario": "runtime"
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "apiario",
+        "envVars": ["APIARIO_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "apiario",
+      "method": "api-key",
+      "choiceId": "apiario-api-key",
+      "appGuidedSecret": true,
+      "choiceLabel": "Apiário API Key",
+      "choiceHint": "Use sua chave da API do Apiário",
+      "groupId": "apiario",
+      "groupLabel": "Apiário",
+      "groupHint": "Apiário Dev",
+      "optionKey": "apiarioApiKey",
+      "cliFlag": "--apiario-api-key",
+      "cliOption": "--apiario-api-key <key>",
+      "cliDescription": "Apiário API Key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
