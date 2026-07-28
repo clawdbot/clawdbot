@@ -4798,6 +4798,8 @@ export const tr: TranslationMap = {
     ru: "Русский (Rusça)",
   },
   cron: {
+    adminRequired:
+      "Yalnızca görüntüleme. Otomasyon değişiklikleri operator.admin erişimi gerektirir.",
     tabs: {
       filterLabel: "Otomasyon durumu",
       all: "Tümü",

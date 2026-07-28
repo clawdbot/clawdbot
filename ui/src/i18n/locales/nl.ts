@@ -4808,6 +4808,8 @@ export const nl: TranslationMap = {
     ru: "Русский (Russisch)",
   },
   cron: {
+    adminRequired:
+      "Alleen bekijken. Voor wijzigingen aan automatiseringen is operator.admin-toegang vereist.",
     tabs: {
       filterLabel: "Automatiseringsstatus",
       all: "Alle",

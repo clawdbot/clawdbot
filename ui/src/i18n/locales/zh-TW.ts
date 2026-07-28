@@ -4654,6 +4654,7 @@ export const zh_TW: TranslationMap = {
     ru: "Русский (Russian)",
   },
   cron: {
+    adminRequired: "僅供瀏覽。變更自動化設定需要 operator.admin 存取權限。",
     tabs: {
       filterLabel: "自動化狀態",
       all: "全部",

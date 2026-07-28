@@ -4723,6 +4723,7 @@ export const ar: TranslationMap = {
     ru: "الروسية (Russian)",
   },
   cron: {
+    adminRequired: "التصفح فقط. تتطلب تغييرات الأتمتة صلاحية operator.admin.",
     tabs: {
       filterLabel: "حالة الأتمتة",
       all: "الكل",

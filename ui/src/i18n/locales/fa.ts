@@ -4764,6 +4764,7 @@ export const fa: TranslationMap = {
     ru: "Русский (روسی)",
   },
   cron: {
+    adminRequired: "فقط برای مرور. تغییرات خودکارسازی به دسترسی operator.admin نیاز دارند.",
     tabs: {
       filterLabel: "وضعیت خودکارسازی",
       all: "همه",

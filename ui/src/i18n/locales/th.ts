@@ -4682,6 +4682,7 @@ export const th: TranslationMap = {
     ru: "Русский (รัสเซีย)",
   },
   cron: {
+    adminRequired: "เรียกดูได้เท่านั้น การเปลี่ยนแปลงระบบอัตโนมัติต้องมีสิทธิ์เข้าถึง operator.admin",
     tabs: {
       filterLabel: "สถานะระบบอัตโนมัติ",
       all: "ทั้งหมด",

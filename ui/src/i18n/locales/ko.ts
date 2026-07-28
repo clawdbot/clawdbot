@@ -4748,6 +4748,7 @@ export const ko: TranslationMap = {
     ru: "Русский (Russian)",
   },
   cron: {
+    adminRequired: "탐색만 가능합니다. 자동화 변경에는 operator.admin 액세스가 필요합니다.",
     tabs: {
       filterLabel: "자동화 상태",
       all: "전체",

@@ -4818,6 +4818,7 @@ export const pl: TranslationMap = {
     ru: "Русский (rosyjski)",
   },
   cron: {
+    adminRequired: "Tylko przeglądanie. Zmiany automatyzacji wymagają dostępu operator.admin.",
     tabs: {
       filterLabel: "Stan automatyzacji",
       all: "Wszystkie",

@@ -4800,6 +4800,7 @@ export const ja_JP: TranslationMap = {
     ru: "Русский (ロシア語)",
   },
   cron: {
+    adminRequired: "閲覧のみ。自動化の変更には operator.admin アクセスが必要です。",
     tabs: {
       filterLabel: "自動化ステータス",
       all: "すべて",

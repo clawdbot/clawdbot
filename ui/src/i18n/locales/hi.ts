@@ -4718,6 +4718,7 @@ export const hi: TranslationMap = {
     ru: "Русский (Russian)",
   },
   cron: {
+    adminRequired: "केवल ब्राउज़िंग। ऑटोमेशन में बदलाव के लिए operator.admin एक्सेस आवश्यक है।",
     tabs: {
       filterLabel: "ऑटोमेशन की स्थिति",
       all: "सभी",

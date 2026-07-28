@@ -4774,6 +4774,8 @@ export const vi: TranslationMap = {
     ru: "Русский (Tiếng Nga)",
   },
   cron: {
+    adminRequired:
+      "Chỉ có thể duyệt. Các thay đổi tự động hóa yêu cầu quyền truy cập operator.admin.",
     tabs: {
       filterLabel: "Trạng thái tự động hóa",
       all: "Tất cả",

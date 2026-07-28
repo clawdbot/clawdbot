@@ -4774,6 +4774,7 @@ export const id: TranslationMap = {
     ru: "Русский (Russian)",
   },
   cron: {
+    adminRequired: "Hanya untuk menjelajah. Perubahan otomatisasi memerlukan akses operator.admin.",
     tabs: {
       filterLabel: "Status otomatisasi",
       all: "Semua",

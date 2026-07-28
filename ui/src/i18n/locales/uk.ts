@@ -4795,6 +4795,7 @@ export const uk: TranslationMap = {
     ru: "Русский (російська)",
   },
   cron: {
+    adminRequired: "Лише перегляд. Для змін автоматизації потрібен доступ operator.admin.",
     tabs: {
       filterLabel: "Стан автоматизації",
       all: "Усі",
