@@ -408,8 +408,9 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).toContain("✨ SKILL OPPORTUNITY");
     expect(text).toContain("Candidate skill: github-pr-workflow");
     expect(text).toContain("Approval: Recommendation only");
-    expect(text).toContain("Workboard idempotency key: unavailable");
-    expect(text).toContain("If `workboard_create` is unavailable or fails");
+    expect(text).toContain("Opportunity idempotency key: unavailable");
+    expect(text).toContain("Optional extension capture: [blocked]");
+    expect(text).not.toContain("workboard_create");
     expect(text.split("\n").length).toBeGreaterThan(5);
   });
 

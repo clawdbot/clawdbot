@@ -29,7 +29,7 @@ describe("skill opportunity contract", () => {
     expect(different).not.toBe(first);
   });
 
-  it("renders an obvious recommendation and the durable-card failure boundary", () => {
+  it("renders an obvious recommendation and a generic durable-capture boundary", () => {
     const text = buildSkillOpportunityContext({
       candidateSkillName: "github-pr-workflow",
       observedWorkflow: "Repeated PR review preparation",
@@ -43,19 +43,21 @@ describe("skill opportunity contract", () => {
     expect(text).toContain(SKILL_OPPORTUNITY_MARKER);
     expect(text).toContain("Candidate skill: github-pr-workflow");
     expect(text).toContain("Observed recurring workflow/problem: Repeated PR review preparation");
-    expect(text).toContain("Workboard idempotency key: skill-opportunity-v1:abc123");
+    expect(text).toContain("Opportunity idempotency key: skill-opportunity-v1:abc123");
     expect(text).toContain("Source: skill_workshop");
     expect(text).toContain("Pending Skill Workshop proposal: proposal-123");
-    expect(text).toContain("call `workboard_create` exactly once");
-    expect(text).toContain("If `workboard_create` is unavailable or fails");
+    expect(text).toContain(
+      "Optional extension capture: an enabled extension may use this idempotency key",
+    );
+    expect(text).not.toContain("workboard_create");
     expect(text).toContain(SKILL_OPPORTUNITY_APPROVAL_BOUNDARY);
 
     const legacyText = buildSkillOpportunityContext({
       candidateSkillName: "legacy-workflow",
     });
     expect(legacyText).toContain(
-      "Workboard card: [blocked] deterministic idempotency key unavailable",
+      "Optional extension capture: [blocked] deterministic idempotency key unavailable",
     );
-    expect(legacyText).not.toContain("call `workboard_create` exactly once");
+    expect(legacyText).not.toContain("workboard_create");
   });
 });

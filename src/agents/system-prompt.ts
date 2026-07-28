@@ -1017,9 +1017,7 @@ export function buildAgentSystemPrompt(params: {
     readToolName,
   });
   const skillWorkshopSection = availableTools.has(SKILL_WORKSHOP_TOOL_NAME)
-    ? buildSkillWorkshopPromptSection({
-        workboardAvailable: availableTools.has("workboard_create"),
-      })
+    ? buildSkillWorkshopPromptSection()
     : [];
   const memorySection = buildMemorySection({
     isMinimal,
