@@ -6,10 +6,28 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { describe, expect, it, vi } from "vitest";
+import { resolveLiveToolResultMaxChars } from "./embedded-agent-runner/tool-result-truncation.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 
 function userMessage(text: string): AgentMessage {
   return { role: "user", content: [{ type: "text", text }] } as AgentMessage;
+}
+
+function assistantToolCall(id: string): AgentMessage {
+  return {
+    role: "assistant",
+    content: [{ type: "toolCall", id, name: "n", arguments: {} }],
+  } as AgentMessage;
+}
+
+function toolResult(id: string, text: string): AgentMessage {
+  return {
+    role: "toolResult",
+    toolCallId: id,
+    toolName: "n",
+    content: [{ type: "text", text }],
+    isError: false,
+  } as AgentMessage;
 }
 
 function persistedRoles(sm: SessionManager): string[] {
@@ -19,8 +37,23 @@ function persistedRoles(sm: SessionManager): string[] {
     .map((entry) => ((entry as { message: AgentMessage }).message as { role: string }).role);
 }
 
+function persistedToolResultTexts(sm: SessionManager): string[] {
+  return sm
+    .getEntries()
+    .filter((entry) => entry.type === "message")
+    .map((entry) => (entry as { message: AgentMessage }).message)
+    .filter((message) => (message as { role?: string }).role === "toolResult")
+    .map((message) =>
+      ((message as { content?: Array<{ text?: string }> }).content ?? [])
+        .map((block) => block.text ?? "")
+        .join(""),
+    );
+}
+
 async function flushAsyncCallbacks(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
 }
 
 describe("guardSessionManager attempt rebinding", () => {
@@ -100,5 +133,32 @@ describe("guardSessionManager attempt rebinding", () => {
 
     expect(retryAttemptPreparing).toHaveBeenCalledTimes(1);
     expect(firstAttemptPreparing).not.toHaveBeenCalled();
+  });
+
+  it("applies the retry attempt's smaller tool-result cap after rebinding", () => {
+    const oversized = "x".repeat(20_000);
+    const sm = guardSessionManager(SessionManager.inMemory(), {
+      contextWindowTokens: 200_000,
+    });
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+
+    appendMessage(assistantToolCall("call_1"));
+    appendMessage(toolResult("call_1", oversized));
+
+    // Retry attempt falls back to a model with a much smaller context window.
+    guardSessionManager(sm, { contextWindowTokens: 4_000 });
+    appendMessage(assistantToolCall("call_2"));
+    appendMessage(toolResult("call_2", oversized));
+
+    const texts = persistedToolResultTexts(sm);
+    expect(texts).toHaveLength(2);
+    // The first attempt's large-window cap keeps the payload intact.
+    expect(texts[0]).toBe(oversized);
+    // The rebound guard must enforce the retry attempt's smaller cap instead
+    // of the limit captured when the guard was first installed.
+    const retryCap = resolveLiveToolResultMaxChars({ contextWindowTokens: 4_000 });
+    expect(retryCap).toBeLessThan(oversized.length);
+    expect(texts[1]).not.toBe(oversized);
+    expect(texts[1]?.length ?? 0).toBeLessThanOrEqual(retryCap + 500);
   });
 });
