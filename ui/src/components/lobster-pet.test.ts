@@ -667,7 +667,7 @@ describe("lobster pet element", () => {
     expect(container.querySelector(".lob-eye-peek")).toBeNull();
   });
 
-  it("renders flatpack, loading, and actual replacement geometry", () => {
+  it("renders full replacement geometry without the standard dome", () => {
     const flatpackPalette = expectDefined(
       LOBSTER_PET_PALETTES.find((palette) => palette.id === "flatpack"),
       "flatpack palette",
@@ -707,6 +707,44 @@ describe("lobster pet element", () => {
     );
     expect(actualContainer.querySelector(".lob-actual")).not.toBeNull();
     expect(actualContainer.querySelector(".lob-standard-dome")).toBeNull();
+
+    const balloonPalette = expectDefined(
+      LOBSTER_PET_PALETTES.find((palette) => palette.id === "balloon"),
+      "balloon palette",
+    );
+    const balloonContainer = document.createElement("div");
+    render(
+      renderLobsterSvg(canonicalLobsterLook(balloonPalette), { standalone: true }),
+      balloonContainer,
+    );
+    expect(balloonContainer.querySelector(".lob-balloon-frame")).not.toBeNull();
+    expect(balloonContainer.querySelector(".lob-standard-dome")).toBeNull();
+
+    const asciiPalette = expectDefined(
+      LOBSTER_PET_PALETTES.find((palette) => palette.id === "ascii"),
+      "ascii palette",
+    );
+    const asciiContainer = document.createElement("div");
+    render(
+      renderLobsterSvg(canonicalLobsterLook(asciiPalette), { standalone: true }),
+      asciiContainer,
+    );
+    expect(asciiContainer.querySelector(".lob-ascii")).not.toBeNull();
+    expect(asciiContainer.querySelector(".lob-eye-open")?.textContent).toContain("(o)");
+    expect(asciiContainer.querySelector(".lob-eye-closed")?.textContent).toContain("(-)");
+    expect(asciiContainer.querySelector(".lob-standard-dome")).toBeNull();
+
+    const portalPalette = expectDefined(
+      LOBSTER_PET_PALETTES.find((palette) => palette.id === "portal"),
+      "portal palette",
+    );
+    const portalContainer = document.createElement("div");
+    render(
+      renderLobsterSvg(canonicalLobsterLook(portalPalette), { standalone: true }),
+      portalContainer,
+    );
+    expect(portalContainer.querySelectorAll(".lob-portal-ring")).toHaveLength(2);
+    expect(portalContainer.querySelector(".lob-standard-dome")).toBeNull();
   });
 
   it("never stacks the sailor cap on the tinfoil hat", () => {
@@ -805,7 +843,9 @@ describe("lobster plans", () => {
       "openclaw.control.lobsterdex.v1",
       JSON.stringify({
         gold: { firstSeenAt: 1, name: "Goldenrod" },
-        tangerine: { firstSeenAt: 2, name: "Marmalade" },
+        // Sorts after "gold" (as retired tangerine did) so probe seed 191 keeps
+        // picking index 0 = gold from the sorted candidate list.
+        watermelon: { firstSeenAt: 2, name: "Pips" },
       }),
     );
     const friend = identityOf(191);
@@ -833,6 +873,9 @@ describe("lobster plans", () => {
       JSON.stringify({
         coral: { firstSeenAt: 1, name: "Faded" },
         teal: { firstSeenAt: 2, name: "Lagoon" },
+        tangerine: { firstSeenAt: 3, name: "Marmalade" },
+        calico: { firstSeenAt: 4, name: "Patches" },
+        abyss: { firstSeenAt: 5, name: "Lantern" },
       }),
     );
     const seen = getLobsterdex();
@@ -866,7 +909,7 @@ describe("lobster plans", () => {
 
 describe("rare lobster loads", () => {
   // Probe seeds (deterministic per stream): 644 hosts the Elder; 191 rolls
-  // an old-friend return plus a balloon entrance; 4689 hatches a shiny lumen;
+  // an old-friend return plus a balloon entrance; 4689 hatches a shiny variant;
   // 104 is a shy load that beaches a bottle at ~194s; 37 is a shy load with
   // a snail crossing at ~407s.
   it("hosts the Elder: barnacled, renamed, and never molting", async () => {
@@ -890,7 +933,9 @@ describe("rare lobster loads", () => {
       "openclaw.control.lobsterdex.v1",
       JSON.stringify({
         gold: { firstSeenAt: 1, name: "Goldenrod" },
-        tangerine: { firstSeenAt: 2, name: "Marmalade" },
+        // Sorts after "gold" (as retired tangerine did) so probe seed 191 keeps
+        // picking index 0 = gold from the sorted candidate list.
+        watermelon: { firstSeenAt: 2, name: "Pips" },
       }),
     );
     const element = createPet(191);

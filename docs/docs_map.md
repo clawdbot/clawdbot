@@ -918,6 +918,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Token model
   - H2: Actions and gates
   - H2: Access control and routing
+  - H3: Group DMs (MPDMs) and bots
   - H2: Threading, sessions, and reply tags
   - H2: Ack reactions
   - H3: Emoji (ackReaction)

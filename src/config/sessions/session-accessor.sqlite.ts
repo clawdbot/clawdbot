@@ -59,6 +59,7 @@ export {
   importSqliteSessionRows,
   replaceSqliteTranscriptEvents,
   replaceSqliteTranscriptEventsSync,
+  rewriteSqliteTranscriptEventRowsExact,
   trimSqliteTranscriptForManualCompact,
   withSqliteTranscriptWriteLock,
   withSqliteTranscriptWriteTransaction,

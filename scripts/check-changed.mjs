@@ -15,6 +15,7 @@ import { performance } from "node:perf_hooks";
 import {
   LIVE_DOCKER_AUTH_SHELL_TARGETS,
   detectChangedLanesForPaths,
+  hasDeadcodeScannedSource,
   listChangedPathsFromGit,
   listStagedChangedPaths,
 } from "./changed-lanes.mjs";
@@ -583,6 +584,17 @@ export function createChangedCheckPlan(result, options = {}) {
     );
   }
   add("package patch guard", ["deps:patches:check"]);
+  if (
+    hasDeadcodeScannedSource(result.paths) &&
+    !isTruthyEnvFlag(baseEnv.OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE)
+  ) {
+    addCommand(
+      "dead export scan (skip with OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE=1)",
+      "node",
+      ["scripts/check-deadcode-exports.mjs"],
+      baseEnv,
+    );
+  }
 
   if (result.docsOnly) {
     return {

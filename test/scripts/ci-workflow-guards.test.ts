@@ -4304,10 +4304,17 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(uiE2e.if).toBe(
       "needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true'",
     );
-    expect(uiE2e["runs-on"]).toBe(ui["runs-on"]);
-    // The full suite runs one file at a time (fileParallelism: false), so it
-    // needs a wider budget than the single-file gate this job replaced.
-    expect(uiE2e["timeout-minutes"]).toBe(45);
+    expect(uiE2e["runs-on"]).toContain("blacksmith-8vcpu-ubuntu-2404");
+    expect(uiE2e["runs-on"]).not.toBe(ui["runs-on"]);
+    // Each Chromium worker keeps serial file ownership while all four shards
+    // together remain required by the aggregate CI gate.
+    expect(uiE2e["timeout-minutes"]).toBe(25);
+    expect(uiE2e.strategy).toEqual({
+      "fail-fast": false,
+      "max-parallel": 4,
+      matrix: { shard: [1, 2, 3, 4] },
+    });
+    expect(workflow.jobs["ci-gate"].needs).toContain("checks-ui-e2e");
 
     const uiSetup = expectDefined(
       ui.steps.find((step: WorkflowStep) => step.name === "Setup Node environment"),
@@ -4330,7 +4337,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       uiE2e.steps.find((step: WorkflowStep) => step.name === "Test Control UI end-to-end"),
       "Control UI E2E suite",
     );
-    expect(scenario.run).toBe("pnpm test:ui:e2e");
+    expect(scenario.run).toBe(
+      "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner --shard ${{ matrix.shard }}/4",
+    );
     expect(JSON.stringify(uiE2e)).not.toContain("OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM");
   });
 

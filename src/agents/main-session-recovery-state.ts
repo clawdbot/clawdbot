@@ -424,14 +424,10 @@ export function transitionMainSessionRecovery(
         runId: command.runId,
         lifecycleGeneration: command.lifecycleGeneration,
       });
-      if (entry.pendingFinalDelivery || entry.pendingFinalDeliveryText) {
-        const pendingText = sanitizePendingFinalDeliveryText(entry.pendingFinalDeliveryText ?? "");
+      if (entry.pendingFinalDelivery?.kind === "replayable") {
+        const pendingText = sanitizePendingFinalDeliveryText(entry.pendingFinalDelivery.text);
         if (pendingText) {
-          entry.pendingFinalDeliveryLastAttemptAt = command.now;
-          entry.pendingFinalDeliveryAttemptCount =
-            (entry.pendingFinalDeliveryAttemptCount ?? 0) + 1;
-          entry.pendingFinalDeliveryLastError = null;
-          entry.pendingFinalDeliveryText = pendingText;
+          entry.pendingFinalDelivery = { ...entry.pendingFinalDelivery, text: pendingText };
         } else {
           Object.assign(entry, PENDING_FINAL_DELIVERY_CLEAR_PATCH);
         }

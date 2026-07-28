@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   createEmptyChangedLanes,
   detectChangedLanes,
+  hasDeadcodeScannedSource,
   isChangedLaneTestPath,
   isLiveDockerPackageScriptOnlyChange,
   isPackageScriptOnlyChange,
@@ -639,6 +640,27 @@ describe("scripts/changed-lanes", () => {
     expectLanes(result.lanes, { core: true, coreTests: true });
   });
 
+  it.each([
+    { name: "core source", changedPaths: ["src/agents/api.ts"], expected: true },
+    { name: "extension source", changedPaths: ["extensions/copilot/src/a.ts"], expected: true },
+    { name: "ui source", changedPaths: ["ui/src/pages/a.ts"], expected: true },
+    { name: "package source", changedPaths: ["packages/x/src/a.mts"], expected: true },
+    // Matches the `[cm]?[jt]sx?` selector the lint lanes in check-changed.mjs use.
+    { name: "tsx source", changedPaths: ["ui/src/pages/Page.tsx"], expected: true },
+    { name: "jsx source", changedPaths: ["ui/src/pages/Page.jsx"], expected: true },
+    { name: "cjs source", changedPaths: ["src/agents/legacy.cjs"], expected: true },
+    // An import-only edit can orphan a barrel re-export in a file this diff never
+    // touches, so selection is by path; inspecting changed lines would miss it.
+    { name: "import-only edit", changedPaths: ["src/agents/tool-surface-plan.ts"], expected: true },
+    { name: "docs tree", changedPaths: ["docs/example.ts"], expected: false },
+    { name: "scripts tree", changedPaths: ["scripts/check-changed.mjs"], expected: false },
+    // knip never reads these, so they must not pull in the scan.
+    { name: "markdown under src", changedPaths: ["src/README.md"], expected: false },
+    { name: "sql under src", changedPaths: ["src/state/schema.sql"], expected: false },
+  ])("selects the dead-export scan for $name", ({ changedPaths, expected }) => {
+    expect(hasDeadcodeScannedSource(changedPaths)).toBe(expected);
+  });
+
   it("ignores the explicit path separator", () => {
     const result = detectChangedLanes(["--", "scripts/test-live-acp-bind-docker.sh"]);
 
@@ -1107,6 +1129,34 @@ describe("scripts/changed-lanes", () => {
     ]);
   });
 
+  it("routes a changed export signature remotely through its own source lane", () => {
+    // Detection only fires for source files, and any such file already enables a
+    // non-docs lane, so the dead export scan needs no special routing branch.
+    const result = detectChangedLanes(["src/config/config.ts"]);
+
+    expect(changedCheckRequiresRemote(result)).toBe(true);
+    expect(shouldDelegateChangedCheckToCrabbox([], {}, { result })).toBe(true);
+  });
+
+  it("adds the dead export scan only for production source changes", () => {
+    const command = {
+      name: "dead export scan (skip with OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE=1)",
+      bin: "node",
+      args: ["scripts/check-deadcode-exports.mjs"],
+      env: expect.any(Object),
+    };
+    const sourceResult = detectChangedLanes(["src/config/config.ts"]);
+    const toolingResult = detectChangedLanes(["scripts/check-changed.mjs"]);
+
+    expect(createChangedCheckPlan(sourceResult).commands).toContainEqual(command);
+    expect(createChangedCheckPlan(toolingResult).commands).not.toContainEqual(command);
+    expect(
+      createChangedCheckPlan(sourceResult, {
+        env: { OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE: "1" },
+      }).commands,
+    ).not.toContainEqual(command);
+  });
+
   it("keeps small changed gates local only with a ready dependency install", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-check-changed-local-route-");
     const docsResult = detectChangedLanes(["docs/reference/test.md"]);
@@ -1379,6 +1429,10 @@ describe("scripts/changed-lanes", () => {
       "deprecated API usage",
       "plugin boundaries",
       "package patch guard",
+      // These live-Docker paths include `src/gateway/*.live.test.ts`, and the
+      // full-tree knip scan sees test files, so a deleted last consumer can
+      // orphan an export here too.
+      "dead export scan (skip with OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE=1)",
       "test temp creation report (warning-only)",
       "typecheck core tests",
       "lint core",

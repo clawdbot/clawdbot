@@ -335,7 +335,7 @@ export const LOBSTER_BOTTLE_FORTUNES = [
   "somewhere, a test is green because of you",
   "swim sideways when forward fails",
   "the reef remembers kind commits",
-  "even the abyss keeps a night light",
+  "even the deep keeps a night light",
   "barnacles are only patient passengers",
   "no current lasts forever",
   "bury your treasure in version control",

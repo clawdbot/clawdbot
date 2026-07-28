@@ -101,6 +101,7 @@ describe("session cost usage SQLite cache", () => {
           updatedAt: 1,
         }),
       ).toBe(true);
+      const rows = readSessionCostUsageRollupRows(agentId);
 
       const liveKeys = new (class extends Set<string> {
         override has(key: string): boolean {
@@ -119,10 +120,52 @@ describe("session cost usage SQLite cache", () => {
         }
       })();
 
-      deleteSessionCostUsageRollupsExcept({ agentId, liveKeys });
+      deleteSessionCostUsageRollupsExcept({ agentId, liveKeys, rows });
 
       expect(readSessionCostUsageRollupRows(agentId)).toEqual([
         { key: rollupId, updatedAt: 2, valueJson: refreshedValue },
+      ]);
+    });
+  });
+
+  it("reads only v2 rollups and prunes retired usage cache rows by scope", () => {
+    const stateDir = makeTempDir(tempDirs, "openclaw-usage-cache-retired-");
+
+    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+      const agentId = "worker-1";
+      expect(
+        writeSessionCostUsageRollup({
+          agentId,
+          rollupId: "current.jsonl",
+          previousValueJson: null,
+          valueJson: '{"version":2}',
+          updatedAt: 2,
+        }),
+      ).toBe(true);
+      const database = openOpenClawAgentDatabase({ agentId });
+      const insert = database.db.prepare(
+        "INSERT INTO cache_entries (scope, key, value_json, blob, expires_at, updated_at) VALUES (?, ?, ?, NULL, NULL, ?)",
+      );
+      insert.run("session-cost-usage-rollup-v1", "retired.jsonl", '{"version":1}', 1);
+      insert.run("session-cost-usage", "cache", "{}", 1);
+      insert.run("session-cost-usage", "refresh-lock", "{}", 1);
+      insert.run("other", "keep", "{}", 1);
+
+      const rows = readSessionCostUsageRollupRows(agentId);
+      expect(rows).toEqual([{ key: "current.jsonl", updatedAt: 2, valueJson: '{"version":2}' }]);
+
+      deleteSessionCostUsageRollupsExcept({
+        agentId,
+        liveKeys: new Set(["current.jsonl"]),
+        rows,
+      });
+
+      expect(
+        database.db.prepare("SELECT scope, key FROM cache_entries ORDER BY scope, key").all(),
+      ).toEqual([
+        { key: "keep", scope: "other" },
+        { key: "refresh-lock", scope: "session-cost-usage" },
+        { key: "current.jsonl", scope: "session-cost-usage-rollup-v2" },
       ]);
     });
   });

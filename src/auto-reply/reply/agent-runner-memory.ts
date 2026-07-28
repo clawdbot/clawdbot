@@ -1315,7 +1315,7 @@ export async function runMemoryFlushIfNeeded(params: {
       `tokenCount=${tokenCountForFlush ?? "undefined"} ` +
       `contextWindow=${contextWindowTokens} threshold=${flushThreshold} ` +
       `isHeartbeat=${params.isHeartbeat} isCli=${isCli} memoryFlushWritable=${memoryFlushWritable} ` +
-      `compactionCount=${entry?.compactionCount ?? 0} memoryFlushCompactionCount=${entry?.memoryFlushCompactionCount ?? "undefined"} ` +
+      `compactionCount=${entry?.compactionCount ?? 0} memoryFlushCompactionCount=${entry?.memoryFlush?.compactionCount ?? "undefined"} ` +
       `persistedPromptTokens=${persistedPromptTokens ?? "undefined"} persistedFresh=${entry?.totalTokensFresh === true} ` +
       `promptTokensEst=${promptTokenEstimate ?? "undefined"} transcriptPromptTokens=${transcriptPromptTokens ?? "undefined"} transcriptOutputTokens=${transcriptOutputTokens ?? "undefined"} ` +
       `projectedTokenCount=${projectedTokenCount ?? "undefined"} transcriptBytes=${transcriptByteSize ?? "undefined"} ` +
@@ -1563,11 +1563,7 @@ export async function runMemoryFlushIfNeeded(params: {
           skipMaintenance: true,
           takeCacheOwnership: true,
           update: async () => ({
-            memoryFlushAt: memoryDeps.now(),
-            memoryFlushCompactionCount: flushedCompactionCount,
-            memoryFlushFailureCount: 0,
-            memoryFlushLastFailedAt: undefined,
-            memoryFlushLastFailureError: undefined,
+            memoryFlush: { kind: "succeeded", compactionCount: flushedCompactionCount },
           }),
         });
         if (updatedEntry) {
@@ -1588,16 +1584,22 @@ export async function runMemoryFlushIfNeeded(params: {
     const truncatedError = truncateMemoryFlushErrorMessage(err);
     if (!isAbortError(err) && params.storePath && params.sessionKey) {
       try {
-        const failedAt = memoryDeps.now();
         const failedEntry = await memoryDeps.updateSessionEntry({
           storePath: params.storePath,
           sessionKey: params.sessionKey,
           skipMaintenance: true,
           takeCacheOwnership: true,
           update: async (sessionEntry) => ({
-            memoryFlushFailureCount: Math.max(0, sessionEntry.memoryFlushFailureCount ?? 0) + 1,
-            memoryFlushLastFailedAt: failedAt,
-            memoryFlushLastFailureError: truncatedError,
+            memoryFlush: {
+              kind: "failed",
+              ...(sessionEntry.memoryFlush?.compactionCount !== undefined
+                ? { compactionCount: sessionEntry.memoryFlush.compactionCount }
+                : {}),
+              failureCount:
+                (sessionEntry.memoryFlush?.kind === "failed"
+                  ? sessionEntry.memoryFlush.failureCount
+                  : 0) + 1,
+            },
           }),
         });
         if (failedEntry) {
@@ -1606,7 +1608,8 @@ export async function runMemoryFlushIfNeeded(params: {
             activeSessionStore[params.sessionKey] = failedEntry;
           }
         }
-        const failureCount = Math.max(0, failedEntry?.memoryFlushFailureCount ?? 0);
+        const failureCount =
+          failedEntry?.memoryFlush?.kind === "failed" ? failedEntry.memoryFlush.failureCount : 0;
         logVerbose(
           `memory flush failed (attempt ${failureCount}/${MAX_FLUSH_FAILURES}): ${truncatedError}`,
         );
@@ -1644,8 +1647,10 @@ export async function runMemoryFlushIfNeeded(params: {
             skipMaintenance: true,
             takeCacheOwnership: true,
             update: async (sessionEntry) => ({
-              memoryFlushAt: memoryDeps.now(),
-              memoryFlushCompactionCount: sessionEntry.compactionCount ?? 0,
+              memoryFlush: {
+                kind: "succeeded",
+                compactionCount: sessionEntry.compactionCount ?? 0,
+              },
             }),
           });
           if (exhaustedEntry) {
