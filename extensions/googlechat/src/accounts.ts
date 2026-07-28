@@ -250,9 +250,3 @@ export function inspectGoogleChatAccount(params: {
 }): ResolvedGoogleChatAccount {
   return resolveGoogleChatAccountWithMode({ ...params, mode: "inspect" });
 }
-
-export function listEnabledGoogleChatAccounts(cfg: OpenClawConfig): ResolvedGoogleChatAccount[] {
-  return listGoogleChatAccountIds(cfg)
-    .map((accountId) => resolveGoogleChatAccount({ cfg, accountId }))
-    .filter((account) => account.enabled);
-}

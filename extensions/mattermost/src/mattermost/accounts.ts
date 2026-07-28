@@ -26,7 +26,7 @@ import type { OpenClawConfig } from "./runtime-api.js";
 
 type MattermostTokenSource = "env" | "config" | "none";
 type MattermostBaseUrlSource = "env" | "config" | "none";
-export type MattermostCredentialStatus = "available" | "configured_unavailable" | "missing";
+type MattermostCredentialStatus = "available" | "configured_unavailable" | "missing";
 
 export type ResolvedMattermostAccount = {
   accountId: string;

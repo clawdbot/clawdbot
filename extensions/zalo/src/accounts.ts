@@ -64,9 +64,3 @@ export function inspectZaloAccount(params: {
 }): ResolvedZaloAccount {
   return resolveZaloAccountWithMode({ ...params, mode: "inspect" });
 }
-
-export function listEnabledZaloAccounts(cfg: OpenClawConfig): ResolvedZaloAccount[] {
-  return listZaloAccountIds(cfg)
-    .map((accountId) => resolveZaloAccount({ cfg, accountId }))
-    .filter((account) => account.enabled);
-}

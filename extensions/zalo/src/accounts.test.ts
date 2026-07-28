@@ -2,7 +2,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   inspectZaloAccount,
-  listEnabledZaloAccounts,
   listZaloAccountIds,
   resolveDefaultZaloAccountId,
   resolveZaloAccount,
@@ -92,7 +91,7 @@ describe("resolveZaloAccount", () => {
 
     expect(listZaloAccountIds(cfg)).toEqual(["default", "work"]);
     expect(resolveDefaultZaloAccountId(cfg)).toBe("default");
-    expect(listEnabledZaloAccounts(cfg).map((account) => account.accountId)).toEqual(["default"]);
+    expect(resolveZaloAccount({ cfg, accountId: "default" }).enabled).toBe(true);
   });
 });
 
