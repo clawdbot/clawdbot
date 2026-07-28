@@ -46,8 +46,6 @@ import {
   type ChatSplitPane,
 } from "./split-layout.ts";
 
-const NARROW_SPLIT_QUERY = "(max-width: 1099px)";
-
 type DropIndicator = { paneId: string; zone: SplitDropZone; rect: SplitDropRect };
 type ChatPaneElement = HTMLElement & { paneId?: string; sessionKey?: string };
 
@@ -84,7 +82,7 @@ export class ChatPage extends OpenClawLightDomElement {
   override connectedCallback() {
     super.connectedCallback();
     this.layout = loadSettings().chatSplitLayout;
-    this.mediaQuery = window.matchMedia(NARROW_SPLIT_QUERY);
+    this.mediaQuery = window.matchMedia("(max-width: 1099px)");
     this.narrow = this.mediaQuery.matches;
     this.mediaQuery.addEventListener("change", this.handleViewportChange);
     this.mobileNavMediaQuery = window.matchMedia(mobileNavLayoutMediaQuery());
