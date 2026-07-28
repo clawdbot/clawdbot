@@ -9967,6 +9967,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Automatic per-model activation
   - H3: The compat.codeMode catalog flag
   - H3: Shipped preferred models
+  - H3: Models shipped by more than one provider
   - H3: Choosing when to enable
   - H2: Activation
   - H2: Model-visible tools
