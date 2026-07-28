@@ -610,7 +610,7 @@ describe("runSearchSetupFlow", () => {
 
   it("returns an install-failed outcome without changing config", async () => {
     ensureOnboardingPluginInstalled.mockResolvedValueOnce({
-      cfg: {},
+      cfg: { plugins: { installs: {} } },
       installed: false,
       pluginId: "brave",
       status: "failed",
