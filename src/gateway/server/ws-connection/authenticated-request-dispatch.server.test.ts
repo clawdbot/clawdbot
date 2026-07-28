@@ -172,6 +172,33 @@ describe("authenticated WebSocket request trace dispatch", () => {
     expect(observed?.spanId).not.toBe("1111111111111111");
   });
 
+  it("keeps handler failure logging and responses inside the request trace", async () => {
+    let loggedContext: DiagnosticTraceContext | undefined;
+    let responseContext: DiagnosticTraceContext | undefined;
+    const { dispatcher, logGateway, send } = createDispatcher(async () => {
+      throw new Error("expected trace failure");
+    });
+    logGateway.error.mockImplementation(() => {
+      loggedContext = getActiveDiagnosticTraceContext();
+    });
+    send.mockImplementation(() => {
+      responseContext = getActiveDiagnosticTraceContext();
+    });
+
+    await dispatchInFreshMessageScope(dispatcher, createClient(), "failure", TRACEPARENTS.first);
+    await vi.waitFor(() => {
+      expect(logGateway.error).toHaveBeenCalled();
+      expect(send).toHaveBeenCalled();
+    });
+
+    expect(loggedContext).toMatchObject({
+      traceId: "11111111111111111111111111111111",
+      parentSpanId: "1111111111111111",
+      traceFlags: "01",
+    });
+    expect(responseContext).toEqual(loggedContext);
+  });
+
   it("retains fresh roots for missing and malformed traceparent values", async () => {
     const observed = new Map<string, DiagnosticTraceContext | undefined>();
     const { dispatcher } = createDispatcher(({ req }) => {

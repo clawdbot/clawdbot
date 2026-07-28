@@ -143,29 +143,30 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
     };
 
     const executeRequest = async () => {
-      const { handleGatewayRequest } = await import("../../server-methods.js");
-      await handleGatewayRequest({
-        req,
-        respond,
-        client,
-        isWebchatConnect: params.isWebchatConnect,
-        extraHandlers,
-        methodRegistry: getMethodRegistry?.(),
-        context: buildRequestContext(),
-      });
+      try {
+        const { handleGatewayRequest } = await import("../../server-methods.js");
+        await handleGatewayRequest({
+          req,
+          respond,
+          client,
+          isWebchatConnect: params.isWebchatConnect,
+          extraHandlers,
+          methodRegistry: getMethodRegistry?.(),
+          context: buildRequestContext(),
+        });
+      } catch (err) {
+        // Failure diagnostics and responses belong to the same request trace as the handler.
+        logGateway.error(`request handler failed: ${formatForLog(err)}`);
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+      }
     };
     const upstreamTrace = parseDiagnosticTraceparent(req.traceparent);
-    const requestDispatch = (
-      upstreamTrace
-        ? runWithDiagnosticTraceContext(
-            createChildDiagnosticTraceContext(upstreamTrace),
-            executeRequest,
-          )
-        : executeRequest()
-    ).catch((err: unknown) => {
-      logGateway.error(`request handler failed: ${formatForLog(err)}`);
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
-    });
+    const requestDispatch = upstreamTrace
+      ? runWithDiagnosticTraceContext(
+          createChildDiagnosticTraceContext(upstreamTrace),
+          executeRequest,
+        )
+      : executeRequest();
     if (DEVICE_CREDENTIAL_INVALIDATING_METHODS.has(req.method)) {
       const barrier = requestDispatch.finally(() => {
         if (deviceCredentialMutationBarrier === barrier) {
