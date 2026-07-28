@@ -70,20 +70,26 @@ type CodeModeToolContext = ToolSearchToolContext;
 
 const MAX_CODE_MODE_CATALOG_INDEX_CHARS = 8_000;
 
+const CODE_MODE_CATALOG_INDEX_HEADING = [
+  "OpenClaw/plugin tool quick index (exact ids; descriptions are intentionally deferred):",
+  "Each line is `id input -> output`; `-> ?` means unknown.",
+  "OUTPUT DECLARED RULE: use declared fields for dependent calls in the first exec.",
+  "OUTPUT UNKNOWN RULE: return the raw tool value unchanged; inspect or map it only in a later exec.",
+].join("\n");
+
+function codeModeCatalogIndexFooter(included: number, total: number): string {
+  const omitted = total - included;
+  return omitted > 0
+    ? `${omitted} additional OpenClaw/plugin tools omitted from this prompt index. Use ALL_TOOLS or tools.search inside exec to find them.`
+    : "Use these exact ids with tools.callValue; use ALL_TOOLS or tools.search inside exec when lookup is ambiguous.";
+}
+
 function renderCodeModeCatalogIndex(lines: readonly string[], total: number): string {
-  const omitted = total - lines.length;
-  const footer =
-    omitted > 0
-      ? `${omitted} additional OpenClaw/plugin tools omitted from this prompt index. Use ALL_TOOLS or tools.search inside exec to find them.`
-      : "Use these exact ids with tools.callValue; use ALL_TOOLS or tools.search inside exec when lookup is ambiguous.";
   return [
-    "OpenClaw/plugin tool quick index (exact ids; descriptions are intentionally deferred):",
-    "Each line is `id input -> output`; `-> ?` means unknown.",
-    "OUTPUT DECLARED RULE: use declared fields for dependent calls in the first exec.",
-    "OUTPUT UNKNOWN RULE: return the raw tool value unchanged; inspect or map it only in a later exec.",
+    CODE_MODE_CATALOG_INDEX_HEADING,
     ...lines,
     "",
-    footer,
+    codeModeCatalogIndexFooter(lines.length, total),
   ].join("\n");
 }
 
@@ -115,12 +121,17 @@ function formatCodeModeCatalogIndex(catalog: readonly ToolSearchCatalogEntry[]):
   // entries stay discoverable through ALL_TOOLS, and the stable input order
   // keeps prompt bytes deterministic for provider caches.
   const included: string[] = [];
+  let includedLineLength = 0;
   for (const line of lines) {
-    if (
-      renderCodeModeCatalogIndex([...included, line], lines.length).length <=
-      MAX_CODE_MODE_CATALOG_INDEX_CHARS
-    ) {
+    const candidateLineLength = includedLineLength + 1 + line.length;
+    const candidateLength =
+      CODE_MODE_CATALOG_INDEX_HEADING.length +
+      candidateLineLength +
+      2 +
+      codeModeCatalogIndexFooter(included.length + 1, lines.length).length;
+    if (candidateLength <= MAX_CODE_MODE_CATALOG_INDEX_CHARS) {
       included.push(line);
+      includedLineLength = candidateLineLength;
     }
   }
   return renderCodeModeCatalogIndex(included, lines.length);

@@ -4,6 +4,7 @@ import { resolveCodeModeConfig, toToolSearchConfig } from "./code-mode-runtime.j
 import {
   activeRuns,
   disposeCodeModeRun,
+  reserveActiveRunSlot,
   storeSnapshotState,
   type PendingBridgeState,
 } from "./code-mode-state.js";
@@ -15,6 +16,7 @@ import {
 } from "./tool-search.js";
 
 const EXPIRING_RUN_ID = "cm_worker_lifecycle_expiry";
+const CAPACITY_RUN_PREFIX = "cm_worker_lifecycle_capacity_";
 
 function parkExpiringRun(method: "callValue" | "agentWait"): ReturnType<typeof vi.fn> {
   const rawConfig = {
@@ -53,10 +55,55 @@ function parkExpiringRun(method: "callValue" | "agentWait"): ReturnType<typeof v
 
 afterEach(() => {
   disposeCodeModeRun(EXPIRING_RUN_ID);
+  for (const runId of activeRuns.keys()) {
+    if (runId.startsWith(CAPACITY_RUN_PREFIX)) {
+      disposeCodeModeRun(runId);
+    }
+  }
   vi.useRealTimers();
 });
 
 describe("Code Mode worker lifecycle", () => {
+  it("transfers a resumed run's slot atomically at the suspended-run limit", () => {
+    parkExpiringRun("callValue");
+    const ownedState = activeRuns.get(EXPIRING_RUN_ID);
+    expect(ownedState).toBeDefined();
+    if (!ownedState) {
+      throw new Error("expected a parked Code Mode run");
+    }
+    for (let index = 0; index < 63; index += 1) {
+      const runId = `${CAPACITY_RUN_PREFIX}${index}`;
+      activeRuns.set(runId, { ...ownedState, runId, pending: [] });
+    }
+
+    const release = reserveActiveRunSlot(EXPIRING_RUN_ID);
+    try {
+      expect(activeRuns.has(EXPIRING_RUN_ID)).toBe(false);
+      expect(activeRuns.size).toBe(63);
+      expect(() => reserveActiveRunSlot()).toThrow("too many suspended code mode runs");
+
+      activeRuns.set(EXPIRING_RUN_ID, ownedState);
+    } finally {
+      release();
+    }
+
+    expect(activeRuns.size).toBe(64);
+    expect(() => reserveActiveRunSlot()).toThrow("too many suspended code mode runs");
+
+    disposeCodeModeRun(`${CAPACITY_RUN_PREFIX}0`);
+    const releaseFreedSlot = reserveActiveRunSlot();
+    releaseFreedSlot();
+  });
+
+  it("rejects an unavailable run without leaking a capacity reservation", () => {
+    expect(() => reserveActiveRunSlot("cm_missing_lifecycle_owner")).toThrow(
+      "code mode run is unavailable or expired",
+    );
+
+    const release = reserveActiveRunSlot();
+    release();
+  });
+
   it("honors an already-aborted execution before starting a worker", async () => {
     const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
     const controller = new AbortController();

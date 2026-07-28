@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { clampNumber } from "../utils.js";
+import { awaitCodeModeDeadline } from "./code-mode-deadline.js";
 import { toCodeModeJsonSafe } from "./code-mode-json.js";
 import {
   createCodeModeNamespaceRuntime,
@@ -89,37 +90,6 @@ function remainingHeadlessMs(deadline: number): number {
     throw new CodeModeHeadlessTimeoutError();
   }
   return remaining;
-}
-
-async function awaitHeadlessDeadline<T>(params: {
-  promise: Promise<T>;
-  deadline: number;
-  signal?: AbortSignal;
-}): Promise<T> {
-  const remainingMs = remainingHeadlessMs(params.deadline);
-  if (params.signal?.aborted) {
-    throw headlessAbortError(params.signal);
-  }
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let onAbort: (() => void) | undefined;
-  try {
-    const timeout = new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => reject(new CodeModeHeadlessTimeoutError()), remainingMs);
-      const signal = params.signal;
-      if (signal) {
-        onAbort = () => reject(headlessAbortError(signal));
-        signal.addEventListener("abort", onAbort, { once: true });
-      }
-    });
-    return await Promise.race([params.promise, timeout]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-    if (params.signal && onAbort) {
-      params.signal.removeEventListener("abort", onAbort);
-    }
-  }
 }
 
 async function runHeadlessWorkerLeg(params: {
@@ -252,10 +222,12 @@ export async function runCodeModeScriptHeadless(params: {
     const catalog = runtime.all({ includeMcp: false });
     const namespaceCatalog = runtime.namespaceEntries();
     const namespaceRuntime = createCodeModeNamespaceRuntime(namespaceCatalog);
-    const preparedSource = await awaitHeadlessDeadline({
-      promise: prepareSource({ code: params.code, language: params.language, config }),
-      deadline,
+    const preparedSource = await awaitCodeModeDeadline({
+      operation: () => prepareSource({ code: params.code, language: params.language, config }),
+      deadlineMs: deadline,
       signal: abortScope.signal,
+      createTimeoutError: () => new CodeModeHeadlessTimeoutError(),
+      createAbortError: headlessAbortError,
     });
     const namespaces = mergeHeadlessNamespaces(
       namespaceRuntime.descriptors,
@@ -337,10 +309,12 @@ export async function runCodeModeScriptHeadless(params: {
           toolCallCount,
         });
       }
-      await awaitHeadlessDeadline({
-        promise: waitForPendingBridgeSettlement(pending, result.settlementMode),
-        deadline,
+      await awaitCodeModeDeadline({
+        operation: () => waitForPendingBridgeSettlement(pending, result.settlementMode),
+        deadlineMs: deadline,
         signal: abortScope.signal,
+        createTimeoutError: () => new CodeModeHeadlessTimeoutError(),
+        createAbortError: headlessAbortError,
       });
       const settledRequests = settledBridgeRequestsInCompletionOrder(pending);
       pending = pending.filter((entry) => !entry.settled);
