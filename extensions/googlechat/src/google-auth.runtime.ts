@@ -1,4 +1,6 @@
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
+import path from "node:path";
 import type { ConnectionOptions } from "node:tls";
 import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
@@ -515,6 +517,50 @@ export async function resolveValidatedGoogleChatCredentials(
   if (account.credentialsFile) {
     const fileCredentials = await readCredentialsFile(account.credentialsFile);
     return validateGoogleChatServiceAccountCredentials(fileCredentials);
+  }
+  return null;
+}
+
+// Mirrors google-auth-library's well-known Application Default Credentials file
+// location (_tryGetApplicationCredentialsFromWellKnownFile): %APPDATA%\gcloud on
+// Windows, otherwise $HOME/.config/gcloud.
+function wellKnownAdcCredentialPath(): string | null {
+  const base =
+    process.platform === "win32"
+      ? process.env.APPDATA?.trim()
+      : (() => {
+          const home = process.env.HOME?.trim();
+          return home ? path.join(home, ".config") : undefined;
+        })();
+  if (!base) {
+    return null;
+  }
+  return path.join(base, "gcloud", "application_default_credentials.json");
+}
+
+/**
+ * Resolve file/env-based Application Default Credentials, mirroring google-auth's
+ * discovery order (GOOGLE_APPLICATION_CREDENTIALS, then the well-known gcloud
+ * file) WITHOUT falling through to google-auth's unguarded GCE metadata probe.
+ * Returns parsed credentials, or null when only the metadata server is available
+ * (handled separately by the guarded metadata mint).
+ *
+ * Credentials are returned unvalidated: ADC files may be service_account,
+ * authorized_user, or external_account, all of which google-auth parses
+ * natively. Their token exchange still flows through the guarded transporter
+ * (googleapis.com / accounts.google.com), so federation to non-Google endpoints
+ * is rejected by the SSRF guard by design.
+ */
+export async function resolveAdcFileCredentials(): Promise<Record<string, unknown> | null> {
+  const envPath = process.env.GOOGLE_APPLICATION_CREDENTIALS?.trim();
+  if (envPath) {
+    // Matches google-auth: an explicitly configured path that cannot be read is
+    // an error, not a silent fall-through to the metadata server.
+    return readCredentialsFile(envPath);
+  }
+  const wellKnownPath = wellKnownAdcCredentialPath();
+  if (wellKnownPath && existsSync(wellKnownPath)) {
+    return readCredentialsFile(wellKnownPath);
   }
   return null;
 }

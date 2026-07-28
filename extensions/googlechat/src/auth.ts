@@ -3,9 +3,11 @@ import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { fetchWithSsrFGuard } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
+import { getGoogleChatAdcAccessToken } from "./adc-token.js";
 import {
   getGoogleAuthTransport,
   loadGoogleAuthRuntime,
+  resolveAdcFileCredentials,
   resolveValidatedGoogleChatCredentials,
 } from "./google-auth.runtime.js";
 
@@ -64,8 +66,11 @@ function buildAuthKey(account: ResolvedGoogleChatAccount): string {
   return "none";
 }
 
-async function getAuthInstance(account: ResolvedGoogleChatAccount): Promise<GoogleAuthInstance> {
-  const key = buildAuthKey(account);
+async function getAuthInstance(
+  account: ResolvedGoogleChatAccount,
+  resolved?: { credentials: Record<string, unknown>; key: string },
+): Promise<GoogleAuthInstance> {
+  const key = resolved?.key ?? buildAuthKey(account);
   const cached = authCache.get(account.accountId);
   if (cached && cached.key === key) {
     return cached.auth;
@@ -73,7 +78,9 @@ async function getAuthInstance(account: ResolvedGoogleChatAccount): Promise<Goog
   const [{ GoogleAuth }, transporter, credentials] = await Promise.all([
     loadGoogleAuthRuntime(),
     getGoogleAuthTransport(),
-    resolveValidatedGoogleChatCredentials(account),
+    resolved
+      ? Promise.resolve(resolved.credentials)
+      : resolveValidatedGoogleChatCredentials(account),
   ]);
 
   const evictOldest = () => {
@@ -95,10 +102,7 @@ async function getAuthInstance(account: ResolvedGoogleChatAccount): Promise<Goog
   return auth;
 }
 
-export async function getGoogleChatAccessToken(
-  account: ResolvedGoogleChatAccount,
-): Promise<string> {
-  const auth = await getAuthInstance(account);
+async function mintAccessToken(auth: GoogleAuthInstance): Promise<string> {
   const client = await auth.getClient();
   const access = await client.getAccessToken();
   const token = typeof access === "string" ? access : access?.token;
@@ -106,6 +110,28 @@ export async function getGoogleChatAccessToken(
     throw new Error("Missing Google Chat access token");
   }
   return token;
+}
+
+export async function getGoogleChatAccessToken(
+  account: ResolvedGoogleChatAccount,
+): Promise<string> {
+  // Keyless (ADC) mode: resolve the ambient Application Default Credentials.
+  // File/env sources (GOOGLE_APPLICATION_CREDENTIALS, the well-known gcloud
+  // file) are minted via GoogleAuth over the guarded transporter; when only the
+  // GCE metadata server is available we use the dedicated guarded mint
+  // (adc-token.ts) rather than google-auth's unguarded gcp-metadata transport.
+  if (account.credentialSource === "adc") {
+    const adcCredentials = await resolveAdcFileCredentials();
+    if (adcCredentials) {
+      const auth = await getAuthInstance(account, {
+        credentials: adcCredentials,
+        key: `adc-file:${JSON.stringify(adcCredentials)}`,
+      });
+      return mintAccessToken(auth);
+    }
+    return getGoogleChatAdcAccessToken([CHAT_SCOPE]);
+  }
+  return mintAccessToken(await getAuthInstance(account));
 }
 
 async function fetchChatCerts(): Promise<Record<string, string>> {
