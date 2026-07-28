@@ -4,6 +4,7 @@
  * auto-review, and follow-up execution paths.
  */
 import crypto from "node:crypto";
+import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecAllowlistEntry } from "../infra/exec-approvals.types.js";
@@ -470,13 +471,13 @@ function buildAllowlistEvalResult(params?: {
 
 function captureProcessUnhandledRejections() {
   const reasons: unknown[] = [];
-  const originalProcessEmit = process.emit;
+  const originalProcessEmit = process.emit.bind(process);
   const processEmit = vi.spyOn(process, "emit").mockImplementation((event, ...args) => {
     if (event === "unhandledRejection") {
       reasons.push(args[0]);
       return true;
     }
-    return Reflect.apply(originalProcessEmit, process, [event, ...args]) as boolean;
+    return originalProcessEmit(event, ...args);
   });
   return { reasons, restore: () => processEmit.mockRestore() };
 }
@@ -687,7 +688,7 @@ describe("executeNodeHostCommand", () => {
       if (scenario.delayed) {
         pendingDecision.reject(runAbortedApprovalError);
       }
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await setImmediate();
 
       expect(unhandledRejections.reasons).toEqual([]);
       expect(sendExecApprovalFollowupResultMock).not.toHaveBeenCalled();
@@ -737,7 +738,7 @@ describe("executeNodeHostCommand", () => {
           "Exec denied (node=node-1 id=approval-1, approval-request-failed): bun ./script.ts",
         );
       });
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await setImmediate();
       expect(unhandledRejections.reasons).toEqual([]);
       expect(
         callGatewayToolMock.mock.calls.some(
@@ -783,7 +784,7 @@ describe("executeNodeHostCommand", () => {
       });
 
       expect(result.details?.status).toBe("approval-pending");
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await setImmediate();
 
       expect(unhandledRejections.reasons).toEqual([]);
       expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(2);
@@ -835,7 +836,7 @@ describe("executeNodeHostCommand", () => {
       });
 
       expect(result.details?.status).toBe("approval-pending");
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await setImmediate();
 
       expect(unhandledRejections.reasons).toEqual([]);
       expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(2);
@@ -886,7 +887,7 @@ describe("executeNodeHostCommand", () => {
       await vi.waitFor(() => {
         expect(sendExecApprovalFollowupResultMock).toHaveBeenCalled();
       });
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await setImmediate();
 
       expect(unhandledRejections.reasons).toEqual([]);
       expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledOnce();
@@ -929,7 +930,7 @@ describe("executeNodeHostCommand", () => {
     expect(resolveApprovalDecisionOrUndefinedMock).toHaveBeenCalledOnce();
     abortController.abort();
     pendingDecision.resolve("allow-once");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await setImmediate();
 
     expect(createExecApprovalDecisionStateMock).not.toHaveBeenCalled();
     expect(sendExecApprovalFollowupResultMock).not.toHaveBeenCalled();
@@ -980,7 +981,7 @@ describe("executeNodeHostCommand", () => {
     });
     abortController.abort();
     policyCheckpoint.resolve(policy);
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await setImmediate();
 
     expect(sendExecApprovalFollowupResultMock).not.toHaveBeenCalled();
     expect(
@@ -1025,7 +1026,7 @@ describe("executeNodeHostCommand", () => {
       expect(results.every((result) => result.details?.status === "approval-pending")).toBe(true);
       expect(resolveApprovalDecisionOrUndefinedMock).toHaveBeenCalledTimes(32);
       pendingDecision.reject(runAbortedApprovalError);
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await setImmediate();
 
       expect(unhandledRejections.reasons).toEqual([]);
       expect(sendExecApprovalFollowupResultMock).not.toHaveBeenCalled();
@@ -1177,7 +1178,7 @@ describe("executeNodeHostCommand", () => {
       });
       abortController.abort(new Error("run aborted during node invocation"));
       pendingInvocation.reject(abortController.signal.reason);
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await setImmediate();
 
       expect(unhandledRejections.reasons).toEqual([]);
       expect(sendExecApprovalFollowupResultMock).not.toHaveBeenCalled();
