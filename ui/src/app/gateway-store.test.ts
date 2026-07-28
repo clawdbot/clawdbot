@@ -28,11 +28,7 @@ const HELLO: GatewayHelloOk = {
   auth: { role: "operator", scopes: [] },
 };
 
-function createGatewayEvent(
-  event = "chat",
-  payload: unknown = {},
-  seq = 1,
-): GatewayEventFrame {
+function createGatewayEvent(event = "chat", payload: unknown = {}, seq = 1): GatewayEventFrame {
   return {
     type: "event",
     event,
