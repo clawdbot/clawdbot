@@ -27,7 +27,11 @@ import { prepareInitialUserMessageHandoff } from "../chat/initial-turn-handoff.t
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import * as catalog from "./catalog-target.ts";
 import { CloudProfileDiscovery, selectProfiles } from "./cloud-profile-discovery.ts";
-import { PendingCloudRecoveryState, resolveScope } from "./cloud-recovery-state.ts";
+import {
+  isCloudRecoveryStuck,
+  PendingCloudRecoveryState,
+  resolveScope,
+} from "./cloud-recovery-state.ts";
 import { advanceCloudDraftSession } from "./cloud-submit.ts";
 import {
   NewSessionComposerTextareaController,
@@ -1594,10 +1598,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       <div class="new-session-page__draft" aria-busy=${String(this.submitting)}>
         ${this.renderTargetBar()}
         ${worktreeNameInvalid ? renderDraftError(t("newSession.worktreeNameInvalid")) : nothing}
-        ${this.error ? renderDraftError(this.error) : nothing}
-        ${this.submissionOutcomeUnknown
-          ? renderDraftError(t("newSession.createOutcomeUnknown"))
-          : nothing}
+        ${this.error ? renderDraftError(this.error) : nothing} ${this.renderCreateOutcomeUnknown()}
         ${renderNewSessionDraftComposer({
           agent: this.selectedAgent(),
           agentId: this.agentId,
@@ -1626,6 +1627,35 @@ class NewSessionPage extends OpenClawLightDomElement {
           onSubmit: () => void this.submit(),
         })}
       </div>
+    `;
+  }
+
+  /** Outcome-unknown error, with a discard escape hatch when the cloud create is stuck. */
+  private renderCreateOutcomeUnknown() {
+    if (!this.submissionOutcomeUnknown) {
+      return nothing;
+    }
+    const error = renderDraftError(t("newSession.createOutcomeUnknown"));
+    if (
+      !isCloudRecoveryStuck({
+        pendingCloud: Boolean(this.pendingCloud.sessionKey),
+        submissionOutcomeUnknown: this.submissionOutcomeUnknown,
+        canRetry: this.canSubmit(),
+      })
+    ) {
+      return error;
+    }
+    // The create cannot be retried (e.g. the Gateway changed mid-create), so the
+    // draft would stay locked until the tab closes. Let the user discard it.
+    return html`
+      ${error}
+      <button
+        type="button"
+        class="btn btn--sm btn--ghost new-session-page__recovery-dismiss"
+        @click=${() => this.clearPendingCloudRecovery()}
+      >
+        ${t("newSession.dismissStuckCloudRecovery")}
+      </button>
     `;
   }
 

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { PendingCloudRecoveryState } from "./cloud-recovery-state.ts";
+import { isCloudRecoveryStuck, PendingCloudRecoveryState } from "./cloud-recovery-state.ts";
 import { readCloudSessionRecovery } from "./cloud-recovery.ts";
 
 describe("pending cloud recovery state", () => {
@@ -129,5 +129,39 @@ describe("pending cloud recovery state", () => {
     });
     expect(captured?.attachments).not.toBe(pending.attachments);
     expect(captured?.createParams).not.toBe(pending.createParams);
+  });
+});
+
+describe("isCloudRecoveryStuck", () => {
+  it("is stuck only when a cloud create is in flight, the outcome is unknown, and retry is impossible", () => {
+    expect(
+      isCloudRecoveryStuck({ pendingCloud: true, submissionOutcomeUnknown: true, canRetry: false }),
+    ).toBe(true);
+  });
+
+  it("is not stuck when the create can still be retried", () => {
+    expect(
+      isCloudRecoveryStuck({ pendingCloud: true, submissionOutcomeUnknown: true, canRetry: true }),
+    ).toBe(false);
+  });
+
+  it("is not stuck when there is no in-flight cloud create", () => {
+    expect(
+      isCloudRecoveryStuck({
+        pendingCloud: false,
+        submissionOutcomeUnknown: true,
+        canRetry: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("is not stuck when the outcome is still known", () => {
+    expect(
+      isCloudRecoveryStuck({
+        pendingCloud: true,
+        submissionOutcomeUnknown: false,
+        canRetry: false,
+      }),
+    ).toBe(false);
   });
 });

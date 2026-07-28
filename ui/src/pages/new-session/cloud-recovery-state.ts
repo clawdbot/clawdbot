@@ -25,6 +25,20 @@ export function resolveScope(
   return { next, changed: !firstBind && snapshot.connected && current !== next };
 }
 
+/**
+ * A cloud create is stuck when its outcome is unknown and it can no longer be
+ * retried (for example the Gateway changed mid-create, so the in-flight create
+ * cannot be confirmed or replayed). In that dead-end the draft is locked with
+ * no escape short of closing the tab, so the caller offers a discard action.
+ */
+export function isCloudRecoveryStuck(params: {
+  pendingCloud: boolean;
+  submissionOutcomeUnknown: boolean;
+  canRetry: boolean;
+}): boolean {
+  return params.pendingCloud && params.submissionOutcomeUnknown && !params.canRetry;
+}
+
 export class PendingCloudRecoveryState {
   sessionKey = "";
   messageId = "";

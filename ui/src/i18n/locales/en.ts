@@ -573,6 +573,7 @@ export const en: TranslationMap = {
     createFailed: "Couldn't create the thread.",
     createOutcomeUnknown:
       "The Gateway changed while this thread was starting. Check recent threads before starting this task again.",
+    dismissStuckCloudRecovery: "Discard and start over",
     catalogUnavailable: "This thread target is unavailable.",
   },
   dashboardsPage: {
