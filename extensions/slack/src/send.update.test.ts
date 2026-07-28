@@ -2,6 +2,8 @@
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { SLACK_EDIT_TEXT_MAX_BYTES } from "./limits.js";
+import { countSlackTextUtf8Bytes } from "./truncate.js";
 
 const getSlackWriteClientMock = vi.hoisted(() => vi.fn());
 
@@ -33,9 +35,7 @@ function createUpdateClient() {
   } as unknown as WebClient & { chat: { update: ReturnType<typeof vi.fn> } };
 }
 
-// chat.update rejects text longer than 4,000 characters with msg_too_long (see limits.ts);
-// chat.postMessage tolerates up to 8,000. An edit must use the smaller 4,000 edit limit.
-const SLACK_EDIT_TEXT_LIMIT = 4_000;
+// chat.update rejects text above 4,000 UTF-8 bytes with msg_too_long (see limits.ts).
 const SLACK_TEST_CFG = {
   channels: { slack: { botToken: "xoxb-test" } },
 } as unknown as OpenClawConfig;
@@ -48,11 +48,11 @@ describe("updateMessageSlack", () => {
     getSlackWriteClientMock.mockReset();
   });
 
-  it("caps chat.update text at the 4000-char edit limit, not the 8000 send limit", async () => {
+  it("caps chat.update text at the 4000-byte edit limit, not the 8000 send limit", async () => {
     const client = createUpdateClient();
     getSlackWriteClientMock.mockReturnValue(client);
-    // Length between the 4,000 edit limit and the 8,000 send limit: Slack rejects this edit with
-    // msg_too_long unless updateMessageSlack truncates to the edit limit first.
+    // Length between the edit and send limits: Slack rejects this edit with msg_too_long unless
+    // updateMessageSlack truncates it first.
     const longText = "a".repeat(6_000);
 
     await updateMessageSlack({
@@ -66,6 +66,26 @@ describe("updateMessageSlack", () => {
     expect(client.chat.update).toHaveBeenCalledTimes(1);
     const [payload] = client.chat.update.mock.calls[0] ?? [];
     const sentText = (payload as { text?: string }).text ?? "";
-    expect(sentText.length).toBeLessThanOrEqual(SLACK_EDIT_TEXT_LIMIT);
+    expect(sentText).toHaveLength(3_998);
+    expect(countSlackTextUtf8Bytes(sentText)).toBe(SLACK_EDIT_TEXT_MAX_BYTES);
+    expect(sentText.endsWith("…")).toBe(true);
+  });
+
+  it("backs off multibyte text to Slack's live UTF-8 byte limit", async () => {
+    const client = createUpdateClient();
+    getSlackWriteClientMock.mockReturnValue(client);
+
+    await updateMessageSlack({
+      cfg: SLACK_TEST_CFG,
+      channelId: "C123",
+      messageTs: "171234.567",
+      text: `${"x".repeat(3_999)}…tail`,
+      blocks: statusBlocks,
+    });
+
+    const [payload] = client.chat.update.mock.calls[0] ?? [];
+    const sentText = (payload as { text?: string }).text ?? "";
+    expect(sentText).toBe(`${"x".repeat(3_997)}…`);
+    expect(countSlackTextUtf8Bytes(sentText)).toBe(SLACK_EDIT_TEXT_MAX_BYTES);
   });
 });
