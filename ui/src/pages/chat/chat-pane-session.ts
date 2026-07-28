@@ -1,6 +1,7 @@
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import {
   CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
+  applySelectedSessionProjection,
   buildCatalogSessionKey,
   catalogMessageId,
   clampText,
@@ -217,6 +218,9 @@ export abstract class ChatPaneSession extends ChatPaneSuggestions {
       previousDraftRetry,
       previousComposerScope,
     });
+    // The sidebar row is already authoritative enough for first paint: it supplies
+    // the header and run controls while the reset restores any cached transcript.
+    applySelectedSessionProjection(state, nextSessionRow);
     this.reconcileWaitingApprovalSnapshot();
     retryChatComposerMemoryFallback(state, nextSessionKey);
     // Route restoration is the new persistence baseline. An untouched pane
@@ -277,18 +281,20 @@ export abstract class ChatPaneSession extends ChatPaneSuggestions {
       () => this.sendPendingSkillWorkshopRevision(nextSessionKey),
       () => this.sendPendingSkillWorkshopRevision(nextSessionKey),
     );
-    const sessionsRefresh = refreshRouteSessionOptions(state);
-    flushChatQueueAfterIdleSessionReconciliation(
-      state,
-      nextSessionKey,
-      historyLoad,
-      sessionsRefresh,
-      previousSessionsResult,
-      () => void flushChatQueueForEvent(state),
-    );
+    if (state.chatQueue.length > 0) {
+      const sessionsRefresh = refreshRouteSessionOptions(state);
+      flushChatQueueAfterIdleSessionReconciliation(
+        state,
+        nextSessionKey,
+        historyLoad,
+        sessionsRefresh,
+        previousSessionsResult,
+        () => void flushChatQueueForEvent(state),
+      );
+      void sessionsRefresh;
+    }
     void subscriptionSync;
     void historyLoad;
-    void sessionsRefresh;
   }
 
   protected openCatalogSession(key: CatalogSessionKey, state: ChatPageHost) {
