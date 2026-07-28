@@ -169,7 +169,6 @@ const loadMemoryHandlers = lazyHandlerModule(
   () => import("./server-methods/memory.js"),
   (module) => module.memoryHandlers,
 );
-);
 const loadTerminalHandlers = lazyHandlerModule(
   () => import("./server-methods/terminal.js"),
   (module) => module.terminalHandlers,

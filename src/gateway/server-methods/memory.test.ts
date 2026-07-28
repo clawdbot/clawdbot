@@ -192,4 +192,64 @@ describe("memory.list RPC handler", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.ok).toBe(false);
   });
+
+  it("counts root MEMORY.md against the limit", async () => {
+    writeWorkspaceFile(workspaceRoot, "MEMORY.md", "# Curated\n");
+    for (let day = 1; day <= 5; day += 1) {
+      const stamp = `2026-07-${String(day).padStart(2, "0")}`;
+      writeWorkspaceFile(workspaceRoot, `memory/${stamp}.md`, `${stamp}\n`);
+    }
+
+    const payload = expectOkPayload(await invokeMemoryList({ includeRootMemory: true, limit: 3 }));
+    expect(payload.returnedFiles).toBe(3);
+    expect(payload.totalFiles).toBe(6);
+    expect(payload.files[0].path).toBe("MEMORY.md");
+    expect(payload.files).toHaveLength(3);
+  });
+
+  it("returns only root MEMORY.md when limit is 1 and root is included", async () => {
+    writeWorkspaceFile(workspaceRoot, "MEMORY.md", "# Curated\n");
+    writeWorkspaceFile(workspaceRoot, "memory/2026-07-28.md", "daily\n");
+
+    const payload = expectOkPayload(await invokeMemoryList({ includeRootMemory: true, limit: 1 }));
+    expect(payload.returnedFiles).toBe(1);
+    expect(payload.files[0].path).toBe("MEMORY.md");
+    expect(payload.totalFiles).toBe(2);
+  });
+
+  it("clamps limit=0 to 1 instead of rejecting", async () => {
+    writeWorkspaceFile(workspaceRoot, "memory/2026-07-28.md", "hello\n");
+
+    const payload = expectOkPayload(await invokeMemoryList({ limit: 0 }));
+    expect(payload.returnedFiles).toBe(1);
+    expect(payload.totalFiles).toBe(1);
+  });
+
+  it("clamps a negative limit to 1 instead of rejecting", async () => {
+    writeWorkspaceFile(workspaceRoot, "memory/2026-07-28.md", "hello\n");
+
+    const payload = expectOkPayload(await invokeMemoryList({ limit: -10 }));
+    expect(payload.returnedFiles).toBe(1);
+    expect(payload.totalFiles).toBe(1);
+  });
+
+  it("clamps maxContentBytes=0 to 1 instead of rejecting", async () => {
+    writeWorkspaceFile(workspaceRoot, "memory/2026-07-28.md", "hello memory\n");
+
+    const payload = expectOkPayload(
+      await invokeMemoryList({ includeContent: true, maxContentBytes: 0 }),
+    );
+    expect(payload.files[0].content).toHaveLength(1);
+    expect(payload.files[0].truncated).toBe(true);
+  });
+
+  it("clamps a negative maxContentBytes to 1 instead of rejecting", async () => {
+    writeWorkspaceFile(workspaceRoot, "memory/2026-07-28.md", "hello memory\n");
+
+    const payload = expectOkPayload(
+      await invokeMemoryList({ includeContent: true, maxContentBytes: -100 }),
+    );
+    expect(payload.files[0].content).toHaveLength(1);
+    expect(payload.files[0].truncated).toBe(true);
+  });
 });

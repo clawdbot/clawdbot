@@ -160,7 +160,10 @@ export const memoryHandlers: GatewayRequestHandlers = {
         }
       }
 
-      for (const name of dailyNames.slice(0, limit)) {
+      // Root memory counts against the file limit so returnedFiles never
+      // exceeds the caller's cap.
+      const dailyLimit = Math.max(0, limit - (rootMemoryIncluded ? 1 : 0));
+      for (const name of dailyNames.slice(0, dailyLimit)) {
         const entry = await buildEntry({
           absolutePath: path.join(memoryDir, name),
           relativePath: toWorkspaceRelativePath("memory", name),

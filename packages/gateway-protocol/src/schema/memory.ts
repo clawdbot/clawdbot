@@ -35,10 +35,10 @@ export const MemoryListParamsSchema = closedObject({
   // Bounds are clamped handler-side (defaults 90 files / 64 KiB, maxima
   // MEMORY_LIST_MAX_FILES / MEMORY_LIST_MAX_CONTENT_BYTES) so out-of-range
   // requests degrade to the cap instead of failing validation.
-  limit: Type.Optional(Type.Integer({ minimum: 1 })),
+  limit: Type.Optional(Type.Integer()),
   includeContent: Type.Optional(Type.Boolean()),
   includeRootMemory: Type.Optional(Type.Boolean()),
-  maxContentBytes: Type.Optional(Type.Integer({ minimum: 1 })),
+  maxContentBytes: Type.Optional(Type.Integer()),
 });
 
 /** Result for one persisted memory enumeration. */
