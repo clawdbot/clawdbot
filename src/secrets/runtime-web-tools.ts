@@ -810,22 +810,39 @@ export async function resolveRuntimeWebTools(params: {
       diagnostics,
     });
   }
-  // Providers whose plugins declare standalone tools (contracts.tools) need their
-  // credentials to stay active even when a different web search/fetch provider is
-  // selected, because the standalone tools share the same configured credential path.
-  // This intentionally expands the active-secret boundary, so it stays fail-closed
-  // only when BOTH conditions hold: the manifest declares non-empty contracts.tools,
-  // and the plugin entry is effectively enabled (missing entry defaults to enabled,
-  // consistent with the plugin lifecycle; enabled: false is treated as disabled).
+  // Standalone web tools (e.g., tavily_search) share the same credential path as
+  // their plugin's generic web search/fetch provider. Keep that credential active
+  // even when a different provider is selected for the generic tool. Eligibility is
+  // fail-closed: the plugin must declare itself as a provider of the relevant web
+  // surface (contracts.webSearchProviders or contracts.webFetchProviders), declare
+  // non-empty standalone tools (contracts.tools), and be effectively enabled.
   const pluginEntries = params.sourceConfig.plugins?.entries;
-  const standalonePluginIds = new Set(
+  function isEffectivelyEnabled(pluginId: string): boolean {
+    return pluginEntries?.[pluginId]?.enabled !== false;
+  }
+  const standaloneWebSearchPluginIds = new Set(
     (params.context.manifestRegistry?.plugins ?? [])
       .filter((p) => {
         if ((p.contracts?.tools?.length ?? 0) === 0) {
           return false;
         }
-        const entry = pluginEntries?.[p.id];
-        return entry?.enabled !== false;
+        if ((p.contracts?.webSearchProviders?.length ?? 0) === 0) {
+          return false;
+        }
+        return isEffectivelyEnabled(p.id);
+      })
+      .map((p) => p.id),
+  );
+  const standaloneWebFetchPluginIds = new Set(
+    (params.context.manifestRegistry?.plugins ?? [])
+      .filter((p) => {
+        if ((p.contracts?.tools?.length ?? 0) === 0) {
+          return false;
+        }
+        if ((p.contracts?.webFetchProviders?.length ?? 0) === 0) {
+          return false;
+        }
+        return isEffectivelyEnabled(p.id);
       })
       .map((p) => p.id),
   );
@@ -835,7 +852,7 @@ export async function resolveRuntimeWebTools(params: {
   if (hasPluginWebSearchConfig && !(await getHasCustomWebSearchRisk())) {
     // When standalone-tool plugins are enabled, load the full provider surface so
     // those providers can be resolved even though a different provider is selected.
-    if (rawProvider && standalonePluginIds.size === 0) {
+    if (rawProvider && standaloneWebSearchPluginIds.size === 0) {
       configuredBundledWebSearchPluginIdHint = inferExactBundledPluginScopedWebToolConfigOwner({
         config: params.sourceConfig,
         key: "webSearch",
@@ -891,7 +908,7 @@ export async function resolveRuntimeWebTools(params: {
 
     const searchStandaloneToolProviderIds = new Set<string>();
     for (const provider of searchSurface.providers) {
-      if (standalonePluginIds.has(provider.pluginId)) {
+      if (standaloneWebSearchPluginIds.has(provider.pluginId)) {
         searchStandaloneToolProviderIds.add(provider.id);
       }
     }
@@ -984,7 +1001,7 @@ export async function resolveRuntimeWebTools(params: {
     };
     const searchSelection = await resolveRuntimeWebProviderSelection(searchSelectionParams);
     const missingSearchStandalonePluginIds = new Set(
-      [...standalonePluginIds].filter(
+      [...standaloneWebSearchPluginIds].filter(
         (pluginId) => !searchSurface.providers.some((provider) => provider.pluginId === pluginId),
       ),
     );
@@ -1063,7 +1080,7 @@ export async function resolveRuntimeWebTools(params: {
 
     const fetchStandaloneToolProviderIds = new Set<string>();
     for (const provider of fetchSurface.providers) {
-      if (standalonePluginIds.has(provider.pluginId)) {
+      if (standaloneWebFetchPluginIds.has(provider.pluginId)) {
         fetchStandaloneToolProviderIds.add(provider.id);
       }
     }
@@ -1157,7 +1174,7 @@ export async function resolveRuntimeWebTools(params: {
     };
     const fetchSelection = await resolveRuntimeWebProviderSelection(fetchSelectionParams);
     const missingFetchStandalonePluginIds = new Set(
-      [...standalonePluginIds].filter(
+      [...standaloneWebFetchPluginIds].filter(
         (pluginId) => !fetchSurface.providers.some((provider) => provider.pluginId === pluginId),
       ),
     );

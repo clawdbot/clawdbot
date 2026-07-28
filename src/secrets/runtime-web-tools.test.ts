@@ -1155,13 +1155,18 @@ describe("runtime web tools resolution", () => {
         PERPLEXITY_API_KEY_REF: "perplexity-key",
       },
       manifestRegistry: {
-        plugins: [{ id: "perplexity", contracts: { tools: ["perplexity_search"] } }],
+        plugins: [
+          {
+            id: "perplexity",
+            contracts: { webSearchProviders: ["perplexity"], tools: ["perplexity_search"] },
+          },
+        ],
       } as Parameters<typeof runRuntimeWebTools>[0]["manifestRegistry"],
     });
 
     // Perplexity's credential should NOT be marked inactive because its plugin
-    // manifest declares standalone tools, and it must be resolved so standalone
-    // tools receive a usable runtime value.
+    // manifest declares both webSearchProviders and standalone tools, so it must
+    // be resolved for standalone tools to receive a usable runtime value.
     expect(context.warnings.map((w) => w.code)).not.toContain(
       "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
     );
@@ -1256,7 +1261,12 @@ describe("runtime web tools resolution", () => {
         BRAVE_API_KEY_REF: "brave-key",
       },
       manifestRegistry: {
-        plugins: [{ id: "perplexity", contracts: { tools: ["perplexity_search"] } }],
+        plugins: [
+          {
+            id: "perplexity",
+            contracts: { webSearchProviders: ["perplexity"], tools: ["perplexity_search"] },
+          },
+        ],
       } as Parameters<typeof runRuntimeWebTools>[0]["manifestRegistry"],
     });
 
@@ -1264,6 +1274,63 @@ describe("runtime web tools resolution", () => {
     expectDiagnostic(context.warnings, {
       code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
       path: "plugins.entries.perplexity.config.webSearch.apiKey",
+    });
+  });
+
+  it("keeps unrelated tool-contract credentials inactive when not selected", async () => {
+    // Regression guard: a plugin that declares standalone tools but does NOT declare
+    // itself as a web search provider must not have its web-search credential activated.
+    // Generic contracts.tools alone is not sufficient authorization for a web-provider
+    // SecretRef outside the selected provider surface.
+    const { context } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "brave",
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            brave: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: { source: "env", provider: "default", id: "BRAVE_API_KEY_REF" },
+                },
+              },
+            },
+            xai: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: { source: "env", provider: "default", id: "XAI_API_KEY_REF" },
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        BRAVE_API_KEY_REF: "brave-key",
+      },
+      manifestRegistry: {
+        plugins: [
+          {
+            id: "xai",
+            contracts: { tools: ["xai_unrelated_tool"] },
+          },
+        ],
+      } as Parameters<typeof runRuntimeWebTools>[0]["manifestRegistry"],
+    });
+
+    // xai declares tools but not webSearchProviders, so its web-search credential
+    // must remain inactive when Brave is selected.
+    expectDiagnostic(context.warnings, {
+      code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+      path: "plugins.entries.xai.config.webSearch.apiKey",
     });
   });
 
