@@ -2735,6 +2735,29 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it.each([
+    [
+      "src/agents/embedded-agent-runner/run/*.test.ts",
+      "test/vitest/vitest.agents-embedded-agent-run.config.ts",
+    ],
+    ["src/agents/runtime-plan/**/*.test.ts", "test/vitest/vitest.agents-support.config.ts"],
+    ["src/agents/tools/**/*.test.ts", "test/vitest/vitest.agents-tools.config.ts"],
+  ])("routes focused agent glob %s to its owning shard", (target, config) => {
+    const plans = buildVitestRunPlans([target]);
+
+    expect(plans).toEqual(
+      expect.arrayContaining([
+        {
+          config,
+          forwardedArgs: [],
+          includePatterns: [target],
+          watchMode: false,
+        },
+      ]),
+    );
+    expect(plans.map((plan) => plan.config)).not.toContain("test/vitest/vitest.agents.config.ts");
+  });
+
   it("keeps mixed embedded-agent and cron-tool targets in their owning shards", () => {
     const embeddedTest = "src/agents/embedded-agent-runner/run.before-agent-reply-cron.test.ts";
     const cronToolTest = "src/agents/tools/cron-tool.pacing.test.ts";

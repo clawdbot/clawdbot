@@ -4251,11 +4251,7 @@ function classifyTarget(arg, cwd) {
   }
   if (isPathAtOrUnder(relative, "src/agents")) {
     // Focused runs must preserve the full suite's isolated harness and hook-timeout contracts.
-    if (
-      relative === "src/agents" ||
-      relative === AGENTS_EMBEDDED_AGENT_TEST_ROOT ||
-      isGlobTarget(relative)
-    ) {
+    if (relative === "src/agents" || relative === AGENTS_EMBEDDED_AGENT_TEST_ROOT) {
       return "agent";
     }
     if (agentsEmbeddedIncompleteTurnTestFiles.includes(relative)) {
@@ -4268,10 +4264,14 @@ function classifyTarget(arg, cwd) {
       return "agentEmbeddedRun";
     }
     if (isPathAtOrUnder(relative, AGENTS_EMBEDDED_AGENT_TEST_ROOT)) {
-      return "agentEmbedded";
+      return isGlobTarget(relative) ? "agent" : "agentEmbedded";
     }
     if (isPathAtOrUnder(relative, "src/agents/tools")) {
       return "agentTools";
+    }
+    if (isGlobTarget(relative)) {
+      const owner = relative.slice("src/agents/".length).split("/", 1)[0];
+      return isGlobTarget(owner) ? "agent" : "agentSupport";
     }
     return isFileLikeTarget(relative) && path.posix.dirname(relative) === "src/agents"
       ? "agentCore"
