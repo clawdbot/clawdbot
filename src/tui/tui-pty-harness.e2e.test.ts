@@ -190,6 +190,34 @@ describe.sequential("TUI PTY harness", () => {
     STARTUP_TEST_TIMEOUT_MS,
   );
 
+  it.each([{ failures: 1 }, { failures: 2 }])(
+    "bounds session subscription recovery after $failures startup failures",
+    async ({ failures }) => {
+      const subscriptionFixture = await startTuiFixture({
+        env: { OPENCLAW_TUI_PTY_SUBSCRIBE_FAILURES: String(failures) },
+      });
+      try {
+        await subscriptionFixture.run.waitForOutput("local ready | idle", STARTUP_TIMEOUT_MS);
+        const entries = await readFixtureLog(subscriptionFixture.logPath);
+        expect(entries.filter((entry) => entry.method === "subscribeSessionEvents")).toHaveLength(
+          2,
+        );
+        expect(entries.filter((entry) => entry.method === "subscribeSessionFailure")).toHaveLength(
+          failures,
+        );
+
+        await subscriptionFixture.run.write("after subscription recovery proof\r");
+        await subscriptionFixture.run.waitForOutput(
+          "PTY_RESPONSE: after subscription recovery proof",
+          STARTUP_TIMEOUT_MS,
+        );
+      } finally {
+        await subscriptionFixture.cleanup();
+      }
+    },
+    STARTUP_TEST_TIMEOUT_MS,
+  );
+
   it("refreshes pending approvals before loading history", async () => {
     await fixture.waitForLogEntry((entry) => entry.method === "listPluginApprovals");
     await fixture.waitForLogEntry((entry) => entry.method === "listTaskSuggestions");
