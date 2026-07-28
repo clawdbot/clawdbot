@@ -75,6 +75,16 @@ describeControlUiE2e("Control UI terminal repaint", () => {
     try {
       await page.goto(server.baseUrl);
       await gateway.waitForRequest("connect");
+      // The connect request is observable before its response upgrades the lazy terminal panel.
+      // Wait for the advertised surface before exercising the real keyboard shortcut.
+      await page.waitForFunction(
+        () =>
+          (
+            document.querySelector("openclaw-terminal-panel") as
+              | (HTMLElement & { available?: boolean })
+              | null
+          )?.available === true,
+      );
       await page.keyboard.press("Control+Backquote");
       await gateway.waitForRequest("terminal.open");
 
