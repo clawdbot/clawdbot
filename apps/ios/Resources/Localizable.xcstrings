@@ -419,128 +419,128 @@
         },
         "zh-CN": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld 运行中 · %2$lld 已完成 · %3$lld 失败"
           }
         },
         "zh-TW": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld 執行中 · %2$lld 完成 · %3$lld 失敗"
           }
         },
         "pt-BR": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld em execução · %2$lld concluídos · %3$lld com falha"
           }
         },
         "de": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld Läuft · %2$lld Fertig · %3$lld Fehlgeschlagen"
           }
         },
         "es": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld en ejecución · %2$lld completados · %3$lld fallidos"
           }
         },
         "ja-JP": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld 実行中 · %2$lld 完了 · %3$lld 失敗"
           }
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld개 실행 중 · %2$lld개 완료 · %3$lld개 실패"
           }
         },
         "fr": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld en cours · %2$lld terminés · %3$lld échoués"
           }
         },
         "hi": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld चल रहे · %2$lld पूर्ण · %3$lld विफल"
           }
         },
         "ar": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld قيد التشغيل · %2$lld مكتمل · %3$lld فشل"
           }
         },
         "it": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld in esecuzione · %2$lld completati · %3$lld non riusciti"
           }
         },
         "tr": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld Çalışıyor · %2$lld Tamamlandı · %3$lld Başarısız"
           }
         },
         "uk": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld виконується · %2$lld готово · %3$lld не вдалося"
           }
         },
         "id": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld Berjalan · %2$lld Selesai · %3$lld Gagal"
           }
         },
         "pl": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld uruchomionych · %2$lld gotowych · %3$lld nieudanych"
           }
         },
         "th": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld กำลังทำงาน · %2$lld เสร็จสิ้น · %3$lld ล้มเหลว"
           }
         },
         "vi": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld Đang chạy · %2$lld Hoàn tất · %3$lld Thất bại"
           }
         },
         "nl": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld actief · %2$lld klaar · %3$lld mislukt"
           }
         },
         "fa": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld در حال اجرا · %2$lld انجام شد · %3$lld ناموفق"
           }
         },
         "ru": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld выполняется · %2$lld готово · %3$lld с ошибкой"
           }
         },
         "sv": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld körs · %2$lld klara · %3$lld misslyckades"
           }
         }
       }
@@ -555,128 +555,128 @@
         },
         "zh-CN": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "还有 %1$lld 个 worker"
           }
         },
         "zh-TW": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "還有 %1$lld 個工作者"
           }
         },
         "pt-BR": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "mais %1$lld workers"
           }
         },
         "de": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "%1$lld weitere Worker"
           }
         },
         "es": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "%1$lld trabajadores más"
           }
         },
         "ja-JP": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "他 %1$lld 件のワーカー"
           }
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "워커 %1$lld개 더"
           }
         },
         "fr": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "%1$lld workers de plus"
           }
         },
         "hi": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "%1$lld और workers"
           }
         },
         "ar": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "%1$lld عمال إضافيون"
           }
         },
         "it": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "%1$lld altri worker"
           }
         },
         "tr": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "%1$lld çalışan daha"
           }
         },
         "uk": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "ще %1$lld воркерів"
           }
         },
         "id": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "%1$lld worker lagi"
           }
         },
         "pl": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "%1$lld więcej workerów"
           }
         },
         "th": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "เวิร์กเกอร์อีก %1$lld รายการ"
           }
         },
         "vi": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "%1$lld worker khác"
           }
         },
         "nl": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "%1$lld extra workers"
           }
         },
         "fa": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "%1$lld کارگر دیگر"
           }
         },
         "ru": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "Ещё %1$lld воркеров"
           }
         },
         "sv": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "%1$lld arbetare till"
           }
         }
       }
@@ -7083,128 +7083,128 @@
         },
         "zh-CN": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "还有 1 个 worker"
           }
         },
         "zh-TW": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "還有 1 個工作者"
           }
         },
         "pt-BR": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "mais 1 worker"
           }
         },
         "de": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "1 weiterer Worker"
           }
         },
         "es": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "1 trabajador más"
           }
         },
         "ja-JP": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "他 1 件のワーカー"
           }
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "워커 1개 더"
           }
         },
         "fr": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "1 worker de plus"
           }
         },
         "hi": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "1 और worker"
           }
         },
         "ar": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "عامل إضافي واحد"
           }
         },
         "it": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "1 altro worker"
           }
         },
         "tr": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "1 çalışan daha"
           }
         },
         "uk": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "ще 1 воркер"
           }
         },
         "id": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "1 worker lagi"
           }
         },
         "pl": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "1 więcej worker"
           }
         },
         "th": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "เวิร์กเกอร์อีก 1 รายการ"
           }
         },
         "vi": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "1 worker khác"
           }
         },
         "nl": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "1 extra worker"
           }
         },
         "fa": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "۱ کارگر دیگر"
           }
         },
         "ru": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "Ещё 1 воркер"
           }
         },
         "sv": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "1 arbetare till"
           }
         }
       }
@@ -193403,8 +193403,8 @@
         },
         "zh-CN": {
           "stringUnit": {
-            "state": "new",
-            "value": "Unphased"
+            "state": "translated",
+            "value": "未分阶段"
           }
         },
         "zh-TW": {
@@ -193415,8 +193415,8 @@
         },
         "pt-BR": {
           "stringUnit": {
-            "state": "new",
-            "value": "Unphased"
+            "state": "translated",
+            "value": "Sem fase"
           }
         },
         "de": {
@@ -193427,8 +193427,8 @@
         },
         "es": {
           "stringUnit": {
-            "state": "new",
-            "value": "Unphased"
+            "state": "translated",
+            "value": "Sin fase"
           }
         },
         "ja-JP": {
@@ -193439,14 +193439,14 @@
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "Unphased"
+            "state": "translated",
+            "value": "미분류"
           }
         },
         "fr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Unphased"
+            "state": "translated",
+            "value": "Non phasé"
           }
         },
         "hi": {
@@ -193457,20 +193457,20 @@
         },
         "ar": {
           "stringUnit": {
-            "state": "new",
-            "value": "Unphased"
+            "state": "translated",
+            "value": "غير مرتّب"
           }
         },
         "it": {
           "stringUnit": {
-            "state": "new",
-            "value": "Unphased"
+            "state": "translated",
+            "value": "Non in fase"
           }
         },
         "tr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Unphased"
+            "state": "translated",
+            "value": "Aşamasız"
           }
         },
         "uk": {
@@ -193511,20 +193511,20 @@
         },
         "fa": {
           "stringUnit": {
-            "state": "new",
-            "value": "Unphased"
+            "state": "translated",
+            "value": "بدون فاز"
           }
         },
         "ru": {
           "stringUnit": {
-            "state": "new",
-            "value": "Unphased"
+            "state": "translated",
+            "value": "Без фазы"
           }
         },
         "sv": {
           "stringUnit": {
-            "state": "new",
-            "value": "Unphased"
+            "state": "translated",
+            "value": "Ofasad"
           }
         }
       }

@@ -11,128 +11,128 @@
         },
         "zh-CN": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld 运行中 · %2$lld 已完成 · %3$lld 失败"
           }
         },
         "zh-TW": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld 執行中 · %2$lld 完成 · %3$lld 失敗"
           }
         },
         "pt-BR": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld em execução · %2$lld concluídos · %3$lld com falha"
           }
         },
         "de": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld Läuft · %2$lld Fertig · %3$lld Fehlgeschlagen"
           }
         },
         "es": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld en ejecución · %2$lld completados · %3$lld fallidos"
           }
         },
         "ja-JP": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld 実行中 · %2$lld 完了 · %3$lld 失敗"
           }
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld개 실행 중 · %2$lld개 완료 · %3$lld개 실패"
           }
         },
         "fr": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld en cours · %2$lld terminés · %3$lld échoués"
           }
         },
         "hi": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld चल रहे · %2$lld पूर्ण · %3$lld विफल"
           }
         },
         "ar": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld قيد التشغيل · %2$lld مكتمل · %3$lld فشل"
           }
         },
         "it": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld in esecuzione · %2$lld completati · %3$lld non riusciti"
           }
         },
         "tr": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld Çalışıyor · %2$lld Tamamlandı · %3$lld Başarısız"
           }
         },
         "uk": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld виконується · %2$lld готово · %3$lld не вдалося"
           }
         },
         "id": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld Berjalan · %2$lld Selesai · %3$lld Gagal"
           }
         },
         "pl": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld uruchomionych · %2$lld gotowych · %3$lld nieudanych"
           }
         },
         "th": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld กำลังทำงาน · %2$lld เสร็จสิ้น · %3$lld ล้มเหลว"
           }
         },
         "vi": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld Đang chạy · %2$lld Hoàn tất · %3$lld Thất bại"
           }
         },
         "nl": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld actief · %2$lld klaar · %3$lld mislukt"
           }
         },
         "fa": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld در حال اجرا · %2$lld انجام شد · %3$lld ناموفق"
           }
         },
         "ru": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld выполняется · %2$lld готово · %3$lld с ошибкой"
           }
         },
         "sv": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld Running · %2$lld Done · %3$lld Failed"
+            "state": "translated",
+            "value": "%1$lld körs · %2$lld klara · %3$lld misslyckades"
           }
         }
       }
@@ -147,128 +147,128 @@
         },
         "zh-CN": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "还有 %1$lld 个 worker"
           }
         },
         "zh-TW": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "還有 %1$lld 個工作者"
           }
         },
         "pt-BR": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "mais %1$lld workers"
           }
         },
         "de": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "%1$lld weitere Worker"
           }
         },
         "es": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "%1$lld trabajadores más"
           }
         },
         "ja-JP": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "他 %1$lld 件のワーカー"
           }
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "워커 %1$lld개 더"
           }
         },
         "fr": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "%1$lld workers de plus"
           }
         },
         "hi": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "%1$lld और workers"
           }
         },
         "ar": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "%1$lld عمال إضافيون"
           }
         },
         "it": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "%1$lld altri worker"
           }
         },
         "tr": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "%1$lld çalışan daha"
           }
         },
         "uk": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "ще %1$lld воркерів"
           }
         },
         "id": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "%1$lld worker lagi"
           }
         },
         "pl": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "%1$lld więcej workerów"
           }
         },
         "th": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "เวิร์กเกอร์อีก %1$lld รายการ"
           }
         },
         "vi": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "%1$lld worker khác"
           }
         },
         "nl": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "%1$lld extra workers"
           }
         },
         "fa": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "%1$lld کارگر دیگر"
           }
         },
         "ru": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "Ещё %1$lld воркеров"
           }
         },
         "sv": {
           "stringUnit": {
-            "state": "new",
-            "value": "%1$lld more workers"
+            "state": "translated",
+            "value": "%1$lld arbetare till"
           }
         }
       }
@@ -1915,128 +1915,128 @@
         },
         "zh-CN": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "还有 1 个 worker"
           }
         },
         "zh-TW": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "還有 1 個工作者"
           }
         },
         "pt-BR": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "mais 1 worker"
           }
         },
         "de": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "1 weiterer Worker"
           }
         },
         "es": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "1 trabajador más"
           }
         },
         "ja-JP": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "他 1 件のワーカー"
           }
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "워커 1개 더"
           }
         },
         "fr": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "1 worker de plus"
           }
         },
         "hi": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "1 और worker"
           }
         },
         "ar": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "عامل إضافي واحد"
           }
         },
         "it": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "1 altro worker"
           }
         },
         "tr": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "1 çalışan daha"
           }
         },
         "uk": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "ще 1 воркер"
           }
         },
         "id": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "1 worker lagi"
           }
         },
         "pl": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "1 więcej worker"
           }
         },
         "th": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "เวิร์กเกอร์อีก 1 รายการ"
           }
         },
         "vi": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "1 worker khác"
           }
         },
         "nl": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "1 extra worker"
           }
         },
         "fa": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "۱ کارگر دیگر"
           }
         },
         "ru": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "Ещё 1 воркер"
           }
         },
         "sv": {
           "stringUnit": {
-            "state": "new",
-            "value": "1 more worker"
+            "state": "translated",
+            "value": "1 arbetare till"
           }
         }
       }
@@ -5723,128 +5723,128 @@
         },
         "zh-CN": {
           "stringUnit": {
-            "state": "new",
-            "value": "Advanced options"
+            "state": "translated",
+            "value": "高级选项"
           }
         },
         "zh-TW": {
           "stringUnit": {
-            "state": "new",
-            "value": "Advanced options"
+            "state": "translated",
+            "value": "進階選項"
           }
         },
         "pt-BR": {
           "stringUnit": {
-            "state": "new",
-            "value": "Advanced options"
+            "state": "translated",
+            "value": "Opções avançadas"
           }
         },
         "de": {
           "stringUnit": {
-            "state": "new",
-            "value": "Advanced options"
+            "state": "translated",
+            "value": "Erweiterte Optionen"
           }
         },
         "es": {
           "stringUnit": {
-            "state": "new",
-            "value": "Advanced options"
+            "state": "translated",
+            "value": "Opciones avanzadas"
           }
         },
         "ja-JP": {
           "stringUnit": {
-            "state": "new",
-            "value": "Advanced options"
+            "state": "translated",
+            "value": "詳細オプション"
           }
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "Advanced options"
+            "state": "translated",
+            "value": "고급 옵션"
           }
         },
         "fr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Advanced options"
+            "state": "translated",
+            "value": "Options avancées"
           }
         },
         "hi": {
           "stringUnit": {
-            "state": "new",
-            "value": "Advanced options"
+            "state": "translated",
+            "value": "उन्नत विकल्प"
           }
         },
         "ar": {
           "stringUnit": {
-            "state": "new",
-            "value": "Advanced options"
+            "state": "translated",
+            "value": "خيارات متقدمة"
           }
         },
         "it": {
           "stringUnit": {
-            "state": "new",
-            "value": "Advanced options"
+            "state": "translated",
+            "value": "Opzioni avanzate"
           }
         },
         "tr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Advanced options"
+            "state": "translated",
+            "value": "Gelişmiş seçenekler"
           }
         },
         "uk": {
           "stringUnit": {
-            "state": "new",
-            "value": "Advanced options"
+            "state": "translated",
+            "value": "Розширені параметри"
           }
         },
         "id": {
           "stringUnit": {
-            "state": "new",
-            "value": "Advanced options"
+            "state": "translated",
+            "value": "Opsi lanjutan"
           }
         },
         "pl": {
           "stringUnit": {
-            "state": "new",
-            "value": "Advanced options"
+            "state": "translated",
+            "value": "Opcje zaawansowane"
           }
         },
         "th": {
           "stringUnit": {
-            "state": "new",
-            "value": "Advanced options"
+            "state": "translated",
+            "value": "ตัวเลือกขั้นสูง"
           }
         },
         "vi": {
           "stringUnit": {
-            "state": "new",
-            "value": "Advanced options"
+            "state": "translated",
+            "value": "Tùy chọn nâng cao"
           }
         },
         "nl": {
           "stringUnit": {
-            "state": "new",
-            "value": "Advanced options"
+            "state": "translated",
+            "value": "Geavanceerde opties"
           }
         },
         "fa": {
           "stringUnit": {
-            "state": "new",
-            "value": "Advanced options"
+            "state": "translated",
+            "value": "گزینه‌های پیشرفته"
           }
         },
         "ru": {
           "stringUnit": {
-            "state": "new",
-            "value": "Advanced options"
+            "state": "translated",
+            "value": "Расширенные параметры"
           }
         },
         "sv": {
           "stringUnit": {
-            "state": "new",
-            "value": "Advanced options"
+            "state": "translated",
+            "value": "Avancerade alternativ"
           }
         }
       }
@@ -32923,128 +32923,128 @@
         },
         "zh-CN": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Set Primary Gateway"
+            "state": "translated",
+            "value": "无法设置主 Gateway"
           }
         },
         "zh-TW": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Set Primary Gateway"
+            "state": "translated",
+            "value": "無法設定主要 Gateway"
           }
         },
         "pt-BR": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Set Primary Gateway"
+            "state": "translated",
+            "value": "Não foi possível definir o Gateway principal"
           }
         },
         "de": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Set Primary Gateway"
+            "state": "translated",
+            "value": "Primäres Gateway konnte nicht festgelegt werden"
           }
         },
         "es": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Set Primary Gateway"
+            "state": "translated",
+            "value": "No se pudo establecer el Gateway principal"
           }
         },
         "ja-JP": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Set Primary Gateway"
+            "state": "translated",
+            "value": "プライマリ Gateway を設定できませんでした"
           }
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Set Primary Gateway"
+            "state": "translated",
+            "value": "기본 Gateway를 설정할 수 없음"
           }
         },
         "fr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Set Primary Gateway"
+            "state": "translated",
+            "value": "Impossible de définir le Gateway principal"
           }
         },
         "hi": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Set Primary Gateway"
+            "state": "translated",
+            "value": "प्राथमिक Gateway सेट नहीं किया जा सका"
           }
         },
         "ar": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Set Primary Gateway"
+            "state": "translated",
+            "value": "تعذّر تعيين Gateway الأساسي"
           }
         },
         "it": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Set Primary Gateway"
+            "state": "translated",
+            "value": "Impossibile impostare il Gateway primario"
           }
         },
         "tr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Set Primary Gateway"
+            "state": "translated",
+            "value": "Birincil Gateway Ayarlanamadı"
           }
         },
         "uk": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Set Primary Gateway"
+            "state": "translated",
+            "value": "Не вдалося встановити основний Gateway"
           }
         },
         "id": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Set Primary Gateway"
+            "state": "translated",
+            "value": "Tidak Dapat Menetapkan Gateway Utama"
           }
         },
         "pl": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Set Primary Gateway"
+            "state": "translated",
+            "value": "Nie można ustawić głównego Gateway"
           }
         },
         "th": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Set Primary Gateway"
+            "state": "translated",
+            "value": "ไม่สามารถตั้ง Gateway หลักได้"
           }
         },
         "vi": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Set Primary Gateway"
+            "state": "translated",
+            "value": "Không Thể Đặt Gateway Chính"
           }
         },
         "nl": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Set Primary Gateway"
+            "state": "translated",
+            "value": "Kan primaire Gateway niet instellen"
           }
         },
         "fa": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Set Primary Gateway"
+            "state": "translated",
+            "value": "امکان تنظیم Gateway اصلی نبود"
           }
         },
         "ru": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Set Primary Gateway"
+            "state": "translated",
+            "value": "Не удалось назначить основной Gateway"
           }
         },
         "sv": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Set Primary Gateway"
+            "state": "translated",
+            "value": "Kunde inte ange primär Gateway"
           }
         }
       }
@@ -33059,128 +33059,128 @@
         },
         "zh-CN": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Switch Gateway"
+            "state": "translated",
+            "value": "无法切换 Gateway"
           }
         },
         "zh-TW": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Switch Gateway"
+            "state": "translated",
+            "value": "無法切換 Gateway"
           }
         },
         "pt-BR": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Switch Gateway"
+            "state": "translated",
+            "value": "Não foi possível alternar o Gateway"
           }
         },
         "de": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Switch Gateway"
+            "state": "translated",
+            "value": "Gateway konnte nicht gewechselt werden"
           }
         },
         "es": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Switch Gateway"
+            "state": "translated",
+            "value": "No se pudo cambiar de Gateway"
           }
         },
         "ja-JP": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Switch Gateway"
+            "state": "translated",
+            "value": "Gateway を切り替えられませんでした"
           }
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Switch Gateway"
+            "state": "translated",
+            "value": "Gateway를 전환할 수 없음"
           }
         },
         "fr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Switch Gateway"
+            "state": "translated",
+            "value": "Impossible de changer de Gateway"
           }
         },
         "hi": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Switch Gateway"
+            "state": "translated",
+            "value": "Gateway स्विच नहीं किया जा सका"
           }
         },
         "ar": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Switch Gateway"
+            "state": "translated",
+            "value": "تعذّر تبديل Gateway"
           }
         },
         "it": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Switch Gateway"
+            "state": "translated",
+            "value": "Impossibile cambiare Gateway"
           }
         },
         "tr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Switch Gateway"
+            "state": "translated",
+            "value": "Gateway Değiştirilemedi"
           }
         },
         "uk": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Switch Gateway"
+            "state": "translated",
+            "value": "Не вдалося переключити Gateway"
           }
         },
         "id": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Switch Gateway"
+            "state": "translated",
+            "value": "Tidak Dapat Mengganti Gateway"
           }
         },
         "pl": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Switch Gateway"
+            "state": "translated",
+            "value": "Nie można przełączyć Gateway"
           }
         },
         "th": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Switch Gateway"
+            "state": "translated",
+            "value": "ไม่สามารถสลับ Gateway ได้"
           }
         },
         "vi": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Switch Gateway"
+            "state": "translated",
+            "value": "Không Thể Chuyển Gateway"
           }
         },
         "nl": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Switch Gateway"
+            "state": "translated",
+            "value": "Kan Gateway niet wisselen"
           }
         },
         "fa": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Switch Gateway"
+            "state": "translated",
+            "value": "امکان تعویض Gateway نبود"
           }
         },
         "ru": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Switch Gateway"
+            "state": "translated",
+            "value": "Не удалось переключить Gateway"
           }
         },
         "sv": {
           "stringUnit": {
-            "state": "new",
-            "value": "Could Not Switch Gateway"
+            "state": "translated",
+            "value": "Kunde inte byta Gateway"
           }
         }
       }
@@ -48563,128 +48563,128 @@
         },
         "zh-CN": {
           "stringUnit": {
-            "state": "new",
-            "value": "Failed"
+            "state": "translated",
+            "value": "失败"
           }
         },
         "zh-TW": {
           "stringUnit": {
-            "state": "new",
-            "value": "Failed"
+            "state": "translated",
+            "value": "失敗"
           }
         },
         "pt-BR": {
           "stringUnit": {
-            "state": "new",
-            "value": "Failed"
+            "state": "translated",
+            "value": "Falhou"
           }
         },
         "de": {
           "stringUnit": {
-            "state": "new",
-            "value": "Failed"
+            "state": "translated",
+            "value": "Fehlgeschlagen"
           }
         },
         "es": {
           "stringUnit": {
-            "state": "new",
-            "value": "Failed"
+            "state": "translated",
+            "value": "Fallido"
           }
         },
         "ja-JP": {
           "stringUnit": {
-            "state": "new",
-            "value": "Failed"
+            "state": "translated",
+            "value": "失敗"
           }
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "Failed"
+            "state": "translated",
+            "value": "실패"
           }
         },
         "fr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Failed"
+            "state": "translated",
+            "value": "Échoué"
           }
         },
         "hi": {
           "stringUnit": {
-            "state": "new",
-            "value": "Failed"
+            "state": "translated",
+            "value": "विफल"
           }
         },
         "ar": {
           "stringUnit": {
-            "state": "new",
-            "value": "Failed"
+            "state": "translated",
+            "value": "فشل"
           }
         },
         "it": {
           "stringUnit": {
-            "state": "new",
-            "value": "Failed"
+            "state": "translated",
+            "value": "Non riuscito"
           }
         },
         "tr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Failed"
+            "state": "translated",
+            "value": "Başarısız"
           }
         },
         "uk": {
           "stringUnit": {
-            "state": "new",
-            "value": "Failed"
+            "state": "translated",
+            "value": "Не вдалося"
           }
         },
         "id": {
           "stringUnit": {
-            "state": "new",
-            "value": "Failed"
+            "state": "translated",
+            "value": "Gagal"
           }
         },
         "pl": {
           "stringUnit": {
-            "state": "new",
-            "value": "Failed"
+            "state": "translated",
+            "value": "Nieudane"
           }
         },
         "th": {
           "stringUnit": {
-            "state": "new",
-            "value": "Failed"
+            "state": "translated",
+            "value": "ล้มเหลว"
           }
         },
         "vi": {
           "stringUnit": {
-            "state": "new",
-            "value": "Failed"
+            "state": "translated",
+            "value": "Thất bại"
           }
         },
         "nl": {
           "stringUnit": {
-            "state": "new",
-            "value": "Failed"
+            "state": "translated",
+            "value": "Mislukt"
           }
         },
         "fa": {
           "stringUnit": {
-            "state": "new",
-            "value": "Failed"
+            "state": "translated",
+            "value": "ناموفق"
           }
         },
         "ru": {
           "stringUnit": {
-            "state": "new",
-            "value": "Failed"
+            "state": "translated",
+            "value": "Ошибка"
           }
         },
         "sv": {
           "stringUnit": {
-            "state": "new",
-            "value": "Failed"
+            "state": "translated",
+            "value": "Misslyckades"
           }
         }
       }
@@ -54553,8 +54553,8 @@
         },
         "zh-TW": {
           "stringUnit": {
-            "state": "new",
-            "value": "Gateways"
+            "state": "translated",
+            "value": "Gateway"
           }
         },
         "pt-BR": {
@@ -54577,8 +54577,8 @@
         },
         "ja-JP": {
           "stringUnit": {
-            "state": "new",
-            "value": "Gateways"
+            "state": "translated",
+            "value": "Gateway"
           }
         },
         "ko": {
@@ -57131,128 +57131,128 @@
         },
         "zh-CN": {
           "stringUnit": {
-            "state": "new",
-            "value": "Hide advanced options"
+            "state": "translated",
+            "value": "隐藏高级选项"
           }
         },
         "zh-TW": {
           "stringUnit": {
-            "state": "new",
-            "value": "Hide advanced options"
+            "state": "translated",
+            "value": "隱藏進階選項"
           }
         },
         "pt-BR": {
           "stringUnit": {
-            "state": "new",
-            "value": "Hide advanced options"
+            "state": "translated",
+            "value": "Ocultar opções avançadas"
           }
         },
         "de": {
           "stringUnit": {
-            "state": "new",
-            "value": "Hide advanced options"
+            "state": "translated",
+            "value": "Erweiterte Optionen ausblenden"
           }
         },
         "es": {
           "stringUnit": {
-            "state": "new",
-            "value": "Hide advanced options"
+            "state": "translated",
+            "value": "Ocultar opciones avanzadas"
           }
         },
         "ja-JP": {
           "stringUnit": {
-            "state": "new",
-            "value": "Hide advanced options"
+            "state": "translated",
+            "value": "詳細オプションを非表示"
           }
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "Hide advanced options"
+            "state": "translated",
+            "value": "고급 옵션 숨기기"
           }
         },
         "fr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Hide advanced options"
+            "state": "translated",
+            "value": "Masquer les options avancées"
           }
         },
         "hi": {
           "stringUnit": {
-            "state": "new",
-            "value": "Hide advanced options"
+            "state": "translated",
+            "value": "उन्नत विकल्प छिपाएँ"
           }
         },
         "ar": {
           "stringUnit": {
-            "state": "new",
-            "value": "Hide advanced options"
+            "state": "translated",
+            "value": "إخفاء الخيارات المتقدمة"
           }
         },
         "it": {
           "stringUnit": {
-            "state": "new",
-            "value": "Hide advanced options"
+            "state": "translated",
+            "value": "Nascondi opzioni avanzate"
           }
         },
         "tr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Hide advanced options"
+            "state": "translated",
+            "value": "Gelişmiş seçenekleri gizle"
           }
         },
         "uk": {
           "stringUnit": {
-            "state": "new",
-            "value": "Hide advanced options"
+            "state": "translated",
+            "value": "Приховати розширені параметри"
           }
         },
         "id": {
           "stringUnit": {
-            "state": "new",
-            "value": "Hide advanced options"
+            "state": "translated",
+            "value": "Sembunyikan opsi lanjutan"
           }
         },
         "pl": {
           "stringUnit": {
-            "state": "new",
-            "value": "Hide advanced options"
+            "state": "translated",
+            "value": "Ukryj opcje zaawansowane"
           }
         },
         "th": {
           "stringUnit": {
-            "state": "new",
-            "value": "Hide advanced options"
+            "state": "translated",
+            "value": "ซ่อนตัวเลือกขั้นสูง"
           }
         },
         "vi": {
           "stringUnit": {
-            "state": "new",
-            "value": "Hide advanced options"
+            "state": "translated",
+            "value": "Ẩn tùy chọn nâng cao"
           }
         },
         "nl": {
           "stringUnit": {
-            "state": "new",
-            "value": "Hide advanced options"
+            "state": "translated",
+            "value": "Geavanceerde opties verbergen"
           }
         },
         "fa": {
           "stringUnit": {
-            "state": "new",
-            "value": "Hide advanced options"
+            "state": "translated",
+            "value": "پنهان کردن گزینه‌های پیشرفته"
           }
         },
         "ru": {
           "stringUnit": {
-            "state": "new",
-            "value": "Hide advanced options"
+            "state": "translated",
+            "value": "Скрыть расширенные параметры"
           }
         },
         "sv": {
           "stringUnit": {
-            "state": "new",
-            "value": "Hide advanced options"
+            "state": "translated",
+            "value": "Dölj avancerade alternativ"
           }
         }
       }
@@ -82563,128 +82563,128 @@
         },
         "zh-CN": {
           "stringUnit": {
-            "state": "new",
-            "value": "Only needed when the gateway requires token auth."
+            "state": "translated",
+            "value": "仅在 gateway 需要令牌认证时才需要。"
           }
         },
         "zh-TW": {
           "stringUnit": {
-            "state": "new",
-            "value": "Only needed when the gateway requires token auth."
+            "state": "translated",
+            "value": "僅在 gateway 需要權杖驗證時才需要。"
           }
         },
         "pt-BR": {
           "stringUnit": {
-            "state": "new",
-            "value": "Only needed when the gateway requires token auth."
+            "state": "translated",
+            "value": "Necessário apenas quando o gateway exige autenticação por token."
           }
         },
         "de": {
           "stringUnit": {
-            "state": "new",
-            "value": "Only needed when the gateway requires token auth."
+            "state": "translated",
+            "value": "Nur erforderlich, wenn das Gateway eine Token-Authentifizierung verlangt."
           }
         },
         "es": {
           "stringUnit": {
-            "state": "new",
-            "value": "Only needed when the gateway requires token auth."
+            "state": "translated",
+            "value": "Solo es necesario cuando el gateway requiere autenticación por token."
           }
         },
         "ja-JP": {
           "stringUnit": {
-            "state": "new",
-            "value": "Only needed when the gateway requires token auth."
+            "state": "translated",
+            "value": "Gateway がトークン認証を必要とする場合のみ必要です。"
           }
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "Only needed when the gateway requires token auth."
+            "state": "translated",
+            "value": "게이트웨이에서 토큰 인증이 필요한 경우에만 필요합니다."
           }
         },
         "fr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Only needed when the gateway requires token auth."
+            "state": "translated",
+            "value": "Nécessaire uniquement lorsque le gateway requiert une authentification par jeton."
           }
         },
         "hi": {
           "stringUnit": {
-            "state": "new",
-            "value": "Only needed when the gateway requires token auth."
+            "state": "translated",
+            "value": "केवल तभी आवश्यक जब gateway को टोकन प्रमाणीकरण चाहिए।"
           }
         },
         "ar": {
           "stringUnit": {
-            "state": "new",
-            "value": "Only needed when the gateway requires token auth."
+            "state": "translated",
+            "value": "مطلوب فقط عندما يتطلب الـ gateway مصادقة برمز مميز."
           }
         },
         "it": {
           "stringUnit": {
-            "state": "new",
-            "value": "Only needed when the gateway requires token auth."
+            "state": "translated",
+            "value": "Necessario solo quando il gateway richiede l'autenticazione con token."
           }
         },
         "tr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Only needed when the gateway requires token auth."
+            "state": "translated",
+            "value": "Yalnızca gateway belirteç kimlik doğrulaması gerektirdiğinde gereklidir."
           }
         },
         "uk": {
           "stringUnit": {
-            "state": "new",
-            "value": "Only needed when the gateway requires token auth."
+            "state": "translated",
+            "value": "Потрібно лише коли gateway вимагає автентифікації за токеном."
           }
         },
         "id": {
           "stringUnit": {
-            "state": "new",
-            "value": "Only needed when the gateway requires token auth."
+            "state": "translated",
+            "value": "Hanya diperlukan saat gateway membutuhkan autentikasi token."
           }
         },
         "pl": {
           "stringUnit": {
-            "state": "new",
-            "value": "Only needed when the gateway requires token auth."
+            "state": "translated",
+            "value": "Wymagane tylko, gdy gateway wymaga uwierzytelniania tokenem."
           }
         },
         "th": {
           "stringUnit": {
-            "state": "new",
-            "value": "Only needed when the gateway requires token auth."
+            "state": "translated",
+            "value": "จำเป็นเฉพาะเมื่อ gateway ต้องการการยืนยันตัวตนด้วยโทเค็นเท่านั้น"
           }
         },
         "vi": {
           "stringUnit": {
-            "state": "new",
-            "value": "Only needed when the gateway requires token auth."
+            "state": "translated",
+            "value": "Chỉ cần thiết khi gateway yêu cầu xác thực bằng token."
           }
         },
         "nl": {
           "stringUnit": {
-            "state": "new",
-            "value": "Only needed when the gateway requires token auth."
+            "state": "translated",
+            "value": "Alleen nodig wanneer de gateway tokenauthenticatie vereist."
           }
         },
         "fa": {
           "stringUnit": {
-            "state": "new",
-            "value": "Only needed when the gateway requires token auth."
+            "state": "translated",
+            "value": "فقط زمانی لازم است که gateway به احراز هویت با توکن نیاز دارد."
           }
         },
         "ru": {
           "stringUnit": {
-            "state": "new",
-            "value": "Only needed when the gateway requires token auth."
+            "state": "translated",
+            "value": "Требуется только когда gateway использует авторизацию по токену."
           }
         },
         "sv": {
           "stringUnit": {
-            "state": "new",
-            "value": "Only needed when the gateway requires token auth."
+            "state": "translated",
+            "value": "Behövs bara när gatewayen kräver token-autentisering."
           }
         }
       }
@@ -92219,128 +92219,128 @@
         },
         "zh-CN": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token from your gateway"
+            "state": "translated",
+            "value": "粘贴来自 gateway 的令牌"
           }
         },
         "zh-TW": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token from your gateway"
+            "state": "translated",
+            "value": "貼上來自 gateway 的權杖"
           }
         },
         "pt-BR": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token from your gateway"
+            "state": "translated",
+            "value": "Cole o token do seu gateway"
           }
         },
         "de": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token from your gateway"
+            "state": "translated",
+            "value": "Fügen Sie das Token aus Ihrem Gateway ein"
           }
         },
         "es": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token from your gateway"
+            "state": "translated",
+            "value": "Pega el token de tu gateway"
           }
         },
         "ja-JP": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token from your gateway"
+            "state": "translated",
+            "value": "Gateway からのトークンを貼り付けてください"
           }
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token from your gateway"
+            "state": "translated",
+            "value": "게이트웨이의 토큰을 붙여넣으세요"
           }
         },
         "fr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token from your gateway"
+            "state": "translated",
+            "value": "Collez le jeton de votre gateway"
           }
         },
         "hi": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token from your gateway"
+            "state": "translated",
+            "value": "अपने gateway से टोकन पेस्ट करें"
           }
         },
         "ar": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token from your gateway"
+            "state": "translated",
+            "value": "الصق الرمز المميز من الـ gateway الخاص بك"
           }
         },
         "it": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token from your gateway"
+            "state": "translated",
+            "value": "Incolla il token dal tuo gateway"
           }
         },
         "tr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token from your gateway"
+            "state": "translated",
+            "value": "Gateway'inizden alınan belirteci yapıştırın"
           }
         },
         "uk": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token from your gateway"
+            "state": "translated",
+            "value": "Вставте токен зі свого gateway"
           }
         },
         "id": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token from your gateway"
+            "state": "translated",
+            "value": "Tempel token dari gateway Anda"
           }
         },
         "pl": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token from your gateway"
+            "state": "translated",
+            "value": "Wklej token z gateway"
           }
         },
         "th": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token from your gateway"
+            "state": "translated",
+            "value": "วางโทเค็นจาก gateway ของคุณ"
           }
         },
         "vi": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token from your gateway"
+            "state": "translated",
+            "value": "Dán token từ gateway của bạn"
           }
         },
         "nl": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token from your gateway"
+            "state": "translated",
+            "value": "Plak het token van je gateway"
           }
         },
         "fa": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token from your gateway"
+            "state": "translated",
+            "value": "توکن را از gateway خود جای‌گذاری کنید"
           }
         },
         "ru": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token from your gateway"
+            "state": "translated",
+            "value": "Вставьте токен из вашего gateway"
           }
         },
         "sv": {
           "stringUnit": {
-            "state": "new",
-            "value": "Paste the token from your gateway"
+            "state": "translated",
+            "value": "Klistra in token från din gateway"
           }
         }
       }
@@ -98203,128 +98203,128 @@
         },
         "zh-CN": {
           "stringUnit": {
-            "state": "new",
-            "value": "Queued"
+            "state": "translated",
+            "value": "已排队"
           }
         },
         "zh-TW": {
           "stringUnit": {
-            "state": "new",
-            "value": "Queued"
+            "state": "translated",
+            "value": "已排入佇列"
           }
         },
         "pt-BR": {
           "stringUnit": {
-            "state": "new",
-            "value": "Queued"
+            "state": "translated",
+            "value": "Na fila"
           }
         },
         "de": {
           "stringUnit": {
-            "state": "new",
-            "value": "Queued"
+            "state": "translated",
+            "value": "In Warteschlange"
           }
         },
         "es": {
           "stringUnit": {
-            "state": "new",
-            "value": "Queued"
+            "state": "translated",
+            "value": "En cola"
           }
         },
         "ja-JP": {
           "stringUnit": {
-            "state": "new",
-            "value": "Queued"
+            "state": "translated",
+            "value": "待機中"
           }
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "Queued"
+            "state": "translated",
+            "value": "대기 중"
           }
         },
         "fr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Queued"
+            "state": "translated",
+            "value": "En file d'attente"
           }
         },
         "hi": {
           "stringUnit": {
-            "state": "new",
-            "value": "Queued"
+            "state": "translated",
+            "value": "कतार में"
           }
         },
         "ar": {
           "stringUnit": {
-            "state": "new",
-            "value": "Queued"
+            "state": "translated",
+            "value": "في قائمة الانتظار"
           }
         },
         "it": {
           "stringUnit": {
-            "state": "new",
-            "value": "Queued"
+            "state": "translated",
+            "value": "In coda"
           }
         },
         "tr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Queued"
+            "state": "translated",
+            "value": "Sırada"
           }
         },
         "uk": {
           "stringUnit": {
-            "state": "new",
-            "value": "Queued"
+            "state": "translated",
+            "value": "У черзі"
           }
         },
         "id": {
           "stringUnit": {
-            "state": "new",
-            "value": "Queued"
+            "state": "translated",
+            "value": "Dalam Antrean"
           }
         },
         "pl": {
           "stringUnit": {
-            "state": "new",
-            "value": "Queued"
+            "state": "translated",
+            "value": "W kolejce"
           }
         },
         "th": {
           "stringUnit": {
-            "state": "new",
-            "value": "Queued"
+            "state": "translated",
+            "value": "อยู่ในคิว"
           }
         },
         "vi": {
           "stringUnit": {
-            "state": "new",
-            "value": "Queued"
+            "state": "translated",
+            "value": "Trong hàng đợi"
           }
         },
         "nl": {
           "stringUnit": {
-            "state": "new",
-            "value": "Queued"
+            "state": "translated",
+            "value": "In wachtrij"
           }
         },
         "fa": {
           "stringUnit": {
-            "state": "new",
-            "value": "Queued"
+            "state": "translated",
+            "value": "در صف"
           }
         },
         "ru": {
           "stringUnit": {
-            "state": "new",
-            "value": "Queued"
+            "state": "translated",
+            "value": "В очереди"
           }
         },
         "sv": {
           "stringUnit": {
-            "state": "new",
-            "value": "Queued"
+            "state": "translated",
+            "value": "I kö"
           }
         }
       }
@@ -147979,8 +147979,8 @@
         },
         "zh-CN": {
           "stringUnit": {
-            "state": "new",
-            "value": "Unphased"
+            "state": "translated",
+            "value": "未分阶段"
           }
         },
         "zh-TW": {
@@ -147991,8 +147991,8 @@
         },
         "pt-BR": {
           "stringUnit": {
-            "state": "new",
-            "value": "Unphased"
+            "state": "translated",
+            "value": "Sem fase"
           }
         },
         "de": {
@@ -148003,8 +148003,8 @@
         },
         "es": {
           "stringUnit": {
-            "state": "new",
-            "value": "Unphased"
+            "state": "translated",
+            "value": "Sin fase"
           }
         },
         "ja-JP": {
@@ -148015,14 +148015,14 @@
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "Unphased"
+            "state": "translated",
+            "value": "미분류"
           }
         },
         "fr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Unphased"
+            "state": "translated",
+            "value": "Non phasé"
           }
         },
         "hi": {
@@ -148033,20 +148033,20 @@
         },
         "ar": {
           "stringUnit": {
-            "state": "new",
-            "value": "Unphased"
+            "state": "translated",
+            "value": "غير مرتّب"
           }
         },
         "it": {
           "stringUnit": {
-            "state": "new",
-            "value": "Unphased"
+            "state": "translated",
+            "value": "Non in fase"
           }
         },
         "tr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Unphased"
+            "state": "translated",
+            "value": "Aşamasız"
           }
         },
         "uk": {
@@ -148087,20 +148087,20 @@
         },
         "fa": {
           "stringUnit": {
-            "state": "new",
-            "value": "Unphased"
+            "state": "translated",
+            "value": "بدون فاز"
           }
         },
         "ru": {
           "stringUnit": {
-            "state": "new",
-            "value": "Unphased"
+            "state": "translated",
+            "value": "Без фазы"
           }
         },
         "sv": {
           "stringUnit": {
-            "state": "new",
-            "value": "Unphased"
+            "state": "translated",
+            "value": "Ofasad"
           }
         }
       }
@@ -152603,128 +152603,128 @@
         },
         "zh-CN": {
           "stringUnit": {
-            "state": "new",
-            "value": "Verify OpenClaw can reach this gateway."
+            "state": "translated",
+            "value": "验证 OpenClaw 是否可以访问此 gateway。"
           }
         },
         "zh-TW": {
           "stringUnit": {
-            "state": "new",
-            "value": "Verify OpenClaw can reach this gateway."
+            "state": "translated",
+            "value": "驗證 OpenClaw 是否能連接到此 gateway。"
           }
         },
         "pt-BR": {
           "stringUnit": {
-            "state": "new",
-            "value": "Verify OpenClaw can reach this gateway."
+            "state": "translated",
+            "value": "Verifique se o OpenClaw consegue acessar este gateway."
           }
         },
         "de": {
           "stringUnit": {
-            "state": "new",
-            "value": "Verify OpenClaw can reach this gateway."
+            "state": "translated",
+            "value": "Überprüfen Sie, ob OpenClaw dieses Gateway erreichen kann."
           }
         },
         "es": {
           "stringUnit": {
-            "state": "new",
-            "value": "Verify OpenClaw can reach this gateway."
+            "state": "translated",
+            "value": "Verifica que OpenClaw pueda conectarse a este gateway."
           }
         },
         "ja-JP": {
           "stringUnit": {
-            "state": "new",
-            "value": "Verify OpenClaw can reach this gateway."
+            "state": "translated",
+            "value": "OpenClaw がこの Gateway に到達できることを確認します。"
           }
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "Verify OpenClaw can reach this gateway."
+            "state": "translated",
+            "value": "OpenClaw가 이 게이트웨이에 연결할 수 있는지 확인합니다."
           }
         },
         "fr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Verify OpenClaw can reach this gateway."
+            "state": "translated",
+            "value": "Vérifiez qu'OpenClaw peut atteindre ce gateway."
           }
         },
         "hi": {
           "stringUnit": {
-            "state": "new",
-            "value": "Verify OpenClaw can reach this gateway."
+            "state": "translated",
+            "value": "सत्यापित करें कि OpenClaw इस gateway तक पहुँच सकता है।"
           }
         },
         "ar": {
           "stringUnit": {
-            "state": "new",
-            "value": "Verify OpenClaw can reach this gateway."
+            "state": "translated",
+            "value": "تحقق من قدرة OpenClaw على الوصول إلى هذا الـ gateway."
           }
         },
         "it": {
           "stringUnit": {
-            "state": "new",
-            "value": "Verify OpenClaw can reach this gateway."
+            "state": "translated",
+            "value": "Verifica che OpenClaw possa raggiungere questo gateway."
           }
         },
         "tr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Verify OpenClaw can reach this gateway."
+            "state": "translated",
+            "value": "OpenClaw'ın bu gateway'e ulaşabildiğini doğrulayın."
           }
         },
         "uk": {
           "stringUnit": {
-            "state": "new",
-            "value": "Verify OpenClaw can reach this gateway."
+            "state": "translated",
+            "value": "Переконайтеся, що OpenClaw може отримати доступ до цього gateway."
           }
         },
         "id": {
           "stringUnit": {
-            "state": "new",
-            "value": "Verify OpenClaw can reach this gateway."
+            "state": "translated",
+            "value": "Verifikasi OpenClaw dapat menjangkau gateway ini."
           }
         },
         "pl": {
           "stringUnit": {
-            "state": "new",
-            "value": "Verify OpenClaw can reach this gateway."
+            "state": "translated",
+            "value": "Sprawdź, czy OpenClaw może połączyć się z tym gateway."
           }
         },
         "th": {
           "stringUnit": {
-            "state": "new",
-            "value": "Verify OpenClaw can reach this gateway."
+            "state": "translated",
+            "value": "ตรวจสอบว่า OpenClaw สามารถเข้าถึง gateway นี้ได้"
           }
         },
         "vi": {
           "stringUnit": {
-            "state": "new",
-            "value": "Verify OpenClaw can reach this gateway."
+            "state": "translated",
+            "value": "Xác minh OpenClaw có thể kết nối tới gateway này."
           }
         },
         "nl": {
           "stringUnit": {
-            "state": "new",
-            "value": "Verify OpenClaw can reach this gateway."
+            "state": "translated",
+            "value": "Controleer of OpenClaw deze gateway kan bereiken."
           }
         },
         "fa": {
           "stringUnit": {
-            "state": "new",
-            "value": "Verify OpenClaw can reach this gateway."
+            "state": "translated",
+            "value": "بررسی کنید که OpenClaw می‌تواند به این gateway دسترسی پیدا کند."
           }
         },
         "ru": {
           "stringUnit": {
-            "state": "new",
-            "value": "Verify OpenClaw can reach this gateway."
+            "state": "translated",
+            "value": "Убедитесь, что OpenClaw может подключиться к этому gateway."
           }
         },
         "sv": {
           "stringUnit": {
-            "state": "new",
-            "value": "Verify OpenClaw can reach this gateway."
+            "state": "translated",
+            "value": "Verifiera att OpenClaw kan nå den här gatewayen."
           }
         }
       }
