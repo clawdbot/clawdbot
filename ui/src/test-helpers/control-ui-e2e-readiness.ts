@@ -1,6 +1,6 @@
 import type { Locator, Page } from "playwright";
 
-export type ReadyControlUiSettingsSidebar = {
+type ReadyControlUiSettingsSidebar = {
   search: Locator;
   sidebar: Locator;
 };

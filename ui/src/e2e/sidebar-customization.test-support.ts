@@ -4,7 +4,7 @@ import type { Locator, Page } from "playwright";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-export const sidebarProofArtifactDir = path.join(
+const sidebarProofArtifactDir = path.join(
   process.cwd(),
   ".artifacts",
   "control-ui-e2e",
@@ -18,10 +18,6 @@ export function createSidebarCustomizationSuite(name: string) {
     unavailableMessage: (executablePath) =>
       `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
   });
-}
-
-export async function trimmedSidebarTextContents(locator: Locator): Promise<string[]> {
-  return (await locator.allTextContents()).map((text) => text.trim());
 }
 
 export async function captureSidebarUiProof(page: Page, fileName: string): Promise<void> {
