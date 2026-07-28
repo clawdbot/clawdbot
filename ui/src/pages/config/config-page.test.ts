@@ -81,6 +81,10 @@ describe("configSelectionFromSearch", () => {
   it("keeps Communications focused on messages, talk, and voice", () => {
     expect(configSectionKeysForPage("communications")).toEqual(["messages", "talk", "tts"]);
   });
+
+  it("keeps provider models off Agent Defaults", () => {
+    expect(configSectionKeysForPage("ai-agents")).toEqual(["agents", "skills", "tools", "session"]);
+  });
 });
 
 describe("ConfigPage moved section routes", () => {
@@ -109,6 +113,29 @@ describe("ConfigPage moved section routes", () => {
 
     expect(navigate).toHaveBeenCalledWith(routeId, { search, hash: "" });
   });
+
+  it("redirects the former Agent Defaults models section", () => {
+    const navigate = vi.fn();
+    const page = new ConfigPage();
+    const state = page as unknown as {
+      context: { navigate: typeof navigate };
+      pageId: "ai-agents";
+      routeData: {
+        section: string;
+        advanced: boolean;
+        tab: string | null;
+        targetBlockId: string | null;
+      };
+      syncRouteData: () => void;
+    };
+    state.context = { navigate };
+    state.pageId = "ai-agents";
+    state.routeData = { section: "models", advanced: false, tab: null, targetBlockId: null };
+
+    state.syncRouteData();
+
+    expect(navigate).toHaveBeenCalledWith("model-providers", { search: "", hash: "" });
+  });
 });
 
 describe("ConfigPage advanced selection guard", () => {
@@ -131,6 +158,10 @@ describe("ConfigPage advanced selection guard", () => {
     });
     expect(configSelectionFromSearch("advanced", "?section=broadcast")).toEqual({
       activeSection: "broadcast",
+      activeSubsection: null,
+    });
+    expect(configSelectionFromSearch("advanced", "?section=models")).toEqual({
+      activeSection: "models",
       activeSubsection: null,
     });
   });

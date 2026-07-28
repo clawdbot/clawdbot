@@ -307,8 +307,8 @@ describe("findSettingsSearchBlocks", () => {
 
     expect(matches).toEqual([
       expect.objectContaining({
-        routeId: "config",
-        hash: "#settings-general-model",
+        routeId: "model-providers",
+        hash: "#settings-model-behavior",
       }),
     ]);
   });
