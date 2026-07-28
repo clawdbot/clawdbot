@@ -58,7 +58,7 @@ export type CodeModeWorkerInput =
       pendingRequests?: PendingBridgeRequest[];
     };
 
-export type CodeModeSettlementMode =
+type CodeModeSettlementMode =
   | { kind: "awaiting" }
   | { kind: "draining"; requiredRequestIds: string[] };
 
