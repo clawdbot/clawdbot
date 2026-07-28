@@ -115,7 +115,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "agent-media-payload": 3,
   // +2: deprecated media projection type and builder.
   "reply-payload": 2,
-  "text-runtime": 191,
+  // +1: flushLogger projected through the deprecated text-runtime barrel.
+  "text-runtime": 192,
   "agent-runtime": 2,
   "channel-secret-runtime": 23,
   "agent-harness-runtime": 4,
@@ -186,7 +187,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +4: focused CLI root-option constants and parsers.
       // +6: model-picker action/capability and authoritative session-apply contracts.
       // +1: logger file-transport flush for graceful shutdown drains.
-      4738,
+      // +1: process-local sessions.changed plugin notification payload.
+      4739,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -224,7 +226,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: shipped Slack and Discord setup compatibility helpers.
       // +10: named media legacy projection deprecations across public compatibility barrels.
       // +2: channel prompt-context type and metadata builder compatibility aliases.
-      1700,
+      // +1: flushLogger projected through the deprecated text-runtime barrel.
+      1701,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

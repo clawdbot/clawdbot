@@ -58,7 +58,6 @@ import {
   readNumberEnv,
   resolveArgs,
 } from "./config-utils.js";
-import { isForcedPrivateQaCodexRuntime } from "./dynamic-tool-profile.js";
 import type { CodexSandboxPolicy } from "./protocol.js";
 
 export function resolveCodexAppServerRuntimeOptions(
@@ -191,17 +190,11 @@ export function resolveCodexAppServerRuntimeOptions(
     ? normalizedPolicyMode
     : (explicitPolicyMode ?? normalizedPolicyMode ?? defaultPolicy?.mode ?? "yolo");
   const serviceTier = normalizeCodexServiceTier(config.serviceTier);
-  const configuredRuntimeSandbox =
+  const resolvedSandbox =
     forcedPolicy?.sandbox ??
     configuredSandbox ??
     defaultPolicy?.sandbox ??
     (policyMode === "guardian" ? "workspace-write" : "danger-full-access");
-  // Private QA may bound production yolo, but must never widen a configured
-  // read-only sandbox or override the ordinary policy precedence.
-  const resolvedSandbox =
-    isForcedPrivateQaCodexRuntime(env) && configuredRuntimeSandbox === "danger-full-access"
-      ? "workspace-write"
-      : configuredRuntimeSandbox;
   if (transport === "websocket" && !url) {
     throw new Error(
       "plugins.entries.codex.config.appServer.url is required when appServer.transport is websocket",
@@ -497,7 +490,7 @@ export function codexAppServerStartOptionsKey(
 export function codexSandboxPolicyForTurn(
   mode: CodexAppServerSandboxMode,
   cwd: string,
-  env: NodeJS.ProcessEnv = process.env,
+  nativeArgs: readonly string[] = [],
 ): CodexSandboxPolicy {
   if (mode === "danger-full-access") {
     return { type: "dangerFullAccess" };
@@ -505,15 +498,42 @@ export function codexSandboxPolicyForTurn(
   if (mode === "read-only") {
     return { type: "readOnly", networkAccess: false };
   }
-  // Codex includes /tmp and TMPDIR in workspace-write by default. Private QA
-  // workspaces live there, so retaining either root defeats sibling containment.
-  const excludePrivateQaTempRoots = isForcedPrivateQaCodexRuntime(env);
+  let excludeTmpdirEnvVar = false;
+  let excludeSlashTmp = false;
+  for (let index = 0; index < nativeArgs.length; index += 1) {
+    const arg = nativeArgs[index];
+    const override =
+      arg === "-c" || arg === "--config"
+        ? nativeArgs[++index]
+        : arg?.startsWith("--config=")
+          ? arg.slice("--config=".length)
+          : undefined;
+    if (!override) {
+      continue;
+    }
+    const separator = override.indexOf("=");
+    if (separator < 0) {
+      continue;
+    }
+    const key = override.slice(0, separator).trim();
+    const value = override.slice(separator + 1).trim();
+    if (value !== "true" && value !== "false") {
+      continue;
+    }
+    if (key === "sandbox_workspace_write.exclude_tmpdir_env_var") {
+      excludeTmpdirEnvVar = value === "true";
+    } else if (key === "sandbox_workspace_write.exclude_slash_tmp") {
+      excludeSlashTmp = value === "true";
+    }
+  }
+  // Native turn/start overrides replace the thread's sandbox. Carry explicit
+  // Codex CLI root exclusions forward or /tmp silently becomes writable again.
   return {
     type: "workspaceWrite",
     writableRoots: [cwd],
     networkAccess: false,
-    excludeTmpdirEnvVar: excludePrivateQaTempRoots,
-    excludeSlashTmp: excludePrivateQaTempRoots,
+    excludeTmpdirEnvVar,
+    excludeSlashTmp,
   };
 }
 

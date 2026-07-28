@@ -184,6 +184,8 @@ Usage:
 
   --dev-wrapper permits a mismatched local wrapper only for subcommands
   classified advisory. OPENCLAW_PR_DEV_WRAPPER=1 is equivalent.
+
+Required commands: git, gh, jq, rg (ripgrep), pnpm, node.
 USAGE
 }
 
@@ -202,7 +204,10 @@ require_cmds() {
   fi
 
   if [ "${#missing[@]}" -gt 0 ]; then
-    echo "Missing required command(s): ${missing[*]}"
+    echo "Missing required command(s): ${missing[*]}" >&2
+    if [[ " ${missing[*]} " = *" rg "* ]]; then
+      echo "Install ripgrep and retry: https://github.com/BurntSushi/ripgrep#installation" >&2
+    fi
     exit 1
   fi
 }

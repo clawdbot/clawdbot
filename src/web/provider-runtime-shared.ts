@@ -1,5 +1,5 @@
-// Web Content Core module implements provider runtime shared behavior.
-export type WebProviderConfigSource = {
+// Shared web provider config, credential, and definition resolution.
+type WebProviderConfigSource = {
   tools?: {
     web?: {
       search?: unknown;

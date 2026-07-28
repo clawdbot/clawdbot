@@ -562,10 +562,7 @@ const config = {
     "packages/acp-core": {
       entry: [
         "src/index.ts!",
-        "src/normalize-text.ts!",
         "src/meta.ts!",
-        "src/numeric-options.ts!",
-        "src/record-shared.ts!",
         "src/session.ts!",
         "src/session-interaction-mode.ts!",
         "src/session-lineage-meta.ts!",

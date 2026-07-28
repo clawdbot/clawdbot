@@ -923,6 +923,31 @@ describe("task-registry maintenance issue #60299", () => {
     expect(currentTasks.has(lostTask.taskId)).toBe(true);
   });
 
+  it("retains the newest-created cron runs when terminal timestamps are identical", async () => {
+    const now = Date.now();
+    const tasks = Array.from({ length: CRON_HISTORY_KEEP_PER_JOB + 1 }, (_, index) =>
+      makeStaleTask({
+        taskId: `cron-same-ms-${String(CRON_HISTORY_KEEP_PER_JOB - index).padStart(4, "0")}`,
+        runtime: "cron",
+        sourceId: "cron-same-ms-job",
+        status: "succeeded",
+        createdAt: now + index,
+        startedAt: now + index,
+        endedAt: now + CRON_HISTORY_KEEP_PER_JOB + 1,
+        lastEventAt: now + CRON_HISTORY_KEEP_PER_JOB + 1,
+        cleanupAfter: 0,
+      }),
+    );
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({ tasks });
+
+    const result = await runTaskRegistryMaintenance();
+
+    expect(result.pruned).toBe(1);
+    expect(currentTasks.size).toBe(CRON_HISTORY_KEEP_PER_JOB);
+    expect(currentTasks.has("cron-same-ms-2000")).toBe(false);
+    expect(currentTasks.has("cron-same-ms-0000")).toBe(true);
+  });
+
   it("scopes same-id cron history retention to each store", async () => {
     const now = Date.now();
     const storeATasks = Array.from({ length: CRON_HISTORY_KEEP_PER_JOB }, (_, index) =>

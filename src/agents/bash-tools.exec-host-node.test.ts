@@ -1305,6 +1305,64 @@ describe("executeNodeHostCommand", () => {
     expect(registerExecApprovalRequestForHostOrThrowMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: "throws synchronously",
+      reviewer: () => {
+        throw new Error("provider\n\u001b[31mfailed\u001b[0m\u202e");
+      },
+    },
+    {
+      name: "rejects asynchronously",
+      reviewer: async () => {
+        throw new Error("provider\n\u001b[31mfailed\u001b[0m\u202e");
+      },
+    },
+  ])("requests human approval when a node reviewer $name", async ({ reviewer }) => {
+    const autoReviewer = vi.fn<ExecAutoReviewer>(reviewer);
+    const warnings: string[] = [];
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "allowlist",
+      hostAsk: "on-miss",
+      askFallback: "deny",
+    });
+
+    const result = await executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: "/tmp/work",
+      env: {},
+      security: "allowlist",
+      ask: "on-miss",
+      autoReview: true,
+      autoReviewer,
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings,
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+
+    expect(autoReviewer).toHaveBeenCalledTimes(1);
+    expect(result.details?.status).toBe("approval-pending");
+    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+    expect(registerExecApprovalRequestForHostOrThrowMock).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalId: "approval-1", host: "node" }),
+    );
+    expect(callGatewayToolMock.mock.calls).not.toEqual(
+      expect.arrayContaining([
+        expect.arrayContaining([
+          "node.invoke",
+          expect.anything(),
+          expect.objectContaining({ command: "system.run" }),
+        ]),
+      ]),
+    );
+    expect(warnings).toEqual([
+      "Exec auto-review deferred to human approval (risk=unknown): exec reviewer failed: provider\\nfailed",
+    ]);
+  });
+
   it("reviews the prepared node plan before suppressing human approval", async () => {
     const divergentPlan = {
       argv: ["rm", "-rf", "/tmp/work"],

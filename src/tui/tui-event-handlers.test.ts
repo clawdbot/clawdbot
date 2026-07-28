@@ -357,6 +357,166 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     vi.useRealTimers();
   });
 
+  it("finalizes the authoritative buffered reply when a local run is aborted", () => {
+    const {
+      state,
+      chatLog,
+      loadHistory,
+      noteLocalRunId,
+      isLocalRunId,
+      setActivityStatus,
+      handleChatEvent,
+    } = createHandlersHarness({
+      state: { activeChatRunId: "run-aborted-partial" },
+    });
+    noteLocalRunId("run-aborted-partial");
+
+    handleChatEvent({
+      runId: "run-aborted-partial",
+      sessionKey: state.currentSessionKey,
+      seq: 1,
+      state: "delta",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Already visible" }],
+      },
+    } satisfies ChatEvent);
+
+    handleChatEvent({
+      runId: "run-aborted-partial",
+      sessionKey: state.currentSessionKey,
+      seq: 2,
+      state: "aborted",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Already visible and the throttled tail" }],
+      },
+    } satisfies ChatEvent);
+
+    expect(chatLog.updateAssistant).toHaveBeenCalledWith("Already visible", "run-aborted-partial");
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledExactlyOnceWith(
+      "Already visible and the throttled tail",
+      "run-aborted-partial",
+    );
+    expect(chatLog.addSystem).toHaveBeenCalledExactlyOnceWith("run aborted");
+    expect(chatLog.dropAssistant).not.toHaveBeenCalled();
+    expect(loadHistory).not.toHaveBeenCalled();
+    expect(isLocalRunId("run-aborted-partial")).toBe(false);
+    expect(state.activeChatRunId).toBeNull();
+    expect(setActivityStatus).toHaveBeenLastCalledWith("aborted");
+  });
+
+  it("finalizes streamed partial text when an abort has no assistant payload", () => {
+    const { state, chatLog, loadHistory, noteLocalRunId, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-aborted-stream" },
+    });
+    noteLocalRunId("run-aborted-stream");
+
+    handleChatEvent({
+      runId: "run-aborted-stream",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Keep the streamed partial" }],
+      },
+    } satisfies ChatEvent);
+
+    handleChatEvent({
+      runId: "run-aborted-stream",
+      sessionKey: state.currentSessionKey,
+      state: "aborted",
+    } satisfies ChatEvent);
+
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledExactlyOnceWith(
+      "Keep the streamed partial",
+      "run-aborted-stream",
+    );
+    expect(chatLog.addSystem).toHaveBeenCalledExactlyOnceWith("run aborted");
+    expect(loadHistory).not.toHaveBeenCalled();
+    expect(state.activeChatRunId).toBeNull();
+  });
+
+  it.each([
+    { name: "the authoritative abort reply", streamText: undefined, finalText: "(no output)" },
+    { name: "a streamed partial reply", streamText: "(no output)", finalText: undefined },
+  ])("preserves literal empty-placeholder text from $name", ({ streamText, finalText }) => {
+    const { state, chatLog, loadHistory, noteLocalRunId, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-aborted-literal" },
+    });
+    noteLocalRunId("run-aborted-literal");
+
+    if (streamText !== undefined) {
+      handleChatEvent({
+        runId: "run-aborted-literal",
+        sessionKey: state.currentSessionKey,
+        state: "delta",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: streamText }],
+        },
+      } satisfies ChatEvent);
+    }
+
+    handleChatEvent({
+      runId: "run-aborted-literal",
+      sessionKey: state.currentSessionKey,
+      state: "aborted",
+      ...(finalText === undefined
+        ? {}
+        : {
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: finalText }],
+            },
+          }),
+    } satisfies ChatEvent);
+
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledExactlyOnceWith(
+      "(no output)",
+      "run-aborted-literal",
+    );
+    expect(chatLog.addSystem).toHaveBeenCalledExactlyOnceWith("run aborted");
+    expect(loadHistory).not.toHaveBeenCalled();
+    expect(state.activeChatRunId).toBeNull();
+  });
+
+  it.each([
+    { name: "missing", message: undefined },
+    { name: "empty", message: { role: "assistant", content: [] } },
+    {
+      name: "thinking-only",
+      message: {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "hidden reasoning" }],
+      },
+    },
+    {
+      name: "non-text",
+      message: {
+        role: "assistant",
+        content: [{ type: "image", source: { type: "base64", data: "image-data" } }],
+      },
+    },
+  ])("does not create a placeholder for a $name aborted reply", ({ message }) => {
+    const { state, chatLog, loadHistory, noteLocalRunId, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-aborted-empty" },
+    });
+    noteLocalRunId("run-aborted-empty");
+
+    handleChatEvent({
+      runId: "run-aborted-empty",
+      sessionKey: state.currentSessionKey,
+      state: "aborted",
+      message,
+    } satisfies ChatEvent);
+
+    expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
+    expect(chatLog.addSystem).toHaveBeenCalledExactlyOnceWith("run aborted");
+    expect(loadHistory).not.toHaveBeenCalled();
+    expect(state.activeChatRunId).toBeNull();
+  });
+
   it("appends the tool-error summary to the abort line when present", () => {
     const { state, chatLog, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: "run-validation-loop" },

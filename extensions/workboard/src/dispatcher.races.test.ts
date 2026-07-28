@@ -73,4 +73,56 @@ describe("Workboard dispatcher lifecycle races", () => {
       expect(current?.status).toBe(transition.status);
     }
   });
+
+  it("does not spend worker attempts on cards that change before they can be claimed", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const first = await store.create({
+      title: "First stale dispatch",
+      status: "ready",
+      priority: "urgent",
+      agentId: "first-worker",
+      workspaceAccess: { unrestricted: true },
+    });
+    const second = await store.create({
+      title: "Second stale dispatch",
+      status: "ready",
+      priority: "high",
+      agentId: "second-worker",
+      workspaceAccess: { unrestricted: true },
+    });
+    const healthy = await store.create({
+      title: "Healthy dispatch",
+      status: "ready",
+      priority: "normal",
+      agentId: "healthy-worker",
+      workspaceAccess: { unrestricted: true },
+    });
+    const originalClaim = store.claim.bind(store);
+    const staleCardIds = new Set([first.id, second.id]);
+    vi.spyOn(store, "claim").mockImplementation(async (id, input, options) => {
+      if (staleCardIds.delete(id)) {
+        await store.archive(id, true);
+      }
+      return await originalClaim(id, input, options);
+    });
+    const run = vi.fn().mockResolvedValue({ runId: "healthy-run" });
+
+    const result = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: { maxStarts: 1, workspaceAccess: { unrestricted: true } },
+    });
+
+    expect(result.startFailures.map((failure) => failure.cardId)).toEqual([first.id, second.id]);
+    expect(result.started).toEqual([
+      expect.objectContaining({ cardId: healthy.id, runId: "healthy-run" }),
+    ]);
+    expect(run).toHaveBeenCalledOnce();
+    await expect(store.get(healthy.id)).resolves.toMatchObject({ status: "running" });
+    for (const cardId of [first.id, second.id]) {
+      const archived = await store.get(cardId);
+      expect(archived?.metadata?.archivedAt).toBeGreaterThan(0);
+      expect(archived?.metadata?.claim).toBeUndefined();
+    }
+  });
 });

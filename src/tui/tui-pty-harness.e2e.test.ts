@@ -1,17 +1,16 @@
 // Exercises the fake-backend TUI PTY harness and visible terminal output.
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   approveWorkspaceSkill,
-  buildOpaqueSessionIsolationFixture,
   COMPACT_TERMINAL_SIZES,
   exerciseFragmentedUnicodePrompt,
   objectFieldEquals,
   readFixtureLog,
   waitForFixtureLogEntry,
+  writeTuiPtyFixtureScript,
   type FixtureLogEntry,
 } from "./tui-pty-harness-fixture-test-support.js";
 import { sleep, startPty, type PtyRun } from "./tui-pty-test-support.js";
@@ -22,453 +21,6 @@ const OUTPUT_TIMEOUT_MS = 2_000;
 const EXIT_TIMEOUT_MS = 4_000;
 const TEST_TIMEOUT_MS = 5_000;
 const STARTUP_TEST_TIMEOUT_MS = 25_000;
-
-async function writeTuiPtyFixtureScript(dir: string) {
-  // Temp files sit outside the repo package scope; .mts preserves the ESM contract under tsx.
-  const scriptPath = path.join(dir, "run-tui-pty-fixture.mts");
-  const tuiModuleUrl = pathToFileURL(path.join(process.cwd(), "src/tui/tui.ts")).href;
-  const payloadsModuleUrl = pathToFileURL(
-    path.join(process.cwd(), "src/agents/embedded-agent-runner/run/payloads.ts"),
-  ).href;
-  const replyPayloadModuleUrl = pathToFileURL(
-    path.join(process.cwd(), "src/auto-reply/reply-payload.ts"),
-  ).href;
-  const outboundPayloadsModuleUrl = pathToFileURL(
-    path.join(process.cwd(), "src/infra/outbound/payloads.ts"),
-  ).href;
-  await writeFile(
-    scriptPath,
-    `
-      import { appendFileSync } from "node:fs";
-      import { buildEmbeddedRunPayloads } from ${JSON.stringify(payloadsModuleUrl)};
-      import { getReplyPayloadMetadata } from ${JSON.stringify(replyPayloadModuleUrl)};
-      import { normalizeReplyPayloadsForDelivery } from ${JSON.stringify(outboundPayloadsModuleUrl)};
-      import type { TuiBackend } from ${JSON.stringify(tuiModuleUrl.replace("/tui.ts", "/tui-backend.ts"))};
-      import { runTui } from ${JSON.stringify(tuiModuleUrl)};
-
-      const actionLogPath = process.env.OPENCLAW_TUI_PTY_LOG_PATH;
-      const gatewayStatus = process.env.OPENCLAW_TUI_PTY_GATEWAY_STATUS ?? "fixture gateway ok";
-      const startupDelayMs = Number(process.env.OPENCLAW_TUI_PTY_STARTUP_DELAY_MS ?? 0);
-      const footerModel = process.env.OPENCLAW_TUI_PTY_MODEL;
-      const footerThinkingLevel = process.env.OPENCLAW_TUI_PTY_THINKING_LEVEL;
-      const launchThinkingLevel = process.env.OPENCLAW_TUI_PTY_LAUNCH_THINKING;
-      const initialMessage = process.env.OPENCLAW_TUI_PTY_INITIAL_MESSAGE;
-      const xaiLimitError = '403 {"code":"The caller does not have permission to execute the specified operation","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}';
-      let currentModel = footerModel ?? "fixture-provider/fixture-model";
-      let currentThinkingLevel = footerThinkingLevel;
-      let fastMode = process.env.OPENCLAW_TUI_PTY_FAST_MODE === "true";
-      let pendingPluginApproval: {
-        id: string;
-        request: {
-          title: string;
-          description: string;
-          toolName: string;
-          allowedDecisions: string[];
-          sessionKey: string;
-        };
-        createdAtMs: number;
-        expiresAtMs: number;
-      } | null = null;
-      let pendingPluginApprovalRun: { runId: string; sessionKey: string } | null = null;
-      let pendingTaskSuggestion: {
-        id: string;
-        title: string;
-        prompt: string;
-        tldr: string;
-        cwd: string;
-        sessionKey: string;
-        agentId: string;
-        createdAt: number;
-      } | null = null;
-
-      function record(method: string, payload?: unknown) {
-        if (!actionLogPath) {
-          return;
-        }
-        appendFileSync(actionLogPath, JSON.stringify({ method, payload }) + "\\n", "utf8");
-      }
-
-      function sessionEntry(key = "main") {
-        return {
-          key,
-          displayName: "Main",
-          model: currentModel,
-          modelProvider: "fixture-provider",
-          contextTokens: 128,
-          fastMode,
-          ...(currentThinkingLevel ? { thinkingLevel: currentThinkingLevel } : {}),
-          thinkingLevels: [],
-        };
-      }
-
-      function assistantMessageFromSourceReplyPayloads(payloads: ReturnType<typeof buildEmbeddedRunPayloads>) {
-        if (payloads.length === 0) {
-          throw new Error("expected source reply payload");
-        }
-        for (const payload of payloads) {
-          const metadata = getReplyPayloadMetadata(payload);
-          if (!metadata?.sourceReplyTranscriptMirror) {
-            throw new Error("expected source reply transcript mirror metadata");
-          }
-          record("sourceReplyMetadata", metadata.sourceReplyTranscriptMirror);
-        }
-        const normalized = normalizeReplyPayloadsForDelivery(payloads);
-        const content = normalized.flatMap((payload) => {
-          const text = payload.text?.trim();
-          return text ? [{ type: "text", text }] : [];
-        });
-        if (content.length === 0) {
-          throw new Error("expected displayable source reply content");
-        }
-        return {
-          role: "assistant",
-          content,
-          timestamp: Date.now(),
-        };
-      }
-
-      class FixtureBackend implements TuiBackend {
-        connection = { url: "pty-fixture://local" };
-        onEvent?: TuiBackend["onEvent"];
-        onConnected?: TuiBackend["onConnected"];
-        onDisconnected?: TuiBackend["onDisconnected"];
-        onGap?: TuiBackend["onGap"];
-
-        start() {
-          queueMicrotask(() => this.onConnected?.());
-        }
-
-        stop() {}
-
-        async sendChat(opts: Parameters<TuiBackend["sendChat"]>[0]) {
-          record("sendChat", {
-            sessionKey: opts.sessionKey,
-            message: opts.message,
-            deliver: opts.deliver,
-            thinking: opts.thinking,
-          });
-          const runId = opts.runId ?? "run-pty-fixture";
-          if (opts.message === "skill approval proof" || opts.message === "skill approval gap proof") {
-            pendingPluginApproval = {
-              id: "plugin:skill-pty",
-              request: {
-                title: "Apply workspace skill proposal",
-                description: "Apply a pending workspace skill proposal into live workspace skills.",
-                pluginId: "workspace-skills",
-                severity: "warning",
-                toolName: "skill_workshop",
-                allowedDecisions: ["allow-once", "deny"],
-                sessionKey: opts.sessionKey,
-              },
-              createdAtMs: Date.now(),
-              expiresAtMs: Date.now() + 120_000,
-            };
-            pendingPluginApprovalRun = { runId, sessionKey: opts.sessionKey };
-            queueMicrotask(() => {
-              if (opts.message === "skill approval gap proof") {
-                this.onGap?.({ expected: 4, received: 5 });
-              } else {
-                this.onEvent?.({
-                  event: "plugin.approval.requested",
-                  payload: pendingPluginApproval,
-                });
-              }
-            });
-            return { runId };
-          }
-          if (opts.message === "task suggestion proof") {
-            pendingTaskSuggestion = {
-              id: "task_pty",
-              title: "Remove stale adapter",
-              prompt: "Delete the stale adapter and update its tests.",
-              tldr: "The adapter is unreachable and adds maintenance cost.",
-              cwd: "/repo/project",
-              sessionKey: opts.sessionKey,
-              agentId: "main",
-              createdAt: Date.now(),
-            };
-            queueMicrotask(() => {
-              this.onEvent?.({
-                event: "task.suggestion",
-                payload: { action: "created", suggestion: pendingTaskSuggestion },
-              });
-            });
-            return { runId };
-          }
-          ${buildOpaqueSessionIsolationFixture()}
-          const responseDelayMs =
-            opts.message === "slow prompt" ||
-            opts.message === "slow reset proof" ||
-            opts.message === "streaming prompt"
-              ? 500
-              : 20;
-          if (opts.message === "streaming prompt") {
-            setTimeout(() => {
-              this.onEvent?.({
-                event: "chat",
-                payload: {
-                  runId,
-                  sessionKey: opts.sessionKey,
-                  state: "delta",
-                  message: {
-                    role: "assistant",
-                    content: [{ type: "text", text: "PTY_STREAMING: streaming prompt" }],
-                    timestamp: Date.now(),
-                  },
-                },
-              });
-            }, 5);
-          }
-          const isSourceReplyProof = opts.message === "message tool only source reply proof";
-          const isXaiLimitProof = opts.message === "xai limit proof";
-          setTimeout(() => {
-            if (isXaiLimitProof) {
-              this.onEvent?.({
-                event: "chat",
-                payload: {
-                  runId,
-                  sessionKey: opts.sessionKey,
-                  state: "error",
-                  errorMessage: xaiLimitError,
-                },
-              });
-              return;
-            }
-            const sourceReplyPayloads = isSourceReplyProof
-              ? buildEmbeddedRunPayloads({
-                  assistantTexts: [],
-                  toolMetas: [],
-                  lastAssistant: undefined,
-                  inlineToolResultsAllowed: false,
-                  sessionKey: opts.sessionKey,
-                  sourceReplyDeliveryMode: "message_tool_only",
-                  messagingToolSourceReplyPayloads: [
-                    {
-                      text: "VISIBLE_TUI_SOURCE_REPLY_PROOF",
-                    },
-                  ],
-                  runId,
-                })
-              : [];
-            const message = isSourceReplyProof
-              ? assistantMessageFromSourceReplyPayloads(sourceReplyPayloads)
-              : {
-                  role: "assistant",
-                  content: [{ type: "text", text: "PTY_RESPONSE: " + opts.message }],
-                  timestamp: Date.now(),
-                };
-            this.onEvent?.({
-              event: "chat",
-              payload: {
-                runId,
-                sessionKey: opts.sessionKey,
-                state: "final",
-                message,
-              },
-            });
-          }, responseDelayMs);
-          return { runId };
-        }
-
-        async abortChat() {
-          record("abortChat");
-          return { ok: true, aborted: true };
-        }
-
-        async loadHistory(opts: Parameters<TuiBackend["loadHistory"]>[0]) {
-          const sessionKey = opts?.sessionKey ?? "main";
-          record("loadHistory", { sessionKey });
-          const rapidSwitchMarker = sessionKey.endsWith("switch-a")
-            ? "A"
-            : sessionKey.endsWith("switch-b")
-              ? "B"
-              : null;
-          const delayMs =
-            rapidSwitchMarker === "A" ? 500 : rapidSwitchMarker === "B" ? 40 : startupDelayMs;
-          if (delayMs > 0) {
-            await new Promise((resolve) => setTimeout(resolve, delayMs));
-          }
-          if (rapidSwitchMarker) {
-            record("loadHistoryResolved", { sessionKey });
-            return {
-              sessionId: "session-" + rapidSwitchMarker,
-              sessionInfo: {
-                key: sessionKey,
-                sessionId: "session-" + rapidSwitchMarker,
-                model: currentModel,
-                modelProvider: "fixture-provider",
-                contextTokens: 128,
-                fastMode,
-                thinkingLevels: [],
-              },
-              messages: [{ role: "user", content: rapidSwitchMarker + "_HISTORY_MARKER" }],
-            };
-          }
-          return {
-            messages: [],
-            fastMode,
-            ...(footerModel
-              ? {
-                  thinkingLevel: footerThinkingLevel,
-                  sessionInfo: sessionEntry(sessionKey),
-                }
-              : {}),
-          };
-        }
-
-        async listSessions() {
-          return {
-            ts: Date.now(),
-            path: "",
-            count: 0,
-            sessions: [],
-            defaults: {
-              model: currentModel,
-              modelProvider: "fixture-provider",
-              contextTokens: 128,
-              thinkingLevels: [],
-            },
-          };
-        }
-
-        async listAgents() {
-          return {
-            defaultId: "main",
-            mainKey: "main",
-            scope: "per-sender",
-            agents: [{ id: "main", name: "Main" }],
-          };
-        }
-
-        async patchSession(opts: Parameters<TuiBackend["patchSession"]>[0]) {
-          record("patchSession", opts);
-          if (opts.model) {
-            currentModel = opts.model;
-          }
-          if (opts.thinkingLevel) {
-            currentThinkingLevel = opts.thinkingLevel;
-          }
-          if (typeof opts.fastMode === "boolean") {
-            fastMode = opts.fastMode;
-          }
-          return {
-            ok: true,
-            path: "",
-            key: opts.key,
-            entry: sessionEntry(opts.key),
-            resolved: {
-              modelProvider: "fixture-provider",
-              model: currentModel,
-            },
-          };
-        }
-
-        async createSession(opts: Parameters<TuiBackend["createSession"]>[0]) {
-          record("createSession", opts);
-          const key = "agent:main:" + opts.key;
-          return { ok: true, key, entry: { ...sessionEntry(key), sessionId: "created-session" } };
-        }
-
-        async resetSession(key: string, reason?: "new" | "reset") {
-          record("resetSession", { key, reason });
-          return {};
-        }
-
-        async getGatewayStatus() {
-          record("getGatewayStatus");
-          return gatewayStatus;
-        }
-
-        async listModels() {
-          return [
-            { id: "fixture-provider/fixture-model", name: "Fixture", provider: "fixture-provider" },
-            { id: "fixture-provider/fixture-model-2", name: "Fixture 2", provider: "fixture-provider" },
-          ];
-        }
-
-        async listPluginApprovals() {
-          record("listPluginApprovals", { pending: Boolean(pendingPluginApproval) });
-          return pendingPluginApproval ? [pendingPluginApproval] : [];
-        }
-
-        async resolvePluginApproval(id: string, decision: "allow-once" | "allow-always" | "deny") {
-          record("resolvePluginApproval", { id, decision });
-          const pendingRun = pendingPluginApprovalRun;
-          pendingPluginApproval = null;
-          pendingPluginApprovalRun = null;
-          this.onEvent?.({
-            event: "plugin.approval.resolved",
-            payload: { id, decision },
-          });
-          this.onEvent?.({
-            event: "chat",
-            payload: {
-              runId: pendingRun?.runId ?? "run-pty-fixture",
-              sessionKey: pendingRun?.sessionKey ?? "agent:main:main",
-              state: "final",
-              message: {
-                role: "assistant",
-                content: [{ type: "text", text: "PTY_SKILL_APPROVAL_RESOLVED: " + decision }],
-                timestamp: Date.now(),
-              },
-            },
-          });
-          return { ok: true };
-        }
-
-        async listTaskSuggestions() {
-          record("listTaskSuggestions", { pending: Boolean(pendingTaskSuggestion) });
-          return pendingTaskSuggestion ? [pendingTaskSuggestion] : [];
-        }
-
-        async acceptTaskSuggestion(taskId: string) {
-          record("acceptTaskSuggestion", { taskId });
-          pendingTaskSuggestion = null;
-          this.onEvent?.({
-            event: "task.suggestion",
-            payload: { action: "resolved", taskId, resolution: "accepted" },
-          });
-          return { taskId, key: "agent:main:task-pty" };
-        }
-
-        async dismissTaskSuggestion(taskId: string) {
-          record("dismissTaskSuggestion", { taskId });
-          pendingTaskSuggestion = null;
-          this.onEvent?.({
-            event: "task.suggestion",
-            payload: { action: "resolved", taskId, resolution: "dismissed" },
-          });
-          return { taskId, dismissed: true };
-        }
-      }
-
-      async function main() {
-        await runTui({
-          backend: new FixtureBackend(),
-          config: {
-            agents: {
-              defaults: { model: "fixture-provider/fixture-model" },
-              entries: { main: { default: true } },
-            },
-            session: { scope: "per-sender", mainKey: "main" },
-          },
-          deliver: false,
-          thinking: launchThinkingLevel,
-          message: initialMessage,
-          historyLimit: 5,
-          title: "openclaw tui pty fixture",
-        });
-      }
-
-      main().catch((error) => {
-        console.error(error);
-        process.exitCode = 1;
-      });
-    `,
-    "utf8",
-  );
-  return scriptPath;
-}
 
 async function startTuiFixture(opts: { env?: NodeJS.ProcessEnv } = {}) {
   const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-tui-pty-"));
@@ -702,6 +254,34 @@ describe.sequential("TUI PTY harness", () => {
     STARTUP_TEST_TIMEOUT_MS,
   );
 
+  it.each([
+    { name: "Ctrl+D", input: "\u0004" },
+    { name: "/exit", input: "/exit\r" },
+  ])(
+    "stops the real terminal cleanly when $name interrupts an active run",
+    async ({ input }) => {
+      const busyFixture = await startTuiFixture();
+      try {
+        await busyFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+        await busyFixture.run.write("slow prompt\r", { delay: false });
+        await busyFixture.waitForLogEntry(
+          (entry) =>
+            entry.method === "sendChat" && objectFieldEquals(entry, "message", "slow prompt"),
+        );
+
+        await busyFixture.run.write(input, { delay: false });
+
+        expect((await busyFixture.run.waitForExit()).exitCode).toBe(0);
+        expect(await readFixtureLog(busyFixture.logPath)).toEqual(
+          expect.arrayContaining([expect.objectContaining({ method: "stop" })]),
+        );
+      } finally {
+        await busyFixture.cleanup();
+      }
+    },
+    STARTUP_TEST_TIMEOUT_MS,
+  );
+
   it(
     "presents and resolves workspace skill approval in the TUI",
     async () => {
@@ -725,6 +305,59 @@ describe.sequential("TUI PTY harness", () => {
         await approveWorkspaceSkill(compactFixture, "skill approval proof");
       } finally {
         await compactFixture.cleanup();
+      }
+    },
+    STARTUP_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "keeps Enter focused on model and session pickers beside a side result in a 20×18 terminal",
+    async () => {
+      const compactPickerFixture = await startTuiFixture({
+        env: {
+          OPENCLAW_TUI_PTY_COLS: "20",
+          OPENCLAW_TUI_PTY_ROWS: "18",
+          OPENCLAW_TUI_PTY_PICKER_FIXTURE: "1",
+        },
+      });
+
+      try {
+        await compactPickerFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+        await compactPickerFixture.run.write("/btw picker focus proof\r", { delay: false });
+        await compactPickerFixture.waitForLogEntry((entry) => entry.method === "pickerSideResult");
+
+        await compactPickerFixture.run.write("\u000c", { delay: false });
+        await compactPickerFixture.waitForLogEntry((entry) => entry.method === "listModels");
+        await compactPickerFixture.run.write("\u001b[B", { delay: false });
+        await compactPickerFixture.run.write("\r", { delay: false });
+        await compactPickerFixture.waitForLogEntry(
+          (entry) =>
+            entry.method === "patchSession" &&
+            objectFieldEquals(entry, "model", "fixture-provider/fixture-model-2"),
+        );
+
+        await compactPickerFixture.run.write("\u0010", { delay: false });
+        await compactPickerFixture.waitForLogEntry(
+          (entry) =>
+            entry.method === "listSessions" && objectFieldEquals(entry, "purpose", "picker"),
+        );
+        await compactPickerFixture.run.write("\u001b[B", { delay: false });
+        await compactPickerFixture.run.write("\r", { delay: false });
+        await compactPickerFixture.waitForLogEntry(
+          (entry) =>
+            entry.method === "loadHistory" &&
+            objectFieldEquals(entry, "sessionKey", "agent:main:picker-target"),
+        );
+
+        await compactPickerFixture.run.write("picker target proof\r", { delay: false });
+        const sent = await compactPickerFixture.waitForLogEntry(
+          (entry) =>
+            entry.method === "sendChat" &&
+            objectFieldEquals(entry, "message", "picker target proof"),
+        );
+        expect(sent.payload).toMatchObject({ sessionKey: "agent:main:picker-target" });
+      } finally {
+        await compactPickerFixture.cleanup();
       }
     },
     STARTUP_TEST_TIMEOUT_MS,
@@ -881,6 +514,87 @@ describe.sequential("TUI PTY harness", () => {
       await fixture.run.waitForOutput("PTY_RESPONSE: streaming prompt");
     },
     TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "renders all 128 ordered chat deltas without losing the final streamed token",
+    async () => {
+      await fixture.run.write("burst streaming proof\r", { delay: false });
+      const burst = await fixture.waitForLogEntry(
+        (entry) => entry.method === "streamBurstComplete" && objectFieldEquals(entry, "count", 128),
+      );
+
+      expect(burst.payload).toMatchObject({ count: 128 });
+      await fixture.run.waitForOutput("PTY_STREAM_BURST:");
+      await fixture.run.waitForOutput("T127");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "ignores delayed aborts and streamed events from the previously selected session",
+    async () => {
+      const isolationFixture = await startTuiFixture();
+      const sourceSessionKey = "agent:main:abort-source";
+      const targetSessionKey = "agent:main:abort-target";
+
+      try {
+        await isolationFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+        await isolationFixture.run.write(`/session ${sourceSessionKey}\r`, { delay: false });
+        await isolationFixture.waitForLogEntry(
+          (entry) =>
+            entry.method === "loadHistory" &&
+            objectFieldEquals(entry, "sessionKey", sourceSessionKey),
+        );
+        await isolationFixture.run.write("cross-session abort source proof\r", { delay: false });
+        await isolationFixture.waitForLogEntry(
+          (entry) =>
+            entry.method === "sendChat" &&
+            objectFieldEquals(entry, "message", "cross-session abort source proof"),
+        );
+
+        await isolationFixture.run.write("/abort\r", { delay: false });
+        await isolationFixture.waitForLogEntry(
+          (entry) =>
+            entry.method === "abortChat" &&
+            objectFieldEquals(entry, "sessionKey", sourceSessionKey),
+        );
+        const outputOffset = isolationFixture.run.visibleOutput().length;
+        await isolationFixture.run.write(`/session ${targetSessionKey}\r`, { delay: false });
+        await isolationFixture.waitForLogEntry(
+          (entry) =>
+            entry.method === "loadHistory" &&
+            objectFieldEquals(entry, "sessionKey", targetSessionKey),
+        );
+        await isolationFixture.waitForLogEntry(
+          (entry) =>
+            entry.method === "abortResolved" &&
+            objectFieldEquals(entry, "sessionKey", sourceSessionKey),
+        );
+        await isolationFixture.waitForLogEntry(
+          (entry) =>
+            entry.method === "lateSessionEvent" &&
+            objectFieldEquals(entry, "sessionKey", sourceSessionKey) &&
+            objectFieldEquals(entry, "state", "final"),
+        );
+
+        const targetOutput = isolationFixture.run.visibleOutput().slice(outputOffset);
+        expect(targetOutput).not.toContain("PTY_LATE_FOREIGN_DELTA");
+        expect(targetOutput).not.toContain("PTY_LATE_FOREIGN_FINAL");
+
+        await isolationFixture.run.write("cross-session target proof\r", { delay: false });
+        const sent = await isolationFixture.waitForLogEntry(
+          (entry) =>
+            entry.method === "sendChat" &&
+            objectFieldEquals(entry, "message", "cross-session target proof"),
+        );
+        expect(sent.payload).toMatchObject({ sessionKey: targetSessionKey });
+        await isolationFixture.run.waitForOutput("PTY_RESPONSE: cross-session target proof");
+      } finally {
+        await isolationFixture.cleanup();
+      }
+    },
+    STARTUP_TEST_TIMEOUT_MS,
   );
 
   it(

@@ -332,7 +332,6 @@ packages/ai/src/transports/anthropic-transport-stream.ts
 packages/ai/src/transports/openai-completions-transport.ts
 packages/gateway-client/src/client.ts
 packages/gateway-protocol/src/schema/agents-models-skills.ts
-packages/gateway-protocol/src/schema/protocol-schemas.ts
 packages/markdown-core/src/ir.ts
 packages/memory-host-sdk/src/host/session-files.ts
 packages/sdk/src/client.ts

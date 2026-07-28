@@ -16,7 +16,7 @@ export type SessionCatalogListProviderParams = {
   limitPerHost?: number;
   hostIds?: string[];
   cursors?: Record<string, string>;
-  /** Request-owned session entries. Providers must not retain this past `list`. */
+  /** Request-owned shared entries. Providers must not mutate or retain them past `list`. */
   sessionEntries?: SessionCatalogEntrySnapshot;
   /** Lazily lists Gateway nodes once per catalog request. Providers must not retain this past `list`. */
   listNodes?: () => ReturnType<PluginRuntime["nodes"]["list"]>;
@@ -61,9 +61,11 @@ export type SessionCatalogEntrySummary = ReturnType<
   PluginRuntime["agent"]["session"]["listSessionEntries"]
 >[number];
 
-/** Mutable store contents captured lazily and reused only within one catalog request. */
+/** Shared, logically frozen store state for one request; copy locally before mutating. */
 export type SessionCatalogEntrySnapshot = {
   entriesForAgent: (agentId: string) => readonly SessionCatalogEntrySummary[];
+  /** Request-wide flatten; optional for compatibility with pre-flatten plugin hosts. */
+  entriesForCatalog?: () => SessionCatalogAgentEntry[];
 };
 
 type SessionCatalogAgentEntry = SessionCatalogEntrySummary & { agentId: string };
@@ -160,6 +162,12 @@ export function listSessionCatalogEntries(params: {
   runtime: PluginRuntime;
   sessionEntries?: SessionCatalogEntrySnapshot;
 }): SessionCatalogAgentEntry[] {
+  const requestEntries = params.sessionEntries?.entriesForCatalog?.();
+  if (requestEntries) {
+    // Keep the shipped SDK helper as the compatibility entry point while the
+    // Gateway snapshot owns the one request-wide flatten.
+    return requestEntries;
+  }
   const defaultAgentId = resolveDefaultAgentId(params.config);
   const agentIds = [
     defaultAgentId,

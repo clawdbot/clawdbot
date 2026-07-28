@@ -550,7 +550,7 @@ describe("Codex app-server config", () => {
     });
   });
 
-  it("confines only explicitly forced private-QA Codex runtime to workspace writes", () => {
+  it("does not let private-QA environment flags override native sandbox policy", () => {
     const privateQaCodexEnv = {
       OPENCLAW_BUILD_PRIVATE_QA: "1",
       OPENCLAW_QA_FORCE_RUNTIME: "codex",
@@ -568,16 +568,46 @@ describe("Codex app-server config", () => {
 
     expectRuntimePolicy(runtime, {
       approvalPolicy: "never",
+      sandbox: "danger-full-access",
+      approvalsReviewer: "user",
+    });
+    expect(codexSandboxPolicyForTurn(runtime.sandbox, "/qa/workspace", runtime.start.args)).toEqual(
+      {
+        type: "dangerFullAccess",
+      },
+    );
+  });
+
+  it("honors explicitly configured native workspace temporary-root exclusions", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {
+        appServer: {
+          sandbox: "workspace-write",
+          args: [
+            "app-server",
+            "-c",
+            "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+            "-c",
+            "sandbox_workspace_write.exclude_slash_tmp=true",
+          ],
+        },
+      },
+    });
+
+    expectRuntimePolicy(runtime, {
+      approvalPolicy: "never",
       sandbox: "workspace-write",
       approvalsReviewer: "user",
     });
-    expect(codexSandboxPolicyForTurn(runtime.sandbox, "/qa/workspace", privateQaCodexEnv)).toEqual({
-      type: "workspaceWrite",
-      writableRoots: ["/qa/workspace"],
-      networkAccess: false,
-      excludeTmpdirEnvVar: true,
-      excludeSlashTmp: true,
-    });
+    expect(codexSandboxPolicyForTurn(runtime.sandbox, "/qa/workspace", runtime.start.args)).toEqual(
+      {
+        type: "workspaceWrite",
+        writableRoots: ["/qa/workspace"],
+        networkAccess: false,
+        excludeTmpdirEnvVar: true,
+        excludeSlashTmp: true,
+      },
+    );
   });
 
   it("preserves an explicitly read-only sandbox for forced private-QA Codex runtime", () => {
@@ -601,10 +631,12 @@ describe("Codex app-server config", () => {
       sandbox: "read-only",
       approvalsReviewer: "user",
     });
-    expect(codexSandboxPolicyForTurn(runtime.sandbox, "/qa/workspace", privateQaCodexEnv)).toEqual({
-      type: "readOnly",
-      networkAccess: false,
-    });
+    expect(codexSandboxPolicyForTurn(runtime.sandbox, "/qa/workspace", runtime.start.args)).toEqual(
+      {
+        type: "readOnly",
+        networkAccess: false,
+      },
+    );
   });
 
   it.each([
@@ -613,6 +645,10 @@ describe("Codex app-server config", () => {
     {
       label: "forced runtime without a private build",
       env: { OPENCLAW_QA_FORCE_RUNTIME: "codex" },
+    },
+    {
+      label: "forced private-QA Codex runtime without explicit sandbox configuration",
+      env: { OPENCLAW_BUILD_PRIVATE_QA: "1", OPENCLAW_QA_FORCE_RUNTIME: "codex" },
     },
     {
       label: "forced private-QA OpenClaw runtime",
@@ -626,7 +662,9 @@ describe("Codex app-server config", () => {
       sandbox: "danger-full-access",
       approvalsReviewer: "user",
     });
-    expect(codexSandboxPolicyForTurn("workspace-write", "/qa/workspace", env)).toEqual({
+    expect(
+      codexSandboxPolicyForTurn("workspace-write", "/qa/workspace", runtime.start.args),
+    ).toEqual({
       type: "workspaceWrite",
       writableRoots: ["/qa/workspace"],
       networkAccess: false,
@@ -634,6 +672,53 @@ describe("Codex app-server config", () => {
       excludeSlashTmp: false,
     });
   });
+
+  it.each([
+    {
+      label: "long config arguments",
+      args: [
+        "--config",
+        "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+        "--config",
+        "sandbox_workspace_write.exclude_slash_tmp=true",
+      ],
+      excludeTmpdirEnvVar: true,
+      excludeSlashTmp: true,
+    },
+    {
+      label: "inline config arguments",
+      args: [
+        "--config=sandbox_workspace_write.exclude_tmpdir_env_var=true",
+        "--config=sandbox_workspace_write.exclude_slash_tmp=true",
+      ],
+      excludeTmpdirEnvVar: true,
+      excludeSlashTmp: true,
+    },
+    {
+      label: "the last native config override",
+      args: [
+        "-c",
+        "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+        "-c",
+        "sandbox_workspace_write.exclude_tmpdir_env_var=false",
+        "-c",
+        "sandbox_workspace_write.exclude_slash_tmp=true",
+      ],
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: true,
+    },
+  ])(
+    "preserves native workspace root policy from $label",
+    ({ args, excludeTmpdirEnvVar, excludeSlashTmp }) => {
+      expect(codexSandboxPolicyForTurn("workspace-write", "/qa/workspace", args)).toEqual({
+        type: "workspaceWrite",
+        writableRoots: ["/qa/workspace"],
+        networkAccess: false,
+        excludeTmpdirEnvVar,
+        excludeSlashTmp,
+      });
+    },
+  );
 
   it("does not change ordinary harness connection defaults when supervision is enabled", () => {
     const runtime = resolveRuntimeForTest({

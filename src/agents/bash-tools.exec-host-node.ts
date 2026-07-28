@@ -14,7 +14,11 @@ import {
   resolveExecApprovalAllowedDecisions,
   resolveExecApprovalUnavailableDecisions,
 } from "../infra/exec-approvals.js";
-import { defaultExecAutoReviewer, type ExecAutoReviewInput } from "../infra/exec-auto-review.js";
+import {
+  defaultExecAutoReviewer,
+  resolveExecAutoReviewDecision,
+  type ExecAutoReviewInput,
+} from "../infra/exec-auto-review.js";
 import { tail } from "./bash-process-registry.js";
 import {
   buildExecApprovalRequesterContext,
@@ -377,32 +381,30 @@ export async function executeNodeHostCommand(
       !requiresSecurityAuditSuppressionApproval
     ) {
       const reviewer = params.autoReviewer ?? defaultExecAutoReviewer;
-      const pendingDecision = Promise.resolve(
-        reviewer({
-          command: prepared.rawCommand,
-          argv: autoReviewArgv,
-          cwd: prepared.cwd,
-          envKeys: Object.keys(params.requestedEnv ?? {}).toSorted(),
-          host: "node",
-          reason: resolveNodeAutoReviewReason({
-            inlineEvalHit,
-            hostSecurity,
-            analysisOk,
-            allowlistSatisfied,
-            durableApprovalSatisfied,
-          }),
-          analysis: {
-            parsed: analysisOk,
-            allowlistMatched: allowlistSatisfied,
-            durableApprovalMatched: durableApprovalSatisfied,
-            inlineEval: inlineEvalHit !== null,
-          },
-          agent: {
-            id: prepared.agentId,
-            sessionKey: prepared.sessionKey,
-          },
+      const pendingDecision = resolveExecAutoReviewDecision(reviewer, {
+        command: prepared.rawCommand,
+        argv: autoReviewArgv,
+        cwd: prepared.cwd,
+        envKeys: Object.keys(params.requestedEnv ?? {}).toSorted(),
+        host: "node",
+        reason: resolveNodeAutoReviewReason({
+          inlineEvalHit,
+          hostSecurity,
+          analysisOk,
+          allowlistSatisfied,
+          durableApprovalSatisfied,
         }),
-      );
+        analysis: {
+          parsed: analysisOk,
+          allowlistMatched: allowlistSatisfied,
+          durableApprovalMatched: durableApprovalSatisfied,
+          inlineEval: inlineEvalHit !== null,
+        },
+        agent: {
+          id: prepared.agentId,
+          sessionKey: prepared.sessionKey,
+        },
+      });
       // An injected reviewer cannot keep a cancelled node invocation or approval alive.
       const decision = params.signal
         ? await abortable(params.signal, pendingDecision)

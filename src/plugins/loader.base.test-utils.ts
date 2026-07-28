@@ -16,6 +16,7 @@ import {
 import { withEnv } from "../test-utils/env.js";
 import { clearPluginCommands } from "./command-registry-state.js";
 import { getPluginCommandSpecs } from "./command-specs.js";
+import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { getGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
 import { writePersistedInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import {
@@ -51,6 +52,7 @@ import {
   globalAfterAll1,
 } from "./loader.test-harness.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import {
   getActivePluginRegistry,
@@ -439,6 +441,66 @@ describe("loadOpenClawPlugins", () => {
     });
 
     expect(registry.plugins.find((entry) => entry.id === plugin.id)?.status).toBe("loaded");
+  });
+
+  it("loads scoped plugins from the current metadata snapshot without rediscovering manifests", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "snapshot-manifest",
+      body: `module.exports = { id: "snapshot-manifest", register() {} };`,
+    });
+    const config = {
+      plugins: {
+        load: { paths: [plugin.file] },
+        allow: [plugin.id],
+      },
+    };
+    const metadataSnapshot = loadPluginMetadataSnapshot({ config, env: process.env });
+    setCurrentPluginMetadataSnapshot(metadataSnapshot, { config, env: process.env });
+    fs.rmSync(path.join(plugin.dir, "openclaw.plugin.json"));
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config,
+      onlyPluginIds: [plugin.id],
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === plugin.id)?.status).toBe("loaded");
+  });
+
+  it("discovers plugin paths supplied only by the activation source", () => {
+    useNoBundledPlugins();
+    const snapshotPlugin = writePlugin({
+      id: "snapshot-base",
+      body: `module.exports = { id: "snapshot-base", register() {} };`,
+    });
+    const sourcePlugin = writePlugin({
+      id: "activation-source-only",
+      body: `module.exports = { id: "activation-source-only", register() {} };`,
+    });
+    const config = {
+      plugins: {
+        load: { paths: [snapshotPlugin.file] },
+        allow: [snapshotPlugin.id, sourcePlugin.id],
+      },
+    };
+    const metadataSnapshot = loadPluginMetadataSnapshot({ config, env: process.env });
+    setCurrentPluginMetadataSnapshot(metadataSnapshot, { config, env: process.env });
+
+    const registry = loadOpenClawPlugins({
+      activate: false,
+      cache: false,
+      config,
+      activationSourceConfig: {
+        plugins: {
+          load: { paths: [sourcePlugin.file] },
+          allow: [sourcePlugin.id],
+        },
+      },
+      onlyPluginIds: [sourcePlugin.id],
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === sourcePlugin.id)?.status).toBe("loaded");
   });
 
   it("loads installed plugin packages discovered from persisted install records", () => {

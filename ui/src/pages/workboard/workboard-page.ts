@@ -31,7 +31,7 @@ import {
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { matchesAgentScope } from "./agent-filter.ts";
-import { WORKBOARD_ALL_BOARDS_FILTER } from "./board-filter.ts";
+import { matchesBoardFilter, WORKBOARD_ALL_BOARDS_FILTER } from "./board-filter.ts";
 import type { WorkboardRouteData } from "./route.ts";
 import { renderWorkboard } from "./view.ts";
 
@@ -253,7 +253,19 @@ class WorkboardPage extends OpenClawLightDomElement {
     if (!context || !boardFilter || context.workboard.state.boardFilter === boardFilter) {
       return;
     }
-    context.workboard.state.boardFilter = boardFilter;
+    const state = context.workboard.state;
+    const remainsVisible = (cardId: string) => {
+      const card = state.cards.find((entry) => entry.id === cardId);
+      return Boolean(card && matchesBoardFilter(card, boardFilter));
+    };
+    if (state.detailCardId && !remainsVisible(state.detailCardId)) {
+      state.detailCardId = null;
+      state.detailCommentBody = "";
+    }
+    if (state.editingCardId && !remainsVisible(state.editingCardId)) {
+      resetDraftState(state);
+    }
+    state.boardFilter = boardFilter;
     context.workboard.notify();
   }
 
