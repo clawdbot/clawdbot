@@ -332,6 +332,40 @@ describe("agent defaults schema", () => {
     expect(result.embeddedAgent?.executionContract).toBe("strict-agentic");
   });
 
+  it("accepts bounded embeddedAgent.runBudget ceilings", () => {
+    const result = AgentDefaultsSchema.parse({
+      embeddedAgent: {
+        runBudget: {
+          maxModelTurns: 8,
+          maxToolCalls: 16,
+          maxProviderAttempts: 4,
+          maxOutputTokens: 12_000,
+          maxDurationSeconds: 60,
+        },
+      },
+    })!;
+    expect(result.embeddedAgent?.runBudget).toEqual({
+      maxModelTurns: 8,
+      maxToolCalls: 16,
+      maxProviderAttempts: 4,
+      maxOutputTokens: 12_000,
+      maxDurationSeconds: 60,
+    });
+  });
+
+  it("rejects embeddedAgent.runBudget ceilings outside their safe ranges", () => {
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({ embeddedAgent: { runBudget: { maxModelTurns: 0 } } }),
+      "embeddedAgent.runBudget.maxModelTurns",
+    );
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({
+        embeddedAgent: { runBudget: { maxDurationSeconds: 3_601 } },
+      }),
+      "embeddedAgent.runBudget.maxDurationSeconds",
+    );
+  });
+
   it("rejects legacy whole-agent runtime pins outside doctor migration", () => {
     expect(AgentDefaultsSchema.safeParse({ agentRuntime: { id: "codex" } }).success).toBe(false);
     expect(

@@ -7,6 +7,7 @@ import type {
   AgentModelEntryConfig,
   AgentModelPolicyConfig,
   EmbeddedAgentExecutionContract,
+  EmbeddedAgentRunBudgetConfig,
   SubagentDelegationMode,
 } from "./types.agent-defaults.js";
 import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
@@ -158,6 +159,8 @@ export type AgentConfig = {
   embeddedAgent?: {
     /** Optional per-agent execution contract override. */
     executionContract?: EmbeddedAgentExecutionContract;
+    /** Optional per-agent embedded-run ceiling overrides. */
+    runBudget?: EmbeddedAgentRunBudgetConfig;
   };
   /** Optional per-agent sandbox overrides. */
   sandbox?: AgentSandboxConfig;

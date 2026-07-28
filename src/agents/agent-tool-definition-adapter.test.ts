@@ -53,6 +53,41 @@ async function executeTool(tool: AgentTool, callId: string) {
 }
 
 describe("agent tool definition adapter", () => {
+  it("reserves guarded tool work immediately before dispatch and propagates cancellation", async () => {
+    const guardAbort = new AbortController();
+    let reservations = 0;
+    const execute = vi.fn(async (_toolCallId: string, _params: unknown, _signal?: AbortSignal) => ({
+      content: [{ type: "text" as const, text: "done" }],
+      details: {},
+    }));
+    const tool = {
+      name: "guarded_tool",
+      label: "Guarded Tool",
+      description: "guarded",
+      parameters: Type.Object({}),
+      execute,
+    } satisfies AgentTool;
+    const [definition] = toToolDefinitions([tool], undefined, {
+      signal: guardAbort.signal,
+      beforeDispatch: () => {
+        if (reservations >= 1) {
+          guardAbort.abort();
+          throw new Error("tool budget exhausted");
+        }
+        reservations += 1;
+      },
+    });
+    expect(definition).toBeDefined();
+
+    await definition!.execute("call-1", {}, undefined, undefined, extensionContext);
+    await expect(
+      definition!.execute("call-2", {}, undefined, undefined, extensionContext),
+    ).rejects.toThrow("tool budget exhausted");
+
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute.mock.calls[0]?.[2]).toBe(guardAbort.signal);
+  });
+
   it("preserves argument preparation and execution mode contracts", () => {
     const prepareArguments = vi.fn((args: unknown) => args as Record<string, never>);
     const tool = {

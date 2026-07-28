@@ -170,10 +170,34 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     'How embedded OpenClaw handles workspace-local `.openclaw/settings.json`: "sanitize" (default) strips shellPath/shellCommandPrefix, "ignore" disables project settings entirely, and "trusted" applies project settings as-is.',
   "agents.defaults.embeddedAgent.executionContract":
     'Embedded OpenClaw execution contract: "default" keeps the standard runner behavior, while "strict-agentic" enables structured plan tracking and non-visible turn recovery for supported OpenAI/OpenAI Codex GPT-5-family runs.',
+  "agents.defaults.embeddedAgent.runBudget":
+    "Optional hard ceilings for one embedded-agent run. Defining this object enables bounded model turns, tool calls, provider attempts, accumulated output tokens, and wall duration; omitted fields use safe defaults.",
+  "agents.defaults.embeddedAgent.runBudget.maxModelTurns":
+    "Maximum model invocations admitted during one run before it terminates with model_turns (default: 8).",
+  "agents.defaults.embeddedAgent.runBudget.maxToolCalls":
+    "Maximum server-side tool executions admitted during one run before it terminates with tool_calls (default: 16).",
+  "agents.defaults.embeddedAgent.runBudget.maxProviderAttempts":
+    "Maximum provider requests across model fallbacks during one run before it terminates with provider_attempts (default: 4).",
+  "agents.defaults.embeddedAgent.runBudget.maxOutputTokens":
+    "Maximum accumulated provider output tokens for one run. Reaching the ceiling discards partial assistant output and terminates with output_tokens (default: 12000).",
+  "agents.defaults.embeddedAgent.runBudget.maxDurationSeconds":
+    "Maximum wall-clock duration for one run in seconds. The runtime aborts model and tool work at the deadline (default: 60).",
   "agents.entries.*.embeddedAgent":
-    "Optional per-agent embedded OpenClaw overrides. Use this to opt specific agents into stricter GPT-5 execution behavior without changing the global default.",
+    "Optional per-agent embedded OpenClaw overrides. Use this to opt specific agents into stricter GPT-5 execution behavior or hard run ceilings without changing the global default.",
   "agents.entries.*.embeddedAgent.executionContract":
     'Optional per-agent embedded OpenClaw execution contract override. Set "strict-agentic" to enable structured plan tracking and non-visible turn recovery for that agent on supported OpenAI/OpenAI Codex GPT-5-family runs, or "default" to inherit the standard runner behavior.',
+  "agents.entries.*.embeddedAgent.runBudget":
+    "Optional per-agent run-budget override. Fields merge over agents.defaults.embeddedAgent.runBudget; defining it also enables the default ceilings when no global run budget exists.",
+  "agents.entries.*.embeddedAgent.runBudget.maxModelTurns":
+    "Per-agent maximum model invocations for one run.",
+  "agents.entries.*.embeddedAgent.runBudget.maxToolCalls":
+    "Per-agent maximum server-side tool executions for one run.",
+  "agents.entries.*.embeddedAgent.runBudget.maxProviderAttempts":
+    "Per-agent maximum provider requests across configured model fallbacks for one run.",
+  "agents.entries.*.embeddedAgent.runBudget.maxOutputTokens":
+    "Per-agent maximum accumulated provider output tokens for one run.",
+  "agents.entries.*.embeddedAgent.runBudget.maxDurationSeconds":
+    "Per-agent maximum wall-clock duration for one run in seconds.",
   "agents.defaults.humanDelay.mode": 'Delay style for block replies ("off", "natural", "custom").',
   "agents.defaults.humanDelay.minMs": "Minimum delay in ms for custom humanDelay (default: 800).",
   "agents.defaults.humanDelay.maxMs": "Maximum delay in ms for custom humanDelay (default: 2500).",

@@ -18,8 +18,13 @@ import {
   clearAutoFallbackPrimaryProbeSelection,
   entryMatchesAutoFallbackPrimaryProbe,
   markAutoFallbackPrimaryProbe,
+  resolveAgentRunBudget,
   resolveEffectiveModelFallbacks,
 } from "../agent-scope.js";
+import {
+  applyRunBudgetEnvelope,
+  EmbeddedAgentRunBudgetController,
+} from "../embedded-agent-runner/run-budget.js";
 import {
   runEmbeddedAgentEntry,
   type EmbeddedAgentRunEntryTerminal,
@@ -56,7 +61,7 @@ import type { AgentCommandOpts } from "./types.js";
 const log = createSubsystemLogger("agents/agent-command");
 const MAX_LIVE_SWITCH_RETRIES = 5;
 
-export async function runEmbeddedAgentAttempt(params: {
+type RunEmbeddedAgentAttemptParams = {
   prepared: PreparedAgentCommandExecution;
   opts: AgentCommandOpts;
   sessionEntry?: SessionEntry;
@@ -67,7 +72,13 @@ export async function runEmbeddedAgentAttempt(params: {
   modelSelection: EmbeddedModelSelection;
   embeddedSessionState: EmbeddedSessionState;
   trackInternalModelRunTarget: (target: AgentRunSessionTarget | undefined) => void;
-}) {
+};
+
+type RunEmbeddedAgentAttemptInternalParams = RunEmbeddedAgentAttemptParams & {
+  runBudgetController?: EmbeddedAgentRunBudgetController;
+};
+
+async function runEmbeddedAgentAttemptInternal(params: RunEmbeddedAgentAttemptInternalParams) {
   const {
     cfg,
     body,
@@ -412,6 +423,7 @@ export async function runEmbeddedAgentAttempt(params: {
             runTimeoutOverrideMs,
             runId,
             lifecycleGeneration,
+            runBudgetController: params.runBudgetController,
             opts: params.opts,
             runContext,
             spawnedBy,
@@ -631,6 +643,40 @@ export async function runEmbeddedAgentAttempt(params: {
     lifecycle,
     terminal,
   };
+}
+
+export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptParams) {
+  const configuredBudget = resolveAgentRunBudget(
+    params.prepared.cfg,
+    params.prepared.sessionAgentId,
+  );
+  if (!configuredBudget) {
+    return await runEmbeddedAgentAttemptInternal(params);
+  }
+
+  const controller = new EmbeddedAgentRunBudgetController({
+    limits: {
+      ...configuredBudget,
+      maxDurationMs: Math.max(
+        1,
+        Math.min(configuredBudget.maxDurationMs, params.prepared.timeoutMs),
+      ),
+    },
+    callerAbortSignal: params.opts.abortSignal,
+  });
+  try {
+    const attempt = await runEmbeddedAgentAttemptInternal({
+      ...params,
+      opts: { ...params.opts, abortSignal: controller.signal },
+      runBudgetController: controller,
+    });
+    return {
+      ...attempt,
+      result: applyRunBudgetEnvelope(attempt.result, controller.complete()),
+    };
+  } finally {
+    controller.dispose();
+  }
 }
 
 export type EmbeddedAgentAttempt = Awaited<ReturnType<typeof runEmbeddedAgentAttempt>>;

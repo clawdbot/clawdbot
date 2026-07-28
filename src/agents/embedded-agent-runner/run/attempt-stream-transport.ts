@@ -21,6 +21,7 @@ import {
   type ProviderPromptState,
   wrapStreamFnWithProviderPromptState,
 } from "../provider-prompt-state.js";
+import { wrapStreamFnWithRunBudget } from "../run-budget.js";
 import {
   describeEmbeddedAgentStreamStrategy,
   resolveEmbeddedAgentApiKey,
@@ -113,7 +114,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     model: attempt.model,
     resolvedApiKey: transportApiKey,
   });
-  session.agent.streamFn = resolveEmbeddedAgentStreamFn({
+  const resolvedStreamFn = resolveEmbeddedAgentStreamFn({
     currentStreamFn: defaultSessionStreamFn,
     providerStreamFn,
     sessionId: attempt.sessionId,
@@ -125,6 +126,9 @@ export async function prepareEmbeddedAttemptTransport(input: {
     authProfileId: resolveAttemptStreamAuthProfileId(attempt),
     authStorage: attempt.authStorage,
   });
+  session.agent.streamFn = attempt.runBudgetController
+    ? wrapStreamFnWithRunBudget(resolvedStreamFn, attempt.runBudgetController)
+    : resolvedStreamFn;
   // Install inside provider/config wrappers so their full onPayload chain runs
   // before admission hashes the request body that the built-in transport sends.
   session.agent.streamFn = wrapStreamFnWithProviderPromptState({

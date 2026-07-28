@@ -1,5 +1,6 @@
 import type { AgentExecutionAuthBinding } from "../../execution-auth-binding.js";
 import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
+import type { EmbeddedAgentRunBudgetController } from "../run-budget.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 
 export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
@@ -9,6 +10,8 @@ export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
   preparedModelRuntimeMode?: "isolated-read-only";
   /** Ring-zero tool override, supplied only by the OpenClaw orchestrator. */
   systemAgentTool?: SystemAgentToolOptions;
+  /** Root run-budget controller shared by all retries and tool turns. */
+  runBudgetController?: EmbeddedAgentRunBudgetController;
 };
 
 export type RunEmbeddedAgentParamsWithSessionFile = RunEmbeddedAgentInternalParams & {

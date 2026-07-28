@@ -24,6 +24,20 @@ export type AgentContextInjection = "always" | "continuation-skip" | "never";
 export type OptionalBootstrapFileName = "SOUL.md" | "USER.md" | "HEARTBEAT.md" | "IDENTITY.md";
 /** Embedded runner behavior contract used by strict-agentic provider flows. */
 export type EmbeddedAgentExecutionContract = "default" | "strict-agentic";
+
+/** Hard per-run ceilings enforced by the embedded-agent loop owner. */
+export type EmbeddedAgentRunBudgetConfig = {
+  /** Maximum logical model invocations admitted for one run. */
+  maxModelTurns?: number;
+  /** Maximum tool executions admitted for one run. */
+  maxToolCalls?: number;
+  /** Maximum provider dispatches admitted for one run. */
+  maxProviderAttempts?: number;
+  /** Maximum cumulative provider-reported output tokens for one run. */
+  maxOutputTokens?: number;
+  /** Maximum wall-clock duration for one run, including admission waits. */
+  maxDurationSeconds?: number;
+};
 /** Prompt-only default for how strongly agents should delegate to sub-agents. */
 export type SubagentDelegationMode = "suggest" | "prefer";
 /** Image compression/detail preference used before sending image inputs to models. */
@@ -234,6 +248,8 @@ export type AgentDefaultsConfig = {
      * - strict-agentic: enable structured plan tracking and non-visible turn recovery on supported GPT-5 runs
      */
     executionContract?: EmbeddedAgentExecutionContract;
+    /** Optional hard ceilings shared by every attempt and tool turn in one run. */
+    runBudget?: EmbeddedAgentRunBudgetConfig;
   };
   /** Default thinking level when no /think directive is present. */
   thinkingDefault?: AgentThinkingLevel;

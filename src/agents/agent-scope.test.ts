@@ -19,6 +19,7 @@ import {
   resolveAgentSkillsFilter,
   resolveEffectiveModelFallbacks,
   resolveAgentModelFallbacksOverride,
+  resolveAgentRunBudget,
   resolveRunModelFallbacksOverride,
   resolveSubagentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
@@ -1216,6 +1217,44 @@ describe("resolveAgentIdsByWorkspacePath", () => {
       "ops",
       "main",
     ]);
+  });
+});
+
+describe("resolveAgentRunBudget", () => {
+  it("is opt-in and merges defaults, global settings, then agent overrides", () => {
+    expect(resolveAgentRunBudget({}, "analyzer")).toBeUndefined();
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          embeddedAgent: {
+            runBudget: {
+              maxModelTurns: 6,
+              maxDurationSeconds: 30,
+            },
+          },
+        },
+        list: [
+          {
+            id: "analyzer",
+            embeddedAgent: {
+              runBudget: {
+                maxToolCalls: 9,
+                maxDurationSeconds: 15,
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    expect(resolveAgentRunBudget(cfg, "analyzer")).toEqual({
+      maxModelTurns: 6,
+      maxToolCalls: 9,
+      maxProviderAttempts: 4,
+      maxOutputTokens: 12_000,
+      maxDurationMs: 15_000,
+    });
   });
 });
 

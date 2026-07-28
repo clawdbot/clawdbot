@@ -34,6 +34,11 @@ import { jsonResult, payloadTextResult } from "./tools/common.js";
 
 type AnyAgentTool = AgentTool;
 
+export type ToolExecutionGuard = {
+  signal: AbortSignal;
+  beforeDispatch: (input: { toolCallId: string; toolName: string }) => void;
+};
+
 type ToolExecuteArgsCurrent = [
   string,
   unknown,
@@ -330,6 +335,7 @@ export function isClientToolNameConflictError(err: unknown): err is Error {
 export function toToolDefinitions(
   tools: AnyAgentTool[],
   hookContext?: HookContext,
+  executionGuard?: ToolExecutionGuard,
 ): ToolDefinition[] {
   return tools.map((tool) => {
     const name = tool.name || "tool";
@@ -406,14 +412,24 @@ export function toToolDefinitions(
             }
             recordAdjustedParamsForToolCall(toolCallId, executeParams, hookContext?.runId);
           }
-          const rawResult = await tool.execute(toolCallId, executeParams, signal, onUpdate);
+          executionGuard?.beforeDispatch({ toolCallId, toolName: name });
+          const executionSignal =
+            signal && executionGuard && signal !== executionGuard.signal
+              ? AbortSignal.any([signal, executionGuard.signal])
+              : (signal ?? executionGuard?.signal);
+          const rawResult = await tool.execute(
+            toolCallId,
+            executeParams,
+            executionSignal,
+            onUpdate,
+          );
           const result = normalizeToolExecutionResult({
             toolName: normalizedName,
             result: rawResult,
           });
           return result;
         } catch (err) {
-          if (signal?.aborted) {
+          if (signal?.aborted || executionGuard?.signal.aborted) {
             throw err;
           }
           if (isBeforeToolCallBlockedError(err)) {

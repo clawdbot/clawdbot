@@ -61,6 +61,8 @@ import { runCliAgent } from "../cli-runner.js";
 import { hasClaudeLiveSessionForOwner } from "../cli-runner/claude-live-session.js";
 import { resolveCliRuntimeToolsAllow } from "../cli-runner/tool-policy.js";
 import { getCliSessionBinding } from "../cli-session.js";
+import type { EmbeddedAgentRunBudgetController } from "../embedded-agent-runner/run-budget.js";
+import type { RunEmbeddedAgentInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
@@ -480,6 +482,7 @@ export function runAgentAttempt(params: {
   runTimeoutOverrideMs?: number;
   runId: string;
   lifecycleGeneration: string;
+  runBudgetController?: EmbeddedAgentRunBudgetController;
   opts: AgentCommandOpts;
   runContext: ReturnType<typeof resolveAgentRunContext>;
   spawnedBy: string | undefined;
@@ -930,7 +933,7 @@ export function runAgentAttempt(params: {
     });
   }
 
-  const embeddedRunParams: Parameters<typeof runEmbeddedAgent>[0] = {
+  const embeddedRunParams: RunEmbeddedAgentInternalParams = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     sessionTarget: params.sessionTarget,
@@ -959,6 +962,7 @@ export function runAgentAttempt(params: {
     workspaceDir: params.workspaceDir,
     cwd: params.cwd,
     config: params.cfg,
+    runBudgetController: params.runBudgetController,
     agentHarnessId: embeddedAgentHarnessOverride,
     modelSelectionLocked: !isRawModelRun && params.sessionEntry?.modelSelectionLocked === true,
     agentHarnessRuntimeOverride: embeddedAgentHarnessOverride,

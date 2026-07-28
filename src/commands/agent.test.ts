@@ -144,6 +144,7 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
         sessionFile: params.sessionFile,
         workspaceDir: params.workspaceDir,
         config: params.cfg,
+        ...(params.runBudgetController ? { runBudgetController: params.runBudgetController } : {}),
         skillsSnapshot: params.skillsSnapshot,
         prompt: params.body,
         images: opts.images,
@@ -1276,6 +1277,83 @@ describe("agentCommand", () => {
         { provider: "openai", model: "gpt-4.1-mini" },
         { provider: "openai", model: "gpt-5.4" },
       ]);
+    });
+  });
+
+  it("shares one run-budget controller across configured model fallbacks", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions-run-budget.json");
+      mockConfig(home, store, {
+        model: {
+          primary: "openai/gpt-4.1-mini",
+          fallbacks: ["openai/gpt-5.4"],
+        },
+        models: {
+          "openai/gpt-4.1-mini": {},
+          "openai/gpt-5.4": {},
+        },
+        embeddedAgent: {
+          runBudget: {
+            maxModelTurns: 8,
+            maxToolCalls: 16,
+            maxProviderAttempts: 2,
+            maxOutputTokens: 12_000,
+            maxDurationSeconds: 60,
+          },
+        },
+      });
+      mockModelCatalogOnce([
+        { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
+        { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+      ]);
+
+      const controllers: Array<{
+        reserveModelInvocation(): void;
+        snapshot(): {
+          completed: boolean;
+          counters: { modelTurns: number; providerAttempts: number };
+        };
+      }> = [];
+      const reserveProviderAttempt = (params: unknown) => {
+        const controller = (
+          params as {
+            runBudgetController?: {
+              reserveModelInvocation(): void;
+              snapshot(): {
+                completed: boolean;
+                counters: { modelTurns: number; providerAttempts: number };
+              };
+            };
+          }
+        ).runBudgetController;
+        expect(controller).toBeDefined();
+        controller!.reserveModelInvocation();
+        controllers.push(controller!);
+      };
+      vi.mocked(runEmbeddedAgent)
+        .mockImplementationOnce(async (params) => {
+          reserveProviderAttempt(params);
+          throw Object.assign(new Error("rate limited"), { status: 429 });
+        })
+        .mockImplementationOnce(async (params) => {
+          reserveProviderAttempt(params);
+          return {
+            payloads: [{ text: "ok" }],
+            meta: {
+              durationMs: 5,
+              agentMeta: { sessionId: "session-budget", provider: "openai", model: "gpt-5.4" },
+            },
+          } as never;
+        });
+
+      await agentCommand({ message: "hi", to: "+1555" }, runtime);
+
+      expect(controllers).toHaveLength(2);
+      expect(controllers[1]).toBe(controllers[0]);
+      expect(controllers[0]?.snapshot()).toMatchObject({
+        completed: true,
+        counters: { modelTurns: 2, providerAttempts: 2 },
+      });
     });
   });
 

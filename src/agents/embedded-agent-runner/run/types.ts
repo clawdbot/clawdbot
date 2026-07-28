@@ -30,6 +30,7 @@ import type { AuthStorage, ModelRegistry } from "../../sessions/index.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import type { NormalizedUsage } from "../../usage.js";
 import type { EmbeddedRunReplayMetadata, EmbeddedRunReplayState } from "../replay-state.js";
+import type { EmbeddedAgentRunBudgetController } from "../run-budget.js";
 import type { EmbeddedRunLivenessState } from "../types.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
@@ -97,6 +98,8 @@ export type EmbeddedRunAttemptTrajectoryRecorder = {
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   /** Sticky operation identity used to suppress ordinary retry and hook policy. */
   operation?: EmbeddedRunAttemptOperation;
+  /** Root run-budget controller shared across fallback/profile attempts. */
+  runBudgetController?: EmbeddedAgentRunBudgetController;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   /** Active file-backed artifact target resolved by the run/session target seam. */
   sessionFile: string;
