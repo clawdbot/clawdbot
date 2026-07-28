@@ -2902,7 +2902,6 @@ describe("scripts/test-projects changed-target routing", () => {
       ["src/agents", "test/vitest/vitest.agents.config.ts"],
       ["src/auto-reply", "test/vitest/vitest.auto-reply.config.ts"],
       ["src/channels", "test/vitest/vitest.channels.config.ts"],
-      ["src/cli", "test/vitest/vitest.cli.config.ts"],
       ["src/config", "test/vitest/vitest.runtime-config.config.ts"],
       ["src/cron", "test/vitest/vitest.cron.config.ts"],
       ["src/daemon", "test/vitest/vitest.daemon.config.ts"],
@@ -2984,6 +2983,34 @@ describe("scripts/test-projects changed-target routing", () => {
         watchMode: false,
       },
     ]);
+  });
+
+  it("routes CLI process tests through their isolated project", () => {
+    expect(buildVitestRunPlans(["src/cli/help-exit.process.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.cli-process.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/cli/help-exit.process.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("adds the CLI process project for broad CLI targets", () => {
+    const plans = buildVitestRunPlans(["src/cli"]);
+
+    expect(plans.map((plan) => plan.config)).toEqual([
+      "test/vitest/vitest.unit-fast.config.ts",
+      "test/vitest/vitest.cli-process.config.ts",
+      "test/vitest/vitest.cli.config.ts",
+    ]);
+    expect(plans[1]?.includePatterns).toContain("src/cli/help-exit.process.test.ts");
+  });
+
+  it("rejects broad CLI watch targets that cross shared and process projects", () => {
+    expect(() => buildVitestRunPlans(["--watch", "src/cli"])).toThrow(
+      "watch mode with mixed test suites is not supported",
+    );
   });
 
   it("chunks broad shell helper globs after isolated targets", () => {
@@ -4383,10 +4410,13 @@ describe("scripts/test-projects full-suite sharding", () => {
     ]);
   });
 
-  it("covers Codex attempt client prewarming in full-suite routing", () => {
-    expect(
-      fullSuiteMatches.get("extensions/codex/src/app-server/run-attempt-client-prewarm.test.ts"),
-    ).toEqual(["test/vitest/vitest.extension-codex-app-server-attempt-light.config.ts"]);
+  it.each([
+    "extensions/codex/src/app-server/run-attempt-client-prewarm.test.ts",
+    "extensions/codex/src/app-server/run-attempt-connection.test.ts",
+  ])("covers Codex attempt lifecycle test %s in full-suite routing", (file) => {
+    expect(fullSuiteMatches.get(file)).toEqual([
+      "test/vitest/vitest.extension-codex-app-server-attempt-light.config.ts",
+    ]);
   });
 
   it("uses the global host worker budget for roomy local hosts", () => {
@@ -4775,6 +4805,7 @@ describe("scripts/test-projects full-suite sharding", () => {
       gatewayServerConfig,
       gatewayServerConfig,
       gatewayServerConfig,
+      "test/vitest/vitest.cli-process.config.ts",
       "test/vitest/vitest.cli.config.ts",
       "test/vitest/vitest.commands-light.config.ts",
       "test/vitest/vitest.commands.config.ts",

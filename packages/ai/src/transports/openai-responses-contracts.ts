@@ -6,8 +6,11 @@ import type {
   ResponseOutputMessage,
   ResponseReasoningItem,
 } from "openai/resources/responses/responses.js";
-import type { OpenAIApiReasoningEffort, OpenAIReasoningEffort } from "../internal/openai.js";
-import type { BaseOpenAIStreamOptions } from "./openai-transport-shared.js";
+import type { BaseOpenAIStreamOptions } from "../provider-options.js";
+import type {
+  OpenAIApiReasoningEffort,
+  OpenAIReasoningEffort,
+} from "../providers/openai-reasoning-effort.js";
 
 export const DEFAULT_AZURE_OPENAI_API_VERSION = "preview";
 export const OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT = " ";

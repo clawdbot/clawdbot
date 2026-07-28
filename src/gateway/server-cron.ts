@@ -453,6 +453,7 @@ export function buildGatewayCronService(params: {
   const terminalExitCompletionTokens = new Map<string, object>();
   let exitWatcherGeneration = 0;
   let exitWatcherMutationRevision = 0;
+  let exitWatchersStopped = false;
   let streamWatcherGeneration = 0;
   // Bumped when a direct watcher route begins; fences reconcile's async list
   // snapshot against mutations that commit inside the list await.
@@ -463,11 +464,15 @@ export function buildGatewayCronService(params: {
     const generation = exitWatcherGeneration;
     exitWatcherReconciliations += 1;
     try {
-      if (!exitWatchersRef.current) {
+      if (!exitWatchersRef.current || exitWatchersStopped) {
         return;
       }
       const result = await cron.list({ includeDisabled: true });
-      if (generation !== exitWatcherGeneration || revision !== exitWatcherMutationRevision) {
+      if (
+        exitWatchersStopped ||
+        generation !== exitWatcherGeneration ||
+        revision !== exitWatcherMutationRevision
+      ) {
         return;
       }
       const jobs: CronJob[] = Array.isArray(result) ? result : (result as { jobs: CronJob[] }).jobs;
@@ -1305,6 +1310,9 @@ export function buildGatewayCronService(params: {
     (exitWatchersRef.current?.activeJobIds().length ?? 0) +
     (streamWatchersRef.current?.activeJobIds().length ?? 0);
   const stopExitWatchers = () => {
+    // Late completion cleanup can request reconciliation after shutdown.
+    // Fence new requests before cancellation so stopped children cannot respawn.
+    exitWatchersStopped = true;
     exitWatcherGeneration += 1;
     exitWatchersRef.current?.cancelAll();
   };
@@ -1422,6 +1430,7 @@ export function buildGatewayCronService(params: {
     if (generation !== streamWatcherGeneration) {
       return;
     }
+    exitWatchersStopped = false;
     streamWatchersStopped = false;
     // A reload restart owns a fresh watcher lifecycle; the next stop must run.
     streamWatchersStopPromise = undefined;

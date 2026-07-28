@@ -233,7 +233,7 @@ export async function handleSessionHistoryHttpRequest(
         resolveSessionTranscriptCandidates(
           entry.sessionId,
           target.storePath,
-          entry.sessionFile,
+          undefined,
           target.agentId,
         )
           .map((candidate) => resolveTranscriptPathForComparison(candidate))

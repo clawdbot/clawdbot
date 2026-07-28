@@ -101,6 +101,43 @@ describe("Workboard session card lookup", () => {
     lease.release();
   });
 
+  it("matches the newest active card when a session is captured on multiple boards", async () => {
+    const { client } = createClient([
+      {
+        cards: [
+          card({
+            id: "card-old",
+            position: 1000,
+            updatedAt: 2,
+            metadata: { automation: { boardId: "ops" } },
+          }),
+          card({
+            id: "card-new",
+            position: 2000,
+            updatedAt: 3,
+            metadata: { automation: { boardId: "product" } },
+          }),
+        ],
+      },
+    ]);
+    const lease = acquireWorkboardSessionCardLookup(client);
+    const listener = vi.fn();
+    const unsubscribe = lease.subscribe("agent:main:workboard-card", listener);
+
+    await vi.waitFor(() =>
+      expect(listener).toHaveBeenCalledWith({
+        cardId: "card-new",
+        title: "Ship dashboard stitch",
+        status: "running",
+        boardId: "product",
+      }),
+    );
+    expect(listener).not.toHaveBeenCalledWith(expect.objectContaining({ cardId: "card-old" }));
+
+    unsubscribe();
+    lease.release();
+  });
+
   it("does not match or scan run history for an archived card", async () => {
     const { client, request } = createClient([
       {

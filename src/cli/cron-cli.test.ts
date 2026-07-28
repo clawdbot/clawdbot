@@ -289,9 +289,11 @@ async function runCronRunAndCaptureExit(params: {
   enqueued?: boolean;
   runId?: string;
   runStatus?: "ok" | "error" | "skipped";
+  runStatuses?: Array<"ok" | "error" | "skipped" | undefined>;
   args?: string[];
 }) {
   resetGatewayMock();
+  let runPollCount = 0;
   callGatewayFromCli.mockImplementation(
     async (method: string, _opts: unknown, callParams?: unknown) => {
       if (method === "cron.status") {
@@ -307,8 +309,10 @@ async function runCronRunAndCaptureExit(params: {
         };
       }
       if (method === "cron.runs") {
+        const runStatus = params.runStatuses?.[runPollCount] ?? params.runStatus;
+        runPollCount += 1;
         return {
-          entries: params.runStatus ? [{ status: params.runStatus }] : [],
+          entries: runStatus ? [{ status: runStatus }] : [],
         };
       }
       return { ok: true, params: callParams };
@@ -391,6 +395,107 @@ describe("cron cli", () => {
       expect(stdoutText()).toContain(`"status": "${status}"`);
     },
   );
+
+  it.each([
+    {
+      name: "bounds the default history RPC by the wait deadline",
+      waitTimeout: "1s",
+      rpcTimeout: undefined,
+      expectedEnqueueTimeout: "600000",
+      expectedMaxPollTimeoutMs: 1_000,
+    },
+    {
+      name: "preserves a shorter explicit history RPC timeout",
+      waitTimeout: "1s",
+      rpcTimeout: "5",
+      expectedEnqueueTimeout: "5",
+      expectedMaxPollTimeoutMs: 5,
+    },
+    {
+      name: "bounds a longer explicit history RPC by the wait deadline",
+      waitTimeout: "10ms",
+      rpcTimeout: "5000",
+      expectedEnqueueTimeout: "5000",
+      expectedMaxPollTimeoutMs: 10,
+    },
+    {
+      name: "keeps one immediate history poll for a zero wait deadline",
+      waitTimeout: "0ms",
+      rpcTimeout: undefined,
+      expectedEnqueueTimeout: "600000",
+      expectedMaxPollTimeoutMs: 1,
+    },
+  ])(
+    "$name",
+    async ({ waitTimeout, rpcTimeout, expectedEnqueueTimeout, expectedMaxPollTimeoutMs }) => {
+      const { calls, exitSpy, runOpts } = await runCronRunAndCaptureExit({
+        enqueued: true,
+        runId: "manual:job-1:123:0",
+        runStatus: "ok",
+        args: [
+          "cron",
+          "run",
+          "job-1",
+          "--wait",
+          "--wait-timeout",
+          waitTimeout,
+          "--poll-interval",
+          "1ms",
+          ...(rpcTimeout === undefined ? [] : ["--timeout", rpcTimeout]),
+        ],
+      });
+
+      const historyCalls = calls.filter(([method]) => method === "cron.runs");
+      const historyOptions = historyCalls[0]?.[1] as { timeout?: string } | undefined;
+      const pollTimeoutMs = Number(historyOptions?.timeout);
+
+      expect(exitSpy).toHaveBeenCalledWith(0);
+      expect(historyCalls).toHaveLength(1);
+      expect(runOpts.timeout).toBe(expectedEnqueueTimeout);
+      expect(Number.isSafeInteger(pollTimeoutMs)).toBe(true);
+      expect(pollTimeoutMs).toBeGreaterThan(0);
+      expect(pollTimeoutMs).toBeLessThanOrEqual(expectedMaxPollTimeoutMs);
+    },
+  );
+
+  it("reduces each history RPC timeout as the cron run wait budget elapses", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-27T12:00:00.000Z"));
+
+    const pendingRun = runCronRunAndCaptureExit({
+      enqueued: true,
+      runId: "manual:job-1:123:0",
+      runStatuses: [undefined, "ok"],
+      args: [
+        "cron",
+        "run",
+        "job-1",
+        "--wait",
+        "--wait-timeout",
+        "100ms",
+        "--poll-interval",
+        "25ms",
+      ],
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.runs")).toHaveLength(
+      1,
+    );
+    await vi.advanceTimersByTimeAsync(25);
+
+    const { calls, exitSpy, runOpts } = await pendingRun;
+    const pollTimeouts = calls
+      .filter(([method]) => method === "cron.runs")
+      .map(([, options]) => Number((options as { timeout?: string }).timeout));
+
+    expect(exitSpy).toHaveBeenCalledWith(0);
+    expect(runOpts.timeout).toBe("600000");
+    expect(pollTimeouts).toHaveLength(2);
+    expect(pollTimeouts[0]).toBeLessThanOrEqual(100);
+    expect(pollTimeouts[1]).toBeLessThanOrEqual(75);
+    expect(pollTimeouts[1]).toBeLessThan(pollTimeouts[0] ?? 0);
+  });
 
   it("rejects zero poll interval for cron run wait before enqueueing", async () => {
     await expectCronCommandExit([

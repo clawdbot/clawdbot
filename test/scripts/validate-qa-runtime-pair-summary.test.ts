@@ -224,14 +224,32 @@ describe("frozen QA runtime-pair summary validation", () => {
     );
   });
 
+  it.each(["311047822ecdde24e824d839ab105ef08f17be00", "c37af96b18776fecc9e24268f27fc89b563481bf"])(
+    "accepts the exact frozen core manifest for %s",
+    (targetSha) => {
+      const fixture = frozenCoreSummary();
+      expect(
+        validateQaRuntimePairSummary(fixture, {
+          requireExplicitGap: true,
+          targetSha,
+          lane: "core",
+        }),
+      ).toMatchObject({ skipped: 8 });
+    },
+  );
+
+  it("rejects an arbitrary target with otherwise identical frozen evidence", () => {
+    expect(() =>
+      validateQaRuntimePairSummary(frozenCoreSummary(), {
+        requireExplicitGap: true,
+        targetSha: "0000000000000000000000000000000000000000",
+        lane: "core",
+      }),
+    ).toThrow("trusted frozen-lane manifest");
+  });
+
   it("pins the exact frozen scenarios that may use the explicit gap exception", () => {
-    const options = {
-      requireExplicitGap: true,
-      targetSha: "311047822ecdde24e824d839ab105ef08f17be00",
-      lane: "core",
-    };
     const fixture = frozenCoreSummary();
-    expect(validateQaRuntimePairSummary(fixture, options)).toMatchObject({ skipped: 8 });
 
     const expectedGap = fixture.scenarios.find(
       (entry) => entry.runtimeParity.scenarioId === "runtime-tool-apply-patch",
@@ -248,9 +266,13 @@ describe("frozen QA runtime-pair summary validation", () => {
     unrelated.runtimeParity.cells.codex.status = "skip";
     unrelated.runtimeParity.cells.codex.details = "known-harness-gap exec: tracked";
 
-    expect(() => validateQaRuntimePairSummary(fixture, options)).toThrow(
-      "trusted frozen-lane manifest",
-    );
+    expect(() =>
+      validateQaRuntimePairSummary(fixture, {
+        requireExplicitGap: true,
+        targetSha: "c37af96b18776fecc9e24268f27fc89b563481bf",
+        lane: "core",
+      }),
+    ).toThrow("trusted frozen-lane manifest");
   });
 
   it("cross-checks generated report JSON and Markdown", () => {

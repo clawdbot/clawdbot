@@ -50,7 +50,13 @@ const runMock = vi.mocked(runWithModelFallback);
 const baseParams = {
   sessionId: "test-session",
   sessionKey: "agent:main:test-session",
-  sessionFile: "/tmp/test-session.jsonl",
+  sessionFile: "agent:main:test-session",
+  sessionTarget: {
+    agentId: "main",
+    sessionId: "test-session",
+    sessionKey: "agent:main:test-session",
+    storePath: "/tmp/sessions.json",
+  },
   workspaceDir: "/tmp",
 };
 

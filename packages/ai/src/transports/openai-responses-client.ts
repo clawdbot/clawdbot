@@ -1,18 +1,16 @@
 import { randomUUID } from "node:crypto";
 import type { AssistantMessage, Context, Model, StreamFn } from "@openclaw/llm-core";
 import OpenAI, { AzureOpenAI } from "openai";
+import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
-import {
-  isOpenAICompatibleAzureResponsesBaseUrl,
-  resolveAzureDeploymentNameFromMap,
-} from "../internal/openai.js";
+import { resolveAzureDeploymentNameFromMap } from "../providers/azure-deployment-map.js";
+import { isOpenAICompatibleAzureResponsesBaseUrl } from "../providers/azure-openai-responses-client-compat.js";
+import { createAssistantMessageEventStream } from "../utils/event-stream.js";
 import {
   createFirstStreamEventAbortController,
-  getEnvApiKey,
   getFirstStreamEventTimeoutHandler,
   getFirstStreamEventTimeoutMs,
-} from "../internal/runtime.js";
-import { createAssistantMessageEventStream } from "../utils/event-stream.js";
+} from "../utils/stream-first-event-timeout.js";
 import { buildGuardedModelFetch } from "./host-policy.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import { formatModelTransportDebugBaseUrl } from "./model-transport-url.js";

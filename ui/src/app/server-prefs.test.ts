@@ -40,7 +40,6 @@ describe("server pref extraction", () => {
           textScale: 125,
           sidebarLiveActivity: false,
           chatMessageMaxWidth: "82%",
-          showAdvancedSettings: true,
           sidebarEntries: ["route:usage", "session:agent:main:test", "route:usage", 7],
           bogus: true,
         }),
@@ -53,7 +52,6 @@ describe("server pref extraction", () => {
       locale: "de",
       chatShowThinking: false,
       chatSendShortcut: "modifier-enter",
-      showAdvancedSettings: true,
       sidebarEntries: ["route:usage", "session:agent:main:test"],
     });
   });
@@ -238,16 +236,9 @@ describe("changedServerUiPrefs", () => {
         textScale: 125,
         sidebarLiveActivity: false,
         chatMessageMaxWidth: "82%",
+        showAdvancedSettings: true,
       }),
     ).toBeNull();
-  });
-
-  it("syncs the advanced settings visibility preference", () => {
-    const previous = loadSettings();
-    expect(previous.showAdvancedSettings).toBe(false);
-    expect(changedServerUiPrefs(previous, { ...previous, showAdvancedSettings: true })).toEqual({
-      showAdvancedSettings: true,
-    });
   });
 
   it("syncs chat behavior prefs and pushes clearable resets as null", () => {

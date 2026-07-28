@@ -613,6 +613,23 @@ describe("doctor state integrity oauth dir checks", () => {
     );
   });
 
+  it("does not require JSONL files for canonical SQLite session rows", async () => {
+    const cfg: OpenClawConfig = {};
+    setupSessionState(cfg, process.env, process.env.HOME ?? "");
+    const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey: "agent:main:sqlite-only", storePath },
+      { sessionId: "sqlite-only-session", updatedAt: Date.now() },
+    );
+
+    await noteStateIntegrity(cfg, {
+      confirmRuntimeRepair: vi.fn(async () => false),
+      note: noteMock,
+    });
+
+    expect(stateIntegrityText()).not.toContain("recent sessions are missing transcripts");
+  });
+
   it("does not auto-archive orphan transcripts from non-interactive repair mode", async () => {
     const cfg: OpenClawConfig = {};
     setupSessionState(cfg, process.env, process.env.HOME ?? "");

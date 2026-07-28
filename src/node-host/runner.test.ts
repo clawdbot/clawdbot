@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   }>,
   mcpConfiguredServerCount: 0,
   mcpDescriptors: [] as Array<Record<string, unknown>>,
+  nodePluginTools: [] as Array<Record<string, unknown>>,
   nodeSkillDescriptors: [] as Array<Record<string, unknown>>,
   runtimeSteps: [] as string[],
   useFakeRuntime: false,
@@ -116,15 +117,7 @@ vi.mock("./plugin-node-host.js", () => ({
     return {
       commands: [...mocks.nodeHostCommands],
       caps: [...mocks.nodeHostCaps],
-      nodePluginTools: [
-        {
-          pluginId: "test-plugin",
-          name: "remote_echo",
-          description: "Echo from node host",
-          command: "test.echo",
-          parameters: { type: "object", properties: {} },
-        },
-      ],
+      nodePluginTools: [...mocks.nodePluginTools],
     };
   }),
   watchRegisteredNodeHostCommandAvailability: vi.fn((_context: unknown, onChange: () => void) => {
@@ -183,6 +176,15 @@ describe("runNodeHost", () => {
     mocks.capturedGatewayClients.length = 0;
     mocks.mcpConfiguredServerCount = 0;
     mocks.mcpDescriptors = [];
+    mocks.nodePluginTools = [
+      {
+        pluginId: "test-plugin",
+        name: "remote_echo",
+        description: "Echo from node host",
+        command: "test.echo",
+        parameters: { type: "object", properties: {} },
+      },
+    ];
     mocks.nodeSkillDescriptors = [];
     mocks.runtimeSteps = [];
     mocks.useFakeRuntime = false;
@@ -490,6 +492,44 @@ describe("runNodeHost", () => {
         },
       ],
     });
+  });
+
+  it("clears gateway plugin tools when the final node-hosted tool disappears", async () => {
+    mocks.startGatewayClientWhenEventLoopReady.mockResolvedValueOnce({
+      ready: true,
+      aborted: false,
+      elapsedMs: 0,
+    });
+    const processOnceSpy = vi.spyOn(process, "once");
+    const previousExitCode = process.exitCode;
+    try {
+      const running = runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 });
+      await vi.waitFor(() => expect(mocks.availabilityChanged).toBeDefined());
+      const client = mocks.capturedGatewayClients[0];
+      lastCapturedOptions()?.onHelloOk?.({
+        protocol: 1,
+        features: { methods: [], events: [] },
+      } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
+      expect(client?.request).toHaveBeenCalledWith("node.pluginTools.update", {
+        tools: [expect.objectContaining({ name: "remote_echo" })],
+      });
+
+      mocks.nodePluginTools = [];
+      mocks.availabilityChanged?.();
+
+      expect(client?.request).toHaveBeenLastCalledWith("node.pluginTools.update", { tools: [] });
+      const onSigterm = processOnceSpy.mock.calls.find(([event]) => event === "SIGTERM")?.[1];
+      onSigterm?.("SIGTERM");
+      await running;
+    } finally {
+      for (const [event, listener] of processOnceSpy.mock.calls) {
+        if ((event === "SIGINT" || event === "SIGTERM") && typeof listener === "function") {
+          process.off(event, listener);
+        }
+      }
+      process.exitCode = previousExitCode;
+      processOnceSpy.mockRestore();
+    }
   });
 
   it("publishes node-hosted skills after gateway hello succeeds", async () => {

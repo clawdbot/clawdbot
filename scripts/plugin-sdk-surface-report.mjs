@@ -188,7 +188,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +6: model-picker action/capability and authoritative session-apply contracts.
       // +1: logger file-transport flush for graceful shutdown drains.
       // +1: process-local sessions.changed plugin notification payload.
-      4739,
+      // +1: loopback-only host classifier for plugin local-machine boundaries.
+      4740,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -217,7 +218,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +3: focused CLI root-option parsers.
       // +1: authoritative model-picker session-apply operation.
       // +1: logger file-transport flush for graceful shutdown drains.
-      2868,
+      // +1: loopback-only host classifier for plugin local-machine boundaries.
+      2869,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

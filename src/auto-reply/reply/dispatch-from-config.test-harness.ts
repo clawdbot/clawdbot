@@ -477,6 +477,8 @@ export const describe0BeforeEach0 = () => {
   );
   mocks.routeReply.mockReset();
   mocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
+  mocks.tryFastApproveFromMessage.mockReset();
+  mocks.tryFastApproveFromMessage.mockResolvedValue({ handled: false });
   acpMocks.listAcpSessionEntries.mockReset().mockResolvedValue([]);
   diagnosticMocks.logMessageQueued.mockClear();
   diagnosticMocks.logMessageProcessed.mockClear();

@@ -841,6 +841,20 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Several: most specific");
   });
 
+  it("switches skills access guidance under code mode", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      codeModeActive: true,
+      skillsPrompt:
+        "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
+    });
+
+    expect(prompt).toContain(
+      'Scan <available_skills>. Clear match: use `skills.read("<name>")` inside `exec`; obey.',
+    );
+    expect(prompt).not.toContain("read exact <location> with `read`");
+  });
+
   it("instructs models to use skill_workshop only when the tool is available", () => {
     const section = buildSkillWorkshopPromptSection();
     expect(section).toEqual([

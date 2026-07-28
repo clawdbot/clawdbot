@@ -111,6 +111,33 @@ function formatQaErrorForLog(error: unknown): string {
   return escaped;
 }
 
+function normalizeQaToolCallSnapshotValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(normalizeQaToolCallSnapshotValue);
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+        .map(([key, entry]) => [key, normalizeQaToolCallSnapshotValue(entry)]),
+    );
+  }
+  return value;
+}
+
+function serializeQaToolCallSnapshot(toolCalls: QaBusToolCall[]): string {
+  // Call order is chronological trace data; nested argument keys are the
+  // unordered surface that must be canonicalized before comparison.
+  return JSON.stringify(
+    toolCalls.map((toolCall) => ({
+      name: toolCall.name,
+      ...(toolCall.arguments
+        ? { arguments: normalizeQaToolCallSnapshotValue(toolCall.arguments) }
+        : {}),
+    })),
+  );
+}
+
 function createQaReplyPreview(params: {
   account: ResolvedQaChannelAccount;
   inbound: QaBusMessage;
@@ -119,6 +146,8 @@ function createQaReplyPreview(params: {
 }) {
   let messageId: string | null = null;
   let currentText = "";
+  let lastDurableText = "";
+  let lastDurableToolCallSnapshot = "[]";
   let pending = Promise.resolve();
 
   const write = (text: string) => {
@@ -170,6 +199,7 @@ function createQaReplyPreview(params: {
     if (!text.trim()) {
       return;
     }
+    const toolCallSnapshot = serializeQaToolCallSnapshot(params.toolCalls);
     await sendQaBusMessage({
       baseUrl: params.account.baseUrl,
       accountId: params.account.accountId,
@@ -181,12 +211,26 @@ function createQaReplyPreview(params: {
       replyToId: params.inbound.id,
       toolCalls: params.toolCalls,
     });
+    lastDurableText = text;
+    lastDurableToolCallSnapshot = toolCallSnapshot;
   };
 
   return {
     clear,
     async deliver(text: string, kind: string) {
       await pending;
+      // Core may close a streamed block with an identical final payload.
+      // The block is already durable, so posting the final again duplicates the reply.
+      if (
+        kind === "final" &&
+        text === lastDurableText &&
+        serializeQaToolCallSnapshot(params.toolCalls) === lastDurableToolCallSnapshot
+      ) {
+        // Count equality is not record equality: a same-count final with changed
+        // tool records must still be delivered.
+        await clear();
+        return;
+      }
       if (kind === "final" && messageId && params.toolCalls.length === 0) {
         await write(text);
         return;

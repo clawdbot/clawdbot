@@ -12,7 +12,12 @@ import {
 } from "../routing/session-key.js";
 import type { ChatLog } from "./components/chat-log.js";
 import type { TuiAgentsList, TuiBackend, TuiSessionMutationResult } from "./tui-backend.js";
-import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
+import {
+  asString,
+  extractTextFromMessage,
+  formatTuiErrorMessage,
+  isCommandMessage,
+} from "./tui-formatters.js";
 import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
 import * as submit from "./tui-submit-state.js";
 import type { SessionInfo, TuiHistoryLoadResult, TuiOptions, TuiStateAccess } from "./tui-types.js";
@@ -197,7 +202,7 @@ export function createSessionActions(context: SessionActionContext) {
       const result = await client.listAgents();
       applyAgentsResult(result);
     } catch (err) {
-      chatLog.addSystem(`agents list failed: ${String(err)}`);
+      chatLog.addSystem(`agents list failed: ${formatTuiErrorMessage(err)}`);
     }
   };
 
@@ -393,7 +398,7 @@ export function createSessionActions(context: SessionActionContext) {
       if (!isCurrentRefresh()) {
         return;
       }
-      chatLog.addSystem(`sessions list failed: ${String(err)}`);
+      chatLog.addSystem(`sessions list failed: ${formatTuiErrorMessage(err)}`);
     }
   };
 
@@ -627,7 +632,7 @@ export function createSessionActions(context: SessionActionContext) {
       if (!isCurrentLoad()) {
         return { loaded: false };
       }
-      chatLog.addSystem(`history failed: ${String(err)}`);
+      chatLog.addSystem(`history failed: ${formatTuiErrorMessage(err)}`);
       tui.requestRender(true);
       return { loaded: false };
     }
@@ -707,7 +712,7 @@ export function createSessionActions(context: SessionActionContext) {
       if (!isCurrentSessionSelection(selection)) {
         return;
       }
-      chatLog.addSystem(`abort failed: ${String(err)}`);
+      chatLog.addSystem(`abort failed: ${formatTuiErrorMessage(err)}`);
       setActivityStatus("abort failed");
     }
     tui.requestRender();

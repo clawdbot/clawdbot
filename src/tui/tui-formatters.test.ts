@@ -8,6 +8,7 @@ import {
   extractThinkingFromMessage,
   formatModelFooter,
   formatGoalFooter,
+  formatTuiErrorMessage,
   isCommandMessage,
   sanitizeRenderableText,
 } from "./tui-formatters.js";
@@ -359,6 +360,20 @@ describe("isCommandMessage", () => {
     expect(isCommandMessage({ command: true })).toBe(true);
     expect(isCommandMessage({ command: false })).toBe(false);
     expect(isCommandMessage({})).toBe(false);
+  });
+});
+
+describe("formatTuiErrorMessage", () => {
+  it("redacts and sanitizes terminal escapes in nested error causes", () => {
+    const secret = "sk-abcdefghijklmnopqrstuv";
+    const cause = new Error(`\u001b[31mAuthorization: Bearer ${secret}\u001b[0m`);
+
+    const formatted = formatTuiErrorMessage(new Error("gateway down", { cause }));
+
+    expect(formatted).toContain("gateway down");
+    expect(formatted).toContain("Authorization: Bearer");
+    expect(formatted).not.toContain(secret);
+    expect(formatted).not.toContain("\u001b");
   });
 });
 

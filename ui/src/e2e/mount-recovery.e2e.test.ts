@@ -49,10 +49,16 @@ describeControlUiE2e("Control UI mount recovery E2E", () => {
       if (request.resourceType() === "document") {
         documentRequests += 1;
         const response = await route.fetch();
-        const body = (await response.text()).replace(
-          'data-openclaw-mount-timeout-ms="12000"',
-          'data-openclaw-mount-timeout-ms="50"',
-        );
+        const documentHtml = await response.text();
+        // Accelerate only the broken document. The recovered Vite module needs the
+        // real mount deadline so a loaded CI runner cannot race its own recovery.
+        const body =
+          documentRequests === 1
+            ? documentHtml.replace(
+                'data-openclaw-mount-timeout-ms="12000"',
+                'data-openclaw-mount-timeout-ms="250"',
+              )
+            : documentHtml;
         await route.fulfill({ response, body });
         return;
       }

@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import type { CurrentInboundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { resolveSessionTranscriptPath } from "../../config/sessions/paths.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { TypingMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -328,8 +327,9 @@ export async function admitFollowupTurn(params: {
           resolveAdmittedRunSessionFile({
             agentId: run.agentId,
             sessionId: operation.sessionId,
+            sessionKey: replySessionKey,
             storePath: params.defaults.storePath,
-          }) ?? resolveSessionTranscriptPath(operation.sessionId, run.agentId),
+          }) ?? run.sessionFile,
         cliSessionBindingFacts: undefined,
         autoFallbackPrimaryProbe: undefined,
         modelSelectionLocked: false,
@@ -392,7 +392,7 @@ export async function admitFollowupTurn(params: {
           resolveAdmittedRunSessionFile({
             agentId: run.agentId,
             sessionId: operation.sessionId,
-            sessionFile: activeEntry.sessionFile,
+            sessionKey: replySessionKey,
             storePath: params.defaults.storePath,
           }) ?? run.sessionFile,
         modelSelectionLocked: activeEntry.modelSelectionLocked === true,
@@ -487,9 +487,9 @@ export async function admitFollowupTurn(params: {
               resolveAdmittedRunSessionFile({
                 agentId: turn.queued.run.agentId,
                 sessionId: entry.sessionId,
-                sessionFile: entry.sessionFile,
+                sessionKey: replySessionKey,
                 storePath: params.defaults.storePath,
-              }) ?? resolveSessionTranscriptPath(entry.sessionId, turn.queued.run.agentId),
+              }) ?? turn.queued.run.sessionFile,
             cliSessionBindingFacts: undefined,
             autoFallbackPrimaryProbe: undefined,
             modelSelectionLocked: entry.modelSelectionLocked === true,

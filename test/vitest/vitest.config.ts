@@ -28,6 +28,7 @@ export const rootVitestProjects = [
   "test/vitest/vitest.acp.config.ts",
   "test/vitest/vitest.runtime-config.config.ts",
   "test/vitest/vitest.secrets.config.ts",
+  "test/vitest/vitest.cli-process.config.ts",
   "test/vitest/vitest.cli.config.ts",
   "test/vitest/vitest.commands-light.config.ts",
   "test/vitest/vitest.commands.config.ts",

@@ -339,7 +339,7 @@ describe("runReplyAgent auto-compaction token update", () => {
     await fs.mkdir(path.dirname(params.storePath), { recursive: true });
     await replaceSessionEntry(
       { storePath: params.storePath, sessionKey: params.sessionKey },
-      params.entry as SessionEntry,
+      params.entry as unknown as SessionEntry,
     );
   }
 

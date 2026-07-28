@@ -266,7 +266,12 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
         try {
           await appendSessionAudit({
             cfg,
-            target: { agentId: target.agentId, entry: result.entry, storePath },
+            target: {
+              agentId: target.agentId,
+              entry: result.entry,
+              sessionKey: target.canonicalKey ?? key,
+              storePath,
+            },
             text: `${action} by ${archiveActor.label ?? archiveActor.id}`,
             now: Date.now(),
           });

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import {
   openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -33,7 +34,7 @@ import {
 } from "./session-accessor.sqlite-read.js";
 import {
   cloneSessionEntry,
-  formatSqliteSessionMarkerForScope,
+  formatSqliteSessionReferenceForScope,
   resolveSqliteScope,
   resolveSqliteTranscriptArchiveDirectory,
   resolveSqliteTranscriptScope,
@@ -55,6 +56,7 @@ import {
   redactTranscriptMessageForStorage,
   replaceSqliteTranscriptEventsInTransaction,
 } from "./session-accessor.sqlite-transcript-store.js";
+import type { SessionTranscriptWriteTransactionContext } from "./session-accessor.types.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import type {
   SessionTranscriptTurnExpectedState,
@@ -242,7 +244,7 @@ export async function importSqliteSessionRows(
       const importedEntry = {
         ...params.entry,
         ...(preservedHarnessId ? { agentHarnessId: preservedHarnessId } : {}),
-        sessionFile: formatSqliteSessionMarkerForScope({
+        sessionFile: formatSqliteSessionReferenceForScope({
           ...resolved,
           sessionId: params.entry.sessionId,
         }),
@@ -353,7 +355,6 @@ export async function appendSqliteExpectedSessionTranscriptTurn(
     const messages = await selectAppendableSqliteTranscriptTurnMessages(
       {
         agentId: resolved.agentId,
-        sessionFile: options.sessionFile,
         sessionId: options.expectedSessionId,
         sessionKey: resolved.sessionKey,
         ...(scope.storePath ? { storePath: scope.storePath } : {}),
@@ -560,12 +561,21 @@ export async function withSqliteTranscriptWriteLock<T>(
 /** Runs synchronous transcript work under one writer queue and SQLite transaction. */
 export async function withSqliteTranscriptWriteTransaction<T>(
   scope: SessionTranscriptWriteScope,
-  run: (context: { sessionFile: string }) => T,
+  run: (context: SessionTranscriptWriteTransactionContext) => T,
 ): Promise<T> {
   const resolved = resolveSqliteTranscriptScope(scope);
   return await runExclusiveSqliteSessionWrite(resolved, async () =>
     runOpenClawAgentWriteTransaction(
-      () => run({ sessionFile: formatSqliteSessionMarkerForScope(resolved) }),
+      () =>
+        run({
+          agentId: resolved.agentId,
+          sessionId: resolved.sessionId,
+          sessionKey: resolved.sessionKey,
+          storePath:
+            resolved.path ??
+            scope.storePath ??
+            resolveOpenClawAgentSqlitePath({ agentId: resolved.agentId, env: resolved.env }),
+        }),
       toDatabaseOptions(resolved),
       { operationLabel: "session.transcript.batch" },
     ),

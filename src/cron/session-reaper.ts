@@ -135,8 +135,6 @@ export async function sweepCronRunSessions(params: {
         agentId: params.agentId,
         storePath,
         removals,
-        preserveActiveWork: true,
-        restrictArchivedTranscriptsToStoreDir: true,
         ...(archiveRetentionMs == null
           ? {}
           : {
