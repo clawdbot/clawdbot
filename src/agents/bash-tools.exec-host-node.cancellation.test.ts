@@ -44,6 +44,7 @@ vi.mock("../infra/exec-auto-review.js", () => ({
 vi.mock("./bash-tools.exec-approval-request.js", () => ({
   buildExecApprovalRequesterContext: vi.fn(() => ({})),
   buildExecApprovalTurnSourceContext: vi.fn(() => ({})),
+  isExecApprovalRunAbortedError: vi.fn(() => false),
   registerExecApprovalRequestForHostOrThrow: mocks.registerNodeApproval,
 }));
 

@@ -23,6 +23,7 @@ import { tail } from "./bash-process-registry.js";
 import {
   buildExecApprovalRequesterContext,
   buildExecApprovalTurnSourceContext,
+  isExecApprovalRunAbortedError,
   registerExecApprovalRequestForHostOrThrow,
 } from "./bash-tools.exec-approval-request.js";
 import {
@@ -527,18 +528,43 @@ export async function executeNodeHostCommand(
           turnSourceAccountId: params.turnSourceAccountId,
           turnSourceThreadId: params.turnSourceThreadId,
         });
-
-        void (async () => {
-          const decision = await execHostShared.resolveApprovalDecisionOrUndefined({
-            approvalId,
-            preResolvedDecision,
-            onFailure: () =>
-              void execHostShared.sendExecApprovalFollowupResult(
+        const sendApprovalRequestFailedFollowup = (): Promise<void> =>
+          Promise.resolve(
+            execHostShared.sendExecApprovalFollowupResult(
+              followupTarget,
+              `Exec denied (node=${target.nodeId} id=${approvalId}, approval-request-failed): ${params.command}`,
+            ),
+          ).catch(() => {
+            if (params.signal?.aborted) {
+              return;
+            }
+            return Promise.resolve(
+              execHostShared.sendExecApprovalFollowupResult(
                 followupTarget,
                 `Exec denied (node=${target.nodeId} id=${approvalId}, approval-request-failed): ${params.command}`,
               ),
+            ).catch(() => undefined);
           });
-          if (decision === undefined) {
+        let nodeInvocationStarted = false;
+        let nodeInvocationCompleted = false;
+
+        void (async () => {
+          let decision: string | null | undefined;
+          try {
+            decision = await execHostShared.resolveApprovalDecisionOrUndefined({
+              approvalId,
+              preResolvedDecision,
+              onFailure: () => void sendApprovalRequestFailedFollowup(),
+            });
+          } catch (error) {
+            // Detached run cancellation has no awaiting tool caller to catch it.
+            if (isExecApprovalRunAbortedError(error)) {
+              return;
+            }
+            await sendApprovalRequestFailedFollowup();
+            return;
+          }
+          if (decision === undefined || params.signal?.aborted) {
             return;
           }
 
@@ -598,7 +624,11 @@ export async function executeNodeHostCommand(
               authority: approvalSource ? "ask-fallback" : "human-approval",
               fallbackPolicy: currentFallback ?? undefined,
             });
+            if (params.signal?.aborted) {
+              return;
+            }
             // Approved follow-up invocations need approval scopes because they mutate remote node state.
+            nodeInvocationStarted = true;
             const raw = await callGatewayTool(
               "node.invoke",
               { timeoutMs: target.invokeTimeoutMs },
@@ -625,8 +655,12 @@ export async function executeNodeHostCommand(
                 notifyOnExit: params.notifyOnExit,
                 systemRunPlan: prepared.plan,
               }),
-              { scopes: APPROVED_NODE_INVOKE_SCOPES },
+              {
+                scopes: APPROVED_NODE_INVOKE_SCOPES,
+                ...(params.signal ? { signal: params.signal } : {}),
+              },
             );
+            nodeInvocationCompleted = true;
             const payload =
               raw?.payload && typeof raw.payload === "object"
                 ? (raw.payload as {
@@ -647,12 +681,25 @@ export async function executeNodeHostCommand(
               : `Exec finished (node=${target.nodeId} id=${approvalId}, ${exitLabel})`;
             await execHostShared.sendExecApprovalFollowupResult(followupTarget, summary);
           } catch {
+            if (params.signal?.aborted || nodeInvocationCompleted) {
+              return;
+            }
             await execHostShared.sendExecApprovalFollowupResult(
               followupTarget,
               `Exec denied (node=${target.nodeId} id=${approvalId}, invoke-failed): ${params.command}`,
             );
           }
-        })();
+        })().catch((error: unknown) => {
+          // Once dispatch starts, a delivery failure cannot mean execution was denied.
+          if (
+            nodeInvocationStarted ||
+            params.signal?.aborted ||
+            isExecApprovalRunAbortedError(error)
+          ) {
+            return;
+          }
+          return sendApprovalRequestFailedFollowup();
+        });
 
         return execHostShared.buildExecApprovalPendingToolResult({
           host: "node",
