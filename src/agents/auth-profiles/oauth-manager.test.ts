@@ -252,6 +252,41 @@ describe("OAuthManagerRefreshError", () => {
 });
 
 describe("createOAuthManager", () => {
+  it("accepts an unchanged expired credential as provider-owned refresh policy", async () => {
+    await withOAuthTempRoot("oauth-manager-unchanged-refresh-", async (tempRoot) => {
+      const agentDir = path.join(tempRoot, "agents", "main", "agent");
+      await fs.mkdir(agentDir, { recursive: true });
+      const profileId = "github-copilot:default";
+      const credential = createCredential({
+        provider: "github-copilot",
+        access: "expired-copilot-access",
+        refresh: "durable-github-token",
+        expires: 1,
+      });
+      const refreshCredential = vi.fn(async () => credential);
+      const manager = createOAuthManager({
+        buildApiKey: async (_provider, value) => value.refresh,
+        refreshCredential,
+        readBootstrapCredential: () => null,
+        isRefreshTokenReusedError: () => false,
+      });
+      const persistedStore: AuthProfileStore = {
+        version: 1,
+        profiles: { [profileId]: credential },
+      };
+      saveAuthProfileStore(persistedStore, agentDir, { filterExternalAuthProfiles: false });
+      const store = ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+        allowKeychainPrompt: false,
+      });
+
+      await expect(
+        manager.resolveOAuthAccess({ store, profileId, credential, agentDir }),
+      ).resolves.toEqual({ apiKey: "durable-github-token", credential });
+      expect(refreshCredential).toHaveBeenCalledOnce();
+      expect(store.profiles[profileId]).toEqual(credential);
+    });
+  });
+
   it("passes active config to OAuth API-key formatting", async () => {
     const profileId = "openai:oauth";
     const credential = createCredential({ expires: Date.now() + 10 * 60_000 });

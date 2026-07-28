@@ -342,10 +342,8 @@ async function pollForGitHubAccessToken(
   throw new Error("Device flow timed out");
 }
 
-/**
- * Refresh GitHub Copilot token
- */
-async function refreshGitHubCopilotToken(
+/** Exchange a GitHub credential for the legacy Copilot access token used during login setup. */
+export async function exchangeGitHubTokenForCopilotAccess(
   refreshToken: string,
   enterpriseDomain?: string,
   options: CopilotRequestOptions = {},
@@ -543,7 +541,7 @@ async function loginGitHubCopilot(options: {
     device.expiresAt,
     options.signal,
   );
-  const credentials = await refreshGitHubCopilotToken(
+  const credentials = await exchangeGitHubTokenForCopilotAccess(
     githubAccessToken,
     enterpriseDomain ?? undefined,
   );
@@ -568,8 +566,10 @@ export const githubCopilotOAuthProvider: OAuthProviderInterface = {
   },
 
   async refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
-    const creds = credentials as CopilotCredentials;
-    return refreshGitHubCopilotToken(creds.refresh, creds.enterpriseUrl);
+    // `expires` belongs to the legacy exchanged Copilot token. Runtime auth now
+    // validates and sends the durable GitHub credential, so expiry must not
+    // force upgraded profiles back through the retired exchange.
+    return credentials;
   },
 
   getApiKey(credentials: OAuthCredentials): string {

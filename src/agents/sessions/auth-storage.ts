@@ -732,9 +732,19 @@ export class AuthStorage {
           return { result: null };
         }
 
+        const refreshedCredential: OAuthCredential = {
+          type: "oauth",
+          ...refreshed.newCredentials,
+        };
+        if (isDeepStrictEqual(cred, refreshedCredential)) {
+          // A provider can keep a durable source credential even when a legacy
+          // access token expired. Avoid rewriting an intentionally unchanged
+          // profile while still returning the provider-formatted API key.
+          return { result: refreshed };
+        }
         const merged: AuthStorageData = {
           ...currentData,
-          [providerId]: { type: "oauth", ...refreshed.newCredentials },
+          [providerId]: refreshedCredential,
         };
         this.data = merged;
         this.loadError = null;

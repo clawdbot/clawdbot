@@ -2,16 +2,14 @@
 import { getEventListeners } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Model } from "../../types.js";
-import { githubCopilotOAuthProvider } from "./github-copilot.js";
+import {
+  exchangeGitHubTokenForCopilotAccess,
+  githubCopilotOAuthProvider,
+} from "./github-copilot.js";
 import type { OAuthCredentials } from "./types.js";
 
 async function refreshThroughGitHubCopilotProvider(refreshToken: string, enterpriseUrl?: string) {
-  return await githubCopilotOAuthProvider.refreshToken({
-    access: "expired-access-token",
-    refresh: refreshToken,
-    expires: 0,
-    enterpriseUrl,
-  } as OAuthCredentials);
+  return await exchangeGitHubTokenForCopilotAccess(refreshToken, enterpriseUrl);
 }
 
 function startGitHubCopilotLogin(enterpriseUrl = "", signal?: AbortSignal) {
@@ -297,6 +295,15 @@ describe("GitHub Copilot OAuth model routing", () => {
 
   it("exposes the durable GitHub token to provider runtime auth", () => {
     expect(githubCopilotOAuthProvider.getApiKey(credential({}))).toBe("refresh-token");
+  });
+
+  it("does not exchange an expired legacy access token during runtime resolution", async () => {
+    const expired = credential({ expires: 1 });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(githubCopilotOAuthProvider.refreshToken(expired)).resolves.toBe(expired);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("drops github-copilot models for an unsupported persisted enterprise domain", () => {
