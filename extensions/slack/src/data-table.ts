@@ -57,6 +57,9 @@ function countCharacters(value: string): number {
 }
 
 function readRichTextLeaf(record: Record<string, unknown>): string {
+  if (record.type === "text" && typeof record.text === "string") {
+    return record.text;
+  }
   const text = readNonEmptyString(record.text);
   if (text) {
     return text;
@@ -91,7 +94,7 @@ function readRichTextLeaf(record: Record<string, unknown>): string {
   }
 }
 
-function readRichTextElements(value: unknown): string {
+function readRichTextElements(value: unknown, separator = ""): string {
   if (!Array.isArray(value)) {
     return "";
   }
@@ -102,7 +105,10 @@ function readRichTextElements(value: unknown): string {
       continue;
     }
     if (Array.isArray(element.elements)) {
-      const rendered = readRichTextElements(element.elements);
+      const rendered = readRichTextElements(
+        element.elements,
+        element.type === "rich_text_list" ? "\n" : "",
+      );
       if (rendered) {
         parts.push(rendered);
       }
@@ -113,7 +119,55 @@ function readRichTextElements(value: unknown): string {
       parts.push(rendered);
     }
   }
-  return parts.join("");
+  return parts.join(separator);
+}
+
+function readSlackBasicTableCell(value: unknown): string {
+  const cell = asRecord(value);
+  if (!cell) {
+    return "";
+  }
+  if (cell.type === "raw_text") {
+    return typeof cell.text === "string" ? cell.text : "";
+  }
+  if (cell.type === "raw_number") {
+    if (typeof cell.text === "string" && cell.text.length > 0) {
+      return cell.text;
+    }
+    if (typeof cell.value === "number" && Number.isFinite(cell.value)) {
+      return String(cell.value);
+    }
+    return typeof cell.value === "string" ? cell.value : "";
+  }
+  return cell.type === "rich_text" ? readRichTextElements(cell.elements, "\n") : "";
+}
+
+function parseSlackBasicTableRows(value: unknown): string[][] | undefined {
+  const block = asRecord(value);
+  if (block?.type !== "table" || !Array.isArray(block.rows)) {
+    return undefined;
+  }
+  if (block.rows.length < 1 || block.rows.length > SLACK_DATA_TABLE_ROWS_MAX) {
+    return undefined;
+  }
+  let characterCount = 0;
+  const rows: string[][] = [];
+  for (const rawRow of block.rows) {
+    if (
+      !Array.isArray(rawRow) ||
+      rawRow.length < 1 ||
+      rawRow.length > SLACK_DATA_TABLE_COLUMNS_MAX
+    ) {
+      return undefined;
+    }
+    const row = rawRow.map(readSlackBasicTableCell);
+    characterCount += row.reduce((total, cell) => total + countCharacters(cell), 0);
+    if (characterCount > SLACK_DATA_TABLE_CELL_CHARACTERS_MAX) {
+      return undefined;
+    }
+    rows.push(row);
+  }
+  return rows.some((row) => row.some((cell) => cell.length > 0)) ? rows : undefined;
 }
 
 function readSlackDataTableCell(value: unknown, allowRichText: boolean): string | undefined {
@@ -319,6 +373,28 @@ function escapeCompactFallbackCell(value: string): string {
     .replaceAll("\t", "\\t")
     .replaceAll("\r", "\\r")
     .replaceAll("\n", "\\n");
+}
+
+function escapeSlackBasicTableCell(value: string, mrkdwnSafe: boolean): string {
+  const escaped = mrkdwnSafe ? escapeSlackMrkdwn(value) : value.replaceAll("\\", "\\\\");
+  return escaped.replaceAll("\t", "\\t").replaceAll("\r", "\\r").replaceAll("\n", "\\n");
+}
+
+function renderSlackBasicTableRows(value: unknown, mrkdwnSafe: boolean): string | undefined {
+  const rows = parseSlackBasicTableRows(value);
+  return rows
+    ?.map((row) => row.map((cell) => escapeSlackBasicTableCell(cell, mrkdwnSafe)).join("\t"))
+    .join("\n");
+}
+
+/** Render Slack's inbound `table` block as ordered, delimiter-safe TSV. */
+export function renderSlackTableFallbackText(value: unknown): string | undefined {
+  return renderSlackBasicTableRows(value, false);
+}
+
+/** Render Slack's inbound `table` block without activating mrkdwn control tokens. */
+export function renderSlackTableMrkdwnFallbackText(value: unknown): string | undefined {
+  return renderSlackBasicTableRows(value, true);
 }
 
 /** Render each native table cell once for bounded, formatting-disabled delivery. */

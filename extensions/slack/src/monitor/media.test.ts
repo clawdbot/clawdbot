@@ -1163,6 +1163,52 @@ describe("resolveSlackThreadHistory", () => {
     ]);
   });
 
+  it("keeps attachment table rows with top-level text in thread history", async () => {
+    const replies = vi.fn().mockResolvedValueOnce({
+      messages: [
+        {
+          text: "Please check these.",
+          user: "U1",
+          ts: "1.000",
+          attachments: [
+            {
+              fallback: "[no preview available]",
+              blocks: [
+                {
+                  type: "table",
+                  rows: [
+                    [
+                      { type: "raw_text", text: "ID" },
+                      { type: "raw_text", text: "Status" },
+                    ],
+                    [
+                      { type: "raw_number", value: 12345 },
+                      { type: "raw_text", text: "enabled" },
+                    ],
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      response_metadata: { next_cursor: "" },
+    });
+    const client = {
+      conversations: { replies },
+    } as unknown as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
+
+    const result = await resolveSlackThreadHistory({
+      channelId: "C1",
+      threadTs: "1.000",
+      client,
+      limit: 10,
+    });
+
+    expect(result[0]?.text).toBe("Please check these.\nID\tStatus\n12345\tenabled");
+    expect(result[0]?.text).not.toContain("[no preview available]");
+  });
+
   it("returns empty when limit is zero without calling Slack API", async () => {
     const replies = vi.fn();
     const client = {

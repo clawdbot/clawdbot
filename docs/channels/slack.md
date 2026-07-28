@@ -1693,6 +1693,13 @@ text from valid raw `data_table` cells, while malformed custom blocks may
 degrade to their caption or general Block Kit fallback. Portable agent, CLI,
 and plugin output should use `presentation`.
 
+Slack clients can also deliver pasted spreadsheet content as a legacy `table`
+block in the message's top-level blocks or attachments. OpenClaw renders those
+inbound cells as delimiter-safe TSV for live agent input, thread context, and
+Slack `read` actions. Only native table blocks are admitted from ordinary
+attachments; link-unfurl and other non-forwarded attachment text remains
+excluded.
+
 ## Plugin-owned modal submissions
 
 Slack plugins that register an interactive handler can also receive modal
