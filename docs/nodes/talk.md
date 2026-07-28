@@ -95,12 +95,30 @@ Supported keys: `voice` / `voice_id` / `voiceId`, `model` / `model_id` / `modelI
 }
 ```
 
-OpenAI browser and iOS WebRTC Talk use Platform credentials in this order:
-the configured realtime API key, an `openai` API-key profile, then
-`OPENAI_API_KEY`. ChatGPT/Codex OAuth authenticates the subscription Codex
-backend, not the public OpenAI Realtime API, and does not configure Talk,
-Voice Call, or Discord realtime voice. Configure a Platform API key even when
-agent turns use Codex OAuth.
+OpenAI browser WebRTC Talk supports native GPT-Live through
+`https://api.openai.com/v1/live`. Set `talk.realtime.model` to
+`gpt-live-1-codex` (recommended) or `gpt-live-1-boulder-alpha`; `gpt-live-1`
+and `gpt-live-1-mini` are not valid on this route. GPT-Live prefers a ChatGPT
+OAuth subscription profile and falls back to Platform API-key auth, whose
+`/v1/live` access is currently
+[waitlist-gated](https://openai.com/form/gpt-live-1-in-the-api/).
+
+GPT-Live accepts `alloy`, `ash`, `ballad`, `cedar`, `coral`, `echo`, `marin`,
+`sage`, `shimmer`, and `verse`. A `403 Voice session access denied` response is
+overloaded: an invalid voice returns the same response. The legacy
+`chatgpt.com` backend route also returns `403`; OpenClaw uses the native
+`api.openai.com/v1/live` route instead.
+
+GPT-Live is limited to browser Talk WebRTC sessions. Telephony, Voice Call,
+Gateway relay, provider WebSocket transports, iOS, and Android are unsupported.
+The Gateway owns the authenticated sideband and routes delegated work through
+the configured OpenClaw agent; the browser receives neither the OAuth token nor
+a Platform API key.
+
+For GA `gpt-realtime-*` browser and iOS WebRTC sessions, Platform credentials
+remain required in this order: the configured realtime API key, an `openai`
+API-key profile, then `OPENAI_API_KEY`. ChatGPT OAuth does not configure those
+GA sessions, Voice Call, Gateway relay, or Discord realtime voice.
 
 | Key                                      | Default                                    | Notes                                                                                                                                                                                                                                                                      |
 | ---------------------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -118,7 +136,7 @@ agent turns use Codex OAuth.
 | `consultFastMode`                        | unset                                      | Fast-mode override for realtime `openclaw_agent_consult` calls.                                                                                                                                                                                                            |
 | `realtime.provider`                      | -                                          | `openai` for WebRTC, `google` for provider WebSocket, or a bridge-only provider through Gateway relay.                                                                                                                                                                     |
 | `realtime.providers.<id>`                | -                                          | Provider-owned realtime config. Browsers receive only ephemeral/constrained session credentials, never a standard API key.                                                                                                                                                 |
-| `realtime.providers.openai.speakerVoice` | `alloy`                                    | Built-in OpenAI Realtime voice id (the older `voice` key still works but is deprecated). Current `gpt-realtime-2.1` voices: `alloy`, `ash`, `ballad`, `cedar`, `coral`, `echo`, `marin`, `sage`, `shimmer`, `verse`; `marin` and `cedar` are recommended for best quality. |
+| `realtime.providers.openai.speakerVoice` | `alloy` for GA; `marin` for GPT-Live       | Built-in OpenAI Realtime voice id (the older `voice` key still works but is deprecated). Current `gpt-realtime-2.1` and GPT-Live voices: `alloy`, `ash`, `ballad`, `cedar`, `coral`, `echo`, `marin`, `sage`, `shimmer`, `verse`; `marin` and `cedar` are recommended for best quality. |
 | `realtime.transport`                     | -                                          | `webrtc`: client-owned OpenAI WebRTC on iOS and in the browser. `provider-websocket`: browser-owned, stays on Gateway relay on iOS. `gateway-relay`: keeps provider audio on the Gateway; Android uses realtime only with this transport.                                  |
 | `realtime.brain`                         | -                                          | `agent-consult` routes realtime tool calls through Gateway policy; `direct-tools` is legacy direct-tool compatibility; `none` is for transcription/external orchestration.                                                                                                 |
 | `realtime.consultRouting`                | -                                          | `provider-direct` preserves the provider's direct reply when it skips `openclaw_agent_consult`; `force-agent-consult` routes finalized user transcripts through OpenClaw instead.                                                                                          |
