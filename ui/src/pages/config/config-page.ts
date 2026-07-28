@@ -58,6 +58,7 @@ import {
   buildSessionObserverTogglePatch,
   buildSessionObserverUtilityModelPatch,
 } from "./session-observer-settings.ts";
+import { SETTINGS_SEARCH_TARGETS } from "./settings-targets.ts";
 import {
   createConfigViewState,
   renderConfig,
@@ -89,8 +90,8 @@ type ConfigPageSetting =
 // settings-search links predating the move must land on the new home.
 const MOVED_TARGET_ROUTES: Record<string, { routeId: RouteId; hash: string }> = {
   "config:settings-general-model": {
-    routeId: "model-providers",
-    hash: "#settings-model-behavior",
+    routeId: SETTINGS_SEARCH_TARGETS.modelBehavior.routeId,
+    hash: SETTINGS_SEARCH_TARGETS.modelBehavior.hash,
   },
 };
 
