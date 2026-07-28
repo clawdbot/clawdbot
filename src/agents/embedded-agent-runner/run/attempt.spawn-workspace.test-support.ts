@@ -564,13 +564,19 @@ vi.mock("../tool-schema-runtime.js", () => ({
   normalizeProviderToolSchemas: ({ tools }: { tools: unknown[] }) => tools,
 }));
 
-vi.mock("../../session-write-lock.js", () => ({
-  acquireSessionWriteLock: (params: Parameters<AcquireSessionWriteLockFn>[0]) =>
-    hoisted.acquireSessionWriteLockMock(params),
-  resolveSessionWriteLockAcquireTimeoutMs: () => 60000,
-  resolveSessionWriteLockOptions: () => ({ timeoutMs: 60000, staleMs: 1_800_000, maxHoldMs: 1 }),
-  resolveSessionLockMaxHoldFromTimeout: () => 1,
-}));
+vi.mock("../../session-write-lock.js", async () => {
+  const { resolveSessionWriteLockTargetKey } = await vi.importActual<
+    typeof import("../../session-write-lock.js")
+  >("../../session-write-lock.js");
+  return {
+    acquireSessionWriteLock: (params: Parameters<AcquireSessionWriteLockFn>[0]) =>
+      hoisted.acquireSessionWriteLockMock(params),
+    resolveSessionWriteLockAcquireTimeoutMs: () => 60000,
+    resolveSessionWriteLockOptions: () => ({ timeoutMs: 60000, staleMs: 1_800_000, maxHoldMs: 1 }),
+    resolveSessionLockMaxHoldFromTimeout: () => 1,
+    resolveSessionWriteLockTargetKey,
+  };
+});
 
 vi.mock("../tool-result-context-guard.js", async () => {
   const actual = await vi.importActual<typeof import("../tool-result-context-guard.js")>(
@@ -1324,10 +1330,8 @@ export async function createContextEngineAttemptRunner(params: {
   const { maintain: rawMaintain, ...contextEngineRest } = params.contextEngine;
   const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ctx-engine-workspace-"));
   const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ctx-engine-agent-"));
-  const sessionFile = path.join(workspaceDir, "session.jsonl");
   const sessionStore = path.join(workspaceDir, "sessions.json");
   params.tempPaths.push(workspaceDir, agentDir);
-  await fs.writeFile(sessionFile, "", "utf8");
   const seedMessages: AgentMessage[] =
     params.sessionMessages ?? ([{ role: "user", content: "seed", timestamp: 1 }] as AgentMessage[]);
   const infoId = params.contextEngine.info?.id ?? "test-context-engine";
@@ -1380,7 +1384,13 @@ export async function createContextEngineAttemptRunner(params: {
     )({
       sessionId: "embedded-session",
       sessionKey: params.sessionKey,
-      sessionFile,
+      sessionFile: params.sessionKey,
+      sessionTarget: {
+        agentId: "main",
+        sessionId: "embedded-session",
+        sessionKey: params.sessionKey,
+        storePath: sessionStore,
+      },
       workspaceDir,
       agentDir,
       config: { session: { store: sessionStore } },

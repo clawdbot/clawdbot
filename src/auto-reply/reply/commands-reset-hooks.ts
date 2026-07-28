@@ -1,12 +1,13 @@
-import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 // Emits reset hooks and cleanup work around session reset commands.
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { selectSessionTranscriptLeafControlledPath } from "../../config/sessions/transcript-tree.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { DEFAULT_AGENT_ID, parseAgentSessionKey } from "../../routing/session-key.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -83,7 +84,9 @@ export async function emitResetCommandHooks(params: {
   workspaceDir: string;
 }): Promise<{ routedReply: boolean }> {
   const hookAgentId =
-    parseAgentSessionKey(params.sessionKey)?.agentId ?? params.agentId ?? DEFAULT_AGENT_ID;
+    parseAgentSessionKey(params.sessionKey)?.agentId ??
+    params.agentId ??
+    resolveDefaultAgentId(params.cfg);
   const hookStorePath =
     hookAgentId && params.storePath
       ? resolveSessionStorePathForScope({
