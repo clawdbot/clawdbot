@@ -186,7 +186,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +4: focused CLI root-option constants and parsers.
       // +6: model-picker action/capability and authoritative session-apply contracts.
       // +1: logger file-transport flush for graceful shutdown drains.
-      4738,
+      // +1: process-local sessions.changed plugin notification payload.
+      4739,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

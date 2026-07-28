@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import type { OpenClawPluginGatewayEvents, PluginRuntime } from "openclaw/plugin-sdk/core";
 import type {
   SessionDiscussionInfo,
   SessionDiscussionProvider,
@@ -50,12 +50,16 @@ import {
 } from "./service-open.js";
 
 const RECONCILE_INTERVAL_MS = 60_000;
+const RECONCILE_DEBOUNCE_MS = 250;
+const RECONCILE_RETRY_MS = 1_000;
+const RECONCILE_RETRY_MAX_MS = 60_000;
 const CHANNEL_NAME_MUTATION_ATTEMPTS = 4;
 
 type DiscussionServiceOptions = {
   clientFactory?: (account: ResolvedClickClackAccount) => ClickClackClient;
   installationId?: string;
   bindingGenerationFactory?: () => string;
+  gatewayEvents?: Pick<OpenClawPluginGatewayEvents, "onSessionsChanged">;
   startTimer?: boolean;
 };
 
@@ -89,9 +93,21 @@ export class ClickClackDiscussionService {
   readonly #bindingGenerationFactory: () => string;
   readonly #timersEnabled: boolean;
   readonly #sessionLocks = new Map<string, Promise<unknown>>();
+  readonly #reconcileDebounceTimers = new Map<
+    string,
+    { fireAt: number; timer: ReturnType<typeof setTimeout> }
+  >();
+  readonly #reconcileRetryState = new Map<string, { delayMs: number; notBefore: number }>();
+  readonly #reconcileInFlight = new Set<string>();
+  readonly #reconcileFollowUps = new Set<string>();
   #channelMutationLock: Promise<unknown> = Promise.resolve();
   #timer: ReturnType<typeof setInterval> | undefined;
   #reconcileAllPromise: Promise<void> | undefined;
+  #unsubscribeSessionsChanged: (() => void) | undefined;
+  #closed = false;
+  // Bumped by cleanup() and bindGatewayEvents(); scheduler callbacks from a
+  // previous activation must not mutate the current activation's bookkeeping.
+  #activationGeneration = 0;
 
   constructor(runtime: PluginRuntime, options: DiscussionServiceOptions = {}) {
     this.#runtime = runtime;
@@ -107,6 +123,32 @@ export class ClickClackDiscussionService {
       info: async ({ sessionKey }) => await this.info(sessionKey),
       open: async ({ sessionKey }) => await this.open(sessionKey),
     };
+    // Activation (event subscription + catch-up reconciles) belongs to the
+    // registered service lifecycle via bindGatewayEvents; construction alone
+    // must not touch remote channels. Tests may inject events for immediacy.
+    if (options.gatewayEvents) {
+      this.bindGatewayEvents(options.gatewayEvents);
+    }
+    if (this.#timersEnabled) {
+      this.#ensureTimer();
+    }
+  }
+
+  bindGatewayEvents(
+    gatewayEvents: Pick<OpenClawPluginGatewayEvents, "onSessionsChanged"> | undefined,
+  ): void {
+    // Service (re)start reactivates regardless of capability: a broadcaster-less
+    // runtime must still recover its fallback poll after a stop/start cycle.
+    // Only cleanup() closes the service.
+    this.#unsubscribeSessionsChanged?.();
+    this.#closed = false;
+    this.#activationGeneration += 1;
+    this.#unsubscribeSessionsChanged = gatewayEvents?.onSessionsChanged((event) => {
+      this.#scheduleReconcile(event.sessionKey);
+    });
+    for (const sessionKey of this.#listReconcileSessionKeys()) {
+      this.#scheduleReconcile(sessionKey, 0);
+    }
     if (this.#timersEnabled) {
       this.#ensureTimer();
     }
@@ -174,37 +216,51 @@ export class ClickClackDiscussionService {
           }
         }
       }
-      const binding = await openClickClackDiscussionBinding({
-        runtime: this.#runtime,
-        store: this.#store,
-        account,
-        clientFactory: this.#clientFactory,
-        installationId: this.#installationId,
-        bindingGenerationFactory: this.#bindingGenerationFactory,
-        sessionKey,
-        ensureTimer: () => this.#ensureTimer(),
-        reconcilePendingOpen: async (pending) =>
-          await this.#reconcilePendingOpen(pending, { allowRetry: false }),
-        withChannelMutationLock: async (run) => await this.#withChannelMutationLock(run),
-        finalizePendingBinding: (key, nextBinding) =>
-          this.#finalizePendingBinding(key, nextBinding),
-        warn: (message) => this.#logger().warn(message),
-      });
+      let binding: ClickClackDiscussionBinding | undefined;
+      try {
+        binding = await openClickClackDiscussionBinding({
+          runtime: this.#runtime,
+          store: this.#store,
+          account,
+          clientFactory: this.#clientFactory,
+          installationId: this.#installationId,
+          bindingGenerationFactory: this.#bindingGenerationFactory,
+          sessionKey,
+          ensureTimer: () => this.#ensureTimer(),
+          reconcilePendingOpen: async (pending) =>
+            await this.#reconcilePendingOpen(pending, { allowRetry: false }),
+          withChannelMutationLock: async (run) => await this.#withChannelMutationLock(run),
+          finalizePendingBinding: (key, nextBinding) =>
+            this.#finalizePendingBinding(key, nextBinding),
+          warn: (message) => this.#logger().warn(message),
+        });
+      } finally {
+        this.#ensureTimer();
+      }
       if (!binding) {
         return { state: "available" };
       }
-      this.#ensureTimer();
       return discussionInfoForBinding(binding, account);
     });
   }
 
   async reconcile(sessionKey: string): Promise<void> {
-    await this.#withSessionLock(sessionKey, async () => {
-      const binding = this.#store.get(sessionKey);
-      if (binding) {
-        await this.#reconcileBinding(sessionKey, binding);
+    try {
+      await this.#withSessionLock(sessionKey, async () => {
+        const binding = this.#store.get(sessionKey);
+        if (binding) {
+          await this.#reconcileBinding(sessionKey, binding);
+        }
+      });
+      const pending = listPendingDiscussionOpens(this.#runtime).find(
+        (candidate) => candidate.sessionKey === sessionKey,
+      );
+      if (pending) {
+        await this.#reconcilePendingOpen(pending);
       }
-    });
+    } finally {
+      this.#ensureTimer();
+    }
   }
 
   async reconcileAll(): Promise<void> {
@@ -212,20 +268,11 @@ export class ClickClackDiscussionService {
       return await this.#reconcileAllPromise;
     }
     this.#reconcileAllPromise = (async () => {
-      for (const { sessionKey } of this.#store.entries()) {
+      for (const sessionKey of this.#listReconcileSessionKeys()) {
         try {
           await this.reconcile(sessionKey);
         } catch (error) {
           this.#logger().warn(`discussion reconcile failed for ${sessionKey}: ${String(error)}`);
-        }
-      }
-      for (const pending of listPendingDiscussionOpens(this.#runtime)) {
-        try {
-          await this.#reconcilePendingOpen(pending);
-        } catch (error) {
-          this.#logger().warn(
-            `discussion pending-open reconcile failed for ${pending.sessionKey}: ${String(error)}`,
-          );
         }
       }
     })().finally(() => {
@@ -285,6 +332,17 @@ export class ClickClackDiscussionService {
   }
 
   cleanup(): void {
+    this.#closed = true;
+    this.#activationGeneration += 1;
+    this.#unsubscribeSessionsChanged?.();
+    this.#unsubscribeSessionsChanged = undefined;
+    for (const scheduled of this.#reconcileDebounceTimers.values()) {
+      clearTimeout(scheduled.timer);
+    }
+    this.#reconcileDebounceTimers.clear();
+    this.#reconcileRetryState.clear();
+    this.#reconcileInFlight.clear();
+    this.#reconcileFollowUps.clear();
     if (this.#timer) {
       clearInterval(this.#timer);
       this.#timer = undefined;
@@ -607,33 +665,122 @@ export class ClickClackDiscussionService {
   }
 
   #ensureTimer(): void {
-    if (
-      !this.#timersEnabled ||
-      this.#timer ||
-      (this.#store.entries().length === 0 && listPendingDiscussionOpens(this.#runtime).length === 0)
-    ) {
+    const hasPendingOpens = listPendingDiscussionOpens(this.#runtime).length > 0;
+    // Without a gateway-event subscription (no broadcaster in this process),
+    // bindings fall back to the interval poll or renames would never reconcile.
+    const needsBindingPoll =
+      this.#unsubscribeSessionsChanged === undefined && this.#store.entries().length > 0;
+    if (this.#closed || (!hasPendingOpens && !needsBindingPoll)) {
+      if (this.#timer) {
+        clearInterval(this.#timer);
+        this.#timer = undefined;
+      }
       return;
     }
-    // The plugin event facade does not expose sessions.changed, and gateway.request
-    // has no subscriber connection to receive it. Reconcile only while bindings
-    // or ambiguous creates exist, at a coarse cadence, so this is not a hot poll.
+    if (!this.#timersEnabled || this.#timer) {
+      return;
+    }
+    // Session changes drive normal binding reconciliation through gateway events.
+    // Only ambiguous creates still need time-based retries while their durable
+    // pending-open record exists.
     this.#timer = setInterval(() => {
       void this.reconcileAll()
         .catch((error: unknown) => {
           this.#logger().warn(`discussion reconcile pass failed: ${String(error)}`);
         })
         .finally(() => {
-          if (
-            this.#store.entries().length === 0 &&
-            listPendingDiscussionOpens(this.#runtime).length === 0 &&
-            this.#timer
-          ) {
-            clearInterval(this.#timer);
-            this.#timer = undefined;
-          }
+          this.#ensureTimer();
         });
     }, RECONCILE_INTERVAL_MS);
     this.#timer.unref?.();
+  }
+
+  #scheduleReconcile(sessionKey: string, delayMs = RECONCILE_DEBOUNCE_MS): void {
+    const hasBinding = this.#store.get(sessionKey) !== undefined;
+    const hasPendingOpen = listPendingDiscussionOpens(this.#runtime).some(
+      (pending) => pending.sessionKey === sessionKey,
+    );
+    if (this.#closed || (!hasBinding && !hasPendingOpen)) {
+      return;
+    }
+    // Events landing while a reconcile runs are coalesced into one follow-up
+    // scheduled after settlement, so an in-flight failure can impose its
+    // backoff floor before the next attempt is timed.
+    if (this.#reconcileInFlight.has(sessionKey)) {
+      this.#reconcileFollowUps.add(sessionKey);
+      return;
+    }
+    // A failed reconcile sets a not-before floor with growing backoff; bursts of
+    // sessions.changed events may pull a run earlier than the debounce asks for,
+    // but never below that floor, so event traffic cannot hammer a failing server.
+    const retry = this.#reconcileRetryState.get(sessionKey);
+    const fireAt = Math.max(Date.now() + delayMs, retry?.notBefore ?? 0);
+    const existing = this.#reconcileDebounceTimers.get(sessionKey);
+    if (existing) {
+      if (existing.fireAt <= fireAt) {
+        return;
+      }
+      clearTimeout(existing.timer);
+    }
+    const generation = this.#activationGeneration;
+    const timer = setTimeout(
+      () => {
+        // A cleanup()/bindGatewayEvents() cycle supersedes this activation; a
+        // stale run must not start work or mutate the new activation's
+        // in-flight/follow-up bookkeeping from its settle callbacks.
+        if (generation !== this.#activationGeneration) {
+          return;
+        }
+        this.#reconcileDebounceTimers.delete(sessionKey);
+        this.#reconcileInFlight.add(sessionKey);
+        void this.reconcile(sessionKey)
+          .then(
+            () => {
+              if (generation !== this.#activationGeneration) {
+                return;
+              }
+              this.#reconcileRetryState.delete(sessionKey);
+            },
+            (error: unknown) => {
+              if (this.#closed || generation !== this.#activationGeneration) {
+                return;
+              }
+              const previous = this.#reconcileRetryState.get(sessionKey);
+              const nextRetryMs = Math.min(
+                previous === undefined ? RECONCILE_RETRY_MS : previous.delayMs * 2,
+                RECONCILE_RETRY_MAX_MS,
+              );
+              this.#reconcileRetryState.set(sessionKey, {
+                delayMs: nextRetryMs,
+                notBefore: Date.now() + nextRetryMs,
+              });
+              this.#logger().warn(
+                `discussion event reconcile failed for ${sessionKey}; retrying in ${nextRetryMs}ms: ${String(error)}`,
+              );
+              this.#reconcileFollowUps.add(sessionKey);
+            },
+          )
+          .finally(() => {
+            if (generation !== this.#activationGeneration) {
+              return;
+            }
+            this.#reconcileInFlight.delete(sessionKey);
+            if (this.#reconcileFollowUps.delete(sessionKey)) {
+              this.#scheduleReconcile(sessionKey);
+            }
+          });
+      },
+      Math.max(fireAt - Date.now(), 0),
+    );
+    timer.unref?.();
+    this.#reconcileDebounceTimers.set(sessionKey, { fireAt, timer });
+  }
+
+  #listReconcileSessionKeys(): Set<string> {
+    return new Set([
+      ...this.#store.entries().map(({ sessionKey }) => sessionKey),
+      ...listPendingDiscussionOpens(this.#runtime).map(({ sessionKey }) => sessionKey),
+    ]);
   }
 
   #logger() {
