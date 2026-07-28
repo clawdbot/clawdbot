@@ -43,11 +43,9 @@ function shouldIgnoreReadinessFailure(
   // restartPending the account stays red instead of hiding dead inbound.
   const restartableReason =
     health.reason === "not-running" || health.reason === "ingress-unavailable";
-  return (
-    restartableReason &&
-    accountSnapshot.restartPending === true &&
-    accountSnapshot.running !== true
-  );
+  const inRestartHandoff =
+    accountSnapshot.restartPending === true && accountSnapshot.running !== true;
+  return restartableReason && inRestartHandoff;
 }
 
 /** Create a cached readiness checker over channel runtime health. */
