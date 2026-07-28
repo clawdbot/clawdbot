@@ -128,7 +128,7 @@ export const GatewayConfigSchema = z
         identityScopes: z.record(z.string().min(1), z.array(OperatorScopeSchema)).optional(),
         rateLimit: z
           .strictObject({
-            maxAttempts: z.number().optional(),
+            maxAttempts: z.number().int().positive().optional(),
             windowMs: z.number().optional(),
             lockoutMs: z.number().optional(),
             exemptLoopback: z.boolean().optional(),
