@@ -9,6 +9,7 @@ import {
 } from "../agents/tool-fs-policy.js";
 import { resolveDeliveryQueueMediaDir, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { expandHomePrefix } from "../infra/home-dir.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { resolveConfigDir } from "../utils.js";
 import { resolveLocalMediaPath } from "./local-media-path.js";
@@ -58,6 +59,29 @@ export function getDefaultMediaLocalRoots(): readonly string[] {
   return buildMediaLocalRoots(resolveStateDir(), resolveConfigDir());
 }
 
+/** Normalizes configured media roots; skips empty / unresolved `~` prefixes. */
+function appendConfiguredMediaLocalRoots(
+  roots: string[],
+  configuredRoots: readonly string[] | undefined,
+): string[] {
+  for (const rawRoot of configuredRoots ?? []) {
+    const trimmedRoot = normalizeOptionalString(rawRoot);
+    if (!trimmedRoot) {
+      continue;
+    }
+    const expanded = trimmedRoot.startsWith("~") ? expandHomePrefix(trimmedRoot) : trimmedRoot;
+    // expandHomePrefix leaves `~` intact when home is unknown — do not trust `<cwd>/~/…`.
+    if (expanded.startsWith("~")) {
+      continue;
+    }
+    const normalizedRoot = path.resolve(expanded);
+    if (!roots.includes(normalizedRoot)) {
+      roots.push(normalizedRoot);
+    }
+  }
+  return roots;
+}
+
 /** Adds the active agent workspace to the default media roots without exposing all agent state. */
 export function getAgentScopedMediaLocalRoots(
   cfg: OpenClawConfig,
@@ -68,6 +92,7 @@ export function getAgentScopedMediaLocalRoots(
   const roots = buildMediaLocalRoots(stateDir, resolveConfigDir()).filter(
     (root) => !sessionWorkspaceDir || root !== path.join(path.resolve(stateDir), "workspace"),
   );
+  appendConfiguredMediaLocalRoots(roots, cfg.agents?.defaults?.mediaLocalRoots);
   const normalizedAgentId = normalizeOptionalString(agentId);
   if (!normalizedAgentId) {
     return roots;

@@ -195,6 +195,11 @@ export const AgentDefaultsSchema = z
     // 0 = unlimited run budget; stream liveness watchdogs still apply.
     timeoutSeconds: z.number().int().nonnegative().optional(),
     mediaMaxMb: z.number().positive().optional(),
+    /**
+     * Extra absolute (or `~/…`) directories outbound MEDIA/local-file delivery may read.
+     * Merged into the shared agent-scoped media-root allowlist used by all channels.
+     */
+    mediaLocalRoots: z.array(z.string().trim().min(1)).optional(),
     imageMaxDimensionPx: z.number().int().positive().optional(),
     imageQuality: z.enum(["auto", "efficient", "balanced", "high"]).optional(),
     typingIntervalSeconds: z.number().int().positive().optional(),

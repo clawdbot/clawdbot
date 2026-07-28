@@ -117,6 +117,44 @@ describe("local media roots", () => {
     });
   });
 
+  it("merges agents.defaults.mediaLocalRoots into agent-scoped outbound roots", () => {
+    const stateDir = path.join("/tmp", "openclaw-configured-media-roots-state");
+    const extraRoot =
+      process.platform === "win32" ? "C:\\data\\snapshots" : "/data/snapshots";
+    const roots = withStateDir(stateDir, () =>
+      getAgentScopedMediaLocalRoots(
+        {
+          agents: {
+            defaults: {
+              mediaLocalRoots: [extraRoot, `${extraRoot}/`],
+            },
+          },
+        },
+        "ops",
+      ),
+    );
+    expectNormalizedRootsContain(roots, [extraRoot, path.join(stateDir, "workspace-ops")]);
+  });
+
+  it("expands ~/ mediaLocalRoots when home is available", () => {
+    const stateDir = path.join("/tmp", "openclaw-configured-media-roots-home");
+    const homeDir =
+      process.platform === "win32" ? "C:\\Users\\media-test" : "/Users/media-test";
+    const roots = withEnv({ OPENCLAW_STATE_DIR: stateDir, HOME: homeDir }, () =>
+      getAgentScopedMediaLocalRoots(
+        {
+          agents: {
+            defaults: {
+              mediaLocalRoots: ["~/captures"],
+            },
+          },
+        },
+        "ops",
+      ),
+    );
+    expectNormalizedRootsContain(roots, [path.join(homeDir, "captures")]);
+  });
+
   it("adds concrete parent roots for local media sources without widening to filesystem root", () => {
     const picturesDir =
       process.platform === "win32" ? "C:\\Users\\peter\\Pictures" : "/Users/peter/Pictures";
