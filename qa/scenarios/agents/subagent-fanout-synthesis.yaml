@@ -93,6 +93,9 @@ flow:
                           - set: prompt
                             value:
                               expr: "`Subagent fanout synthesis check: delegate exactly two bounded subagents sequentially using sessions_spawn, not ACP.\nFanout mock phase namespace: ${sessionKey}\nFirst spawn exactly one child with label ${alphaLabel} and task: verify that \\`AGENTS.md\\` exists and reply exactly \\`ok\\` if it does. Wait for that child to finish.\nThen spawn exactly one child with label ${betaLabel} and task: verify that \\`repo/qa/scenarios/agents/subagent-fanout-synthesis.yaml\\` exists and reply exactly \\`ok\\` if it does. Wait for that child to finish.\nDo not spawn any more children after ${betaLabel} finishes.\nThen reply with exactly these two lines and nothing else:\nsubagent-1: ok\nsubagent-2: ok`"
+                          - set: outboundStartIndex
+                            value:
+                              expr: "getTransportSnapshot().messages.filter((message) => message.direction === 'outbound').length"
                           - call: runAgentPrompt
                             args:
                               - ref: env
@@ -102,14 +105,22 @@ flow:
                                   ref: prompt
                                 timeoutMs:
                                   expr: liveTurnTimeoutMs(env, 90000)
-                          - call: waitForOutboundMessage
-                            saveAs: parentOutbound
-                            args:
-                              - ref: state
-                              - lambda:
-                                  params: [candidate]
-                                  expr: "config.expectedReplyGroups.every((group) => group.some((needle) => normalizeLowercaseStringOrEmpty(candidate.text).includes(needle)))"
-                              - 30000
+                          - set: parentOutbound
+                            value:
+                              expr: "getTransportSnapshot().messages.filter((message) => message.direction === 'outbound').slice(outboundStartIndex).find((candidate) => config.expectedReplyGroups.every((group) => group.some((needle) => normalizeLowercaseStringOrEmpty(candidate.text).includes(needle))))"
+                          - if:
+                              expr: "!parentOutbound"
+                              then:
+                                - call: waitForOutboundMessage
+                                  saveAs: parentOutbound
+                                  args:
+                                    - ref: state
+                                    - lambda:
+                                        params: [candidate]
+                                        expr: "config.expectedReplyGroups.every((group) => group.some((needle) => normalizeLowercaseStringOrEmpty(candidate.text).includes(needle)))"
+                                    - 30000
+                                    - sinceIndex:
+                                        ref: outboundStartIndex
                           - set: alphaExpected
                             value:
                               expr: "Boolean(env.mock) ? config.expectedChildCompletionMarkers[0] : 'ok'"
@@ -177,7 +188,7 @@ flow:
                               then:
                                 - set: timeoutParentOutbound
                                   value:
-                                    expr: "await waitForOutboundMessage(state, (candidate) => config.expectedReplyGroups.every((group) => group.some((needle) => normalizeLowercaseStringOrEmpty(candidate.text).includes(needle))), 30000).catch(() => undefined)"
+                                    expr: "getTransportSnapshot().messages.filter((message) => message.direction === 'outbound').slice(outboundStartIndex).find((candidate) => config.expectedReplyGroups.every((group) => group.some((needle) => normalizeLowercaseStringOrEmpty(candidate.text).includes(needle)))) ?? await waitForOutboundMessage(state, (candidate) => config.expectedReplyGroups.every((group) => group.some((needle) => normalizeLowercaseStringOrEmpty(candidate.text).includes(needle))), 30000, { sinceIndex: outboundStartIndex }).catch(() => undefined)"
                                 - set: timeoutAlphaExpected
                                   value:
                                     expr: "Boolean(env.mock) ? config.expectedChildCompletionMarkers[0] : 'ok'"

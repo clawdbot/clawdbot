@@ -132,6 +132,7 @@ async function runLoadedScenarioFlow(
     resetBus: async () => {
       state.reset();
     },
+    getTransportSnapshot: state.getSnapshot.bind(state),
     runAgentPrompt: async () => undefined,
     formatTransportTranscript: formatTestTranscript,
     waitForOutboundMessage: async (
@@ -144,7 +145,8 @@ async function runLoadedScenarioFlow(
       params.onWaitForOutboundMessage?.({ waitCount, state: stateLocal });
       const match = stateLocal
         .getSnapshot()
-        .messages.slice(options?.sinceIndex ?? 0)
+        .messages.filter((candidate) => candidate.direction === "outbound")
+        .slice(options?.sinceIndex ?? 0)
         .find((candidate) => predicate(candidate));
       if (match) {
         return match;
@@ -402,6 +404,62 @@ const planningEvidenceFixtures = readQaScenarioPack()
   .map(createPlanningEvidenceFixture);
 
 describe("scenario-flow-runner", () => {
+  it("accepts a fanout parent reply emitted before runAgentPrompt returns", async () => {
+    const state = createQaBusState();
+    let lateWaitCalls = 0;
+    const sessionKey = "agent:qa:fanout:1:00000000";
+    const result = await runLoadedScenarioFlow("subagent-fanout-synthesis", {
+      state,
+      api: {
+        env: {
+          providerMode: "mock-openai",
+          mock: { baseUrl: "http://mock.invalid" },
+          gateway: {},
+        },
+        normalizeLowercaseStringOrEmpty: (value: unknown) =>
+          typeof value === "string" ? value.trim().toLowerCase() : "",
+        runAgentPrompt: async () => {
+          state.addOutboundMessage({
+            accountId: "qa-channel",
+            to: "dm:qa-operator",
+            text: "subagent-1: ok\nsubagent-2: ok",
+          });
+          return { started: { runId: "fanout-run" }, waited: { status: "ok" } };
+        },
+        waitForOutboundMessage: async () => {
+          lateWaitCalls += 1;
+          throw new Error("late outbound waiter should not be armed after the reply exists");
+        },
+        readRawQaSessionStore: async () => ({
+          "agent:qa:subagent:alpha": {
+            spawnedBy: sessionKey,
+            label: "qa-fanout-alpha",
+          },
+          "agent:qa:subagent:beta": {
+            spawnedBy: sessionKey,
+            label: "qa-fanout-beta",
+          },
+        }),
+        readSessionTranscriptSummary: async (_env: unknown, childSessionKey: string) => ({
+          finalText: childSessionKey.endsWith(":alpha") ? "ALPHA-OK" : "BETA-OK",
+        }),
+        fetchJson: async () => [
+          {
+            plannedToolName: "sessions_spawn",
+            allInputText: `Subagent fanout synthesis check\nFanout mock phase namespace: ${sessionKey}`,
+          },
+          {
+            plannedToolName: "sessions_spawn",
+            allInputText: `Subagent fanout synthesis check\nFanout mock phase namespace: ${sessionKey}`,
+          },
+        ],
+      },
+    });
+
+    expect(result).toMatchObject({ status: "pass" });
+    expect(lateWaitCalls).toBe(0);
+  });
+
   it.each([
     "control-ui-qa-channel-image-roundtrip",
     "control-ui-assistant-transcript-role-boundary",

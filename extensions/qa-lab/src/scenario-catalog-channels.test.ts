@@ -74,7 +74,9 @@ describe("qa scenario catalog channel contracts", () => {
   it("uses authoritative parent outbound and durable child evidence before accepting fanout", () => {
     const scenario = requireFlowScenario(readQaScenarioById("subagent-fanout-synthesis"));
     const flow = JSON.stringify(scenario.execution.flow);
-    const parentOutboundWait = flow.indexOf('"saveAs":"parentOutbound"');
+    const outboundCursor = flow.indexOf('"set":"outboundStartIndex"');
+    const agentPrompt = flow.indexOf('"call":"runAgentPrompt"');
+    const parentOutboundRead = flow.indexOf('"set":"parentOutbound"');
     const childCompletionWait = flow.indexOf('"saveAs":"childEvidence"');
     const storeReads = [...flow.matchAll(/readRawQaSessionStore/gu)].map((match) => match.index);
 
@@ -85,14 +87,17 @@ describe("qa scenario catalog channel contracts", () => {
     );
     expect(flow).toContain("Boolean(env.mock) ? config.expectedChildCompletionMarkers[0] : 'ok'");
     expect(flow).toContain("Fanout mock phase namespace: ${sessionKey}");
-    expect(flow).toContain('saveAs":"parentOutbound');
+    expect(flow).toContain("slice(outboundStartIndex).find");
+    expect(flow).toContain('"sinceIndex":{"ref":"outboundStartIndex"}');
     expect(flow).toContain('saveAs":"childEvidence');
     expect(flow).toContain('saveAs":"timeoutEvidence');
     expect(flow).toContain("Promise.all([readSessionTranscriptSummary");
-    expect(parentOutboundWait).toBeGreaterThan(-1);
-    expect(childCompletionWait).toBeGreaterThan(parentOutboundWait);
+    expect(outboundCursor).toBeGreaterThan(-1);
+    expect(agentPrompt).toBeGreaterThan(outboundCursor);
+    expect(parentOutboundRead).toBeGreaterThan(agentPrompt);
+    expect(childCompletionWait).toBeGreaterThan(parentOutboundRead);
     expect(storeReads).toHaveLength(2);
-    expect(parentOutboundWait).toBeLessThan(storeReads[0] ?? -1);
+    expect(parentOutboundRead).toBeLessThan(storeReads[0] ?? -1);
   });
 
   it("keeps channel streaming evidence portable across QA Channel and Crabline Telegram", () => {
