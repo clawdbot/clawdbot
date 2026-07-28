@@ -150,7 +150,10 @@ import {
   attachQaMockResponsesWebSocketServer,
   type QaMockResponsesDispatchResult,
 } from "./mock-openai-responses-websocket.js";
-import { hasSuccessfulSessionsSpawnToolResult } from "./mock-openai-spawn-result.js";
+import {
+  findSuccessfulSessionsSpawnToolResultCallId,
+  hasSuccessfulSessionsSpawnToolResult,
+} from "./mock-openai-spawn-result.js";
 import { resolveLogicalPlannedToolName } from "./mock-openai-tool-plan.js";
 import {
   readTargetFromPrompt,
@@ -1204,9 +1207,18 @@ async function buildResponsesPayload(
     }
     return events;
   }
-  const fanoutNamespace = resolveSubagentFanoutPhaseNamespace(allInputText);
-  const successfulBetaSpawn = hasSuccessfulSessionsSpawnToolResult(input, "qa-fanout-beta");
-  if (successfulBetaSpawn) {
+  const requestFanoutNamespace = resolveSubagentFanoutPhaseNamespace(allInputText);
+  const fanoutResultCallId =
+    findSuccessfulSessionsSpawnToolResultCallId(input, "qa-fanout-beta") ?? "";
+  const successfulBetaSpawn = Boolean(fanoutResultCallId);
+  const fanoutNamespace =
+    scenarioState.subagentFanoutNamespaceByCallId.get(fanoutResultCallId) ?? requestFanoutNamespace;
+  const consumedFanoutResultKey = `${fanoutNamespace}:${fanoutResultCallId}`;
+  if (
+    successfulBetaSpawn &&
+    !scenarioState.consumedSubagentFanoutResultCallIds.has(consumedFanoutResultKey)
+  ) {
+    scenarioState.consumedSubagentFanoutResultCallIds.add(consumedFanoutResultKey);
     scenarioState.subagentFanoutPhaseByNamespace.set(fanoutNamespace, 2);
     return buildAssistantEvents("subagent-1: ok\nsubagent-2: ok");
   }
@@ -1226,12 +1238,17 @@ async function buildResponsesPayload(
       mode: "run",
       thread: false,
     };
-    return hasDeclaredTool(body, "sessions_spawn")
+    const events = hasDeclaredTool(body, "sessions_spawn")
       ? buildToolCallEventsWithArgs("sessions_spawn", args)
       : buildToolCallEventsWithArgs("exec", {
           language: "javascript",
           code: `return await tools.callValue("openclaw:core:sessions_spawn", ${JSON.stringify(args)});`,
         });
+    const callId = extractPlannedToolCallId(events);
+    if (callId) {
+      scenarioState.subagentFanoutNamespaceByCallId.set(callId, requestFanoutNamespace);
+    }
+    return events;
   }
   const explicitSessionsSpawnArgs = buildExplicitSessionsSpawnArgs(prompt);
   if (explicitSessionsSpawnArgs && !toolOutput) {
@@ -1385,10 +1402,12 @@ export async function startQaMockOpenAiServer(params?: {
   const finalOnlyMarkerPauseMs = params?.finalOnlyMarkerPauseMs ?? 1_500;
   const scenarioState: MockScenarioState = {
     anthropicThinkingErrorScenarioKeys: new Set<string>(),
+    consumedSubagentFanoutResultCallIds: new Set(),
     pendingImageGenerationCalls: new Map(),
     // A suite process reuses this server across isolated scenarios. Session-keyed
     // phases let a retry replay both spawns without corrupting an in-flight peer.
     subagentFanoutPhaseByNamespace: new Map(),
+    subagentFanoutNamespaceByCallId: new Map(),
     subagentHandoffSpawned: false,
     toolLoopReadAttempts: 0,
   };

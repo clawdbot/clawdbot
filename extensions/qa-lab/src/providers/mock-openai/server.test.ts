@@ -5405,9 +5405,14 @@ describe("qa mock openai server", () => {
       completedSpawn("agent:qa:subagent:alpha"),
     );
     const beta = requireExecSpawn(await send(afterAlpha), "qa-fanout-beta");
-    const final = await send(appendResult([], beta, completedSpawn("agent:qa:subagent:beta")));
+    const betaCompletion = appendResult([], beta, completedSpawn("agent:qa:subagent:beta"));
+    const final = await send(betaCompletion);
     expect(final.stop_reason).toBe("end_turn");
     expect(final.content.find((block) => block.type === "text")?.text).toBe(
+      "subagent-1: ok\nsubagent-2: ok",
+    );
+    const replay = await send(betaCompletion);
+    expect(replay.content.find((block) => block.type === "text")?.text).not.toBe(
       "subagent-1: ok\nsubagent-2: ok",
     );
   });

@@ -64,7 +64,7 @@ function isAcceptedSessionsSpawnResult(value: Record<string, unknown> | null) {
   );
 }
 
-export function hasSuccessfulSessionsSpawnToolResult(
+export function findSuccessfulSessionsSpawnToolResultCallId(
   input: ResponsesInputItem[],
   expectedLabel: string,
 ) {
@@ -97,8 +97,15 @@ export function hasSuccessfulSessionsSpawnToolResult(
         ? parseFunctionCallOutputObject(matchingOutput)
         : readCompletedCodeModeValue(input, callIndex, matchingOutput);
     if (isAcceptedSessionsSpawnResult(result)) {
-      return true;
+      return item.call_id;
     }
   }
-  return false;
+  return undefined;
+}
+
+export function hasSuccessfulSessionsSpawnToolResult(
+  input: ResponsesInputItem[],
+  expectedLabel: string,
+) {
+  return findSuccessfulSessionsSpawnToolResultCallId(input, expectedLabel) !== undefined;
 }

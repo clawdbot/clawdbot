@@ -280,8 +280,10 @@ export const QA_MCP_CODE_MODE_API_FILE_PROMPT_RE = /mcp code mode api file qa ch
 
 export type MockScenarioState = {
   anthropicThinkingErrorScenarioKeys: Set<string>;
+  consumedSubagentFanoutResultCallIds: Set<string>;
   pendingImageGenerationCalls: Map<string, string>;
   subagentFanoutPhaseByNamespace: Map<string, number>;
+  subagentFanoutNamespaceByCallId: Map<string, string>;
   subagentHandoffSpawned: boolean;
   toolLoopReadAttempts: number;
 };
