@@ -2061,7 +2061,6 @@ class OpenClawShell extends OpenClawLightDomElement {
         <openclaw-custodian-panel
           .available=${custodianPanelAvailable}
           .suppressed=${activeRoute === "custodian"}
-          .activeRoute=${activeRoute}
           .minimizeRequestId=${this.custodianMinimizeRequestId}
         ></openclaw-custodian-panel>
         ${isOptionalElementDefined(this.execApprovalElement)

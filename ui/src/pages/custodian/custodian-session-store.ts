@@ -45,7 +45,6 @@ export class CustodianSessionStore {
   eventNudgePending: eventNudgeState.CustodianEventNudge | null = null;
   earlierBoundaryAfterId: number | null = null;
   abandonedTurnOutcomeUnknown = false;
-  panelClosedByUser = false;
 
   private context: ApplicationContext | null = null;
   private variant: CustodianSessionVariant = "caretaker";
@@ -102,14 +101,6 @@ export class CustodianSessionStore {
   setInput(value: string): void {
     this.input = value;
     this.emit();
-  }
-
-  markPanelClosedByUser(closed: boolean): void {
-    this.panelClosedByUser = closed;
-  }
-
-  markCustodianVisited(): void {
-    this.panelClosedByUser = false;
   }
 
   hasRealUserTurn(): boolean {

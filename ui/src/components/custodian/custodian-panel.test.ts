@@ -9,7 +9,6 @@ import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../panel-toggle-contract.ts";
 import "./custodian-panel.ts";
 
 type TestCustodianPanel = HTMLElement & {
-  activeRoute: string;
   available: boolean;
   custodianPanelOpen: boolean;
   minimizeRequestId: number;
@@ -30,7 +29,6 @@ async function mountPanel() {
   const panel = document.createElement("openclaw-custodian-panel") as TestCustodianPanel;
   panel.store = store;
   panel.available = true;
-  panel.activeRoute = "custodian";
   panel.suppressed = true;
   provider.append(panel);
   document.body.append(provider);
@@ -68,7 +66,6 @@ describe("custodian panel", () => {
       { id: 2, role: "user", text: "Check this system", at: 2, question: null },
     ];
 
-    panel.activeRoute = "config";
     panel.suppressed = false;
     panel.minimizeRequestId = 1;
     await panel.updateComplete;
@@ -81,18 +78,10 @@ describe("custodian panel", () => {
     panel.querySelector<HTMLButtonElement>(".cp-actions .cp-icon:last-child")!.click();
     await panel.updateComplete;
     expect(panel.custodianPanelOpen).toBe(false);
-    expect(store.panelClosedByUser).toBe(true);
 
-    panel.activeRoute = "profile";
-    await panel.updateComplete;
-    expect(panel.custodianPanelOpen).toBe(false);
-
-    panel.activeRoute = "custodian";
     panel.suppressed = true;
     await panel.updateComplete;
-    expect(store.panelClosedByUser).toBe(false);
 
-    panel.activeRoute = "profile";
     panel.suppressed = false;
     panel.minimizeRequestId = 2;
     await panel.updateComplete;
@@ -106,14 +95,12 @@ describe("custodian panel", () => {
     await panel.updateComplete;
     expect(panel.custodianPanelOpen).toBe(false);
 
-    panel.activeRoute = "config";
     panel.suppressed = false;
     await panel.updateComplete;
     window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
     await panel.updateComplete;
     expect(panel.custodianPanelOpen).toBe(true);
 
-    panel.activeRoute = "custodian";
     panel.suppressed = true;
     await panel.updateComplete;
     expect(panel.custodianPanelOpen).toBe(false);
@@ -125,7 +112,6 @@ describe("custodian panel", () => {
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
     store.messages = [{ id: 1, role: "user", text: "Check this system", at: 1, question: null }];
     panel.available = false;
-    panel.activeRoute = "config";
     panel.suppressed = false;
     panel.minimizeRequestId = 1;
     await panel.updateComplete;
@@ -145,7 +131,6 @@ describe("custodian panel", () => {
       { id: 2, role: "user", text: "Continue setup", at: 2, question: null },
     ];
 
-    panel.activeRoute = "config";
     panel.suppressed = false;
     panel.minimizeRequestId = 1;
     await panel.updateComplete;
@@ -161,7 +146,6 @@ describe("custodian panel", () => {
 
   it("updates the panel mascot mood with shared sending state", async () => {
     const { panel, store } = await mountPanel();
-    panel.activeRoute = "config";
     panel.suppressed = false;
     window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
     await panel.updateComplete;

@@ -51,16 +51,6 @@ describe("CustodianSessionStore", () => {
     expect(panelSurfaceUpdates).toHaveBeenCalled();
   });
 
-  it("keeps the explicit panel-close latch until the custodian page is visited", () => {
-    const store = new CustodianSessionStore();
-
-    store.markPanelClosedByUser(true);
-    expect(store.panelClosedByUser).toBe(true);
-
-    store.markCustodianVisited();
-    expect(store.panelClosedByUser).toBe(false);
-  });
-
   it("accepts new event nudges after a conversation variant rotates", async () => {
     const request = vi.fn().mockResolvedValue({
       sessionId: "shared-session",

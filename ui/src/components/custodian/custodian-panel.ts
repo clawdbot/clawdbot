@@ -32,7 +32,6 @@ const panelLayout = createDockPanelLayout({
 export class OpenClawCustodianPanel extends OpenClawLightDomElement {
   @property({ type: Boolean }) available = false;
   @property({ type: Boolean }) suppressed = false;
-  @property({ attribute: false }) activeRoute = "";
   @property({ type: Number }) minimizeRequestId = 0;
   @property({ attribute: false }) store: CustodianSessionStore = custodianSessionStore;
 
@@ -68,11 +67,7 @@ export class OpenClawCustodianPanel extends OpenClawLightDomElement {
     if (changed.has("suppressed")) {
       this.dockLayout.setSuppressed(this.suppressed);
     }
-    if (this.activeRoute === "custodian") {
-      this.store.markCustodianVisited();
-    }
     if (this.minimizeRequestId > 0 && this.minimizeRequestId !== this.handledMinimizeRequestId) {
-      this.store.markCustodianVisited();
       if (this.available) {
         this.handledMinimizeRequestId = this.minimizeRequestId;
       }
@@ -104,9 +99,8 @@ export class OpenClawCustodianPanel extends OpenClawLightDomElement {
       return;
     }
     if (this.dockLayout.open) {
-      this.closePanel();
+      this.dockLayout.setOpen(false);
     } else {
-      this.store.markPanelClosedByUser(false);
       this.dockLayout.setOpen(true);
     }
   }
@@ -120,23 +114,17 @@ export class OpenClawCustodianPanel extends OpenClawLightDomElement {
       this.dockLayout.setDock(detail.dock, false);
     }
     if (detail?.open === false) {
-      this.closePanel();
+      this.dockLayout.setOpen(false);
       return;
     }
     if (detail?.open === true) {
       if (!this.available || this.suppressed) {
         return;
       }
-      this.store.markPanelClosedByUser(false);
       this.dockLayout.setOpen(true);
       return;
     }
     this.toggle();
-  }
-
-  private closePanel(): void {
-    this.store.markPanelClosedByUser(true);
-    this.dockLayout.setOpen(false);
   }
 
   private setDock(dock: CustodianDock): void {
@@ -180,7 +168,7 @@ export class OpenClawCustodianPanel extends OpenClawLightDomElement {
               class="cp-icon"
               type="button"
               aria-label=${t("custodian.panel.close")}
-              @click=${() => this.closePanel()}
+              @click=${() => this.dockLayout.setOpen(false)}
             >
               ${icons.x}
             </button>
