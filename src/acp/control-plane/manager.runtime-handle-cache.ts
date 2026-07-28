@@ -75,10 +75,19 @@ export class ManagerRuntimeHandleCache {
   /** Clears a cached handle only when the caller still owns the same runtime identifiers. */
   clearIfHandleMatches(params: { sessionKey: string; handle: AcpRuntimeHandle }): void {
     const cached = this.get(params.sessionKey);
-    if (!cached || !this.runtimeHandlesMatch(cached.handle, params.handle)) {
+    if (!cached || !this.handlesMatch(cached.handle, params.handle)) {
       return;
     }
     this.clear(params.sessionKey);
+  }
+
+  /** Removes and returns the cached runtime state without awaiting backend cleanup. */
+  take(sessionKey: string): CachedRuntimeState | null {
+    const cached = this.get(sessionKey);
+    if (cached) {
+      this.clear(sessionKey);
+    }
+    return cached;
   }
 
   /** Closes handles that exceeded the configured idle TTL without racing active turns. */
@@ -176,7 +185,7 @@ export class ManagerRuntimeHandleCache {
     return actualAcpxRecordId === expectedAcpxRecordId;
   }
 
-  private runtimeHandlesMatch(a: AcpRuntimeHandle, b: AcpRuntimeHandle): boolean {
+  handlesMatch(a: AcpRuntimeHandle, b: AcpRuntimeHandle): boolean {
     return (
       a.sessionKey === b.sessionKey &&
       a.backend === b.backend &&

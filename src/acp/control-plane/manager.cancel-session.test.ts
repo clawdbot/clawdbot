@@ -8,6 +8,7 @@ import {
 import {
   AcpSessionManager,
   baseCfg,
+  createDeferred,
   createRuntime,
   expectRecordFields,
   extractStatesFromUpserts,
@@ -15,6 +16,7 @@ import {
   installAcpSessionManagerTestLifecycle,
   mockParentedAcpSessionEntries,
   mockCallArg,
+  type SessionAcpMeta,
 } from "./manager.test-helpers.js";
 
 describe("AcpSessionManager cancelSession", () => {
@@ -91,5 +93,124 @@ describe("AcpSessionManager cancelSession", () => {
       expect(states).toContain("idle");
       expect(states).not.toContain("error");
     });
+  });
+
+  it("force-discards stuck cancel and close operations without stale state writes", async () => {
+    const runtimeState = createRuntime();
+    const stuckCancel = createDeferred();
+    let ensureCount = 0;
+    runtimeState.ensureSession.mockImplementation(async (input) => {
+      ensureCount += 1;
+      return {
+        sessionKey: input.sessionKey,
+        backend: "acpx",
+        runtimeSessionName: `runtime-${ensureCount}`,
+        backendSessionId: `backend-${ensureCount}`,
+      };
+    });
+    runtimeState.cancel.mockImplementation(async () => await stuckCancel.promise);
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+
+    let persistedMeta: SessionAcpMeta | undefined;
+    hoisted.readAcpSessionEntryMock.mockImplementation((input: unknown) => {
+      if (!persistedMeta) {
+        return null;
+      }
+      const sessionKey = (input as { sessionKey: string }).sessionKey;
+      return {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        entry: { sessionId: "child-1", updatedAt: Date.now(), acp: persistedMeta },
+        acp: persistedMeta,
+      };
+    });
+    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (input: unknown) => {
+      const params = input as {
+        sessionKey: string;
+        mutate: (
+          current: typeof persistedMeta,
+          entry: { sessionId: string; updatedAt: number; acp?: typeof persistedMeta },
+        ) => typeof persistedMeta | null | undefined;
+      };
+      const entry = {
+        sessionId: "child-1",
+        updatedAt: Date.now(),
+        ...(persistedMeta ? { acp: persistedMeta } : {}),
+      };
+      persistedMeta = params.mutate(persistedMeta, entry) ?? undefined;
+      return {
+        sessionKey: params.sessionKey,
+        storeSessionKey: params.sessionKey,
+        entry: { ...entry, ...(persistedMeta ? { acp: persistedMeta } : {}) },
+        acp: persistedMeta,
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    const sessionKey = "agent:codex:acp:child-1";
+    const initialize = async () =>
+      await manager.initializeSession({
+        cfg: baseCfg,
+        sessionKey,
+        agent: "codex",
+        mode: "persistent",
+      });
+    const first = await initialize();
+    const cancelPromise = manager.cancelSession({
+      cfg: baseCfg,
+      sessionKey,
+      reason: "session-reset",
+    });
+    await vi.waitFor(() => {
+      expect(runtimeState.cancel).toHaveBeenCalledTimes(1);
+    });
+
+    await manager.forceDiscardSessionRuntime({
+      cfg: baseCfg,
+      sessionKey,
+      reason: "session-reset",
+    });
+    expect(runtimeState.close).toHaveBeenCalledWith({
+      handle: first.handle,
+      reason: "session-reset",
+      discardPersistentState: true,
+    });
+
+    const second = await initialize();
+    expect(second.handle.runtimeSessionName).toBe("runtime-2");
+    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+    const upsertsBeforeStaleCancelSettles = hoisted.upsertAcpSessionMetaMock.mock.calls.length;
+
+    stuckCancel.resolve();
+    await cancelPromise;
+    expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalledTimes(upsertsBeforeStaleCancelSettles);
+
+    const stuckClose = createDeferred();
+    runtimeState.close.mockImplementationOnce(async () => await stuckClose.promise);
+    const closePromise = manager.closeSession({
+      cfg: baseCfg,
+      sessionKey,
+      reason: "session-reset",
+      discardPersistentState: true,
+    });
+    await vi.waitFor(() => {
+      expect(runtimeState.close).toHaveBeenCalledTimes(2);
+    });
+
+    await manager.forceDiscardSessionRuntime({
+      cfg: baseCfg,
+      sessionKey,
+      reason: "session-reset",
+    });
+    const third = await initialize();
+    expect(third.handle.runtimeSessionName).toBe("runtime-3");
+    const upsertsBeforeStaleCloseSettles = hoisted.upsertAcpSessionMetaMock.mock.calls.length;
+
+    stuckClose.resolve();
+    await closePromise;
+    expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalledTimes(upsertsBeforeStaleCloseSettles);
   });
 });

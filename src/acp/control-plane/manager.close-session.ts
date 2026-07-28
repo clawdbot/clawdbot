@@ -29,6 +29,7 @@ export async function runManagerCloseSession(params: {
   resolveSession: ResolveManagerSession;
   ensureRuntimeHandle: EnsureManagerRuntimeHandle;
   writeSessionMeta: WriteManagerSessionMeta;
+  isCurrentActor: () => boolean;
 }): Promise<AcpCloseSessionResult> {
   const { input, sessionKey } = params;
   const resolution = params.resolveSession({
@@ -70,6 +71,11 @@ export async function runManagerCloseSession(params: {
         sessionKey,
         meta,
       });
+      if (input.discardPersistentState) {
+        // A discard close may itself hang. Evict before awaiting it so reset
+        // callers can never reuse the handle after their cleanup timeout.
+        params.runtimeHandles.clearIfHandleMatches({ sessionKey, handle });
+      }
       await withAcpRuntimeErrorBoundary({
         run: async () =>
           await ensuredRuntime.close({
@@ -81,13 +87,24 @@ export async function runManagerCloseSession(params: {
         fallbackMessage: "ACP close failed before completion.",
       });
       runtimeClosed = true;
-      params.runtimeHandles.clear(sessionKey);
+      if (!params.isCurrentActor()) {
+        return {
+          runtimeClosed,
+          metaCleared: false,
+        };
+      }
+      if (!input.discardPersistentState) {
+        params.runtimeHandles.clearIfHandleMatches({ sessionKey, handle });
+      }
     } catch (error) {
       const acpError = toAcpRuntimeError({
         error,
         fallbackCode: "ACP_TURN_FAILED",
         fallbackMessage: "ACP close failed before completion.",
       });
+      if (!params.isCurrentActor()) {
+        throw acpError;
+      }
       if (
         input.allowBackendUnavailable &&
         (acpError.code === "ACP_BACKEND_MISSING" ||
@@ -114,6 +131,14 @@ export async function runManagerCloseSession(params: {
         throw acpError;
       }
     }
+  }
+
+  if (!params.isCurrentActor()) {
+    return {
+      runtimeClosed,
+      ...(runtimeNotice ? { runtimeNotice } : {}),
+      metaCleared: false,
+    };
   }
 
   let metaCleared = false;

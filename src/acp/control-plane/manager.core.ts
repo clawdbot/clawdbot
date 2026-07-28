@@ -299,6 +299,8 @@ export class AcpSessionManager {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
     await this.evictIdleRuntimeHandles();
+    const actorKey = normalizeActorKey(sessionKey);
+    const actorEpoch = this.actorQueue.getEpoch(actorKey);
     await this.withSessionActor(
       sessionKey,
       async () =>
@@ -315,6 +317,7 @@ export class AcpSessionManager {
           recordTurnCompletion: this.recordTurnCompletion.bind(this),
           reconcileRuntimeSessionIdentifiers: this.reconcileRuntimeSessionIdentifiers.bind(this),
           writeSessionMeta: this.writeSessionMeta.bind(this),
+          isCurrentActor: () => this.actorQueue.isCurrentEpoch(actorKey, actorEpoch),
         }),
       input.signal,
     );
@@ -330,6 +333,8 @@ export class AcpSessionManager {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
     await this.evictIdleRuntimeHandles();
+    const actorKey = normalizeActorKey(sessionKey);
+    const actorEpoch = this.actorQueue.getEpoch(actorKey);
     await runManagerCancelSession({
       cfg: params.cfg,
       sessionKey,
@@ -338,8 +343,54 @@ export class AcpSessionManager {
       withSessionActor: this.withSessionActor.bind(this),
       resolveSession: this.resolveSession.bind(this),
       ensureRuntimeHandle: this.ensureRuntimeHandle.bind(this),
+      isCurrentActor: () => this.actorQueue.isCurrentEpoch(actorKey, actorEpoch),
       setSessionState: this.setSessionState.bind(this),
     });
+  }
+
+  /** Evicts and closes runtime ownership without waiting for the current actor lane. */
+  async forceDiscardSessionRuntime(params: {
+    cfg: OpenClawConfig;
+    sessionKey: string;
+    reason: string;
+  }): Promise<void> {
+    const sessionKey = canonicalizeAcpSessionKey(params);
+    if (!sessionKey) {
+      throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
+    }
+    const actorKey = normalizeActorKey(sessionKey);
+    this.actorQueue.rotate(actorKey);
+
+    const activeTurn = this.activeTurnBySession.get(actorKey);
+    if (activeTurn) {
+      activeTurn.abortController.abort();
+      if (this.activeTurnBySession.get(actorKey) === activeTurn) {
+        this.activeTurnBySession.delete(actorKey);
+      }
+    }
+    const cached = this.runtimeHandles.take(sessionKey);
+    const closeTargets = [
+      ...(activeTurn ? [{ runtime: activeTurn.runtime, handle: activeTurn.handle }] : []),
+      ...(cached &&
+      (!activeTurn || !this.runtimeHandles.handlesMatch(cached.handle, activeTurn.handle))
+        ? [{ runtime: cached.runtime, handle: cached.handle }]
+        : []),
+    ];
+    const outcomes = await Promise.allSettled(
+      closeTargets.map(async ({ runtime, handle }) => {
+        await runtime.close({
+          handle,
+          reason: params.reason,
+          discardPersistentState: true,
+        });
+      }),
+    );
+    const failed = outcomes.find(
+      (outcome): outcome is PromiseRejectedResult => outcome.status === "rejected",
+    );
+    if (failed) {
+      throw toErrorObject(failed.reason, "ACP runtime force discard failed.");
+    }
   }
 
   async closeSession(input: AcpCloseSessionInput): Promise<AcpCloseSessionResult> {
@@ -351,6 +402,8 @@ export class AcpSessionManager {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
     await this.evictIdleRuntimeHandles();
+    const actorKey = normalizeActorKey(sessionKey);
+    const actorEpoch = this.actorQueue.getEpoch(actorKey);
     return await this.withSessionActor(
       sessionKey,
       async () =>
@@ -362,6 +415,7 @@ export class AcpSessionManager {
           resolveSession: this.resolveSession.bind(this),
           ensureRuntimeHandle: this.ensureRuntimeHandle.bind(this),
           writeSessionMeta: this.writeSessionMeta.bind(this),
+          isCurrentActor: () => this.actorQueue.isCurrentEpoch(actorKey, actorEpoch),
         }),
     );
   }

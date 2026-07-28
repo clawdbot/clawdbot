@@ -70,6 +70,7 @@ export async function runManagerTurn(params: {
   }) => void;
   reconcileRuntimeSessionIdentifiers: ReconcileManagerRuntimeSessionIdentifiers;
   writeSessionMeta: WriteManagerSessionMeta;
+  isCurrentActor: () => boolean;
 }): Promise<void> {
   const { input, sessionKey } = params;
   const turnStartedAt = Date.now();
@@ -147,12 +148,14 @@ export async function runManagerTurn(params: {
         });
       }
     }
-    await params.setSessionState({
-      cfg: input.cfg,
-      sessionKey,
-      state: "error",
-      lastError: formatAcpErrorChain(errorToRecord),
-    });
+    if (params.isCurrentActor()) {
+      await params.setSessionState({
+        cfg: input.cfg,
+        sessionKey,
+        state: "error",
+        lastError: formatAcpErrorChain(errorToRecord),
+      });
+    }
     throw errorToRecord;
   };
 
@@ -341,12 +344,14 @@ export async function runManagerTurn(params: {
               });
             }
           }
-          await params.setSessionState({
-            cfg: input.cfg,
-            sessionKey,
-            state: "idle",
-            clearLastError: true,
-          });
+          if (params.isCurrentActor()) {
+            await params.setSessionState({
+              cfg: input.cfg,
+              sessionKey,
+              state: "idle",
+              clearLastError: true,
+            });
+          }
           return;
         } catch (error) {
           const acpError = toAcpRuntimeError({
@@ -395,7 +400,14 @@ export async function runManagerTurn(params: {
           if (activeTurn && params.activeTurnBySession.get(actorKey) === activeTurn) {
             params.activeTurnBySession.delete(actorKey);
           }
-          if (!retryFreshHandle && !skipPostTurnCleanup && runtime && handle && meta) {
+          if (
+            !retryFreshHandle &&
+            !skipPostTurnCleanup &&
+            runtime &&
+            handle &&
+            meta &&
+            params.isCurrentActor()
+          ) {
             ({ handle, meta } = await params.reconcileRuntimeSessionIdentifiers({
               cfg: input.cfg,
               sessionKey,
@@ -411,6 +423,7 @@ export async function runManagerTurn(params: {
             runtime &&
             handle &&
             meta &&
+            params.isCurrentActor() &&
             meta.mode === "oneshot"
           ) {
             try {
