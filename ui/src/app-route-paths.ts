@@ -4,7 +4,10 @@ import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
 import type { BoardFace } from "./lib/board/settings.ts";
 export const INTERNAL_SESSION_PATH_PARAM = "__openclawSessionPath";
 
-const APP_ROUTE_DEFINITIONS = {
+// Exported for the app-routes tree-consistency test: page definitions in
+// ui/src/pages/*/route.ts hand-duplicate these paths/aliases, and a drift
+// would desync routeIdFromPath/base-path inference from actual router matching.
+export const APP_ROUTE_DEFINITIONS = {
   chat: { path: "/chat" },
   dashboard: { path: "/dashboard" },
   dashboards: { path: "/dashboards" },

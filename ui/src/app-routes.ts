@@ -53,7 +53,9 @@ export type ApplicationRouter = Router<
 >;
 type AppRoute = PageDefinition<RouteId, ApplicationContext<RouteId>, AppRouteModule>;
 
-const APP_ROUTE_TREE = [
+// Exported for the tree-consistency test only; runtime consumers go through
+// createApplicationRouter.
+export const APP_ROUTE_TREE = [
   ...chatPages,
   custodianPage,
   newSessionPage,
