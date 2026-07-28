@@ -26,7 +26,7 @@ OpenClaw package.
 
 ## Manual recovery
 
-Node 24.15+ is recommended for a manual install; Node 22.22.3+ also works. Install
+Node 26 is recommended for a manual install; Node 22.22.3+ or 24.15+ also work. Install
 `openclaw` globally:
 
 ```bash
