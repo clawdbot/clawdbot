@@ -294,27 +294,22 @@ export class ChatLog extends Container {
     }
 
     // A revised provider snapshot cannot be split at an obsolete tool boundary.
-    // Collapse its old segments instead of rendering both the stale and replacement answer.
+    // Drop obsolete segments so the authoritative replacement lands after the tools.
     const frozen = this.frozenAssistants.get(runId);
     if (!frozen?.size) {
       return text;
     }
-    const [first, ...superseded] = frozen;
-    if (!first) {
-      return text;
-    }
-    first.setText(text);
-    for (const component of superseded) {
+    for (const component of frozen) {
       this.removeChild(component);
-      frozen.delete(component);
     }
+    this.frozenAssistants.delete(runId);
     const streaming = this.streamingRuns.get(runId);
     if (streaming) {
       this.removeChild(streaming);
       this.streamingRuns.delete(runId);
     }
-    this.committedAssistantText.set(runId, text);
-    return "";
+    this.committedAssistantText.delete(runId);
+    return text;
   }
 
   // Tool rows freeze earlier cumulative text so later deltas render below the tool.
@@ -372,8 +367,8 @@ export class ChatLog extends Container {
 
   finalizeAssistant(text: string, runId?: string) {
     const effectiveRunId = this.resolveRunId(runId);
-    const existing = this.streamingRuns.get(effectiveRunId);
     const segmentText = this.resolveAssistantSegment(effectiveRunId, text);
+    const existing = this.streamingRuns.get(effectiveRunId);
     this.frozenAssistants.delete(effectiveRunId);
     this.committedAssistantText.delete(effectiveRunId);
     this.latestAssistantText.delete(effectiveRunId);

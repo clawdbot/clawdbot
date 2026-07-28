@@ -126,9 +126,10 @@ describe("ChatLog", () => {
     expect(rendered.split("Hallo before the tool.")).toHaveLength(2);
     expect(rendered.split("Revised answer.")).toHaveLength(2);
     expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
-      "AssistantMessageComponent",
       "ToolExecutionComponent",
+      "AssistantMessageComponent",
     ]);
+    expect(rendered.indexOf("Read File")).toBeLessThan(rendered.indexOf("Revised answer."));
 
     chatLog.updateAssistant("Hallo before the tool.\n\nRevised answer.\n\nNext segment.", "run-1");
 
@@ -151,10 +152,11 @@ describe("ChatLog", () => {
     expect(rendered.split("Final answer.")).toHaveLength(2);
     expect(rendered).not.toContain("Second segment.");
     expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
+      "ToolExecutionComponent",
+      "ToolExecutionComponent",
       "AssistantMessageComponent",
-      "ToolExecutionComponent",
-      "ToolExecutionComponent",
     ]);
+    expect(rendered.lastIndexOf("Read File")).toBeLessThan(rendered.indexOf("Final answer."));
   });
 
   it("removes frozen provisional text when the final snapshot retracts it", () => {
@@ -168,7 +170,6 @@ describe("ChatLog", () => {
       "Retracted provisional answer.",
     );
     expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
-      "AssistantMessageComponent",
       "ToolExecutionComponent",
     ]);
   });
