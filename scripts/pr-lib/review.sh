@@ -15,6 +15,19 @@ review_artifacts_helper_path() {
   printf '%s/pr-lib/review-artifacts.mjs\n' "$scripts_dir"
 }
 
+is_full_lower_hex_sha() {
+  local value="$1"
+  case "$value" in
+    ????????????????????????????????????????)
+      case "$value" in
+        *[!0123456789abcdef]*) return 1 ;;
+        *) return 0 ;;
+      esac
+      ;;
+    *) return 1 ;;
+  esac
+}
+
 review_claim() {
   local pr="$1"
   mark_pr_operation_side_effects_started
@@ -160,7 +173,7 @@ review_artifacts_init() {
   local meta_number head_sha
   meta_number=$(jq -r '.number' .local/pr-meta.json)
   head_sha=$(jq -r '.headRefOid' .local/pr-meta.json)
-  if [ "$meta_number" != "$pr" ] || ! printf '%s' "$head_sha" | rg -q '^[0-9a-f]{40}$'; then
+  if [ "$meta_number" != "$pr" ] || ! is_full_lower_hex_sha "$head_sha"; then
     echo "Review artifacts init failed: .local/pr-meta.json describes PR #$meta_number at '$head_sha', not PR #$pr. Re-run: scripts/pr review-init $pr"
     exit 1
   fi

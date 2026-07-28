@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -128,7 +128,17 @@ function runValidation(
   );
 }
 
-function runReviewShellFunction(fixtureRoot: string, invocation: string) {
+function pathWithoutRipgrep(): string {
+  const binDir = tempDirs.make("openclaw-pr-review-no-rg-bin-");
+  symlinkSync(process.execPath, join(binDir, "node"));
+  return `${binDir}:/usr/bin:/bin`;
+}
+
+function runReviewShellFunction(
+  fixtureRoot: string,
+  invocation: string,
+  options: { env?: NodeJS.ProcessEnv } = {},
+) {
   return spawnSync(
     "bash",
     [
@@ -146,11 +156,14 @@ function runReviewShellFunction(fixtureRoot: string, invocation: string) {
       reviewScript,
       fixtureRoot,
     ],
-    { encoding: "utf8" },
+    { encoding: "utf8", env: options.env },
   );
 }
 
-function runArtifactsInit(existing: { review?: unknown; markdown?: string } = {}) {
+function runArtifactsInit(
+  existing: { review?: unknown; markdown?: string } = {},
+  options: { env?: NodeJS.ProcessEnv } = {},
+) {
   const fixtureRoot = tempDirs.make("openclaw-pr-review-artifacts-init-");
   const localDir = join(fixtureRoot, ".local");
   mkdirSync(localDir);
@@ -166,7 +179,9 @@ function runArtifactsInit(existing: { review?: unknown; markdown?: string } = {}
     writeFileSync(join(localDir, "review.md"), existing.markdown);
   }
 
-  const result = runReviewShellFunction(fixtureRoot, `review_artifacts_init ${REVIEWED_PR}`);
+  const result = runReviewShellFunction(fixtureRoot, `review_artifacts_init ${REVIEWED_PR}`, {
+    env: options.env,
+  });
   return { result, localDir };
 }
 
@@ -284,7 +299,7 @@ describePosix("scripts/pr review artifact validation", () => {
     const archives = readdirSync(join(localDir, "superseded"));
     expect(archives).toHaveLength(1);
     const archive = join(localDir, "superseded", archives[0]!);
-    expect(readdirSync(archive).sort()).toEqual(["review.json", "review.md"]);
+    expect(readdirSync(archive).toSorted()).toEqual(["review.json", "review.md"]);
     expect(JSON.parse(readFileSync(join(archive, "review.json"), "utf8")).pr.number).toBe(113928);
     expect(readFileSync(join(archive, "review.md"), "utf8")).toBe("A) Ship another PR\n");
 
@@ -294,6 +309,19 @@ describePosix("scripts/pr review artifact validation", () => {
     const markdown = readFileSync(join(localDir, "review.md"), "utf8");
     expect(markdown.split("\n")[0]).toBe(REVIEWED_IDENTITY_LINE);
     expect(markdown).toContain("A) TL;DR recommendation");
+  });
+
+  it("initializes review artifacts without ripgrep on PATH", () => {
+    const { result, localDir } = runArtifactsInit(
+      {},
+      { env: { ...process.env, PATH: pathWithoutRipgrep() } },
+    );
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stderr).not.toContain("rg");
+    expect(readFileSync(join(localDir, "review.md"), "utf8").split("\n")[0]).toBe(
+      REVIEWED_IDENTITY_LINE,
+    );
   });
 
   it("re-stamps markdown left over from another PR even when the JSON stamp matches", () => {
