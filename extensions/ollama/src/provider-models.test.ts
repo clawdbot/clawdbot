@@ -148,6 +148,36 @@ describe("ollama provider models", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("discovers a chat model after 200 embedding-only catalog entries", async () => {
+    const embeddingModels = Array.from({ length: 200 }, (_, index) => ({
+      name: `embedding-${index}:latest`,
+    }));
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = requestUrl(input);
+      if (url.endsWith("/api/tags")) {
+        return jsonResponse({
+          models: [...embeddingModels, { name: "qwen-chat:latest" }],
+        });
+      }
+      if (url.endsWith("/api/show")) {
+        const body = JSON.parse(requestBodyText(init?.body)) as { name?: string };
+        const completion = body.name === "qwen-chat:latest";
+        return jsonResponse({
+          capabilities: completion ? ["completion", "tools"] : ["embedding"],
+          model_info: completion ? { "qwen.context_length": 32_768 } : {},
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = await buildOllamaProvider("http://127.0.0.1:11434");
+
+    expect(provider.models?.map((model) => model.id)).toEqual(["qwen-chat:latest"]);
+    expect(provider.models?.[0]?.contextWindow).toBe(32_768);
+    expect(fetchMock).toHaveBeenCalledTimes(202);
+  });
+
   it("scopes cached show metadata by credential", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = requestUrl(input);

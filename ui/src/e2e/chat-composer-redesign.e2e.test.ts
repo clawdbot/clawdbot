@@ -922,7 +922,7 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
           agentsList: {
             agents: [{ id: "work", name: "Work" }],
             defaultId: "main",
-            mainKey: "agent:work:main",
+            mainKey: "main",
             scope: "agent",
           },
           messages: [],
@@ -934,7 +934,13 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
 
     try {
       await page.goto(controlUiSessionUrl(server.baseUrl, "agent:work:main"));
-      await expect.poll(async () => (await gateway.getRequests("chat.startup")).length).toBe(1);
+      const startupRequest = await gateway.waitForRequest("chat.startup");
+      expect(startupRequest.params).toEqual(
+        expect.objectContaining({ sessionKey: "agent:work:main" }),
+      );
+      for (const request of await gateway.getRequests("chat.startup")) {
+        expect(request.params).toEqual(expect.objectContaining({ sessionKey: "agent:work:main" }));
+      }
 
       const composer = page.locator(".agent-chat__input");
       await expect
