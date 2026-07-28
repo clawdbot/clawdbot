@@ -68,6 +68,29 @@ describe("Apple app i18n catalogs", () => {
     expect(APPLE_I18N_LOCALES).toEqual(NATIVE_I18N_LOCALES);
   });
 
+  it("derives shared discovery status coverage into the iOS catalog", async () => {
+    const inventory = JSON.parse(await readFile("apps/.i18n/native-source.json", "utf8")) as {
+      entries: Array<{
+        id: string;
+        kind: string;
+        line: number;
+        path: string;
+        source: string;
+        surface: string;
+      }>;
+      version: number;
+    };
+    const build = buildIosCatalog(
+      { sourceLanguage: "en", strings: {}, version: "1.0" },
+      inventory,
+      [],
+    );
+
+    expect(Object.keys(build.catalog.strings ?? {})).toEqual(
+      expect.arrayContaining(["Searching…", "Stopped", "Waiting"]),
+    );
+  });
+
   it("derives broad macOS catalog coverage from the native source inventory", async () => {
     const inventory = JSON.parse(await readFile("apps/.i18n/native-source.json", "utf8")) as {
       entries: Array<{
