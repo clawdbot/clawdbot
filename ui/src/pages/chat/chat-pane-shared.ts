@@ -126,6 +126,19 @@ export const NEW_SESSION_CREATE_FAILED_MESSAGE =
 export const NEW_SESSION_RENAME_FAILED_MESSAGE =
   "New Chat reset the thread but could not apply the name. Try renaming it again.";
 
+/** Outcome of a /new (create-session) request routed through the chat pane. */
+export type ChatNewSessionResult =
+  /** A fresh conversation is available. */
+  | "completed"
+  /** Nothing destructive happened; the command may be retried. */
+  | "cancelled"
+  /**
+   * The destructive reset landed but a follow-up step (e.g. the label patch)
+   * failed. The command is consumed: callers must surface the error without
+   * restoring a retryable /new draft that would reset again.
+   */
+  | "consumed-error";
+
 export function summarizeSessionPullRequests(
   pullRequests: readonly ControlUiSessionPullRequest[],
 ): SessionCatalogPullRequestSummary | undefined {

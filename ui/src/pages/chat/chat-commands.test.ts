@@ -295,7 +295,7 @@ describe("conversation reset confirmation", () => {
 
   it("propagates cancelled /new session creation", async () => {
     const result = await dispatchChatSlashCommand(
-      { createChatSession: vi.fn(async () => false) } as never,
+      { createChatSession: vi.fn(async () => "cancelled" as const) } as never,
       "new",
       "",
       { sendResetMessage: vi.fn() },
@@ -304,8 +304,23 @@ describe("conversation reset confirmation", () => {
     expect(result).toBe("cancelled");
   });
 
+  it("consumes /new when the reset landed but a follow-up step failed", async () => {
+    // "consumed-error" means the destructive reset already happened (e.g. only
+    // the label patch failed). Mapping it to "uncertain" keeps the command
+    // consumed: the composer must not restore a retryable /new draft that
+    // would reset the fresh conversation again.
+    const result = await dispatchChatSlashCommand(
+      { createChatSession: vi.fn(async () => "consumed-error" as const) } as never,
+      "new",
+      "--name Planning notes",
+      { sendResetMessage: vi.fn() },
+    );
+
+    expect(result).toBe("uncertain");
+  });
+
   it("forwards a named /new title to the created session", async () => {
-    const createChatSession = vi.fn(async () => true);
+    const createChatSession = vi.fn(async () => "completed" as const);
     const result = await dispatchChatSlashCommand(
       { createChatSession } as never,
       "new",
@@ -318,7 +333,7 @@ describe("conversation reset confirmation", () => {
   });
 
   it("creates an unnamed /new session when no title is provided", async () => {
-    const createChatSession = vi.fn(async () => true);
+    const createChatSession = vi.fn(async () => "completed" as const);
     await dispatchChatSlashCommand({ createChatSession } as never, "new", "", {
       sendResetMessage: vi.fn(),
     });

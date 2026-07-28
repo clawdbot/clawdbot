@@ -11,6 +11,7 @@ import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import type { ChatState } from "./chat-history.ts";
+import type { ChatNewSessionResult } from "./chat-pane-shared.ts";
 import type { ChatRealtimeState } from "./chat-realtime.ts";
 import type { ChatSendTimingEntry } from "./chat-send-ack.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
@@ -153,7 +154,7 @@ export type ChatPageHost = ChatHost &
     handleOpenImage: (item: ImageLightboxItem, requestVersion?: number) => void;
     handleCloseImage: () => void;
     announceSessionSwitch?: (sessionKey: string, label: string) => void;
-    createChatSession?: () => Promise<boolean>;
+    createChatSession?: (options?: { label?: string }) => Promise<ChatNewSessionResult>;
     confirmConversationReset?: () => Promise<boolean>;
     exportCurrentChat?: () => Promise<void> | void;
     refreshCurrentSessionTools?: () => Promise<void>;

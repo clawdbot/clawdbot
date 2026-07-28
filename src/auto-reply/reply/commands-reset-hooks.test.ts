@@ -7,6 +7,8 @@ import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadSessionEntry, upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
+import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { clearCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
 import type { MsgContext } from "../templating.js";
 import { maybeHandleResetCommand } from "./commands-reset.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -1305,6 +1307,85 @@ describe("handleCommands reset hooks", () => {
     expect(result).toBeNull();
     expect(preparedCatalogMock.loadPreparedModelCatalogSnapshot).toHaveBeenCalled();
     expect(loadSessionEntry({ storePath, sessionKey: "agent:main:main" })?.label).toBeUndefined();
+  });
+
+  it("resolves a cold plugin model tail that uses a manifest alias", async () => {
+    // The loaded catalog stores canonical ids (gemini-3.1-pro-preview) while plugin
+    // manifests declare user-facing aliases (gemini-3-pro). Classification must apply
+    // the same manifest normalization as the reset-model resolver before comparing;
+    // otherwise the aliased directive is frozen into the session name even though the
+    // resolver downstream would have honored it as a model switch.
+    setCurrentPluginMetadataSnapshot(
+      {
+        policyHash: "reset-alias-test",
+        index: {
+          version: 1,
+          hostContractVersion: "test",
+          compatRegistryVersion: "test",
+          migrationVersion: 1,
+          policyHash: "reset-alias-test",
+          generatedAtMs: 0,
+          installRecords: {},
+          plugins: [],
+          diagnostics: [],
+        },
+        plugins: [
+          {
+            modelIdNormalization: {
+              providers: {
+                google: {
+                  aliases: { "gemini-3-pro": "gemini-3.1-pro-preview" },
+                },
+              },
+            },
+          },
+        ],
+      } as never,
+      { config: {} },
+    );
+    try {
+      preparedCatalogMock.getPreparedModelCatalogSnapshot.mockReturnValue(undefined);
+      preparedCatalogMock.loadPreparedModelCatalogSnapshot.mockResolvedValue({
+        entries: [{ id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro", provider: "google" }],
+        routeVariants: [],
+      });
+      const storePath = await createStorePath();
+      await upsertSessionEntry(
+        { storePath, sessionKey: "agent:main:main" },
+        { sessionId: "fresh-session", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+      );
+      const params = buildResetParams(
+        "/new google/gemini-3-pro notes",
+        {
+          commands: { text: true },
+          channels: { discord: { allowFrom: ["*"] } },
+        } as OpenClawConfig,
+        {
+          CommandSource: "native",
+          CommandArgs: { values: { title: "google/gemini-3-pro notes" } },
+          Provider: "discord",
+          Surface: "discord",
+        },
+      );
+      params.storePath = storePath;
+      params.sessionStore = {
+        "agent:main:main": {
+          sessionId: "fresh-session",
+          updatedAt: 1,
+          totalTokens: 0,
+          totalTokensFresh: true,
+        },
+      };
+      params.sessionEntry = params.sessionStore["agent:main:main"];
+
+      const result = await maybeHandleResetCommand(params);
+
+      expect(result).toBeNull();
+      expect(preparedCatalogMock.loadPreparedModelCatalogSnapshot).toHaveBeenCalled();
+      expect(loadSessionEntry({ storePath, sessionKey: "agent:main:main" })?.label).toBeUndefined();
+    } finally {
+      clearCurrentPluginMetadataSnapshot();
+    }
   });
 
   it("names a fresh session when a cold plugin model tail is not a known model", async () => {
