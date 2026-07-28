@@ -186,6 +186,82 @@ suite.define(() => {
     }
   });
 
+  it("opens a workspace managed image through an artifact-scoped ticket", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const attachmentId = crypto.randomUUID();
+    const artifactId = `artifact_managed_image_${attachmentId}`;
+    const imageUrl = `/api/chat/media/outgoing/agent%3Amain%3Amain/${attachmentId}/full`;
+    const ticketedUrl = `${imageUrl}?mediaTicket=ticket-workspace-e2e`;
+    const mediaRequests: Array<{ authorization?: string; url: URL }> = [];
+    await context.route("**/api/chat/media/outgoing/**", async (route) => {
+      mediaRequests.push({
+        authorization: route.request().headers().authorization,
+        url: new URL(route.request().url()),
+      });
+      await route.fulfill({
+        contentType: "image/png",
+        body: Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=",
+          "base64",
+        ),
+      });
+    });
+    const artifact = {
+      download: { mode: "url" },
+      id: artifactId,
+      mimeType: "image/png",
+      sizeBytes: 68,
+      title: "Ticketed workspace image",
+      type: "image",
+    };
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "artifacts.list": { artifacts: [artifact] },
+        "artifacts.download": {
+          artifact,
+          url: ticketedUrl,
+          expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+        },
+        "sessions.files.list": {
+          browser: { entries: [], path: "" },
+          files: [],
+          root: "/workspace",
+          sessionKey: "main",
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.locator(".chat-workspace-toggle").click();
+      await page.locator(".chat-workspace-rail__file-name", { hasText: artifact.title }).click();
+
+      const openArtifact = page.getByRole("link", { name: "Open artifact" });
+      await openArtifact.waitFor({ state: "visible", timeout: 10_000 });
+      const [popup] = await Promise.all([page.waitForEvent("popup"), openArtifact.click()]);
+      await popup.waitForLoadState("load");
+
+      expect(new URL(popup.url()).searchParams.get("mediaTicket")).toBe("ticket-workspace-e2e");
+      expect(mediaRequests).toHaveLength(1);
+      expect(mediaRequests[0]?.url.pathname).toBe(imageUrl);
+      expect(mediaRequests[0]?.url.searchParams.get("mediaTicket")).toBe("ticket-workspace-e2e");
+      expect(mediaRequests[0]?.authorization).toBeUndefined();
+      const request = await gateway.waitForRequest("artifacts.download");
+      expect(request.params).toMatchObject({
+        sessionKey: "main",
+        artifactId,
+      });
+      await popup.close();
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("renders a canonical inbound image through the ticketed media route", async () => {
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const context = await suite.newBrowserContext({
