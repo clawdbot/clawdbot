@@ -11,6 +11,7 @@ import type { WorkboardCapability } from "../lib/workboard/capability.ts";
 import type { AgentSelectionCapability } from "./agent-selection.ts";
 import type { ApplicationConfigCapability } from "./config.ts";
 import type { ApplicationGateway } from "./gateway.ts";
+import type { HostPolicyCapability } from "./host-policy.ts";
 import type { NativeChatDrafts } from "./native-bridge.ts";
 import type { ApplicationOverlays } from "./overlays.ts";
 import type { ThemeMode } from "./theme.ts";
@@ -60,6 +61,7 @@ export type ApplicationSkillWorkshopRevisionHandoff = {
 export type ApplicationContext<TRouteId extends string = string> = {
   readonly basePath: string;
   readonly gateway: ApplicationGateway;
+  readonly hostPolicy: HostPolicyCapability;
   readonly agents: AgentCapability;
   readonly agentIdentity: AgentIdentityCapability;
   readonly agentSelection: AgentSelectionCapability;

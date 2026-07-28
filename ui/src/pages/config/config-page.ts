@@ -677,6 +677,7 @@ export class ConfigPage extends LitElement {
       schemaLoading: configState.configSchemaLoading,
       uiHints: configState.configUiHints,
       formMode: this.formModes[this.pageId],
+      readOnly: !this.context.hostPolicy.isSettingEditable("*"),
       viewState: this.configViewState,
       rawAvailable: Boolean(
         configState.configSnapshot?.config || configState.configForm || configState.configRaw,
@@ -829,6 +830,7 @@ export class ConfigPage extends LitElement {
       configSaving: runtimeConfig.state.configSaving,
       configApplying: runtimeConfig.state.configApplying,
       configReady: Boolean(runtimeConfig.state.configSnapshot?.hash),
+      readOnly: !this.context.hostPolicy.isSettingEditable("*"),
       onSelectPreset: (id) => {
         const preset = getPresetById(id);
         if (preset) {
@@ -922,6 +924,7 @@ export class ConfigPage extends LitElement {
         this.pageId,
         (routeId) => this.navigate(routeId),
         (routeId) => this.context.preload(routeId),
+        { hostPolicy: this.context.hostPolicy },
       )}
     `;
   }

@@ -2,6 +2,7 @@
 import { applyMergePatch } from "../../../../src/config/merge-patch.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../../api/types.ts";
+import type { HostPolicyCapability } from "../../app/host-policy.ts";
 import { schemaType, type JsonSchema } from "../../components/config-form.shared.ts";
 import {
   cloneConfigObject,
@@ -52,6 +53,8 @@ type RuntimeConfigGateway = {
   readonly snapshot: RuntimeConfigGatewaySnapshot;
   subscribe: (listener: (snapshot: RuntimeConfigGatewaySnapshot) => void) => () => void;
 };
+
+type RuntimeConfigHostPolicy = Pick<HostPolicyCapability, "settingPolicy" | "isSettingEditable">;
 
 export type RuntimeConfigCapability = {
   readonly state: ConfigState;
@@ -786,8 +789,16 @@ export async function openConfigFile(state: ConfigState): Promise<void> {
   }
 }
 
+function formatPolicyPath(path: Array<string | number>): string {
+  return path
+    .map((part) => String(part).trim())
+    .filter(Boolean)
+    .join(".");
+}
+
 export function createRuntimeConfigCapability(
   gateway: RuntimeConfigGateway,
+  hostPolicy?: RuntimeConfigHostPolicy,
 ): RuntimeConfigCapability {
   const state = createInitialConfigState(gateway.snapshot);
   const listeners = new Set<(state: ConfigState) => void>();
@@ -813,6 +824,20 @@ export function createRuntimeConfigCapability(
   const mutate = (task: () => void) => {
     task();
     publish();
+  };
+  const denySettingMutation = (path: Array<string | number>): boolean => {
+    if (!hostPolicy) {
+      return false;
+    }
+    const normalizedPath = formatPolicyPath(path);
+    const policy = hostPolicy.settingPolicy(normalizedPath);
+    if (policy.state === "editable") {
+      return false;
+    }
+    state.lastError =
+      policy.reason ??
+      `Setting '${normalizedPath || "*"}' is ${policy.state === "locked" ? "locked" : "read-only"} by the host.`;
+    return true;
   };
   const trackLoad = (key: "config" | "schema", promise: Promise<void>): Promise<void> => {
     const next = promise.finally(() => {
@@ -868,11 +893,31 @@ export function createRuntimeConfigCapability(
         "schema",
         run(() => loadConfigSchema(state)),
       ),
-    patchForm: (path, value) => mutate(() => updateConfigFormValue(state, path, value)),
-    removeFormValue: (path) => mutate(() => removeConfigFormValue(state, path)),
-    setRaw: (value) => mutate(() => updateConfigRawValue(state, value)),
+    patchForm: (path, value) =>
+      mutate(() => {
+        if (!denySettingMutation(path)) {
+          updateConfigFormValue(state, path, value);
+        }
+      }),
+    removeFormValue: (path) =>
+      mutate(() => {
+        if (!denySettingMutation(path)) {
+          removeConfigFormValue(state, path);
+        }
+      }),
+    setRaw: (value) =>
+      mutate(() => {
+        if (!denySettingMutation(["*"])) {
+          updateConfigRawValue(state, value);
+        }
+      }),
     resetDraft: () => mutate(() => resetConfigPendingChanges(state)),
-    stagePreset: (patch) => mutate(() => stageConfigPreset(state, patch)),
+    stagePreset: (patch) =>
+      mutate(() => {
+        if (!denySettingMutation(["*"])) {
+          stageConfigPreset(state, patch);
+        }
+      }),
     save: () => run(() => saveConfig(state)),
     apply: () => run(() => applyConfig(state)),
     openFile: () => run(() => openConfigFile(state)),

@@ -107,6 +107,7 @@ export type QuickSettingsProps = {
   configSaving?: boolean;
   configApplying?: boolean;
   configReady?: boolean;
+  readOnly?: boolean;
   onSelectPreset?: (presetId: ConfigPresetId) => void;
   onResetConfig?: () => void;
   onSaveConfig?: () => void;
@@ -410,6 +411,7 @@ function renderModelCard(props: QuickSettingsProps) {
                   class="qs-segmented__btn ${level === props.thinkingLevel
                     ? "qs-segmented__btn--active"
                     : ""}"
+                  ?disabled=${props.readOnly === true}
                   @click=${() => props.onThinkingChange?.(level)}
                 >
                   ${level.charAt(0).toUpperCase() + level.slice(1)}
@@ -431,6 +433,7 @@ function renderModelCard(props: QuickSettingsProps) {
               ([value, label]) => html`
                 <button
                   class="qs-segmented__btn ${fastMode === value ? "qs-segmented__btn--active" : ""}"
+                  ?disabled=${props.readOnly === true}
                   @click=${() =>
                     fastMode === value
                       ? undefined
@@ -548,6 +551,7 @@ function renderSecurityCard(props: QuickSettingsProps) {
             <input
               type="checkbox"
               .checked=${browserEnabled}
+              ?disabled=${props.readOnly === true}
               @change=${(event: Event) =>
                 props.onBrowserEnabledToggle?.((event.currentTarget as HTMLInputElement).checked)}
             />
@@ -565,6 +569,7 @@ function renderSecurityCard(props: QuickSettingsProps) {
                   normalizedToolProfile
                     ? "qs-segmented__btn--active"
                     : ""}"
+                  ?disabled=${props.readOnly === true}
                   @click=${() => props.onToolProfileChange?.(profile)}
                 >
                   ${profile}
@@ -918,6 +923,7 @@ function renderPresetsCard(props: QuickSettingsProps) {
   const hasPendingProfileChange = !profileSettingsEqual(draftSettings, savedSettings);
   const hasPendingConfigChange = props.configDirty === true;
   const canCommit =
+    props.readOnly !== true &&
     props.connected &&
     props.configReady === true &&
     props.configSaving !== true &&
@@ -955,6 +961,7 @@ function renderPresetsCard(props: QuickSettingsProps) {
                 type="button"
                 class="qs-preset ${preset.id === selectedPresetId ? "qs-preset--active" : ""}"
                 aria-pressed=${preset.id === selectedPresetId}
+                ?disabled=${props.readOnly === true}
                 @click=${() => props.onSelectPreset?.(preset.id)}
               >
                 <div class="qs-preset__head">
@@ -1051,7 +1058,7 @@ function renderConnectionFooter(props: QuickSettingsProps) {
 
 export function renderQuickSettings(props: QuickSettingsProps) {
   return html`
-    <div class="qs-container">
+    <div class="qs-container ${props.readOnly === true ? "qs-container--host-readonly" : ""}">
       <div class="qs-grid">
         ${renderModelCard(props)} ${renderChannelsCard(props)} ${renderSecurityCard(props)}
         ${renderSystemCard(props)} ${renderAppearanceCard(props)} ${renderPersonalCard(props)}

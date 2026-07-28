@@ -73,10 +73,16 @@ export async function startApplicationRouter(
   context: ApplicationContext<RouteId>,
 ): Promise<void> {
   const location = history.location();
-  if (routeIdFromPath(location.pathname, basePath) === null) {
+  const routeId = routeIdFromPath(location.pathname, basePath);
+  if (routeId === null || !context.hostPolicy.isRouteEnabled(routeId)) {
+    const fallbackRoute = APP_ROUTE_IDS.find((candidate) =>
+      context.hostPolicy.isRouteEnabled(candidate),
+    );
     history.replace({
       ...location,
-      pathname: router.pathForRoute("chat", basePath),
+      pathname: router.pathForRoute(fallbackRoute ?? "chat", basePath),
+      search: "",
+      hash: "",
     });
   }
   await router.start(history, basePath, context);

@@ -110,6 +110,7 @@ export type ConfigProps = {
   schemaLoading: boolean;
   uiHints: ConfigUiHints;
   formMode: ConfigFormMode;
+  readOnly?: boolean;
   viewState: ConfigViewState;
   rawAvailable?: boolean;
   showModeToggle?: boolean;
@@ -1474,9 +1475,15 @@ export function renderConfig(props: ConfigProps) {
   // Save/apply buttons require actual changes to be enabled.
   // Note: formUnsafe warns about unsupported schema paths but shouldn't block saving.
   const canSaveForm = Boolean(props.formValue) && !props.loading && Boolean(analysis.schema);
+  const readOnly = props.readOnly === true;
   const canSave =
-    props.connected && !props.saving && hasChanges && (formMode === "raw" ? true : canSaveForm);
+    !readOnly &&
+    props.connected &&
+    !props.saving &&
+    hasChanges &&
+    (formMode === "raw" ? true : canSaveForm);
   const canApply =
+    !readOnly &&
     props.connected &&
     !props.applying &&
     !props.updating &&
@@ -1496,7 +1503,7 @@ export function renderConfig(props: ConfigProps) {
     Boolean(include?.has("__appearance__"));
 
   return html`
-    <div class="config-layout">
+    <div class="config-layout ${readOnly ? "config-layout--host-readonly" : ""}">
       <main class="config-main">
         <div class="config-actions">
           <div class="config-actions__left">
@@ -1545,7 +1552,7 @@ export function renderConfig(props: ConfigProps) {
             <div class="config-actions__buttons">
               ${props.onOpenFile
                 ? html`
-                    <button class="btn btn--sm" @click=${props.onOpenFile}>
+                    <button class="btn btn--sm" ?disabled=${readOnly} @click=${props.onOpenFile}>
                       ${icons.fileText} Open
                     </button>
                   `
@@ -1865,7 +1872,7 @@ export function renderConfig(props: ConfigProps) {
                           uiHints: props.uiHints,
                           value: props.formValue,
                           rawAvailable,
-                          disabled: props.loading || !props.formValue,
+                          disabled: readOnly || props.loading || !props.formValue,
                           unsupportedPaths: analysis.unsupportedPaths,
                           onPatch: props.onFormPatch,
                           searchQuery: props.searchQuery,
@@ -1939,7 +1946,11 @@ export function renderConfig(props: ConfigProps) {
                               <textarea
                                 placeholder="Raw config (JSON/JSON5)"
                                 .value=${props.raw}
+                                ?disabled=${readOnly}
                                 @input=${(e: Event) => {
+                                  if (readOnly) {
+                                    return;
+                                  }
                                   props.onRawChange((e.target as HTMLTextAreaElement).value);
                                 }}
                               ></textarea>

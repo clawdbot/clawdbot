@@ -280,7 +280,7 @@ class LogsPage extends LitElement {
         "logs",
         (routeId) => this.context.navigate(routeId),
         (routeId) => this.context.preload(routeId),
-        { fillHeight: true },
+        { fillHeight: true, hostPolicy: this.context.hostPolicy },
       )}
     `;
   }

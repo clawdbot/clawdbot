@@ -407,6 +407,7 @@ class OpenClawShell extends LitElement {
   private stopRouteSubscription: (() => void) | undefined;
   private stopOverlaySubscription: (() => void) | undefined;
   private stopRuntimeConfigSubscription: (() => void) | undefined;
+  private stopHostPolicySubscription: (() => void) | undefined;
   private stopThemeSubscription: (() => void) | undefined;
 
   override createRenderRoot() {
@@ -437,6 +438,7 @@ class OpenClawShell extends LitElement {
       this.stopRouteSubscription ||
       this.stopOverlaySubscription ||
       this.stopRuntimeConfigSubscription ||
+      this.stopHostPolicySubscription ||
       this.stopThemeSubscription
     ) {
       return;
@@ -478,7 +480,10 @@ class OpenClawShell extends LitElement {
       this.overlaySnapshot = snapshot;
     });
     this.stopRuntimeConfigSubscription = context.runtimeConfig.subscribe(() => {
-      // Route enablement (e.g. Workboard) derives from the config snapshot.
+      // Route enablement derives from runtime config and host policy.
+      this.requestUpdate();
+    });
+    this.stopHostPolicySubscription = context.hostPolicy.subscribe(() => {
       this.requestUpdate();
     });
   }
@@ -500,6 +505,8 @@ class OpenClawShell extends LitElement {
     this.stopOverlaySubscription = undefined;
     this.stopRuntimeConfigSubscription?.();
     this.stopRuntimeConfigSubscription = undefined;
+    this.stopHostPolicySubscription?.();
+    this.stopHostPolicySubscription = undefined;
     this.stopThemeSubscription?.();
     this.stopThemeSubscription = undefined;
     this.agentsListClient = null;
@@ -660,9 +667,15 @@ class OpenClawShell extends LitElement {
   }
 
   private enabledRouteIds(): readonly RouteId[] {
-    return isWorkboardEnabledInConfigSnapshot(this.context?.runtimeConfig.state.configSnapshot)
+    const baseRoutes = isWorkboardEnabledInConfigSnapshot(
+      this.context?.runtimeConfig.state.configSnapshot,
+    )
       ? APP_ROUTE_IDS
       : ROUTE_IDS_WITHOUT_WORKBOARD;
+    const hostPolicy = this.context?.hostPolicy;
+    return hostPolicy
+      ? baseRoutes.filter((routeId) => hostPolicy.isRouteEnabled(routeId))
+      : baseRoutes;
   }
 
   private ensureAgentsList(snapshot: { client: GatewayBrowserClient | null; connected: boolean }) {
@@ -710,6 +723,12 @@ class OpenClawShell extends LitElement {
   private updateRouteState(routeState: ShellRouteState) {
     this.routeState = routeState;
     const context = this.context;
+    if (context && routeState.routeId && !context.hostPolicy.isRouteEnabled(routeState.routeId)) {
+      context.replace(
+        APP_ROUTE_IDS.find((routeId) => context.hostPolicy.isRouteEnabled(routeId)) ?? "chat",
+      );
+      return;
+    }
     if (context) {
       this.ensureAgentsList(context.gateway.snapshot);
     }

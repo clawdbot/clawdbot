@@ -28,6 +28,7 @@ import type {
 } from "./context.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
+import { createHostPolicyCapability } from "./host-policy.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import {
@@ -213,6 +214,28 @@ function createSkillWorkshopRevisionHandoff(): ApplicationSkillWorkshopRevisionH
   };
 }
 
+function resolveHostedGatewayUrl(path: string, basePath: string): string | undefined {
+  const trimmed = path.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    const pageHref = globalThis.location?.href ?? "http://127.0.0.1/";
+    const normalizedPath = trimmed.startsWith("/") ? trimmed : `${basePath}/${trimmed}`;
+    const url = new URL(normalizedPath, pageHref);
+    if (url.protocol === "ws:" || url.protocol === "wss:") {
+      return url.href;
+    }
+    if (url.protocol === "http:" || url.protocol === "https:") {
+      url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+      return url.href;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
 export type ApplicationRuntime = {
   readonly context: ApplicationContext<RouteId>;
   readonly router: ApplicationRouter;
@@ -251,7 +274,17 @@ export function bootstrapApplication(): ApplicationRuntime {
   }
 
   const settings = startup.settings;
-  const gateway = createApplicationGateway(settings, startup.password ?? "");
+  const hostPolicy = createHostPolicyCapability();
+  const gateway = createApplicationGateway(
+    settings,
+    startup.password ?? "",
+    undefined,
+    hostPolicy.preflightAction,
+    () => ({
+      gatewayUrl: resolveHostedGatewayUrl(hostPolicy.snapshot.gateway.path, basePath),
+      operatorScopes: hostPolicy.snapshot.gateway.scopes,
+    }),
+  );
   const agents = createAgentCapability(gateway);
   const agentIdentity = createAgentIdentityCapability(gateway);
   const agentSelection = createAgentSelectionCapability(gateway);
@@ -265,7 +298,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   });
   const sessions = createSessionCapability(gateway);
   const workboard = createWorkboardCapability();
-  const runtimeConfig = createRuntimeConfigCapability(gateway);
+  const runtimeConfig = createRuntimeConfigCapability(gateway, hostPolicy);
   const overlays = createApplicationOverlays(gateway);
   const navigation = createApplicationNavigationPreferences(settings);
   const theme = createApplicationTheme(settings);
@@ -327,6 +360,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   const context: ApplicationContext<RouteId> = {
     basePath,
     gateway,
+    hostPolicy,
     agents,
     agentIdentity,
     agentSelection,
@@ -342,6 +376,9 @@ export function bootstrapApplication(): ApplicationRuntime {
     webPush,
     skillWorkshopRevision,
     navigate: (routeId, options) => {
+      if (!context.hostPolicy.isRouteEnabled(routeId)) {
+        return;
+      }
       void router
         .navigate(routeId, context, { history: "push" }, routeLocation(routeId, options))
         .catch((error: unknown) => {
@@ -349,6 +386,9 @@ export function bootstrapApplication(): ApplicationRuntime {
         });
     },
     replace: (routeId, options) => {
+      if (!context.hostPolicy.isRouteEnabled(routeId)) {
+        return;
+      }
       void router
         .navigate(routeId, context, { history: "replace" }, routeLocation(routeId, options))
         .catch((error: unknown) => {
@@ -366,6 +406,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     confirmPendingGatewayConnection,
     cancelPendingGatewayConnection,
     start: async () => {
+      await hostPolicy.refresh(basePath);
       void config.refresh({ skipWithoutAuthCandidate: true });
       const routerStart = startApplicationRouter(router, history, basePath, context);
       gateway.start();

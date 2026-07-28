@@ -335,6 +335,7 @@ class SkillsPage extends LitElement {
         "skills",
         (routeId) => this.context.navigate(routeId),
         (routeId) => this.context.preload(routeId),
+        { hostPolicy: this.context.hostPolicy },
       )}
     `;
   }

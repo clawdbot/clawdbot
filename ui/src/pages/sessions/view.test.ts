@@ -307,6 +307,37 @@ describe("sessions view", () => {
     expect(onPatch).toHaveBeenLastCalledWith("agent:main:dashboard:1", { archived: false });
   });
 
+  it("disables session selection and bulk deletion when delete is host-locked", async () => {
+    const container = document.createElement("div");
+    const onDeleteSelected = vi.fn();
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent:main:dashboard:1",
+            kind: "direct",
+            updatedAt: Date.now(),
+          }),
+        ),
+        canDeleteSessions: false,
+        selectedKeys: new Set(["agent:main:dashboard:1"]),
+        onDeleteSelected,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const deleteButton = container.querySelector<HTMLButtonElement>(".data-table-bulk-bar .danger");
+    const checkboxes = Array.from(
+      container.querySelectorAll<HTMLInputElement>('table input[type="checkbox"]'),
+    );
+    expect(deleteButton?.disabled).toBe(true);
+    expect(checkboxes.every((checkbox) => checkbox.disabled)).toBe(true);
+
+    deleteButton?.click();
+    expect(onDeleteSelected).not.toHaveBeenCalled();
+  });
+
   it("keeps pinned sessions above newer unpinned sessions", async () => {
     const container = document.createElement("div");
     render(

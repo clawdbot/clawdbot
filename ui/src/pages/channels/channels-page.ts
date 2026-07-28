@@ -375,6 +375,7 @@ class ChannelsPage extends LitElement {
         "channels",
         (routeId) => context.navigate(routeId),
         (routeId) => context.preload(routeId),
+        { hostPolicy: context.hostPolicy },
       )}
     `;
   }

@@ -401,6 +401,24 @@ describe("GatewayBrowserClient", () => {
     vi.unstubAllGlobals();
   });
 
+  it("rejects Gateway requests when a host request preflight blocks the method", async () => {
+    const client = new GatewayBrowserClient({
+      url: DEFAULT_GATEWAY_URL,
+      requestPreflight: (method) => ({
+        ok: false,
+        code: "HOST_POLICY_BLOCKED",
+        message: `${method} blocked`,
+        details: { method },
+      }),
+    });
+
+    await expect(client.request("sessions.delete")).rejects.toMatchObject({
+      gatewayCode: "HOST_POLICY_BLOCKED",
+      details: { method: "sessions.delete" },
+    });
+    expect(wsInstances).toHaveLength(0);
+  });
+
   it("requests full control ui operator scopes with explicit shared auth", async () => {
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
@@ -413,6 +431,18 @@ describe("GatewayBrowserClient", () => {
     expect(connectFrame.params?.minProtocol).toBe(MIN_CLIENT_PROTOCOL_VERSION);
     expect(connectFrame.params?.maxProtocol).toBe(PROTOCOL_VERSION);
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
+  });
+
+  it("uses host-provided operator scopes when connecting", async () => {
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+      operatorScopes: ["operator.read", "operator.write"],
+    });
+
+    const { connectFrame } = await startConnect(client);
+
+    expect(connectFrame.params?.scopes).toEqual(["operator.read", "operator.write"]);
   });
 
   it("adds the current Control UI protocol to bare protocol mismatch errors", () => {

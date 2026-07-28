@@ -8,6 +8,7 @@ import {
   titleForRoute,
 } from "../app-navigation.ts";
 import { isRouteId, pathForRoute, type RouteId } from "../app-route-paths.ts";
+import type { HostPolicyCapability } from "../app/host-policy.ts";
 import { icons } from "../components/icons.ts";
 import { t } from "../i18n/index.ts";
 
@@ -18,11 +19,14 @@ function renderSettingsSectionNav(
   currentRouteId: RouteId,
   navigate: (routeId: RouteId) => void,
   preload?: (routeId: RouteId) => Promise<void> | void,
+  hostPolicy?: HostPolicyCapability,
 ) {
   if (!isSettingsNavigationRoute(currentRouteId)) {
     return nothing;
   }
-  const routes = SETTINGS_NAVIGATION_ROUTES.filter(isRouteId);
+  const routes = SETTINGS_NAVIGATION_ROUTES.filter(
+    (routeId) => isRouteId(routeId) && (hostPolicy?.isRouteEnabled(routeId) ?? true),
+  );
   return html`
     <nav class="settings-section-nav" aria-label=${t("common.settingsSections")}>
       ${routes.map((routeId) => {
@@ -72,14 +76,14 @@ export function renderSettingsWorkspace(
   routeId: RouteId,
   navigate: (routeId: RouteId) => void,
   preload?: (routeId: RouteId) => Promise<void> | void,
-  options: { fillHeight?: boolean } = {},
+  options: { fillHeight?: boolean; hostPolicy?: HostPolicyCapability } = {},
 ) {
   const className = options.fillHeight
     ? "settings-workspace settings-workspace--fill-height"
     : "settings-workspace";
   return html`
     <section class=${className}>
-      ${renderSettingsSectionNav(basePath, routeId, navigate, preload)}
+      ${renderSettingsSectionNav(basePath, routeId, navigate, preload, options.hostPolicy)}
       <div class="settings-workspace__body">${body}</div>
     </section>
   `;

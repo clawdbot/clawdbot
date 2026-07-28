@@ -271,6 +271,47 @@ describe("renderQuickSettings", () => {
     ]);
   });
 
+  it("greys out quick deployment config controls when host settings are read-only", () => {
+    const onThinkingChange = vi.fn();
+    const onFastModeChange = vi.fn();
+    const onBrowserEnabledToggle = vi.fn();
+    const onToolProfileChange = vi.fn();
+    const onSelectPreset = vi.fn();
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(
+        createProps({
+          readOnly: true,
+          configDirty: true,
+          configReady: true,
+          onThinkingChange,
+          onFastModeChange,
+          onBrowserEnabledToggle,
+          onToolProfileChange,
+          onSelectPreset,
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".qs-container--host-readonly")).toBeInstanceOf(HTMLElement);
+    expect(expectButtonByText(expectRowByLabel(container, "Thinking"), "Low").disabled).toBe(true);
+    expect(expectButtonByText(expectRowByLabel(container, "Fast mode"), "Fast").disabled).toBe(
+      true,
+    );
+    expect(expectRowByLabel(container, "Browser enabled").querySelector("input")).toHaveProperty(
+      "disabled",
+      true,
+    );
+    expect(expectButtonByText(container, "full").disabled).toBe(true);
+    const presetButton = container.querySelector(".qs-preset");
+    expect(presetButton).toBeInstanceOf(HTMLButtonElement);
+    expect((presetButton as HTMLButtonElement).disabled).toBe(true);
+    expect(expectButtonByText(container, "Save Changes").disabled).toBe(true);
+    expect(expectButtonByText(container, "Apply Now").disabled).toBe(true);
+  });
+
   it("opens mobile pairing from Security quick settings", () => {
     const onPairMobile = vi.fn();
     const container = document.createElement("div");

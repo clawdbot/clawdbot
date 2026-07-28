@@ -731,11 +731,11 @@ class AppSidebar extends LitElement {
   }
 
   private async deleteSession(session: SidebarRecentSession) {
-    if (!window.confirm(t("sessionsView.deleteSessionConfirm", { session: session.label }))) {
+    const context = this.context;
+    if (!context || !context.hostPolicy.canInvokeAction("sessions.delete")) {
       return;
     }
-    const context = this.context;
-    if (!context) {
+    if (!window.confirm(t("sessionsView.deleteSessionConfirm", { session: session.label }))) {
       return;
     }
     const { selectedAgentId } = this.getSessionNavigationState();
@@ -861,6 +861,7 @@ class AppSidebar extends LitElement {
         hello: context?.gateway.snapshot.hello,
       }),
     );
+    const deleteAllowed = context?.hostPolicy.canInvokeAction("sessions.delete") ?? true;
     const groups = this.knownSessionGroups();
     return html`
       <div
@@ -1035,7 +1036,7 @@ class AppSidebar extends LitElement {
           type="button"
           class="sidebar-session-menu__item sidebar-session-menu__item--destructive"
           role="menuitem"
-          ?disabled=${!this.connected || !archiveAllowed}
+          ?disabled=${!this.connected || !archiveAllowed || !deleteAllowed}
           @click=${() => {
             this.closeSessionMenu();
             void this.deleteSession(session);
@@ -1648,6 +1649,7 @@ class AppSidebar extends LitElement {
     });
     const settingsActive =
       this.activeRouteId !== undefined && isSettingsNavigationRoute(this.activeRouteId);
+    const settingsEnabled = this.isRouteEnabled("config");
     return html`
       <aside class="sidebar ${this.collapsed ? "sidebar--collapsed" : ""}">
         <!-- macOS app only (CSS-gated on html.openclaw-native-macos): use the
@@ -1682,28 +1684,35 @@ class AppSidebar extends LitElement {
                 ></span>
               </openclaw-tooltip>
               <span class="sidebar-footer-bar__spacer"></span>
-              <openclaw-tooltip .content=${titleForRoute("config")}>
-                <a
-                  href=${pathForRoute("config", this.basePath)}
-                  class="sidebar-footer-icon ${settingsActive ? "sidebar-footer-icon--active" : ""}"
-                  aria-label=${titleForRoute("config")}
-                  aria-current=${settingsActive ? "page" : nothing}
-                  @focus=${(event: Event) => this.preloadRoute("config", event)}
-                  @blur=${this.cancelPreload}
-                  @pointerenter=${(event: Event) => this.preloadRoute("config", event)}
-                  @pointerleave=${this.cancelPreload}
-                  @touchstart=${(event: TouchEvent) => this.preloadRoute("config", event, true)}
-                  @click=${(event: MouseEvent) => {
-                    if (!shouldHandleNavigationClick(event)) {
-                      return;
-                    }
-                    event.preventDefault();
-                    this.onNavigate?.("config");
-                  }}
-                >
-                  ${icons.settings}
-                </a>
-              </openclaw-tooltip>
+              ${settingsEnabled
+                ? html`
+                    <openclaw-tooltip .content=${titleForRoute("config")}>
+                      <a
+                        href=${pathForRoute("config", this.basePath)}
+                        class="sidebar-footer-icon ${settingsActive
+                          ? "sidebar-footer-icon--active"
+                          : ""}"
+                        aria-label=${titleForRoute("config")}
+                        aria-current=${settingsActive ? "page" : nothing}
+                        @focus=${(event: Event) => this.preloadRoute("config", event)}
+                        @blur=${this.cancelPreload}
+                        @pointerenter=${(event: Event) => this.preloadRoute("config", event)}
+                        @pointerleave=${this.cancelPreload}
+                        @touchstart=${(event: TouchEvent) =>
+                          this.preloadRoute("config", event, true)}
+                        @click=${(event: MouseEvent) => {
+                          if (!shouldHandleNavigationClick(event)) {
+                            return;
+                          }
+                          event.preventDefault();
+                          this.onNavigate?.("config");
+                        }}
+                      >
+                        ${icons.settings}
+                      </a>
+                    </openclaw-tooltip>
+                  `
+                : nothing}
               <openclaw-tooltip
                 .content=${t("chat.docsOpensInNewTab", { label: t("common.docs") })}
               >

@@ -463,7 +463,12 @@ class SessionsPage extends LitElement {
   private async deleteSelected() {
     const context = this.context;
     const keys = [...this.selectedKeys];
-    if (!context || keys.length === 0 || this.loading) {
+    if (
+      !context ||
+      keys.length === 0 ||
+      this.loading ||
+      !context.hostPolicy.canInvokeAction("sessions.delete")
+    ) {
       return;
     }
     if (
@@ -773,6 +778,7 @@ class SessionsPage extends LitElement {
         page: this.page,
         pageSize: this.pageSize,
         selectedKeys: this.selectedKeys,
+        canDeleteSessions: context.hostPolicy.canInvokeAction("sessions.delete"),
         workboardSessionKeys: new Set(
           workboardState.cards
             .flatMap((card) => [card.sessionKey, card.execution?.sessionKey])

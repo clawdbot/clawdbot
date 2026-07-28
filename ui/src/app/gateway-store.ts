@@ -18,6 +18,10 @@ import type {
 import { loadSettings, patchSettings } from "./settings.ts";
 
 type GatewayClientFactory = (opts: GatewayBrowserClientOptions) => GatewayBrowserClient;
+type HostedGatewayConfigProvider = () => {
+  gatewayUrl?: string;
+  operatorScopes?: readonly string[];
+};
 
 const defaultClientFactory: GatewayClientFactory = (opts) => new GatewayBrowserClient(opts);
 
@@ -25,6 +29,8 @@ export function createApplicationGateway(
   initialSettings: ReturnType<typeof loadSettings>,
   initialPassword = "",
   createClient: GatewayClientFactory = defaultClientFactory,
+  requestPreflight?: GatewayBrowserClientOptions["requestPreflight"],
+  hostedGatewayConfig?: HostedGatewayConfigProvider,
 ): ApplicationGateway {
   let settings = initialSettings;
   let connection: ApplicationGatewayConnection = {
@@ -89,7 +95,11 @@ export function createApplicationGateway(
 
   const connect = (overrides: ApplicationGatewayConnectOptions = {}) => {
     const { sessionKey: requestedSessionKey, ...connectionOverrides } = overrides;
-    const nextConnection = { ...connection, ...connectionOverrides };
+    const hostedConfig = hostedGatewayConfig?.();
+    const hostedConnection = hostedConfig?.gatewayUrl
+      ? { gatewayUrl: hostedConfig.gatewayUrl }
+      : {};
+    const nextConnection = { ...connection, ...connectionOverrides, ...hostedConnection };
     const hasRequestedSessionKey = requestedSessionKey !== undefined;
     const nextSessionKey = hasRequestedSessionKey
       ? requestedSessionKey.trim()
@@ -117,6 +127,8 @@ export function createApplicationGateway(
       clientVersion: "dev",
       mode: "webchat",
       instanceId: generateUUID(),
+      operatorScopes: hostedConfig?.operatorScopes,
+      requestPreflight,
       onHello: (hello: GatewayHelloOk) => {
         if (client !== nextClient) {
           return;

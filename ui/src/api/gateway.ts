@@ -306,6 +306,15 @@ export type GatewayBrowserClientOptions = {
   onGap?: (info: { expected: number; received: number }) => void;
   onRequestTiming?: (timing: GatewayRequestTiming) => void;
   onConnectTiming?: (timing: GatewayConnectTiming) => void;
+  operatorScopes?: readonly string[];
+  requestPreflight?: (method: string) =>
+    | { ok: true }
+    | {
+        ok: false;
+        code: string;
+        message: string;
+        details?: unknown;
+      };
 };
 
 export type GatewayEventListener = (evt: GatewayEventFrame) => void;
@@ -430,7 +439,13 @@ function formatBrowserWebSocketConstructorError(err: unknown, url: string): Gate
   };
 }
 
-function resolveControlUiConnectScopes(selectedAuth: SelectedConnectAuth): string[] {
+function resolveControlUiConnectScopes(
+  selectedAuth: SelectedConnectAuth,
+  operatorScopes?: readonly string[],
+): string[] {
+  if (operatorScopes && operatorScopes.length > 0) {
+    return [...operatorScopes];
+  }
   const isUsingStoredDeviceToken =
     Boolean(selectedAuth.storedToken) &&
     (selectedAuth.resolvedDeviceToken === selectedAuth.storedToken ||
@@ -821,7 +836,7 @@ export class GatewayBrowserClient {
         deviceId: deviceIdentity.deviceId,
       });
     }
-    const scopes = resolveControlUiConnectScopes(selectedAuth);
+    const scopes = resolveControlUiConnectScopes(selectedAuth, this.opts.operatorScopes);
     const device = await buildGatewayConnectDevice({
       deviceIdentity,
       client,
@@ -1121,6 +1136,16 @@ export class GatewayBrowserClient {
   }
 
   request<T = unknown>(method: string, params?: unknown): Promise<T> {
+    const preflight = this.opts.requestPreflight?.(method);
+    if (preflight && !preflight.ok) {
+      return Promise.reject(
+        new GatewayRequestError({
+          code: preflight.code,
+          message: preflight.message,
+          details: preflight.details,
+        }),
+      );
+    }
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error("gateway not connected"));
     }

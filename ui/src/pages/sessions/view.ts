@@ -59,6 +59,7 @@ export type SessionsProps = {
   page: number;
   pageSize: number;
   selectedKeys: Set<string>;
+  canDeleteSessions?: boolean;
   expandedSessionKey: string | null;
   checkpointItemsByKey: Record<string, SessionCompactionCheckpoint[]>;
   checkpointLoadingKey: string | null;
@@ -702,6 +703,7 @@ function renderOverrideSelect(params: {
 }
 
 export function renderSessions(props: SessionsProps) {
+  const canDeleteSessions = props.canDeleteSessions ?? true;
   const rawRows = props.result?.sessions ?? [];
   const filtered = filterRows(rawRows, props.searchQuery, props.agentIdentityById);
   const sorted = sortRows(filtered, props.sortColumn, props.sortDir);
@@ -922,7 +924,7 @@ export function renderSessions(props: SessionsProps) {
                 </button>
                 <button
                   class="btn btn--sm danger"
-                  ?disabled=${props.loading}
+                  ?disabled=${props.loading || !canDeleteSessions}
                   @click=${props.onDeleteSelected}
                 >
                   ${icons.trash} ${t("sessionsView.deleteSelected")}
@@ -943,6 +945,7 @@ export function renderSessions(props: SessionsProps) {
                         paginated.every((r) => props.selectedKeys.has(r.key))}
                         .indeterminate=${paginated.some((r) => props.selectedKeys.has(r.key)) &&
                         !paginated.every((r) => props.selectedKeys.has(r.key))}
+                        ?disabled=${!canDeleteSessions}
                         @change=${() => {
                           const allSelected = paginated.every((r) => props.selectedKeys.has(r.key));
                           if (allSelected) {
@@ -1031,6 +1034,7 @@ export function renderSessions(props: SessionsProps) {
 }
 
 function renderRows(row: GatewaySessionRow, props: SessionsProps) {
+  const canDeleteSessions = props.canDeleteSessions ?? true;
   const updated = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : t("common.na");
   const latestCheckpoint = row.latestCompactionCheckpoint;
   const checkpointCount = row.compactionCheckpointCount ?? 0;
@@ -1127,6 +1131,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
         <input
           type="checkbox"
           .checked=${props.selectedKeys.has(row.key)}
+          ?disabled=${!canDeleteSessions}
           @change=${() => props.onToggleSelect(row.key)}
           aria-label=${t("sessionsView.selectSession")}
         />

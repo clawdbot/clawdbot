@@ -297,6 +297,7 @@ class NodesPage extends LitElement implements NodesPageDataState {
         "nodes",
         (routeId) => this.context.navigate(routeId),
         (routeId) => this.context.preload(routeId),
+        { hostPolicy: this.context.hostPolicy },
       )}
     `;
   }

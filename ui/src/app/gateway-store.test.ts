@@ -153,4 +153,51 @@ describe("createApplicationGateway reconnecting snapshot", () => {
     // The superseded client cannot demote the fresh attempt's snapshot.
     expect(gateway.snapshot.reconnecting).toBe(true);
   });
+
+  it("passes the host request preflight to GatewayBrowserClient", () => {
+    const requestPreflight = vi.fn(() => ({ ok: true as const }));
+    const clients: FakeGatewayClient[] = [];
+    const gateway = createApplicationGateway(
+      loadSettings(),
+      "",
+      (opts) => {
+        const client = new FakeGatewayClient(opts);
+        clients.push(client);
+        return client as unknown as GatewayBrowserClient;
+      },
+      requestPreflight,
+    );
+
+    gateway.start();
+
+    expect(clients.at(-1)?.opts.requestPreflight).toBe(requestPreflight);
+  });
+
+  it("uses host Gateway URL and scopes when creating the browser client", () => {
+    const clients: FakeGatewayClient[] = [];
+    const gateway = createApplicationGateway(
+      loadSettings(),
+      "",
+      (opts) => {
+        const client = new FakeGatewayClient(opts);
+        clients.push(client);
+        return client as unknown as GatewayBrowserClient;
+      },
+      undefined,
+      () => ({
+        gatewayUrl: "wss://lobster.example/v1/openclaw-gateway?client_family=hosted-control-ui",
+        operatorScopes: ["operator.read", "operator.write"],
+      }),
+    );
+
+    gateway.start();
+
+    expect(gateway.connection.gatewayUrl).toBe(
+      "wss://lobster.example/v1/openclaw-gateway?client_family=hosted-control-ui",
+    );
+    expect(clients.at(-1)?.opts).toMatchObject({
+      url: "wss://lobster.example/v1/openclaw-gateway?client_family=hosted-control-ui",
+      operatorScopes: ["operator.read", "operator.write"],
+    });
+  });
 });
