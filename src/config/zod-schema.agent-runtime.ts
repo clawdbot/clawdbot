@@ -831,6 +831,7 @@ export const MemorySearchSchema = z
       .object({
         maxResults: z.number().int().positive().optional(),
         minScore: z.number().min(0).max(1).optional(),
+        primaryTimeoutMs: z.number().int().min(100).max(14_000).optional(),
       })
       .strict()
       .optional(),

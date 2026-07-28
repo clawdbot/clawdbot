@@ -186,8 +186,10 @@ and `sources` alone do not export transcripts into QMD. See
 **No results?** Run `openclaw memory status` to check the index. If empty, run
 `openclaw memory index --force`.
 
-**Only keyword matches?** Your embedding provider may not be configured. Check
-`openclaw memory status --deep`.
+**Only keyword matches?** Your embedding provider may not be configured, or its
+query exceeded `memory.search.query.primaryTimeoutMs` and the same call fell
+back to model-independent FTS. Check the result's `mode`/`debug.fallback` fields
+and run `openclaw memory status --deep`.
 
 **Local embeddings time out?** `ollama`, `lmstudio`, and `local` use longer
 provider-owned batch deadlines. Check provider health and rerun

@@ -122,6 +122,11 @@ export type MemorySearchConfig = {
   query?: {
     maxResults?: number;
     minScore?: number;
+    /**
+     * Maximum time for the primary query embedding before the built-in engine
+     * returns model-independent lexical FTS results from the same index.
+     */
+    primaryTimeoutMs?: number;
   };
   /** Index cache behavior. */
   cache?: {

@@ -256,6 +256,8 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     "Maximum number of memory hits returned from search before downstream reranking and prompt injection. Raise for broader recall, or lower for tighter prompts and faster responses.",
   "memory.search.query.minScore":
     "Minimum relevance score threshold for including memory results in final recall output. Increase to reduce weak/noisy matches, or lower when you need more permissive retrieval.",
+  "memory.search.query.primaryTimeoutMs":
+    "Maximum milliseconds allowed for the primary query embedding before built-in memory search returns model-independent lexical FTS results from the same index. Lower this when a cold local provider approaches the outer memory_search deadline; the next query still retries the primary.",
   "memory.search.cache.enabled":
     "Caches computed chunk embeddings in SQLite so reindexing and incremental updates run faster (default: true). Keep this enabled unless investigating cache correctness or minimizing disk usage.",
   memory: "Memory backend configuration (global).",

@@ -356,10 +356,11 @@ defaults rather than exposing per-install timing switches.
 
 All under `memory.search.query`:
 
-| Key          | Type     | Default | Description                               |
-| ------------ | -------- | ------- | ----------------------------------------- |
-| `maxResults` | `number` | `6`     | Max memory hits returned before injection |
-| `minScore`   | `number` | `0.35`  | Minimum relevance score to include a hit  |
+| Key                | Type     | Default | Description                                                                                                                               |
+| ------------------ | -------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `maxResults`       | `number` | `6`     | Max memory hits returned before injection                                                                                                 |
+| `minScore`         | `number` | `0.35`  | Minimum relevance score to include a hit                                                                                                  |
+| `primaryTimeoutMs` | `number` | `10000` | Primary query-embedding budget before the built-in engine returns model-independent FTS results from the same index (range `100`-`14000`) |
 
 Hybrid retrieval remains enabled. The builtin engine always applies a fixed
 30-day recency half-life to dated daily notes and a fixed importance
@@ -381,11 +382,18 @@ auto-injected.
       query: {
         maxResults: 6,
         minScore: 0.35,
+        primaryTimeoutMs: 10000,
       },
     },
   },
 }
 ```
+
+`primaryTimeoutMs` does not change provider or index identity and does not
+trigger a vector reindex. When this budget expires, the current call is
+reported as `mode: "fts-only"` with a `primary-timeout:<ms>ms` debug fallback;
+the next call still tries the configured primary provider. Caller cancellation
+always wins and does not produce lexical fallback results.
 
 ---
 

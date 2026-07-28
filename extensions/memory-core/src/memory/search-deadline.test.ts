@@ -38,7 +38,11 @@ describe("runMemorySearchWithDeadline", () => {
 
     await resultAssertion;
     expect(taskSignal?.aborted).toBe(true);
-    expect(taskSignal?.reason).toEqual(new Error("memory_search timed out after 15s"));
+    expect(taskSignal?.reason).toMatchObject({
+      message: "memory_search timed out after 15s",
+      code: "MEMORY_SEARCH_TIMEOUT",
+      timeoutMs: 15_000,
+    });
     expect(vi.getTimerCount()).toBe(0);
   });
 

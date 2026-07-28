@@ -384,7 +384,7 @@ describe("memory index", () => {
     sessionMemory?: boolean;
     rememberAcrossConversations?: boolean;
     provider?: string;
-    fallback?: "none" | "gemini" | "fallback-provider";
+    fallback?: "none" | "gemini" | "fallback-provider" | "local";
     providerAliases?: NonNullable<NonNullable<TestCfg["models"]>["providers"]>;
     batchEnabled?: boolean;
     model?: string;
@@ -397,6 +397,7 @@ describe("memory index", () => {
     vectorEnabled?: boolean;
     cacheEnabled?: boolean;
     minScore?: number;
+    primaryTimeoutMs?: number;
     onSearch?: boolean;
     hybrid?: {
       enabled: boolean;
@@ -420,7 +421,10 @@ describe("memory index", () => {
                 batch: { enabled: true },
               }
             : undefined,
-          query: { minScore: params.minScore ?? 0 },
+          query: {
+            minScore: params.minScore ?? 0,
+            primaryTimeoutMs: params.primaryTimeoutMs,
+          },
           cache: params.cacheEnabled ? { enabled: true } : undefined,
           extraPaths: params.extraPaths,
           multimodal: params.multimodal,
@@ -2074,6 +2078,117 @@ describe("memory index", () => {
         hybrid: { enabled: true, vectorWeight: 0, textWeight: 1 },
       }),
     );
+  });
+
+  it("returns same-call FTS results when a cold primary exceeds its budget, then keeps the warm primary", async () => {
+    const cfg = createCfg({
+      provider: "ollama",
+      fallback: "local",
+      primaryTimeoutMs: 100,
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+
+    type QueryOptions = { signal?: AbortSignal };
+    type TestProvider = {
+      id: string;
+      model: string;
+      embedQuery: (text: string, options?: QueryOptions) => Promise<number[]>;
+      embedBatch: (texts: string[]) => Promise<number[][]>;
+      close: () => Promise<void>;
+    };
+    const provider = (
+      manager as unknown as {
+        provider: TestProvider;
+      }
+    ).provider;
+    provider.embedQuery = async (_text, options) =>
+      await new Promise<number[]>((_, reject) => {
+        options?.signal?.addEventListener("abort", () => reject(options.signal?.reason), {
+          once: true,
+        });
+      });
+
+    const coldDebug: Array<{
+      effectiveMode?: string;
+      fallback?: string;
+    }> = [];
+    const providerCreationsBeforeSearch = providerCalls.length;
+    const startedAt = Date.now();
+    const coldResults = await manager.search("alpha", {
+      onDebug: (debug) => coldDebug.push(debug),
+    });
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(elapsedMs).toBeLessThan(1_000);
+    expect(coldResults.some((result) => result.path.endsWith("memory/2026-01-12.md"))).toBe(true);
+    expect(coldDebug.at(-1)).toMatchObject({
+      effectiveMode: "fts-only",
+      fallback: "primary-timeout:100ms",
+    });
+    expect(providerCalls).toHaveLength(providerCreationsBeforeSearch);
+    expect(manager.status().fallback).toBeUndefined();
+
+    provider.embedQuery = async () => [1, 0, 0, 0];
+    const warmDebug: Array<{
+      effectiveMode?: string;
+      fallback?: string;
+    }> = [];
+    const warmResults = await manager.search("alpha", {
+      onDebug: (debug) => warmDebug.push(debug),
+    });
+
+    expect(warmResults.some((result) => result.path.endsWith("memory/2026-01-12.md"))).toBe(true);
+    expect(warmDebug.at(-1)).toMatchObject({
+      configuredMode: "hybrid",
+      effectiveMode: "hybrid",
+    });
+    expect(warmDebug.at(-1)?.fallback).toBeUndefined();
+    expect(manager.status().provider).toBe("ollama");
+  });
+
+  it("honors caller abort instead of returning primary-timeout FTS fallback", async () => {
+    const cfg = createCfg({
+      provider: "ollama",
+      fallback: "local",
+      primaryTimeoutMs: 1_000,
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+
+    type QueryOptions = { signal?: AbortSignal };
+    const provider = (
+      manager as unknown as {
+        provider: {
+          embedQuery: (text: string, options?: QueryOptions) => Promise<number[]>;
+        };
+      }
+    ).provider;
+    provider.embedQuery = async (_text, options) =>
+      await new Promise<number[]>((_, reject) => {
+        options?.signal?.addEventListener("abort", () => reject(options.signal?.reason), {
+          once: true,
+        });
+      });
+
+    const debug: Array<{ effectiveMode?: string; fallback?: string }> = [];
+    const controller = new AbortController();
+    const callerAbort = new Error("caller stopped waiting");
+    const pending = manager.search("alpha", {
+      signal: controller.signal,
+      onDebug: (entry) => debug.push(entry),
+    });
+    setTimeout(() => controller.abort(callerAbort), 20);
+
+    await expect(pending).rejects.toBe(callerAbort);
+    expect(debug.some((entry) => entry.effectiveMode === "fts-only")).toBe(false);
+    expect(debug.some((entry) => entry.fallback?.startsWith("primary-timeout") === true)).toBe(
+      false,
+    );
+    expect(manager.status().provider).toBe("ollama");
+    expect(manager.status().fallback).toBeUndefined();
   });
 
   it("retries transient query embedding transport failures during search", async () => {

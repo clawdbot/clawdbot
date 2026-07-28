@@ -86,6 +86,7 @@ import {
   runMemorySyncWithReadonlyRecovery,
   type MemoryReadonlyRecoveryState,
 } from "./manager-sync-control.js";
+import { isMemorySearchTimeoutError, runMemorySearchWithDeadline } from "./search-deadline.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
 const LOCAL_EMBEDDING_RUNTIME_FACTS = Symbol.for("openclaw.localEmbeddingRuntimeFacts");
@@ -1053,6 +1054,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       // every other caller defaults to the configured search corpus.
       const sourceFilterList = searchSources ?? this.settings.searchSources;
       const hybrid = this.settings.query.hybrid;
+      const configuredSearchMode =
+        hybrid.enabled && this.fts.enabled && this.fts.available ? "hybrid" : "vector";
       const candidates = Math.min(
         200,
         Math.max(1, Math.floor(maxResults * hybrid.candidateMultiplier)),
@@ -1095,8 +1098,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       };
 
       // If FTS isn't available, hybrid mode cannot use keyword search; degrade to vector-only.
-      const loadKeywordResults = async () =>
-        hybrid.enabled && this.fts.enabled && this.fts.available
+      const loadKeywordResults = async (force = false) =>
+        (force || hybrid.enabled) && this.fts.enabled && this.fts.available
           ? await this.searchKeywordWithFallback(
               cleaned,
               candidates,
@@ -1125,14 +1128,46 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           });
         }
         try {
-          queryVec = await this.embedQueryWithRetry(
-            cleaned,
-            opts?.signal,
-            semanticProvider,
-            false,
-            semanticProviderRuntime,
-          );
+          queryVec = await runMemorySearchWithDeadline({
+            timeoutMs: this.settings.query.primaryTimeoutMs,
+            parentSignal: opts?.signal,
+            run: async (signal) =>
+              await this.embedQueryWithRetry(
+                cleaned,
+                signal,
+                semanticProvider,
+                false,
+                semanticProviderRuntime,
+              ),
+          });
         } catch (err) {
+          if (
+            isMemorySearchTimeoutError(err, this.settings.query.primaryTimeoutMs) &&
+            !opts?.signal?.aborted &&
+            this.fts.enabled &&
+            this.fts.available
+          ) {
+            if (!hybrid.enabled) {
+              keywordResults = await loadKeywordResults(true);
+            }
+            const timeoutFallback = `primary-timeout:${this.settings.query.primaryTimeoutMs}ms`;
+            opts?.onDebug?.({
+              backend: "builtin",
+              configuredMode: configuredSearchMode,
+              effectiveMode: "fts-only",
+              fallback: timeoutFallback,
+            });
+            log.warn(
+              `memory search: primary query embedding exceeded ${this.settings.query.primaryTimeoutMs}ms; ` +
+                "using keyword-only FTS results",
+            );
+            return await this.finalizeKeywordOnlyResults({
+              results: keywordResults,
+              temporalDecay: hybrid.temporalDecay,
+              maxResults,
+              minScore,
+            });
+          }
           releaseSemanticProvider();
           this.markLocalEmbeddingProviderDegraded(err);
           // An aborted caller already stopped waiting; skip fallback-provider
@@ -1203,6 +1238,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       } finally {
         releaseSemanticProvider();
       }
+      opts?.onDebug?.({
+        backend: "builtin",
+        configuredMode: configuredSearchMode,
+        effectiveMode: configuredSearchMode,
+      });
       const hasVector = queryVec.some((v) => v !== 0);
       const vectorResults = hasVector
         ? await this.searchVector(

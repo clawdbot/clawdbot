@@ -547,7 +547,7 @@ describe("memory search config", () => {
               extensionPath: "/opt/sqlite-vec.dylib",
             },
           },
-          query: { maxResults: 4, minScore: 0.2 },
+          query: { maxResults: 4, minScore: 0.2, primaryTimeoutMs: 8_000 },
         },
       },
 
@@ -559,7 +559,7 @@ describe("memory search config", () => {
             default: true,
             memory: {
               search: {
-                query: { maxResults: 8 },
+                query: { maxResults: 8, primaryTimeoutMs: 6_000 },
               },
             },
           },
@@ -571,8 +571,28 @@ describe("memory search config", () => {
     expect(resolved?.model).toBe("text-embedding-3-small");
     expect(resolved?.query.maxResults).toBe(8);
     expect(resolved?.query.minScore).toBe(0.2);
+    expect(resolved?.query.primaryTimeoutMs).toBe(6_000);
     expect(resolved?.store.vector.enabled).toBe(true);
     expect(resolved?.store.vector.extensionPath).toBe("/opt/sqlite-vec.dylib");
+  });
+
+  it("bounds the primary query budget below the memory tool deadline", () => {
+    const defaultResolved = resolveMemorySearchConfig(configWithDefaultProvider("ollama"), "main");
+    expect(defaultResolved?.query.primaryTimeoutMs).toBe(10_000);
+
+    const bounded = resolveMemorySearchConfig(
+      asConfig({
+        memory: {
+          search: {
+            provider: "ollama",
+            query: { primaryTimeoutMs: 14_000 },
+          },
+        },
+        agents: { defaults: {} },
+      }),
+      "main",
+    );
+    expect(bounded?.query.primaryTimeoutMs).toBe(14_000);
   });
 
   it("merges extra memory paths from defaults and overrides", () => {

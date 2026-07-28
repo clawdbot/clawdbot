@@ -1062,6 +1062,53 @@ describe("memory_search unavailable payloads", () => {
     });
   });
 
+  it("reports builtin primary-timeout fallback as FTS-only instead of semantic", async () => {
+    setMemoryBackend("builtin");
+    setMemorySearchImpl(async (opts) => {
+      opts?.onDebug?.({
+        backend: "builtin",
+        configuredMode: "hybrid",
+        effectiveMode: "fts-only",
+        fallback: "primary-timeout:8000ms",
+      });
+      return [
+        {
+          path: "MEMORY.md",
+          startLine: 1,
+          endLine: 2,
+          score: 0.7,
+          snippet: "lexical result",
+          source: "memory",
+        },
+      ];
+    });
+
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off" },
+      },
+    });
+    const result = await tool.execute("builtin-primary-timeout", {
+      query: "lexical result",
+    });
+    const details = result.details as {
+      mode?: string;
+      debug?: {
+        configuredMode?: string;
+        effectiveMode?: string;
+        fallback?: string;
+      };
+    };
+
+    expect(details.mode).toBe("fts-only");
+    expect(details.debug).toMatchObject({
+      configuredMode: "hybrid",
+      effectiveMode: "fts-only",
+      fallback: "primary-timeout:8000ms",
+    });
+  });
+
   it("returns unavailable metadata when the index identity is paused", async () => {
     let searchCalls = 0;
     setMemorySearchImpl(async () => {

@@ -769,10 +769,7 @@ export function createMemorySearchTool(options: {
                 searchDebug = {
                   backend: status.backend,
                   configuredMode: latestDebug?.configuredMode,
-                  effectiveMode:
-                    status.backend === "qmd"
-                      ? (latestDebug?.effectiveMode ?? latestDebug?.configuredMode)
-                      : "n/a",
+                  effectiveMode: latestDebug?.effectiveMode ?? latestDebug?.configuredMode,
                   fallback: latestDebug?.fallback,
                   managerMs,
                   searchMs,
