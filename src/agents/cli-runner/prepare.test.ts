@@ -26,7 +26,10 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { resolveApiKeyForProfile as resolveApiKeyForProfileImpl } from "../auth-profiles/oauth.js";
-import { saveAuthProfileStore } from "../auth-profiles/store.js";
+import {
+  loadAuthProfileStoreWithoutExternalProfiles,
+  saveAuthProfileStore,
+} from "../auth-profiles/store.js";
 import {
   resetCliAuthEpochTestDeps,
   setCliAuthEpochTestDeps,
@@ -782,11 +785,18 @@ describe("prepareCliRunContext", () => {
     expect(prepareExecution.mock.calls[0]?.[0]).not.toHaveProperty("authCredential");
   });
 
-  it("refreshes and forwards a selected Claude CLI OAuth profile", async () => {
+  it("persists and forwards a refreshed selected Claude CLI OAuth profile", async () => {
     const { dir } = fixture.session;
     const agentDir = path.join(dir, "agents", "main", "agent");
     const authProfileId = "anthropic:claude-cli";
     const prepareExecution = vi.fn(async () => undefined);
+    const refreshedCredential = {
+      type: "oauth" as const,
+      provider: "claude-cli",
+      access: "refreshed-access-token",
+      refresh: "refreshed-refresh-token",
+      expires: Date.now() + 60 * 60_000,
+    };
     fs.mkdirSync(agentDir, { recursive: true });
     saveAuthProfileStore(
       {
@@ -795,29 +805,36 @@ describe("prepareCliRunContext", () => {
           [authProfileId]: {
             type: "oauth",
             provider: "claude-cli",
-            access: "stored-access-token",
+            access: "expired-access-token",
             refresh: "stored-refresh-token",
-            expires: Date.now() + 60 * 60_000,
+            expires: Date.now() - 60_000,
           },
         },
       },
       agentDir,
     );
     setCliBackendForPrepareTest({ prepareExecution, authEpochMode: "profile-only" });
-    setCliRunnerPrepareTestDeps({
-      resolveApiKeyForProfile: vi.fn(async () => ({
-        apiKey: "stored-access-token",
-        provider: "claude-cli",
-        profileId: authProfileId,
-        profileType: "oauth",
-        credential: {
-          type: "oauth",
-          provider: "claude-cli",
-          access: "stored-access-token",
-          refresh: "stored-refresh-token",
-          expires: Date.now() + 60 * 60_000,
+    const resolveApiKeyForProfile = vi.fn<typeof resolveApiKeyForProfileImpl>(async ({ store }) => {
+      saveAuthProfileStore(
+        {
+          ...store,
+          profiles: {
+            ...store.profiles,
+            [authProfileId]: refreshedCredential,
+          },
         },
-      })),
+        agentDir,
+      );
+      return {
+        apiKey: refreshedCredential.access,
+        provider: refreshedCredential.provider,
+        profileId: authProfileId,
+        profileType: refreshedCredential.type,
+        credential: refreshedCredential,
+      };
+    });
+    setCliRunnerPrepareTestDeps({
+      resolveApiKeyForProfile,
     });
 
     await fixture.prepare({
@@ -835,10 +852,162 @@ describe("prepareCliRunContext", () => {
         authCredential: expect.objectContaining({
           type: "oauth",
           provider: "claude-cli",
-          access: "stored-access-token",
+          access: refreshedCredential.access,
+          refresh: refreshedCredential.refresh,
         }),
       }),
     );
+    expect(loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[authProfileId]).toEqual(
+      refreshedCredential,
+    );
+    expect(resolveApiKeyForProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileId: authProfileId,
+        agentDir,
+        allowProfileFallback: false,
+      }),
+    );
+  });
+
+  it("does not revive a selected Claude CLI credential when auth resolution returns null", async () => {
+    const { dir } = fixture.session;
+    const agentDir = path.join(dir, "agents", "main", "agent");
+    const authProfileId = "anthropic:claude-cli";
+    const prepareExecution = vi.fn(async () => undefined);
+    fs.mkdirSync(agentDir, { recursive: true });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [authProfileId]: {
+            type: "oauth",
+            provider: "claude-cli",
+            access: "expired-access-token",
+            refresh: "expired-refresh-token",
+            expires: Date.now() - 60_000,
+          },
+        },
+      },
+      agentDir,
+    );
+    setCliBackendForPrepareTest({ prepareExecution, authEpochMode: "profile-only" });
+    setCliRunnerPrepareTestDeps({
+      resolveApiKeyForProfile: vi.fn(async () => null),
+    });
+
+    const preparation = fixture.prepare({
+      sessionKey: "agent:main:main",
+      agentDir,
+      provider: "claude-cli",
+      model: "sonnet",
+      authProfileId,
+      config: {},
+    });
+    await expect(preparation).rejects.toThrow(
+      `could not materialize selected auth profile "${authProfileId}"`,
+    );
+    await expect(preparation).rejects.toThrow("claude auth login");
+    expect(prepareExecution).not.toHaveBeenCalled();
+  });
+
+  it("does not replace an explicit Claude CLI profile with a resolver fallback", async () => {
+    const { dir } = fixture.session;
+    const agentDir = path.join(dir, "agents", "main", "agent");
+    const authProfileId = "anthropic:account-a";
+    const fallbackProfileId = "anthropic:account-b";
+    const prepareExecution = vi.fn(async () => undefined);
+    fs.mkdirSync(agentDir, { recursive: true });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [authProfileId]: {
+            type: "oauth",
+            provider: "anthropic",
+            access: "expired-account-a-access",
+            refresh: "account-a-refresh",
+            expires: Date.now() - 60_000,
+          },
+          [fallbackProfileId]: {
+            type: "oauth",
+            provider: "anthropic",
+            access: "account-b-access",
+            refresh: "account-b-refresh",
+            expires: Date.now() + 60 * 60_000,
+          },
+        },
+      },
+      agentDir,
+    );
+    setCliBackendForPrepareTest({ prepareExecution, authEpochMode: "profile-only" });
+    setCliRunnerPrepareTestDeps({
+      resolveApiKeyForProfile: vi.fn(async () => ({
+        apiKey: "account-b-access",
+        provider: "anthropic",
+        profileId: fallbackProfileId,
+        profileType: "oauth",
+        credential: {
+          type: "oauth",
+          provider: "anthropic",
+          access: "account-b-access",
+          refresh: "account-b-refresh",
+          expires: Date.now() + 60 * 60_000,
+        },
+      })),
+    });
+
+    await expect(
+      fixture.prepare({
+        sessionKey: "agent:main:main",
+        agentDir,
+        provider: "claude-cli",
+        model: "sonnet",
+        authProfileId,
+        config: {},
+      }),
+    ).rejects.toThrow(`resolved as "${fallbackProfileId}"`);
+    expect(prepareExecution).not.toHaveBeenCalled();
+  });
+
+  it("surfaces selected Claude CLI refresh failures before backend preparation", async () => {
+    const { dir } = fixture.session;
+    const agentDir = path.join(dir, "agents", "main", "agent");
+    const authProfileId = "anthropic:claude-cli";
+    const prepareExecution = vi.fn(async () => undefined);
+    fs.mkdirSync(agentDir, { recursive: true });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [authProfileId]: {
+            type: "oauth",
+            provider: "claude-cli",
+            access: "expired-access-token",
+            refresh: "expired-refresh-token",
+            expires: Date.now() - 60_000,
+          },
+        },
+      },
+      agentDir,
+    );
+    setCliBackendForPrepareTest({ prepareExecution, authEpochMode: "profile-only" });
+    setCliRunnerPrepareTestDeps({
+      resolveApiKeyForProfile: vi.fn(async () => {
+        throw new Error("OAuth refresh failed. Run claude auth login.");
+      }),
+    });
+
+    await expect(
+      fixture.prepare({
+        sessionKey: "agent:main:main",
+        agentDir,
+        provider: "claude-cli",
+        model: "sonnet",
+        authProfileId,
+        config: {},
+      }),
+    ).rejects.toThrow("Run claude auth login");
+    expect(prepareExecution).not.toHaveBeenCalled();
   });
 
   it.each([

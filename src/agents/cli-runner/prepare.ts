@@ -48,7 +48,9 @@ import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { hasAgentRosterProperty, resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { resolveAgentConfig, resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
+import { hasUsableOAuthCredential } from "../auth-profiles/credential-state.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
+import { buildOAuthRefreshFailureLoginCommand } from "../auth-profiles/oauth-refresh-failure.js";
 import { resolveApiKeyForProfile } from "../auth-profiles/oauth.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { loadAuthProfileStoreForRuntime } from "../auth-profiles/store.js";
@@ -327,6 +329,23 @@ function shouldRefreshAuthProfileForExecution(params: {
   );
 }
 
+function buildCliAuthProfileResolutionError(params: {
+  backendId: string;
+  profileId: string;
+  provider: string;
+  resolvedProfileId?: string;
+}): Error {
+  const loginCommand = buildOAuthRefreshFailureLoginCommand(params.provider, {
+    profileId: params.profileId,
+  });
+  const reason = params.resolvedProfileId
+    ? `selected auth profile "${params.profileId}" resolved as "${params.resolvedProfileId}"`
+    : `could not materialize selected auth profile "${params.profileId}"`;
+  return new Error(
+    `CLI backend "${params.backendId}" ${reason}. Re-authenticate with: ${loginCommand}. OpenClaw did not start the run.`,
+  );
+}
+
 /** Builds the complete context required to execute a CLI-backed agent run. */
 export async function prepareCliRunContext(
   inputParams: RunCliAgentParams,
@@ -520,11 +539,43 @@ export async function prepareCliRunContext(
       store: writableAuthStore,
       profileId: authProfileId,
       agentDir,
+      // Claude's selected profile is an account boundary. Never refresh or
+      // substitute a sibling account while preparing this run.
+      ...(backendResolved.id === "claude-cli" ? { allowProfileFallback: false } : {}),
     });
+    if (!resolvedAuth && backendResolved.id === "claude-cli") {
+      throw buildCliAuthProfileResolutionError({
+        backendId: backendResolved.id,
+        profileId: authProfileId,
+        provider: writableAuthStore.profiles[authProfileId]?.provider ?? params.provider,
+      });
+    }
+    if (
+      resolvedAuth &&
+      backendResolved.id === "claude-cli" &&
+      resolvedAuth.profileId !== authProfileId
+    ) {
+      throw buildCliAuthProfileResolutionError({
+        backendId: backendResolved.id,
+        profileId: authProfileId,
+        provider: writableAuthStore.profiles[authProfileId]?.provider ?? params.provider,
+        resolvedProfileId: resolvedAuth.profileId,
+      });
+    }
     const resolvedAuthProfileId = resolvedAuth?.profileId ?? authProfileId;
-    const resolvedAuthCredential = resolvedAuth?.credential;
     authStore = loadScopedAuthStore({ profileId: resolvedAuthProfileId });
-    authCredential = resolvedAuthCredential ?? authStore.profiles[resolvedAuthProfileId];
+    authCredential = resolvedAuth?.credential ?? authStore.profiles[resolvedAuthProfileId];
+    if (
+      backendResolved.id === "claude-cli" &&
+      (!authCredential ||
+        (authCredential.type === "oauth" && !hasUsableOAuthCredential(authCredential)))
+    ) {
+      throw buildCliAuthProfileResolutionError({
+        backendId: backendResolved.id,
+        profileId: authProfileId,
+        provider: resolvedAuth?.provider ?? params.provider,
+      });
+    }
     if (resolvedAuth && authCredential) {
       effectiveAuthProfileId = resolvedAuthProfileId;
       resolvedProfileAuth = {
