@@ -18,6 +18,7 @@ type DoctorConfigResult = {
   skipWizardMetadataForIncludeWrite?: boolean;
   preservedLegacyRootKeys?: readonly string[];
   shouldRepairCronCodexModelRefsAfterConfigWrite?: boolean;
+  retiredPhoneControlStateCleanupPending?: boolean;
   blockedCodexModelIdentities?: readonly string[];
 };
 

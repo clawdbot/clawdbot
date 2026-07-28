@@ -32,7 +32,7 @@ vi.mock("../dashboard-session-title.js", async (importOriginal) => {
   mocks.maybeGenerateSessionTitle.mockImplementation(actual.maybeGenerateSessionTitle);
   return { ...actual, maybeGenerateSessionTitle: mocks.maybeGenerateSessionTitle };
 });
-vi.mock("../session-transcript-readers.js", () => ({
+vi.mock("../session-transcript-title-reader.js", () => ({
   readSessionTitleFieldsFromTranscript: mocks.readSessionTitleFields,
 }));
 vi.mock("./session-change-event.js", () => ({

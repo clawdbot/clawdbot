@@ -268,6 +268,61 @@ function createTwoCalendarAppPolicyContext() {
 setupRunAttemptTestHooks();
 
 describe("Codex app-server thread lifecycle bindings", () => {
+  it("persists the native rollout path across thread start and resume", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const threadId = "thread-native-rollout";
+    const rolloutPath = path.join(
+      tempDir,
+      "agent",
+      "codex-home",
+      "sessions",
+      `rollout-${threadId}.jsonl`,
+    );
+    const params = createParams(sessionFile, workspaceDir);
+    const request = vi.fn(async (method: string) => {
+      if (method !== "thread/start" && method !== "thread/resume") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      const response = threadStartResult(threadId);
+      return {
+        ...response,
+        thread: { ...response.thread, path: rolloutPath },
+      };
+    });
+    const common = {
+      client: { getInstanceId: () => "native-rollout-client", request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      userMcpServersEnabled: false,
+    };
+
+    const started = await startOrResumeThread(common);
+    expect(started).toMatchObject({
+      threadId,
+      rolloutPath,
+      lifecycle: { action: "started" },
+    });
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId,
+      rolloutPath,
+    });
+
+    const resumed = await startOrResumeThread(common);
+    expect(resumed).toMatchObject({
+      threadId,
+      rolloutPath,
+      lifecycle: { action: "resumed" },
+    });
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId,
+      rolloutPath,
+    });
+  });
+
   it("reuses one live ephemeral thread across two incognito turns", async () => {
     const sessionFile = path.join(tempDir, "incognito-session.jsonl");
     const workspaceDir = path.join(tempDir, "incognito-workspace");

@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -10,8 +10,13 @@ const reviewArtifactsScript = join(process.cwd(), "scripts/pr-lib/review-artifac
 const mergeScript = join(process.cwd(), "scripts/pr-lib/merge.sh");
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 
+const REVIEWED_PR = 42;
+const REVIEWED_HEAD = "b".repeat(40);
+const REVIEWED_IDENTITY_LINE = `Review artifact for PR #${REVIEWED_PR} at ${REVIEWED_HEAD}`;
+
 function validReview() {
   return {
+    pr: { number: REVIEWED_PR, headSha: REVIEWED_HEAD },
     recommendation: "NEEDS WORK",
     findings: [] as Array<{
       id: string;
@@ -60,6 +65,8 @@ function runValidation(
   options: {
     files?: string[];
     guardFailure?: boolean;
+    markdownIdentityLine?: string;
+    metaEnvPrNumber?: number;
     mode?: "pr" | "main";
     orList?: boolean;
   } = {},
@@ -70,12 +77,31 @@ function runValidation(
   writeFileSync(join(localDir, "review.json"), `${JSON.stringify(review)}\n`);
   writeFileSync(
     join(localDir, "review.md"),
-    ["A)", "B)", "C)", "D)", "E)", "F)", "G)", "H)", "I)", "J)"].join("\n"),
+    [
+      options.markdownIdentityLine ?? REVIEWED_IDENTITY_LINE,
+      "A)",
+      "B)",
+      "C)",
+      "D)",
+      "E)",
+      "F)",
+      "G)",
+      "H)",
+      "I)",
+      "J)",
+    ].join("\n"),
   );
-  writeFileSync(join(localDir, "pr-meta.env"), "PR_URL=https://example.invalid/pr/42\n");
+  writeFileSync(
+    join(localDir, "pr-meta.env"),
+    `PR_URL=https://example.invalid/pr/42\nPR_NUMBER=${options.metaEnvPrNumber ?? REVIEWED_PR}\nPR_HEAD_SHA=${REVIEWED_HEAD}\n`,
+  );
   writeFileSync(
     join(localDir, "pr-meta.json"),
-    `${JSON.stringify({ files: (options.files ?? []).map((path) => ({ path })) })}\n`,
+    `${JSON.stringify({
+      number: REVIEWED_PR,
+      headRefOid: REVIEWED_HEAD,
+      files: (options.files ?? []).map((path) => ({ path })),
+    })}\n`,
   );
 
   return spawnSync(
@@ -100,6 +126,48 @@ function runValidation(
     ],
     { encoding: "utf8" },
   );
+}
+
+function runReviewShellFunction(fixtureRoot: string, invocation: string) {
+  return spawnSync(
+    "bash",
+    [
+      "-c",
+      [
+        "set -euo pipefail",
+        'source "$1"',
+        'fixture_root="$2"',
+        'enter_worktree() { cd "$fixture_root"; }',
+        'require_artifact() { [ -s "$1" ]; }',
+        "mark_pr_operation_side_effects_started() { :; }",
+        invocation,
+      ].join("\n"),
+      "pr-review-shell",
+      reviewScript,
+      fixtureRoot,
+    ],
+    { encoding: "utf8" },
+  );
+}
+
+function runArtifactsInit(existing: { review?: unknown; markdown?: string } = {}) {
+  const fixtureRoot = tempDirs.make("openclaw-pr-review-artifacts-init-");
+  const localDir = join(fixtureRoot, ".local");
+  mkdirSync(localDir);
+  writeFileSync(join(localDir, "pr-meta.env"), `PR_NUMBER=${REVIEWED_PR}\n`);
+  writeFileSync(
+    join(localDir, "pr-meta.json"),
+    `${JSON.stringify({ number: REVIEWED_PR, headRefOid: REVIEWED_HEAD, files: [] })}\n`,
+  );
+  if (existing.review !== undefined) {
+    writeFileSync(join(localDir, "review.json"), `${JSON.stringify(existing.review)}\n`);
+  }
+  if (existing.markdown !== undefined) {
+    writeFileSync(join(localDir, "review.md"), existing.markdown);
+  }
+
+  const result = runReviewShellFunction(fixtureRoot, `review_artifacts_init ${REVIEWED_PR}`);
+  return { result, localDir };
 }
 
 function runMergeVerification(checks: "api-error" | "invalid-json" | "no-required" | "pending") {
@@ -149,6 +217,131 @@ describePosix("scripts/pr review artifact validation", () => {
 
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(result.stdout).toContain("review artifacts validated");
+  });
+
+  it("rejects a review authored for a different PR", () => {
+    const review = validReadyReview();
+    review.pr.number = 113928;
+
+    const result = runValidation(review);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(
+      `Review artifact identity mismatch in .local/review.json: authored for PR #113928 at ${REVIEWED_HEAD}, but .local/pr-meta.json describes PR #${REVIEWED_PR} at ${REVIEWED_HEAD}`,
+    );
+  });
+
+  it("rejects a review stamped with a superseded head", () => {
+    const review = validReadyReview();
+    review.pr.headSha = "c".repeat(40);
+
+    const result = runValidation(review);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("Review artifact identity mismatch in .local/review.json");
+  });
+
+  it("rejects a self-consistent artifact set describing another PR", () => {
+    const result = runValidation(validReadyReview(), { metaEnvPrNumber: 113928 });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(
+      `Review artifact identity mismatch: .local/pr-meta.json describes PR #${REVIEWED_PR} at ${REVIEWED_HEAD}, which does not match .local/pr-meta.env.`,
+    );
+  });
+
+  it("rejects a review markdown authored for a different PR", () => {
+    const result = runValidation(validReadyReview(), {
+      markdownIdentityLine: `Review artifact for PR #113928 at ${REVIEWED_HEAD}`,
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(
+      `Review artifact identity mismatch in .local/review.md: first line must be "${REVIEWED_IDENTITY_LINE}"`,
+    );
+  });
+
+  it("rejects a review with no PR identity stamp", () => {
+    const review = validReadyReview() as Partial<ReturnType<typeof validReadyReview>>;
+    review.pr = undefined;
+
+    const result = runValidation(review as ReturnType<typeof validReadyReview>);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("Invalid PR identity in .local/review.json");
+  });
+
+  it("moves foreign review artifacts aside and stamps a fresh template", () => {
+    const foreign = validReadyReview();
+    foreign.pr.number = 113928;
+    const { result, localDir } = runArtifactsInit({
+      review: foreign,
+      markdown: "A) Ship another PR\n",
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain("moved aside .local/review.json");
+    const archives = readdirSync(join(localDir, "superseded"));
+    expect(archives).toHaveLength(1);
+    const archive = join(localDir, "superseded", archives[0]!);
+    expect(readdirSync(archive).sort()).toEqual(["review.json", "review.md"]);
+    expect(JSON.parse(readFileSync(join(archive, "review.json"), "utf8")).pr.number).toBe(113928);
+    expect(readFileSync(join(archive, "review.md"), "utf8")).toBe("A) Ship another PR\n");
+
+    const rewritten = JSON.parse(readFileSync(join(localDir, "review.json"), "utf8"));
+    expect(rewritten.pr).toEqual({ number: REVIEWED_PR, headSha: REVIEWED_HEAD });
+    expect(rewritten.recommendation).toContain("NEEDS WORK");
+    const markdown = readFileSync(join(localDir, "review.md"), "utf8");
+    expect(markdown.split("\n")[0]).toBe(REVIEWED_IDENTITY_LINE);
+    expect(markdown).toContain("A) TL;DR recommendation");
+  });
+
+  it("re-stamps markdown left over from another PR even when the JSON stamp matches", () => {
+    const { result, localDir } = runArtifactsInit({
+      review: validReadyReview(),
+      markdown: `Review artifact for PR #113928 at ${REVIEWED_HEAD}\n\nA) Ship another PR\n`,
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain("moved aside .local/review.md");
+    expect(readFileSync(join(localDir, "review.md"), "utf8").split("\n")[0]).toBe(
+      REVIEWED_IDENTITY_LINE,
+    );
+  });
+
+  it("preserves in-progress artifacts already stamped for this head", () => {
+    const inProgress = validReadyReview();
+    inProgress.issueValidation.summary = "Half-written review worth keeping.";
+    const { result, localDir } = runArtifactsInit({
+      review: inProgress,
+      markdown: `${REVIEWED_IDENTITY_LINE}\n\nA) Half-written review worth keeping.\n`,
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain(
+      `review artifacts already stamped for PR #${REVIEWED_PR} at ${REVIEWED_HEAD}`,
+    );
+    expect(readFileSync(join(localDir, "review.md"), "utf8")).toBe(
+      `${REVIEWED_IDENTITY_LINE}\n\nA) Half-written review worth keeping.\n`,
+    );
+    expect(
+      JSON.parse(readFileSync(join(localDir, "review.json"), "utf8")).issueValidation.summary,
+    ).toBe("Half-written review worth keeping.");
+  });
+
+  it("rejects a review guard whose PR metadata describes another PR", () => {
+    const fixtureRoot = tempDirs.make("openclaw-pr-review-guard-");
+    const localDir = join(fixtureRoot, ".local");
+    mkdirSync(localDir);
+    writeFileSync(join(localDir, "review-mode.env"), "REVIEW_MODE=pr\n");
+    writeFileSync(join(localDir, "pr-meta.env"), "PR_NUMBER=113928\n");
+
+    const result = runReviewShellFunction(fixtureRoot, `review_guard ${REVIEWED_PR}`);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(
+      `Review guard failed: .local/pr-meta.env describes PR #113928, not #${REVIEWED_PR}`,
+    );
   });
 
   it("rejects validation from main-baseline mode", () => {
@@ -337,12 +530,15 @@ describePosix("scripts/pr review artifact validation", () => {
   });
 
   it("derives template enum hints from the validation table", () => {
-    const result = spawnSync(process.execPath, [reviewArtifactsScript, "template"], {
-      encoding: "utf8",
-    });
+    const result = spawnSync(
+      process.execPath,
+      [reviewArtifactsScript, "template", String(REVIEWED_PR), REVIEWED_HEAD],
+      { encoding: "utf8" },
+    );
     const template = JSON.parse(result.stdout) as ReturnType<typeof validReview>;
 
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(template.pr).toEqual({ number: REVIEWED_PR, headSha: REVIEWED_HEAD });
     expect(template.recommendation).toBe(
       "NEEDS WORK (allowed: READY FOR /prepare-pr|NEEDS WORK|NEEDS DISCUSSION|NOT USEFUL (CLOSE))",
     );

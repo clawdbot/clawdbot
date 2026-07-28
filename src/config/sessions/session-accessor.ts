@@ -233,6 +233,10 @@ export type {
   SessionTranscriptMessageEventPage,
 } from "./session-accessor.sqlite-active-events.js";
 export {
+  readSessionTranscriptWatermark,
+  type SessionTranscriptWatermark,
+} from "./session-accessor.sqlite-transcript-watermark.js";
+export {
   resolveConcreteSessionStorePath,
   resolveSessionTranscriptReadTarget,
   resolveSessionTranscriptRuntimeReadTarget,
