@@ -112,6 +112,8 @@ describe("NVIDIA speech HTTP runtime", () => {
       transcriptionRequest({
         model: "nvidia/parakeet-tdt-0.6b-v2",
         baseUrl: "http://10.0.0.5:9000/v1",
+        apiKey: "",
+        auth: { kind: "none", source: "test-self-hosted" },
       }),
     );
 
@@ -124,7 +126,21 @@ describe("NVIDIA speech HTTP runtime", () => {
       allowedOrigins: ["http://10.0.0.5:9000"],
     });
     const form = mocks.postTranscriptionRequest.mock.calls[0]?.[0]?.body as FormData;
-    expect(form.get("model")).toBe("nvidia/parakeet-tdt-0.6b-v2");
+    expect(form.get("model")).toBeNull();
+    const headers = mocks.postTranscriptionRequest.mock.calls[0]?.[0]?.headers as Headers;
+    expect(headers.has("authorization")).toBe(false);
+  });
+
+  it("requires an API key for the hosted ASR endpoint", async () => {
+    await expect(
+      transcribeNvidiaAudio(
+        transcriptionRequest({
+          apiKey: "",
+          auth: { kind: "none", source: "test-missing" },
+        }),
+      ),
+    ).rejects.toThrow("API key missing for hosted ASR");
+    expect(mocks.postTranscriptionRequest).not.toHaveBeenCalled();
   });
 
   it("uses a nonblank ASR environment endpoint and ignores a blank one", async () => {

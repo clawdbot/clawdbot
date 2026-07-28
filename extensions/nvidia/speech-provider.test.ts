@@ -81,6 +81,14 @@ describe("NVIDIA Magpie speech provider", () => {
     });
   });
 
+  it("advertises voices from the Magpie Multilingual catalog", () => {
+    expect(provider.voices).toContain("Magpie-Multilingual.ZH-CN.HouZhen");
+    expect(provider.voices).toContain("Magpie-Multilingual.HI-IN.Sofia");
+    expect(provider.voices).toContain("Magpie-Multilingual.JA-JP.Isabela");
+    expect(provider.voices).not.toContain("Magpie-Multilingual.HI-IN.Aarav");
+    expect(provider.voices).not.toContain("Magpie-Multilingual.JA-JP.Hana");
+  });
+
   it("reports configured when a shared NVIDIA auth profile exists", () => {
     delete process.env.NVIDIA_API_KEY;
     isProviderAuthProfileConfiguredMock.mockReturnValue(true);
@@ -111,5 +119,26 @@ describe("NVIDIA Magpie speech provider", () => {
     );
     expect(result.outputFormat).toBe("wav");
     expect(result.voiceCompatible).toBe(false);
+  });
+
+  it("allows a keyless self-hosted Magpie endpoint", async () => {
+    delete process.env.NVIDIA_API_KEY;
+    const providerConfig = { baseUrl: "http://127.0.0.1:9000/v1" };
+
+    expect(provider.isConfigured({ cfg: {}, providerConfig, timeoutMs: 5_000 })).toBe(true);
+    await provider.synthesize({
+      text: "hello",
+      cfg: {},
+      providerConfig,
+      target: "audio-file",
+      timeoutMs: 5_000,
+    });
+
+    expect(magpieSynthesizeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: undefined,
+        baseUrl: "http://127.0.0.1:9000/v1",
+      }),
+    );
   });
 });

@@ -143,7 +143,7 @@ async function normalizeNvidiaAsrAudio(
   };
 }
 
-type AsrEndpoint = { baseUrl: string; model: string; sendModel: boolean };
+type AsrEndpoint = { baseUrl: string; model: string; hosted: boolean };
 
 function resolveAsrTranscriptionUrl(baseUrl: string): string {
   return baseUrl.endsWith("/v1")
@@ -169,7 +169,7 @@ function resolveAsrEndpoint(req: AudioTranscriptionRequest): AsrEndpoint {
     return {
       baseUrl: customBaseUrl,
       model,
-      sendModel: model !== NVIDIA_DEFAULT_ASR_MODEL,
+      hosted: false,
     };
   }
   if (req.model && req.model !== NVIDIA_DEFAULT_ASR_MODEL) {
@@ -178,7 +178,7 @@ function resolveAsrEndpoint(req: AudioTranscriptionRequest): AsrEndpoint {
   return {
     baseUrl: NVIDIA_ASR_BASE_URL,
     model: NVIDIA_DEFAULT_ASR_MODEL,
-    sendModel: false,
+    hosted: true,
   };
 }
 
@@ -187,13 +187,14 @@ async function transcribeAtEndpoint(
   endpoint: AsrEndpoint,
 ): Promise<AudioTranscriptionResult> {
   const fetchFn = req.fetchFn ?? fetch;
+  const apiKey = req.auth?.kind === "none" ? undefined : req.apiKey?.trim();
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy, requestConfig } =
     resolveProviderHttpRequestConfig({
       baseUrl: endpoint.baseUrl,
       defaultBaseUrl: endpoint.baseUrl,
       headers: req.headers,
       request: req.request,
-      defaultHeaders: { Authorization: `Bearer ${req.apiKey}` },
+      defaultHeaders: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined,
       provider: "nvidia",
       api: "nemotron-speech-asr",
       capability: "audio",
@@ -206,7 +207,6 @@ async function transcribeAtEndpoint(
     fields: {
       language: req.language?.trim() || "en-US",
       response_format: "json",
-      ...(endpoint.sendModel ? { model: endpoint.model } : {}),
     },
   });
   appendAsrCustomizations(form, req.query);
@@ -239,8 +239,10 @@ async function transcribeAtEndpoint(
 export async function transcribeNvidiaAudio(
   req: AudioTranscriptionRequest,
 ): Promise<AudioTranscriptionResult> {
-  if (!req.apiKey) {
-    throw new Error("NVIDIA speech API key missing");
+  const endpoint = resolveAsrEndpoint(req);
+  const apiKey = req.auth?.kind === "none" ? undefined : req.apiKey?.trim();
+  if (endpoint.hosted && !apiKey) {
+    throw new Error("NVIDIA speech API key missing for hosted ASR");
   }
   const deadline = createProviderOperationDeadline({
     timeoutMs: req.timeoutMs,
@@ -252,7 +254,6 @@ export async function transcribeNvidiaAudio(
     ...req,
     timeoutMs: resolveRemainingTimeoutMs(),
   });
-  const endpoint = resolveAsrEndpoint(normalizedReq);
   return await transcribeAtEndpoint(
     { ...normalizedReq, timeoutMs: resolveRemainingTimeoutMs() },
     endpoint,
@@ -261,7 +262,7 @@ export async function transcribeNvidiaAudio(
 
 type MagpieSynthesizeParams = {
   text: string;
-  apiKey: string;
+  apiKey?: string;
   baseUrl: string;
   voice: string;
   language: string;
@@ -286,9 +287,13 @@ export async function magpieSynthesize(params: MagpieSynthesizeParams): Promise<
   }
 
   const baseUrl = normalizeNvidiaBaseUrl(params.baseUrl);
+  const headers = new Headers();
+  if (params.apiKey) {
+    headers.set("Authorization", `Bearer ${params.apiKey}`);
+  }
   const { response, release } = await postMultipartRequest({
     url: resolveTtsSynthesisUrl(baseUrl),
-    headers: new Headers({ Authorization: `Bearer ${params.apiKey}` }),
+    headers,
     body: form,
     timeoutMs: params.timeoutMs,
     fetchFn: fetch,

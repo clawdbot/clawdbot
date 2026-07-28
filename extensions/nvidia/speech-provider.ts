@@ -12,6 +12,7 @@ import {
   NVIDIA_DEFAULT_LANGUAGE,
   NVIDIA_DEFAULT_TTS_MODEL,
   NVIDIA_DEFAULT_VOICE,
+  NVIDIA_TTS_BASE_URL,
   normalizeNvidiaTtsConfig,
 } from "./nvidia-speech-config.js";
 
@@ -22,9 +23,9 @@ const MAGPIE_VOICES = [
   "Magpie-Multilingual.ES-US.Diego",
   "Magpie-Multilingual.DE-DE.Leo",
   "Magpie-Multilingual.FR-FR.Pascal",
-  "Magpie-Multilingual.ZH-CN.Mia",
-  "Magpie-Multilingual.HI-IN.Aarav",
-  "Magpie-Multilingual.JA-JP.Hana",
+  "Magpie-Multilingual.ZH-CN.HouZhen",
+  "Magpie-Multilingual.HI-IN.Sofia",
+  "Magpie-Multilingual.JA-JP.Isabela",
 ] as const;
 
 export function buildNvidiaSpeechProvider(): SpeechProviderPlugin {
@@ -42,12 +43,17 @@ export function buildNvidiaSpeechProvider(): SpeechProviderPlugin {
         ? { language: trimToUndefined(params.language ?? params.languageCode) }
         : {}),
     }),
-    isConfigured: ({ providerConfig, cfg }) =>
-      Boolean(normalizeNvidiaTtsConfig(providerConfig).apiKey) ||
-      isProviderAuthProfileConfigured({ provider: "nvidia", cfg }),
+    isConfigured: ({ providerConfig, cfg }) => {
+      const config = normalizeNvidiaTtsConfig(providerConfig);
+      return (
+        Boolean(config.apiKey) ||
+        config.baseUrl !== NVIDIA_TTS_BASE_URL ||
+        isProviderAuthProfileConfigured({ provider: "nvidia", cfg })
+      );
+    },
     synthesize: async (req) => {
       const config = normalizeNvidiaTtsConfig(req.providerConfig);
-      const apiKey = await resolveNvidiaSpeechApiKey(config.apiKey, req.cfg);
+      const apiKey = await resolveNvidiaSpeechApiKey(config.apiKey, config.baseUrl, req.cfg);
       const overrides = req.providerOverrides ?? {};
       const { magpieSynthesize } = await import("./nvidia-speech-http.runtime.js");
       const audioBuffer = await magpieSynthesize({
@@ -74,8 +80,9 @@ export function buildNvidiaSpeechProvider(): SpeechProviderPlugin {
 
 async function resolveNvidiaSpeechApiKey(
   configuredApiKey: string | undefined,
+  baseUrl: string,
   cfg: OpenClawConfig,
-): Promise<string> {
+): Promise<string | undefined> {
   const direct = trimToUndefined(configuredApiKey) ?? trimToUndefined(process.env.NVIDIA_API_KEY);
   if (direct) {
     return direct;
@@ -84,6 +91,9 @@ async function resolveNvidiaSpeechApiKey(
   const profileKey = trimToUndefined(auth?.apiKey);
   if (profileKey) {
     return profileKey;
+  }
+  if (baseUrl !== NVIDIA_TTS_BASE_URL) {
+    return undefined;
   }
   throw new Error(
     "NVIDIA credentials missing for TTS. Run `openclaw onboard --auth-choice nvidia-api-key` or set NVIDIA_API_KEY.",
