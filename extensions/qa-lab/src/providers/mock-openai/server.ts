@@ -9,7 +9,11 @@ import {
   listMockOpenAiServerModelIds,
 } from "../shared/mock-model-config.js";
 import { buildMessagesPayload } from "./mock-anthropic-messages.js";
-import { buildAssistantText } from "./mock-openai-assistant-text.js";
+import {
+  buildAssistantText,
+  isCanonicalCompactionRetryWriteResult,
+  QA_COMPACTION_RETRY_FINAL_MARKER,
+} from "./mock-openai-assistant-text.js";
 import {
   type ResponsesInputItem,
   type StreamEvent,
@@ -951,6 +955,9 @@ async function buildResponsesPayload(
     /compaction retry evidence/i.test(toolOutput) ||
     /compaction-retry-summary\.txt/i.test(toolOutput)
   ) {
+    if (isCanonicalCompactionRetryWriteResult(toolOutput)) {
+      return buildAssistantEvents(QA_COMPACTION_RETRY_FINAL_MARKER);
+    }
     if (!toolOutput) {
       return buildToolCallEventsWithArgs("read", { path: "COMPACTION_RETRY_CONTEXT.md" });
     }

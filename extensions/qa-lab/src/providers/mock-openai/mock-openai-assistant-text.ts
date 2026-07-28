@@ -63,6 +63,14 @@ function readCompletedImageGenerationMediaPath(prompt: string): string | undefin
   return /^MEDIA:\s*([^\r\n]+)$/im.exec(completionEvent)?.[1]?.trim() || undefined;
 }
 
+export const QA_COMPACTION_RETRY_FINAL_MARKER = "Protocol note: replay unsafe after write.";
+
+export function isCanonicalCompactionRetryWriteResult(toolOutput: string): boolean {
+  return /^Successfully wrote \d+ bytes to compaction-retry-summary\.txt\.?$/i.test(
+    toolOutput.trim(),
+  );
+}
+
 export function buildAssistantText(
   input: ResponsesInputItem[],
   body: Record<string, unknown>,
@@ -346,13 +354,8 @@ export function buildAssistantText(
     (/compaction retry mutating tool check/i.test(allInputText) ||
       /compaction-retry-summary\.txt/i.test(toolOutput))
   ) {
-    if (
-      toolOutput.includes("Replay safety: unsafe after write.") ||
-      /compaction-retry-summary\.txt/i.test(toolOutput) ||
-      /successfully (?:wrote|replaced)/i.test(toolOutput) ||
-      /\bwrote\b.*\bcompaction-retry-summary\.txt\b/i.test(toolOutput)
-    ) {
-      return "Protocol note: replay unsafe after write.";
+    if (isCanonicalCompactionRetryWriteResult(toolOutput)) {
+      return QA_COMPACTION_RETRY_FINAL_MARKER;
     }
     return "";
   }
