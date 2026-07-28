@@ -6,7 +6,11 @@ export {
   expectedForwardedAuthProfile,
 } from "./test-helpers/agents/auth-profile-runtime-contract.js";
 export { DELIVERY_NO_REPLY_RUNTIME_CONTRACT } from "./test-helpers/agents/delivery-no-reply-runtime-contract.js";
-export { installSessionManagerFileCompat } from "./test-helpers/agents/session-manager-file-compat.js";
+export {
+  createFileBackedSessionManagerForTest,
+  openFileBackedSessionManagerForTest,
+  type FileBackedSessionManagerForTest,
+} from "./test-helpers/agents/session-manager-file-fixture.js";
 export {
   createTerminalPresentationContractTool,
   installCodexToolResultMiddleware,
