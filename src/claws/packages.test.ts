@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { installClawPackages, preflightClawPackage } from "./packages.js";
 import type { PersistedClawPackageRef } from "./provenance.js";
@@ -163,6 +166,46 @@ describe("preflightClawPackage plugin setup requirements", () => {
         deps: { preflightPlugin, probePlugin: probePluginSetup },
       }),
     ).resolves.not.toHaveProperty("requirements");
+  });
+
+  it("accepts declared local auth evidence", async () => {
+    const credentialsDir = await mkdtemp(join(tmpdir(), "claw-auth-evidence-"));
+    const credentialsPath = join(credentialsDir, "credentials.json");
+    await writeFile(credentialsPath, "{}", "utf8");
+    probePluginSetup.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "evidence",
+      setup: {
+        providers: [
+          {
+            ...setup.providers[0],
+            authEvidence: [
+              {
+                type: "local-file-with-env",
+                fileEnvVar: "EVIDENCE_CREDENTIALS",
+                requiresAllEnv: ["EVIDENCE_PROJECT"],
+                credentialMarker: "evidence-local-credentials",
+              },
+            ],
+          },
+        ],
+      },
+      clawhub: { integrity },
+    });
+
+    try {
+      await expect(
+        preflightClawPackage(pluginPackage, "/tmp/workspace", {
+          env: {
+            EVIDENCE_CREDENTIALS: credentialsPath,
+            EVIDENCE_PROJECT: "project",
+          },
+          deps: { preflightPlugin, probePlugin: probePluginSetup },
+        }),
+      ).resolves.not.toHaveProperty("requirements");
+    } finally {
+      await rm(credentialsDir, { recursive: true, force: true });
+    }
   });
 });
 

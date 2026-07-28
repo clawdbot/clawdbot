@@ -9,6 +9,7 @@ import {
 } from "../plugins/plugin-install-preflight.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { resolveLocalProviderAuthEvidence } from "../secrets/provider-auth-evidence.js";
 import { installSkillFromClawHub, preflightSkillFromClawHub } from "../skills/lifecycle/clawhub.js";
 import {
   acquireClawPackageLifecycleLease,
@@ -148,7 +149,12 @@ function resolveClawPluginSetupRequirements(params: {
 }): ClawLocalPrerequisite[] {
   return (params.setup?.providers ?? []).flatMap((provider) => {
     const envVars = provider.envVars ?? [];
-    if (envVars.length === 0 || envVars.some((name) => Boolean(params.env[name]?.trim()))) {
+    const authEvidence = provider.authEvidence ?? [];
+    if (
+      (envVars.length === 0 && authEvidence.length === 0) ||
+      envVars.some((name) => Boolean(params.env[name]?.trim())) ||
+      resolveLocalProviderAuthEvidence(authEvidence, params.env)
+    ) {
       return [];
     }
     return [
