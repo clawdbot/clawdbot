@@ -37,7 +37,7 @@ import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { ModelRegistry } from "./model-registry.js";
 import type { ResourceLoader } from "./resource-loader.js";
 import { createAgentSession } from "./sdk.js";
-import { SessionManager } from "./session-manager.js";
+import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 import { createSyntheticSourceInfo } from "./source-info.js";
 
@@ -220,32 +220,50 @@ async function createSessionAndStreamModel(model: Model): Promise<SimpleStreamOp
   return streamMocks.streamSimple.mock.lastCall?.[2] ?? {};
 }
 
-function appendPersistedAssistantMessage(params: {
-  sessionManager: SessionManager;
-  content: unknown;
-  stopReason?: "stop" | "aborted";
-}) {
-  params.sessionManager.appendMessage({
-    role: "assistant",
-    content: params.content,
-    api: "messages",
-    provider: "anthropic",
-    model: "sonnet-4.6",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+function createSessionManagerWithPersistedAssistantMessages(
+  messages: Array<{
+    content: unknown;
+    stopReason?: "stop" | "aborted";
+  }>,
+): SessionManager {
+  const timestamp = new Date().toISOString();
+  return SessionManager.fromEntries([
+    {
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: "sdk-persisted-content",
+      timestamp,
+      cwd: process.cwd(),
     },
-    stopReason: params.stopReason ?? "stop",
-    timestamp: Date.now(),
-  } as Parameters<SessionManager["appendMessage"]>[0]);
+    ...messages.map((message, index) => ({
+      type: "message",
+      id: `assistant-${String(index + 1)}`,
+      parentId: index === 0 ? null : `assistant-${String(index)}`,
+      timestamp,
+      message: {
+        role: "assistant",
+        content: message.content,
+        api: "messages",
+        provider: "anthropic",
+        model: "sonnet-4.6",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: message.stopReason ?? "stop",
+        timestamp: Date.now(),
+      },
+    })),
+  ]);
 }
 
 async function createSessionFromManager(sessionManager: SessionManager) {
   const { session } = await createAgentSession({
+    authStorage: AuthStorage.inMemory(),
     model: testModel,
     resourceLoader: createEmptyResourceLoader(),
     sessionManager,
@@ -256,9 +274,9 @@ async function createSessionFromManager(sessionManager: SessionManager) {
 }
 
 async function createSessionWithPersistedAssistantContent(content: unknown) {
-  const sessionManager = SessionManager.inMemory();
-  appendPersistedAssistantMessage({ sessionManager, content });
-  return await createSessionFromManager(sessionManager);
+  return await createSessionFromManager(
+    createSessionManagerWithPersistedAssistantMessages([{ content }]),
+  );
 }
 
 describe("AgentSession getLastAssistantText", () => {
@@ -285,13 +303,10 @@ describe("AgentSession getLastAssistantText", () => {
   });
 
   it("skips aborted malformed content and returns the preceding assistant text", async () => {
-    const sessionManager = SessionManager.inMemory();
-    appendPersistedAssistantMessage({ sessionManager, content: "previous answer" });
-    appendPersistedAssistantMessage({
-      sessionManager,
-      content: null,
-      stopReason: "aborted",
-    });
+    const sessionManager = createSessionManagerWithPersistedAssistantMessages([
+      { content: "previous answer" },
+      { content: null, stopReason: "aborted" },
+    ]);
     const session = await createSessionFromManager(sessionManager);
 
     expect(session.getLastAssistantText()).toBe("previous answer");

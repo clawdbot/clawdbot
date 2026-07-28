@@ -36,10 +36,7 @@ import {
   resolveRunStaleThresholdMs,
 } from "../../logging/diagnostic-run-activity.js";
 import { logMessageQueuedWithBacklogPolicy } from "../../logging/diagnostic-runtime.js";
-import {
-  diagnosticLogger as diag,
-  logSessionStateChange,
-} from "../../logging/diagnostic.js";
+import { diagnosticLogger as diag, logSessionStateChange } from "../../logging/diagnostic.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
 import {
