@@ -138,6 +138,42 @@ describe("runSessionBackfill", () => {
     expect(result.days.map((day) => day.day)).toEqual(["2026-01-01", "2026-01-02"]);
   });
 
+  it("does not advance the cursor past messages excluded by a date range", async () => {
+    const workspaceDir = await createIsolatedWorkspace("range-cursor-");
+    await seedCanonicalTranscript("range-cursor", [
+      {
+        role: "user",
+        content: "January durable note",
+        timestamp: "2026-01-15T12:00:00.000Z",
+        owner: true,
+      },
+      {
+        role: "user",
+        content: "February durable note",
+        timestamp: "2026-02-15T12:00:00.000Z",
+        owner: true,
+      },
+    ]);
+
+    const january = await runSessionBackfill({
+      agentId: "main",
+      workspaceDir,
+      apply: true,
+      to: "2026-01-31",
+      timezone: "UTC",
+    });
+    const february = await runSessionBackfill({
+      agentId: "main",
+      workspaceDir,
+      apply: true,
+      from: "2026-02-01",
+      timezone: "UTC",
+    });
+
+    expect(january.days.map((day) => day.day)).toEqual(["2026-01-15"]);
+    expect(february.days.map((day) => day.day)).toEqual(["2026-02-15"]);
+  });
+
   it("advances the source cursor beyond the per-file signal cap", async () => {
     const workspaceDir = await createIsolatedWorkspace("cursor-");
     await seedCanonicalTranscript(
@@ -365,5 +401,15 @@ describe("runSessionBackfill", () => {
     expect(await fs.readFile(dreamsPath, "utf-8")).not.toContain(
       "openclaw:dreaming:backfill-entry",
     );
+    expect(
+      (
+        await runSessionBackfill({
+          agentId: "main",
+          workspaceDir,
+          apply: true,
+          timezone: "UTC",
+        })
+      ).candidateCount,
+    ).toBe(0);
   });
 });

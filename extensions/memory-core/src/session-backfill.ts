@@ -83,6 +83,7 @@ type SessionBackfillScan = {
   contentHash: string;
   lineCount: number;
   mtimeMs: number;
+  progressBlockIndex?: number;
   scannedEndIndex: number;
   size: number;
   stateKey: string;
@@ -284,6 +285,7 @@ async function collectSessionBackfillCandidates(params: {
     const startIndex = unchanged ? Math.min(previous.lastContentLine, lines.length) : 0;
     const sourceCandidates: SessionBackfillCandidate[] = [];
     let fileCount = 0;
+    let progressBlockIndex: number | undefined;
     let scannedEndIndex = startIndex;
     for (let index = startIndex; index < lines.length; index += 1) {
       if (fileCount >= perFileCap) {
@@ -316,6 +318,7 @@ async function collectSessionBackfillCandidates(params: {
         params.timezone,
       );
       if (!candidateDayInRange(day, params.from, params.to)) {
+        progressBlockIndex ??= index;
         continue;
       }
       const dedupeBasis = timestampMs > 0 ? `ts:${Math.floor(timestampMs)}` : `line:${lineNumber}`;
@@ -353,6 +356,7 @@ async function collectSessionBackfillCandidates(params: {
       contentHash: entry.hash,
       lineCount: lines.length,
       mtimeMs: Math.floor(entry.mtimeMs),
+      ...(progressBlockIndex !== undefined ? { progressBlockIndex } : {}),
       scannedEndIndex,
       size: Math.floor(entry.size),
       stateKey: source.stateKey,
@@ -394,12 +398,17 @@ function mergeSessionBackfillFileProgress(params: {
     const firstUnselected = scan.candidates.find(
       (candidate) => !selectedHashes.has(candidate.hash),
     );
+    const progressStops = [
+      scan.scannedEndIndex,
+      ...(firstUnselected ? [firstUnselected.contentIndex] : []),
+      ...(scan.progressBlockIndex !== undefined ? [scan.progressBlockIndex] : []),
+    ];
     files[scan.stateKey] = {
       mtimeMs: scan.mtimeMs,
       size: scan.size,
       contentHash: scan.contentHash,
       lineCount: scan.lineCount,
-      lastContentLine: firstUnselected?.contentIndex ?? scan.scannedEndIndex,
+      lastContentLine: Math.min(...progressStops),
     };
   }
   return files;
@@ -544,6 +553,7 @@ export async function runSessionBackfill(
   if (params.rollback) {
     // Backfill diary markers and grounded-only candidates are a shared artifact
     // class with rem-backfill; the stable removal APIs intentionally clear both.
+    // Ingestion cursors and hashes remain: rollback must not re-ingest tracked messages.
     const [diary, staged] = await Promise.all([
       removeBackfillDiaryEntries({ workspaceDir }),
       removeGroundedShortTermCandidates({ workspaceDir }),

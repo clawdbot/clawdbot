@@ -124,6 +124,7 @@ Session backfill uses canonical retained transcript identities, including
 sessions preserved across rotation. Messages are bucketed in the configured
 dreaming timezone and share live ingestion's tracked message hashes and signal
 caps, so bounded reruns continue forward without re-ingesting prior messages.
+Rollback removes generated artifacts but retains those ingestion checkpoints.
 Foreign files supplied with `--archive-files` are treated conservatively. Their
 embedded ownership fields are caller-controlled and therefore remain untrusted;
 without an authenticated provenance contract, they cannot enter short-term

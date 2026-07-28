@@ -179,7 +179,9 @@ or dreaming decision.
 Backfill rollback is intentionally shared with `memory rem-backfill`: both
 commands use the same grounded-only staging class and diary markers. Run
 `session-backfill --rollback` only when you intend to clear both commands'
-grounded backfill artifacts from that workspace.
+grounded backfill artifacts from that workspace. Rollback preserves transcript
+ingestion cursors and tracked message hashes, so removed messages are not
+automatically re-ingested.
 
 ## Dreaming
 
