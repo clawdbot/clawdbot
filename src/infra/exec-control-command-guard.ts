@@ -10,7 +10,7 @@ type ParsedExecApprovalCommand = {
   decision: "allow-once" | "allow-always" | "deny";
 };
 
-type UnsafeExecControlShellCommandKind = "approve" | "channel-login";
+type UnsafeExecControlShellCommandKind = "approve" | "channel-login" | "skill-workshop-lifecycle";
 
 function parseExecApprovalShellCommand(raw: string): ParsedExecApprovalCommand | null {
   const normalized = raw.trimStart();
@@ -91,6 +91,22 @@ function parseOpenClawChannelsLoginShellCommand(raw: string): boolean {
   );
 }
 
+function parseOpenClawSkillWorkshopLifecycleShellCommand(raw: string): boolean {
+  const argv = splitShellArgs(raw);
+  if (!argv) {
+    return false;
+  }
+  const openclawArgv = stripOpenClawPackageRunner(argv);
+  return (
+    normalizeCommandBaseName(openclawArgv[0]) === "openclaw" &&
+    openclawArgv[1] === "skills" &&
+    openclawArgv[2] === "workshop" &&
+    (openclawArgv[3] === "apply" ||
+      openclawArgv[3] === "reject" ||
+      openclawArgv[3] === "quarantine")
+  );
+}
+
 export async function detectUnsafeExecControlShellCommand(
   command: string,
 ): Promise<UnsafeExecControlShellCommandKind | null> {
@@ -117,6 +133,9 @@ export async function detectUnsafeExecControlShellCommand(
     if (parseOpenClawChannelsLoginShellCommand(candidate)) {
       return "channel-login";
     }
+    if (parseOpenClawSkillWorkshopLifecycleShellCommand(candidate)) {
+      return "skill-workshop-lifecycle";
+    }
   }
   return null;
 }
@@ -136,6 +155,14 @@ export async function rejectUnsafeExecControlShellCommand(command: string): Prom
       [
         "exec cannot run interactive OpenClaw channel login commands.",
         "Run `openclaw channels login` in a terminal on the gateway host, or use the channel-specific login agent tool when available (for WhatsApp: `whatsapp_login`).",
+      ].join(" "),
+    );
+  }
+  if (unsafeKind === "skill-workshop-lifecycle") {
+    throw new Error(
+      [
+        "exec cannot run Skill Workshop lifecycle commands.",
+        "Use the skill_workshop tool so apply, reject, and quarantine actions pass through the formal approval flow.",
       ].join(" "),
     );
   }

@@ -8,10 +8,12 @@ const MSTEAMS_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 
 function normalizeMSTeamsApproverId(value: string | number): string | undefined {
   const normalized = normalizeMSTeamsMessagingTarget(String(value));
-  if (!normalized?.startsWith("user:")) {
+  if (!normalized) {
     return undefined;
   }
-  const id = normalizeOptionalLowercaseString(normalized.slice("user:".length));
+  const id = normalizeOptionalLowercaseString(
+    normalized.startsWith("user:") ? normalized.slice("user:".length) : normalized,
+  );
   if (!id) {
     return undefined;
   }
