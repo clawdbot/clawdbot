@@ -7,12 +7,9 @@ export {
   formatPermissionDetail,
   formatPermissionRemediation,
   inspectPathPermissions,
-  readOwnerAndDacl,
   safeStat,
-  type OwnerAndDaclResult,
   type PermissionCheck,
   type PermissionCheckOptions,
-  type WindowsAccessControlEntry,
 } from "@openclaw/fs-safe/permissions";
 export {
   createIcaclsResetCommand,
