@@ -129,16 +129,11 @@ final class TailscaleService {
         let appInstalled = self.checkAppInstallation()
         let cliInstalled = self.checkCLIInstallation()
         let apiResponse = await self.fetchTailscaleStatus()
-        // RFC 6598 space is not Tailscale-exclusive. Only trust an interface
-        // fallback after the app, CLI, or local API proves this installation.
-        let fallbackIP = appInstalled || cliInstalled || apiResponse != nil
-            ? TailscaleNetwork.detectTailnetIPv4()
-            : nil
         self.applyStatusEvidence(
             appInstalled: appInstalled,
             cliInstalled: cliInstalled,
             apiResponse: apiResponse,
-            fallbackIP: fallbackIP)
+            fallbackIP: TailscaleNetwork.detectTailnetIPv4())
 
         if previousIP != self.tailscaleIP {
             await GatewayEndpointStore.shared.refresh()
@@ -153,6 +148,9 @@ final class TailscaleService {
     {
         self.isAppInstalled = appInstalled
         self.isInstalled = appInstalled || cliInstalled || apiResponse != nil
+        // RFC 6598 space is not Tailscale-exclusive. Only trust an interface
+        // fallback after the app, CLI, or local API proves this installation.
+        let trustedFallbackIP = self.isInstalled ? fallbackIP : nil
 
         if let apiResponse {
             self.isRunning = apiResponse.status.lowercased() == "running"
@@ -166,7 +164,7 @@ final class TailscaleService {
                     .replacingOccurrences(of: ".tailscale.net", with: "")
 
                 self.tailscaleHostname = "\(deviceName).\(tailnetName).ts.net"
-                self.tailscaleIP = apiResponse.iPv4 ?? fallbackIP
+                self.tailscaleIP = apiResponse.iPv4 ?? trustedFallbackIP
                 self.statusError = nil
 
                 self.logger.info(
@@ -176,12 +174,12 @@ final class TailscaleService {
                 self.tailscaleIP = nil
                 self.statusError = "Tailscale is not running"
             }
-        } else if let fallbackIP {
+        } else if let trustedFallbackIP {
             self.isRunning = true
             self.tailscaleHostname = nil
-            self.tailscaleIP = fallbackIP
+            self.tailscaleIP = trustedFallbackIP
             self.statusError = nil
-            self.logger.info("Tailscale interface IP detected (fallback) ip=\(fallbackIP, privacy: .public)")
+            self.logger.info("Tailscale interface IP detected (fallback) ip=\(trustedFallbackIP, privacy: .public)")
         } else {
             self.isRunning = false
             self.tailscaleHostname = nil
