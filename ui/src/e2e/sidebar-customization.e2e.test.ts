@@ -401,9 +401,9 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
           "Debug",
           "Logs",
           "About",
-          "General",
           "Appearance",
           "Notifications",
+          "Gateway",
         ]);
       await captureSettingsSidebarProof(settingsSidebar, "01c-settings-search-group.png");
       await holdUiProof(page);
