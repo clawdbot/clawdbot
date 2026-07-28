@@ -360,8 +360,19 @@ function normalizeRequiredComponentIds(expectedAgentIds: readonly string[]): str
   ];
 }
 
-function normalizeOwnerInventory(value: RecoveryPointOwnerInventory) {
+export function verifyRecoveryPointOwnerInventory(value: unknown): RecoveryPointOwnerInventory {
   const inventory = recoveryPointOwnerInventorySchema.parse(value);
+  const canonicalAgentIds = normalizeRequiredComponentIds(inventory.agentIds)
+    .slice(1)
+    .map((componentId) => componentId.slice("sqlite/agent/".length));
+  if (!isDeepStrictEqual(inventory.agentIds, canonicalAgentIds)) {
+    throw new Error("Recovery point owner inventory agent ids are not in canonical order.");
+  }
+  return inventory;
+}
+
+function normalizeOwnerInventory(value: RecoveryPointOwnerInventory) {
+  const inventory = verifyRecoveryPointOwnerInventory(value);
   return {
     version: inventory.version,
     owner: inventory.owner,

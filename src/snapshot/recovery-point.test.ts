@@ -9,6 +9,7 @@ import {
   createRecoveryPointManifest,
   verifyRecoveryPoint,
   verifyRecoveryPointManifest,
+  verifyRecoveryPointOwnerInventory,
   type RecoveryPointAcceptance,
   type RecoveryPointManifest,
   type RecoveryPointOwnerInventory,
@@ -256,6 +257,13 @@ describe("recovery point composition", () => {
         } as unknown as RecoveryPointOwnerInventory,
       }),
     ).rejects.toThrow();
+
+    expect(() =>
+      verifyRecoveryPointOwnerInventory(stateOwnerInventory(["research", "main"])),
+    ).toThrow("canonical order");
+    expect(() => verifyRecoveryPointOwnerInventory(stateOwnerInventory(["../../outside"]))).toThrow(
+      "expected agent id is invalid",
+    );
   });
 
   it("rejects incomplete, extra, and self-consistent but owner-mismatched inventories", async () => {
