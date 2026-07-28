@@ -36,14 +36,18 @@ function parseThemeBlocks(baseCss: string): Map<string, TokenMap> {
   const blocks = new Map<string, TokenMap>();
   const blockPattern = /(:root(?:\[data-theme(?:-mode)?="[^"]+"\])?)\s*\{([^}]*)\}/g;
   for (const match of baseCss.matchAll(blockPattern)) {
+    const selector = match[1] ?? "";
+    const body = match[2] ?? "";
     const tokens: TokenMap = new Map();
-    for (const line of match[2].split("\n")) {
+    for (const line of body.split("\n")) {
       const declaration = line.match(/^\s*(--[\w-]+)\s*:\s*([^;]+);/);
-      if (declaration) {
-        tokens.set(declaration[1], declaration[2].trim());
+      const name = declaration?.[1];
+      const value = declaration?.[2];
+      if (name && value) {
+        tokens.set(name, value.trim());
       }
     }
-    blocks.set(match[1], tokens);
+    blocks.set(selector, tokens);
   }
   return blocks;
 }
@@ -72,18 +76,18 @@ function resolveThemes(blocks: Map<string, TokenMap>): Map<string, TokenMap> {
 }
 
 function relativeLuminance(hex: string): number {
-  const channels = [0, 2, 4].map((offset) => {
-    const channel = parseInt(hex.slice(offset + 1, offset + 3), 16) / 255;
-    return channel <= 0.04045 ? channel / 12.92 : Math.pow((channel + 0.055) / 1.055, 2.4);
+  const [red = 0, green = 0, blue = 0] = [0, 2, 4].map((offset) => {
+    const channel = Number.parseInt(hex.slice(offset + 1, offset + 3), 16) / 255;
+    return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
   });
-  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
 }
 
 function contrastRatio(foregroundHex: string, backgroundHex: string): number {
-  const [lighter, darker] = [
+  const [lighter = 0, darker = 0] = [
     relativeLuminance(foregroundHex),
     relativeLuminance(backgroundHex),
-  ].sort((a, b) => b - a);
+  ].toSorted((a, b) => b - a);
   return (lighter + 0.05) / (darker + 0.05);
 }
 
