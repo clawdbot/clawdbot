@@ -119,8 +119,7 @@ describe("local media roots", () => {
 
   it("merges agents.defaults.mediaLocalRoots into agent-scoped outbound roots", () => {
     const stateDir = path.join("/tmp", "openclaw-configured-media-roots-state");
-    const extraRoot =
-      process.platform === "win32" ? "C:\\data\\snapshots" : "/data/snapshots";
+    const extraRoot = process.platform === "win32" ? "C:\\data\\snapshots" : "/data/snapshots";
     const roots = withStateDir(stateDir, () =>
       getAgentScopedMediaLocalRoots(
         {
@@ -138,8 +137,7 @@ describe("local media roots", () => {
 
   it("expands ~/ mediaLocalRoots when home is available", () => {
     const stateDir = path.join("/tmp", "openclaw-configured-media-roots-home");
-    const homeDir =
-      process.platform === "win32" ? "C:\\Users\\media-test" : "/Users/media-test";
+    const homeDir = process.platform === "win32" ? "C:\\Users\\media-test" : "/Users/media-test";
     const roots = withEnv({ OPENCLAW_STATE_DIR: stateDir, HOME: homeDir }, () =>
       getAgentScopedMediaLocalRoots(
         {
