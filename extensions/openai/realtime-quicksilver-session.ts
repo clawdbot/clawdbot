@@ -36,14 +36,6 @@ import {
   type OpenAIQuicksilverInitialItem,
   type OpenAIQuicksilverRequestIds,
 } from "./realtime-quicksilver-wire.js";
-export {
-  buildOpenAIQuicksilverSession,
-  chunkOpenAIQuicksilverAppendText,
-  createOpenAIQuicksilverCall,
-  OpenAIQuicksilverCallError,
-  parseOpenAIQuicksilverEvent,
-} from "./realtime-quicksilver-wire.js";
-
 export const OPENAI_QUICKSILVER_OFFER_PATH = "/plugins/openai/realtime/calls";
 export const OPENAI_QUICKSILVER_CAPABILITIES = {
   transports: ["webrtc" as const],

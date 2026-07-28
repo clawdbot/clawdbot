@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildOpenAIQuicksilverSession,
   createOpenAIQuicksilverCall,
-  OpenAIQuicksilverCallError,
 } from "./realtime-quicksilver-wire.js";
 
 function createCallResponse(answer = "v=answer\r\n", callId = "rtc_test"): Response {
@@ -134,7 +133,7 @@ describe("GPT-Live call creation", () => {
       name: "OpenAIQuicksilverCallError",
       status,
       message,
-    } satisfies Partial<OpenAIQuicksilverCallError>);
+    });
   });
 
   it.each([

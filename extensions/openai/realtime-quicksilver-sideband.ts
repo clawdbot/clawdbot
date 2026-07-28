@@ -37,9 +37,9 @@ export type OpenAIQuicksilverSocketFactory = (
   options: ClientOptions,
 ) => OpenAIQuicksilverSocket;
 
-export type OpenAIQuicksilverBufferedFrame = { data: RawData; isBinary: boolean };
+type OpenAIQuicksilverBufferedFrame = { data: RawData; isBinary: boolean };
 
-export type OpenAIQuicksilverConnectedSideband = {
+type OpenAIQuicksilverConnectedSideband = {
   socket: OpenAIQuicksilverSocket;
   bufferedFrames: OpenAIQuicksilverBufferedFrame[];
   detachBuffer: () => void;
@@ -102,7 +102,16 @@ function waitForRetryDelay(ms: number, signal: AbortSignal): Promise<void> {
         resolve();
       }
     };
-    const onAbort = () => finish(signal.reason ?? new Error("GPT-Live session stopped"));
+    const onAbort = () => {
+      const reason = signal.reason;
+      finish(
+        reason instanceof Error
+          ? reason
+          : new Error(reason === undefined ? "GPT-Live session stopped" : String(reason), {
+              cause: reason,
+            }),
+      );
+    };
     const timer = setTimeout(() => finish(), ms);
     timer.unref?.();
     signal.addEventListener("abort", onAbort, { once: true });

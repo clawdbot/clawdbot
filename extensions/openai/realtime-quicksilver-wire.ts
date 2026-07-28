@@ -1,7 +1,7 @@
 // GPT-Live frameless session, call-creation, and sideband event wire contracts.
 import { randomBytes } from "node:crypto";
 import { resolveProviderRequestHeaders } from "openclaw/plugin-sdk/provider-http";
-import { z } from "openclaw/plugin-sdk/zod";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const OPENAI_QUICKSILVER_APPEND_MAX_BYTES = 500;
 const OPENAI_QUICKSILVER_CONTEXT_MAX_ENTRIES = 16;
@@ -40,7 +40,7 @@ export type OpenAIQuicksilverInitialItem = {
   text: string;
 };
 
-export type OpenAIQuicksilverSession = {
+type OpenAIQuicksilverSession = {
   model: string;
   instructions: string;
   audio: { output: { voice: OpenAIQuicksilverVoice } };
@@ -52,50 +52,82 @@ export type OpenAIQuicksilverSession = {
   }>;
 };
 
-const eventEnvelopeSchema = z.object({ type: z.string() }).passthrough();
-const sessionStartedSchema = z
-  .object({
-    type: z.literal("session.started"),
-    session: z.object({ expires_at: z.number().optional() }).passthrough(),
-  })
-  .passthrough();
-const transcriptAddedSchema = z
-  .object({
-    item: z.object({ text: z.string() }).passthrough(),
-  })
-  .passthrough();
-const turnDoneSchema = z
-  .object({
-    turn: z
-      .object({
-        role: z.enum(["user", "assistant"]),
-        transcript: z.string(),
-      })
-      .passthrough(),
-  })
-  .passthrough();
-const delegationSchema = z
-  .object({
-    type: z.literal("delegation.created"),
-    item: z
-      .object({
-        type: z.string(),
-        target: z.string(),
-        id: z.string().optional(),
-        content: z
-          .array(
-            z
-              .object({
-                type: z.string(),
-                text: z.string().optional(),
-              })
-              .passthrough(),
-          )
-          .optional(),
-      })
-      .passthrough(),
-  })
-  .passthrough();
+type QuicksilverSessionStartedEvent = {
+  type: "session.started";
+  session: { expires_at?: number };
+};
+
+type QuicksilverTranscriptAddedEvent = { item: { text: string } };
+
+type QuicksilverTurnDoneEvent = {
+  turn: { role: "user" | "assistant"; transcript: string };
+};
+
+type QuicksilverDelegationEvent = {
+  type: "delegation.created";
+  item: {
+    type: string;
+    target: string;
+    id?: string;
+    content?: Array<{ type: string; text?: string }>;
+  };
+};
+
+function hasOptionalPropertyType(
+  value: Record<string, unknown>,
+  key: string,
+  expectedType: "number" | "string",
+): boolean {
+  return value[key] === undefined || typeof value[key] === expectedType;
+}
+
+function isQuicksilverSessionStartedEvent(value: unknown): value is QuicksilverSessionStartedEvent {
+  return (
+    isRecord(value) &&
+    value.type === "session.started" &&
+    isRecord(value.session) &&
+    hasOptionalPropertyType(value.session, "expires_at", "number")
+  );
+}
+
+function isQuicksilverTranscriptAddedEvent(
+  value: unknown,
+): value is QuicksilverTranscriptAddedEvent {
+  return isRecord(value) && isRecord(value.item) && typeof value.item.text === "string";
+}
+
+function isQuicksilverTurnDoneEvent(value: unknown): value is QuicksilverTurnDoneEvent {
+  return (
+    isRecord(value) &&
+    isRecord(value.turn) &&
+    (value.turn.role === "user" || value.turn.role === "assistant") &&
+    typeof value.turn.transcript === "string"
+  );
+}
+
+function isQuicksilverDelegationEvent(value: unknown): value is QuicksilverDelegationEvent {
+  if (
+    !isRecord(value) ||
+    value.type !== "delegation.created" ||
+    !isRecord(value.item) ||
+    typeof value.item.type !== "string" ||
+    typeof value.item.target !== "string" ||
+    !hasOptionalPropertyType(value.item, "id", "string")
+  ) {
+    return false;
+  }
+  const content = value.item.content;
+  return (
+    content === undefined ||
+    (Array.isArray(content) &&
+      content.every(
+        (part) =>
+          isRecord(part) &&
+          typeof part.type === "string" &&
+          hasOptionalPropertyType(part, "text", "string"),
+      ))
+  );
+}
 
 export type OpenAIQuicksilverInboundEvent =
   | { kind: "ignored"; eventType: string }
@@ -106,7 +138,7 @@ export type OpenAIQuicksilverInboundEvent =
   | { kind: "error"; message: string; fatalAuth: boolean }
   | { kind: "unknown"; eventType: string };
 
-export class OpenAIQuicksilverCallError extends Error {
+class OpenAIQuicksilverCallError extends Error {
   constructor(
     message: string,
     readonly status?: number,
@@ -421,47 +453,42 @@ export function parseOpenAIQuicksilverEvent(payload: string): OpenAIQuicksilverI
   } catch {
     return null;
   }
-  const envelope = eventEnvelopeSchema.safeParse(decoded);
-  if (!envelope.success) {
+  if (!isRecord(decoded) || typeof decoded.type !== "string") {
     return null;
   }
-  const eventType = envelope.data.type;
+  const eventType = decoded.type;
   if (eventType === "session.started") {
-    const started = sessionStartedSchema.safeParse(decoded);
-    if (!started.success) {
+    if (!isQuicksilverSessionStartedEvent(decoded)) {
       return { kind: "ignored", eventType };
     }
-    const expiresAt = started.data.session.expires_at;
+    const expiresAt = decoded.session.expires_at;
     return {
       kind: "session-started",
       ...(expiresAt !== undefined ? { expiresAt } : {}),
     };
   }
   if (eventType === "input_transcript.added" || eventType === "output_transcript.added") {
-    const transcript = transcriptAddedSchema.safeParse(decoded);
-    return transcript.success
+    return isQuicksilverTranscriptAddedEvent(decoded)
       ? {
           kind: "transcript-delta",
           role: eventType === "input_transcript.added" ? "user" : "assistant",
-          text: transcript.data.item.text,
+          text: decoded.item.text,
         }
       : { kind: "ignored", eventType };
   }
   if (eventType === "turn.done") {
-    const turn = turnDoneSchema.safeParse(decoded);
-    return turn.success
-      ? { kind: "transcript-done", role: turn.data.turn.role, text: turn.data.turn.transcript }
+    return isQuicksilverTurnDoneEvent(decoded)
+      ? { kind: "transcript-done", role: decoded.turn.role, text: decoded.turn.transcript }
       : { kind: "ignored", eventType };
   }
   if (eventType === "session.updated" || eventType === "output_audio.delta") {
     return { kind: "ignored", eventType };
   }
   if (eventType === "delegation.created") {
-    const delegation = delegationSchema.safeParse(decoded);
-    if (!delegation.success) {
+    if (!isQuicksilverDelegationEvent(decoded)) {
       return { kind: "ignored", eventType };
     }
-    const { item } = delegation.data;
+    const { item } = decoded;
     if (item.type !== "delegation" || item.target !== "client" || !item.id) {
       return { kind: "ignored", eventType };
     }

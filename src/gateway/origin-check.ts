@@ -21,7 +21,7 @@ type OriginCheckResult =
     }
   | { ok: false; reason: string };
 
-export type BrowserOriginPolicy = {
+type BrowserOriginPolicy = {
   requestHost?: string;
   origin?: string;
   allowedOrigins?: string[];
