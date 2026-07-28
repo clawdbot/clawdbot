@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { TextDecoder } from "node:util";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
+import { findAgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
 import type { EmbeddedAgentRunMeta } from "../agents/embedded-agent.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -329,6 +330,9 @@ function setAgentExecEnvironment(params: {
 }
 
 function isStructuredTimeoutError(error: unknown): boolean {
+  if (findAgentRunTerminalOutcome(error)?.status === "timeout") {
+    return true;
+  }
   let candidate = error;
   for (let depth = 0; depth < 4; depth += 1) {
     if (!candidate || typeof candidate !== "object") {

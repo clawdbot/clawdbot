@@ -5,6 +5,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { AgentRunTerminalOutcomeError } from "../agents/agent-run-terminal-outcome.js";
 import {
   ensureAuthProfileStore,
   findPersistedAuthProfileCredential,
@@ -234,6 +235,36 @@ describe("agent exec command composition", () => {
     expect(result).toMatchObject({
       exitCode: 2,
       envelope: { status: "timeout", error: { kind: "timeout" } },
+    });
+  });
+
+  it("maps embedded terminal-outcome timeouts to exit code 2", async () => {
+    const { runtime } = createRuntime();
+    const timeout = new AgentRunTerminalOutcomeError(
+      new Error("attempt aborted before prompt submission"),
+      {
+        reason: "hard_timeout",
+        status: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+    );
+
+    const result = await agentExecCommand("inspect", { json: true }, runtime, {
+      runAgent: vi.fn(async () => {
+        throw timeout;
+      }),
+    });
+
+    expect(result).toMatchObject({
+      exitCode: 2,
+      envelope: {
+        status: "timeout",
+        error: {
+          kind: "timeout",
+          message: "attempt aborted before prompt submission",
+        },
+      },
     });
   });
 
