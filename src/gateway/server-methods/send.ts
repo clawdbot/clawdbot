@@ -8,7 +8,6 @@ import {
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateMessageActionParams,
   validatePollParams,
   validateSendParams,
@@ -16,8 +15,13 @@ import {
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
 import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
+import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
-import type { ChannelThreadingToolContext } from "../../channels/plugins/types.public.js";
+import type {
+  ChannelPlugin,
+  ChannelThreadingToolContext,
+} from "../../channels/plugins/types.public.js";
+import { resolveChannelThreadAddressing } from "../../channels/thread-addressing.js";
 import type { InternalChannelThreadingToolContext } from "../../channels/threading-tool-context-internal.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
 import {
@@ -28,6 +32,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import { validateExplicitMessageAccountSelection } from "../../infra/outbound/message-account-selection.js";
 import {
   hydrateAttachmentParamsForAction,
   resolveAttachmentMediaPolicy,
@@ -53,7 +58,11 @@ import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { normalizePollInput } from "../../polls.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import {
+  normalizeAccountId,
+  normalizeAgentId,
+  normalizeOptionalAccountId,
+} from "../../routing/session-key.js";
 import {
   isAgentHarnessSessionKey,
   resolveMissingAgentHarnessSessionError,
@@ -67,6 +76,7 @@ import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/m
 import { resolveGatewayConversationReadOrigin } from "../conversation-read-origin.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
+import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
@@ -75,8 +85,117 @@ import {
   type GatewayInflightResult as InflightResult,
 } from "./inflight.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 type MessageActionToolContext = Omit<ChannelThreadingToolContext, "currentChatType">;
+type MessageOperationPrefix = "message.action" | "poll" | "send";
+
+type MessageOperationRoute = {
+  channel: string;
+  accountId: string;
+  requestScope: string;
+};
+
+type MessageOperationRouteBinding = {
+  key: string;
+  reservedRoute?: MessageOperationRoute;
+};
+
+type MessageOperationRouteBindingEntry = {
+  requestScope: string;
+  retainUntilSettled: boolean;
+  ts: number;
+};
+
+// Send and poll callers can spell one canonical route four ways by omitting or
+// supplying channel/account defaults. Preserve every alias for the full result budget.
+const MESSAGE_OPERATION_ROUTE_BINDING_MAX = DEDUPE_MAX * 4;
+const messageOperationRouteBindings = new WeakMap<
+  GatewayRequestContext,
+  Map<string, MessageOperationRouteBindingEntry>
+>();
+const messageOperationRouteBindingQueues = new WeakMap<GatewayRequestContext, KeyedAsyncQueue>();
+
+function pruneMessageOperationRouteBindings(
+  bindings: Map<string, MessageOperationRouteBindingEntry>,
+  now: number,
+): void {
+  for (const [key, entry] of bindings) {
+    if (!entry.retainUntilSettled && now - entry.ts > DEDUPE_TTL_MS) {
+      bindings.delete(key);
+    }
+  }
+  const excess = bindings.size - MESSAGE_OPERATION_ROUTE_BINDING_MAX;
+  if (excess <= 0) {
+    return;
+  }
+  const oldestSettledKeys = [...bindings.entries()]
+    .filter(([, entry]) => !entry.retainUntilSettled)
+    .toSorted(([, left], [, right]) => left.ts - right.ts)
+    .slice(0, excess)
+    .map(([key]) => key);
+  for (const key of oldestSettledKeys) {
+    bindings.delete(key);
+  }
+}
+
+function getMessageOperationRouteBindings(
+  context: GatewayRequestContext,
+): Map<string, MessageOperationRouteBindingEntry> {
+  let bindings = messageOperationRouteBindings.get(context);
+  if (!bindings) {
+    bindings = new Map();
+    messageOperationRouteBindings.set(context, bindings);
+  }
+  pruneMessageOperationRouteBindings(bindings, Date.now());
+  return bindings;
+}
+
+function getMessageOperationRouteBindingQueue(context: GatewayRequestContext): KeyedAsyncQueue {
+  let queue = messageOperationRouteBindingQueues.get(context);
+  if (!queue) {
+    queue = new KeyedAsyncQueue();
+    messageOperationRouteBindingQueues.set(context, queue);
+  }
+  return queue;
+}
+
+async function acquireMessageOperationRouteBindingLock(params: {
+  context: GatewayRequestContext;
+  binding: MessageOperationRouteBinding | undefined;
+}): Promise<() => void> {
+  if (!params.binding) {
+    return () => undefined;
+  }
+
+  let signalAcquired: (() => void) | undefined;
+  let signalRelease: (() => void) | undefined;
+  const acquired = new Promise<void>((resolve) => {
+    signalAcquired = resolve;
+  });
+  const held = new Promise<void>((resolve) => {
+    signalRelease = resolve;
+  });
+  // The lock covers mutable route selection through canonical in-flight registration.
+  // Otherwise a later retry can bind newer defaults while the first request is resolving.
+  void getMessageOperationRouteBindingQueue(params.context).enqueue(
+    params.binding.key,
+    async () => {
+      signalAcquired?.();
+      await held;
+    },
+  );
+  await acquired;
+
+  let released = false;
+  return () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    signalRelease?.();
+  };
+}
 
 function resolveTrustedMessageActionToolContext(params: {
   client: Parameters<GatewayRequestHandlers["message.action"]>[0]["client"];
@@ -152,12 +271,22 @@ function resolveTrustedMessageActionToolContext(params: {
   };
 }
 
+function resolveMessageOperationAuthorityScope(params: {
+  prefix: MessageOperationPrefix;
+  conversationReadOrigin?: ConversationReadInvocationOrigin;
+}): string {
+  return params.prefix === "message.action"
+    ? `:${params.conversationReadOrigin ?? "delegated"}`
+    : "";
+}
+
 function resolveGatewayInflightRequest(params: {
   context: GatewayRequestContext;
-  prefix: "message.action" | "poll" | "send";
+  prefix: MessageOperationPrefix;
   idempotencyKey: string;
   respond: RespondFn;
   conversationReadOrigin?: ConversationReadInvocationOrigin;
+  requestScope?: string;
 }):
   | {
       kind: "ready";
@@ -170,15 +299,216 @@ function resolveGatewayInflightRequest(params: {
       done: Promise<void>;
     } {
   const idem = params.idempotencyKey;
-  const dedupeKey =
-    params.prefix === "message.action"
-      ? `${params.prefix}:${params.conversationReadOrigin ?? "delegated"}:${idem}`
-      : `${params.prefix}:${idem}`;
+  const authorityScope = resolveMessageOperationAuthorityScope(params);
+  const requestScope = params.requestScope ? `:${params.requestScope}` : "";
+  const dedupeKey = `${params.prefix}${authorityScope}${requestScope}:${idem}`;
   return resolveIdempotentGatewayRequest({
     context: params.context,
     dedupeKey,
     idempotencyKey: idem,
     respond: params.respond,
+  });
+}
+
+function parseMessageOperationRoute(
+  requestScope: string | undefined,
+): MessageOperationRoute | undefined {
+  if (!requestScope) {
+    return undefined;
+  }
+  try {
+    const parsed: unknown = JSON.parse(requestScope);
+    if (
+      !Array.isArray(parsed) ||
+      parsed.length !== 2 ||
+      typeof parsed[0] !== "string" ||
+      typeof parsed[1] !== "string"
+    ) {
+      return undefined;
+    }
+    const channel = normalizeMessageChannel(parsed[0]);
+    const accountId = normalizeOptionalAccountId(parsed[1]);
+    if (!channel || channel !== parsed[0] || !accountId || accountId !== parsed[1]) {
+      return undefined;
+    }
+    return { channel, accountId, requestScope };
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveMessageOperationRouteBinding(params: {
+  context: GatewayRequestContext;
+  prefix: MessageOperationPrefix;
+  idempotencyKey: string;
+  conversationReadOrigin?: ConversationReadInvocationOrigin;
+  requestChannel: unknown;
+  accountIds: readonly unknown[];
+}): MessageOperationRouteBinding | undefined {
+  const rawChannel = readStringValue(params.requestChannel);
+  const channel = rawChannel ? normalizeMessageChannel(rawChannel) : undefined;
+  if (rawChannel && !channel) {
+    return undefined;
+  }
+  const providedAccountIds = params.accountIds.filter(
+    (value) => value !== undefined && value !== null && (typeof value !== "string" || value.trim()),
+  );
+  const normalizedAccountIds = providedAccountIds.map((value) =>
+    typeof value === "string" ? normalizeOptionalAccountId(value) : undefined,
+  );
+  if (normalizedAccountIds.some((accountId) => !accountId)) {
+    return undefined;
+  }
+  const distinctAccountIds = [...new Set(normalizedAccountIds as string[])];
+  if (distinctAccountIds.length > 1) {
+    return undefined;
+  }
+  const accountId = distinctAccountIds[0];
+  const authorityScope = resolveMessageOperationAuthorityScope(params);
+  const explicitRouteScope = JSON.stringify([channel ?? null, accountId ?? null]);
+  const key = `${params.prefix}${authorityScope}:route-binding:${explicitRouteScope}:${params.idempotencyKey}`;
+  return {
+    key,
+    reservedRoute: parseMessageOperationRoute(
+      getMessageOperationRouteBindings(params.context).get(key)?.requestScope,
+    ),
+  };
+}
+
+function bindMessageOperationRoute(params: {
+  context: GatewayRequestContext;
+  binding: MessageOperationRouteBinding | undefined;
+  requestScope: string;
+}): boolean {
+  if (!params.binding) {
+    return true;
+  }
+  const bindings = getMessageOperationRouteBindings(params.context);
+  const existing = bindings.get(params.binding.key);
+  if (existing) {
+    if (existing.requestScope !== params.requestScope) {
+      return false;
+    }
+    bindings.set(params.binding.key, { ...existing, ts: Date.now() });
+    return true;
+  }
+  // Bind the canonical route before dispatch so retries can replay without
+  // consulting mutable defaults or plugin/account configuration.
+  bindings.set(params.binding.key, {
+    ts: Date.now(),
+    requestScope: params.requestScope,
+    retainUntilSettled: false,
+  });
+  pruneMessageOperationRouteBindings(bindings, Date.now());
+  return true;
+}
+
+function refreshMessageOperationRouteBinding(params: {
+  context: GatewayRequestContext;
+  binding: MessageOperationRouteBinding | undefined;
+  requestScope: string;
+}): void {
+  if (!params.binding) {
+    return;
+  }
+  const bindings = getMessageOperationRouteBindings(params.context);
+  const existing = bindings.get(params.binding.key);
+  if (existing?.requestScope === params.requestScope) {
+    bindings.set(params.binding.key, {
+      ...existing,
+      ts: Date.now(),
+      retainUntilSettled: false,
+    });
+    pruneMessageOperationRouteBindings(bindings, Date.now());
+  }
+}
+
+function retainMessageOperationRouteBinding(params: {
+  context: GatewayRequestContext;
+  binding: MessageOperationRouteBinding | undefined;
+  requestScope: string;
+}): void {
+  if (!params.binding) {
+    return;
+  }
+  const bindings = getMessageOperationRouteBindings(params.context);
+  const existing = bindings.get(params.binding.key);
+  if (existing?.requestScope === params.requestScope) {
+    // Active provider work owns this alias even past TTL or capacity pressure;
+    // settlement below restarts ordinary expiry.
+    bindings.set(params.binding.key, {
+      ...existing,
+      retainUntilSettled: true,
+    });
+  }
+}
+
+function replayReservedMessageOperationRoute(params: {
+  context: GatewayRequestContext;
+  binding: MessageOperationRouteBinding | undefined;
+  prefix: MessageOperationPrefix;
+  idempotencyKey: string;
+  respond: RespondFn;
+  conversationReadOrigin?: ConversationReadInvocationOrigin;
+}): Promise<void> | undefined {
+  if (!params.binding?.reservedRoute) {
+    return undefined;
+  }
+  const inflight = resolveGatewayInflightRequest({
+    context: params.context,
+    prefix: params.prefix,
+    idempotencyKey: params.idempotencyKey,
+    respond: params.respond,
+    conversationReadOrigin: params.conversationReadOrigin,
+    requestScope: params.binding.reservedRoute.requestScope,
+  });
+  if (inflight.kind === "ready") {
+    return undefined;
+  }
+  return inflight.done;
+}
+
+function resolveMessageOperationAccountRoute(params: {
+  cfg: OpenClawConfig;
+  channel: string;
+  plugin: ChannelPlugin;
+  accountIds: readonly unknown[];
+  conflictMessage: string;
+}): { accountId: string | undefined; requestScope: string } {
+  const accountIds = params.accountIds
+    .map((accountId) =>
+      validateExplicitMessageAccountSelection({
+        cfg: params.cfg,
+        channel: params.channel,
+        accountId,
+        plugin: params.plugin,
+      }),
+    )
+    .filter((accountId): accountId is string => accountId !== undefined);
+  const distinctAccountIds = [...new Set(accountIds)];
+  if (distinctAccountIds.length > 1) {
+    throw new Error(params.conflictMessage);
+  }
+  const accountId = distinctAccountIds[0];
+  // Missing input remains host-derived authority; this value only canonicalizes
+  // idempotency and is not forwarded as a caller-supplied explicit selection.
+  const effectiveAccountId =
+    accountId ??
+    normalizeAccountId(resolveChannelDefaultAccountId({ plugin: params.plugin, cfg: params.cfg }));
+  return {
+    accountId,
+    requestScope: JSON.stringify([params.channel, effectiveAccountId]),
+  };
+}
+
+function respondGatewayInvalidRequest(params: {
+  respond: RespondFn;
+  channel: string;
+  error: unknown;
+}): void {
+  params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(params.error)), {
+    channel: params.channel,
+    error: formatForLog(params.error),
   });
 }
 
@@ -464,15 +794,7 @@ function scheduleDeliveredSourceReplyTranscriptMirror(params: {
 export const sendHandlers: GatewayRequestHandlers = {
   "message.action": async ({ params, respond, context, client }) => {
     const p = params;
-    if (!validateMessageActionParams(p)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid message.action params: ${formatValidationErrors(validateMessageActionParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(p, validateMessageActionParams, "message.action", respond)) {
       return;
     }
     const request = p as {
@@ -500,153 +822,233 @@ export const sendHandlers: GatewayRequestHandlers = {
       client,
       requestedOrigin: request.conversationReadOrigin,
     });
-    const inflight = resolveGatewayInflightRequest({
+    let routeBinding = resolveMessageOperationRouteBinding({
       context,
       prefix: "message.action",
       idempotencyKey: request.idempotencyKey,
-      respond,
       conversationReadOrigin,
+      requestChannel: request.channel,
+      accountIds: [request.accountId, request.params.accountId],
     });
-    if (inflight.kind === "handled") {
-      await inflight.done;
-      return;
-    }
-    const { dedupeKey, inflightMap } = inflight;
-    const work = (async (): Promise<InflightResult> => {
-      const resolvedChannel = await resolveRequestedChannel({
+    const releaseRouteBindingLock = await acquireMessageOperationRouteBindingLock({
+      context,
+      binding: routeBinding,
+    });
+    try {
+      routeBinding = resolveMessageOperationRouteBinding({
+        context,
+        prefix: "message.action",
+        idempotencyKey: request.idempotencyKey,
+        conversationReadOrigin,
         requestChannel: request.channel,
+        accountIds: [request.accountId, request.params.accountId],
+      });
+      const reservedReplay = replayReservedMessageOperationRoute({
+        context,
+        binding: routeBinding,
+        prefix: "message.action",
+        idempotencyKey: request.idempotencyKey,
+        respond,
+        conversationReadOrigin,
+      });
+      if (reservedReplay) {
+        releaseRouteBindingLock();
+        await reservedReplay;
+        return;
+      }
+      const resolvedChannel = await resolveRequestedChannel({
+        requestChannel: routeBinding?.reservedRoute?.channel ?? request.channel,
         unsupportedMessage: (input) => `unsupported channel: ${input}`,
         context,
         rejectWebchatAsInternalOnly: true,
       });
       if ("error" in resolvedChannel) {
-        return { ok: false, error: resolvedChannel.error };
+        respond(false, undefined, resolvedChannel.error);
+        return;
       }
       const { cfg: selectedCfg, sourceCfg, channel } = resolvedChannel;
       const cfg = resolveMessageActionRuntimeConfig({ cfg: selectedCfg, sourceCfg });
       const plugin = resolveOutboundChannelPlugin({ channel, cfg });
       if (!plugin?.actions?.handleAction) {
-        return {
-          ok: false,
-          error: errorShape(
+        respond(
+          false,
+          undefined,
+          errorShape(
             ErrorCodes.INVALID_REQUEST,
             `Channel ${channel} does not support action ${request.action}.`,
           ),
-        };
+        );
+        return;
       }
-
+      let accountRoute: ReturnType<typeof resolveMessageOperationAccountRoute>;
       try {
-        const sessionKey = normalizeOptionalString(request.sessionKey) ?? undefined;
-        const agentId =
-          normalizeOptionalString(request.agentId) ??
-          (sessionKey ? resolveSessionAgentId({ sessionKey, config: cfg }) : undefined);
-        const accountId = normalizeOptionalString(request.accountId) ?? undefined;
-        if (request.action === "send") {
-          await hydrateAttachmentParamsForAction({
-            cfg,
-            channel,
-            accountId,
-            args: request.params,
-            action: "send",
-            mediaPolicy: resolveAttachmentMediaPolicy({
-              mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, agentId),
-            }),
-          });
-        }
-        const sourceReplyMirror = {
-          action: request.action,
-          channel,
-          actionParams: request.params,
+        accountRoute = resolveMessageOperationAccountRoute({
           cfg,
-          accountId,
-          currentAccountId: trustedContext.requesterAccountId,
-          sessionKey,
-          sessionId: trustedContext.sessionId,
-          agentId,
-          toolContext: trustedContext.toolContext,
-          idempotencyKey: request.idempotencyKey,
-          toolCallId: trustedContext.sourceReplyToolCallId,
-          ...(trustedContext.sourceReplyFinal !== undefined
-            ? { sourceReplyFinal: trustedContext.sourceReplyFinal }
-            : {}),
-        };
-        const terminalDeliveryReceipt =
-          trustedContext.sourceReplyFinal === true
-            ? await beginTerminalSourceReplyDelivery(sourceReplyMirror)
-            : undefined;
-        const gatewayClientScopes = client?.connect?.scopes ?? [];
-        const handled = await dispatchChannelMessageAction({
           channel,
-          action: request.action as never,
-          cfg,
-          params: request.params,
-          accountId,
-          requesterAccountId: trustedContext.requesterAccountId,
-          requesterSenderId: trustedContext.requesterSenderId,
-          senderIsOwner: gatewayClientScopes.includes(ADMIN_SCOPE)
-            ? request.senderIsOwner === true
-            : false,
-          conversationReadOrigin,
-          sessionKey,
-          sessionId: normalizeOptionalString(request.sessionId) ?? undefined,
-          inboundEventKind: request.inboundTurnKind,
-          agentId,
-          mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, agentId),
-          toolContext: trustedContext.toolContext,
-          dryRun: false,
-          gatewayClientScopes,
+          plugin,
+          accountIds: [
+            request.accountId,
+            request.params.accountId,
+            routeBinding?.reservedRoute?.accountId,
+          ],
+          conflictMessage: "message.action accountId does not match params.accountId",
         });
-        if (!handled) {
-          await cancelTerminalSourceReplyDelivery(terminalDeliveryReceipt);
-          const error = errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `Message action ${request.action} not supported for channel ${channel}.`,
-          );
-          cacheGatewayDedupeFailure({ context, dedupeKey, error });
-          return { ok: false, error, meta: { channel } };
-        }
-        const payload = extractToolPayload(handled);
-        try {
-          await reconcileTerminalSourceReplyDelivery({
-            deliveredPayload: payload,
-            mirror: sourceReplyMirror,
-            receipt: terminalDeliveryReceipt,
-          });
-        } catch (err) {
-          // The pre-send intent remains durable. Return the provider result so
-          // the model does not retry an external effect with an unknown outcome.
-          context.logGateway?.warn?.("Terminal source reply receipt reconciliation failed.", {
-            error: formatForLog(err),
-            channel,
-            sessionKey,
-          });
-        }
-        await scheduleDeliveredSourceReplyTranscriptMirror({
-          context,
-          mirror: {
-            ...sourceReplyMirror,
-            deliveredPayload: payload,
-          },
-        });
-        return createGatewayInflightSuccess({ context, dedupeKey, payload, channel });
-      } catch (err) {
-        return createGatewayInflightUnavailableFailure({ context, dedupeKey, channel, err });
+      } catch (error) {
+        respondGatewayInvalidRequest({ respond, channel, error });
+        return;
       }
-    })();
+      if (
+        !bindMessageOperationRoute({
+          context,
+          binding: routeBinding,
+          requestScope: accountRoute.requestScope,
+        })
+      ) {
+        respondGatewayInvalidRequest({
+          respond,
+          channel,
+          error: "idempotency key is already bound to a different message route",
+        });
+        return;
+      }
+      const inflight = resolveGatewayInflightRequest({
+        context,
+        prefix: "message.action",
+        idempotencyKey: request.idempotencyKey,
+        respond,
+        conversationReadOrigin,
+        requestScope: accountRoute.requestScope,
+      });
+      if (inflight.kind === "handled") {
+        releaseRouteBindingLock();
+        await inflight.done;
+        return;
+      }
+      const { dedupeKey, inflightMap } = inflight;
+      retainMessageOperationRouteBinding({
+        context,
+        binding: routeBinding,
+        requestScope: accountRoute.requestScope,
+      });
+      const work = (async (): Promise<InflightResult> => {
+        try {
+          const sessionKey = normalizeOptionalString(request.sessionKey) ?? undefined;
+          const agentId =
+            normalizeOptionalString(request.agentId) ??
+            (sessionKey ? resolveSessionAgentId({ sessionKey, config: cfg }) : undefined);
+          const accountId = accountRoute.accountId;
+          if (accountId) {
+            request.params.accountId = accountId;
+          }
+          if (request.action === "send") {
+            await hydrateAttachmentParamsForAction({
+              cfg,
+              channel,
+              accountId,
+              args: request.params,
+              action: "send",
+              mediaPolicy: resolveAttachmentMediaPolicy({
+                mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, agentId),
+              }),
+            });
+          }
+          const sourceReplyMirror = {
+            action: request.action,
+            channel,
+            actionParams: request.params,
+            cfg,
+            accountId,
+            currentAccountId: trustedContext.requesterAccountId,
+            sessionKey,
+            sessionId: trustedContext.sessionId,
+            agentId,
+            toolContext: trustedContext.toolContext,
+            idempotencyKey: request.idempotencyKey,
+            toolCallId: trustedContext.sourceReplyToolCallId,
+            ...(trustedContext.sourceReplyFinal !== undefined
+              ? { sourceReplyFinal: trustedContext.sourceReplyFinal }
+              : {}),
+          };
+          const terminalDeliveryReceipt =
+            trustedContext.sourceReplyFinal === true
+              ? await beginTerminalSourceReplyDelivery(sourceReplyMirror)
+              : undefined;
+          const gatewayClientScopes = client?.connect?.scopes ?? [];
+          const handled = await dispatchChannelMessageAction({
+            channel,
+            action: request.action as never,
+            cfg,
+            params: request.params,
+            accountId,
+            requesterAccountId: trustedContext.requesterAccountId,
+            requesterSenderId: trustedContext.requesterSenderId,
+            senderIsOwner: gatewayClientScopes.includes(ADMIN_SCOPE)
+              ? request.senderIsOwner === true
+              : false,
+            conversationReadOrigin,
+            sessionKey,
+            sessionId: normalizeOptionalString(request.sessionId) ?? undefined,
+            inboundEventKind: request.inboundTurnKind,
+            agentId,
+            mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, agentId),
+            toolContext: trustedContext.toolContext,
+            dryRun: false,
+            gatewayClientScopes,
+          });
+          if (!handled) {
+            await cancelTerminalSourceReplyDelivery(terminalDeliveryReceipt);
+            const error = errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `Message action ${request.action} not supported for channel ${channel}.`,
+            );
+            cacheGatewayDedupeFailure({ context, dedupeKey, error });
+            return { ok: false, error, meta: { channel } };
+          }
+          const payload = extractToolPayload(handled);
+          try {
+            await reconcileTerminalSourceReplyDelivery({
+              deliveredPayload: payload,
+              mirror: sourceReplyMirror,
+              receipt: terminalDeliveryReceipt,
+            });
+          } catch (err) {
+            // The pre-send intent remains durable. Return the provider result so
+            // the model does not retry an external effect with an unknown outcome.
+            context.logGateway?.warn?.("Terminal source reply receipt reconciliation failed.", {
+              error: formatForLog(err),
+              channel,
+              sessionKey,
+            });
+          }
+          await scheduleDeliveredSourceReplyTranscriptMirror({
+            context,
+            mirror: {
+              ...sourceReplyMirror,
+              deliveredPayload: payload,
+            },
+          });
+          return createGatewayInflightSuccess({ context, dedupeKey, payload, channel });
+        } catch (err) {
+          return createGatewayInflightUnavailableFailure({ context, dedupeKey, channel, err });
+        }
+      })().finally(() => {
+        refreshMessageOperationRouteBinding({
+          context,
+          binding: routeBinding,
+          requestScope: accountRoute.requestScope,
+        });
+      });
 
-    await runGatewayInflightWork({ inflightMap, dedupeKey, work, respond });
+      const inflightWork = runGatewayInflightWork({ inflightMap, dedupeKey, work, respond });
+      releaseRouteBindingLock();
+      await inflightWork;
+    } finally {
+      releaseRouteBindingLock();
+    }
   },
   send: async ({ params, respond, context, client }) => {
     const p = params;
-    if (!validateSendParams(p)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid send params: ${formatValidationErrors(validateSendParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(p, validateSendParams, "send", respond)) {
       return;
     }
     const request = p as {
@@ -670,17 +1072,6 @@ export const sendHandlers: GatewayRequestHandlers = {
       sessionKey?: string;
       idempotencyKey: string;
     };
-    const inflight = resolveGatewayInflightRequest({
-      context,
-      prefix: "send",
-      idempotencyKey: request.idempotencyKey,
-      respond,
-    });
-    if (inflight.kind === "handled") {
-      await inflight.done;
-      return;
-    }
-    const { idem, dedupeKey, inflightMap } = inflight;
     const to = normalizeOptionalString(request.to) ?? "";
     const message = normalizeOptionalString(request.message) ?? "";
     const mediaUrl = normalizeOptionalString(request.mediaUrl);
@@ -698,216 +1089,302 @@ export const sendHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const accountId = normalizeOptionalString(request.accountId);
+    const requestedAccountId = normalizeOptionalString(request.accountId);
     const replyToId = normalizeOptionalString(request.replyToId);
     const threadId = normalizeOptionalString(request.threadId);
-
-    const work = (async (): Promise<InflightResult> => {
-      const resolvedChannel = await resolveInternalDeliveryChannel(request.channel, context);
+    let routeBinding = resolveMessageOperationRouteBinding({
+      context,
+      prefix: "send",
+      idempotencyKey: request.idempotencyKey,
+      requestChannel: request.channel,
+      accountIds: [request.accountId],
+    });
+    const releaseRouteBindingLock = await acquireMessageOperationRouteBindingLock({
+      context,
+      binding: routeBinding,
+    });
+    try {
+      routeBinding = resolveMessageOperationRouteBinding({
+        context,
+        prefix: "send",
+        idempotencyKey: request.idempotencyKey,
+        requestChannel: request.channel,
+        accountIds: [request.accountId],
+      });
+      const reservedReplay = replayReservedMessageOperationRoute({
+        context,
+        binding: routeBinding,
+        prefix: "send",
+        idempotencyKey: request.idempotencyKey,
+        respond,
+      });
+      if (reservedReplay) {
+        releaseRouteBindingLock();
+        await reservedReplay;
+        return;
+      }
+      const resolvedChannel = await resolveInternalDeliveryChannel(
+        routeBinding?.reservedRoute?.channel ?? request.channel,
+        context,
+      );
       if (resolvedChannel.kind !== "ready") {
-        return resolvedChannel.result;
+        const result = resolvedChannel.result;
+        respond(result.ok, result.payload, result.error, result.meta);
+        return;
       }
       const { cfg, channel } = resolvedChannel;
       const outboundChannel = channel;
       const plugin = resolveOutboundChannelPlugin({ channel, cfg });
       if (!plugin) {
-        return {
-          ok: false,
-          error: errorShape(ErrorCodes.INVALID_REQUEST, `unsupported channel: ${channel}`),
-        };
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `unsupported channel: ${channel}`),
+        );
+        return;
       }
-
+      let accountRoute: ReturnType<typeof resolveMessageOperationAccountRoute>;
       try {
-        const resolvedTarget = resolveGatewayOutboundTarget({
-          channel: outboundChannel,
-          to,
-          cfg,
-          accountId,
-        });
-        if (!resolvedTarget.ok) {
-          return {
-            ok: false,
-            error: resolvedTarget.error,
-            meta: { channel },
-          };
-        }
-        const idLikeTarget = await maybeResolveIdLikeTarget({
+        accountRoute = resolveMessageOperationAccountRoute({
           cfg,
           channel,
-          input: resolvedTarget.to,
-          accountId,
+          plugin,
+          accountIds: [requestedAccountId, routeBinding?.reservedRoute?.accountId],
+          conflictMessage: "send account selections do not match",
         });
-        const deliveryTarget = idLikeTarget?.to ?? resolvedTarget.to;
-        // Preserve opaque, case-sensitive peer IDs (e.g. Matrix room ids) on an
-        // explicit session key instead of raw-lowercasing it (openclaw#75670).
-        // Non-enrolled channels still canonicalize to lowercase via the registry.
-        const providedSessionKey =
-          normalizeSessionKeyPreservingOpaquePeerIds(request.sessionKey) || undefined;
-        const explicitAgentId = normalizeOptionalString(request.agentId);
-        const sessionAgentId = providedSessionKey
-          ? resolveSessionAgentId({ sessionKey: providedSessionKey, config: cfg })
-          : undefined;
-        const defaultAgentId = resolveSessionAgentId({ config: cfg });
-        const effectiveAgentId = explicitAgentId ?? sessionAgentId ?? defaultAgentId;
-        const sendArgs: Record<string, unknown> = {
-          mediaUrl,
-          mediaUrls,
-          buffer,
-          filename: normalizeOptionalString(request.filename) ?? undefined,
-          contentType: normalizeOptionalString(request.contentType) ?? undefined,
-        };
-        await hydrateAttachmentParamsForAction({
-          cfg,
+      } catch (error) {
+        respondGatewayInvalidRequest({ respond, channel, error });
+        return;
+      }
+      if (
+        !bindMessageOperationRoute({
+          context,
+          binding: routeBinding,
+          requestScope: accountRoute.requestScope,
+        })
+      ) {
+        respondGatewayInvalidRequest({
+          respond,
           channel,
-          accountId,
-          args: sendArgs,
-          action: "send",
-          mediaPolicy: resolveAttachmentMediaPolicy({
-            mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, effectiveAgentId),
-          }),
+          error: "idempotency key is already bound to a different message route",
         });
-        const hydratedMediaUrl = normalizeOptionalString(sendArgs.mediaUrl);
-        const hydratedMediaUrls = Array.isArray(sendArgs.mediaUrls)
-          ? sendArgs.mediaUrls
-              .map((entry) => normalizeOptionalString(entry))
-              .filter((entry): entry is string => Boolean(entry))
-          : undefined;
-        const outboundDeps = context.deps ? createOutboundSendDeps(context.deps) : undefined;
-        const outboundPayloads = [
-          {
-            text: message,
-            mediaUrl: hydratedMediaUrl,
-            mediaUrls: hydratedMediaUrls,
-            ...(request.asVoice === true ? { audioAsVoice: true } : {}),
-          },
-        ];
-        const outboundPayloadPlan = createOutboundPayloadPlan(outboundPayloads);
-        const mirrorProjection = projectOutboundPayloadPlanForMirror(outboundPayloadPlan);
-        const mirrorText = mirrorProjection.text;
-        const mirrorMediaUrls = mirrorProjection.mediaUrls;
-        const derivedRoute = await resolveOutboundSessionRoute({
-          cfg,
-          channel,
-          agentId: effectiveAgentId,
-          accountId,
-          target: deliveryTarget,
-          currentSessionKey: providedSessionKey,
-          resolvedTarget: idLikeTarget,
-          replyToId,
-          threadId,
-        });
-        const providedSessionBaseKey =
-          parseThreadSessionSuffix(providedSessionKey).baseSessionKey ?? providedSessionKey;
-        const shouldUseDerivedThreadSessionKey =
-          channel === "slack" &&
-          Boolean(providedSessionKey) &&
-          Boolean(normalizeOptionalString(derivedRoute?.threadId)) &&
-          normalizeOptionalLowercaseString(derivedRoute?.baseSessionKey) ===
-            normalizeOptionalLowercaseString(providedSessionBaseKey) &&
-          normalizeOptionalLowercaseString(derivedRoute?.sessionKey) !== providedSessionKey;
-        // Slack replies can refine an existing base session into a thread session after target lookup.
-        const outboundRoute = derivedRoute
-          ? providedSessionKey
-            ? shouldUseDerivedThreadSessionKey
-              ? {
-                  ...derivedRoute,
-                  baseSessionKey: derivedRoute.baseSessionKey ?? providedSessionKey,
-                }
-              : {
-                  ...derivedRoute,
-                  sessionKey: providedSessionKey,
-                  baseSessionKey: providedSessionKey,
-                }
-            : derivedRoute
-          : null;
-        const outboundSessionKey = outboundRoute?.sessionKey ?? providedSessionKey;
-        if (outboundSessionKey && isAgentHarnessSessionKey(outboundSessionKey)) {
-          const { canonicalKey, entry } = loadSessionEntry(outboundSessionKey);
-          const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(
-            canonicalKey,
-            entry,
-          );
-          if (missingHarnessSessionError) {
+        return;
+      }
+      const accountId = accountRoute.accountId;
+      const inflight = resolveGatewayInflightRequest({
+        context,
+        prefix: "send",
+        idempotencyKey: request.idempotencyKey,
+        respond,
+        requestScope: accountRoute.requestScope,
+      });
+      if (inflight.kind === "handled") {
+        releaseRouteBindingLock();
+        await inflight.done;
+        return;
+      }
+      const { idem, dedupeKey, inflightMap } = inflight;
+      retainMessageOperationRouteBinding({
+        context,
+        binding: routeBinding,
+        requestScope: accountRoute.requestScope,
+      });
+
+      const work = (async (): Promise<InflightResult> => {
+        try {
+          const resolvedTarget = resolveGatewayOutboundTarget({
+            channel: outboundChannel,
+            to,
+            cfg,
+            accountId,
+          });
+          if (!resolvedTarget.ok) {
             return {
               ok: false,
-              error: errorShape(ErrorCodes.INVALID_REQUEST, missingHarnessSessionError),
+              error: resolvedTarget.error,
               meta: { channel },
             };
           }
-        }
-        if (outboundRoute) {
-          await ensureOutboundSessionEntry({
+          const idLikeTarget = await maybeResolveIdLikeTarget({
+            cfg,
+            channel,
+            input: resolvedTarget.to,
+            accountId,
+          });
+          const deliveryTarget = idLikeTarget?.to ?? resolvedTarget.to;
+          // Preserve opaque, case-sensitive peer IDs (e.g. Matrix room ids) on an
+          // explicit session key instead of raw-lowercasing it (openclaw#75670).
+          // Non-enrolled channels still canonicalize to lowercase via the registry.
+          const providedSessionKey =
+            normalizeSessionKeyPreservingOpaquePeerIds(request.sessionKey) || undefined;
+          const explicitAgentId = normalizeOptionalString(request.agentId);
+          const sessionAgentId = providedSessionKey
+            ? resolveSessionAgentId({ sessionKey: providedSessionKey, config: cfg })
+            : undefined;
+          const defaultAgentId = resolveSessionAgentId({ config: cfg });
+          const effectiveAgentId = explicitAgentId ?? sessionAgentId ?? defaultAgentId;
+          const sendArgs: Record<string, unknown> = {
+            mediaUrl,
+            mediaUrls,
+            buffer,
+            filename: normalizeOptionalString(request.filename) ?? undefined,
+            contentType: normalizeOptionalString(request.contentType) ?? undefined,
+          };
+          await hydrateAttachmentParamsForAction({
             cfg,
             channel,
             accountId,
-            route: outboundRoute,
+            args: sendArgs,
+            action: "send",
+            mediaPolicy: resolveAttachmentMediaPolicy({
+              mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, effectiveAgentId),
+            }),
           });
-        }
-        const outboundSession = buildOutboundSessionContext({
-          cfg,
-          agentId: effectiveAgentId,
-          sessionKey: outboundSessionKey,
-          conversationType: outboundRoute?.chatType,
-        });
-        const send = await sendDurableMessageBatch({
-          cfg,
-          channel: outboundChannel,
-          to: deliveryTarget,
-          accountId,
-          payloads: outboundPayloads,
-          replyToId: replyToId ?? null,
-          session: outboundSession,
-          gifPlayback: request.gifPlayback,
-          forceDocument: request.forceDocument,
-          threadId: outboundRoute?.threadId ?? threadId ?? null,
-          deps: outboundDeps,
-          gatewayClientScopes: client?.connect?.scopes ?? [],
-          silent: request.silent,
-          formatting: request.parseMode ? { parseMode: request.parseMode } : undefined,
-          mirror: outboundSessionKey
-            ? {
-                sessionKey: outboundSessionKey,
-                agentId: effectiveAgentId,
-                text: mirrorText || message,
-                mediaUrls: mirrorMediaUrls.length > 0 ? mirrorMediaUrls : undefined,
-                idempotencyKey: idem,
-              }
-            : undefined,
-        });
-        if (send.status === "failed" || send.status === "partial_failed") {
-          throw send.error;
-        }
-        const results = send.status === "sent" ? send.results : [];
+          const hydratedMediaUrl = normalizeOptionalString(sendArgs.mediaUrl);
+          const hydratedMediaUrls = Array.isArray(sendArgs.mediaUrls)
+            ? sendArgs.mediaUrls
+                .map((entry) => normalizeOptionalString(entry))
+                .filter((entry): entry is string => Boolean(entry))
+            : undefined;
+          const outboundDeps = context.deps ? createOutboundSendDeps(context.deps) : undefined;
+          const outboundPayloads = [
+            {
+              text: message,
+              mediaUrl: hydratedMediaUrl,
+              mediaUrls: hydratedMediaUrls,
+              ...(request.asVoice === true ? { audioAsVoice: true } : {}),
+            },
+          ];
+          const outboundPayloadPlan = createOutboundPayloadPlan(outboundPayloads);
+          const mirrorProjection = projectOutboundPayloadPlanForMirror(outboundPayloadPlan);
+          const mirrorText = mirrorProjection.text;
+          const mirrorMediaUrls = mirrorProjection.mediaUrls;
+          const derivedRoute = await resolveOutboundSessionRoute({
+            cfg,
+            channel,
+            agentId: effectiveAgentId,
+            accountId,
+            target: deliveryTarget,
+            currentSessionKey: providedSessionKey,
+            resolvedTarget: idLikeTarget,
+            replyToId,
+            threadId,
+          });
+          const providedSessionBaseKey =
+            parseThreadSessionSuffix(providedSessionKey).baseSessionKey ?? providedSessionKey;
+          const shouldUseDerivedThreadSessionKey =
+            resolveChannelThreadAddressing(channel) === "message" &&
+            Boolean(providedSessionKey) &&
+            Boolean(normalizeOptionalString(derivedRoute?.threadId)) &&
+            normalizeOptionalLowercaseString(derivedRoute?.baseSessionKey) ===
+              normalizeOptionalLowercaseString(providedSessionBaseKey) &&
+            normalizeOptionalLowercaseString(derivedRoute?.sessionKey) !== providedSessionKey;
+          // Message-scoped threads can refine an existing base session only after target lookup.
+          const outboundRoute = derivedRoute
+            ? providedSessionKey
+              ? shouldUseDerivedThreadSessionKey
+                ? {
+                    ...derivedRoute,
+                    baseSessionKey: derivedRoute.baseSessionKey ?? providedSessionKey,
+                  }
+                : {
+                    ...derivedRoute,
+                    sessionKey: providedSessionKey,
+                    baseSessionKey: providedSessionKey,
+                  }
+              : derivedRoute
+            : null;
+          const outboundSessionKey = outboundRoute?.sessionKey ?? providedSessionKey;
+          if (outboundSessionKey && isAgentHarnessSessionKey(outboundSessionKey)) {
+            const { canonicalKey, entry } = loadSessionEntry(outboundSessionKey);
+            const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(
+              canonicalKey,
+              entry,
+            );
+            if (missingHarnessSessionError) {
+              return {
+                ok: false,
+                error: errorShape(ErrorCodes.INVALID_REQUEST, missingHarnessSessionError),
+                meta: { channel },
+              };
+            }
+          }
+          if (outboundRoute) {
+            await ensureOutboundSessionEntry({
+              cfg,
+              channel,
+              accountId,
+              route: outboundRoute,
+            });
+          }
+          const outboundSession = buildOutboundSessionContext({
+            cfg,
+            agentId: effectiveAgentId,
+            sessionKey: outboundSessionKey,
+            conversationType: outboundRoute?.chatType,
+          });
+          const send = await sendDurableMessageBatch({
+            cfg,
+            channel: outboundChannel,
+            to: deliveryTarget,
+            accountId,
+            payloads: outboundPayloads,
+            replyToId: replyToId ?? null,
+            session: outboundSession,
+            gifPlayback: request.gifPlayback,
+            forceDocument: request.forceDocument,
+            threadId: outboundRoute?.threadId ?? threadId ?? null,
+            deps: outboundDeps,
+            gatewayClientScopes: client?.connect?.scopes ?? [],
+            silent: request.silent,
+            formatting: request.parseMode ? { parseMode: request.parseMode } : undefined,
+            mirror: outboundSessionKey
+              ? {
+                  sessionKey: outboundSessionKey,
+                  agentId: effectiveAgentId,
+                  text: mirrorText || message,
+                  mediaUrls: mirrorMediaUrls.length > 0 ? mirrorMediaUrls : undefined,
+                  idempotencyKey: idem,
+                }
+              : undefined,
+          });
+          if (send.status === "failed" || send.status === "partial_failed") {
+            throw send.error;
+          }
+          const results = send.status === "sent" ? send.results : [];
 
-        const result = results.at(-1);
-        if (!result) {
-          throw new Error("No delivery result");
+          const result = results.at(-1);
+          if (!result) {
+            throw new Error("No delivery result");
+          }
+          return createGatewayDeliveryInflightSuccess({
+            context,
+            dedupeKey,
+            runId: idem,
+            channel,
+            result,
+          });
+        } catch (err) {
+          return createGatewayInflightUnavailableFailure({ context, dedupeKey, channel, err });
         }
-        return createGatewayDeliveryInflightSuccess({
+      })().finally(() => {
+        refreshMessageOperationRouteBinding({
           context,
-          dedupeKey,
-          runId: idem,
-          channel,
-          result,
+          binding: routeBinding,
+          requestScope: accountRoute.requestScope,
         });
-      } catch (err) {
-        return createGatewayInflightUnavailableFailure({ context, dedupeKey, channel, err });
-      }
-    })();
+      });
 
-    await runGatewayInflightWork({ inflightMap, dedupeKey, work, respond });
+      const inflightWork = runGatewayInflightWork({ inflightMap, dedupeKey, work, respond });
+      releaseRouteBindingLock();
+      await inflightWork;
+    } finally {
+      releaseRouteBindingLock();
+    }
   },
   poll: async ({ params, respond, context, client }) => {
     const p = params;
-    if (!validatePollParams(p)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid poll params: ${formatValidationErrors(validatePollParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(p, validatePollParams, "poll", respond)) {
       return;
     }
     const request = p as {
@@ -924,25 +1401,45 @@ export const sendHandlers: GatewayRequestHandlers = {
       accountId?: string;
       idempotencyKey: string;
     };
-    const inflight = resolveGatewayInflightRequest({
+    let routeBinding = resolveMessageOperationRouteBinding({
       context,
       prefix: "poll",
       idempotencyKey: request.idempotencyKey,
-      respond,
+      requestChannel: request.channel,
+      accountIds: [request.accountId],
     });
-    if (inflight.kind === "handled") {
-      await inflight.done;
-      return;
-    }
-    const { idem, dedupeKey, inflightMap } = inflight;
-    const work = (async (): Promise<InflightResult> => {
-      const resolvedChannel = await resolveRequestedChannel({
+    const releaseRouteBindingLock = await acquireMessageOperationRouteBindingLock({
+      context,
+      binding: routeBinding,
+    });
+    try {
+      routeBinding = resolveMessageOperationRouteBinding({
+        context,
+        prefix: "poll",
+        idempotencyKey: request.idempotencyKey,
         requestChannel: request.channel,
+        accountIds: [request.accountId],
+      });
+      const reservedReplay = replayReservedMessageOperationRoute({
+        context,
+        binding: routeBinding,
+        prefix: "poll",
+        idempotencyKey: request.idempotencyKey,
+        respond,
+      });
+      if (reservedReplay) {
+        releaseRouteBindingLock();
+        await reservedReplay;
+        return;
+      }
+      const resolvedChannel = await resolveRequestedChannel({
+        requestChannel: routeBinding?.reservedRoute?.channel ?? request.channel,
         unsupportedMessage: (input) => `unsupported poll channel: ${input}`,
         context,
       });
       if ("error" in resolvedChannel) {
-        return { ok: false, error: resolvedChannel.error };
+        respond(false, undefined, resolvedChannel.error);
+        return;
       }
       const { cfg, channel } = resolvedChannel;
       const plugin = resolveOutboundChannelPlugin({ channel, cfg });
@@ -952,81 +1449,144 @@ export const sendHandlers: GatewayRequestHandlers = {
         outbound?.supportsPollDurationSeconds !== true
       ) {
         // Duration support is channel-specific; reject before normalizing to avoid silent truncation.
-        return {
-          ok: false,
-          error: errorShape(
+        respond(
+          false,
+          undefined,
+          errorShape(
             ErrorCodes.INVALID_REQUEST,
             `durationSeconds is not supported for ${channel} polls`,
           ),
-        };
+        );
+        return;
       }
       if (typeof request.isAnonymous === "boolean" && outbound?.supportsAnonymousPolls !== true) {
-        return {
-          ok: false,
-          error: errorShape(
+        respond(
+          false,
+          undefined,
+          errorShape(
             ErrorCodes.INVALID_REQUEST,
             `isAnonymous is not supported for ${channel} polls`,
           ),
-        };
+        );
+        return;
       }
-      const poll = {
-        question: request.question,
-        options: request.options,
-        maxSelections: request.maxSelections,
-        durationSeconds: request.durationSeconds,
-        durationHours: request.durationHours,
-      };
-      const threadId = normalizeOptionalString(request.threadId);
-      const accountId = normalizeOptionalString(request.accountId);
+      if (!plugin || !outbound?.sendPoll) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `unsupported poll channel: ${channel}`),
+        );
+        return;
+      }
+      const sendPoll = outbound.sendPoll;
+      let accountRoute: ReturnType<typeof resolveMessageOperationAccountRoute>;
       try {
-        if (!outbound?.sendPoll) {
-          const error = errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `unsupported poll channel: ${channel}`,
-          );
-          return { ok: false, error };
-        }
-        const resolvedTarget = resolveGatewayOutboundTarget({
+        accountRoute = resolveMessageOperationAccountRoute({
+          cfg,
           channel,
-          to: request.to.trim(),
-          cfg,
-          accountId,
+          plugin,
+          accountIds: [request.accountId, routeBinding?.reservedRoute?.accountId],
+          conflictMessage: "poll account selections do not match",
         });
-        if (!resolvedTarget.ok) {
-          return { ok: false, error: resolvedTarget.error };
-        }
-        const normalized = outbound.pollMaxOptions
-          ? normalizePollInput(poll, { maxOptions: outbound.pollMaxOptions })
-          : normalizePollInput(poll);
-        const result = await outbound.sendPoll({
-          cfg,
-          to: resolvedTarget.to,
-          poll: normalized,
-          accountId,
-          threadId,
-          silent: request.silent,
-          isAnonymous: request.isAnonymous,
-          gatewayClientScopes: client?.connect?.scopes ?? [],
-        });
-        const payload = buildGatewayDeliveryPayload({ runId: idem, channel, result });
-        cacheGatewayDedupeSuccess({
-          context,
-          dedupeKey,
-          payload,
-        });
-        return { ok: true, payload, meta: { channel } };
-      } catch (err) {
-        const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
-        cacheGatewayDedupeFailure({
-          context,
-          dedupeKey,
-          error,
-        });
-        return { ok: false, error, meta: { channel, error: formatForLog(err) } };
+      } catch (error) {
+        respondGatewayInvalidRequest({ respond, channel, error });
+        return;
       }
-    })();
+      if (
+        !bindMessageOperationRoute({
+          context,
+          binding: routeBinding,
+          requestScope: accountRoute.requestScope,
+        })
+      ) {
+        respondGatewayInvalidRequest({
+          respond,
+          channel,
+          error: "idempotency key is already bound to a different message route",
+        });
+        return;
+      }
+      const accountId = accountRoute.accountId;
+      const inflight = resolveGatewayInflightRequest({
+        context,
+        prefix: "poll",
+        idempotencyKey: request.idempotencyKey,
+        respond,
+        requestScope: accountRoute.requestScope,
+      });
+      if (inflight.kind === "handled") {
+        releaseRouteBindingLock();
+        await inflight.done;
+        return;
+      }
+      const { idem, dedupeKey, inflightMap } = inflight;
+      retainMessageOperationRouteBinding({
+        context,
+        binding: routeBinding,
+        requestScope: accountRoute.requestScope,
+      });
+      const work = (async (): Promise<InflightResult> => {
+        const poll = {
+          question: request.question,
+          options: request.options,
+          maxSelections: request.maxSelections,
+          durationSeconds: request.durationSeconds,
+          durationHours: request.durationHours,
+        };
+        const threadId = normalizeOptionalString(request.threadId);
+        try {
+          const resolvedTarget = resolveGatewayOutboundTarget({
+            channel,
+            to: request.to.trim(),
+            cfg,
+            accountId,
+          });
+          if (!resolvedTarget.ok) {
+            return { ok: false, error: resolvedTarget.error };
+          }
+          const normalized = outbound.pollMaxOptions
+            ? normalizePollInput(poll, { maxOptions: outbound.pollMaxOptions })
+            : normalizePollInput(poll);
+          const result = await sendPoll({
+            cfg,
+            to: resolvedTarget.to,
+            poll: normalized,
+            accountId,
+            threadId,
+            silent: request.silent,
+            isAnonymous: request.isAnonymous,
+            gatewayClientScopes: client?.connect?.scopes ?? [],
+          });
+          const payload = buildGatewayDeliveryPayload({ runId: idem, channel, result });
+          cacheGatewayDedupeSuccess({
+            context,
+            dedupeKey,
+            payload,
+          });
+          return { ok: true, payload, meta: { channel } };
+        } catch (err) {
+          const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
+          cacheGatewayDedupeFailure({
+            context,
+            dedupeKey,
+            error,
+          });
+          return { ok: false, error, meta: { channel, error: formatForLog(err) } };
+        }
+      })().finally(() => {
+        refreshMessageOperationRouteBinding({
+          context,
+          binding: routeBinding,
+          requestScope: accountRoute.requestScope,
+        });
+      });
 
-    await runGatewayInflightWork({ inflightMap, dedupeKey, work, respond });
+      const inflightWork = runGatewayInflightWork({ inflightMap, dedupeKey, work, respond });
+      releaseRouteBindingLock();
+      await inflightWork;
+    } finally {
+      releaseRouteBindingLock();
+    }
   },
 };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

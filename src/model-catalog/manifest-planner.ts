@@ -52,6 +52,8 @@ type ManifestModelCatalogPlan = {
   conflicts: readonly ManifestModelCatalogConflict[];
 };
 
+export type ManifestModelCatalogRowSelection = "static" | "supplemental";
+
 export type ManifestModelCatalogSuppressionEntry = {
   pluginId: string;
   provider: string;
@@ -82,6 +84,7 @@ export function planManifestModelCatalogRows(params: {
   registry: ManifestModelCatalogRegistry;
   providerFilter?: string;
   remoteOverlay?: Readonly<Record<string, ModelCatalogProvider>>;
+  selection?: ManifestModelCatalogRowSelection;
 }): ManifestModelCatalogPlan {
   const providerFilter = params.providerFilter
     ? normalizeModelCatalogProviderId(params.providerFilter)
@@ -99,7 +102,14 @@ export function planManifestModelCatalogRows(params: {
   }
 
   const rowCandidates: NormalizedModelCatalogRow[] = [];
-  const seenRows = new Map<string, { pluginId: string; row: NormalizedModelCatalogRow }>();
+  const seenRows = new Map<
+    string,
+    {
+      pluginId: string;
+      row: NormalizedModelCatalogRow;
+      discovery: ModelCatalogDiscovery | undefined;
+    }
+  >();
   const conflicts = new Map<string, ManifestModelCatalogConflict>();
   for (const entry of entries) {
     for (const row of entry.rows) {
@@ -119,13 +129,30 @@ export function planManifestModelCatalogRows(params: {
         }
         continue;
       }
-      seenRows.set(row.mergeKey, { pluginId: entry.pluginId, row });
+      seenRows.set(row.mergeKey, {
+        pluginId: entry.pluginId,
+        row,
+        discovery: entry.discovery,
+      });
       rowCandidates.push(row);
     }
   }
 
   const conflictedMergeKeys = new Set(conflicts.keys());
-  const rows = rowCandidates.filter((row) => !conflictedMergeKeys.has(row.mergeKey));
+  const rows = rowCandidates.filter((row) => {
+    if (conflictedMergeKeys.has(row.mergeKey)) {
+      return false;
+    }
+    const discovery = seenRows.get(row.mergeKey)?.discovery;
+    if (params.selection === "static") {
+      return discovery === "static";
+    }
+    return (
+      params.selection !== "supplemental" ||
+      discovery !== "runtime" ||
+      row.source === "runtime-refresh"
+    );
+  });
 
   return {
     entries,

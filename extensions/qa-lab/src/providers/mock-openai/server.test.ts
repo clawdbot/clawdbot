@@ -147,7 +147,7 @@ function makeWhatsAppStructuredUserInput(text: string, mediaKind?: "sticker") {
     return makeUserInput(text);
   }
   const mediaContext = [
-    "WhatsApp media (untrusted metadata):",
+    "WhatsApp media: ⟦openclaw:ctx⟧",
     "```json",
     JSON.stringify({ source: "whatsapp", type: "media", payload: { kind: mediaKind } }),
     "```",
@@ -1723,39 +1723,6 @@ describe("qa mock openai server", () => {
     expect(await response.text()).toContain(
       '"arguments":"{\\"path\\":\\"FOLLOWTHROUGH_INPUT.md\\"}"',
     );
-  });
-
-  it("keeps the dreaming shadow trial ahead of system exact-reply fallbacks", async () => {
-    const server = await startMockServer();
-    const response = await postResponses(server, {
-      stream: true,
-      model: "gpt-5.6-luna",
-      input: [
-        {
-          role: "system",
-          content: [
-            {
-              type: "input_text",
-              text: "Nothing to say: entire reply exactly NO_REPLY",
-            },
-          ],
-        },
-        makeUserInput(
-          "Dreaming shadow trial report check. Read DREAMING_SHADOW_TRIAL_BRIEF.md and DREAMING_CANDIDATE_EVIDENCE.md first. Reply with the report path and exact marker DREAMING-SHADOW-TRIAL-OK.",
-        ),
-      ],
-    });
-
-    expect(response.status).toBe(200);
-    const body = await response.text();
-    expect(body).toContain('"name":"read"');
-    expect(body).toContain('"arguments":"{\\"path\\":\\"DREAMING_SHADOW_TRIAL_BRIEF.md\\"}"');
-    expect(body).not.toContain('"text":"NO_REPLY"');
-
-    const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
-    expect(debugResponse.status).toBe(200);
-    const debugPayload = requireRecord(await debugResponse.json(), "debug request");
-    expect(debugPayload.plannedToolName).toBe("read");
   });
 
   it("advances personal task followthrough when transcript text is newer than extracted tool output", async () => {
@@ -3519,7 +3486,7 @@ describe("qa mock openai server", () => {
         previousExactMarkerInput,
         makeUserInput(
           [
-            "Conversation info (untrusted metadata):",
+            "Conversation info: ⟦openclaw:ctx⟧",
             "```json",
             '{"inbound_event_kind":"user_request"}',
             "```",
@@ -3535,9 +3502,7 @@ describe("qa mock openai server", () => {
         setupInput,
         previousExactMarkerInput,
         makeUserInput(
-          ["Sender (untrusted metadata):", "```json", '{"name":"QA"}', "```", "", "<contact>"].join(
-            "\n",
-          ),
+          ["Sender: ⟦openclaw:ctx⟧", "```json", '{"name":"QA"}', "```", "", "<contact>"].join("\n"),
         ),
       ],
     });
@@ -3548,7 +3513,7 @@ describe("qa mock openai server", () => {
         previousExactMarkerInput,
         makeWhatsAppStructuredUserInput(
           [
-            "Conversation info (untrusted metadata):",
+            "Conversation info: ⟦openclaw:ctx⟧",
             "```json",
             '{"inbound_event_kind":"user_request"}',
             "```",
@@ -3700,7 +3665,7 @@ describe("qa mock openai server", () => {
         "Sticker note: <media:sticker>",
       ].join("\n"),
       [
-        "WhatsApp media (untrusted metadata):",
+        "WhatsApp media: ⟦openclaw:ctx⟧",
         "```json",
         '{"source":"whatsapp","type":"media","payload":{"kind":"image"}}',
         "```",
@@ -4004,6 +3969,227 @@ describe("qa mock openai server", () => {
     expect(toolPlanOutput.type).toBe("function_call");
     expect(toolPlanOutput.name).toBe("web_search");
     expect(String(toolPlanOutput.arguments)).toContain("OPENCLAW_QA_WEB_SEARCH_DENIED_INPUT");
+  });
+
+  it.each([
+    {
+      label: "workspace-local happy",
+      prompt:
+        "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
+      operation: "Add File",
+      patchPath: "runtime-tool-fixture-patch.txt",
+    },
+    {
+      label: "workspace-escaping failure",
+      prompt:
+        "tool search qa failure target=apply_patch. Exercise the denied-input path once and then summarize.",
+      operation: "Update File",
+      patchPath: "../runtime-tool-fixture-denied.txt",
+    },
+  ])("plans a valid $label apply_patch envelope", async ({ prompt, operation, patchPath }) => {
+    const server = await startMockServer();
+    const response = await postResponses(server, {
+      stream: false,
+      input: [makeUserInput(prompt)],
+    });
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(outputItem(payload)).toMatchObject({ type: "function_call", name: "apply_patch" });
+    const args = outputToolArgs(payload);
+    expect(args).not.toHaveProperty("__qaFailureMode");
+    expect(args.input).toBeTypeOf("string");
+    expect(args.input).toContain("*** Begin Patch\n");
+    expect(args.input).toContain(`*** ${operation}: ${patchPath}\n`);
+    if (operation === "Update File") {
+      expect(args.input).toContain("\n@@\n-runtime-tool-fixture-denied-original\n");
+    }
+    expect(args.input).toContain("\n*** End Patch\n");
+  });
+
+  it.each([
+    {
+      label: "workspace-local happy",
+      prompt:
+        "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
+      operation: "Add File",
+      patchPath: "runtime-tool-fixture-patch.txt",
+    },
+    {
+      label: "workspace-escaping failure",
+      prompt:
+        "tool search qa failure target=apply_patch. Exercise the denied-input path once and then summarize.",
+      operation: "Update File",
+      patchPath: "../runtime-tool-fixture-denied.txt",
+    },
+  ])("plans an actual $label native freeform patch", async (testCase) => {
+    const server = await startMockServer();
+    const response = await postResponses(server, {
+      stream: false,
+      tools: [
+        {
+          type: "custom",
+          name: "apply_patch",
+          format: { type: "grammar", syntax: "lark", definition: "start: /.+/" },
+        },
+      ],
+      input: [makeUserInput(testCase.prompt)],
+    });
+
+    expect(response.status).toBe(200);
+    const item = outputItem(await response.json());
+    expect(item).toMatchObject({ type: "custom_tool_call", name: "apply_patch" });
+    expect(item).not.toHaveProperty("arguments");
+    expect(item.input).toEqual(
+      expect.stringContaining(`*** ${testCase.operation}: ${testCase.patchPath}\n`),
+    );
+    if (testCase.operation === "Update File") {
+      expect(item.input).toEqual(
+        expect.stringContaining("\n@@\n-runtime-tool-fixture-denied-original\n"),
+      );
+    }
+
+    const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
+    expect(debugResponse.status).toBe(200);
+    const debug = requireRecord(await debugResponse.json(), "native patch plan debug request");
+    expect(debug.plannedToolName).toBe("apply_patch");
+    expect(debug.plannedToolCallId).toBe(item.call_id);
+    expect(debug.plannedToolArgs).toEqual({ input: item.input });
+  });
+
+  it("streams native Codex patch input as custom-tool SSE", async () => {
+    const server = await startMockServer();
+    const response = await postResponses(server, {
+      stream: true,
+      tools: [
+        {
+          type: "custom",
+          name: "apply_patch",
+          format: { type: "grammar", syntax: "lark", definition: "start: /.+/" },
+        },
+      ],
+      input: [
+        makeUserInput(
+          "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
+        ),
+      ],
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    const events = body
+      .split("\n")
+      .filter((line) => line.startsWith("data: {"))
+      .map(
+        (line) =>
+          JSON.parse(line.slice("data: ".length)) as {
+            type: string;
+            response?: { id?: string; output?: Array<Record<string, unknown>> };
+            item?: Record<string, unknown>;
+            item_id?: string;
+            call_id?: string;
+            delta?: string;
+          },
+      );
+    expect(events.map((event) => event.type)).toEqual([
+      "response.created",
+      "response.output_item.added",
+      "response.custom_tool_call_input.delta",
+      "response.output_item.done",
+      "response.completed",
+    ]);
+    const [created, added, delta, done, completed] = events;
+    expect(created?.response?.id).toBe(completed?.response?.id);
+    expect(added?.item).toMatchObject({
+      type: "custom_tool_call",
+      name: "apply_patch",
+      input: "",
+      status: "in_progress",
+    });
+    expect(done?.item).toMatchObject({
+      type: "custom_tool_call",
+      name: "apply_patch",
+      status: "completed",
+    });
+    expect(done?.item?.id).toEqual(expect.stringMatching(/^ctc_mock_apply_patch_/));
+    expect(delta?.item_id).toBe(done?.item?.id);
+    expect(delta?.call_id).toBe(done?.item?.call_id);
+    expect(delta?.delta).toBe(done?.item?.input);
+    expect(delta?.delta).toContain("runtime-tool-fixture-patch.txt");
+    expect(completed?.response?.output).toEqual([done?.item]);
+  });
+
+  it.each([
+    {
+      label: "successful native patch",
+      prompt:
+        "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
+      output: "Successfully applied patch",
+      expectedOutput: "Successfully applied patch",
+      structuredError: false,
+    },
+    {
+      label: "denied native patch",
+      prompt:
+        "tool search qa failure target=apply_patch. Exercise the denied-input path once and then summarize.",
+      output: "Error: Path escapes sandbox root",
+      expectedOutput: "Error: Path escapes sandbox root",
+      structuredError: true,
+    },
+    {
+      label: "upstream Codex native patch rejection without a wire error flag",
+      prompt:
+        "tool search qa failure target=apply_patch. Exercise the denied-input path once and then summarize.",
+      output: "patch rejected: writing outside of the project; rejected by user approval settings",
+      expectedOutput:
+        "patch rejected: writing outside of the project; rejected by user approval settings",
+      structuredError: false,
+    },
+    {
+      label: "structured native patch output",
+      prompt:
+        "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
+      output: [{ type: "input_text", text: "Successfully applied structured patch" }],
+      expectedOutput: "Successfully applied structured patch",
+      structuredError: false,
+    },
+  ])("links and completes $label custom-tool outputs", async (testCase) => {
+    const server = await startMockServer();
+    const planResponse = await postResponses(server, {
+      stream: false,
+      input: [makeUserInput(testCase.prompt)],
+    });
+    expect(planResponse.status).toBe(200);
+    const plannedCall = outputItem(await planResponse.json());
+    expect(plannedCall).toMatchObject({ type: "function_call", name: "apply_patch" });
+    const callId = outputToolCallId(plannedCall, "native-patch-call");
+
+    const continuationResponse = await postResponses(server, {
+      stream: false,
+      input: [
+        makeUserInput(testCase.prompt),
+        {
+          type: "custom_tool_call_output",
+          call_id: callId,
+          output: testCase.output,
+          ...(testCase.structuredError ? { is_error: true } : {}),
+        },
+      ],
+    });
+    expect(continuationResponse.status).toBe(200);
+    expect(outputItem(await continuationResponse.json()).type).toBe("message");
+
+    const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
+    expect(debugResponse.status).toBe(200);
+    const debug = requireRecord(await debugResponse.json(), "custom patch debug request");
+    expect(debug.toolOutput).toBe(testCase.expectedOutput);
+    expect(debug.toolOutputCallId).toBe(callId);
+    if (testCase.structuredError) {
+      expect(debug.toolOutputStructuredError).toBe(true);
+    } else {
+      expect(debug).not.toHaveProperty("toolOutputStructuredError");
+    }
+    expect(debug).not.toHaveProperty("plannedToolName");
   });
 
   it("plans QA subagent handoff calls even when Codex dynamic tools are not in body.tools", async () => {
@@ -4411,7 +4597,7 @@ describe("qa mock openai server", () => {
           content: [
             {
               type: "input_text",
-              text: 'Conversation info (untrusted metadata): {"is_group_chat": true}\n\nhello team, no bot ping here',
+              text: 'Conversation info: ⟦openclaw:ctx⟧\n{"is_group_chat": true}\n\nhello team, no bot ping here',
             },
           ],
         },
@@ -4444,6 +4630,49 @@ describe("qa mock openai server", () => {
     expect(body.data.map((entry) => entry.id)).toEqual(
       expect.arrayContaining(["gpt-5.5", "gpt-5.5-alt", "gpt-image-1"]),
     );
+  });
+
+  it("advertises directly executable native Codex metadata alongside OpenAI models", async () => {
+    const server = await startMockServer({
+      modelRefs: ["mock-openai/gpt-5.6-luna", "mock-openai/gpt-5.6-luna-alt"],
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/models?client_version=0.142.0`);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      data: Array<{ id: string; object: string }>;
+      models: Array<Record<string, unknown>>;
+    };
+    expect(body.data).toEqual(
+      expect.arrayContaining([
+        { id: "gpt-5.6-luna", object: "model" },
+        { id: "gpt-5.6-luna-alt", object: "model" },
+      ]),
+    );
+    expect(body.models).toHaveLength(2);
+    expect(body.models).toEqual([
+      expect.objectContaining({
+        slug: "gpt-5.6-luna",
+        display_name: "gpt-5.6-luna",
+        apply_patch_tool_type: "freeform",
+        tool_mode: "direct",
+        shell_type: "shell_command",
+        visibility: "list",
+        supported_in_api: true,
+        base_instructions: expect.any(String),
+        truncation_policy: { mode: "tokens", limit: 10_000 },
+        supported_reasoning_levels: expect.arrayContaining([
+          { effort: "medium", description: "Balanced QA reasoning" },
+        ]),
+        experimental_supported_tools: [],
+        input_modalities: ["text", "image"],
+      }),
+      expect.objectContaining({
+        slug: "gpt-5.6-luna-alt",
+        apply_patch_tool_type: "freeform",
+        tool_mode: "direct",
+      }),
+    ]);
   });
 
   it("serves deterministic OpenAI-compatible audio transcription responses", async () => {

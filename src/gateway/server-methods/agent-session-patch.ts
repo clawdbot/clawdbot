@@ -136,6 +136,7 @@ export function buildAgentSessionPatch(params: {
         entry: params.freshEntry,
         storePath: params.storePath,
         agentId: params.sessionAgentId,
+        sessionKey: params.canonicalSessionKey,
       })
     : undefined;
   const freshSkipImplicitExpiry =
@@ -236,7 +237,6 @@ export function buildAgentSessionPatch(params: {
           endedAt: undefined,
           runtimeMs: undefined,
           abortedLastRun: undefined,
-          ...(shouldClearRotatedState ? { sessionFile: undefined } : {}),
         }
       : {}),
   };

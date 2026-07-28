@@ -6,7 +6,8 @@ import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { SessionScopeHost } from "../../../lib/sessions/index.ts";
-import { parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
+import { canonicalUiSessionKeyForPersistence } from "../../../lib/sessions/session-key.ts";
+import { normalizeOptionalString } from "../../../lib/string-coerce.ts";
 import {
   applyTaskEvent,
   isActiveTask,
@@ -23,7 +24,6 @@ import {
 import { renderTaskDetail, renderTaskRow } from "./chat-background-task-row.ts";
 import { newestTaskSnapshot } from "./chat-background-tasks-shared.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
-import { paneSessionAgentId } from "./chat-session-workspace.ts";
 
 export { STATUS_TONES } from "./chat-background-tasks-shared.ts";
 export type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
@@ -34,12 +34,11 @@ type BackgroundTaskEventBuffer = {
   requestId: number;
   client: GatewayBrowserClient;
   connectionEpoch: number | undefined;
-  agentId: string;
+  sessionKey: string;
   events: BackgroundTaskLoadEvent[];
 };
 
 type BackgroundTasksState = {
-  agentId: string;
   cancellingTaskIds: Set<string>;
   collapsed: boolean;
   connectionClient: GatewayBrowserClient | null;
@@ -53,6 +52,7 @@ type BackgroundTasksState = {
   pendingTaskEvents: BackgroundTaskEventBuffer | null;
   pendingReload: boolean;
   requestId: number;
+  sessionKey: string;
   // wa-tooltip anchors by document id, so the status row's id must stay unique
   // per pane: two panes on the same agent would otherwise cross-anchor.
   statusRowId: string;
@@ -69,7 +69,6 @@ export type BackgroundTasksHost = {
   connected: boolean;
   connectionEpoch?: number;
   hello: GatewayHelloOk | null;
-  assistantAgentId?: string | null;
   agentsList?: SessionScopeHost["agentsList"];
   backgroundTasksState?: BackgroundTasksState;
   requestUpdate?: () => void;
@@ -84,10 +83,13 @@ const RECENT_TASKS_LIMIT = 100;
 let nextStatusRowId = 0;
 
 function getBackgroundTasksState(host: BackgroundTasksHost): BackgroundTasksState {
-  const agentId = paneSessionAgentId(host);
+  const sessionKey =
+    canonicalUiSessionKeyForPersistence(host, host.sessionKey) ||
+    normalizeOptionalString(host.sessionKey) ||
+    host.sessionKey;
   const current = host.backgroundTasksState;
   if (
-    current?.agentId === agentId &&
+    current?.sessionKey === sessionKey &&
     current.connectionClient === host.client &&
     current.connectionEpoch === host.connectionEpoch
   ) {
@@ -95,10 +97,9 @@ function getBackgroundTasksState(host: BackgroundTasksHost): BackgroundTasksStat
   }
   nextStatusRowId += 1;
   const next: BackgroundTasksState = {
-    agentId,
     cancellingTaskIds: new Set(),
-    // The pane is an agent-level view; keep the open/collapsed choice across
-    // agent switches and only reload the task list for the new scope.
+    // Keep presentation choices across thread switches while discarding all
+    // task data and private details from the previous session scope.
     collapsed: current?.collapsed ?? true,
     // The pane increments this epoch even when a reconnect reuses its client.
     // Old snapshots and private task details must never enter the new scope.
@@ -113,6 +114,7 @@ function getBackgroundTasksState(host: BackgroundTasksHost): BackgroundTasksStat
     pendingTaskEvents: null,
     pendingReload: false,
     requestId: 0,
+    sessionKey,
     statusRowId: `chat-tasks-status-${nextStatusRowId}`,
     tasks: null,
     selectedTaskId: null,
@@ -146,23 +148,23 @@ function loadBackgroundTasks(
     requestId,
     client,
     connectionEpoch: state.connectionEpoch,
-    agentId: state.agentId,
+    sessionKey: state.sessionKey,
     events: [],
   };
   state.pendingTaskEvents = eventBuffer;
   state.loading = true;
   state.error = null;
   state.pendingReload = false;
-  const agentId = state.agentId;
+  const sessionKey = state.sessionKey;
   void (async () => {
     try {
       const [activePayload, recentPayload] = await Promise.all([
         client.request("tasks.list", {
-          agentId,
+          sessionKey,
           status: ["queued", "running"],
           limit: ACTIVE_TASKS_LIMIT,
         }),
-        client.request("tasks.list", { agentId, limit: RECENT_TASKS_LIMIT }),
+        client.request("tasks.list", { sessionKey, limit: RECENT_TASKS_LIMIT }),
       ]);
       const active = normalizeTasksListResult(activePayload);
       const recent = normalizeTasksListResult(recentPayload);
@@ -217,16 +219,17 @@ function loadBackgroundTasks(
   })();
 }
 
-function taskMatchesAgentScope(task: TaskSummary, agentId: string): boolean {
-  // Mirrors the gateway's tasks.list agent filter: an explicit task agentId is
-  // authoritative; legacy records fall back to agent-style requester/child/
-  // owner keys. Dropping ownerKey here would make owner-scoped legacy rows
-  // load but never receive live event updates.
-  if (task.agentId) {
-    return task.agentId === agentId;
-  }
+function taskMatchesSessionScope(
+  host: BackgroundTasksHost,
+  task: TaskSummary,
+  sessionKey: string,
+): boolean {
+  // Mirror the gateway's session filter so requester, child, and owner views
+  // receive the same live events as their tasks.list snapshots.
   return [task.sessionKey, task.childSessionKey, task.ownerKey].some(
-    (key) => key !== undefined && parseAgentSessionKey(key)?.agentId === agentId,
+    (key) =>
+      canonicalUiSessionKeyForPersistence(host, key) === sessionKey ||
+      normalizeOptionalString(key) === sessionKey,
   );
 }
 
@@ -243,8 +246,8 @@ function bufferBackgroundTaskEvent(
     buffer.requestId !== state.requestId ||
     buffer.client !== host.client ||
     buffer.connectionEpoch !== host.connectionEpoch ||
-    buffer.agentId !== state.agentId ||
-    (event.action === "upserted" && !taskMatchesAgentScope(event.task, state.agentId))
+    buffer.sessionKey !== state.sessionKey ||
+    (event.action === "upserted" && !taskMatchesSessionScope(host, event.task, state.sessionKey))
   ) {
     return false;
   }
@@ -253,7 +256,7 @@ function bufferBackgroundTaskEvent(
 }
 
 /** Apply a gateway `task` event to the pane's snapshot. Events for other
- * agents are ignored; a registry restore forces a refetch. */
+ * sessions are ignored; a registry restore forces a refetch. */
 export function handleBackgroundTasksEvent(host: BackgroundTasksHost, payload: unknown) {
   const state = host.backgroundTasksState;
   if (
@@ -267,7 +270,7 @@ export function handleBackgroundTasksEvent(host: BackgroundTasksHost, payload: u
   if (!event) {
     return;
   }
-  if (event.action === "upserted" && !taskMatchesAgentScope(event.task, state.agentId)) {
+  if (event.action === "upserted" && !taskMatchesSessionScope(host, event.task, state.sessionKey)) {
     return;
   }
   const bufferedEvent = bufferBackgroundTaskEvent(host, state, event);
@@ -504,7 +507,7 @@ export function createBackgroundTasksProps(
     loadBackgroundTasks(host, state);
   }
   return {
-    agentId: state.agentId,
+    sessionKey: state.sessionKey,
     statusRowId: state.statusRowId,
     collapsed: state.collapsed,
     narrowLayout: opts.narrowLayout === true,
@@ -534,7 +537,7 @@ export function createBackgroundTasksProps(
 }
 
 /** Active-count badge shown on the collapsed-rail toggles; 0 until the task
- * list has loaded for the pane's agent. */
+ * list has loaded for the pane's session. */
 function backgroundTasksActiveCount(props: BackgroundTasksProps | undefined): number {
   return props?.tasks?.filter(isActiveTask).length ?? 0;
 }
@@ -637,7 +640,7 @@ export function renderBackgroundTasksRail(
             `
           : html`
               <div class="chat-tasks-rail__title">
-                <span class="chat-tasks-rail__eyebrow">${backgroundTasks.agentId}</span>
+                <span class="chat-tasks-rail__eyebrow">${backgroundTasks.sessionKey}</span>
                 <strong>${t("chat.backgroundTasks.title")}</strong>
               </div>
               <div class="chat-tasks-rail__actions">

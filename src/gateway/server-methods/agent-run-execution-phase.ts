@@ -211,7 +211,6 @@ export function startAgentRunExecution(params: {
                     : {
                         sessionId: params.resolvedSessionId!,
                         updatedAt: Date.now(),
-                        sessionFile: params.sessionEntry?.sessionFile,
                       };
                 if (!latestEntry) {
                   return undefined;

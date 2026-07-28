@@ -133,6 +133,7 @@ const ALL_ROUTES: RouteId[] = Array.from(
     "worktrees",
     "memory-import",
     "model-setup",
+    "lobsterdex",
     ...SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes),
   ]),
 );
@@ -147,6 +148,7 @@ const SETTINGS_ROUTE_PATHS = [
     alias: "/communications",
   },
   { routeId: "appearance", path: "/settings/appearance", alias: "/appearance" },
+  { routeId: "lobsterdex", path: "/settings/lobsterdex", alias: "/lobsterdex" },
   { routeId: "automation", path: "/settings/automation", alias: "/automation" },
   { routeId: "mcp", path: "/settings/mcp", alias: "/mcp" },
   {
@@ -187,6 +189,7 @@ describe("navigationIconForRoute", () => {
       apps: "layoutGrid",
       approvals: "badgeCheck",
       workboard: "kanban",
+      dashboards: "layoutDashboard",
       worktrees: "folder",
       channels: "link",
       connection: "radio",
@@ -203,8 +206,10 @@ describe("navigationIconForRoute", () => {
       profile: "circleUser",
       communications: "send",
       appearance: "palette",
+      lobsterdex: "bug",
       automation: "terminal",
       mcp: "wrench",
+      memory: "book",
       infrastructure: "globe",
       labs: "flaskConical",
       about: "fileText",
@@ -295,6 +300,7 @@ describe("titleForRoute", () => {
       apps: "Apps",
       approvals: "Approvals",
       workboard: "Workboard",
+      dashboards: "Dashboards",
       worktrees: "Worktrees",
       channels: "Channels",
       connection: "Connection",
@@ -311,8 +317,10 @@ describe("titleForRoute", () => {
       profile: "Profile",
       communications: "Communications",
       appearance: "Appearance",
+      lobsterdex: "Lobsterdex",
       automation: "Automation",
       mcp: "MCP",
+      memory: "Memory",
       infrastructure: "Infrastructure",
       labs: "Labs",
       about: "About",
@@ -340,6 +348,7 @@ describe("subtitleForRoute", () => {
       apps: "Companion apps for phone, watch, desktop, and browser.",
       approvals: "Recent exec, plugin, and system-agent approvals.",
       workboard: "Agent work queue and thread handoff.",
+      dashboards: "Threads that open on their dashboard face.",
       worktrees: "Isolated agent task checkouts and recovery snapshots.",
       channels: "Channels and settings.",
       connection: "Gateway endpoint, credentials, and handshake status.",
@@ -356,8 +365,10 @@ describe("subtitleForRoute", () => {
       profile: "Your agent's stats, streaks, and life in the reef.",
       communications: "Channels, messages, and audio settings.",
       appearance: "Theme, UI, and setup wizard settings.",
+      lobsterdex: "Every lobster palette that has visited this browser.",
       automation: "Commands, hooks, cron, and plugins.",
       mcp: "MCP servers, auth, tools, and diagnostics.",
+      memory: "Memory engine, backend, search, and dreaming.",
       infrastructure: "Gateway, web, browser, and media settings.",
       labs: "Experimental agent and tool capabilities.",
       about: "Control UI and connected Gateway build identity.",
@@ -378,6 +389,7 @@ describe("pathForRoute", () => {
   it("returns correct path without base", () => {
     expect(pathForRoute("chat")).toBe("/chat");
     expect(pathForRoute("apps")).toBe("/apps");
+    expect(pathForRoute("dashboards")).toBe("/dashboards");
     expect(pathForRoute("custodian")).toBe("/custodian");
     expect(pathForRoute("connection")).toBe("/settings/connection");
     expect(pathForRoute("debug")).toBe("/debug");
@@ -414,6 +426,7 @@ describe("routeIdFromPath", () => {
     expect(routeIdFromPath("/connection")).toBeNull();
     expect(routeIdFromPath("/activity")).toBe("activity");
     expect(routeIdFromPath("/apps")).toBe("apps");
+    expect(routeIdFromPath("/dashboards")).toBe("dashboards");
     expect(routeIdFromPath("/sessions")).toBe("sessions");
     expect(routeIdFromPath("/debug")).toBe("debug");
     expect(routeIdFromPath("/logs")).toBe("logs");
@@ -532,11 +545,14 @@ describe("routeIdFromPath", () => {
       agentId: "main",
       shortId: "12345678",
     });
+    // The slug is captured so it can settle a tie between ids sharing this prefix, but it
+    // never changes the parsed id: a wrong agent and a wrong slug both stay decorative.
     expect(sessionRefFromPath("/chat/wrong/wrong-slug-1234567890ab")).toEqual({
       namespace: "chat",
       kind: "short",
       agentId: "wrong",
       shortId: "1234567890ab",
+      slugHint: "wrong-slug",
     });
     expect(sessionRefFromPath("/chat/main/telegram/12345")).toEqual({
       namespace: "chat",
@@ -749,6 +765,7 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "labs",
       "model-providers",
       "mcp",
+      "memory",
       "automation",
       "security",
       "approvals",

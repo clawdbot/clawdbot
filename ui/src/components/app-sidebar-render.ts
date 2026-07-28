@@ -13,7 +13,10 @@ import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { sessionHasBoard } from "../lib/board/provider.ts";
-import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
+import {
+  resolveSessionPreferredFace,
+  sessionNavigationTarget,
+} from "../lib/sessions/route-navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   normalizeAgentId,
@@ -65,15 +68,21 @@ function readSidebarNativeGateway(): SidebarNativeGateway | null {
 }
 
 export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
-  const { activeId: cardAgentId, agent: cardAgent, agents: cardAgents } = host.activeChipAgent();
+  const {
+    activeId: cardAgentId,
+    agent: cardAgent,
+    agents: cardAgents,
+    identity: cardIdentity,
+  } = host.activeChipAgent();
   const menuUnread = cardAgents.some((entry) => {
     const agentId = normalizeAgentId(entry.id);
     return agentId !== cardAgentId && host.agentUnreadCount(agentId) > 0;
   });
-  const cardName = cardAgent ? normalizeAgentLabel(cardAgent) : cardAgentId;
+  const cardName =
+    cardIdentity?.name?.trim() || (cardAgent ? normalizeAgentLabel(cardAgent) : cardAgentId);
   const approvalCount = host.sessionData.approvalBadgeSnapshot().agentCounts.get(cardAgentId) ?? 0;
   const cardAvatarText =
-    (cardAgent ? resolveAgentTextAvatar(cardAgent) : null) ??
+    (cardAgent ? resolveAgentTextAvatar(cardAgent, cardIdentity) : cardIdentity?.emoji) ??
     (cardName || cardAgentId).slice(0, 1).toUpperCase();
   // The sidebar action follows gateway availability; collapsed native chrome
   // keeps its separate offline-tolerant ⌘N mirror.
@@ -81,7 +90,9 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
     <div class="sidebar-brand">
       <openclaw-sidebar-agent-card
         .agentName=${cardName}
-        .avatarUrl=${cardAgent ? resolveAgentAvatarUrl(cardAgent) : null}
+        .avatarUrl=${cardAgent
+          ? resolveAgentAvatarUrl(cardAgent, cardIdentity)
+          : cardIdentity?.avatar}
         .avatarText=${cardAvatarText}
         .subtitle=${host.agentChipSubtitle(cardAgentId)}
         .menuOpen=${host.sidebarMenus.agentMenuPosition !== null}
@@ -136,12 +147,13 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
   return html`
     <a
       href=${sessionNavigationTarget({
-        face: "chat",
+        face: resolveSessionPreferredFace(mainRow),
         sessionKey: mainKey,
         fallbackAgentId: agentId,
         basePath: host.basePath,
         row: mainRow ?? undefined,
         mainKey: parseAgentSessionKey(mainKey)?.rest,
+        preferenceDerivedFace: true,
       }).href}
       class="nav-item nav-item--home ${active ? "nav-item--active" : ""}"
       aria-current=${active ? "page" : nothing}

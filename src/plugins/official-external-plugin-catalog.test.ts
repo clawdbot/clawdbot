@@ -289,6 +289,14 @@ describe("official external plugin catalog", () => {
     }
   });
 
+  it("advertises DeepInfra through the generic embedding provider contract", () => {
+    const entry = expectCatalogEntry("deepinfra");
+    const contracts = getOfficialExternalPluginCatalogManifest(entry)?.contracts;
+
+    expect(contracts?.embeddingProviders).toEqual(["deepinfra"]);
+    expect(contracts?.memoryEmbeddingProviders).toBeUndefined();
+  });
+
   it("does not allow malformed feed wrappers to count as feed documents", () => {
     expect(
       isOfficialExternalPluginCatalogFeed({

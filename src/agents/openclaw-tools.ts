@@ -101,9 +101,8 @@ export function createOpenClawTools(
     agentSessionKey?: string;
     toolBindings?: Readonly<Record<string, unknown>>;
     /**
-     * The actual live run session key. When the tool is constructed with a sandbox/policy
-     * session key, this allows `session_status({sessionKey:"current"})` to resolve to
-     * the live run session instead of the stale sandbox key.
+     * The durable store session key for the live run when it differs from the
+     * sandbox/policy session key used to construct the tool set.
      */
     runSessionKey?: string;
     agentChannel?: GatewayMessageChannel;
@@ -481,7 +480,10 @@ export function createOpenClawTools(
                 }),
               ]),
           createCronTool({
-            agentSessionKey: options?.agentSessionKey,
+            // attempt-tool-base-prepare preserves the durable store key as runSessionKey.
+            // Cron bindings, wakes, and reminder history need that transcript owner; a
+            // policy-scoped DM key can be empty and cleanup-retired, leaving jobs dangling.
+            agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             agentAccountId: gatewayCallerAccountId,
             currentDeliveryContext: {
               channel: options?.agentChannel,

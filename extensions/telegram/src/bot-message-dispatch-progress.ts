@@ -326,6 +326,12 @@ export function createTelegramProgressController(params: {
 
   return {
     applyCollapseSummary,
+    beginQueuedFollowup: () => {
+      finalAnswerDeliveryStarted = false;
+      finalAnswerDelivered = false;
+      sawProgressFinal = false;
+      compositor.beginNewTurn({ force: true });
+    },
     canPushToolProgress,
     cancel: () => compositor.cancel(),
     closeReasoningBurst: () => summary.closeReasoningBurst(),

@@ -235,26 +235,30 @@ function createMarketplaceInstallConfig(params: {
   };
 }
 
-function createClawHubInstallConfig(params: {
-  pluginId: string;
-  installPath: string;
-  clawhubUrl: string;
-  clawhubPackage: string;
-  clawhubFamily: "bundle-plugin" | "code-plugin";
-  clawhubChannel: "community" | "official" | "private";
-  spec?: string;
-}): OpenClawConfig {
+function createClawHubInstallConfig(
+  params: {
+    pluginId?: string;
+    installPath?: string;
+    clawhubUrl?: string;
+    clawhubPackage?: string;
+    clawhubFamily?: "bundle-plugin" | "code-plugin";
+    clawhubChannel?: "community" | "official" | "private";
+    spec?: string;
+  } = {},
+): OpenClawConfig {
+  const pluginId = params.pluginId ?? "demo";
+  const clawhubPackage = params.clawhubPackage ?? pluginId;
   return {
     plugins: {
       installs: {
-        [params.pluginId]: {
+        [pluginId]: {
           source: "clawhub" as const,
-          spec: params.spec ?? `clawhub:${params.clawhubPackage}`,
-          installPath: params.installPath,
-          clawhubUrl: params.clawhubUrl,
-          clawhubPackage: params.clawhubPackage,
-          clawhubFamily: params.clawhubFamily,
-          clawhubChannel: params.clawhubChannel,
+          spec: params.spec ?? `clawhub:${clawhubPackage}`,
+          installPath: params.installPath ?? `/tmp/${pluginId}`,
+          clawhubUrl: params.clawhubUrl ?? "https://clawhub.ai",
+          clawhubPackage,
+          clawhubFamily: params.clawhubFamily ?? "code-plugin",
+          clawhubChannel: params.clawhubChannel ?? "official",
         },
       },
     },
@@ -266,14 +270,7 @@ function createEnabledDemoClawHubInstallConfig(): OpenClawConfig {
     name: "demo",
     version: "1.2.3",
   });
-  const config = createClawHubInstallConfig({
-    pluginId: "demo",
-    installPath,
-    clawhubUrl: "https://clawhub.ai",
-    clawhubPackage: "demo",
-    clawhubFamily: "code-plugin",
-    clawhubChannel: "official",
-  });
+  const config = createClawHubInstallConfig({ installPath });
   config.plugins = {
     ...config.plugins,
     entries: {
@@ -752,6 +749,104 @@ describe("updateNpmInstalledPlugins", () => {
     resolveBundledPluginSourcesMock.mockReturnValue(new Map());
     runCommandWithTimeoutMock.mockReset();
     validatePackageExtensionEntriesForInstallMock.mockReset();
+  });
+
+  it("moves only the replaced npm plugin's exact explicit load path", async () => {
+    const previousInstallPath = createInstalledPackageDir({
+      name: "@acme/demo",
+      version: "1.0.0",
+    });
+    const nextInstallPath = createInstalledPackageDir({
+      name: "@acme/demo",
+      version: "2.0.0",
+    });
+    const adjacentInstallPath = createInstalledPackageDir({
+      name: "@acme/adjacent",
+      version: "1.0.0",
+    });
+    const customPath = path.join(previousInstallPath, "custom-child");
+    mockNpmViewMetadata({ name: "@acme/demo", version: "2.0.0" });
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "demo",
+        targetDir: nextInstallPath,
+        version: "2.0.0",
+        npmResolution: {
+          name: "@acme/demo",
+          version: "2.0.0",
+          resolvedSpec: "@acme/demo@2.0.0",
+        },
+      }),
+    );
+    const adjacentRecord = {
+      source: "npm" as const,
+      spec: "@acme/adjacent@1.0.0",
+      installPath: adjacentInstallPath,
+    };
+
+    const result = await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          load: {
+            paths: [customPath, previousInstallPath, adjacentInstallPath],
+          },
+          installs: {
+            demo: {
+              source: "npm",
+              spec: "@acme/demo@1.0.0",
+              installPath: previousInstallPath,
+              resolvedName: "@acme/demo",
+              resolvedSpec: "@acme/demo@1.0.0",
+              resolvedVersion: "1.0.0",
+            },
+            adjacent: adjacentRecord,
+          },
+        },
+      },
+      pluginIds: ["demo"],
+    });
+
+    expect(result.changed).toBe(true);
+    expect(result.config.plugins?.load?.paths).toEqual([
+      customPath,
+      nextInstallPath,
+      adjacentInstallPath,
+    ]);
+    expect(result.config.plugins?.installs?.adjacent).toEqual(adjacentRecord);
+  });
+
+  it("preserves explicit load paths when the npm replacement fails", async () => {
+    const previousInstallPath = createInstalledPackageDir({
+      name: "@acme/demo",
+      version: "1.0.0",
+    });
+    const customPath = "/tmp/custom-demo";
+    mockNpmViewMetadata({ name: "@acme/demo", version: "2.0.0" });
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: false,
+      error: "npm install failed",
+    });
+    const config = {
+      plugins: {
+        load: { paths: [previousInstallPath, customPath] },
+        installs: {
+          demo: {
+            source: "npm" as const,
+            spec: "@acme/demo@1.0.0",
+            installPath: previousInstallPath,
+            resolvedName: "@acme/demo",
+            resolvedSpec: "@acme/demo@1.0.0",
+            resolvedVersion: "1.0.0",
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = await updateNpmInstalledPlugins({ config, pluginIds: ["demo"] });
+
+    expect(result.changed).toBe(false);
+    expect(result.config).toBe(config);
+    expect(result.config.plugins?.load?.paths).toEqual([previousInstallPath, customPath]);
   });
 
   afterEach(() => {
@@ -2548,11 +2643,7 @@ describe("updateNpmInstalledPlugins", () => {
 
     const config = createClawHubInstallConfig({
       pluginId: "diagnostics-otel",
-      installPath: "/tmp/diagnostics-otel",
-      clawhubUrl: "https://clawhub.ai",
       clawhubPackage: "@openclaw/diagnostics-otel",
-      clawhubFamily: "code-plugin",
-      clawhubChannel: "official",
       spec: "clawhub:@openclaw/diagnostics-otel@2026.5.3",
     });
     const result = await updateNpmInstalledPlugins({
@@ -2826,14 +2917,7 @@ describe("updateNpmInstalledPlugins", () => {
     });
     const installPath = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-update-missing-"));
     tempDirs.push(installPath);
-    const config = createClawHubInstallConfig({
-      pluginId: "demo",
-      installPath,
-      clawhubUrl: "https://clawhub.ai",
-      clawhubPackage: "demo",
-      clawhubFamily: "code-plugin",
-      clawhubChannel: "official",
-    });
+    const config = createClawHubInstallConfig({ installPath });
     config.plugins = {
       ...config.plugins,
       entries: {
@@ -3541,14 +3625,7 @@ describe("updateNpmInstalledPlugins", () => {
       },
     });
 
-    const config = createClawHubInstallConfig({
-      pluginId: "demo",
-      installPath: "/tmp/demo",
-      clawhubUrl: "https://clawhub.ai",
-      clawhubPackage: "demo",
-      clawhubFamily: "code-plugin",
-      clawhubChannel: "official",
-    });
+    const config = createClawHubInstallConfig();
     delete config.plugins?.installs?.demo?.clawhubPackage;
     config.plugins!.installs!.demo!.resolvedSpec = "clawhub:demo@1.2.3";
     delete config.plugins?.installs?.demo?.spec;
@@ -3592,17 +3669,7 @@ describe("updateNpmInstalledPlugins", () => {
 
   it("records a busy ClawHub lifecycle lease as one plugin update failure", async () => {
     withClawPackageLifecycleLeaseMock.mockRejectedValueOnce(new Error("package busy"));
-    const result = await updatePlugin(
-      createClawHubInstallConfig({
-        pluginId: "demo",
-        installPath: "/tmp/demo",
-        clawhubUrl: "https://clawhub.ai",
-        clawhubPackage: "demo",
-        clawhubFamily: "code-plugin",
-        clawhubChannel: "official",
-      }),
-      "demo",
-    );
+    const result = await updatePlugin(createClawHubInstallConfig(), "demo");
 
     expect(result.outcomes).toContainEqual(
       expect.objectContaining({
@@ -3624,18 +3691,9 @@ describe("updateNpmInstalledPlugins", () => {
       }),
     );
 
-    const result = await updatePlugin(
-      createClawHubInstallConfig({
-        pluginId: "demo",
-        installPath: "/tmp/demo",
-        clawhubUrl: "https://clawhub.ai",
-        clawhubPackage: "demo",
-        clawhubFamily: "code-plugin",
-        clawhubChannel: "official",
-      }),
-      "demo",
-      { updateChannel: "beta" },
-    );
+    const result = await updatePlugin(createClawHubInstallConfig(), "demo", {
+      updateChannel: "beta",
+    });
 
     expect(clawHubInstallCall()?.spec).toBe("clawhub:demo@beta");
     expect(clawHubInstallCall()?.baseUrl).toBe("https://clawhub.ai");
@@ -3666,21 +3724,10 @@ describe("updateNpmInstalledPlugins", () => {
       );
 
     const warnMessages: string[] = [];
-    const result = await updatePlugin(
-      createClawHubInstallConfig({
-        pluginId: "demo",
-        installPath: "/tmp/demo",
-        clawhubUrl: "https://clawhub.ai",
-        clawhubPackage: "demo",
-        clawhubFamily: "code-plugin",
-        clawhubChannel: "official",
-      }),
-      "demo",
-      {
-        updateChannel: "beta",
-        logger: { warn: (msg) => warnMessages.push(msg) },
-      },
-    );
+    const result = await updatePlugin(createClawHubInstallConfig(), "demo", {
+      updateChannel: "beta",
+      logger: { warn: (msg) => warnMessages.push(msg) },
+    });
 
     expect(clawHubInstallCall(0)?.spec).toBe("clawhub:demo@beta");
     expect(clawHubInstallCall(1)?.spec).toBe("clawhub:demo");
@@ -3717,11 +3764,7 @@ describe("updateNpmInstalledPlugins", () => {
       createClawHubInstallConfig({
         pluginId: "discord",
         installPath,
-        clawhubUrl: "https://clawhub.ai",
         clawhubPackage: "@openclaw/discord",
-        clawhubFamily: "code-plugin",
-        clawhubChannel: "official",
-        spec: "clawhub:@openclaw/discord",
       }),
       "discord",
       {
@@ -3787,11 +3830,7 @@ describe("updateNpmInstalledPlugins", () => {
       createClawHubInstallConfig({
         pluginId: "discord",
         installPath,
-        clawhubUrl: "https://clawhub.ai",
         clawhubPackage: "@openclaw/discord",
-        clawhubFamily: "code-plugin",
-        clawhubChannel: "official",
-        spec: "clawhub:@openclaw/discord",
       }),
       "discord",
       {
@@ -3845,11 +3884,7 @@ describe("updateNpmInstalledPlugins", () => {
       createClawHubInstallConfig({
         pluginId: "discord",
         installPath,
-        clawhubUrl: "https://clawhub.ai",
         clawhubPackage: "@openclaw/discord",
-        clawhubFamily: "code-plugin",
-        clawhubChannel: "official",
-        spec: "clawhub:@openclaw/discord",
       }),
       "discord",
       {
@@ -3894,11 +3929,7 @@ describe("updateNpmInstalledPlugins", () => {
       createClawHubInstallConfig({
         pluginId: "discord",
         installPath,
-        clawhubUrl: "https://clawhub.ai",
         clawhubPackage: "@openclaw/discord",
-        clawhubFamily: "code-plugin",
-        clawhubChannel: "official",
-        spec: "clawhub:@openclaw/discord",
       }),
       "discord",
       {
@@ -3938,9 +3969,6 @@ describe("updateNpmInstalledPlugins", () => {
         installPath,
         clawhubUrl: "https://custom-clawhub.example",
         clawhubPackage: "@openclaw/discord",
-        clawhubFamily: "code-plugin",
-        clawhubChannel: "official",
-        spec: "clawhub:@openclaw/discord",
       }),
       "discord",
       { updateChannel: "beta" },
@@ -3967,161 +3995,108 @@ describe("updateNpmInstalledPlugins", () => {
       }),
     );
 
-    await updatePlugin(
-      createClawHubInstallConfig({
-        pluginId: "demo",
-        installPath: "/tmp/demo",
-        clawhubUrl: "https://clawhub.ai",
-        clawhubPackage: "demo",
-        clawhubFamily: "code-plugin",
-        clawhubChannel: "official",
-        spec: "clawhub:demo@rc",
-      }),
-      "demo",
-      { updateChannel: "beta", dryRun: true },
-    );
+    await updatePlugin(createClawHubInstallConfig({ spec: "clawhub:demo@rc" }), "demo", {
+      updateChannel: "beta",
+      dryRun: true,
+    });
 
     expect(clawHubInstallCall()?.spec).toBe("clawhub:demo@rc");
   });
 
-  it("skips ClawHub plugin update when bundled version is newer", async () => {
-    resolveBundledPluginSourcesMock.mockReturnValue(
-      new Map([
-        [
-          "whatsapp",
-          {
-            pluginId: "whatsapp",
-            localPath: appBundledPluginRoot("whatsapp"),
-            version: "2026.4.20",
-          },
-        ],
-      ]),
-    );
-
-    const config = createClawHubInstallConfig({
+  it.each([
+    {
+      name: "skips ClawHub plugin update when bundled version is newer",
       pluginId: "whatsapp",
-      installPath: "/tmp/whatsapp",
-      clawhubUrl: "https://clawhub.ai",
-      clawhubPackage: "whatsapp",
+      bundledVersion: "2026.4.20",
+      installedVersion: "2026.2.9",
       clawhubFamily: "bundle-plugin",
       clawhubChannel: "community",
-    });
-    (config.plugins!.installs!.whatsapp as Record<string, unknown>).version = "2026.2.9";
-
-    const warnMessages: string[] = [];
-    const result = await updatePlugin(config, "whatsapp", {
-      logger: { warn: (msg) => warnMessages.push(msg) },
-    });
-
-    expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
-    expect(result.changed).toBe(false);
-    expect(result.outcomes).toHaveLength(1);
-    expect(result.outcomes[0]?.pluginId).toBe("whatsapp");
-    expect(result.outcomes[0]?.status).toBe("skipped");
-    expect(result.outcomes[0]?.message).toContain("bundled version 2026.4.20 is newer");
-    expect(warnMessages).toHaveLength(1);
-    expect(warnMessages[0]).toContain("bundled version 2026.4.20 is newer");
-  });
-
-  it("proceeds with ClawHub plugin update when bundled version is older", async () => {
-    resolveBundledPluginSourcesMock.mockReturnValue(
-      new Map([
-        [
-          "demo",
-          {
-            pluginId: "demo",
-            localPath: appBundledPluginRoot("demo"),
-            version: "1.0.0",
-          },
-        ],
-      ]),
-    );
-    installPluginFromClawHubMock.mockResolvedValue({
-      ok: true,
+      nextVersion: undefined,
+    },
+    {
+      name: "proceeds with ClawHub plugin update when bundled version is older",
       pluginId: "demo",
-      targetDir: "/tmp/demo",
-      version: "2.0.0",
-      clawhub: {
-        source: "clawhub",
-        clawhubUrl: "https://clawhub.ai",
-        clawhubPackage: "demo",
-        clawhubFamily: "code-plugin",
-        clawhubChannel: "official",
-        integrity: "sha256-new",
-        resolvedAt: "2026-04-30T00:00:00.000Z",
-      },
-    });
-
-    const config = createClawHubInstallConfig({
-      pluginId: "demo",
-      installPath: "/tmp/demo",
-      clawhubUrl: "https://clawhub.ai",
-      clawhubPackage: "demo",
+      bundledVersion: "1.0.0",
+      installedVersion: "1.5.0",
       clawhubFamily: "code-plugin",
       clawhubChannel: "official",
-    });
-    (config.plugins!.installs!.demo as Record<string, unknown>).version = "1.5.0";
-
-    const result = await updatePlugin(config, "demo");
-
-    expect(installPluginFromClawHubMock).toHaveBeenCalled();
-    expect(result.changed).toBe(true);
-  });
-
-  it("does not treat an older bundled stable release as newer than an installed correction release", async () => {
-    resolveBundledPluginSourcesMock.mockReturnValue(
-      new Map([
-        [
-          "demo",
-          {
-            pluginId: "demo",
-            localPath: appBundledPluginRoot("demo"),
-            version: "2026.5.3",
-          },
-        ],
-      ]),
-    );
-    installPluginFromClawHubMock.mockResolvedValue(
-      createSuccessfulClawHubUpdateResult({
-        pluginId: "demo",
-        targetDir: "/tmp/demo",
-        version: "2026.5.3-2",
-        clawhubPackage: "demo",
-      }),
-    );
-
-    const config = createClawHubInstallConfig({
+      nextVersion: "2.0.0",
+    },
+    {
+      name: "does not treat an older bundled stable release as newer than an installed correction release",
       pluginId: "demo",
-      installPath: "/tmp/demo",
-      clawhubUrl: "https://clawhub.ai",
-      clawhubPackage: "demo",
+      bundledVersion: "2026.5.3",
+      installedVersion: "2026.5.3-1",
       clawhubFamily: "code-plugin",
       clawhubChannel: "official",
-    });
-    (config.plugins!.installs!.demo as Record<string, unknown>).version = "2026.5.3-1";
-
-    const result = await updatePlugin(config, "demo");
-
-    expect(installPluginFromClawHubMock).toHaveBeenCalled();
-    expect(result.changed).toBe(true);
-    expectRecordFields(result.outcomes[0], {
-      pluginId: "demo",
-      status: "updated",
-      currentVersion: undefined,
       nextVersion: "2026.5.3-2",
-    });
-  });
+    },
+  ] as const)(
+    "$name",
+    async ({
+      pluginId,
+      bundledVersion,
+      installedVersion,
+      clawhubFamily,
+      clawhubChannel,
+      nextVersion,
+    }) => {
+      resolveBundledPluginSourcesMock.mockReturnValue(
+        new Map([
+          [
+            pluginId,
+            { pluginId, localPath: appBundledPluginRoot(pluginId), version: bundledVersion },
+          ],
+        ]),
+      );
+      if (nextVersion) {
+        installPluginFromClawHubMock.mockResolvedValue(
+          createSuccessfulClawHubUpdateResult({
+            pluginId,
+            targetDir: `/tmp/${pluginId}`,
+            version: nextVersion,
+            clawhubPackage: pluginId,
+          }),
+        );
+      }
+      const config = createClawHubInstallConfig({ pluginId, clawhubFamily, clawhubChannel });
+      const install = config.plugins?.installs?.[pluginId];
+      if (!install) {
+        throw new Error(`Missing ClawHub install fixture for ${pluginId}`);
+      }
+      install.version = installedVersion;
+      const warnings: string[] = [];
+      const result = await updatePlugin(config, pluginId, {
+        logger: { warn: (message) => warnings.push(message) },
+      });
+
+      if (!nextVersion) {
+        expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
+        expect(result.changed).toBe(false);
+        expect(result.outcomes).toHaveLength(1);
+        expectRecordFields(result.outcomes[0], { pluginId, status: "skipped" });
+        expect(result.outcomes[0]?.message).toContain(`bundled version ${bundledVersion} is newer`);
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain(`bundled version ${bundledVersion} is newer`);
+        return;
+      }
+
+      expect(installPluginFromClawHubMock).toHaveBeenCalled();
+      expect(result.changed).toBe(true);
+      if (installedVersion.includes("-")) {
+        expectRecordFields(result.outcomes[0], {
+          pluginId,
+          status: "updated",
+          currentVersion: undefined,
+          nextVersion,
+        });
+      }
+    },
+  );
 
   it("forwards ClawHub risk acknowledgement inputs without dry-run prompts", async () => {
     const onClawHubRisk = vi.fn(async () => true);
-    const config = createClawHubInstallConfig({
-      pluginId: "demo",
-      installPath: "/tmp/demo",
-      clawhubUrl: "https://clawhub.ai",
-      clawhubPackage: "demo",
-      clawhubFamily: "code-plugin",
-      clawhubChannel: "official",
-    });
+    const config = createClawHubInstallConfig();
     installPluginFromClawHubMock.mockResolvedValue({
       ok: true,
       pluginId: "demo",
@@ -4476,17 +4451,7 @@ describe("updateNpmInstalledPlugins", () => {
       }),
       "demo",
     );
-    await updatePlugin(
-      createClawHubInstallConfig({
-        pluginId: "demo",
-        installPath,
-        clawhubUrl: "https://clawhub.ai",
-        clawhubPackage: "demo",
-        clawhubFamily: "code-plugin",
-        clawhubChannel: "official",
-      }),
-      "demo",
-    );
+    await updatePlugin(createClawHubInstallConfig({ installPath }), "demo");
     await updatePlugin(
       createMarketplaceInstallConfig({
         pluginId: "demo",

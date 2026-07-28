@@ -183,11 +183,10 @@ describe("sessionsCommand", () => {
     expect(group?.totalTokensFresh).toBe(false);
   });
 
-  it("reports the SQLite database for the store and SQLite-backed sessionFile", async () => {
+  it("reports the SQLite database and omits the retired sessionFile field", async () => {
     const store = await writeStore({
       main: {
         sessionId: "abc123",
-        sessionFile: "sqlite:main:abc123:/tmp/openclaw/agents/main/sessions/sessions.json",
         updatedAt: Date.now() - 10 * 60_000,
         model: "test:opus",
       },
@@ -195,14 +194,12 @@ describe("sessionsCommand", () => {
 
     const payload = await runSessionsJson<{
       path?: string;
-      sessions?: Array<{ key: string; sessionFile?: string }>;
+      sessions?: Array<{ key: string }>;
     }>(sessionsCommand, store);
 
     expect(payload.path).toMatch(/openclaw-agent\.sqlite$/u);
     expect(payload.path).not.toContain("sessions.json");
-    expect(payload.sessions?.find((row) => row.key === "main")?.sessionFile).toBe(
-      "sqlite:main:abc123:/tmp/openclaw/agents/main/agent/openclaw-agent.sqlite",
-    );
+    expect(payload.sessions?.find((row) => row.key === "main")).not.toHaveProperty("sessionFile");
   });
 
   it("exports subagent lineage metadata in JSON output", async () => {
@@ -210,7 +207,6 @@ describe("sessionsCommand", () => {
       "agent:child:main": {
         sessionId: "child-session",
         updatedAt: Date.now() - 10 * 60_000,
-        sessionFile: "/tmp/openclaw/child-session.jsonl",
         spawnedBy: "agent:main:main",
         spawnedWorkspaceDir: "/workspace/project",
         spawnedCwd: "/workspace/project/tasks",
@@ -230,7 +226,6 @@ describe("sessionsCommand", () => {
     const payload = await runSessionsJson<{
       sessions?: Array<{
         key: string;
-        sessionFile?: string;
         spawnedBy?: string;
         spawnedWorkspaceDir?: string;
         spawnedCwd?: string;
@@ -248,7 +243,6 @@ describe("sessionsCommand", () => {
 
     const child = payload.sessions?.find((row) => row.key === "agent:child:main");
     expect(child).toMatchObject({
-      sessionFile: "/tmp/openclaw/child-session.jsonl",
       spawnedBy: "agent:main:main",
       spawnedWorkspaceDir: "/workspace/project",
       spawnedCwd: "/workspace/project/tasks",
@@ -262,6 +256,7 @@ describe("sessionsCommand", () => {
       label: "research helper",
       status: "done",
     });
+    expect(child).not.toHaveProperty("sessionFile");
   });
 
   it("shows preserved stale totals in JSON output", async () => {

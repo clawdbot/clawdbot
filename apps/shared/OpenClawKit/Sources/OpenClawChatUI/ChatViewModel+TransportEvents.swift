@@ -34,17 +34,16 @@ extension OpenClawChatViewModel {
             let context = self.currentSessionSnapshot()
             Task { await self.pollHealthIfNeeded(force: false, sessionSnapshot: context) }
         case let .sessionsChanged(change):
+            // Broad subscribers see every agent's canonical global row. Gate
+            // ownership before the shared-key projection can replace local state.
+            guard ChatSessionSidebarModel.sessionMatchesActiveAgent(
+                sessionKey: change.sessionKey,
+                agentId: change.agentId,
+                activeAgentId: self.activeAgentId)
+            else { return }
             let swarmEvent = self.observeSwarmEvent(change)
             let ownedSwarmActivityNote = swarmEvent && SelfContainedSwarmHelpers.isActivityNote(change)
-            let projectedSessions = ChatSessionSidebarModel.applying(
-                sessionChange: change,
-                to: self.sessions)
-            if let projectedSessions {
-                self.sessions = projectedSessions
-            } else if !ownedSwarmActivityNote, change.reason != "patch", change.reason != "command-metadata" {
-                let context = self.currentSessionSnapshot()
-                Task { await self.fetchSessions(limit: 50, sessionSnapshot: context) }
-            }
+            self.applySessionChangeProjection(change, ownedSwarmActivityNote: ownedSwarmActivityNote)
             // Group-catalog mutations from any client arrive as reason "groups"
             // (mirrors web ui/src/lib/sessions); bump the revision so views keyed
             // on it refetch. Rename/delete also rewrite member sessions' category
@@ -89,7 +88,8 @@ extension OpenClawChatViewModel {
         case let .sessionObserver(digest):
             self.sessions = ChatSessionSidebarModel.applying(
                 observerDigest: digest,
-                to: self.sessions)
+                to: self.sessions,
+                activeAgentId: self.activeAgentId)
         case let .chat(chat):
             self.handleChatEvent(chat)
         case let .sessionMessage(message):
@@ -125,6 +125,22 @@ extension OpenClawChatViewModel {
                 await self.refreshHistoryAfterRun(historyRequest: context)
                 await self.pollHealthIfNeeded(force: true, sessionSnapshot: context.session)
             }
+        }
+    }
+
+    private func applySessionChangeProjection(
+        _ change: OpenClawChatSessionsChangedEvent,
+        ownedSwarmActivityNote: Bool)
+    {
+        let projectedSessions = ChatSessionSidebarModel.applying(
+            sessionChange: change,
+            to: self.sessions,
+            activeAgentId: self.activeAgentId)
+        if let projectedSessions {
+            self.sessions = projectedSessions
+        } else if !ownedSwarmActivityNote, change.reason != "patch", change.reason != "command-metadata" {
+            let context = self.currentSessionSnapshot()
+            Task { await self.fetchSessions(limit: 50, sessionSnapshot: context) }
         }
     }
 

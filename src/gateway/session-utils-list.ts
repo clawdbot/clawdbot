@@ -4,6 +4,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
+import { readAcpSessionMetaBatch } from "../acp/runtime/session-meta.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
@@ -17,7 +18,8 @@ import { withPinnedActivePluginRegistryWorkspaceDir } from "../plugins/runtime-w
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { type SessionEntryPair, sortAndLimitSessionEntries } from "./session-list-order.js";
-import { readSessionTitleFieldsFromTranscriptAsync as readScopedSessionTitleFieldsFromTranscriptAsync } from "./session-transcript-readers.js";
+import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
+import { readSessionTitleFieldsFromTranscriptAsync as readScopedSessionTitleFieldsFromTranscriptAsync } from "./session-transcript-title-reader.js";
 import type {
   SessionListRowContext,
   SessionListRowContextProvider,
@@ -55,13 +57,67 @@ const SESSIONS_LIST_DEFAULT_LIMIT = 100;
 
 type SessionEntrySelection = {
   entries: SessionEntryPair[];
-  creatorEntries: SessionEntryPair[];
+  creators: Array<{ id: string; label?: string }>;
   totalCount: number;
   limitApplied?: number;
   offset: number;
   nextOffset: number | null;
   hasMore: boolean;
 };
+
+function addSessionCreatorIdentity(
+  creators: Map<string, { id: string; label?: string }>,
+  entry: SessionEntry,
+  userProfileLabelById: Map<string, string | undefined>,
+): void {
+  const actor = projectSessionActor(entry.createdActor, userProfileLabelById);
+  const id = normalizeOptionalString(actor?.id);
+  if (!id) {
+    return;
+  }
+  const label = normalizeOptionalString(actor?.label);
+  const existing = creators.get(id);
+  if (!existing || (label && (!existing.label || label.localeCompare(existing.label) < 0))) {
+    creators.set(id, { id, ...(label ? { label } : {}) });
+  }
+}
+
+function sortSessionCreatorIdentities(
+  creators: Map<string, { id: string; label?: string }>,
+): Array<{ id: string; label?: string }> {
+  return [...creators.values()].toSorted((a, b) => {
+    const byLabel = (a.label ?? a.id).localeCompare(b.label ?? b.id);
+    return byLabel || a.id.localeCompare(b.id);
+  });
+}
+
+function populateSessionListAcpMetadata(params: {
+  cfg: OpenClawConfig;
+  entries: readonly SessionEntryPair[];
+  opts: SessionsListParams;
+  rowContext?: SessionListRowContext;
+}): void {
+  if (!params.rowContext || params.entries.length === 0) {
+    return;
+  }
+  const entries = params.entries.map(([key, entry]) => {
+    const parsed = parseAgentSessionKey(key);
+    const agentId = normalizeAgentId(
+      key === "global" && typeof params.opts.agentId === "string"
+        ? params.opts.agentId
+        : (parsed?.agentId ?? resolveDefaultAgentId(params.cfg)),
+    );
+    return {
+      sessionKey: resolveStoredSessionKeyForAgentStore({
+        cfg: params.cfg,
+        agentId,
+        sessionKey: key,
+      }),
+      entry,
+    };
+  });
+  params.rowContext.acpSessionMetaByEntry = readAcpSessionMetaBatch({ entries });
+}
 
 function resolveSessionsListLimit(
   opts: SessionsListParams,
@@ -93,138 +149,129 @@ function filterSessionEntries(params: {
   store: Record<string, SessionEntry>;
   opts: SessionsListParams;
   now: number;
-  rowContext?: SessionListRowContext;
+  userProfileLabelById?: Map<string, string | undefined>;
   getRowContext?: SessionListRowContextProvider;
-}): SessionEntryPair[] {
+}): Pick<SessionEntrySelection, "creators" | "entries"> {
   const { cfg, store, opts, now } = params;
   const includeGlobal = opts.includeGlobal === true;
   const includeUnknown = opts.includeUnknown === true;
   const spawnedBy = typeof opts.spawnedBy === "string" ? opts.spawnedBy : "";
   const label = normalizeOptionalString(opts.label) ?? "";
+  const boardFace = opts.boardFace;
   const agentId = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
   const search = normalizeLowercaseStringOrEmpty(opts.search);
   const activeMinutes =
     typeof opts.activeMinutes === "number" && Number.isFinite(opts.activeMinutes)
       ? Math.max(1, Math.floor(opts.activeMinutes))
       : undefined;
+  const creatorId = normalizeOptionalString(opts.creatorId);
+  const activeCutoff = activeMinutes === undefined ? undefined : now - activeMinutes * 60_000;
+  const entries: SessionEntryPair[] = [];
+  const creators = new Map<string, { id: string; label?: string }>();
 
-  let entries = Object.entries(store)
-    .filter(([key]) => {
-      if (isCronRunSessionKey(key)) {
-        return false;
-      }
-      if (!includeGlobal && key === "global") {
-        return false;
-      }
-      if (!includeUnknown && key === "unknown") {
-        return false;
-      }
-      if (agentId) {
-        if (key === "global") {
-          return includeGlobal;
+  for (const [key, entry] of Object.entries(store)) {
+    if (
+      isCronRunSessionKey(key) ||
+      (!includeGlobal && key === "global") ||
+      (!includeUnknown && key === "unknown")
+    ) {
+      continue;
+    }
+    if (agentId) {
+      if (key === "global") {
+        if (!includeGlobal) {
+          continue;
         }
-        if (key === "unknown") {
-          return false;
-        }
+      } else if (key === "unknown") {
+        continue;
+      } else {
         const parsed = parseAgentSessionKey(key);
-        if (!parsed) {
-          return false;
+        if (!parsed || normalizeAgentId(parsed.agentId) !== agentId) {
+          continue;
         }
-        return normalizeAgentId(parsed.agentId) === agentId;
       }
-      return true;
-    })
-    .filter(([key, entry]) => {
-      if (isPhantomAgentStoreListEntry(key, entry)) {
-        return false;
-      }
-      if (!spawnedBy) {
-        return true;
-      }
+    }
+    if (isPhantomAgentStoreListEntry(key, entry)) {
+      continue;
+    }
+    if (spawnedBy) {
       if (key === "unknown" || key === "global") {
-        return false;
+        continue;
       }
       const filterRowContext = resolveSessionListRowContext(params);
       const latest = filterRowContext
         ? filterRowContext.subagentRuns.getDisplaySubagentRun(key)
         : getSessionDisplaySubagentRunByChildSessionKey(key);
-      if (latest) {
-        const latestControllerSessionKey =
-          normalizeOptionalString(latest.controllerSessionKey) ||
-          normalizeOptionalString(latest.requesterSessionKey);
-        return (
-          latestControllerSessionKey === spawnedBy &&
+      const keepSpawned = latest
+        ? (normalizeOptionalString(latest.controllerSessionKey) ||
+            normalizeOptionalString(latest.requesterSessionKey)) === spawnedBy &&
           shouldKeepSubagentRunChildLink(latest, {
             activeDescendants: filterRowContext
               ? filterRowContext.subagentRuns.countActiveDescendantRuns(key)
               : countActiveDescendantRuns(key),
             now,
           })
-        );
+        : shouldKeepStoreOnlyChildLink(entry, now) &&
+          (entry.spawnedBy === spawnedBy || entry.parentSessionKey === spawnedBy);
+      if (!keepSpawned) {
+        continue;
       }
-      return (
-        shouldKeepStoreOnlyChildLink(entry, now) &&
-        (entry?.spawnedBy === spawnedBy || entry?.parentSessionKey === spawnedBy)
-      );
-    })
-    .filter(([, entry]) => {
-      if (opts.archived === "all") {
-        return true;
+    }
+    if (opts.archived !== "all") {
+      const archived = entry.archivedAt !== undefined;
+      if (opts.archived === true ? !archived : archived) {
+        continue;
       }
-      const archived = entry?.archivedAt !== undefined;
-      return opts.archived === true ? archived : !archived;
-    })
-    .filter(([, entry]) => {
-      if (opts.requireLastInteraction !== true) {
-        return true;
-      }
-      return (
-        isFinitePositiveTimestamp(entry?.lastInteractionAt) &&
-        !normalizeOptionalString(entry?.heartbeatIsolatedBaseSessionKey)
-      );
-    })
-    .filter(([, entry]) => {
-      if (!label) {
-        return true;
-      }
-      return entry?.label === label;
-    });
-
-  if (search) {
-    entries = entries.filter(([key, entry]) => {
+    }
+    if (
+      opts.requireLastInteraction === true &&
+      (!isFinitePositiveTimestamp(entry.lastInteractionAt) ||
+        normalizeOptionalString(entry.heartbeatIsolatedBaseSessionKey))
+    ) {
+      continue;
+    }
+    if ((label && entry.label !== label) || (boardFace && entry.boardFace !== boardFace)) {
+      continue;
+    }
+    if (search) {
       const cheapFields = [
         resolveSessionListSearchDisplayName(key, entry),
-        entry?.label,
-        entry?.subject,
-        entry?.sessionId,
+        entry.label,
+        entry.subject,
+        entry.sessionId,
         key,
       ];
       appendStoredSessionModelSearchFields(cheapFields, entry);
-      if (matchesSessionListSearch(cheapFields, search)) {
-        return true;
+      const cheapMatch = matchesSessionListSearch(cheapFields, search);
+      const derivedMatch =
+        !cheapMatch &&
+        shouldResolveDerivedSessionModelSearchFields(search) &&
+        matchesSessionListSearch(
+          resolveSessionListSearchModelFields({
+            cfg,
+            key,
+            entry,
+            rowContext: resolveSessionListRowContext(params),
+          }),
+          search,
+        );
+      if (!cheapMatch && !derivedMatch) {
+        continue;
       }
-      if (!shouldResolveDerivedSessionModelSearchFields(search)) {
-        return false;
-      }
-      const searchRowContext = resolveSessionListRowContext(params);
-      return matchesSessionListSearch(
-        resolveSessionListSearchModelFields({
-          cfg,
-          key,
-          entry,
-          rowContext: searchRowContext,
-        }),
-        search,
-      );
-    });
+    }
+    if (activeCutoff !== undefined && (entry.updatedAt ?? 0) < activeCutoff) {
+      continue;
+    }
+    if (params.userProfileLabelById) {
+      addSessionCreatorIdentity(creators, entry, params.userProfileLabelById);
+    }
+    if (creatorId && entry.createdActor?.id !== creatorId) {
+      continue;
+    }
+    entries.push([key, entry]);
   }
 
-  if (activeMinutes !== undefined) {
-    const cutoff = now - activeMinutes * 60_000;
-    entries = entries.filter(([, entry]) => (entry?.updatedAt ?? 0) >= cutoff);
-  }
-
-  return entries;
+  return { entries, creators: sortSessionCreatorIdentities(creators) };
 }
 
 function isPhantomAgentStoreListEntry(key: string, entry: SessionEntry | undefined): boolean {
@@ -241,15 +288,11 @@ function selectSessionEntries(params: {
   store: Record<string, SessionEntry>;
   opts: SessionsListParams;
   now: number;
-  rowContext?: SessionListRowContext;
   getRowContext?: SessionListRowContextProvider;
   defaultLimit?: number;
+  userProfileLabelById?: Map<string, string | undefined>;
 }): SessionEntrySelection {
-  const creatorEntries = filterSessionEntries(params);
-  const creatorId = normalizeOptionalString(params.opts.creatorId);
-  const filtered = creatorId
-    ? creatorEntries.filter(([, entry]) => entry.createdActor?.id === creatorId)
-    : creatorEntries;
+  const { creators, entries: filtered } = filterSessionEntries(params);
   const limit = resolveSessionsListLimit(params.opts, params.defaultLimit);
   const offset = resolveSessionsListOffset(params.opts);
   const windowLimit = resolveSessionsListWindowLimit(limit, offset);
@@ -260,7 +303,7 @@ function selectSessionEntries(params: {
   const hasMore = nextOffset < filtered.length;
   return {
     entries,
-    creatorEntries,
+    creators,
     totalCount: filtered.length,
     limitApplied: limit,
     offset,
@@ -269,36 +312,11 @@ function selectSessionEntries(params: {
   };
 }
 
-function listSessionCreatorIdentities(
-  entries: readonly SessionEntryPair[],
-  userProfileLabelById: Map<string, string | undefined>,
-): Array<{ id: string; label?: string }> {
-  const creators = new Map<string, { id: string; label?: string }>();
-  for (const [, entry] of entries) {
-    const actor = projectSessionActor(entry.createdActor, userProfileLabelById);
-    const id = normalizeOptionalString(actor?.id);
-    if (!id) {
-      continue;
-    }
-    const label = normalizeOptionalString(actor?.label);
-    const existing = creators.get(id);
-    if (!existing || (label && (!existing.label || label.localeCompare(existing.label) < 0))) {
-      creators.set(id, { id, ...(label ? { label } : {}) });
-    }
-  }
-  return [...creators.values()].toSorted((a, b) => {
-    const byLabel = (a.label ?? a.id).localeCompare(b.label ?? b.id);
-    return byLabel || a.id.localeCompare(b.id);
-  });
-}
-
 export function filterAndSortSessionEntries(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
   opts: SessionsListParams;
   now: number;
-  rowContext?: SessionListRowContext;
-  getRowContext?: SessionListRowContextProvider;
 }): [string, SessionEntry][] {
   return selectSessionEntries(params).entries;
 }
@@ -314,9 +332,12 @@ export function listSessionsFromStore(params: {
   const now = Date.now();
   const sessionListTranscriptUsageMaxBytes = 64 * 1024;
   const sessionListTranscriptFieldRows = 100;
+  // Creator facets and rows must share one profile-label snapshot. Every row context in this
+  // public list call is built with this map below, so a profile rename cannot split the response.
+  const userProfileLabelById = new Map<string, string | undefined>();
   let rowContext: SessionListRowContext | undefined;
   const getRowContext = () => {
-    rowContext ??= buildSessionListRowContext({ store, now });
+    rowContext ??= buildSessionListRowContext({ store, now, userProfileLabelById });
     return rowContext;
   };
   const includeDerivedTitles = opts.includeDerivedTitles === true;
@@ -333,16 +354,19 @@ export function listSessionsFromStore(params: {
         ? getRowContext
         : undefined,
     defaultLimit: SESSIONS_LIST_DEFAULT_LIMIT,
+    userProfileLabelById,
   });
-  const { entries, creatorEntries, totalCount, limitApplied, offset, nextOffset, hasMore } =
-    selection;
+  const { entries, creators, totalCount, limitApplied, offset, nextOffset, hasMore } = selection;
   const fullRowContext =
     rowContext || hasSpawnedByFilter || entries.length > SESSIONS_LIST_YIELD_BATCH_SIZE
       ? getRowContext()
       : undefined;
   const sharedRowContext =
     fullRowContext ??
-    (entries.length > 0 ? buildSessionListRowMetadataContext({ now }) : undefined);
+    (entries.length > 0
+      ? buildSessionListRowMetadataContext({ now, userProfileLabelById })
+      : undefined);
+  populateSessionListAcpMetadata({ cfg, entries, opts, rowContext: sharedRowContext });
 
   const sessions = entries.map(([key, entry], index) => {
     const includeTranscriptFields = index < sessionListTranscriptFieldRows;
@@ -379,10 +403,7 @@ export function listSessionsFromStore(params: {
     offset: offset > 0 ? offset : undefined,
     nextOffset,
     hasMore,
-    creators: listSessionCreatorIdentities(
-      creatorEntries,
-      sharedRowContext?.userProfileLabelById ?? new Map(),
-    ),
+    creators,
     defaults: getSessionDefaults(cfg, params.modelCatalog, { allowPluginNormalization: false }),
     sessions,
   };
@@ -415,9 +436,12 @@ export async function listSessionsFromStoreAsync(params: {
     const now = Date.now();
     const sessionListTranscriptUsageMaxBytes = 64 * 1024;
     const sessionListTranscriptFieldRows = 100;
+    // Creator facets and rows must share one profile-label snapshot. Every row context in this
+    // public list call is built with this map below, so a profile rename cannot split the response.
+    const userProfileLabelById = new Map<string, string | undefined>();
     let rowContext: SessionListRowContext | undefined;
     const getRowContext = () => {
-      rowContext ??= buildSessionListRowContext({ store, now });
+      rowContext ??= buildSessionListRowContext({ store, now, userProfileLabelById });
       return rowContext;
     };
     const includeDerivedTitles = opts.includeDerivedTitles === true;
@@ -434,16 +458,19 @@ export async function listSessionsFromStoreAsync(params: {
           ? getRowContext
           : undefined,
       defaultLimit: SESSIONS_LIST_DEFAULT_LIMIT,
+      userProfileLabelById,
     });
-    const { entries, creatorEntries, totalCount, limitApplied, offset, nextOffset, hasMore } =
-      selection;
+    const { entries, creators, totalCount, limitApplied, offset, nextOffset, hasMore } = selection;
     const fullRowContext =
       rowContext || hasSpawnedByFilter || entries.length > SESSIONS_LIST_YIELD_BATCH_SIZE
         ? getRowContext()
         : undefined;
     const sharedRowContext =
       fullRowContext ??
-      (entries.length > 0 ? buildSessionListRowMetadataContext({ now }) : undefined);
+      (entries.length > 0
+        ? buildSessionListRowMetadataContext({ now, userProfileLabelById })
+        : undefined);
+    populateSessionListAcpMetadata({ cfg, entries, opts, rowContext: sharedRowContext });
 
     const sessions: GatewaySessionRow[] = [];
     for (let i = 0; i < entries.length; i++) {
@@ -490,7 +517,7 @@ export async function listSessionsFromStoreAsync(params: {
           storePath,
         });
         if (includeDerivedTitles) {
-          row.derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage);
+          row.derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage, row.displayName);
         }
         if (includeLastMessage && fields.lastMessagePreview) {
           row.lastMessagePreview = fields.lastMessagePreview;
@@ -515,10 +542,7 @@ export async function listSessionsFromStoreAsync(params: {
       offset: offset > 0 ? offset : undefined,
       nextOffset,
       hasMore,
-      creators: listSessionCreatorIdentities(
-        creatorEntries,
-        sharedRowContext?.userProfileLabelById ?? new Map(),
-      ),
+      creators,
       defaults: getSessionDefaults(cfg, params.modelCatalog, { allowPluginNormalization: false }),
       sessions,
     };

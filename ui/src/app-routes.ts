@@ -20,8 +20,10 @@ import { pages as configPages } from "./pages/config/route.ts";
 import { page as connectionPage } from "./pages/connection/route.ts";
 import { page as cronPage } from "./pages/cron/route.ts";
 import { page as custodianPage } from "./pages/custodian/route.ts";
+import { page as dashboardsPage } from "./pages/dashboards/route.ts";
 import { page as debugPage } from "./pages/debug/route.ts";
 import { page as labsPage } from "./pages/labs/route.ts";
+import { page as lobsterdexPage } from "./pages/lobsterdex/route.ts";
 import { page as logsPage } from "./pages/logs/route.ts";
 import { page as memoryImportPage } from "./pages/memory-import/route.ts";
 import { page as modelProvidersPage } from "./pages/model-providers/route.ts";
@@ -56,6 +58,7 @@ const APP_ROUTE_TREE = [
   custodianPage,
   newSessionPage,
   activityPage,
+  dashboardsPage,
   appsPage,
   agentsPage,
   approvalsPage,
@@ -63,6 +66,7 @@ const APP_ROUTE_TREE = [
   connectionPage,
   labsPage,
   aboutPage,
+  lobsterdexPage,
   ...configPages,
   modelSetupPage,
   modelProvidersPage,

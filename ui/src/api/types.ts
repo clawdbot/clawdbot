@@ -10,6 +10,7 @@ import type { FastModeSource } from "../../../src/shared/fast-mode.js";
 import type {
   GatewayAgentRuntime,
   GatewayAgentRow as SharedGatewayAgentRow,
+  SessionBoardFace,
   SessionsListResultBase,
   SessionsPatchResultBase,
 } from "../../../src/shared/session-types.js";
@@ -368,6 +369,9 @@ export type AgentFileEntry = {
   name: string;
   path: string;
   missing: boolean;
+  // Absence is a normal workspace state (optional profile files, MEMORY.md before
+  // anything is written); the editor offers these for creation instead of flagging them.
+  expectedAbsent?: boolean;
   size?: number;
   updatedAtMs?: number;
   content?: string;
@@ -528,6 +532,8 @@ export type GatewaySessionRow = {
   label?: string;
   /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
   category?: string;
+  /** Preferred Control UI face for generic session navigation. */
+  boardFace?: SessionBoardFace;
   displayName?: string;
   derivedTitle?: string;
   channel?: string;
@@ -541,7 +547,7 @@ export type GatewaySessionRow = {
   agentStatus?: SessionAgentStatus;
   observerDigest?: Pick<
     SessionObserverDigest,
-    "runId" | "headline" | "health" | "updatedAt" | "revision"
+    "agentId" | "runId" | "headline" | "health" | "updatedAt" | "revision"
   >;
   lastActivityAt?: number;
   archived?: boolean;

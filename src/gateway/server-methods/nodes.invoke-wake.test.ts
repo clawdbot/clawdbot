@@ -778,10 +778,8 @@ describe("node.invoke APNs wake path", () => {
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
   });
 
-  it("allows an armed computer.act command for write-scoped operators", async () => {
-    mocks.getRuntimeConfig.mockReturnValue({
-      gateway: { nodes: { commands: { allow: ["computer.act"] } } },
-    });
+  it("allows an enabled computer.act command for write-scoped operators", async () => {
+    mocks.getRuntimeConfig.mockReturnValue({});
     mocks.resolveNodeCommandAllowlist.mockReturnValue(new Set(["computer.act"]));
     const nodeRegistry = {
       get: vi.fn(() => ({
@@ -1232,7 +1230,7 @@ describe("node.invoke APNs wake path", () => {
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
   });
 
-  it("does not retroactively grant a command armed while waiting for reconnect", async () => {
+  it("does not retroactively grant a command enabled while waiting for reconnect", async () => {
     vi.useFakeTimers();
     mockDirectWakeConfig("mac-node-policy-grant");
 

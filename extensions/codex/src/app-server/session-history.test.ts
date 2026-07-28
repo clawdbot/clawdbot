@@ -167,6 +167,23 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
     ]);
   });
 
+  it("falls back from an unregistered requested key to the marker's verified session key", async () => {
+    const { marker } = await writeSqliteSession();
+    const staleSessionKey = "agent:main:stale-codex-session";
+
+    await expect(
+      readCodexMirroredSessionHistoryMessages({
+        agentId: "main",
+        sessionFile: marker,
+        sessionId: "codex-sqlite-session",
+        sessionKey: staleSessionKey,
+      }),
+    ).resolves.toMatchObject([
+      { role: "user", content: "sqlite prompt" },
+      { role: "assistant", content: "sqlite answer" },
+    ]);
+  });
+
   it("resolves synthesized SQLite markers for stale file-backed session metadata", async () => {
     const { marker } = await writeSqliteSession({
       storedSessionFile: "/tmp/legacy-session.jsonl",

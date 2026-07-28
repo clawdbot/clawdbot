@@ -1416,6 +1416,8 @@ function buildRenderedSkillsPrompt(params: {
   total: number;
   format: SkillsPromptFormat;
 }): string {
+  // resolveCodeModeSkills in src/agents/code-mode-skills.ts parses this exact format; update both together.
+  // The production-renderer parity test in src/agents/code-mode.test.ts enforces this coupling.
   const truncated = params.skills.length < params.total;
   const limitNote = buildSkillsLimitNote({
     truncated,

@@ -1692,73 +1692,7 @@ text from valid raw `data_table` cells, while malformed custom blocks may
 degrade to their caption or general Block Kit fallback. Portable agent, CLI,
 and plugin output should use `presentation`.
 
-## Interactive replies
-
-Slack can render agent-authored interactive reply controls, but this feature is disabled by default.
-For new agent, CLI, and plugin output, prefer the shared
-`presentation` buttons or select blocks. They use the same Slack interaction
-path while also degrading on other channels.
-
-Enable it globally:
-
-```json5
-{
-  channels: {
-    slack: {
-      capabilities: {
-        interactiveReplies: true,
-      },
-    },
-  },
-}
-```
-
-Or enable it for one Slack account only:
-
-```json5
-{
-  channels: {
-    slack: {
-      accounts: {
-        ops: {
-          capabilities: {
-            interactiveReplies: true,
-          },
-        },
-      },
-    },
-  },
-}
-```
-
-When enabled, agents can still emit deprecated Slack-only reply directives:
-
-- `[[slack_buttons: Approve:approve, Reject:reject]]`
-- `[[slack_select: Choose a target | Canary:canary, Production:production]]`
-
-These directives compile into Slack Block Kit and route clicks or selections
-back through the existing Slack interaction event path. Keep them for old
-prompts and Slack-specific escape hatches; use shared presentation for new
-portable controls.
-
-The directive compiler APIs are also deprecated for new producer code:
-
-- `compileSlackInteractiveReplies(...)`
-- `parseSlackOptionsLine(...)`
-- `isSlackInteractiveRepliesEnabled(...)`
-- `buildSlackInteractiveBlocks(...)`
-
-Use `presentation` payloads and `buildSlackPresentationBlocks(...)` for new
-Slack-rendered controls.
-
-Notes:
-
-- This is Slack-specific legacy UI. Other channels do not translate Slack Block
-  Kit directives into their own button systems.
-- The interactive callback values are OpenClaw-generated opaque tokens, not raw agent-authored values.
-- If generated interactive blocks would exceed Slack Block Kit limits, OpenClaw falls back to the original text reply instead of sending an invalid blocks payload.
-
-### Plugin-owned modal submissions
+## Plugin-owned modal submissions
 
 Slack plugins that register an interactive handler can also receive modal
 `view_submission` and `view_closed` lifecycle events before OpenClaw compacts

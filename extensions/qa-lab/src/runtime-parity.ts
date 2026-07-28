@@ -22,7 +22,13 @@ import { discardIgnoredResponseBody } from "./ignored-response-body.js";
 import * as parity from "./parity-shared.js";
 import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
 
+// These are the canonical QA comparison cells, not the extensible product
+// AgentHarness registry. Broader harness coverage needs its own explicit lane.
 export type RuntimeId = "openclaw" | "codex";
+
+type RuntimeParityStatus = "pass" | "fail" | "skip";
+
+const CANONICAL_RUNTIME_IDS = ["openclaw", "codex"] as const satisfies readonly RuntimeId[];
 
 export type RuntimeParityToolCall = {
   tool: string;
@@ -51,11 +57,30 @@ export type RuntimeParityCell = {
   finalText: string;
   usage: RuntimeParityUsage;
   wallClockMs: number;
+  bootstrapWallClockMs?: number;
   transportErrorClass?: string;
   runtimeErrorClass?: string;
   bootStateLines: string[];
   sentinelFindings?: GatewayLogSentinelFinding[];
 };
+
+type RuntimeParityResultCell = RuntimeParityCell & {
+  status: RuntimeParityStatus;
+  details?: string;
+};
+
+// Runtime-tool fixtures reserve this prefix for tracked harness limitations.
+// Matching only that explicit skip keeps unexpected coverage loss blocking.
+const KNOWN_HARNESS_GAP_DETAILS_PREFIX = "known-harness-gap ";
+
+function isKnownHarnessGapSkip(
+  cell: Pick<RuntimeParityResultCell, "details" | "status"> | undefined,
+) {
+  return (
+    cell?.status === "skip" &&
+    cell.details?.trimStart().startsWith(KNOWN_HARNESS_GAP_DETAILS_PREFIX) === true
+  );
+}
 
 export type RuntimeParityDrift =
   | "none"
@@ -68,10 +93,7 @@ export type RuntimeParityDrift =
 export type RuntimeParityResult = {
   scenarioId: string;
   runtimeParityUsage?: RuntimeParityUsagePolicy;
-  cells: {
-    openclaw: RuntimeParityCell;
-    codex: RuntimeParityCell;
-  };
+  cells: Record<RuntimeId, RuntimeParityResultCell>;
   drift: RuntimeParityDrift;
   driftDetails?: string;
 };
@@ -93,8 +115,8 @@ export function resolveRuntimeParityUsagePolicy(value: unknown): RuntimeParityUs
 }
 
 export type RuntimeParityScenarioExecution = {
-  scenarioStatus: "pass" | "fail";
-  scenarioDetails?: string;
+  status: RuntimeParityStatus;
+  details?: string;
   cell: RuntimeParityCell;
 };
 
@@ -108,10 +130,18 @@ export function runtimeParityCellStatus(
 }
 
 export function isRuntimeParityResultPass(result: RuntimeParityResult) {
+  if (result.drift === "failure-mode") {
+    return false;
+  }
+  const cells = CANONICAL_RUNTIME_IDS.map((runtime) => result.cells[runtime]);
+  const knownHarnessGapSkips = cells.filter((cell) => isKnownHarnessGapSkip(cell));
   return (
-    result.drift !== "failure-mode" &&
-    isRuntimeParityCellPassable(result.cells.openclaw) &&
-    isRuntimeParityCellPassable(result.cells.codex)
+    knownHarnessGapSkips.length <= 1 &&
+    cells.every(
+      (cell) =>
+        isRuntimeParityCellPassable(cell) &&
+        (cell.status === "pass" || isKnownHarnessGapSkip(cell)),
+    )
   );
 }
 
@@ -131,6 +161,7 @@ type RuntimeParityCaptureParams = {
   gateway: QaGatewayLike;
   scenarioResult: QaSuiteScenarioLike;
   wallClockMs: number;
+  bootstrapWallClockMs?: number;
   agentId?: string;
   mockBaseUrl?: string;
 };
@@ -1099,8 +1130,10 @@ function summarizeSentinelErrorClass(findings: readonly GatewayLogSentinelFindin
 function classifyRuntimeParityCells(params: {
   openclaw: RuntimeParityCell;
   codex: RuntimeParityCell;
-  openclawScenarioStatus: "pass" | "fail";
-  codexScenarioStatus: "pass" | "fail";
+  openclawStatus: RuntimeParityStatus;
+  codexStatus: RuntimeParityStatus;
+  openclawDetails?: string;
+  codexDetails?: string;
 }): Pick<RuntimeParityResult, "drift" | "driftDetails"> {
   if (
     isHardFailureRuntimeError(params.openclaw.runtimeErrorClass) ||
@@ -1127,18 +1160,43 @@ function classifyRuntimeParityCells(params: {
     };
   }
 
+  const openclawKnownHarnessGap = isKnownHarnessGapSkip({
+    status: params.openclawStatus,
+    details: params.openclawDetails,
+  });
+  const codexKnownHarnessGap = isKnownHarnessGapSkip({
+    status: params.codexStatus,
+    details: params.codexDetails,
+  });
   if (
-    params.openclawScenarioStatus === "fail" ||
-    params.codexScenarioStatus === "fail" ||
+    openclawKnownHarnessGap !== codexKnownHarnessGap &&
+    (openclawKnownHarnessGap ? params.codexStatus : params.openclawStatus) === "pass" &&
+    isRuntimeParityCellPassable(params.openclaw) &&
+    isRuntimeParityCellPassable(params.codex)
+  ) {
+    const skippedRuntime = openclawKnownHarnessGap ? "openclaw" : "codex";
+    return {
+      drift: "structural",
+      driftDetails: `known harness gap in ${skippedRuntime} runtime; paired runtime passed`,
+    };
+  }
+
+  if (
+    params.openclawStatus !== "pass" ||
+    params.codexStatus !== "pass" ||
     !isRuntimeParityCellPassable(params.openclaw) ||
     !isRuntimeParityCellPassable(params.codex)
   ) {
     return {
       drift: "failure-mode",
       driftDetails:
-        params.openclawScenarioStatus === params.codexScenarioStatus
-          ? "at least one runtime failed"
-          : `scenario status differs (${params.openclawScenarioStatus} vs ${params.codexScenarioStatus})`,
+        params.openclawStatus === params.codexStatus
+          ? params.openclawStatus === "skip"
+            ? "both canonical runtime-pair cells skipped"
+            : params.openclawStatus === "fail"
+              ? "both canonical runtime-pair cells failed"
+              : "at least one runtime failed"
+          : `runtime-pair cell status differs (${params.openclawStatus} vs ${params.codexStatus})`,
     };
   }
 
@@ -1398,9 +1456,9 @@ export async function captureRuntimeParityCell(
   // Retry passes retain first-attempt diagnostics; only terminal failures may
   // classify that historical text as the cell's runtime error.
   const scenarioErrorClass =
-    params.scenarioResult.status === "pass"
-      ? undefined
-      : classifyScenarioError(params.scenarioResult.details);
+    params.scenarioResult.status === "fail"
+      ? classifyScenarioError(params.scenarioResult.details)
+      : undefined;
   const sentinelErrorClass = summarizeSentinelErrorClass(sentinelFindings);
   const terminalImageResultProven = hasProvenTerminalImageResult(params.scenarioResult);
   return {
@@ -1414,6 +1472,9 @@ export async function captureRuntimeParityCell(
     finalText: extractFinalAssistantText(transcriptRecords),
     usage: aggregateUsage(transcriptRecords),
     wallClockMs: params.wallClockMs,
+    ...(params.bootstrapWallClockMs === undefined
+      ? {}
+      : { bootstrapWallClockMs: params.bootstrapWallClockMs }),
     ...(scenarioErrorClass || sentinelErrorClass
       ? { runtimeErrorClass: scenarioErrorClass ?? sentinelErrorClass }
       : {}),
@@ -1432,15 +1493,25 @@ export async function runRuntimeParityScenario(params: {
   const drift = classifyRuntimeParityCells({
     openclaw: openclaw.cell,
     codex: codex.cell,
-    openclawScenarioStatus: openclaw.scenarioStatus,
-    codexScenarioStatus: codex.scenarioStatus,
+    openclawStatus: openclaw.status,
+    codexStatus: codex.status,
+    openclawDetails: openclaw.details,
+    codexDetails: codex.details,
   });
   return {
     scenarioId: params.scenarioId,
     runtimeParityUsage: resolveRuntimeParityUsagePolicy(params.runtimeParityUsage),
     cells: {
-      openclaw: openclaw.cell,
-      codex: codex.cell,
+      openclaw: {
+        ...openclaw.cell,
+        status: openclaw.status,
+        ...(openclaw.details ? { details: openclaw.details } : {}),
+      },
+      codex: {
+        ...codex.cell,
+        status: codex.status,
+        ...(codex.details ? { details: codex.details } : {}),
+      },
     },
     drift: drift.drift,
     ...(drift.driftDetails ? { driftDetails: drift.driftDetails } : {}),

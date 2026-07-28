@@ -26,6 +26,7 @@ type ChatMetadataApplyResult = {
 };
 
 type ChatRefreshOptions = {
+  deferBranches?: boolean;
   scheduleScroll?: boolean;
   awaitHistory?: boolean;
   startup?: boolean;
@@ -42,6 +43,16 @@ type ChatMetadataRequest = {
   client: GatewayBrowserClient;
   agentId: string | null | undefined;
   version: number;
+};
+
+type ChatMetadataRefreshOptions = {
+  preserveModelCatalogOnFallback?: boolean;
+  requestVersion?: number;
+};
+
+const EMPTY_CHAT_METADATA_APPLY_RESULT: ChatMetadataApplyResult = {
+  commands: false,
+  models: false,
 };
 
 function scheduleChatMetadataRefresh(callback: () => void) {
@@ -66,16 +77,20 @@ function applyChatMetadataResult(
   client: GatewayBrowserClient,
   agentId: string | null | undefined,
   result: ChatMetadataResult,
+  fields: { commands?: boolean; models?: boolean } = {},
 ): ChatMetadataApplyResult {
-  const models = applyModelCatalogResult(result.models);
+  const models = fields.models === false ? undefined : applyModelCatalogResult(result.models);
   if (models) {
     host.chatModelCatalog = models;
   }
-  const commandsApplied = applyRemoteSlashCommandsResult({
-    client,
-    agentId,
-    result,
-  });
+  const commandsApplied =
+    fields.commands === false
+      ? false
+      : applyRemoteSlashCommandsResult({
+          client,
+          agentId,
+          result,
+        });
   return { commands: commandsApplied, models: Boolean(models) };
 }
 
@@ -110,34 +125,52 @@ function canUseCompatibilityModelCatalog(
   return agentId === resolveUiDefaultAgentId(host);
 }
 
+async function refreshMissingChatMetadata(
+  request: ChatMetadataRequest,
+  applied: ChatMetadataApplyResult,
+  opts?: ChatMetadataRefreshOptions,
+): Promise<void> {
+  if (!ownsChatMetadataRequest(request)) {
+    return;
+  }
+  const commandsRefresh = applied.commands
+    ? Promise.resolve()
+    : refreshCompatibilityCommands(request);
+  const preserveModels = opts?.preserveModelCatalogOnFallback;
+  const modelsRefresh =
+    applied.models || preserveModels
+      ? Promise.resolve()
+      : canUseCompatibilityModelCatalog(request.host, request.agentId)
+        ? refreshCompatibilityModelCatalog(request)
+        : Promise.resolve().then(() => {
+            if (ownsChatMetadataRequest(request)) {
+              request.host.chatModelCatalog = [];
+            }
+          });
+  await Promise.allSettled([commandsRefresh, modelsRefresh]);
+}
+
 export async function refreshChatMetadata(
   host: ChatPageHost,
-  opts?: { preserveModelCatalogOnFallback?: boolean },
-) {
-  const requestVersion = ++host.chatMetadataRequestVersion;
+  opts?: ChatMetadataRefreshOptions,
+): Promise<ChatMetadataApplyResult> {
+  const requestVersion = opts?.requestVersion ?? ++host.chatMetadataRequestVersion;
   if (!host.client || !host.connected) {
     host.chatModelsLoading = false;
     host.chatModelCatalog = [];
-    return;
+    return EMPTY_CHAT_METADATA_APPLY_RESULT;
+  }
+  if (host.chatMetadataRequestVersion !== requestVersion) {
+    return EMPTY_CHAT_METADATA_APPLY_RESULT;
   }
   const client = host.client;
   const agentId = resolveChatAgentId(host);
   const request = { host, client, agentId, version: requestVersion };
-  const shouldRefreshCompatibilityModels =
-    !opts?.preserveModelCatalogOnFallback && canUseCompatibilityModelCatalog(host, agentId);
-  const shouldClearUnresolvedModels =
-    !opts?.preserveModelCatalogOnFallback && !shouldRefreshCompatibilityModels;
   host.chatModelsLoading = true;
   try {
     if (isGatewayMethodAdvertised(host as unknown as ChatState, "chat.metadata") === false) {
-      if (shouldClearUnresolvedModels) {
-        host.chatModelCatalog = [];
-      }
-      await Promise.allSettled([
-        ...(shouldRefreshCompatibilityModels ? [refreshCompatibilityModelCatalog(request)] : []),
-        refreshCompatibilityCommands(request),
-      ]);
-      return;
+      await refreshMissingChatMetadata(request, EMPTY_CHAT_METADATA_APPLY_RESULT, opts);
+      return EMPTY_CHAT_METADATA_APPLY_RESULT;
     }
 
     const result = await client.request<ChatMetadataResult>(
@@ -145,30 +178,18 @@ export async function refreshChatMetadata(
       agentId ? { agentId } : {},
     );
     if (!ownsChatMetadataRequest(request)) {
-      return;
+      return EMPTY_CHAT_METADATA_APPLY_RESULT;
     }
     const metadataApplied = applyChatMetadataResult(host, client, agentId, result);
-    if (!metadataApplied.models && shouldClearUnresolvedModels) {
-      host.chatModelCatalog = [];
-    }
     if (!metadataApplied.models || !metadataApplied.commands) {
-      await Promise.allSettled([
-        ...(!metadataApplied.models && shouldRefreshCompatibilityModels
-          ? [refreshCompatibilityModelCatalog(request)]
-          : []),
-        ...(metadataApplied.commands ? [] : [refreshCompatibilityCommands(request)]),
-      ]);
+      await refreshMissingChatMetadata(request, metadataApplied, opts);
     }
+    return metadataApplied;
   } catch {
     if (ownsChatMetadataRequest(request)) {
-      if (shouldClearUnresolvedModels) {
-        host.chatModelCatalog = [];
-      }
-      await Promise.allSettled([
-        ...(shouldRefreshCompatibilityModels ? [refreshCompatibilityModelCatalog(request)] : []),
-        refreshCompatibilityCommands(request),
-      ]);
+      await refreshMissingChatMetadata(request, EMPTY_CHAT_METADATA_APPLY_RESULT, opts);
     }
+    return EMPTY_CHAT_METADATA_APPLY_RESULT;
   } finally {
     if (ownsChatMetadataRequest(request)) {
       host.chatModelsLoading = false;
@@ -209,6 +230,7 @@ async function refreshChat(
   const requestUpdate = () => host.requestUpdate?.();
   const previousSessionsResult = host.sessionsResult;
   const historyLoad = loadChatHistory(host as unknown as ChatState, {
+    deferBranches: opts?.deferBranches === true,
     startup: opts?.startup === true,
   });
   const historyRefresh = historyLoad.finally(() => {
@@ -287,31 +309,55 @@ async function refreshChat(
 }
 
 export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {
-  let resolveStartupMetadata: (result: ChatMetadataApplyResult) => void = () => {};
-  const ownsStartupMetadata = Boolean(opts?.startup && host.client && host.connected);
+  const ownsStartupMetadata = Boolean(
+    opts?.startup &&
+    host.client &&
+    host.connected &&
+    isGatewayMethodAdvertised(host as unknown as ChatState, "chat.startup") !== false,
+  );
   const startupMetadataRequestVersion = ownsStartupMetadata
     ? ++host.chatMetadataRequestVersion
     : null;
-  const startupMetadataApplied = ownsStartupMetadata
-    ? new Promise<ChatMetadataApplyResult>((resolve) => {
-        resolveStartupMetadata = resolve;
-      })
-    : Promise.resolve({ commands: false, models: false });
+  if (ownsStartupMetadata) {
+    host.chatModelsLoading = true;
+  }
 
   const refresh = refreshChat(host, {
     ...opts,
-    onStartupMetadata: ({ client, agentId, metadata }) => {
-      const ownsMetadata =
-        startupMetadataRequestVersion !== null &&
-        host.chatMetadataRequestVersion === startupMetadataRequestVersion &&
-        host.client === client &&
-        host.connected &&
-        resolveChatAgentId(host) === agentId;
-      const applied =
-        metadata && ownsMetadata
-          ? applyChatMetadataResult(host, client, agentId, metadata)
-          : { commands: false, models: false };
-      resolveStartupMetadata(applied);
+    onStartupMetadata: async ({ client, agentId, metadata }) => {
+      if (
+        startupMetadataRequestVersion === null ||
+        host.chatMetadataRequestVersion !== startupMetadataRequestVersion ||
+        host.client !== client ||
+        !host.connected ||
+        resolveChatAgentId(host) !== agentId
+      ) {
+        return;
+      }
+      const request: ChatMetadataRequest = {
+        host,
+        client,
+        agentId,
+        version: startupMetadataRequestVersion,
+      };
+      try {
+        if (!metadata) {
+          // Missing startup metadata means the bounded catalog projection could not finish.
+          // Start the scoped combined fallback now, on the response signal, rather than at idle.
+          await refreshChatMetadata(host, { requestVersion: startupMetadataRequestVersion });
+          return;
+        }
+        const applied = applyChatMetadataResult(host, client, agentId, metadata);
+        if (!applied.models || !applied.commands) {
+          // chat.startup owns the first metadata load. Fill only omitted fields here;
+          // a parallel chat.metadata request would repeat the same catalog discovery.
+          await refreshMissingChatMetadata(request, applied);
+        }
+      } finally {
+        if (ownsChatMetadataRequest(request)) {
+          host.chatModelsLoading = false;
+        }
+      }
     },
   });
 
@@ -325,22 +371,10 @@ export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {
     if (!ownsScheduledMetadataRefresh()) {
       return;
     }
-    void startupMetadataApplied
-      .catch(() => ({ commands: false, models: false }))
-      .then(async (metadataApplied) => {
-        // Startup metadata can settle after a session switch. Recheck ownership
-        // so stale startup work cannot supersede the new pane's catalog refresh.
-        if (!ownsScheduledMetadataRefresh()) {
-          return;
-        }
-        await Promise.allSettled([
-          refreshChatAvatar(host),
-          refreshChatMetadata(host, {
-            preserveModelCatalogOnFallback: opts?.startup === true && metadataApplied.models,
-          }),
-        ]);
-      })
-      .finally(() => host.requestUpdate?.());
+    void Promise.allSettled([
+      refreshChatAvatar(host),
+      ...(startupMetadataRequestVersion === null ? [refreshChatMetadata(host)] : []),
+    ]).finally(() => host.requestUpdate?.());
   });
   return refresh;
 }

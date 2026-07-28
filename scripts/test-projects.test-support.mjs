@@ -12,6 +12,10 @@ import {
 } from "../test/vitest/vitest.agents-paths.mjs";
 import { isChannelSurfaceTestFile } from "../test/vitest/vitest.channel-paths.mjs";
 import {
+  cliProcessTestFiles,
+  isCliProcessTestFile,
+} from "../test/vitest/vitest.cli-process-paths.mjs";
+import {
   commandsLightTestFiles,
   isCommandsLightTarget,
   resolveCommandsLightIncludePattern,
@@ -54,6 +58,10 @@ import {
   toolingIsolatedTestFiles,
 } from "../test/vitest/vitest.tooling-isolated-paths.mjs";
 import {
+  isUiIsolatedTestFile,
+  uiIsolatedTestFiles,
+} from "../test/vitest/vitest.ui-isolated-paths.mjs";
+import {
   getUnitFastIsolatedTestFiles,
   getUnitFastTestFiles,
   getUnitFastTimerTestFiles,
@@ -94,6 +102,7 @@ const AUTO_REPLY_TOP_LEVEL_VITEST_CONFIG = "test/vitest/vitest.auto-reply-top-le
 const BOUNDARY_VITEST_CONFIG = "test/vitest/vitest.boundary.config.ts";
 const BUNDLED_VITEST_CONFIG = "test/vitest/vitest.bundled.config.ts";
 const CHANNEL_VITEST_CONFIG = "test/vitest/vitest.channels.config.ts";
+const CLI_PROCESS_VITEST_CONFIG = "test/vitest/vitest.cli-process.config.ts";
 const CLI_VITEST_CONFIG = "test/vitest/vitest.cli.config.ts";
 const COMMANDS_LIGHT_VITEST_CONFIG = "test/vitest/vitest.commands-light.config.ts";
 const COMMANDS_VITEST_CONFIG = "test/vitest/vitest.commands.config.ts";
@@ -221,6 +230,7 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   [EXTENSION_TELEGRAM_VITEST_CONFIG, 94],
   [EXTENSION_WHATSAPP_VITEST_CONFIG, 92],
   [AUTO_REPLY_CORE_VITEST_CONFIG, 90],
+  [CLI_PROCESS_VITEST_CONFIG, 87],
   [CLI_VITEST_CONFIG, 86],
   [MEDIA_VITEST_CONFIG, 84],
   [PLUGINS_VITEST_CONFIG, 82],
@@ -314,6 +324,7 @@ const TUI_VITEST_CONFIG = "test/vitest/vitest.tui.config.ts";
 const TUI_PTY_VITEST_CONFIG = "test/vitest/vitest.tui-pty.config.ts";
 const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
 const UI_E2E_VITEST_CONFIG = "test/vitest/vitest.ui-e2e.config.ts";
+const UI_ISOLATED_VITEST_CONFIG = "test/vitest/vitest.ui-isolated.config.ts";
 const UTILS_VITEST_CONFIG = "test/vitest/vitest.utils.config.ts";
 const WIZARD_VITEST_CONFIG = "test/vitest/vitest.wizard.config.ts";
 const INCLUDE_FILE_ENV_KEY = "OPENCLAW_VITEST_INCLUDE_FILE";
@@ -338,6 +349,7 @@ const VITEST_CONFIG_BY_KIND = {
   boundary: BOUNDARY_VITEST_CONFIG,
   bundled: BUNDLED_VITEST_CONFIG,
   channel: CHANNEL_VITEST_CONFIG,
+  cliProcess: CLI_PROCESS_VITEST_CONFIG,
   cli: CLI_VITEST_CONFIG,
   command: COMMANDS_VITEST_CONFIG,
   commandLight: COMMANDS_LIGHT_VITEST_CONFIG,
@@ -409,6 +421,7 @@ const VITEST_CONFIG_BY_KIND = {
   tuiPty: TUI_PTY_VITEST_CONFIG,
   ui: UI_VITEST_CONFIG,
   uiE2e: UI_E2E_VITEST_CONFIG,
+  uiIsolated: UI_ISOLATED_VITEST_CONFIG,
   utils: UTILS_VITEST_CONFIG,
   wizard: WIZARD_VITEST_CONFIG,
 };
@@ -749,6 +762,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   [".github/workflows/clawsweeper-dispatch.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
   [".github/workflows/labeler.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
   [".github/workflows/real-behavior-proof.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
+  [".github/workflows/stale.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
   [
     ".github/workflows/security-sensitive-guard.yml",
     ["test/scripts/security-sensitive-guard-workflow.test.ts"],
@@ -1567,6 +1581,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/qa-lab-up.ts", ["test/scripts/qa-lab-up.test.ts"]],
   ["scripts/qa-coverage-report.ts", ["test/scripts/qa-report-cli.test.ts"]],
   ["scripts/qa-parity-report.ts", ["test/scripts/qa-report-cli.test.ts"]],
+  [
+    "scripts/validate-qa-runtime-pair-summary.mjs",
+    ["test/scripts/validate-qa-runtime-pair-summary.test.ts"],
+  ],
   ["scripts/qa/render-maturity-docs.ts", ["test/scripts/render-maturity-docs.test.ts"]],
   [
     "scripts/qa/ux-matrix-evidence-producer.ts",
@@ -1597,7 +1615,15 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/mobile-reauth.sh", ["test/scripts/auth-monitor.test.ts"]],
   ["scripts/committer", ["test/scripts/committer.test.ts"]],
   ["scripts/gh-read", ["test/scripts/gh-read.test.ts"]],
-  ["scripts/pr", ["test/scripts/pr-operation-lock.test.ts", "test/scripts/pr-wrappers.test.ts"]],
+  [
+    "scripts/pr",
+    [
+      "test/scripts/pr-merge.test.ts",
+      "test/scripts/pr-operation-lock.test.ts",
+      "test/scripts/pr-wrappers.test.ts",
+    ],
+  ],
+  ["scripts/pr-lib/merge.sh", ["test/scripts/pr-merge.test.ts"]],
   ["scripts/pr-lib/operation-lock.sh", ["test/scripts/pr-operation-lock.test.ts"]],
   ["scripts/pr-lib/process-group-runner.mjs", ["test/scripts/pr-operation-lock.test.ts"]],
   ["scripts/pr-merge", ["test/scripts/pr-wrappers.test.ts"]],
@@ -2307,6 +2333,7 @@ const TOOLING_TEST_TARGETS = new Map([
     ["test/scripts/plugin-prerelease-test-plan.test.ts"],
   ],
   ["test/scripts/pr-operation-lock.test.ts", ["test/scripts/pr-operation-lock.test.ts"]],
+  ["test/scripts/pr-merge.test.ts", ["test/scripts/pr-merge.test.ts"]],
   ["test/scripts/pr-wrappers.test.ts", ["test/scripts/pr-wrappers.test.ts"]],
   ["test/scripts/test-projects.test.ts", ["test/scripts/test-projects.test.ts"]],
   [
@@ -4004,6 +4031,9 @@ function classifyTarget(arg, cwd) {
   if (isControlUiE2eTarget(relative)) {
     return "uiE2e";
   }
+  if (isUiIsolatedTestFile(relative)) {
+    return "uiIsolated";
+  }
   if (isPathAtOrUnder(relative, "ui/src")) {
     return "ui";
   }
@@ -4191,6 +4221,9 @@ function classifyTarget(arg, cwd) {
   }
   if (isPathAtOrUnder(relative, "src/acp")) {
     return "acp";
+  }
+  if (isCliProcessTestFile(relative)) {
+    return "cliProcess";
   }
   if (isPathAtOrUnder(relative, "src/cli")) {
     return "cli";
@@ -4400,6 +4433,36 @@ export function buildVitestRunPlans(
     }
     groupedTargets.set("toolingIsolated", current);
   }
+  const uiTargets = groupedTargets.get("ui") ?? [];
+  const impliedUiIsolatedTargets = uiIsolatedTestFiles.filter((file) =>
+    uiTargets.some((targetArg) =>
+      includePatternMatchesAnyFile(toScopedIncludePattern(targetArg, cwd), [file]),
+    ),
+  );
+  if (impliedUiIsolatedTargets.length > 0) {
+    const current = groupedTargets.get("uiIsolated") ?? [];
+    for (const target of impliedUiIsolatedTargets) {
+      if (!current.includes(target)) {
+        current.push(target);
+      }
+    }
+    groupedTargets.set("uiIsolated", current);
+  }
+  const cliTargets = groupedTargets.get("cli") ?? [];
+  const impliedCliProcessTargets = cliProcessTestFiles.filter((file) =>
+    cliTargets.some((targetArg) =>
+      includePatternMatchesAnyFile(toScopedIncludePattern(targetArg, cwd), [file]),
+    ),
+  );
+  if (impliedCliProcessTargets.length > 0) {
+    const current = groupedTargets.get("cliProcess") ?? [];
+    for (const target of impliedCliProcessTargets) {
+      if (!current.includes(target)) {
+        current.push(target);
+      }
+    }
+    groupedTargets.set("cliProcess", current);
+  }
 
   if (watchMode && groupedTargets.size > 1) {
     throw new Error(
@@ -4444,6 +4507,7 @@ export function buildVitestRunPlans(
     "tuiPty",
     "mediaUnderstanding",
     "acp",
+    "cliProcess",
     "cli",
     "commandLight",
     "command",
@@ -4462,6 +4526,7 @@ export function buildVitestRunPlans(
     "agentsTools",
     "plugin",
     "ui",
+    "uiIsolated",
     "uiE2e",
     "unitSrc",
     "unitSecurity",

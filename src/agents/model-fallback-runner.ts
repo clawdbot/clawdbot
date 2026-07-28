@@ -65,7 +65,7 @@ import {
   logModelFallbackDecision,
   type ModelFallbackDecisionParams,
 } from "./model-fallback-observation.js";
-import type { FallbackAttempt } from "./model-fallback.types.js";
+import type { FallbackAttempt, ModelFallbackRouteResolution } from "./model-fallback.types.js";
 import type { ModelManifestNormalizationContext } from "./model-ref-shared.js";
 import {
   resolveSessionSuspensionReason,
@@ -100,6 +100,7 @@ type RunWithModelFallbackParams<T> = {
   agentDir?: string;
   /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
   fallbacksOverride?: string[];
+  requestedRouteResolution?: ModelFallbackRouteResolution;
   run: ModelFallbackRunFn<T>;
   onError?: ModelFallbackErrorHandler;
   onFallbackStep?: ModelFallbackStepHandler;
@@ -157,6 +158,7 @@ async function runWithModelFallbackInternal<T>(
     provider: params.provider,
     model: params.model,
     fallbacksOverride: params.fallbacksOverride,
+    requestedRouteResolution: params.requestedRouteResolution,
     manifestPlugins: params.manifestPlugins,
   });
   const authRuntime =
@@ -219,7 +221,7 @@ async function runWithModelFallbackInternal<T>(
   };
 
   const hasFallbackCandidates = candidates.length > 1;
-  const requestedCandidate = candidates[0];
+  const requestedCandidate = candidates.find((candidate) => candidate.routeOrigin === "requested");
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates.at(i);
@@ -244,7 +246,7 @@ async function runWithModelFallbackInternal<T>(
       prepareAgentHarnessRuntime: params.prepareAgentHarnessRuntime,
       ...candidate,
     });
-    const isPrimary = i === 0;
+    const isPrimary = candidate.routeOrigin === "requested";
     const requestedModel = requestedCandidate
       ? sameModelCandidate(candidate, requestedCandidate)
       : false;

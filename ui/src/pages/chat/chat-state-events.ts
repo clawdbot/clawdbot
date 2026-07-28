@@ -4,6 +4,7 @@ import { fireFirstReplyConfetti } from "../../components/confetti.ts";
 import { isGitHubPullRequestLink } from "../../components/github-link-hovercard.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
+import { pickFreshestObserverDigest } from "../../lib/observer-digest.ts";
 import {
   readSessionChangedEvent,
   type SessionChangedResult,
@@ -34,7 +35,7 @@ import { recordChatSendServerTiming } from "./chat-send-timing.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { requestChatPageUpdate } from "./chat-state-render.ts";
-import { resolveChatAgentId } from "./chat-state-route.ts";
+import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { handleBackgroundTasksEvent } from "./components/chat-background-tasks.ts";
 import {
   reconcileChatRunFromCurrentSessionRow,
@@ -335,9 +336,7 @@ function observerDigestMatchesAuthoritativeRun(
   if (state.chatRunId) {
     return digest.runId === state.chatRunId;
   }
-  const session = state.sessionsResult?.sessions.find((row) =>
-    areUiSessionKeysEquivalent(row.key, state.sessionKey),
-  );
+  const session = selectedChatSessionRow(state);
   return Boolean(
     session?.hasActiveRun && digest.runId && session.activeRunIds?.includes(digest.runId),
   );
@@ -350,6 +349,8 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
       payload?.state === "delta" &&
       typeof payload.runId === "string" &&
       chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId) &&
+      // Same-session background streams cannot clear the foreground run's status.
+      (!state.chatRunId || state.chatRunId === payload.runId) &&
       state.observerDigest &&
       state.observerDigest.runId !== payload.runId
     ) {
@@ -392,21 +393,20 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
     const payload = event.payload as SessionObserverDigest | undefined;
     if (
       !payload ||
-      !chatScopedEventSessionMatches(state, payload.sessionKey) ||
+      !chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId) ||
       !observerDigestMatchesAuthoritativeRun(state, payload)
     ) {
       return;
     }
     const previous = state.observerDigest;
     if (
-      !previous ||
-      previous.runId !== payload.runId ||
-      payload.revision > previous.revision ||
-      (payload.revision === previous.revision && payload.updatedAt > previous.updatedAt)
+      previous?.runId === payload.runId &&
+      pickFreshestObserverDigest(previous, payload) === previous
     ) {
-      state.observerDigest = payload;
-      requestChatPageUpdate(state);
+      return;
     }
+    state.observerDigest = payload;
+    requestChatPageUpdate(state);
     return;
   }
   if (event.event === "agent" || event.event === "session.tool") {

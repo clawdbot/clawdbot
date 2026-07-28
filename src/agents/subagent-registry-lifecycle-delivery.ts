@@ -1,5 +1,11 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import {
+  loadSessionEntryReadOnly,
+  type SessionTranscriptRuntimeTarget,
+} from "../config/sessions/session-accessor.js";
+import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import type { DetachedTaskFindResult } from "../tasks/detached-task-runtime-contract.js";
 import {
@@ -264,16 +270,34 @@ export function createSubagentRegistryLifecycleDelivery(
     }
     let resultText: string | null;
     try {
+      const transcriptTarget = entry.execution?.transcriptTarget;
+      const agentId =
+        transcriptTarget?.agentId ?? resolveAgentIdFromSessionKey(entry.childSessionKey);
+      const sessionKey = transcriptTarget?.sessionKey ?? entry.childSessionKey;
+      const configuredStorePath = agentId
+        ? (transcriptTarget?.storePath ??
+          resolveStorePath(params.getRuntimeConfig().session?.store, { agentId }))
+        : undefined;
+      const storePath = configuredStorePath
+        ? resolveSessionStorePathForScope({
+            agentId,
+            sessionKey,
+            storePath: configuredStorePath,
+          })
+        : undefined;
+      const sessionId =
+        transcriptTarget?.sessionId ??
+        (agentId && storePath
+          ? loadSessionEntryReadOnly({ agentId, sessionKey, storePath })?.sessionId
+          : undefined);
+      const sessionTarget: SessionTranscriptRuntimeTarget | undefined =
+        agentId && sessionId && storePath
+          ? { agentId, sessionId, sessionKey, storePath }
+          : undefined;
       const captured = await params.captureSubagentCompletionReply(entry.childSessionKey, {
         waitForReply: entry.expectsCompletionMessage === true,
         outcome,
-        sessionFile: entry.execution?.transcriptTarget?.storePath
-          ? formatSqliteSessionFileMarker({
-              agentId: entry.execution.transcriptTarget.agentId ?? "",
-              sessionId: entry.execution.transcriptTarget.sessionId ?? "",
-              storePath: entry.execution.transcriptTarget.storePath,
-            })
-          : undefined,
+        ...(sessionTarget ? { sessionTarget } : {}),
       });
       resultText = captured?.trim() ? capFrozenResultText(captured) : null;
     } catch {

@@ -8,6 +8,7 @@ import type {
   SessionsListResult,
 } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
+import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
@@ -30,6 +31,7 @@ import {
   type SessionArchivedFilter,
 } from "../../lib/sessions/index.ts";
 import {
+  resolveSessionPreferredFaceForKey,
   resolveSessionNavigationAgentId,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
@@ -42,6 +44,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import { showToast } from "../../lib/toast.ts";
+import { isActiveWorkboardCard } from "../../lib/workboard/card-state.ts";
 import { captureSessionToWorkboard } from "../../lib/workboard/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -700,18 +703,22 @@ class SessionsPage extends OpenClawLightDomElement {
           areUiSessionKeysEquivalent(key, scope.gateway.snapshot.sessionKey),
         );
         if (deletedCurrent) {
-          scope.gateway.setSessionKey(
-            buildAgentMainSessionKey({
-              agentId:
-                parseAgentSessionKey(deletedCurrent)?.agentId ??
-                scope.context.agentSelection.state.selectedId ??
-                "main",
+          const agentId =
+            parseAgentSessionKey(deletedCurrent)?.agentId ??
+            scope.context.agentSelection.state.selectedId ??
+            "main";
+          selectApplicationSession({
+            selection: scope.context.agentSelection,
+            gateway: scope.gateway,
+            agentId,
+            sessionKey: buildAgentMainSessionKey({
+              agentId,
               mainKey: resolveUiConfiguredMainKey({
                 agentsList: scope.context.agents.state.agentsList,
                 hello: scope.gateway.snapshot.hello,
               }),
             }),
-          );
+          });
         }
       }
       if (result.errors.length > 0) {
@@ -1177,6 +1184,7 @@ class SessionsPage extends OpenClawLightDomElement {
     const workboardState = context.workboard.state;
     const capturedSessionKeys = new Set(
       workboardState.cards
+        .filter(isActiveWorkboardCard)
         .flatMap((card) => [card.sessionKey, card.execution?.sessionKey])
         .filter((key): key is string => typeof key === "string" && key.length > 0),
     );
@@ -1211,7 +1219,7 @@ class SessionsPage extends OpenClawLightDomElement {
         .workboard=${canCapture && row.kind !== "global"
           ? {
               captured: capturedSessionKeys.has(row.key),
-              busy: [...workboardState.capturingSessionKeys][0] === row.key,
+              busy: workboardState.capturingSessionKeys.has(row.key),
             }
           : null}
         .onClose=${() => this.closeSessionMenu()}
@@ -1395,16 +1403,19 @@ class SessionsPage extends OpenClawLightDomElement {
             this.selectedKeys = new Set();
           },
           onDeleteSelected: () => void this.deleteSelected(),
-          onNavigateToChat: (sessionKey) =>
-            context.navigate("chat", {
+          onNavigateToChat: (sessionKey) => {
+            const face = resolveSessionPreferredFaceForKey(context, sessionKey);
+            context.navigate(face, {
               ...sessionNavigationTarget({
                 context,
-                face: "chat",
+                face,
                 sessionKey,
                 agentId: this.sessionPathAgentId(sessionKey, context),
+                preferenceDerivedFace: true,
               }).options,
               hash: "",
-            }),
+            });
+          },
           onOpenSessionMenu: (row, position, trigger) =>
             this.openSessionMenu(row, position, trigger),
           onToggleDetails: (sessionKey) => void this.toggleSessionDetails(sessionKey),

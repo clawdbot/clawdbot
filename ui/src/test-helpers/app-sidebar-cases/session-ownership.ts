@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   createGateway,
+  createGatewayHarness,
   createSessionsHarness,
   mountSidebar,
   type SidebarLifecycleState,
@@ -35,6 +36,80 @@ async function selectCreator(sidebar: SidebarLifecycleState, creatorId: string |
 }
 
 describe("AppSidebar session ownership", () => {
+  it("renders self and presence avatars while unmatched actors keep initials", async () => {
+    const gateway = createGatewayHarness({} as GatewayBrowserClient);
+    gateway.publish({
+      selfUser: {
+        id: "profile-ada",
+        name: "Ada",
+        avatarUrl: "/api/users/profile-ada/avatar?v=1",
+      },
+    });
+    const harness = createSessionsHarness("main", [
+      "agent:main:main",
+      "agent:main:ada",
+      "agent:main:bob",
+      "agent:main:carol",
+    ]);
+    const result = harness.sessions.state.result;
+    if (!result) {
+      throw new Error("expected session list");
+    }
+    const ada = result.sessions.find((row) => row.key.endsWith(":ada"));
+    const bob = result.sessions.find((row) => row.key.endsWith(":bob"));
+    const carol = result.sessions.find((row) => row.key.endsWith(":carol"));
+    if (!ada || !bob || !carol) {
+      throw new Error("expected creator rows");
+    }
+    ada.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
+    bob.createdActor = { type: "human", id: "profile-bob", label: "Bob" };
+    carol.createdActor = { type: "human", id: "profile-carol", label: "Carol" };
+    result.creators = [
+      { id: "profile-ada", label: "Ada" },
+      { id: "profile-bob", label: "Bob" },
+      { id: "profile-carol", label: "Carol" },
+    ];
+
+    const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
+    gateway.publishEvent("presence", {
+      presence: [
+        {
+          instanceId: "bob-browser",
+          user: {
+            id: "profile-bob",
+            name: "Bob",
+            avatarUrl: "/api/users/profile-bob/avatar?v=2",
+          },
+        },
+      ],
+    });
+    harness.publishList({ result, agentId: "main" });
+
+    await waitForFast(() => {
+      expect(
+        sidebar.querySelector('[data-session-key="agent:main:ada"] openclaw-viewer-avatar img'),
+      ).not.toBeNull();
+      expect(
+        sidebar.querySelector('[data-session-key="agent:main:bob"] openclaw-viewer-avatar img'),
+      ).not.toBeNull();
+    });
+
+    const adaChip = sidebar.querySelector(
+      '[data-session-key="agent:main:ada"] .session-owner-chip',
+    );
+    expect(adaChip?.getAttribute("aria-label")).toBe("Created by Ada");
+    expect(adaChip?.getAttribute("title")).toBe("Created by Ada");
+    const adaImage = adaChip?.querySelector("img");
+    adaImage?.dispatchEvent(new Event("error"));
+    expect(adaChip?.querySelector(".viewer-avatar")?.classList.contains("is-fallback")).toBe(true);
+
+    const carolChip = sidebar.querySelector(
+      '[data-session-key="agent:main:carol"] .session-owner-chip',
+    );
+    expect(carolChip?.querySelector("openclaw-viewer-avatar")).toBeNull();
+    expect(carolChip?.textContent?.trim()).toBe("C");
+  });
+
   it("uses the complete facet and requests unloaded creators from the Gateway", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const harness = createSessionsHarness("main", ["agent:main:main", "agent:main:ada"]);
@@ -81,7 +156,14 @@ describe("AppSidebar session ownership", () => {
   });
 
   it("renders no ownership chrome when the listed sessions have fewer than two creators", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
+    const gateway = createGatewayHarness({} as GatewayBrowserClient);
+    gateway.publish({
+      selfUser: {
+        id: "profile-ada",
+        name: "Ada",
+        avatarUrl: "/api/users/profile-ada/avatar",
+      },
+    });
     const harness = createSessionsHarness("main", [
       "agent:main:main",
       "agent:main:a",
@@ -94,7 +176,7 @@ describe("AppSidebar session ownership", () => {
     for (const row of result.sessions) {
       row.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
     }
-    const { sidebar } = await mountSidebar(gateway, harness.sessions);
+    const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
     harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
 

@@ -36,8 +36,8 @@ describe("buildDiscordNativeCommandContext", () => {
     expect(ctx.SessionKey).toBe("agent:codex:discord:slash:user-1");
     expect(ctx.CommandTargetSessionKey).toBe("agent:codex:discord:direct:user-1");
     expect(ctx.OriginatingTo).toBe("user:user-1");
-    expect(ctx.UntrustedContext).toBeUndefined();
-    expect(ctx.UntrustedStructuredContext).toBeUndefined();
+    expect(ctx.ChannelPromptContext).toBeUndefined();
+    expect(ctx.ChannelStructuredContext).toBeUndefined();
     expect(ctx.GroupSystemPrompt).toBeUndefined();
     expect(ctx.Timestamp).toBe(123);
   });
@@ -92,8 +92,8 @@ describe("buildDiscordNativeCommandContext", () => {
     expect(ctx.MessageThreadId).toBe("chan-1");
     expect(ctx.ThreadParentId).toBe("parent-1");
     expect(ctx.OriginatingTo).toBe("channel:chan-1");
-    expect(ctx.UntrustedContext).toBeUndefined();
-    expect(ctx.UntrustedStructuredContext).toEqual([
+    expect(ctx.ChannelPromptContext).toBeUndefined();
+    expect(ctx.ChannelStructuredContext).toEqual([
       {
         label: "Discord channel metadata",
         source: "discord",
