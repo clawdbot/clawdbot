@@ -159,12 +159,31 @@ describe("board providers", () => {
         expect(client.request).toHaveBeenCalledOnce();
         expect(client.addEventListener).toHaveBeenCalledOnce();
 
+        await expect(chat.provider.applyOps([])).resolves.toBeUndefined();
+        await expect(chat.provider.pinWidget({ docId: "cv-allowed" })).resolves.toBeUndefined();
+        await expect(chat.provider.pinMcpApp({ viewId: "app-allowed" })).resolves.toBeUndefined();
+        await expect(dashboard.provider.pinWidget({ docId: "cv-denied" })).rejects.toThrow();
+        await expect(dashboard.provider.pinMcpApp({ viewId: "app-denied" })).rejects.toThrow();
+
+        expect(client.request).toHaveBeenCalledTimes(4);
+        expect(client.request).toHaveBeenCalledWith("board.update", { sessionKey, ops: [] });
+        expect(client.request).toHaveBeenCalledWith("board.widget.put", {
+          sessionKey,
+          name: "canvas-cv-allowed",
+          content: { kind: "canvas-doc", docId: "cv-allowed" },
+        });
+        expect(client.request).toHaveBeenCalledWith("board.widget.put", {
+          sessionKey,
+          name: mcpAppWidgetNameForViewId("app-allowed"),
+          content: { kind: "mcp-app", viewId: "app-allowed" },
+        });
+
         first.release();
         first.release();
         expect(removeListener).not.toHaveBeenCalled();
         expect(second.provider.snapshot$.value).toEqual(snapshot);
         await expect(first.provider.applyOps([])).rejects.toThrow();
-        expect(client.request).toHaveBeenCalledOnce();
+        expect(client.request).toHaveBeenCalledTimes(4);
         second.release();
         expect(removeListener).toHaveBeenCalledOnce();
       } finally {
@@ -311,6 +330,96 @@ describe("board providers", () => {
     } finally {
       writable.release();
       approver.release();
+    }
+  });
+
+  it("dispatches newly authorized board actions after upgrading a read-only lease", async () => {
+    mockLocation.search = "";
+    const sessionKey = "agent:main:lease-scope-upgrade";
+    const snapshot = {
+      sessionKey,
+      revision: 1,
+      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
+      widgets: [
+        {
+          name: "pending-widget",
+          tabId: "main",
+          contentKind: "html" as const,
+          sizeW: 6,
+          sizeH: 4,
+          position: 0,
+          grantState: "pending" as const,
+          revision: 1,
+        },
+      ],
+    };
+    const client = {
+      request: vi.fn(async () => snapshot) as never,
+      addEventListener: vi.fn(() => () => {}),
+    };
+    const lease = acquireBoardProviderForSession(
+      sessionKey,
+      client,
+      true,
+      false,
+      false,
+      false,
+      false,
+    );
+
+    try {
+      await vi.waitFor(() => expect(lease.provider.snapshot$.value).toEqual(snapshot));
+      await expect(lease.provider.applyOps([])).rejects.toThrow();
+      await expect(lease.provider.pinWidget({ docId: "cv-upgraded" })).rejects.toThrow();
+      await expect(lease.provider.pinMcpApp({ viewId: "app-upgraded" })).rejects.toThrow();
+      await expect(lease.provider.grant("pending-widget", "granted")).rejects.toThrow();
+      expect(client.request).toHaveBeenCalledOnce();
+
+      lease.update(client, true, {
+        canPinWidgets: true,
+        canPinMcpApps: true,
+        canMutate: true,
+        canGrant: true,
+      });
+
+      await expect(lease.provider.applyOps([])).resolves.toBeUndefined();
+      await expect(lease.provider.pinWidget({ docId: "cv-upgraded" })).resolves.toBeUndefined();
+      await expect(lease.provider.pinMcpApp({ viewId: "app-upgraded" })).resolves.toBeUndefined();
+      await expect(lease.provider.grant("pending-widget", "granted")).resolves.toBeUndefined();
+      expect(client.request).toHaveBeenCalledTimes(5);
+      expect(client.request).toHaveBeenCalledWith("board.update", { sessionKey, ops: [] });
+      expect(client.request).toHaveBeenCalledWith("board.widget.put", {
+        sessionKey,
+        name: "canvas-cv-upgraded",
+        content: { kind: "canvas-doc", docId: "cv-upgraded" },
+      });
+      expect(client.request).toHaveBeenCalledWith("board.widget.put", {
+        sessionKey,
+        name: mcpAppWidgetNameForViewId("app-upgraded"),
+        content: { kind: "mcp-app", viewId: "app-upgraded" },
+      });
+      expect(client.request).toHaveBeenCalledWith("board.widget.grant", {
+        sessionKey,
+        name: "pending-widget",
+        decision: "granted",
+        revision: 1,
+      });
+      expect(client.addEventListener).toHaveBeenCalledOnce();
+
+      lease.update(client, true, {
+        canPinWidgets: false,
+        canPinMcpApps: false,
+        canMutate: false,
+        canGrant: false,
+      });
+
+      await expect(lease.provider.applyOps([])).rejects.toThrow();
+      await expect(lease.provider.pinWidget({ docId: "cv-upgraded" })).rejects.toThrow();
+      await expect(lease.provider.pinMcpApp({ viewId: "app-upgraded" })).rejects.toThrow();
+      await expect(lease.provider.grant("pending-widget", "granted")).rejects.toThrow();
+      expect(client.request).toHaveBeenCalledTimes(5);
+    } finally {
+      lease.release();
     }
   });
 
