@@ -18,6 +18,7 @@ type RuntimeCell = {
 type ScenarioParams = {
   name: string;
   status: CellStatus;
+  drift?: "none" | "structural" | "failure-mode";
   openclawStatus?: CellStatus;
   codexStatus?: CellStatus;
   codexDetails?: string;
@@ -39,7 +40,7 @@ function scenario(params: ScenarioParams) {
     status: params.status,
     runtimeParity: {
       scenarioId,
-      drift: params.status === "pass" ? "none" : "failure-mode",
+      drift: params.drift ?? (params.status === "pass" ? "none" : "failure-mode"),
       cells: {
         openclaw: cell("openclaw", params.openclawStatus ?? "pass"),
         codex: cell("codex", params.codexStatus ?? "pass", params.codexDetails),
@@ -146,6 +147,94 @@ describe("frozen QA runtime-pair summary validation", () => {
       failed: 0,
       skipped: 2,
     });
+  });
+
+  it("accepts a tracked Codex harness gap kept advisory by the current classifier", () => {
+    const advisoryGap = scenario({
+      name: "tracked advisory gap",
+      status: "pass",
+      drift: "structural",
+      codexStatus: "skip",
+      codexDetails: "known-harness-gap exec: tracked\ntracking: #80319",
+    });
+
+    const fixture = summary([advisoryGap]);
+    expect(validateQaRuntimePairSummary(fixture)).toEqual({
+      total: 1,
+      passed: 1,
+      failed: 0,
+      skipped: 0,
+    });
+
+    const reportSummary = {
+      runtimePair: ["openclaw", "codex"],
+      totalScenarios: 1,
+      passedScenarios: 1,
+      failedScenarios: 0,
+      scenarios: [
+        {
+          name: "tracked advisory gap",
+          status: "pass",
+          drift: "structural",
+          driftDetails: undefined,
+          openclawStatus: "pass",
+          codexStatus: "pass",
+        },
+      ],
+      failures: [],
+      pass: true,
+    };
+    const markdown =
+      "# OpenClaw Runtime Parity Report — openclaw vs codex\n\n- Verdict: pass\n\n### tracked advisory gap\n\n- status: pass\n- drift: structural\n- openclaw: pass (0 tool calls)\n- codex: pass (0 tool calls)\n";
+    expect(validateQaRuntimePairReport(fixture, reportSummary, markdown)).toMatchObject({
+      total: 1,
+      passed: 1,
+    });
+  });
+
+  it("rejects malformed or unsafe advisory gap evidence", () => {
+    const buildAdvisoryGap = () => {
+      const advisoryGap = scenario({
+        name: "tracked advisory gap",
+        status: "pass",
+        drift: "structural",
+        codexStatus: "skip",
+        codexDetails: "known-harness-gap exec: tracked\ntracking: #80319",
+      });
+      return advisoryGap;
+    };
+
+    const unannotated = buildAdvisoryGap();
+    unannotated.runtimeParity.cells.codex.details = "implementation unavailable";
+    expect(() => validateQaRuntimePairSummary(summary([unannotated]))).toThrow(
+      "reports pass without two passing, passable runtime cells",
+    );
+
+    const pairedSkip = buildAdvisoryGap();
+    pairedSkip.runtimeParity.cells.openclaw.status = "skip";
+    expect(() => validateQaRuntimePairSummary(summary([pairedSkip]))).toThrow(
+      "reports pass without two passing, passable runtime cells",
+    );
+
+    const hardError = buildAdvisoryGap();
+    hardError.runtimeParity.cells.codex.runtimeErrorClass = "auth";
+    expect(() => validateQaRuntimePairSummary(summary([hardError]))).toThrow(
+      "reports pass without two passing, passable runtime cells",
+    );
+
+    const missingResult = buildAdvisoryGap();
+    missingResult.runtimeParity.cells.codex.toolCalls.push({
+      errorClass: "tool-result-missing",
+    });
+    expect(() => validateQaRuntimePairSummary(summary([missingResult]))).toThrow(
+      "reports pass without two passing, passable runtime cells",
+    );
+
+    const failureMode = buildAdvisoryGap();
+    failureMode.runtimeParity.drift = "failure-mode";
+    expect(() => validateQaRuntimePairSummary(summary([failureMode]))).toThrow(
+      "reports pass without two passing, passable runtime cells",
+    );
   });
 
   const rejectedSkips: Array<

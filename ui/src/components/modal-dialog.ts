@@ -173,6 +173,14 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     if (!this.isConnected) {
       return;
     }
+    // Both the scheduled show hook and wa-after-show land here, and the second
+    // arrives after the open animation. If focus already moved to a slotted
+    // field (user click, autofill, e2e input), refocusing the autofocus target
+    // would steal it mid-typing; `this` means focus sits on dialog chrome.
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active !== this && this.contains(active)) {
+      return;
+    }
     const autofocusTarget = this.querySelector<HTMLElement>("[autofocus]");
     autofocusTarget?.focus({ preventScroll: true });
   };

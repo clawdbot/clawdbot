@@ -27,6 +27,7 @@ function createProps(overrides: Partial<CronProps> = {}): CronProps {
     basePath: "",
     agentId: "main",
     loading: false,
+    canManage: true,
     jobsLoadingMore: false,
     status: null,
     failingCount: null,
@@ -989,6 +990,46 @@ describe("cron view editor", () => {
         new CustomEvent("wa-tab-show", { detail: { name: "history" }, bubbles: true }),
       );
     expect(onDetailTabChange).toHaveBeenCalledWith("history");
+  });
+
+  it.each([true, false])("preserves task browsing for canManage=%s", (canManage) => {
+    const job = createJob("permission-job");
+    const onSelectJob = vi.fn();
+    const container = renderView({ canManage, jobs: [job], onSelectJob });
+
+    expect(Boolean(container.querySelector('[data-test-id="cron-new-task"]'))).toBe(canManage);
+    expect(Boolean(container.querySelector('[data-test-id="cron-row-run-permission-job"]'))).toBe(
+      canManage,
+    );
+    expect(Boolean(container.querySelector("wa-dropdown.cron-job-menu"))).toBe(canManage);
+    getElement(container, '[data-test-id="cron-row-permission-job"]', HTMLDivElement).click();
+    expect(onSelectJob).toHaveBeenCalledWith(job);
+  });
+
+  it("keeps read-only operators on browse surfaces without mutation controls", () => {
+    const onSelectJob = vi.fn();
+    const job = createJob("job-1", { name: "Nightly digest" });
+    const list = renderView({ canManage: false, jobs: [job], jobsTotal: 1, onSelectJob });
+
+    expect(list.textContent).toContain("Browsing only");
+    expect(list.querySelector('[data-test-id="cron-new-task"]')).toBeNull();
+    expect(list.querySelector('[data-test-id="cron-row-run-job-1"]')).toBeNull();
+    expect(list.querySelector('[data-test-id="cron-row-toggle-job-1"]')).toBeNull();
+    expect(list.querySelector("wa-dropdown.cron-job-menu")).toBeNull();
+    expect(list.querySelector("[data-suggestion]")).toBeNull();
+
+    getElement(list, '[data-test-id="cron-row-job-1"]', HTMLDivElement).click();
+    expect(onSelectJob).toHaveBeenCalledWith(job);
+
+    const detail = renderView({ canManage: false, jobs: [job], editingJobId: job.id });
+    expect(detail.textContent).toContain("Browsing only");
+    expect(detail.querySelector('[data-test-id="cron-run-now"]')).toBeNull();
+    expect(detail.querySelector('[data-test-id="cron-toggle-enabled"]')).toBeNull();
+    expect(detail.querySelector("wa-dropdown.cron-job-menu")).toBeNull();
+    expect(detail.querySelector('[data-test-id="cron-submit"]')).toBeNull();
+    expect(detail.querySelector(".cron-editor-actions")).toBeNull();
+    expect(getElement(detail, ".cron-editor", HTMLFieldSetElement).disabled).toBe(true);
+    expect(detail.querySelector('[data-test-id="cron-detail-tab-history"]')).not.toBeNull();
   });
 
   it("locks the editor and back navigation while a save is pending", () => {

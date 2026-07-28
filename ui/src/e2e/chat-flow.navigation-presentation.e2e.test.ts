@@ -7,13 +7,198 @@ import {
   createChatFlowE2eSuite,
   expectDefined,
   installMockGateway,
+  pauseVirtualClock,
   requireRecord,
   sidebarSessionOrder,
+  waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("coalesces persisted same-session split panes during cold startup", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    await context.addInitScript(() => {
+      localStorage.setItem(
+        "openclaw.control.settings.v1:ws://127.0.0.1:18789",
+        JSON.stringify({
+          chatSplitLayout: {
+            activePaneId: "p1",
+            columns: [
+              {
+                id: "c1",
+                panes: [{ id: "p1", sessionKey: "agent:main:session-a" }],
+                paneWeights: [1],
+              },
+              {
+                id: "c2",
+                panes: [{ id: "p2", sessionKey: "agent:main:session-a" }],
+                paneWeights: [1],
+              },
+            ],
+            columnWeights: [0.5, 0.5],
+          },
+        }),
+      );
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["chat.startup", "chat.startup"],
+      historyMessages: [
+        {
+          content: [{ type: "text", text: "Shared cold startup proof." }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+      ],
+      methodResponses: { "sessions.list": chatSessionListResponse() },
+      sessionKey: "agent:main:session-a",
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
+      await expect.poll(() => panes.count(), { timeout: 10_000 }).toBe(2);
+      await expect
+        .poll(() =>
+          panes.evaluateAll((nodes) =>
+            nodes.map((node) =>
+              Boolean(
+                (node as HTMLElement & { state?: { chatLoading?: boolean } }).state?.chatLoading,
+              ),
+            ),
+          ),
+        )
+        .toEqual([true, true]);
+      expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
+
+      await gateway.resolveDeferred("chat.startup");
+      await expect.poll(() => page.getByText("Shared cold startup proof.").count()).toBe(2);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("restores a scrolled session after switching away while new messages arrive", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 720, width: 1280 },
+    });
+    const page = await context.newPage();
+    const sessionA = "agent:main:session-a";
+    const sessionB = "agent:main:session-b";
+    const messages = (label: string, count: number) =>
+      Array.from({ length: count }, (_, index) => ({
+        role: index % 2 === 0 ? "user" : "assistant",
+        content: `${label} message ${index}: ${"wrapped transcript content ".repeat(8)}`,
+        timestamp: 1_000 + index,
+        __openclaw: { seq: index + 1 },
+      }));
+    const response = (sessionKey: string, transcript: unknown[]) => ({
+      messages: transcript,
+      sessionId: `${sessionKey}:backing`,
+      thinkingLevel: null,
+    });
+    const responseCases = (messagesA: unknown[], messagesB = messages("B", 30)) => ({
+      cases: [
+        { match: { sessionKey: sessionA }, response: response(sessionA, messagesA) },
+        { match: { sessionKey: sessionB }, response: response(sessionB, messagesB) },
+      ],
+    });
+    const initialMessagesA = messages("A", 70);
+    const initialResponses = responseCases(initialMessagesA);
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "chat.history": initialResponses,
+        "chat.startup": initialResponses,
+        "sessions.list": chatSessionListResponse(),
+      },
+      sessionKey: sessionA,
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await waitForChatScrollIdle(page);
+      const thread = page.locator(".chat-thread");
+      await expect.poll(() => thread.count()).toBe(1);
+      const initialDistance = await thread.evaluate((element) => {
+        const transcript = element as HTMLElement;
+        return transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight;
+      });
+      expect(initialDistance).toBeLessThanOrEqual(8);
+      const storedScrollTop = await thread.evaluate((element) => {
+        const transcript = element as HTMLElement;
+        transcript.scrollTop = Math.floor((transcript.scrollHeight - transcript.clientHeight) / 3);
+        transcript.dispatchEvent(new Event("scroll", { bubbles: true }));
+        return transcript.scrollTop;
+      });
+      expect(storedScrollTop).toBeGreaterThan(0);
+
+      const sessionLink = (sessionKey: string) =>
+        page.locator(
+          `.sidebar-recent-session[data-session-key="${sessionKey}"] a.sidebar-recent-session__link`,
+        );
+      await sessionLink(sessionB).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionB));
+      await waitForChatScrollIdle(page);
+      const firstVisitDistance = await thread.evaluate((element) => {
+        const transcript = element as HTMLElement;
+        return transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight;
+      });
+      expect(firstVisitDistance).toBeLessThanOrEqual(8);
+
+      const messagesAWithNewTail = messages("A", 78);
+      const updatedResponses = responseCases(messagesAWithNewTail);
+      await gateway.setMethodResponse("chat.history", updatedResponses);
+      await gateway.setMethodResponse("chat.startup", updatedResponses);
+      const historyRequestsBeforeReturn = (await gateway.getRequests("chat.history")).length;
+      await sessionLink(sessionA).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionA));
+      await expect
+        .poll(async () => (await gateway.getRequests("chat.history")).length)
+        .toBeGreaterThan(historyRequestsBeforeReturn);
+      await waitForChatScrollIdle(page);
+
+      const restored = await thread.evaluate((element) => {
+        const transcript = element as HTMLElement;
+        return {
+          distanceFromBottom:
+            transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight,
+          scrollTop: transcript.scrollTop,
+        };
+      });
+      expect(
+        Math.abs(restored.scrollTop - storedScrollTop),
+        JSON.stringify({ restored, storedScrollTop }),
+      ).toBeLessThanOrEqual(120);
+      expect(restored.distanceFromBottom).toBeGreaterThan(8);
+
+      const messagesBWithNewTail = messages("B", 36);
+      const endAnchoredResponses = responseCases(messagesAWithNewTail, messagesBWithNewTail);
+      await gateway.setMethodResponse("chat.history", endAnchoredResponses);
+      await gateway.setMethodResponse("chat.startup", endAnchoredResponses);
+      const historyRequestsBeforeEndReturn = (await gateway.getRequests("chat.history")).length;
+      await sessionLink(sessionB).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionB));
+      await expect
+        .poll(async () => (await gateway.getRequests("chat.history")).length)
+        .toBeGreaterThan(historyRequestsBeforeEndReturn);
+      await waitForChatScrollIdle(page);
+      const endAnchoredDistance = await thread.evaluate((element) => {
+        const transcript = element as HTMLElement;
+        return transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight;
+      });
+      expect(endAnchoredDistance).toBeLessThanOrEqual(8);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("renders always-on pane headers without desktop topbar chrome", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
@@ -507,6 +692,82 @@ suite.define(() => {
     }
   });
 
+  it("flips a sidebar short route before any list refresh and refreshes only for an outbox", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const firstKey = "agent:main:thread:aaaaaaaa-1111-4111-8111-111111111111";
+    const secondKey = "agent:main:thread:bbbbbbbb-2222-4222-8222-222222222222";
+    const sessions = chatSessionListResponse([
+      { key: firstKey, kind: "direct", label: "Instant A", updatedAt: 2 },
+      { key: secondKey, kind: "direct", label: "Instant B", updatedAt: 1 },
+    ]);
+    const gateway = await installMockGateway(page, {
+      methodResponses: { "sessions.list": sessions },
+      sessionKey: firstKey,
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.locator(`.sidebar-recent-session[data-session-key="${secondKey}"]`).waitFor();
+      await page.locator(".chat-pane__session-title").getByText("Instant A").waitFor();
+      await page.waitForTimeout(500);
+      const initialListCount = (await gateway.getRequests("sessions.list")).length;
+      const initialMetadataCount = (await gateway.getRequests("chat.metadata")).length;
+      await gateway.deferNext("sessions.list");
+
+      await page
+        .locator(
+          `.sidebar-recent-session[data-session-key="${secondKey}"] a.sidebar-recent-session__link`,
+        )
+        .click();
+      await page.locator(".chat-pane__session-title").getByText("Instant B").waitFor();
+      const emptyOutboxListRequests = (await gateway.getRequests("sessions.list")).slice(
+        initialListCount,
+      );
+      expect(emptyOutboxListRequests).toHaveLength(0);
+      expect(await gateway.getRequests("chat.metadata")).toHaveLength(initialMetadataCount);
+      const emptyOutboxListCount = initialListCount + emptyOutboxListRequests.length;
+
+      await page.locator("openclaw-chat-pane").evaluate((pane, targetKey) => {
+        const state = (
+          pane as HTMLElement & {
+            state: {
+              chatQueueByScope: Record<string, unknown[]>;
+            };
+          }
+        ).state;
+        state.chatQueueByScope[`${targetKey}\u0000agent:main`] = [
+          {
+            id: "queued-before-switch",
+            text: "flush after idle reconciliation",
+            createdAt: Date.now(),
+            sendState: "waiting-idle",
+            sessionKey: targetKey,
+            agentId: "main",
+          },
+        ];
+      }, firstKey);
+      await page
+        .locator(
+          `.sidebar-recent-session[data-session-key="${firstKey}"] a.sidebar-recent-session__link`,
+        )
+        .click();
+      await page.locator(".chat-pane__session-title").getByText("Instant A").waitFor();
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .toBe(emptyOutboxListCount + 1);
+      if (emptyOutboxListRequests.length === 0) {
+        await gateway.resolveDeferred("sessions.list", sessions);
+      }
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("keeps derived sidebar titles and accessible state after session patch refreshes", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
@@ -646,20 +907,29 @@ suite.define(() => {
       }));
       expect(layout.scrollWidth, JSON.stringify(layout)).toBeGreaterThan(layout.clientWidth);
 
+      // Freeze the clock so the 500ms hover-intent delay elapses only via
+      // runFor; a ticking clock let slow runners start the marquee before the
+      // "not yet scrolling" asserts below.
+      await pauseVirtualClock(page);
       await recentRow.dispatchEvent("mouseenter");
       await page.clock.runFor(250);
       expect(await recentLabel.evaluate((label) => label.classList.value)).not.toContain(
         "hover-marquee--scrolling",
       );
       await recentRow.dispatchEvent("mouseleave");
+      // 250 + 300 exceeds the hover delay: only the leave-cancel keeps it off.
       await page.clock.runFor(300);
       expect(await recentLabel.evaluate((label) => label.classList.value)).not.toContain(
         "hover-marquee--scrolling",
       );
       await recentRow.dispatchEvent("mouseenter");
+      await page.clock.runFor(500);
       await expect
         .poll(() => recentLabel.evaluate((label) => label.classList.value), { timeout: 1_500 })
         .toContain("hover-marquee--scrolling");
+      // Resume real time: the snap-back below is a compositor-driven CSS
+      // transition, not a fake-timer callback.
+      await page.clock.resume();
       await recentRow.dispatchEvent("mouseleave");
       await expect
         .poll(
@@ -693,7 +963,7 @@ suite.define(() => {
     }
   });
 
-  it("renders the visible authenticated assistant avatar after switching sessions", async () => {
+  it("keeps the authenticated assistant avatar stable across same-agent switches", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -704,17 +974,15 @@ suite.define(() => {
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nPcAAAAASUVORK5CYII=",
       "base64",
     );
-    let avatarRequestCount = 0;
     await page.route(/\/avatar\/main\?meta=1$/, (route) =>
       route.fulfill({
         contentType: "application/json",
         body: JSON.stringify({ avatarUrl: "/avatar/main", avatarStatus: "local" }),
       }),
     );
-    await page.route(/\/avatar\/main$/, (route) => {
-      avatarRequestCount += 1;
-      return route.fulfill({ contentType: "image/png", body: avatarBody });
-    });
+    await page.route(/\/avatar\/main$/, (route) =>
+      route.fulfill({ contentType: "image/png", body: avatarBody }),
+    );
     await installMockGateway(page, {
       methodResponses: { "sessions.list": chatSessionListResponse() },
       sessionKey: "agent:main:session-a",
@@ -732,8 +1000,6 @@ suite.define(() => {
       const avatar = page.locator("img.agent-chat__welcome-avatar");
       await avatar.waitFor({ state: "visible" });
       await expect.poll(() => avatar.getAttribute("src")).toMatch(/^blob:/);
-      const initialAvatarSrc = await avatar.getAttribute("src");
-      const initialRequestCount = avatarRequestCount;
 
       const sessionRow = (sessionKey: string) =>
         page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
@@ -742,12 +1008,8 @@ suite.define(() => {
       await expect
         .poll(() => sessionB.getAttribute("class"))
         .toContain("sidebar-recent-session--active");
-      await expect.poll(() => avatarRequestCount).toBeGreaterThan(initialRequestCount);
-      await expect.poll(() => avatar.getAttribute("src")).not.toBe(initialAvatarSrc);
       await expect.poll(() => avatar.getAttribute("src")).toMatch(/^blob:/);
       await expect.poll(() => avatar.isVisible()).toBe(true);
-      const sessionBAvatarSrc = await avatar.getAttribute("src");
-      const sessionBRequestCount = avatarRequestCount;
 
       const sessionA = sessionRow("agent:main:session-a");
       await sessionA.locator("a.sidebar-recent-session__link").click();
@@ -755,8 +1017,6 @@ suite.define(() => {
         .poll(() => sessionA.getAttribute("class"))
         .toContain("sidebar-recent-session--active");
 
-      await expect.poll(() => avatarRequestCount).toBeGreaterThan(sessionBRequestCount);
-      await expect.poll(() => avatar.getAttribute("src")).not.toBe(sessionBAvatarSrc);
       await expect.poll(() => avatar.getAttribute("src")).toMatch(/^blob:/);
       await expect.poll(() => avatar.isVisible()).toBe(true);
       expect(

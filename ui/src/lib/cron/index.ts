@@ -328,8 +328,8 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
   if (!form.payloadLocked && form.payloadKind === "agentTurn") {
     const timeoutRaw = form.timeoutSeconds.trim();
     if (timeoutRaw) {
-      const timeout = toNumber(timeoutRaw, 0);
-      if (timeout <= 0) {
+      const timeout = toNumber(timeoutRaw, Number.NaN);
+      if (!Number.isFinite(timeout) || timeout < 0) {
         errors.timeoutSeconds = "cron.errors.timeoutInvalid";
       }
     }
@@ -920,9 +920,12 @@ function buildCronPayload(form: CronFormState) {
   if (thinking) {
     payload.thinking = thinking;
   }
-  const timeoutSeconds = toNumber(form.timeoutSeconds, 0);
-  if (timeoutSeconds > 0) {
-    payload.timeoutSeconds = timeoutSeconds;
+  const timeoutRaw = form.timeoutSeconds.trim();
+  if (timeoutRaw) {
+    const timeoutSeconds = toNumber(timeoutRaw, Number.NaN);
+    if (Number.isFinite(timeoutSeconds) && timeoutSeconds >= 0) {
+      payload.timeoutSeconds = timeoutSeconds;
+    }
   }
   if (form.payloadLightContext) {
     payload.lightContext = true;

@@ -325,7 +325,6 @@ describe("MemoryImportPage", () => {
     );
 
     context.gateway.snapshot.phase = "stopped";
-    context.gateway.snapshot.client = null;
     page.requestUpdate();
     await page.updateComplete;
     await page.updateComplete;

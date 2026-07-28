@@ -167,6 +167,7 @@ export async function discoverOpenAICompatibleLocalModels(params: {
   apiKey?: string;
   label: string;
   contextWindow?: number;
+  discoverRuntimeContext?: boolean;
   maxTokens?: number;
   env?: NodeJS.ProcessEnv;
 }): Promise<ModelDefinitionConfig[]> {
@@ -212,7 +213,7 @@ export async function discoverOpenAICompatibleLocalModels(params: {
         return [{ id: modelId, meta: model.meta }];
       });
       const runtimeContextTokensByModelId = new Map<string, number>();
-      if (params.contextWindow === undefined) {
+      if (params.contextWindow === undefined && params.discoverRuntimeContext !== false) {
         const uniqueModelIds = uniqueStrings(discoveredModels.map((model) => model.id));
         const runtimeContextTokenResults = await Promise.all(
           uniqueModelIds.map(

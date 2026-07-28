@@ -350,12 +350,10 @@ proposals.
 ## Storage
 
 ```text
-<OPENCLAW_STATE_DIR>/skill-workshop/
-  proposals.json
-  proposals/<proposal-id>/
-    proposal.json
+<OPENCLAW_STATE_DIR>/
+  state/openclaw.sqlite
+  skill-workshop/proposals/<proposal-id>/
     PROPOSAL.md
-    rollback.json
     assets/
     examples/
     references/
@@ -365,20 +363,24 @@ proposals.
 
 Default state directory: `~/.openclaw`.
 
-- `proposal.json`: canonical proposal record.
-- `proposals.json`: fast listing index, rebuildable from proposal folders.
+- `state/openclaw.sqlite`: canonical proposal records, lifecycle status, origin attribution, and apply rollback metadata.
 - `PROPOSAL.md`: pending skill proposal.
-- `rollback.json`: recovery metadata written before apply changes live files.
+- Support files remain beside `PROPOSAL.md` so operators can review the proposed skill as a normal directory.
+
+`openclaw doctor --fix` imports the previous `proposals.json`, `proposal.json`, and
+`rollback.json` metadata into SQLite after verifying each proposal, then removes
+the migrated JSON files. If an agent's configured workspace changes, its earlier
+proposals remain listed with a previous-workspace marker instead of disappearing.
 
 ## Limits
 
-| Limit                           | Value                                                                |
-| ------------------------------- | -------------------------------------------------------------------- |
-| Description                     | 160 bytes                                                            |
-| Proposal body                   | `skills.workshop.maxSkillBytes` (default 40,000; hard ceiling 1 MiB) |
-| Support files                   | 64 per proposal                                                      |
-| Support file size               | 256 KiB each, 2 MiB total                                            |
-| Pending + quarantined proposals | `skills.workshop.maxPending` per workspace (default 50)              |
+| Limit                           | Value                                                             |
+| ------------------------------- | ----------------------------------------------------------------- |
+| Description                     | 160 bytes                                                         |
+| Proposal body                   | `skills.workshop.maxSkillBytes` (default 40,000; maximum 200,000) |
+| Support files                   | 64 per proposal                                                   |
+| Support file size               | 256 KiB each, 2 MiB total                                         |
+| Pending + quarantined proposals | `skills.workshop.maxPending` per workspace (default 50)           |
 
 ## Troubleshooting
 

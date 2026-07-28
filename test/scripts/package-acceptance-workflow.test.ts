@@ -106,6 +106,7 @@ type WorkflowJob = {
       include?: WorkflowMatrixEntry[];
       lane?: string;
       profile?: string[];
+      shard?: number[];
     };
   };
   secrets?: string | Record<string, string>;
@@ -118,6 +119,11 @@ type WorkflowJob = {
 type Workflow = {
   env?: Record<string, string>;
   jobs?: Record<string, WorkflowJob>;
+  on?: {
+    workflow_call?: {
+      inputs?: Record<string, unknown>;
+    };
+  };
 };
 
 function readWorkflow(path: string): Workflow {
@@ -2581,13 +2587,7 @@ describe("package artifact reuse", () => {
     expect(releaseJob.if).toContain('contains(fromJSON(\'["all","qa","qa-live"]\')');
     expect(releaseJob.with).toMatchObject({
       expected_sha: "${{ needs.resolve_target.outputs.revision }}",
-      matrix_profile: "release",
-      matrix_provider_mode: "mock-openai",
-      matrix_primary_model: "mock-openai/gpt-5.6-luna",
-      matrix_alternate_model: "mock-openai/gpt-5.6-luna-alt",
-      matrix_attempts: 2,
       run_matrix: true,
-      matrix_advisory: true,
     });
     for (const lane of ["mock_parity", "telegram", "discord", "whatsapp", "slack"]) {
       expect(releaseJob.with?.[`run_${lane}`]).toBeUndefined();
@@ -2596,7 +2596,7 @@ describe("package artifact reuse", () => {
       "inputs.expected_sha == '' || inputs.run_mock_parity",
     );
     expect(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_matrix").if).toBe(
-      "(github.event_name != 'workflow_call' || inputs.run_matrix) && !(github.event_name == 'workflow_dispatch' && inputs.matrix_profile == 'all')",
+      "github.event_name != 'workflow_call' || inputs.run_matrix",
     );
     for (const channel of ["telegram", "discord", "whatsapp", "slack"]) {
       expect(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, `run_live_${channel}`).if).toBe(
@@ -2607,9 +2607,6 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).not.toContain("Run QA Lab live Matrix lane");
     expect(releaseWorkflow).not.toContain("pnpm openclaw qa matrix");
     expect(qaWorkflow).toContain("pnpm openclaw qa matrix");
-    expect(qaWorkflow).toContain('for attempt in $(seq 1 "${MATRIX_ATTEMPTS}")');
-    expect(qaWorkflow).toContain("matrix_status:");
-    expect(qaWorkflow).toContain("value: ${{ jobs.run_live_matrix.outputs.status }}");
     expect(qaWorkflow).toContain('trusted_reason="repository-branch"');
     expect(qaWorkflow).toContain('"${selected_revision}" != "${EXPECTED_SHA}"');
     expect(qaWorkflow).toContain("EXPECTED_SHA: ${{ inputs.expected_sha }}");
@@ -2623,71 +2620,33 @@ describe("package artifact reuse", () => {
     expect(qaWorkflow).not.toContain('"${{ inputs.expected_sha }}" !== ""');
     expect(qaWorkflow).toContain('if [[ -n "${EXPECTED_SHA}" ]]; then');
     const matrixJob = workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_matrix");
-    const conditionalOpenAiSecret =
-      "${{ (inputs.expected_sha != '' && inputs.matrix_provider_mode == 'live-frontier' || inputs.expected_sha == '' && github.event_name != 'workflow_dispatch') && secrets.OPENAI_API_KEY || '' }}";
-    expect(workflowStep(matrixJob, "Validate required QA credential env").env?.OPENAI_API_KEY).toBe(
-      conditionalOpenAiSecret,
+    expect(workflowStep(matrixJob, "Run Matrix live lane").run).toContain(
+      "--provider-mode mock-openai",
     );
-    expect(workflowStep(matrixJob, "Run Matrix live lane").env?.OPENAI_API_KEY).toBe(
-      conditionalOpenAiSecret,
-    );
-    expect(workflowStep(matrixJob, "Run Matrix live lane").env).toMatchObject({
-      MATRIX_PROVIDER_MODE:
-        "${{ inputs.expected_sha != '' && inputs.matrix_provider_mode || github.event_name == 'workflow_dispatch' && 'mock-openai' || 'live-frontier' }}",
-      MATRIX_PRIMARY_MODEL:
-        "${{ inputs.expected_sha != '' && inputs.matrix_primary_model || github.event_name == 'workflow_dispatch' && 'mock-openai/gpt-5.6-luna' || env.OPENCLAW_CI_OPENAI_MODEL }}",
-      MATRIX_ALTERNATE_MODEL:
-        "${{ inputs.expected_sha != '' && inputs.matrix_alternate_model || github.event_name == 'workflow_dispatch' && 'mock-openai/gpt-5.6-luna-alt' || env.OPENCLAW_CI_OPENAI_FALLBACK_MODEL }}",
-    });
+    const matrixSpecificInputs = Object.keys(
+      readWorkflow(QA_LIVE_TRANSPORTS_WORKFLOW).on?.workflow_call?.inputs ?? {},
+    ).filter((input) => input.startsWith("matrix_"));
+    expect(matrixSpecificInputs).toEqual([]);
     expect(workflowStep(matrixJob, "Upload Matrix QA artifacts").with?.name).toBe(
-      "${{ inputs.expected_sha != '' && format('release-qa-live-matrix-{0}', inputs.expected_sha) || format('qa-live-matrix-{0}-{1}', github.run_id, github.run_attempt) }}",
+      "${{ inputs.expected_sha != '' && format('release-qa-live-matrix-{0}-shard-{1}-of-5', inputs.expected_sha, matrix.shard) || format('qa-live-matrix-{0}-{1}-shard-{2}-of-5', github.run_id, github.run_attempt, matrix.shard) }}",
     );
-    expect(matrixJob["continue-on-error"]).toBe(
-      "${{ github.event_name == 'workflow_call' && inputs.matrix_advisory }}",
+    expect(matrixJob["continue-on-error"]).toBeUndefined();
+    expect(matrixJob.strategy?.matrix?.shard).toEqual([1, 2, 3, 4, 5]);
+    expect(workflowStep(matrixJob, "Run Matrix live lane").run).toContain(
+      '--shard "${{ matrix.shard }}/5"',
     );
-    expect(qaWorkflow).toContain("status: ${{ steps.record_status.outputs.status }}");
-    expect(qaWorkflow).not.toContain('matrix_runner="legacy"');
-    const shardedMatrixJob = workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_matrix_sharded");
-    expect(shardedMatrixJob.if).toBe(
-      "${{ github.event_name == 'workflow_dispatch' && inputs.matrix_profile == 'all' }}",
+    expect(workflowStep(matrixJob, "Run Matrix live lane").run).toContain(
+      "Selected target predates profile-free Matrix catalog sharding",
     );
-    expect(shardedMatrixJob.strategy?.matrix?.profile).toEqual([
-      "transport",
-      "media",
-      "e2ee-smoke",
-      "e2ee-deep",
-      "e2ee-cli",
-    ]);
-    expect(workflowStep(shardedMatrixJob, "Run Matrix live lane shard").run).toContain(
-      '--profile "${{ matrix.profile }}"',
-    );
+    expect(readWorkflow(QA_LIVE_TRANSPORTS_WORKFLOW).jobs?.run_live_matrix_sharded).toBeUndefined();
     expect(releaseTelegramWorkflow).toContain(
       'echo "Telegram live lane failed on attempt ${attempt}; retrying once..." >&2',
     );
-    expect(qaWorkflow).toContain(
-      'echo "Matrix live lane failed on attempt ${attempt}; retrying..." >&2',
-    );
+    expect(workflowStep(matrixJob, "Run Matrix live lane").run).not.toContain("for attempt in");
+    expect(qaWorkflow).not.toContain("Matrix live lane failed on attempt");
     expect(qaWorkflow).not.toContain("OPENCLAW_QA_MATRIX_CANARY_TIMEOUT_MS");
-    expect(qaWorkflow).toContain('--profile "${matrix_profile}"');
+    expect(qaWorkflow).not.toContain("--profile");
     expect(qaWorkflow).not.toContain("--fail-fast");
-
-    const matrixRunScript = workflowStep(matrixJob, "Run Matrix live lane").run ?? "";
-    const resolveMatrixProfile = shellFunctionSource(matrixRunScript, "resolve_matrix_profile");
-    const resolveProfile = (requested: string, helpText: string) =>
-      execFileSync(
-        "bash",
-        [
-          "-c",
-          `${resolveMatrixProfile}\nresolve_matrix_profile "$1" "$2"`,
-          "resolve-matrix-profile",
-          requested,
-          helpText,
-        ],
-        { encoding: "utf8" },
-      ).trim();
-    expect(resolveProfile("release", "profiles: all, fast, release, transport")).toBe("release");
-    expect(resolveProfile("release", "profiles: all, fast, transport")).toBe("fast");
-    expect(resolveProfile("e2ee-smoke", "profiles: all, fast, transport")).toBe("e2ee-smoke");
   });
 
   it("runs live transport lanes nightly while release checks stay gated", () => {
@@ -2719,7 +2678,6 @@ describe("package artifact reuse", () => {
         "always() && steps.run_lane.outputs.output_dir != ''",
       ],
       ["run_live_matrix", "Upload Matrix QA artifacts", "always()"],
-      ["run_live_matrix_sharded", "Upload Matrix QA shard artifacts", "always()"],
       ["run_live_telegram", "Upload Telegram QA artifacts", "always()"],
       ["run_live_discord", "Upload Discord QA artifacts", "always()"],
       ["run_live_whatsapp", "Upload WhatsApp QA artifacts", "always()"],
@@ -3370,7 +3328,6 @@ describe("package artifact reuse", () => {
     for (const jobName of [
       "run_mock_parity",
       "run_live_matrix",
-      "run_live_matrix_sharded",
       "run_live_telegram",
       "run_live_discord",
       "run_live_whatsapp",
@@ -3485,8 +3442,7 @@ describe("package artifact reuse", () => {
 
     const verifyStep = workflowStep(summary, "Verify release check results");
     expect(verifyStep.env).toMatchObject({
-      QA_LIVE_RELEASE_CHECKS_RESULT:
-        "${{ needs.qa_live_release_checks.result == 'skipped' && 'skipped' || needs.qa_live_release_checks.outputs.matrix_status || 'failure' }}",
+      QA_LIVE_RELEASE_CHECKS_RESULT: "${{ needs.qa_live_release_checks.result }}",
       RELEASE_CHECK_RUN_ATTEMPT: "${{ github.run_attempt }}",
       RELEASE_CHECK_RUN_ID: "${{ github.run_id }}",
       RELEASE_CHECK_TARGET_SHA: "${{ needs.resolve_target.outputs.revision }}",

@@ -4355,6 +4355,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const workflowSource = readFileSync(".github/workflows/ci.yml", "utf8");
     const buildArtifactSteps = workflow.jobs["build-artifacts"].steps;
     const localeJob = workflow.jobs["control-ui-i18n"];
+    const sourceStep = localeJob.steps.find(
+      (step: WorkflowStep) => step.name === "Verify Control UI i18n source",
+    );
     const localeStep = localeJob.steps.find(
       (step: WorkflowStep) => step.name === "Check Control UI locale parity",
     );
@@ -4365,6 +4368,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(JSON.parse(readFileSync("package.json", "utf8")).scripts["test:ui"]).not.toContain(
       "ui:i18n:check",
     );
+    expect(workflowSource.match(/pnpm ui:i18n:verify/gu)).toHaveLength(1);
     expect(workflowSource.match(/pnpm ui:i18n:check/gu)).toHaveLength(1);
     expect(readFileSync("ui/src/i18n/test/translate.test.ts", "utf8")).not.toContain(
       "keeps shipped locales structurally aligned with English",
@@ -4372,6 +4376,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(localeJob.needs).toEqual(["preflight"]);
     expect(localeJob.if).toBe("needs.preflight.outputs.run_control_ui_i18n == 'true'");
     expect(localeJob["continue-on-error"]).toBeUndefined();
+    expect(sourceStep["continue-on-error"]).toBeUndefined();
+    expect(sourceStep.run).toBe("pnpm ui:i18n:verify");
     expect(localeStep["continue-on-error"]).toBe(
       "${{ needs.preflight.outputs.strict_control_ui_i18n != 'true' }}",
     );
@@ -4548,12 +4554,14 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       'shard.groups?.some((group) => group.shard_name.startsWith("core-tooling"))',
     );
     expect(nodeTestJob["timeout-minutes"]).toBe("${{ matrix.timeout_minutes || 60 }}");
-    expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("300000");
+    expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe(
+      "${{ needs.preflight.outputs.compatibility_target == 'true' && '660000' || '300000' }}",
+    );
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_RETRY).toBe("1");
     expect(runStep.env.OPENCLAW_NODE_TEST_ENV_JSON).toBe("${{ toJson(matrix.env) }}");
     expect(runStep.env.OPENCLAW_NODE_TEST_TARGETS_JSON).toBe("${{ toJson(matrix.targets) }}");
     expect(runStep.env.OPENCLAW_NODE_TEST_VITEST_ARGS_JSON).toBe(
-      "${{ needs.preflight.outputs.compatibility_target == 'true' && '[\"--hookTimeout=300000\"]' || '[]' }}",
+      "${{ needs.preflight.outputs.compatibility_target == 'true' && '[\"--hookTimeout=600000\"]' || '[]' }}",
     );
     expect(runStep.env.JOB_CONTEXT_JSON).toBe("${{ toJSON(job) }}");
     // Shard execution policy lives in the unit-tested wrapper script. Frozen

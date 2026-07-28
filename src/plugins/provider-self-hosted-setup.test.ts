@@ -147,6 +147,32 @@ function cancelTrackedResponse(init?: ResponseInit): {
 }
 
 describe("discoverOpenAICompatibleLocalModels", () => {
+  it("discovers a large non-llama.cpp catalog without probing per-model llama.cpp props", async () => {
+    const release = vi.fn(async () => undefined);
+    const data = Array.from({ length: 500 }, (_, index) => ({
+      id: `Qwen/model-${index}`,
+      meta: { n_ctx_train: 32_768 },
+    }));
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(JSON.stringify({ data }), { status: 200 }),
+      finalUrl: "http://127.0.0.1:8000/v1/models",
+      release,
+    });
+
+    const models = await discoverOpenAICompatibleLocalModels({
+      baseUrl: "http://127.0.0.1:8000/v1",
+      label: "vLLM",
+      discoverRuntimeContext: false,
+      env: {},
+    });
+
+    expect(models).toHaveLength(500);
+    expect(models[0]).toMatchObject({ id: "Qwen/model-0", contextWindow: 32_768 });
+    expect(models[499]).toMatchObject({ id: "Qwen/model-499", contextWindow: 32_768 });
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("labels malformed discovery JSON in the warning", async () => {
     const release = vi.fn(async () => undefined);
     fetchWithSsrFGuardMock.mockResolvedValueOnce({

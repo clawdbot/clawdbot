@@ -93,7 +93,22 @@ function collectFishPathOptionFlags(
   return [...flags];
 }
 
-function generateFishPathHelper(rootCmd: string): string {
+function generateFishPathHelper(rootCmd: string, program: Command): string {
+  const knownCommandPaths = collectBashCompletionContexts(program, [])
+    .flatMap((context) => context.pathVariants)
+    .map((pathSegments) => `'${pathSegments.join(" ").replaceAll("'", "'\\''")}'`)
+    .join(" ");
+  const rejectDescendantCommands = knownCommandPaths
+    ? `
+  if test (count $command_tokens) -gt (count $expected)
+    set -l next_index (math (count $expected) + 1)
+    set -l candidate_path (string join " " $expected $command_tokens[$next_index])
+    switch "$candidate_path"
+      case ${knownCommandPaths}
+        return 1
+    end
+  end`
+    : "";
   // Fish needs a helper to ignore option values while matching nested command paths.
   return `
 function __${rootCmd}_command_path_matches
@@ -132,11 +147,14 @@ function __${rootCmd}_command_path_matches
     end
     set -a command_tokens $token
   end
-  for i in (seq (count $expected))
-    if test "$command_tokens[$i]" != "$expected[$i]"
-      return 1
+  if test (count $expected) -gt 0
+    for i in (seq (count $expected))
+      if test "$command_tokens[$i]" != "$expected[$i]"
+        return 1
+      end
     end
   end
+${rejectDescendantCommands}
   return 0
 end
 `;
@@ -148,7 +166,8 @@ function fishCommandPathCondition(
   parents: readonly string[],
 ): string {
   const valueOptions = collectFishPathOptionFlags(program, parents, true);
-  return `__${rootCmd}_command_path_matches ${parents.join(" ")} -- ${fishWords(valueOptions)}`.trimEnd();
+  const commandPath = parents.length > 0 ? ` ${parents.join(" ")}` : "";
+  return `__${rootCmd}_command_path_matches${commandPath} -- ${fishWords(valueOptions)}`.trimEnd();
 }
 
 async function writeCompletionCache(params: {
@@ -604,15 +623,13 @@ ${commandPathCases}
 
 function generateFishCompletion(program: Command): string {
   const rootCmd = program.name();
-  const segments: string[] = [generateFishPathHelper(rootCmd)];
+  const segments: string[] = [generateFishPathHelper(rootCmd, program)];
 
   const visit = (cmd: Command, parentVariants: string[][]) => {
     // One condition per alias-expanded parent path so completion keeps working
     // after the user typed an alias segment.
     const conditions = parentVariants.map((parents) =>
-      parents.length === 0
-        ? "__fish_use_subcommand"
-        : fishCommandPathCondition(program, rootCmd, parents),
+      fishCommandPathCondition(program, rootCmd, parents),
     );
     for (const condition of conditions) {
       // Subcommands (canonical names and aliases)

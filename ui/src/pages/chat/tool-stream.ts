@@ -7,6 +7,7 @@ import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
+import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 
 const TOOL_STREAM_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
@@ -1005,7 +1006,8 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   }
 
   const now = Date.now();
-  let entry = host.toolStreamById.get(toolCallId);
+  const toolStreamIdentity = buildToolStreamIdentity(payload.runId, toolCallId);
+  let entry = host.toolStreamById.get(toolStreamIdentity);
   if (!entry) {
     // Commit any in-progress streaming text as a segment so it renders
     // above the tool card instead of below it.
@@ -1036,8 +1038,8 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       receivedAt: now,
       message: {},
     };
-    host.toolStreamById.set(toolCallId, entry);
-    host.toolStreamOrder.push(toolCallId);
+    host.toolStreamById.set(toolStreamIdentity, entry);
+    host.toolStreamOrder.push(toolStreamIdentity);
   } else {
     entry.name = name;
     if (args !== undefined) {

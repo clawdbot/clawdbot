@@ -15,6 +15,7 @@ import type {
 
 type MockFn = ReturnType<typeof vi.fn>;
 type HandlerChatLog = {
+  addLiveUser: (...args: unknown[]) => void;
   startTool: (...args: unknown[]) => void;
   updateToolResult: (...args: unknown[]) => void;
   addSystem: (...args: unknown[]) => void;
@@ -30,6 +31,7 @@ type HandlerBtwPresenter = {
 };
 type HandlerTui = { requestRender: (...args: unknown[]) => void };
 type MockChatLog = {
+  addLiveUser: MockFn;
   startTool: MockFn;
   updateToolResult: MockFn;
   addSystem: MockFn;
@@ -47,6 +49,7 @@ type MockTui = { requestRender: MockFn };
 
 function createMockChatLog(): MockChatLog & HandlerChatLog {
   return {
+    addLiveUser: vi.fn(),
     startTool: vi.fn(),
     updateToolResult: vi.fn(),
     addSystem: vi.fn(),
@@ -236,7 +239,12 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
     handleAgentEvent(evt);
 
-    expect(chatLog.startTool).toHaveBeenCalledWith("tc1", "exec", { command: "echo hi" });
+    expect(chatLog.startTool).toHaveBeenCalledWith(
+      "tc1",
+      "exec",
+      { command: "echo hi" },
+      "run-123",
+    );
     expect(tui.requestRender).toHaveBeenCalledTimes(1);
   });
 
@@ -965,7 +973,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
     handleAgentEvent(agentEvt);
 
-    expect(chatLog.startTool).toHaveBeenCalledWith("tc1", "exec", undefined);
+    expect(chatLog.startTool).toHaveBeenCalledWith("tc1", "exec", undefined, "run-42");
   });
 
   it("accepts chat events when session key is an alias of the active canonical key", () => {
@@ -1644,7 +1652,12 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       data: { phase: "start", toolCallId: "tc-final", name: "session_status" },
     });
 
-    expect(chatLog.startTool).toHaveBeenCalledWith("tc-final", "session_status", undefined);
+    expect(chatLog.startTool).toHaveBeenCalledWith(
+      "tc-final",
+      "session_status",
+      undefined,
+      "run-final",
+    );
     expect(tui.requestRender).toHaveBeenCalled();
   });
 
@@ -2464,6 +2477,53 @@ describe("tui-event-handlers: handleAgentEvent", () => {
   });
 
   describe("session.message history reload", () => {
+    it.each([
+      { identity: "transcript metadata", includeMessageMetadata: true },
+      { identity: "gateway event envelope", includeMessageMetadata: false },
+    ])(
+      "renders another client's $identity user turn before its active stream",
+      ({ includeMessageMetadata }) => {
+        const { state, chatLog, loadHistory, handleChatEvent, handleSessionMessageEvent } =
+          createHandlersHarness({ state: { activeChatRunId: null } });
+        const runId = "shared-session-web-run";
+        handleChatEvent({
+          runId,
+          seq: 1,
+          sessionKey: state.currentSessionKey,
+          state: "delta",
+          message: { content: [{ type: "text", text: "Already streaming." }] },
+        } satisfies ChatEvent);
+
+        handleSessionMessageEvent({
+          sessionKey: state.currentSessionKey,
+          ...(includeMessageMetadata ? {} : { clientRunId: runId }),
+          messageId: "shared-session-user",
+          messageSeq: 1,
+          message: {
+            ...(includeMessageMetadata
+              ? {
+                  __openclaw: {
+                    id: "shared-session-user",
+                    idempotencyKey: `${runId}:user`,
+                    seq: 1,
+                  },
+                }
+              : {}),
+            content: [{ type: "text", text: "Sent from the other client." }],
+            role: "user",
+          },
+        } satisfies SessionMessageEvent);
+
+        expect(chatLog.addLiveUser).toHaveBeenCalledWith("Sent from the other client.", {
+          messageId: "shared-session-user",
+          messageSeq: 1,
+          runId,
+        });
+        expect(state.activeChatRunId).toBe(runId);
+        expect(loadHistory).not.toHaveBeenCalled();
+      },
+    );
+
     it("reloads the current session when another client appends a message", () => {
       const { state, loadHistory, handleSessionMessageEvent } = createHandlersHarness({
         state: {

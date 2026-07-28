@@ -978,8 +978,8 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
   const result: WorkspaceBootstrapFile[] = [];
   for (const entry of entries) {
     if (
-      entry.name === DEFAULT_MEMORY_FILENAME &&
-      !(await exactWorkspaceEntryExists(resolvedDir, DEFAULT_MEMORY_FILENAME))
+      (entry.name === DEFAULT_MEMORY_FILENAME || entry.name === DEFAULT_USER_FILENAME) &&
+      !(await exactWorkspaceEntryExists(resolvedDir, entry.name))
     ) {
       continue;
     }

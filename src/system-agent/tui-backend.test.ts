@@ -443,6 +443,10 @@ describe("runSystemAgentTui", () => {
         handoff: { kind: "open-setup", target: "channels", channel: "slack" },
         expected: "channels:slack:false:function",
       },
+      {
+        handoff: { kind: "open-setup", target: "search" },
+        expected: "search:function",
+      },
     ];
 
     for (const { handoff, expected } of cases) {
@@ -484,6 +488,9 @@ describe("runSystemAgentTui", () => {
             events.push(
               `channels:${opts.channel ?? "all"}:${String(params?.hasFlags)}:${typeof params?.beforePersistentEffect}`,
             );
+          },
+          runSearchSetupHandoff: async (_runtime, beforePersistentEffect) => {
+            events.push(`search:${typeof beforePersistentEffect}`);
           },
         },
         createRuntime(),

@@ -2159,6 +2159,162 @@ describe("loadChatHistory filtering", () => {
     expect(state.agentsSelectedId).toBe("ops");
   });
 
+  it("coalesces matching startup requests across chat pane states", async () => {
+    const startup = createDeferred<{
+      messages: Array<{ role: string; content: Array<{ type: string; text: string }> }>;
+    }>();
+    const request = vi.fn(() => startup.promise);
+    const client = { request } as unknown as ChatState["client"];
+    const firstState = createState({
+      client,
+      connected: true,
+      sessionKey: "agent:main:main",
+    });
+    const secondState = createState({
+      client,
+      connected: true,
+      sessionKey: "agent:main:main",
+    });
+
+    const firstLoad = loadChatHistory(firstState, { startup: true });
+    const secondLoad = loadChatHistory(secondState, { startup: true });
+
+    expect(request).toHaveBeenCalledTimes(1);
+    startup.resolve({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "shared" }] }],
+    });
+    await Promise.all([firstLoad, secondLoad]);
+
+    expect(firstState.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "shared" }] },
+    ]);
+    expect(secondState.chatMessages).toEqual(firstState.chatMessages);
+  });
+
+  it("keeps displaced startup ownership across overlapping pane refreshes", async () => {
+    type StartupResult = {
+      messages: Array<{ role: string; content: Array<{ type: string; text: string }> }>;
+    };
+    const sharedStartup = createDeferred<StartupResult>();
+    const firstFreshStartup = createDeferred<StartupResult>();
+    const secondFreshStartup = createDeferred<StartupResult>();
+    const startups = [sharedStartup, firstFreshStartup, secondFreshStartup];
+    let requestCount = 0;
+    const request = vi.fn(() => {
+      const startup = startups[requestCount++];
+      if (!startup) {
+        throw new Error("unexpected startup request");
+      }
+      return startup.promise;
+    });
+    const client = { request } as unknown as ChatState["client"];
+    const firstState = createState({
+      client,
+      connected: true,
+      sessionKey: "agent:main:main",
+    });
+    const secondState = createState({
+      client,
+      connected: true,
+      sessionKey: "agent:main:main",
+    });
+
+    const firstSharedLoad = loadChatHistory(firstState, { startup: true });
+    const secondSharedLoad = loadChatHistory(secondState, { startup: true });
+    firstState.chatMessages = [...firstState.chatMessages];
+    const firstFreshLoad = loadChatHistory(firstState, { startup: true });
+    secondState.chatMessages = [...secondState.chatMessages];
+    const secondFreshLoad = loadChatHistory(secondState, { startup: true });
+
+    expect(request).toHaveBeenCalledTimes(3);
+    firstFreshStartup.resolve({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "first-fresh" }] }],
+    });
+    secondFreshStartup.resolve({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "second-fresh" }] }],
+    });
+    sharedStartup.resolve({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "shared-stale" }] }],
+    });
+    await Promise.all([firstSharedLoad, secondSharedLoad, firstFreshLoad, secondFreshLoad]);
+
+    expect(firstState.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "first-fresh" }] },
+    ]);
+    expect(secondState.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "second-fresh" }] },
+    ]);
+  });
+
+  it("keeps startup requests separate for different pane sessions", async () => {
+    const request = vi.fn().mockResolvedValue({ messages: [] });
+    const client = { request } as unknown as ChatState["client"];
+    const firstState = createState({
+      client,
+      connected: true,
+      sessionKey: "agent:main:first",
+    });
+    const secondState = createState({
+      client,
+      connected: true,
+      sessionKey: "agent:main:second",
+    });
+
+    await Promise.all([
+      loadChatHistory(firstState, { startup: true }),
+      loadChatHistory(secondState, { startup: true }),
+    ]);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledWith("chat.startup", {
+      sessionKey: "agent:main:first",
+      limit: 100,
+    });
+    expect(request).toHaveBeenCalledWith("chat.startup", {
+      sessionKey: "agent:main:second",
+      limit: 100,
+    });
+  });
+
+  it("keeps startup requests separate across pane connection epochs", async () => {
+    const staleStartup = createDeferred<{
+      messages: Array<{ role: string; content: Array<{ type: string; text: string }> }>;
+    }>();
+    const request = vi
+      .fn()
+      .mockImplementationOnce(() => staleStartup.promise)
+      .mockResolvedValueOnce({
+        messages: [{ role: "assistant", content: [{ type: "text", text: "fresh" }] }],
+      });
+    const client = { request } as unknown as ChatState["client"];
+    const staleState = createState({
+      client,
+      connected: true,
+      connectionEpoch: 1,
+      sessionKey: "agent:main:main",
+    });
+    const freshState = createState({
+      client,
+      connected: true,
+      connectionEpoch: 2,
+      sessionKey: "agent:main:main",
+    });
+
+    const staleLoad = loadChatHistory(staleState, { startup: true });
+    const freshLoad = loadChatHistory(freshState, { startup: true });
+
+    expect(request).toHaveBeenCalledTimes(2);
+    await freshLoad;
+    staleStartup.resolve({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "stale" }] }],
+    });
+    await staleLoad;
+
+    expect(freshState.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "fresh" }] },
+    ]);
+  });
+
   it("falls back to chat.history when startup history is not advertised", async () => {
     const request = vi.fn().mockResolvedValue({ messages: [] });
     const state = createState({
@@ -2271,6 +2427,58 @@ describe("loadChatHistory retry handling", () => {
       expect(state.chatThinkingLevel).toBe("low");
       expect(state.chatLoading).toBe(false);
       expect(state.lastError).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives a pane joining shared startup work its own retry window", async () => {
+    vi.useFakeTimers();
+    try {
+      const retryableError = new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "chat.history unavailable during gateway startup",
+        details: { method: "chat.history" },
+        retryable: true,
+        retryAfterMs: 250,
+      });
+      const secondAttempt = createDeferred<unknown>();
+      const request = vi
+        .fn()
+        .mockRejectedValueOnce(
+          new GatewayRequestError({
+            code: "UNAVAILABLE",
+            message: "chat.history unavailable during gateway startup",
+            details: { method: "chat.history" },
+            retryable: true,
+            retryAfterMs: 59_000,
+          }),
+        )
+        .mockImplementationOnce(() => secondAttempt.promise)
+        .mockResolvedValueOnce({
+          messages: [{ role: "assistant", content: [{ type: "text", text: "awake" }] }],
+        });
+      const client = { request } as unknown as ChatState["client"];
+      const firstState = createState({ client, connected: true });
+      const secondState = createState({ client, connected: true });
+
+      const firstLoad = loadChatHistory(firstState);
+      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(59_000);
+      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+
+      const secondLoad = loadChatHistory(secondState);
+      expect(request).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1_001);
+      secondAttempt.reject(retryableError);
+      await vi.advanceTimersByTimeAsync(250);
+      await Promise.all([firstLoad, secondLoad]);
+
+      expect(request).toHaveBeenCalledTimes(3);
+      expect(firstState.chatMessages).toEqual([
+        { role: "assistant", content: [{ type: "text", text: "awake" }] },
+      ]);
+      expect(secondState.chatMessages).toEqual(firstState.chatMessages);
     } finally {
       vi.useRealTimers();
     }

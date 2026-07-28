@@ -243,7 +243,7 @@ describe("qa scenario catalog", () => {
     if (scenario.execution.kind !== "playwright") {
       throw new Error(`expected Playwright scenario, got ${scenario.execution.kind}`);
     }
-    expect(scenario.execution.path).toBe("ui/src/e2e/chat-flow.e2e.test.ts");
+    expect(scenario.execution.path).toBe("ui/src/e2e/chat-flow.messaging.e2e.test.ts");
     expect(scenario.execution.testNamePattern).toBe(
       "sends a chat turn through the GUI and renders the final Gateway event",
     );
@@ -896,14 +896,12 @@ describe("qa scenario catalog", () => {
     }
   });
 
-  it("keeps portable thread relation flows free of a channel requirement", () => {
+  it("keeps portable thread relation flows on channels with native thread semantics", () => {
     for (const scenarioId of ["thread-follow-up", "thread-isolation"]) {
-      const scenario = readQaScenarioById(scenarioId);
+      const scenario = requireFlowScenario(readQaScenarioById(scenarioId));
 
       expect(scenario.execution.channel, scenarioId).toBeUndefined();
-      expect(Object.keys(scenario.execution.profiles ?? {}), scenarioId).toEqual(
-        expect.arrayContaining(["matrix:adapter", "slack:adapter"]),
-      );
+      expect(scenario.execution.channels, scenarioId).toEqual(["qa-channel", "slack", "matrix"]);
     }
   });
 

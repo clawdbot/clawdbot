@@ -338,12 +338,15 @@ export async function runCronIsolatedAgentTurn(params: {
         });
       } finally {
         prepared.context.sessionWorkAdmission.release();
-        // Browser ownership follows the detached run identity, not the stable cron job key.
-        await cleanupBrowserSessionsForLifecycleEnd({
-          cfg: prepared.context.cfgWithAgentDefaults,
-          sessionKeys: [prepared.context.runSessionKey],
-          onWarn: (message) => logWarn(`[cron:${params.job.id}] ${message}`),
-        });
+        // Only run-scoped browser identities end with this invocation.
+        // Persistent cron targets keep the session and its tracked tabs alive.
+        if (prepared.context.runSessionKey !== prepared.context.agentSessionKey) {
+          await cleanupBrowserSessionsForLifecycleEnd({
+            cfg: prepared.context.cfgWithAgentDefaults,
+            sessionKeys: [prepared.context.runSessionKey],
+            onWarn: (message) => logWarn(`[cron:${params.job.id}] ${message}`),
+          });
+        }
       }
     }
   }

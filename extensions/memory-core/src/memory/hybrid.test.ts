@@ -80,6 +80,37 @@ describe("memory hybrid helpers", () => {
     expect(b?.textScore).toBeCloseTo(1);
   });
 
+  it("keeps null importance neutral and deterministically boosts important entries", async () => {
+    const baseEntry = {
+      id: "neutral",
+      path: "MEMORY.md",
+      startLine: 1,
+      endLine: 1,
+      source: "memory" as const,
+      snippet: "neutral",
+      vectorScore: 0.8,
+    };
+    const base = {
+      vectorWeight: 1,
+      textWeight: 0,
+      keyword: [],
+      vector: [baseEntry],
+    };
+    const neutral = await mergeHybridResults(base);
+    const important = await mergeHybridResults({
+      ...base,
+      vector: [{ ...baseEntry, id: "important", importance: 10 }],
+    });
+    const low = await mergeHybridResults({
+      ...base,
+      vector: [{ ...baseEntry, id: "low", importance: 1 }],
+    });
+
+    expect(neutral[0]?.score).toBeCloseTo(0.8);
+    expect(important[0]?.score).toBeCloseTo(1);
+    expect(low[0]?.score).toBeCloseTo(0.64);
+  });
+
   it("uses path BM25 only for partial path-only hybrid hits", async () => {
     const merged = await mergeHybridResults({
       vectorWeight: 0.7,

@@ -19,18 +19,14 @@ import {
 } from "../lifecycle/workspace-skill-write.js";
 import { resolveAllowedSkillSymlinkTargetRealPaths } from "../loading/symlink-targets.js";
 import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
-import { resolveSkillWorkshopConfig, type SkillWorkshopConfig } from "./config.js";
+import { resolveSkillWorkshopConfig } from "./config.js";
 import {
   readProposalFrontmatter,
   renderProposalMarkdown,
   stripProposalFrontmatterForSkill,
 } from "./frontmatter.js";
 import { assertProposalContainsNoLiteralSecrets, scanProposalBundle } from "./proposal-scan.js";
-import {
-  isProposalInWorkspace,
-  listSkillProposals,
-  readRequiredProposal,
-} from "./service-query.js";
+import { readRequiredProposal } from "./service-query.js";
 import {
   createSkillProposalId,
   createSkillProposalRollback,
@@ -38,9 +34,7 @@ import {
   MAX_PROPOSAL_SUPPORT_FILES,
   prepareSkillProposalSupportFiles,
   readProposalSupportFiles,
-  readSkillProposalRecord,
   replaceSkillProposalDraft,
-  refreshSkillProposalManifest,
   resolveSkillProposalTarget,
   updateSkillProposalRecord,
   writeSkillProposal,
@@ -61,7 +55,6 @@ import {
   type SkillProposalApplyResult,
   type SkillProposalCreateInput,
   type SkillProposalOrigin,
-  type SkillProposalManifest,
   type SkillProposalReadResult,
   type SkillProposalRecord,
   type SkillProposalReviseInput,
@@ -231,7 +224,10 @@ export async function proposeCreateSkill(
     { file: "evidence", content: evidence },
   ]);
   assertProposalContainsNoLiteralSecrets(scan);
-  const origin = normalizeProposalOrigin(input.origin);
+  const origin = normalizeProposalOrigin({
+    ...input.origin,
+    agentId: input.origin?.agentId ?? input.agentId,
+  });
   const originRunProvenance = mergeProposalOriginRunProvenance(undefined, origin);
   const record: SkillProposalRecord = {
     schema: SKILL_WORKSHOP_SCHEMA,
@@ -266,10 +262,10 @@ export async function proposeCreateSkill(
     record,
     content: proposalContent,
     supportFiles,
+    workspaceDir: input.workspaceDir,
+    ownerAgentId: input.agentId,
+    maxPending: config.maxPending,
     store: proposalStoreOptions(input.env),
-    beforeWrite: async (manifest) => {
-      await assertCanCreatePendingProposal(input.workspaceDir, config, manifest, input.env);
-    },
   });
   return { record, content: proposalContent };
 }
@@ -347,7 +343,10 @@ export async function proposeUpdateSkill(
     { file: "evidence", content: evidence },
   ]);
   assertProposalContainsNoLiteralSecrets(scan);
-  const origin = normalizeProposalOrigin(input.origin);
+  const origin = normalizeProposalOrigin({
+    ...input.origin,
+    agentId: input.origin?.agentId ?? input.agentId,
+  });
   const originRunProvenance = mergeProposalOriginRunProvenance(undefined, origin);
   const record: SkillProposalRecord = {
     schema: SKILL_WORKSHOP_SCHEMA,
@@ -383,10 +382,10 @@ export async function proposeUpdateSkill(
     record,
     content: proposalContent,
     supportFiles,
+    workspaceDir: input.workspaceDir,
+    ownerAgentId: input.agentId ?? origin?.agentId,
+    maxPending: config.maxPending,
     store: proposalStoreOptions(input.env),
-    beforeWrite: async (manifest) => {
-      await assertCanCreatePendingProposal(input.workspaceDir, config, manifest, input.env);
-    },
   });
   return { record, content: proposalContent };
 }
@@ -619,7 +618,6 @@ export async function applySkillProposal(
       record: applied,
       store: proposalStoreOptions(input.env),
     });
-    await refreshSkillProposalManifest(proposalStoreOptions(input.env));
     return { record: applied, targetSkillFile: record.target.skillFile };
   });
 }
@@ -690,44 +688,6 @@ async function readApplyTargetState(
     }
   }
   return { previousContent, previousSupportFiles };
-}
-
-async function assertCanCreatePendingProposal(
-  workspaceDir: string,
-  config: SkillWorkshopConfig,
-  manifest?: SkillProposalManifest,
-  env?: NodeJS.ProcessEnv,
-): Promise<void> {
-  if (!manifest) {
-    const proposals = (await listSkillProposals({ workspaceDir, env })).proposals;
-    assertPendingProposalCountWithinLimit(
-      proposals.filter((entry) => entry.status === "pending" || entry.status === "quarantined")
-        .length,
-      config,
-    );
-    return;
-  }
-
-  let activeProposalCount = 0;
-  for (const entry of manifest.proposals) {
-    if (entry.status !== "pending" && entry.status !== "quarantined") {
-      continue;
-    }
-    const record = await readSkillProposalRecord(entry.id, proposalStoreOptions(env));
-    if (record && isProposalInWorkspace(record, workspaceDir)) {
-      activeProposalCount += 1;
-    }
-  }
-  assertPendingProposalCountWithinLimit(activeProposalCount, config);
-}
-
-function assertPendingProposalCountWithinLimit(
-  activeProposalCount: number,
-  config: SkillWorkshopConfig,
-): void {
-  if (activeProposalCount >= config.maxPending) {
-    throw new Error(`Skill Workshop pending proposal limit reached (${config.maxPending}).`);
-  }
 }
 
 function assertProposalDescriptionWithinLimit(description: string): void {
@@ -828,15 +788,25 @@ async function markProposal(
 }
 
 async function withPendingSkillProposalMutation<T>(
-  input: Pick<SkillProposalActionInput, "env" | "proposalId" | "workspaceDir">,
+  input: Pick<SkillProposalActionInput, "agentId" | "env" | "proposalId" | "workspaceDir">,
   action: "applied" | "quarantined" | "rejected" | "revised",
   fn: (read: SkillProposalReadResult) => Promise<T>,
 ): Promise<T> {
-  const initial = await readRequiredProposal(input.proposalId, input.workspaceDir, input.env);
+  const initial = await readRequiredProposal(
+    input.proposalId,
+    input.workspaceDir,
+    input.env,
+    input.agentId,
+  );
   return await withSkillProposalTargetLock(
     initial.record,
     async () => {
-      const read = await readRequiredProposal(input.proposalId, input.workspaceDir, input.env);
+      const read = await readRequiredProposal(
+        input.proposalId,
+        input.workspaceDir,
+        input.env,
+        input.agentId,
+      );
       if (read.record.status !== "pending") {
         throw new Error(
           `Only pending proposals can be ${action}. Current status: ${read.record.status}.`,

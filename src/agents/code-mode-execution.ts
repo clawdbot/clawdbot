@@ -36,6 +36,7 @@ import {
   settledBridgeRequestsInCompletionOrder,
   snapshotState,
   storeSnapshotState,
+  takeUndeliveredCodeModeRunOutput,
   telemetry,
   waitForPendingBridgeSettlement,
   type PendingBridgeState,
@@ -215,6 +216,7 @@ async function settleCodeModeResult(params: {
   runtime: ToolSearchRuntime;
   namespaceRuntime: CodeModeNamespaceRuntime;
   deadlineMs: number;
+  deliveredOutputCount?: number;
   pending?: PendingBridgeState[];
   activeRunId?: string;
   signal?: AbortSignal;
@@ -224,6 +226,7 @@ async function settleCodeModeResult(params: {
   let pending = params.pending ?? [];
   const activeRunId = params.activeRunId ?? `cm_${randomUUID()}`;
   const output = params.output;
+  const deliveredOutputCount = params.deliveredOutputCount ?? 0;
   // One exec/wait call shares a single wall-clock deadline across its initial
   // worker run and this inline settle phase, so auto-draining bridge calls
   // cannot stack a second full `timeoutMs` budget on top of the run that
@@ -235,7 +238,7 @@ async function settleCodeModeResult(params: {
     status: "failed" as const,
     error: "code mode execution aborted",
     code: "aborted" as const,
-    output,
+    output: output.slice(deliveredOutputCount),
     replaySafe: params.replaySafe,
     telemetry: telemetry(params.runtime),
   });
@@ -259,7 +262,7 @@ async function settleCodeModeResult(params: {
           status: "failed" as const,
           error: "restart-safe code mode cannot call namespace tools.",
           code: "invalid_input" as const,
-          output,
+          output: output.slice(deliveredOutputCount),
           replaySafe: true,
           telemetry: telemetry(params.runtime),
         };
@@ -328,6 +331,7 @@ async function settleCodeModeResult(params: {
           runtime: params.runtime,
           namespaceRuntime: params.namespaceRuntime,
           output,
+          deliveredOutputCount,
         });
       }
       // Deliver the settled frontier only. Unresolved sibling promises remain
@@ -379,7 +383,7 @@ async function settleCodeModeResult(params: {
         status: "failed" as const,
         error: "restart-safe code mode cannot call side-effecting tools.",
         code: "invalid_input" as const,
-        output,
+        output: output.slice(deliveredOutputCount),
         replaySafe: true,
         telemetry: telemetry(params.runtime),
       };
@@ -426,6 +430,7 @@ async function settleCodeModeResult(params: {
           runtime: params.runtime,
           namespaceRuntime: params.namespaceRuntime,
           output,
+          deliveredOutputCount,
         });
       } catch (error) {
         cancelPendingBridgeStates(pending);
@@ -444,6 +449,7 @@ async function settleCodeModeResult(params: {
       runtime: params.runtime,
       namespaceRuntime: params.namespaceRuntime,
       output,
+      deliveredOutputCount,
       replaySafe: params.replaySafe,
       settlementMode: result.settlementMode,
       signal: params.signal,
@@ -460,7 +466,7 @@ async function settleCodeModeResult(params: {
   });
   return {
     ...result,
-    output,
+    output: output.slice(deliveredOutputCount),
     replaySafe: params.replaySafe,
     telemetry: telemetry(params.runtime),
   };
@@ -512,7 +518,7 @@ export async function runWait(params: {
           status: "failed" as const,
           error: "code mode execution aborted",
           code: "aborted" as const,
-          output: state.output,
+          output: takeUndeliveredCodeModeRunOutput(state),
           replaySafe: state.replaySafe,
           telemetry: telemetry(state.runtime),
         };
@@ -527,7 +533,7 @@ export async function runWait(params: {
         reason: codeModeWaitingReason(pending.length > 0 ? pending : state.pending),
         pendingToolCalls: pendingToolCalls(pending.length > 0 ? pending : state.pending),
         replaySafe: state.replaySafe,
-        output: state.output,
+        output: takeUndeliveredCodeModeRunOutput(state),
         telemetry: telemetry(state.runtime),
       };
     }
@@ -571,6 +577,7 @@ export async function runWait(params: {
       config: state.config,
       runtime: state.runtime,
       namespaceRuntime: state.namespaceRuntime,
+      deliveredOutputCount: state.deliveredOutputCount,
       pending,
       activeRunId: state.runId,
       signal: params.signal,
@@ -586,7 +593,7 @@ export async function runWait(params: {
       status: "failed" as const,
       error: codeModeFailureMessage(error),
       code: codeModeFailureCode(error),
-      output: state.output,
+      output: takeUndeliveredCodeModeRunOutput(state),
       replaySafe: state.replaySafe,
       telemetry: telemetry(state.runtime),
     };
