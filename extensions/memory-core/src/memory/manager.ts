@@ -1987,8 +1987,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       sourceFilterParams: sourceFilter.params,
     });
 
+    // Status projects the effective keyword-only search mode while degraded.
+    // Sync generations still snapshot this.provider so recovery can rebuild vectors.
+    const statusProvider = this.embeddingBootstrapFailure ? null : this.provider;
     const providerInfo = resolveStatusProviderInfo({
-      provider: this.embeddingBootstrapFailure ? null : this.provider,
+      provider: statusProvider,
       providerInitialized: this.embeddingBootstrapFailure ? true : this.providerInitialized,
       requestedProvider: this.requestedProvider,
       configuredModel: this.settings.model || undefined,
