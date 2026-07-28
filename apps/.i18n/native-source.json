@@ -38723,15 +38723,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 245,
-      "path": "apps/macos/Sources/OpenClaw/TailscaleIntegrationSection.swift",
-      "source": "Start the Tailscale daemon from the command line.",
-      "surface": "apple",
-      "id": "native.apple.92b3e25f9f04e4dd"
-    },
-    {
-      "kind": "ui-call",
-      "line": 253,
+      "line": 249,
       "path": "apps/macos/Sources/OpenClaw/TailscaleIntegrationSection.swift",
       "source": "Require credentials",
       "surface": "apple",
@@ -38739,7 +38731,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 258,
+      "line": 254,
       "path": "apps/macos/Sources/OpenClaw/TailscaleIntegrationSection.swift",
       "source": "Serve uses Tailscale identity headers; no password required.",
       "surface": "apple",
@@ -38747,7 +38739,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 267,
+      "line": 263,
       "path": "apps/macos/Sources/OpenClaw/TailscaleIntegrationSection.swift",
       "source": "Funnel requires authentication.",
       "surface": "apple",
@@ -38755,7 +38747,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 276,
+      "line": 272,
       "path": "apps/macos/Sources/OpenClaw/TailscaleIntegrationSection.swift",
       "source": "Password",
       "surface": "apple",
@@ -38763,7 +38755,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 280,
+      "line": 276,
       "path": "apps/macos/Sources/OpenClaw/TailscaleIntegrationSection.swift",
       "source": "Stored in ~/.openclaw/openclaw.json. Prefer OPENCLAW_GATEWAY_PASSWORD for production.",
       "surface": "apple",
@@ -38771,7 +38763,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 283,
+      "line": 279,
       "path": "apps/macos/Sources/OpenClaw/TailscaleIntegrationSection.swift",
       "source": "Update password",
       "surface": "apple",
