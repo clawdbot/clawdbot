@@ -521,6 +521,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     autoReviewer?: ExecAutoReviewer;
     commitExecAuthorization?: HandleSystemRunInvokeOptions["commitExecAuthorization"];
     prepareDelayedApprovalPlan?: boolean;
+    signal?: AbortSignal;
   }): Promise<{
     runCommand: MockedRunCommand;
     runViaMacAppExecHost: MockedRunViaMacAppExecHost;
@@ -618,6 +619,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       skillBins: {
         current: params.skillBinsCurrent ?? (async () => []),
       },
+      signal: params.signal,
       execHostEnforced: false,
       execHostFallbackAllowed: true,
       resolveExecSecurity: params.resolveExecSecurity ?? (() => params.security ?? "full"),
@@ -644,6 +646,61 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       sendExecFinishedEvent,
     };
   }
+
+  it("forwards cancellation to locally spawned node commands", async () => {
+    const controller = new AbortController();
+    const result = await runSystemInvoke({
+      preferMacAppExecHost: false,
+      signal: controller.signal,
+    });
+
+    expect(result.runCommand.mock.calls[0]?.[4]).toBe(controller.signal);
+  });
+
+  it("does not spawn an already-cancelled node command", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await runSystemInvoke({
+      preferMacAppExecHost: false,
+      signal: controller.signal,
+    });
+
+    expect(result.runCommand).not.toHaveBeenCalled();
+    expect(result.runViaMacAppExecHost).not.toHaveBeenCalled();
+  });
+
+  it("does not publish a cancelled local command completion", async () => {
+    const controller = new AbortController();
+    const result = await runSystemInvoke({
+      preferMacAppExecHost: false,
+      signal: controller.signal,
+      runCommand: async () => {
+        controller.abort();
+        return createLocalRunResult("cancelled");
+      },
+    });
+
+    expect(result.runCommand).toHaveBeenCalledOnce();
+    expect(result.sendInvokeResult).not.toHaveBeenCalled();
+    expect(result.sendExecFinishedEvent).not.toHaveBeenCalled();
+  });
+
+  it("does not publish a cancelled Mac exec-host completion", async () => {
+    const controller = new AbortController();
+    const result = await runSystemInvoke({
+      preferMacAppExecHost: true,
+      signal: controller.signal,
+      runViaMacAppExecHost: async () => {
+        controller.abort();
+        return { ok: true, payload: createLocalRunResult("cancelled") };
+      },
+    });
+
+    expect(result.runViaMacAppExecHost).toHaveBeenCalledOnce();
+    expect(result.sendInvokeResult).not.toHaveBeenCalled();
+    expect(result.sendExecFinishedEvent).not.toHaveBeenCalled();
+  });
 
   it("routes local, mac host, and canonical shell-wrapper requests", async () => {
     const localInvoke = await runSystemInvoke({

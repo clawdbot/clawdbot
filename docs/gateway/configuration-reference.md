@@ -529,7 +529,6 @@ See [Plugins](/tools/plugin).
       chatPersistCommentary: true, // Keep commentary after runs in Control UI; does not deliver it to channels
       chatSendShortcut: "enter", // enter | modifier-enter
       chatFollowUpMode: "steer", // steer | queue; omit to use the server queue mode
-      showAdvancedSettings: false, // Expand every Advanced group in Settings
     },
   },
 }
@@ -545,10 +544,8 @@ See [Plugins](/tools/plugin).
   commentary visible during a run but removes it at completion and prevents new
   Codex commentary from entering the durable transcript mirror. Messaging-channel
   delivery remains separate and unchanged.
-  `showAdvancedSettings` defaults to `false`; Settings search may temporarily
-  open one matching advanced group without changing this preference.
-  Presentation-only preferences such as text scale, chat width, and live
-  sidebar activity stay browser-local and are configured in Settings.
+  Presentation-only preferences such as advanced-tier visibility, text scale,
+  chat width, and live sidebar activity stay browser-local and are configured in Settings.
   Connected clients apply server-side changes live: the gateway broadcasts a
   hash-only `config.changed` event after every persisted config write and
   clients refresh their snapshot (skipped while a local settings draft has

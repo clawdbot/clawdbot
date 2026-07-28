@@ -107,7 +107,7 @@ describe("Z.ai vendor error codes (#48988)", () => {
 });
 
 describe("Google invalid API key errors (#114784)", () => {
-  it("classifies the Google Generative AI invalid-key response as auth", () => {
+  it("classifies Google Generative AI's invalid-key response as auth", () => {
     const raw =
       "Google Generative AI API error (400): API key not valid. Please pass a valid API key. [code=INVALID_ARGUMENT]";
 
@@ -115,8 +115,14 @@ describe("Google invalid API key errors (#114784)", () => {
     expect(classifyFailoverReason(raw)).toBe("auth");
   });
 
-  it("classifies the structured API_KEY_INVALID variant as auth", () => {
-    expect(isAuthErrorMessage('{"code":"API_KEY_INVALID"}')).toBe(true);
+  it.each([
+    "invalid_api_key_error",
+    "API key is invalid",
+    '{"code":"API_KEY_INVALID"}',
+    '{"code":"API_KEY_INVALID_ERROR"}',
+  ])("classifies the %s variant as auth", (raw) => {
+    expect(isAuthErrorMessage(raw)).toBe(true);
+    expect(classifyFailoverReason(raw)).toBe("auth");
   });
 
   it("does not treat unrelated Google invalid arguments as auth", () => {
@@ -125,9 +131,10 @@ describe("Google invalid API key errors (#114784)", () => {
 
     expect(isAuthErrorMessage(raw)).toBe(false);
     expect(classifyFailoverReason(raw)).toBeNull();
+    expect(isAuthErrorMessage("API key invalidation policy updated")).toBe(false);
+    expect(isAuthErrorMessage("INVALID API KEYSTORE configuration")).toBe(false);
   });
 });
-
 describe("Chinese provider overload messages", () => {
   const ZHIPU_OVERLOAD = "[1305][该模型当前访问量过大，请您稍后再试]";
 

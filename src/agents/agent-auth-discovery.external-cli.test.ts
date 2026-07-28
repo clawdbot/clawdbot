@@ -113,4 +113,29 @@ describe("resolveAgentCredentialsForDiscovery external CLI scoping", () => {
       },
     });
   });
+
+  it.each(["oauth", "token"] as const)(
+    "skips synthetic api-key fills under a %s provider pin",
+    (auth) => {
+      syntheticAuthMocks.resolveProviderSyntheticAuthWithPlugin.mockReturnValue({
+        apiKey: "synthetic-key",
+      });
+      const cfg = {
+        models: {
+          providers: {
+            fireworks: { auth, baseUrl: "https://example.invalid", models: [] },
+          },
+        },
+      } satisfies OpenClawConfig;
+
+      const credentials = resolveAgentCredentialsForDiscovery("/tmp/openclaw-agent", {
+        config: cfg,
+        env: {},
+        syntheticAuthProviderRefs: ["fireworks"],
+      });
+
+      expect(credentials.fireworks).toBeUndefined();
+      expect(syntheticAuthMocks.resolveProviderSyntheticAuthWithPlugin).not.toHaveBeenCalled();
+    },
+  );
 });

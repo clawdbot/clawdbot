@@ -5,8 +5,12 @@ import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runWithAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
+import type { Skill } from "../skills/loading/skill-contract.js";
+import { resolveSkillsPromptForRun } from "../skills/loading/workspace.js";
+import { createFixtureSkillEntry } from "../skills/test-support/test-helpers.js";
 import { buildBlockedToolResult } from "./agent-tools.before-tool-call.js";
 import { createOpenClawReadTool } from "./agent-tools.read.js";
+import { resolveCodeModeSkills, type CodeModeSkill } from "./code-mode-skills.js";
 import {
   applyCodeModeCatalog,
   CODE_MODE_EXEC_TOOL_NAME,
@@ -24,6 +28,26 @@ import {
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
+
+function skillCandidate(params: {
+  name: string;
+  description: string;
+  filePath: string;
+  readContent?: string;
+}): Skill {
+  return {
+    ...params,
+    baseDir: params.filePath.replace(/\/[^/]+$/u, ""),
+    sourceInfo: {
+      path: params.filePath,
+      source: "test",
+      scope: "temporary",
+      origin: "top-level",
+    },
+    disableModelInvocation: false,
+    source: "test",
+  };
+}
 
 function fakeTool(name: string, description: string): AnyAgentTool {
   // Minimal tool shape keeps Code Mode catalog tests runtime-free.
@@ -112,6 +136,7 @@ function createCodeModeHarness(
   params: {
     agentId?: string;
     catalogRef?: ToolSearchCatalogRef;
+    codeModeSkills?: readonly CodeModeSkill[];
     forceRestartSafeTools?: boolean;
   } = {},
 ) {
@@ -126,6 +151,7 @@ function createCodeModeHarness(
     runId: "run-code-mode",
     catalogRef,
     forceRestartSafeTools: params.forceRestartSafeTools,
+    codeModeSkills: params.codeModeSkills,
   };
   const tools = createCodeModeTools(ctx);
   return { catalogRef, config, ctx, tools };
@@ -1030,6 +1056,106 @@ describe("Code Mode", () => {
     });
     expect(details.telemetry).toMatchObject({ callCount: 3 });
     expect(ticket.execute).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps Code Mode skill parsing aligned with the production prompt renderer", () => {
+    const entries = [createFixtureSkillEntry("alpha"), createFixtureSkillEntry("beta")];
+    const skillsPrompt = resolveSkillsPromptForRun({
+      entries,
+      workspaceDir: "/workspace",
+    });
+
+    expect(
+      resolveCodeModeSkills({
+        skillsPrompt,
+        candidates: entries.map((entry) => entry.skill),
+      }).map(({ name, location }) => ({ name, location })),
+    ).toEqual([
+      { name: "alpha", location: "/skills/alpha/SKILL.md" },
+      { name: "beta", location: "/skills/beta/SKILL.md" },
+    ]);
+  });
+
+  it("lists and reads only prompt-eligible skills through the worker bridge", async () => {
+    const demo = skillCandidate({
+      name: "demo",
+      description: "Full demo description",
+      filePath: "/host/skills/demo/SKILL.md",
+    });
+    const hidden = skillCandidate({
+      name: "hidden",
+      description: "Hidden skill",
+      filePath: "/host/skills/hidden/SKILL.md",
+    });
+    const reader = vi.fn(async ({ location }: { location: string }) =>
+      location === "/guest/skills/demo/SKILL.md"
+        ? "---\nname: demo\n---\n\n# Complete demo instructions\n"
+        : "# Hidden\n",
+    );
+    const codeModeSkills = resolveCodeModeSkills({
+      skillsPrompt: [
+        "<available_skills>",
+        "  <skill>",
+        "    <name>demo</name>",
+        "    <description>Short prompt description</description>",
+        "    <location>/guest/skills/demo/SKILL.md</location>",
+        "  </skill>",
+        "</available_skills>",
+      ].join("\n"),
+      candidates: [demo, hidden],
+      reader,
+    });
+    const {
+      config,
+      catalogRef,
+      tools: codeModeTools,
+    } = createCodeModeHarness({
+      codeModeSkills,
+    });
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+      codeModeSkills,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
+      code: `
+        const listed = await skills.list();
+        const body = await skills.read("demo");
+        let unknown;
+        try {
+          await skills.read("missing");
+        } catch (error) {
+          unknown = error.message;
+        }
+        return { listed, body, unknown };
+      `,
+    });
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toEqual({
+      listed: [
+        {
+          name: "demo",
+          description: "Full demo description",
+          location: "/guest/skills/demo/SKILL.md",
+        },
+      ],
+      body: "---\nname: demo\n---\n\n# Complete demo instructions\n",
+      unknown: 'Unknown skill "missing". Available skills: demo',
+    });
+    expect(codeModeTools[0]?.description).toContain("`await skills.read(name)`");
+    expect(reader).toHaveBeenCalledOnce();
+    expect(reader).toHaveBeenCalledWith({
+      location: "/guest/skills/demo/SKILL.md",
+      signal: expect.any(AbortSignal),
+    });
   });
 
   it("returns ordinary read content through tools.callValue", async () => {

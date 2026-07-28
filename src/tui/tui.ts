@@ -1403,6 +1403,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     reconnectStreamingWatchdog,
     consumeCompletedRunForPendingSend,
     isRunObserved,
+    reconcileHistoryAfterGap,
     flushPendingHistoryRefreshIfIdle,
     dispose: disposeEventHandlers,
   } = createEventHandlers({
@@ -1790,6 +1791,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       return;
     }
     setConnectionStatus(`event gap: expected ${info.expected}, got ${info.received}`, 5000);
+    reconcileHistoryAfterGap();
     void (async () => {
       try {
         await pluginApprovals?.refresh();

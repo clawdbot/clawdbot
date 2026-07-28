@@ -17,6 +17,7 @@ import {
   toToolSearchConfig,
   type CodeModeConfig,
   type CodeModeLanguage,
+  type CodeModeSettlementMode,
   type CodeModeWorkerResult,
   type SettledBridgeRequest,
 } from "./code-mode-runtime.js";
@@ -36,6 +37,7 @@ import {
   snapshotState,
   storeSnapshotState,
   telemetry,
+  waitForPendingBridgeSettlement,
   type PendingBridgeState,
 } from "./code-mode-state.js";
 import { normalizeCodeModeWorkerResult, runCodeModeWorker } from "./code-mode-worker.js";
@@ -156,29 +158,28 @@ function usableResumeBudgetMs(deadlineMs: number, config: CodeModeConfig): numbe
 }
 
 async function waitForPending(
-  pending: PendingBridgeState[],
+  pending: readonly PendingBridgeState[],
+  settlementMode: CodeModeSettlementMode,
   timeoutMs: number,
   signal?: AbortSignal,
-  waitForAll = false,
 ): Promise<boolean> {
   // Abort wins even over already-settled requests: callers treat `false` as
   // "do not resume the guest", which is what a cancelled exec/wait needs.
   if (signal?.aborted) {
     return false;
   }
-  if (!waitForAll && pending.some((entry) => entry.settled)) {
-    return true;
-  }
-  const pendingPromises = pending.filter((entry) => !entry.settled).map((entry) => entry.promise);
-  if (pendingPromises.length === 0) {
+  const required = pendingBridgeStatesForSettlement(pending, settlementMode);
+  if (
+    required.length === 0 ||
+    (settlementMode.kind === "awaiting" && required.some((entry) => entry.settled)) ||
+    required.every((entry) => entry.settled)
+  ) {
     return true;
   }
   let timer: ReturnType<typeof setTimeout> | undefined;
   let onAbort: (() => void) | undefined;
   try {
-    const bridgeReady = waitForAll
-      ? Promise.all(pendingPromises).then(() => true)
-      : Promise.race(pendingPromises).then(() => true);
+    const bridgeReady = waitForPendingBridgeSettlement(pending, settlementMode).then(() => true);
     return await Promise.race([
       bridgeReady,
       new Promise<boolean>((resolve) => {
@@ -296,10 +297,10 @@ async function settleCodeModeResult(params: {
         }),
       );
       const ready = await waitForPending(
-        pendingBridgeStatesForSettlement(pending, result.settlementMode),
+        pending,
+        result.settlementMode,
         remainingMs,
         params.signal,
-        result.settlementMode.kind === "draining",
       );
       const resumeBudgetMs = ready
         ? usableResumeBudgetMs(settleDeadline, params.config)
@@ -496,10 +497,10 @@ export async function runWait(params: {
   const deadlineMs = Date.now() + state.config.timeoutMs;
   try {
     const ready = await waitForPending(
-      pendingBridgeStatesForSettlement(state.pending, state.settlementMode),
+      state.pending,
+      state.settlementMode,
       Math.max(1, deadlineMs - Date.now()),
       params.signal,
-      state.settlementMode.kind === "draining",
     );
     const resumeBudgetMs = ready ? usableResumeBudgetMs(deadlineMs, state.config) : undefined;
     if (!ready || resumeBudgetMs === undefined) {
