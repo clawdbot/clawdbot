@@ -1380,6 +1380,21 @@ export async function runMemoryFlushIfNeeded(params: {
     workspaceDir: params.followupRun.run.workspaceDir,
     relativePath: memoryFlushWritePath,
   });
+  const memoryFlushAbsolutePath = path.join(
+    params.followupRun.run.workspaceDir,
+    memoryFlushWritePath,
+  );
+  const readMemoryFlushContent = () =>
+    fs.promises.readFile(memoryFlushAbsolutePath, "utf8").catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return "";
+      }
+      throw error;
+    });
+  // Capture one baseline before any write can start. Per-write snapshots can
+  // pair a failed later write with an earlier success and miss mixed content.
+  const memoryFlushContentBefore = await readMemoryFlushContent();
+  let memoryFlushWroteTarget = false;
   const flushSystemPrompt = [
     params.followupRun.run.extraSystemPrompt,
     activeMemoryFlushPlan.systemPrompt,
@@ -1476,6 +1491,11 @@ export async function runMemoryFlushIfNeeded(params: {
           abortSignal: params.replyOperation.abortSignal,
           replyOperation: params.replyOperation,
           onAgentEvent: (evt) => {
+            if (evt.stream === "tool" && evt.data.name === "write") {
+              if (evt.data.phase === "result" && evt.data.isError !== true) {
+                memoryFlushWroteTarget = true;
+              }
+            }
             if (evt.stream === "compaction") {
               const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
               if (phase === "end") {
@@ -1494,6 +1514,16 @@ export async function runMemoryFlushIfNeeded(params: {
         return result;
       },
     });
+    if (activeMemoryFlushPlan.recordWriteProvenance && memoryFlushWroteTarget) {
+      await activeMemoryFlushPlan.recordWriteProvenance({
+        workspaceDir: params.followupRun.run.workspaceDir,
+        relativePath: memoryFlushWritePath,
+        contentBefore: memoryFlushContentBefore,
+        contentAfter: await readMemoryFlushContent(),
+        originClass: params.followupRun.run.senderIsOwner ? "agent" : "untrusted",
+        observedAt: memoryDeps.now(),
+      });
+    }
     const flushedCompactionCount =
       activeSessionEntry?.compactionCount ??
       (params.sessionKey ? activeSessionStore?.[params.sessionKey]?.compactionCount : 0) ??

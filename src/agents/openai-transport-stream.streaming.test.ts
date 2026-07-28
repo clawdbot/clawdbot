@@ -89,12 +89,12 @@ describe("openai transport stream", () => {
   it.each([
     {
       api: "openai-responses" as const,
-      provider: "openai",
+      provider: "custom-openai",
       createStream: createOpenAIResponsesTransportStreamFn,
     },
     {
       api: "azure-openai-responses" as const,
-      provider: "azure-openai",
+      provider: "azure-openai-responses-devdiv",
       createStream: createAzureOpenAIResponsesTransportStreamFn,
     },
     {

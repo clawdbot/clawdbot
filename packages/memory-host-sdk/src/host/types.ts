@@ -2,6 +2,17 @@
 // package consumers.
 export type MemorySource = "memory" | "sessions";
 
+export type MemoryOriginClass = "owner" | "agent" | "untrusted" | "system";
+
+export type MemorySessionKind = "interactive" | "cron" | "heartbeat" | "subagent" | "unknown";
+
+export type MemoryEntryProvenance = {
+  originClass: MemoryOriginClass;
+  sessionKind: MemorySessionKind;
+  observedAt: number;
+  supersedesKey?: string;
+};
+
 /** One ranked memory search hit with optional vector/text scoring details. */
 export type MemorySearchResult = {
   path: string;
@@ -12,7 +23,12 @@ export type MemorySearchResult = {
   textScore?: number;
   snippet: string;
   source: MemorySource;
+  importance?: number;
+  triggers?: string;
+  /** Future provenance column supplied by the promoted-memory workstream. */
+  originClass?: string;
   citation?: string;
+  provenance?: MemoryEntryProvenance;
 };
 
 /** Cached/probed embedding availability status. */
@@ -145,6 +161,12 @@ export interface MemorySearchManager {
       maxResults?: number;
       minScore?: number;
       sessionKey?: string;
+      /**
+       * Keyword/FTS scoring only: skip query embedding and vector search.
+       * For reply-path recall (trigger injection) that must not add a
+       * network round-trip per inbound message.
+       */
+      lexicalOnly?: boolean;
       qmdSearchModeOverride?: "query" | "search" | "vsearch";
       onDebug?: (debug: MemorySearchRuntimeDebug) => void;
       sources?: MemorySource[];
@@ -152,6 +174,7 @@ export interface MemorySearchManager {
       signal?: AbortSignal;
     },
   ): Promise<MemorySearchResult[]>;
+  listTriggerCandidates?(opts?: { limit?: number }): Promise<MemorySearchResult[]>;
   readFile(params: { relPath: string; from?: number; lines?: number }): Promise<MemoryReadResult>;
   status(): MemoryProviderStatus;
   sync?(params?: MemorySyncParams): Promise<void>;

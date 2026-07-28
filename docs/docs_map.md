@@ -2495,6 +2495,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What dreaming writes
   - H2: Phase model
   - H2: Session transcript ingestion
+  - H2: Consolidation safety
   - H2: Dream Diary
   - H2: Deep ranking signals
   - H2: Scheduling
@@ -2597,6 +2598,26 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Common gotchas
   - H2: Related
 
+## concepts/memory-architecture.md
+
+- Route: /concepts/memory-architecture
+- Headings:
+  - H2: Design principles
+  - H2: The tier model
+  - H2: Provenance: every memory knows where it came from
+  - H2: Trust boundaries and limits
+  - H2: The write path
+  - H2: Dreaming: consolidation with gates
+  - H2: Recall: two lanes
+  - H3: Lane 1: always on, zero model calls
+  - H3: Lane 2: escalation
+  - H2: The user model
+  - H2: Standing intents: prospective memory
+  - H2: The security model
+  - H2: A day in the life
+  - H2: Configuration map
+  - H2: Related
+
 ## concepts/memory-builtin.md
 
 - Route: /concepts/memory-builtin
@@ -2652,10 +2673,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Quick start
   - H2: Supported providers
   - H2: How search works
+  - H2: Deterministic trigger recall
   - H2: Improving search quality
-  - H3: Temporal decay
+  - H3: Recency decay
   - H3: MMR (diversity)
-  - H3: Enable both
   - H2: Multimodal memory
   - H2: Session memory search
   - H2: Troubleshooting
@@ -3043,6 +3064,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: One warning
   - H2: Related
 
+## concepts/standing-intents.md
+
+- Route: /concepts/standing-intents
+- Headings:
+  - H2: Choose the right intention tier
+  - H2: Create an event-based intent
+  - H2: How matching works
+  - H2: List and cancel
+  - H2: Lifecycle states
+  - H2: Related
+
 ## concepts/streaming.md
 
 - Route: /concepts/streaming
@@ -3139,6 +3171,16 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Piece forms
   - H3: Example
   - H2: Providers + credentials
+  - H2: Related
+
+## concepts/user-model.md
+
+- Route: /concepts/user-model
+- Headings:
+  - H2: Write directives, not observations
+  - H2: Supersede in place
+  - H2: Choose the right file
+  - H2: Keep it compact
   - H2: Related
 
 ## date-time.md
@@ -9190,8 +9232,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /reference/templates/USER
 - Headings:
-  - H1: USER.md - About Your Human
-  - H2: Context
+  - H1: USER.md - User Model
+  - H2: Directives
   - H2: Related
 
 ## reference/test.md
