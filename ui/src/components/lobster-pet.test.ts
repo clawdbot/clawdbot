@@ -41,19 +41,28 @@ const LOBSTER_PET_PALETTE_IDS: LobsterPetPaletteId[] = [
   "oilslick",
   "aurora",
   "nebula",
+  "banana",
   "mood",
+  "bee",
+  "rubberduck",
   "clawtron",
   "selene",
   "geode",
   "ghost",
   "glass",
   "split",
+  "sourdough",
+  "zombie",
+  "plush",
   "cottoncandy",
+  "disco",
   "pixel",
   "blueprint",
   "phosphor",
   "heisenbug",
+  "invisible",
   "retro",
+  "goldenretro",
 ];
 
 const SPOT_ZONES = { left: [12, 38], right: [60, 84] } as const;
@@ -218,7 +227,7 @@ describe("lobster pet look", () => {
     for (const id of LOBSTER_PET_PALETTE_IDS) {
       expect(counts.get(id) ?? 0).toBeGreaterThan(0);
     }
-    // Exact catalog weights total 123.5. Every one-point-or-lower palette is
+    // Exact catalog weights total 132.95. Every one-point-or-lower palette is
     // below 1%, with enough tolerance here for the deterministic sample.
     for (const grail of [
       "clawtron",
@@ -227,20 +236,31 @@ describe("lobster pet look", () => {
       "ghost",
       "glass",
       "split",
+      "sourdough",
+      "zombie",
+      "plush",
       "cottoncandy",
+      "disco",
       "pixel",
       "blueprint",
       "phosphor",
       "heisenbug",
+      "invisible",
       "retro",
+      "goldenretro",
     ]) {
       expect(counts.get(grail) ?? 0).toBeLessThan(total * 0.018);
     }
+    const goldenRetroCount = counts.get("goldenretro") ?? 0;
     const retroCount = counts.get("retro") ?? 0;
-    for (const paletteId of LOBSTER_PET_PALETTE_IDS.filter((candidate) => candidate !== "retro")) {
+    expect(goldenRetroCount).toBeLessThan(retroCount);
+    for (const paletteId of LOBSTER_PET_PALETTE_IDS.filter(
+      (candidate) => candidate !== "retro" && candidate !== "goldenretro",
+    )) {
       expect(retroCount).toBeLessThan(counts.get(paletteId) ?? 0);
     }
-    expect((counts.get("crimson") ?? 0) + (counts.get("coral") ?? 0)).toBeGreaterThan(total * 0.4);
+    // The two common palettes own 52 / 132.95 of the expanded weight pool.
+    expect((counts.get("crimson") ?? 0) + (counts.get("coral") ?? 0)).toBeGreaterThan(total * 0.38);
     // Shinies exist and stay near their 1-in-512 odds.
     expect(shinies).toBeGreaterThan(0);
     expect(shinies).toBeLessThan(total * 0.006);
@@ -271,6 +291,16 @@ describe("lobster pet look", () => {
       createLobsterPetLook(seed, neutralDate),
     ).find((look) => look.palette.id === "clawtron");
     expect(clawtron?.antennae).toBe("perky");
+  });
+
+  it("keeps zombies' antennae droopy", () => {
+    // Pinned date: on the anniversary every palette repaints retro and no
+    // zombie could ever be found.
+    const neutralDate = new Date("2026-07-15T12:00:00");
+    const zombie = Array.from({ length: 20_000 }, (_, seed) =>
+      createLobsterPetLook(seed, neutralDate),
+    ).find((look) => look.palette.id === "zombie");
+    expect(zombie?.antennae).toBe("droopy");
   });
 
   it("derives distinct salted seeds per session key, stable within a load", () => {
@@ -919,6 +949,16 @@ describe("lobster plans", () => {
     expect(friend.oldFriend).toBe(true);
     expect(friend.look.palette.id).toBe("gold");
     expect(friend.friendName).toBe("Goldenrod");
+    const goldenRetro = expectDefined(
+      LOBSTER_PET_PALETTES.find((palette) => palette.id === "goldenretro"),
+      "golden retro palette",
+    );
+    const grail = resolveLobsterLoadIdentity(191, {
+      ...createLobsterPetLook(191, neutralDate),
+      palette: goldenRetro,
+    });
+    expect(grail.oldFriend).toBe(false);
+    expect(grail.look.palette.id).toBe("goldenretro");
     // A seed whose friend roll misses stays a fresh stranger.
     expect(identityOf(42).oldFriend).toBe(false);
   });
@@ -944,7 +984,7 @@ describe("lobster plans", () => {
 
 describe("rare lobster loads", () => {
   // Probe seeds (deterministic per stream): 644 hosts the Elder; 191 rolls
-  // an old-friend return plus a balloon entrance; 105715 hatches a shiny lumen;
+  // an old-friend return plus a balloon entrance; 4689 hatches a shiny lumen;
   // 104 is a shy load that beaches a bottle at ~194s; 37 is a shy load with
   // a snail crossing at ~407s.
   it("hosts the Elder: barnacled, renamed, and never molting", async () => {
@@ -996,7 +1036,7 @@ describe("rare lobster loads", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-09T12:00:00"));
     vi.stubGlobal("localStorage", window.localStorage);
-    const element = createPet(105_715);
+    const element = createPet(4_689);
     await arrive(element);
 
     expect(spriteClasses(element)).toContain("lobster-pet--shiny");

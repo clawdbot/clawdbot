@@ -1171,6 +1171,8 @@ export const en: TranslationMap = {
       lobsterdexSeen: "{seen}/{total} visited",
       lobsterdexFirstVisited: "{name} · first visited {date}",
       lobsterdexCardFirstVisited: "First visited {date}",
+      lobsterdexCardShinySeen: "✦ Shiny spotted {date}",
+      lobsterdexCardCopyLink: "Copy link",
       lobsterdexOpen: "Open Lobsterdex",
     },
     security: {

@@ -14,7 +14,7 @@ import type {
   LobsterPetPaletteId,
   LobsterPetPersonalityId,
 } from "./lobster-pet-contract.ts";
-import { lobsterPaletteName } from "./lobster-pet-lore.ts";
+import { lobsterPaletteName, lobsterRandomName } from "./lobster-pet-lore.ts";
 import { moonPhaseFraction } from "./lobster-pet-moon.ts";
 import {
   ACCESSORY_SPRITES,
@@ -35,6 +35,7 @@ import {
   MECHA_PLATES,
   NEBULA_STARS,
   OILSLICK_SHEEN,
+  PALETTE_OVERLAYS,
   PASSER_SPRITES,
   PASSER_TITLES,
   PATTERNED_PALETTES,
@@ -74,25 +75,38 @@ const PALETTES: Array<[LobsterPetPalette, number]> = [
   [{ id: "oilslick", shell: "#15171d", claw: "#23262e" }, 2],
   [{ id: "aurora", shell: "#dce6f0", claw: "#e9f0f7" }, 2],
   [{ id: "nebula", shell: "#34255c", claw: "#4a3a7d" }, 2],
+  [{ id: "banana", shell: "#f7e27d", claw: "#f3d55b" }, 2],
   // CSS custom properties are the palette color contract, so accent vars stay
   // intact through every look renderer rather than being parsed as hex values.
   [{ id: "mood", shell: "var(--accent, #7f77dd)", claw: "var(--accent-hover, #9a93e8)" }, 1.5],
+  [{ id: "bee", shell: "#f4c531", claw: "#2b2b23" }, 1.5],
+  [{ id: "rubberduck", shell: "#ffd93b", claw: "#ffb03b" }, 1.5],
   [{ id: "clawtron", shell: "#8d99a6", claw: "#a2aeba" }, 1],
   [{ id: "selene", shell: "#c9ced8", claw: "#d8dde5" }, 1],
   [{ id: "geode", shell: "#6b6474", claw: "#7d7588" }, 1],
   [{ id: "ghost", shell: "#dce8f2", claw: "#ecf3fa" }, 1],
   [{ id: "glass", shell: "#cfe4f4", claw: "#e0eef8" }, 1],
   [{ id: "split", shell: "#ff4f40", claw: "#ff775f" }, 1],
+  [{ id: "sourdough", shell: "#d9a662", claw: "#e6bc82" }, 1],
+  [{ id: "zombie", shell: "#9db08a", claw: "#86a17a" }, 1],
+  [{ id: "plush", shell: "#e8967a", claw: "#f2b09a" }, 1],
   // Pastel pink/blue iridescence, after the famous Maine catches.
   [{ id: "cottoncandy", shell: "#f6a8c9", claw: "#a5c6f0" }, 0.8],
+  [{ id: "disco", shell: "#b8c4d8", claw: "#cbd5e6" }, 0.8],
   [{ id: "pixel", shell: "#d84c3e", claw: "#ef8f6a" }, 0.7],
   [{ id: "blueprint", shell: "#123a66", claw: "#123a66" }, 0.7],
   [{ id: "phosphor", shell: "#0d2415", claw: "#0f2b19" }, 0.7],
   [{ id: "heisenbug", shell: "#262a33", claw: "#343945" }, 0.6],
+  // CSS values, rather than parsed colors, are the palette contract. Like
+  // mood's var() colors, translucent rgba() values must pass through intact.
+  [{ id: "invisible", shell: "rgba(127,140,160,0.07)", claw: "rgba(127,140,160,0.07)" }, 0.55],
   // The grail: homage to the classic OpenClaw logo (big raised claw, smirk,
   // angry brows, white sticker outline). ~0.5% of sessions.
   [{ id: "retro", shell: "#e8262c", claw: "#f04a3e" }, 0.5],
+  [{ id: "goldenretro", shell: "#e8b422", claw: "#f6cf5a" }, 0.1],
 ];
+
+const RETRO_GEOMETRY_PALETTES: ReadonlySet<LobsterPetPaletteId> = new Set(["retro", "goldenretro"]);
 
 // Catalog order for collection UIs (Lobsterdex): common to grail.
 export const LOBSTER_PET_PALETTES: readonly LobsterPetPalette[] = PALETTES.map(
@@ -195,40 +209,9 @@ const LOBSTER_PET_CLAW_MULS: Record<LobsterPetClawSize, number> = {
   mighty: 1.18,
 };
 
-// Seeded pet names; rare palettes carry signature names. Shown via the
-// sprite's native title tooltip, so no i18n surface.
-const PET_NAMES = [
-  "Pinchy",
-  "Barnaby",
-  "Thermidor",
-  "Clawdette",
-  "Sheldon",
-  "Scuttles",
-  "Bisque",
-  "Crusty",
-  "Snips",
-  "Bubbles",
-  "Clawdia",
-  "Ferdinand",
-  "Maple",
-  "Pearl",
-  "Biscuit",
-  "Captain",
-  "Ziggy",
-  "Noodle",
-  "Waffles",
-  "Pippin",
-  "Squirt",
-  "Chip",
-  "Clementine",
-  "Moss",
-] as const;
-
 export function lobsterPetName(look: LobsterPetLook, seed: number): string {
   const signatureName = lobsterPaletteName(look.palette.id);
-  return signatureName !== look.palette.id
-    ? signatureName
-    : expectDefined(PET_NAMES[(seed >>> 3) % PET_NAMES.length], "lobster pet name catalog entry");
+  return signatureName !== look.palette.id ? signatureName : lobsterRandomName(seed);
 }
 
 // A stranger wears a different palette than the resident pet.
@@ -319,7 +302,12 @@ export function createLobsterPetLook(seed: number, now: Date = new Date()): Lobs
   };
   // The LED rides the perky antenna tip. Keep the original antenna roll above
   // so adding Clawtron does not shift any later seeded trait.
-  const preparedLook = palette.id === "clawtron" ? { ...look, antennae: "perky" as const } : look;
+  let preparedLook = palette.id === "clawtron" ? { ...look, antennae: "perky" as const } : look;
+  // The undead do not do perky. Preserve the antenna roll above so later
+  // seeded traits stay aligned, then enforce the identity at the end.
+  if (palette.id === "zombie") {
+    preparedLook = { ...look, antennae: "droopy" };
+  }
   if (isLobsterAnniversary(now)) {
     // Birthday dress code: everyone is the classic logo, party hats on.
     const retro = PALETTES.find(([entry]) => entry.id === "retro")?.[0];
@@ -342,6 +330,7 @@ export function renderLobsterSvg(
   } = {},
 ) {
   const isPixel = look.palette.id === "pixel";
+  const hasRetroGeometry = RETRO_GEOMETRY_PALETTES.has(look.palette.id);
   const openEyeStyle = options.shell || options.sleeping ? "display:none" : "";
   const closedEyeStyle =
     options.shell || options.sleeping ? "opacity:1" : options.standalone ? "display:none" : "";
@@ -358,13 +347,13 @@ export function renderLobsterSvg(
           isPixel
             ? PIXEL_LOBSTER(openEyeStyle, closedEyeStyle)
             : svg`
-              ${look.palette.id === "retro" ? RETRO_ANTENNAE : ANTENNAE_SPRITES[look.antennae]}
+              ${hasRetroGeometry ? RETRO_ANTENNAE : ANTENNAE_SPRITES[look.antennae]}
               ${look.tailFan ? TAIL_FAN : nothing}
               <g class="lob-claw lob-claw--l">
                 <path d="M20 42 C5 37 0 47 5 57 C10 67 20 62 25 52 C28 45 25 42 20 42 Z" fill="var(--lob-claw)" />
               </g>
               ${
-                look.palette.id === "retro"
+                hasRetroGeometry
                   ? nothing
                   : svg`<g class="lob-claw lob-claw--r"><path d="M100 42 C115 37 120 47 115 57 C110 67 100 62 95 52 C92 45 95 42 100 42 Z" fill="var(--lob-claw)" /></g>`
               }
@@ -383,8 +372,9 @@ export function renderLobsterSvg(
               ${look.palette.id === "blueprint" ? BLUEPRINT_MARKS : nothing}
               ${look.palette.id === "clawtron" ? MECHA_PLATES : nothing}
               ${look.palette.id === "selene" ? SELENE_MOON(selenePhase) : nothing}
+              ${PALETTE_OVERLAYS[look.palette.id] ?? nothing}
               ${look.freckles && !PATTERNED_PALETTES.has(look.palette.id) ? FRECKLE_SPOTS : nothing}
-              <ellipse cx="48" cy="28" rx="20" ry="11" fill="#ffffff" opacity="0.1" />
+              ${look.palette.id === "invisible" ? nothing : svg`<ellipse cx="48" cy="28" rx="20" ry="11" fill="#ffffff" opacity="0.1" />`}
               <g class="lob-eye-open" style=${openEyeStyle}>
                 <circle cx="45" cy="32" r="5.5" fill="#0a1014" />
                 <circle cx="75" cy="32" r="5.5" fill="#0a1014" />
@@ -402,18 +392,18 @@ export function renderLobsterSvg(
             `
         }
       ${
-        look.palette.id === "retro"
+        hasRetroGeometry
           ? svg`
             ${RETRO_FACE}
             <g class="lob-claw lob-claw--r">${RETRO_MEGA_CLAW}</g>
           `
           : nothing
       }
-      ${options.grumpy && look.palette.id !== "retro" ? GRUMPY_FACE : nothing}
+      ${options.grumpy && !hasRetroGeometry ? GRUMPY_FACE : nothing}
       ${look.accessory === "none" || options.shell ? nothing : ACCESSORY_SPRITES[look.accessory]}
       ${
         // The retro grail's mega claw owns the same shoulder; it moves light.
-        options.bindle && look.palette.id !== "retro" ? BINDLE : nothing
+        options.bindle && !hasRetroGeometry ? BINDLE : nothing
       }
       ${options.sailorCap && !options.shell && !HEADWEAR.has(look.accessory) ? SAILOR_CAP : nothing}
       </g>

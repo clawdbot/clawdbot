@@ -19,9 +19,10 @@ describe("renderLobsterdex", () => {
     const container = document.createElement("div");
     render(renderLobsterdex(entries), container);
 
-    expect(container.querySelector(".lobsterdex-page__count")?.textContent).toBe("1/28 visited");
+    expect(container.querySelector(".lobsterdex-page__count")?.textContent).toBe("1/37 visited");
 
     const seen = container.querySelector(".lobster-pet--palette-crimson")?.closest("article");
+    expect(seen?.id).toBe("lobsterdex-crimson");
     expect(seen?.querySelector("h3")?.textContent).toBe("Ruby");
     expect(seen?.querySelector(".lobsterdex-page__lore")?.textContent).toBe(
       "The classic red, first in every tide pool.",
@@ -29,7 +30,12 @@ describe("renderLobsterdex", () => {
     expect(seen?.querySelector(".lobsterdex-page__date")?.textContent).toContain(
       new Date(firstSeenAt).toLocaleDateString("en"),
     );
+    expect(seen?.querySelectorAll(".lobsterdex-page__date")).toHaveLength(2);
+    expect(seen?.querySelector(".lobsterdex-page__dates")?.textContent).toContain(
+      `✦ Shiny spotted ${new Date(firstSeenAt).toLocaleDateString("en")}`,
+    );
     expect(seen?.querySelector(".lobsterdex-page__star")).not.toBeNull();
+    expect(seen?.querySelector('button[aria-label="Copy link"]')).not.toBeNull();
 
     const unseen = container.querySelector(".lobster-pet--palette-coral")?.closest("article");
     expect(unseen?.querySelector("h3")?.textContent).toBe("?");
