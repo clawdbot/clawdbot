@@ -87,23 +87,14 @@ Installed third-party plugins may declare additional credential variables in the
 ## ClawHub install telemetry
 
 Installing a skill or a plugin from ClawHub reports that install back to ClawHub.
-The report is sent only when a ClawHub auth token resolves, so signed-out
-installs send nothing.
+See [ClawHub telemetry](/clawhub/telemetry) for what is sent, when it is sent, and
+what is never included.
 
 | Variable                    | Purpose                                                     |
 | --------------------------- | ----------------------------------------------------------- |
 | `CLAWHUB_DISABLE_TELEMETRY` | Disable ClawHub install reporting with `1`, `true`, `yes`, or `on`. |
 
-`CLAWDHUB_DISABLE_TELEMETRY` is accepted as a legacy spelling of the same
-setting.
-
-What each report contains:
-
-- Skill install: the skill slug, and where present the owner handle, the
-  requested reference, the trust state, and the resolved version.
-- Plugin install: the package name and the resolved version.
-
-Reports carry no command output, file paths, or workspace contents.
+`CLAWDHUB_DISABLE_TELEMETRY` is accepted as a legacy spelling of the same setting.
 
 ## Provider credentials and workspace `.env`
 
