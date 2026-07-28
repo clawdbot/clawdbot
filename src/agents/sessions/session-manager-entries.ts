@@ -1,5 +1,6 @@
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
 import type { ImageContent, Message, TextContent } from "../../llm/types.js";
+import { takePersistedUserTurnEventId } from "../../sessions/user-turn-transcript-runtime-context.js";
 import {
   buildSessionContext as buildCoreSessionContext,
   type SessionTreeEntry as CoreSessionTreeEntry,
@@ -60,12 +61,22 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     message: Message | CustomMessage | BashExecutionMessage,
     options?: AppendPersistenceOptions,
   ): string {
+    const { eventId: persistedEventId, message: entryMessage } =
+      takePersistedUserTurnEventId(message);
+    if (persistedEventId && this.byId.has(persistedEventId)) {
+      // The recorder pre-persisted this turn before this manager loaded it; the
+      // entry is already canonical. Appending again would force-insert a duplicate
+      // idempotency-key row into SQLite (#115389).
+      return persistedEventId;
+    }
     const entry: SessionMessageEntry = {
       type: "message",
-      id: generateSessionEntryId(this.byId),
+      // Adopting the pre-persisted event id keeps one transcript identity: the
+      // SQLite append then dedupes to the same row instead of force-inserting.
+      id: persistedEventId ?? generateSessionEntryId(this.byId),
       parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
-      message,
+      message: entryMessage,
     };
     this.appendEntry(entry, options);
     return entry.id;

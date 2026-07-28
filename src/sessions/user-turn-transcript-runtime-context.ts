@@ -17,6 +17,60 @@ type RuntimeUserTurnTranscriptContext = {
   recorder: UserTurnTranscriptRecorder;
 };
 
+// The recorder pre-persists a user turn under its own SQLite event id. The id rides
+// the prepared message's __openclaw meta so SessionManager adopts one event identity
+// instead of force-inserting a duplicate idempotency-key row (#115389).
+const PERSISTED_USER_TURN_EVENT_ID_META_KEY = "persistedEventId";
+
+function readOpenClawMeta(message: unknown): Record<string, unknown> | undefined {
+  const meta =
+    message && typeof message === "object"
+      ? (message as Record<string, unknown>)["__openclaw"]
+      : undefined;
+  return meta && typeof meta === "object" && !Array.isArray(meta)
+    ? (meta as Record<string, unknown>)
+    : undefined;
+}
+
+export function readPersistedUserTurnEventId(message: unknown): string | undefined {
+  const value = readOpenClawMeta(message)?.[PERSISTED_USER_TURN_EVENT_ID_META_KEY];
+  return typeof value === "string" && value ? value : undefined;
+}
+
+/** Marks a prepared user turn with the SQLite event id it was pre-persisted under. */
+export function stampPersistedUserTurnEventId(
+  message: PersistedUserTurnMessage,
+  eventId: string,
+): PersistedUserTurnMessage {
+  if (readPersistedUserTurnEventId(message) === eventId) {
+    return message;
+  }
+  return {
+    ...(message as unknown as Record<string, unknown>),
+    __openclaw: { ...readOpenClawMeta(message), [PERSISTED_USER_TURN_EVENT_ID_META_KEY]: eventId },
+  } as unknown as PersistedUserTurnMessage;
+}
+
+/** Takes the adoption marker off a message before it becomes a session entry payload. */
+export function takePersistedUserTurnEventId<TMessage>(message: TMessage): {
+  eventId?: string;
+  message: TMessage;
+} {
+  const meta = readOpenClawMeta(message);
+  const eventId = meta?.[PERSISTED_USER_TURN_EVENT_ID_META_KEY];
+  if (!meta || typeof eventId !== "string" || !eventId) {
+    return { message };
+  }
+  const { [PERSISTED_USER_TURN_EVENT_ID_META_KEY]: _removed, ...restMeta } = meta;
+  const record: Record<string, unknown> = { ...(message as Record<string, unknown>) };
+  if (Object.keys(restMeta).length > 0) {
+    record["__openclaw"] = restMeta;
+  } else {
+    delete record["__openclaw"];
+  }
+  return { eventId, message: record as TMessage };
+}
+
 /** Carries transcript-only fields with a queued runtime message without exposing them to the model. */
 export function attachRuntimeUserTurnTranscriptContext(
   runtimeMessage: PersistedUserTurnMessage,

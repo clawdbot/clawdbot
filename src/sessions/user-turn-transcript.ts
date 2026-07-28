@@ -8,6 +8,10 @@ import {
 import { readPersistedMediaFacts, type MediaFact } from "../media/media-facts.js";
 import { applyInputProvenanceToUserMessage, normalizeInputProvenance } from "./input-provenance.js";
 import {
+  readPersistedUserTurnEventId,
+  stampPersistedUserTurnEventId,
+} from "./user-turn-transcript-runtime-context.js";
+import {
   normalizeStructuredMediaEntryForTranscript,
   resolveTranscriptMediaPath,
 } from "./user-turn-transcript.media-normalize.js";
@@ -273,7 +277,7 @@ export function mergePreparedUserTurnMessageForRuntime(params: {
   } as unknown as AgentMessage;
 }
 
-/** Restores only auth state that write hooks must not be able to forge or erase. */
+/** Restores only operational state that write hooks must not be able to forge or erase. */
 export function restorePreparedUserTurnOperationalMetaForRuntime(params: {
   runtimeMessage: AgentMessage;
   preparedMessage?: PersistedUserTurnMessage;
@@ -283,13 +287,20 @@ export function restorePreparedUserTurnOperationalMetaForRuntime(params: {
   }
   const preparedMeta = readOpenClawMessageMeta(params.preparedMessage);
   const senderIsOwner = preparedMeta?.senderIsOwner;
-  if (typeof senderIsOwner !== "boolean") {
-    return params.runtimeMessage;
+  let restoredMessage: PersistedUserTurnMessage = params.runtimeMessage;
+  if (typeof senderIsOwner === "boolean") {
+    restoredMessage = {
+      ...(restoredMessage as unknown as Record<string, unknown>),
+      __openclaw: { ...readOpenClawMessageMeta(restoredMessage), senderIsOwner },
+    } as unknown as PersistedUserTurnMessage;
   }
-  return {
-    ...(params.runtimeMessage as unknown as Record<string, unknown>),
-    __openclaw: { ...readOpenClawMessageMeta(params.runtimeMessage), senderIsOwner },
-  } as unknown as AgentMessage;
+  // A hook rewrite must not detach the turn from its pre-persisted event identity;
+  // losing it re-opens the duplicate-enrollment force insert (#115389).
+  const persistedEventId = readPersistedUserTurnEventId(params.preparedMessage);
+  if (persistedEventId) {
+    restoredMessage = stampPersistedUserTurnEventId(restoredMessage, persistedEventId);
+  }
+  return restoredMessage;
 }
 
 /** Applies before-message hooks while preserving user-turn transcript metadata. */
@@ -627,7 +638,16 @@ export function createUserTurnTranscriptRecorder(
   };
   return {
     message,
-    resolveMessage: resolveMessageForPersistence,
+    resolveMessage: async () => {
+      const resolvedMessage = await resolveMessageForPersistence();
+      // Ride the pre-persisted event id on the prepared message so SessionManager
+      // adopts one event identity instead of force-inserting a duplicate (#115389).
+      // Persistence itself keeps using resolveMessageForPersistence, so the marker
+      // never lands in stored payloads.
+      return resolvedMessage && persistedResult
+        ? stampPersistedUserTurnEventId(resolvedMessage, persistedResult.messageId)
+        : resolvedMessage;
+    },
     getPersistedMessage: () => runtimePersistedMessage ?? persistedResult?.message,
     markSentToProvider: () => {
       sentToProvider = true;
