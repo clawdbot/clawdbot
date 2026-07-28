@@ -317,8 +317,10 @@ describe("GPT-Live sideband protocol", () => {
     }
   });
 
-  it("skips empty delegations", async () => {
-    const runAgentConsult = vi.fn(async () => ({ text: "Done" }));
+  it("skips empty delegations and keeps their transcript for the next one", async () => {
+    const runAgentConsult = vi.fn(async (_params: { prompt: string; signal?: AbortSignal }) => ({
+      text: "Done",
+    }));
     const { realtime, sockets } = createBroker({ runAgentConsult });
     try {
       const reservation = await realtime.broker.createBrowserSession(
@@ -337,6 +339,10 @@ describe("GPT-Live sideband protocol", () => {
         throw new Error("Expected sideband socket");
       }
       emitSideband(socket, {
+        type: "turn.done",
+        turn: { role: "user", transcript: "hello" },
+      });
+      emitSideband(socket, {
         type: "delegation.created",
         item: {
           type: "delegation",
@@ -349,6 +355,20 @@ describe("GPT-Live sideband protocol", () => {
         setTimeout(resolve, 0);
       });
       expect(runAgentConsult).not.toHaveBeenCalled();
+
+      emitSideband(socket, {
+        type: "delegation.created",
+        item: {
+          type: "delegation",
+          target: "client",
+          id: "delegation-1",
+          content: [{ type: "input_text", text: "check weather" }],
+        },
+      });
+      await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledTimes(1));
+      expect(runAgentConsult.mock.calls[0]?.[0]?.prompt).toBe(
+        "<realtime_delegation>\n  <input>check weather</input>\n  <transcript_delta>user: hello</transcript_delta>\n</realtime_delegation>",
+      );
     } finally {
       await realtime.cleanup();
     }

@@ -344,13 +344,16 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
       return;
     }
     const delegationInput = event.prompt;
-    const transcript = session.transcript;
-    session.transcript = [];
-    session.partialTranscriptRole = undefined;
     if (!delegationInput.trim()) {
       params.logger.debug?.("OpenAI GPT-Live ignored an empty client delegation");
       return;
     }
+    // Drain only for a delegation we actually consult: the transcript is a
+    // once-delivered delta, so clearing it for an ignored event would strand
+    // that context and consult the next real delegation without it.
+    const transcript = session.transcript;
+    session.transcript = [];
+    session.partialTranscriptRole = undefined;
     const prompt = buildOpenAIQuicksilverDelegationPrompt({
       input: delegationInput,
       transcript,
