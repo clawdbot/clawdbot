@@ -145,6 +145,7 @@ import {
   hasSuccessfulWriteToolOutput,
   extractLatestImageUserTurn,
   parseToolOutputJson,
+  resolveLogicalPlannedToolName,
 } from "./mock-openai-input.js";
 import {
   attachQaMockResponsesWebSocketServer,
@@ -162,6 +163,17 @@ import {
   isSnackRecallPrompt,
   extractSnackPreference,
 } from "./mock-openai-tooling.js";
+
+function extractPlannedToolDebugFields(events: StreamEvent[]) {
+  const plannedToolName = extractPlannedToolName(events);
+  const plannedToolArgs = extractPlannedToolArgs(events);
+  return {
+    plannedToolCallId: extractPlannedToolCallId(events),
+    plannedToolName,
+    logicalPlannedToolName: resolveLogicalPlannedToolName(plannedToolName, plannedToolArgs),
+    plannedToolArgs,
+  };
+}
 
 async function buildResponsesPayload(
   body: Record<string, unknown>,
@@ -1421,9 +1433,7 @@ export async function startQaMockOpenAiServer(params?: {
       model: resolvedModel,
       providerVariant: resolveProviderVariant(resolvedModel),
       imageInputCount: countImageInputs(input),
-      plannedToolCallId: extractPlannedToolCallId(events),
-      plannedToolName: extractPlannedToolName(events),
-      plannedToolArgs: extractPlannedToolArgs(events),
+      ...extractPlannedToolDebugFields(events),
       toolOutputCallId: extractToolOutputCallId(input) || undefined,
       ...(extractToolOutputStructuredError(input) ? { toolOutputStructuredError: true } : {}),
     });
@@ -1646,9 +1656,7 @@ export async function startQaMockOpenAiServer(params?: {
           model: normalizedModel,
           providerVariant: resolveProviderVariant(normalizedModel),
           imageInputCount: countImageInputs(input),
-          plannedToolCallId: extractPlannedToolCallId(events),
-          plannedToolName: extractPlannedToolName(events),
-          plannedToolArgs: extractPlannedToolArgs(events),
+          ...extractPlannedToolDebugFields(events),
           toolOutputCallId: extractToolOutputCallId(input) || undefined,
           ...(extractToolOutputStructuredError(input) ? { toolOutputStructuredError: true } : {}),
         });

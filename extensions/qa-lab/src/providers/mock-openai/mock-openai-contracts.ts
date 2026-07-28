@@ -123,6 +123,7 @@ export type MockOpenAiRequestSnapshot = {
   imageInputCount: number;
   plannedToolCallId?: string;
   plannedToolName?: string;
+  logicalPlannedToolName?: string;
   plannedToolArgs?: Record<string, unknown>;
   toolOutputCallId?: string;
   toolOutputStructuredError?: true;

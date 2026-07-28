@@ -129,16 +129,11 @@ flow:
         - set: followthroughDebugRequests
           value:
             expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].filter((request) => /repo contract followthrough check/i.test(String(request.allInputText ?? ''))) : []"
+        - set: followthroughLogicalToolNames
+          value:
+            expr: "followthroughDebugRequests.map((request) => request.logicalPlannedToolName ?? null)"
         - assert:
-            expr: "!env.mock || followthroughDebugRequests.filter((request) => request.plannedToolName === 'read').length >= 3"
+            expr: "!env.mock || (JSON.stringify(followthroughLogicalToolNames.slice(0, 4)) === JSON.stringify(['read', 'read', 'read', 'write']) && followthroughLogicalToolNames.slice(4).every((name) => name === null))"
             message:
-              expr: "`expected three read tool calls before write, saw plannedToolNames=${JSON.stringify(followthroughDebugRequests.map((request) => request.plannedToolName ?? null))}`"
-        - assert:
-            expr: "!env.mock || followthroughDebugRequests.some((request) => request.plannedToolName === 'write')"
-            message:
-              expr: "`expected write tool call during repo contract followthrough, saw plannedToolNames=${JSON.stringify(followthroughDebugRequests.map((request) => request.plannedToolName ?? null))}`"
-        - assert:
-            expr: "!env.mock || (() => { const readIndices = followthroughDebugRequests.map((r, i) => r.plannedToolName === 'read' ? i : -1).filter(i => i >= 0); const firstWrite = followthroughDebugRequests.findIndex((r) => r.plannedToolName === 'write'); return readIndices.length >= 3 && firstWrite >= 0 && readIndices[2] < firstWrite; })()"
-            message:
-              expr: "`expected all 3 reads before any write during repo contract followthrough, saw plannedToolNames=${JSON.stringify(followthroughDebugRequests.map((request) => request.plannedToolName ?? null))}`"
+              expr: "`expected logical read/read/read/write with only trailing final nulls, saw logicalPlannedToolNames=${JSON.stringify(followthroughLogicalToolNames)} outerPlannedToolNames=${JSON.stringify(followthroughDebugRequests.map((request) => request.plannedToolName ?? null))}`"
       detailsExpr: outbound.text

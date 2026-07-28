@@ -5394,6 +5394,24 @@ describe("qa mock openai server", () => {
     ]);
     expect(writeInput.content).toEqual(expect.stringContaining("repo contract"));
     expect(writeInput.content).toEqual(expect.stringContaining("Evidence:"));
+    const plannedDebugResponse = await fetch(`${server.baseUrl}/debug/requests`);
+    expect(plannedDebugResponse.status).toBe(200);
+    const plannedDebugRequests = requireArray(
+      await plannedDebugResponse.json(),
+      "repo contract debug requests",
+    ).map((request, index) => requireRecord(request, `repo contract debug request ${index}`));
+    expect(plannedDebugRequests.map((request) => request.plannedToolName)).toEqual([
+      "exec",
+      "exec",
+      "exec",
+      "exec",
+    ]);
+    expect(plannedDebugRequests.map((request) => request.logicalPlannedToolName)).toEqual([
+      "read",
+      "read",
+      "read",
+      "write",
+    ]);
 
     const buildCodeModeResult = () =>
       JSON.stringify({
@@ -5487,6 +5505,14 @@ describe("qa mock openai server", () => {
     expect(finalText).toContain("Read: AGENT.md, SOUL.md, FOLLOWTHROUGH_INPUT.md");
     expect(finalText).toContain("Wrote: repo-contract-summary.txt");
     expect(finalText).toContain("Status: complete");
+    const finalDebugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
+    expect(finalDebugResponse.status).toBe(200);
+    const finalDebugRequest = requireRecord(
+      await finalDebugResponse.json(),
+      "final repo contract debug request",
+    );
+    expect(finalDebugRequest.plannedToolName).toBeUndefined();
+    expect(finalDebugRequest.logicalPlannedToolName).toBeUndefined();
   });
 
   it("finishes an Anthropic compaction retry from the matched non-error write result", async () => {
