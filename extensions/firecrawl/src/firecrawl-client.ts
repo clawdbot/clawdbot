@@ -561,6 +561,32 @@ export function parseFirecrawlScrapePayload(params: {
   };
 }
 
+/**
+ * Rebinds a cached scrape result onto the URL the current caller asked for.
+ *
+ * The scrape cache key canonicalizes its URL dimension, so one entry now serves every
+ * case-equivalent spelling of the same resource. Two fields in a stored result echo the request
+ * that populated it: `url` is the requested URL verbatim, and `finalUrl` falls back to it when
+ * Firecrawl reports no source URL of its own. Replaying those would hand a later caller the first
+ * caller's spelling, so a field that still equals the stored request URL is re-bound to the current
+ * one. A `finalUrl` Firecrawl actually reported differs from the request and is left untouched:
+ * that is the provider's statement about the resource, not an echo of the input.
+ */
+function rebindScrapeRequestUrl(
+  value: Record<string, unknown>,
+  requestUrl: string,
+): Record<string, unknown> {
+  const storedUrl = value.url;
+  if (typeof storedUrl !== "string" || storedUrl === requestUrl) {
+    return value;
+  }
+  return {
+    ...value,
+    url: requestUrl,
+    ...(value.finalUrl === storedUrl ? { finalUrl: requestUrl } : {}),
+  };
+}
+
 export async function runFirecrawlScrape(
   params: FirecrawlScrapeParams,
 ): Promise<Record<string, unknown>> {
@@ -599,7 +625,7 @@ export async function runFirecrawlScrape(
   );
   const cached = readCache(SCRAPE_CACHE, cacheKey);
   if (cached) {
-    return { ...cached.value, cached: true };
+    return { ...rebindScrapeRequestUrl(cached.value, params.url), cached: true };
   }
 
   const endpoint = await resolveEndpoint(baseUrl, "/v2/scrape");
@@ -662,5 +688,6 @@ export const testing = {
   resolveEndpoint,
   validateFirecrawlBaseUrl,
   resolveSearchItems,
+  SCRAPE_CACHE,
 };
 export { testing as __testing };
