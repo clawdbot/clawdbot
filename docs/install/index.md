@@ -76,14 +76,16 @@ If you already manage Node yourself:
 <Tabs>
   <Tab title="npm">
     ```bash
-    npm install -g openclaw@latest
+    npm install -g openclaw@latest --allow-scripts openclaw
     openclaw onboard --install-daemon
     ```
 
     <Note>
     The hosted installer clears npm freshness filters such as `min-release-age`
     for the OpenClaw package install. If you install manually with npm, your own
-    npm policy still applies.
+    npm policy still applies. npm 11+ also requires package install scripts to
+    be allowlisted; use `--allow-scripts openclaw` for global installs instead
+    of `npm approve-scripts openclaw`, which is project-scoped.
     </Note>
 
   </Tab>

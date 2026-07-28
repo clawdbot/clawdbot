@@ -143,8 +143,11 @@ The Gateway is the single source of truth for sessions, routing, and channel con
 <Steps>
   <Step title="Install OpenClaw">
     ```bash
-    npm install -g openclaw@latest
+    npm install -g openclaw@latest --allow-scripts openclaw
     ```
+
+    npm 11+ requires explicit package-script approval for global installs. See
+    [Install](/install#npm-pnpm-or-bun) for package-manager notes.
   </Step>
   <Step title="Onboard and install the service">
     ```bash
