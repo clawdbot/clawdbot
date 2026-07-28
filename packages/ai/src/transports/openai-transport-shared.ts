@@ -23,7 +23,7 @@ export const log = {
   },
 };
 
-export type { BaseOpenAIStreamOptions, OpenAICompletionsOptions } from "../provider-options.js";
+export type { OpenAICompletionsOptions } from "../provider-options.js";
 
 type OpenAIModeCompatInput = Omit<OpenAICompletionsCompat, "thinkingFormat"> & {
   thinkingFormat?: string;
