@@ -30,6 +30,12 @@ afterEach(() => {
 
 function expectedEmbedUrl(url: string, mode: "light" | "dark" = "dark"): string {
   const resolved = new URL(url);
+  if (
+    resolved.searchParams.get("openclawHostTheme") !== "1" ||
+    !/^\/embed\/(?:channel|thread)\/[^/]+\/[^/]+\/?$/u.test(resolved.pathname)
+  ) {
+    return resolved.href;
+  }
   resolved.searchParams.set("theme", mode);
   resolved.searchParams.set("hostOrigin", window.location.origin);
   return resolved.href;
@@ -90,7 +96,8 @@ describe("session discussion panel", () => {
     const panel = mount({
       loadInfo: vi.fn().mockResolvedValue({
         state: "open",
-        embedUrl: "https://discussion.example/embed/channel/T1/C1?existing=1#messages",
+        embedUrl:
+          "https://discussion.example/embed/channel/T1/C1?openclawHostTheme=1&existing=1#messages",
       }),
       openDiscussion: vi.fn(),
     });
@@ -98,11 +105,41 @@ describe("session discussion panel", () => {
     await vi.waitFor(() => {
       expect(panel.querySelector("iframe")?.getAttribute("src")).toBe(
         expectedEmbedUrl(
-          "https://discussion.example/embed/channel/T1/C1?existing=1#messages",
+          "https://discussion.example/embed/channel/T1/C1?openclawHostTheme=1&existing=1#messages",
           "light",
         ),
       );
     });
+  });
+
+  it("preserves signed provider URLs even when their routes resemble ClickClack", async () => {
+    const signedUrl =
+      "https://discussion.example/embed/channel/a/b?signature=abc%2B123&expires=1785200000#thread";
+    document.documentElement.dataset.themeMode = "light";
+    document.documentElement.style.setProperty("--bg", "#faf9f7");
+    const panel = mount({
+      loadInfo: vi.fn().mockResolvedValue({
+        state: "open",
+        embedUrl: signedUrl,
+      }),
+      openDiscussion: vi.fn(),
+    });
+
+    await vi.waitFor(() => {
+      expect(panel.querySelector<HTMLIFrameElement>("iframe")?.src).toBe(signedUrl);
+    });
+    const frame = panel.querySelector<HTMLIFrameElement>("iframe")!;
+    const postMessage = vi.spyOn(frame.contentWindow!, "postMessage");
+
+    frame.dispatchEvent(new Event("load"));
+
+    expect(postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "openclaw:widget-theme",
+        tokens: expect.objectContaining({ surface: "#faf9f7" }),
+      }),
+      "https://discussion.example",
+    );
   });
 
   it("posts the complete host palette to the exact discussion origin on frame load", async () => {
@@ -113,7 +150,7 @@ describe("session discussion panel", () => {
     const panel = mount({
       loadInfo: vi.fn().mockResolvedValue({
         state: "open",
-        embedUrl: "https://discussion.example/embed/channel/T1/C1",
+        embedUrl: "https://discussion.example/embed/channel/T1/C1?openclawHostTheme=1",
       }),
       openDiscussion: vi.fn(),
     });
@@ -146,7 +183,7 @@ describe("session discussion panel", () => {
     const panel = mount({
       loadInfo: vi.fn().mockResolvedValue({
         state: "open",
-        embedUrl: "https://discussion.example/embed/channel/T1/C1",
+        embedUrl: "https://discussion.example/embed/channel/T1/C1?openclawHostTheme=1",
       }),
       openDiscussion: vi.fn(),
     });
@@ -170,7 +207,7 @@ describe("session discussion panel", () => {
     const panel = mount({
       loadInfo: vi.fn().mockResolvedValue({
         state: "open",
-        embedUrl: "https://discussion.example/embed/channel/T1/C1",
+        embedUrl: "https://discussion.example/embed/channel/T1/C1?openclawHostTheme=1",
       }),
       openDiscussion: vi.fn(),
     });
@@ -202,7 +239,7 @@ describe("session discussion panel", () => {
     const panel = mount({
       loadInfo: vi.fn().mockResolvedValue({
         state: "open",
-        embedUrl: "https://discussion.example/embed/channel/T1/C1",
+        embedUrl: "https://discussion.example/embed/channel/T1/C1?openclawHostTheme=1",
       }),
       openDiscussion: vi.fn(),
     });

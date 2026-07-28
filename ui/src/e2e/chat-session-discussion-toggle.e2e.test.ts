@@ -163,7 +163,7 @@ describeControlUiE2e("session discussion toggle", () => {
       methodResponses: {
         "session.discussion.info": { state: "available" },
         "session.discussion.open": {
-          embedUrl: "https://discussion.example/embed/channel/T1/C1",
+          embedUrl: "https://discussion.example/embed/channel/T1/C1?openclawHostTheme=1",
           openUrl: "https://discussion.example/app/T1/C1",
           state: "open",
         },

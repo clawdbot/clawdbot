@@ -50,6 +50,14 @@ function resolveDiscussionEmbedUrl(value: string | undefined): string | null {
   if (url.origin === window.location.origin) {
     return null;
   }
+  if (
+    url.searchParams.get("openclawHostTheme") !== "1" ||
+    !/^\/embed\/(?:channel|thread)\/[^/]+\/[^/]+\/?$/u.test(url.pathname)
+  ) {
+    // Provider-issued and signed discussion URLs are opaque. Only ClickClack's
+    // documented embed routes support the first-paint theme query contract.
+    return url.href;
+  }
   // The initial URL protects the first paint; hostOrigin binds subsequent
   // full-palette messages to this exact Control UI parent.
   url.searchParams.set(
