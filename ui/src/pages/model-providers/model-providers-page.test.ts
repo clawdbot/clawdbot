@@ -94,9 +94,16 @@ function createHarness(initialScopeId: string) {
       configLoading: false,
       configSaving: false,
       configApplying: false,
+      configNeedsApply: false,
+      configFormMode: "form",
+      configFormDirty: false,
+      configAutoSaveStatus: "idle",
     },
     ensureLoaded: vi.fn(async () => undefined),
     patchForm: vi.fn(),
+    save: vi.fn(async () => true),
+    apply: vi.fn(async () => true),
+    discardDraft: vi.fn(async () => undefined),
     subscribe,
   };
   const context = {
@@ -173,6 +180,21 @@ describe("ModelProvidersPage agent scope", () => {
       ["agents", "defaults", "fastModeDefault"],
       false,
     );
+  });
+
+  it("wires model config recovery and apply actions to the shared capability", async () => {
+    const { context, runtimeConfig } = createHarness("main");
+    runtimeConfig.state.configAutoSaveStatus = "error";
+    runtimeConfig.state.configNeedsApply = true;
+    const page = appendPage(context);
+    await vi.waitFor(() => expect(page.querySelector(".config-apply-banner")).not.toBeNull());
+
+    const buttons = [...page.querySelectorAll<HTMLButtonElement>("button")];
+    buttons.find((entry) => entry.textContent?.trim() === "Retry")?.click();
+    buttons.find((entry) => entry.textContent?.trim() === "Restart & apply")?.click();
+
+    expect(runtimeConfig.save).toHaveBeenCalledTimes(1);
+    expect(runtimeConfig.apply).toHaveBeenCalledTimes(1);
   });
 
   it("reloads credential status when the agent selector changes", async () => {
