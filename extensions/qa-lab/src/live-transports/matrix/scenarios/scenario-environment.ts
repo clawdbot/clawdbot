@@ -1,5 +1,6 @@
 // QA Lab Matrix setup prepares transport state for the shared flow host.
 import { setTimeout as sleep } from "node:timers/promises";
+import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
@@ -20,6 +21,7 @@ type MatrixQaHarness = Awaited<ReturnType<typeof startMatrixQaHarness>>;
 type MatrixQaScenarioEnvironmentParams = {
   accountId: string;
   harness: MatrixQaHarness;
+  onTransportInterruptionStateChange?: (active: boolean) => void;
   observedEvents: MatrixQaObservedEvent[];
   provisioning: MatrixQaProvisionResult;
 };
@@ -41,6 +43,16 @@ type MatrixQaConfigApplyStatus = {
   configRevisionHash?: string;
   hash?: string;
 };
+
+export function resetMatrixQaScenarioObserverState(params: {
+  syncState: MatrixQaScenarioContext["syncState"];
+  syncStreams: NonNullable<MatrixQaScenarioContext["syncStreams"]>;
+}) {
+  delete params.syncState.driver;
+  delete params.syncState.observer;
+  delete params.syncStreams.driver;
+  delete params.syncStreams.observer;
+}
 
 function readMatrixConfigOverrides(
   config: Record<string, unknown>,
@@ -221,6 +233,10 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
       sutUserId: params.provisioning.sut.userId,
       topology: params.provisioning.topology,
     });
+    const matrixConfigChanged = !isDeepStrictEqual(
+      configSnapshot.config.channels?.matrix,
+      gatewayConfig.channels?.matrix,
+    );
     const patchStartedAt = Date.now();
     const accountStartAtBeforePatch = (
       await readMatrixAccountStatuses(input.gateway).catch(() => [])
@@ -250,16 +266,21 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
       timeoutMs: input.timeoutMs,
     });
     await waitForMatrixAccountReady({
-      // Restart-required writes acknowledge before SIGUSR1 completes. Require a
-      // fresh Matrix account start so the scenario cannot race the old gateway.
+      // Config writes acknowledge persisted state before a deferred channel
+      // reload completes. Require the changed Matrix account to actually restart
+      // so a later config patch cannot supersede this scenario's live runtime.
       afterStartAt:
-        patchResult.sentinel?.payload?.stats?.requiresRestart === true
+        matrixConfigChanged && patchResult.noop !== true
           ? (accountStartAtBeforePatch ?? patchStartedAt - 1)
           : undefined,
       accountId: params.accountId,
       gateway: input.gateway,
       timeoutMs: input.timeoutMs,
     });
+    // Scenario actors must prime after each config/reload boundary. Reusing an
+    // observer across channel restarts can retain an in-flight timeline cursor
+    // and consume the next scenario's first preview before its predicate exists.
+    resetMatrixQaScenarioObserverState({ syncState, syncStreams });
 
     const scenarioContext = {
       baseUrl: params.harness.baseUrl,
@@ -325,12 +346,17 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
         });
       },
       interruptTransport: async () => {
-        await params.harness.restartService();
-        await waitForMatrixAccountReady({
-          accountId: params.accountId,
-          gateway: input.gateway,
-          timeoutMs: Math.max(input.timeoutMs, 90_000),
-        });
+        params.onTransportInterruptionStateChange?.(true);
+        try {
+          await params.harness.restartService();
+          await waitForMatrixAccountReady({
+            accountId: params.accountId,
+            gateway: input.gateway,
+            timeoutMs: Math.max(input.timeoutMs, 90_000),
+          });
+        } finally {
+          params.onTransportInterruptionStateChange?.(false);
+        }
       },
       roomId: params.provisioning.roomId,
       sutAccountId: params.accountId,

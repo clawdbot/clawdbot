@@ -124,6 +124,16 @@ describe("Matrix QA Lab scenario flows", () => {
     });
   });
 
+  it("isolates the homeserver restart from the shared Matrix sync streams", () => {
+    expect(readQaScenarioById("matrix-homeserver-restart-resume").execution).toMatchObject({
+      kind: "flow",
+      channel: "matrix",
+      suiteIsolation: "isolated",
+      isolationReason:
+        "Restarts the disposable homeserver process and its active Matrix sync streams.",
+    });
+  });
+
   it("runs the allowlist scenario through its config-file reload owner", () => {
     const scenario = catalog.scenarios.find((entry) => entry.id === "matrix-allowlist-hot-reload");
     expect(scenario?.execution.kind).toBe("flow");
