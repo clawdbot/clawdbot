@@ -111,7 +111,7 @@ describe("normalizeSlackOutboundText", () => {
     }
   });
 
-  it("drops emphasis markers that Slack renders literally beside CJK punctuation", () => {
+  it("drops emphasis markers beside CJK punctuation and non-ASCII symbols", () => {
     const cases = [
       ["_今回の改善はちゃんと効いてます_。", "今回の改善はちゃんと効いてます。"],
       ["*重要*。", "重要。"],
@@ -120,16 +120,23 @@ describe("normalizeSlackOutboundText", () => {
       ["__重要__。", "重要。"],
       ["***重要***。", "重要。"],
       ["___重要___。", "重要。"],
+      ["【_重要_】", "【重要】"],
+      ["€*important*€", "€important€"],
+      ["💡*important*💡", "💡important💡"],
+      ["×*important*→", "×important→"],
     ] as const;
     for (const [input, expected] of cases) {
       expect(normalizeSlackOutboundText(input)).toBe(expected);
     }
   });
 
-  it("preserves safe emphasis and semantic underscores", () => {
+  it("preserves emphasis beside Slack-safe punctuation", () => {
     const cases = [
       ["*important*.", "_important_."],
       ["**important**.", "*important*."],
+      ["“*important*”", "“_important_”"],
+      ["—*important*—", "—_important_—"],
+      ["…*important*…", "…_important_…"],
       ["*重要*", "_重要_"],
       ["_重要_", "_重要_"],
       ["**重要**", "*重要*"],
@@ -159,11 +166,12 @@ describe("normalizeSlackOutboundText", () => {
     ).toStrictEqual([]);
   });
 
-  it("keeps invalid italic boundaries plain when chunking", () => {
+  it("keeps unsafe emphasis boundaries plain when chunking", () => {
     expect(markdownToSlackMrkdwnChunks("これは*重要*です。", 100)).toEqual(["これは重要です。"]);
     expect(markdownToSlackMrkdwnChunks("*重要*。", 100)).toEqual(["重要。"]);
     expect(markdownToSlackMrkdwnChunks("**重要**。", 100)).toEqual(["重要。"]);
     expect(markdownToSlackMrkdwnChunks("___重要___。", 100)).toEqual(["重要。"]);
+    expect(markdownToSlackMrkdwnChunks("€**important**€", 100)).toEqual(["€important€"]);
   });
 });
 
