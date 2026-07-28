@@ -47,6 +47,14 @@ export default defineSingleProviderPluginEntry({
         promptMessage: "Enter your Apiário API key",
         defaultModel: APIARIO_DEFAULT_MODEL_REF,
         applyConfig: applyApiarioConfig,
+        wizard: {
+          choiceId: "apiario-api-key",
+          choiceLabel: "Apiário API Key",
+          choiceHint: "Use sua chave da API do Apiário",
+          groupId: "apiario",
+          groupLabel: "Apiário",
+          groupHint: "Apiário Dev",
+        },
       },
     ],
     catalog: {
