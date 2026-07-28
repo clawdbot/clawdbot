@@ -278,6 +278,15 @@ export async function executeSystemAgentOperation(
         ].join("\n"),
       );
       return { applied: false };
+    case "memory-import":
+      runtime.log(
+        [
+          "Memory import needs an interactive session.",
+          "Open the Memory page in the Control UI,",
+          "or run `openclaw onboard` for the terminal wizard.",
+        ].join("\n"),
+      );
+      return { applied: false };
     case "model-setup":
       runtime.log(
         [

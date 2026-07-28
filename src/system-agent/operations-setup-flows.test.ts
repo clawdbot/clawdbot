@@ -59,6 +59,14 @@ describe("system agent setup-flow operations", () => {
     expect(parseSystemAgentOperation("configure search with brave").kind).toBe("none");
   });
 
+  it("parses the exact memory-import grammar", () => {
+    for (const input of ["import memory", "import memories", "memory import"]) {
+      expect(parseSystemAgentOperation(input)).toEqual({ kind: "memory-import" });
+    }
+    expect(isPersistentSystemAgentOperation({ kind: "memory-import" })).toBe(false);
+    expect(parseSystemAgentOperation("import memory from codex").kind).toBe("none");
+  });
+
   it("parses anchored setup switches and channel info", () => {
     for (const input of [
       "open setup wizard",
@@ -125,6 +133,15 @@ describe("system agent setup-flow operations", () => {
     expect(lines.join("\n")).toContain("openclaw configure --section skills");
     expect(lines.join("\n")).toContain("openclaw configure --section web");
     expect(lines.join("\n")).toContain("openclaw configure --section gateway");
+  });
+
+  it("points one-shot memory import at interactive owners", async () => {
+    const { runtime, lines } = createSystemAgentTestRuntime();
+
+    await executeSystemAgentOperation({ kind: "memory-import" }, runtime);
+
+    expect(lines.join("\n")).toContain("Memory page in the Control UI");
+    expect(lines.join("\n")).toContain("openclaw onboard");
   });
 
   it("routes one-shot model setup through the verified OpenClaw flow", async () => {

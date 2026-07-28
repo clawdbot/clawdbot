@@ -332,6 +332,11 @@ describe("openclaw tool", () => {
     expect(toolText(gateway)).toContain("never ask for or repeat a credential");
     expect(directiveRef.current).toEqual({ kind: "gateway-config-setup" });
 
+    const memory = await tool.execute("t5-memory", { action: "import_memory" });
+    expect(toolText(memory)).toContain("directive:");
+    expect(toolText(memory)).toContain("copy-only memory import");
+    expect(directiveRef.current).toEqual({ kind: "memory-import" });
+
     const configureModel = await tool.execute("t6", {
       action: "configure_model_provider",
       workspace: "/tmp/work",
@@ -417,6 +422,12 @@ describe("openclaw tool", () => {
         resultText: "directive: the host chat starts local Gateway setup.",
       }),
     ).toEqual({ kind: "gateway-config-setup" });
+    expect(
+      resolveSystemAgentDirectiveTransition({
+        args: { action: "import_memory" },
+        resultText: "directive: the host chat starts memory import.",
+      }),
+    ).toEqual({ kind: "memory-import" });
     expect(
       resolveSystemAgentDirectiveTransition({
         args: { action: "open_agent" },
