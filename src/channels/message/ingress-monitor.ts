@@ -601,6 +601,10 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
       if (running || stopped || isAborted()) {
         return;
       }
+      // Open the durable queue before arming the poll timer. A monitor without a queue can
+      // neither admit nor drain, so channel start must fail through the caller instead of
+      // running a timer that reports the same unrecoverable error on every tick.
+      getQueue();
       running = true;
       pollTimer = setInterval(requestDrain, options.pollIntervalMs);
       pollTimer.unref?.();

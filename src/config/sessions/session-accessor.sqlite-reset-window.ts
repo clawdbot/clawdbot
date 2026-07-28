@@ -284,3 +284,25 @@ export function readVisibleMessageRange(
   );
   return [...keptEvents, ...postEvents];
 }
+
+/** Maps a logical visible-message range to its materialized message positions. */
+export function resolveVisibleMessagePositionRange(
+  projection: ResetWindowProjection,
+  start: number,
+  endExclusive: number,
+): number[] {
+  if (endExclusive <= start) {
+    return [];
+  }
+  const visible = resolveVisibleMessagePositions(projection);
+  const boundedStart = Math.min(Math.max(0, start), visible.total);
+  const boundedEnd = Math.min(Math.max(boundedStart, endExclusive), visible.total);
+  const keptEnd = Math.min(boundedEnd, visible.kept.length);
+  const positions = visible.kept.slice(boundedStart, keptEnd);
+  const postVisibleStart = Math.max(boundedStart, visible.kept.length);
+  const postVisibleEnd = Math.max(postVisibleStart, boundedEnd);
+  for (let logical = postVisibleStart; logical < postVisibleEnd; logical += 1) {
+    positions.push(visible.postStart + logical - visible.kept.length);
+  }
+  return positions;
+}

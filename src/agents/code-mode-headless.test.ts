@@ -94,6 +94,300 @@ describe("headless Code Mode", () => {
     expect(second.execute).toHaveBeenCalledOnce();
   });
 
+  it("keeps the headless race winner when the later-started tool settles first", async () => {
+    let firstAborted = false;
+    const first = fakeTool("headless_first_race", async (_toolCallId, _input, signal) => {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(resolve, 25);
+        signal?.addEventListener(
+          "abort",
+          () => {
+            clearTimeout(timer);
+            firstAborted = true;
+            reject(new Error("aborted"));
+          },
+          { once: true },
+        );
+      });
+      return jsonResult({ winner: "first" });
+    });
+    const second = fakeTool("headless_second_race", async () => jsonResult({ winner: "second" }));
+
+    const result = expectCompleted(
+      await runCodeModeScriptHeadless({
+        ctx: createHeadlessHarness([first, second]),
+        code: `return await Promise.race([
+          tools.callValue("openclaw:core:headless_first_race", {}),
+          tools.callValue("openclaw:core:headless_second_race", {}),
+        ]);`,
+        wallClockMs: 5_000,
+      }),
+    );
+
+    expect(result.value).toEqual({ winner: "second" });
+    expect(result.toolCallCount).toBe(2);
+    expect(first.execute).toHaveBeenCalledOnce();
+    expect(second.execute).toHaveBeenCalledOnce();
+    expect(firstAborted).toBe(false);
+  });
+
+  it("drains a headless nested combinator after its outer race wins", async () => {
+    let nestedAborted = false;
+    const never = fakeTool("headless_nested_race_never", async (_toolCallId, _input, signal) => {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(resolve, 25);
+        signal?.addEventListener(
+          "abort",
+          () => {
+            clearTimeout(timer);
+            nestedAborted = true;
+            reject(new Error("aborted"));
+          },
+          { once: true },
+        );
+      });
+      return jsonResult({ winner: "nested" });
+    });
+    const fast = fakeTool("headless_nested_race_fast", async () => jsonResult({ winner: "fast" }));
+
+    const result = expectCompleted(
+      await runCodeModeScriptHeadless({
+        ctx: createHeadlessHarness([never, fast]),
+        code: `return await Promise.race([
+          Promise.all([tools.callValue("openclaw:core:headless_nested_race_never", {})]),
+          tools.callValue("openclaw:core:headless_nested_race_fast", {}),
+        ]);`,
+        wallClockMs: 5_000,
+      }),
+    );
+
+    expect(result.value).toEqual({ winner: "fast" });
+    expect(result.toolCallCount).toBe(2);
+    expect(never.execute).toHaveBeenCalledOnce();
+    expect(fast.execute).toHaveBeenCalledOnce();
+    expect(nestedAborted).toBe(false);
+  });
+
+  it.each([
+    {
+      label: "directly",
+      auditCode: 'void tools.callValue("openclaw:core:headless_early_audit", {});',
+    },
+    {
+      label: "in a detached already-settled Promise.race",
+      auditCode:
+        'void Promise.race([tools.callValue("openclaw:core:headless_early_audit", {}), Promise.resolve()]);',
+    },
+    {
+      label: "in a detached Promise.all",
+      auditCode: 'void Promise.all([tools.callValue("openclaw:core:headless_early_audit", {})]);',
+    },
+    {
+      label: "in a detached Promise.allSettled",
+      auditCode:
+        'void Promise.allSettled([tools.callValue("openclaw:core:headless_early_audit", {})]);',
+    },
+    {
+      label: "in a detached Promise.any",
+      auditCode: 'void Promise.any([tools.callValue("openclaw:core:headless_early_audit", {})]);',
+    },
+    {
+      label: "in a detached Promise.race",
+      auditCode: 'void Promise.race([tools.callValue("openclaw:core:headless_early_audit", {})]);',
+    },
+  ])(
+    "drains a headless detached audit started $label before an awaited nested call",
+    async ({ auditCode }) => {
+      let auditCompleted = false;
+      let auditAborted = false;
+      const audit = fakeTool("headless_early_audit", async (_toolCallId, _input, signal) => {
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, 250);
+          signal?.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(timer);
+              auditAborted = true;
+              reject(new Error("aborted"));
+            },
+            { once: true },
+          );
+        });
+        auditCompleted = true;
+        return jsonResult({ recorded: true });
+      });
+      const fast = fakeTool("headless_awaited_fast", async () => jsonResult({ winner: "fast" }));
+
+      const result = expectCompleted(
+        await runCodeModeScriptHeadless({
+          ctx: createHeadlessHarness([audit, fast]),
+          code: `${auditCode}
+          return await tools.callValue("openclaw:core:headless_awaited_fast", {});`,
+          wallClockMs: 5_000,
+        }),
+      );
+
+      expect(result.value).toEqual({ winner: "fast" });
+      expect(result.toolCallCount).toBe(2);
+      expect(audit.execute).toHaveBeenCalledOnce();
+      expect(fast.execute).toHaveBeenCalledOnce();
+      expect(auditCompleted).toBe(true);
+      expect(auditAborted).toBe(false);
+    },
+  );
+
+  it("drains a headless race winner's detached audit and its slower race branch", async () => {
+    let loserAborted = false;
+    const winner = fakeTool("headless_race_winner", async () => jsonResult({ winner: "fast" }));
+    const loser = fakeTool("headless_race_loser", async (_toolCallId, _input, signal) => {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(resolve, 25);
+        signal?.addEventListener(
+          "abort",
+          () => {
+            clearTimeout(timer);
+            loserAborted = true;
+            reject(new Error("aborted"));
+          },
+          { once: true },
+        );
+      });
+      return jsonResult({ winner: "slow" });
+    });
+    const audit = fakeTool("headless_race_audit", async () => jsonResult({ recorded: true }));
+
+    const result = expectCompleted(
+      await runCodeModeScriptHeadless({
+        ctx: createHeadlessHarness([winner, loser, audit]),
+        code: `return Promise.race([
+          tools.callValue("openclaw:core:headless_race_winner", {}),
+          tools.callValue("openclaw:core:headless_race_loser", {}),
+        ]).then((value) => {
+          void tools.callValue("openclaw:core:headless_race_audit", {});
+          return value;
+        });`,
+        wallClockMs: 5_000,
+      }),
+    );
+
+    expect(result.value).toEqual({ winner: "fast" });
+    expect(result.toolCallCount).toBe(3);
+    expect(winner.execute).toHaveBeenCalledOnce();
+    expect(loser.execute).toHaveBeenCalledOnce();
+    expect(audit.execute).toHaveBeenCalledOnce();
+    expect(loserAborted).toBe(false);
+  });
+
+  it("drains every detached headless tool before completing the guest", async () => {
+    const first = fakeTool("headless_detached_first", async () => jsonResult({ name: "first" }));
+    const second = fakeTool("headless_detached_second", async () => jsonResult({ name: "second" }));
+
+    const result = expectCompleted(
+      await runCodeModeScriptHeadless({
+        ctx: createHeadlessHarness([first, second]),
+        code: `void tools.callValue("openclaw:core:headless_detached_first", {});
+          void tools.callValue("openclaw:core:headless_detached_second", {});
+          return "done";`,
+        wallClockMs: 5_000,
+      }),
+    );
+
+    expect(result.value).toBe("done");
+    expect(result.toolCallCount).toBe(2);
+    expect(first.execute).toHaveBeenCalledOnce();
+    expect(second.execute).toHaveBeenCalledOnce();
+  });
+
+  it.each(["race", "any"] as const)(
+    "preserves the headless Promise.%s winner while draining the slower nested tool",
+    async (combinator) => {
+      let slowAborted = false;
+      let slowCompleted = false;
+      const fast = fakeTool("headless_fast", async () => jsonResult({ winner: "fast" }));
+      const slow = fakeTool("headless_slow", async (_toolCallId, _input, signal) => {
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, 25);
+          signal?.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(timer);
+              slowAborted = true;
+              reject(new Error("aborted"));
+            },
+            { once: true },
+          );
+        });
+        slowCompleted = true;
+        return jsonResult({ winner: "slow" });
+      });
+
+      const result = expectCompleted(
+        await runCodeModeScriptHeadless({
+          ctx: createHeadlessHarness([fast, slow]),
+          code: `return await Promise.${combinator}([
+            tools.callValue("openclaw:core:headless_fast", {}),
+            tools.callValue("openclaw:core:headless_slow", {}),
+          ]);`,
+          wallClockMs: 5_000,
+        }),
+      );
+
+      expect(result.value).toEqual({ winner: "fast" });
+      expect(result.toolCallCount).toBe(2);
+      expect(fast.execute).toHaveBeenCalledOnce();
+      expect(slow.execute).toHaveBeenCalledOnce();
+      expect(slowCompleted).toBe(true);
+      expect(slowAborted).toBe(false);
+    },
+  );
+
+  it("preserves headless fail-fast Promise.all while draining the slower nested tool", async () => {
+    let slowAborted = false;
+    let slowCompleted = false;
+    const failed = fakeTool("headless_failed", async () => {
+      throw new Error("fast failure");
+    });
+    const slow = fakeTool("headless_slow", async (_toolCallId, _input, signal) => {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(resolve, 25);
+        signal?.addEventListener(
+          "abort",
+          () => {
+            clearTimeout(timer);
+            slowAborted = true;
+            reject(new Error("aborted"));
+          },
+          { once: true },
+        );
+      });
+      slowCompleted = true;
+      return jsonResult({ winner: "slow" });
+    });
+
+    const result = expectCompleted(
+      await runCodeModeScriptHeadless({
+        ctx: createHeadlessHarness([failed, slow]),
+        code: `try {
+          await Promise.all([
+            tools.callValue("openclaw:core:headless_failed", {}),
+            tools.callValue("openclaw:core:headless_slow", {}),
+          ]);
+          return "unexpected success";
+        } catch (error) {
+          return error.message;
+        }`,
+        wallClockMs: 5_000,
+      }),
+    );
+
+    expect(result.value).toBe("fast failure");
+    expect(result.toolCallCount).toBe(2);
+    expect(failed.execute).toHaveBeenCalledOnce();
+    expect(slow.execute).toHaveBeenCalledOnce();
+    expect(slowCompleted).toBe(true);
+    expect(slowAborted).toBe(false);
+  });
+
   it("does not expose collector globals without resumable snapshot state", async () => {
     const result = expectCompleted(
       await runCodeModeScriptHeadless({
@@ -304,6 +598,60 @@ describe("headless Code Mode", () => {
 
     expect(result.code).toBe("tool_budget_exceeded");
     expect(result.toolCallCount).toBe(2);
+    expect(tool.execute).toHaveBeenCalledOnce();
+  });
+
+  it("counts first-class node operations against the headless tool budget", async () => {
+    const nodesTool = fakeTool("nodes", async () => jsonResult({ nodes: [] }));
+
+    const result = expectFailed(
+      await runCodeModeScriptHeadless({
+        ctx: createHeadlessHarness([nodesTool]),
+        code: `
+          await nodes.list();
+          await nodes.list();
+          return true;
+        `,
+        maxToolCalls: 1,
+        wallClockMs: 5_000,
+      }),
+    );
+
+    expect(result.code).toBe("tool_budget_exceeded");
+    expect(result.toolCallCount).toBe(2);
+    expect(nodesTool.execute).toHaveBeenCalledOnce();
+  });
+
+  it("fails an awaiting promise without bridge work before resuming a worker", async () => {
+    const result = expectFailed(
+      await runCodeModeScriptHeadless({
+        ctx: createHeadlessHarness(),
+        code: "await new Promise(() => {}); return true;",
+        wallClockMs: 5_000,
+      }),
+    );
+
+    expect(result.code).toBe("internal_error");
+    expect(result.error).toContain("pending without host work");
+    expect(result.toolCallCount).toBe(0);
+  });
+
+  it("bounds output and returned values across separate worker legs", async () => {
+    const tool = fakeTool("output_boundary", async () => jsonResult({ ok: true }));
+
+    const result = expectFailed(
+      await runCodeModeScriptHeadless({
+        ctx: createHeadlessHarness([tool]),
+        code: `
+          text("x".repeat(700));
+          await tools.call("openclaw:core:output_boundary", {});
+          return "y".repeat(700);
+        `,
+        overrides: { maxOutputBytes: 1_024 },
+      }),
+    );
+
+    expect(result.code).toBe("output_limit_exceeded");
     expect(tool.execute).toHaveBeenCalledOnce();
   });
 

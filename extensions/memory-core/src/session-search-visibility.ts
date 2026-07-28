@@ -1,5 +1,4 @@
 // Memory Core plugin module implements session search visibility behavior.
-import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { resolveSessionAgentId } from "openclaw/plugin-sdk/memory-host-core";
@@ -41,11 +40,7 @@ function isSameStoredTranscript(
   if (anchorSessionId && candidate.sessionId?.trim() === anchorSessionId) {
     return true;
   }
-  const anchorFile = anchor.sessionFile?.trim();
-  const candidateFile = candidate.sessionFile?.trim();
-  return Boolean(
-    anchorFile && candidateFile && path.resolve(anchorFile) === path.resolve(candidateFile),
-  );
+  return false;
 }
 
 function isPrivateConversation(params: {

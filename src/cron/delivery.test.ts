@@ -593,4 +593,33 @@ describe("resolveFailureDestination", () => {
       accountId: undefined,
     });
   });
+
+  it("does not inherit a foreign global account for a prefixed failure destination", () => {
+    const plan = resolveFailureDestination(
+      makeCronJob({
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "111",
+          failureDestination: {
+            mode: "announce",
+            to: "slack:U123",
+          },
+        },
+      }),
+      {
+        mode: "announce",
+        channel: "telegram",
+        to: "telegram:alerts",
+        accountId: "telegram-bot",
+      },
+    );
+
+    expect(plan).toEqual({
+      mode: "announce",
+      channel: "slack",
+      to: "slack:U123",
+      accountId: undefined,
+    });
+  });
 });

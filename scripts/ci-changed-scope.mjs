@@ -64,7 +64,7 @@ const RELEASE_BRANCH_RE = /^release\/\d{4}\.\d+\.\d+$/;
 export class ControlUiGeneratedArtifactsMixedError extends Error {}
 export class NativeGeneratedArtifactsMixedError extends Error {}
 const CONTROL_UI_TEST_SCOPE_RE =
-  /^(ui\/|test\/vitest\/vitest\.shared\.config\.ts$|scripts\/ensure-playwright-chromium\.mjs$)/;
+  /^(ui\/|test\/vitest\/vitest\.(?:shared|ui-e2e)\.config\.ts$|scripts\/ensure-playwright-chromium\.mjs$)/;
 const NATIVE_I18N_SCOPE_RE =
   /^(?:apps\/\.i18n\/|apps\/android\/(?:app\/src\/(?:main|play|thirdParty)\/|wear\/src\/main\/)|apps\/ios\/|apps\/macos\/Sources\/|apps\/shared\/OpenClawKit\/Sources\/|scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.ts$|test\/scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.test\.ts$|\.github\/workflows\/(?:ci|native-app-locale-refresh)\.yml$)/;
 // Android base resources are co-owned: source PRs edit their English content,

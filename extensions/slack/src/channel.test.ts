@@ -37,19 +37,21 @@ vi.mock("./send.runtime.js", () => ({
 
 vi.mock("./client.js", async () => {
   const actual = await vi.importActual<typeof import("./client.js")>("./client.js");
+  const createClient = () => ({
+    assistant: {
+      threads: {
+        setStatus: assistantThreadsSetStatusMock,
+      },
+    },
+    conversations: {
+      info: conversationsInfoMock,
+      open: conversationsOpenMock,
+    },
+  });
   return {
     ...actual,
-    createSlackWebClient: vi.fn(() => ({
-      assistant: {
-        threads: {
-          setStatus: assistantThreadsSetStatusMock,
-        },
-      },
-      conversations: {
-        info: conversationsInfoMock,
-        open: conversationsOpenMock,
-      },
-    })),
+    createSlackReadClient: vi.fn(createClient),
+    createSlackWebClient: vi.fn(createClient),
   };
 });
 

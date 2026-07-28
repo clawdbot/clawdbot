@@ -15,6 +15,7 @@ import type {
 
 type MockFn = ReturnType<typeof vi.fn>;
 type HandlerChatLog = {
+  addLiveUser: (...args: unknown[]) => void;
   startTool: (...args: unknown[]) => void;
   updateToolResult: (...args: unknown[]) => void;
   addSystem: (...args: unknown[]) => void;
@@ -30,6 +31,7 @@ type HandlerBtwPresenter = {
 };
 type HandlerTui = { requestRender: (...args: unknown[]) => void };
 type MockChatLog = {
+  addLiveUser: MockFn;
   startTool: MockFn;
   updateToolResult: MockFn;
   addSystem: MockFn;
@@ -47,6 +49,7 @@ type MockTui = { requestRender: MockFn };
 
 function createMockChatLog(): MockChatLog & HandlerChatLog {
   return {
+    addLiveUser: vi.fn(),
     startTool: vi.fn(),
     updateToolResult: vi.fn(),
     addSystem: vi.fn(),
@@ -183,6 +186,40 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       ...handlers,
     };
   };
+
+  it("recovers a missed final from authoritative history after an event gap", async () => {
+    const { state, loadHistory, reconcileHistoryAfterGap, setActivityStatus } =
+      createHandlersHarness({ state: { activeChatRunId: "run-gap" } });
+
+    reconcileHistoryAfterGap();
+
+    await vi.waitFor(() => expect(state.activeChatRunId).toBeNull());
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
+  });
+
+  it("preserves an in-flight run when gap-recovery history reports it is still active", async () => {
+    const { state, loadHistory, reconcileHistoryAfterGap, setActivityStatus } =
+      createHandlersHarness({ state: { activeChatRunId: "run-gap" } });
+    loadHistory.mockResolvedValue({ loaded: true, inFlightRunId: "run-gap" });
+
+    reconcileHistoryAfterGap();
+
+    await vi.waitFor(() => expect(loadHistory).toHaveBeenCalledTimes(1));
+    expect(state.activeChatRunId).toBe("run-gap");
+    expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
+  });
+
+  it("reloads the selected session after an event gap while no run is active", async () => {
+    const { state, loadHistory, reconcileHistoryAfterGap } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+
+    reconcileHistoryAfterGap();
+
+    await vi.waitFor(() => expect(loadHistory).toHaveBeenCalledTimes(1));
+    expect(state.activeChatRunId).toBeNull();
+  });
 
   it("processes tool events when runId matches activeChatRunId (even if sessionId differs)", () => {
     const { chatLog, tui, handleAgentEvent } = createHandlersHarness({
@@ -355,6 +392,166 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(loadHistory).not.toHaveBeenCalled();
     expect(tui.requestRender).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
+  });
+
+  it("finalizes the authoritative buffered reply when a local run is aborted", () => {
+    const {
+      state,
+      chatLog,
+      loadHistory,
+      noteLocalRunId,
+      isLocalRunId,
+      setActivityStatus,
+      handleChatEvent,
+    } = createHandlersHarness({
+      state: { activeChatRunId: "run-aborted-partial" },
+    });
+    noteLocalRunId("run-aborted-partial");
+
+    handleChatEvent({
+      runId: "run-aborted-partial",
+      sessionKey: state.currentSessionKey,
+      seq: 1,
+      state: "delta",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Already visible" }],
+      },
+    } satisfies ChatEvent);
+
+    handleChatEvent({
+      runId: "run-aborted-partial",
+      sessionKey: state.currentSessionKey,
+      seq: 2,
+      state: "aborted",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Already visible and the throttled tail" }],
+      },
+    } satisfies ChatEvent);
+
+    expect(chatLog.updateAssistant).toHaveBeenCalledWith("Already visible", "run-aborted-partial");
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledExactlyOnceWith(
+      "Already visible and the throttled tail",
+      "run-aborted-partial",
+    );
+    expect(chatLog.addSystem).toHaveBeenCalledExactlyOnceWith("run aborted");
+    expect(chatLog.dropAssistant).not.toHaveBeenCalled();
+    expect(loadHistory).not.toHaveBeenCalled();
+    expect(isLocalRunId("run-aborted-partial")).toBe(false);
+    expect(state.activeChatRunId).toBeNull();
+    expect(setActivityStatus).toHaveBeenLastCalledWith("aborted");
+  });
+
+  it("finalizes streamed partial text when an abort has no assistant payload", () => {
+    const { state, chatLog, loadHistory, noteLocalRunId, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-aborted-stream" },
+    });
+    noteLocalRunId("run-aborted-stream");
+
+    handleChatEvent({
+      runId: "run-aborted-stream",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Keep the streamed partial" }],
+      },
+    } satisfies ChatEvent);
+
+    handleChatEvent({
+      runId: "run-aborted-stream",
+      sessionKey: state.currentSessionKey,
+      state: "aborted",
+    } satisfies ChatEvent);
+
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledExactlyOnceWith(
+      "Keep the streamed partial",
+      "run-aborted-stream",
+    );
+    expect(chatLog.addSystem).toHaveBeenCalledExactlyOnceWith("run aborted");
+    expect(loadHistory).not.toHaveBeenCalled();
+    expect(state.activeChatRunId).toBeNull();
+  });
+
+  it.each([
+    { name: "the authoritative abort reply", streamText: undefined, finalText: "(no output)" },
+    { name: "a streamed partial reply", streamText: "(no output)", finalText: undefined },
+  ])("preserves literal empty-placeholder text from $name", ({ streamText, finalText }) => {
+    const { state, chatLog, loadHistory, noteLocalRunId, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-aborted-literal" },
+    });
+    noteLocalRunId("run-aborted-literal");
+
+    if (streamText !== undefined) {
+      handleChatEvent({
+        runId: "run-aborted-literal",
+        sessionKey: state.currentSessionKey,
+        state: "delta",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: streamText }],
+        },
+      } satisfies ChatEvent);
+    }
+
+    handleChatEvent({
+      runId: "run-aborted-literal",
+      sessionKey: state.currentSessionKey,
+      state: "aborted",
+      ...(finalText === undefined
+        ? {}
+        : {
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: finalText }],
+            },
+          }),
+    } satisfies ChatEvent);
+
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledExactlyOnceWith(
+      "(no output)",
+      "run-aborted-literal",
+    );
+    expect(chatLog.addSystem).toHaveBeenCalledExactlyOnceWith("run aborted");
+    expect(loadHistory).not.toHaveBeenCalled();
+    expect(state.activeChatRunId).toBeNull();
+  });
+
+  it.each([
+    { name: "missing", message: undefined },
+    { name: "empty", message: { role: "assistant", content: [] } },
+    {
+      name: "thinking-only",
+      message: {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "hidden reasoning" }],
+      },
+    },
+    {
+      name: "non-text",
+      message: {
+        role: "assistant",
+        content: [{ type: "image", source: { type: "base64", data: "image-data" } }],
+      },
+    },
+  ])("does not create a placeholder for a $name aborted reply", ({ message }) => {
+    const { state, chatLog, loadHistory, noteLocalRunId, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-aborted-empty" },
+    });
+    noteLocalRunId("run-aborted-empty");
+
+    handleChatEvent({
+      runId: "run-aborted-empty",
+      sessionKey: state.currentSessionKey,
+      state: "aborted",
+      message,
+    } satisfies ChatEvent);
+
+    expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
+    expect(chatLog.addSystem).toHaveBeenCalledExactlyOnceWith("run aborted");
+    expect(loadHistory).not.toHaveBeenCalled();
+    expect(state.activeChatRunId).toBeNull();
   });
 
   it("appends the tool-error summary to the abort line when present", () => {
@@ -2270,6 +2467,52 @@ describe("tui-event-handlers: handleAgentEvent", () => {
   });
 
   describe("session.message history reload", () => {
+    it.each([
+      { identity: "transcript metadata", includeMessageMetadata: true },
+      { identity: "gateway event envelope", includeMessageMetadata: false },
+    ])(
+      "renders another client's $identity user turn before its active stream",
+      ({ includeMessageMetadata }) => {
+        const { state, chatLog, loadHistory, handleChatEvent, handleSessionMessageEvent } =
+          createHandlersHarness({ state: { activeChatRunId: null } });
+        const runId = "shared-session-web-run";
+        handleChatEvent({
+          runId,
+          seq: 1,
+          sessionKey: state.currentSessionKey,
+          state: "delta",
+          message: { content: [{ type: "text", text: "Already streaming." }] },
+        } satisfies ChatEvent);
+
+        handleSessionMessageEvent({
+          sessionKey: state.currentSessionKey,
+          ...(includeMessageMetadata ? {} : { clientRunId: runId }),
+          messageId: "shared-session-user",
+          messageSeq: 1,
+          message: {
+            ...(includeMessageMetadata
+              ? {
+                  __openclaw: {
+                    id: "shared-session-user",
+                    idempotencyKey: `${runId}:user`,
+                    seq: 1,
+                  },
+                }
+              : {}),
+            content: [{ type: "text", text: "Sent from the other client." }],
+            role: "user",
+          },
+        } satisfies SessionMessageEvent);
+
+        expect(chatLog.addLiveUser).toHaveBeenCalledWith("Sent from the other client.", {
+          messageId: "shared-session-user",
+          runId,
+        });
+        expect(state.activeChatRunId).toBe(runId);
+        expect(loadHistory).not.toHaveBeenCalled();
+      },
+    );
+
     it("reloads the current session when another client appends a message", () => {
       const { state, loadHistory, handleSessionMessageEvent } = createHandlersHarness({
         state: {

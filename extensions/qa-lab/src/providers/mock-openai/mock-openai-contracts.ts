@@ -7,6 +7,7 @@ import { writeJson } from "../shared/http-json.js";
 export type ResponsesInputItem = Record<string, unknown>;
 
 export type StreamEvent =
+  | { type: "response.created"; response: { id: string } }
   | { type: "response.output_item.added"; item: Record<string, unknown> }
   | {
       type: "response.output_text.delta";
@@ -23,6 +24,12 @@ export type StreamEvent =
       text: string;
     }
   | { type: "response.function_call_arguments.delta"; delta: string }
+  | {
+      type: "response.custom_tool_call_input.delta";
+      item_id: string;
+      call_id: string;
+      delta: string;
+    }
   | { type: "response.output_item.done"; item: Record<string, unknown> }
   | {
       type: "response.completed";

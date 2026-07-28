@@ -7,7 +7,7 @@ import {
   sanitizeRenderableText,
 } from "./tui-formatters.js";
 import { createTuiRunLifecycle } from "./tui-run-lifecycle.js";
-import { matchesSelectedTuiSession } from "./tui-session-events.js";
+import { matchesSelectedTuiSession, readTuiSessionUserMessage } from "./tui-session-events.js";
 import { TuiSessionRunCoordinator } from "./tui-session-run-coordinator.js";
 import {
   clearPendingSubmit,
@@ -25,6 +25,7 @@ import type {
 } from "./tui-types.js";
 
 type EventHandlerChatLog = {
+  addLiveUser: (text: string, options: { messageId: string; runId?: string }) => void;
   startTool: (toolCallId: string, toolName: string, args: unknown) => void;
   updateToolResult: (
     toolCallId: string,
@@ -345,10 +346,24 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (evt.state === "aborted") {
       forgetLocalBtwRunId?.(evt.runId);
       const wasActiveRun = state.activeChatRunId === evt.runId;
+      // Determine content from the message and stream, not the user-visible
+      // empty placeholder: "(no output)" is also valid assistant text.
+      const hasDisplayableAbortedText =
+        Boolean(
+          extractTextFromMessage(evt.message, { includeThinking: state.showThinking }).trim(),
+        ) || streamAssembler.hasDisplayText(evt.runId);
+      // Abort envelopes carry the complete buffered reply, including text
+      // suppressed by Gateway delta throttling; finalize it before run cleanup.
+      const abortedText = streamAssembler.finalize(evt.runId, evt.message, state.showThinking);
+      if (hasDisplayableAbortedText) {
+        chatLog.finalizeAssistant(abortedText, evt.runId);
+      }
       const diagnostic = formatAbortDiagnostic(evt.errorMessage);
       chatLog.addSystem(diagnostic ? `run aborted: ${diagnostic}` : "run aborted");
       terminateRun({ runId: evt.runId, wasActiveRun, status: "aborted" });
-      maybeRefreshHistoryForRun(evt.runId);
+      maybeRefreshHistoryForRun(evt.runId, {
+        hasDisplayableFinal: hasDisplayableAbortedText,
+      });
     }
     if (evt.state === "error") {
       forgetLocalBtwRunId?.(evt.runId);
@@ -472,6 +487,15 @@ export function createEventHandlers(context: EventHandlerContext) {
     syncSessionKey();
     if (!matchesSelectedTuiSession(state, evt, { requireAliasOwnership: true })) {
       return;
+    }
+
+    const liveUserMessage = readTuiSessionUserMessage(evt);
+    if (liveUserMessage) {
+      chatLog.addLiveUser(liveUserMessage.text, {
+        messageId: liveUserMessage.messageId,
+        ...(liveUserMessage.runId ? { runId: liveUserMessage.runId } : {}),
+      });
+      tui.requestRender();
     }
 
     const currentUpdatedAt = state.sessionInfo.updatedAt;
@@ -692,6 +716,17 @@ export function createEventHandlers(context: EventHandlerContext) {
   // registered so it does not re-arm a draft the abort path would then drop.
   const isRunObserved = (runId: string) => sessionRuns.has(runId);
 
+  const reconcileHistoryAfterGap = () => {
+    const { runIds, displayedRunIds } = collectTrackedSessionRunIds();
+    if (runIds.size === 0) {
+      runCoordinator.queueHistoryReload();
+      return;
+    }
+    // A dropped final cannot distinguish a finished run from a still-streaming
+    // one; authoritative history must either finalize it or restore it.
+    runCoordinator.queueGapHistoryReload(runIds, displayedRunIds);
+  };
+
   return {
     handleChatEvent,
     handleAgentEvent,
@@ -702,6 +737,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     reconnectStreamingWatchdog,
     consumeCompletedRunForPendingSend,
     isRunObserved,
+    reconcileHistoryAfterGap,
     flushPendingHistoryRefreshIfIdle,
     dispose,
   };

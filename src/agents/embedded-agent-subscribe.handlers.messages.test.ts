@@ -1391,6 +1391,35 @@ describe("handleMessageUpdate commentary phase", () => {
 });
 
 describe("handleMessageEnd", () => {
+  it.each([
+    {
+      name: "counts a completed provider assistant message",
+      message: { role: "assistant", content: [{ type: "text", text: "Done." }] },
+      expected: 1,
+    },
+    {
+      name: "ignores transcript-only mirrored assistant messages",
+      message: {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: "Done." }],
+      },
+      expected: 0,
+    },
+    {
+      name: "ignores non-assistant messages",
+      message: { role: "user", content: [{ type: "text", text: "hi" }] },
+      expected: 0,
+    },
+  ])("$name for assistantTurnCount", ({ message, expected }) => {
+    const ctx = createMessageEndContext({ state: { assistantTurnCount: 0 } });
+
+    void endMessage(ctx, { message });
+
+    expect(ctx.state.assistantTurnCount).toBe(expected);
+  });
+
   it("keeps duplicate-reply diagnostics free of lone surrogates", () => {
     const text = `${"a".repeat(49)}😀tail`;
     const ctx = createMessageEndContext({

@@ -44,7 +44,6 @@ import { resolveEmbeddedCompactionTarget } from "./compaction-runtime-context.js
 import { prepareCompactionSessionAgent } from "./compaction-session-agent.js";
 import type { PreparedCompactEmbeddedAgentSessionParams } from "./direct-compaction-preparation.js";
 import { compactEmbeddedAgentSessionDirectOnce } from "./direct-compaction.js";
-import { hardenManualCompactionBoundary } from "./manual-compaction-boundary.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
 export type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
@@ -129,10 +128,11 @@ export async function compactEmbeddedAgentSessionDirect(
   const runSessionTarget = await resolveAgentRunSessionTarget(paramsBase);
   const requestedParams: CompactEmbeddedAgentSessionParamsWithSessionFile = {
     ...paramsBase,
-    agentId: paramsBase.agentId ?? runSessionTarget.agentId,
+    agentId: runSessionTarget.agentId,
     sessionId: runSessionTarget.sessionId,
-    sessionKey: paramsBase.sessionKey ?? runSessionTarget.sessionKey,
-    sessionFile: runSessionTarget.sessionFile,
+    sessionKey: runSessionTarget.sessionKey,
+    sessionTarget: runSessionTarget,
+    sessionFile: runSessionTarget.sessionKey,
   };
   const requestedAgentIds = resolveSessionAgentIds({
     sessionKey: requestedParams.sessionKey,
@@ -256,7 +256,6 @@ export const testing = {
   containsRealConversationMessages,
   estimateTokensAfterCompaction,
   buildBeforeCompactionHookMetrics,
-  hardenManualCompactionBoundary,
   resolveCompactionProviderStream,
   prepareCompactionSessionAgent,
   runBeforeCompactionHooks,

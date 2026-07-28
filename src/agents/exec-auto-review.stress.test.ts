@@ -726,6 +726,69 @@ describe("exec auto-review adversarial model-response stress", () => {
 });
 
 describe("exec auto-review concurrency stress", () => {
+  it("keeps 128 mixed concurrent provider failures bounded and isolated", async () => {
+    const providerFailure = "provider\n\u001b[31mfailed\u001b[0m\u202e" + "x".repeat(1_024);
+    const cases = Array.from({ length: 128 }, (_unused, index) => {
+      const prepare = vi.fn(async () => {
+        if (index % 4 === 0) {
+          return { error: providerFailure };
+        }
+        return {
+          selection: { provider: "openrouter", modelId: "reviewer", agentDir: "/agent" },
+          model: { provider: "openrouter", id: "reviewer", api: "openai" as const },
+          auth: { apiKey: "redacted", mode: "env" as const },
+        };
+      });
+      const complete = vi.fn(async () => {
+        if (index % 4 === 1) {
+          return {
+            stopReason: "error" as const,
+            errorMessage: providerFailure,
+            content: [],
+          };
+        }
+        if (index % 4 === 2) {
+          throw new Error(providerFailure);
+        }
+        return modelResponse("allow", "low");
+      });
+      const reviewer = createModelExecAutoReviewer({
+        cfg: {},
+        deps: {
+          prepareSimpleCompletionModelForAgent:
+            prepare as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
+          completeWithPreparedSimpleCompletionModel:
+            complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
+        },
+      });
+      return { reviewer, prepare, complete };
+    });
+
+    const decisions = await Promise.all(
+      cases.map(({ reviewer }, index) =>
+        Promise.resolve(
+          reviewer({
+            ...baselineInput,
+            command: `git status --failure-case=${index}`,
+            argv: ["git", "status", `--failure-case=${index}`],
+          }),
+        ),
+      ),
+    );
+
+    for (const [index, decision] of decisions.entries()) {
+      expect(decision.decision, `provider failure case ${index}`).toBe(
+        index % 4 === 3 ? "allow-once" : "ask",
+      );
+      expect(decision.rationale.length, `provider failure case ${index}`).toBeLessThanOrEqual(500);
+      expect(decision.rationale, `provider failure case ${index}`).not.toMatch(
+        /[\p{Cc}\p{Cf}\u2028\u2029]/u,
+      );
+      expect(cases[index]?.prepare).toHaveBeenCalledTimes(1);
+      expect(cases[index]?.complete).toHaveBeenCalledTimes(index % 4 === 0 ? 0 : 1);
+    }
+  });
+
   it("cancels 64 concurrent provider reviews without sharing execution signals", async () => {
     const controllers = Array.from({ length: 64 }, () => new AbortController());
     const observedSignals: AbortSignal[] = [];

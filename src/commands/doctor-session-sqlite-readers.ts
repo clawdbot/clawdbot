@@ -301,7 +301,7 @@ function parseSqliteSessionEntry(entryJson: string): SessionEntry | undefined {
   try {
     const parsed = JSON.parse(entryJson) as unknown;
     return isRecord(parsed) && typeof parsed.sessionId === "string"
-      ? (parsed as SessionEntry)
+      ? (parsed as unknown as SessionEntry)
       : undefined;
   } catch {
     return undefined;

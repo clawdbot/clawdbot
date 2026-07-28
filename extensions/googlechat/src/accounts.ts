@@ -9,7 +9,12 @@ import {
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
-import { isSecretRef } from "openclaw/plugin-sdk/secret-input";
+import {
+  coerceSecretRef,
+  isSecretRef,
+  resolveSecretInputString,
+  type SecretInputStringResolutionMode,
+} from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { z } from "zod";
@@ -114,8 +119,10 @@ function parseServiceAccount(value: unknown): Record<string, unknown> | null {
 }
 
 function resolveCredentialsFromConfig(params: {
+  cfg: OpenClawConfig;
   accountId: string;
   account: GoogleChatAccountConfig;
+  mode: SecretInputStringResolutionMode;
 }): {
   credentials?: Record<string, unknown>;
   credentialsFile?: string;
@@ -129,10 +136,17 @@ function resolveCredentialsFromConfig(params: {
     return { credentials: inline, source: "inline", status: "available" };
   }
 
-  if (isSecretRef(account.serviceAccount)) {
-    throw new Error(
-      `channels.googlechat.accounts.${accountId}.serviceAccount: unresolved SecretRef "${account.serviceAccount.source}:${account.serviceAccount.provider}:${account.serviceAccount.id}". Resolve this command against an active gateway runtime snapshot before reading it.`,
-    );
+  const serviceAccountRef = coerceSecretRef(account.serviceAccount, params.cfg.secrets?.defaults);
+  if (serviceAccountRef) {
+    const resolved = resolveSecretInputString({
+      value: account.serviceAccount,
+      defaults: params.cfg.secrets?.defaults,
+      path: `channels.googlechat.accounts.${accountId}.serviceAccount`,
+      mode: params.mode,
+    });
+    return resolved.status === "configured_unavailable"
+      ? { source: "none", status: "configured_unavailable" }
+      : { source: "none", status: "missing" };
   }
 
   const file = normalizeOptionalString(account.serviceAccountFile);
@@ -191,9 +205,10 @@ function resolveCredentialsFromConfig(params: {
   return { source: "none", status: "missing" };
 }
 
-export function resolveGoogleChatAccount(params: {
+function resolveGoogleChatAccountWithMode(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
+  mode: SecretInputStringResolutionMode;
 }): ResolvedGoogleChatAccount {
   const accountId = normalizeAccountId(
     params.accountId ?? params.cfg.channels?.["googlechat"]?.defaultAccount,
@@ -202,7 +217,12 @@ export function resolveGoogleChatAccount(params: {
   const merged = mergeGoogleChatAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
-  const credentials = resolveCredentialsFromConfig({ accountId, account: merged });
+  const credentials = resolveCredentialsFromConfig({
+    cfg: params.cfg,
+    accountId,
+    account: merged,
+    mode: params.mode,
+  });
 
   return {
     accountId,
@@ -217,8 +237,16 @@ export function resolveGoogleChatAccount(params: {
   };
 }
 
-export function listEnabledGoogleChatAccounts(cfg: OpenClawConfig): ResolvedGoogleChatAccount[] {
-  return listGoogleChatAccountIds(cfg)
-    .map((accountId) => resolveGoogleChatAccount({ cfg, accountId }))
-    .filter((account) => account.enabled);
+export function resolveGoogleChatAccount(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): ResolvedGoogleChatAccount {
+  return resolveGoogleChatAccountWithMode({ ...params, mode: "strict" });
+}
+
+export function inspectGoogleChatAccount(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): ResolvedGoogleChatAccount {
+  return resolveGoogleChatAccountWithMode({ ...params, mode: "inspect" });
 }

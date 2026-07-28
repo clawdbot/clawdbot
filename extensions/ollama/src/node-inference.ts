@@ -1,4 +1,4 @@
-import { jsonResult } from "openclaw/plugin-sdk/channel-actions";
+import { jsonResult, stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import { formatErrorMessage as errorMessage } from "openclaw/plugin-sdk/error-runtime";
 // Ollama node inference exposes local models to agents through paired node hosts.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
@@ -22,8 +22,10 @@ import { Type } from "typebox";
 import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import {
   buildOllamaBaseUrlSsrFPolicy,
+  enrichOllamaCompletionModels,
   enrichOllamaModelsWithContext,
   fetchOllamaModels,
+  isOllamaCloudModel,
   resolveOllamaApiBase,
 } from "./provider-models.js";
 
@@ -40,7 +42,6 @@ const MAX_INFERENCE_TIMEOUT_MS = 10 * 60_000;
 const MAX_TOKENS = 8192;
 const MAX_PROMPT_CHARS = 128_000;
 const MAX_SYSTEM_PROMPT_CHARS = 32_000;
-const MAX_DISCOVERED_MODELS = 200;
 const MAX_ERROR_BODY_BYTES = 500;
 
 type NodeModel = {
@@ -184,17 +185,16 @@ async function discoverOllamaNodeModels(
   if (!discovered.reachable) {
     throw new Error(`Ollama is not running at ${apiBase}`);
   }
-  const localModels = discovered.models
-    .filter((model) => !model.remote_host?.trim())
-    .slice(0, MAX_DISCOVERED_MODELS);
+  const localModels = discovered.models.filter(
+    (model) => !model.remote_host?.trim() && !isOllamaCloudModel(model.name),
+  );
   const [models, loadedNames] = await Promise.all([
-    enrichOllamaModelsWithContext(apiBase, localModels),
+    // Paired nodes must positively confirm completion; unlike provider catalogs,
+    // failed or legacy show probes must never expose unrunnable remote commands.
+    enrichOllamaCompletionModels(apiBase, localModels, { requireCompletionCapability: true }),
     fetchLoadedModelNames(apiBase),
   ]);
   const rows = models
-    // Nodes advertise only models Ollama positively identifies as chat-capable.
-    // Failed /api/show probes must not turn embedding models into runnable choices.
-    .filter((model) => model.capabilities?.includes("completion") === true)
     .map((model): NodeModel => {
       const details = model.details;
       const row: NodeModel = {
@@ -247,7 +247,8 @@ async function runOllamaNodeChat(params: {
   const apiBase = resolveOllamaApiBase(params.baseUrl);
   const discovered = await fetchOllamaModels(apiBase);
   const localModel = discovered.models.find(
-    (model) => model.name === params.model && !model.remote_host?.trim(),
+    (model) =>
+      model.name === params.model && !model.remote_host?.trim() && !isOllamaCloudModel(model.name),
   );
   const [model] = localModel ? await enrichOllamaModelsWithContext(apiBase, [localModel]) : [];
   if (!discovered.reachable || model?.capabilities?.includes("completion") !== true) {
@@ -424,7 +425,7 @@ const ollamaNodeInferenceToolDefinition = {
     "Discover and run chat-capable Ollama models installed on paired desktop/server nodes. Use action=discover first, then action=run with a node and model from that result. Inference stays on the selected node.",
   parameters: Type.Object(
     {
-      action: Type.Union([Type.Literal("discover"), Type.Literal("run")]),
+      action: stringEnum(["discover", "run"] as const),
       node: Type.Optional(
         Type.String({ description: "Connected node id or display name. Required when ambiguous." }),
       ),
@@ -450,7 +451,7 @@ export function createOllamaNodeInferenceTool(api: OpenClawPluginApi): AnyAgentT
       const nodeQuery = readStringParam(params, "node");
       const listed = await api.runtime.nodes.list({ connected: true });
       const modelNodes = listed.nodes.filter((node) =>
-        node.commands?.includes(OLLAMA_MODELS_COMMAND),
+        (node.invocableCommands ?? node.commands)?.includes(OLLAMA_MODELS_COMMAND),
       );
 
       if (action === "discover") {
@@ -494,7 +495,9 @@ export function createOllamaNodeInferenceTool(api: OpenClawPluginApi): AnyAgentT
       if (action !== "run") {
         throw new Error("action must be discover or run");
       }
-      const chatNodes = modelNodes.filter((node) => node.commands?.includes(OLLAMA_CHAT_COMMAND));
+      const chatNodes = modelNodes.filter((node) =>
+        (node.invocableCommands ?? node.commands)?.includes(OLLAMA_CHAT_COMMAND),
+      );
       const node = nodeQuery
         ? findNode(chatNodes, nodeQuery)
         : chatNodes.length === 1

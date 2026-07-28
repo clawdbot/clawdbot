@@ -247,7 +247,7 @@ describe("cron service timer seam coverage", () => {
     timeoutSpy.mockRestore();
   });
 
-  it("uses the persisted reservation timestamp for the canonical timer task", async () => {
+  it("uses the persisted execution timestamp for the canonical timer task", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-03-23T12:00:00.000Z");
     let clock = now;
@@ -300,10 +300,13 @@ describe("cron service timer seam coverage", () => {
 
     expect(reservedAt).toEqual(expect.any(Number));
     expect(persistedReservation).toEqual(expect.any(Number));
+    expect(reservedAt).not.toBe(persistedReservation);
     expect(liveReservation).toBe(persistedReservation);
     expect(liveError).toBeUndefined();
     expect(emittedStartedAt).toBe(persistedReservation);
-    expect(findCronTaskByBaseRunId(`cron:isolated-agent-job:${reservedAt}`)).toMatchObject({
+    expect(
+      findCronTaskByBaseRunId(`cron:isolated-agent-job:${persistedReservation}`),
+    ).toMatchObject({
       startedAt: emittedStartedAt,
       status: "succeeded",
     });

@@ -127,6 +127,8 @@ export type ConfigProps = {
   setLobsterPetVisits?: (enabled: boolean) => void;
   lobsterPetSounds?: boolean;
   setLobsterPetSounds?: (enabled: boolean) => void;
+  lobsterdexHref?: string;
+  onOpenLobsterdex?: () => void;
   chatSendShortcut: ChatSendShortcut;
   setChatSendShortcut: (value: ChatSendShortcut) => void;
   chatFollowUpMode: ChatFollowUpMode | undefined;

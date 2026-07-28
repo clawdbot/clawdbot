@@ -9133,6 +9133,7 @@ public struct SystemAgentChatParams: Codable, Sendable {
     public let message: String?
     public let welcomevariant: AnyCodable?
     public let reset: Bool?
+    public let context: [String: AnyCodable]?
     public let delegation: [String: AnyCodable]?
 
     public init(
@@ -9140,12 +9141,14 @@ public struct SystemAgentChatParams: Codable, Sendable {
         message: String? = nil,
         welcomevariant: AnyCodable? = nil,
         reset: Bool? = nil,
+        context: [String: AnyCodable]? = nil,
         delegation: [String: AnyCodable]? = nil)
     {
         self.sessionid = sessionid
         self.message = message
         self.welcomevariant = welcomevariant
         self.reset = reset
+        self.context = context
         self.delegation = delegation
     }
 
@@ -9154,6 +9157,7 @@ public struct SystemAgentChatParams: Codable, Sendable {
         case message
         case welcomevariant = "welcomeVariant"
         case reset
+        case context
         case delegation
     }
 }
@@ -11813,17 +11817,20 @@ public struct ArtifactsDownloadResult: Codable, Sendable {
     public let encoding: String?
     public let data: String?
     public let url: String?
+    public let expiresat: String?
 
     public init(
         artifact: ArtifactSummary,
         encoding: String? = nil,
         data: String? = nil,
-        url: String? = nil)
+        url: String? = nil,
+        expiresat: String? = nil)
     {
         self.artifact = artifact
         self.encoding = encoding
         self.data = data
         self.url = url
+        self.expiresat = expiresat
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -11831,6 +11838,7 @@ public struct ArtifactsDownloadResult: Codable, Sendable {
         case encoding
         case data
         case url
+        case expiresat = "expiresAt"
     }
 }
 
@@ -13506,6 +13514,7 @@ public struct CronListParams: Codable, Sendable {
     public let sortdir: AnyCodable?
     public let agentid: String?
     public let compact: Bool?
+    public let includedeliverypreviews: Bool?
 
     public init(
         includedisabled: Bool? = nil,
@@ -13518,7 +13527,8 @@ public struct CronListParams: Codable, Sendable {
         sortby: AnyCodable? = nil,
         sortdir: AnyCodable? = nil,
         agentid: String? = nil,
-        compact: Bool? = nil)
+        compact: Bool? = nil,
+        includedeliverypreviews: Bool? = nil)
     {
         self.includedisabled = includedisabled
         self.limit = limit
@@ -13531,6 +13541,7 @@ public struct CronListParams: Codable, Sendable {
         self.sortdir = sortdir
         self.agentid = agentid
         self.compact = compact
+        self.includedeliverypreviews = includedeliverypreviews
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -13545,6 +13556,7 @@ public struct CronListParams: Codable, Sendable {
         case sortdir = "sortDir"
         case agentid = "agentId"
         case compact
+        case includedeliverypreviews = "includeDeliveryPreviews"
     }
 }
 

@@ -36,7 +36,6 @@ import {
   findLiveRegistryWorktreeByOwner,
   findLiveRegistryWorktreeByPath,
   getRegistryWorktree,
-  getRegistryWorktreeProvisionedLedger,
   getRegistryWorktreeProvisionedPaths,
   getRegistryWorktreeProvisionedState,
   insertRegistryWorktree,
@@ -963,21 +962,12 @@ export class ManagedWorktreeService {
       branchCreated = true;
       await requireGit(record.path, ["symbolic-ref", "HEAD", `refs/heads/${record.branch}`]);
       await requireGit(record.path, ["reset"]);
-      const provisionedLedger = getRegistryWorktreeProvisionedLedger(this.env, record.id);
-      if (provisionedLedger.status === "legacy") {
-        // Explicitly removed pre-ledger worktrees retain their historical restore behavior.
-        restoredProvisionedPaths = await provisionIncludedFiles(record.repoRoot, record.path);
-      } else {
-        if (provisionedLedger.status === "invalid") {
-          throw new Error(`worktree ${record.id} has invalid provisioned file metadata`);
-        }
-        const provisionedState = getRegistryWorktreeProvisionedState(this.env, record.id);
-        if (provisionedState === undefined) {
-          throw new Error(`worktree ${record.id} snapshot lacks provisioned file metadata`);
-        }
-        await restoreProvisionedFiles(this.env, record.id, record.path, provisionedState);
-        restoredProvisionedPaths = provisionedState.map((state) => state.path);
+      const provisionedState = getRegistryWorktreeProvisionedState(this.env, record.id);
+      if (provisionedState === undefined) {
+        throw new Error(`worktree ${record.id} snapshot lacks provisioned file metadata`);
       }
+      await restoreProvisionedFiles(this.env, record.id, record.path, provisionedState);
+      restoredProvisionedPaths = provisionedState.map((state) => state.path);
     } catch (error) {
       const removed = await runGit(record.repoRoot, ["worktree", "remove", "--force", record.path]);
       const branchDeleted = branchCreated

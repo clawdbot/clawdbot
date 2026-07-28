@@ -8,7 +8,7 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
-import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
+import { dispatchInboundMessageWithProjectedDispatcher } from "../../auto-reply/dispatch.js";
 import {
   clearAgentRunContext,
   getAgentEventLifecycleGeneration,
@@ -333,7 +333,7 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
       : undefined;
 
     let agentRunStarted = false;
-    const { deliveredReplies, dispatcher, hasAppendedWebchatAgentMedia, onModelSelected } =
+    const { deliveredReplies, dispatcherOptions, hasAppendedWebchatAgentMedia, onModelSelected } =
       createChatSendReplyDispatch({
         accountId,
         isAgentRunStarted: () => agentRunStarted,
@@ -397,10 +397,10 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
             if (replyContextFieldsPromise) {
               applyChatSendReplyContextFields(ctx, await replyContextFieldsPromise);
             }
-            const dispatchResult = await dispatchInboundMessage({
+            const dispatchResult = await dispatchInboundMessageWithProjectedDispatcher({
               ctx,
               cfg,
-              dispatcher,
+              dispatcherOptions,
               onSessionMetadataChanges: (changes) => {
                 for (const change of changes) {
                   emitSessionsChanged(context, change);

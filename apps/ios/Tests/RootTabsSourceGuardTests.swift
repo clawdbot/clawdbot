@@ -4,6 +4,35 @@ import Testing
 @testable import OpenClaw
 
 struct RootTabsSourceGuardTests {
+    @Test func `inactive scenes clear voice wake toast and camera flash`() throws {
+        let source = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
+        let rootAppearLifecycle = try Self.extract(
+            source,
+            from: "private func rootAppearLifecycle(_ content: some View) -> some View",
+            to: "private func rootGatewayProblemLifecycle(_ content: some View) -> some View")
+        let rootVoiceWakeLifecycle = try Self.extract(
+            source,
+            from: "private func rootVoiceWakeLifecycle(_ content: some View) -> some View",
+            to: "private func rootAppearLifecycle(_ content: some View) -> some View")
+        let cameraFlashOverlay = try Self.extract(
+            source,
+            from: "private struct RootCameraFlashOverlay: View",
+            to: "#if DEBUG")
+
+        #expect(source.contains("@State private var toastDismissGate = DelayedActionGate()"))
+        #expect(rootVoiceWakeLifecycle.contains("self.toastDismissGate.schedule"))
+        #expect(!source.contains("toastDismissTask"))
+        #expect(rootAppearLifecycle.contains("guard newValue == .active else {"))
+        #expect(rootAppearLifecycle.contains("self.clearVoiceWakeToast()"))
+        #expect(cameraFlashOverlay.contains("@Environment(\\.scenePhase) private var scenePhase"))
+        #expect(cameraFlashOverlay.contains("@State private var dismissGate = DelayedActionGate()"))
+        #expect(cameraFlashOverlay.contains("self.dismissGate.schedule"))
+        #expect(!cameraFlashOverlay.contains("Task {"))
+        #expect(cameraFlashOverlay.contains("guard self.scenePhase == .active else {"))
+        #expect(cameraFlashOverlay.contains("guard newValue != .active else { return }"))
+        #expect(cameraFlashOverlay.contains("self.clearFlash()"))
+    }
+
     @Test func `app applies initial scene phase before gateway admission`() throws {
         let source = try String(contentsOf: Self.openClawAppSourceURL(), encoding: .utf8)
         let startupTask = try Self.extract(
@@ -1374,6 +1403,32 @@ extension RootTabsSourceGuardTests {
         #expect(resolvedPushes.contains("applyValidatedExecApprovalResolvedPush(push, context: context)"))
         #expect(resolvedPushes.contains("session: self.operatorGateway"))
         #expect(resolvedPushes.contains("generation: context.routeGeneration"))
+    }
+
+    @Test func `watch approval reconnect teardown retains its source gateway route`() throws {
+        let source = try String(contentsOf: Self.nodeAppModelSourceURL(), encoding: .utf8)
+        let reconnect = try Self.extract(
+            source,
+            from: "private func ensureOperatorApprovalConnectionForWatchReview(",
+            to: "private func ensureOperatorApprovalConnection(timeoutMs:")
+        let initialWait = try #require(reconnect.range(of: "if await self.waitForGatewayConnection("))
+        let restartGuard = try #require(
+            reconnect.range(
+                of: "guard self.isCurrentGatewayRoute(",
+                range: initialWait.upperBound..<reconnect.endIndex))
+        let cancellation = try #require(reconnect.range(of: "self.operatorGatewayTask?.cancel()"))
+        let disconnect = try #require(reconnect.range(of: "await self.operatorGateway.disconnect()"))
+        let postDisconnectGuard = try #require(
+            reconnect.range(
+                of: "guard self.isCurrentGatewayRoute(",
+                range: disconnect.upperBound..<reconnect.endIndex))
+        let offline = try #require(reconnect.range(of: "self.setOperatorConnected(false)"))
+
+        #expect(reconnect.contains("routeGeneration: UInt64"))
+        #expect(reconnect.contains("gatewayStableID: String"))
+        #expect(restartGuard.lowerBound < cancellation.lowerBound)
+        #expect(disconnect.lowerBound < postDisconnectGuard.lowerBound)
+        #expect(postDisconnectGuard.lowerBound < offline.lowerBound)
     }
 }
 

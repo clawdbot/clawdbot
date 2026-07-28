@@ -17,7 +17,7 @@ import {
   refreshChatMetadata,
   refreshRouteSessionOptions,
   resetChatStateForRouteSession,
-  resetChatThreadPresentationState,
+  resetChatThreadSessionPresentationState,
   retryChatComposerMemoryFallback,
   resolveChatAgentId,
   resolveSessionDisplayName,
@@ -174,14 +174,15 @@ export abstract class ChatPaneSession extends ChatPaneSuggestions {
     // Close old-session listener owners before the next render detaches their
     // DOM; thread-global portals and caches are reset separately.
     dismissConfirmedActionPopovers(this);
-    resetChatThreadPresentationState(this.paneId);
+    resetChatThreadSessionPresentationState(this.paneId);
     this.sessionDiscussionOpenUrls.clear();
     const previousSessionKey = state.sessionKey;
     // An in-progress title edit belongs to the previous session; committing
     // it against the newly routed row would rename the wrong session.
     this.cancelHeaderRename();
-    this.resetOlderMessagesViewport();
+    const restoredPosition = this.resetOlderMessagesViewport(nextSessionKey);
     const catalogKey = parseCatalogSessionKey(nextSessionKey);
+    const previousAgentId = resolveChatAgentId(state);
     const previousSessionsResult = state.sessionsResult;
     const nextSessionRow = state.sessionsResult?.sessions.find((row) => row.key === nextSessionKey);
     const nextSessionLabel = resolveSessionDisplayName(nextSessionKey, nextSessionRow);
@@ -241,7 +242,12 @@ export abstract class ChatPaneSession extends ChatPaneSuggestions {
     }
     void state.loadAssistantIdentity();
     void refreshChatAvatar(state).finally(() => this.requestUpdate());
-    void refreshChatMetadata(state).finally(() => state.requestUpdate?.());
+    const nextAgentId = resolveChatAgentId(state);
+    // Agent-scoped catalogs remain valid across same-agent sessions. Cross-agent
+    // failures must clear instead of retaining models owned by the previous agent.
+    void refreshChatMetadata(state, {
+      preserveModelCatalogOnFallback: Boolean(previousAgentId && previousAgentId === nextAgentId),
+    }).finally(() => state.requestUpdate?.());
     const subscriptionSync = syncSelectedSessionMessageSubscription(state);
     const composerStorageError = state.chatError === CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
     const historyLoad = loadChatHistory(state, { deferBranches: true });
@@ -260,7 +266,11 @@ export abstract class ChatPaneSession extends ChatPaneSuggestions {
         return;
       }
       state.requestUpdate();
-      scheduleChatScroll(state, true);
+      if (restoredPosition === null || restoredPosition.anchorToEnd) {
+        scheduleChatScroll(state, true);
+      } else {
+        this.restoreOlderMessagesViewport(nextSessionKey, restoredPosition.scrollTop);
+      }
     };
     void historyLoad.then(scheduleHistoryScroll, scheduleHistoryScroll);
     void historyLoad.then(

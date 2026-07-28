@@ -21,6 +21,27 @@ import type { RunEmbeddedAgentParams } from "./params.js";
 type ModelResolution = Awaited<ReturnType<typeof resolveModelAsync>>;
 type RuntimeModel = NonNullable<ModelResolution["model"]>;
 
+function loadEmbeddedRunAuthProfileStore(params: {
+  agentDir: string;
+  config: RunEmbeddedAgentParams["config"];
+  externalCliProviderIds: Iterable<string>;
+}): AuthProfileStore {
+  // Provider pins own ambient overlays at this loader seam. Genuinely stored profiles and
+  // explicit bindings remain available for the cross-class contracts in prepare-auth.test.ts.
+  return ensureAuthProfileStore(params.agentDir, {
+    config: params.config,
+    externalCliProviderIds: params.externalCliProviderIds,
+    allowKeychainPrompt: false,
+  });
+}
+
+// Test-only seam access mirrors external-auth.ts; the config-threading regression
+// must stay provable without composing a full embedded runner.
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.embeddedRunAuthPlanTestApi")] =
+    { loadEmbeddedRunAuthProfileStore };
+}
+
 export async function prepareEmbeddedRunAuthPlan(params: {
   runParams: RunEmbeddedAgentParams;
   provider: string;
@@ -86,18 +107,20 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   params.markStage?.("scope");
 
   const attemptAuthProfileStore = usesOpenAIAuthRouting
-    ? ensureAuthProfileStore(params.agentDir, {
+    ? loadEmbeddedRunAuthProfileStore({
+        agentDir: params.agentDir,
+        config: runParams.config,
         externalCliProviderIds: [OPENAI_PROVIDER_ID],
-        allowKeychainPrompt: false,
       })
     : initialPluginHarnessOwnsTransport
       ? ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
           allowKeychainPrompt: false,
         })
       : externalCliAuthScope.providerIds
-        ? ensureAuthProfileStore(params.agentDir, {
+        ? loadEmbeddedRunAuthProfileStore({
+            agentDir: params.agentDir,
+            config: runParams.config,
             externalCliProviderIds: externalCliAuthScope.providerIds,
-            allowKeychainPrompt: false,
           })
         : (noExternalAuthStore ??
           ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, {

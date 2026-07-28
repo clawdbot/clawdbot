@@ -5,6 +5,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { UiSettings } from "../../app/settings.ts";
+import { SLASH_COMMANDS } from "../../lib/chat/commands.ts";
 import { createSessionCapability } from "../../lib/sessions/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -548,15 +549,13 @@ describe("refreshChat", () => {
     expect(requestUpdate).not.toHaveBeenCalled();
   });
 
-  it("starts startup metadata without waiting for the transcript response", async () => {
+  it("uses startup-shipped metadata without requesting chat.metadata", async () => {
     const startup = createDeferred<unknown>();
-    const metadata = createDeferred<unknown>();
     const host = makeHost({
       hello: {
         features: { methods: ["chat.metadata", "chat.startup"] },
       } as TestChatHost["hello"],
       requestHandlers: {
-        "chat.metadata": () => metadata.promise,
         "chat.startup": () => startup.promise,
       },
     });
@@ -567,39 +566,8 @@ describe("refreshChat", () => {
       startup: true,
     });
 
-    expect(host.request.mock.calls.map(([method]) => method)).toEqual([
-      "chat.startup",
-      "chat.metadata",
-    ]);
+    expect(host.request.mock.calls.map(([method]) => method)).toEqual(["chat.startup"]);
     expect(await raceWithMacrotask(refresh)).toBe("pending");
-
-    metadata.resolve({ commands: [], models: [] });
-    startup.resolve({ messages: [] });
-    await expect(refresh).resolves.toBeUndefined();
-  });
-
-  it("preserves startup metadata when parallel metadata needs fallbacks", async () => {
-    const startup = createDeferred<unknown>();
-    const metadata = createDeferred<unknown>();
-    const host = makeHost({
-      hello: {
-        features: { methods: ["chat.metadata", "chat.startup"] },
-      } as TestChatHost["hello"],
-      requestHandlers: {
-        "chat.metadata": () => metadata.promise,
-        "chat.startup": () => startup.promise,
-      },
-    });
-    const refresh = refreshPageChat(asChatPageHost(host), {
-      awaitHistory: true,
-      deferBranches: true,
-      startup: true,
-    });
-
-    metadata.resolve({});
-    await Promise.resolve();
-    expect(host.request).not.toHaveBeenCalledWith("models.list", expect.anything());
-    expect(host.request).not.toHaveBeenCalledWith("commands.list", expect.anything());
 
     startup.resolve({
       messages: [],
@@ -616,7 +584,7 @@ describe("refreshChat", () => {
       },
     });
     await expect(refresh).resolves.toBeUndefined();
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(host.chatModelCatalog).toEqual([
         {
           available: true,
@@ -626,8 +594,73 @@ describe("refreshChat", () => {
         },
       ]),
     );
+    expect(host.request).not.toHaveBeenCalledWith("chat.metadata", expect.anything());
     expect(host.request).not.toHaveBeenCalledWith("models.list", expect.anything());
     expect(host.request).not.toHaveBeenCalledWith("commands.list", expect.anything());
+  });
+
+  it("fills omitted startup metadata immediately and populates models and commands", async () => {
+    const startup = createDeferred<unknown>();
+    const host = makeHost({
+      hello: {
+        features: { methods: ["chat.metadata", "chat.startup"] },
+      } as TestChatHost["hello"],
+      requestHandlers: {
+        "chat.metadata": {},
+        "commands.list": {
+          commands: [
+            {
+              name: "startup-gap-command",
+              textAliases: ["/startup-gap-command"],
+              description: "Loaded from the startup metadata gap fill.",
+              source: "plugin",
+              scope: "text",
+              acceptsArgs: false,
+            },
+          ],
+        },
+        "chat.startup": () => startup.promise,
+        "models.list": {
+          models: [
+            {
+              available: true,
+              id: "gap-model",
+              name: "Gap Model",
+              provider: "openai",
+            },
+          ],
+        },
+      },
+    });
+    const refresh = refreshPageChat(asChatPageHost(host), {
+      awaitHistory: true,
+      deferBranches: true,
+      startup: true,
+    });
+
+    expect(host.request.mock.calls.map(([method]) => method)).toEqual(["chat.startup"]);
+    expect(host.request).not.toHaveBeenCalledWith("models.list", expect.anything());
+    expect(host.request).not.toHaveBeenCalledWith("commands.list", expect.anything());
+
+    startup.resolve({ messages: [] });
+    await expect(refresh).resolves.toBeUndefined();
+    await waitForFast(() =>
+      expect(host.chatModelCatalog).toEqual([
+        {
+          available: true,
+          id: "gap-model",
+          name: "Gap Model",
+          provider: "openai",
+        },
+      ]),
+    );
+    expect(SLASH_COMMANDS.some((command) => command.name === "startup-gap-command")).toBe(true);
+    expect(host.request).toHaveBeenCalledWith("models.list", { view: "configured" });
+    expect(host.request).toHaveBeenCalledWith(
+      "commands.list",
+      expect.objectContaining({ includeArgs: true, scope: "text" }),
+    );
+    expect(host.request).toHaveBeenCalledWith("chat.metadata", { agentId: "main" });
   });
 
   it.each([

@@ -6,11 +6,9 @@ import {
   buildChannelProgressDraftLineForEntry,
   createChannelProgressDraftCompositor,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import type { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
-import {
-  resolveInboundLastRouteSessionKey,
-  type ResolvedAgentRoute,
-} from "openclaw/plugin-sdk/routing";
+import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import type { MattermostPost } from "./client.js";
 import {
   createMattermostDraftPreviewBoundaryController,
@@ -27,14 +25,12 @@ import {
   deliverMattermostReplyWithDraftPreview,
   type MattermostDraftPreviewState,
 } from "./monitor-draft-delivery.js";
+import type { MattermostEventPlan } from "./monitor-event-plan.js";
 import type { MattermostIngressLifecycle } from "./monitor-ingress.js";
 import type { MattermostMonitorContext } from "./monitor-types.js";
-import {
-  createMattermostReplyDeliveryBarrier,
-  deliverMattermostReplyPayload,
-} from "./reply-delivery.js";
-import type { ChatType, HistoryEntry, ReplyPayload } from "./runtime-api.js";
-import { createChannelMessageReplyPipeline, logTypingFailure } from "./runtime-api.js";
+import { deliverMattermostReplyPayload } from "./reply-delivery.js";
+import type { HistoryEntry, ReplyPayload } from "./runtime-api.js";
+import { createChannelMessageReplyPipeline } from "./runtime-api.js";
 import { sendMessageMattermost } from "./send.js";
 import { recordMattermostThreadParticipation } from "./thread-participation.js";
 
@@ -42,12 +38,7 @@ type MattermostInboundTurnParams = {
   post: MattermostPost;
   rawText: string;
   ctxPayload: ReturnType<typeof finalizeInboundContext>;
-  kind: ChatType;
-  route: ResolvedAgentRoute;
-  channelId: string;
-  senderId: string;
-  to: string;
-  effectiveReplyToId?: string;
+  eventPlan: MattermostEventPlan;
   historyKey: string | null;
   historyLimit: number;
   channelHistories: Map<string, HistoryEntry[]>;
@@ -77,54 +68,47 @@ export async function dispatchMattermostInboundTurn(
   params: MattermostInboundTurnParams,
 ): Promise<void> {
   const { account, cfg, client, core, runtime } = monitor;
-  const { sendTypingIndicator } = monitor.resources;
   const {
     channelHistories,
-    channelId,
     ctxPayload,
-    effectiveReplyToId,
+    eventPlan,
     historyKey,
     historyLimit,
-    kind,
     pinnedMainDmOwner,
     post,
     rawText,
-    route,
-    senderId,
-    to,
     turnAdoptionLifecycle,
   } = params;
-  const textLimit = core.channel.text.resolveTextChunkLimit(cfg, "mattermost", account.accountId, {
-    fallbackLimit: account.textChunkLimit ?? 4000,
-  });
-  const tableMode = core.channel.text.resolveMarkdownTableMode({
-    cfg,
-    channel: "mattermost",
-    accountId: account.accountId,
-  });
+  const { channelId, kind, route, senderId, thread, to } = eventPlan;
+  const { effectiveReplyToId } = thread;
+  const {
+    deliveryBarrier,
+    replyOptions,
+    replyPipeline: baseReplyPipeline,
+    tableMode,
+    textLimit,
+  } = eventPlan.createReplyPlan();
   const chunkMode = core.channel.text.resolveChunkMode(cfg, "mattermost", account.accountId);
-  const { onModelSelected, typingCallbacks, resolveResponsePrefix, ...replyPipeline } =
+  const { onModelSelected, typingCallbacks, resolveResponsePrefix, ...dispatcherPipeline } =
     createChannelMessageReplyPipeline({
       cfg,
       agentId: route.agentId,
       channel: "mattermost",
       accountId: account.accountId,
-      typing: {
-        start: () => sendTypingIndicator(channelId, effectiveReplyToId),
-        onStartError: (err) => {
-          logTypingFailure({
-            log: monitor.logDebugMessage,
-            channel: "mattermost",
-            target: channelId,
-            error: err,
-          });
-        },
-      },
+      typing: baseReplyPipeline.typing,
     });
-  const draftPreviewEnabled = account.streamingMode !== "off";
-  const draftToolProgressEnabled = shouldUpdateMattermostDraftToolProgress(account);
+  // Provider drafts are visible before outbound modifiers run. Keep them off whenever a hook
+  // can rewrite or cancel so the original payload cannot escape the durable delivery gate.
+  const hookRunner = getGlobalHookRunner();
+  const allowProviderPreview = !(
+    (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
+    (hookRunner?.hasHooks("message_sending") ?? false)
+  );
+  const draftPreviewEnabled = allowProviderPreview && account.streamingMode !== "off";
+  const draftToolProgressEnabled =
+    draftPreviewEnabled && shouldUpdateMattermostDraftToolProgress(account);
   const suppressDefaultToolProgressMessages =
-    shouldSuppressMattermostDefaultToolProgressMessages(account);
+    draftPreviewEnabled && shouldSuppressMattermostDefaultToolProgressMessages(account);
   const draftStream = draftPreviewEnabled
     ? createMattermostDraftStream({
         client,
@@ -257,12 +241,8 @@ export async function dispatchMattermostInboundTurn(
     return boundarySettled;
   };
 
-  const deliveryBarrier = createMattermostReplyDeliveryBarrier({
-    isDirect: kind === "direct",
-    dmRetryOptions: account.config.dmChannelRetry,
-  });
   const dispatcherOptions: NonNullable<ChannelInboundTurnPlan["dispatcherOptions"]> = {
-    ...replyPipeline,
+    ...dispatcherPipeline,
     resolveFollowupAdmissionBarrierTimeoutPolicy: deliveryBarrier.resolveTimeoutPolicy,
     onDeliverySettled: deliveryBarrier.markDeliverySettled,
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
@@ -430,11 +410,7 @@ export async function dispatchMattermostInboundTurn(
             onObservedReplyDelivery: draftToolProgressEnabled
               ? () => draftStream.clear()
               : undefined,
-            disableBlockStreaming: draftPreviewEnabled
-              ? true
-              : typeof account.blockStreaming === "boolean"
-                ? !account.blockStreaming
-                : undefined,
+            disableBlockStreaming: draftPreviewEnabled ? true : replyOptions.disableBlockStreaming,
             ...(suppressDefaultToolProgressMessages
               ? { suppressDefaultToolProgressMessages: true }
               : {}),

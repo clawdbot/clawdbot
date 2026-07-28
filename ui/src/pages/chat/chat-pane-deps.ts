@@ -115,6 +115,7 @@ export {
 export {
   ObserverDigestHistory,
   pickFreshestObserverDigest,
+  projectSessionObserverDigest,
   resolveChatPaneObserverRunId,
 } from "../../lib/observer-digest.ts";
 export { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
@@ -175,6 +176,7 @@ export { sendSessionObserverVisibility } from "./chat-observer.ts";
 export {
   applySelectedSessionProjection,
   dismissChatError,
+  resolveChatArtifactDownload,
   resolveAssistantAttachmentAuthToken,
   SessionParticipationTracker,
 } from "./chat-pane-state.ts";
@@ -272,7 +274,7 @@ export {
 export type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
 export {
   ChatTranscriptController,
-  resetChatThreadPresentationState,
+  resetChatThreadSessionPresentationState,
 } from "./components/chat-thread.ts";
 export { WIDGET_PROMPT_EVENT, type WidgetPromptEventDetail } from "./components/chat-tool-cards.ts";
 export {
@@ -289,7 +291,14 @@ export {
   reconcileStaleChatRunAfterSessionStatePublication,
   replayPendingChatAbort,
 } from "./run-lifecycle.ts";
-export { scheduleChatScroll } from "./scroll.ts";
+export {
+  captureChatSessionScrollPosition,
+  getChatSessionScrollPosition,
+  restoreChatScroll,
+  saveChatSessionScrollPosition,
+  scheduleChatScroll,
+  type ChatSessionScrollPosition,
+} from "./scroll.ts";
 export {
   clearChatMessagesFromCache,
   readChatSessionSnapshot,

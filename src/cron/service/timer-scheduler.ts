@@ -289,7 +289,6 @@ async function onAdmittedTimer(state: CronServiceState) {
     const runDueJob = async (params: {
       id: string;
       job: CronJob;
-      reservedAtMs: number;
       reservationIdentity: object;
       startedAt: number;
     }): Promise<TimedCronRunOutcome> => {
@@ -311,7 +310,6 @@ async function onAdmittedTimer(state: CronServiceState) {
         state,
         job: executionJob,
         startedAt,
-        runIdStartedAt: params.reservedAtMs,
       });
 
       try {
