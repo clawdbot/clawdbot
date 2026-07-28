@@ -946,6 +946,9 @@ describe("SystemAgentChatEngine", () => {
       if (!confirmed) {
         return { status: "skipped", providers: [] };
       }
+      // Route changes mid-wizard, after the turn gate: only the copy-boundary
+      // recheck can catch it.
+      currentConfig = changedConfig;
       await params.beforeApply?.();
       copyEffect();
       return {
@@ -966,7 +969,6 @@ describe("SystemAgentChatEngine", () => {
 
     const confirm = await engine.handle("import memory");
     expect(confirm.text).toContain("Import detected memory?");
-    currentConfig = changedConfig;
 
     const stopped = await engine.handle("yes");
 
