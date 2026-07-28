@@ -14899,7 +14899,15 @@
     },
     {
       "kind": "resource-string",
-      "line": 15,
+      "line": 16,
+      "path": "apps/android/wear/src/main/res/values/strings.xml",
+      "source": "Open thread",
+      "surface": "android",
+      "id": "native.android.fc73a8c21e6a7b16"
+    },
+    {
+      "kind": "resource-string",
+      "line": 17,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "← Swipe →",
       "surface": "android",
@@ -14907,7 +14915,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 16,
+      "line": 18,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Hold",
       "surface": "android",
@@ -14915,7 +14923,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 17,
+      "line": 19,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Tap",
       "surface": "android",
@@ -14923,7 +14931,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 18,
+      "line": 20,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Double tap",
       "surface": "android",
@@ -14931,7 +14939,15 @@
     },
     {
       "kind": "resource-string",
-      "line": 19,
+      "line": 21,
+      "path": "apps/android/wear/src/main/res/values/strings.xml",
+      "source": "Show new messages",
+      "surface": "android",
+      "id": "native.android.75a41b3ed302ff41"
+    },
+    {
+      "kind": "resource-string",
+      "line": 22,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Start Live to see the conversation here.",
       "surface": "android",
@@ -14939,7 +14955,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 20,
+      "line": 23,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "New",
       "surface": "android",
@@ -14947,7 +14963,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 21,
+      "line": 24,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Type",
       "surface": "android",
@@ -14955,7 +14971,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 22,
+      "line": 25,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Message",
       "surface": "android",
@@ -14963,7 +14979,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 23,
+      "line": 26,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Message agent",
       "surface": "android",
@@ -14971,7 +14987,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 24,
+      "line": 27,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Send",
       "surface": "android",
@@ -14979,7 +14995,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 25,
+      "line": 28,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Speak to your agent",
       "surface": "android",
@@ -14987,7 +15003,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 26,
+      "line": 29,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Stop speaking",
       "surface": "android",
@@ -14995,7 +15011,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 27,
+      "line": 30,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Speak latest reply",
       "surface": "android",
@@ -15003,7 +15019,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 28,
+      "line": 31,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Speaking",
       "surface": "android",
@@ -15011,7 +15027,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 29,
+      "line": 32,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Listening",
       "surface": "android",
@@ -15019,7 +15035,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 30,
+      "line": 33,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Connecting",
       "surface": "android",
@@ -15027,7 +15043,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 31,
+      "line": 34,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Thinking",
       "surface": "android",
@@ -15035,7 +15051,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 32,
+      "line": 35,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Typing",
       "surface": "android",
@@ -15043,7 +15059,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 33,
+      "line": 36,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Sending",
       "surface": "android",
@@ -15051,7 +15067,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 34,
+      "line": 37,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Agent working",
       "surface": "android",
@@ -15059,7 +15075,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 35,
+      "line": 38,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Error",
       "surface": "android",
@@ -15067,7 +15083,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 36,
+      "line": 39,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Ready",
       "surface": "android",
@@ -15075,7 +15091,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 37,
+      "line": 40,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "You",
       "surface": "android",
@@ -15083,7 +15099,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 38,
+      "line": 41,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Agent",
       "surface": "android",
@@ -15091,7 +15107,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 39,
+      "line": 42,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "System",
       "surface": "android",
@@ -15099,7 +15115,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 40,
+      "line": 43,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Start a conversation",
       "surface": "android",
@@ -15107,7 +15123,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 41,
+      "line": 44,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Talk or type on your watch. The paired phone sends the message through its authenticated OpenClaw session.",
       "surface": "android",
@@ -15115,7 +15131,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 42,
+      "line": 45,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Current session",
       "surface": "android",
@@ -15123,7 +15139,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 43,
+      "line": 46,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Appearance",
       "surface": "android",
@@ -15131,7 +15147,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 44,
+      "line": 47,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Dark",
       "surface": "android",
@@ -15139,7 +15155,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 45,
+      "line": 48,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Light",
       "surface": "android",
@@ -15147,7 +15163,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 46,
+      "line": 49,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Speak replies automatically",
       "surface": "android",
@@ -15155,7 +15171,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 47,
+      "line": 50,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Reply alerts",
       "surface": "android",
@@ -15163,7 +15179,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 48,
+      "line": 51,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Enable alerts",
       "surface": "android",
@@ -15171,7 +15187,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 49,
+      "line": 52,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Abort run",
       "surface": "android",
@@ -15179,7 +15195,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 50,
+      "line": 53,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Open notification settings",
       "surface": "android",
@@ -15187,7 +15203,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 51,
+      "line": 54,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "On",
       "surface": "android",
@@ -15195,7 +15211,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 52,
+      "line": 55,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Off",
       "surface": "android",
@@ -15203,7 +15219,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 53,
+      "line": 56,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Connection",
       "surface": "android",
@@ -15211,7 +15227,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 54,
+      "line": 57,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Gateway",
       "surface": "android",
@@ -15219,7 +15235,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 55,
+      "line": 58,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Security",
       "surface": "android",
@@ -15227,7 +15243,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 56,
+      "line": 59,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Phone-controlled",
       "surface": "android",
@@ -15235,7 +15251,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 57,
+      "line": 60,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Gateway credentials and identity stay on the paired phone. The watch only uses the Wear Data Layer.",
       "surface": "android",
@@ -15243,7 +15259,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 58,
+      "line": 61,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Checking phone",
       "surface": "android",
@@ -15251,7 +15267,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 59,
+      "line": 62,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Reading agents, sessions, and chat",
       "surface": "android",
@@ -15259,7 +15275,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 60,
+      "line": 63,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Phone ready",
       "surface": "android",
@@ -15267,7 +15283,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 61,
+      "line": 64,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Gateway connected",
       "surface": "android",
@@ -15275,7 +15291,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 62,
+      "line": 65,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Gateway offline",
       "surface": "android",
@@ -15283,7 +15299,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 63,
+      "line": 66,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Reconnect the Gateway in OpenClaw on the paired phone.",
       "surface": "android",
@@ -15291,7 +15307,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 64,
+      "line": 67,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Open OpenClaw on phone",
       "surface": "android",
@@ -15299,7 +15315,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 65,
+      "line": 68,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "The watch never starts or authenticates the Gateway itself.",
       "surface": "android",
@@ -15307,7 +15323,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 66,
+      "line": 69,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Phone not reachable",
       "surface": "android",
@@ -15315,7 +15331,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 67,
+      "line": 70,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Keep the paired phone nearby and install the matching OpenClaw app.",
       "surface": "android",
@@ -15323,7 +15339,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 68,
+      "line": 71,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Selection no longer available",
       "surface": "android",
@@ -15331,7 +15347,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 69,
+      "line": 72,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Action not accepted",
       "surface": "android",
@@ -15339,7 +15355,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 70,
+      "line": 73,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Something went wrong",
       "surface": "android",
@@ -15347,7 +15363,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 71,
+      "line": 74,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Refresh the lists and try again.",
       "surface": "android",
@@ -15355,7 +15371,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 72,
+      "line": 75,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Try again from the watch.",
       "surface": "android",
@@ -15363,7 +15379,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 73,
+      "line": 76,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Update required",
       "surface": "android",
@@ -15371,7 +15387,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 74,
+      "line": 77,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Update OpenClaw on both phone and watch.",
       "surface": "android",
@@ -15379,7 +15395,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 75,
+      "line": 78,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Refresh",
       "surface": "android",
@@ -15387,7 +15403,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 76,
+      "line": 79,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Retry",
       "surface": "android",
@@ -15395,7 +15411,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 77,
+      "line": 80,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "OpenClaw replies",
       "surface": "android",
@@ -15403,7 +15419,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 78,
+      "line": 81,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Reply",
       "surface": "android",
@@ -15411,7 +15427,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 79,
+      "line": 82,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "OpenClaw reply",
       "surface": "android",
@@ -15419,7 +15435,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 80,
+      "line": 83,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Reply not sent",
       "surface": "android",
@@ -15427,7 +15443,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 81,
+      "line": 84,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Phone unavailable. Tap Reply to try again.",
       "surface": "android",
@@ -15435,7 +15451,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 82,
+      "line": 85,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Open OpenClaw to reply",
       "surface": "android",
@@ -15443,7 +15459,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 83,
+      "line": 86,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Your preferred phone changed. Open the app to reload the session before replying.",
       "surface": "android",
@@ -15451,7 +15467,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 84,
+      "line": 87,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "OpenClaw",
       "surface": "android",
@@ -15459,7 +15475,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 85,
+      "line": 88,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "Open sessions and reply through your paired phone",
       "surface": "android",
@@ -15467,7 +15483,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 86,
+      "line": 89,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "OPEN",
       "surface": "android",
@@ -15475,7 +15491,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 87,
+      "line": 90,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
       "source": "PHONE PROXY",
       "surface": "android",

@@ -165,6 +165,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       artifactKind: "archive-artifact",
       contentRevision: expect.any(String),
       generatedByCronRun: true,
+      sessionKind: "cron",
       sessionFile: archivePath,
       sessionId: "cron-run",
     });
@@ -173,7 +174,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
   it("reads live SQLite rows by session identity while preserving archived JSONL artifacts", async () => {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
     const storePath = path.join(sessionsDir, "sessions.json");
-    const sessionKey = "agent:main:chat:sqlite-live";
+    const sessionKey = "agent:main:chat:sqlite-live:heartbeat";
     const sessionId = "sqlite-live";
     const updatedAt = Date.parse("2026-06-25T12:00:00.000Z");
     fsSync.mkdirSync(sessionsDir, { recursive: true });
@@ -220,6 +221,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
           sessionKey,
           transcriptSource: "sqlite",
           updatedAtMs: expect.any(Number),
+          sessionKind: "interactive",
         }),
         expect.objectContaining({
           agentId: "main",
@@ -392,6 +394,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
           artifactKind: "archive-artifact",
           contentRevision: expect.any(String),
           generatedByCronRun: true,
+          sessionKind: "cron",
           sessionFile: expectedArchivePath,
           sessionId: "cron-run",
         }),
@@ -571,6 +574,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
         contentRevision: expect.any(String),
         sessionFile: archivePath,
         sessionId: "retained",
+        sessionKind: "unknown",
       },
     ]);
   });
@@ -951,145 +955,6 @@ describe("buildSessionEntry", () => {
 
     const entry = requireSessionEntry(await buildSessionEntry(filePath));
     expect(entry.content).toBe("User: Actual user text");
-  });
-
-  it("skips inter-session user messages", async () => {
-    const jsonlLines = [
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "user",
-          content: "A background task completed. Internal relay text.",
-          provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
-        },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: { role: "assistant", content: "User-facing summary." },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: { role: "user", content: "Actual user follow-up." },
-      }),
-    ];
-    const filePath = path.join(tmpDir, "inter-session-session.jsonl");
-    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
-
-    const entry = requireSessionEntry(await buildSessionEntry(filePath));
-    expect(entry.content).toBe("Assistant: User-facing summary.\nUser: Actual user follow-up.");
-    expect(entry.lineMap).toStrictEqual([2, 3]);
-  });
-
-  it("drops every assistant response in a provenance-marked heartbeat turn", async () => {
-    const jsonlLines = [
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "user",
-          content: "[OpenClaw heartbeat poll]",
-          provenance: { kind: "internal_system", sourceTool: "heartbeat" },
-        },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "assistant",
-          content: "Heartbeat received. Main is active. No pending user request in this cron poll.",
-        },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: { role: "toolResult", content: "Background check complete." },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: { role: "assistant", content: "One maintenance task was also completed." },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "user",
-          content: "Internal handoff.",
-          provenance: { kind: "inter_session", sourceTool: "sessions_send" },
-        },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: { role: "assistant", content: "Cross-session response." },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: { role: "user", content: "What is the weather today?" },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: { role: "assistant", content: "The weather is sunny." },
-      }),
-    ];
-    const filePath = path.join(tmpDir, "heartbeat-session.jsonl");
-    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
-
-    const entry = requireSessionEntry(await buildSessionEntry(filePath));
-    expect(entry.content).toBe(
-      "Assistant: Cross-session response.\nUser: What is the weather today?\nAssistant: The weather is sunny.",
-    );
-    expect(entry.lineMap).toStrictEqual([6, 7, 8]);
-  });
-
-  it("does not couple user-spoofed heartbeat text to the next assistant response", async () => {
-    const jsonlLines = [
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "user",
-          content: "[OpenClaw heartbeat poll]",
-        },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "assistant",
-          content: "This reply belongs to a real user turn.",
-        },
-      }),
-    ];
-    const filePath = path.join(tmpDir, "normal-session.jsonl");
-    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
-
-    const entry = requireSessionEntry(await buildSessionEntry(filePath));
-    expect(entry.content).toBe("Assistant: This reply belongs to a real user turn.");
-    expect(entry.lineMap).toStrictEqual([2]);
-  });
-
-  it("ends a heartbeat turn when the next real user message has no text", async () => {
-    const jsonlLines = [
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "user",
-          content: "[OpenClaw heartbeat poll]",
-          provenance: { kind: "internal_system", sourceTool: "heartbeat" },
-        },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: { role: "assistant", content: "Heartbeat received." },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: { role: "user", content: [{ type: "image", source: "photo.jpg" }] },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: { role: "assistant", content: "I can see the photo." },
-      }),
-    ];
-    const filePath = path.join(tmpDir, "heartbeat-before-media-session.jsonl");
-    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
-
-    const entry = requireSessionEntry(await buildSessionEntry(filePath));
-    expect(entry.content).toBe("Assistant: I can see the photo.");
-    expect(entry.lineMap).toStrictEqual([4]);
   });
 
   it("drops Date-invalid numeric message timestamps", async () => {

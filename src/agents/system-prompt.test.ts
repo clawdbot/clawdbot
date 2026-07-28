@@ -963,11 +963,22 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain(
-      "MEMORY.md: durable preferences/behavior; follow all session unless higher priority overrides.",
+      "MEMORY.md: durable non-profile facts and decisions; use when relevant unless higher-priority instructions override.",
     );
     expect(prompt.indexOf("NEVER use [[tts:...]]")).toBeGreaterThan(-1);
     expect(prompt.lastIndexOf("## Voice (TTS)")).toBeGreaterThan(
       prompt.indexOf("NEVER use [[tts:...]]"),
+    );
+  });
+
+  it("adds USER guidance when a user-model file is present", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [{ path: "USER.md", content: "- Prefer concise answers." }],
+    });
+
+    expect(prompt).toContain(
+      "USER.md: durable user preferences and profile directives; follow unless higher-priority instructions override.",
     );
   });
 

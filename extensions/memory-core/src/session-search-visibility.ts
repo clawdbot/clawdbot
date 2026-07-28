@@ -40,7 +40,14 @@ function isSameStoredTranscript(
   if (anchorSessionId && candidate.sessionId?.trim() === anchorSessionId) {
     return true;
   }
-  return false;
+  const anchorSessionFile = (anchor as { sessionFile?: unknown }).sessionFile;
+  const candidateSessionFile = (candidate as { sessionFile?: unknown }).sessionFile;
+  return (
+    typeof anchorSessionFile === "string" &&
+    anchorSessionFile.trim().length > 0 &&
+    typeof candidateSessionFile === "string" &&
+    candidateSessionFile.trim() === anchorSessionFile.trim()
+  );
 }
 
 function isPrivateConversation(params: {

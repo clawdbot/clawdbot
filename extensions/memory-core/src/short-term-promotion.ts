@@ -215,6 +215,7 @@ export async function rankShortTermPromotionCandidates(
         consolidation,
         conceptual,
       },
+      provenance: entry.provenance,
     });
   }
 

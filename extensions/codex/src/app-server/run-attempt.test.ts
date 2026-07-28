@@ -220,11 +220,11 @@ async function writeExistingBinding(
   });
 }
 
-function attachSqliteSessionTarget(
+async function attachSqliteSessionTarget(
   params: EmbeddedRunAttemptParams,
   storePath: string,
   sessionId: string,
-): void {
+): Promise<void> {
   params.sessionId = sessionId;
   params.sessionKey = `agent:main:${sessionId}`;
   params.sessionTarget = {
@@ -233,6 +233,12 @@ function attachSqliteSessionTarget(
     sessionKey: params.sessionKey,
     storePath,
   };
+  await upsertSessionEntry({
+    agentId: "main",
+    sessionKey: params.sessionKey,
+    storePath,
+    entry: { sessionFile: params.sessionFile, sessionId, updatedAt: Date.now() },
+  });
 }
 
 async function readTranscriptMessagesByIdentity(
@@ -1764,7 +1770,7 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace-early-prompt");
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
-    attachSqliteSessionTarget(params, storePath, "session-early-prompt");
+    await attachSqliteSessionTarget(params, storePath, "session-early-prompt");
     params.prompt = "external channel prompt";
     const onUserMessagePersisted = vi.fn();
     params.onUserMessagePersisted = onUserMessagePersisted;
@@ -1802,7 +1808,7 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace-suppressed-early-prompt");
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
-    attachSqliteSessionTarget(params, storePath, "session-suppressed-early-prompt");
+    await attachSqliteSessionTarget(params, storePath, "session-suppressed-early-prompt");
     params.prompt = "already persisted prompt";
     params.suppressNextUserMessagePersistence = true;
     const run = runCodexAppServerAttempt(params);
@@ -3538,7 +3544,7 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace-settled-finalization-context");
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
-    attachSqliteSessionTarget(params, storePath, sessionId);
+    await attachSqliteSessionTarget(params, storePath, sessionId);
     params.prompt = "Send the update to Alice.";
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
@@ -4260,7 +4266,11 @@ describe("runCodexAppServerAttempt", () => {
     });
     const elicitation = installElicitationClient(request);
     const params = createRunParams();
-    attachSqliteSessionTarget(params, path.join(tempDir, "sessions.json"), "session-computer-use");
+    await attachSqliteSessionTarget(
+      params,
+      path.join(tempDir, "sessions.json"),
+      "session-computer-use",
+    );
     const run = runCodexAppServerAttempt(params, {
       pluginConfig: {
         computerUse: {

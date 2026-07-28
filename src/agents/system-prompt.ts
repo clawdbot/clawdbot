@@ -239,13 +239,21 @@ function buildProjectContextSection(params: {
     const hasMemoryFile = params.files.some(
       (file) => getContextFileBasename(file.path) === "memory.md",
     );
+    const hasUserFile = params.files.some(
+      (file) => getContextFileBasename(file.path) === "user.md",
+    );
     lines.push("Loaded project context:");
     if (hasSoulFile) {
       lines.push("SOUL.md: persona/tone. Follow it unless higher-priority instructions override.");
     }
     if (hasMemoryFile) {
       lines.push(
-        "MEMORY.md: durable preferences/behavior; follow all session unless higher priority overrides.",
+        "MEMORY.md: durable non-profile facts and decisions; use when relevant unless higher-priority instructions override.",
+      );
+    }
+    if (hasUserFile) {
+      lines.push(
+        "USER.md: durable user preferences and profile directives; follow unless higher-priority instructions override.",
       );
     }
     lines.push("");

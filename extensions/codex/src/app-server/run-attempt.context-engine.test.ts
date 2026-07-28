@@ -18,6 +18,7 @@ import {
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { formatSqliteSessionFileMarker } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
@@ -123,7 +124,10 @@ function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAtt
   } as EmbeddedRunAttemptParams;
 }
 
-function createSqliteParams(workspaceDir: string, storeName: string): EmbeddedRunAttemptParams {
+async function createSqliteParams(
+  workspaceDir: string,
+  storeName: string,
+): Promise<EmbeddedRunAttemptParams> {
   const sessionId = "session-1";
   const sessionKey = "agent:main:session-1";
   const storePath = path.join(tempDir, `${storeName}.sqlite`);
@@ -133,6 +137,12 @@ function createSqliteParams(workspaceDir: string, storeName: string): EmbeddedRu
     storePath,
   });
   const params = createParams(sessionFile, workspaceDir);
+  await upsertSessionEntry({
+    agentId: "main",
+    sessionKey,
+    storePath,
+    entry: { sessionFile, sessionId, updatedAt: Date.now() },
+  });
   params.sessionTarget = {
     agentId: "main",
     sessionId,
@@ -1981,7 +1991,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       const maintain = vi.fn(async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }));
       const contextEngine = createContextEngine({ afterTurn, maintain, bootstrap: undefined });
       const harness = createStartedThreadHarness();
-      const params = createSqliteParams(
+      const params = await createSqliteParams(
         workspaceDir,
         `heartbeat-${testCase.bootstrapContextRunKind}`,
       );
@@ -2113,7 +2123,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       bootstrap: undefined,
     });
     const harness = createStartedThreadHarness();
-    const params = createSqliteParams(workspaceDir, "prompt-failure");
+    const params = await createSqliteParams(workspaceDir, "prompt-failure");
     params.contextEngine = contextEngine;
 
     const run = runCodexAppServerAttempt(params);

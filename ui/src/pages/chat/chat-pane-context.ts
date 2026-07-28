@@ -5,6 +5,9 @@ import {
   canonicalUiSessionKeyForPersistence,
   clearChatMessagesFromCache,
   hasOperatorAdminAccess,
+  invalidateChatAvatarCache,
+  invalidateAssistantIdentityCache,
+  invalidateChatMetadataCache,
   isGatewayMethodAdvertised,
   loadSettings,
   markQueuedChatSendsWaitingForReconnect,
@@ -160,6 +163,10 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       // A reconnect can retain the browser client. Keep async ownership tied
       // to the logical connection, not only the transport object identity.
       this.connectionGeneration += 1;
+      invalidateChatAvatarCache(state);
+      invalidateAssistantIdentityCache(state.client);
+      state.assistantIdentityRequestVersion += 1;
+      invalidateChatMetadataCache(state);
       this.swarmHydrator?.dispose();
       this.swarmHydrator = null;
       this.builtinBoardSnapshot = null;

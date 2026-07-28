@@ -835,6 +835,64 @@ describe("matrix message actions", () => {
     expect(next.messages.map((message) => message.eventId)).toEqual(["$thread-reply"]);
   });
 
+  it.each([
+    ["appended junk", (cursor: string) => `${cursor}!`],
+    ["padding", (cursor: string) => `${cursor}=`],
+    [
+      "extra payload field",
+      (cursor: string) => {
+        const prefix = "openclaw.matrix.thread-relations-start:";
+        const payload = Buffer.from(
+          JSON.stringify({ v: 1, threadId: "$thread-root", extra: true }),
+          "utf8",
+        ).toString("base64url");
+        expect(cursor.startsWith(prefix)).toBe(true);
+        return `${prefix}${payload}`;
+      },
+    ],
+  ])(
+    "forwards a synthetic thread cursor with %s as an opaque Matrix token",
+    async (_name, alter) => {
+      const firstPage = createMessagesClient({
+        chunk: [],
+        pollRoot: {
+          event_id: "$thread-root",
+          sender: "@alice:example.org",
+          type: "m.room.message",
+          origin_server_ts: 10,
+          content: { msgtype: "m.text", body: "thread root" },
+        },
+        threadRelations: [{ event_id: "$thread-reply" }],
+      });
+      const first = await readMatrixMessages("room:!room:example.org", {
+        client: firstPage.client,
+        threadId: "$thread-root",
+        limit: 1,
+      });
+      const cursor = first.nextBatch;
+      if (!cursor) {
+        throw new Error("Expected a synthetic thread cursor");
+      }
+      const nonCanonicalCursor = alter(cursor);
+      const nextPage = createMessagesClient({ chunk: [], threadRelations: [] });
+
+      await readMatrixMessages("room:!room:example.org", {
+        client: nextPage.client,
+        threadId: "$thread-root",
+        limit: 1,
+        before: nonCanonicalCursor,
+      });
+
+      expect(nextPage.getRelations).toHaveBeenCalledWith(
+        "!room:example.org",
+        "$thread-root",
+        "m.thread",
+        undefined,
+        { dir: "b", from: nonCanonicalCursor, limit: 1 },
+      );
+    },
+  );
+
   it("does not reserve first-page thread capacity for a redacted root", async () => {
     const { client, doRequest, getEvent, getRelations } = createMessagesClient({
       chunk: [],

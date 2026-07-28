@@ -289,11 +289,19 @@ function isMatrixThreadRelationsStartCursor(raw: string | undefined, threadId: s
   }
   const encoded = raw.slice(MATRIX_THREAD_RELATIONS_START_CURSOR_PREFIX.length);
   try {
-    const decoded = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as {
+    const bytes = Buffer.from(encoded, "base64url");
+    if (bytes.toString("base64url") !== encoded) {
+      return false;
+    }
+    const decoded = JSON.parse(bytes.toString("utf8")) as {
       v?: unknown;
       threadId?: unknown;
     };
-    return decoded.v === 1 && decoded.threadId === threadId;
+    return (
+      decoded.v === 1 &&
+      decoded.threadId === threadId &&
+      encodeMatrixThreadRelationsStartCursor(decoded.threadId) === raw
+    );
   } catch {
     return false;
   }
