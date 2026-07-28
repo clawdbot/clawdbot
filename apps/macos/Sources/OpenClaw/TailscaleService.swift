@@ -21,6 +21,9 @@ final class TailscaleService {
     /// Indicates if a Tailscale installation or active daemon was detected.
     private(set) var isInstalled = false
 
+    /// Indicates if the GUI app is available for app-specific actions.
+    private(set) var isAppInstalled = false
+
     /// Indicates if Tailscale is currently running.
     private(set) var isRunning = false
 
@@ -40,12 +43,14 @@ final class TailscaleService {
     #if DEBUG
     init(
         isInstalled: Bool,
+        isAppInstalled: Bool = false,
         isRunning: Bool,
         tailscaleHostname: String? = nil,
         tailscaleIP: String? = nil,
         statusError: String? = nil)
     {
         self.isInstalled = isInstalled
+        self.isAppInstalled = isAppInstalled
         self.isRunning = isRunning
         self.tailscaleHostname = tailscaleHostname
         self.tailscaleIP = tailscaleIP
@@ -57,6 +62,25 @@ final class TailscaleService {
         let installed = FileManager().fileExists(atPath: "/Applications/Tailscale.app")
         self.logger.info("Tailscale app installed: \(installed)")
         return installed
+    }
+
+    func checkCLIInstallation() -> Bool {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let candidates = [
+            "/usr/local/bin/tailscale",
+            "/usr/local/bin/tailscaled",
+            "/opt/homebrew/bin/tailscale",
+            "/opt/homebrew/bin/tailscaled",
+            "\(home)/go/bin/tailscale",
+            "\(home)/go/bin/tailscaled",
+        ]
+        let installed = Self.hasExecutableCLI(at: candidates)
+        self.logger.info("Tailscale CLI installed: \(installed)")
+        return installed
+    }
+
+    static func hasExecutableCLI(at candidates: [String]) -> Bool {
+        candidates.contains { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
     struct TailscaleAPIResponse: Codable {
@@ -103,10 +127,16 @@ final class TailscaleService {
     func checkTailscaleStatus() async {
         let previousIP = self.tailscaleIP
         let appInstalled = self.checkAppInstallation()
-        let fallbackIP = TailscaleNetwork.detectTailnetIPv4()
+        let cliInstalled = self.checkCLIInstallation()
         let apiResponse = await self.fetchTailscaleStatus()
+        // RFC 6598 space is not Tailscale-exclusive. Only trust an interface
+        // fallback after the app, CLI, or local API proves this installation.
+        let fallbackIP = appInstalled || cliInstalled || apiResponse != nil
+            ? TailscaleNetwork.detectTailnetIPv4()
+            : nil
         self.applyStatusEvidence(
             appInstalled: appInstalled,
+            cliInstalled: cliInstalled,
             apiResponse: apiResponse,
             fallbackIP: fallbackIP)
 
@@ -117,10 +147,12 @@ final class TailscaleService {
 
     func applyStatusEvidence(
         appInstalled: Bool,
+        cliInstalled: Bool,
         apiResponse: TailscaleAPIResponse?,
         fallbackIP: String?)
     {
-        self.isInstalled = appInstalled || apiResponse != nil || fallbackIP != nil
+        self.isAppInstalled = appInstalled
+        self.isInstalled = appInstalled || cliInstalled || apiResponse != nil
 
         if let apiResponse {
             self.isRunning = apiResponse.status.lowercased() == "running"
@@ -154,9 +186,17 @@ final class TailscaleService {
             self.isRunning = false
             self.tailscaleHostname = nil
             self.tailscaleIP = nil
-            self.statusError = appInstalled ? "Please start the Tailscale app" : "Tailscale is not installed"
+            self.statusError = if appInstalled {
+                "Please start the Tailscale app"
+            } else if cliInstalled {
+                "Please start the Tailscale daemon"
+            } else {
+                "Tailscale is not installed"
+            }
             if appInstalled {
                 self.logger.info("Tailscale API not responding; app likely not running")
+            } else if cliInstalled {
+                self.logger.info("Tailscale API not responding; CLI daemon likely not running")
             }
         }
     }

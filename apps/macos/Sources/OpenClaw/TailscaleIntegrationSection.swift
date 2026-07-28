@@ -237,10 +237,14 @@ struct TailscaleIntegrationSection: View {
                 .foregroundStyle(.secondary)
         }
 
-        if self.effectiveService.isInstalled, !self.effectiveService.isRunning {
+        if self.effectiveService.isAppInstalled, !self.effectiveService.isRunning {
             Button("Start Tailscale") { self.effectiveService.openTailscaleApp() }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
+        } else if self.effectiveService.isInstalled, !self.effectiveService.isRunning {
+            Text("Start the Tailscale daemon from the command line.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
