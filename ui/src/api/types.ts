@@ -464,6 +464,7 @@ export type ArtifactDownloadResult = {
   encoding?: "base64";
   data?: string;
   url?: string;
+  expiresAt?: string;
 };
 
 export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";

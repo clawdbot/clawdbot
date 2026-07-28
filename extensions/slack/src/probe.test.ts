@@ -3,18 +3,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { probeSlack } from "./probe.js";
 
 const authTestMock = vi.hoisted(() => vi.fn());
-const createSlackWebClientMock = vi.hoisted(() => vi.fn());
+const createSlackReadClientMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./client.js", () => ({
-  createSlackWebClient: createSlackWebClientMock,
+  createSlackReadClient: createSlackReadClientMock,
 }));
 
 describe("probeSlack", () => {
   beforeEach(() => {
     authTestMock.mockReset();
-    createSlackWebClientMock.mockReset();
+    createSlackReadClientMock.mockReset();
 
-    createSlackWebClientMock.mockReturnValue({
+    createSlackReadClientMock.mockReturnValue({
       auth: {
         test: authTestMock,
       },
@@ -39,7 +39,7 @@ describe("probeSlack", () => {
       bot: { id: "U123", name: "openclaw-bot" },
       team: { id: "T123", name: "OpenClaw" },
     });
-    expect(createSlackWebClientMock).toHaveBeenCalledWith("xoxb-test");
+    expect(createSlackReadClientMock).toHaveBeenCalledWith("xoxb-test", { timeout: 2500 });
   });
 
   it("warns when auth.test looks like a user token in the bot token slot", async () => {

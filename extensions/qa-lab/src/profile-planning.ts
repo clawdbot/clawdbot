@@ -114,6 +114,7 @@ export function resolveQaRunProfileExecutionSelection(params: {
   channel?: string | null;
   defaultChannel?: string;
   claudeCliAuthMode?: QaCliBackendAuthMode;
+  supportsChannel?: (channel: string) => boolean;
 }): QaRunProfileExecutionSelection {
   const selectedScenarios: QaSeedScenarioWithSource[] = [];
   const excludedScenarios: QaRunProfileExecutionSelection["excludedScenarios"] = [];
@@ -123,19 +124,30 @@ export function resolveQaRunProfileExecutionSelection(params: {
     if (scenario.execution.channel === "qa-channel" && params.channelDriver !== "qa-channel") {
       reasons.push("channelDriver=qa-channel");
     }
+    const effectiveChannel =
+      params.channelDriver === "qa-channel"
+        ? "qa-channel"
+        : (params.channel ?? scenario.execution.channel ?? params.defaultChannel);
     reasons.push(
       ...describeQaProviderLaneMismatches({
         scenario,
         providerMode: params.providerMode,
         primaryModel: params.primaryModel,
         channelDriver: params.channelDriver,
-        channel:
-          params.channelDriver === "qa-channel"
-            ? "qa-channel"
-            : (params.channel ?? scenario.execution.channel ?? params.defaultChannel),
+        channel: effectiveChannel,
         claudeCliAuthMode: params.claudeCliAuthMode,
       }),
     );
+    if (
+      reasons.length === 0 &&
+      scenario.execution.kind === "flow" &&
+      params.channelDriver !== "qa-channel" &&
+      effectiveChannel &&
+      params.supportsChannel &&
+      !params.supportsChannel(effectiveChannel)
+    ) {
+      reasons.push(`unsupported ${params.channelDriver} channel=${effectiveChannel}`);
+    }
     if (reasons.length > 0) {
       excludedScenarios.push({ scenario, reasons: uniqueStrings(reasons) });
     } else {

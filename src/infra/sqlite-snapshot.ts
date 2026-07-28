@@ -6,9 +6,16 @@ import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
-import { pinDirectory, requireDirectorySync, syncDirectory } from "./directory-durability.js";
+import {
+  getPublishFileExclusiveFailureDetails,
+  isHardlinkFallbackError,
+  pinDirectory,
+  publishFileNoClobber,
+  requireDirectorySync,
+  syncDirectory,
+} from "./directory-durability.js";
 import { formatErrorMessage } from "./errors.js";
-import { sameFileIdentity } from "./fs-safe-advanced.js";
+import { sameFileIdentity, type FileIdentityStat } from "./fs-safe-advanced.js";
 import {
   openNodeSqliteDatabase,
   requireNodeSqlite,
@@ -341,9 +348,12 @@ function assertExpectedContent(
   }
 }
 
+type CleanupIdentity = FileIdentityStat &
+  Partial<Pick<Stats, "birthtimeMs" | "ctimeMs" | "mtimeMs" | "size">>;
+
 function removePublishedTargetIfOwned(
   filePath: string,
-  expectedIdentity: Stats,
+  expectedIdentity: CleanupIdentity,
   requireFingerprint = false,
 ): boolean {
   let currentIdentity: Stats;
@@ -354,7 +364,11 @@ function removePublishedTargetIfOwned(
   }
   const fingerprintMatches =
     !requireFingerprint ||
-    (expectedIdentity.size === currentIdentity.size &&
+    (typeof expectedIdentity.size === "number" &&
+      typeof expectedIdentity.mtimeMs === "number" &&
+      typeof expectedIdentity.ctimeMs === "number" &&
+      typeof expectedIdentity.birthtimeMs === "number" &&
+      expectedIdentity.size === currentIdentity.size &&
       expectedIdentity.mtimeMs === currentIdentity.mtimeMs &&
       expectedIdentity.ctimeMs === currentIdentity.ctimeMs &&
       expectedIdentity.birthtimeMs === currentIdentity.birthtimeMs);
@@ -371,6 +385,17 @@ function removePublishedTargetIfOwned(
   }
 }
 
+function sameFileStatFingerprint(left: Stats, right: Stats): boolean {
+  // Creating the publication hard link changes source ctime, so compare the
+  // mutation fields that remain stable for the same bytes and pathname owner.
+  return (
+    sameFileIdentity(left, right) &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs &&
+    left.birthtimeMs === right.birthtimeMs
+  );
+}
+
 function assertSynchronousCallbackResult(result: unknown, label: string): void {
   if (
     result &&
@@ -380,17 +405,6 @@ function assertSynchronousCallbackResult(result: unknown, label: string): void {
     void Promise.resolve(result).catch(() => undefined);
     throw new Error(`${label} must be synchronous.`);
   }
-}
-
-function isLinkFallbackError(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException).code;
-  return (
-    code === "EPERM" ||
-    code === "EXDEV" ||
-    code === "ENOTSUP" ||
-    code === "EOPNOTSUPP" ||
-    code === "ENOSYS"
-  );
 }
 
 /**
@@ -421,18 +435,15 @@ export async function publishVerifiedSqliteFile(
   let source: FileHandle | undefined;
   let target: FileHandle | undefined;
   let targetPinFileDescriptor: number | undefined;
-  let verifiedStagedIdentity: Stats | undefined;
-  let linkedCandidateIdentity: Stats | undefined;
+  let failedPublicationIdentity: FileIdentityStat | undefined;
   let publishedIdentity: Stats | undefined;
   let ownershipPinned = false;
-  let hardLinkCreated = false;
   try {
     stagingIdentity = await fs.lstat(stagingDir);
     await fs.chmod(stagingDir, 0o700);
     source = await fs.open(options.sourcePath, "r");
     await assertOpenFileIdentity(source, options.sourcePath, options.sourceIdentity);
     const staged = await copyFileExclusive(source, stagedPath);
-    verifiedStagedIdentity = staged.identity;
     const expectedContent = options.expectedContent;
     assertExpectedContent(staged.content, expectedContent, options.targetPath);
     await source.close();
@@ -443,76 +454,89 @@ export async function publishVerifiedSqliteFile(
     assertExpectedContent(validatedContent, expectedContent, options.targetPath);
     await options.beforePublish?.();
     await assertTargetAbsent(options.targetPath);
-    let usedHardLink = false;
+    const currentStagedIdentity = await fs.lstat(stagedPath);
+    if (!sameFileStatFingerprint(staged.identity, currentStagedIdentity)) {
+      throw new Error(`SQLite snapshot staging file changed during publication: ${stagedPath}`);
+    }
     try {
-      await fs.link(stagedPath, options.targetPath);
-      usedHardLink = true;
-      hardLinkCreated = true;
+      const publication = await publishFileNoClobber(stagedPath, options.targetPath, {
+        strategy: options.requireAtomicPublication ? "link-required" : "link-or-copy",
+        durability: "fail-closed",
+      });
+      publishedIdentity = publication.identity;
     } catch (error) {
-      if (!isLinkFallbackError(error)) {
-        throw error;
+      const details = getPublishFileExclusiveFailureDetails(error);
+      const stagedAfterFailure = details?.targetCreated
+        ? await fs.lstat(stagedPath).catch(() => undefined)
+        : undefined;
+      const targetAfterFailure = details?.targetCreated
+        ? await fs.lstat(options.targetPath).catch(() => undefined)
+        : undefined;
+      const stagedPathChanged =
+        !stagedAfterFailure || !sameFileStatFingerprint(staged.identity, stagedAfterFailure);
+      if (
+        details?.targetCreated &&
+        details.cleanup !== "removed" &&
+        stagedAfterFailure &&
+        targetAfterFailure &&
+        sameFileIdentity(stagedAfterFailure, targetAfterFailure)
+      ) {
+        // fs-safe proves this call created the path; the SQLite layer can also
+        // prove it linked from the staged name, so cleanup remains owned.
+        failedPublicationIdentity = targetAfterFailure;
+      } else if (
+        details?.targetCreated &&
+        details.cleanup !== "removed" &&
+        details.targetIdentity &&
+        targetAfterFailure &&
+        sameFileIdentity(details.targetIdentity, targetAfterFailure)
+      ) {
+        // Copy fallback has a distinct inode; the receipt ties its created
+        // identity to the current path before fingerprint-guarded cleanup.
+        failedPublicationIdentity = targetAfterFailure;
       }
-      if (options.requireAtomicPublication) {
+      if (options.requireAtomicPublication && isHardlinkFallbackError(error)) {
         throw new Error(
           `Atomic SQLite publication requires hard-link support in ${targetDirectory}.`,
           { cause: error },
         );
       }
-      const stagedSource = await fs.open(stagedPath, "r");
-      try {
-        const copied = await copyFileExclusive(stagedSource, options.targetPath);
-        publishedIdentity = copied.identity;
-        assertExpectedContent(copied.content, expectedContent, options.targetPath);
-      } finally {
-        await stagedSource.close();
-      }
-    }
-    if (usedHardLink) {
-      target = await fs.open(options.targetPath, "r");
-      const linkedIdentity = await target.stat();
-      linkedCandidateIdentity = linkedIdentity;
-      const currentTargetIdentity = await fs.lstat(options.targetPath);
-      const currentStagedIdentity = await fs.lstat(stagedPath);
-      if (!sameFileIdentity(linkedIdentity, currentTargetIdentity)) {
-        throw new Error(`SQLite snapshot target changed during publication: ${options.targetPath}`);
-      }
-      const matchesVerifiedStaging = sameFileIdentity(staged.identity, linkedIdentity);
-      const matchesCurrentStaging = sameFileIdentity(currentStagedIdentity, linkedIdentity);
-      if (matchesVerifiedStaging || matchesCurrentStaging) {
-        // The target handle pins exactly what link() published for ownership-safe cleanup.
-        publishedIdentity = linkedIdentity;
-        ownershipPinned = true;
-      }
-      if (!matchesCurrentStaging) {
-        throw new Error(`SQLite snapshot staging path changed after publication: ${stagedPath}`);
-      }
-      if (!matchesVerifiedStaging) {
+      if (details?.targetCreated) {
+        if (stagedPathChanged) {
+          throw new Error(
+            `SQLite snapshot staging file changed during publication: ${options.targetPath}`,
+            { cause: error },
+          );
+        }
         throw new Error(
-          `SQLite snapshot staging file changed during publication: ${options.targetPath}`,
+          `SQLite snapshot target changed during publication: ${options.targetPath}`,
+          { cause: error },
         );
       }
+      throw error;
     }
     if (!publishedIdentity) {
       throw new Error(`SQLite snapshot target was not published: ${options.targetPath}`);
     }
     const initialPublishedIdentity = publishedIdentity;
-    target ??= await fs.open(options.targetPath, "r");
+    target = await fs.open(options.targetPath, "r");
     await assertOpenFileIdentity(target, options.targetPath, initialPublishedIdentity);
     ownershipPinned = true;
-    requireDirectorySync(
-      await syncDirectory(targetDirectoryReceipt),
-      "SQLite publication directory",
-    );
+    // Retire the writable staging hard link before the final byte verification.
     await fs.unlink(stagedPath);
     const expectedIdentity = await target.stat();
     publishedIdentity = expectedIdentity;
+    const publishedContent = await hashOpenPublishedFile(
+      target,
+      options.targetPath,
+      expectedIdentity,
+    );
+    assertExpectedContent(publishedContent, expectedContent, options.targetPath);
     await fs.rmdir(stagingDir);
     requireDirectorySync(
       await syncDirectory(targetDirectoryReceipt),
       "SQLite publication directory",
     );
-    const linkedContent = await hashOpenPublishedFile(target, options.targetPath, expectedIdentity);
-    assertExpectedContent(linkedContent, expectedContent, options.targetPath);
     await target.close();
     target = undefined;
     ownershipPinned = false;
@@ -545,34 +569,6 @@ export async function publishVerifiedSqliteFile(
     targetPinFileDescriptor = undefined;
     ownershipPinned = false;
   } catch (error) {
-    if (!publishedIdentity && hardLinkCreated && verifiedStagedIdentity) {
-      const currentTargetIdentity = await fs.lstat(options.targetPath).catch(() => undefined);
-      const currentStagedIdentity = await fs.lstat(stagedPath).catch(() => undefined);
-      const targetMatchesStaging =
-        currentTargetIdentity &&
-        currentStagedIdentity &&
-        sameFileIdentity(currentTargetIdentity, currentStagedIdentity);
-      const targetMatchesVerified =
-        currentTargetIdentity && sameFileIdentity(currentTargetIdentity, verifiedStagedIdentity);
-      if (targetMatchesStaging || targetMatchesVerified) {
-        publishedIdentity = currentTargetIdentity;
-        ownershipPinned = Boolean(targetMatchesStaging);
-      }
-    }
-    if (!publishedIdentity && target && linkedCandidateIdentity && verifiedStagedIdentity) {
-      const currentTargetIdentity = await fs.lstat(options.targetPath).catch(() => undefined);
-      const currentStagedIdentity = await fs.lstat(stagedPath).catch(() => undefined);
-      const targetStillMatches =
-        currentTargetIdentity && sameFileIdentity(currentTargetIdentity, linkedCandidateIdentity);
-      const targetCameFromStaging =
-        (currentStagedIdentity &&
-          sameFileIdentity(currentStagedIdentity, linkedCandidateIdentity)) ||
-        sameFileIdentity(verifiedStagedIdentity, linkedCandidateIdentity);
-      if (targetStillMatches && targetCameFromStaging) {
-        publishedIdentity = linkedCandidateIdentity;
-        ownershipPinned = true;
-      }
-    }
     if (target && publishedIdentity) {
       const openedIdentity = await target.stat().catch(() => undefined);
       if (openedIdentity && sameFileIdentity(openedIdentity, publishedIdentity)) {
@@ -580,10 +576,11 @@ export async function publishVerifiedSqliteFile(
         ownershipPinned = true;
       }
     }
-    if (publishedIdentity) {
+    const cleanupIdentity = publishedIdentity ?? failedPublicationIdentity;
+    if (cleanupIdentity) {
       const removed = removePublishedTargetIfOwned(
         options.targetPath,
-        publishedIdentity,
+        cleanupIdentity,
         !ownershipPinned,
       );
       if (removed) {

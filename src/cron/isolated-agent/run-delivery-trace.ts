@@ -25,7 +25,7 @@ import type {
   CronRunDiagnostics,
 } from "../types.js";
 import { logWarn } from "./run.runtime.js";
-import { resolveCronSourceDeliveryPlan } from "./source-delivery-fallback.js";
+import { resolveCronSourceDeliveryPlan } from "./source-delivery-plan.js";
 
 const cronDeliveryRuntimeLoader = createLazyImportLoader(() => import("./run-delivery.runtime.js"));
 const codexNativeWebSearchLoader = createLazyImportLoader(

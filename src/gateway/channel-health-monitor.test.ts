@@ -22,6 +22,7 @@ function createMockChannelManager(overrides?: Partial<ChannelManager>): ChannelM
     markChannelLoggedOut: vi.fn(),
     isHealthMonitorEnabled: vi.fn(() => true),
     isManuallyStopped: vi.fn(() => false),
+    isAutoRestartScheduled: vi.fn(() => false),
     resetRestartAttempts: vi.fn(),
     ...overrides,
   };
@@ -589,6 +590,38 @@ describe("channel-health-monitor", () => {
 
     expect(manager.stopChannel).toHaveBeenCalledTimes(1);
     expect(manager.startChannel).toHaveBeenCalledTimes(2);
+    monitor.stop();
+  });
+
+  it("defers to the channel supervisor while its own auto-restart is scheduled", async () => {
+    let autoRestartScheduled = true;
+    const manager = createSnapshotManager(
+      {
+        whatsapp: {
+          default: {
+            ...managedStoppedAccount("Another process owns this WhatsApp connection."),
+            linked: true,
+            restartPending: true,
+            reconnectAttempts: 5,
+          },
+        },
+      },
+      { isAutoRestartScheduled: vi.fn(() => autoRestartScheduled) },
+    );
+
+    const monitor = await startAndRunCheck(manager);
+    expect(manager.startChannel).not.toHaveBeenCalled();
+    // Deferring must not burn the attempt ladder the supervisor is still walking.
+    expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
+
+    await advanceHealthCheck();
+    expect(manager.startChannel).not.toHaveBeenCalled();
+
+    // Once the supervisor gives up it no longer owns recovery, so the monitor
+    // becomes the account's last restart owner again.
+    autoRestartScheduled = false;
+    await advanceHealthCheck();
+    expect(manager.startChannel).toHaveBeenCalledWith("whatsapp", "default");
     monitor.stop();
   });
 

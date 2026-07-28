@@ -11,6 +11,7 @@ import {
   type PendingBridgeRequest,
   type SettledBridgeRequest,
 } from "./code-mode-runtime.js";
+import { readCodeModeSkill } from "./code-mode-skills.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import { stableStringify } from "./stable-stringify.js";
 import { getSwarmRunByLaunchReplayKey, initSubagentRegistry } from "./subagent-registry.js";
@@ -506,6 +507,28 @@ export async function runBridgeRequest(params: {
       }
       case "agentWait": {
         value = await runAgentWaitBridge(params);
+        break;
+      }
+      case "skillsList": {
+        value = (params.ctx.codeModeSkills ?? []).map(({ name, description, location }) => ({
+          name,
+          description,
+          location,
+        }));
+        break;
+      }
+      case "skillsRead": {
+        const name = values[0];
+        const available = params.ctx.codeModeSkills ?? [];
+        const skill =
+          typeof name === "string" ? available.find((entry) => entry.name === name) : null;
+        if (!skill) {
+          const names = available.map((entry) => entry.name).join(", ") || "(none)";
+          throw new ToolInputError(
+            `Unknown skill ${JSON.stringify(name)}. Available skills: ${names}`,
+          );
+        }
+        value = await readCodeModeSkill(skill, params.signal);
         break;
       }
       case "swarmNote": {

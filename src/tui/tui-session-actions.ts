@@ -18,6 +18,7 @@ import {
   formatTuiErrorMessage,
   isCommandMessage,
 } from "./tui-formatters.js";
+import { readTuiSessionUserMessage } from "./tui-session-events.js";
 import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
 import * as submit from "./tui-submit-state.js";
 import type { SessionInfo, TuiHistoryLoadResult, TuiOptions, TuiStateAccess } from "./tui-types.js";
@@ -565,7 +566,12 @@ export function createSessionActions(context: SessionActionContext) {
               text,
               timestamp: extractMessageTimestamp(message),
             });
-            chatLog.addUser(text);
+            const liveUserMessage = readTuiSessionUserMessage({ message });
+            if (liveUserMessage) {
+              chatLog.addUser(text, { messageId: liveUserMessage.messageId });
+            } else {
+              chatLog.addUser(text);
+            }
           }
           continue;
         }

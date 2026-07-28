@@ -73,14 +73,28 @@ async function call(
   client?: { connect?: { scopes?: string[] }; connId?: string },
   contextOverrides: Record<string, unknown> = {},
 ) {
+  const pending = startCall(method, params, config, client, contextOverrides);
+  await pending.completion;
+  return pending.respond;
+}
+
+function startCall(
+  method: keyof typeof sessionCatalogHandlers,
+  params: unknown,
+  config: Record<string, unknown> = {},
+  client?: { connect?: { scopes?: string[] }; connId?: string },
+  contextOverrides: Record<string, unknown> = {},
+) {
   const respond = vi.fn();
-  await sessionCatalogHandlers[method]?.({
-    params,
-    respond,
-    client,
-    context: { getRuntimeConfig: () => config, ...contextOverrides },
-  } as never);
-  return respond;
+  const completion = Promise.resolve(
+    sessionCatalogHandlers[method]?.({
+      params,
+      respond,
+      client,
+      context: { getRuntimeConfig: () => config, ...contextOverrides },
+    } as never),
+  );
+  return { completion, respond };
 }
 
 describe("session catalog Gateway methods", () => {
@@ -160,6 +174,62 @@ describe("session catalog Gateway methods", () => {
     expect(respond).toHaveBeenCalledWith(true, {
       catalogs: [expect.objectContaining({ id: "codex", hosts: [host] })],
     });
+  });
+
+  it("single-flights identical concurrent lists and gives followers only the final result", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const host = {
+      hostId: "gateway:local",
+      label: "Local",
+      kind: "gateway" as const,
+      connected: true,
+      sessions: [],
+    };
+    const list = vi.fn(async ({ onHost }: { onHost?: (value: typeof host) => void }) => {
+      onHost?.(host);
+      await gate;
+      return [host];
+    });
+    hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("codex", { list }) }];
+    const config = { agents: { list: [{ id: "main" }, { id: "research" }] } };
+    const leaderBroadcast = vi.fn();
+    const followerBroadcast = vi.fn();
+    const leader = startCall(
+      "sessions.catalog.list",
+      { progressId: "leader-progress" },
+      config,
+      { connId: "leader" },
+      { broadcastToConnIds: leaderBroadcast },
+    );
+    const follower = startCall(
+      "sessions.catalog.list",
+      { progressId: "follower-progress" },
+      config,
+      { connId: "follower" },
+      { broadcastToConnIds: followerBroadcast },
+    );
+    const otherAgent = startCall("sessions.catalog.list", { agentId: "research" }, config);
+    const otherParams = startCall("sessions.catalog.list", { search: "other" }, config);
+
+    await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(3));
+    release();
+    await Promise.all([
+      leader.completion,
+      follower.completion,
+      otherAgent.completion,
+      otherParams.completion,
+    ]);
+
+    expect(leaderBroadcast).toHaveBeenCalledOnce();
+    expect(followerBroadcast).not.toHaveBeenCalled();
+    for (const pending of [leader, follower, otherAgent, otherParams]) {
+      expect(pending.respond).toHaveBeenCalledWith(true, {
+        catalogs: [expect.objectContaining({ id: "codex", hosts: [host] })],
+      });
+    }
   });
 
   it("projects authoritative creator ownership onto streamed and final catalog rows", async () => {
@@ -559,21 +629,23 @@ describe("session catalog Gateway methods", () => {
     });
   });
 
-  it("refreshes a provider's core new-session target when listing", async () => {
+  it("memoizes a provider's create target until runtime config identity changes", async () => {
     let createSession: { model: string; agentRuntime: string } | undefined = {
       model: "anthropic/claude-opus-4-8",
       agentRuntime: "claude-cli",
     };
+    const resolveCreateSession = vi.fn(() => createSession);
     hoisted.activeRegistry.sessionCatalogs = [
       {
         pluginId: "anthropic",
         provider: provider("claude", {
-          resolveCreateSession: () => createSession,
+          resolveCreateSession,
         }),
       },
     ];
+    const config = {};
 
-    const respond = await call("sessions.catalog.list", {});
+    const respond = await call("sessions.catalog.list", {}, config);
 
     expect(respond).toHaveBeenCalledWith(true, {
       catalogs: [
@@ -589,7 +661,19 @@ describe("session catalog Gateway methods", () => {
     });
 
     createSession = undefined;
-    const refreshed = await call("sessions.catalog.list", {});
+    const cached = await call("sessions.catalog.list", {}, config);
+    expect(cached).toHaveBeenCalledWith(true, {
+      catalogs: [
+        expect.objectContaining({
+          capabilities: expect.objectContaining({
+            createSession: { model: "anthropic/claude-opus-4-8" },
+          }),
+        }),
+      ],
+    });
+    expect(resolveCreateSession).toHaveBeenCalledOnce();
+
+    const refreshed = await call("sessions.catalog.list", {}, {});
     expect(refreshed).toHaveBeenCalledWith(true, {
       catalogs: [
         expect.objectContaining({
@@ -601,6 +685,43 @@ describe("session catalog Gateway methods", () => {
         }),
       ],
     });
+    expect(resolveCreateSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries an exception-derived create target failure without a config reload", async () => {
+    const resolveCreateSession = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new Error("provider warming");
+      })
+      .mockReturnValue({
+        model: "anthropic/claude-opus-4-8",
+        agentRuntime: "claude-cli",
+      });
+    hoisted.activeRegistry.sessionCatalogs = [
+      { provider: provider("claude", { resolveCreateSession }) },
+    ];
+    const config = {};
+
+    const unavailable = await call("sessions.catalog.list", {}, config);
+    expect(unavailable).toHaveBeenCalledWith(true, {
+      catalogs: [
+        expect.objectContaining({
+          capabilities: { continueSession: false, archive: false },
+        }),
+      ],
+    });
+    const recovered = await call("sessions.catalog.list", {}, config);
+    expect(recovered).toHaveBeenCalledWith(true, {
+      catalogs: [
+        expect.objectContaining({
+          capabilities: expect.objectContaining({
+            createSession: { model: "anthropic/claude-opus-4-8" },
+          }),
+        }),
+      ],
+    });
+    expect(resolveCreateSession).toHaveBeenCalledTimes(2);
   });
 
   it("keeps creation available when catalog history listing fails", async () => {
@@ -683,7 +804,7 @@ describe("session catalog Gateway methods", () => {
       },
     ];
 
-    expect(resolveSessionCatalogCreateTarget("claude", "research")).toEqual({
+    expect(resolveSessionCatalogCreateTarget("claude", "research", {})).toEqual({
       ok: true,
       target: {
         model: "anthropic/claude-opus-4-8",
@@ -691,7 +812,7 @@ describe("session catalog Gateway methods", () => {
         pluginOwnerId: "anthropic",
       },
     });
-    expect(resolveSessionCatalogCreateTarget("missing", "research")).toEqual({
+    expect(resolveSessionCatalogCreateTarget("missing", "research", {})).toEqual({
       ok: false,
       message: "unknown session catalog: missing",
       unknownCatalog: true,

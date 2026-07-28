@@ -3,6 +3,7 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import {
+  composeProviderStreamWrappers,
   createPayloadPatchStreamWrapper,
   normalizeOpenAICompatibleReasoningReplay,
 } from "openclaw/plugin-sdk/provider-stream-shared";
@@ -285,24 +286,19 @@ export function wrapOpenRouterProviderStream(
     ? injectOpenRouterRouting(ctx.streamFn, providerRouting)
     : ctx.streamFn;
   const wrapStreamFn = openRouterThinkingStreamHooks.wrapStreamFn ?? undefined;
-  if (!wrapStreamFn) {
-    return createOpenRouterAnthropicPrefillWrapper(
-      createOpenRouterAuthHeaderWrapper(
-        createOpenRouterDeepSeekV4ReplayWrapper(routedStreamFn, ctx.thinkingLevel),
-      ),
-    );
-  }
-  const wrappedStreamFn =
-    wrapStreamFn({
-      ...ctx,
-      streamFn: routedStreamFn,
-      thinkingLevel: isOpenRouterProxyReasoningUnsupportedModel(ctx.modelId)
-        ? undefined
-        : ctx.thinkingLevel,
-    }) ?? undefined;
-  return createOpenRouterAnthropicPrefillWrapper(
-    createOpenRouterAuthHeaderWrapper(
-      createOpenRouterDeepSeekV4ReplayWrapper(wrappedStreamFn, ctx.thinkingLevel),
-    ),
+  return composeProviderStreamWrappers(
+    routedStreamFn,
+    wrapStreamFn &&
+      ((streamFn) =>
+        wrapStreamFn({
+          ...ctx,
+          streamFn,
+          thinkingLevel: isOpenRouterProxyReasoningUnsupportedModel(ctx.modelId)
+            ? undefined
+            : ctx.thinkingLevel,
+        }) ?? undefined),
+    (streamFn) => createOpenRouterDeepSeekV4ReplayWrapper(streamFn, ctx.thinkingLevel),
+    createOpenRouterAuthHeaderWrapper,
+    createOpenRouterAnthropicPrefillWrapper,
   );
 }

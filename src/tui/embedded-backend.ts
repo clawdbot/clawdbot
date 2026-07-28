@@ -604,7 +604,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
     const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntryReadOnly(
       opts.sessionKey,
-      loadOptions,
+      { ...loadOptions, includeStoreChildEntries: true },
     );
     const sessionId = entry?.sessionId;
     const sessionAgentId = resolveSessionAgentId({

@@ -30,6 +30,12 @@ const GATEWAY_STARTUP_CORE_RUNNER = DEFAULT_NODE_TEST_RUNNER;
 const GATEWAY_STARTUP_HEALTH_RUNTIME_ENV = {
   OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000",
 };
+// The first embedded-agent file owns 157 serial tests and can stay quiet for
+// more than five minutes on a cold GitHub-hosted fork runner. Keep the outer
+// watchdog above the scoped 600-second hook budget so it cannot preempt Vitest.
+const AGENTS_EMBEDDED_AGENT_ENV = {
+  OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "660000",
+};
 const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
 // PR-only bundles trade a little serial work for fewer ephemeral runner registrations.
 // Keep runner classes and subprocess isolation intact while bounding each combined job.
@@ -71,7 +77,9 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map([
   ["agentic-agents-core-runtime", 79],
   ["agentic-agents-core-subagents", 32],
   ["agentic-agents-core-tools", 52],
-  ["agentic-agents-embedded", 57],
+  // A cold fork run is about 430s and emits no file result for most of its
+  // first five minutes. Keep this whole-config whale in its own compact job.
+  ["agentic-agents-embedded", 430],
   ["agentic-agents-support", 105],
   ["agentic-agents-tools", 42],
   ["agentic-cli", 72],
@@ -1167,7 +1175,7 @@ const SPLIT_NODE_SHARDS = new Map([
       ...createGatewayServerSplitShards(),
       {
         shardName: "agentic-cli",
-        configs: ["test/vitest/vitest.cli.config.ts"],
+        configs: ["test/vitest/vitest.cli.config.ts", "test/vitest/vitest.cli-process.config.ts"],
         requiresDist: false,
       },
       {
@@ -1183,6 +1191,7 @@ const SPLIT_NODE_SHARDS = new Map([
       {
         shardName: "agentic-agents-embedded",
         configs: ["test/vitest/vitest.agents-embedded-agent.config.ts"],
+        env: AGENTS_EMBEDDED_AGENT_ENV,
         requiresDist: false,
       },
       {

@@ -15,6 +15,11 @@ import { bootstrapApplication } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
 import { loadSettings, saveSettings } from "./settings.ts";
 
+// Startup progress (dynamic imports, gateway subscribe, router start) is not a
+// performance assertion, so these waits must not inherit vi.waitFor's 1s default:
+// under a loaded CI runner that budget expires before startup reaches the step.
+const STARTUP_STEP_WAIT = { timeout: 15_000 };
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -366,7 +371,7 @@ describe("normalizeInitialApplicationLocation", () => {
         features: { methods: ["openclaw.setup.detect"] },
       },
     } as Parameters<GatewayListener>[0]);
-    await vi.waitFor(() => expect(replaceRoute).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(replaceRoute).toHaveBeenCalledOnce(), STARTUP_STEP_WAIT);
     expect(replaceRoute).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
   });
 
@@ -515,7 +520,7 @@ describe("normalizeInitialApplicationLocation", () => {
 
     try {
       const start = runtime.start();
-      await vi.waitFor(() => expect(activeSubscriptions.size).toBe(1));
+      await vi.waitFor(() => expect(activeSubscriptions.size).toBe(1), STARTUP_STEP_WAIT);
       runtime.stop();
       await start;
 
@@ -545,7 +550,7 @@ describe("normalizeInitialApplicationLocation", () => {
 
     try {
       const start = runtime.start();
-      await vi.waitFor(() => expect(routerStart).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(routerStart).toHaveBeenCalledOnce(), STARTUP_STEP_WAIT);
       runtime.stop();
       expect(routerStop).toHaveBeenCalledOnce();
 

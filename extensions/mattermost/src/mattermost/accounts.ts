@@ -14,7 +14,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { BlockStreamingCoalesceConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "../secret-input.js";
+import { resolveSecretInputString, type SecretInputStringResolutionMode } from "../secret-input.js";
 import type {
   MattermostAccountConfig,
   MattermostChatMode,
@@ -26,6 +26,7 @@ import type { OpenClawConfig } from "./runtime-api.js";
 
 type MattermostTokenSource = "env" | "config" | "none";
 type MattermostBaseUrlSource = "env" | "config" | "none";
+type MattermostCredentialStatus = "available" | "configured_unavailable" | "missing";
 
 export type ResolvedMattermostAccount = {
   accountId: string;
@@ -34,6 +35,7 @@ export type ResolvedMattermostAccount = {
   botToken?: string;
   baseUrl?: string;
   botTokenSource: MattermostTokenSource;
+  botTokenStatus?: MattermostCredentialStatus;
   baseUrlSource: MattermostBaseUrlSource;
   config: MattermostAccountConfig;
   chatmode?: MattermostChatMode;
@@ -76,10 +78,10 @@ function resolveMattermostRequireMention(config: MattermostAccountConfig): boole
   return config.requireMention;
 }
 
-export function resolveMattermostAccount(params: {
+function resolveMattermostAccountWithMode(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
-  allowUnresolvedSecretRef?: boolean;
+  mode: SecretInputStringResolutionMode;
 }): ResolvedMattermostAccount {
   const accountId = normalizeAccountId(
     params.accountId ?? resolveDefaultMattermostAccountId(params.cfg),
@@ -92,18 +94,25 @@ export function resolveMattermostAccount(params: {
   const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
   const envToken = allowEnv ? process.env.MATTERMOST_BOT_TOKEN?.trim() : undefined;
   const envUrl = allowEnv ? process.env.MATTERMOST_URL?.trim() : undefined;
-  const configToken = params.allowUnresolvedSecretRef
-    ? normalizeSecretInputString(merged.botToken)
-    : normalizeResolvedSecretInputString({
-        value: merged.botToken,
-        path: `channels.mattermost.accounts.${accountId}.botToken`,
-      });
+  const configToken = resolveSecretInputString({
+    value: merged.botToken,
+    path: `channels.mattermost.accounts.${accountId}.botToken`,
+    mode: params.mode,
+  });
   const configUrl = merged.baseUrl?.trim();
-  const botToken = configToken || envToken;
+  const botToken =
+    configToken.status === "available"
+      ? configToken.value
+      : configToken.status === "missing"
+        ? envToken
+        : undefined;
   const baseUrl = normalizeMattermostBaseUrl(configUrl || envUrl);
   const requireMention = resolveMattermostRequireMention(merged);
 
-  const botTokenSource: MattermostTokenSource = configToken ? "config" : envToken ? "env" : "none";
+  const botTokenSource: MattermostTokenSource =
+    configToken.status !== "missing" ? "config" : envToken ? "env" : "none";
+  const botTokenStatus: MattermostCredentialStatus =
+    configToken.status !== "missing" ? configToken.status : envToken ? "available" : "missing";
   const baseUrlSource: MattermostBaseUrlSource = configUrl ? "config" : envUrl ? "env" : "none";
 
   return {
@@ -113,6 +122,7 @@ export function resolveMattermostAccount(params: {
     botToken,
     baseUrl,
     botTokenSource,
+    botTokenStatus,
     baseUrlSource,
     config: merged,
     chatmode: merged.chatmode,
@@ -124,6 +134,20 @@ export function resolveMattermostAccount(params: {
     blockStreaming: resolveChannelStreamingBlockEnabled(merged),
     blockStreamingCoalesce: resolveChannelStreamingBlockCoalesce(merged),
   };
+}
+
+export function resolveMattermostAccount(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): ResolvedMattermostAccount {
+  return resolveMattermostAccountWithMode({ ...params, mode: "strict" });
+}
+
+export function inspectMattermostAccount(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): ResolvedMattermostAccount {
+  return resolveMattermostAccountWithMode({ ...params, mode: "inspect" });
 }
 
 /**

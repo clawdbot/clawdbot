@@ -5,7 +5,7 @@ import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { FastMode, ModelCatalogEntry } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../../app-route-paths.ts";
@@ -42,6 +42,7 @@ import {
   type RealtimeTalkInputDevice,
 } from "../chat/realtime-talk-input.ts";
 import { switchActiveRealtimeTalkCameras } from "../chat/realtime-talk.ts";
+import { isUnknownSystemInfoMethodError, supportsSystemInfo } from "../connection/system-info.ts";
 import {
   configSectionKeysForPage,
   SCOPED_CONFIG_SECTION_KEYS,
@@ -85,23 +86,13 @@ type ConfigPageSetting =
 // sensible instead of silently opening the old page's default section.
 const MOVED_SECTION_ROUTES: Record<string, { routeId: RouteId; keepSection: boolean }> = {
   "communications:__notifications__": { routeId: "notifications", keepSection: false },
+  "communications:channels": { routeId: "channels", keepSection: false },
+  "communications:broadcast": { routeId: "advanced", keepSection: true },
   "automation:approvals": { routeId: "security", keepSection: true },
   "ai-agents:memory": { routeId: "memory", keepSection: true },
 };
 
-const SYSTEM_INFO_POLL_INTERVAL_MS = 10_000;
-
-function isUnknownSystemInfoMethodError(error: unknown): boolean {
-  return (
-    error instanceof GatewayRequestError &&
-    error.gatewayCode === "INVALID_REQUEST" &&
-    error.message.includes("unknown method: system.info")
-  );
-}
-
-export function supportsSystemInfo(hello: ApplicationGatewaySnapshot["hello"]): boolean {
-  return hello?.features?.methods?.includes("system.info") === true;
-}
+const SESSION_OBSERVER_STATUS_POLL_INTERVAL_MS = 10_000;
 
 function defaultConfigSelection(pageId: ConfigPageId): ConfigSelection {
   switch (pageId) {
@@ -289,7 +280,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   private readonly sessionObserverModelFailures = new WeakSet<GatewayBrowserClient>();
   private readonly systemInfoPolling = new PollController(
     this,
-    SYSTEM_INFO_POLL_INTERVAL_MS,
+    SESSION_OBSERVER_STATUS_POLL_INTERVAL_MS,
     () => {
       void this.loadSystemInfo();
     },
@@ -479,7 +470,9 @@ export class ConfigPage extends OpenClawLightDomElement {
   }
 
   private isSystemInfoVisible(): boolean {
-    return this.pageId === "config" || this.pageId === "appearance";
+    // Appearance still uses system.info to show the Session Observer's server-resolved utility
+    // model. Gateway host polling itself belongs exclusively to the Connection page.
+    return this.pageId === "appearance";
   }
 
   private synchronizeRuntimeConfig(runtimeConfig: ApplicationContext["runtimeConfig"]) {
@@ -973,6 +966,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       lobsterPetSounds: this.settings.lobsterPetSounds === true,
       setLobsterPetSounds: (enabled) =>
         this.applySettings({ ...this.settings, lobsterPetSounds: enabled }),
+      lobsterdexHref: pathForRoute("lobsterdex", this.context.basePath),
+      onOpenLobsterdex: () => this.context.navigate("lobsterdex"),
       chatSendShortcut: normalizeChatSendShortcut(this.settings.chatSendShortcut),
       setChatSendShortcut: (value) => this.setSetting("chatSendShortcut", value),
       chatFollowUpMode: this.settings.chatFollowUpMode,
@@ -1088,15 +1083,12 @@ export class ConfigPage extends OpenClawLightDomElement {
     const thinkingLevel =
       typeof agentsDefaults?.thinkingDefault === "string" ? agentsDefaults.thinkingDefault : "off";
     const fastMode = agentsDefaults?.fastModeDefault;
-    const appConfig = this.context.config.current;
     return renderQuickSettings({
       locale: isSupportedLocale(this.settings.locale) ? this.settings.locale : i18n.getLocale(),
       onLocaleChange: (locale) => this.setLocale(locale),
       currentModel: model,
       thinkingLevel,
       fastMode: fastMode === "auto" || typeof fastMode === "boolean" ? fastMode : false,
-      systemInfo: this.systemInfo,
-      systemInfoUnavailable: this.systemInfoUnavailable,
       onModelChange: () => {
         this.selections = {
           ...this.selections,
@@ -1105,9 +1097,6 @@ export class ConfigPage extends OpenClawLightDomElement {
         this.navigate("ai-agents");
       },
       connected: runtimeConfig.state.connected,
-      assistantName: appConfig.assistantIdentity.name,
-      version:
-        appConfig.serverVersion ?? this.context.gateway.snapshot.hello?.server?.version ?? "",
       configLoading: runtimeConfig.state.configLoading,
       configSaving: runtimeConfig.state.configSaving,
       configApplying: runtimeConfig.state.configApplying,
