@@ -60,6 +60,17 @@ function oggOpus(channelCount: number): Buffer {
   return buffer;
 }
 
+function flac(channelCount: number, bitsPerSample = 16): Buffer {
+  const buffer = Buffer.alloc(42);
+  buffer.write("fLaC", 0, "ascii");
+  buffer[4] = 0x80;
+  buffer.writeUIntBE(34, 5, 3);
+  const bitsPerSampleMinusOne = bitsPerSample - 1;
+  buffer[20] = ((channelCount - 1) << 1) | (bitsPerSampleMinusOne >> 4);
+  buffer[21] = (bitsPerSampleMinusOne & 0x0f) << 4;
+  return buffer;
+}
+
 function okJson(text: string) {
   return {
     response: new Response(JSON.stringify({ text }), {
@@ -269,6 +280,26 @@ describe("NVIDIA speech HTTP runtime", () => {
       }),
     );
     expect(mocks.transcodeAudioBufferToOpus).not.toHaveBeenCalled();
+  });
+
+  it("uploads mono FLAC directly but normalizes multichannel FLAC", async () => {
+    mocks.postTranscriptionRequest.mockImplementation(async () => okJson("flac transcript"));
+
+    await transcribeNvidiaAudio(
+      transcriptionRequest({ buffer: flac(1), fileName: "mono.flac", mime: "audio/flac" }),
+    );
+    expect(mocks.transcodeAudioBufferToOpus).not.toHaveBeenCalled();
+
+    await transcribeNvidiaAudio(
+      transcriptionRequest({ buffer: flac(2), fileName: "stereo.flac", mime: "audio/flac" }),
+    );
+    expect(mocks.transcodeAudioBufferToOpus).toHaveBeenCalledOnce();
+
+    mocks.transcodeAudioBufferToOpus.mockClear();
+    await transcribeNvidiaAudio(
+      transcriptionRequest({ buffer: flac(1, 24), fileName: "24-bit.flac", mime: "audio/flac" }),
+    );
+    expect(mocks.transcodeAudioBufferToOpus).toHaveBeenCalledOnce();
   });
 
   it("sends Magpie customization fields and returns the WAV response unchanged", async () => {

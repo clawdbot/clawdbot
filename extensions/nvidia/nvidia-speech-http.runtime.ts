@@ -41,6 +41,7 @@ const RIFF_HEADER = Buffer.from("RIFF");
 const WAVE_HEADER = Buffer.from("WAVE");
 const OGG_HEADER = Buffer.from("OggS");
 const OPUS_HEADER = Buffer.from("OpusHead");
+const FLAC_HEADER = Buffer.from("fLaC");
 const DEFAULT_TTS_MAX_BYTES = 16 * 1024 * 1024;
 
 function toSnakeCase(value: string): string {
@@ -101,6 +102,20 @@ function isMonoOggOpus(buffer: Buffer): boolean {
   );
 }
 
+function isMonoFlac(buffer: Buffer): boolean {
+  if (buffer.length < 21 || !buffer.subarray(0, FLAC_HEADER.length).equals(FLAC_HEADER)) {
+    return false;
+  }
+  const metadataType = buffer[4]! & 0x7f;
+  const metadataLength = (buffer[5]! << 16) | (buffer[6]! << 8) | buffer[7]!;
+  if (metadataType !== 0 || metadataLength < 34 || buffer.length < 8 + metadataLength) {
+    return false;
+  }
+  const channelsMinusOne = (buffer[20]! >> 1) & 0x07;
+  const bitsPerSampleMinusOne = ((buffer[20]! & 0x01) << 4) | (buffer[21]! >> 4);
+  return channelsMinusOne === 0 && bitsPerSampleMinusOne + 1 === 16;
+}
+
 function isMonoPcm16Wav(buffer: Buffer): boolean {
   if (
     buffer.length < 12 ||
@@ -131,7 +146,7 @@ function isMonoPcm16Wav(buffer: Buffer): boolean {
 async function normalizeNvidiaAsrAudio(
   req: AudioTranscriptionRequest,
 ): Promise<AudioTranscriptionRequest> {
-  if (isMonoOggOpus(req.buffer) || isMonoPcm16Wav(req.buffer)) {
+  if (isMonoOggOpus(req.buffer) || isMonoPcm16Wav(req.buffer) || isMonoFlac(req.buffer)) {
     return req;
   }
   const buffer = await transcodeAudioBufferToOpus({
