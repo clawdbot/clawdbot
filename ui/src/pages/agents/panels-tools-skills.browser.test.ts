@@ -1,6 +1,6 @@
 // Control UI tests cover agents panels tools skills behavior.
 import { render } from "lit";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SkillStatusEntry } from "../../api/types.ts";
 import { renderAgentSkills, renderAgentTools } from "./panels-tools-skills.ts";
 
@@ -431,7 +431,11 @@ describe("agents tools panel (browser)", () => {
     expect(group.open).toBe(false);
     expect(tool.open).toBe(false);
 
-    const previousUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    // The chip handler navigates via history.replaceState on shared jsdom
+    // history. Stub it so the click can never leak #agent-tool-read into
+    // later files that share this worker (see #115221; the finally-restore
+    // there stayed racy across CI pools and file orderings).
+    const replaceStateSpy = vi.spyOn(window.history, "replaceState").mockImplementation(() => {});
     try {
       chip.click();
       await new Promise((resolve) => {
@@ -440,10 +444,11 @@ describe("agents tools panel (browser)", () => {
 
       expect(group.open).toBe(true);
       expect(tool.open).toBe(true);
+      expect(replaceStateSpy).toHaveBeenCalledTimes(1);
+      expect(String(replaceStateSpy.mock.calls[0]?.[2])).toContain("#agent-tool-read");
+      expect(window.location.hash).toBe("");
     } finally {
-      // Hash links mutate shared jsdom history; restore the actual prior URL
-      // so a later Settings route never inherits this tool-card deep link.
-      window.history.replaceState({}, "", previousUrl);
+      replaceStateSpy.mockRestore();
       container.remove();
     }
   });
