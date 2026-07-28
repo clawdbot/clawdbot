@@ -1,9 +1,4 @@
-import type { Locator, Page } from "playwright";
-
-type ReadyControlUiSettingsSidebar = {
-  search: Locator;
-  sidebar: Locator;
-};
+import type { Page } from "playwright";
 
 /** A sent connect request is not the delivered Gateway handshake. */
 export async function waitForControlUiGatewayReady(page: Page): Promise<void> {
@@ -25,19 +20,4 @@ export async function waitForControlUiTerminalReady(page: Page): Promise<void> {
           | null
       )?.available === true,
   );
-}
-
-/** Settings owns the navigation only after its old app sidebar has yielded. */
-export async function waitForControlUiSettingsSidebar(
-  page: Page,
-  previousAppSidebar?: Locator,
-): Promise<ReadyControlUiSettingsSidebar> {
-  if (previousAppSidebar) {
-    await previousAppSidebar.waitFor({ state: "hidden" });
-  }
-  const sidebar = page.locator(".settings-sidebar");
-  const search = sidebar.getByRole("searchbox", { name: "Search settings" });
-  await sidebar.waitFor({ state: "visible" });
-  await search.waitFor({ state: "visible" });
-  return { search, sidebar };
 }

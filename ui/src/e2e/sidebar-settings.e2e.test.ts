@@ -1,6 +1,8 @@
 import { expect, it } from "vitest";
-import { waitForControlUiSettingsSidebar } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  installMockGateway,
+  waitForControlUiSettingsTakeover,
+} from "../test-helpers/control-ui-e2e.ts";
 import {
   captureSettingsSidebarUiProof,
   createSidebarCustomizationSuite,
@@ -47,7 +49,7 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}settings/general`);
       const { search: settingsSearchInput, sidebar: settingsSidebar } =
-        await waitForControlUiSettingsSidebar(page);
+        await waitForControlUiSettingsTakeover(page);
       const settingsSearchShell = settingsSidebar.locator(".settings-sidebar__search");
       const settingsNav = settingsSidebar.locator(".settings-sidebar__nav");
       const firstSettingsLink = settingsSidebar.locator(".settings-sidebar__item").first();

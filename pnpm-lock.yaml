@@ -1756,6 +1756,9 @@ importers:
       '@slack/web-api':
         specifier: 8.0.0
         version: 8.0.0
+      get-east-asian-width:
+        specifier: 1.6.0
+        version: 1.6.0
       p-map:
         specifier: 7.0.5
         version: 7.0.5

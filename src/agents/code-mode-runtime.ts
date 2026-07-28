@@ -92,7 +92,10 @@ export type CodeModeWorkerResult =
 const typescriptRuntimeLoader = createLazyPromiseLoader(() => import("typescript"), {
   cacheRejections: true,
 });
-let typescriptRuntimeForTest: typeof import("typescript") | null = null;
+let typescriptRuntimeForTest:
+  | typeof import("typescript")
+  | Promise<typeof import("typescript")>
+  | null = null;
 
 function normalizeCodeModeRawConfig(value: unknown): Record<string, unknown> | undefined {
   const codeMode = value;
@@ -303,8 +306,11 @@ export function enforceResultLimit(params: {
   value?: unknown;
   config: CodeModeConfig;
 }): void {
-  enforceOutputLimit(params.output, params.config);
-  const outputBytes = params.output.length > 0 ? jsonByteLength(params.output) : 0;
+  const serializedOutputBytes = jsonByteLength(params.output);
+  if (serializedOutputBytes > params.config.maxOutputBytes) {
+    throw new CodeModeLimitError("output_limit_exceeded", "code mode output limit exceeded");
+  }
+  const outputBytes = params.output.length > 0 ? serializedOutputBytes : 0;
   if (
     params.value !== undefined &&
     outputBytes + jsonByteLength(params.value) > params.config.maxOutputBytes
@@ -560,7 +566,7 @@ function rejectsModuleAccess(
 
 async function loadTypeScriptRuntime(): Promise<typeof import("typescript")> {
   if (typescriptRuntimeForTest) {
-    return typescriptRuntimeForTest;
+    return await typescriptRuntimeForTest;
   }
   return await typescriptRuntimeLoader.load();
 }
@@ -644,7 +650,9 @@ export function enforceSnapshotPayloadLimits(params: {
 export const codeModeRuntimeTesting = {
   getTypescriptRuntimePromise: (): Promise<typeof import("typescript")> | null =>
     typescriptRuntimeLoader.peek() ?? null,
-  setTypescriptRuntimeForTest: (runtime: typeof import("typescript") | null) => {
+  setTypescriptRuntimeForTest: (
+    runtime: typeof import("typescript") | Promise<typeof import("typescript")> | null,
+  ) => {
     typescriptRuntimeForTest = runtime;
   },
 };

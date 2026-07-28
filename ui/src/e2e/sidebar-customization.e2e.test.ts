@@ -3,7 +3,6 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { waitForControlUiSettingsSidebar } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   canRunPlaywrightChromium,
   controlUiSessionPath,
@@ -11,6 +10,7 @@ import {
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
+  waitForControlUiSettingsTakeover,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
 
@@ -230,10 +230,8 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       };
       await expect.poll(() => identityCard.isVisible()).toBe(true);
       await openSettingsFromIdentity();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/general");
       const { search: settingsSearch, sidebar: settingsSidebar } =
-        await waitForControlUiSettingsSidebar(page, sidebar);
-      await expect.poll(() => sidebar.isVisible()).toBe(false);
+        await waitForControlUiSettingsTakeover(page);
       await expect
         .poll(() =>
           settingsSidebar
