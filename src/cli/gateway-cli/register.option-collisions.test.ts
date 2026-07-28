@@ -289,7 +289,11 @@ describe("gateway register option collisions", () => {
 
     await program.parseAsync(["node", "openclaw", "gateway", "health", "--json"]);
 
-    expect(callGatewayCli).toHaveBeenCalledWith("health", expect.objectContaining({ json: true }));
+    expect(callGatewayCli).toHaveBeenCalledWith(
+      "health",
+      expect.objectContaining({ json: true }),
+      undefined,
+    );
     expect(loadGatewayHealthModule).not.toHaveBeenCalled();
     expect(loadHealthStyleModule).not.toHaveBeenCalled();
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith({ ok: true });
