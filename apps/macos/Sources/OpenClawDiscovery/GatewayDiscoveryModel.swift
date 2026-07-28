@@ -69,7 +69,7 @@ public final class GatewayDiscoveryModel {
     }
 
     public var gateways: [DiscoveredGateway] = []
-    public var statusText: String = "Idle"
+    public var statusText: String = GatewayDiscoveryStatusText.idle
 
     private var browsers: [String: NWBrowser] = [:]
     private var resultsByDomain: [String: Set<NWBrowser.Result>] = [:]
@@ -170,7 +170,7 @@ public final class GatewayDiscoveryModel {
         self.tailscaleServeFallbackTask = nil
         self.tailscaleServeFallbackGateways = []
         self.gateways = []
-        self.statusText = "Stopped"
+        self.statusText = GatewayDiscoveryStatusText.stopped
     }
 
     private func mapWideAreaBeacons(_ beacons: [WideAreaGatewayBeacon], domain: String) -> [DiscoveredGateway] {
