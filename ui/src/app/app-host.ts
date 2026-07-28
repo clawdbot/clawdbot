@@ -517,6 +517,7 @@ class OpenClawShell extends OpenClawLightDomElement {
   @property({ attribute: false }) onboarding = false;
 
   @state() private navDrawerOpen = false;
+  @state() private desktopNavigationExpanded = false;
   @state() private activeSessionKey = "";
   @state() private settingsSearchQuery = "";
   @state() private routeState: ShellRouteState = {};
@@ -807,6 +808,7 @@ class OpenClawShell extends OpenClawLightDomElement {
 
   private resetShellEpochState() {
     this.navDrawerOpen = false;
+    this.desktopNavigationExpanded = false;
     this.navDrawerTrigger = null;
     this.lastWorkspaceLocation = null;
     this.activeSessionKey = "";
@@ -899,6 +901,7 @@ class OpenClawShell extends OpenClawLightDomElement {
       return;
     }
     if (command.kind === "sidebar") {
+      this.desktopNavigationExpanded = false;
       context.navigation.update({ navCollapsed: !command.visible });
       return;
     }
@@ -1064,9 +1067,12 @@ class OpenClawShell extends OpenClawLightDomElement {
       this.navDrawerOpen = true;
       return;
     }
-    // A drawer that survived a breakpoint change is visually expanded even
-    // when the persisted desktop preference says collapsed.
-    const nextNavCollapsed = this.navDrawerOpen || !context.navigation.snapshot.navCollapsed;
+    // A responsive drawer handoff can expand this shell without rewriting the
+    // stored desktop preference; toggle the surface the user actually sees.
+    const nextNavCollapsed =
+      this.navDrawerOpen ||
+      !(context.navigation.snapshot.navCollapsed && !this.desktopNavigationExpanded);
+    this.desktopNavigationExpanded = false;
     if (nextNavCollapsed) {
       this.dismissSidebarTransientMenus();
     }
@@ -1181,10 +1187,19 @@ class OpenClawShell extends OpenClawLightDomElement {
   };
 
   private readonly handleWindowResize = () => {
-    // Breakpoint rendering moves the sidebar into the drawer, so dismiss its
-    // menu before the original owner unmounts or focus restoration is lost.
+    const mobileNavLayout = isMobileNavLayout();
+    // Clean up the old navigation surface before the shared sidebar moves;
+    // otherwise menus survive the breakpoint or the closed drawer reopens.
     const dismissedSidebarMenus =
-      isMobileNavLayout() && !this.navDrawerOpen && this.dismissSidebarTransientMenus();
+      mobileNavLayout && !this.navDrawerOpen && this.dismissSidebarTransientMenus();
+    if (mobileNavLayout) {
+      this.desktopNavigationExpanded = false;
+    } else if (this.navDrawerOpen) {
+      this.closeNavDrawer({ restoreFocus: false });
+      // Keep the drawer visibly expanded in this shell without changing the
+      // user's persisted desktop-collapse preference.
+      this.desktopNavigationExpanded = this.context?.navigation.snapshot.navCollapsed ?? false;
+    }
     this.requestUpdate();
     void this.updateComplete.then(() => {
       if (isMobileNavLayout() && !this.navDrawerOpen && dismissedSidebarMenus) {
@@ -1421,7 +1436,9 @@ class OpenClawShell extends OpenClawLightDomElement {
       this.onboardingMode ||
       mobileNavLayout ||
       (this.isSettingsTakeover() && !mobileNavLayout) ||
-      (!this.navDrawerOpen && (this.context?.navigation.snapshot.navCollapsed ?? false))
+      (!this.navDrawerOpen &&
+        !this.desktopNavigationExpanded &&
+        (this.context?.navigation.snapshot.navCollapsed ?? false))
     );
   }
 
@@ -1794,7 +1811,11 @@ class OpenClawShell extends OpenClawLightDomElement {
     // Drawer navigation always opens expanded; the desktop collapse preference
     // stays persisted for when the viewport returns to the desktop layout.
     // The settings sidebar has a fixed width, so the collapse state pauses too.
-    const navCollapsed = navigationSnapshot.navCollapsed && !navDrawerOpen && !settingsTakeover;
+    const navCollapsed =
+      navigationSnapshot.navCollapsed &&
+      !this.desktopNavigationExpanded &&
+      !navDrawerOpen &&
+      !settingsTakeover;
     const navigationSurfaceHidden = navigationSurfaceIsHidden({
       navCollapsed,
       navDrawerOpen,
