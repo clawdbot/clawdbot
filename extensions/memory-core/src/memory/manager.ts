@@ -114,7 +114,8 @@ const MEMORY_INDEX_MANAGER_GLOBAL_LIFECYCLE_KEY = Symbol.for(
   "openclaw.memoryIndexManagerGlobalLifecycle.v3",
 );
 const EMBEDDING_PROBE_CACHE_TTL_MS = 30_000;
-const PRIMARY_QUERY_TIMEOUT_MS = 10_000;
+const SEMANTIC_QUERY_TIMEOUT_MS = 10_000;
+const CONFIGURED_FALLBACK_RESERVE_MS = 1_000;
 const FTS_FALLBACK_RESERVE_MS = 1_000;
 const KEYWORD_FALLBACK_SEARCH_TERM_LIMIT = 6;
 const EXACT_PATH_CANDIDATE_LIMIT = 200;
@@ -126,12 +127,12 @@ type MemoryEmbeddingProviderRequirement = {
   configuredProvider?: string;
 };
 
-function resolvePrimaryQueryTimeoutMs(signal?: AbortSignal): number {
+function resolveSemanticQueryTimeoutMs(signal: AbortSignal | undefined, reserveMs: number): number {
   const remainingMs = resolveMemorySearchRemainingMs(signal);
   if (remainingMs === undefined) {
-    return PRIMARY_QUERY_TIMEOUT_MS;
+    return SEMANTIC_QUERY_TIMEOUT_MS;
   }
-  return Math.max(0, Math.min(PRIMARY_QUERY_TIMEOUT_MS, remainingMs - FTS_FALLBACK_RESERVE_MS));
+  return Math.max(0, Math.min(SEMANTIC_QUERY_TIMEOUT_MS, remainingMs - reserveMs));
 }
 
 const { cache: INDEX_CACHE, pending: INDEX_CACHE_PENDING } =
@@ -1142,11 +1143,71 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           });
         }
         const canFallbackToFts = this.fts.enabled && this.fts.available;
-        // Budget from the live outer deadline after keyword work so a cold
-        // provider cannot consume the window needed to return lexical results.
+        // Budget from the live outer deadline after keyword work. Preserve a
+        // configured semantic fallback window plus time to finalize FTS.
         const primaryTimeoutMs = canFallbackToFts
-          ? resolvePrimaryQueryTimeoutMs(opts?.signal)
+          ? resolveSemanticQueryTimeoutMs(
+              opts?.signal,
+              CONFIGURED_FALLBACK_RESERVE_MS + FTS_FALLBACK_RESERVE_MS,
+            )
           : undefined;
+        const finalizePrimaryTimeoutResults = async (fallbackDetail?: string) => {
+          if (!hybrid.enabled) {
+            keywordResults = await loadKeywordResults(true);
+          }
+          const timeoutFallback =
+            `primary-timeout:${primaryTimeoutMs}ms` + (fallbackDetail ? `;${fallbackDetail}` : "");
+          opts?.onDebug?.({
+            backend: "builtin",
+            configuredMode: configuredSearchMode,
+            effectiveMode: "fts-only",
+            fallback: timeoutFallback,
+          });
+          log.warn(
+            `memory search: primary query embedding exceeded ${primaryTimeoutMs}ms; ` +
+              "using keyword-only FTS results",
+            fallbackDetail ? { fallback: fallbackDetail } : undefined,
+          );
+          return await this.finalizeKeywordOnlyResults({
+            results: keywordResults,
+            temporalDecay: hybrid.temporalDecay,
+            maxResults,
+            minScore,
+          });
+        };
+        const embedWithActivatedFallback = async (signal?: AbortSignal) => {
+          if (
+            this.refreshIndexIdentityDirty({
+              providerKeyKnown: this.providerInitialized,
+            }).status !== "valid"
+          ) {
+            return { kind: "incompatible" } as const;
+          }
+          if (!this.provider) {
+            return { kind: "unavailable" } as const;
+          }
+          semanticProvider = this.provider;
+          semanticProviderRuntime = this.providerRuntime;
+          vectorProviderIdentity = {
+            model: semanticProvider.model,
+            aliases: this.resolveProviderIndexIdentities()
+              .slice(1)
+              .map((identity) => identity.model),
+          };
+          const releaseFallbackProvider = this.acquireProviderUse(semanticProvider);
+          try {
+            const vector = await this.embedQueryWithRetry(
+              cleaned,
+              signal,
+              semanticProvider,
+              false,
+              semanticProviderRuntime,
+            );
+            return { kind: "success", vector } as const;
+          } finally {
+            releaseFallbackProvider();
+          }
+        };
         try {
           queryVec =
             primaryTimeoutMs === undefined
@@ -1170,98 +1231,105 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
                     ),
                 });
         } catch (err) {
-          if (
+          const primaryTimedOut =
             primaryTimeoutMs !== undefined &&
             isMemorySearchTimeoutError(err, primaryTimeoutMs) &&
-            !opts?.signal?.aborted &&
-            canFallbackToFts
-          ) {
-            if (!hybrid.enabled) {
-              keywordResults = await loadKeywordResults(true);
-            }
-            const timeoutFallback = `primary-timeout:${primaryTimeoutMs}ms`;
-            opts?.onDebug?.({
-              backend: "builtin",
-              configuredMode: configuredSearchMode,
-              effectiveMode: "fts-only",
-              fallback: timeoutFallback,
-            });
-            log.warn(
-              `memory search: primary query embedding exceeded ${primaryTimeoutMs}ms; ` +
-                "using keyword-only FTS results",
-            );
-            return await this.finalizeKeywordOnlyResults({
-              results: keywordResults,
-              temporalDecay: hybrid.temporalDecay,
-              maxResults,
-              minScore,
-            });
-          }
+            canFallbackToFts;
           releaseSemanticProvider();
-          this.markLocalEmbeddingProviderDegraded(err);
           // An aborted caller already stopped waiting; skip fallback-provider
           // activation so the abandoned search stops instead of re-embedding.
           if (opts?.signal?.aborted) {
             throw err;
           }
           const message = formatErrorMessage(err);
-          const activatedFallback = this.shouldFallbackOnError(err)
-            ? await this.activateFallbackProvider(message).catch((fallbackErr: unknown) => {
-                log.warn(
-                  `memory search: failed to activate fallback provider: ${formatErrorMessage(fallbackErr)}`,
-                );
-                return false;
-              })
-            : false;
-          if (activatedFallback) {
-            if (
-              this.refreshIndexIdentityDirty({
-                providerKeyKnown: this.providerInitialized,
-              }).status !== "valid"
-            ) {
-              return [];
-            }
-            if (!this.provider) {
-              return [];
-            }
-            semanticProvider = this.provider;
-            semanticProviderRuntime = this.providerRuntime;
-            vectorProviderIdentity = {
-              model: semanticProvider.model,
-              aliases: this.resolveProviderIndexIdentities()
-                .slice(1)
-                .map((identity) => identity.model),
-            };
-            const releaseFallbackProvider = this.acquireProviderUse(semanticProvider);
-            try {
-              keywordResults = await loadKeywordResults();
-              queryVec = await this.embedQueryWithRetry(
-                cleaned,
-                opts?.signal,
-                semanticProvider,
-                false,
-                semanticProviderRuntime,
-              );
-            } catch (fallbackErr) {
-              releaseFallbackProvider();
-              this.markLocalEmbeddingProviderDegraded(fallbackErr);
-              throw fallbackErr;
-            } finally {
-              releaseFallbackProvider();
-            }
-          } else if (!this.provider && this.fts.enabled && this.fts.available) {
-            this.assertRequiredProviderAvailable("search");
-            log.warn(
-              `memory search: embeddings unavailable; using keyword-only results: ${message}`,
+          if (primaryTimedOut) {
+            // Preserve an explicitly configured semantic fallback, but bound
+            // its activation and query so FTS still owns the final reserve.
+            const fallbackTimeoutMs = resolveSemanticQueryTimeoutMs(
+              opts?.signal,
+              FTS_FALLBACK_RESERVE_MS,
             );
-            return await this.finalizeKeywordOnlyResults({
-              results: keywordResults,
-              temporalDecay: hybrid.temporalDecay,
-              maxResults,
-              minScore,
-            });
+            if (fallbackTimeoutMs <= 0) {
+              return await finalizePrimaryTimeoutResults("fallback-budget-exhausted");
+            }
+            try {
+              const fallbackOutcome = await runMemorySearchWithDeadline({
+                timeoutMs: fallbackTimeoutMs,
+                parentSignal: opts?.signal,
+                run: async (signal) => {
+                  const activated = await this.activateFallbackProvider(message);
+                  signal.throwIfAborted();
+                  if (!activated || !this.provider) {
+                    return { kind: "unavailable" } as const;
+                  }
+                  return await embedWithActivatedFallback(signal);
+                },
+              });
+              if (fallbackOutcome.kind === "success") {
+                queryVec = fallbackOutcome.vector;
+              } else {
+                if (fallbackOutcome.kind === "incompatible") {
+                  this.resetProviderInitializationForRetry();
+                }
+                return await finalizePrimaryTimeoutResults(
+                  fallbackOutcome.kind === "incompatible"
+                    ? "fallback-incompatible"
+                    : "fallback-unavailable",
+                );
+              }
+            } catch (fallbackErr: unknown) {
+              if (opts?.signal?.aborted) {
+                throw fallbackErr;
+              }
+              const fallbackTimedOut = isMemorySearchTimeoutError(fallbackErr, fallbackTimeoutMs);
+              if (!fallbackTimedOut) {
+                this.markLocalEmbeddingProviderDegraded(fallbackErr);
+              }
+              log.warn(
+                `memory search: bounded fallback provider failed: ${formatErrorMessage(
+                  fallbackErr,
+                )}`,
+              );
+              return await finalizePrimaryTimeoutResults(
+                fallbackTimedOut ? `fallback-timeout:${fallbackTimeoutMs}ms` : "fallback-error",
+              );
+            }
           } else {
-            throw err;
+            this.markLocalEmbeddingProviderDegraded(err);
+            const activatedFallback = this.shouldFallbackOnError(err)
+              ? await this.activateFallbackProvider(message).catch((fallbackErr: unknown) => {
+                  log.warn(
+                    `memory search: failed to activate fallback provider: ${formatErrorMessage(fallbackErr)}`,
+                  );
+                  return false;
+                })
+              : false;
+            if (activatedFallback) {
+              keywordResults = await loadKeywordResults();
+              const fallbackOutcome = await embedWithActivatedFallback(opts?.signal).catch(
+                (fallbackErr: unknown) => {
+                  this.markLocalEmbeddingProviderDegraded(fallbackErr);
+                  throw fallbackErr;
+                },
+              );
+              if (fallbackOutcome.kind !== "success") {
+                return [];
+              }
+              queryVec = fallbackOutcome.vector;
+            } else if (!this.provider && this.fts.enabled && this.fts.available) {
+              this.assertRequiredProviderAvailable("search");
+              log.warn(
+                `memory search: embeddings unavailable; using keyword-only results: ${message}`,
+              );
+              return await this.finalizeKeywordOnlyResults({
+                results: keywordResults,
+                temporalDecay: hybrid.temporalDecay,
+                maxResults,
+                minScore,
+              });
+            } else {
+              throw err;
+            }
           }
         }
       } finally {

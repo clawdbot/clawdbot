@@ -126,7 +126,10 @@ request time (bad auth, network failure), `memory_search` reports memory as
 unavailable instead of silently degrading to FTS-only results. This keeps a
 broken configured provider visible. Set `provider: "none"` for deliberate
 FTS-only recall, or fix the provider/auth configuration to restore semantic
-ranking.
+ranking. A query that exhausts its bounded semantic-search budget is different:
+the same call tries a compatible configured fallback provider within the
+remaining deadline, then returns FTS-only results if no semantic path finishes
+in time.
 
 ## Improving search quality
 
