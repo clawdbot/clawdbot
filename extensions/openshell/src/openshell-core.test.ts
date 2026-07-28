@@ -226,10 +226,11 @@ describe("openshell backend manager", () => {
     const factory = createOpenShellSandboxBackendFactory({
       pluginConfig: resolveOpenShellPluginConfig({ command: "openshell" }),
     });
-    const createBackend = async (scopeKey: string) =>
+    const createBackend = async (scopeKey: string, registeredRuntimeIds?: readonly string[]) =>
       await factory({
         sessionKey: `${scopeKey}:turn`,
         scopeKey,
+        ...(registeredRuntimeIds ? { registeredRuntimeIds } : {}),
         workspaceDir: "/tmp/workspace",
         agentWorkspaceDir: "/tmp/workspace",
         cfg: createOpenShellBackendSandboxConfig(),
@@ -238,11 +239,52 @@ describe("openshell backend manager", () => {
     const first = await createBackend("agent:main");
     const repeated = await createBackend("agent:main");
     const other = await createBackend("agent:other");
+    const legacyRuntimeId = "openclaw-agent-main-25bffc4d";
+    const adoptedLegacy = await createBackend("agent:main", [legacyRuntimeId]);
+    const ignoresUnknown = await createBackend("agent:main", ["unrelated-runtime"]);
+    const prefersCurrent = await createBackend("agent:main", [legacyRuntimeId, first.runtimeId]);
 
     expect(first.runtimeId).toMatch(/^oc-[a-f0-9]{16}$/u);
     expect(first.runtimeId).toHaveLength(19);
     expect(repeated.runtimeId).toBe(first.runtimeId);
     expect(other.runtimeId).not.toBe(first.runtimeId);
+    expect(adoptedLegacy.runtimeId).toBe(legacyRuntimeId);
+    expect(ignoresUnknown.runtimeId).toBe(first.runtimeId);
+    expect(prefersCurrent.runtimeId).toBe(first.runtimeId);
+  });
+
+  it("does not recreate an unreachable registered legacy sandbox name", async () => {
+    const legacyRuntimeId = "openclaw-agent-main-25bffc4d";
+    cliMocks.runOpenShellCli.mockResolvedValue({
+      code: 1,
+      stdout: "",
+      stderr: "sandbox not found",
+    });
+    const factory = createOpenShellSandboxBackendFactory({
+      pluginConfig: resolveOpenShellPluginConfig({ command: "openshell", mode: "remote" }),
+    });
+    const backend = await factory({
+      sessionKey: "agent:main:turn",
+      scopeKey: "agent:main",
+      registeredRuntimeIds: [legacyRuntimeId],
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      cfg: createOpenShellBackendSandboxConfig(),
+    });
+
+    await expect(
+      backend.runShellCommand({
+        script: "true",
+      }),
+    ).rejects.toThrow(
+      'Registered legacy OpenShell sandbox "openclaw-agent-main-25bffc4d" could not be reached.',
+    );
+    expect(cliMocks.runOpenShellCli).toHaveBeenCalledTimes(1);
+    expect(cliMocks.runOpenShellCli).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: expect.arrayContaining(["create"]),
+      }),
+    );
   });
 
   it.runIf(process.platform !== "win32")(

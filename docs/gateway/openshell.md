@@ -254,6 +254,11 @@ remote workspace for that scope, and the next use seeds a fresh one from
 local. For `mirror` mode, recreate mainly resets the remote execution
 environment since local stays canonical.
 
+OpenClaw keeps a registered sandbox's shipped legacy runtime name after an
+upgrade so its remote workspace remains addressable. Recreating that scope
+deletes the legacy runtime; the next use creates the current 19-character
+runtime name.
+
 Recreate after changing any of:
 
 - `agents.defaults.sandbox.backend`
