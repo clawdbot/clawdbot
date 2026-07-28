@@ -52,7 +52,12 @@ describe("custodian page", () => {
     await page.updateComplete;
     const assistantGroup = page.querySelector<HTMLElement>(".chat-group.assistant")!;
     expect(assistantGroup.querySelector("strong")?.textContent).toBe("aboard");
-    expect(assistantGroup.querySelector(".chat-avatar.assistant")?.textContent?.trim()).toBe("OC");
+    expect(
+      assistantGroup
+        .querySelector<HTMLImageElement>("img.chat-avatar.assistant")
+        ?.getAttribute("src"),
+    ).toBe("/favicon.svg");
+    expect(page.querySelector(".custodian__mark openclaw-mascot")).not.toBeNull();
     const card = page.querySelector("openclaw-option-card")!;
     await card.updateComplete;
     expect(page.querySelector(".option-card__choice--recommended")?.textContent).toContain(

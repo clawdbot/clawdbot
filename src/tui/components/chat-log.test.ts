@@ -387,6 +387,38 @@ describe("ChatLog", () => {
     expect(normalizeTestText(chatLog.render(120).join("\n"))).toContain("Still streaming.");
   });
 
+  it("preserves a delayed shared prompt and its active reply when scrollback is full", () => {
+    const chatLog = new ChatLog(20);
+    chatLog.updateAssistant("Already streaming.", "shared-run");
+    for (let index = 0; index < 19; index += 1) {
+      chatLog.addSystem(`Older notice ${index}.`);
+    }
+
+    chatLog.addLiveUser("Sent from the other client.", {
+      messageId: "shared-overflow-user",
+      runId: "shared-run",
+    });
+    chatLog.addLiveUser("Sent from the other client.", {
+      messageId: "shared-overflow-user",
+      runId: "shared-run",
+    });
+
+    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(chatLog.children).toHaveLength(20);
+    expect(rendered).toContain("Sent from the other client.");
+    expect(rendered).toContain("Already streaming.");
+    expect(rendered).not.toContain("Older notice 0.");
+    expect(rendered.match(/Sent from the other client\./g)).toHaveLength(1);
+    expect(rendered.indexOf("Sent from the other client.")).toBeLessThan(
+      rendered.indexOf("Already streaming."),
+    );
+
+    chatLog.updateAssistant("Still streaming after overflow.", "shared-run");
+    expect(normalizeTestText(chatLog.render(120).join("\n"))).toContain(
+      "Still streaming after overflow.",
+    );
+  });
+
   it("deduplicates authoritative user events and adopts the matching pending prompt", () => {
     const chatLog = new ChatLog(40);
     chatLog.addPendingUser("shared-run", "Persisted prompt.");

@@ -243,7 +243,7 @@ describe("qa scenario catalog", () => {
     if (scenario.execution.kind !== "playwright") {
       throw new Error(`expected Playwright scenario, got ${scenario.execution.kind}`);
     }
-    expect(scenario.execution.path).toBe("ui/src/e2e/chat-flow.e2e.test.ts");
+    expect(scenario.execution.path).toBe("ui/src/e2e/chat-flow.messaging.e2e.test.ts");
     expect(scenario.execution.testNamePattern).toBe(
       "sends a chat turn through the GUI and renders the final Gateway event",
     );

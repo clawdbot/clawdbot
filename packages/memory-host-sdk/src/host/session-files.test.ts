@@ -9,7 +9,9 @@ import {
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { markInboundContextLabel } from "../../../../src/auto-reply/reply/inbound-context-marker.js";
 import {
+  appendTranscriptMessage,
   persistSessionTranscriptTurn,
+  replaceSessionEntry,
   upsertSessionEntry,
 } from "../../../../src/config/sessions/session-accessor.js";
 import {
@@ -119,6 +121,67 @@ describe("listSessionFilesForAgent", () => {
 });
 
 describe("listSessionTranscriptCorpusEntriesForAgent", () => {
+  it("includes rotated SQLite sessions only when retained history is requested", async () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionKey = "agent:main:main";
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      { sessionId: "retained-old", updatedAt: 10 },
+    );
+    await appendTranscriptMessage(
+      { agentId: "main", sessionId: "retained-old", sessionKey, storePath },
+      { message: { role: "assistant", content: "retained transcript" } },
+    );
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      { sessionId: "retained-old", updatedAt: 15 },
+    );
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      { sessionId: "retained-new", updatedAt: 20 },
+    );
+    await appendTranscriptMessage(
+      { agentId: "main", sessionId: "retained-new", sessionKey, storePath },
+      { message: { role: "assistant", content: "current transcript" } },
+    );
+
+    const currentOnly = await listSessionTranscriptCorpusEntriesForAgent("main");
+    expect(currentOnly.map((entry) => entry.sessionId)).toEqual(["retained-new"]);
+
+    const withHistory = await listSessionTranscriptCorpusEntriesForAgent("main", {
+      includeRetainedSqlite: true,
+    });
+    expect(withHistory).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          artifactKind: "active-session",
+          sessionId: "retained-new",
+          transcriptSource: "sqlite",
+        }),
+        expect.objectContaining({
+          artifactKind: "retained-session",
+          sessionId: "retained-old",
+          transcriptSource: "sqlite",
+        }),
+      ]),
+    );
+    const retained = withHistory.find((entry) => entry.sessionId === "retained-old");
+    expect(
+      requireSessionEntry(
+        await buildSessionEntry(retained?.sessionFile ?? "", {
+          ...(retained?.agentId !== undefined ? { agentId: retained.agentId } : {}),
+          ...(retained?.sessionId !== undefined ? { sessionId: retained.sessionId } : {}),
+          ...(retained?.sessionKey !== undefined ? { sessionKey: retained.sessionKey } : {}),
+          ...(retained?.storePath !== undefined ? { storePath: retained.storePath } : {}),
+          ...(retained?.updatedAtMs !== undefined ? { updatedAtMs: retained.updatedAtMs } : {}),
+        }),
+      ).content,
+    ).toBe("Assistant: retained transcript");
+  });
+
   it("treats accessor-backed entries as live SQLite transcripts", async () => {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
     fsSync.mkdirSync(sessionsDir, { recursive: true });

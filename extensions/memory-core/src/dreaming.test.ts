@@ -25,6 +25,14 @@ import {
 } from "./dreaming.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
+// `runDreamingSweepPhases` is the only binding the dreaming trigger imports from this module.
+const runDreamingSweepPhasesMock = vi.hoisted(() =>
+  vi.fn(async (_params: { agentId?: string; workspaceDir: string }) => {}),
+);
+vi.mock("./dreaming-phases.js", () => ({
+  runDreamingSweepPhases: runDreamingSweepPhasesMock,
+}));
+
 const constants = {
   MANAGED_DREAMING_CRON_NAME: MANAGED_MEMORY_DREAMING_CRON_NAME,
   MANAGED_DREAMING_CRON_TAG: MANAGED_MEMORY_DREAMING_CRON_TAG,
@@ -250,7 +258,7 @@ function getBeforeAgentReplyHandler(
   onMock: ReturnType<typeof vi.fn>,
 ): (
   event: { cleanedBody: string },
-  ctx: { trigger?: string; workspaceDir?: string; sessionKey?: string },
+  ctx: { agentId?: string; trigger?: string; workspaceDir?: string; sessionKey?: string },
 ) => Promise<unknown> {
   const call = onMock.mock.calls.find(([eventName]) => eventName === "before_agent_reply");
   if (!call) {
@@ -258,7 +266,7 @@ function getBeforeAgentReplyHandler(
   }
   return call[1] as (
     event: { cleanedBody: string },
-    ctx: { trigger?: string; workspaceDir?: string; sessionKey?: string },
+    ctx: { agentId?: string; trigger?: string; workspaceDir?: string; sessionKey?: string },
   ) => Promise<unknown>;
 }
 
@@ -1904,6 +1912,73 @@ describe("gateway startup reconciliation", () => {
         handled: true,
         reason: "memory-core: short-term dreaming disabled",
       });
+    } finally {
+      clearInternalHooks();
+    }
+  });
+
+  // Regression: the sweep dropped the agent id entirely, so narrative subagent sessions used
+  // unscoped keys that no per-agent SQLite store could resolve and every phase failed.
+  it("sweeps each workspace as its owning agent rather than the roster default", async () => {
+    clearInternalHooks();
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-owner-");
+    const logger = createLogger();
+    const harness = createCronHarness();
+    const onMock = vi.fn();
+    runDreamingSweepPhasesMock.mockClear();
+    const api: DreamingPluginApiTestDouble = {
+      config: {
+        agents: {
+          defaults: { workspace: workspaceDir },
+        },
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  limit: 5,
+                  phases: {
+                    light: { enabled: false },
+                    rem: { enabled: false },
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      pluginConfig: {},
+      logger,
+      runtime: {},
+      on: onMock,
+    };
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+      await triggerGatewayStart(onMock, {
+        config: api.config,
+        getCron: () => harness.cron,
+      });
+
+      const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
+      await beforeAgentReply(
+        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+        {
+          trigger: "cron",
+          agentId: "researcher",
+          workspaceDir,
+          sessionKey: "agent:researcher:cron:memory-dreaming",
+        },
+      );
+
+      expect(runDreamingSweepPhasesMock).toHaveBeenCalledTimes(1);
+      const sweepArgs = expectDefined(
+        runDreamingSweepPhasesMock.mock.calls[0],
+        "dreaming sweep call",
+      )[0];
+      expect(sweepArgs.agentId).toBe("researcher");
+      expect(sweepArgs.workspaceDir).toBe(workspaceDir);
     } finally {
       clearInternalHooks();
     }

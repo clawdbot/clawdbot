@@ -87,9 +87,11 @@ export class ChatLog extends Container {
     }
   }
 
-  private pruneOverflow() {
+  private pruneOverflow(protectedComponents?: ReadonlySet<Component>) {
     while (this.children.length > this.maxComponents) {
-      const oldest = this.children[0];
+      const oldest = protectedComponents
+        ? this.children.find((component) => !protectedComponents.has(component))
+        : this.children[0];
       if (!oldest) {
         return;
       }
@@ -231,12 +233,13 @@ export class ChatLog extends Container {
       frozen?.values().next().value ??
       (options.runId ? this.streamingRuns.get(options.runId) : undefined);
     const assistantIndex = assistant ? this.children.indexOf(assistant) : -1;
-    if (assistantIndex >= 0) {
+    if (assistant && assistantIndex >= 0) {
       // Transcript broadcasts can trail the first delta; insert their prompt
-      // before the existing reply without resetting live stream or tool state.
+      // before the existing reply. Preserve both when full scrollback evicts
+      // older components so the newly recovered prompt cannot disappear.
       this.repeatableSystemMessage = null;
       this.children.splice(assistantIndex, 0, component);
-      this.pruneOverflow();
+      this.pruneOverflow(new Set([component, assistant]));
       return component;
     }
     this.appendNonSystem(component);
