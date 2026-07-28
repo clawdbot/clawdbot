@@ -29,6 +29,8 @@ extension GatewayConnection {
         var urlRequest = URLRequest(url: url)
         urlRequest.timeoutInterval = 20
         urlRequest.setValue("image/*", forHTTPHeaderField: "Accept")
+        // Native macOS has no per-Gateway proxy-header configuration surface today. If one is
+        // added, carry its immutable snapshot on Route so the socket and ticket GET cannot diverge.
         let tls = lease.route.tls?.params ?? GatewayTLSParams(
             required: false,
             expectedFingerprint: nil,

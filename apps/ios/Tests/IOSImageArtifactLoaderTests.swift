@@ -5,8 +5,9 @@ import Testing
 
 @Suite("iOS managed image artifact loader")
 struct IOSImageArtifactLoaderTests {
-    @Test @MainActor func `loads ticketed image from gateway origin without a bearer override`() async throws {
-        let config = Self.config()
+    @Test @MainActor func `loads ticketed image with proxy headers and without a gateway bearer`() async throws {
+        let gatewayURL = try #require(URL(string: "wss://gateway.example"))
+        let config = Self.config(url: gatewayURL)
         let loader = IOSImageArtifactLoader(
             connectionProvider: {
                 IOSImageArtifactLoader.Connection(
@@ -18,9 +19,9 @@ struct IOSImageArtifactLoaderTests {
                 #expect(maximumBytes == 12 * 1024 * 1024)
                 return { request in
                     #expect(request.url?.absoluteString ==
-                        "http://127.0.0.1:18789/api/chat/media/outgoing/main/11111111-1111-4111-8111-111111111111/full?mediaTicket=ticket")
+                        "https://gateway.example/api/chat/media/outgoing/main/11111111-1111-4111-8111-111111111111/full?mediaTicket=ticket")
                     #expect(request.value(forHTTPHeaderField: "Authorization") == nil)
-                    #expect(request.value(forHTTPHeaderField: "X-Proxy-Token") == nil)
+                    #expect(request.value(forHTTPHeaderField: "X-Proxy-Token") == "proxy")
                     let response = try #require(HTTPURLResponse(
                         url: #require(request.url),
                         statusCode: 200,
@@ -66,9 +67,11 @@ struct IOSImageArtifactLoaderTests {
         }
     }
 
-    private static func config() -> GatewayConnectConfig {
+    private static func config(
+        url: URL = URL(string: "ws://127.0.0.1:18789")!) -> GatewayConnectConfig
+    {
         GatewayConnectConfig(
-            url: URL(string: "ws://127.0.0.1:18789")!,
+            url: url,
             stableID: "manual|127.0.0.1|18789",
             tls: nil,
             token: nil,
