@@ -242,6 +242,12 @@ export const NodeInvokeInputEventSchema = closedObject({
   payloadJSON: Type.String({ maxLength: 16 * 1024 }),
 });
 
+/** Payload sent by the gateway to cancel one active node invoke. */
+export const NodeInvokeCancelEventSchema = closedObject({
+  invokeId: NonEmptyString,
+  nodeId: NonEmptyString,
+});
+
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.
 export type NodePairListParams = Static<typeof NodePairListParamsSchema>;
@@ -256,6 +262,7 @@ export type NodeInvokeParams = Static<typeof NodeInvokeParamsSchema>;
 export type NodeInvokeResultParams = Static<typeof NodeInvokeResultParamsSchema>;
 export type NodeInvokeProgressParams = Static<typeof NodeInvokeProgressParamsSchema>;
 export type NodeInvokeInputEvent = Static<typeof NodeInvokeInputEventSchema>;
+export type NodeInvokeCancelEvent = Static<typeof NodeInvokeCancelEventSchema>;
 export type NodeEventParams = Static<typeof NodeEventParamsSchema>;
 export type NodeEventResult = Static<typeof NodeEventResultSchema>;
 export type NodePresenceAlivePayload = Static<typeof NodePresenceAlivePayloadSchema>;

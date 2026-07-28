@@ -441,7 +441,8 @@ response. Streaming callers can set an inactivity deadline that starts with the
 first progress event and resets after later progress while retaining the
 invoke's separate hard timeout during approval and execution. Result, hard
 timeout, inactivity timeout, and node disconnect all discard pending stream
-state. Caller cancellation emits `node.invoke.cancel`; the node host then
+state. Caller cancellation emits `node.invoke.cancel` with the published
+`NodeInvokeCancelEvent` payload (`invokeId` and `nodeId`); the node host then
 terminates the matching process tree. Existing request/response commands are unchanged.
 
 ## Command policy

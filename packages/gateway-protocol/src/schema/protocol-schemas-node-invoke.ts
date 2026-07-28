@@ -1,4 +1,5 @@
 import {
+  NodeInvokeCancelEventSchema,
   NodeInvokeInputEventSchema,
   NodeInvokeParamsSchema,
   NodeInvokeProgressParamsSchema,
@@ -6,12 +7,13 @@ import {
   NodeInvokeResultParamsSchema,
 } from "./nodes.js";
 
-// Node invoke request/input/progress/result wire schemas, grouped like the
-// sibling node-presence bundle so the main registry stays within its budget.
+// Node invoke request/cancel/input/progress/result wire schemas, grouped like
+// the sibling node-presence bundle so the main registry stays within its budget.
 export const NodeInvokeProtocolSchemas = {
   NodeInvokeParams: NodeInvokeParamsSchema,
   NodeInvokeInputEvent: NodeInvokeInputEventSchema,
   NodeInvokeProgressParams: NodeInvokeProgressParamsSchema,
   NodeInvokeResultParams: NodeInvokeResultParamsSchema,
   NodeInvokeRequestEvent: NodeInvokeRequestEventSchema,
+  NodeInvokeCancelEvent: NodeInvokeCancelEventSchema,
 };

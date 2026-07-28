@@ -12,10 +12,6 @@ private struct NodeInvokeRequestPayload: Codable {
     var idempotencyKey: String?
 }
 
-private struct NodeInvokeCancelPayload: Codable {
-    var invokeId: String
-}
-
 /// Binds suspended work to one installed gateway channel generation.
 /// Callers use this lease so an actor hop cannot retarget a payload to a replacement gateway.
 public struct GatewayNodeSessionRoute: Sendable, Equatable {
@@ -1130,7 +1126,7 @@ extension GatewayNodeSession {
         if evt.event == "node.invoke.cancel" {
             guard let payload = evt.payload else { return }
             do {
-                let cancel: NodeInvokeCancelPayload = try self.decodeEventPayload(from: payload)
+                let cancel: NodeInvokeCancelEvent = try self.decodeEventPayload(from: payload)
                 self.cancelActiveInvoke(
                     requestID: cancel.invokeId,
                     admissionGeneration: admissionGeneration)
