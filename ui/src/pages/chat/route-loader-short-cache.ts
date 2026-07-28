@@ -31,7 +31,7 @@ function rowMatchesShortTarget(
   return !target.slugHint || controlUiSessionSlug(row.displayName) === target.slugHint;
 }
 
-export type CachedShortSession = {
+type CachedShortSession = {
   sessionKey: string;
   row?: GatewaySessionRow;
 };
