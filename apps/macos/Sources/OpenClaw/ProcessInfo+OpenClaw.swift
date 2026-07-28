@@ -1,6 +1,13 @@
 import Foundation
 
 extension ProcessInfo {
+    /// SwiftPM loads test bundles into these helpers, so bundle inspection alone
+    /// cannot identify every test process. Keep current and legacy runner names.
+    private static let swiftPMTestHelperNames: Set<String> = [
+        "swiftpm-testing-helper",
+        "swiftpm-xctest-helper",
+    ]
+
     var isPreview: Bool {
         guard let raw = getenv("XCODE_RUNNING_FOR_PREVIEWS") else { return false }
         return String(cString: raw) == "1"
@@ -41,10 +48,10 @@ extension ProcessInfo {
         bundleURLs: [URL]) -> Bool
     {
         if bundleURLs.contains(where: { $0.pathExtension == "xctest" }) { return true }
-        if processName == "swiftpm-testing-helper" || processName == "swiftpm-xctest-helper" {
-            return true
-        }
-        if arguments.first.map({ URL(fileURLWithPath: $0).lastPathComponent }) == "swiftpm-testing-helper" {
+        if self.swiftPMTestHelperNames.contains(processName) { return true }
+        if let executable = arguments.first.map({ URL(fileURLWithPath: $0).lastPathComponent }),
+           self.swiftPMTestHelperNames.contains(executable)
+        {
             return true
         }
         return environment["XCTestConfigurationFilePath"] != nil

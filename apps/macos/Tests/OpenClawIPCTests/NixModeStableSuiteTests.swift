@@ -36,6 +36,13 @@ struct NixModeStableSuiteTests {
             processName: "swiftpm-xctest-helper",
             arguments: [],
             bundleURLs: []))
+        for helper in ["swiftpm-testing-helper", "swiftpm-xctest-helper"] {
+            #expect(ProcessInfo.resolveIsRunningTests(
+                environment: [:],
+                processName: "OpenClawTests",
+                arguments: ["/Library/Developer/Toolchains/usr/libexec/swift/pm/\(helper)"],
+                bundleURLs: []))
+        }
         #expect(ProcessInfo.resolveIsRunningTests(
             environment: ["XCTestSessionIdentifier": "session"],
             processName: "OpenClawTests",
