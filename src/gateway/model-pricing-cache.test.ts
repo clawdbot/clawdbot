@@ -352,6 +352,65 @@ describe("model-pricing-cache", () => {
     ).toBeUndefined();
   });
 
+  it("skips remote pricing for .local DNS hostnames (fail-closed DNS-rebinding guard)", async () => {
+    // .local DNS hostnames are classified as private without DNS resolution
+    // by isPrivateOrLoopbackResolvedHost — prevents DNS-rebinding SSRF where
+    // a .local name could resolve to a loopback address on the host.
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "local-model/qwen2.5-coder:7b" },
+        },
+      },
+      models: {
+        providers: {
+          "local-model": {
+            baseUrl: "http://my-gpu.internal.local:8000/v1",
+            api: "openai-completions",
+            models: [{ id: "qwen2.5-coder:7b" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = vi.fn<typeof fetch>();
+
+    await runGatewayModelPricingRefresh({ config, fetchImpl });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(
+      getCachedGatewayModelPricing({
+        provider: "local-model",
+        model: "qwen2.5-coder:7b",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("skips remote pricing for .localhost DNS hostnames (fail-closed DNS-rebinding guard)", async () => {
+    // .localhost DNS hostnames are classified as private without DNS
+    // resolution — same fail-closed boundary as .local.
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "local-model/qwen2.5-coder:7b" },
+        },
+      },
+      models: {
+        providers: {
+          "local-model": {
+            baseUrl: "http://llm.internal.localhost:11434",
+            api: "ollama",
+            models: [{ id: "qwen2.5-coder:7b" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = vi.fn<typeof fetch>();
+
+    await runGatewayModelPricingRefresh({ config, fetchImpl });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("records and clears remote pricing source failures for health surfaces", async () => {
     const config = {
       agents: {

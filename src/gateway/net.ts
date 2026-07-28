@@ -436,6 +436,69 @@ export function isPrivateOrLoopbackHost(host: string): boolean {
   return true;
 }
 
+/**
+ * Resolve-aware variant of {@link isPrivateOrLoopbackHost} for use at
+ * network-fetch authorization boundaries (e.g. model-pricing cache refresh).
+ *
+ * IP literals are delegated to the synchronous {@link isPrivateOrLoopbackHost}.
+ * DNS hostnames are resolved and checked: if ANY resolved address is private
+ * or loopback, the host is classified as private.  Resolution failures are
+ * treated as private (fail-closed) to prevent DNS-rebinding SSRF bypasses.
+ *
+ * Local-only DNS patterns ({@code .local}, {@code .localhost}) are classified
+ * as private without DNS resolution — they conventionally resolve to loopback
+ * or link-local addresses.
+ */
+export async function isPrivateOrLoopbackResolvedHost(
+  host: string,
+): Promise<boolean> {
+  const unbracketed = host.replace(/^\[|\]$/g, "").trim();
+  if (!unbracketed) {
+    return false;
+  }
+
+  // IP-literal path — use the canonical synchronous classifier.
+  if (net.isIP(unbracketed)) {
+    return isPrivateOrLoopbackHost(host);
+  }
+
+  // Localhost DNS patterns that conventionally resolve to loopback/local
+  // addresses.  Classify these as private without DNS resolution.
+  const lower = unbracketed.toLowerCase();
+  if (
+    lower === "localhost" ||
+    lower === "localhost.localdomain" ||
+    lower.endsWith(".localhost") ||
+    lower.endsWith(".local")
+  ) {
+    return true;
+  }
+
+  // DNS hostname path — resolve and verify every returned address.
+  try {
+    const { promises: dnsPromises } = await import("node:dns");
+
+    const [v4, v6] = await Promise.allSettled([
+      dnsPromises.resolve4(lower),
+      dnsPromises.resolve6(lower),
+    ]);
+
+    const addresses: string[] = [];
+    if (v4.status === "fulfilled") addresses.push(...v4.value);
+    if (v6.status === "fulfilled") addresses.push(...v6.value);
+
+    if (addresses.length === 0) {
+      // Resolved with no usable addresses — fail closed.
+      return true;
+    }
+
+    return addresses.some((addr) => isPrivateOrLoopbackAddress(addr));
+  } catch {
+    // DNS resolution failure — fail closed.
+    return true;
+  }
+}
+
 function parseHostForAddressChecks(
   host: string,
 ): { isLocalhost: boolean; unbracketedHost: string } | null {
