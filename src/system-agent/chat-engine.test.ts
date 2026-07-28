@@ -916,6 +916,81 @@ describe("SystemAgentChatEngine", () => {
     expect(appendAuditEntry).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { outcome: "kept-current" as const, config: {}, reason: "user-skipped" as const },
+    {
+      outcome: "kept-current" as const,
+      config: {},
+      reason: "provider-install-skipped" as const,
+      providerId: "brave",
+    },
+  ])("reports $reason as an unchanged setup, not a failure", async (result) => {
+    const appendAuditEntry = vi.fn(async () => "state/openclaw.sqlite");
+    mocks.readSetupConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      hash: "search-base-hash",
+      config: result.config,
+      sourceConfig: result.config,
+    });
+    mocks.runSearchSetupFlow.mockResolvedValue(result);
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      appendAuditEntry,
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const reply = await engine.handle("configure search");
+
+    expect(reply.text).toContain("kept the current configuration. Nothing was changed");
+    expect(reply.text).not.toContain("setup stopped");
+    expect(reply.text).not.toContain("Done — web search setup is complete");
+    expect(mocks.writeWizardConfigFile).not.toHaveBeenCalled();
+    expect(appendAuditEntry).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      outcome: "kept-current" as const,
+      config: {},
+      reason: "no-providers" as const,
+      message: "no web search providers are available under the current plugin policy",
+    },
+    {
+      outcome: "kept-current" as const,
+      config: {},
+      reason: "provider-unavailable" as const,
+      providerId: "brave",
+      message: "the selected web search provider is no longer available",
+    },
+  ])("reports $reason as a stopped setup", async ({ message, ...result }) => {
+    const appendAuditEntry = vi.fn(async () => "state/openclaw.sqlite");
+    mocks.readSetupConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      hash: "search-base-hash",
+      config: result.config,
+      sourceConfig: result.config,
+    });
+    mocks.runSearchSetupFlow.mockResolvedValue(result);
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      appendAuditEntry,
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const reply = await engine.handle("configure search");
+
+    expect(reply.text).toContain(`Web search setup stopped: Error: ${message}`);
+    expect(reply.text).not.toContain("Done — web search setup is complete");
+    expect(mocks.writeWizardConfigFile).not.toHaveBeenCalled();
+    expect(appendAuditEntry).not.toHaveBeenCalled();
+  });
+
   it("hands CLI search credentials to the masked terminal wizard", async () => {
     const engine = new SystemAgentChatEngine({
       surface: "cli",

@@ -91,7 +91,7 @@ export type SystemAgentChatEngineOptions = {
   runSearchSetupWizard?: (
     prompter: WizardPrompterLike,
     beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
-  ) => Promise<void>;
+  ) => Promise<void | HostedWizardCompletion>;
   /** Exact route/credential that passed the host's live inference gate. */
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
   /** Delegated chats accept approval only from the operator registry. */
@@ -121,11 +121,14 @@ type SystemAgentChatReply = {
 
 type WizardPrompterLike = import("../wizard/prompts.js").WizardPrompter;
 
+type HostedWizardCompletion = "applied" | "kept-current";
+
 type ActiveWizardBridge = {
   session: WizardSession;
   step: WizardStep | null;
   kind: "channel" | "skills" | "search";
   label: string;
+  completion: { status: HostedWizardCompletion };
   /** Channel to auto-answer in the first selection step ("connect telegram"). */
   autoSelectChannel?: string;
 };
@@ -163,13 +166,16 @@ async function runHostedConfigWizard(params: {
   run: (context: {
     baseConfig: import("../config/types.openclaw.js").OpenClawConfig;
     runtime: RuntimeEnv;
-  }) => Promise<{
-    nextConfig: import("../config/types.openclaw.js").OpenClawConfig;
-    afterWrite?: (
-      committedConfig: import("../config/types.openclaw.js").OpenClawConfig,
-    ) => Promise<void>;
-  }>;
-}): Promise<void> {
+  }) => Promise<
+    | {
+        nextConfig: import("../config/types.openclaw.js").OpenClawConfig;
+        afterWrite?: (
+          committedConfig: import("../config/types.openclaw.js").OpenClawConfig,
+        ) => Promise<void>;
+      }
+    | { keptCurrent: true }
+  >;
+}): Promise<HostedWizardCompletion> {
   const { readSetupConfigFileSnapshot, writeWizardConfigFile } =
     await import("../wizard/setup.shared.js");
   const snapshot = await readSetupConfigFileSnapshot();
@@ -182,6 +188,9 @@ async function runHostedConfigWizard(params: {
   const { defaultRuntime } = await import("../runtime.js");
   const runtime = createHostedWizardRuntime(defaultRuntime);
   const result = await params.run({ baseConfig, runtime });
+  if ("keptCurrent" in result) {
+    return "kept-current";
+  }
   await params.beforePersistentApply(runtime);
   const committedConfig = await writeWizardConfigFile(result.nextConfig, {
     allowConfigSizeDrop: false,
@@ -189,20 +198,21 @@ async function runHostedConfigWizard(params: {
     migrationBaseConfig: baseConfig,
   });
   await result.afterWrite?.(committedConfig);
+  return "applied";
 }
 
 async function defaultChannelSetupWizardRunner(
   channel: string,
   prompter: WizardPrompterLike,
   beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
-): Promise<void> {
+): Promise<HostedWizardCompletion> {
   const {
     createChannelOnboardingPostWriteHookCollector,
     runCollectedChannelOnboardingPostWriteHooks,
     setupChannels,
   } = await import("../commands/onboard-channels.js");
   const postWriteHooks = createChannelOnboardingPostWriteHookCollector();
-  await runHostedConfigWizard({
+  return await runHostedConfigWizard({
     label: "Channel setup",
     beforePersistentApply,
     run: async ({ baseConfig, runtime }) => ({
@@ -233,12 +243,12 @@ async function defaultChannelSetupWizardRunner(
 async function defaultSkillsSetupWizardRunner(
   prompter: WizardPrompterLike,
   beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
-): Promise<void> {
+): Promise<HostedWizardCompletion> {
   const [{ setupSkills }, { resolveOnboardingAgentTarget }] = await Promise.all([
     import("../commands/onboard-skills.js"),
     import("../commands/onboard-agent-target.js"),
   ]);
-  await runHostedConfigWizard({
+  return await runHostedConfigWizard({
     label: "Skills setup",
     beforePersistentApply,
     run: async ({ baseConfig, runtime }) => ({
@@ -256,9 +266,9 @@ async function defaultSkillsSetupWizardRunner(
 async function defaultSearchSetupWizardRunner(
   prompter: WizardPrompterLike,
   beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
-): Promise<void> {
+): Promise<HostedWizardCompletion> {
   const { runSearchSetupFlow } = await import("../flows/search-setup.js");
-  await runHostedConfigWizard({
+  return await runHostedConfigWizard({
     label: "Web search setup",
     beforePersistentApply,
     run: async ({ baseConfig, runtime }) => {
@@ -271,14 +281,13 @@ async function defaultSearchSetupWizardRunner(
         throw new Error(`web search provider ${result.providerId} installation ${failure}`);
       }
       if (result.outcome === "kept-current") {
+        if (result.reason === "user-skipped" || result.reason === "provider-install-skipped") {
+          return { keptCurrent: true };
+        }
         const reason =
           result.reason === "no-providers"
             ? "no web search providers are available under the current plugin policy"
-            : result.reason === "provider-unavailable"
-              ? "the selected web search provider is no longer available"
-              : result.reason === "provider-install-skipped"
-                ? `web search provider ${result.providerId} installation was skipped`
-                : "the current web search configuration was kept";
+            : "the selected web search provider is no longer available";
         throw new Error(reason);
       }
       return { nextConfig: result.config };
@@ -1312,15 +1321,19 @@ export class SystemAgentChatEngine {
     kind: ActiveWizardBridge["kind"];
     label: string;
     autoSelectChannel?: string;
-    run: (prompter: WizardPrompterLike) => Promise<void>;
+    run: (prompter: WizardPrompterLike) => Promise<void | HostedWizardCompletion>;
   }): Promise<string> {
     this.lastSensitiveChannel = undefined;
-    const session = new WizardSession((prompter) => params.run(prompter));
+    const completion = { status: "applied" as HostedWizardCompletion };
+    const session = new WizardSession(async (prompter) => {
+      completion.status = (await params.run(prompter)) ?? "applied";
+    });
     this.wizardBridge = {
       session,
       step: null,
       kind: params.kind,
       label: params.label,
+      completion,
       ...(params.autoSelectChannel ? { autoSelectChannel: params.autoSelectChannel } : {}),
     };
     return await this.pumpWizardBridge();
@@ -1371,6 +1384,9 @@ export class SystemAgentChatEngine {
       this.wizardBridge = null;
       const label = bridge.label;
       if (result.status === "done") {
+        if (bridge.completion.status === "kept-current") {
+          return `${label[0]?.toUpperCase() ?? "S"}${label.slice(1)} setup kept the current configuration. Nothing was changed.`;
+        }
         const audit =
           bridge.kind === "channel"
             ? {
