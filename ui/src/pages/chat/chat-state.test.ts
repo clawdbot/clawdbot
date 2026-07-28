@@ -1974,6 +1974,34 @@ describe("refreshChatMetadata", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
+  it("ignores metadata from an earlier logical connection", async () => {
+    type MetadataResult = {
+      commands: never[];
+      models: Array<{ id: string; name: string; provider: string; available: boolean }>;
+    };
+    const metadata = createDeferred<MetadataResult>();
+    const request = vi.fn(async () => await metadata.promise);
+    const existingCatalog = [
+      { id: "current-model", name: "Current Model", provider: "openai", available: true },
+    ];
+    const state = createMetadataState(request, {
+      chatModelCatalog: existingCatalog,
+      connectionEpoch: 1,
+    });
+
+    const refresh = refreshChatMetadata(state);
+    state.connectionEpoch = 2;
+    state.chatModelsLoading = false;
+    metadata.resolve({
+      commands: [],
+      models: [{ id: "stale-model", name: "Stale Model", provider: "openai", available: true }],
+    });
+    await refresh;
+
+    expect(state.chatModelCatalog).toBe(existingCatalog);
+    expect(state.chatModelsLoading).toBe(false);
+  });
+
   it("ignores metadata after switching to a different agent", async () => {
     let resolveMetadata:
       | ((value: {

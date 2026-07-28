@@ -34,6 +34,7 @@ type ChatRefreshOptions = {
 
 type ChatStartupMetadataHandler = (params: {
   client: GatewayBrowserClient;
+  connectionEpoch: number;
   agentId: string | null | undefined;
   metadata: ChatMetadataResult | undefined;
 }) => void | Promise<void>;
@@ -41,6 +42,7 @@ type ChatStartupMetadataHandler = (params: {
 type ChatMetadataRequest = {
   host: ChatPageHost;
   client: GatewayBrowserClient;
+  connectionEpoch: number;
   agentId: string | null | undefined;
   version: number;
 };
@@ -169,6 +171,7 @@ function ownsChatMetadataRequest(request: ChatMetadataRequest): boolean {
   return (
     request.host.client === request.client &&
     request.host.connected &&
+    request.host.connectionEpoch === request.connectionEpoch &&
     request.host.chatMetadataRequestVersion === request.version &&
     resolveChatAgentId(request.host) === request.agentId
   );
@@ -235,8 +238,9 @@ export async function refreshChatMetadata(
     return EMPTY_CHAT_METADATA_APPLY_RESULT;
   }
   const client = host.client;
+  const connectionEpoch = host.connectionEpoch;
   const agentId = resolveChatAgentId(host);
-  const request = { host, client, agentId, version: requestVersion };
+  const request = { host, client, connectionEpoch, agentId, version: requestVersion };
   host.chatModelsLoading = true;
   try {
     if (isGatewayMethodAdvertised(host as unknown as ChatState, "chat.metadata") === false) {
@@ -294,6 +298,7 @@ async function refreshChat(
 ) {
   const refreshedSessionKey = host.sessionKey;
   const refreshedClient = host.client;
+  const refreshedConnectionEpoch = host.connectionEpoch;
   const refreshedAgentId = resolveAgentIdForSession(host);
   const requestUpdate = () => host.requestUpdate?.();
   const previousSessionsResult = host.sessionsResult;
@@ -345,6 +350,7 @@ async function refreshChat(
             if (
               host.client !== refreshedClient ||
               !host.connected ||
+              host.connectionEpoch !== refreshedConnectionEpoch ||
               host.sessionKey !== refreshedSessionKey ||
               resolveAgentIdForSession(host) !== refreshedAgentId
             ) {
@@ -352,6 +358,7 @@ async function refreshChat(
             }
             return opts.onStartupMetadata?.({
               client: refreshedClient,
+              connectionEpoch: refreshedConnectionEpoch,
               agentId: refreshedAgentId,
               metadata: history?.metadata,
             });
@@ -362,6 +369,7 @@ async function refreshChat(
             if (
               host.client !== refreshedClient ||
               !host.connected ||
+              host.connectionEpoch !== refreshedConnectionEpoch ||
               host.sessionKey !== refreshedSessionKey ||
               resolveAgentIdForSession(host) !== refreshedAgentId
             ) {
@@ -369,6 +377,7 @@ async function refreshChat(
             }
             return opts.onStartupMetadata?.({
               client: refreshedClient,
+              connectionEpoch: refreshedConnectionEpoch,
               agentId: refreshedAgentId,
               metadata: undefined,
             });
@@ -396,6 +405,7 @@ async function refreshChat(
 }
 
 export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {
+  const refreshedConnectionEpoch = host.connectionEpoch;
   const ownsStartupMetadata = Boolean(
     opts?.startup &&
     host.client &&
@@ -411,12 +421,13 @@ export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {
 
   const refresh = refreshChat(host, {
     ...opts,
-    onStartupMetadata: async ({ client, agentId, metadata }) => {
+    onStartupMetadata: async ({ client, connectionEpoch, agentId, metadata }) => {
       if (
         startupMetadataRequestVersion === null ||
         host.chatMetadataRequestVersion !== startupMetadataRequestVersion ||
         host.client !== client ||
         !host.connected ||
+        host.connectionEpoch !== connectionEpoch ||
         resolveChatAgentId(host) !== agentId
       ) {
         return;
@@ -424,6 +435,7 @@ export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {
       const request: ChatMetadataRequest = {
         host,
         client,
+        connectionEpoch,
         agentId,
         version: startupMetadataRequestVersion,
       };
@@ -452,6 +464,7 @@ export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {
   const ownsScheduledMetadataRefresh = () =>
     host.sessionKey === refreshedSessionKey &&
     host.connected &&
+    host.connectionEpoch === refreshedConnectionEpoch &&
     (startupMetadataRequestVersion === null ||
       host.chatMetadataRequestVersion === startupMetadataRequestVersion);
   scheduleChatMetadataRefresh(() => {

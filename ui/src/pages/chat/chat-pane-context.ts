@@ -181,6 +181,8 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.resetSessionPullRequests();
       this.resetOlderMessagesViewport();
       state.chatLoading = false;
+      state.chatMetadataRequestVersion += 1;
+      state.chatModelsLoading = false;
     }
     state.client = snapshot.client;
     state.connected = snapshot.phase === "connected";

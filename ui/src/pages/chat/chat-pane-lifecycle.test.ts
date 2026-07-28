@@ -769,6 +769,24 @@ describe("chat pane presentation teardown", () => {
 });
 
 describe("chat pane connection lifecycle", () => {
+  it("invalidates pending metadata when the logical gateway connection changes", () => {
+    const client = {
+      request: vi.fn(() => new Promise<never>(() => {})),
+    } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    state.chatMetadataRequestVersion = 3;
+    state.chatModelsLoading = true;
+
+    pane.applyGatewaySnapshot({
+      ...pane.context.gateway.snapshot,
+      client,
+      phase: "reconnecting",
+    });
+
+    expect(state.chatMetadataRequestVersion).toBe(4);
+    expect(state.chatModelsLoading).toBe(false);
+  });
+
   it("rehydrates secondary session state after a same-client logical reconnect", () => {
     const client = {
       request: vi.fn(() => new Promise<never>(() => {})),
