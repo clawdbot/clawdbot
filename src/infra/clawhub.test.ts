@@ -780,6 +780,40 @@ describe("clawhub helpers", () => {
     expect(url.searchParams.get("version")).toBe("1.0.0");
   });
 
+  it("can fetch skill verification without resolved auth", async () => {
+    process.env.CLAWHUB_TOKEN = "env-token-123";
+    let requestedInit: RequestInit | undefined;
+
+    await fetchClawHubSkillVerification({
+      slug: "weather",
+      ownerHandle: "demo-owner",
+      version: "1.0.0",
+      skipAuth: true,
+      fetchImpl: async (_input, init) => {
+        requestedInit = init;
+        return new Response(
+          JSON.stringify({
+            schema: "clawhub.skill.verify.v1",
+            ok: true,
+            decision: "pass",
+            reasons: [],
+            skill: {},
+            publisher: {},
+            version: {},
+            card: {},
+            artifact: {},
+            provenance: {},
+            security: {},
+            signature: {},
+          }),
+          { headers: { "content-type": "application/json" } },
+        );
+      },
+    });
+
+    expect(new Headers(requestedInit?.headers).get("Authorization")).toBeNull();
+  });
+
   it("posts bulk skill security verdict requests", async () => {
     let requestedUrl = "";
     let requestedInit: RequestInit | undefined;

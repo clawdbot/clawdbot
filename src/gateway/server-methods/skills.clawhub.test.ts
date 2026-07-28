@@ -11,6 +11,7 @@ const resolveAgentWorkspaceDirMock = vi.fn<(_cfg: unknown, _agentId: string) => 
 );
 const buildWorkspaceSkillStatusMock = vi.fn();
 const readLocalSkillCardContentSyncMock = vi.fn();
+const fetchClawHubSkillVerificationMock = vi.fn();
 const fetchClawHubSkillSecurityVerdictsMock = vi.fn();
 const installSkillFromClawHubMock = vi.fn();
 const installSkillMock = vi.fn();
@@ -46,6 +47,7 @@ vi.mock("../../skills/lifecycle/install.js", () => ({
 
 vi.mock("../../infra/clawhub.js", () => ({
   fetchClawHubSkillDetail: vi.fn(),
+  fetchClawHubSkillVerification: (...args: unknown[]) => fetchClawHubSkillVerificationMock(...args),
   fetchClawHubSkillSecurityVerdicts: (...args: unknown[]) =>
     fetchClawHubSkillSecurityVerdictsMock(...args),
   resolveClawHubBaseUrl: () => "https://clawhub.ai",
@@ -91,6 +93,7 @@ describe("skills gateway handlers (clawhub)", () => {
     resolveAgentWorkspaceDirMock.mockReset();
     buildWorkspaceSkillStatusMock.mockReset();
     readLocalSkillCardContentSyncMock.mockReset();
+    fetchClawHubSkillVerificationMock.mockReset();
     fetchClawHubSkillSecurityVerdictsMock.mockReset();
     installSkillFromClawHubMock.mockReset();
     installSkillMock.mockReset();
@@ -197,6 +200,149 @@ describe("skills gateway handlers (clawhub)", () => {
     });
     expect(JSON.stringify(response)).not.toContain("scannerPayload");
     expect(JSON.stringify(response)).not.toContain('"security":');
+  });
+
+  it("falls back to owner-qualified verification when the bulk verdict misses a linked skill", async () => {
+    buildWorkspaceSkillStatusMock.mockReturnValue({
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/openclaw/skills",
+      skills: [
+        {
+          name: "self-improvement",
+          skillKey: "self-improvement",
+          clawhub: {
+            status: "linked",
+            valid: true,
+            registry: "https://clawhub.ai",
+            slug: "self-improving-agent",
+            ownerHandle: "pskoett",
+            installedVersion: "3.0.24",
+            installedAt: 123,
+          },
+        },
+      ],
+    });
+    fetchClawHubSkillSecurityVerdictsMock.mockResolvedValue({
+      schema: "clawhub.skill.security-verdicts.v1",
+      items: [
+        {
+          ok: false,
+          decision: "fail",
+          reasons: ["skill.not_found"],
+          requestedSlug: "self-improving-agent",
+          requestedVersion: "3.0.24",
+          error: { code: "skill_not_found", message: "Skill not found" },
+        },
+      ],
+    });
+    fetchClawHubSkillVerificationMock.mockResolvedValue({
+      schema: "clawhub.skill.verify.v1",
+      ok: true,
+      decision: "pass",
+      reasons: [],
+      slug: "self-improving-agent",
+      publisherHandle: "pskoett",
+      version: { version: "3.0.24", createdAt: 123 },
+      skill: { slug: "self-improving-agent", displayName: "Self Improving Agent" },
+      publisher: { handle: "pskoett" },
+      card: {},
+      artifact: {},
+      provenance: {},
+      security: { status: "clean", passed: true },
+      signature: {},
+      pageUrl: "https://clawhub.ai/pskoett/self-improving-agent",
+    });
+
+    const { ok, response, error } = await callSkillsHandler("skills.securityVerdicts", {});
+
+    expect(error).toBeUndefined();
+    expect(ok).toBe(true);
+    expect(fetchClawHubSkillSecurityVerdictsMock).toHaveBeenCalledWith({
+      baseUrl: "https://clawhub.ai",
+      items: [
+        {
+          slug: "self-improving-agent",
+          ownerHandle: "pskoett",
+          version: "3.0.24",
+        },
+      ],
+      skipAuth: true,
+    });
+    expect(fetchClawHubSkillVerificationMock).toHaveBeenCalledWith({
+      slug: "self-improving-agent",
+      ownerHandle: "pskoett",
+      version: "3.0.24",
+      baseUrl: "https://clawhub.ai",
+      token: undefined,
+      skipAuth: true,
+      timeoutMs: undefined,
+    });
+    expect(response).toEqual({
+      schema: "openclaw.skills.security-verdicts.v1",
+      items: [
+        expect.objectContaining({
+          registry: "https://clawhub.ai",
+          ok: true,
+          decision: "pass",
+          requestedSlug: "self-improving-agent",
+          requestedVersion: "3.0.24",
+          publisherHandle: "pskoett",
+          securityStatus: "clean",
+          securityPassed: true,
+        }),
+      ],
+    });
+  });
+
+  it("keeps the bulk miss when owner-qualified verification is unavailable", async () => {
+    buildWorkspaceSkillStatusMock.mockReturnValue({
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/openclaw/skills",
+      skills: [
+        {
+          name: "self-improvement",
+          skillKey: "self-improvement",
+          clawhub: {
+            status: "linked",
+            valid: true,
+            registry: "https://clawhub.ai",
+            slug: "self-improving-agent",
+            ownerHandle: "pskoett",
+            installedVersion: "3.0.24",
+            installedAt: 123,
+          },
+        },
+      ],
+    });
+    fetchClawHubSkillSecurityVerdictsMock.mockResolvedValue({
+      schema: "clawhub.skill.security-verdicts.v1",
+      items: [
+        {
+          ok: false,
+          decision: "fail",
+          reasons: ["skill.not_found"],
+          requestedSlug: "self-improving-agent",
+          requestedVersion: "3.0.24",
+          error: { code: "skill_not_found", message: "Skill not found" },
+        },
+      ],
+    });
+    fetchClawHubSkillVerificationMock.mockRejectedValue(new Error("registry unavailable"));
+
+    const { ok, response, error } = await callSkillsHandler("skills.securityVerdicts", {});
+
+    expect(error).toBeUndefined();
+    expect(ok).toBe(true);
+    expect(response).toEqual({
+      schema: "openclaw.skills.security-verdicts.v1",
+      items: [
+        expect.objectContaining({
+          ok: false,
+          decision: "fail",
+          error: { code: "skill_not_found", message: "Skill not found" },
+        }),
+      ],
+    });
   });
 
   it("does not passively fetch verdicts from a non-default registry", async () => {
