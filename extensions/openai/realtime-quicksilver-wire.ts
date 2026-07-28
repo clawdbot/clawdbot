@@ -288,9 +288,7 @@ function decodeOpenAIQuicksilverCallId(params: {
     if (isOpenAIQuicksilverCallId(sessionId)) {
       return sessionId;
     }
-    throw new OpenAIQuicksilverCallError(
-      "GPT-Live call response Location has no valid call id",
-    );
+    throw new OpenAIQuicksilverCallError("GPT-Live call response Location has no valid call id");
   }
   return callId;
 }

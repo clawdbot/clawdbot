@@ -38,9 +38,7 @@ export type OpenAIQuicksilverSocketFactory = (
 ) => OpenAIQuicksilverSocket;
 
 type OpenAIQuicksilverBufferedFrame = { data: RawData; isBinary: boolean };
-type OpenAIQuicksilverTerminalEvent =
-  | { kind: "error"; error: Error }
-  | { kind: "close" };
+type OpenAIQuicksilverTerminalEvent = { kind: "error"; error: Error } | { kind: "close" };
 
 type OpenAIQuicksilverConnectedSideband = {
   socket: OpenAIQuicksilverSocket;
