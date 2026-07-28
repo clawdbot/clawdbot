@@ -482,8 +482,12 @@ describe("ChatLog", () => {
       "Second missing prompt.",
       "Fifth persisted reply.",
     ];
-    for (let index = 1; index < messages.length; index += 1) {
-      expect(rendered.indexOf(messages[index - 1])).toBeLessThan(rendered.indexOf(messages[index]));
+    let previousMessage: string | undefined;
+    for (const message of messages) {
+      if (previousMessage !== undefined) {
+        expect(rendered.indexOf(previousMessage)).toBeLessThan(rendered.indexOf(message));
+      }
+      previousMessage = message;
     }
   });
 
