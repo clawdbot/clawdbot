@@ -36,6 +36,8 @@ type CodeModeRunState = {
   // True only when every future bridge call is enforced read-only before execution.
   replaySafe: boolean;
   output: unknown[];
+  // Retain all output for cumulative limits, but never replay blocks already returned to the model.
+  deliveredOutputCount: number;
   createdAt: number;
   expiresAt: number;
   agentWaitRetainUntil?: number;
@@ -195,6 +197,7 @@ export function snapshotState(params: {
   runtime: ToolSearchRuntime;
   namespaceRuntime: CodeModeNamespaceRuntime;
   output: unknown[];
+  deliveredOutputCount?: number;
   replaySafe: boolean;
   settlementMode: CodeModeSettlementMode;
   signal?: AbortSignal;
@@ -322,6 +325,7 @@ export function storeSnapshotState(params: {
   runtime: ToolSearchRuntime;
   namespaceRuntime: CodeModeNamespaceRuntime;
   output: unknown[];
+  deliveredOutputCount?: number;
 }) {
   const now = Date.now();
   const expiresAt = resolveCodeModeSnapshotExpiresAt(now, params.config.snapshotTtlSeconds);
@@ -348,6 +352,7 @@ export function storeSnapshotState(params: {
     settlementMode: params.settlementMode,
     replaySafe: params.replaySafe,
     output: params.output,
+    deliveredOutputCount: params.output.length,
     createdAt: now,
     expiresAt,
     agentWaitRetainUntil,
@@ -361,7 +366,7 @@ export function storeSnapshotState(params: {
     reason: codeModeWaitingReason(params.pending),
     pendingToolCalls: pendingToolCalls(params.pending),
     replaySafe: params.replaySafe,
-    output: params.output,
+    output: params.output.slice(params.deliveredOutputCount ?? 0),
     telemetry: telemetry(params.runtime),
   };
 }
