@@ -534,36 +534,6 @@ function requestSessionFileSet(
   });
 }
 
-function subscribeSessionGateway(client: SessionRequestClient): Promise<void> {
-  return client.request("sessions.subscribe", {}).then(() => undefined);
-}
-
-function resetSessionMessageSubscriptionRegistry(client: GatewayBrowserClient): void {
-  resetGatewaySessionMessageSubscriptionCoordinator(client);
-}
-
-function acquireSessionMessageSubscription(
-  client: GatewayBrowserClient,
-  key: string,
-  options: { agentId?: string | null; includeApprovals?: boolean } = {},
-  onRelease: (subscription: SessionMessageSubscription) => void = () => undefined,
-): Promise<SessionMessageSubscription> {
-  const normalizedKey = key.trim();
-  const agentId =
-    isUiGlobalSessionKey(normalizedKey) && options.agentId?.trim()
-      ? normalizeAgentId(options.agentId)
-      : null;
-  return getGatewaySessionMessageSubscriptionCoordinator(client, {
-    keysEquivalent: areUiSessionKeysEquivalent,
-  }).acquire(normalizedKey, {
-    agentId,
-    ...(options.includeApprovals ? { includeApprovals: true } : {}),
-    onRelease,
-  });
-}
-
-const releaseSessionMessageSubscription = releaseGatewaySessionMessageSubscription;
-
 async function listSessionCheckpoints(
   client: SessionRequestClient,
   key: string,
@@ -1686,6 +1656,11 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     return isCurrentConnection(scope) ? result : null;
   };
 
+  const unsubscribeMessages = async (subscription: SessionMessageSubscription): Promise<void> => {
+    await releaseGatewaySessionMessageSubscription(subscription);
+    ownedMessageSubscriptions.delete(subscription);
+  };
+
   const subscribeMessages = async (
     key: string,
     options: { agentId?: string | null; includeApprovals?: boolean } = {},
@@ -1694,21 +1669,24 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (!scope) {
       throw new Error("Session message subscription requires an active Gateway connection");
     }
-    const subscription = await acquireSessionMessageSubscription(
-      scope.client,
-      key,
-      options,
-      (released) => ownedMessageSubscriptions.delete(released),
-    );
+    const normalizedKey = key.trim();
+    const agentId =
+      isUiGlobalSessionKey(normalizedKey) && options.agentId?.trim()
+        ? normalizeAgentId(options.agentId)
+        : null;
+    const subscription = await getGatewaySessionMessageSubscriptionCoordinator(scope.client, {
+      keysEquivalent: areUiSessionKeysEquivalent,
+    }).acquire(normalizedKey, {
+      agentId,
+      ...(options.includeApprovals ? { includeApprovals: true } : {}),
+    });
     ownedMessageSubscriptions.add(subscription);
     if (!isCurrentConnection(scope)) {
-      await releaseSessionMessageSubscription(subscription).catch(() => undefined);
+      await unsubscribeMessages(subscription).catch(() => undefined);
       throw new Error("Session message subscription completed on a replaced Gateway connection");
     }
     return subscription;
   };
-
-  const unsubscribeMessages = releaseSessionMessageSubscription;
 
   const listCheckpoints = async (
     key: string,
@@ -1833,7 +1811,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       clearEventRefreshTimer();
       connectionEpoch += 1;
       if (previousClient) {
-        resetSessionMessageSubscriptionRegistry(previousClient);
+        resetGatewaySessionMessageSubscriptionCoordinator(previousClient);
       }
       ownedMessageSubscriptions.clear();
       invalidateGroupsLoad();
@@ -1872,7 +1850,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       subscribedClient = scope.client;
       void (async () => {
         try {
-          await subscribeSessionGateway(scope.client);
+          await scope.client.request("sessions.subscribe", {});
         } catch (error) {
           if (isCurrentConnection(scope)) {
             publish({ ...state, error: String(error) });
@@ -2006,7 +1984,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         globalThis.removeEventListener("pagehide", flushEventRefresh);
       }
       for (const subscription of ownedMessageSubscriptions) {
-        void releaseSessionMessageSubscription(subscription).catch(() => undefined);
+        void unsubscribeMessages(subscription).catch(() => undefined);
       }
       disposed = true;
       connectionEpoch += 1;

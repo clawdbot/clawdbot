@@ -26,6 +26,10 @@ export type SessionProjectionScope = {
   activeLeafEntryId?: string | null;
 };
 
+export type SessionProjectionSnapshotOptions = {
+  shouldIncludeMessage?: (message: unknown) => boolean;
+};
+
 export type SessionProjectionRunStatus =
   | "streaming"
   | "completed"
@@ -42,6 +46,17 @@ export type SessionProjectionRun = {
   stopReason?: string;
   errorKind?: string;
   errorMessage?: string;
+};
+
+export type SessionProjectionGatewayRunEvent = {
+  state?: unknown;
+  yielded?: unknown;
+} & Partial<Record<"runId" | "message" | "stopReason" | "errorKind" | "errorMessage", unknown>>;
+
+export type SessionProjectionRunTransition = {
+  projection: SessionProjectionState;
+  previousRun: SessionProjectionRun | undefined;
+  currentRun: SessionProjectionRun | undefined;
 };
 
 export type SessionProjectionEntry = {
@@ -63,41 +78,41 @@ export type SessionProjectionState = {
 const MAX_TRACKED_SESSION_RUNS = 200;
 const RETAINED_SESSION_RUNS = 150;
 const MAX_ACCEPTED_FINAL_MESSAGES_PER_RUN = 32;
+const SESSION_PROJECTION_SCOPE_KEYS = [
+  "sessionKey",
+  "sessionId",
+  "agentId",
+  "lifecycleRevision",
+  "activeLeafEntryId",
+] as const;
 
-type ScopedSessionProjectionEvent = {
-  scope?: SessionProjectionScope;
-  sessionKey?: string;
-  sessionId?: string;
-  agentId?: string;
-  lifecycleRevision?: number | string;
-  activeLeafEntryId?: string | null;
-};
+type ScopedSessionProjectionEvent = SessionProjectionScope & { scope?: SessionProjectionScope };
 
 export type SessionProjectionEvent = ScopedSessionProjectionEvent &
   (
-    | { type: "snapshotLoaded"; messages: readonly unknown[] }
+    | {
+        type: "snapshotLoaded";
+        messages: readonly unknown[];
+        options?: SessionProjectionSnapshotOptions;
+      }
     | ({
         type: "messagePersisted";
         message: unknown;
         envelope?: SessionMessageEnvelope;
       } & SessionMessageEnvelope)
+    | { type: "sendPending"; message: unknown; runId?: string; idempotencyKey?: string }
     | {
-        type: "sendPending";
-        message: unknown;
+        type: "sendAcknowledged";
         runId?: string;
         idempotencyKey?: string;
+        previousRunId?: string;
       }
-    | { type: "sendAcknowledged"; runId?: string; idempotencyKey?: string }
+    | { type: "sendFailed"; runId: string }
     | { type: "runDelta"; runId: string; message?: unknown }
-    | {
+    | (Omit<SessionProjectionRun, "acceptedFinalMessageIdentities"> & {
         type: "runTerminal";
-        runId: string;
         status: Exclude<SessionProjectionRunStatus, "streaming">;
-        message?: unknown;
-        stopReason?: string;
-        errorKind?: string;
-        errorMessage?: string;
-      }
+      })
     | { type: "sessionReset" }
     | { type: "transportGap" }
     | { type: "reconnected" }
@@ -110,11 +125,7 @@ function readRecord(value: unknown): Record<string, unknown> | null {
 }
 
 function readNonemptyString(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const normalized = value.trim();
-  return normalized || null;
+  return typeof value === "string" ? value.trim() || null : null;
 }
 
 function readPositiveSafeInteger(value: unknown): number | null {
@@ -172,12 +183,26 @@ export function readSessionMessageIdentity(
   };
 }
 
+/** Local turns have no durable transcript metadata beyond their own optional send key. */
+export function isLocallyOptimisticSessionMessage(message: unknown): boolean {
+  const identity = readSessionMessageIdentity(message);
+  if (!identity || (identity.role !== "user" && identity.role !== "assistant")) {
+    return false;
+  }
+  const metadata = readRecord(readRecord(message)?.["__openclaw"]);
+  return !metadata || Object.keys(metadata).every((key) => key === "idempotencyKey");
+}
+
 function createEntry(
   message: unknown,
   options?: { envelope?: SessionMessageEnvelope; live?: boolean; pendingRunId?: string | null },
 ): SessionProjectionEntry {
   const identity = readSessionMessageIdentity(message, options?.envelope);
-  const pendingRunId = normalizeSessionProjectionRunId(options?.pendingRunId);
+  const inferredPendingRunId =
+    options?.live !== true && isLocallyOptimisticSessionMessage(message) ? identity?.runId : null;
+  const pendingRunId = normalizeSessionProjectionRunId(
+    options?.pendingRunId ?? inferredPendingRunId,
+  );
   return {
     message,
     identity,
@@ -187,11 +212,34 @@ function createEntry(
   };
 }
 
+function createProjectionEntries(messages: readonly unknown[]): SessionProjectionEntry[] {
+  let pendingUserRunId: string | null = null;
+  return messages.map((message) => {
+    const entry = createEntry(message);
+    if (entry.identity?.role === "user") {
+      pendingUserRunId = entry.pending ? entry.pendingRunId : null;
+      return entry;
+    }
+    if (
+      pendingUserRunId &&
+      entry.identity?.role === "assistant" &&
+      !entry.pending &&
+      isLocallyOptimisticSessionMessage(message)
+    ) {
+      return createEntry(message, { pendingRunId: pendingUserRunId });
+    }
+    if (!isLocallyOptimisticSessionMessage(message)) {
+      pendingUserRunId = null;
+    }
+    return entry;
+  });
+}
+
 export function createSessionProjection(
   scope: SessionProjectionScope = {},
   messages: readonly unknown[] = [],
 ): SessionProjectionState {
-  const entries = messages.map((message) => createEntry(message));
+  const entries = createProjectionEntries(messages);
   return {
     scope: { ...scope },
     entries,
@@ -202,31 +250,19 @@ export function createSessionProjection(
 }
 
 function scopesMatch(left: SessionProjectionScope, right: SessionProjectionScope): boolean {
-  const keys = [
-    "sessionKey",
-    "sessionId",
-    "agentId",
-    "lifecycleRevision",
-    "activeLeafEntryId",
-  ] as const;
-  return keys.every(
+  return SESSION_PROJECTION_SCOPE_KEYS.every(
     (key) => left[key] === undefined || right[key] === undefined || left[key] === right[key],
   );
 }
 
 function readEventScope(event: ScopedSessionProjectionEvent): SessionProjectionScope {
-  return {
-    ...event.scope,
-    ...(event.sessionKey === undefined ? {} : { sessionKey: event.sessionKey }),
-    ...(event.sessionId === undefined ? {} : { sessionId: event.sessionId }),
-    ...(event.agentId === undefined ? {} : { agentId: event.agentId }),
-    ...(event.lifecycleRevision === undefined
-      ? {}
-      : { lifecycleRevision: event.lifecycleRevision }),
-    ...(event.activeLeafEntryId === undefined
-      ? {}
-      : { activeLeafEntryId: event.activeLeafEntryId }),
-  };
+  const scope: SessionProjectionScope = { ...event.scope };
+  for (const key of SESSION_PROJECTION_SCOPE_KEYS) {
+    if (event[key] !== undefined) {
+      Object.assign(scope, { [key]: event[key] });
+    }
+  }
+  return scope;
 }
 
 function sameTranscriptIdentity(
@@ -246,22 +282,41 @@ function sameTranscriptIdentity(
     // Partial provider IDs are unsafe, but a same-scope persisted sequence is authoritative.
     return left.sequence !== null && right.sequence !== null && left.sequence === right.sequence;
   }
-  if (left.id && right.id) {
-    return left.id === right.id;
-  }
-  // A missing durable ID cannot adopt another canonical row simply because a sequence agrees.
   if (left.id || right.id) {
-    return false;
-  }
-  if (left.sequence !== null && right.sequence !== null) {
-    return left.sequence === right.sequence;
+    // A missing durable ID cannot adopt another canonical row by sequence alone.
+    return Boolean(left.id && right.id && left.id === right.id);
   }
   // A run can publish several durable messages; its ID identifies ownership, not a row.
-  return false;
+  return left.sequence !== null && right.sequence !== null && left.sequence === right.sequence;
 }
 
-function entryMatches(left: SessionProjectionEntry, right: SessionProjectionEntry): boolean {
+function entryMatches(
+  left: SessionProjectionEntry,
+  right: SessionProjectionEntry,
+  allowSnapshotPromotion = false,
+): boolean {
   if (sameTranscriptIdentity(left.identity, right.identity)) {
+    return true;
+  }
+  const persisted = left.identity;
+  const observed = right.identity;
+  if (
+    allowSnapshotPromotion &&
+    right.live &&
+    persisted &&
+    observed &&
+    persisted.role === observed.role &&
+    !persisted.isImported &&
+    !observed.isImported &&
+    persisted.id &&
+    !observed.id &&
+    ((persisted.sequence !== null && persisted.sequence === observed.sequence) ||
+      (persisted.role === "assistant" &&
+        observed.sequence === null &&
+        persisted.runId !== null &&
+        persisted.runId === observed.runId))
+  ) {
+    // Only current-scope history can promote an observed native sequence or assistant run.
     return true;
   }
   if (left.pending && right.pending) {
@@ -284,31 +339,6 @@ function entryMatches(left: SessionProjectionEntry, right: SessionProjectionEntr
   );
 }
 
-function snapshotEntryMatches(
-  snapshot: SessionProjectionEntry,
-  current: SessionProjectionEntry,
-): boolean {
-  if (entryMatches(snapshot, current)) {
-    return true;
-  }
-  const persisted = snapshot.identity;
-  const observed = current.identity;
-  // Only current-scope history may promote an observed, sequence-only native live row.
-  return Boolean(
-    current.live &&
-    !current.pending &&
-    persisted &&
-    observed &&
-    persisted.role === observed.role &&
-    !persisted.isImported &&
-    !observed.isImported &&
-    persisted.id &&
-    !observed.id &&
-    persisted.sequence !== null &&
-    persisted.sequence === observed.sequence,
-  );
-}
-
 function withEntries(
   state: SessionProjectionState,
   entries: readonly SessionProjectionEntry[],
@@ -319,18 +349,28 @@ function withEntries(
 function insertEntry(
   entries: readonly SessionProjectionEntry[],
   incoming: SessionProjectionEntry,
+  runs?: Readonly<Record<string, SessionProjectionRun>>,
 ): SessionProjectionEntry[] {
   const sequence = incoming.identity?.sequence;
-  if (sequence !== undefined && sequence !== null) {
-    const nextIndex = entries.findIndex((entry) => {
-      const candidate = entry.identity?.sequence;
-      return candidate !== undefined && candidate !== null && candidate > sequence;
-    });
-    if (nextIndex >= 0) {
-      return [...entries.slice(0, nextIndex), incoming, ...entries.slice(nextIndex)];
-    }
+  let nextIndex =
+    sequence === undefined || sequence === null
+      ? -1
+      : entries.findIndex((entry) => {
+          const candidate = entry.identity?.sequence;
+          return candidate !== undefined && candidate !== null && candidate > sequence;
+        });
+  if (nextIndex < 0 && incoming.identity?.role === "user" && incoming.identity.runId) {
+    const runId = incoming.identity.runId;
+    const terminalMessage = runs?.[runId]?.message;
+    nextIndex = entries.findIndex(
+      (entry) =>
+        entry.identity?.role === "assistant" &&
+        (entry.identity.runId === runId || entry.message === terminalMessage),
+    );
   }
-  return [...entries, incoming];
+  return nextIndex < 0
+    ? [...entries, incoming]
+    : [...entries.slice(0, nextIndex), incoming, ...entries.slice(nextIndex)];
 }
 
 export function projectLiveSessionMessage(
@@ -348,11 +388,29 @@ export function projectLiveSessionMessage(
   }
   const existingIndex = state.entries.findIndex((entry) => entryMatches(entry, incoming));
   if (existingIndex < 0) {
-    return withEntries(state, insertEntry(state.entries, incoming));
+    return withEntries(state, insertEntry(state.entries, incoming, state.runs));
   }
   const existing = state.entries[existingIndex];
   if (existing && existing.message === message && existing.live && !existing.pending) {
     return state;
+  }
+  if (existing?.pending && incoming.identity.sequence !== null) {
+    const sequence = incoming.identity.sequence;
+    const violatesOrder = state.entries.some(
+      ({ identity }, index) =>
+        identity?.sequence != null &&
+        (index < existingIndex ? identity.sequence > sequence : identity.sequence < sequence),
+    );
+    return withEntries(
+      state,
+      violatesOrder
+        ? insertEntry(
+            state.entries.filter((_, index) => index !== existingIndex),
+            incoming,
+            state.runs,
+          )
+        : state.entries.toSpliced(existingIndex, 1, incoming),
+    );
   }
   return withEntries(state, [
     ...state.entries.slice(0, existingIndex),
@@ -366,29 +424,30 @@ export function reconcileSessionProjectionSnapshot(
   state: SessionProjectionState,
   messages: readonly unknown[],
   scope: SessionProjectionScope = {},
+  options: SessionProjectionSnapshotOptions = {},
 ): SessionProjectionState {
+  const visibleMessages = options.shouldIncludeMessage
+    ? messages.filter(options.shouldIncludeMessage)
+    : messages;
   if (!scopesMatch(state.scope, scope)) {
-    return createSessionProjection(scope, messages);
+    return createSessionProjection(scope, visibleMessages);
   }
-  let entries = messages.map((message) => createEntry(message));
+  let entries = createProjectionEntries(visibleMessages);
   for (const current of state.entries) {
     if (
       (!current.live && !current.pending) ||
-      entries.some((entry) => snapshotEntryMatches(entry, current))
+      options.shouldIncludeMessage?.(current.message) === false ||
+      entries.filter((entry) => entryMatches(entry, current, true)).length === 1
     ) {
       continue;
     }
-    entries = insertEntry(entries, current);
+    entries = insertEntry(entries, current, state.runs);
   }
   return {
     ...withEntries(state, entries),
     scope: { ...state.scope, ...scope },
     hasTransportGap: false,
   };
-}
-
-export function getSessionProjectionMessages(state: SessionProjectionState): readonly unknown[] {
-  return state.messages;
 }
 
 function hasDisplayableSessionMessage(message: unknown): boolean {
@@ -399,23 +458,20 @@ function hasDisplayableSessionMessage(message: unknown): boolean {
   if (!record) {
     return false;
   }
-  if (typeof record.content === "string" && record.content.trim().length > 0) {
-    return true;
-  }
-  if (Array.isArray(record.content)) {
-    const hasDisplayableBlock = record.content.some((block) => {
+  const displayableBlocks =
+    Array.isArray(record.content) &&
+    record.content.some((block) => {
       const entry = readRecord(block);
-      if (!entry) {
-        return typeof block === "string" && block.trim().length > 0;
-      }
-      return entry.type !== "text" || readNonemptyString(entry.text) !== null;
+      return entry
+        ? entry.type !== "text" || readNonemptyString(entry.text) !== null
+        : typeof block === "string" && block.trim().length > 0;
     });
-    if (hasDisplayableBlock) {
-      return true;
-    }
-  }
   const media = readRecord(record["__openclaw"])?.media;
-  return Array.isArray(media) && media.length > 0;
+  return Boolean(
+    (typeof record.content === "string" && record.content.trim()) ||
+    displayableBlocks ||
+    (Array.isArray(media) && media.length > 0),
+  );
 }
 
 function readSessionProjectionFinalMessageIdentity(message: unknown): string | null {
@@ -457,16 +513,12 @@ export function hasSessionProjectionAcceptedFinal(
   run: SessionProjectionRun | undefined,
   message: unknown,
 ): boolean {
-  if (!run) {
-    return false;
-  }
   const identity = readSessionProjectionFinalMessageIdentity(message);
-  if (!identity) {
-    return false;
-  }
-  return (
-    run.acceptedFinalMessageIdentities?.includes(identity) === true ||
-    readSessionProjectionFinalMessageIdentity(run.message) === identity
+  return Boolean(
+    identity &&
+    run &&
+    (run.acceptedFinalMessageIdentities?.includes(identity) ||
+      readSessionProjectionFinalMessageIdentity(run.message) === identity),
   );
 }
 
@@ -509,10 +561,7 @@ function updateRun(
       incomingFinalIdentity !== null &&
       !hasSessionProjectionAcceptedFinal(current, incoming.message);
     // Distinct valid finals are remembered; the first delivered reply remains immutable.
-    const recoverMessage =
-      acceptFinal &&
-      !hasDisplayableSessionMessage(current.message) &&
-      hasDisplayableSessionMessage(incoming.message);
+    const recoverMessage = acceptFinal && !hasDisplayableSessionMessage(current.message);
     const recoverError =
       readNonemptyString(current.errorMessage) === null && incomingErrorMessage !== null;
     if (!acceptFinal && !recoverError) {
@@ -581,25 +630,15 @@ export function reduceSessionProjection(
   const scope = readEventScope(event);
   if (event.type === "snapshotLoaded") {
     // A delayed response cannot switch this reducer back into a reset or abandoned epoch.
-    if (!scopesMatch(state.scope, scope)) {
-      return state;
-    }
-    return reconcileSessionProjectionSnapshot(state, event.messages, scope);
+    return scopesMatch(state.scope, scope)
+      ? reconcileSessionProjectionSnapshot(state, event.messages, scope, event.options)
+      : state;
   }
   if (event.type === "sessionReset") {
-    if (
-      !scopesMatch(
-        {
-          sessionKey: state.scope.sessionKey,
-          sessionId: state.scope.sessionId,
-          agentId: state.scope.agentId,
-        },
-        { sessionKey: scope.sessionKey, sessionId: scope.sessionId, agentId: scope.agentId },
-      )
-    ) {
-      return state;
-    }
-    return createSessionProjection({ ...state.scope, ...scope });
+    const { sessionKey, sessionId, agentId } = state.scope;
+    return scopesMatch({ sessionKey, sessionId, agentId }, scope)
+      ? createSessionProjection({ ...state.scope, ...scope })
+      : state;
   }
   if (!scopesMatch(state.scope, scope)) {
     return state;
@@ -614,15 +653,38 @@ export function reduceSessionProjection(
         return state;
       }
       const index = state.entries.findIndex((entry) => entryMatches(entry, incoming));
-      return index < 0 ? withEntries(state, insertEntry(state.entries, incoming)) : state;
+      return index < 0
+        ? withEntries(state, insertEntry(state.entries, incoming, state.runs))
+        : state;
     }
     case "sendAcknowledged": {
       const runId = normalizeSessionProjectionRunId(event.idempotencyKey ?? event.runId);
-      if (!runId) {
+      const previousRunId = normalizeSessionProjectionRunId(event.previousRunId);
+      if (!runId || !previousRunId || previousRunId === runId) {
+        // An acknowledgement is not transcript evidence; retain pending until persistence.
         return state;
       }
-      // An acknowledgement is not persisted transcript evidence; retain the optimistic turn.
-      return state;
+      let changed = false;
+      const entries = state.entries.flatMap((entry) => {
+        if (!entry.pending || entry.pendingRunId !== previousRunId) {
+          return [entry];
+        }
+        changed = true;
+        const rekeyed = { ...entry, pendingRunId: runId };
+        return state.entries.some(
+          (candidate) => !candidate.pending && entryMatches(rekeyed, candidate),
+        )
+          ? []
+          : [rekeyed];
+      });
+      return changed ? withEntries(state, entries) : state;
+    }
+    case "sendFailed": {
+      const runId = normalizeSessionProjectionRunId(event.runId);
+      const entries = state.entries.filter(
+        (entry) => !entry.pending || entry.pendingRunId !== runId,
+      );
+      return entries.length === state.entries.length ? state : withEntries(state, entries);
     }
     case "runDelta":
       return updateRun(state, {
@@ -647,4 +709,50 @@ export function reduceSessionProjection(
     default:
       return state;
   }
+}
+
+/** Normalizes Gateway run envelopes once for every browser and terminal adapter. */
+export function reduceSessionProjectionRunEvent(
+  projection: SessionProjectionState,
+  event: SessionProjectionGatewayRunEvent,
+  scope: SessionProjectionScope = {},
+): SessionProjectionRunTransition | null {
+  const runId = readNonemptyString(event.runId);
+  const eventState = event.state;
+  if (
+    !runId ||
+    typeof eventState !== "string" ||
+    !["delta", "final", "error", "aborted"].includes(eventState)
+  ) {
+    return null;
+  }
+  const message = event.message;
+  const stopReason =
+    readNonemptyString(event.stopReason) ?? readNonemptyString(readRecord(message)?.stopReason);
+  const errorKind = readNonemptyString(event.errorKind);
+  const base = { runId, ...(message === undefined ? {} : { message }), scope };
+  const action: SessionProjectionEvent =
+    eventState === "delta"
+      ? { type: "runDelta", ...base }
+      : {
+          type: "runTerminal",
+          ...base,
+          status:
+            eventState === "aborted"
+              ? "aborted"
+              : eventState === "error"
+                ? errorKind === "timeout"
+                  ? "timeout"
+                  : "error"
+                : event.yielded === true && stopReason === "end_turn"
+                  ? "yielded"
+                  : stopReason === "error"
+                    ? "error"
+                    : "completed",
+          ...(stopReason === null ? {} : { stopReason }),
+          ...(errorKind === null ? {} : { errorKind }),
+          ...(typeof event.errorMessage === "string" ? { errorMessage: event.errorMessage } : {}),
+        };
+  const next = reduceSessionProjection(projection, action);
+  return { projection: next, previousRun: projection.runs[runId], currentRun: next.runs[runId] };
 }

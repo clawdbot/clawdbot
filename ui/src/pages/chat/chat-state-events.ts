@@ -1,5 +1,4 @@
 import {
-  normalizeSessionProjectionRunId,
   readSessionMessageIdentity,
   readSessionMessageSequence,
   reduceSessionProjection,
@@ -44,11 +43,7 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { handleBackgroundTasksEvent } from "./components/chat-background-tasks.ts";
-import {
-  getChatSessionProjection,
-  rememberLiveAuthoritativeUserMessage,
-  setChatSessionProjection,
-} from "./history-merge.ts";
+import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
 import {
   reconcileChatRunFromCurrentSessionRow,
   reconcileChatRunFromSessionRow,
@@ -56,10 +51,7 @@ import {
 } from "./run-lifecycle.ts";
 import { preserveQueuedUserTurn, retireSteeredChipsForTerminalRun } from "./steer-lifecycle.ts";
 import { isAckedSteeredChip } from "./steered-chip.ts";
-import {
-  isLiveTerminalForRun,
-  rememberAuthoritativeTerminal,
-} from "./terminal-message-identity.ts";
+import { rememberAuthoritativeTerminal } from "./terminal-message-identity.ts";
 import { handleAgentEvent, handleSessionOperationEvent } from "./tool-stream.ts";
 
 function sessionMessageMatchesChat(
@@ -123,28 +115,11 @@ function applyLiveUserMessage(state: ChatPageHost, payload: unknown): void {
     },
   };
   const scope = readChatSessionProjectionScope(state);
-  let projection = reduceSessionProjection(
+  const projection = reduceSessionProjection(
     getChatSessionProjection(state, state.chatMessages, scope),
     { type: "messagePersisted", message, envelope: event, scope },
   );
-  const ownerRunId = incoming.runId ?? normalizeSessionProjectionRunId(event.clientRunId);
-  const terminalIndex = ownerRunId
-    ? projection.entries.findIndex((entry) => isLiveTerminalForRun(entry.message, ownerRunId))
-    : -1;
-  const messageIndex = projection.entries.findIndex((entry) => entry.message === message);
-  if (terminalIndex >= 0 && messageIndex > terminalIndex) {
-    // A persisted prompt can arrive after its run's streamed terminal; replay
-    // must still place the canonical user turn before its assistant reply.
-    const entry = projection.entries[messageIndex];
-    if (entry) {
-      const entries = projection.entries
-        .toSpliced(messageIndex, 1)
-        .toSpliced(terminalIndex, 0, entry);
-      projection = { ...projection, entries, messages: entries.map((item) => item.message) };
-    }
-  }
   setChatSessionProjection(state, projection);
-  rememberLiveAuthoritativeUserMessage(message, projection);
   state.chatMessages = [...projection.messages];
 }
 
