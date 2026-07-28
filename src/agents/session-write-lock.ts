@@ -1348,17 +1348,31 @@ export async function cleanStaleLockFiles(params: {
   return { locks, cleaned };
 }
 
-export async function acquireSessionWriteLock(params: {
+type AcquireSessionWriteLockBaseParams = {
   sessionFile: string;
   timeoutMs?: number;
   staleMs?: number;
   maxHoldMs?: number;
-  /** Process-local identity for intentional nesting on retained file-lock targets. */
-  reentrantOwner?: string;
-  allowReentrant?: boolean;
   signal?: AbortSignal;
-  targetKind?: "file" | "session-key";
-}): Promise<{
+};
+
+type AcquireSessionWriteLockParams = AcquireSessionWriteLockBaseParams &
+  (
+    | {
+        targetKind: "session-key";
+        /** Reuse the process-local SQLite lease held for this session key. */
+        allowReentrant?: boolean;
+        reentrantOwner?: never;
+      }
+    | {
+        targetKind?: "file";
+        /** Process-local identity for intentional nesting on retained file-lock targets. */
+        reentrantOwner?: string;
+        allowReentrant?: never;
+      }
+  );
+
+export async function acquireSessionWriteLock(params: AcquireSessionWriteLockParams): Promise<{
   assertOwned?: () => void;
   release: () => Promise<void>;
 }> {
@@ -1374,7 +1388,6 @@ export async function acquireSessionWriteLock(params: {
     throw error;
   };
   throwIfAborted();
-  const allowReentrant = params.allowReentrant ?? false;
   const defaultOptions = resolveSessionWriteLockOptions();
   const timeoutMs = resolvePositiveMs(params.timeoutMs, defaultOptions.timeoutMs, {
     allowInfinity: true,
@@ -1387,7 +1400,7 @@ export async function acquireSessionWriteLock(params: {
       sessionKey: params.sessionFile,
       timeoutMs,
       maxHoldMs,
-      allowReentrant,
+      allowReentrant: params.allowReentrant ?? false,
       ...(params.signal ? { signal: params.signal } : {}),
     });
   }

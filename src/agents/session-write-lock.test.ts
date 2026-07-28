@@ -157,7 +157,6 @@ async function expectActiveInProcessLockIsNotReclaimed(params?: {
       acquireSessionWriteLock({
         sessionFile,
         timeoutMs: 5,
-        allowReentrant: false,
       }),
     ).rejects.toThrow(/session file locked/);
     await lock.release();
@@ -732,7 +731,6 @@ describe("acquireSessionWriteLock", () => {
           sessionFile,
           timeoutMs: 5,
           staleMs: 60_000,
-          allowReentrant: false,
         }),
       ).rejects.toThrow(/session file locked/);
       await expect(fs.access(lockPath)).resolves.toBeUndefined();
