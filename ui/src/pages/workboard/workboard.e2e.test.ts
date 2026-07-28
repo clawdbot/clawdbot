@@ -105,6 +105,16 @@ async function chooseWorkboardSelectFieldOption(
   }, optionValue);
 }
 
+async function setWorkboardDraftField(
+  scope: Page | Locator,
+  label: string,
+  value: string,
+): Promise<void> {
+  const input = scope.getByLabel(label);
+  await input.fill(value);
+  await expect.poll(() => input.inputValue()).toBe(value);
+}
+
 async function waitForRequests(
   gateway: MockGatewayControls,
   method: string,
@@ -440,10 +450,10 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       const createDialog = writable.page.getByRole("dialog", { name: "New card" });
       const createForm = writable.page.locator('openclaw-modal-dialog[label="New card"]');
       await expect.poll(() => createDialog.isVisible()).toBe(true);
-      await createForm.getByLabel("Title").fill(createdCard.title);
-      await createForm.getByLabel("Notes").fill(createdCard.notes ?? "");
+      await setWorkboardDraftField(createForm, "Title", createdCard.title);
+      await setWorkboardDraftField(createForm, "Notes", createdCard.notes ?? "");
       await chooseWorkboardSelectOption(createForm, "Thread", linkedSessionName);
-      await createForm.getByLabel("Labels").fill("ui, proof");
+      await setWorkboardDraftField(createForm, "Labels", "ui, proof");
       await captureScreenshot(writable.page, artifacts, "02-create-dialog");
       const createBefore = (await writableGateway.getRequests("workboard.cards.create")).length;
       await createForm.getByRole("button", { name: /^Create$/u }).click();
@@ -495,10 +505,10 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       const editDialog = writable.page.getByRole("dialog", { name: "Edit card" });
       const editForm = writable.page.locator('openclaw-modal-dialog[label="Edit card"]');
       await expect.poll(() => editDialog.isVisible()).toBe(true);
-      await editForm.getByLabel("Title").fill(editedCard.title);
-      await editForm.getByLabel("Notes").fill(editedCard.notes ?? "");
+      await setWorkboardDraftField(editForm, "Title", editedCard.title);
+      await setWorkboardDraftField(editForm, "Notes", editedCard.notes ?? "");
       await chooseWorkboardSelectOption(editForm, "Priority", "High");
-      await editForm.getByLabel("Labels").fill("ui, proof, e2e");
+      await setWorkboardDraftField(editForm, "Labels", "ui, proof, e2e");
       const updateBeforeEdit = (await writableGateway.getRequests("workboard.cards.update")).length;
       await editForm.getByRole("button", { name: /^Save$/u }).click();
       const editRequest = await waitForNextRequest(
