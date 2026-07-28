@@ -372,7 +372,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
             ),
           ),
         )
-        .toEqual(["General", "Gateway Host"]);
+        .toEqual(["Gateway", "Gateway Host"]);
       await settingsSearch.fill("mcp");
       await expect
         .poll(() =>
