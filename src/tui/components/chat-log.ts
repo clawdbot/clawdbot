@@ -373,7 +373,11 @@ export class ChatLog extends Container {
     this.committedAssistantText.delete(effectiveRunId);
     this.latestAssistantText.delete(effectiveRunId);
     if (existing) {
-      existing.setText(segmentText);
+      if (segmentText) {
+        existing.setText(segmentText);
+      } else {
+        this.removeChild(existing);
+      }
       this.streamingRuns.delete(effectiveRunId);
       return;
     }

@@ -174,6 +174,21 @@ describe("ChatLog", () => {
     ]);
   });
 
+  it("removes an empty post-tool component when its final snapshot is retracted", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.updateAssistant("Before the tool.", "run-1");
+    chatLog.startTool("tool-1", "read_file", { path: "a.txt" });
+    chatLog.updateAssistant("Before the tool.\n\nRetracted answer.", "run-1");
+    chatLog.finalizeAssistant("Before the tool.", "run-1");
+
+    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
+      "AssistantMessageComponent",
+      "ToolExecutionComponent",
+    ]);
+    expect(normalizeTestText(chatLog.render(120).join("\n"))).not.toContain("Retracted answer.");
+  });
+
   it("preserves indentation in assistant text that follows a tool call", () => {
     const chatLog = new ChatLog(40);
 
