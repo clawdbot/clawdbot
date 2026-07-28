@@ -24,6 +24,7 @@ import {
 } from "../schema/typebox.js";
 import {
   describeSessionsListTool,
+  describeSessionVisibilityScope,
   SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
 import { stripToolMessages } from "./chat-history-text.js";
@@ -462,7 +463,7 @@ export function createSessionsListTool(opts?: {
           : {
               mode: visibility,
               restricted: true,
-              warning: `Session visibility is restricted (effective tools.sessions.visibility=${visibility}). Results may omit sessions outside the current scope. The count field reflects only sessions within the current scope.`,
+              warning: `Session visibility is restricted (effective tools.sessions.visibility=${visibility}: ${describeSessionVisibilityScope(visibility, { spawnRestricted: restrictToSpawned })}). Sessions outside that scope are omitted from results and count.`,
             };
 
       return jsonResult({

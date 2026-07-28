@@ -13,11 +13,6 @@ type TuiSessionEvent = {
   agentId?: string;
 };
 
-/** Reads the monotonic transcript position shared by persisted and live messages. */
-export function readTuiTranscriptMessageSequence(message: unknown): number | undefined {
-  return readSessionMessageSequence(message) ?? undefined;
-}
-
 /** Reads the durable user identity without mistaking another run's prompt for this one. */
 export function readTuiSessionUserMessage(event: SessionMessageEvent): {
   text: string;

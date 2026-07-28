@@ -1,8 +1,13 @@
+import {
+  readSessionMessageIdentity,
+  readSessionMessageSequence,
+} from "@openclaw/gateway-client/browser";
 import type {
   ApplicationInitialUserMessage,
   ApplicationInitialUserMessageHandoff,
 } from "../../app/context.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { extractText } from "../../lib/chat/message-extract.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import {
   getChatAttachmentDataUrl,
@@ -15,7 +20,6 @@ import {
   type ChatQueueScopedSessionHost,
   writeChatQueueForScope,
 } from "./chat-queue.ts";
-import { messageDisplaySignature, readTranscriptSequence } from "./history-merge.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
 const INITIAL_TURN_HANDOFF_TTL_MS = 60_000;
@@ -79,13 +83,30 @@ export function prepareInitialUserMessageHandoff(
   handoff.prepare({ message, owner, sessionKey });
 }
 
+function initialUserMessageDisplaySignature(message: unknown): string | null {
+  const identity = readSessionMessageIdentity(message);
+  if (!identity) {
+    return null;
+  }
+  const text = extractText(message)?.trim();
+  if (text) {
+    return `${identity.role}:text:${text}`;
+  }
+  try {
+    const content = (message as { content?: unknown }).content;
+    return `${identity.role}:content:${JSON.stringify(content ?? null)}`;
+  } catch {
+    return null;
+  }
+}
+
 function isSameInitialUserMessage(candidate: unknown, message: ApplicationInitialUserMessage) {
-  const sequence = readTranscriptSequence(message);
-  if (sequence !== null && readTranscriptSequence(candidate) === sequence) {
+  const sequence = readSessionMessageSequence(message);
+  if (sequence !== null && readSessionMessageSequence(candidate) === sequence) {
     return true;
   }
-  const signature = messageDisplaySignature(message);
-  return Boolean(signature && messageDisplaySignature(candidate) === signature);
+  const signature = initialUserMessageDisplaySignature(message);
+  return Boolean(signature && initialUserMessageDisplaySignature(candidate) === signature);
 }
 
 function hasInlineDataImage(message: ApplicationInitialUserMessage): boolean {
@@ -201,21 +222,6 @@ export function admitInitialUserMessageHandoff(
   }
   host.chatMessages = [message, ...host.chatMessages];
   return true;
-}
-
-/**
- * The projected prompt is a head row owned by reconcileInitialUserMessageHandoff.
- * A history merge that re-places it as a late optimistic tail would render the
- * first turn below the replies it started.
- */
-export function isPendingInitialUserMessage(
-  handoff: ApplicationInitialUserMessageHandoff | undefined,
-  host: { client?: object | null },
-  sessionKey: string,
-  candidate: unknown,
-): boolean {
-  const message = handoff?.read(sessionKey, host.client ?? null);
-  return Boolean(message && isSameInitialUserMessage(candidate, message));
 }
 
 /** Keeps the accepted prompt projected until authoritative history owns it. */

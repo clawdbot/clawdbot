@@ -28,18 +28,12 @@ type TrackedAssistantRun = {
   latestText?: string;
 };
 
-type TrackedLiveUser = {
-  component: UserMessageComponent;
-  messageSeq?: number;
-  live: boolean;
-};
-
 /** Scrollback container that tracks pending users, streaming assistant runs, tools, and notices. */
 export class ChatLog extends Container {
   private readonly maxComponents: number;
   private tools = new Map<string, TrackedTool>();
   private assistantRuns = new Map<string, TrackedAssistantRun>();
-  private liveUsers = new Map<string, TrackedLiveUser>();
+  private userComponents = new Map<string, UserMessageComponent>();
   private pendingUsers = new Map<
     string,
     {
@@ -79,9 +73,9 @@ export class ChatLog extends Container {
         this.pendingUsers.delete(runId);
       }
     }
-    for (const [messageId, user] of this.liveUsers.entries()) {
-      if (user.component === component) {
-        this.liveUsers.delete(messageId);
+    for (const [messageId, user] of this.userComponents.entries()) {
+      if (user === component) {
+        this.userComponents.delete(messageId);
       }
     }
     for (const [runId, entry] of this.pendingSystemNotices.entries()) {
@@ -175,27 +169,15 @@ export class ChatLog extends Container {
     this.append(component);
   }
 
-  clearAll(opts?: { preservePendingUsers?: boolean; preserveLiveUsers?: boolean }) {
+  clearAll() {
     this.clear();
     this.tools.clear();
     this.assistantRuns.clear();
-    if (opts?.preserveLiveUsers) {
-      // History rows are authoritative snapshots, not in-flight live events.
-      // Keeping them would resurrect deleted or switched-away transcript branches.
-      for (const [messageId, user] of this.liveUsers.entries()) {
-        if (!user.live) {
-          this.liveUsers.delete(messageId);
-        }
-      }
-    } else {
-      this.liveUsers.clear();
-    }
+    this.userComponents.clear();
+    this.pendingUsers.clear();
     this.pendingSystemNotices.clear();
     this.btwMessage = null;
     this.repeatableSystemMessage = null;
-    if (!opts?.preservePendingUsers) {
-      this.pendingUsers.clear();
-    }
   }
 
   clearTools() {
@@ -203,35 +185,6 @@ export class ChatLog extends Container {
       this.removeChild(tool.component);
     }
     this.tools.clear();
-  }
-
-  restoreLiveUsers(beforeMessageSeq?: number) {
-    // Rebuilt history replaces matching IDs in addUser; only live prompts
-    // missing from a stale snapshot are restored before the next canonical row.
-    for (const user of this.liveUsers.values()) {
-      if (!user.live) {
-        continue;
-      }
-      if (this.children.includes(user.component)) {
-        continue;
-      }
-      if (beforeMessageSeq !== undefined) {
-        const messageSeq = user.messageSeq;
-        if (messageSeq === undefined || messageSeq >= beforeMessageSeq) {
-          continue;
-        }
-      }
-      this.appendNonSystem(user.component);
-    }
-  }
-
-  restorePendingUsers() {
-    for (const entry of this.pendingUsers.values()) {
-      if (this.children.includes(entry.component)) {
-        continue;
-      }
-      this.appendNonSystem(entry.component);
-    }
   }
 
   clearPendingUsers() {
@@ -295,56 +248,37 @@ export class ChatLog extends Container {
     return true;
   }
 
-  addUser(text: string, options?: { messageId?: string; messageSeq?: number }) {
+  addUser(text: string, options?: { messageId?: string }) {
+    const previous = options?.messageId ? this.userComponents.get(options.messageId) : undefined;
+    if (previous) {
+      previous.setText(text);
+      return previous;
+    }
     const component = new UserMessageComponent(text);
     if (options?.messageId) {
-      const previous = this.liveUsers.get(options.messageId);
-      // Once authoritative history contains this identity it is no longer a
-      // missing live event and must not survive a later deletion or branch.
-      this.liveUsers.set(options.messageId, {
-        component,
-        messageSeq: options.messageSeq ?? previous?.messageSeq,
-        live: false,
-      });
+      this.userComponents.set(options.messageId, component);
     }
     this.appendNonSystem(component);
+    return component;
   }
 
-  addLiveUser(text: string, options: { messageId: string; messageSeq?: number; runId?: string }) {
-    const existing = this.liveUsers.get(options.messageId);
+  addLiveUser(text: string, options: { messageId: string; runId?: string }) {
+    const existing = this.userComponents.get(options.messageId);
     if (existing) {
-      if (!existing.live) {
-        // A historical identity becomes live in event order, not its old
-        // snapshot order; restoration must preserve the new canonical order.
-        this.liveUsers.delete(options.messageId);
-        this.liveUsers.set(options.messageId, existing);
-      }
-      existing.live = true;
-      if (options.messageSeq !== undefined) {
-        existing.messageSeq = options.messageSeq;
-      }
-      existing.component.setText(text);
-      return existing.component;
+      existing.setText(text);
+      return existing;
     }
 
     const pending = options.runId ? this.pendingUsers.get(options.runId) : undefined;
     if (pending && options.runId && pending.text === text) {
       pending.component.setText(text);
       this.pendingUsers.delete(options.runId);
-      this.liveUsers.set(options.messageId, {
-        component: pending.component,
-        messageSeq: options.messageSeq,
-        live: true,
-      });
+      this.userComponents.set(options.messageId, pending.component);
       return pending.component;
     }
 
     const component = new UserMessageComponent(text);
-    this.liveUsers.set(options.messageId, {
-      component,
-      messageSeq: options.messageSeq,
-      live: true,
-    });
+    this.userComponents.set(options.messageId, component);
     const protectedComponents = new Set<Component>([component]);
     if (options.runId) {
       const run = this.assistantRuns.get(options.runId);
@@ -418,31 +352,6 @@ export class ChatLog extends Container {
     this.pendingUsers.delete(fromRunId);
     this.pendingUsers.set(toRunId, existing);
     return true;
-  }
-
-  reconcilePendingUsers(
-    historyUsers: Array<{
-      text: string;
-      runId?: string;
-    }>,
-  ) {
-    // Text and clocks cannot identify a send: another client can persist the
-    // same prompt. Only this client's canonical persisted run adopts its row.
-    const persistedRunIds = new Set(
-      historyUsers.flatMap((entry) => (entry.runId ? [entry.runId] : [])),
-    );
-    const clearedRunIds: string[] = [];
-    for (const [runId, entry] of this.pendingUsers.entries()) {
-      if (!persistedRunIds.has(runId)) {
-        continue;
-      }
-      if (this.children.includes(entry.component)) {
-        this.removeChild(entry.component);
-      }
-      this.pendingUsers.delete(runId);
-      clearedRunIds.push(runId);
-    }
-    return clearedRunIds;
   }
 
   countPendingUsers() {

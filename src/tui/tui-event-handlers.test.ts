@@ -2,6 +2,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
+import {
+  readTuiSessionProjectionScope,
+  reduceTuiSessionProjection,
+} from "./tui-session-projection.js";
 import { getPendingSubmitAcceptedRunId, type TuiPendingSubmit } from "./tui-submit-state.js";
 import type {
   AgentEvent,
@@ -193,6 +197,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
     reconcileHistoryAfterGap();
 
+    expect(state.sessionProjection?.hasTransportGap).toBe(true);
     await vi.waitFor(() => expect(state.activeChatRunId).toBeNull());
     expect(loadHistory).toHaveBeenCalledTimes(1);
     expect(setActivityStatus).toHaveBeenCalledWith("idle");
@@ -1613,6 +1618,8 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(state.pendingSubmit).toBeNull();
     expect(state.activityStatus).toBe("idle");
     expect(state.currentSessionId).toBe("session-after");
+    expect(state.sessionProjection?.scope.sessionId).toBe("session-after");
+    expect(state.sessionProjection?.runs).toEqual({});
     expect(state.sessionInfo.updatedAt).toBe(200);
     expect(isLocalRunId("run-local")).toBe(false);
     expect(setActivityStatus).toHaveBeenCalledWith("idle");
@@ -1909,7 +1916,52 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       expect.stringContaining("assistant reply"),
       "run-external",
     );
+    expect(state.sessionProjection?.entries[0]?.message).toMatchObject({
+      role: "assistant",
+      content: "assistant reply",
+    });
+    reduceTuiSessionProjection(state, {
+      type: "snapshotLoaded",
+      messages: [],
+      scope: readTuiSessionProjectionScope(state),
+    });
+    expect(state.sessionProjection?.entries[0]?.message).toMatchObject({
+      role: "assistant",
+      content: "assistant reply",
+    });
     expect(loadHistory).not.toHaveBeenCalled();
+  });
+
+  it("preserves the assembled delta-only final across an older history snapshot", () => {
+    const { state, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-streamed-final" },
+    });
+    const sessionKey = state.currentSessionKey;
+    handleChatEvent({
+      runId: "run-streamed-final",
+      sessionKey,
+      seq: 1,
+      state: "delta",
+      message: { role: "assistant", content: "Assembled streamed reply." },
+    } satisfies ChatEvent);
+    handleChatEvent({
+      runId: "run-streamed-final",
+      sessionKey,
+      seq: 2,
+      state: "final",
+      message: { role: "assistant", content: [] },
+    } satisfies ChatEvent);
+
+    reduceTuiSessionProjection(state, {
+      type: "snapshotLoaded",
+      messages: [],
+      scope: readTuiSessionProjectionScope(state),
+    });
+
+    expect(state.sessionProjection?.entries[0]?.message).toMatchObject({
+      role: "assistant",
+      content: "Assembled streamed reply.",
+    });
   });
 
   it("reloads history on final when external run has no message", () => {
@@ -2835,23 +2887,33 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     it.each([
       {
         name: "prefers canonical persisted identity over a conflicting event envelope",
+        initialSessionId: "session-1",
         metadata: { id: "persisted-user", idempotencyKey: "persisted-run:user", seq: 7 },
         envelope: { messageId: "envelope-user", clientRunId: "envelope-run", messageSeq: 99 },
-        expected: { messageId: "persisted-user", messageSeq: 7, runId: "persisted-run" },
+        expected: { messageId: "persisted-user", runId: "persisted-run" },
       },
       {
         name: "uses the envelope when canonical transcript identity is absent",
+        initialSessionId: "session-1",
         metadata: undefined,
         envelope: { messageId: "envelope-user", clientRunId: "envelope-run", messageSeq: 99 },
-        expected: { messageId: "envelope-user", messageSeq: 99, runId: "envelope-run" },
+        expected: { messageId: "envelope-user", runId: "envelope-run" },
       },
-    ])("$name", ({ metadata, envelope, expected }) => {
+      {
+        name: "binds the first session identity without dropping the live canonical prompt",
+        initialSessionId: null,
+        metadata: { id: "persisted-user", idempotencyKey: "persisted-run:user", seq: 7 },
+        envelope: { messageId: "envelope-user", clientRunId: "envelope-run", messageSeq: 99 },
+        expected: { messageId: "persisted-user", runId: "persisted-run" },
+      },
+    ])("$name", ({ initialSessionId, metadata, envelope, expected }) => {
       const { state, chatLog, handleSessionMessageEvent } = createHandlersHarness({
-        state: { activeChatRunId: "run-existing" },
+        state: { activeChatRunId: "run-existing", currentSessionId: initialSessionId },
       });
 
       handleSessionMessageEvent({
         sessionKey: state.currentSessionKey,
+        ...(initialSessionId === null ? { sessionId: "first-persisted-session" } : {}),
         ...envelope,
         message: {
           role: "user",
@@ -2864,6 +2926,44 @@ describe("tui-event-handlers: handleAgentEvent", () => {
         "Canonical cross-client prompt.",
         expected,
       );
+      expect(state.sessionProjection?.entries).toHaveLength(1);
+      expect(state.sessionProjection?.entries[0]?.identity).toMatchObject({
+        id: expected.messageId,
+        runId: expected.runId,
+        sequence: metadata?.seq ?? envelope.messageSeq,
+      });
+      if (initialSessionId === null) {
+        expect(state.sessionProjection?.scope.sessionId).toBe("first-persisted-session");
+      }
+    });
+
+    it.each([
+      { name: "persists a canonical imported sequence", persistedSequence: 7, expectedEntries: 1 },
+      {
+        name: "rejects an envelope-only imported sequence",
+        persistedSequence: null,
+        expectedEntries: 0,
+      },
+    ])("$name", ({ persistedSequence, expectedEntries }) => {
+      const { state, chatLog, handleSessionMessageEvent } = createHandlersHarness();
+
+      handleSessionMessageEvent({
+        sessionKey: state.currentSessionKey,
+        messageId: "native-or-provider-local-id",
+        messageSeq: 99,
+        message: {
+          role: "user",
+          content: "Partially imported prompt.",
+          __openclaw: {
+            id: "provider-local-id",
+            importedFrom: "claude-cli",
+            ...(persistedSequence === null ? {} : { seq: persistedSequence }),
+          },
+        },
+      } satisfies SessionMessageEvent);
+
+      expect(state.sessionProjection?.entries ?? []).toHaveLength(expectedEntries);
+      expect(chatLog.addLiveUser).toHaveBeenCalledTimes(expectedEntries);
     });
 
     it.each([
@@ -2905,7 +3005,6 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
         expect(chatLog.addLiveUser).toHaveBeenCalledWith("Sent from the other client.", {
           messageId: "shared-session-user",
-          messageSeq: 1,
           runId,
         });
         expect(state.activeChatRunId).toBe(runId);

@@ -1,6 +1,7 @@
 import {
   hasSessionProjectionAcceptedFinal,
   reduceSessionProjection,
+  reduceSessionProjectionRunEvent,
 } from "@openclaw/gateway-client/browser";
 import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
@@ -62,72 +63,6 @@ function isEventForDifferentActiveRun(
   activeRunId: string | null,
 ): boolean {
   return Boolean(activeRunId && payload && payload.runId !== activeRunId);
-}
-
-function reduceChatRunEvent(state: ChatState, payload: ChatEventPayload) {
-  if (!payload.runId || payload.state === "status") {
-    return null;
-  }
-  const scope = {
-    sessionKey: state.sessionKey,
-    ...(state.currentSessionId ? { sessionId: state.currentSessionId } : {}),
-    ...(state.chatDisplayedLeafEntryId !== undefined
-      ? { activeLeafEntryId: state.chatDisplayedLeafEntryId }
-      : {}),
-  };
-  const projection = getChatSessionProjection(state, state.chatMessages, scope);
-  const previous = projection.runs[payload.runId];
-  const record = payload as ChatEventPayload & { errorKind?: unknown };
-  const message =
-    payload.message && typeof payload.message === "object" && !Array.isArray(payload.message)
-      ? (payload.message as Record<string, unknown>)
-      : null;
-  const stopReason =
-    payload.stopReason ??
-    (typeof message?.stopReason === "string" ? message.stopReason : undefined);
-  const errorKind = typeof record.errorKind === "string" ? record.errorKind : undefined;
-  const next =
-    payload.state === "delta"
-      ? reduceSessionProjection(projection, {
-          type: "runDelta",
-          runId: payload.runId,
-          ...(payload.message === undefined ? {} : { message: payload.message }),
-          scope,
-        })
-      : reduceSessionProjection(projection, {
-          type: "runTerminal",
-          runId: payload.runId,
-          status:
-            payload.state === "aborted"
-              ? "aborted"
-              : payload.state === "error"
-                ? errorKind === "timeout"
-                  ? "timeout"
-                  : "error"
-                : payload.yielded === true && stopReason === "end_turn"
-                  ? "yielded"
-                  : stopReason === "error"
-                    ? "error"
-                    : "completed",
-          ...(payload.message === undefined ? {} : { message: payload.message }),
-          ...(stopReason === undefined ? {} : { stopReason }),
-          ...(errorKind === undefined ? {} : { errorKind }),
-          ...(payload.errorMessage === undefined ? {} : { errorMessage: payload.errorMessage }),
-          scope,
-        });
-  setChatSessionProjection(state, next);
-  return { previous, current: next.runs[payload.runId] };
-}
-
-function isReplayedFinalAssistantMessage(
-  previousRun: Parameters<typeof hasSessionProjectionAcceptedFinal>[0],
-  incomingMessage: unknown,
-) {
-  const incoming = normalizeFinalAssistantMessage(incomingMessage);
-  if (!incoming || shouldHideAssistantChatMessage(incoming)) {
-    return true;
-  }
-  return hasSessionProjectionAcceptedFinal(previousRun, incoming);
 }
 
 function resolveDeltaChatStreamText(
@@ -192,10 +127,20 @@ function normalizeAbortedAssistantMessage(message: unknown): Record<string, unkn
 }
 
 function normalizeFinalAssistantMessage(message: unknown): Record<string, unknown> | null {
-  return normalizeAssistantMessage(message, {
+  const normalized = normalizeAssistantMessage(message, {
     roleRequirement: "optional",
     allowTextField: true,
   });
+  if (!normalized) {
+    return null;
+  }
+  const assistant =
+    typeof normalized.role === "string" ? normalized : { ...normalized, role: "assistant" };
+  // Older final envelopes carry their visible reply in `text`. Canonicalize
+  // before reducing so replay identity includes the delivered content.
+  return !Object.hasOwn(assistant, "content") && typeof assistant.text === "string"
+    ? { ...assistant, content: [{ type: "text", text: assistant.text }] }
+    : assistant;
 }
 
 function stripChatErrorMarker(text: string): string {
@@ -260,6 +205,8 @@ function handleChatEvent(
   if (!payload) {
     return null;
   }
+  const normalizedFinalMessage =
+    payload.state === "final" ? normalizeFinalAssistantMessage(payload.message) : null;
   const hadActiveRunBeforeEvent = state.chatRunId !== null;
   const sessionMatches = chatEventSessionMatches(state, payload);
   const activeRunMatches =
@@ -273,7 +220,7 @@ function handleChatEvent(
   );
   if (!sessionMatches && !activeRunMatches) {
     if (payload.state === "final") {
-      const finalMessage = normalizeFinalAssistantMessage(payload.message);
+      const finalMessage = normalizedFinalMessage;
       if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
         const cacheAgentId = isUiGlobalSessionKey(payload.sessionKey)
           ? (payload.agentId ?? resolveUiDefaultAgentId(state))
@@ -283,8 +230,47 @@ function handleChatEvent(
     }
     return null;
   }
-  const projectedRun = reduceChatRunEvent(state, payload);
-  const previousTerminalRun = projectedRun?.previous;
+  const scope = {
+    sessionKey: state.sessionKey,
+    ...(state.currentSessionId ? { sessionId: state.currentSessionId } : {}),
+    ...(state.chatDisplayedLeafEntryId !== undefined
+      ? { activeLeafEntryId: state.chatDisplayedLeafEntryId }
+      : {}),
+  };
+  const publishVisibleFinal = (
+    message: Record<string, unknown>,
+    visibleMessages: unknown[],
+    runId: string | null | undefined,
+  ): void => {
+    const event = payload as ChatEventPayload & { messageId?: unknown; messageSeq?: unknown };
+    const projection = reduceSessionProjection(
+      getChatSessionProjection(state, visibleMessages.slice(0, -1), scope),
+      {
+        type: "messagePersisted",
+        message,
+        envelope: {
+          ...(runId ? { runId } : {}),
+          ...(event.messageId === undefined ? {} : { messageId: event.messageId }),
+          ...(event.messageSeq === undefined ? {} : { messageSeq: event.messageSeq }),
+        },
+        scope,
+      },
+    );
+    setChatSessionProjection(state, projection);
+    state.chatMessages = [...projection.messages];
+  };
+  const projectedRun =
+    payload.runId && payload.state !== "status"
+      ? reduceSessionProjectionRunEvent(
+          getChatSessionProjection(state, state.chatMessages, scope),
+          normalizedFinalMessage ? { ...payload, message: normalizedFinalMessage } : payload,
+          scope,
+        )
+      : null;
+  if (projectedRun) {
+    setChatSessionProjection(state, projectedRun.projection);
+  }
+  const previousTerminalRun = projectedRun?.previousRun;
   if (previousTerminalRun && previousTerminalRun.status !== "streaming") {
     if (payload.state === "delta") {
       return null;
@@ -292,7 +278,7 @@ function handleChatEvent(
     if (payload.state === "error") {
       if (
         payload.errorMessage?.trim() &&
-        projectedRun.current?.errorMessage !== previousTerminalRun.errorMessage
+        projectedRun.currentRun?.errorMessage !== previousTerminalRun.errorMessage
       ) {
         // A completed transcript is immutable; retain provider guidance without
         // adopting its old run or interrupting a newer in-flight response.
@@ -300,10 +286,13 @@ function handleChatEvent(
       }
       return "error";
     }
+    const incomingFinal = normalizedFinalMessage;
     if (
       payload.state === "aborted" ||
       (payload.state === "final" &&
-        isReplayedFinalAssistantMessage(previousTerminalRun, payload.message))
+        (!incomingFinal ||
+          shouldHideAssistantChatMessage(incomingFinal) ||
+          hasSessionProjectionAcceptedFinal(previousTerminalRun, incomingFinal)))
     ) {
       return payload.state;
     }
@@ -324,9 +313,9 @@ function handleChatEvent(
   // See https://github.com/openclaw/openclaw/issues/1909
   if (state.chatRunId && payload.runId !== state.chatRunId) {
     if (payload.state === "final") {
-      const finalMessage = normalizeFinalAssistantMessage(payload.message);
+      const finalMessage = normalizedFinalMessage;
       if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
-        state.chatMessages = [...state.chatMessages, finalMessage];
+        publishVisibleFinal(finalMessage, [...state.chatMessages, finalMessage], payload.runId);
         return null;
       }
       return "final";
@@ -383,7 +372,7 @@ function handleChatEvent(
       state.chatStream = next;
     }
   } else if (payload.state === "final") {
-    const finalMessage = normalizeFinalAssistantMessage(payload.message);
+    const finalMessage = normalizedFinalMessage;
     if (authoritativeTerminalMatches) {
       // History already owns this run's terminal message. Discard the live
       // projection; reconcileTerminalRun below clears its remaining stream.
@@ -398,9 +387,11 @@ function handleChatEvent(
         state.chatMessages = materializeVisibleStream({ includeCurrent: false });
         clearToolStreamSegments(state);
       }
-      state.chatMessages = appendTerminalAssistantMessage(
-        state.chatMessages,
-        rememberLiveTerminalRun(finalMessage, terminalRunId),
+      const liveFinal = rememberLiveTerminalRun(finalMessage, terminalRunId);
+      publishVisibleFinal(
+        finalMessage,
+        appendTerminalAssistantMessage(state.chatMessages, liveFinal),
+        terminalRunId,
       );
     } else {
       state.chatMessages = materializeVisibleStream();
