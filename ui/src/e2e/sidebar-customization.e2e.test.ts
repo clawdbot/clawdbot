@@ -10,6 +10,7 @@ import {
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
+  waitForControlUiSettingsTakeover,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
 
@@ -34,15 +35,6 @@ async function trimmedTextContents(locator: Locator): Promise<string[]> {
 
 async function roundedWidth(locator: Locator): Promise<number> {
   return Math.round((await locator.boundingBox())?.width ?? 0);
-}
-
-async function waitForSettingsSidebar(page: Page) {
-  const sidebar = page.locator(".settings-sidebar");
-  const search = sidebar.getByRole("searchbox", { name: "Search settings" });
-  await sidebar.waitFor({ state: "visible" });
-  // The route shell can paint before the takeover controls settle on a loaded CI host.
-  await search.waitFor({ state: "visible" });
-  return { search, sidebar };
 }
 
 function visibleDrawerButton(page: Page) {
@@ -170,7 +162,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
     try {
       await page.goto(`${server.baseUrl}settings/general`);
       const { search: settingsSearchInput, sidebar: settingsSidebar } =
-        await waitForSettingsSidebar(page);
+        await waitForControlUiSettingsTakeover(page);
       const settingsSearchShell = settingsSidebar.locator(".settings-sidebar__search");
       const settingsNav = settingsSidebar.locator(".settings-sidebar__nav");
       const firstSettingsLink = settingsSidebar.locator(".settings-sidebar__item").first();
@@ -340,12 +332,8 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       };
       await expect.poll(() => identityCard.isVisible()).toBe(true);
       await openSettingsFromIdentity();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/general");
-      // Route changes paint Settings before the previous app sidebar finishes yielding.
-      await sidebar.waitFor({ state: "hidden" });
       const { search: settingsSearch, sidebar: settingsSidebar } =
-        await waitForSettingsSidebar(page);
-      await expect.poll(() => sidebar.isVisible()).toBe(false);
+        await waitForControlUiSettingsTakeover(page);
       await expect
         .poll(() =>
           settingsSidebar
