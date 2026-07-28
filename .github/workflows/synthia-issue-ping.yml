@@ -1,0 +1,51 @@
+# Tell Synthia an issue was filed, so it can attempt a reproduction against
+# current main. Nothing is written back to this repository.
+#
+# What leaves the runner: the repository slug and the issue number. Nothing
+# else — not the title, not the body, not the labels, not the reporter. Those
+# are read afterwards from the public issues API, the same way they are read
+# today by a scheduled poll. This workflow replaces that poll with a push.
+#
+# What this needs from you: nothing. No secret, no App, no token, no
+# collaborator access, no third-party action to review or pin. `permissions: {}`
+# means the job's GITHUB_TOKEN has no scopes at all, and the workflow never
+# uses it.
+#
+# What happens if Synthia is down: nothing. The step cannot fail the job, and a
+# ping that never arrives only means the reproduction attempt starts from the
+# next scheduled read instead.
+
+name: Synthia issue ping
+
+on:
+  issues:
+    types: [opened]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    name: Notify Synthia
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      # Best-effort by construction: `continue-on-error` covers the job, and
+      # `|| true` covers the step. A third-party outage must never put a red
+      # mark on this repository's tracker.
+      - name: Notify
+        continue-on-error: true
+        env:
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ github.event.issue.number }}
+        # Values arrive through env and the body is built by jq, so nothing is
+        # concatenated into a shell word or a JSON string.
+        run: |
+          curl -sS --max-time 20 -X POST \
+            https://mcp.synthiaresearch.com/v1/hooks/github/issue-opened \
+            -H 'content-type: application/json' \
+            --data "$(jq -nc --arg r "$REPO" --argjson i "$ISSUE" \
+                      '{repo: $r, issue: $i}')" || true
