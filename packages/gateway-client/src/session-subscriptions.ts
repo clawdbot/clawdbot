@@ -183,13 +183,13 @@ export class GatewaySessionMessageSubscriptionCoordinator {
       return Promise.resolve();
     }
     const { entry } = owner;
-    if (entry.retired || this.#retired) {
-      this.#finishRelease(subscription, owner);
-      return Promise.resolve();
-    }
-    if (entry.handles.size > 1) {
-      this.#finishRelease(subscription, owner);
-      return Promise.resolve();
+    if (entry.retired || this.#retired || entry.handles.size > 1) {
+      try {
+        this.#finishRelease(subscription, owner);
+        return Promise.resolve();
+      } catch (error) {
+        return Promise.reject(error);
+      }
     }
     if (entry.release) {
       return entry.release;
@@ -213,8 +213,7 @@ export class GatewaySessionMessageSubscriptionCoordinator {
     const request = this.#client
       .request("sessions.messages.unsubscribe", sessionSubscriptionParams(entry.key, entry.agentId))
       .then(() => {
-        this.#finishRelease(subscription, owner);
-        this.#entries.delete(entry);
+        this.#finishRelease(subscription, owner, true);
       });
     const tracked = request.finally(() => {
       if (entry.release === tracked) {
@@ -228,16 +227,27 @@ export class GatewaySessionMessageSubscriptionCoordinator {
   /** A reconnect retires leases without touching the next connection's observers. */
   reset(): void {
     this.#retired = true;
+    const callbackFailures: unknown[] = [];
     for (const entry of this.#entries) {
       entry.retired = true;
       for (const subscription of entry.handles) {
         const owner = this.#owners.get(subscription);
         if (owner) {
-          this.#finishRelease(subscription, owner);
+          try {
+            this.#finishRelease(subscription, owner);
+          } catch (error) {
+            callbackFailures.push(error);
+          }
         }
       }
     }
     this.#entries.clear();
+    if (callbackFailures.length === 1) {
+      throw callbackFailures[0];
+    }
+    if (callbackFailures.length > 1) {
+      throw new AggregateError(callbackFailures, "Session message release callbacks failed");
+    }
   }
 
   #createEntry(
@@ -350,6 +360,7 @@ export class GatewaySessionMessageSubscriptionCoordinator {
   #finishRelease(
     subscription: GatewaySessionMessageSubscription,
     owner: SessionMessageSubscriptionOwner,
+    removeEntry = false,
   ): void {
     if (this.#owners.get(subscription) !== owner) {
       return;
@@ -357,6 +368,9 @@ export class GatewaySessionMessageSubscriptionCoordinator {
     this.#owners.delete(subscription);
     sessionMessageSubscriptionOwners.delete(subscription);
     owner.entry.handles.delete(subscription);
+    if (removeEntry) {
+      this.#entries.delete(owner.entry);
+    }
     owner.onRelease?.(subscription);
   }
 
@@ -391,8 +405,11 @@ export function getGatewaySessionMessageSubscriptionCoordinator(
 export function resetGatewaySessionMessageSubscriptionCoordinator(
   client: GatewaySessionMessageRequestClient,
 ): void {
-  sessionMessageSubscriptionCoordinators.get(client)?.reset();
-  sessionMessageSubscriptionCoordinators.delete(client);
+  try {
+    sessionMessageSubscriptionCoordinators.get(client)?.reset();
+  } finally {
+    sessionMessageSubscriptionCoordinators.delete(client);
+  }
 }
 
 export function releaseGatewaySessionMessageSubscription(

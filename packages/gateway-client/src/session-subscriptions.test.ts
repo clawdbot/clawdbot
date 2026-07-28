@@ -237,6 +237,76 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     expect(request).toHaveBeenCalledTimes(3);
   });
 
+  it("discards a successfully unsubscribed observer before its release callback throws", async () => {
+    const { client, request } = createClient();
+    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
+    const subscription = await coordinator.acquire("main", {
+      onRelease: () => {
+        throw new Error("release callback failed");
+      },
+    });
+
+    await expect(coordinator.release(subscription)).rejects.toThrow("release callback failed");
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.messages.unsubscribe", {
+      key: "main",
+    });
+
+    const replacement = await coordinator.acquire("main");
+    expect(request).toHaveBeenNthCalledWith(3, "sessions.messages.subscribe", { key: "main" });
+    await coordinator.release(replacement);
+    expect(request).toHaveBeenNthCalledWith(4, "sessions.messages.unsubscribe", {
+      key: "main",
+    });
+  });
+
+  it("retains another live owner when a nonfinal release callback throws", async () => {
+    const { client, request } = createClient();
+    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
+    const first = await coordinator.acquire("main", {
+      onRelease: () => {
+        throw new Error("first owner callback failed");
+      },
+    });
+    const second = await coordinator.acquire("main");
+
+    await expect(coordinator.release(first)).rejects.toThrow("first owner callback failed");
+    expect(request).toHaveBeenCalledOnce();
+
+    await coordinator.release(second);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", { key: "main" });
+
+    const replacement = await coordinator.acquire("main");
+    expect(request).toHaveBeenNthCalledWith(3, "sessions.messages.subscribe", { key: "main" });
+    await coordinator.release(replacement);
+  });
+
+  it("retires every connection lease before surfacing a reset callback failure", async () => {
+    const { client, request } = createClient();
+    const coordinator = getGatewaySessionMessageSubscriptionCoordinator(client);
+    const released = vi.fn();
+    const first = await coordinator.acquire("main", {
+      onRelease: () => {
+        throw new Error("reset callback failed");
+      },
+    });
+    const second = await coordinator.acquire("other", { onRelease: released });
+
+    expect(() => resetGatewaySessionMessageSubscriptionCoordinator(client)).toThrow(
+      "reset callback failed",
+    );
+    expect(released).toHaveBeenCalledExactlyOnceWith(second);
+    await expect(releaseGatewaySessionMessageSubscription(first)).resolves.toBeUndefined();
+    await expect(releaseGatewaySessionMessageSubscription(second)).resolves.toBeUndefined();
+
+    const replacementCoordinator = getGatewaySessionMessageSubscriptionCoordinator(client);
+    expect(replacementCoordinator).not.toBe(coordinator);
+    const replacement = await replacementCoordinator.acquire("main");
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenLastCalledWith("sessions.messages.subscribe", { key: "main" });
+    await replacementCoordinator.release(replacement);
+  });
+
   it("coalesces concurrent releases of the final lease", async () => {
     const unsubscribe = deferred<unknown>();
     const { client, request } = createClient(async (method, params) =>

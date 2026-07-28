@@ -2189,6 +2189,113 @@ describe("buildCachedChatItems", () => {
     expect(messageAt(groupAt(groups, 0), 1).duplicateCount).toBeUndefined();
   });
 
+  it("keeps imported prompts from distinct CLI sessions separate when provider IDs collide", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "Imported clients sent the same prompt." }],
+          timestamp: 1,
+          __openclaw: {
+            id: "provider-local-user",
+            externalId: "provider-local-user",
+            importedFrom: "claude-cli",
+            cliSessionId: "first-cli-session",
+            seq: 1,
+          },
+        },
+        {
+          role: "user",
+          content: [{ type: "text", text: "Imported clients sent the same prompt." }],
+          timestamp: 2,
+          __openclaw: {
+            id: "provider-local-user",
+            externalId: "provider-local-user",
+            importedFrom: "claude-cli",
+            cliSessionId: "second-cli-session",
+            seq: 2,
+          },
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groupAt(groups, 0).messages).toHaveLength(2);
+    expect(messageRecord(groupAt(groups, 0), 0)["__openclaw"]).toMatchObject({
+      cliSessionId: "first-cli-session",
+    });
+    expect(messageRecord(groupAt(groups, 0), 1)["__openclaw"]).toMatchObject({
+      cliSessionId: "second-cli-session",
+    });
+  });
+
+  it("keeps a native prompt separate from a colliding imported provider ID", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "Native and imported prompts coincide." }],
+          timestamp: 1,
+          __openclaw: { id: "colliding-user", seq: 1 },
+        },
+        {
+          role: "user",
+          content: [{ type: "text", text: "Native and imported prompts coincide." }],
+          timestamp: 2,
+          __openclaw: {
+            id: "colliding-user",
+            externalId: "colliding-user",
+            importedFrom: "claude-cli",
+            cliSessionId: "imported-cli-session",
+            seq: 2,
+          },
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groupAt(groups, 0).messages).toHaveLength(2);
+    expect(messageRecord(groupAt(groups, 0), 0)["__openclaw"]).toEqual({
+      id: "colliding-user",
+      seq: 1,
+    });
+    expect(messageRecord(groupAt(groups, 0), 1)["__openclaw"]).toMatchObject({
+      cliSessionId: "imported-cli-session",
+    });
+  });
+
+  it("does not guess that incomplete imported source identities are duplicate prompts", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "Incomplete imports can share provider IDs." }],
+          timestamp: 1,
+          __openclaw: {
+            id: "incomplete-provider-user",
+            externalId: "incomplete-provider-user",
+            importedFrom: "claude-cli",
+          },
+        },
+        {
+          role: "user",
+          content: [{ type: "text", text: "Incomplete imports can share provider IDs." }],
+          timestamp: 2,
+          __openclaw: {
+            id: "incomplete-provider-user",
+            externalId: "incomplete-provider-user",
+            importedFrom: "claude-cli",
+          },
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groupAt(groups, 0).messages).toHaveLength(2);
+    expect(messageAt(groupAt(groups, 0), 0).duplicateCount).toBeUndefined();
+    expect(messageAt(groupAt(groups, 0), 1).duplicateCount).toBeUndefined();
+  });
+
   it("collapses a replay of the same canonical user prompt", () => {
     const metadata = {
       id: "canonical-replayed-user",
