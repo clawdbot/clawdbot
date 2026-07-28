@@ -2212,6 +2212,52 @@ describe("runCli exit behavior", () => {
   });
 
   it.each([
+    {
+      name: "version-pinned skill install",
+      argv: ["node", "openclaw", "skills", "install", "@owner/weather", "--version", "1.2.3"],
+    },
+    {
+      name: "version-pinned skill verification",
+      argv: ["node", "openclaw", "skills", "verify", "@owner/weather", "--version", "1.2.3"],
+    },
+    {
+      name: "equals-form version-pinned skill install",
+      argv: ["node", "openclaw", "skills", "install", "@owner/weather", "--version=1.2.3"],
+    },
+    {
+      name: "profiled version-pinned skill verification",
+      argv: [
+        "node",
+        "openclaw",
+        "--profile",
+        "work",
+        "skills",
+        "verify",
+        "@owner/weather",
+        "--version",
+        "1.2.3",
+      ],
+    },
+  ])("starts the managed proxy for $name", async ({ argv }) => {
+    await withEnvAsync(
+      {
+        OPENCLAW_PROFILE: undefined,
+        OPENCLAW_STATE_DIR: undefined,
+        OPENCLAW_CONFIG_PATH: undefined,
+      },
+      async () => {
+        hasEnvHttpProxyAgentConfiguredMock.mockReturnValue(true);
+        tryRouteCliMock.mockResolvedValueOnce(true);
+
+        await runCli(argv);
+
+        expect(startProxyMock).toHaveBeenCalledWith(undefined);
+        expect(ensureGlobalUndiciEnvProxyDispatcherMock).toHaveBeenCalledOnce();
+      },
+    );
+  });
+
+  it.each([
     ["JSON flag", ["node", "openclaw", "plugins", "marketplace", "list", "--json"]],
     ["models status JSON alias", ["node", "openclaw", "models", "--status-json"]],
   ])("routes managed-proxy startup logs away for the %s", async (_name, argv) => {
