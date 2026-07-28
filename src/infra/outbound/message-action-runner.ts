@@ -61,6 +61,7 @@ import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reas
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
+  resolveGatewayMessageChannel,
   type GatewayClientMode,
   type GatewayClientName,
 } from "../../utils/message-channel.js";
@@ -792,6 +793,41 @@ function hasExplicitTargetParam(params: Record<string, unknown>): boolean {
     (Array.isArray(params.targets) &&
       params.targets.some((value) => normalizeOptionalString(value)))
   );
+}
+
+// `channel` selects the provider ("slack"), never the destination, but callers
+// routinely pass a channel id there and omit `target`, which fails as "requires
+// a target". Provider ids are lowercase words, so a value carrying digits or
+// separators is unambiguously a destination and can be adopted as the target.
+// Provider-shaped values are left alone so an unregistered plugin channel still
+// reports "Unknown channel" rather than being read as a destination.
+const PROVIDER_SHAPED_VALUE = /^[a-z][a-z-]*$/;
+
+function adoptChannelParamAsTarget(
+  input: RunMessageActionParams,
+  params: Record<string, unknown>,
+): void {
+  const action = input.action;
+  if (!actionRequiresTarget(action)) {
+    return;
+  }
+  // Only when the runner has no conversation of its own to fall back on, so
+  // context-bearing calls keep their existing errors and stay context-isolated.
+  if (
+    normalizeOptionalString(input.toolContext?.currentChannelId) ||
+    normalizeOptionalString(input.toolContext?.currentMessagingTarget)
+  ) {
+    return;
+  }
+  const raw = normalizeOptionalString(params.channel);
+  if (!raw || hasExplicitTargetParam(params)) {
+    return;
+  }
+  if (resolveGatewayMessageChannel(raw) || PROVIDER_SHAPED_VALUE.test(raw.toLowerCase())) {
+    return;
+  }
+  params.target = raw;
+  delete params.channel;
 }
 
 function hasPotentialActionTargetInput(
@@ -1927,6 +1963,7 @@ export async function runMessageAction(
     return handleInternalSourceReplySendAction({ ...input, agentId: resolvedAgentId }, params);
   }
   applyImplicitSourceReplySendPolicy(input, params);
+  adoptChannelParamAsTarget(input, params);
   // Missing targets must fail before channel discovery, which can bootstrap or
   // probe configured plugins. Non-standard params may still be owner aliases.
   if (actionRequiresTarget(action) && !hasPotentialActionTargetInput(input, params)) {

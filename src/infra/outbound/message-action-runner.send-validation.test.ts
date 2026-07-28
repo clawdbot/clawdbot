@@ -307,6 +307,60 @@ describe("runMessageAction send validation", () => {
     ).rejects.toThrow(/requires a target/i);
   });
 
+  it("adopts a channel id passed as channel when no target is given", async () => {
+    const result = await runMessageAction({
+      cfg: workspaceConfig,
+      action: "send",
+      params: {
+        channel: "C12345678",
+        message: "hello from codex",
+      },
+      sessionKey: "agent:main",
+      sourceReplyDeliveryMode: "message_tool_only",
+      dryRun: true,
+    });
+
+    expect(result).toMatchObject({
+      kind: "send",
+      channel: "workspace",
+      to: "C12345678",
+      handledBy: "core",
+      dryRun: true,
+    });
+  });
+
+  it("keeps a provider name in channel instead of adopting it as a target", async () => {
+    await expect(
+      runMessageAction({
+        cfg: workspaceConfig,
+        action: "send",
+        params: {
+          channel: "workspace",
+          message: "hello from codex",
+        },
+        sessionKey: "agent:main",
+        sourceReplyDeliveryMode: "message_tool_only",
+      }),
+    ).rejects.toThrow(/requires a target/i);
+  });
+
+  it("does not adopt channel as target when an explicit target is present", async () => {
+    await expect(
+      runMessageAction({
+        cfg: workspaceConfig,
+        action: "send",
+        params: {
+          channel: "C99999999",
+          target: "#C12345678",
+          message: "hello from codex",
+        },
+        sessionKey: "agent:main",
+        sourceReplyDeliveryMode: "message_tool_only",
+        dryRun: true,
+      }),
+    ).rejects.toThrow(/unknown channel/i);
+  });
+
   it("keeps explicit message routes on the normal outbound path", async () => {
     const result = await runMessageAction({
       cfg: workspaceConfig,

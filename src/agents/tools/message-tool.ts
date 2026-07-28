@@ -558,7 +558,12 @@ function hasSanitizedSendPayloadContent(params: Record<string, unknown>): boolea
 
 function buildRoutingSchema() {
   return {
-    channel: Type.Optional(Type.String()),
+    channel: Type.Optional(
+      Type.String({
+        description:
+          "Messaging provider to route through (slack, discord, telegram, signal, imessage, ...). Defaults to the current conversation's provider. This is not a destination: put channel/user ids in `target`.",
+      }),
+    ),
     target: Type.Optional(channelTargetSchema()),
     targets: Type.Optional(channelTargetsSchema()),
     accountId: Type.Optional(Type.String()),
