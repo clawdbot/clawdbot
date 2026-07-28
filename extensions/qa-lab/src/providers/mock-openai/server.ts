@@ -145,12 +145,12 @@ import {
   hasSuccessfulWriteToolOutput,
   extractLatestImageUserTurn,
   parseToolOutputJson,
-  resolveLogicalPlannedToolName,
 } from "./mock-openai-input.js";
 import {
   attachQaMockResponsesWebSocketServer,
   type QaMockResponsesDispatchResult,
 } from "./mock-openai-responses-websocket.js";
+import { resolveLogicalPlannedToolName } from "./mock-openai-tool-plan.js";
 import {
   readTargetFromPrompt,
   execCommandFromToolProgressPrompt,
