@@ -23,6 +23,7 @@ export {
   isTransientMemoryReadError,
   listMemoryFiles,
   loadSqliteVecExtension,
+  MEMORY_CHUNKING_VERSION,
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_CHUNKS_TABLE,
   MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,

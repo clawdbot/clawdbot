@@ -8,6 +8,7 @@ export {
   ensureDir,
   hashText,
   listMemoryFiles,
+  MEMORY_CHUNKING_VERSION,
   normalizeExtraMemoryPaths,
   parseEmbedding,
   remapChunkLines,

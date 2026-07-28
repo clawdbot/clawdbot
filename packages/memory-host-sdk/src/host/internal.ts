@@ -54,11 +54,16 @@ export type MemoryFileEntry = {
 export type MemoryChunk = {
   startLine: number;
   endLine: number;
+  entryStartLine?: number;
+  entryEndLine?: number;
   text: string;
   hash: string;
   embeddingInput?: EmbeddingInput;
   provenance?: MemoryEntryProvenance;
 };
+
+// Persisted with index metadata so boundary changes rebuild unchanged files.
+export const MEMORY_CHUNKING_VERSION = 1;
 
 type MultimodalMemoryChunk = {
   chunk: MemoryChunk;
@@ -396,7 +401,7 @@ export async function buildMultimodalChunkForIndexing(
 
 export function chunkMarkdown(
   content: string,
-  chunking: { tokens: number; overlap: number },
+  chunking: { tokens: number; overlap: number; perEntry?: boolean },
 ): MemoryChunk[] {
   const lines = content.split("\n");
   if (lines.length === 0) {
@@ -408,6 +413,8 @@ export function chunkMarkdown(
 
   let current: Array<{ line: string; lineNo: number }> = [];
   let currentChars = 0;
+  let entryStartLine: number | undefined;
+  let entryFirstChunk = 0;
 
   const flush = () => {
     if (current.length === 0) {
@@ -453,9 +460,31 @@ export function chunkMarkdown(
     currentChars = acc;
   };
 
+  const finishEntry = (entryEndLine: number) => {
+    if (entryStartLine === undefined) {
+      return;
+    }
+    // Every size fragment remains part of the same curated entry and inherits
+    // its full annotation span; dropping scope on later fragments can leak them.
+    for (const chunk of chunks.slice(entryFirstChunk)) {
+      chunk.entryStartLine = entryStartLine;
+      chunk.entryEndLine = entryEndLine;
+    }
+  };
+
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i] ?? "";
     const lineNo = i + 1;
+    if (chunking.perEntry && line.startsWith("- ")) {
+      if (current.length > 0) {
+        flush();
+      }
+      finishEntry(lineNo - 1);
+      current = [];
+      currentChars = 0;
+      entryStartLine = lineNo;
+      entryFirstChunk = chunks.length;
+    }
     const segments: string[] = [];
     if (line.length === 0) {
       segments.push("");
@@ -494,6 +523,7 @@ export function chunkMarkdown(
     }
   }
   flush();
+  finishEntry(lines.length);
   return chunks;
 }
 

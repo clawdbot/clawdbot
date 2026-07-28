@@ -287,6 +287,39 @@ describe("memory host SDK package internals", () => {
     }
   });
 
+  it("chunks top-level curated entries without carrying neighboring bullets", () => {
+    const text = [
+      "# Curated memory",
+      "",
+      "- Alpha entry",
+      "  alpha continuation",
+      "- Beta entry",
+      "  beta continuation",
+      "- Global entry",
+    ].join("\n");
+
+    const chunks = chunkMarkdown(text, { tokens: 400, overlap: 40, perEntry: true });
+
+    expect(chunks.map((chunk) => chunk.text)).toEqual([
+      "# Curated memory\n",
+      "- Alpha entry\n  alpha continuation",
+      "- Beta entry\n  beta continuation",
+      "- Global entry",
+    ]);
+    expect(chunks.map((chunk) => [chunk.startLine, chunk.endLine])).toEqual([
+      [1, 2],
+      [3, 4],
+      [5, 6],
+      [7, 7],
+    ]);
+    expect(chunks.map((chunk) => [chunk.entryStartLine, chunk.entryEndLine])).toEqual([
+      [undefined, undefined],
+      [3, 4],
+      [5, 6],
+      [7, 7],
+    ]);
+  });
+
   it("remaps chunk lines using JSONL source line maps", () => {
     const lineMap = [4, 6, 7, 10, 13];
     const chunks = chunkMarkdown(

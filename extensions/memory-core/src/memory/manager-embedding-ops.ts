@@ -130,7 +130,9 @@ function resolveChunkRecallMetadata(params: {
   const projectKeys = new Set<string>();
   let importance: number | null = null;
   const lines = params.content.replace(/\r\n/gu, "\n").split("\n");
-  for (const line of lines.slice(params.chunk.startLine - 1, params.chunk.endLine)) {
+  const annotationStartLine = params.chunk.entryStartLine ?? params.chunk.startLine;
+  const annotationEndLine = params.chunk.entryEndLine ?? params.chunk.endLine;
+  for (const line of lines.slice(annotationStartLine - 1, annotationEndLine)) {
     const annotationSuffix = line.match(
       /(?:\s*<!--\s*(?:trigger|importance|project)\s*:[\s\S]*?-->\s*)+$/iu,
     )?.[0];
@@ -1126,7 +1128,16 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         () => fs.readFile(entry.absPath, "utf-8"),
         `read memory markdown for indexing ${entry.absPath}`,
       ));
-    const baseChunks = filterNonEmptyMemoryChunks(chunkMarkdown(content, this.settings.chunking));
+    const normalizedEntryPath = entry.path.replaceAll("\\", "/");
+    const perEntry =
+      options.source === "memory" &&
+      (normalizedEntryPath === "MEMORY.md" || normalizedEntryPath === "USER.md");
+    const baseChunks = filterNonEmptyMemoryChunks(
+      chunkMarkdown(content, {
+        ...this.settings.chunking,
+        perEntry,
+      }),
+    );
     for (const chunk of baseChunks) {
       chunk.provenance = this.resolveChunkProvenance(
         entry,
@@ -1150,8 +1161,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           resolveChunkRecallMetadata({
             curatedRoot: pathClassification.curatedRoot,
             projectScopeEligible:
-              options.source === "memory" &&
-              entry.path.replaceAll("\\", "/").toUpperCase() !== "USER.MD",
+              options.source === "memory" && normalizedEntryPath.toUpperCase() !== "USER.MD",
             content,
             chunk,
           }),
