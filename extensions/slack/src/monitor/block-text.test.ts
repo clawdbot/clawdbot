@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  chooseSlackPrimaryText,
   hasSlackMessageTableBlock,
   resolveSlackBlocksText,
   resolveSlackMessageText,
@@ -202,30 +201,28 @@ describe("resolveSlackBlocksText data visualizations", () => {
   });
 
   it("keeps top-level message text alongside native chart details", () => {
-    const blocksText = resolveSlackBlocksText([
-      {
-        type: "data_visualization",
-        title: "Weekly latency",
-        chart: {
-          type: "line",
-          series: [
-            {
-              name: "p95",
-              data: [
-                { label: "Mon", value: 250 },
-                { label: "Tue", value: 230 },
-              ],
-            },
-          ],
-          axis_config: { categories: ["Mon", "Tue"] },
-        },
-      },
-    ]);
-
     expect(
-      chooseSlackPrimaryText({
-        messageText: "Here is the requested latency trend.",
-        blocksText,
+      resolveSlackMessageText({
+        text: "Here is the requested latency trend.",
+        blocks: [
+          {
+            type: "data_visualization",
+            title: "Weekly latency",
+            chart: {
+              type: "line",
+              series: [
+                {
+                  name: "p95",
+                  data: [
+                    { label: "Mon", value: 250 },
+                    { label: "Tue", value: 230 },
+                  ],
+                },
+              ],
+              axis_config: { categories: ["Mon", "Tue"] },
+            },
+          },
+        ],
       }),
     ).toBe(
       [
@@ -237,39 +234,44 @@ describe("resolveSlackBlocksText data visualizations", () => {
   });
 
   it("does not duplicate top-level text already represented before a chart", () => {
-    const blocksText = resolveSlackBlocksText([
-      { type: "section", text: { type: "mrkdwn", text: "Latency report" } },
-      {
-        type: "data_visualization",
-        title: "Weekly latency",
-        chart: {
-          type: "line",
-          series: [{ name: "p95", data: [{ label: "Mon", value: 250 }] }],
-          axis_config: { categories: ["Mon"] },
-        },
-      },
-    ]);
-
-    expect(chooseSlackPrimaryText({ messageText: "Latency report", blocksText })).toBe(
-      "Latency report\nWeekly latency (line chart)\n- p95: Mon: 250",
-    );
+    expect(
+      resolveSlackMessageText({
+        text: "Latency report",
+        blocks: [
+          { type: "section", text: { type: "mrkdwn", text: "Latency report" } },
+          {
+            type: "data_visualization",
+            title: "Weekly latency",
+            chart: {
+              type: "line",
+              series: [{ name: "p95", data: [{ label: "Mon", value: 250 }] }],
+              axis_config: { categories: ["Mon"] },
+            },
+          },
+        ],
+      }),
+    ).toBe("Latency report\nWeekly latency (line chart)\n- p95: Mon: 250");
   });
 
   it("does not duplicate chart data when top-level text uses paragraph spacing", () => {
-    const blocksText = resolveSlackBlocksText([
-      { type: "section", text: { type: "mrkdwn", text: "Latency report" } },
-      {
-        type: "data_visualization",
-        title: "Weekly latency",
-        chart: {
-          type: "line",
-          series: [{ name: "p95", data: [{ label: "Mon", value: 250 }] }],
-          axis_config: { categories: ["Mon"] },
-        },
-      },
-    ]);
     const messageText = "Latency report\n\nWeekly latency (line chart)\n- p95: Mon: 250";
 
-    expect(chooseSlackPrimaryText({ messageText, blocksText })).toBe(messageText);
+    expect(
+      resolveSlackMessageText({
+        text: messageText,
+        blocks: [
+          { type: "section", text: { type: "mrkdwn", text: "Latency report" } },
+          {
+            type: "data_visualization",
+            title: "Weekly latency",
+            chart: {
+              type: "line",
+              series: [{ name: "p95", data: [{ label: "Mon", value: 250 }] }],
+              axis_config: { categories: ["Mon"] },
+            },
+          },
+        ],
+      }),
+    ).toBe(messageText);
   });
 });

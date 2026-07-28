@@ -115,7 +115,7 @@ export function resolveSlackMessageText(
   return resolved;
 }
 
-export function chooseSlackPrimaryText(params: {
+function chooseSlackPrimaryText(params: {
   messageText: string | undefined;
   blocksText: SlackBlocksText | undefined;
 }): string | undefined {
