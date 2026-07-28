@@ -293,8 +293,9 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       basePath: this.basePath,
       row: this.findSidebarSessionByKey(sessionKey),
       mainKey: this.sessionMainKey(),
+      preferenceDerivedFace: true,
     });
-    this.context?.gateway.setSessionKey(sessionKey);
+    this.setApplicationSession(sessionKey, this.selectedAgentIdForSessions());
     this.onNavigate?.(face, target.options);
   };
 
@@ -432,8 +433,9 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       basePath: this.basePath,
       row: this.findSidebarSessionByKey(sessionKey),
       mainKey: this.sessionMainKey(),
+      preferenceDerivedFace: true,
     });
-    this.context?.gateway.setSessionKey(sessionKey);
+    this.setApplicationSession(sessionKey, this.selectedAgentIdForSessions());
     if (isSessionRouteId(this.activeRouteId)) {
       this.onNavigate?.(face, target.options);
     }
@@ -468,7 +470,14 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     const roster = this.context?.agents.state.agentsList?.agents ?? [];
     const activeId = this.expandedAgentId();
     const agent = roster.find((entry) => normalizeAgentId(entry.id) === activeId);
-    return { activeId, agent, agents: listSelectableAgents(roster) };
+    const identities = new Map(
+      (this.context?.agentIdentity.entries() ?? []).map(
+        (identity) => [identity.agentId, identity] as const,
+      ),
+    );
+    const agents = listSelectableAgents(roster);
+    const identity = identities.get(activeId) ?? null;
+    return { activeId, agent, agents, identity, identities };
   }
 
   /** Newest visible session for an agent; the chip menu resumes here. */
@@ -544,7 +553,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       row: this.findSidebarSessionByKey(key),
       mainKey: this.sessionMainKey(),
     });
-    this.context?.gateway.setSessionKey(key);
+    this.setApplicationSession(key, this.selectedAgentIdForSessions());
     this.onNavigate?.("chat", {
       ...target.options,
       search: `?draft=${draft}`,

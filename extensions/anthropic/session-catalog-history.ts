@@ -55,10 +55,10 @@ function importedClaudeMessage(
 export async function importClaudeHistory(params: {
   items: ClaudeTranscriptItem[];
   threadId: string;
-  sessionFile: string;
   sessionId: string;
   sessionKey: string;
   agentId: string;
+  storePath: string;
   cwd?: string;
   config: OpenClawConfig;
 }): Promise<void> {

@@ -105,6 +105,18 @@ function expectGatewayTermination(pid: number) {
   expect(killProcessTree).toHaveBeenCalledWith(pid, { graceMs: 300 });
 }
 
+function setTaskStateProbeResult(state: number) {
+  const stdout = String(state);
+  spawnSync.mockReturnValueOnce({
+    pid: 0,
+    output: [null, stdout, ""],
+    stdout,
+    stderr: "",
+    status: 0,
+    signal: null,
+  });
+}
+
 async function withPreparedGatewayTask(
   run: (context: { env: Record<string, string>; stdout: PassThrough }) => Promise<void>,
 ) {
@@ -335,6 +347,99 @@ describe("Scheduled Task stop/restart cleanup", () => {
       );
     });
   });
+
+  it.each([
+    { state: 1, label: "disabled" },
+    { state: 3, label: "ready" },
+  ])("accepts a localized /End failure when COM proves the task is $label", async ({ state }) => {
+    await withPreparedGatewayTask(async ({ env, stdout }) => {
+      const onMutation = vi.fn();
+      schtasksResponses.push(
+        { ...SUCCESS_RESPONSE },
+        { ...SUCCESS_RESPONSE },
+        {
+          code: 1,
+          stdout: "",
+          stderr: "FEHLER: Die Aufgabe wird derzeit nicht ausgeführt.",
+        },
+      );
+      setTaskStateProbeResult(state);
+
+      await expect(stopScheduledTask({ env, stdout, onMutation })).resolves.toBeUndefined();
+
+      expect(schtasksCalls).toEqual([
+        ["/Query"],
+        ["/Query", "/TN", "OpenClaw Gateway"],
+        ["/End", "/TN", "OpenClaw Gateway"],
+      ]);
+      expect(spawnSync).toHaveBeenCalledOnce();
+      expect(onMutation).toHaveBeenCalledWith({ mode: "schtasks-stop" });
+    });
+  });
+
+  it.each([
+    { state: 0, label: "unknown" },
+    { state: 2, label: "queued" },
+    { state: 4, label: "running" },
+  ])("fails closed after a localized /End failure when the task is $label", async ({ state }) => {
+    await withPreparedGatewayTask(async ({ env, stdout }) => {
+      const onMutation = vi.fn();
+      schtasksResponses.push(
+        { ...SUCCESS_RESPONSE },
+        { ...SUCCESS_RESPONSE },
+        {
+          code: 1,
+          stdout: "",
+          stderr: "FEHLER: Die Aufgabe konnte nicht beendet werden.",
+        },
+      );
+      setTaskStateProbeResult(state);
+
+      await expect(stopScheduledTask({ env, stdout, onMutation })).rejects.toThrow(
+        "schtasks end failed: FEHLER: Die Aufgabe konnte nicht beendet werden.",
+      );
+
+      expect(spawnSync).toHaveBeenCalledOnce();
+      expect(onMutation).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each([
+    { label: "malformed", status: 0, probeOutput: "3 trailing output" },
+    { label: "missing", status: 1, probeOutput: "-2147024894" },
+    { label: "unavailable", status: 1, probeOutput: "-2147024891" },
+  ])(
+    "fails closed after a localized /End failure when the state probe is $label",
+    async ({ status, probeOutput }) => {
+      await withPreparedGatewayTask(async ({ env, stdout }) => {
+        const onMutation = vi.fn();
+        schtasksResponses.push(
+          { ...SUCCESS_RESPONSE },
+          { ...SUCCESS_RESPONSE },
+          {
+            code: 1,
+            stdout: "",
+            stderr: "FEHLER: Der Aufgabenstatus ist nicht verfügbar.",
+          },
+        );
+        spawnSync.mockReturnValueOnce({
+          pid: 0,
+          output: [null, probeOutput, ""],
+          stdout: probeOutput,
+          stderr: "",
+          status,
+          signal: null,
+        });
+
+        await expect(stopScheduledTask({ env, stdout, onMutation })).rejects.toThrow(
+          "schtasks end failed: FEHLER: Der Aufgabenstatus ist nicht verfügbar.",
+        );
+
+        expect(spawnSync).toHaveBeenCalledOnce();
+        expect(onMutation).not.toHaveBeenCalled();
+      });
+    },
+  );
 
   it("kills lingering verified gateway listeners after schtasks stop", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {

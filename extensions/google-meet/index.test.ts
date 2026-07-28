@@ -1281,6 +1281,7 @@ describe("google-meet plugin", () => {
             name: "googlemeet",
             description: "Join and manage Google Meet calls",
             hasSubcommands: true,
+            machineOutput: expect.any(Function),
           },
         ],
       },

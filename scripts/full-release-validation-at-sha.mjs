@@ -299,7 +299,7 @@ function waitForWorkflowRun(parentRunId, workflowSha) {
     }
     if (suite?.status === "completed") {
       if (suite.conclusion === "success") {
-        return;
+        return suite;
       }
       throw new Error(
         `Full Release Validation concluded ${String(suite.conclusion).toLowerCase()}: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,

@@ -29,6 +29,7 @@ import {
 } from "../infra/exec-approvals.js";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import type { ExecHostResponse } from "../infra/exec-host.js";
+import { formatExecCommand } from "../infra/system-run-command.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -520,6 +521,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     autoReviewer?: ExecAutoReviewer;
     commitExecAuthorization?: HandleSystemRunInvokeOptions["commitExecAuthorization"];
     prepareDelayedApprovalPlan?: boolean;
+    signal?: AbortSignal;
   }): Promise<{
     runCommand: MockedRunCommand;
     runViaMacAppExecHost: MockedRunViaMacAppExecHost;
@@ -617,6 +619,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       skillBins: {
         current: params.skillBinsCurrent ?? (async () => []),
       },
+      signal: params.signal,
       execHostEnforced: false,
       execHostFallbackAllowed: true,
       resolveExecSecurity: params.resolveExecSecurity ?? (() => params.security ?? "full"),
@@ -643,6 +646,61 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       sendExecFinishedEvent,
     };
   }
+
+  it("forwards cancellation to locally spawned node commands", async () => {
+    const controller = new AbortController();
+    const result = await runSystemInvoke({
+      preferMacAppExecHost: false,
+      signal: controller.signal,
+    });
+
+    expect(result.runCommand.mock.calls[0]?.[4]).toBe(controller.signal);
+  });
+
+  it("does not spawn an already-cancelled node command", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await runSystemInvoke({
+      preferMacAppExecHost: false,
+      signal: controller.signal,
+    });
+
+    expect(result.runCommand).not.toHaveBeenCalled();
+    expect(result.runViaMacAppExecHost).not.toHaveBeenCalled();
+  });
+
+  it("does not publish a cancelled local command completion", async () => {
+    const controller = new AbortController();
+    const result = await runSystemInvoke({
+      preferMacAppExecHost: false,
+      signal: controller.signal,
+      runCommand: async () => {
+        controller.abort();
+        return createLocalRunResult("cancelled");
+      },
+    });
+
+    expect(result.runCommand).toHaveBeenCalledOnce();
+    expect(result.sendInvokeResult).not.toHaveBeenCalled();
+    expect(result.sendExecFinishedEvent).not.toHaveBeenCalled();
+  });
+
+  it("does not publish a cancelled Mac exec-host completion", async () => {
+    const controller = new AbortController();
+    const result = await runSystemInvoke({
+      preferMacAppExecHost: true,
+      signal: controller.signal,
+      runViaMacAppExecHost: async () => {
+        controller.abort();
+        return { ok: true, payload: createLocalRunResult("cancelled") };
+      },
+    });
+
+    expect(result.runViaMacAppExecHost).toHaveBeenCalledOnce();
+    expect(result.sendInvokeResult).not.toHaveBeenCalled();
+    expect(result.sendExecFinishedEvent).not.toHaveBeenCalled();
+  });
 
   it("routes local, mac host, and canonical shell-wrapper requests", async () => {
     const localInvoke = await runSystemInvoke({
@@ -807,6 +865,95 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       clearRuntimeConfigSnapshot();
     }
   });
+
+  it.each([
+    {
+      name: "throws synchronously",
+      reviewer: () => {
+        throw new Error("provider\n\u001b[31mfailed\u001b[0m\u202e");
+      },
+    },
+    {
+      name: "rejects asynchronously",
+      reviewer: async () => {
+        throw new Error("provider\n\u001b[31mfailed\u001b[0m\u202e");
+      },
+    },
+  ])("denies direct system.run when its reviewer $name", async ({ reviewer }) => {
+    const tmp = createFixtureDir("openclaw-system-run-auto-review-failure-");
+    const executablePath = createTempExecutable({ dir: tmp, name: "read-info" });
+    setRuntimeConfigSnapshot({ tools: { exec: { mode: "auto" } } });
+    const autoReviewer = vi.fn<ExecAutoReviewer>(reviewer);
+    const runCommand = vi.fn(async () => createLocalRunResult("should-not-run"));
+    const prepared = buildSystemRunApprovalPlan({ command: [executablePath], cwd: tmp });
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) {
+      throw new Error("expected a bound system.run approval plan");
+    }
+
+    const invoke = await runSystemInvoke({
+      preferMacAppExecHost: false,
+      command: prepared.plan.argv,
+      cwd: prepared.plan.cwd ?? tmp,
+      systemRunPlan: prepared.plan,
+      runCommand,
+      resolveExecSecurity: resolveProductionExecSecurity,
+      resolveExecAsk: resolveProductionExecAsk,
+      autoReviewer,
+    });
+
+    expect(autoReviewer).toHaveBeenCalledTimes(1);
+    expect(runCommand).not.toHaveBeenCalled();
+    expectInvokeErrorMessage(invoke.sendInvokeResult, {
+      message:
+        "exec auto-review deferred to human approval: exec reviewer failed: provider\\nfailed",
+    });
+  });
+
+  it.runIf(process.platform !== "win32").each(["bash", "sh", "/bin/sh"])(
+    "does not auto-review direct %s login-shell startup",
+    async (shell) => {
+      const tmp = createFixtureDir("openclaw-system-run-auto-review-login-");
+      setRuntimeConfigSnapshot({ tools: { exec: { mode: "auto" } } });
+      try {
+        const autoReviewer = vi.fn<ExecAutoReviewer>(() => ({
+          decision: "allow-once",
+          rationale: "unsafe startup wrapper must not reach the reviewer",
+          risk: "low",
+        }));
+        const loginCommand = `${shell} -lc "echo auto-review-startup-proof"`;
+        const command = ["/bin/sh", "-lc", loginCommand];
+        // The real plan builder already rejects this wrapper. Exercise the
+        // node trust boundary against a hostile, otherwise well-formed plan.
+        const approvalPlan = {
+          argv: command,
+          cwd: tmp,
+          commandText: formatExecCommand(command),
+          agentId: "main",
+          sessionKey: "agent:main:main",
+        } satisfies SystemRunApprovalPlan;
+
+        const invoke = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command,
+          rawCommand: approvalPlan.commandText,
+          cwd: tmp,
+          systemRunPlan: approvalPlan,
+          resolveExecSecurity: resolveProductionExecSecurity,
+          resolveExecAsk: resolveProductionExecAsk,
+          autoReviewer,
+        });
+
+        expect(autoReviewer).not.toHaveBeenCalled();
+        expect(invoke.runCommand).not.toHaveBeenCalled();
+        expectInvokeErrorMessage(invoke.sendInvokeResult, {
+          message: "SYSTEM_RUN_DENIED: approval required",
+        });
+      } finally {
+        clearRuntimeConfigSnapshot();
+      }
+    },
+  );
 
   it("does not auto-review direct system.run security audit suppression edits", async () => {
     const tmp = createFixtureDir("openclaw-system-run-auto-review-suppression-");

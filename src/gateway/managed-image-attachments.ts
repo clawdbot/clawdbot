@@ -683,10 +683,12 @@ async function getSessionManagedOutgoingAttachmentIndex(
   }
 
   let transcriptStat: SessionManagedOutgoingAttachmentTranscriptStat | null = null;
+  // This path is only a cache/reset-archive hint. Canonical active messages are
+  // read from the structured SQLite identity below even when no artifact exists.
   const resolvedTranscriptPath = await resolveSessionHistoryTranscriptPathAsync(
     sessionId,
     storePath,
-    entry.sessionFile,
+    undefined,
     { allowResetArchiveFallback: true },
   );
   if (resolvedTranscriptPath) {

@@ -206,6 +206,18 @@ export function hasToolDefinition(body: Record<string, unknown>, name: string) {
   return [...tools, ...dynamicTools].some((tool) => toolDefinitionMentionsName(tool, name));
 }
 
+export function hasDeclaredCustomTool(body: Record<string, unknown>, name: string) {
+  const tools = Array.isArray(body.tools) ? body.tools : [];
+  return tools.some(
+    (tool) =>
+      tool !== null &&
+      typeof tool === "object" &&
+      !Array.isArray(tool) &&
+      (tool as Record<string, unknown>).type === "custom" &&
+      (tool as Record<string, unknown>).name === name,
+  );
+}
+
 function toolDefinitionMentionsName(value: unknown, name: string, depth = 0): boolean {
   if (depth > 6 || !value || typeof value !== "object") {
     return false;

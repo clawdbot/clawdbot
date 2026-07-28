@@ -166,7 +166,7 @@ export type AgentDefaultsConfig = {
   /**
    * List of optional bootstrap filenames to skip writing to the workspace root.
    * Applies to: SOUL.md, USER.md, IDENTITY.md ("HEARTBEAT.md" is accepted but a no-op).
-   * Required workspace setup such as AGENTS.md and TOOLS.md still runs.
+   * Required workspace setup such as AGENTS.md still runs.
    * Example: ["SOUL.md", "USER.md", "IDENTITY.md"]
    */
   skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
@@ -382,6 +382,8 @@ export type AgentCompactionMidTurnPrecheckConfig = {
 };
 
 export type AgentCompactionConfig = {
+  /** Enable embedded proactive auto-compaction. Default: true. */
+  enabled?: boolean;
   /** Compaction summarization mode. */
   mode?: AgentCompactionMode;
   /** Override the session thinking level for embedded OpenClaw compaction summaries. */

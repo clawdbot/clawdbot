@@ -1,5 +1,6 @@
 // Qa Lab tests cover canonical scenario lane matching behavior.
 import { describe, expect, it } from "vitest";
+import type { QaProviderMode } from "./model-selection.js";
 import { readQaScenarioById, readQaScenarioPack } from "./scenario-catalog.js";
 import {
   describeQaProviderLaneMismatches,
@@ -31,6 +32,43 @@ describe("QA scenario lane matching", () => {
       }),
     ).toBe(false);
   });
+
+  it.each([
+    {
+      id: "cron-empty-response-after-write-recovery",
+      allowedProviderMode: "mock-openai" as const,
+      rejectedProviderMode: "live-frontier" as const,
+    },
+    {
+      id: "cron-explicit-authority-execution",
+      allowedProviderMode: "live-frontier" as const,
+      rejectedProviderMode: "mock-openai" as const,
+    },
+  ])(
+    "keeps $id on its required $allowedProviderMode provider lane",
+    ({ id, allowedProviderMode, rejectedProviderMode }) => {
+      const scenario = readQaScenarioById(id);
+      const modelForMode = (mode: QaProviderMode) =>
+        mode === "mock-openai" ? "mock-openai/gpt-5.6-luna" : "openai/gpt-5.6-luna";
+
+      expect(
+        scenarioMatchesQaProviderLane({
+          scenario,
+          providerMode: allowedProviderMode,
+          primaryModel: modelForMode(allowedProviderMode),
+        }),
+      ).toBe(true);
+      const rejected = {
+        scenario,
+        providerMode: rejectedProviderMode,
+        primaryModel: modelForMode(rejectedProviderMode),
+      };
+      expect(scenarioMatchesQaProviderLane(rejected)).toBe(false);
+      expect(describeQaProviderLaneMismatches(rejected)).toContain(
+        `providerMode=${allowedProviderMode}`,
+      );
+    },
+  );
 
   it("reports every declared mismatch in one decision", () => {
     const scenario = makeQaSuiteTestScenario("strict-live-lane", {

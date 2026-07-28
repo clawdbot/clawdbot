@@ -3,7 +3,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateChannelsStartParams,
   validateChannelsStopParams,
   validateChannelsLogoutParams,
@@ -335,15 +334,7 @@ async function stopChannelAccount(params: {
 /** Gateway request handlers for channel list, status, start, stop, and logout. */
 export const channelsHandlers: GatewayRequestHandlers = {
   "channels.status": async ({ params, respond, context }) => {
-    if (!validateChannelsStatusParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid channels.status params: ${formatValidationErrors(validateChannelsStatusParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateChannelsStatusParams, "channels.status", respond)) {
       return;
     }
     const probe = (params as { probe?: boolean }).probe === true;

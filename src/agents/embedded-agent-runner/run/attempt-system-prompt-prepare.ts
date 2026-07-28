@@ -54,7 +54,6 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   bootstrap: PreparedBootstrap;
   capabilityToolNames: Set<string>;
   defaultAgentId: string;
-  deferredDirectoryToolsCallable: boolean;
   effectiveCwd: string;
   effectiveTools: PromptTools;
   effectiveWorkspace: string;
@@ -66,7 +65,10 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   sandboxSessionKey: string;
   sessionAgentId: string;
   skillsPrompt: string;
+  codeModeActive?: boolean;
   toolSearchCatalogRef?: ToolSearchCatalogRef;
+  toolSearchDirectoryEnabled: boolean;
+  toolSearchRuntimeConfig: EmbeddedRunAttemptParams["config"];
 }) {
   const { attempt } = params;
   if (attempt.operation === "settled-tool-finalization") {
@@ -140,10 +142,10 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
         accountId: attempt.agentAccountId,
       })
     : undefined;
-  const toolSchemaDirectoryPrompt = params.deferredDirectoryToolsCallable
+  const toolSchemaDirectoryPrompt = params.toolSearchDirectoryEnabled
     ? buildToolSchemaDirectoryPrompt({
         config: attempt.config,
-        runtimeConfig: attempt.config,
+        runtimeConfig: params.toolSearchRuntimeConfig,
         agentId: params.sessionAgentId,
         sessionKey: params.sandboxSessionKey,
         sessionId: attempt.sessionId,
@@ -265,6 +267,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       reasoningTagHint,
       heartbeatPrompt,
       skillsPrompt: effectiveSkillsPrompt,
+      codeModeActive: params.codeModeActive,
       docsPath: openClawReferences.docsPath ?? undefined,
       sourcePath: openClawReferences.sourcePath ?? undefined,
       workspaceNotes: params.bootstrap.workspaceNotes.length

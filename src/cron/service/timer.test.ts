@@ -13,6 +13,7 @@ import * as taskExecutor from "../../tasks/task-executor.js";
 import { findTaskByRunId, listTaskRecordsUnsorted } from "../../tasks/task-registry.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { formatTaskStatusDetail } from "../../tasks/task-status.js";
+import { createDeferred } from "../../test-utils/deferred.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
@@ -246,7 +247,7 @@ describe("cron service timer seam coverage", () => {
     timeoutSpy.mockRestore();
   });
 
-  it("uses the persisted reservation timestamp for the canonical timer task", async () => {
+  it("uses the persisted execution timestamp for the canonical timer task", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-03-23T12:00:00.000Z");
     let clock = now;
@@ -299,10 +300,13 @@ describe("cron service timer seam coverage", () => {
 
     expect(reservedAt).toEqual(expect.any(Number));
     expect(persistedReservation).toEqual(expect.any(Number));
+    expect(reservedAt).not.toBe(persistedReservation);
     expect(liveReservation).toBe(persistedReservation);
     expect(liveError).toBeUndefined();
     expect(emittedStartedAt).toBe(persistedReservation);
-    expect(findCronTaskByBaseRunId(`cron:isolated-agent-job:${reservedAt}`)).toMatchObject({
+    expect(
+      findCronTaskByBaseRunId(`cron:isolated-agent-job:${persistedReservation}`),
+    ).toMatchObject({
       startedAt: emittedStartedAt,
       status: "succeeded",
     });
@@ -361,6 +365,66 @@ describe("cron service timer seam coverage", () => {
       finalizeSpy.mockRestore();
     }
   });
+
+  it.each(["command", "script", "systemEvent", "heartbeat"] as const)(
+    "does not run a %s payload when trigger evaluation resolves after cancellation",
+    async (kind) => {
+      const { storePath } = await makeStorePath();
+      const now = Date.parse("2026-07-27T12:00:00.000Z");
+      const evaluation = createDeferred<{
+        kind: "evaluated";
+        fire: true;
+        state: { revision: number };
+      }>();
+      const evaluateCronTrigger = vi.fn(() => evaluation.promise);
+      const enqueueSystemEvent = vi.fn();
+      const requestHeartbeat = vi.fn();
+      const runCommandJob = vi.fn(async () => ({ status: "ok" as const }));
+      const runScriptJob = vi.fn(async () => ({ status: "ok" as const }));
+      const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+      const state = createCronServiceState({
+        storePath,
+        cronEnabled: true,
+        cronConfig: { triggers: { enabled: true } },
+        log: logger,
+        nowMs: () => now,
+        enqueueSystemEvent,
+        requestHeartbeat,
+        evaluateCronTrigger,
+        runCommandJob,
+        runScriptJob,
+        runIsolatedAgentJob,
+      });
+      const baseJob =
+        kind === "command"
+          ? createDueCommandJob({ now })
+          : kind === "script"
+            ? createDueScriptJob({ now })
+            : kind === "heartbeat"
+              ? {
+                  ...createDueMainJob({ now, wakeMode: "next-heartbeat" }),
+                  payload: { kind: "heartbeat" as const },
+                }
+              : createDueMainJob({ now, wakeMode: "next-heartbeat" });
+      const job: CronJob = {
+        ...baseJob,
+        trigger: { script: "json({ fire: true })" },
+      };
+      const controller = new AbortController();
+
+      const result = executeJobCore(state, job, controller.signal);
+      expect(evaluateCronTrigger).toHaveBeenCalledOnce();
+      controller.abort(new Error("operator cancelled the scheduled run"));
+      evaluation.resolve({ kind: "evaluated", fire: true, state: { revision: 2 } });
+
+      await expect(result).resolves.toMatchObject({ status: "error" });
+      expect(enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(requestHeartbeat).not.toHaveBeenCalled();
+      expect(runCommandJob).not.toHaveBeenCalled();
+      expect(runScriptJob).not.toHaveBeenCalled();
+      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+    },
+  );
 
   it("runs command cron jobs without isolated agent setup", async () => {
     const { storePath } = await makeStorePath();

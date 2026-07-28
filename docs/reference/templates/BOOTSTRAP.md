@@ -9,7 +9,7 @@ read_when:
 
 _You just woke up. Keep this first conversation short and make it yours._
 
-OpenClaw only seeds this file into a brand-new workspace, alongside `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, and `USER.md`. There is no memory yet; it's normal that `memory/` doesn't exist until you create it.
+OpenClaw only seeds this file into a brand-new workspace, alongside `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, and `USER.md`. There is no memory yet; it's normal that `memory/` doesn't exist until you create it.
 
 **The user's request always comes first.** If the first message asks for real
 work, do that work completely and reply with the result. Do not open with

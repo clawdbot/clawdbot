@@ -224,7 +224,6 @@ const LOCAL_EXTENSION_API_BARREL_GUARDS = [
   "nostr",
   "ollama",
   "open-prose",
-  "phone-control",
   "copilot-proxy",
   "qqbot",
   "sglang",

@@ -97,14 +97,6 @@ Deep ranking uses six weighted base signals plus phase reinforcement:
 
 Light and REM phase hits add a small recency-decayed boost from `memory/.dreams/phase-signals.json`.
 
-Shadow-trial results can layer on top of the base score as a review signal before any durable write: a helpful trial gives a candidate a small bounded boost, a neutral trial keeps it deferred, and a harmful trial marks it rejected for that scoring pass. This signal is report-only - it can change candidate ordering or review metadata, but never writes to `MEMORY.md` or promotes a candidate by itself.
-
-### QA shadow trial report coverage
-
-QA Lab includes a report-only scenario for exploring how a future dreaming shadow trial could review a candidate memory before promotion: an agent compares a baseline answer against an answer that can use the candidate memory, then writes a local report with a verdict, reason, and risk flags. This coverage is scoped to QA - it verifies the report artifact stays separate from `MEMORY.md` and that the agent never claims the candidate was promoted. It does not add production shadow-trial behavior or change the deep-phase promotion engine.
-
-The `memory-core` shadow-trial runner keeps the same report-only contract for code paths that need a stable artifact. It accepts the candidate, trial prompt, baseline outcome, candidate outcome, verdict, reason, risk flags, and evidence references, then writes a report with `promotion action: report-only`. Helpful verdicts map to a `promote` recommendation, neutral verdicts map to `defer`, and harmful verdicts map to `reject` - none of those writes to `MEMORY.md` or applies deep-phase promotion.
-
 ## Scheduling
 
 When enabled, `memory-core` auto-manages one cron job for a full dreaming sweep, deduped across the primary runtime workspace and any configured agent workspaces so subagent workspace fan-out does not exclude the main agent's `DREAMS.md` and memory state.

@@ -4,18 +4,20 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   type TaskSummary,
   type TasksListParams,
   validateTasksCancelParams,
   validateTasksGetParams,
   validateTasksListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { canonicalizeMainSessionAlias } from "../../config/sessions.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { getTaskById, listTaskRecordPage } from "../../tasks/runtime-internal.js";
-import { cancelDetachedTaskRunById } from "../../tasks/task-executor.js";
 import type { TaskStatus } from "../../tasks/task-registry.types.js";
 import { mapTaskSummary } from "./task-summary.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 const DEFAULT_TASKS_LIST_LIMIT = 100;
 const MAX_TASKS_LIST_LIMIT = 500;
@@ -55,16 +57,8 @@ function parseCursor(cursor: string | undefined): number | null {
 // Control UI task methods expose the stable gateway protocol shape; helpers
 // above keep runtime registry details out of the wire result.
 export const tasksHandlers: GatewayRequestHandlers = {
-  "tasks.list": ({ params, respond }) => {
-    if (!validateTasksListParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid tasks.list params: ${formatValidationErrors(validateTasksListParams.errors)}`,
-        ),
-      );
+  "tasks.list": ({ params, respond, context }) => {
+    if (!assertValidParams(params, validateTasksListParams, "tasks.list", respond)) {
       return;
     }
     const cursor = parseCursor(params.cursor);
@@ -78,6 +72,19 @@ export const tasksHandlers: GatewayRequestHandlers = {
     }
     const statusFilter = normalizeTaskStatusFilter(params.status);
     const limit = Math.min(params.limit ?? DEFAULT_TASKS_LIST_LIMIT, MAX_TASKS_LIST_LIMIT);
+    const requestedSessionKey = normalizeOptionalString(params.sessionKey);
+    let sessionKey: string | undefined;
+    if (requestedSessionKey) {
+      const cfg = context.getRuntimeConfig();
+      sessionKey = canonicalizeMainSessionAlias({
+        cfg,
+        agentId:
+          parseAgentSessionKey(requestedSessionKey)?.agentId ??
+          normalizeOptionalString(params.agentId) ??
+          resolveDefaultAgentId(cfg),
+        sessionKey: requestedSessionKey,
+      });
+    }
     // The ledger pages by last activity so an old long-running task that just
     // finished still surfaces first. Selection stays inside the registry so
     // only the bounded wire page pays for defensive record cloning.
@@ -86,7 +93,7 @@ export const tasksHandlers: GatewayRequestHandlers = {
       limit,
       statuses: statusFilter ? [...statusFilter] : undefined,
       agentId: params.agentId,
-      sessionKey: params.sessionKey,
+      sessionKey,
     });
     const nextOffset = cursor + page.tasks.length;
     respond(true, {
@@ -95,15 +102,7 @@ export const tasksHandlers: GatewayRequestHandlers = {
     });
   },
   "tasks.get": ({ params, respond }) => {
-    if (!validateTasksGetParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid tasks.get params: ${formatValidationErrors(validateTasksGetParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateTasksGetParams, "tasks.get", respond)) {
       return;
     }
     const taskId = params.taskId;
@@ -121,19 +120,13 @@ export const tasksHandlers: GatewayRequestHandlers = {
     respond(true, { task: mapTaskSummary(task, { includePrompt: true }) });
   },
   "tasks.cancel": async ({ params, respond, context }) => {
-    if (!validateTasksCancelParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid tasks.cancel params: ${formatValidationErrors(validateTasksCancelParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateTasksCancelParams, "tasks.cancel", respond)) {
       return;
     }
     const taskId = params.taskId;
     const reason = normalizeOptionalString(params.reason);
+    const { cancelDetachedTaskRunById } =
+      await import("../../tasks/task-executor-cancel.runtime.js");
     const result = await cancelDetachedTaskRunById({
       cfg: context.getRuntimeConfig(),
       taskId,

@@ -213,6 +213,27 @@ describe("explicit model visibility policy", () => {
     ]);
   });
 
+  it("keeps nested prefix wildcards scoped when segments carry boundary whitespace", () => {
+    const policy = createPolicy({
+      agents: {
+        defaults: {
+          modelPolicy: { allow: [" clawrouter / anthropic / * ", " openai / gpt-5.5 "] },
+        },
+      },
+    });
+
+    // The padded nested wildcard must keep its namespace rather than widening to
+    // every clawrouter model.
+    expect(policy.allowsKey("clawrouter/anthropic/claude-haiku-4-5")).toBe(true);
+    expect(policy.allowsKey("clawrouter/google/gemini-3.5-flash")).toBe(false);
+    expect(policy.allowsKey("openai/gpt-5.5")).toBe(true);
+    expect(policy.allowsKey("openai/gpt-5.6-sol")).toBe(false);
+    expect(policy.allowedCatalog.map((entry) => `${entry.provider}/${entry.id}`)).toEqual([
+      "clawrouter/anthropic/claude-haiku-4-5",
+      "openai/gpt-5.5",
+    ]);
+  });
+
   it("keeps top-level provider wildcard behavior for nested model ids", () => {
     const policy = createPolicy({
       agents: {

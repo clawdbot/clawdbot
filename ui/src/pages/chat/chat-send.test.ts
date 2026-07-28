@@ -5,6 +5,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { UiSettings } from "../../app/settings.ts";
+import { SLASH_COMMANDS } from "../../lib/chat/commands.ts";
 import { createSessionCapability } from "../../lib/sessions/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -24,7 +25,7 @@ import {
   switchChatThinkingLevel,
 } from "./chat-session.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
-import type { ChatPageHost } from "./chat-state.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   admitStoredChatComposerQueueItem,
   listStoredChatOutboxes,
@@ -104,6 +105,22 @@ function cacheChatMessages(
   });
 }
 
+function createQueuedLocalCommand(
+  id: string,
+  text: string,
+  options: { createdAt?: number; sessionKey?: string } = {},
+) {
+  const [name, ...args] = text.slice(1).split(" ");
+  return {
+    id,
+    text,
+    createdAt: options.createdAt ?? 1,
+    localCommandArgs: args.join(" "),
+    localCommandName: name ?? "",
+    sessionKey: options.sessionKey ?? "agent:main",
+  };
+}
+
 const executeSlashCommandMock = vi.fn();
 const executeSlashCommandActual = chatCommandExecutor.executeSlashCommand;
 
@@ -142,7 +159,7 @@ let handleSendChat: typeof import("./chat-send-submit.ts").handleSendChat;
 let steerQueuedChatMessage: typeof import("./chat-send-actions.ts").steerQueuedChatMessage;
 let handleAbortChat: typeof import("./run-lifecycle.ts").handleAbortChat;
 let hasAbortableSessionRun: typeof import("./run-lifecycle.ts").hasAbortableSessionRun;
-let handlePageGatewayEvent: typeof import("./chat-state.ts").handlePageGatewayEvent;
+let handlePageGatewayEvent: typeof import("./chat-state-events.ts").handlePageGatewayEvent;
 let loadChatBranches: typeof import("./chat-history.ts").loadChatBranches;
 let loadChatHistory: typeof import("./chat-history.ts").loadChatHistory;
 let clearPendingQueueItemsForRun: typeof import("./chat-queue.ts").clearPendingQueueItemsForRun;
@@ -157,7 +174,7 @@ let flushChatQueueForEvent: typeof import("./chat-send-actions.ts").flushChatQue
 let retryReconnectableQueuedChatSends: typeof import("./chat-send-actions.ts").retryReconnectableQueuedChatSends;
 let retryQueuedChatMessage: typeof import("./chat-send-actions.ts").retryQueuedChatMessage;
 let recordChatSendServerTiming: typeof import("./chat-send-timing.ts").recordChatSendServerTiming;
-let refreshPageChat: typeof import("./chat-state.ts").refreshPageChat;
+let refreshPageChat: typeof import("./chat-state-refresh.ts").refreshPageChat;
 
 async function loadChatHelpers(): Promise<void> {
   ({
@@ -168,9 +185,8 @@ async function loadChatHelpers(): Promise<void> {
   } = await import("./chat-send-actions.ts"));
   ({ handleSendChat } = await import("./chat-send-submit.ts"));
   ({ recordChatSendServerTiming } = await import("./chat-send-timing.ts"));
-  const chatState = await import("./chat-state.ts");
-  handlePageGatewayEvent = chatState.handlePageGatewayEvent;
-  refreshPageChat = chatState.refreshPageChat;
+  ({ handlePageGatewayEvent } = await import("./chat-state-events.ts"));
+  ({ refreshPageChat } = await import("./chat-state-refresh.ts"));
   ({ loadChatBranches, loadChatHistory } = await import("./chat-history.ts"));
   ({ handleAbortChat, hasAbortableSessionRun } = await import("./run-lifecycle.ts"));
   ({
@@ -533,15 +549,13 @@ describe("refreshChat", () => {
     expect(requestUpdate).not.toHaveBeenCalled();
   });
 
-  it("starts startup metadata without waiting for the transcript response", async () => {
+  it("uses startup-shipped metadata without requesting chat.metadata", async () => {
     const startup = createDeferred<unknown>();
-    const metadata = createDeferred<unknown>();
     const host = makeHost({
       hello: {
         features: { methods: ["chat.metadata", "chat.startup"] },
       } as TestChatHost["hello"],
       requestHandlers: {
-        "chat.metadata": () => metadata.promise,
         "chat.startup": () => startup.promise,
       },
     });
@@ -552,39 +566,8 @@ describe("refreshChat", () => {
       startup: true,
     });
 
-    expect(host.request.mock.calls.map(([method]) => method)).toEqual([
-      "chat.startup",
-      "chat.metadata",
-    ]);
+    expect(host.request.mock.calls.map(([method]) => method)).toEqual(["chat.startup"]);
     expect(await raceWithMacrotask(refresh)).toBe("pending");
-
-    metadata.resolve({ commands: [], models: [] });
-    startup.resolve({ messages: [] });
-    await expect(refresh).resolves.toBeUndefined();
-  });
-
-  it("preserves startup metadata when parallel metadata needs fallbacks", async () => {
-    const startup = createDeferred<unknown>();
-    const metadata = createDeferred<unknown>();
-    const host = makeHost({
-      hello: {
-        features: { methods: ["chat.metadata", "chat.startup"] },
-      } as TestChatHost["hello"],
-      requestHandlers: {
-        "chat.metadata": () => metadata.promise,
-        "chat.startup": () => startup.promise,
-      },
-    });
-    const refresh = refreshPageChat(asChatPageHost(host), {
-      awaitHistory: true,
-      deferBranches: true,
-      startup: true,
-    });
-
-    metadata.resolve({});
-    await Promise.resolve();
-    expect(host.request).not.toHaveBeenCalledWith("models.list", expect.anything());
-    expect(host.request).not.toHaveBeenCalledWith("commands.list", expect.anything());
 
     startup.resolve({
       messages: [],
@@ -601,7 +584,7 @@ describe("refreshChat", () => {
       },
     });
     await expect(refresh).resolves.toBeUndefined();
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(host.chatModelCatalog).toEqual([
         {
           available: true,
@@ -611,8 +594,73 @@ describe("refreshChat", () => {
         },
       ]),
     );
+    expect(host.request).not.toHaveBeenCalledWith("chat.metadata", expect.anything());
     expect(host.request).not.toHaveBeenCalledWith("models.list", expect.anything());
     expect(host.request).not.toHaveBeenCalledWith("commands.list", expect.anything());
+  });
+
+  it("fills omitted startup metadata immediately and populates models and commands", async () => {
+    const startup = createDeferred<unknown>();
+    const host = makeHost({
+      hello: {
+        features: { methods: ["chat.metadata", "chat.startup"] },
+      } as TestChatHost["hello"],
+      requestHandlers: {
+        "chat.metadata": {},
+        "commands.list": {
+          commands: [
+            {
+              name: "startup-gap-command",
+              textAliases: ["/startup-gap-command"],
+              description: "Loaded from the startup metadata gap fill.",
+              source: "plugin",
+              scope: "text",
+              acceptsArgs: false,
+            },
+          ],
+        },
+        "chat.startup": () => startup.promise,
+        "models.list": {
+          models: [
+            {
+              available: true,
+              id: "gap-model",
+              name: "Gap Model",
+              provider: "openai",
+            },
+          ],
+        },
+      },
+    });
+    const refresh = refreshPageChat(asChatPageHost(host), {
+      awaitHistory: true,
+      deferBranches: true,
+      startup: true,
+    });
+
+    expect(host.request.mock.calls.map(([method]) => method)).toEqual(["chat.startup"]);
+    expect(host.request).not.toHaveBeenCalledWith("models.list", expect.anything());
+    expect(host.request).not.toHaveBeenCalledWith("commands.list", expect.anything());
+
+    startup.resolve({ messages: [] });
+    await expect(refresh).resolves.toBeUndefined();
+    await waitForFast(() =>
+      expect(host.chatModelCatalog).toEqual([
+        {
+          available: true,
+          id: "gap-model",
+          name: "Gap Model",
+          provider: "openai",
+        },
+      ]),
+    );
+    expect(SLASH_COMMANDS.some((command) => command.name === "startup-gap-command")).toBe(true);
+    expect(host.request).toHaveBeenCalledWith("models.list", { view: "configured" });
+    expect(host.request).toHaveBeenCalledWith(
+      "commands.list",
+      expect.objectContaining({ includeArgs: true, scope: "text" }),
+    );
+    expect(host.request).toHaveBeenCalledWith("chat.metadata", { agentId: "main" });
   });
 
   it.each([
@@ -3409,14 +3457,7 @@ describe("handleSendChat", () => {
   });
 
   it("reconciles a restored undefined-state command before destructive execution", async () => {
-    const item = {
-      id: "restored-undefined-clear",
-      text: "/clear",
-      createdAt: 1,
-      localCommandArgs: "",
-      localCommandName: "clear",
-      sessionKey: "agent:main",
-    };
+    const item = createQueuedLocalCommand("restored-undefined-clear", "/clear");
     const host = makeHost({
       requestHandlers: {
         "chat.history": {
@@ -3478,14 +3519,7 @@ describe("handleSendChat", () => {
       "chat.history": () => idleChatHistory(),
     });
     const client = clientWithRequest(request);
-    const item = {
-      id: "shared-local-command",
-      text: "/think high",
-      createdAt: 1,
-      localCommandArgs: "high",
-      localCommandName: "think",
-      sessionKey: "agent:main",
-    };
+    const item = createQueuedLocalCommand("shared-local-command", "/think high");
     const firstHost = makeHost({ client, chatQueue: [item] });
     const secondHost = makeHost({ client, chatQueue: [{ ...item }] });
     expect(admitQueuedMessageForSession(firstHost, firstHost.sessionKey, item)).toBe(true);
@@ -3510,22 +3544,13 @@ describe("handleSendChat", () => {
     const client = clientWithRequest(request);
     const sessionKey = "agent:main:visible";
     const items = [
-      {
-        id: "first-shared-local-command",
-        text: "/think high",
-        createdAt: 1,
-        localCommandArgs: "high",
-        localCommandName: "think",
+      createQueuedLocalCommand("first-shared-local-command", "/think high", {
         sessionKey,
-      },
-      {
-        id: "second-shared-local-command",
-        text: "/think low",
+      }),
+      createQueuedLocalCommand("second-shared-local-command", "/think low", {
         createdAt: 2,
-        localCommandArgs: "low",
-        localCommandName: "think",
         sessionKey,
-      },
+      }),
     ];
     const visibleHost = makeHost({ client, chatQueue: items, sessionKey });
     const inactiveHost = makeHost({ client, chatQueue: [], sessionKey: "agent:main:inactive" });
@@ -3547,14 +3572,7 @@ describe("handleSendChat", () => {
     const request = makeRequestMock({
       "chat.history": () => idleChatHistory(),
     });
-    const item = {
-      id: "slow-local-command",
-      text: "/compact",
-      createdAt: 1,
-      localCommandArgs: "",
-      localCommandName: "compact",
-      sessionKey: "agent:main",
-    };
+    const item = createQueuedLocalCommand("slow-local-command", "/compact");
     const client = clientWithRequest(request);
     const host = makeHost({
       client,
@@ -3605,14 +3623,7 @@ describe("handleSendChat", () => {
   it("returns a confirmed clear to waiting-idle when a run starts during the dialog", async () => {
     const confirmation = createDeferred<boolean>();
 
-    const item = {
-      id: "clear-confirmation-race",
-      text: "/clear",
-      createdAt: 1,
-      localCommandArgs: "",
-      localCommandName: "clear",
-      sessionKey: "agent:main",
-    };
+    const item = createQueuedLocalCommand("clear-confirmation-race", "/clear");
     const host = makeHost({
       requestHandlers: {
         "chat.history": () => idleChatHistory(),
@@ -3634,14 +3645,7 @@ describe("handleSendChat", () => {
   });
 
   it("cancels a queued reset when dashboard reset confirmation is rejected", async () => {
-    const item = {
-      id: "queued-reset-cancelled",
-      text: "/reset",
-      createdAt: 1,
-      localCommandArgs: "",
-      localCommandName: "reset",
-      sessionKey: "agent:main",
-    };
+    const item = createQueuedLocalCommand("queued-reset-cancelled", "/reset");
     const confirmConversationReset = vi.fn(async () => false);
     const host = makeHost({
       requestHandlers: {
@@ -3663,14 +3667,7 @@ describe("handleSendChat", () => {
     const confirmation = createDeferred<boolean>();
     const sendPayloads: Array<Record<string, unknown>> = [];
 
-    const item = {
-      id: "queued-reset-approved-before-run",
-      text: "/reset",
-      createdAt: 1,
-      localCommandArgs: "",
-      localCommandName: "reset",
-      sessionKey: "agent:main",
-    };
+    const item = createQueuedLocalCommand("queued-reset-approved-before-run", "/reset");
     const confirmConversationReset = vi.fn(async () => await confirmation.promise);
     const host = makeHost({
       requestHandlers: {
@@ -3713,14 +3710,9 @@ describe("handleSendChat", () => {
   it("keeps a queued reset when its session changes during confirmation", async () => {
     const confirmation = createDeferred<boolean>();
 
-    const item = {
-      id: "queued-reset-route-switch",
-      text: "/reset",
-      createdAt: 1,
-      localCommandArgs: "",
-      localCommandName: "reset",
+    const item = createQueuedLocalCommand("queued-reset-route-switch", "/reset", {
       sessionKey: "agent:main:first",
-    };
+    });
     const confirmConversationReset = vi.fn(async () => await confirmation.promise);
     const host = makeHost({
       requestHandlers: {
@@ -3751,14 +3743,9 @@ describe("handleSendChat", () => {
     const command = createDeferred<Awaited<ReturnType<ExecuteSlashCommand>>>();
     executeSlashCommandMock.mockImplementationOnce(() => command.promise);
 
-    const item = {
-      id: "route-switched-local-command",
-      text: "/model gpt-5-mini",
-      createdAt: 1,
-      localCommandArgs: "gpt-5-mini",
-      localCommandName: "model",
+    const item = createQueuedLocalCommand("route-switched-local-command", "/model gpt-5-mini", {
       sessionKey: "agent:main:first",
-    };
+    });
     const refreshCurrentSessionTools = vi.fn(async () => undefined);
     const refreshCurrentChat = vi.fn(async () => undefined);
     const host = makeHost({
@@ -3810,14 +3797,9 @@ describe("handleSendChat", () => {
         "chat.history": () => idleChatHistory("agent:main:first"),
       }),
     );
-    const item = {
-      id: "reconnected-local-command",
-      text: "/model unavailable",
-      createdAt: 1,
-      localCommandArgs: "unavailable",
-      localCommandName: "model",
+    const item = createQueuedLocalCommand("reconnected-local-command", "/model unavailable", {
       sessionKey: "agent:main:first",
-    };
+    });
     const host = makeHost({
       client: firstClient,
       connectionEpoch: 1,
@@ -4059,22 +4041,8 @@ describe("handleSendChat", () => {
     const sendPayloads: Array<Record<string, unknown>> = [];
 
     const items = [
-      {
-        id: "queued-think-before-reset",
-        text: "/think high",
-        createdAt: 1,
-        localCommandArgs: "high",
-        localCommandName: "think",
-        sessionKey: "agent:main",
-      },
-      {
-        id: "queued-reset-after-think",
-        text: "/reset",
-        createdAt: 2,
-        localCommandArgs: "",
-        localCommandName: "reset",
-        sessionKey: "agent:main",
-      },
+      createQueuedLocalCommand("queued-think-before-reset", "/think high"),
+      createQueuedLocalCommand("queued-reset-after-think", "/reset", { createdAt: 2 }),
       {
         id: "queued-prompt-after-reset",
         text: "run only after reset",
@@ -4149,14 +4117,7 @@ describe("handleSendChat", () => {
     const write = storage.setItem.bind(storage);
     executeSlashCommandMock.mockResolvedValue({ content: "Thinking level set." });
 
-    const item = {
-      id: "local-command-claim-failure",
-      text: "/think high",
-      createdAt: 1,
-      localCommandArgs: "high",
-      localCommandName: "think",
-      sessionKey: "agent:main",
-    };
+    const item = createQueuedLocalCommand("local-command-claim-failure", "/think high");
     const host = makeHost({
       requestHandlers: {
         "chat.history": () => idleChatHistory(),
@@ -4195,14 +4156,7 @@ describe("handleSendChat", () => {
         return { content: "Thinking level set." };
       });
 
-    const item = {
-      id: "retry-local-command-after-disconnect",
-      text: "/think high",
-      createdAt: 1,
-      localCommandArgs: "high",
-      localCommandName: "think",
-      sessionKey: "agent:main",
-    };
+    const item = createQueuedLocalCommand("retry-local-command-after-disconnect", "/think high");
     const following = {
       id: "prompt-after-retried-command",
       text: "use the new thinking level",
@@ -4249,14 +4203,7 @@ describe("handleSendChat", () => {
   it("retires a rejected clear, drops its optimistic history, and parks its successor", async () => {
     const sentMessages: string[] = [];
 
-    const clear = {
-      id: "uncertain-clear",
-      text: "/clear",
-      createdAt: 1,
-      localCommandArgs: "",
-      localCommandName: "clear",
-      sessionKey: "agent:main",
-    };
+    const clear = createQueuedLocalCommand("uncertain-clear", "/clear");
     const successor = {
       id: "prompt-after-uncertain-clear",
       text: "send only after review",
@@ -4338,14 +4285,7 @@ describe("handleSendChat", () => {
     let resetIssued = false;
     let failedBarrierWrites = 0;
 
-    const clear = {
-      id: "uncertain-clear-storage-barrier",
-      text: "/clear",
-      createdAt: 1,
-      localCommandArgs: "",
-      localCommandName: "clear",
-      sessionKey: "agent:main",
-    };
+    const clear = createQueuedLocalCommand("uncertain-clear-storage-barrier", "/clear");
     const successor = {
       id: "successor-storage-barrier",
       text: "must stay parked",

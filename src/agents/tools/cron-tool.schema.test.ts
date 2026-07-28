@@ -110,6 +110,29 @@ describe("createCronToolSchema", () => {
     ).toEqual(["max", "min"]);
   });
 
+  it("exposes bounded cron list pagination", () => {
+    expect(propertyAt(schemaRecord, "limit")).toMatchObject({
+      type: "integer",
+      minimum: 1,
+      maximum: 200,
+    });
+    expect(propertyAt(schemaRecord, "offset")).toMatchObject({
+      type: "integer",
+      minimum: 0,
+    });
+    expect(Value.Check(schema, { action: "list", limit: 200, offset: 200 })).toBe(true);
+
+    for (const invalid of [
+      { action: "list", limit: 0 },
+      { action: "list", limit: 201 },
+      { action: "list", limit: 1.5 },
+      { action: "list", offset: -1 },
+      { action: "list", offset: 1.5 },
+    ]) {
+      expect(Value.Check(schema, invalid)).toBe(false);
+    }
+  });
+
   it("job.schedule exposes interval, cron, and stream source fields", () => {
     expect(keysAt(schemaRecord, "job.schedule")).toEqual(
       [

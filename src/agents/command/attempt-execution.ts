@@ -156,6 +156,7 @@ type PersistTextTurnTranscriptParams = {
   sessionCwd: string;
   config: OpenClawConfig;
   embeddedAssistantGapFill?: boolean;
+  skipAssistantTurn?: boolean;
   assistant: {
     api: string;
     provider: string;
@@ -274,7 +275,7 @@ async function persistTextTurnTranscript(
   params: PersistTextTurnTranscriptParams,
 ): Promise<PersistTextTurnTranscriptResult> {
   const promptText = params.transcriptBody ?? params.body;
-  const replyText = params.finalText;
+  const replyText = params.skipAssistantTurn === true ? "" : params.finalText;
   const userMessage =
     params.userMessage ??
     (promptText
@@ -314,11 +315,13 @@ async function persistTextTurnTranscript(
         stopReason: "stop",
         timestamp: Date.now(),
       },
-      shouldAppend: async ({ sessionFile }: { sessionFile: string }) => {
+      shouldAppend: async (
+        context: import("../../config/sessions/session-accessor.js").SessionTranscriptTurnWriteContext,
+      ) => {
         if (!params.embeddedAssistantGapFill) {
           return true;
         }
-        const latest = await readTailAssistantTextFromSessionTranscript(sessionFile, {
+        const latest = await readTailAssistantTextFromSessionTranscript(context, {
           excludeTranscriptOnlyOpenClawAssistant: true,
         });
         const normalizedReply = normalizeTranscriptMirrorText(replyText);
@@ -416,6 +419,7 @@ export async function persistCliTurnTranscript(params: {
   config: OpenClawConfig;
   embeddedAssistantGapFill?: boolean;
   skipUserTurn?: boolean;
+  skipAssistantTurn?: boolean;
 }): Promise<PersistTextTurnTranscriptResult> {
   const replyText = resolveCliTranscriptReplyText(params.result);
   const provider = params.result.meta.agentMeta?.provider?.trim() ?? "cli";
@@ -445,6 +449,7 @@ export async function persistCliTurnTranscript(params: {
       model,
       usage: params.result.meta.agentMeta?.usage,
     },
+    skipAssistantTurn: params.skipAssistantTurn,
   });
 }
 

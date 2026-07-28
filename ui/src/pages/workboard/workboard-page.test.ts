@@ -3,6 +3,7 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/c
 import { createWorkboardCapability } from "../../lib/workboard/capability.ts";
 import type { WorkboardCapability } from "../../lib/workboard/capability.ts";
 import * as workboardLib from "../../lib/workboard/index.ts";
+import type { WorkboardRouteData } from "./route.ts";
 
 const configureLiveRefresh = vi.fn((): boolean => false);
 const handleChanged = vi.fn();
@@ -15,8 +16,10 @@ await import("./workboard-page.ts");
 
 type WorkboardPageTestElement = HTMLElement & {
   context: ApplicationContext;
+  routeData?: WorkboardRouteData;
   updateComplete: Promise<boolean>;
   syncWorkboardAgentScope: () => void;
+  syncWorkboardBoardFilter: () => void;
 };
 
 function contextWithWorkboard(workboard: WorkboardCapability): ApplicationContext {
@@ -241,5 +244,65 @@ describe("WorkboardPage lifecycle", () => {
     expect(workboard.state.detailCommentBody).toBe("draft comment");
     expect(workboard.state.draftOpen).toBe(true);
     expect(workboard.state.editingCardId).toBe("writer-card");
+  });
+
+  it.each([
+    { boardFilter: "product", remainsVisible: false },
+    { boardFilter: "__all__", remainsVisible: true },
+  ])(
+    "reconciles existing card overlays when the board route changes to $boardFilter",
+    async ({ boardFilter, remainsVisible }) => {
+      const workboard = createWorkboardCapability();
+      const page = document.createElement("openclaw-workboard-page") as WorkboardPageTestElement;
+      page.context = contextWithWorkboard(workboard);
+      document.body.append(page);
+      await page.updateComplete;
+      workboard.state.cards = [
+        {
+          id: "ops-card",
+          title: "Operations task",
+          status: "todo",
+          priority: "normal",
+          labels: [],
+          position: 1000,
+          createdAt: 1,
+          updatedAt: 1,
+          metadata: { automation: { boardId: "ops" } },
+        },
+      ];
+      workboard.state.boardFilter = "ops";
+      workboard.state.detailCardId = "ops-card";
+      workboard.state.detailCommentBody = "draft comment";
+      workboard.state.draftOpen = true;
+      workboard.state.editingCardId = "ops-card";
+      page.routeData = { boardFilter, search: "" };
+
+      page.syncWorkboardBoardFilter();
+
+      expect(workboard.state.boardFilter).toBe(boardFilter);
+      expect(workboard.state.detailCardId).toBe(remainsVisible ? "ops-card" : null);
+      expect(workboard.state.detailCommentBody).toBe(remainsVisible ? "draft comment" : "");
+      expect(workboard.state.draftOpen).toBe(remainsVisible);
+      expect(workboard.state.editingCardId).toBe(remainsVisible ? "ops-card" : null);
+    },
+  );
+
+  it("preserves a new-card draft when the board route changes", async () => {
+    const workboard = createWorkboardCapability();
+    const page = document.createElement("openclaw-workboard-page") as WorkboardPageTestElement;
+    page.context = contextWithWorkboard(workboard);
+    document.body.append(page);
+    await page.updateComplete;
+    workboard.state.boardFilter = "ops";
+    workboard.state.draftOpen = true;
+    workboard.state.draftTitle = "New operations task";
+    page.routeData = { boardFilter: "product", search: "" };
+
+    page.syncWorkboardBoardFilter();
+
+    expect(workboard.state.boardFilter).toBe("product");
+    expect(workboard.state.draftOpen).toBe(true);
+    expect(workboard.state.draftTitle).toBe("New operations task");
+    expect(workboard.state.editingCardId).toBeNull();
   });
 });

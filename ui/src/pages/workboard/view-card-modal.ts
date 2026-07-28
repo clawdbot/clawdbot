@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { workboardCardSessionKey } from "../../lib/workboard/card-state.ts";
 import {
   addWorkboardCardComment,
   getWorkboardState,
@@ -44,8 +45,30 @@ const workboardTemplates = [
   defineTemplate("plugin", "plugin", "plugin", "normal"),
 ];
 
-export function openCreateModal(state: WorkboardUiState) {
+export function openCreateModal(
+  state: WorkboardUiState,
+  props: Pick<WorkboardProps, "agentsList" | "defaultAgentId" | "scopeAgentId">,
+) {
   resetDraftState(state);
+  const scopedAgentId = props.scopeAgentId?.trim();
+  const defaultAgentId = props.agentsList?.defaultId?.trim() ?? props.defaultAgentId?.trim();
+  const selectedAgentId = scopedAgentId
+    ? scopedAgentId === defaultAgentId
+      ? ""
+      : scopedAgentId
+    : state.agentFilter === "all" || state.agentFilter === "default"
+      ? ""
+      : state.agentFilter;
+  if (
+    selectedAgentId &&
+    (props.agentsList
+      ? buildAssignableAgentOptions(props.agentsList, "").some(
+          (agent) => agent.id === selectedAgentId,
+        )
+      : Boolean(scopedAgentId))
+  ) {
+    state.draftAgentId = selectedAgentId;
+  }
   state.draftOpen = true;
 }
 
@@ -58,7 +81,7 @@ export function openEditModal(state: WorkboardUiState, card: WorkboardCard) {
   state.draftPriority = card.priority;
   state.draftLabels = card.labels.join(", ");
   state.draftAgentId = card.agentId ?? "";
-  state.draftSessionKey = card.sessionKey ?? "";
+  state.draftSessionKey = workboardCardSessionKey(card) ?? "";
   state.draftTemplateId = card.metadata?.templateId ?? "";
   state.draftCommentBody = "";
 }

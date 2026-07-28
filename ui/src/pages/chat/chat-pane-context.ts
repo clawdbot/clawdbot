@@ -1,7 +1,6 @@
 import {
   applyChatAgentsList,
   applySelectedSessionProjection,
-  areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
   canonicalUiSessionKeyForPersistence,
   clearChatMessagesFromCache,
@@ -23,6 +22,7 @@ import {
   resolveSessionKey,
   resolveUiConfiguredMainKey,
   retryReconnectableQueuedChatSends,
+  selectedChatSessionRow,
   setQuestionPromptClient,
   syncSelectedSessionMessageSubscription,
   uiSessionEventMatches,
@@ -56,7 +56,10 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     state.sessionsLoading = stateValue.loading;
     state.sessionsError = stateValue.error;
     for (const row of stateValue.result?.sessions ?? []) {
-      const sessionKey = this.resolveBoardSessionKey(row.key);
+      const sessionKey = this.resolveObserverDigestHistoryKey(
+        row.key,
+        row.observerDigest?.agentId ?? stateValue.agentId ?? undefined,
+      );
       this.observerDigestHistory.sync(sessionKey, row.sessionId);
       if (row.observerDigest) {
         this.observerDigestHistory.hydrate(sessionKey, row.observerDigest, row.sessionId);
@@ -64,9 +67,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     }
     this.refreshSwarmRoster();
     this.refreshBuiltinBoardSnapshot();
-    const selectedSession = stateValue.result?.sessions.find((row) =>
-      areUiSessionKeysEquivalent(row.key, state.sessionKey),
-    );
+    const selectedSession = selectedChatSessionRow(state);
     if (applySelectedSessionProjection(state, selectedSession)) {
       this.markSessionRead(selectedSession);
     }

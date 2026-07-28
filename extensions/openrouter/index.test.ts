@@ -144,7 +144,14 @@ describe("openrouter provider hooks", () => {
       id: "openrouter",
       name: "OpenRouter Provider",
     });
-    const modelCatalogProvider = expectUnifiedModelCatalogProviderRegistration({
+    const textModelCatalogProvider = expectUnifiedModelCatalogProviderRegistration({
+      plugin: openrouterPlugin,
+      pluginId: "openrouter",
+      pluginName: "OpenRouter Provider",
+      provider: "openrouter",
+      kind: "text",
+    });
+    const videoModelCatalogProvider = expectUnifiedModelCatalogProviderRegistration({
       plugin: openrouterPlugin,
       pluginId: "openrouter",
       pluginName: "OpenRouter Provider",
@@ -162,7 +169,9 @@ describe("openrouter provider hooks", () => {
     expect(imageProviders.map((provider) => provider.id)).toEqual(["openrouter"]);
     expect(musicProviders.map((provider) => provider.id)).toEqual(["openrouter"]);
     expect(videoProviders.map((provider) => provider.id)).toEqual(["openrouter"]);
-    expect(modelCatalogProvider.liveCatalog).toBeTypeOf("function");
+    expect(textModelCatalogProvider.staticCatalog).toBeTypeOf("function");
+    expect(textModelCatalogProvider.liveCatalog).toBeTypeOf("function");
+    expect(videoModelCatalogProvider.liveCatalog).toBeTypeOf("function");
   });
 
   it("registers OAuth and API-key auth methods", async () => {

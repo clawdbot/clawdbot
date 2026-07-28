@@ -563,6 +563,7 @@ export async function loadCronJobsPage(
     const res = await state.client.request<CronJobsListResult>("cron.list", {
       ...(state.cronAgentId ? { agentId: state.cronAgentId } : {}),
       includeDisabled: state.cronJobsEnabledFilter === "all",
+      includeDeliveryPreviews: false,
       limit: state.cronJobsLimit,
       offset,
       query: state.cronJobsQuery.trim() || undefined,
@@ -682,7 +683,7 @@ function clearCronRunsPage(state: CronState) {
 }
 
 function resetCronFormToDefaults(state: CronState) {
-  state.cronForm = { ...DEFAULT_CRON_FORM };
+  state.cronForm = { ...DEFAULT_CRON_FORM, agentId: state.cronAgentId ?? "" };
   // A fresh form starts visually clean; validation re-arms on the first change
   // or submit so required-field errors do not greet the user immediately.
   state.cronFieldErrors = {};

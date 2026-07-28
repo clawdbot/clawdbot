@@ -123,6 +123,8 @@ export class ChatPage extends OpenClawLightDomElement {
       (!this.layout || activePane?.sessionKey === data.sessionKey);
     if (changedProperties.has("data")) {
       if (data?.canonicalLocation) {
+        // data.face is the loader's resolved face, which may differ from the namespace
+        // this route was matched under; replacing under it moves the URL to that board.
         this.context.replace(data.face ?? "chat", data.canonicalLocation);
         return;
       }

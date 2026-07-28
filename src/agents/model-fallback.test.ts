@@ -12,10 +12,8 @@ import {
 } from "../infra/diagnostic-events.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
-import {
-  clearCurrentPluginMetadataSnapshot,
-  setCurrentPluginMetadataSnapshot,
-} from "../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
@@ -33,12 +31,10 @@ import {
 import { clearAgentHarnesses, registerAgentHarness } from "./harness/registry.js";
 import type { AgentHarness } from "./harness/types.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
-import {
-  isFallbackSummaryError,
-  resolveModelCandidateChain,
-  runWithImageModelFallback,
-  runWithModelFallback as runWithModelFallbackBase,
-} from "./model-fallback.js";
+import { isFallbackSummaryError } from "./model-fallback-attempt.js";
+import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
+import { runWithImageModelFallback } from "./model-fallback-image.js";
+import { runWithModelFallback as runWithModelFallbackBase } from "./model-fallback-runner.js";
 import { shouldDiscardDeferredSessionSuspension } from "./model-fallback.test-support.js";
 import {
   createAgentRunDirectAbortError,
@@ -1916,6 +1912,42 @@ describe("runWithModelFallback", () => {
     expect(result.result).toBe("ok");
     expect(run).toHaveBeenCalledTimes(2);
     expect(result.provider).toBe("anthropic");
+  });
+
+  it("continues to the next model after a Google invalid-key response (#114784)", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "google/gemini-3.1-pro-preview",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+      },
+    });
+    const googleInvalidKey = new Error(
+      "Google Generative AI API error (400): API key not valid. Please pass a valid API key. [code=INVALID_ARGUMENT]",
+    );
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(googleInvalidKey)
+      .mockResolvedValueOnce("fallback ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+      run,
+    });
+
+    expect(result.result).toBe("fallback ok");
+    expect(result.provider).toBe("anthropic");
+    expect(result.attempts[0]).toMatchObject({
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+      reason: "auth",
+    });
+    expect(run).toHaveBeenCalledTimes(2);
   });
 
   it("keeps provider failover metadata authoritative over nested session locks", async () => {

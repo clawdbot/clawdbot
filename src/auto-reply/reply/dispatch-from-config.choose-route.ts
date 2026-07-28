@@ -6,10 +6,12 @@ import {
 import { logVerbose } from "../../globals.js";
 import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import {
+  copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
   type ReplyPayload,
 } from "../reply-payload.js";
+import { createBlockReplyContentKey } from "./block-reply-pipeline.js";
 import type { CommandSessionMetadataChange } from "./command-session-metadata.js";
 import {
   DispatchReplyOperationAbortedError,
@@ -220,10 +222,82 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     const reply = resolveSendableOutboundReplyParts(payload);
     return !reply.hasMedia && !hasExecApprovalPayload(payload);
   };
+  const deliveredBlockContentKeys = new Set<string>();
+  const pendingBlockDeliveryOutcomes = new Map<
+    string,
+    Array<Promise<ReplyDispatchDeliveryOutcome>>
+  >();
+  const sendTrackedBlockReply = (payload: ReplyPayload): boolean => {
+    const contentKey = createBlockReplyContentKey(payload);
+    const delivery = captureReplyDispatchDeliveryOutcome(payload);
+    const queued = dispatcher.sendBlockReply(payload);
+    if (!queued || !delivery.isTracked()) {
+      return queued;
+    }
+    const outcomes = pendingBlockDeliveryOutcomes.get(contentKey);
+    if (outcomes) {
+      outcomes.push(delivery.promise);
+    } else {
+      pendingBlockDeliveryOutcomes.set(contentKey, [delivery.promise]);
+    }
+    return queued;
+  };
+  const recordRoutedBlockReplyDelivery = (
+    payload: ReplyPayload,
+    result: Awaited<ReturnType<typeof sendPayloadAsync>>,
+  ): void => {
+    if (result && isRoutedReplyDelivered(result)) {
+      deliveredBlockContentKeys.add(createBlockReplyContentKey(payload));
+    }
+  };
+  // Routed blocks bypass dispatcher queue counts entirely; this is the only
+  // settled-delivery fact for them (media-only blocks never touch blockCount).
+  const hasDeliveredRoutedBlockReply = (): boolean => deliveredBlockContentKeys.size > 0;
+  const wasReplyDeliveredAsBlock = async (
+    payload: ReplyPayload,
+    abortSignal?: AbortSignal,
+  ): Promise<boolean> => {
+    const contentKey = createBlockReplyContentKey(payload);
+    if (deliveredBlockContentKeys.has(contentKey)) {
+      return true;
+    }
+    const outcomes = pendingBlockDeliveryOutcomes.get(contentKey);
+    if (!outcomes) {
+      return false;
+    }
+    pendingBlockDeliveryOutcomes.delete(contentKey);
+    const settlement = Promise.all(outcomes).then((settledOutcomes) => ({
+      kind: "settled" as const,
+      outcomes: settledOutcomes,
+    }));
+    if (abortSignal?.aborted) {
+      return false;
+    }
+    let removeAbortListener: (() => void) | undefined;
+    const result = abortSignal
+      ? await Promise.race([
+          settlement,
+          new Promise<{ kind: "aborted" }>((resolve) => {
+            const onAbort = () => resolve({ kind: "aborted" });
+            abortSignal.addEventListener("abort", onAbort, { once: true });
+            removeAbortListener = () => abortSignal.removeEventListener("abort", onAbort);
+          }),
+        ]).finally(() => removeAbortListener?.())
+      : await settlement;
+    if (result.kind === "aborted") {
+      return false;
+    }
+    const delivered = result.outcomes.some((outcome) => outcome === "delivered");
+    if (delivered) {
+      deliveredBlockContentKeys.add(contentKey);
+    }
+    return delivered;
+  };
   const sendFinalPayload = async (
     payload: ReplyPayload,
     options: { abortSignal?: AbortSignal; deliveryId?: string } = {},
   ): Promise<{
+    dedupedAgainstBlock?: boolean;
     queuedFinal: boolean;
     routedFinalCount: number;
     dispatcherOutcome?: Promise<ReplyDispatchDeliveryOutcome>;
@@ -272,8 +346,24 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
             accountId: replyRoute.accountId,
           });
     throwIfFinalDeliveryAborted();
-    const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
+    let normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
     throwIfFinalDeliveryAborted();
+    const deliveredAsBlock = await wasReplyDeliveredAsBlock(payload, abortSignal);
+    throwIfFinalDeliveryAborted();
+    if (deliveredAsBlock) {
+      if (createBlockReplyContentKey(normalizedPayload) === createBlockReplyContentKey(payload)) {
+        return { dedupedAgainstBlock: true, queuedFinal: false, routedFinalCount: 0 };
+      }
+      // Final-only transforms such as TTS still need delivery, but the block already
+      // made the text visible. Preserve only the newly added media/rich payload.
+      normalizedPayload = copyReplyPayloadMetadata(normalizedPayload, {
+        ...normalizedPayload,
+        text: undefined,
+      });
+      if (!hasOutboundReplyContent(normalizedPayload, { trimText: true })) {
+        return { dedupedAgainstBlock: true, queuedFinal: false, routedFinalCount: 0 };
+      }
+    }
     const result = await routeReplyToOriginating(normalizedPayload, {
       abortSignal,
       kind: "final",
@@ -520,6 +610,10 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       flushPendingCommentaryProgress,
       noteCommentaryProgress,
       shouldSuppressMessageToolOnlyTextErrorProgress,
+      sendTrackedBlockReply,
+      recordRoutedBlockReplyDelivery,
+      wasReplyDeliveredAsBlock,
+      hasDeliveredRoutedBlockReply,
       sendFinalPayload,
     },
     {

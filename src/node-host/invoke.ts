@@ -335,6 +335,7 @@ async function runCommand(
   cwd: string | undefined,
   env: Record<string, string> | undefined,
   timeoutMs: number | undefined,
+  signal?: AbortSignal,
 ): Promise<RunResult> {
   try {
     const result = await runCommandWithTimeout(argv, {
@@ -345,6 +346,7 @@ async function runCommand(
       maxOutputBytes: OUTPUT_CAP,
       outputCapture: "head",
       input: Buffer.alloc(0),
+      signal,
       timeoutMs: timeoutMs && timeoutMs > 0 ? timeoutMs : undefined,
     });
     const timedOut = result.termination === "timeout";
@@ -804,6 +806,7 @@ async function dispatchInvoke(
     client,
     params,
     skillBins,
+    signal: runtime.signal,
     execHostEnforced,
     execHostFallbackAllowed,
     resolveExecSecurity,

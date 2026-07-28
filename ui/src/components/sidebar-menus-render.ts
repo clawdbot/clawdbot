@@ -19,6 +19,7 @@ import {
   renderSidebarSessionSortMenu,
 } from "./app-sidebar-session-menu-renderers.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
+import { resolveSessionOwnerUser } from "./session-owner-identity.ts";
 import type {
   SidebarMenusController,
   SidebarMenusControllerHost,
@@ -73,12 +74,13 @@ export function renderSidebarAgentMenuForController(controller: SidebarMenusCont
   const { host } = controller;
   const position = controller.agentMenuPosition;
   const trigger = controller.agentMenuTrigger;
-  const { activeId, agent, agents } = host.activeChipAgent();
+  const { activeId, agent, agents, identity, identities } = host.activeChipAgent();
   return renderSidebarAgentMenu({
     position,
     activeId,
-    activeName: agent ? normalizeAgentLabel(agent) : activeId,
+    activeName: identity?.name?.trim() || (agent ? normalizeAgentLabel(agent) : activeId),
     agents,
+    identities,
     filter: controller.agentMenuFilter,
     pinnedAgentIds: host.pinnedAgentIds,
     connected: host.connected,
@@ -290,6 +292,7 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
     showCron: host.sessionsShowCron,
     creators: host.sessionOwnershipVisible ? host.sessionCreatorOptions : [],
     creatorFilterId: host.sessionCreatorFilterActive ? host.sessionCreatorFilterId : null,
+    resolveCreatorUser: (creatorId) => resolveSessionOwnerUser(host, creatorId),
     onGroupingChange: (grouping) => {
       host.sessionOrganizer.setSessionsGrouping(grouping);
       controller.closeSessionSortMenu({ restoreFocus: true });
@@ -329,6 +332,7 @@ export function renderSidebarCatalogViewMenuForController(controller: SidebarMen
     grouping: host.catalogProjectGrouping,
     creators: host.sessionOwnershipVisible ? host.sessionCreatorOptions : [],
     creatorFilterId: host.sessionCreatorFilterActive ? host.sessionCreatorFilterId : null,
+    resolveCreatorUser: (creatorId) => resolveSessionOwnerUser(host, creatorId),
     onGroupingChange: (grouping) => {
       host.setCatalogProjectGrouping(grouping);
       controller.closeCatalogViewMenu({ restoreFocus: true });

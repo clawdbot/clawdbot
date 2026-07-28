@@ -37,11 +37,10 @@ import {
   applySessionCatalogHostEvent as applySessionCatalogHostEventToData,
   loadMoreSessionCatalog as loadMoreSessionCatalogData,
   refreshSessionCatalogs as refreshSessionCatalogData,
-  requestSessionCatalogRefresh as requestSessionCatalogDataRefresh,
-  synchronizeSessionCatalogAgent,
+  scheduleSessionCatalogRefresh,
   type SessionCatalogDataOwner,
   type SessionDataControllerHost,
-  visibleSessionCatalogClient,
+  updateSessionCatalogData as updateSessionCatalogDataForHost,
 } from "./session-data-controller-catalog.ts";
 
 /** Gateway-backed session-list and external-catalog data ownership. */
@@ -185,7 +184,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
   hostUpdated(): void {
     this.syncSessionsScrollObserver();
-    this.updateSessionCatalogData();
+    this.updateSessionCatalogData(true);
   }
 
   hostDisconnected(): void {
@@ -260,18 +259,8 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     this.notify();
   }
 
-  updateSessionCatalogData(): void {
-    if (this.context) {
-      synchronizeSessionCatalogAgent(this, this.host.expandedAgentId());
-    }
-    if (
-      !visibleSessionCatalogClient(this) ||
-      this.sessionCatalogLive.timer ||
-      this.sessionCatalogLive.requestGeneration === this.sessionCatalogGeneration
-    ) {
-      return;
-    }
-    void this.refreshSessionCatalogs();
+  updateSessionCatalogData(defer = false): void {
+    updateSessionCatalogDataForHost(this, defer);
   }
 
   handleSessionCatalogHostEvent(payload: unknown): void {
@@ -280,7 +269,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
   handleSessionCatalogPresence(payload: unknown): void {
     if (this.sessionCatalogLive.observePresence(payload)) {
-      requestSessionCatalogDataRefresh(this);
+      scheduleSessionCatalogRefresh(this);
     }
   }
 
@@ -303,11 +292,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   };
 
   private readonly handleSessionCatalogPageActivation = () => {
-    if (document.visibilityState === "hidden") {
-      this.sessionCatalogLive.cancelScheduledRefreshes();
-      return;
-    }
-    this.sessionCatalogLive.scheduleActivation(() => requestSessionCatalogDataRefresh(this));
+    scheduleSessionCatalogRefresh(this);
   };
 
   refreshSessionCatalogs(): Promise<void> {

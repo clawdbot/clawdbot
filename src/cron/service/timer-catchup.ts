@@ -1,6 +1,5 @@
 import { markCronJobActive } from "../active-jobs.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
-import type { CronJob } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import {
   computeJobPreviousRunAtMs,
@@ -33,13 +32,9 @@ import {
 } from "./timer-execution-timeout.js";
 import { executeJobCoreWithTimeout } from "./timer-job-runner.js";
 import {
-  clearActiveMarkersForOutcomes,
   clearUnstartedStartupCatchupReservationMarkers,
-  filterCurrentCronRunOutcomes,
-  finishPersistedQuietCronTaskRuns,
-  finishRetiredCronTaskRuns,
+  createCompletedCronRunOutcomeDrain,
 } from "./timer-outcome-finalization.js";
-import { applyOutcomeToStoredJob } from "./timer-outcomes.js";
 import { collectRunnableJobs, isRunnableJob } from "./timer-runnable.js";
 import { maybeNotifyIsolatedAgentSetupTimeout } from "./timer-scheduler.js";
 
@@ -139,10 +134,23 @@ export async function runMissedJobs(
     return;
   }
 
-  const execution = await executeStartupCatchupPlan(state, plan);
+  const completedOutcomeDrain = createCompletedCronRunOutcomeDrain(state, {
+    discardWhenStopped: true,
+    repairFutureCronNextRunAtMs: false,
+  });
+  const execution = await executeStartupCatchupPlan(state, plan, completedOutcomeDrain);
   let finalizedOutcomes: TimedCronRunOutcome[];
   try {
-    finalizedOutcomes = await applyStartupCatchupOutcomes(state, plan, execution.outcomes);
+    let completedOutcomes: TimedCronRunOutcome[];
+    try {
+      completedOutcomes = await completedOutcomeDrain.flush();
+    } catch (drainError) {
+      // Preserve overflow wake times and release every unstarted reservation
+      // even when a completed sibling's terminal store write has failed.
+      await applyStartupCatchupOutcomes(state, plan, execution.outcomes);
+      throw drainError;
+    }
+    finalizedOutcomes = await applyStartupCatchupOutcomes(state, plan, completedOutcomes);
   } catch (finalizationError) {
     if (execution.ok) {
       try {
@@ -271,6 +279,7 @@ async function planStartupCatchup(
 async function executeStartupCatchupPlan(
   state: CronServiceState,
   plan: StartupCatchupPlan,
+  completedOutcomeDrain: ReturnType<typeof createCompletedCronRunOutcomeDrain>,
 ): Promise<StartupCatchupExecution> {
   const outcomes: TimedCronRunOutcome[] = [];
   try {
@@ -353,7 +362,10 @@ async function executeStartupCatchupPlan(
         break;
       }
       if (admission.value) {
+        // Catch-up execution stays sequential, while completed outcomes
+        // persist in coalesced batches before slower siblings have to drain.
         outcomes.push(admission.value);
+        completedOutcomeDrain.enqueue(admission.value);
       }
     }
   } catch (error) {
@@ -373,7 +385,6 @@ async function runStartupCatchupCandidate(
     state,
     job: executionJob,
     startedAt,
-    runIdStartedAt: candidate.reservedAtMs,
   });
   const activeJobMarker = markCronJobActive(executionJob.id, {
     preserveAcrossGenerationAdvance: !runsDetachedFromMainSession(executionJob),
@@ -425,103 +436,69 @@ async function applyStartupCatchupOutcomes(
   outcomes: TimedCronRunOutcome[],
 ): Promise<TimedCronRunOutcome[]> {
   const staggerMs = Math.max(0, state.deps.missedJobStaggerMs ?? DEFAULT_MISSED_JOB_STAGGER_MS);
-  try {
-    const currentOutcomes = filterCurrentCronRunOutcomes(outcomes);
-    let finalizedOutcomes: TimedCronRunOutcome[] = [];
-    await locked(state, async () => {
-      // Catch-up runners can rewrite delivery targets or remove their own jobs.
-      // Reload before merging outcomes so the startup snapshot cannot overwrite them.
-      await ensureLoaded(state, {
-        forceReload: true,
-        skipRecompute: true,
-      });
-      if (!state.store) {
-        return;
-      }
-      if (state.stopped) {
-        const rollbackSnapshot = snapshotStoreForRollback(state);
-        finishRetiredCronTaskRuns(state, outcomes, []);
-        const pendingReleases = clearUnstartedStartupCatchupReservationMarkers(
-          state,
-          plan,
-          outcomes,
-        );
-        if (pendingReleases.length > 0) {
-          recomputeNextRunsForMaintenance(state, { repairFutureCronNextRunAtMs: false });
-          await persistOrRestore(state, rollbackSnapshot);
-          for (const pending of pendingReleases) {
-            releaseQueuedCronRun(state, pending.jobId, pending.reservationIdentity);
-          }
-        }
-        return;
-      }
-
-      finalizedOutcomes = filterCurrentCronRunOutcomes(currentOutcomes);
-      finishRetiredCronTaskRuns(state, outcomes, finalizedOutcomes);
+  await locked(state, async () => {
+    // Each completed run is already durable. Reload before releasing or
+    // staggering sibling reservations so their current rows stay authoritative.
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    if (!state.store) {
+      return;
+    }
+    if (state.stopped) {
       const rollbackSnapshot = snapshotStoreForRollback(state);
       const pendingReleases = clearUnstartedStartupCatchupReservationMarkers(state, plan, outcomes);
-      const removedJobs: CronJob[] = [];
-      for (const result of finalizedOutcomes) {
-        const removedJob = applyOutcomeToStoredJob(state, result);
-        if (removedJob) {
-          removedJobs.push(removedJob);
+      if (pendingReleases.length > 0) {
+        recomputeNextRunsForMaintenance(state, { repairFutureCronNextRunAtMs: false });
+        await persistOrRestore(state, rollbackSnapshot);
+        for (const pending of pendingReleases) {
+          releaseQueuedCronRun(state, pending.jobId, pending.reservationIdentity);
         }
       }
-      if (finalizedOutcomes.length === 0 && plan.deferredJobs.length === 0) {
-        if (pendingReleases.length > 0) {
-          recomputeNextRunsForMaintenance(state, { repairFutureCronNextRunAtMs: false });
-          await persistOrRestore(state, rollbackSnapshot);
-          for (const pending of pendingReleases) {
-            releaseQueuedCronRun(state, pending.jobId, pending.reservationIdentity);
-          }
-        }
-        return;
-      }
+      return;
+    }
 
-      if (plan.deferredJobs.length > 0) {
-        const baseNow = state.deps.nowMs();
-        let offset = staggerMs;
-        for (const deferred of plan.deferredJobs) {
-          const jobId = deferred.jobId;
-          const job = state.store.jobs.find((entry) => entry.id === jobId);
-          if (!job || !isJobEnabled(job)) {
-            continue;
-          }
-          if (typeof deferred.delayMs === "number") {
-            const runAtMs = baseNow + deferred.delayMs + offset - staggerMs;
-            job.state.nextRunAtMs = runAtMs;
-            job.state.startupCatchupAtMs = runAtMs;
-            offset += staggerMs;
-            continue;
-          }
-          const runAtMs = baseNow + offset;
+    const rollbackSnapshot = snapshotStoreForRollback(state);
+    const pendingReleases = clearUnstartedStartupCatchupReservationMarkers(state, plan, outcomes);
+    if (outcomes.length === 0 && plan.deferredJobs.length === 0) {
+      if (pendingReleases.length > 0) {
+        recomputeNextRunsForMaintenance(state, { repairFutureCronNextRunAtMs: false });
+        await persistOrRestore(state, rollbackSnapshot);
+        for (const pending of pendingReleases) {
+          releaseQueuedCronRun(state, pending.jobId, pending.reservationIdentity);
+        }
+      }
+      return;
+    }
+
+    if (plan.deferredJobs.length > 0) {
+      const baseNow = state.deps.nowMs();
+      let offset = staggerMs;
+      for (const deferred of plan.deferredJobs) {
+        const jobId = deferred.jobId;
+        const job = state.store.jobs.find((entry) => entry.id === jobId);
+        if (!job || !isJobEnabled(job)) {
+          continue;
+        }
+        if (typeof deferred.delayMs === "number") {
+          const runAtMs = baseNow + deferred.delayMs + offset - staggerMs;
           job.state.nextRunAtMs = runAtMs;
           job.state.startupCatchupAtMs = runAtMs;
           offset += staggerMs;
+          continue;
         }
-      }
-
-      // Preserve any new past-due nextRunAtMs values that became due while
-      // startup catch-up was running. They should execute on a future tick
-      // instead of being silently advanced. Future repair is disabled here so
-      // startup overflow deferrals survive until their staggered catch-up tick.
-      recomputeNextRunsForMaintenance(state, { repairFutureCronNextRunAtMs: false });
-      await persistOrRestore(state, rollbackSnapshot);
-      for (const pending of pendingReleases) {
-        releaseQueuedCronRun(state, pending.jobId, pending.reservationIdentity);
-      }
-      finishPersistedQuietCronTaskRuns(state, finalizedOutcomes);
-      for (const removedJob of removedJobs) {
-        emit(state, { jobId: removedJob.id, action: "removed", job: removedJob });
-      }
-    });
-    return finalizedOutcomes;
-  } finally {
-    for (const outcome of outcomes) {
-      if (outcome.reservationIdentity) {
-        releaseQueuedCronRun(state, outcome.jobId, outcome.reservationIdentity);
+        const runAtMs = baseNow + offset;
+        job.state.nextRunAtMs = runAtMs;
+        job.state.startupCatchupAtMs = runAtMs;
+        offset += staggerMs;
       }
     }
-    clearActiveMarkersForOutcomes(outcomes);
-  }
+
+    // Startup overflow owns these staggered wake times; repairing future
+    // schedules here would silently move a deferred run to its natural slot.
+    recomputeNextRunsForMaintenance(state, { repairFutureCronNextRunAtMs: false });
+    await persistOrRestore(state, rollbackSnapshot);
+    for (const pending of pendingReleases) {
+      releaseQueuedCronRun(state, pending.jobId, pending.reservationIdentity);
+    }
+  });
+  return outcomes;
 }

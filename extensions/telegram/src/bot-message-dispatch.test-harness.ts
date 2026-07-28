@@ -113,6 +113,7 @@ const getAgentScopedMediaLocalRootsHoisted = vi.hoisted(() =>
 );
 const resolveChunkModeHoisted = vi.hoisted(() => vi.fn(() => undefined));
 const resolveMarkdownTableModeHoisted = vi.hoisted(() => vi.fn(() => "preserve"));
+const getGlobalHookRunnerHoisted = vi.hoisted(() => vi.fn());
 
 export const createTelegramDraftStream = createTelegramDraftStreamHoisted;
 export const dispatchReplyWithBufferedBlockDispatcher =
@@ -153,6 +154,7 @@ const resolveDefaultModelForAgent = resolveDefaultModelForAgentHoisted;
 const getAgentScopedMediaLocalRoots = getAgentScopedMediaLocalRootsHoisted;
 const resolveChunkMode = resolveChunkModeHoisted;
 export const resolveMarkdownTableMode = resolveMarkdownTableModeHoisted;
+export const getGlobalHookRunner = getGlobalHookRunnerHoisted;
 
 vi.mock("./draft-stream.js", () => ({
   createTelegramDraftStream: createTelegramDraftStreamHoisted,
@@ -163,6 +165,14 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
   return {
     ...actual,
     deliverInboundReplyWithMessageSendContext: deliverInboundReplyWithMessageSendContextHoisted,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/plugin-runtime")>();
+  return {
+    ...actual,
+    getGlobalHookRunner: getGlobalHookRunnerHoisted,
   };
 });
 
@@ -380,6 +390,7 @@ function resetTelegramDispatchTestState() {
   getAgentScopedMediaLocalRoots.mockClear();
   resolveChunkMode.mockClear();
   resolveMarkdownTableMode.mockClear();
+  getGlobalHookRunner.mockReset();
   describeStickerImage.mockReset();
   loadModelCatalog.mockReset();
   findModelInCatalog.mockReset();
@@ -447,6 +458,7 @@ function resetTelegramDispatchTestState() {
     provider: "openai",
     model: "gpt-test",
   });
+  getGlobalHookRunner.mockReturnValue(null);
 }
 
 function cleanupTelegramDispatchTestState() {

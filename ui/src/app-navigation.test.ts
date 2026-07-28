@@ -133,6 +133,7 @@ const ALL_ROUTES: RouteId[] = Array.from(
     "worktrees",
     "memory-import",
     "model-setup",
+    "lobsterdex",
     ...SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes),
   ]),
 );
@@ -147,6 +148,7 @@ const SETTINGS_ROUTE_PATHS = [
     alias: "/communications",
   },
   { routeId: "appearance", path: "/settings/appearance", alias: "/appearance" },
+  { routeId: "lobsterdex", path: "/settings/lobsterdex", alias: "/lobsterdex" },
   { routeId: "automation", path: "/settings/automation", alias: "/automation" },
   { routeId: "mcp", path: "/settings/mcp", alias: "/mcp" },
   {
@@ -204,6 +206,7 @@ describe("navigationIconForRoute", () => {
       profile: "circleUser",
       communications: "send",
       appearance: "palette",
+      lobsterdex: "bug",
       automation: "terminal",
       mcp: "wrench",
       memory: "book",
@@ -314,6 +317,7 @@ describe("titleForRoute", () => {
       profile: "Profile",
       communications: "Communications",
       appearance: "Appearance",
+      lobsterdex: "Lobsterdex",
       automation: "Automation",
       mcp: "MCP",
       memory: "Memory",
@@ -361,6 +365,7 @@ describe("subtitleForRoute", () => {
       profile: "Your agent's stats, streaks, and life in the reef.",
       communications: "Channels, messages, and audio settings.",
       appearance: "Theme, UI, and setup wizard settings.",
+      lobsterdex: "Every lobster palette that has visited this browser.",
       automation: "Commands, hooks, cron, and plugins.",
       mcp: "MCP servers, auth, tools, and diagnostics.",
       memory: "Memory engine, backend, search, and dreaming.",
@@ -540,11 +545,14 @@ describe("routeIdFromPath", () => {
       agentId: "main",
       shortId: "12345678",
     });
+    // The slug is captured so it can settle a tie between ids sharing this prefix, but it
+    // never changes the parsed id: a wrong agent and a wrong slug both stay decorative.
     expect(sessionRefFromPath("/chat/wrong/wrong-slug-1234567890ab")).toEqual({
       namespace: "chat",
       kind: "short",
       agentId: "wrong",
       shortId: "1234567890ab",
+      slugHint: "wrong-slug",
     });
     expect(sessionRefFromPath("/chat/main/telegram/12345")).toEqual({
       namespace: "chat",

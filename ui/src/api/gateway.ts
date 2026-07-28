@@ -30,6 +30,7 @@ import {
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "@openclaw/gateway-client/browser";
+import type { ControlUiSessionPullRequests } from "../../../src/gateway/control-ui-contract.js";
 import {
   clearDeviceAuthToken,
   loadDeviceAuthToken,
@@ -206,6 +207,14 @@ const STARTUP_RETRY_CLOSE_CODE = 4013;
 const BROWSER_WEBSOCKET_CLOSE_CODE = 1006;
 const BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR_CODE = "BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR";
 const BROWSER_WEBSOCKET_SECURITY_ERROR_CODE = "BROWSER_WEBSOCKET_SECURITY_ERROR";
+const SESSION_PULL_REQUESTS_RETRY_BASE_MS = 30_000;
+const SESSION_PULL_REQUESTS_RETRY_MAX_MS = 5 * 60_000;
+
+type GatewaySessionPullRequestsParams = {
+  sessionKey: string;
+  agentId?: string;
+  refresh?: boolean;
+};
 
 function getErrorMessage(err: unknown): string {
   return err instanceof Error && err.message ? err.message : String(err);
@@ -301,6 +310,13 @@ export class GatewayBrowserClient {
   inboundActivitySeq = 0;
   private pendingDeviceTokenRetry = false;
   private deviceTokenRetryBudgetUsed = false;
+  // This optional surface can be advertised before its runtime dependency is usable.
+  // Scope failures to one socket hello; the generation keeps concurrent rows from
+  // multiplying one outage wave's backoff.
+  private sessionPullRequestsUnavailable = false;
+  private sessionPullRequestsRetryAtMs = 0;
+  private sessionPullRequestsRetryDelayMs = 0;
+  private sessionPullRequestsAvailabilityGeneration = 0;
   private readonly recoveryScopeTracker = new GatewayRecoveryScopeTracker();
 
   constructor(private opts: GatewayBrowserClientOptions) {
@@ -378,6 +394,7 @@ export class GatewayBrowserClient {
     this.client.stop();
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
+    this.resetSessionPullRequestsAvailability();
   }
 
   get connected() {
@@ -494,6 +511,7 @@ export class GatewayBrowserClient {
   private handleConnectHello(hello: GatewayHelloOk, plan: ConnectPlan) {
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
+    this.resetSessionPullRequestsAvailability();
     this.opts.bootstrapToken = undefined;
     if (hello?.auth?.deviceToken && plan.deviceIdentity) {
       storeDeviceAuthToken({
@@ -592,6 +610,60 @@ export class GatewayBrowserClient {
     options?: GatewayProtocolRequestOptions,
   ): Promise<T> {
     return this.client.request<T>(method, params, options);
+  }
+
+  async requestSessionPullRequests(
+    params: GatewaySessionPullRequestsParams,
+  ): Promise<ControlUiSessionPullRequests | null> {
+    if (this.sessionPullRequestsUnavailable || Date.now() < this.sessionPullRequestsRetryAtMs) {
+      return null;
+    }
+    const availabilityGeneration = this.sessionPullRequestsAvailabilityGeneration;
+    try {
+      const result = await this.request<ControlUiSessionPullRequests>(
+        "controlUi.sessionPullRequests",
+        params,
+      );
+      if (availabilityGeneration === this.sessionPullRequestsAvailabilityGeneration) {
+        this.clearSessionPullRequestsAvailability();
+      }
+      return result;
+    } catch (error) {
+      if (
+        error instanceof GatewayRequestError &&
+        error.gatewayCode === "UNAVAILABLE" &&
+        availabilityGeneration === this.sessionPullRequestsAvailabilityGeneration
+      ) {
+        if (!error.retryable) {
+          this.sessionPullRequestsUnavailable = true;
+          this.sessionPullRequestsAvailabilityGeneration += 1;
+        } else {
+          const localDelayMs = Math.min(
+            this.sessionPullRequestsRetryDelayMs || SESSION_PULL_REQUESTS_RETRY_BASE_MS,
+            SESSION_PULL_REQUESTS_RETRY_MAX_MS,
+          );
+          const delayMs = Math.max(error.retryAfterMs ?? 0, localDelayMs);
+          this.sessionPullRequestsRetryDelayMs = Math.min(
+            localDelayMs * 2,
+            SESSION_PULL_REQUESTS_RETRY_MAX_MS,
+          );
+          this.sessionPullRequestsRetryAtMs = Date.now() + delayMs;
+          this.sessionPullRequestsAvailabilityGeneration += 1;
+        }
+      }
+      throw error;
+    }
+  }
+
+  private resetSessionPullRequestsAvailability(): void {
+    this.clearSessionPullRequestsAvailability();
+    this.sessionPullRequestsAvailabilityGeneration += 1;
+  }
+
+  private clearSessionPullRequestsAvailability(): void {
+    this.sessionPullRequestsUnavailable = false;
+    this.sessionPullRequestsRetryAtMs = 0;
+    this.sessionPullRequestsRetryDelayMs = 0;
   }
 
   addEventListener(listener: GatewayEventListener): () => void {

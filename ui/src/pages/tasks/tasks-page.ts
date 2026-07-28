@@ -12,6 +12,7 @@ import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { t } from "../../i18n/index.ts";
 import {
+  findUiSessionRow,
   resolveSessionPreferredFaceForKey,
   resolveSessionNavigationAgentId,
   sessionNavigationTarget,
@@ -383,7 +384,7 @@ class TasksPage extends OpenClawLightDomElement {
         error: this.error,
         tasks: this.tasks,
         cancellingTaskIds: this.cancellingTaskIds,
-        sessionFace: (sessionKey) => resolveSessionPreferredFaceForKey(this.context, sessionKey),
+        sessionRow: (sessionKey) => findUiSessionRow(this.context, sessionKey),
         onCancel: (taskId) => void this.cancelTask(taskId),
         onNavigateToChat: (sessionKey) => {
           const face = resolveSessionPreferredFaceForKey(this.context, sessionKey);
@@ -393,6 +394,7 @@ class TasksPage extends OpenClawLightDomElement {
               context: this.context,
               face,
               sessionKey,
+              preferenceDerivedFace: true,
             }).options,
           );
         },

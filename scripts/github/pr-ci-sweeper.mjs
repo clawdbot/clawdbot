@@ -434,6 +434,12 @@ export async function runPrCiSweeper({
     // close history so a racing push or human action wins over the sweep.
     const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: listed.number });
     if (pr.state !== "open" || pr.head.sha !== listed.head.sha) {
+      results.push({
+        number: listed.number,
+        sha: listed.head.sha.slice(0, 12),
+        action: "skip",
+        reason: "changed-during-sweep",
+      });
       core.info(`pr-ci-sweeper: #${listed.number} changed during sweep; leaving it alone`);
       continue;
     }
@@ -452,17 +458,17 @@ export async function runPrCiSweeper({
         sweeperLogins.has(event.actor.login),
     ).length;
     const verdict = classifyPrForSweep({ pr, ciRuns, botCloseCount, now });
-    results.push({ number: pr.number, sha: pr.head.sha.slice(0, 12), ...verdict });
     if (verdict.action !== "refire") {
+      results.push({ number: pr.number, sha: pr.head.sha.slice(0, 12), ...verdict });
       core.info(`pr-ci-sweeper: skip #${pr.number} (${verdict.reason})`);
       continue;
     }
-    refires += 1;
     if (dryRun) {
+      refires += 1;
+      results.push({ number: pr.number, sha: pr.head.sha.slice(0, 12), ...verdict });
       core.info(`pr-ci-sweeper: dry-run, would re-fire #${pr.number} (${verdict.reason})`);
       continue;
     }
-    core.info(`pr-ci-sweeper: re-firing CI for #${pr.number} (${verdict.reason})`);
     // Revalidate immediately before mutating: a human close or a fresh push in
     // the classify gap must win over the sweep.
     const { data: fresh } = await github.rest.pulls.get({ owner, repo, pull_number: pr.number });
@@ -472,6 +478,12 @@ export async function runPrCiSweeper({
       fresh.auto_merge ||
       fresh.mergeable === false
     ) {
+      results.push({
+        number: pr.number,
+        sha: pr.head.sha.slice(0, 12),
+        action: "skip",
+        reason: "changed-during-sweep",
+      });
       core.info(`pr-ci-sweeper: #${pr.number} changed during sweep; leaving it alone`);
       continue;
     }
@@ -484,9 +496,19 @@ export async function runPrCiSweeper({
       headSha: fresh.head.sha,
     });
     if (latestRuns.some((run) => run.conclusion !== "startup_failure")) {
+      results.push({
+        number: pr.number,
+        sha: pr.head.sha.slice(0, 12),
+        action: "skip",
+        reason: "ci-attached",
+      });
       core.info(`pr-ci-sweeper: #${pr.number} CI attached during sweep; leaving it alone`);
       continue;
     }
+    // Spend the bounded repair budget only after the exact head still needs a close/reopen.
+    refires += 1;
+    results.push({ number: pr.number, sha: pr.head.sha.slice(0, 12), ...verdict });
+    core.info(`pr-ci-sweeper: re-firing CI for #${pr.number} (${verdict.reason})`);
     const knownCloseIds = new Set(
       events.filter((event) => event.event === "closed").map((event) => event.id),
     );

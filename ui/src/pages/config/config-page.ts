@@ -973,6 +973,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       lobsterPetSounds: this.settings.lobsterPetSounds === true,
       setLobsterPetSounds: (enabled) =>
         this.applySettings({ ...this.settings, lobsterPetSounds: enabled }),
+      lobsterdexHref: pathForRoute("lobsterdex", this.context.basePath),
+      onOpenLobsterdex: () => this.context.navigate("lobsterdex"),
       chatSendShortcut: normalizeChatSendShortcut(this.settings.chatSendShortcut),
       setChatSendShortcut: (value) => this.setSetting("chatSendShortcut", value),
       chatFollowUpMode: this.settings.chatFollowUpMode,
@@ -1087,7 +1089,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     const model = resolveModelPrimary(agentsDefaults?.model) ?? "default";
     const thinkingLevel =
       typeof agentsDefaults?.thinkingDefault === "string" ? agentsDefaults.thinkingDefault : "off";
-    const fastMode = agentsDefaults?.fastMode;
+    const fastMode = agentsDefaults?.fastModeDefault;
     const appConfig = this.context.config.current;
     return renderQuickSettings({
       locale: isSupportedLocale(this.settings.locale) ? this.settings.locale : i18n.getLocale(),
@@ -1122,7 +1124,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       onThinkingChange: (level) =>
         runtimeConfig.patchForm(["agents", "defaults", "thinkingDefault"], level),
       onFastModeChange: (mode: FastMode) =>
-        runtimeConfig.patchForm(["agents", "defaults", "fastMode"], mode),
+        runtimeConfig.patchForm(["agents", "defaults", "fastModeDefault"], mode),
     });
   }
 
