@@ -30,7 +30,7 @@ import {
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithSsrFGuard, isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
@@ -196,13 +196,7 @@ export function isOllamaCompatProvider(model: {
   }
   try {
     const parsed = new URL(model.baseUrl);
-    const hostname = normalizeLowercaseStringOrEmpty(parsed.hostname);
-    const isLocalhost =
-      hostname === "localhost" ||
-      hostname === "127.0.0.1" ||
-      hostname === "::1" ||
-      hostname === "[::1]";
-    if (isLocalhost && parsed.port === "11434") {
+    if (isLoopbackHost(parsed.hostname) && parsed.port === "11434") {
       return true;
     }
 
