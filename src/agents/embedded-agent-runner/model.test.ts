@@ -841,6 +841,50 @@ describe("resolveModel", () => {
     expect(discoverModels).not.toHaveBeenCalled();
   });
 
+  it("reuses a prepared configured static model before request-time catalog resolution", async () => {
+    const preparedModel = {
+      provider: "mistral",
+      id: "mistral-medium-3-5",
+      name: "Mistral Medium 3.5",
+      api: "openai-completions" as const,
+      baseUrl: "https://api.mistral.ai/v1",
+      reasoning: true,
+      input: ["text" as const, "image" as const],
+      cost: { input: 1.5, output: 7.5, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 262144,
+      maxTokens: 8192,
+    };
+
+    const result = await resolveModelAsync(
+      "mistral",
+      "mistral-medium-3-5",
+      "/tmp/agent",
+      undefined,
+      {
+        allowBundledStaticCatalogFallback: true,
+        preparedRuntimeModels: [
+          {
+            provider: "mistral",
+            modelId: "mistral-medium-3-5",
+            model: preparedModel,
+          },
+        ],
+        runtimeHooks: createRuntimeHooks(),
+        skipAgentDiscovery: true,
+      },
+    );
+
+    expectRecordFields(expectResolvedModel(result), {
+      provider: "mistral",
+      id: "mistral-medium-3-5",
+      api: "openai-completions",
+      contextWindow: 262144,
+      maxTokens: 8192,
+    });
+    expect(resolveBundledStaticCatalogModelMock).not.toHaveBeenCalled();
+    expect(resolveBundledProviderStaticCatalogModelMock).not.toHaveBeenCalled();
+  });
+
   it("resolves opt-in provider static catalog rows while skipping agent discovery", async () => {
     resolveBundledProviderStaticCatalogModelMock.mockResolvedValueOnce({
       provider: "google",

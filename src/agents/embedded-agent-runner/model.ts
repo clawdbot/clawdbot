@@ -11,6 +11,7 @@ import {
   getPreparedModelRuntimeSnapshot,
   loadPreparedModelRuntimeSnapshot,
 } from "../prepared-model-runtime.js";
+import type { PreparedConfiguredRuntimeModel } from "../prepared-model-runtime.owner.js";
 import {
   AuthStorage as AgentAuthStorageClass,
   ModelRegistry as AgentModelRegistryClass,
@@ -41,6 +42,7 @@ import {
   resolveBundledProviderStaticCatalogModel,
   resolveBundledStaticCatalogModel,
 } from "./model.static-catalog.js";
+import { staticModelIdMatches } from "./model.static-id.js";
 
 export { resolveModelWithRegistry } from "./model.registry-resolution.js";
 
@@ -62,6 +64,7 @@ type AsyncModelResolutionOptions = CommonModelResolutionOptions & {
   retryTransientProviderRuntimeMiss?: boolean;
   agentRuntimeId?: string;
   skipAgentDiscovery?: boolean;
+  preparedRuntimeModels?: readonly PreparedConfiguredRuntimeModel[];
 };
 
 /** Creates isolated model/auth stores for harnesses that own model discovery themselves. */
@@ -300,6 +303,17 @@ export async function resolveModelAsync(
       return undefined;
     }
     staticCatalogLookup ??= (async () => {
+      const preparedModel = options.preparedRuntimeModels?.find((candidate) =>
+        staticModelIdMatches({
+          candidateId: candidate.modelId,
+          rowProvider: candidate.provider,
+          provider: normalizedRef.provider,
+          modelId: normalizedRef.model,
+        }),
+      )?.model;
+      if (preparedModel) {
+        return preparedModel;
+      }
       const manifestModel = resolveBundledStaticCatalogModel({
         provider: normalizedRef.provider,
         modelId: normalizedRef.model,
