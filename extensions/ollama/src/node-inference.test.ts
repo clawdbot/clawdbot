@@ -27,6 +27,7 @@ async function withOllamaServer<T>(
     chatRequests: Record<string, unknown>[],
     showRequests: string[],
   ) => Promise<T>,
+  options?: { models: Array<Record<string, unknown>> },
 ): Promise<T> {
   const chatRequests: Record<string, unknown>[] = [];
   const showRequests: string[] = [];
@@ -35,7 +36,7 @@ async function withOllamaServer<T>(
     if (request.url === "/api/tags") {
       response.end(
         JSON.stringify({
-          models: [
+          models: options?.models ?? [
             {
               name: "remote:cloud",
               size: 1,
@@ -84,7 +85,7 @@ async function withOllamaServer<T>(
         response.end(JSON.stringify({ error: "show failed" }));
         return;
       }
-      const embedding = body.name === "embedding:latest";
+      const embedding = body.name?.startsWith("embedding") === true;
       response.end(
         JSON.stringify({
           capabilities: embedding ? ["embedding"] : ["completion", "tools"],
@@ -168,6 +169,29 @@ describe("Ollama node host inference", () => {
         quantization: "Q4_K_M",
       });
     });
+  });
+
+  it("discovers a local chat model after 200 embedding-only node models", async () => {
+    const models = [
+      ...Array.from({ length: 200 }, (_, index) => ({ name: `embedding-${index}:latest` })),
+      { name: "chat:small", size: 500 },
+    ];
+
+    await withOllamaServer(
+      async (baseUrl, _chatRequests, showRequests) => {
+        const result = JSON.parse(await commandByName(baseUrl, OLLAMA_MODELS_COMMAND).handle()) as {
+          provider: string;
+          models: Array<{ name: string }>;
+        };
+
+        expect(result).toEqual({
+          provider: "ollama",
+          models: [expect.objectContaining({ name: "chat:small" })],
+        });
+        expect(showRequests).toHaveLength(201);
+      },
+      { models },
+    );
   });
 
   it("runs bounded chat and returns compact usage", async () => {
