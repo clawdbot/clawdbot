@@ -26,6 +26,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveContinuationTraceparent } from "../../infra/continuation-tracer.js";
 import { generateChainId } from "../../infra/secure-random.js";
 import {
+  SessionDeliveryDeadLetteredError,
   SessionDeliveryDeferredError,
   type QueuedSessionDelivery,
   type SessionDeliveryContext,
@@ -36,6 +37,8 @@ import { resolveContinuationRuntimeConfig } from "../continuation/config.js";
 import {
   markPendingDelegateFailed,
   markPendingDelegateSpawnAccepted,
+  revalidatePendingDelegateForSpawn,
+  type DelegateSpawnFenceResult,
 } from "../continuation/delegate-store.js";
 import { hasCrossSessionDelegateTargeting } from "../continuation/targeting-pure.js";
 import type { ContinuationRuntimeConfig } from "../continuation/types.js";
@@ -66,6 +69,10 @@ export type PostCompactionDelegateDeliveryDeps = {
   resolveSessionAgentId(params: { sessionKey?: string; config?: OpenClawConfig }): string;
   resolveStorePath(store?: string, opts?: { agentId?: string; env?: NodeJS.ProcessEnv }): string;
   spawnSubagentDirect: PostCompactionDelegateSpawn;
+  revalidatePendingDelegateForSpawn(
+    delegate: { flowId?: string; expectedRevision?: number; task: string },
+    controller: "post-compaction",
+  ): DelegateSpawnFenceResult;
   markPendingDelegateSpawnAccepted(
     delegate: { flowId?: string; expectedRevision?: number; task: string },
     childSessionKey: string,
@@ -88,6 +95,7 @@ const defaultPostCompactionDelegateDeliveryDeps: PostCompactionDelegateDeliveryD
   resolveSessionAgentId,
   resolveStorePath,
   spawnSubagentDirect,
+  revalidatePendingDelegateForSpawn,
   markPendingDelegateSpawnAccepted,
   markPendingDelegateFailed,
 };
@@ -592,6 +600,22 @@ export async function deliverQueuedPostCompactionDelegate(
   const artifactFlowId = params.entry.sourceFlowId ?? params.entry.id;
   if (artifactMode === "optional" || artifactMode === "required") {
     assertDelegateArtifactPolicyPrepared(artifactFlowId);
+  }
+
+  const spawnFence = deps.revalidatePendingDelegateForSpawn(
+    {
+      flowId: params.entry.sourceFlowId,
+      expectedRevision: params.entry.sourceExpectedRevision,
+      task: params.entry.task,
+    },
+    "post-compaction",
+  );
+  if (!spawnFence.allowed) {
+    removeRejectedArtifactPolicy();
+    deps.log(
+      `[continuation:post-compaction-spawn-fenced] reason=${spawnFence.reason} flowId=${params.entry.sourceFlowId ?? "unknown"} entryId=${params.entry.id}`,
+    );
+    throw new SessionDeliveryDeadLetteredError(spawnFence.summary);
   }
 
   const spawnResult = await deps.spawnSubagentDirect(

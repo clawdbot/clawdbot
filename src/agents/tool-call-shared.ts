@@ -197,7 +197,13 @@ function redactContinueDelegateAttachment(value: unknown): Record<string, unknow
 
 /** Normalize a transcript tool-call name and redact continuation snapshot bytes. */
 export function sanitizeTranscriptToolCallBlock<
-  T extends { name?: unknown; input?: unknown; arguments?: unknown; partialJson?: unknown },
+  T extends {
+    name?: unknown;
+    input?: unknown;
+    arguments?: unknown;
+    partialArgs?: unknown;
+    partialJson?: unknown;
+  },
 >(block: T): T {
   // sessions_spawn payloads remain trusted transcript-owned state. Continuation
   // snapshots are durable queue input and are redacted once the call is recorded.
@@ -212,9 +218,16 @@ export function sanitizeTranscriptToolCallBlock<
   const args = isContinueDelegate
     ? redactContinueDelegateAttachmentContent(block.arguments)
     : block.arguments;
+  const removePartialArgs = isContinueDelegate && Object.hasOwn(block, "partialArgs");
   const removePartialJson = isContinueDelegate && Object.hasOwn(block, "partialJson");
 
-  if (!nameChanged && input === block.input && args === block.arguments && !removePartialJson) {
+  if (
+    !nameChanged &&
+    input === block.input &&
+    args === block.arguments &&
+    !removePartialArgs &&
+    !removePartialJson
+  ) {
     return block;
   }
   const next = { ...block } as T;
@@ -226,6 +239,9 @@ export function sanitizeTranscriptToolCallBlock<
   }
   if ("arguments" in block) {
     next.arguments = args;
+  }
+  if (removePartialArgs) {
+    delete next.partialArgs;
   }
   if (removePartialJson) {
     delete next.partialJson;

@@ -4,6 +4,7 @@ import { formatDelegateArtifactTaskInstruction } from "../../agents/delegate-art
 import {
   assertDelegateArtifactPolicyPrepared,
   MissingDelegateArtifactPolicyError,
+  removeUnacceptedDelegateArtifactPolicy,
   UnavailableDelegateArtifactPolicyError,
 } from "../../agents/delegate-artifacts.js";
 import { spawnSubagentDirect } from "../../agents/subagent-spawn.js";
@@ -17,7 +18,10 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { InlineAttachment, InlineAttachmentMount } from "../../shared/inline-attachments.js";
 import { resolveContinuationRuntimeConfig } from "./config.js";
 import { partitionKnownAcceptedDelegateChildren } from "./delegate-dispatch-accepted-children.js";
-import { requeueReleasedPostCompactionTaskFlowDelegate } from "./delegate-store.js";
+import {
+  requeueReleasedPostCompactionTaskFlowDelegate,
+  revalidatePendingDelegateForSpawn,
+} from "./delegate-store.js";
 import { rejectPostCompactionTaskFlowDelegate } from "./post-compaction-taskflow-rejection.js";
 import { checkContinuationBudget, type ChainState } from "./scheduler.js";
 import { hasCrossSessionDelegateTargeting } from "./targeting-pure.js";
@@ -298,6 +302,24 @@ export async function dispatchStagedPostCompactionDelegates(
           delegate.returnOptions?.artifacts === "required")
       ) {
         assertDelegateArtifactPolicyPrepared(delegate.flowId);
+      }
+      const spawnFence = revalidatePendingDelegateForSpawn(delegate, "post-compaction");
+      if (!spawnFence.allowed) {
+        failed++;
+        if (delegate.flowId) {
+          terminalRejectedFlowIds.push(delegate.flowId);
+          if (managedArtifacts) {
+            removeUnacceptedDelegateArtifactPolicy(delegate.flowId);
+          }
+        }
+        postCompactionLog.warn(
+          `[continuation:post-compaction-spawn-fenced] reason=${spawnFence.reason} flowId=${delegate.flowId ?? "unknown"} session=${sessionKey}`,
+        );
+        enqueueSystemEvent(
+          `[continuation] ${spawnFence.summary} Task: ${formatDelegateTaskForSystemEvent(delegate.task)}`,
+          { sessionKey, trusted: true },
+        );
+        continue;
       }
       const spawnResult = await spawnSubagentDirect(
         {

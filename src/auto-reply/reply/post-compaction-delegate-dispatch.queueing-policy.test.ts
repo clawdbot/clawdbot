@@ -227,6 +227,7 @@ function createDeliveryDeps(params: {
     resolveSessionAgentId: vi.fn(() => "main"),
     resolveStorePath: vi.fn(() => params.storePath),
     spawnSubagentDirect,
+    revalidatePendingDelegateForSpawn: vi.fn(() => ({ allowed: true }) as const),
     markPendingDelegateSpawnAccepted,
     markPendingDelegateFailed,
   };

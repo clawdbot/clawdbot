@@ -51,6 +51,7 @@ import {
   markPendingDelegateFailed,
   markPendingDelegateSpawnAccepted,
   peekSoonestUnmaturedDelegateDueAt,
+  revalidatePendingDelegateForSpawn,
   requeuePendingDelegate,
 } from "./delegate-store.js";
 import { checkContinuationBudget, type ChainState } from "./scheduler.js";
@@ -572,6 +573,20 @@ export async function dispatchToolDelegates(
           delegate.returnOptions?.artifacts === "required")
       ) {
         assertDelegateArtifactPolicyPrepared(delegate.flowId);
+      }
+      const spawnFence = revalidatePendingDelegateForSpawn(delegate, "pending");
+      if (!spawnFence.allowed) {
+        log.info(
+          `[continuation:delegate-spawn-fenced] reason=${spawnFence.reason} flowId=${delegate.flowId ?? "unknown"} session=${sessionKey}`,
+        );
+        removeRejectedArtifactPolicy(delegate);
+        dispatchSpan.setStatus("ERROR", spawnFence.summary);
+        enqueueSystemEvent(
+          `[continuation] ${spawnFence.summary} Task: ${formatDelegateTaskForSystemEvent(delegate.task)}`,
+          { sessionKey, trusted: true },
+        );
+        rejected++;
+        continue;
       }
       spawnAttempted = true;
       const result = await spawnSubagentDirect(

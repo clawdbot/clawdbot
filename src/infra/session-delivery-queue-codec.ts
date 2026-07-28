@@ -169,13 +169,44 @@ const QueuedInlineAttachmentSchema = z
   })
   .strict();
 
+function parseQueuedAttachmentMountPath(
+  value: unknown,
+  options: { requireCanonicalInput?: boolean } = {},
+) {
+  const parsed = parseInlineAttachmentMountPath(value);
+  if (parsed.status !== "valid") {
+    if (
+      parsed.status === "absent" &&
+      options.requireCanonicalInput === true &&
+      value !== undefined &&
+      value !== null
+    ) {
+      return { status: "invalid" } as const;
+    }
+    return parsed;
+  }
+  if (
+    (options.requireCanonicalInput === true && value !== parsed.mountPath) ||
+    parsed.mountPath.startsWith("/") ||
+    parsed.mountPath.endsWith("/") ||
+    parsed.mountPath.includes("//") ||
+    !/^[A-Za-z0-9._\-/]+$/.test(parsed.mountPath) ||
+    parsed.mountPath.split("/").some((segment) => segment === "." || segment === "..")
+  ) {
+    return { status: "invalid" } as const;
+  }
+  return parsed;
+}
+
 const QueuedInlineAttachmentMountSchema = z
   .object({
     mountPath: z.string().optional(),
   })
   .strict()
   .transform((mount, ctx) => {
-    const parsed = parseInlineAttachmentMountPath(mount.mountPath);
+    const parsed = parseQueuedAttachmentMountPath(mount.mountPath, {
+      requireCanonicalInput: true,
+    });
     if (parsed.status === "invalid") {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -408,6 +439,40 @@ const QueuedPostCompactionDelegateSchema = z
   })
   .transform(stripQueuedAttachmentMountWithoutAttachments);
 
+function normalizeQueuedPostCompactionMountForPersistence(
+  entry: QueuedSessionDelivery,
+): QueuedSessionDelivery {
+  if (entry.kind !== "postCompactionDelegate") {
+    return entry;
+  }
+  const rawAttachAs = (entry as { attachAs?: unknown }).attachAs;
+  if (
+    rawAttachAs === undefined ||
+    !rawAttachAs ||
+    typeof rawAttachAs !== "object" ||
+    Array.isArray(rawAttachAs)
+  ) {
+    return entry;
+  }
+  const mountPath = (rawAttachAs as { mountPath?: unknown }).mountPath;
+  const parsed = parseQueuedAttachmentMountPath(mountPath);
+  if (parsed.status === "invalid") {
+    return entry;
+  }
+  if (parsed.status === "absent") {
+    const normalized = { ...entry };
+    delete normalized.attachAs;
+    return normalized;
+  }
+  if (mountPath === parsed.mountPath) {
+    return entry;
+  }
+  return {
+    ...entry,
+    attachAs: { ...(rawAttachAs as Record<string, unknown>), mountPath: parsed.mountPath },
+  } as QueuedSessionDelivery;
+}
+
 const INVALID_POST_COMPACTION_DELIVERY_JSON =
   "invalid postCompactionDelegate delivery payload: invalid JSON";
 const INVALID_POST_COMPACTION_DELIVERY_SHAPE =
@@ -491,7 +556,9 @@ export function normalizeSessionDeliveryForPersistence(
     }
     return parsed.data as QueuedSessionDelivery;
   }
-  const parsed = QueuedPostCompactionDelegateSchema.safeParse(entry);
+  const parsed = QueuedPostCompactionDelegateSchema.safeParse(
+    normalizeQueuedPostCompactionMountForPersistence(entry),
+  );
   if (!parsed.success) {
     throw new Error(INVALID_POST_COMPACTION_DELIVERY_SHAPE);
   }

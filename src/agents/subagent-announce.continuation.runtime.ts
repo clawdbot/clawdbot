@@ -5,6 +5,7 @@ import {
   enqueuePendingDelegate,
   markPendingDelegateFailed,
   markPendingDelegateSpawnAccepted,
+  revalidatePendingDelegateForSpawn,
   stagePostCompactionDelegate,
 } from "../auto-reply/continuation/delegate-store.js";
 import { stripContinuationSignal } from "../auto-reply/continuation/signal.js";
@@ -22,6 +23,7 @@ import { resolveContinuationTraceparent } from "../infra/continuation-tracer.js"
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { defaultRuntime } from "../runtime.js";
 import type { DeliveryContext } from "../utils/delivery-context.js";
+import { removeUnacceptedDelegateArtifactPolicy } from "./delegate-artifacts.js";
 import { loadSessionEntryByKey } from "./subagent-announce-delivery.js";
 import {
   type ContinuationChainSource,
@@ -537,6 +539,24 @@ export async function coordinateSubagentContinuation(params: {
           continue;
         }
         const childDepth = getSubagentDepthFromSessionStore(params.childSessionKey);
+        const spawnFence = revalidatePendingDelegateForSpawn(delegate, "pending");
+        if (!spawnFence.allowed) {
+          if (
+            delegate.flowId &&
+            (delegate.returnOptions?.artifacts === "optional" ||
+              delegate.returnOptions?.artifacts === "required")
+          ) {
+            removeUnacceptedDelegateArtifactPolicy(delegate.flowId);
+          }
+          defaultRuntime.log(
+            `[continuation:delegate-spawn-fenced] reason=${spawnFence.reason} flowId=${delegate.flowId ?? "unknown"} session=${params.childSessionKey}`,
+          );
+          enqueueSystemEvent(`[continuation] ${spawnFence.summary} Task: ${delegate.task}`, {
+            sessionKey: params.targetRequesterSessionKey,
+            trusted: true,
+          });
+          continue;
+        }
         const spawnResult = await spawnSubagentDirect(
           {
             task: `[continuation:chain-hop:${nextHop}] Tool-delegated from sub-agent (depth ${childDepth}): ${delegate.task}`,

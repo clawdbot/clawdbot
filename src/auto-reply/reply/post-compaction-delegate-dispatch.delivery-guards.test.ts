@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   enqueuePostCompactionDelegateDelivery as enqueuePostCompactionDelegateDeliveryQueue,
   loadPendingSessionDelivery,
+  SessionDeliveryDeadLetteredError,
   SessionDeliveryDeferredError,
 } from "../../infra/session-delivery-queue-storage.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
@@ -209,6 +210,13 @@ function createDeliveryDeps(params: {
   runtimeConfig?: Partial<ContinuationRuntimeConfig>;
   spawnStatus?: "accepted" | "forbidden" | "error";
   spawnError?: Error;
+  spawnFence?:
+    | { allowed: true }
+    | {
+        allowed: false;
+        reason: "cancelled" | "stale";
+        summary: string;
+      };
 }) {
   const enqueueSystemEvent = vi.fn();
   const log = vi.fn();
@@ -223,6 +231,9 @@ function createDeliveryDeps(params: {
   );
   const markPendingDelegateSpawnAccepted = vi.fn(() => true);
   const markPendingDelegateFailed = vi.fn(() => true);
+  const revalidatePendingDelegateForSpawn = vi.fn(
+    () => params.spawnFence ?? ({ allowed: true } as const),
+  );
   const deps: PostCompactionDelegateDeliveryDeps = {
     enqueueSystemEvent,
     getRuntimeConfig: vi.fn(() => cfg),
@@ -237,6 +248,7 @@ function createDeliveryDeps(params: {
     resolveSessionAgentId: vi.fn(() => "main"),
     resolveStorePath: vi.fn(() => params.storePath),
     spawnSubagentDirect,
+    revalidatePendingDelegateForSpawn,
     markPendingDelegateSpawnAccepted,
     markPendingDelegateFailed,
   };
@@ -247,6 +259,7 @@ function createDeliveryDeps(params: {
     log,
     markPendingDelegateFailed,
     markPendingDelegateSpawnAccepted,
+    revalidatePendingDelegateForSpawn,
     spawnSubagentDirect,
   };
 }
@@ -302,6 +315,48 @@ const splitLintUse = [
 void splitLintUse;
 
 describe("post-compaction delegate dispatch extraction", () => {
+  it("dead-letters a source cancelled after claim without spawning or retrying", async () => {
+    await withTempDir({ prefix: "openclaw-post-compaction-source-cancelled-" }, async (tempDir) => {
+      const storePath = path.join(tempDir, "sessions.json");
+      await seedSessionStore(storePath, { main: { sessionId: "session", updatedAt: Date.now() } });
+      const {
+        deps,
+        markPendingDelegateSpawnAccepted,
+        revalidatePendingDelegateForSpawn,
+        spawnSubagentDirect,
+      } = createDeliveryDeps({
+        storePath,
+        spawnFence: {
+          allowed: false,
+          reason: "cancelled",
+          summary: "Continuation delegate cancelled before spawn.",
+        },
+      });
+      const entry = createQueuedEntry({
+        sourceFlowId: "pc-flow-source",
+        sourceExpectedRevision: 7,
+        attachments: [{ name: "private.txt", content: "cancelled secret" }],
+        returnOptions: { artifacts: "required" },
+      });
+
+      await expect(deliverQueuedPostCompactionDelegate({ entry }, deps)).rejects.toBeInstanceOf(
+        SessionDeliveryDeadLetteredError,
+      );
+
+      expect(revalidatePendingDelegateForSpawn).toHaveBeenCalledWith(
+        {
+          flowId: "pc-flow-source",
+          expectedRevision: 7,
+          task: "queued delegate",
+        },
+        "post-compaction",
+      );
+      expect(spawnSubagentDirect).not.toHaveBeenCalled();
+      expect(markPendingDelegateSpawnAccepted).not.toHaveBeenCalled();
+      expect(removeUnacceptedDelegateArtifactPolicyMock).toHaveBeenCalledWith("pc-flow-source");
+    });
+  });
+
   it("uses queued source flow ids for idempotent post-compaction spawns and commits accepted TaskFlow rows", async () => {
     await withTempDir({ prefix: "openclaw-post-compaction-source-flow-" }, async (tempDir) => {
       const storePath = path.join(tempDir, "sessions.json");

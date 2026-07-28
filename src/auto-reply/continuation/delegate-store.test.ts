@@ -43,6 +43,7 @@ type MockTaskFlowRecord = {
   createdAt: number;
   updatedAt: number;
   endedAt?: number;
+  cancelRequestedAt?: number;
 };
 
 const mockFlows = new Map<string, MockTaskFlowRecord>();
@@ -176,6 +177,7 @@ import {
   markPendingDelegateFailed,
   markPendingDelegateSpawnAccepted,
   pendingDelegateCount,
+  revalidatePendingDelegateForSpawn,
   resetDelegateStoreForTests,
   stagePostCompactionTaskFlowDelegate,
   stagedPostCompactionDelegateCount,
@@ -226,6 +228,31 @@ describe("delegate store — TaskFlow-backed", () => {
     expect(delegates).toHaveLength(1);
     expect(expectDefined(delegates.at(0), "delegate").task).toBe("check CI");
     expect(pendingDelegateCount("session-1")).toBe(0);
+  });
+
+  it("does not recover or claim a cancel-requested pending delegate and scrubs snapshots", () => {
+    const sessionKey = "session-cancel-requested-pending";
+    const secret = "CANCEL_REQUESTED_PENDING_SECRET";
+    enqueuePendingDelegate(sessionKey, {
+      task: "must not spawn",
+      attachments: [{ name: "brief.md", content: secret }],
+      attachAs: { mountPath: "handoff" },
+    });
+    const flow = expectDefined([...mockFlows.values()].at(0), "pending flow");
+    flow.cancelRequestedAt = Date.now();
+
+    expect(listPendingDelegateSessionKeysForRecovery()).toEqual([]);
+    expect(hasRecoverablePendingDelegate(sessionKey)).toBe(false);
+    expect(consumePendingDelegates(sessionKey)).toEqual([]);
+    expect(flow.status).toBe("queued");
+    expect(flow.cancelRequestedAt).toBeDefined();
+    expect(flow.stateJson).toMatchObject({
+      kind: "continuation_delegate",
+      task: "must not spawn",
+    });
+    expect(flow.stateJson).not.toHaveProperty("attachments");
+    expect(flow.stateJson).not.toHaveProperty("attachAs");
+    expect(JSON.stringify(flow.stateJson)).not.toContain(secret);
   });
 
   it("uses only regular queued/running pending delegates for cleanup deferral", () => {
@@ -983,6 +1010,87 @@ describe("post-compaction delegate staging", () => {
     expect(delegate.task).toBe("rehydrate state");
     expect(delegate.mode).toBe("post-compaction");
     expect(stagedPostCompactionDelegateCount("session-1")).toBe(0);
+  });
+
+  it("does not claim or recover cancel-requested post-compaction delegates and scrubs snapshots", () => {
+    const queuedSessionKey = "session-cancel-requested-post-compaction-queued";
+    const runningSessionKey = "session-cancel-requested-post-compaction-running";
+    stagePostCompactionTaskFlowDelegate(queuedSessionKey, {
+      task: "queued must not spawn",
+      stagedAt: 1_000,
+      attachments: [{ name: "queued.md", content: "QUEUED_CANCEL_SECRET" }],
+      attachAs: { mountPath: "handoff" },
+    });
+    const queuedFlow = expectDefined([...mockFlows.values()].at(0), "queued flow");
+    queuedFlow.cancelRequestedAt = Date.now();
+
+    stagePostCompactionTaskFlowDelegate(runningSessionKey, {
+      task: "running must not recover",
+      stagedAt: 2_000,
+      attachments: [{ name: "running.md", content: "RUNNING_CANCEL_SECRET" }],
+      attachAs: { mountPath: "handoff" },
+    });
+    const runningDelegate = expectDefined(
+      claimStagedPostCompactionTaskFlowDelegates(runningSessionKey).at(0),
+      "running delegate",
+    );
+    const runningFlow = expectDefined(mockFlows.get(runningDelegate.flowId!), "running flow");
+    runningFlow.cancelRequestedAt = Date.now();
+
+    expect(claimStagedPostCompactionTaskFlowDelegates(queuedSessionKey)).toEqual([]);
+    expect(listRecoverableStagedPostCompactionDelegates()).toEqual([]);
+    expect(queuedFlow.status).toBe("queued");
+    expect(runningFlow.status).toBe("running");
+    for (const flow of [queuedFlow, runningFlow]) {
+      expect(flow.cancelRequestedAt).toBeDefined();
+      expect(flow.stateJson).not.toHaveProperty("attachments");
+      expect(flow.stateJson).not.toHaveProperty("attachAs");
+      expect(JSON.stringify(flow.stateJson)).not.toContain("CANCEL_SECRET");
+    }
+  });
+
+  it("fails a post-compaction source cancelled after claim at the pre-spawn fence", () => {
+    const sessionKey = "post-compaction-cancelled-after-claim";
+    const secret = "POST_COMPACTION_CANCELLED_AFTER_CLAIM_SECRET";
+    stagePostCompactionTaskFlowDelegate(sessionKey, {
+      task: "must not spawn after cancellation",
+      stagedAt: Date.now(),
+      attachments: [{ name: "private.md", content: secret }],
+      attachAs: { mountPath: "handoff" },
+    });
+    const delegate = expectDefined(
+      claimStagedPostCompactionTaskFlowDelegates(sessionKey).at(0),
+      "claimed post-compaction delegate",
+    );
+    const flow = expectDefined(mockFlows.get(delegate.flowId!), "claimed post-compaction flow");
+    flow.cancelRequestedAt = Date.now();
+    flow.revision += 1;
+
+    expect(revalidatePendingDelegateForSpawn(delegate, "post-compaction")).toMatchObject({
+      allowed: false,
+      reason: "cancelled",
+    });
+    expect(flow.status).toBe("failed");
+    expect(flow.stateJson).not.toHaveProperty("attachments");
+    expect(flow.stateJson).not.toHaveProperty("attachAs");
+    expect(JSON.stringify(flow.stateJson)).not.toContain(secret);
+  });
+
+  it("accepts the single source revision committed by durable post-compaction handoff", () => {
+    const sessionKey = "post-compaction-durable-handoff-revision";
+    stagePostCompactionTaskFlowDelegate(sessionKey, {
+      task: "spawn from the durable handoff",
+      stagedAt: Date.now(),
+    });
+    const delegate = expectDefined(
+      claimStagedPostCompactionTaskFlowDelegates(sessionKey).at(0),
+      "claimed post-compaction delegate",
+    );
+
+    expect(finalizeStagedPostCompactionDelegates([delegate.flowId])).toBe(1);
+    expect(revalidatePendingDelegateForSpawn(delegate, "post-compaction")).toEqual({
+      allowed: true,
+    });
   });
 
   it("preserves firstArmedAt across post-compaction TaskFlow storage", () => {

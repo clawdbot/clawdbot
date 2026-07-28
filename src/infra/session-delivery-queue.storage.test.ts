@@ -419,7 +419,7 @@ describe("session-delivery queue storage", () => {
     });
   });
 
-  it("canonicalizes post-compaction mount hints before durable enqueue", async () => {
+  it("persists only canonical relative post-compaction mount hints", async () => {
     await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const id = await enqueuePostCompactionDelegateDelivery(
         {
@@ -439,20 +439,79 @@ describe("session-delivery queue storage", () => {
         kind: "postCompactionDelegate",
         attachAs: { mountPath: "handoff/path" },
       });
-      await expect(
-        enqueuePostCompactionDelegateDelivery(
+
+      const invalidMountPaths = [
+        "/absolute",
+        "handoff/../outside",
+        "handoff/./nested",
+        "handoff//nested",
+        "handoff/path/",
+        "handoff:path",
+        "unsafe\npath",
+      ];
+      for (const [index, mountPath] of invalidMountPaths.entries()) {
+        await expect(
+          enqueuePostCompactionDelegateDelivery(
+            {
+              sessionKey: "agent:main:main",
+              delegate: {
+                task: "reject unsafe mount",
+                createdAt: 124 + index,
+                attachments: [{ name: "brief.md", content: "snapshot" }],
+                attachAs: { mountPath },
+              },
+              sequence: index + 1,
+            },
+            tempDir,
+          ),
+          mountPath,
+        ).rejects.toThrow("invalid postCompactionDelegate delivery payload: invalid shape");
+      }
+      await expect(loadPendingSessionDeliveries(tempDir)).resolves.toHaveLength(1);
+    });
+  });
+
+  it("dead-letters noncanonical recovered post-compaction mount hints and scrubs them", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const invalidMountPaths = [
+        "/absolute",
+        "handoff/../outside",
+        "handoff/./nested",
+        "handoff//nested",
+        "handoff/path/",
+        " handoff/path ",
+        "handoff:path",
+      ];
+
+      for (const [sequence, mountPath] of invalidMountPaths.entries()) {
+        const secret = `INVALID_RECOVERED_MOUNT_SECRET_${sequence}`;
+        const id = await enqueuePostCompactionDelegateDelivery(
           {
             sessionKey: "agent:main:main",
             delegate: {
-              task: "reject unsafe mount",
-              createdAt: 124,
-              attachAs: { mountPath: "unsafe\npath" },
+              task: "recover only a canonical mount",
+              createdAt: 200 + sequence,
+              attachments: [{ name: "brief.md", content: secret }],
+              attachAs: { mountPath: "handoff/path" },
             },
-            sequence: 1,
+            sequence,
           },
           tempDir,
-        ),
-      ).rejects.toThrow("invalid postCompactionDelegate delivery payload: invalid shape");
+        );
+        rewriteSessionQueueEntry(tempDir, id, (entry) => {
+          entry.attachAs = { mountPath };
+        });
+
+        await expect(loadPendingSessionDelivery(id, tempDir), mountPath).resolves.toBeNull();
+        const row = readSessionQueueRow(tempDir, id);
+        expect(row).toMatchObject({
+          status: "failed",
+          last_error: "invalid postCompactionDelegate delivery payload: invalid shape",
+        });
+        expect(row?.entry_json).not.toContain(secret);
+        expect(row?.entry_json).not.toContain("attachAs");
+        expect(row?.entry_json).not.toContain("attachments");
+      }
     });
   });
 

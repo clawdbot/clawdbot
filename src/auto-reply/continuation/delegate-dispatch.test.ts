@@ -198,13 +198,16 @@ vi.mock("../../tasks/task-flow-registry.js", () => ({
       return { applied: true, flow: { ...flow } };
     },
   ),
-  failFlow: vi.fn((params: { flowId: string }) => {
+  failFlow: vi.fn((params: { flowId: string; stateJson?: unknown }) => {
     const flow = mockFlows.get(params.flowId);
     if (failFlowShouldPersistFail) {
       return { applied: false, reason: "persist_failed", current: flow ? { ...flow } : undefined };
     }
     if (flow) {
       flow.status = "failed";
+      if (params.stateJson !== undefined) {
+        flow.stateJson = params.stateJson;
+      }
     }
     return { applied: Boolean(flow) };
   }),
@@ -375,6 +378,52 @@ const splitLintUse = [
 void splitLintUse;
 
 describe("managed artifact pre-spawn lifecycle", () => {
+  it("fails and scrubs a delegate cancelled after claim without spawning", async () => {
+    const sessionKey = "agent:main:managed-cancelled-after-claim";
+    setRuntimeConfigSnapshot({
+      agents: { defaults: { continuation: { enabled: true } } },
+      tools: { sessions_spawn: { attachments: { enabled: true } } },
+    });
+    const delegate = enqueuePendingDelegate(
+      sessionKey,
+      {
+        task: "produce a cancelled report",
+        attachments: [{ name: "private.txt", content: "cancelled secret" }],
+        returnOptions: { artifacts: "required" },
+      },
+      {
+        attachmentConfig: {
+          tools: { sessions_spawn: { attachments: { enabled: true } } },
+        },
+      },
+    );
+    assertDelegateArtifactPolicyPreparedMock.mockImplementationOnce(() => {
+      const flow = expectDefined(mockFlows.get(delegate!.flowId!), "claimed delegate flow");
+      flow.cancelRequestedAt = Date.now();
+      flow.revision = Number(flow.revision) + 1;
+    });
+
+    const result = await dispatchToolDelegates({
+      sessionKey,
+      chainState: {
+        currentChainCount: 0,
+        chainStartedAt: Date.now(),
+        accumulatedChainTokens: 0,
+      },
+      ctx: { sessionKey },
+      maxChainLength: 8,
+      config: continuationConfig({ enabled: true, crossSessionTargeting: "enabled" }),
+    });
+
+    expect(result).toMatchObject({ dispatched: 0, rejected: 1 });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    const terminalFlow = expectDefined(mockFlows.get(delegate!.flowId!), "terminal delegate flow");
+    expect(terminalFlow.status).toBe("failed");
+    expect(terminalFlow.stateJson).not.toHaveProperty("attachments");
+    expect(terminalFlow.stateJson).not.toHaveProperty("attachAs");
+    expect(removeUnacceptedDelegateArtifactPolicyMock).toHaveBeenCalledWith(delegate!.flowId);
+  });
+
   it("requeues accepted managed work when continuation is disabled before spawn", async () => {
     const sessionKey = "agent:main:managed-disabled";
     enqueuePendingDelegate(sessionKey, {
@@ -779,11 +828,22 @@ describe("raw trusted delegate task echoes", () => {
   it("forwards typed attachments into the continuation child spawn", async () => {
     const sessionKey = "session-with-attachments";
     const attachments = [{ name: "handoff.txt", content: "scoped child input" }];
-    enqueuePendingDelegate(sessionKey, {
-      task: "consume the handoff",
-      attachments,
-      attachAs: { mountPath: "handoff" },
+    setRuntimeConfigSnapshot({
+      tools: { sessions_spawn: { attachments: { enabled: true } } },
     });
+    enqueuePendingDelegate(
+      sessionKey,
+      {
+        task: "consume the handoff",
+        attachments,
+        attachAs: { mountPath: "handoff" },
+      },
+      {
+        attachmentConfig: {
+          tools: { sessions_spawn: { attachments: { enabled: true } } },
+        },
+      },
+    );
 
     await dispatchToolDelegates({
       sessionKey,
@@ -850,7 +910,7 @@ describe("raw trusted delegate task echoes", () => {
       }
     }
 
-    expect(taskReferences).toHaveLength(15);
+    expect(taskReferences).toHaveLength(17);
     expect(
       taskReferences.every((taskReference) => {
         const parent = taskReference.parent;

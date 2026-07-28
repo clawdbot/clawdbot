@@ -75,8 +75,16 @@ type ConsumedToolDelegate = {
   flowId?: string;
   expectedRevision?: number;
 };
+type DelegateSpawnFenceResult =
+  | { allowed: true }
+  | { allowed: false; reason: "cancelled" | "stale"; summary: string };
 const consumePendingDelegatesMock = vi.fn((_sessionKey: string): ConsumedToolDelegate[] => []);
 const markPendingDelegateFailedMock = vi.fn();
+const revalidatePendingDelegateForSpawnMock = vi.fn(
+  (_delegate: ConsumedToolDelegate, _controller: "pending"): DelegateSpawnFenceResult => ({
+    allowed: true,
+  }),
+);
 // capture durable delayed-bracket delegate enqueues (replaces the old
 // volatile setTimeout path).
 const enqueuePendingDelegateMock = vi.fn((_sessionKey: string, _delegate: unknown) => {});
@@ -247,6 +255,8 @@ vi.mock("../auto-reply/continuation/delegate-store.js", async (importOriginal) =
   ...(await importOriginal<typeof import("../auto-reply/continuation/delegate-store.js")>()),
   consumePendingDelegates: (sessionKey: string) => consumePendingDelegatesMock(sessionKey),
   markPendingDelegateFailed: (...args: unknown[]) => markPendingDelegateFailedMock(...args),
+  revalidatePendingDelegateForSpawn: (delegate: ConsumedToolDelegate, controller: "pending") =>
+    revalidatePendingDelegateForSpawnMock(delegate, controller),
   enqueuePendingDelegate: (sessionKey: string, delegate: unknown) =>
     enqueuePendingDelegateMock(sessionKey, delegate),
   clearQueuedDelegatesChainTokensFold: (sessionKey: string) =>
@@ -350,6 +360,7 @@ describe("subagent-announce continuation drain (F7)", () => {
       .mockResolvedValue({ delivered: true, path: "direct" });
     consumePendingDelegatesMock.mockReset().mockReturnValue([]);
     markPendingDelegateFailedMock.mockReset();
+    revalidatePendingDelegateForSpawnMock.mockReset().mockReturnValue({ allowed: true });
     enqueuePendingDelegateMock.mockReset();
     clearQueuedDelegatesChainTokensFoldMock.mockReset().mockReturnValue(0);
     stagePostCompactionDelegateMock.mockReset();
@@ -454,6 +465,46 @@ describe("subagent-announce continuation drain (F7)", () => {
     };
     expect(call?.inheritedSilent).toBe(true);
     expect(call?.inheritedWake).toBe(true);
+  });
+
+  it("fences a tool delegate cancelled after the announce drain claimed it", async () => {
+    const delegate = {
+      task: "must not spawn after cancellation",
+      flowId: "flow-cancelled-after-drain",
+      expectedRevision: 4,
+    };
+    loadSessionStoreMock.mockImplementation(
+      () =>
+        ({
+          "agent:main:subagent:test": { sessionId: "session-child", updatedAt: Date.now() },
+          "agent:main:main": { sessionId: "session-main", updatedAt: Date.now() },
+        }) as Record<string, unknown>,
+    );
+    consumePendingDelegatesMock.mockReturnValueOnce([delegate]);
+    revalidatePendingDelegateForSpawnMock.mockReturnValueOnce({
+      allowed: false,
+      reason: "cancelled",
+      summary: "Continuation delegate cancelled before spawn.",
+    });
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-cancelled-after-drain",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "[continuation:chain-hop:1] prior delegate",
+      timeoutMs: 100,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "done",
+    });
+
+    expect(revalidatePendingDelegateForSpawnMock).toHaveBeenCalledWith(delegate, "pending");
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(markPendingDelegateFailedMock).not.toHaveBeenCalled();
   });
 
   it("does not set inherited silent/wake for a normal (visible) parent", async () => {

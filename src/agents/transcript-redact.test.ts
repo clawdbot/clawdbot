@@ -90,6 +90,10 @@ describe("redactTranscriptMessage", () => {
           type: "toolCall",
           id: "delegate-call",
           name: " continue_delegate ",
+          partialArgs: {
+            task: "carry the partial argument snapshot",
+            attachments: [{ name: "partial.md", content: secret }],
+          },
           partialJson: JSON.stringify({
             task: "carry the streaming snapshot",
             attachments: [{ name: "streaming.md", content: secret }],
@@ -124,13 +128,18 @@ describe("redactTranscriptMessage", () => {
     const persistedBytes = JSON.stringify(result);
     expect(persistedBytes).not.toContain(secret);
     expect(persistedBytes).toContain("__OPENCLAW_REDACTED__");
-    const blocks = msgContent(result) as Array<{ name: string; partialJson?: string }>;
+    const blocks = msgContent(result) as Array<{
+      name: string;
+      partialArgs?: unknown;
+      partialJson?: string;
+    }>;
     expect(blocks).toHaveLength(3);
     expect(blocks.map((block) => block.name)).toEqual([
       "continue_delegate",
       "continue_delegate",
       "continue_delegate",
     ]);
+    expect(blocks[0]).not.toHaveProperty("partialArgs");
     expect(blocks[0]).not.toHaveProperty("partialJson");
   });
 

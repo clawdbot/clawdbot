@@ -16,6 +16,7 @@ import {
 import {
   CONTINUATION_DELEGATE_CONTROLLER_ID,
   CONTINUATION_POST_COMPACTION_CONTROLLER_ID,
+  hasStoredDelegateAttachmentState,
   isContinuationDelegateFlow,
   scrubStoredDelegateAttachmentState,
 } from "../../tasks/task-flow-continuation-state.js";
@@ -465,12 +466,18 @@ export function isSucceededDelegateFlow(flow: TaskFlowRecord): boolean {
 }
 
 export function isRecoverablePendingFlow(flow: TaskFlowRecord): boolean {
-  return isPendingDelegateFlow(flow) && (flow.status === "queued" || flow.status === "running");
+  return (
+    isPendingDelegateFlow(flow) &&
+    flow.cancelRequestedAt == null &&
+    (flow.status === "queued" || flow.status === "running")
+  );
 }
 
 export function isRecoverableContinuationDelegateFlow(flow: TaskFlowRecord): boolean {
   return (
-    isContinuationDelegateFlow(flow) && (flow.status === "queued" || flow.status === "running")
+    isContinuationDelegateFlow(flow) &&
+    flow.cancelRequestedAt == null &&
+    (flow.status === "queued" || flow.status === "running")
   );
 }
 
@@ -478,7 +485,7 @@ export function isRecoverablePendingFlowWithinCutoffs(
   flow: TaskFlowRecord,
   options: PendingDelegateCutoffOptions = {},
 ): boolean {
-  if (!isPendingDelegateFlow(flow)) {
+  if (!isPendingDelegateFlow(flow) || flow.cancelRequestedAt != null) {
     return false;
   }
   if (flow.status === "queued") {
@@ -507,14 +514,46 @@ export function listRecoverablePendingFlows(
 
 export function listQueuedPendingFlows(sessionKey: string): TaskFlowRecord[] {
   return listTaskFlowsForOwnerKey(sessionKey)
-    .filter((flow) => isPendingDelegateFlow(flow) && flow.status === "queued")
+    .filter(
+      (flow) =>
+        isPendingDelegateFlow(flow) && flow.cancelRequestedAt == null && flow.status === "queued",
+    )
     .toSorted((a, b) => a.createdAt - b.createdAt);
 }
 
 export function listQueuedPostCompactionFlows(sessionKey: string): TaskFlowRecord[] {
   return listTaskFlowsForOwnerKey(sessionKey)
-    .filter((flow) => isPostCompactionDelegateFlow(flow) && flow.status === "queued")
+    .filter(
+      (flow) =>
+        isPostCompactionDelegateFlow(flow) &&
+        flow.cancelRequestedAt == null &&
+        flow.status === "queued",
+    )
     .toSorted((a, b) => a.createdAt - b.createdAt);
+}
+
+export function scrubCancellationRequestedDelegateFlowState(flow: TaskFlowRecord): void {
+  let current = flow;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (
+      !isContinuationDelegateFlow(current) ||
+      current.cancelRequestedAt == null ||
+      !hasStoredDelegateAttachmentState(current.stateJson)
+    ) {
+      return;
+    }
+    const result = updateFlowRecordByIdExpectedRevision({
+      flowId: current.flowId,
+      expectedRevision: current.revision,
+      patch: {
+        stateJson: scrubStoredDelegateAttachmentState(current.stateJson),
+      },
+    });
+    if (result.applied || result.reason === "not_found" || !result.current) {
+      return;
+    }
+    current = result.current;
+  }
 }
 
 export function delegateDueAt(flow: TaskFlowRecord, delegate: PendingContinuationDelegate): number {

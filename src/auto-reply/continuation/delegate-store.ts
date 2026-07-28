@@ -14,11 +14,13 @@ import {
   isRecoverablePendingFlow,
   isRecoverablePendingFlowWithinCutoffs,
   isSucceededDelegateFlow,
+  isTerminalDelegateFlow,
   listQueuedPendingFlows,
   listQueuedPostCompactionFlows,
   listRecoverablePendingFlows,
   rejectCorruptDelegateFlow,
   resetDelegateFlowDiagnosticsForTests,
+  scrubCancellationRequestedDelegateFlowState,
   type PendingDelegateCutoffOptions,
 } from "./delegate-flow-store.js";
 import type {
@@ -29,6 +31,82 @@ import type {
 
 const log = createSubsystemLogger("continuation/delegate-store");
 type DelegateFlowRecord = ReturnType<typeof delegateFlowRecords.listAll>[number];
+
+function scrubCancellationRequestedDelegateFlows(flows: readonly DelegateFlowRecord[]): void {
+  for (const flow of flows) {
+    if (flow.cancelRequestedAt != null) {
+      scrubCancellationRequestedDelegateFlowState(flow);
+    }
+  }
+}
+
+export type DelegateSpawnFenceResult =
+  | { allowed: true }
+  | { allowed: false; reason: "cancelled" | "stale"; summary: string };
+
+/**
+ * Re-read a claimed delegate at the last synchronous boundary before spawn.
+ * Once a claim is cancelled or superseded, terminalize its current row so
+ * recovery cannot replay stale work.
+ */
+export function revalidatePendingDelegateForSpawn(
+  delegate: Pick<PendingContinuationDelegate, "flowId" | "expectedRevision" | "task">,
+  controller: "pending" | "post-compaction",
+): DelegateSpawnFenceResult {
+  if (!delegate.flowId || delegate.expectedRevision === undefined) {
+    return { allowed: true };
+  }
+
+  let current = delegateFlowRecords.get(delegate.flowId);
+  const isExpectedController =
+    controller === "pending" ? isPendingDelegateFlow : isPostCompactionDelegateFlow;
+  const isExpectedClaimRevision =
+    current?.revision === delegate.expectedRevision && current.status === "running";
+  const isExpectedDurableHandoffRevision =
+    controller === "post-compaction" &&
+    current?.revision === delegate.expectedRevision + 1 &&
+    current.status === "succeeded";
+  if (
+    current &&
+    isExpectedController(current) &&
+    (isExpectedClaimRevision || isExpectedDurableHandoffRevision) &&
+    current.cancelRequestedAt == null
+  ) {
+    return { allowed: true };
+  }
+
+  const reason =
+    current?.cancelRequestedAt != null || current?.status === "cancelled" ? "cancelled" : "stale";
+  const summary =
+    reason === "cancelled"
+      ? "Continuation delegate cancelled before spawn."
+      : "Continuation delegate claim became stale before spawn.";
+
+  for (let attempt = 0; attempt < 2 && current && isExpectedController(current); attempt += 1) {
+    if (isTerminalDelegateFlow(current)) {
+      if (current.cancelRequestedAt != null) {
+        scrubCancellationRequestedDelegateFlowState(current);
+      }
+      break;
+    }
+    const failed = delegateFlowRecords.fail({
+      flowId: current.flowId,
+      expectedRevision: current.revision,
+      currentStep:
+        reason === "cancelled"
+          ? "Cancelled before continuation delegate spawn"
+          : "Rejected stale continuation delegate spawn claim",
+      blockedSummary: summary,
+      updatedAt: Date.now(),
+    });
+    if (failed.applied || failed.reason === "not_found" || !failed.current) {
+      break;
+    }
+    current = failed.current;
+  }
+
+  return { allowed: false, reason, summary };
+}
 
 /** Enqueue a delegate from the `continue_delegate` tool. */
 export function enqueuePendingDelegate(
@@ -52,7 +130,9 @@ export function listPendingDelegateSessionKeysForRecovery(
   options: Omit<PendingDelegateCutoffOptions, "includeRunning"> = {},
 ): string[] {
   const sessionKeys: string[] = [];
-  for (const flow of delegateFlowRecords.listAll()) {
+  const flows = delegateFlowRecords.listAll();
+  scrubCancellationRequestedDelegateFlows(flows);
+  for (const flow of flows) {
     if (
       !isRecoverablePendingFlowWithinCutoffs(flow, {
         includeRunning: true,
@@ -78,7 +158,9 @@ export function listPendingDelegateSessionKeysForRecovery(
 export function classifyRecoverablePendingDelegates(
   options: Omit<PendingDelegateCutoffOptions, "includeRunning"> = {},
 ): void {
-  for (const flow of delegateFlowRecords.listAll()) {
+  const flows = delegateFlowRecords.listAll();
+  scrubCancellationRequestedDelegateFlows(flows);
+  for (const flow of flows) {
     if (
       !isRecoverablePendingFlowWithinCutoffs(flow, {
         includeRunning: true,
@@ -104,6 +186,7 @@ export function consumePendingDelegates(
 ): PendingContinuationDelegate[] {
   const delegates: PendingContinuationDelegate[] = [];
   const now = Date.now();
+  scrubCancellationRequestedDelegateFlows(delegateFlowRecords.listForOwner(sessionKey));
 
   for (const flow of listRecoverablePendingFlows(sessionKey, options)) {
     const delegate = decodeDelegateFlow(flow);
@@ -320,7 +403,9 @@ export function pendingDelegateCount(sessionKey: string): number {
 }
 
 export function hasRecoverablePendingDelegate(sessionKey: string): boolean {
-  return delegateFlowRecords.listForOwner(sessionKey).some(isRecoverablePendingFlow);
+  const flows = delegateFlowRecords.listForOwner(sessionKey);
+  scrubCancellationRequestedDelegateFlows(flows);
+  return flows.some(isRecoverablePendingFlow);
 }
 
 export function annotateQueuedDelegatesChainTokensFold(
@@ -488,10 +573,13 @@ export function requeueAwaitingNextCompactionDelegates(options: {
   runningUpdatedAtOrBefore: number;
 }): number {
   let requeued = 0;
-  for (const flow of delegateFlowRecords.listAll()) {
+  const flows = delegateFlowRecords.listAll();
+  scrubCancellationRequestedDelegateFlows(flows);
+  for (const flow of flows) {
     if (
       !isPostCompactionDelegateFlow(flow) ||
       flow.status !== "running" ||
+      flow.cancelRequestedAt != null ||
       flow.updatedAt > options.runningUpdatedAtOrBefore ||
       !isAwaitingNextCompactionDelegateFlow(flow)
     ) {
@@ -563,6 +651,7 @@ export function claimStagedPostCompactionTaskFlowDelegates(
   options: { claimFor?: "release" | "next-seam-persist" } = {},
 ): PendingContinuationDelegate[] {
   const delegates: PendingContinuationDelegate[] = [];
+  scrubCancellationRequestedDelegateFlows(delegateFlowRecords.listForOwner(sessionKey));
   for (const flow of listQueuedPostCompactionFlows(sessionKey)) {
     const delegate = decodeDelegateFlow(flow);
     if (!delegate) {
@@ -653,8 +742,14 @@ export function listRecoverableStagedPostCompactionDelegates(options?: {
   runningUpdatedAtOrBefore?: number;
 }): Array<{ sessionKey: string; delegate: PendingContinuationDelegate }> {
   const recoverable: Array<{ sessionKey: string; delegate: PendingContinuationDelegate }> = [];
-  for (const flow of delegateFlowRecords.listAll()) {
-    if (!isPostCompactionDelegateFlow(flow) || flow.status !== "running") {
+  const flows = delegateFlowRecords.listAll();
+  scrubCancellationRequestedDelegateFlows(flows);
+  for (const flow of flows) {
+    if (
+      !isPostCompactionDelegateFlow(flow) ||
+      flow.status !== "running" ||
+      flow.cancelRequestedAt != null
+    ) {
       continue;
     }
     if (

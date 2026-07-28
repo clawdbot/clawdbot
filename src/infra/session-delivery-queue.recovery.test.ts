@@ -126,6 +126,62 @@ describe("session-delivery queue recovery", () => {
     });
   });
 
+  it("dead-letters invalid recovered mount hints without delivering or retaining snapshots", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const invalidMountPaths = [
+        "/absolute",
+        "handoff/../outside",
+        "handoff/./nested",
+        "handoff//nested",
+        "handoff/path/",
+        " handoff/path ",
+        "handoff:path",
+      ];
+      const deliver = vi.fn(async () => undefined);
+
+      for (const [sequence, mountPath] of invalidMountPaths.entries()) {
+        const secret = `RECOVERY_INVALID_MOUNT_SECRET_${sequence}`;
+        const id = await enqueueSessionDelivery(
+          buildPostCompactionDelegateDeliveryPayload({
+            sessionKey: "agent:main:main",
+            delegate: {
+              task: "recover only a canonical mount",
+              createdAt: 300 + sequence,
+              attachments: [{ name: "brief.md", content: secret }],
+              attachAs: { mountPath: "handoff/path" },
+            },
+            sequence,
+          }),
+          tempDir,
+        );
+        const row = readSessionQueueRow(tempDir, id);
+        const corrupted = JSON.parse(row?.entry_json ?? "{}") as Record<string, unknown>;
+        corrupted.attachAs = { mountPath };
+        const { db } = openOpenClawStateDatabase({
+          env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
+        });
+        db.prepare(
+          `UPDATE delivery_queue_entries
+              SET entry_json = ?
+            WHERE queue_name = 'session' AND id = ?`,
+        ).run(JSON.stringify(corrupted), id);
+
+        await recoverPendingSessionDeliveries({
+          deliver,
+          stateDir: tempDir,
+          log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        });
+
+        const terminal = readSessionQueueRow(tempDir, id);
+        expect(terminal?.status, mountPath).toBe("failed");
+        expect(terminal?.entry_json).not.toContain(secret);
+        expect(terminal?.entry_json).not.toContain("attachAs");
+        expect(terminal?.entry_json).not.toContain("attachments");
+      }
+      expect(deliver).not.toHaveBeenCalled();
+    });
+  });
+
   it("lets the delivery owner persist its fence at the side-effect boundary", async () => {
     await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const id = await enqueueSessionDelivery(
