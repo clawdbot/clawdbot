@@ -281,6 +281,35 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
     });
   });
 
+  it("restores the composer when reconnect recovery cannot find an old question", async () => {
+    const { gateway, page } = await openQuestionPage();
+    const request = questionRecord("question-expired-during-disconnect", [
+      {
+        questionId: "deploy_target",
+        header: "Deploy",
+        question: "Where should I deploy after reconnecting?",
+        options: [{ label: "Staging" }, { label: "Production" }],
+      },
+    ]);
+    await emitRequested(gateway, request);
+    const panel = panelFor(page, "Where should I deploy after reconnecting?");
+    await panel.waitFor();
+
+    await gateway.deferNext("question.get");
+    await gateway.closeLatest();
+    const recovery = await gateway.waitForRequest("question.get");
+    expect(recovery.params).toEqual({ id: request.id });
+    await gateway.rejectDeferred("question.get", {
+      code: "INVALID_REQUEST",
+      message: "question was not found",
+      details: { reason: "QUESTION_NOT_FOUND" },
+    });
+
+    await expect.poll(() => panel.count()).toBe(0);
+    await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+    expect(await gateway.getRequests("question.get")).toHaveLength(1);
+  });
+
   it("shows a 1/2 stepper with answered and expired summaries", async () => {
     const { gateway, page } = await openQuestionPage();
     const elsewhere = questionRecord("question-external-answer", [

@@ -492,73 +492,73 @@
       "text": "NIP-05"
     },
     {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "Compacting context..."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "Context compacted"
-    },
-    {
       "count": 2,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
+      "path": "ui/src/pages/chat/components/chat-composer-slash-menu.ts",
       "text": "Enter"
     },
     {
       "count": 2,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
+      "path": "ui/src/pages/chat/components/chat-composer-slash-menu.ts",
       "text": "Esc"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "Replying to"
     },
     {
       "count": 2,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
+      "path": "ui/src/pages/chat/components/chat-composer-slash-menu.ts",
       "text": "Tab"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/chat/components/chat-message.ts",
-      "text": "% ctx"
+      "path": "ui/src/pages/chat/components/chat-composer-status.ts",
+      "text": "Compacting context..."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-composer-status.ts",
+      "text": "Context compacted"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-composer-view.ts",
+      "text": "Replying to"
     },
     {
       "count": 2,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/chat/components/chat-message.ts",
+      "path": "ui/src/pages/chat/components/chat-message-bubble.ts",
       "text": "JSON"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/chat/components/chat-message.ts",
+      "path": "ui/src/pages/chat/components/chat-message-timestamp.ts",
+      "text": "% ctx"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-message-timestamp.ts",
       "text": "R"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/chat/components/chat-message.ts",
+      "path": "ui/src/pages/chat/components/chat-message-timestamp.ts",
       "text": "W"
     },
     {
@@ -595,6 +595,13 @@
       "name": "text",
       "path": "ui/src/pages/config/mcp.ts",
       "text": "openclaw mcp status --verbose"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/pages/config/view.ts",
+      "text": "48rem"
     },
     {
       "count": 1,

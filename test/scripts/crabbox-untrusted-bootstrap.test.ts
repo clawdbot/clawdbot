@@ -3,6 +3,16 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 describe("scripts/crabbox-untrusted-bootstrap.sh", () => {
+  it("pins the package manager required by the trusted checkout", () => {
+    const script = readFileSync("scripts/crabbox-untrusted-bootstrap.sh", "utf8");
+    const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
+      packageManager?: string;
+    };
+    const pnpmSpec = script.match(/^pnpm_spec="([^"]+)"$/mu)?.[1];
+
+    expect(pnpmSpec).toBe(packageJson.packageManager);
+  });
+
   it("bounds both IMDSv2 identity requests", () => {
     const script = readFileSync("scripts/crabbox-untrusted-bootstrap.sh", "utf8");
     const imdsRequests = script.match(

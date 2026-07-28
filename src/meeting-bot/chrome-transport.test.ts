@@ -185,7 +185,7 @@ describe.each(cases)("$name Chrome transport parity", (testCase) => {
     await expect(
       transport.launchInChrome({
         config,
-        fullConfig: {} as OpenClawConfig,
+        fullConfig: { transcripts: { enabled: false } } as OpenClawConfig,
         logger,
         meetingSessionId: "session-1",
         mode: "agent",
@@ -196,6 +196,11 @@ describe.each(cases)("$name Chrome transport parity", (testCase) => {
     ).rejects.toThrow("realtime startup failed");
 
     expect(dispose).toHaveBeenCalledOnce();
+    expect(browserMocks.open).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({ captureCaptions: false, mode: "agent" }),
+      }),
+    );
     expect(browserMocks.leave).toHaveBeenCalledTimes(testCase.expectedLeaves);
   });
 });

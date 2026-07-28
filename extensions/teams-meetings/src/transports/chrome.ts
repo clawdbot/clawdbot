@@ -11,11 +11,7 @@ import {
   TEAMS_MEETINGS_SYSTEM_PROFILER_COMMAND,
   outputMentionsBlackHole2ch,
 } from "./chrome-audio-device.js";
-import {
-  TEAMS_MEETINGS_PLATFORM_ADAPTER,
-  isTeamsMeetingsRealtimeRouteReady,
-  isTeamsMeetingsTalkBackMode,
-} from "./teams-meetings-platform-adapter.js";
+import { TEAMS_MEETINGS_PLATFORM_ADAPTER } from "./teams-meetings-platform-adapter.js";
 import {
   TEAMS_MEETINGS_BROWSER_NODE_ADAPTER,
   TEAMS_MEETINGS_NODE_COMMAND,
@@ -29,8 +25,8 @@ const chromeTransport = MeetingPlatformAdapter.createChromeTransport<
   TeamsMeetingsTranscriptSnapshot
 >({
   browserNodeAdapter: TEAMS_MEETINGS_BROWSER_NODE_ADAPTER,
-  isRealtimeRouteReady: isTeamsMeetingsRealtimeRouteReady,
-  isTalkBackMode: isTeamsMeetingsTalkBackMode,
+  isRealtimeRouteReady: MeetingPlatformAdapter.isRealtimeRouteReady,
+  isTalkBackMode: MeetingPlatformAdapter.isTalkBackMode,
   meetingLabel: "Microsoft Teams meeting",
   nodeCommandName: TEAMS_MEETINGS_NODE_COMMAND,
   outputMentionsAudioDevice: outputMentionsBlackHole2ch,

@@ -226,7 +226,11 @@ export async function installClawPackages(
     return await installClawPackagesUnlocked(plan, options);
   }
   return await withPluginLifecycleLease(
-    {},
+    {
+      ...(options.env ? { env: options.env } : {}),
+      ...(options.path ? { path: options.path } : {}),
+      ...(options.database ? { database: options.database } : {}),
+    },
     async () => await installClawPackagesUnlocked(plan, options),
   );
 }

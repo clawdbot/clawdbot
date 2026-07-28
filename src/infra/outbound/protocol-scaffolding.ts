@@ -1,4 +1,6 @@
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
+import { stripInternalRuntimeContext } from "../../agents/internal-runtime-context.js";
+import { escapeRegExp } from "../../shared/regexp.js";
 
 const INTERNAL_RUNTIME_SCAFFOLDING_TAGS = ["system-reminder", "previous_response"] as const;
 const INTERNAL_RUNTIME_SCAFFOLDING_TAG_PATTERN = INTERNAL_RUNTIME_SCAFFOLDING_TAGS.join("|");
@@ -14,35 +16,14 @@ const INTERNAL_RUNTIME_SCAFFOLDING_TAG_RE = new RegExp(
   `<\\s*\\/?\\s*(?:${INTERNAL_RUNTIME_SCAFFOLDING_TAG_PATTERN})\\b[^>]*>`,
   "gi",
 );
-const INTERNAL_RUNTIME_DELIMITED_BLOCKS = [
-  ["<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>", "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>"],
-] as const;
 const INTERNAL_RUNTIME_MARKER_LINES = [
   "<<<BEGIN_UNTRUSTED_CHILD_RESULT>>>",
   "<<<END_UNTRUSTED_CHILD_RESULT>>>",
 ] as const;
 const PROMPT_DATA_TAG_NAMES = ["prompt-data", "untrusted-text"] as const;
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 function standaloneLinePattern(token: string): string {
   return `(?:^|\\r?\\n)[ \\t]*${escapeRegExp(token)}[ \\t]*(?=\\r?\\n|$)`;
-}
-
-function stripDelimitedRuntimeBlock(text: string, begin: string, end: string): string {
-  const closedBlockRe = new RegExp(
-    `${standaloneLinePattern(begin)}[\\s\\S]*?${standaloneLinePattern(end)}`,
-    "g",
-  );
-  // If the closing delimiter is missing, drop the rest rather than leaking
-  // internal runtime context to user-visible outbound text.
-  const unmatchedBeginRe = new RegExp(`${standaloneLinePattern(begin)}[\\s\\S]*$`, "g");
-  return stripStandaloneMarkerLine(
-    text.replace(closedBlockRe, "").replace(unmatchedBeginRe, ""),
-    end,
-  );
 }
 
 function stripStandaloneMarkerLine(text: string, marker: string): string {
@@ -81,13 +62,13 @@ function unwrapPromptDataWrapperLines(text: string): string {
 }
 
 export function stripInternalRuntimeScaffolding(text: string): string {
-  let stripped = unwrapPromptDataWrapperLines(text)
-    .replace(INTERNAL_RUNTIME_SCAFFOLDING_BLOCK_RE, "")
-    .replace(INTERNAL_RUNTIME_SCAFFOLDING_SELF_CLOSING_RE, "")
-    .replace(INTERNAL_RUNTIME_SCAFFOLDING_TAG_RE, "");
-  for (const [begin, end] of INTERNAL_RUNTIME_DELIMITED_BLOCKS) {
-    stripped = stripDelimitedRuntimeBlock(stripped, begin, end);
-  }
+  let stripped = stripInternalRuntimeContext(
+    unwrapPromptDataWrapperLines(text)
+      .replace(INTERNAL_RUNTIME_SCAFFOLDING_BLOCK_RE, "")
+      .replace(INTERNAL_RUNTIME_SCAFFOLDING_SELF_CLOSING_RE, "")
+      .replace(INTERNAL_RUNTIME_SCAFFOLDING_TAG_RE, ""),
+    { preserveSurroundingWhitespace: true },
+  );
   for (const marker of INTERNAL_RUNTIME_MARKER_LINES) {
     stripped = stripStandaloneMarkerLine(stripped, marker);
   }

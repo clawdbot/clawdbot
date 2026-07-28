@@ -41,6 +41,7 @@ import {
   suspendSession,
   type SessionSuspensionParams,
 } from "../session-suspension.js";
+import { resolveSystemPromptRepoRoot } from "../system-prompt-params.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { runEmbeddedAgentViaCliBackendIfEligible } from "./cli-backend-dispatch.js";
 import { waitForDeferredTurnMaintenanceForSession } from "./context-engine-maintenance.js";
@@ -115,10 +116,11 @@ async function runEmbeddedAgentInternal(
   });
   let params: RunEmbeddedAgentParamsWithSessionFile = withExecutionPhaseDiagnostics({
     ...paramsBase,
-    agentId: paramsBase.agentId ?? runSessionTarget.agentId,
+    agentId: runSessionTarget.agentId,
     sessionId: runSessionTarget.sessionId,
-    sessionKey: normalizeOptionalString(effectiveSessionKey ?? runSessionTarget.sessionKey),
-    sessionFile: runSessionTarget.sessionFile,
+    sessionKey: runSessionTarget.sessionKey,
+    sessionTarget: runSessionTarget,
+    sessionFile: runSessionTarget.sessionKey,
     skillWorkshopProposalMutationBudget,
   });
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
@@ -213,17 +215,26 @@ async function runEmbeddedAgentInternal(
         params.preparedModelRuntimeMode === "isolated-read-only"
           ? await acquireReadOnlyPreparedModelRuntime(preparedInput)
           : await acquireAgentRunPreparedModelRuntime(preparedInput, { retainIdleRunOwner });
-      const preparedModelRuntime = preparedModelRuntimeLease.snapshot;
+      const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;
       try {
         // A reload may complete while admission waits. The committed generation owns config,
         // directories, model selection, hooks, fallbacks, and every later run projection.
         const rebound = bindRunToPreparedModelRuntime({
           runParams: params,
           requestedWorkspaceResolution,
-          preparedModelRuntime,
+          preparedModelRuntime: preparedModelRuntimeOwnerSnapshot,
         });
         params = rebound.runParams;
         const workspaceResolution = rebound.workspaceResolution;
+        const preparedModelRuntime = Object.freeze({
+          ...preparedModelRuntimeOwnerSnapshot,
+          repoRoot:
+            resolveSystemPromptRepoRoot({
+              config: rebound.runParams.config,
+              workspaceDir: workspaceResolution.workspaceDir,
+              cwd: rebound.runParams.cwd,
+            }) ?? null,
+        });
         const preparedAgentId = workspaceResolution.agentId;
         const resolvedWorkspace = workspaceResolution.workspaceDir;
         const agentDir = preparedModelRuntime.agentDir;

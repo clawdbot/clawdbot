@@ -16,6 +16,7 @@ import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { fetchCatalogIconBlobUrl } from "../plugins/icon-loader.ts";
+import type { ModelSetupPrepareOption } from "./prepare-options.ts";
 import { detectModelSetup, verifyModelSetup } from "./rpc.ts";
 import {
   activationTargetId,
@@ -30,6 +31,7 @@ import {
 } from "./state.ts";
 import { renderModelSetup, resolveSetupBrandIcon } from "./view.ts";
 import { ModelSetupWizardRunner } from "./wizard-runner.ts";
+import type { ModelSetupWizardStartMethod } from "./wizard-runner.ts";
 
 type Candidate = SystemAgentSetupDetectResult["candidates"][number];
 type AuthOption = NonNullable<SystemAgentSetupDetectResult["authOptions"]>[number];
@@ -57,6 +59,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   @state() private activationState: ModelSetupActivationState = { phase: "idle" };
   @state() private verifyState: ModelSetupVerifyState = { phase: "idle" };
   @state() private wizardState: ModelSetupWizardState = { phase: "idle" };
+  @state() private wizardMode: "auth" | "prepare" = "auth";
   @state() private wizardValue: unknown;
   @state() private manualProviderId = "";
   @state() private manualApiKey = "";
@@ -90,7 +93,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         this.wizardValue = initialWizardValue(next.step);
       }
     },
-    onDone: () => void this.handleWizardDone(),
+    onDone: (startMethod) => void this.handleWizardDone(startMethod),
     requestFailedMessage: () => t("modelSetup.errors.requestFailed"),
     cancelledMessage: () => t("modelSetup.wizard.cancelled"),
     sessionExpiredMessage: () => t("modelSetup.wizard.sessionExpired"),
@@ -143,7 +146,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     const snapshot = this.context.gateway.snapshot;
     return Boolean(
       client &&
-      snapshot.connected &&
+      snapshot.phase === "connected" &&
       hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
       isGatewayMethodAdvertised(snapshot, "openclaw.setup.detect") === true,
     );
@@ -235,7 +238,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       .then((blobUrl) => {
         if (
           this.iconRequests.get(iconUrl) !== request ||
-          !this.context.gateway.snapshot.connected ||
+          this.context.gateway.snapshot.phase !== "connected" ||
           !this.currentIconUrls().has(iconUrl)
         ) {
           if (blobUrl) {
@@ -447,20 +450,22 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     );
   }
 
-  private async handleWizardDone(): Promise<void> {
+  private async handleWizardDone(startMethod: ModelSetupWizardStartMethod): Promise<void> {
     const result = await this.detect();
     if (!result) {
       this.wizard.fail(t("modelSetup.errors.requestFailed"));
       return;
     }
-    if (!result.setupComplete) {
+    if (startMethod === "openclaw.setup.auth.start" && !result.setupComplete) {
       this.wizard.fail(t("modelSetup.wizard.notComplete"));
       return;
     }
-    this.activationState = {
-      phase: "success",
-      modelRef: result.configuredModel ?? t("modelSetup.success.configuredModel"),
-    };
+    if (startMethod === "openclaw.setup.auth.start") {
+      this.activationState = {
+        phase: "success",
+        modelRef: result.configuredModel ?? t("modelSetup.success.configuredModel"),
+      };
+    }
     this.wizard.close();
   }
 
@@ -478,7 +483,8 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     const snapshot = this.context.gateway.snapshot;
     const canAdmin = hasOperatorAdminAccess(snapshot.hello?.auth ?? null);
     const gatewayTooOld =
-      snapshot.connected && isGatewayMethodAdvertised(snapshot, "openclaw.setup.detect") !== true;
+      snapshot.phase === "connected" &&
+      isGatewayMethodAdvertised(snapshot, "openclaw.setup.detect") !== true;
     const canVerify =
       canAdmin &&
       !gatewayTooOld &&
@@ -488,9 +494,14 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       activation: this.activationState,
       verify: this.verifyState,
       wizard: this.wizardState,
+      wizardMode: this.wizardMode,
       wizardValue: this.wizardValue,
       canAdmin,
       canVerify,
+      canPrepare:
+        canAdmin &&
+        !gatewayTooOld &&
+        isGatewayMethodAdvertised(snapshot, "openclaw.setup.prepare.start") === true,
       gatewayTooOld,
       actionsDisabled: this.actionsDisabled(),
       manualProviderId: this.manualProviderId,
@@ -501,7 +512,14 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       onDetect: () => void this.detect(),
       onVerify: () => void this.verifyConnection(),
       onActivateCandidate: (candidate) => this.activateCandidate(candidate),
-      onStartAuth: (option: AuthOption) => void this.wizard.start(option.id),
+      onStartAuth: (option: AuthOption) => {
+        this.wizardMode = "auth";
+        void this.wizard.start(option.id);
+      },
+      onStartPrepare: (option: ModelSetupPrepareOption) => {
+        this.wizardMode = "prepare";
+        void this.wizard.start(option.id, "openclaw.setup.prepare.start");
+      },
       onManualProviderChange: (providerId) => {
         this.manualProviderId = providerId;
         this.manualError = null;

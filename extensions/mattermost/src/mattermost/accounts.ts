@@ -4,7 +4,6 @@ import {
   hasConfiguredAccountValue,
 } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
 import {
   resolveChannelStreamingBlockCoalesce,
   resolveChannelStreamingBlockEnabled,
@@ -47,7 +46,13 @@ export type ResolvedMattermostAccount = {
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
 };
 
-const mattermostAccountHelpers = createAccountListHelpers("mattermost", {
+const {
+  listAccountIds: listMattermostAccountIds,
+  resolveDefaultAccountId: resolveDefaultMattermostAccountId,
+  resolveAccountConfig: mergeMattermostAccountConfig,
+} = createAccountListHelpers<MattermostAccountConfig>("mattermost", {
+  omitKeys: ["defaultAccount"],
+  nestedObjectKeys: ["commands"],
   hasImplicitDefaultAccount: (cfg) => {
     const mattermost = cfg.channels?.mattermost;
     return Boolean(
@@ -56,29 +61,7 @@ const mattermostAccountHelpers = createAccountListHelpers("mattermost", {
     );
   },
 });
-
-export function listMattermostAccountIds(cfg: OpenClawConfig): string[] {
-  return mattermostAccountHelpers.listAccountIds(cfg);
-}
-
-export function resolveDefaultMattermostAccountId(cfg: OpenClawConfig): string {
-  return mattermostAccountHelpers.resolveDefaultAccountId(cfg);
-}
-
-function mergeMattermostAccountConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): MattermostAccountConfig {
-  return resolveMergedAccountConfig<MattermostAccountConfig>({
-    channelConfig: cfg.channels?.mattermost as MattermostAccountConfig | undefined,
-    accounts: cfg.channels?.mattermost?.accounts as
-      | Record<string, Partial<MattermostAccountConfig>>
-      | undefined,
-    accountId,
-    omitKeys: ["defaultAccount"],
-    nestedObjectKeys: ["commands"],
-  });
-}
+export { listMattermostAccountIds, resolveDefaultMattermostAccountId };
 
 function resolveMattermostRequireMention(config: MattermostAccountConfig): boolean | undefined {
   if (config.chatmode === "oncall") {

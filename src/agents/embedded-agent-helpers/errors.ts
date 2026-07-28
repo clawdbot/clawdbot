@@ -1,4 +1,5 @@
 import { isConfiguredContextSizeOverflowError } from "@openclaw/ai/internal/runtime";
+import { inspectTlsCertificateError } from "@openclaw/ai/internal/shared";
 /**
  * Classifies provider/runtime failures and formats assistant-facing error text.
  */
@@ -390,6 +391,7 @@ export type ProviderRuntimeFailureKind =
   | "rate_limit"
   | "dns"
   | "timeout"
+  | "tls_certificate"
   | "model_not_found"
   | "schema"
   | "sandbox_blocked"
@@ -898,9 +900,11 @@ function classifyFailoverReasonFromCode(raw: string | undefined): FailoverReason
   }
 }
 
-function classifyFailoverReasonFromErrorType(raw: string | undefined): FailoverReason | null {
+function classifyCoreFailoverReasonFromErrorType(raw: string | undefined): FailoverReason | null {
   const normalized = normalizeOptionalLowercaseString(raw);
   switch (normalized) {
+    case "invalid_request_error":
+      return "format";
     case "server_error":
     case "upstream_error":
       return "server_error";
@@ -914,7 +918,7 @@ function classifyFailoverReasonFromErrorType(raw: string | undefined): FailoverR
 function classifyFailoverClassificationFromErrorType(
   raw: string | undefined,
 ): FailoverClassification | null {
-  const reason = classifyFailoverReasonFromErrorType(raw);
+  const reason = classifyCoreFailoverReasonFromErrorType(raw);
   return reason ? toReasonClassification(reason) : null;
 }
 
@@ -1128,6 +1132,13 @@ function classifyFailoverClassificationFromMessage(
   if (providerSpecific) {
     return toReasonClassification(providerSpecific);
   }
+  // Some adapters preserve only the raw JSON response body. Reuse the same
+  // structured type mapping as typed SDK errors after all more-specific text
+  // and provider rules have had a chance to classify the failure.
+  const apiErrorReason = classifyCoreFailoverReasonFromErrorType(parseApiErrorInfo(raw)?.type);
+  if (apiErrorReason) {
+    return toReasonClassification(apiErrorReason);
+  }
   return null;
 }
 
@@ -1182,6 +1193,10 @@ function mergeMessageAndDetailClassification(
 
 export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassification | null {
   const inferredStatus = inferSignalStatus(signal);
+  const tlsCertificateError = inspectTlsCertificateError(signal);
+  if (tlsCertificateError && inferredStatus === undefined) {
+    return toReasonClassification("tls_certificate");
+  }
   const explicitStatus =
     typeof signal.status === "number" && Number.isFinite(signal.status) ? signal.status : undefined;
   if (
@@ -1222,6 +1237,8 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
     detailClassification,
   );
   const errorTypeClassification = classifyFailoverClassificationFromErrorType(signal.errorType);
+  // Message/detail semantics stay ahead of generic structured types so an
+  // invalid-request wrapper cannot hide billing, context, or provider policy.
   const effectiveMessageClassification = providerPluginReason
     ? toReasonClassification(providerPluginReason)
     : (messageOrDetailClassification ?? errorTypeClassification);
@@ -1296,6 +1313,12 @@ export function classifyProviderRuntimeFailureKind(
     status,
     message: message || undefined,
   });
+  if (
+    failoverClassification?.kind === "reason" &&
+    failoverClassification.reason === "tls_certificate"
+  ) {
+    return "tls_certificate";
+  }
   if (failoverClassification?.kind === "reason" && failoverClassification.reason === "rate_limit") {
     return "rate_limit";
   }
@@ -1488,6 +1511,13 @@ export function formatAssistantErrorText(
     return "LLM request failed: proxy or tunnel configuration blocked the provider request.";
   }
 
+  if (providerRuntimeFailureKind === "tls_certificate") {
+    return (
+      "LLM request failed: TLS certificate validation rejected the provider endpoint. " +
+      "Check the endpoint hostname, proxy, and local certificate trust."
+    );
+  }
+
   if (providerRuntimeFailureKind === "model_not_found") {
     return MODEL_NOT_FOUND_USER_TEXT;
   }
@@ -1530,9 +1560,9 @@ export function formatAssistantErrorText(
     );
   }
 
-  const invalidRequest = raw.match(/"type":"invalid_request_error".*?"message":"([^"]+)"/);
-  if (invalidRequest?.[1]) {
-    return `LLM request rejected: ${invalidRequest[1]}`;
+  const apiError = parseApiErrorInfo(raw);
+  if (apiError?.type?.toLowerCase().includes("invalid_request") && apiError.message?.trim()) {
+    return `LLM request rejected: ${apiError.message.trim()}`;
   }
 
   if (

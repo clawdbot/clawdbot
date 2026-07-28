@@ -5,6 +5,7 @@ import { Command, Option } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { routeLogsToStderr } from "../logging/console.js";
+import { formatConsoleDiagnosticLine } from "../logging/json-console-line.js";
 import {
   buildFishOptionCompletionLine,
   buildFishSubcommandCompletionLine,
@@ -166,7 +167,8 @@ async function writeCompletionCache(params: {
 }
 
 function writeCompletionRegistrationWarning(message: string): void {
-  process.stderr.write(`[completion] ${message}\n`);
+  const diagnostic = `[completion] ${message}`;
+  process.stderr.write(`${formatConsoleDiagnosticLine({ level: "warn", message: diagnostic })}\n`);
 }
 
 async function registerSubcommandsForCompletion(program: Command): Promise<void> {
@@ -209,6 +211,15 @@ export function registerCompletionCli(program: Command) {
       // Route logs to stderr so plugin loading messages do not corrupt
       // the completion script written to stdout.
       routeLogsToStderr();
+
+      // Cached installation needs only the existing script; loading the command tree can
+      // introduce unrelated plugin failures before the cache can be checked or installed.
+      if (options.install && !options.writeState) {
+        const targetShell = options.shell ?? resolveShellFromEnv();
+        await installCompletion(targetShell, Boolean(options.yes), program.name());
+        return;
+      }
+
       const shell = options.shell ?? "zsh";
 
       // Completion needs the full Commander command tree (including nested subcommands).
@@ -395,7 +406,7 @@ function generateBashCompletion(program: Command): string {
   const rootCmd = program.name();
   const rootCompletions = [
     ...program.commands.flatMap((command) => commandNameVariants(command)),
-    ...program.options.map((option) => preferredCompletionFlag(option)),
+    ...program.options.flatMap((option) => completionFlags(option)),
   ];
   const rootValueOptions = completionOptionFlags(program.options, true);
   const contexts = collectBashCompletionContexts(program, rootValueOptions);
@@ -450,7 +461,7 @@ function collectBashCompletionContexts(
   const visit = (cmd: Command, pathVariants: string[][], inheritedValueOptions: string[]) => {
     const completions = [
       ...cmd.commands.flatMap((command) => commandNameVariants(command)),
-      ...cmd.options.map((option) => preferredCompletionFlag(option)),
+      ...cmd.options.flatMap((option) => completionFlags(option)),
     ];
     const valueOptions = [
       ...new Set([...inheritedValueOptions, ...completionOptionFlags(cmd.options, true)]),

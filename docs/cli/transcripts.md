@@ -9,8 +9,9 @@ title: "Transcripts CLI"
 
 # `openclaw transcripts`
 
-Inspector and export command for transcripts written by the `transcripts` agent
-tool. Capture, import, and summarization run through that tool, not this CLI.
+Inspector and export command for durable meeting transcripts. Google Meet,
+Microsoft Teams, and Zoom browser participants capture notes automatically;
+the `transcripts` agent tool also supports provider capture and manual import.
 
 Canonical transcript state lives in the shared SQLite database at
 `$OPENCLAW_STATE_DIR/state/openclaw.sqlite`. `show` and `path` explicitly
@@ -75,6 +76,8 @@ The selector is the safest value to pass back to `show` or `path`.
 
 `list --json` returns objects with `sessionId`, `selector`, `date`, `title`,
 `startedAt`, `stoppedAt`, `source`, `path`, `summaryPath`, `hasSummary`.
+Stored meeting source URLs contain only the origin and path; query strings,
+fragments, and embedded credentials are removed before persistence.
 
 `show --json` returns the stored session metadata, selector, session
 directory, summary path, and summary Markdown text.
@@ -126,18 +129,21 @@ sessions and any exports you rely on.
 
 ## Configuration
 
-Capture is opt-in (live sources can join and record meeting audio). Enable it
-with:
+Meeting transcript capture is enabled by default. To opt out globally:
 
 ```json
 {
   "transcripts": {
-    "enabled": true
+    "enabled": false
   }
 }
 ```
 
-- `enabled` (default `false`): turn the tool on.
+- `enabled` (default `true`): enable automatic meeting notes, the transcripts
+  tool, and configured auto-start sources. Set it to `false` when meeting
+  notes should not be persisted on the host. An explicitly requested meeting
+  `transcribe` mode keeps its existing bounded live-caption tail, but does not
+  write durable rows while this setting is false.
   Configure auto-start sources with `transcripts.autoStart`. Each entry is
   enabled by being present; omit an entry to disable that source. `discord-voice`
   is the bundled auto-start-capable source and requires `guildId` and
@@ -157,3 +163,8 @@ with:
   }
 }
 ```
+
+The meeting provider ids are `google-meet`, `teams`, and `zoom`. Their aliases
+are `googlemeet`/`meet`, `teams-meetings`/`microsoft-teams`/`msteams`, and
+`zoom-meetings`, respectively. Meeting providers attach to an already-active
+meeting bot session; normal meeting joins do not need an `autoStart` entry.

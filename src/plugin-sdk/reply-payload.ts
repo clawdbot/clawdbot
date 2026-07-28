@@ -7,7 +7,10 @@ import { normalizeOutboundReplyPayload as normalizeCoreOutboundReplyPayload } fr
 import { createReplyToFanout } from "../infra/outbound/reply-policy.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
 
-export type { MediaPayload, MediaPayloadInput } from "../channels/plugins/media-payload.js";
+export type { MediaPayloadInput } from "../channels/plugins/media-payload.js";
+/** @deprecated Inbound contexts use `media`; outbound replies use `ReplyPayload.mediaUrl(s)`. */
+export type { MediaPayload } from "../channels/plugins/media-payload.js";
+/** @deprecated Inbound contexts use `media`; outbound replies use `ReplyPayload.mediaUrl(s)`. */
 export { buildMediaPayload } from "../channels/plugins/media-payload.js";
 /** Plugin-facing reply payload without core-only trusted local media internals. */
 export type ReplyPayload = Omit<InternalReplyPayload, "trustedLocalMedia">;

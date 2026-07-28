@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { disconnectAllSharedGatewayAuthClients } from "./server-shared-auth-generation.js";
+import type { SessionCompanionService } from "./session-companion.js";
 import type { SessionObserverService } from "./session-observer-contract.js";
 
 type GatewayRequestContextClient = GatewayClient & {
@@ -23,6 +24,7 @@ type GatewayRequestContextParams = {
   deps: GatewayRequestContext["deps"];
   runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader">;
   getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];
+  sessionCompanion: SessionCompanionService;
   sessionObserver: SessionObserverService;
   getMcpAppSandboxPort?: GatewayRequestContext["getMcpAppSandboxPort"];
   ensureSandboxHostPort?: GatewayRequestContext["ensureSandboxHostPort"];
@@ -73,15 +75,7 @@ type GatewayRequestContextParams = {
   agentRunSeq: GatewayRequestContext["agentRunSeq"];
   chatAbortControllers: GatewayRequestContext["chatAbortControllers"];
   chatQueuedTurns: GatewayRequestContext["chatQueuedTurns"];
-  chatAbortedRuns: GatewayRequestContext["chatAbortedRuns"];
-  chatRunBuffers: GatewayRequestContext["chatRunBuffers"];
-  chatRunPlanSnapshots?: GatewayRequestContext["chatRunPlanSnapshots"];
-  chatDeltaSentAt: GatewayRequestContext["chatDeltaSentAt"];
-  chatDeltaLastBroadcastLen: GatewayRequestContext["chatDeltaLastBroadcastLen"];
-  chatDeltaLastBroadcastText: GatewayRequestContext["chatDeltaLastBroadcastText"];
-  agentDeltaSentAt: GatewayRequestContext["agentDeltaSentAt"];
-  bufferedAgentEvents: GatewayRequestContext["bufferedAgentEvents"];
-  clearChatRunState: GatewayRequestContext["clearChatRunState"];
+  chatRunState: GatewayRequestContext["chatRunState"];
   addChatRun: GatewayRequestContext["addChatRun"];
   removeChatRun: GatewayRequestContext["removeChatRun"];
   subscribeSessionEvents: GatewayRequestContext["subscribeSessionEvents"];
@@ -166,6 +160,7 @@ export function createGatewayRequestContext(
       return params.runtimeState.cronState.storePath;
     },
     getRuntimeConfig: params.getRuntimeConfig,
+    sessionCompanion: params.sessionCompanion,
     sessionObserver: params.sessionObserver,
     notifyPluginMetadataChanged: () =>
       params.runtimeState.configReloader.notifyPluginMetadataChanged(),
@@ -313,15 +308,7 @@ export function createGatewayRequestContext(
     agentRunSeq: params.agentRunSeq,
     chatAbortControllers: params.chatAbortControllers,
     chatQueuedTurns: params.chatQueuedTurns,
-    chatAbortedRuns: params.chatAbortedRuns,
-    chatRunBuffers: params.chatRunBuffers,
-    chatRunPlanSnapshots: params.chatRunPlanSnapshots,
-    chatDeltaSentAt: params.chatDeltaSentAt,
-    chatDeltaLastBroadcastLen: params.chatDeltaLastBroadcastLen,
-    chatDeltaLastBroadcastText: params.chatDeltaLastBroadcastText,
-    agentDeltaSentAt: params.agentDeltaSentAt,
-    bufferedAgentEvents: params.bufferedAgentEvents,
-    clearChatRunState: params.clearChatRunState,
+    chatRunState: params.chatRunState,
     addChatRun: params.addChatRun,
     removeChatRun: params.removeChatRun,
     subscribeSessionEvents: params.subscribeSessionEvents,

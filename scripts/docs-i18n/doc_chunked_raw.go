@@ -75,12 +75,25 @@ func translateDocBodyChunked(ctx context.Context, translator docsTranslator, rel
 	}
 	translatedBody := out.String()
 	translatedBody = normalizeMaskedListMarkerPlaceholders(translatedBody, mapping)
+	translatedBody = normalizeMaskedListMarkerSpacing(maskedBody, translatedBody, listPlaceholders)
+	translatedBody = escapeUnexpectedListItemBodyMarkers(maskedBody, translatedBody, listPlaceholders)
 	translatedBody = escapeUnexpectedMarkdownListMarkers(translatedBody, listPlaceholders)
 	if err := validatePlaceholders(translatedBody, placeholders); err != nil {
 		return "", fmt.Errorf("%s: restore fenced literals: %w", relPath, err)
 	}
+	maskedListMarkers := extractMarkdownListMarkerPrefixes(translatedBody)
 	translatedBody = unmaskMarkdown(translatedBody, placeholders, mapping)
 	if err := validateDocBodyFencedLiterals(body, translatedBody); err != nil {
+		log.Printf(
+			"docs-i18n: final list diagnostics %s source=%q masked=%q translated=%q",
+			relPath,
+			extractMarkdownListMarkerPrefixes(body),
+			maskedListMarkers,
+			extractMarkdownListMarkerPrefixes(translatedBody),
+		)
+		if os.Getenv("OPENCLAW_DOCS_I18N_LOG_REJECTED_BODY") == "1" {
+			log.Printf("docs-i18n: rejected translated body %s %q", relPath, translatedBody)
+		}
 		return "", fmt.Errorf("%s: final document validation: %w", relPath, err)
 	}
 	return translatedBody, nil
@@ -128,7 +141,7 @@ func validateDocBodyFencedLiterals(source, translated string) error {
 	return nil
 }
 
-func translateDocBlockGroup(ctx context.Context, translator docsTranslator, chunkID string, blocks []string, protectedPlaceholders []string, listPlaceholders map[string]struct{}, srcLang, tgtLang string) (string, error) {
+func translateDocBlockGroup(ctx context.Context, translator docsTranslator, chunkID string, blocks []string, protectedPlaceholders []string, listPlaceholders map[string]string, srcLang, tgtLang string) (string, error) {
 	source := strings.Join(blocks, "")
 	if strings.TrimSpace(source) == "" {
 		return source, nil
@@ -147,7 +160,11 @@ func translateDocBlockGroup(ctx context.Context, translator docsTranslator, chun
 		translated = sanitizeDocChunkProtocolWrappers(source, translated)
 		translated = preserveDocChunkBoundaryWhitespace(normalizedSource, translated)
 		translated = reapplyCommonIndent(translated, commonIndent)
+		translated = normalizeMaskedListMarkerPlaceholders(translated, listPlaceholders)
+		translated = normalizeMaskedListMarkerSpacing(source, translated, listPlaceholders)
+		translated = escapeUnexpectedListItemBodyMarkers(source, translated, listPlaceholders)
 		translated = escapeUnexpectedMarkdownListMarkers(translated, listPlaceholders)
+		translated = unwrapUnexpectedInlineCodeSpans(source, translated)
 		if validationErr := validateDocChunkTranslation(source, translated); validationErr == nil {
 			log.Printf("docs-i18n: chunk done %s out_bytes=%d", chunkID, len(translated))
 			return translated, nil
@@ -176,7 +193,7 @@ func translateDocBlockGroup(ctx context.Context, translator docsTranslator, chun
 	return "", fmt.Errorf("%s: %w", chunkID, err)
 }
 
-func translateDocLeafBlock(ctx context.Context, translator docsTranslator, chunkID, source string, protectedPlaceholders []string, listPlaceholders map[string]struct{}, srcLang, tgtLang string) (string, error) {
+func translateDocLeafBlock(ctx context.Context, translator docsTranslator, chunkID, source string, protectedPlaceholders []string, listPlaceholders map[string]string, srcLang, tgtLang string) (string, error) {
 	sourceStructure := summarizeDocChunkStructure(source)
 	if sourceStructure.fenceCount != 0 {
 		return "", fmt.Errorf("%s: raw leaf fallback not applicable", chunkID)
@@ -197,7 +214,11 @@ func translateDocLeafBlock(ctx context.Context, translator docsTranslator, chunk
 	translated = sanitizeDocChunkProtocolWrappers(source, translated)
 	translated = preserveDocChunkBoundaryWhitespace(normalizedSource, translated)
 	translated = reapplyCommonIndent(translated, commonIndent)
+	translated = normalizeMaskedListMarkerPlaceholders(translated, listPlaceholders)
+	translated = normalizeMaskedListMarkerSpacing(source, translated, listPlaceholders)
+	translated = escapeUnexpectedListItemBodyMarkers(source, translated, listPlaceholders)
 	translated = escapeUnexpectedMarkdownListMarkers(translated, listPlaceholders)
+	translated = unwrapUnexpectedInlineCodeSpans(source, translated)
 	if validationErr := validateDocChunkTranslation(source, translated); validationErr != nil {
 		return "", validationErr
 	}
@@ -737,7 +758,7 @@ func containsProtocolWrapperToken(text string) bool {
 	return strings.Contains(lower, strings.ToLower(bodyTagStart)) || strings.Contains(lower, strings.ToLower(frontmatterTagStart))
 }
 
-func translatePlannedDocChunkGroups(ctx context.Context, translator docsTranslator, chunkID, source string, groups [][]string, protectedPlaceholders []string, listPlaceholders map[string]struct{}, srcLang, tgtLang string) (string, error) {
+func translatePlannedDocChunkGroups(ctx context.Context, translator docsTranslator, chunkID, source string, groups [][]string, protectedPlaceholders []string, listPlaceholders map[string]string, srcLang, tgtLang string) (string, error) {
 	var out strings.Builder
 	translatedGroups := make([]string, 0, len(groups))
 	for index, group := range groups {

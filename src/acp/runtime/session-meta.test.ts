@@ -1,9 +1,9 @@
 /** Tests ACP session metadata persistence, joins, and migration helpers. */
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import { loadSessionStore } from "../../config/sessions/store-load.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -83,7 +83,7 @@ describe("ACP session metadata SQLite store", () => {
       });
 
       expect(result?.acp?.runtimeSessionName).toBe("codex-discord");
-      expect(loadSessionStore(storePath)[sessionKey]?.acp).toBeUndefined();
+      expect(fs.existsSync(storePath)).toBe(false);
       expect(
         readAcpSessionEntry({
           cfg,
@@ -226,7 +226,7 @@ describe("ACP session metadata SQLite store", () => {
           sessionKey: storeSessionKey,
         })?.acp?.runtimeSessionName,
       ).toBe("codex-normalized");
-      expect(loadSessionStore(storePath)[storeSessionKey]?.acp).toBeUndefined();
+      expect(fs.existsSync(storePath)).toBe(false);
       const legacyEmbeddedEntry = readStoredAcpSessionEntry({
         storePath,
         sessionKey: storeSessionKey,

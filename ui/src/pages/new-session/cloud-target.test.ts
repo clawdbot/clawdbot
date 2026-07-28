@@ -98,12 +98,13 @@ describe("cloud session startup", () => {
       .fn()
       .mockRejectedValueOnce(new Error("transport closed"))
       .mockResolvedValueOnce({ session: { placement: { state: "active" } } })
-      .mockResolvedValueOnce({ runId: "run-1" });
+      .mockResolvedValueOnce({ runId: "run-1", messageSeq: 3 });
 
     await expect(
       startCloudInitialTurn(clientWith(request), { ...params, attachments }, () => true),
     ).resolves.toMatchObject({
       status: "started",
+      messageSeq: 3,
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.describe", { key: params.key });
     expect(request).toHaveBeenNthCalledWith(

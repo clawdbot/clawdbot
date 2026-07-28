@@ -234,6 +234,7 @@ only for behavior that really belongs to the backend.
 | `defaultAuthProfileId`             | Prefer a specific OpenClaw auth profile                                     |
 | `authEpochMode`                    | Decide how auth changes invalidate stored CLI sessions                      |
 | `nativeToolMode`                   | Declare whether native tools are absent, always on, or host-selectable      |
+| `toolAvailabilityEnforcement`      | Declare whether exact tool caps are enforced in argv or execution staging   |
 | `sideQuestionToolMode`             | Declare disabled native tools for `/btw` side questions                     |
 | `bundleMcp` / `bundleMcpMode`      | Opt into OpenClaw's loopback MCP tool bridge                                |
 | `ownsNativeCompaction`             | Backend owns its own compaction - OpenClaw defers                           |
@@ -271,25 +272,37 @@ side-question argv reliably disables those tools, also set
 `sideQuestionToolMode: "disabled"`; otherwise OpenClaw fails closed when BTW
 requires a no-tools CLI run.
 
-Set `nativeToolMode: "selectable"` only when `resolveExecutionArgs` can disable
-every backend-native tool for an individual run. For those restricted runs,
-`ctx.toolAvailability.native` is the exact backend-native tool list and
-`ctx.toolAvailability.mcp` is the exact host-isolated MCP allowlist. The hook
-must replace conflicting tool flags, disable backend customization surfaces
-that can execute outside those tools, and return argv that enforces both
-values. OpenClaw calls it once with the final fresh or resume argv and fails
-closed when the backend cannot enforce the restriction. MCP names in this
-context are safe to auto-approve only because the host has already limited the
-generated MCP configuration to those servers and tools.
+Set `nativeToolMode: "selectable"` only when the backend can disable every
+backend-native tool for an individual run. Restricted runs receive a canonical
+contract: `ctx.toolAvailability.native` is the exact backend-native list and
+`ctx.toolAvailability.openClaw` is the exact list of OpenClaw tool names. The
+host independently limits the generated MCP configuration and grant to that
+OpenClaw list; plugins must not translate it in core or add transport prefixes.
 
-To support OpenClaw runtime caps such as cron `toolsAllow`, also implement
-`resolveRuntimeToolAvailability(ctx)`. OpenClaw passes a normalized,
-group-expanded allowlist and always disables backend-native tools. Return only
-host-isolated MCP names selected from that allowlist. Returning `null` or
-`undefined` keeps the generic runner fail-closed. A backend may omit an allowed
-tool it cannot represent, but must never add authority absent from the
-allowlist. Before minting a grant, the host rejects any returned entry that is
-not the exact `mcp__openclaw__<tool>` name for one of the allowed tools.
+Declare how the backend enforces that contract:
+
+- `toolAvailabilityEnforcement: "execution-args"` requires
+  `resolveExecutionArgs`. The hook must replace conflicting tool flags, disable
+  customization surfaces that can execute outside the selected tools, and
+  return enforcing argv for both fresh and resumed runs.
+- `toolAvailabilityEnforcement: "prepare-execution"` requires
+  `prepareExecution`. The hook must stage an exact per-run policy and return
+  `toolAvailabilityEnforced: true`; missing acknowledgement fails closed and
+  OpenClaw cleans up the staged resources before launch.
+
+Runtime caps such as cron `toolsAllow` are normalized and group-expanded by
+OpenClaw before this contract is built. Native tools are disabled, and a
+backend without a complete declared enforcement path fails before execution.
+
+Plugins built against `v2026.7.2-beta.1` through `v2026.7.2-beta.3` may still
+read the deprecated `ctx.toolAvailability.mcp` transport-name projection and
+may omit `toolAvailabilityEnforcement` when a selectable backend implements
+`resolveExecutionArgs`. OpenClaw recognizes that shipped beta path from the
+plugin package's required `openclaw.build.openclawVersion` metadata and
+preserves it through the `2026.8.x` line. New and updated plugins should use canonical
+`ctx.toolAvailability.openClaw` names and declare
+`toolAvailabilityEnforcement: "execution-args"` explicitly; the beta
+compatibility path is scheduled for removal after that window.
 
 ### `ownsNativeCompaction`: opting out of OpenClaw compaction
 

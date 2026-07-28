@@ -47,7 +47,7 @@ import {
   releaseLeasedSharedCodexAppServerClient,
 } from "../app-server/shared-client.js";
 import { codexPluginActivationReportState, sanitizeAppsNeedingAuth } from "./apply-report.js";
-import { applyCodexAuthItem, buildCodexAuthConfigPatchItems } from "./auth.js";
+import { applyCodexAuthItems, type CodexAuthSource } from "./auth.js";
 import { buildCodexMigrationPlan } from "./plan.js";
 import {
   buildCodexPluginsConfigValue,
@@ -128,16 +128,10 @@ export async function applyCodexMigrationPlan(params: {
     typeof plan.metadata?.codexHome === "string" && plan.metadata.codexHome.trim()
       ? plan.metadata.codexHome
       : plan.source;
-  const authSource = {
-    root: plan.source,
-    confidence: "high" as const,
+  const authSource: CodexAuthSource = {
     codexHome,
     authPath: path.join(codexHome, "auth.json"),
     modelsCachePath: path.join(codexHome, "models_cache.json"),
-    memoryFiles: [],
-    skills: [],
-    plugins: [],
-    archivePaths: [],
   };
   const runtime = withCachedMigrationConfigRuntime(
     params.ctx.runtime ?? params.runtime,
@@ -152,18 +146,12 @@ export async function applyCodexMigrationPlan(params: {
     if (item.id === CODEX_PLUGIN_CONFIG_ITEM_ID) {
       items.push(await applyCodexPluginConfigItem(applyCtx, item, items));
     } else if (item.kind === "auth") {
-      const authItem = await applyCodexAuthItem({
-        ctx: applyCtx,
-        item,
-        source: authSource,
-        targets,
-      });
-      items.push(authItem);
       items.push(
-        ...(await buildCodexAuthConfigPatchItems({
+        ...(await applyCodexAuthItems({
           ctx: applyCtx,
-          item: authItem,
+          item,
           source: authSource,
+          targets,
         })),
       );
     } else if (item.kind === "plugin" && item.action === "install") {
@@ -453,7 +441,7 @@ async function applyCodexPluginConfigItem(
   if (!currentConfig) {
     return markMigrationItemError(item, "config runtime unavailable");
   }
-  const value = buildCodexPluginsConfigValue(entries, { config: currentConfig });
+  const value = buildCodexPluginsConfigValue(entries, currentConfig);
   if (!ctx.overwrite && hasCodexPluginConfigConflict(currentConfig, value)) {
     return markMigrationItemConflict(item, MIGRATION_REASON_TARGET_EXISTS);
   }
@@ -508,31 +496,21 @@ function readAppliedPluginConfigEntry(
   if (item.status === "migrated" || item.deferredCompletion === true) {
     return readCodexPluginMigrationConfigEntry(item, true);
   }
-  if (
-    item.status === "skipped" &&
-    item.reason !== CODEX_PLUGIN_NOT_SELECTED_REASON &&
-    item.reason === CODEX_PLUGIN_AUTH_REQUIRED_REASON
-  ) {
+  if (item.status === "skipped" && item.reason === CODEX_PLUGIN_AUTH_REQUIRED_REASON) {
     return readCodexPluginMigrationConfigEntry(item, false);
   }
   return undefined;
 }
 
 function readCodexPluginPolicy(item: MigrationItem): ResolvedCodexPluginPolicy | undefined {
-  const configKey = item.details?.configKey;
-  const marketplaceName = item.details?.marketplaceName;
-  const pluginName = item.details?.pluginName;
-  if (
-    typeof configKey !== "string" ||
-    marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME ||
-    typeof pluginName !== "string"
-  ) {
+  const entry = readCodexPluginMigrationConfigEntry(item, true);
+  if (!entry) {
     return undefined;
   }
   return {
-    configKey,
+    configKey: entry.configKey,
     marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-    pluginName,
+    pluginName: entry.pluginName,
     enabled: true,
     allowDestructiveActions: true,
     destructiveApprovalMode: "allow",

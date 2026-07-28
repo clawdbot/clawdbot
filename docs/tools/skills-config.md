@@ -20,7 +20,6 @@ Most skills configuration lives under `skills` in
       extraDirs: ["~/Projects/agent-scripts/skills"],
       allowSymlinkTargets: ["~/Projects/manager/skills"],
       watch: true,
-      watchDebounceMs: 250,
     },
     install: {
       preferBrew: true,
@@ -71,10 +70,6 @@ Most skills configuration lives under `skills` in
 <ParamField path="skills.load.watch" type="boolean" default="true">
   Watch skill folders and refresh the skills snapshot when `SKILL.md` files
   change. Covers nested files under grouped skill roots.
-</ParamField>
-
-<ParamField path="skills.load.watchDebounceMs" type="number" default="250">
-  Debounce window for skill watcher events in milliseconds.
 </ParamField>
 
 ## Install (`skills.install`)

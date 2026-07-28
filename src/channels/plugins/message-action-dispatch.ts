@@ -43,6 +43,14 @@ type ChannelMessageActionDispatchContext = Omit<ChannelMessageActionContext, "ac
   action: unknown;
 };
 
+type PreparedMessageActionReadContext = {
+  actionContext: ChannelMessageActionContext;
+  plugin: ChannelPlugin;
+  origin: ServerOwnedConversationReadOrigin;
+  actionPolicy: ChannelMessageActionReadPolicy;
+  enforcement: MessageActionReadEnforcement;
+};
+
 type ChannelMessageActionReadPolicy =
   | { readonly kind: "none" }
   | {
@@ -339,6 +347,65 @@ function hasTargetInput(value: unknown): boolean {
   return typeof value === "number" && Number.isFinite(value);
 }
 
+function attachExternalCurrentTargetSibling(params: {
+  ctx: ChannelMessageActionContext;
+  plugin: ChannelPlugin;
+  origin: ServerOwnedConversationReadOrigin;
+  actionPolicy: ChannelMessageActionReadPolicy;
+  enforcement: MessageActionReadEnforcement;
+}): ChannelMessageActionContext {
+  if (
+    params.origin === "direct-operator" ||
+    params.actionPolicy.kind !== "conversation-read" ||
+    params.enforcement.kind !== "host-exact-current" ||
+    params.enforcement.pluginTrust !== "external"
+  ) {
+    return params.ctx;
+  }
+  const target =
+    typeof params.ctx.params.target === "string" ? params.ctx.params.target.trim() : "";
+  if (!target) {
+    return params.ctx;
+  }
+  const mirroredTo = params.ctx.params.to;
+  if (typeof mirroredTo !== "string" || mirroredTo.trim() !== target) {
+    return params.ctx;
+  }
+  const providerPrefixes = params.plugin.messaging?.targetPrefixes;
+  const requestedTarget = normalizeHostConversationTarget({
+    value: target,
+    channel: params.ctx.channel,
+    providerPrefixes,
+  });
+  if (!requestedTarget) {
+    return params.ctx;
+  }
+  const trustedCurrentTarget = [
+    params.ctx.toolContext?.currentMessagingTarget,
+    params.ctx.toolContext?.currentChannelId,
+  ].find((value) => {
+    const normalized = normalizeHostConversationTarget({
+      value,
+      channel: params.ctx.channel,
+      providerPrefixes,
+    });
+    return (
+      normalized?.id === requestedTarget.id &&
+      (!requestedTarget.kind || !normalized.kind || normalized.kind === requestedTarget.kind)
+    );
+  });
+  if (typeof trustedCurrentTarget !== "string" || !trustedCurrentTarget.trim()) {
+    return params.ctx;
+  }
+  return {
+    ...params.ctx,
+    params: {
+      ...params.ctx.params,
+      to: trustedCurrentTarget.trim(),
+    },
+  };
+}
+
 function isExactCurrentConversation(params: {
   ctx: ChannelMessageActionContext;
   plugin: ChannelPlugin;
@@ -476,6 +543,54 @@ function canonicalizeExternalExactCurrentTarget(ctx: ChannelMessageActionContext
   }
 }
 
+function prepareMessageActionReadContext(
+  ctx: ChannelMessageActionDispatchContext,
+): PreparedMessageActionReadContext | undefined {
+  const actionPolicy = resolveChannelMessageActionReadPolicy(ctx.action);
+  if (!actionPolicy) {
+    return undefined;
+  }
+  const registration = resolveChannelPluginRegistration(ctx.channel);
+  if (!registration) {
+    return undefined;
+  }
+  const action = ctx.action as ChannelMessageActionName;
+  const origin = resolveServerOwnedConversationReadOrigin(ctx.conversationReadOrigin);
+  const actionContext: ChannelMessageActionContext = {
+    ...ctx,
+    action,
+    conversationReadOrigin: origin,
+  };
+  return {
+    actionContext,
+    plugin: registration.plugin,
+    origin,
+    actionPolicy,
+    enforcement: resolveMessageActionReadEnforcement({
+      action,
+      channel: actionContext.channel,
+      pluginOrigin: registration.origin,
+    }),
+  };
+}
+
+function isExternalDelegatedMessageActionRead(
+  prepared: PreparedMessageActionReadContext | undefined,
+): prepared is PreparedMessageActionReadContext & {
+  actionPolicy: Extract<ChannelMessageActionReadPolicy, { kind: "conversation-read" }>;
+  enforcement: Extract<MessageActionReadEnforcement, { kind: "host-exact-current" }> & {
+    pluginTrust: "external";
+  };
+} {
+  return Boolean(
+    prepared &&
+    prepared.origin !== "direct-operator" &&
+    prepared.actionPolicy.kind === "conversation-read" &&
+    prepared.enforcement.kind === "host-exact-current" &&
+    prepared.enforcement.pluginTrust === "external",
+  );
+}
+
 /** The sole host chokepoint before any read-capable plugin callback runs. */
 function enforceMessageActionConversationReadGate(params: {
   ctx: ChannelMessageActionContext;
@@ -514,6 +629,40 @@ function enforceMessageActionConversationReadGate(params: {
   }
 }
 
+/** Authorizes and canonicalizes external exact-current targets before target resolution. */
+export function prepareExternalMessageActionTargetForResolution(
+  ctx: ChannelMessageActionDispatchContext,
+): Record<string, unknown> {
+  const prepared = prepareMessageActionReadContext(ctx);
+  if (!isExternalDelegatedMessageActionRead(prepared)) {
+    return ctx.params;
+  }
+  // External target resolution can execute plugin directory/provider lookups.
+  // Establish exact-current authority before that boundary, then recheck at dispatch.
+  const authorizedActionContext = attachExternalCurrentTargetSibling({
+    ctx: prepared.actionContext,
+    plugin: prepared.plugin,
+    origin: prepared.origin,
+    actionPolicy: prepared.actionPolicy,
+    enforcement: prepared.enforcement,
+  });
+  enforceMessageActionConversationReadGate({
+    ctx: authorizedActionContext,
+    plugin: prepared.plugin,
+    origin: prepared.origin,
+    actionPolicy: prepared.actionPolicy,
+    enforcement: prepared.enforcement,
+  });
+  return authorizedActionContext.params;
+}
+
+/** Defers delegated external target interpretation to the attested Gateway boundary. */
+export function shouldDeferExternalMessageActionTargetResolution(
+  ctx: ChannelMessageActionDispatchContext,
+): boolean {
+  return isExternalDelegatedMessageActionRead(prepareMessageActionReadContext(ctx));
+}
+
 function requiresTrustedRequesterSender(
   ctx: ChannelMessageActionContext,
   plugin: ChannelPlugin,
@@ -532,53 +681,46 @@ function requiresTrustedRequesterSender(
 export async function dispatchChannelMessageAction(
   ctx: ChannelMessageActionDispatchContext,
 ): Promise<AgentToolResult<unknown> | null> {
-  const actionPolicy = resolveChannelMessageActionReadPolicy(ctx.action);
-  if (!actionPolicy) {
+  const prepared = prepareMessageActionReadContext(ctx);
+  if (!prepared) {
     return null;
   }
-  // The policy lookup is the runtime proof that this is a core-owned action.
-  const action = ctx.action as ChannelMessageActionName;
-  const registration = resolveChannelPluginRegistration(ctx.channel);
-  if (!registration) {
-    return null;
-  }
-  const { plugin } = registration;
+  const { actionContext, plugin, origin, actionPolicy, enforcement } = prepared;
   const actions = plugin.actions;
   if (!actions?.handleAction) {
     return null;
   }
-  const origin = resolveServerOwnedConversationReadOrigin(ctx.conversationReadOrigin);
-  const actionContext: ChannelMessageActionContext = {
-    ...ctx,
-    action,
-    // Plugins receive only the closed server-normalized classification.
-    conversationReadOrigin: origin,
-  };
-  enforceMessageActionConversationReadGate({
+  const authorizedActionContext = attachExternalCurrentTargetSibling({
     ctx: actionContext,
     plugin,
     origin,
     actionPolicy,
-    enforcement: resolveMessageActionReadEnforcement({
-      action: actionContext.action,
-      channel: actionContext.channel,
-      pluginOrigin: registration.origin,
-    }),
+    enforcement,
+  });
+  enforceMessageActionConversationReadGate({
+    ctx: authorizedActionContext,
+    plugin,
+    origin,
+    actionPolicy,
+    enforcement,
   });
   // Some plugin actions depend on the sender identity to enforce channel-local
   // trust. Reject tool-driven calls before invoking the action without it.
   if (
-    requiresTrustedRequesterSender(actionContext, plugin) &&
-    !actionContext.requesterSenderId?.trim()
+    requiresTrustedRequesterSender(authorizedActionContext, plugin) &&
+    !authorizedActionContext.requesterSenderId?.trim()
   ) {
     throw new Error(
-      `Trusted sender identity is required for ${actionContext.channel}:${actionContext.action} in tool-driven contexts.`,
+      `Trusted sender identity is required for ${authorizedActionContext.channel}:${authorizedActionContext.action} in tool-driven contexts.`,
     );
   }
   // `handleAction` may be broad; `supportsAction` lets plugins cheaply decline
   // action names before the dispatcher enters channel-specific behavior.
-  if (actions.supportsAction && !actions.supportsAction({ action: actionContext.action })) {
+  if (
+    actions.supportsAction &&
+    !actions.supportsAction({ action: authorizedActionContext.action })
+  ) {
     return null;
   }
-  return await actions.handleAction(actionContext);
+  return await actions.handleAction(authorizedActionContext);
 }

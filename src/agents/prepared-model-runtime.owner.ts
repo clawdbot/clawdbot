@@ -1,6 +1,7 @@
 import path from "node:path";
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { PreparedMessageToolCatalog } from "../channels/plugins/message-action-discovery.js";
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import { MODEL_APIS } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -8,6 +9,11 @@ import { withTimeout } from "../node-host/with-timeout.js";
 import { prepareMediaCapabilityProviders } from "../plugins/capability-provider-runtime.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import {
+  EMPTY_PREPARED_MESSAGE_TOOL_CATALOG,
+  getPreparedMessageToolCatalog,
+  getPreparedMessageToolCatalogForRegistry,
+} from "../plugins/prepared-message-tool-catalog.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
 import {
@@ -34,8 +40,11 @@ export type PreparedModelRuntimeSnapshot = Readonly<{
   agentDir: string;
   inheritedAuthDir?: string;
   workspaceDir?: string;
+  /** Run-prepared repository root; null means discovery completed without a match. */
+  repoRoot?: string | null;
   config: OpenClawConfig;
   metadataSnapshot: PluginMetadataSnapshot;
+  messageToolCatalog?: PreparedMessageToolCatalog;
   mediaCapabilityProviders?: ReturnType<typeof prepareMediaCapabilityProviders>;
   modelCatalog: ModelCatalogSnapshot;
   createStores: () => PreparedModelRuntimeStores;
@@ -405,6 +414,10 @@ async function buildSnapshot(
         pluginMetadataSnapshot,
         registry: runtimePluginRegistry,
       });
+  const messageToolCatalog =
+    (runtimePluginRegistry
+      ? getPreparedMessageToolCatalogForRegistry(runtimePluginRegistry)
+      : getPreparedMessageToolCatalog()) ?? EMPTY_PREPARED_MESSAGE_TOOL_CATALOG;
   const templateAuthStorage = discoverAuthStorage(input.agentDir, {
     config: input.config,
     // Snapshot construction never initializes, migrates, or externally syncs auth. ModelRegistry
@@ -468,6 +481,7 @@ async function buildSnapshot(
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     config: input.config,
     metadataSnapshot: pluginMetadataSnapshot,
+    messageToolCatalog,
     ...(mediaCapabilityProviders ? { mediaCapabilityProviders } : {}),
     modelCatalog: { ...modelCatalog, staticEntries },
     createStores,

@@ -9,6 +9,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import type { SessionArchivedTranscriptCleanupRule } from "./session-accessor.lifecycle-types.js";
 import {
   materializeSqliteSessionStateDeletePlans,
   type MaterializedSqliteSessionStateDeletePlan,
@@ -24,10 +25,12 @@ import type {
   SessionEntryStatus,
 } from "./session-accessor.sqlite-contract.js";
 import {
+  deleteLegacySessionEntryRows,
   deleteSqliteSessionEntryRows,
   readExactSessionEntryRow,
   readSqliteSessionEntryCount,
   readSqliteSessionEntryStore,
+  rehomeSqliteSessionWindows,
   sqliteSessionEntriesEqual,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
@@ -38,6 +41,7 @@ import {
   emitCommittedSessionEntryRemovals,
 } from "./session-accessor.sqlite-identity.js";
 import {
+  assertPlannedSqliteLifecycleArtifactEntriesUnchanged,
   collectProjectedReferencedSqliteSessionIds,
   deleteMaterializedSqliteSessionStatePlans,
   deletePlannedSqliteLifecycleArtifactEntries,
@@ -65,7 +69,6 @@ import { readSqliteSessionEntriesByStatus } from "./session-accessor.sqlite-stat
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
-import type { SessionArchivedTranscriptCleanupRule } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
 // Bulk mutation owner. Detached callbacks prepare first; one validated transaction commits the projection.
@@ -158,6 +161,7 @@ export async function applySqliteSessionEntryReplacements<T>(params: {
             transactionDb,
             replacement.sessionKey,
             cloneSessionEntry(replacement.entry),
+            { previousEntry: expectedEntries.get(replacement.sessionKey) ?? null },
           );
         }
         maintenancePlans.push(
@@ -165,6 +169,7 @@ export async function applySqliteSessionEntryReplacements<T>(params: {
             activeSessionKey: params.activeSessionKey ?? "",
             archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
             skipMaintenance: params.skipMaintenance ?? true,
+            storePath: params.storePath,
           }),
         );
       },
@@ -253,7 +258,9 @@ export async function applySqliteSessionStoreProjection<T>(params: {
         for (const sessionKey of changedKeys) {
           const entry = projected[sessionKey];
           if (entry) {
-            writeSessionEntry(transactionDb, sessionKey, cloneSessionEntry(entry));
+            writeSessionEntry(transactionDb, sessionKey, cloneSessionEntry(entry), {
+              previousEntry: before[sessionKey] ?? null,
+            });
           } else {
             deleteSqliteSessionEntryRows(transactionDb, sessionKey);
           }
@@ -263,6 +270,7 @@ export async function applySqliteSessionStoreProjection<T>(params: {
             activeSessionKey: params.activeSessionKey ?? "",
             archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
             skipMaintenance: params.skipMaintenance,
+            storePath: params.storePath,
           }),
         );
       },
@@ -321,19 +329,39 @@ export async function applySqliteSessionEntryLifecycleMutation(params: {
       captureArtifactCleanupError(error);
     }
     runOpenClawAgentWriteTransaction((transactionDb) => {
-      for (const removal of projected.removals) {
+      const validatedRemovals = projected.removals.filter((removal) => {
         const entry = readExactSessionEntryRow(transactionDb, removal.sessionKey)?.entry;
         if (!sqliteSessionEntriesEqual(entry, removal.expectedEntry)) {
+          const replacedInSameMutation = projected.upsertedEntries.some(
+            (upsert) => upsert.sessionKey === removal.sessionKey,
+          );
           throw new Error(
-            `SQLite session entry changed before lifecycle removal for ${removal.sessionKey}`,
+            replacedInSameMutation
+              ? `SQLite session entry has stale lifecycle state for ${removal.sessionKey}`
+              : `SQLite session entry changed before lifecycle removal for ${removal.sessionKey}`,
           );
         }
-        if (!shouldRemoveSqliteSessionEntry(entry, removal.removal)) {
-          continue;
+        const shouldRemove = shouldRemoveSqliteSessionEntry(entry, removal.removal);
+        if (
+          !shouldRemove &&
+          projected.upsertedEntries.some((upsert) => upsert.sessionKey === removal.sessionKey)
+        ) {
+          throw new Error(
+            `SQLite session entry has stale lifecycle state for ${removal.sessionKey}`,
+          );
         }
-        deleteSqliteSessionEntryRows(transactionDb, removal.sessionKey);
-        removedSessionKeys.push(removal.sessionKey);
-      }
+        return shouldRemove;
+      });
+      archivedTranscripts = deleteMaterializedSqliteSessionStatePlans(
+        transactionDb,
+        materializedRemovalPlans,
+        undefined,
+        new Set(validatedRemovals.map((removal) => removal.sessionKey)),
+      );
+      const legacyReplacementTargets = new Map<
+        string,
+        { canonicalKey: string; rehomeMembers: boolean }
+      >();
       for (const {
         sessionKey,
         entry,
@@ -341,8 +369,21 @@ export async function applySqliteSessionEntryLifecycleMutation(params: {
         resetBoundaryPlan,
       } of projected.upsertedEntries) {
         const currentEntry = readExactSessionEntryRow(transactionDb, sessionKey)?.entry;
-        if (!sqliteSessionEntriesEqual(currentEntry, expectedEntry)) {
+        const sameKeyRemoval = validatedRemovals.find(
+          (removal) => removal.sessionKey === sessionKey,
+        );
+        const expectedCurrentEntry = expectedEntry ?? sameKeyRemoval?.expectedEntry;
+        if (!sqliteSessionEntriesEqual(currentEntry, expectedCurrentEntry)) {
+          if (sameKeyRemoval) {
+            throw new Error(`SQLite session entry has stale lifecycle state for ${sessionKey}`);
+          }
           throw new Error(`SQLite session entry changed before lifecycle upsert for ${sessionKey}`);
+        }
+        if (
+          sameKeyRemoval &&
+          !shouldRemoveSqliteSessionEntry(currentEntry, sameKeyRemoval.removal)
+        ) {
+          throw new Error(`SQLite session entry has stale lifecycle state for ${sessionKey}`);
         }
         if (resetBoundaryPlan && expectedEntry?.sessionId) {
           const events = [...resetBoundaryPlan.seedEvents, resetBoundaryPlan.event];
@@ -355,7 +396,53 @@ export async function applySqliteSessionEntryLifecycleMutation(params: {
             throw new Error(`Failed to append reset boundary for ${sessionKey}`);
           }
         }
-        writeSessionEntry(transactionDb, sessionKey, entry);
+        writeSessionEntry(transactionDb, sessionKey, entry, {
+          previousEntry: expectedCurrentEntry ?? null,
+        });
+        const relatedRemovalKeys = validatedRemovals.flatMap((removal) => {
+          const removedSessionId = removal.expectedEntry.sessionId;
+          return removal.sessionKey !== sessionKey &&
+            (removedSessionId === entry.sessionId || removedSessionId === entry.previousSessionId)
+            ? [removal.sessionKey]
+            : [];
+        });
+        rehomeSqliteSessionWindows(transactionDb, sessionKey, relatedRemovalKeys);
+        for (const legacyKey of relatedRemovalKeys) {
+          const removedEntry = validatedRemovals.find(
+            (removal) => removal.sessionKey === legacyKey,
+          )?.expectedEntry;
+          legacyReplacementTargets.set(legacyKey, {
+            canonicalKey: sessionKey,
+            rehomeMembers: removedEntry?.sessionId === entry.sessionId,
+          });
+        }
+      }
+      const upsertedKeys = new Set(projected.upsertedEntries.map((upsert) => upsert.sessionKey));
+      for (const removal of validatedRemovals) {
+        if (upsertedKeys.has(removal.sessionKey)) {
+          continue;
+        }
+        const entry = readExactSessionEntryRow(transactionDb, removal.sessionKey)?.entry;
+        if (!sqliteSessionEntriesEqual(entry, removal.expectedEntry)) {
+          throw new Error(
+            `SQLite session entry changed before lifecycle removal for ${removal.sessionKey}`,
+          );
+        }
+        if (!shouldRemoveSqliteSessionEntry(entry, removal.removal)) {
+          continue;
+        }
+        const replacement = legacyReplacementTargets.get(removal.sessionKey);
+        if (replacement) {
+          deleteLegacySessionEntryRows(
+            transactionDb,
+            [removal.sessionKey],
+            replacement.canonicalKey,
+            { rehomeMembers: replacement.rehomeMembers },
+          );
+        } else {
+          deleteSqliteSessionEntryRows(transactionDb, removal.sessionKey);
+        }
+        removedSessionKeys.push(removal.sessionKey);
       }
       maintenancePlans.push(
         applySqliteSessionEntryMaintenance(transactionDb, {
@@ -366,11 +453,8 @@ export async function applySqliteSessionEntryLifecycleMutation(params: {
             ? { ...resolveMaintenanceConfig(), ...params.maintenanceOverride }
             : undefined,
           skipMaintenance: params.skipMaintenance,
+          storePath: params.storePath,
         }),
-      );
-      archivedTranscripts = deleteMaterializedSqliteSessionStatePlans(
-        transactionDb,
-        materializedRemovalPlans,
       );
     }, toDatabaseOptions(resolved));
     emitCommittedLifecycleIdentityMutations({ projected, removedSessionKeys });
@@ -457,16 +541,20 @@ export async function purgeSqliteDeletedAgentSessionEntries(
     let archivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
     const maintenancePlans: SqliteSessionEntryMaintenancePlan[] = [];
     runOpenClawAgentWriteTransaction((transactionDb) => {
+      assertPlannedSqliteLifecycleArtifactEntriesUnchanged(transactionDb, entryRemovals);
+      archivedTranscripts = deleteMaterializedSqliteSessionStatePlans(
+        transactionDb,
+        materializedPlans,
+        undefined,
+        new Set(entryRemovals.map((removal) => removal.sessionKey)),
+      );
       deletePlannedSqliteLifecycleArtifactEntries(transactionDb, entryRemovals);
       maintenancePlans.push(
         applySqliteSessionEntryMaintenance(transactionDb, {
           activeSessionKey: "",
           archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
+          storePath: params.storePath,
         }),
-      );
-      archivedTranscripts = deleteMaterializedSqliteSessionStatePlans(
-        transactionDb,
-        materializedPlans,
       );
     }, toDatabaseOptions(resolved));
     emitCommittedSessionEntryRemovals(entryRemovals);

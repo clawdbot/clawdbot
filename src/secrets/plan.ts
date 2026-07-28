@@ -186,6 +186,8 @@ export function normalizeSecretsPlanOptions(
   return {
     scrubEnv: options?.scrubEnv ?? true,
     scrubAuthProfilesForProviderTargets: options?.scrubAuthProfilesForProviderTargets ?? true,
-    scrubLegacyAuthJson: options?.scrubLegacyAuthJson ?? true,
+    // Deprecated plan input retained for protocol compatibility. Doctor owns
+    // legacy auth.json migration; secrets apply never reads or rewrites it.
+    scrubLegacyAuthJson: false,
   };
 }

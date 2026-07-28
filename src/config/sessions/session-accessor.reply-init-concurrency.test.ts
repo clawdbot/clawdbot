@@ -115,6 +115,7 @@ function waitForProceed(requestId) {
 
 async function runReplyInit(request) {
   const snapshot = loadReplySessionInitializationSnapshot({
+    agentId: AGENT_ID,
     sessionKey: SESSION_KEY,
     storePath: request.storePath,
   });

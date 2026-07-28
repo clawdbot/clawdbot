@@ -408,6 +408,15 @@ export interface ConfigMachineState {
   value_json: string;
 }
 
+export interface CronJobScratch {
+  content: string | null;
+  job_id: string;
+  revision: number;
+  source_sha256: string | null;
+  store_key: string;
+  updated_at_ms: number;
+}
+
 export interface CronJobs {
   agent_id: string | null;
   anchor_ms: number | null;
@@ -864,6 +873,17 @@ export interface ModelCapabilityCache {
   updated_at_ms: number;
 }
 
+export interface ModelCatalogRemote {
+  bundle_json: string;
+  checked_at: number;
+  etag: string | null;
+  generated_at: number;
+  id: Generated<number>;
+  last_modified: string | null;
+  min_version: string | null;
+  source_url: string;
+}
+
 export interface NativeHookRelayBridges {
   expires_at_ms: number;
   hostname: string;
@@ -1059,6 +1079,11 @@ export interface SessionWatchCursors {
   target_session_key: string;
   updated_at: number;
   watcher_session_key: string;
+}
+
+export interface SidebarSections {
+  position: number;
+  section_id: string;
 }
 
 export interface SkillCuratorState {
@@ -1500,6 +1525,7 @@ export interface DB {
   commitments: Commitments;
   config_health_entries: ConfigHealthEntries;
   config_machine_state: ConfigMachineState;
+  cron_job_scratch: CronJobScratch;
   cron_jobs: CronJobs;
   current_conversation_bindings: CurrentConversationBindings;
   delivery_queue_entries: DeliveryQueueEntries;
@@ -1528,6 +1554,7 @@ export interface DB {
   migration_runs: MigrationRuns;
   migration_sources: MigrationSources;
   model_capability_cache: ModelCapabilityCache;
+  model_catalog_remote: ModelCatalogRemote;
   native_hook_relay_bridges: NativeHookRelayBridges;
   node_host_config: NodeHostConfig;
   official_external_plugin_catalog_snapshots: OfficialExternalPluginCatalogSnapshots;
@@ -1544,6 +1571,7 @@ export interface DB {
   session_state_heads: SessionStateHeads;
   session_upstream_links: SessionUpstreamLinks;
   session_watch_cursors: SessionWatchCursors;
+  sidebar_sections: SidebarSections;
   skill_curator_state: SkillCuratorState;
   skill_lifecycle: SkillLifecycle;
   skill_upload_chunks: SkillUploadChunks;

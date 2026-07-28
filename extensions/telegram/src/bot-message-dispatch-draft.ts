@@ -60,6 +60,7 @@ function resolveDraftPartialText(
 
 export function createTelegramDraftController(params: {
   accountId: string;
+  allowProviderPreview: boolean;
   bot: Bot;
   cfg: OpenClawConfig;
   chatId: number;
@@ -82,6 +83,7 @@ export function createTelegramDraftController(params: {
     resolveChannelStreamingBlockEnabled(params.telegramCfg) ??
     params.cfg.agents?.defaults?.blockStreamingDefault === "on";
   const canStreamAnswerDraft =
+    params.allowProviderPreview &&
     streamDeliveryEnabled &&
     !params.hasTelegramQuoteReply &&
     !accountBlockStreamingEnabled &&
@@ -90,7 +92,10 @@ export function createTelegramDraftController(params: {
   const streamReasoningInProgressDraft =
     streamReasoningDraft && params.streamMode === "progress" && canStreamAnswerDraft;
   const canStreamReasoningDraft =
-    !params.isRoomEvent && streamReasoningDraft && !streamReasoningInProgressDraft;
+    params.allowProviderPreview &&
+    !params.isRoomEvent &&
+    streamReasoningDraft &&
+    !streamReasoningInProgressDraft;
   const draftMaxChars =
     params.streamMode === "block"
       ? Math.min(
@@ -458,6 +463,15 @@ export function createTelegramDraftController(params: {
     answerLane,
     reasoningLane,
     lanes,
+    beginQueuedFollowup: () => {
+      for (const lane of [answerLane, reasoningLane]) {
+        if (!lane.stream) {
+          continue;
+        }
+        lane.stream.forceNewMessage();
+        resetLaneState(lane);
+      }
+    },
     canPushAnswerDraft: () => Boolean(answerLane.stream),
     cleanup: async (superseded: boolean) => {
       for (const lane of [answerLane, reasoningLane]) {

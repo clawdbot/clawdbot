@@ -1,15 +1,16 @@
 /** Mutates and persists isolated cron session state around one run. */
-import fs from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { clearBootstrapSnapshotOnSessionBoundary } from "../../agents/bootstrap-cache.js";
 import type { LiveSessionModelSelection } from "../../agents/live-model-switch.js";
+import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { readTranscriptStatsSync } from "../../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
-import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { isCronSessionKey } from "../../sessions/session-key-utils.js";
 import { isSessionWorkAdmissionActive } from "../../sessions/session-lifecycle-admission.js";
 import type { SkillSnapshot } from "../../skills/types.js";
+import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import type { resolveCronSession } from "./session.js";
 
 type MutableSessionStore = Record<string, SessionEntry>;
@@ -60,12 +61,26 @@ export function resolveCronLifecycleRevisionIdentity(lifecycleRevision: string):
   return `cron-lifecycle-revision:${lifecycleRevision}`;
 }
 
-function cronTranscriptExists(entry: SessionEntry): boolean {
-  const sessionFile = entry.sessionFile?.trim();
-  if (parseSqliteSessionFileMarker(sessionFile)) {
-    return true;
+function cronTranscriptExists(params: {
+  entry: SessionEntry;
+  sessionKey: string;
+  storePath: string;
+}): boolean {
+  const sessionId = params.entry.sessionId?.trim();
+  if (!sessionId) {
+    return false;
   }
-  return Boolean(sessionFile && fs.existsSync(sessionFile));
+  try {
+    return (
+      readTranscriptStatsSync({
+        sessionId,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+      }).eventCount > 0
+    );
+  } catch {
+    return false;
+  }
 }
 
 function normalizeSessionField(value: string | undefined): string | undefined {
@@ -85,7 +100,6 @@ function toNonResumableCronSessionEntry(entry: SessionEntry): SessionEntry {
   const next = { ...entry } as Partial<SessionEntry>;
   // If the transcript never materialized, do not persist stale resume handles
   // that would make the next cron run believe a resumable CLI session exists.
-  delete next.sessionFile;
   delete next.sessionStartedAt;
   delete next.lastInteractionAt;
   delete next.cliSessionIds;
@@ -106,7 +120,11 @@ export function createPersistCronSessionEntry(params: {
     const persistedEntry =
       isCronSessionKey(params.agentSessionKey) &&
       liveEntry.sessionId &&
-      !cronTranscriptExists(liveEntry)
+      !cronTranscriptExists({
+        entry: liveEntry,
+        sessionKey: params.agentSessionKey,
+        storePath: params.cronSession.storePath,
+      })
         ? toNonResumableCronSessionEntry(liveEntry)
         : liveEntry;
     let committedEntry = persistedEntry;
@@ -140,8 +158,23 @@ export function createPersistCronSessionEntry(params: {
             projectCronOwnershipFields(currentEntry),
             projectCronOwnershipFields(params.cronSession.initialSessionEntry),
           );
+        // Same-generation continuation: the row still carries the lifecycle
+        // revision this run resolved from, so no competing run has claimed it
+        // since. Benign concurrent field writes (delivery, token, status) then
+        // merge into the claim instead of aborting it. Exact ownership-field
+        // equality alone spuriously rejected these on large, busy stores where
+        // such an update lands between resolve and this first persist.
+        const initialEntry = params.cronSession.initialSessionEntry;
+        const initialLifecycleRevision = initialEntry?.lifecycleRevision;
+        const currentContinuesInitialGeneration =
+          currentEntry !== undefined &&
+          initialEntry !== undefined &&
+          initialLifecycleRevision !== undefined &&
+          currentEntry.lifecycleRevision === initialLifecycleRevision &&
+          currentEntry.sessionId === initialEntry.sessionId;
         const canClaimInitialRevision = params.cronSession.initialSessionEntry
-          ? !currentRevisionActive && initialEntryMatchesOwnershipFields
+          ? !currentRevisionActive &&
+            (initialEntryMatchesOwnershipFields || currentContinuesInitialGeneration)
           : currentEntry === undefined;
         // Concurrent persistent runs can resolve the same initial row. Once one
         // revision claims it, older owners must not reclaim it and delete newer state.
@@ -188,6 +221,7 @@ export function createCronRunContinuationSession(params: {
   thinkingLevel?: string;
   toolsAllow?: string[];
   toolsAllowIsDefault?: boolean;
+  scheduledToolPolicy?: CronScheduledToolPolicy;
   cliSessionBindingFacts?: {
     extraSystemPromptStatic?: string;
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
@@ -195,11 +229,16 @@ export function createCronRunContinuationSession(params: {
   };
   persistSessionEntry: PersistSessionEntry;
 }): CronRunContinuationSession {
+  const scheduledToolPolicy = resolveScheduledToolPolicyContext({
+    toolsAllow: params.toolsAllow,
+    scheduledToolPolicy: params.scheduledToolPolicy,
+  });
   const continuation: NonNullable<SessionEntry["cronRunContinuation"]> = {
     lifecycleRevision: params.cronSession.lifecycleRevision,
     phase: "running" as const,
     ...(params.toolsAllow !== undefined ? { toolsAllow: [...params.toolsAllow] } : {}),
     ...(params.toolsAllowIsDefault === true ? { toolsAllowIsDefault: true } : {}),
+    ...(scheduledToolPolicy ? { scheduledToolPolicy } : {}),
     ...(params.cliSessionBindingFacts
       ? { cliSessionBindingFacts: { ...params.cliSessionBindingFacts } }
       : {}),
@@ -270,7 +309,7 @@ export function createCronRunContinuationSession(params: {
   };
 }
 
-/** Adopts the session id/file produced by a run and preserves usage-family lineage. */
+/** Adopts the session id produced by a run and preserves usage-family lineage. */
 export function adoptCronRunSessionMetadata(params: {
   entry: MutableCronSessionEntry;
   sessionKey: string;
@@ -280,8 +319,7 @@ export function adoptCronRunSessionMetadata(params: {
   };
 }): boolean {
   const nextSessionId = normalizeSessionField(params.runMeta?.sessionId);
-  const nextSessionFile = normalizeSessionField(params.runMeta?.sessionFile);
-  if (!nextSessionFile) {
+  if (!nextSessionId) {
     return false;
   }
 
@@ -297,11 +335,6 @@ export function adoptCronRunSessionMetadata(params: {
         nextSessionId,
       ]),
     );
-    changed = true;
-  }
-
-  if (nextSessionFile !== params.entry.sessionFile) {
-    params.entry.sessionFile = nextSessionFile;
     changed = true;
   }
 

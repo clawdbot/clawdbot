@@ -19,6 +19,7 @@ import {
   setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
+import { PLUGIN_APPROVAL_DETAIL_MAX_LENGTH } from "../infra/plugin-approvals.js";
 import {
   getDiagnosticSessionActivitySnapshot,
   resetDiagnosticRunActivityForTest,
@@ -50,7 +51,7 @@ import {
   requireArgAfter,
   requireRecord,
   requireRegexMatch,
-  withTempExecApprovalsFile,
+  withTempExecApprovalsState,
   withTempOpenClawHome,
   type PreparedCliRunContextOverrides,
 } from "./cli-runner.test-helpers.js";
@@ -158,6 +159,10 @@ afterEach(() => {
 });
 
 const CLAUDE_OK_JSONL = `${JSON.stringify({ type: "result", result: "ok" })}\n`;
+const GEMINI_OK_JSONL = `${[
+  JSON.stringify({ type: "message", role: "assistant", content: "ok", delta: true }),
+  JSON.stringify({ type: "result", status: "success" }),
+].join("\n")}\n`;
 
 describe("runCliAgent spawn path", () => {
   it("formats output digests without logging response content", () => {
@@ -279,7 +284,7 @@ describe("runCliAgent spawn path", () => {
         toolAvailability = execution.toolAvailability;
         return [...execution.baseArgs];
       },
-      cliToolAvailability: { native: [], mcp: ["mcp__openclaw__message"] },
+      cliToolAvailability: { native: [], openClaw: ["message"] },
     });
     context.preparedBackend.secretInput = {
       fd: 3,
@@ -296,8 +301,8 @@ describe("runCliAgent spawn path", () => {
 
     expect(output).toMatchObject({ text: "node answer", sessionId: "forked-node-session" });
     // Node runs keep the gateway's native tool policy; loopback MCP tools do
-    // not exist on the node so the mcp list is projected empty.
-    expect(toolAvailability).toEqual({ native: [], mcp: [] });
+    // not exist on the node so the OpenClaw list is projected empty.
+    expect(toolAvailability).toEqual({ native: [], openClaw: [], mcp: [] });
     expect(writeSystemPrompt).not.toHaveBeenCalled();
     expect(supervisorSpawnMock).not.toHaveBeenCalled();
     expect(invokeNode).toHaveBeenCalledWith(
@@ -1179,7 +1184,7 @@ describe("runCliAgent spawn path", () => {
     mockSuccessfulCliRun(CLAUDE_OK_JSONL);
     const toolAvailability: NonNullable<PreparedCliRunContext["params"]["cliToolAvailability"]> = {
       native: [],
-      mcp: ["mcp__openclaw__openclaw"],
+      openClaw: ["openclaw"],
     };
     const resolveExecutionArgs = vi.fn(({ baseArgs }) => baseArgs);
 
@@ -1192,7 +1197,12 @@ describe("runCliAgent spawn path", () => {
     );
 
     expect(resolveExecutionArgs).toHaveBeenCalledWith(
-      expect.objectContaining({ toolAvailability }),
+      expect.objectContaining({
+        toolAvailability: {
+          ...toolAvailability,
+          mcp: ["mcp__openclaw__openclaw"],
+        },
+      }),
     );
   });
 
@@ -1204,13 +1214,28 @@ describe("runCliAgent spawn path", () => {
         buildPreparedCliRunContext({
           cliToolAvailability: {
             native: [],
-            mcp: ["mcp__openclaw__openclaw"],
+            openClaw: ["openclaw"],
           },
           resolveExecutionArgs,
         }),
       ),
     ).rejects.toThrow("did not enforce exact per-run tool availability");
     expect(supervisorSpawnMock).not.toHaveBeenCalled();
+  });
+
+  it("does not require an argv rewrite after prepared-execution enforcement", async () => {
+    mockSuccessfulCliRun(GEMINI_OK_JSONL);
+
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "google-gemini-cli",
+        model: "gemini-3.1-pro-preview",
+        cliToolAvailability: { native: [], openClaw: ["openclaw"] },
+        toolAvailabilityEnforcement: "prepare-execution",
+      }),
+    );
+
+    expect(supervisorSpawnMock).toHaveBeenCalledOnce();
   });
 
   it("maps Ultra to the strongest generic CLI backend level", async () => {
@@ -2202,7 +2227,10 @@ describe("runCliAgent spawn path", () => {
         timeoutMs: 3_600_000,
       }),
     );
-    const rejection = expect(run).rejects.toThrow(/produced no output for 900s/);
+    const rejection = run.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
     await vi.waitFor(() => {
       expect(stdin.write).toHaveBeenCalledOnce();
     });
@@ -2218,14 +2246,16 @@ describe("runCliAgent spawn path", () => {
     );
 
     // Base watchdog (600s cap for a 1h budget) must not kill the quiet tool.
-    await vi.advanceTimersByTimeAsync(650_000);
+    vi.advanceTimersByTime(650_000);
     expect(cancel).not.toHaveBeenCalled();
 
     // The blocked-tool floor (15min of quiet) still terminates a wedged tool.
     try {
-      await vi.advanceTimersByTimeAsync(300_000);
+      vi.advanceTimersByTime(300_000);
       expect(cancel).toHaveBeenCalledWith("manual-cancel");
-      await rejection;
+      const error = await rejection;
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toMatch(/produced no output for 900s/);
       // Watchdog-killed turns must keep timeout provenance for active tools.
       expect(toolErrorEvents).toContainEqual(
         expect.objectContaining({
@@ -2868,6 +2898,51 @@ describe("runCliAgent spawn path", () => {
     );
   });
 
+  it("sends full reviewer detail for oversized non-Bash tool input", async () => {
+    mockCallGatewayTool.mockResolvedValueOnce({
+      id: "claude-native-bounded-detail",
+      decision: "allow-once",
+    });
+    const content = `line one ${"x".repeat(500)} line end`;
+    const live = mockClaudeLiveRun(supervisorSpawnMock, {
+      events: buildClaudeControlRequestEvents({
+        requestId: "req-write-bounded-detail",
+        toolUseId: "tool-write-bounded-detail-1",
+        toolName: "Write",
+        input: { file_path: "/tmp/out.txt", content },
+        sessionId: "live-control-write-bounded-detail",
+      }),
+      pid: 3012,
+    });
+
+    const result = await executePreparedCliRun(
+      buildClaudeLiveRunContext({
+        prompt: "hello",
+        config: { tools: { exec: { security: "allowlist", ask: "on-miss" } } },
+      }),
+    );
+
+    expect(result.text).toBe("ok");
+    await vi.waitFor(() =>
+      expect(live.writes.some((entry) => entry.includes('"control_response"'))).toBe(true),
+    );
+    expectClaudeControlDecision(live, {
+      behavior: "allow",
+      requestId: "req-write-bounded-detail",
+      toolUseId: "tool-write-bounded-detail-1",
+      updatedInput: { file_path: "/tmp/out.txt", content },
+    });
+    expect(mockCallGatewayTool).toHaveBeenCalledWith(
+      "plugin.approval.request",
+      expect.any(Object),
+      expect.objectContaining({
+        detail: JSON.stringify({ file_path: "/tmp/out.txt", content }),
+        allowedDecisions: ["allow-once", "deny"],
+      }),
+      { expectFinal: false },
+    );
+  });
+
   it("fails closed when a Claude native tool Gateway approval is unavailable", async () => {
     mockCallGatewayTool.mockRejectedValueOnce(new Error("gateway unavailable"));
     const live = mockClaudeLiveRun(supervisorSpawnMock, {
@@ -2903,7 +2978,7 @@ describe("runCliAgent spawn path", () => {
       events: buildClaudeControlRequestEvents({
         requestId: "req-bash-oversized",
         toolUseId: "tool-bash-oversized-1",
-        input: { command: `echo ${"x".repeat(500)}; rm -rf /tmp/example` },
+        input: { command: "x".repeat(PLUGIN_APPROVAL_DETAIL_MAX_LENGTH) },
         sessionId: "live-control-bash-oversized",
       }),
       pid: 3014,
@@ -3854,7 +3929,7 @@ describe("runCliAgent spawn path", () => {
     };
 
     if (testCase.approvals) {
-      await withTempExecApprovalsFile(testCase.approvals, run);
+      await withTempExecApprovalsState(testCase.approvals, run);
     } else {
       await run();
     }

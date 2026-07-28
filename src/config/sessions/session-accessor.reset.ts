@@ -1,3 +1,8 @@
+import {
+  isIncognitoSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import {
   cloneSessionEntries,
@@ -10,6 +15,7 @@ import {
   listSessionEntriesReadOnly,
   resolveSessionEntryFromStore,
 } from "./session-accessor.entry.js";
+import type { SessionEntryLifecycleUpsert } from "./session-accessor.lifecycle-types.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
 import type {
   SessionLifecycleTranscriptInfo,
@@ -17,17 +23,39 @@ import type {
   ReplySessionInitializationCommitContext,
   ReplySessionInitializationCommitResult,
 } from "./session-accessor.types.js";
+import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import type {
   ResolvedSessionMaintenanceConfig,
   SessionMaintenanceWarning,
 } from "./store-maintenance.js";
-import type { SessionEntryLifecycleUpsert } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionEntryRetirement = {
   entry: SessionEntry;
   key: string;
 };
+
+export class SessionInitializationAgentScopeMismatchError extends Error {
+  readonly code = "SESSION_INITIALIZATION_AGENT_SCOPE_MISMATCH";
+
+  constructor(
+    readonly agentId: string,
+    readonly sessionKeyAgentId: string,
+  ) {
+    super(
+      `Session initialization agent scope mismatch: explicit agent "${agentId}" does not match session key agent "${sessionKeyAgentId}".`,
+    );
+    this.name = "SessionInitializationAgentScopeMismatchError";
+  }
+}
+
+function assertSessionInitializationAgentScope(agentId: string, sessionKey: string): void {
+  const normalizedAgentId = normalizeAgentId(agentId);
+  const sessionKeyAgentId = parseAgentSessionKey(sessionKey)?.agentId;
+  if (sessionKeyAgentId && normalizeAgentId(sessionKeyAgentId) !== normalizedAgentId) {
+    throw new SessionInitializationAgentScopeMismatchError(normalizedAgentId, sessionKeyAgentId);
+  }
+}
 
 const loadSessionArchiveRuntime = createLazyRuntimeModule(
   () => import("../../gateway/session-archive.runtime.js"),
@@ -64,14 +92,16 @@ export async function persistSessionResetLifecycle(params: {
 
 /** Loads the reply-session initialization rows without exposing a mutable store. */
 export function loadReplySessionInitializationSnapshot(params: {
+  agentId: string;
   storePath: string;
   sessionKey: string;
 }): ReplySessionInitializationSnapshot {
+  assertSessionInitializationAgentScope(params.agentId, params.sessionKey);
+  const storePath = resolveSessionStorePathForScope(params);
   const store = Object.fromEntries(
-    listSessionEntriesReadOnly({ storePath: params.storePath }).map(({ sessionKey, entry }) => [
-      sessionKey,
-      entry,
-    ]),
+    listSessionEntriesReadOnly({ agentId: params.agentId, storePath }).map(
+      ({ sessionKey, entry }) => [sessionKey, entry],
+    ),
   );
   const resolved = resolveSessionEntryFromStore({ store, sessionKey: params.sessionKey });
   const currentEntry = resolved.existing ? { ...resolved.existing } : undefined;
@@ -84,7 +114,7 @@ export function loadReplySessionInitializationSnapshot(params: {
     },
     revision: createReplySessionInitializationRevision({
       entry: currentEntry,
-      storePath: params.storePath,
+      storePath,
     }),
   };
 }
@@ -117,8 +147,13 @@ export async function commitReplySessionInitialization(params: {
   snapshotEntry?: SessionEntry;
   storePath: string;
 }): Promise<ReplySessionInitializationCommitResult> {
+  assertSessionInitializationAgentScope(params.agentId, params.sessionKey);
+  const storePath = resolveSessionStorePathForScope({
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+  });
   const store = Object.fromEntries(
-    listSessionEntries({ storePath: params.storePath }).map(({ sessionKey, entry }) => [
+    listSessionEntries({ agentId: params.agentId, storePath }).map(({ sessionKey, entry }) => [
       sessionKey,
       entry,
     ]),
@@ -127,7 +162,7 @@ export async function commitReplySessionInitialization(params: {
   const currentEntry = resolved.existing ? { ...resolved.existing } : undefined;
   const revision = createReplySessionInitializationRevision({
     entry: currentEntry,
-    storePath: params.storePath,
+    storePath,
   });
   if (revision !== params.expectedRevision) {
     return {
@@ -153,7 +188,7 @@ export async function commitReplySessionInitialization(params: {
     agentId: params.agentId,
     ...(currentEntry ? { currentEntry } : {}),
     sessionEntry: preparedSessionEntry,
-    storePath: params.storePath,
+    storePath,
   });
   let staleCommit:
     | {
@@ -175,7 +210,7 @@ export async function commitReplySessionInitialization(params: {
         const commitEntry = commitResolved.existing;
         const commitRevision = createReplySessionInitializationRevision({
           entry: commitEntry,
-          storePath: params.storePath,
+          storePath,
         });
         if (commitRevision !== params.expectedRevision) {
           staleCommit = {
@@ -215,8 +250,9 @@ export async function commitReplySessionInitialization(params: {
   }
   await applySessionEntryLifecycleMutation({
     activeSessionKey: params.activeSessionKey,
+    agentId: params.agentId,
     maintenanceOverride: params.maintenanceConfig,
-    storePath: params.storePath,
+    storePath,
     upserts,
   });
   if (staleCommit) {
@@ -239,16 +275,16 @@ export async function commitReplySessionInitialization(params: {
   };
 
   const previousSessionTranscript =
-    params.archivePreviousTranscript === false
-      ? params.previousEntry?.sessionFile
-        ? { sessionFile: params.previousEntry.sessionFile, transcriptArchived: false }
-        : {}
-      : await archivePreviousSessionTranscript({
-          agentId: params.agentId,
-          onArchiveError: params.onArchiveError,
-          previousEntry: params.previousEntry,
-          storePath: params.storePath,
-        });
+    isIncognitoSessionKey(params.sessionKey) || params.previousEntry?.incognito === true
+      ? {}
+      : params.archivePreviousTranscript === false
+        ? {}
+        : await archivePreviousSessionTranscript({
+            agentId: params.agentId,
+            onArchiveError: params.onArchiveError,
+            previousEntry: params.previousEntry,
+            storePath: params.storePath,
+          });
   return {
     ...committed,
     previousSessionTranscript,
@@ -269,7 +305,6 @@ async function archivePreviousSessionTranscript(params: {
   const archivedTranscripts = archiveSessionTranscriptsDetailed({
     sessionId: params.previousEntry.sessionId,
     storePath: params.storePath,
-    sessionFile: params.previousEntry.sessionFile,
     agentId: params.agentId,
     reason: "reset",
     onArchiveError: params.onArchiveError,
@@ -277,7 +312,6 @@ async function archivePreviousSessionTranscript(params: {
   return resolveStableSessionEndTranscript({
     sessionId: params.previousEntry.sessionId,
     storePath: params.storePath,
-    sessionFile: params.previousEntry.sessionFile,
     agentId: params.agentId,
     archivedTranscripts,
   });

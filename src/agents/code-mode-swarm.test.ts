@@ -1,10 +1,6 @@
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  createCodeModeApiVirtualFiles,
-  registerCodeModeNamespaceForPlugin,
-} from "./code-mode-namespaces.js";
-import { clearCodeModeNamespacesForTest } from "./code-mode-namespaces.test-support.js";
+import { createCodeModeApiVirtualFiles } from "./code-mode-namespaces.js";
 import { resolveCodeModeConfig } from "./code-mode.js";
 import { testing } from "./code-mode.test-support.js";
 import { stableStringify } from "./stable-stringify.js";
@@ -73,7 +69,6 @@ function swarmContext() {
 afterEach(() => {
   testing.activeRuns.clear();
   testing.setSwarmDepsForTest();
-  clearCodeModeNamespacesForTest();
 });
 
 describe("Code Mode swarm guest", () => {
@@ -212,17 +207,6 @@ describe("Code Mode swarm guest", () => {
     expect(files[0]?.content).toContain("Promise.all");
     expect(files[0]?.content).toContain("while (!ready)");
     expect(files[0]?.content).toContain("schema: AgentJsonSchema");
-  });
-
-  it.each(["agents", "phase", "log"])("reserves the %s global", (globalName) => {
-    expect(() =>
-      registerCodeModeNamespaceForPlugin("test", {
-        id: `test-${globalName}`,
-        globalName,
-        requiredToolNames: ["noop"],
-        createScope: () => ({}),
-      }),
-    ).toThrow(`globalName "${globalName}" is reserved`);
   });
 });
 

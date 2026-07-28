@@ -11,6 +11,9 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { appendTranscriptEvent, persistSessionTranscriptTurn } from "./session-accessor.js";
 import {
   readRecentSessionTranscriptMessageEvents,
+  readSessionTranscriptActiveLeafEvents,
+  readSessionTranscriptActiveStats,
+  readSessionTranscriptBoundedMessageTailPage,
   readSessionTranscriptMessageAnchorPage,
   readSessionTranscriptMessageEventById,
   readSessionTranscriptMessageEventCount,
@@ -109,6 +112,9 @@ describe("SQLite active transcript event projection", () => {
       "root",
       "active",
     ]);
+    expect(readSessionTranscriptActiveLeafEvents(scope)).toEqual([
+      expect.objectContaining({ id: "active" }),
+    ]);
     expect(page.events.map((entry) => entry.seq)).toEqual([1, 2]);
     expect(page.totalMessages).toBe(2);
     expect(
@@ -128,6 +134,24 @@ describe("SQLite active transcript event projection", () => {
       { active_position: 0, event_seq: 1, message_position: 0 },
       { active_position: 1, event_seq: 3, message_position: 1 },
     ]);
+
+    const activeRows = database.db
+      .prepare(
+        `SELECT event.event_json
+         FROM session_transcript_active_events AS active
+         JOIN transcript_events AS event
+           ON event.session_id = active.session_id AND event.seq = active.event_seq
+         WHERE active.session_id = ?
+         ORDER BY active.active_position`,
+      )
+      .all(scope.sessionId) as Array<{ event_json: string }>;
+    expect(readSessionTranscriptActiveStats(scope)).toEqual({
+      eventCount: activeRows.length,
+      sizeBytes: activeRows.reduce(
+        (total, row) => total + Buffer.byteLength(row.event_json, "utf8") + 1,
+        0,
+      ),
+    });
   });
 
   it("defers mixed legacy and canonical rebuilds off request stacks", async () => {
@@ -176,6 +200,30 @@ describe("SQLite active transcript event projection", () => {
         )
         .get(scope.sessionId),
     ).toEqual({ active_message_count: 1, needs_rebuild: 0 });
+  });
+
+  it("skips oversized tail rows before materializing a bounded message page", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        { eventId: "small", parentId: null, message: { role: "user", content: "keep" } },
+        {
+          eventId: "oversized",
+          parentId: "small",
+          message: { role: "assistant", content: "x".repeat(16_384) },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+
+    const page = readSessionTranscriptBoundedMessageTailPage(scope, {
+      maxBytes: 512,
+      maxMessages: Number.MAX_SAFE_INTEGER,
+      offset: 0,
+    });
+
+    expect(page.scannedMessages).toBe(2);
+    expect(page.serializedBytes).toBeLessThanOrEqual(512);
+    expect(page.events.map(({ event }) => (event as { id?: unknown }).id)).toEqual(["small"]);
   });
 
   it("fails fast and schedules maintenance when out-of-band state is dirty", async () => {
@@ -287,6 +335,16 @@ describe("SQLite active transcript event projection", () => {
       firstKeptEntryId: "old",
       tokensBefore: 10,
     });
+    expect(
+      readRecentSessionTranscriptMessageEvents(scope, {
+        maxBytes: 1_024,
+        maxLines: 1,
+        maxMessages: 1,
+      }).activeLeafEntryId,
+    ).toBe("newer-compaction");
+    expect(readSessionTranscriptActiveLeafEvents(scope)).toEqual([
+      expect.objectContaining({ id: "newer-compaction" }),
+    ]);
     expect(readSessionTranscriptMessageEventCount(scope)).toBe(5);
     expect(readSessionTranscriptMessageEventById(scope, "old")).toBeDefined();
   });

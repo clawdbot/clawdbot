@@ -252,7 +252,7 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
   return html`
     <openclaw-menu-surface>
       <wa-dropdown
-        class="sidebar-customize-menu"
+        class="sidebar-customize-menu sidebar-pin-editor-menu"
         .open=${true}
         placement="bottom-start"
         .distance=${0}

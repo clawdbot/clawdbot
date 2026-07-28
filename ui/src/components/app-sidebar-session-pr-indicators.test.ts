@@ -34,7 +34,7 @@ describe("SessionPullRequestIndicatorsController", () => {
     } as SidebarRecentSession;
     let state: "open" | "merged" = "open";
     let rateLimited = false;
-    const request = vi.fn(() =>
+    const request = vi.fn((_method: string, _params: unknown) =>
       Promise.resolve({
         pullRequests: rateLimited
           ? []
@@ -53,7 +53,11 @@ describe("SessionPullRequestIndicatorsController", () => {
       }),
     );
     const snapshot = {
-      client: { request } as unknown as GatewayBrowserClient,
+      client: {
+        request,
+        requestSessionPullRequests: (params: { sessionKey: string; agentId?: string }) =>
+          request("controlUi.sessionPullRequests", params),
+      } as unknown as GatewayBrowserClient,
       hello: { features: { methods: ["controlUi.sessionPullRequests"] } },
     } as ApplicationGatewaySnapshot;
     const controller = new SessionPullRequestIndicatorsController(host, {

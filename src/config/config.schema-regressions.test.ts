@@ -146,28 +146,12 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(false);
   });
 
-  it("accepts 1M-character tool result caps for long-context agents", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          contextLimits: {
-            toolResultMaxChars: 1_000_000,
-          },
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
   it("accepts agents.defaults and agents.entries contextLimits overrides", () => {
     const res = validateConfigObject({
       agents: {
         defaults: {
           contextLimits: {
             memoryGetMaxChars: 20_000,
-            memoryGetDefaultLines: 180,
-            toolResultMaxChars: 24_000,
             postCompactionMaxChars: 4_000,
           },
         },
@@ -416,7 +400,7 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(false);
   });
 
-  it("skips binding agentId check when agents.entries is absent", () => {
+  it("rejects non-default bindings when the implicit-main roster is materialized", () => {
     const res = validateConfigObject({
       bindings: [
         {
@@ -427,7 +411,7 @@ describe("config schema regressions", () => {
       ],
     });
 
-    expect(res.ok).toBe(true);
+    expect(res.ok).toBe(false);
   });
 
   it("accepts a microsoft-foundry model entry carrying thinkingLevelMap (openclaw#91011)", () => {

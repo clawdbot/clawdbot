@@ -40,6 +40,7 @@ async function safeFetch(params: SafeFetchParams) {
       allowHosts,
       authAllowHosts: authorizationAllowHosts ?? [],
     },
+    resolveFn: request.resolveFn ?? publicResolve,
   });
 }
 

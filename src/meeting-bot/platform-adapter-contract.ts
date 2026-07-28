@@ -29,6 +29,7 @@ export type MeetingBrowserRequestParams = {
 export type MeetingBrowserRequestCaller = (params: MeetingBrowserRequestParams) => Promise<unknown>;
 
 export type MeetingBrowserJoinSession<Mode extends string> = {
+  captureCaptions?: boolean;
   meetingSessionId: string;
   mode: Mode;
   url: string;

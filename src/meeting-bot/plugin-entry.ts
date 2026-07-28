@@ -10,6 +10,10 @@ import type { OpenClawPluginApi } from "../plugins/plugin-api.types.js";
 import type { OpenClawPluginConfigSchema } from "../plugins/plugin-config-schema.types.js";
 import type { OpenClawPluginNodeInvokePolicy } from "../plugins/plugin-registration.types.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import {
+  createMeetingTranscriptSourceProvider,
+  type MeetingTranscriptSourceRuntime,
+} from "./transcripts-bridge.js";
 
 type MeetingToolAction = "join" | "leave" | "status" | "transcript" | "speak";
 type MeetingMode = "agent" | "bidi" | "transcribe";
@@ -30,18 +34,19 @@ type MeetingPluginConfig = {
   chromeNode: { node?: string };
 };
 
-type MeetingPluginRuntime<Request extends MeetingJoinRequest> = {
-  join(request: Request): Promise<unknown>;
-  leave(sessionId: string): Promise<unknown>;
-  ownsSession(agentId: string, sessionId: string): boolean;
-  setupStatus(params: { mode?: MeetingMode; transport?: MeetingTransport }): Promise<unknown>;
-  speak(sessionId: string, message?: string): Promise<unknown>;
-  status(sessionId?: string): Promise<unknown>;
-  statusForAgent(agentId: string, sessionId?: string): Promise<unknown>;
-  testListen(request: Request): Promise<unknown>;
-  testSpeech(request: Request): Promise<unknown>;
-  transcript(sessionId: string, options: { sinceIndex?: number }): Promise<unknown>;
-};
+type MeetingPluginRuntime<Request extends MeetingJoinRequest> =
+  Partial<MeetingTranscriptSourceRuntime> & {
+    join(request: Request): Promise<unknown>;
+    leave(sessionId: string): Promise<unknown>;
+    ownsSession(agentId: string, sessionId: string): boolean;
+    setupStatus(params: { mode?: MeetingMode; transport?: MeetingTransport }): Promise<unknown>;
+    speak(sessionId: string, message?: string): Promise<unknown>;
+    status(sessionId?: string): Promise<unknown>;
+    statusForAgent(agentId: string, sessionId?: string): Promise<unknown>;
+    testListen(request: Request): Promise<unknown>;
+    testSpeech(request: Request): Promise<unknown>;
+    transcript(sessionId: string, options: { sinceIndex?: number }): Promise<unknown>;
+  };
 
 type MeetingPluginEntryOptions<
   Config extends MeetingPluginConfig,
@@ -75,6 +80,11 @@ type MeetingPluginEntryOptions<
   toolLabel: string;
   toolName: string;
   toolParameters: TObject;
+  transcriptSource?: {
+    id: string;
+    aliases?: readonly string[];
+    name: string;
+  };
   unknownActionMessage: string;
 };
 
@@ -217,6 +227,20 @@ export function createMeetingPluginEntryOptions<
         runtime ??= options.createRuntime({ api, config });
         return runtime;
       };
+      if (options.transcriptSource) {
+        api.registerTranscriptSourceProvider(
+          createMeetingTranscriptSourceProvider({
+            ...options.transcriptSource,
+            runtime: async () => {
+              const resolved = await ensureRuntime();
+              if (!resolved.startTranscriptSource || !resolved.stopTranscriptSource) {
+                throw new Error(`${options.name} transcript source runtime is unavailable`);
+              }
+              return resolved as MeetingTranscriptSourceRuntime;
+            },
+          }),
+        );
+      }
       const sendError = (
         respond: GatewayRequestHandlerOptions["respond"],
         error: unknown,

@@ -9,6 +9,7 @@ import {
   type ErrorShape,
   errorShape,
   normalizeSessionIconInput,
+  type SessionCreatedActor,
   type SessionsPatchParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
@@ -33,8 +34,10 @@ import {
   resolveSupportedThinkingLevel,
 } from "../auto-reply/thinking.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { projectCanonicalSessionEntryShape } from "../config/sessions/store-entry-shape.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeExecTarget } from "../infra/exec-approvals.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
@@ -136,7 +139,9 @@ export async function projectSessionsPatchEntry(params: {
   storeKey: string;
   agentId?: string;
   patch: SessionsPatchParams;
+  archivedBy?: SessionCreatedActor;
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
+  providerAuthMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
   /** Exact harness owner authorized to project its new reserved session row. */
   authorizedAgentHarnessId?: string;
 }): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
@@ -195,7 +200,9 @@ export async function projectSessionsPatchEntry(params: {
     return loadedModelCatalog;
   };
 
-  const existing = params.existingEntry;
+  const existing = params.existingEntry
+    ? projectCanonicalSessionEntryShape(params.existingEntry as unknown as Record<string, unknown>)
+    : undefined;
   // Existing entries without session ids are placeholder aliases; assigning an id makes them real.
   const next: SessionEntry = existing?.sessionId
     ? {
@@ -205,7 +212,6 @@ export async function projectSessionsPatchEntry(params: {
     : {
         ...existing,
         sessionId: randomUUID(),
-        sessionFile: undefined,
         updatedAt: Math.max(existing?.updatedAt ?? 0, now),
       };
   if (existing && !existing.sessionId) {
@@ -262,6 +268,10 @@ export async function projectSessionsPatchEntry(params: {
     }
   }
 
+  if ("boardFace" in patch && patch.boardFace !== undefined) {
+    next.boardFace = patch.boardFace;
+  }
+
   if ("icon" in patch) {
     const raw = patch.icon;
     if (raw === null) {
@@ -316,10 +326,18 @@ export async function projectSessionsPatchEntry(params: {
   if ("archived" in patch) {
     if (patch.archived === true) {
       // Archived sessions leave the active quick-access set in the same write.
-      next.archivedAt ??= now;
+      if (next.archivedAt === undefined) {
+        next.archivedAt = now;
+        if (params.archivedBy) {
+          next.archivedBy = params.archivedBy;
+        } else {
+          delete next.archivedBy;
+        }
+      }
       delete next.pinnedAt;
     } else {
       delete next.archivedAt;
+      delete next.archivedBy;
     }
   }
 
@@ -515,6 +533,9 @@ export async function projectSessionsPatchEntry(params: {
           currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
           entry: next,
           provider: resolvedDefault.provider,
+          ...(params.providerAuthMetadataSnapshot
+            ? { metadataSnapshot: params.providerAuthMetadataSnapshot }
+            : {}),
         }),
       });
       delete next.liveModelSwitchPending;
@@ -560,6 +581,9 @@ export async function projectSessionsPatchEntry(params: {
           currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
           entry: next,
           provider: resolved.provider,
+          ...(params.providerAuthMetadataSnapshot
+            ? { metadataSnapshot: params.providerAuthMetadataSnapshot }
+            : {}),
         }),
         markLiveSwitchPending: true,
       });
@@ -652,7 +676,9 @@ export async function applySessionsPatchToStore(params: {
   storeKey: string;
   agentId?: string;
   patch: SessionsPatchParams;
+  archivedBy?: SessionCreatedActor;
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
+  providerAuthMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
   /** Exact harness owner authorized to project its new reserved session row. */
   authorizedAgentHarnessId?: string;
 }): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
@@ -663,7 +689,9 @@ export async function applySessionsPatchToStore(params: {
     storeKey: params.storeKey,
     agentId: params.agentId,
     patch: params.patch,
+    archivedBy: params.archivedBy,
     loadGatewayModelCatalog: params.loadGatewayModelCatalog,
+    providerAuthMetadataSnapshot: params.providerAuthMetadataSnapshot,
     authorizedAgentHarnessId: params.authorizedAgentHarnessId,
   });
   if (projected.ok) {

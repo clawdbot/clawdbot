@@ -32,7 +32,7 @@ function terminal(id: string, resolvedAtMs: number): ApprovalHistoryResult["item
 
 function createPage(request: GatewayBrowserClient["request"]): TestApprovalsPage {
   const client = { request } as GatewayBrowserClient;
-  const snapshot = { connected: true, client } as ApplicationGatewaySnapshot;
+  const snapshot = { phase: "connected", client } as ApplicationGatewaySnapshot;
   const gateway = {
     snapshot,
     subscribe: () => () => undefined,

@@ -1,8 +1,11 @@
 import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
+import { sanitizeExecApprovalWarningTextWithStatus } from "../../infra/exec-approval-command-display.js";
 import type { ExecAsk, ExecSecurity } from "../../infra/exec-approvals.js";
 import {
   DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,
+  PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH,
   PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
+  truncatePluginApprovalDetail,
 } from "../../infra/plugin-approvals.js";
 import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
 import { callGatewayTool } from "../tools/gateway.js";
@@ -30,7 +33,7 @@ const CLAUDE_NATIVE_TOOL_TRUNCATED_DECISIONS = [
   "deny",
 ] as const satisfies readonly ClaudeNativeToolApprovalDecision[];
 // Claude Code's Bash tool is arbitrary shell execution, so a name-wide grant is unrestricted.
-// A truncated command can hide a destructive middle, so oversized Bash requests fail closed.
+// Bash fails closed when even the reviewer-only detail cannot show the complete input.
 const CLAUDE_NATIVE_TOOL_ARBITRARY_EXECUTION_TOOL = "Bash";
 
 export function resolveClaudeNativeToolApprovalPlan(execPermission: {
@@ -48,7 +51,7 @@ export function resolveClaudeNativeToolApprovalPlan(execPermission: {
   return "prompt";
 }
 
-type ClaudeNativeToolDescription = { text: string; truncated: boolean };
+type ClaudeNativeToolDescription = { compact: string; text: string; truncated: boolean };
 
 /**
  * The gateway caps approval descriptions (PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH),
@@ -62,12 +65,13 @@ function formatClaudeNativeToolDescription(
 ): ClaudeNativeToolDescription {
   const compact = JSON.stringify(toolInput) ?? "{}";
   if (compact.length <= CLAUDE_NATIVE_TOOL_DESCRIPTION_MAX_CHARS) {
-    return { text: compact, truncated: false };
+    return { compact, text: compact, truncated: false };
   }
   const head = truncateUtf16Safe(compact, CLAUDE_NATIVE_TOOL_DESCRIPTION_HEAD_CHARS);
   const tail = sliceUtf16Safe(compact, compact.length - CLAUDE_NATIVE_TOOL_DESCRIPTION_TAIL_CHARS);
   const hiddenChars = compact.length - head.length - tail.length;
   return {
+    compact,
     text: `${head} …[+${hiddenChars} chars hidden]… ${tail}`,
     truncated: true,
   };
@@ -152,7 +156,32 @@ export async function requestClaudeNativeToolApproval(params: {
       addTimerTimeoutGraceMs(timeoutMs, CLAUDE_NATIVE_TOOL_APPROVAL_GATEWAY_GRACE_MS) ??
       timeoutMs + CLAUDE_NATIVE_TOOL_APPROVAL_GATEWAY_GRACE_MS;
     const description = formatClaudeNativeToolDescription(params.toolInput);
-    if (params.toolName === CLAUDE_NATIVE_TOOL_ARBITRARY_EXECUTION_TOOL && description.truncated) {
+    const detail = truncatePluginApprovalDetail(description.compact);
+    const detailSanitization =
+      params.toolName === CLAUDE_NATIVE_TOOL_ARBITRARY_EXECUTION_TOOL
+        ? sanitizeExecApprovalWarningTextWithStatus(description.compact)
+        : null;
+    // Sanitization escapes control/bidi characters into longer visible
+    // sequences, so a short raw command can still overflow the 512-char
+    // description bound after sanitization and get truncated at render time.
+    const summarySanitization =
+      params.toolName === CLAUDE_NATIVE_TOOL_ARBITRARY_EXECUTION_TOOL
+        ? sanitizeExecApprovalWarningTextWithStatus(description.text)
+        : null;
+    // Approvals resolve from summary-only surfaces (channel text, push), which
+    // never carry the reviewer detail. Bash therefore fails closed whenever any
+    // resolving surface could see less than the complete command: a truncated
+    // description, sanitization-altered display, or post-sanitization overflow.
+    if (
+      params.toolName === CLAUDE_NATIVE_TOOL_ARBITRARY_EXECUTION_TOOL &&
+      (description.truncated ||
+        detailSanitization?.truncated === true ||
+        detailSanitization?.oversized === true ||
+        summarySanitization?.truncated === true ||
+        summarySanitization?.oversized === true ||
+        (summarySanitization &&
+          Array.from(summarySanitization.text).length > PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH))
+    ) {
       return { kind: "deny", reason: "policy-oversized" };
     }
     const allowedDecisions = resolveClaudeNativeToolAllowedDecisions({
@@ -175,6 +204,7 @@ export async function requestClaudeNativeToolApproval(params: {
           sessionKey: params.sessionKey,
           title: formatClaudeNativeToolTitle(params.toolName),
           description: description.text,
+          detail,
           severity: "warning",
           allowedDecisions,
           timeoutMs,

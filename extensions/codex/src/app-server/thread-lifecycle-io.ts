@@ -1,3 +1,4 @@
+import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
@@ -6,7 +7,11 @@ import {
   isCodexAppServerUnsafeSubscriptionError,
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
-import { CodexAppServerRpcError, isCodexAppServerConnectionClosedError } from "./client.js";
+import {
+  CodexAppServerRpcError,
+  isCodexAppServerConnectionClosedError,
+  resolveCodexAppServerClientInstanceId,
+} from "./client.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
@@ -14,7 +19,7 @@ import {
   type CodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
 import { assertCodexThreadStartResponse } from "./protocol-validators.js";
-import type { JsonObject } from "./protocol.js";
+import type { CodexThread, JsonObject } from "./protocol.js";
 import type {
   CodexAppServerBindingIdentity,
   CodexAppServerContextEngineBinding,
@@ -79,6 +84,19 @@ type StartThreadContext = ThreadRequestContext & {
   preserveExistingBinding: boolean;
   rotatedContextEngineBinding: boolean;
 };
+
+function resolveCodexThreadRolloutPath(thread: CodexThread): string | undefined {
+  const rolloutPath = thread.path?.trim();
+  if (
+    !rolloutPath ||
+    !path.isAbsolute(rolloutPath) ||
+    path.extname(rolloutPath) !== ".jsonl" ||
+    !path.basename(rolloutPath).includes(thread.id)
+  ) {
+    return undefined;
+  }
+  return rolloutPath;
+}
 
 export async function resumeExistingCodexThread(
   params: CodexStartOrResumeThreadParams,
@@ -205,6 +223,7 @@ export async function resumeExistingCodexThread(
         : resumeBinding.mcpServersFingerprint;
     const resumePatch = {
       cwd: params.cwd,
+      rolloutPath: resolveCodexThreadRolloutPath(response.thread) ?? resumeBinding.rolloutPath,
       authProfileId: boundAuthProfileId,
       model: response.model ?? resumeParams.model ?? params.params.modelId,
       preserveNativeModel: resumeBinding.preserveNativeModel === true ? true : undefined,
@@ -329,6 +348,7 @@ export async function startFreshCodexThread(
   params: CodexStartOrResumeThreadParams,
   context: StartThreadContext,
 ): Promise<CodexAppServerThreadLifecycleBinding> {
+  const clientId = resolveCodexAppServerClientInstanceId(params.client);
   const {
     bindingIdentity,
     startModelSelection,
@@ -404,6 +424,7 @@ export async function startFreshCodexThread(
     }
   });
   const response = assertCodexThreadStartResponse(threadStartResponse);
+  const rolloutPath = resolveCodexThreadRolloutPath(response.thread);
   if (ringZeroActive) {
     try {
       await lifecycleTiming.measure("ring-zero-mcp-attestation", () =>
@@ -431,7 +452,9 @@ export async function startFreshCodexThread(
         if: { kind: "absent" },
         binding: {
           threadId: response.thread.id,
+          ...(clientId ? { clientId } : {}),
           cwd: params.cwd,
+          ...(rolloutPath ? { rolloutPath } : {}),
           authProfileId: params.params.authProfileId,
           model: response.model ?? startParams.model ?? params.params.modelId,
           modelProvider: normalizeBindingModelProvider(
@@ -482,7 +505,9 @@ export async function startFreshCodexThread(
   });
   return {
     threadId: response.thread.id,
+    ...(clientId ? { clientId } : {}),
     cwd: params.cwd,
+    ...(rolloutPath ? { rolloutPath } : {}),
     authProfileId: params.params.authProfileId,
     model: response.model ?? startParams.model ?? params.params.modelId,
     modelProvider:

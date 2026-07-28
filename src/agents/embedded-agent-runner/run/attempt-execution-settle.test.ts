@@ -28,6 +28,7 @@ vi.mock("./attempt-stream-finalize.js", () => ({
 }));
 
 import { runEmbeddedAttemptSettledPhase } from "./attempt-execution-settle.js";
+import { SESSIONS_YIELD_ABORT_REASON } from "./attempt.sessions-yield.js";
 
 type SettledInput = Parameters<typeof runEmbeddedAttemptSettledPhase>[0];
 
@@ -54,18 +55,10 @@ function createFixture() {
     promptCache: undefined,
     systemPromptText: "system prompt",
   };
-  const state = {
-    aborted: false,
+  const state: SettledInput["state"] = {
     beforeAgentRunBlocked: false,
     beforeAgentRunBlockedBy: undefined,
-    cleanupYieldAborted: false,
-    externalAbort: false,
-    idleTimedOut: false,
-    promptError: null,
-    timedOut: false,
-    timedOutByRunBudget: false,
-    timedOutDuringCompaction: false,
-    timedOutDuringToolExecution: false,
+    terminal: { kind: "ok" },
     trajectoryEndRecorded: false,
   };
   const result = { messages: [{ role: "assistant", content: "done" }] };
@@ -73,7 +66,7 @@ function createFixture() {
     abortable: (promise: Promise<unknown>) => promise,
     cache: {
       observabilityEnabled: true,
-      promptToolNames: new Set(["read"]),
+      promptTools: [{ name: "read" }],
     },
     history: {
       contextEnginePromptAuthority: "assembled",
@@ -269,7 +262,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
       expect.objectContaining({
         beforeAgentRunBlocked: true,
         beforeAgentRunBlockedBy: "before_agent",
-        promptError: null,
+        terminal: { kind: "ok" },
         trajectoryEndRecorded: true,
       }),
     );
@@ -333,6 +326,52 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     );
   });
 
+  it("releases the active run when backend cleanup throws during a failed prompt", async () => {
+    const fixture = createFixture();
+    const failure = new Error("prompt failed");
+    mocks.runPrompt.mockRejectedValueOnce(failure);
+    fixture.detachBackend.mockImplementationOnce(() => {
+      fixture.order.push("detach-backend");
+      throw new Error("backend detach failed");
+    });
+
+    await expect(runEmbeddedAttemptSettledPhase(fixture.input)).rejects.toBe(failure);
+
+    expect(mocks.clearActiveEmbeddedRun).toHaveBeenCalledOnce();
+    expect(fixture.removeAbortSignalListener).toHaveBeenCalledOnce();
+    expect(mocks.logError).toHaveBeenCalledWith(
+      expect.stringContaining("backend detach failed, possible resource leak"),
+    );
+  });
+
+  it("reports a backend cleanup failure after releasing a successful run", async () => {
+    const fixture = createFixture();
+    const failure = new Error("backend detach failed");
+    fixture.detachBackend.mockImplementationOnce(() => {
+      fixture.order.push("detach-backend");
+      throw failure;
+    });
+
+    await expect(runEmbeddedAttemptSettledPhase(fixture.input)).rejects.toBe(failure);
+
+    expect(mocks.clearActiveEmbeddedRun).toHaveBeenCalledOnce();
+    expect(fixture.removeAbortSignalListener).toHaveBeenCalledOnce();
+  });
+
+  it("reports active-run cleanup failure after releasing the abort listener", async () => {
+    const fixture = createFixture();
+    const failure = new Error("active run cleanup failed");
+    mocks.clearActiveEmbeddedRun.mockImplementationOnce(() => {
+      fixture.order.push("clear-active-run");
+      throw failure;
+    });
+
+    await expect(runEmbeddedAttemptSettledPhase(fixture.input)).rejects.toBe(failure);
+
+    expect(fixture.detachBackend).toHaveBeenCalledOnce();
+    expect(fixture.removeAbortSignalListener).toHaveBeenCalledOnce();
+  });
+
   it("re-arms delivered children only after a yielded requester becomes idle", async () => {
     const fixture = createFixture();
     mocks.completeResult.mockImplementationOnce(() => {
@@ -361,6 +400,67 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     expect(fixture.order.indexOf("clear-active-run")).toBeLessThan(
       fixture.order.indexOf("resume-requester"),
     );
+  });
+
+  it("keeps a real timeout when yield cleanup observes the same unwind", async () => {
+    const fixture = createFixture();
+    fixture.input.runAbortController.abort(SESSIONS_YIELD_ABORT_REASON);
+    fixture.state.terminal = { kind: "timeout", phase: "prompt", source: "external" };
+    mocks.runPrompt.mockImplementationOnce(async (promptInput) => {
+      promptInput.lifecycle.markYieldAborted();
+      return { promptStartedAt: 100 };
+    });
+
+    await runEmbeddedAttemptSettledPhase(fixture.input);
+
+    expect(fixture.state.terminal).toEqual({
+      kind: "timeout",
+      phase: "prompt",
+      source: "external",
+    });
+  });
+
+  it("keeps an external abort when yield cleanup observes the same unwind", async () => {
+    const fixture = createFixture();
+    fixture.input.runAbortController.abort(SESSIONS_YIELD_ABORT_REASON);
+    fixture.state.terminal = { kind: "aborted", source: "external" };
+    mocks.runPrompt.mockImplementationOnce(async (promptInput) => {
+      promptInput.lifecycle.markYieldAborted();
+      return { promptStartedAt: 100 };
+    });
+
+    await runEmbeddedAttemptSettledPhase(fixture.input);
+
+    expect(fixture.state.terminal).toEqual({ kind: "aborted", source: "external" });
+  });
+
+  it("defaults a source-less settlement failure without dropping it", async () => {
+    const fixture = createFixture();
+    const failure = new Error("settlement failed");
+    mocks.finalizeStream.mockImplementationOnce(async (finalizeInput) => {
+      finalizeInput.onSettled({
+        promptError: failure,
+        promptErrorSource: null,
+        timedOutDuringCompaction: true,
+        messagesSnapshot: [],
+        sessionIdUsed: "settled-session",
+        lastAssistant: undefined,
+        currentAttemptAssistant: undefined,
+        attemptUsage: undefined,
+        cacheBreak: null,
+        promptCache: undefined,
+      });
+      return { sessionIdUsed: "settled-session" };
+    });
+
+    await runEmbeddedAttemptSettledPhase(fixture.input);
+
+    expect(fixture.state.terminal).toEqual({
+      kind: "failed",
+      source: "prompt",
+      error: failure,
+      timeoutObservation: "compaction",
+    });
   });
 
   it("releases requester-turn retention after a normal final answer", async () => {

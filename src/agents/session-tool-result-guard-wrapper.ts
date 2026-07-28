@@ -206,8 +206,6 @@ export function guardSessionManager(
       typeof opts?.contextWindowTokens === "number"
         ? resolveLiveToolResultMaxChars({
             contextWindowTokens: opts.contextWindowTokens,
-            cfg: opts.config,
-            agentId: opts.agentId,
           })
         : undefined,
     suppressNextUserMessagePersistence: opts?.suppressNextUserMessagePersistence,

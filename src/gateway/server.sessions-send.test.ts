@@ -198,36 +198,43 @@ describe("sessions_send gateway loopback", () => {
         accountId?: string | null;
         threadId?: string | number | null;
       }> = [];
+      const whatsappPlugin = createOutboundTestPlugin({
+        id: "whatsapp",
+        label: "WhatsApp",
+        outbound: {
+          deliveryMode: "direct",
+          resolveTarget: ({ to }) => {
+            const target = to?.trim();
+            return target
+              ? { ok: true, to: target }
+              : { ok: false, error: new Error("missing target") };
+          },
+          sendText: async (ctx) => {
+            sendCalls.push({
+              to: ctx.to,
+              text: ctx.text,
+              accountId: ctx.accountId,
+              threadId: ctx.threadId,
+            });
+            return { channel: "whatsapp", messageId: "wa-proof-msg" };
+          },
+        },
+        messaging: {
+          normalizeTarget: (raw) => raw,
+        },
+      });
       setTestPluginRegistry(
         createTestRegistry([
           {
             pluginId: "whatsapp",
             source: "test",
-            plugin: createOutboundTestPlugin({
-              id: "whatsapp",
-              label: "WhatsApp",
-              outbound: {
-                deliveryMode: "direct",
-                resolveTarget: ({ to }) => {
-                  const target = to?.trim();
-                  return target
-                    ? { ok: true, to: target }
-                    : { ok: false, error: new Error("missing target") };
-                },
-                sendText: async (ctx) => {
-                  sendCalls.push({
-                    to: ctx.to,
-                    text: ctx.text,
-                    accountId: ctx.accountId,
-                    threadId: ctx.threadId,
-                  });
-                  return { channel: "whatsapp", messageId: "wa-proof-msg" };
-                },
+            plugin: {
+              ...whatsappPlugin,
+              config: {
+                ...whatsappPlugin.config,
+                listAccountIds: () => ["work"],
               },
-              messaging: {
-                normalizeTarget: (raw) => raw,
-              },
-            }),
+            },
           },
         ]),
       );

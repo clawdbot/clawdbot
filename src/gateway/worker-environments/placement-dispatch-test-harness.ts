@@ -373,6 +373,15 @@ export function createHarness(
     markEnvironmentAttachments: (attachedSessionIds: string[]) => {
       currentEnvironment = { ...attached, attachedSessionIds };
     },
+    markEnvironmentProtocolFeatures: (protocolFeatures: string[]) => {
+      if (!currentEnvironment?.bootstrapReceipt) {
+        throw new Error("worker environment fixture has no bootstrap receipt");
+      }
+      currentEnvironment = {
+        ...currentEnvironment,
+        bootstrapReceipt: { ...currentEnvironment.bootstrapReceipt, protocolFeatures },
+      };
+    },
     service,
     ready,
     attached,
