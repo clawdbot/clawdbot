@@ -18,7 +18,7 @@ import {
   type SessionBackfillResult,
 } from "./session-backfill.js";
 
-export const SESSION_BACKFILL_GATEWAY_METHODS = {
+const SESSION_BACKFILL_GATEWAY_METHODS = {
   preview: "memory.sessionBackfill.preview",
   apply: "memory.sessionBackfill.apply",
   rollback: "memory.sessionBackfill.rollback",
@@ -29,7 +29,7 @@ type SessionBackfillGatewayParams = Pick<
   "agentId" | "from" | "to" | "limitDays"
 >;
 
-export type SessionBackfillGatewayResult = {
+type SessionBackfillGatewayResult = {
   days: number;
   candidates: number;
   perDay: Array<{ day: string; candidateCount: number; sample: string[] }>;

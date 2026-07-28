@@ -96,7 +96,7 @@ type SessionBackfillCollection = {
   scans: SessionBackfillScan[];
 };
 
-export type SessionBackfillDay = {
+type SessionBackfillDay = {
   day: string;
   candidateCount: number;
   topCandidates: string[];
@@ -118,12 +118,12 @@ export type SessionBackfillResult = {
   };
 };
 
-export type SessionBackfillContinuation = {
+type SessionBackfillContinuation = {
   advanced: boolean;
   hasMore: boolean;
 };
 
-export type SessionBackfillExecution = {
+type SessionBackfillExecution = {
   result: SessionBackfillResult;
   continuation: SessionBackfillContinuation;
 };

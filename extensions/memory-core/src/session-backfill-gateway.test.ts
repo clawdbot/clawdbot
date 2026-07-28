@@ -1,10 +1,7 @@
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  registerSessionBackfillGatewayMethods,
-  SESSION_BACKFILL_GATEWAY_METHODS,
-} from "./session-backfill-gateway.js";
+import { registerSessionBackfillGatewayMethods } from "./session-backfill-gateway.js";
 import { executeSessionBackfill, executeSessionBackfillBatch } from "./session-backfill.js";
 
 vi.mock("./session-backfill.js", async (importOriginal) => ({
@@ -20,6 +17,11 @@ type RegisteredMethod = {
 
 const executeMock = vi.mocked(executeSessionBackfill);
 const executeBatchMock = vi.mocked(executeSessionBackfillBatch);
+const SESSION_BACKFILL_GATEWAY_METHODS = {
+  preview: "memory.sessionBackfill.preview",
+  apply: "memory.sessionBackfill.apply",
+  rollback: "memory.sessionBackfill.rollback",
+} as const;
 
 function createHarness(config?: Record<string, unknown>) {
   const methods = new Map<string, RegisteredMethod>();
