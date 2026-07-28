@@ -19,7 +19,9 @@ import {
 import { ssrfPolicyFromHttpBaseUrlAllowedOrigin } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   NVIDIA_ASR_BASE_URL,
+  NVIDIA_CHAT_BASE_URL,
   NVIDIA_DEFAULT_ASR_MODEL,
+  isNvidiaHostedAsrBaseUrl,
   normalizeNvidiaBaseUrl,
 } from "./nvidia-speech-config.js";
 
@@ -37,7 +39,6 @@ const RIFF_HEADER = Buffer.from("RIFF");
 const WAVE_HEADER = Buffer.from("WAVE");
 const OGG_HEADER = Buffer.from("OggS");
 const OPUS_HEADER = Buffer.from("OpusHead");
-const NVIDIA_CHAT_BASE_URL = "https://integrate.api.nvidia.com/v1";
 
 function toSnakeCase(value: string): string {
   return value.replace(/[A-Z]/g, (char) => `_${char.toLowerCase()}`);
@@ -157,12 +158,13 @@ function resolveTtsSynthesisUrl(baseUrl: string): string {
 
 function resolveAsrEndpoint(req: AudioTranscriptionRequest): AsrEndpoint {
   const requestBaseUrl = req.baseUrl ? normalizeNvidiaBaseUrl(req.baseUrl) : undefined;
-  const envBaseUrl = process.env.NVIDIA_ASR_BASE_URL?.trim() || undefined;
+  const rawEnvBaseUrl = process.env.NVIDIA_ASR_BASE_URL?.trim() || undefined;
+  const envBaseUrl = rawEnvBaseUrl ? normalizeNvidiaBaseUrl(rawEnvBaseUrl) : undefined;
   const customBaseUrl =
-    requestBaseUrl && requestBaseUrl !== NVIDIA_CHAT_BASE_URL
+    requestBaseUrl && !isNvidiaHostedAsrBaseUrl(requestBaseUrl)
       ? requestBaseUrl
-      : envBaseUrl
-        ? normalizeNvidiaBaseUrl(envBaseUrl)
+      : envBaseUrl && !isNvidiaHostedAsrBaseUrl(envBaseUrl)
+        ? envBaseUrl
         : undefined;
   if (customBaseUrl) {
     const model = req.model?.trim() || NVIDIA_DEFAULT_ASR_MODEL;
@@ -187,7 +189,7 @@ async function transcribeAtEndpoint(
   endpoint: AsrEndpoint,
 ): Promise<AudioTranscriptionResult> {
   const fetchFn = req.fetchFn ?? fetch;
-  const apiKey = req.auth?.kind === "none" ? undefined : req.apiKey?.trim();
+  const apiKey = endpoint.hosted && req.auth?.kind !== "none" ? req.apiKey?.trim() : undefined;
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy, requestConfig } =
     resolveProviderHttpRequestConfig({
       baseUrl: endpoint.baseUrl,

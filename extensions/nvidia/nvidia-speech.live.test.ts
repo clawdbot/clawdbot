@@ -27,7 +27,7 @@ describeLive("nvidia speech plugin live", () => {
     const { mediaProviders, speechProviders } = await registerNvidiaPlugin();
     const speechProvider = requireRegisteredProvider(speechProviders, "nvidia");
     const mediaProvider = requireRegisteredProvider(mediaProviders, "nvidia");
-    const phrase = "OpenClaw NVIDIA speech integration test OK.";
+    const phrase = "Open Claw. Open Claw. NVIDIA speech integration test OK.";
 
     const audioFile = await speechProvider.synthesize({
       text: phrase,

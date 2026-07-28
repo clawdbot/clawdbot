@@ -6,6 +6,7 @@ import { asFiniteNumber, asObject, trimToUndefined } from "openclaw/plugin-sdk/s
 
 export const NVIDIA_ASR_BASE_URL =
   "https://1598d209-5e27-4d3c-8079-4751568b1081.invocation.api.nvcf.nvidia.com";
+export const NVIDIA_CHAT_BASE_URL = "https://integrate.api.nvidia.com/v1";
 export const NVIDIA_TTS_BASE_URL =
   "https://877104f7-e885-42b9-8de8-f6e4c6303969.invocation.api.nvcf.nvidia.com";
 
@@ -33,11 +34,10 @@ export function normalizeNvidiaTtsConfig(rawConfig: Record<string, unknown>): Nv
   const providers = asObject(rawConfig.providers);
   const raw = asObject(providers?.nvidia) ?? asObject(rawConfig.nvidia) ?? rawConfig;
   return {
-    apiKey:
-      normalizeResolvedSecretInputString({
-        value: raw.apiKey,
-        path: "messages.tts.providers.nvidia.apiKey",
-      }) ?? trimToUndefined(process.env.NVIDIA_API_KEY),
+    apiKey: normalizeResolvedSecretInputString({
+      value: raw.apiKey,
+      path: "messages.tts.providers.nvidia.apiKey",
+    }),
     baseUrl: normalizeNvidiaBaseUrl(
       trimToUndefined(raw.baseUrl) ??
         trimToUndefined(process.env.NVIDIA_TTS_BASE_URL) ??
@@ -50,4 +50,9 @@ export function normalizeNvidiaTtsConfig(rawConfig: Record<string, unknown>): Nv
     customDictionary: trimToUndefined(raw.customDictionary),
     customConfiguration: trimToUndefined(raw.customConfiguration),
   };
+}
+
+export function isNvidiaHostedAsrBaseUrl(value: string): boolean {
+  const normalized = normalizeNvidiaBaseUrl(value);
+  return normalized === NVIDIA_CHAT_BASE_URL || normalized === NVIDIA_ASR_BASE_URL;
 }

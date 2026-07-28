@@ -154,12 +154,14 @@ fields.
 }
 ```
 
-For a self-hosted ASR NIM, set `tools.media.audio.baseUrl` (or the model entry's
-`baseUrl`) to its HTTP origin. An explicit request-scoped ASR URL is used by
-itself and never falls back to a hosted NVIDIA origin. Self-hosted ASR and TTS
-endpoints can run without `NVIDIA_API_KEY`; hosted NVIDIA endpoints require it.
-To override the hosted ASR default, set `NVIDIA_ASR_BASE_URL`; set
-`NVIDIA_TTS_BASE_URL` for Magpie. These endpoints must expose the matching HTTP
+For a keyless self-hosted ASR NIM, set `NVIDIA_ASR_BASE_URL` or
+`models.providers.nvidia.baseUrl` to its HTTP origin. This makes the custom
+origin visible to authentication resolution and never forwards hosted NVIDIA
+credentials to it. Set `NVIDIA_TTS_BASE_URL` for a keyless self-hosted Magpie
+NIM. A custom TTS origin receives a key only when `apiKey` is explicitly set in
+its TTS provider configuration; `NVIDIA_API_KEY` and saved NVIDIA profiles stay
+hosted-only. Hosted NVIDIA endpoints require credentials. These endpoints must
+expose the matching HTTP
 `/v1/audio/transcriptions` or `/v1/audio/synthesize` route.
 
 ## Featured catalog

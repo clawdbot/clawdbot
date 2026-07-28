@@ -131,6 +131,21 @@ describe("NVIDIA speech HTTP runtime", () => {
     expect(headers.has("authorization")).toBe(false);
   });
 
+  it("never forwards a hosted ASR credential to a custom origin", async () => {
+    mocks.postTranscriptionRequest.mockResolvedValue(okJson("custom transcript"));
+
+    await transcribeNvidiaAudio(
+      transcriptionRequest({
+        baseUrl: "https://speech.example/v1",
+        apiKey: "hosted-secret",
+        auth: { kind: "api-key", apiKey: "hosted-secret", source: "test-hosted" },
+      }),
+    );
+
+    const headers = mocks.postTranscriptionRequest.mock.calls[0]?.[0]?.headers as Headers;
+    expect(headers.has("authorization")).toBe(false);
+  });
+
   it("requires an API key for the hosted ASR endpoint", async () => {
     await expect(
       transcribeNvidiaAudio(
@@ -164,6 +179,13 @@ describe("NVIDIA speech HTTP runtime", () => {
     expect(mocks.postTranscriptionRequest.mock.calls[0]?.[0]?.url).toContain(
       "1598d209-5e27-4d3c-8079-4751568b1081.invocation.api.nvcf.nvidia.com",
     );
+
+    mocks.postTranscriptionRequest.mockClear();
+    process.env.NVIDIA_ASR_BASE_URL =
+      "https://1598d209-5e27-4d3c-8079-4751568b1081.invocation.api.nvcf.nvidia.com/";
+    await transcribeNvidiaAudio(transcriptionRequest());
+    const headers = mocks.postTranscriptionRequest.mock.calls[0]?.[0]?.headers as Headers;
+    expect(headers.get("authorization")).toBe("Bearer nvapi-test");
   });
 
   it("uses an explicit ASR base URL without falling back to a hosted endpoint", async () => {

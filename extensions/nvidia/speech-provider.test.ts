@@ -122,7 +122,8 @@ describe("NVIDIA Magpie speech provider", () => {
   });
 
   it("allows a keyless self-hosted Magpie endpoint", async () => {
-    delete process.env.NVIDIA_API_KEY;
+    process.env.NVIDIA_API_KEY = "hosted-secret";
+    resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: "profile-secret" });
     const providerConfig = { baseUrl: "http://127.0.0.1:9000/v1" };
 
     expect(provider.isConfigured({ cfg: {}, providerConfig, timeoutMs: 5_000 })).toBe(true);
@@ -140,5 +141,6 @@ describe("NVIDIA Magpie speech provider", () => {
         baseUrl: "http://127.0.0.1:9000/v1",
       }),
     );
+    expect(resolveApiKeyForProviderMock).not.toHaveBeenCalled();
   });
 });

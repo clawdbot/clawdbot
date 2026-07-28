@@ -48,6 +48,7 @@ export function buildNvidiaSpeechProvider(): SpeechProviderPlugin {
       return (
         Boolean(config.apiKey) ||
         config.baseUrl !== NVIDIA_TTS_BASE_URL ||
+        Boolean(trimToUndefined(process.env.NVIDIA_API_KEY)) ||
         isProviderAuthProfileConfigured({ provider: "nvidia", cfg })
       );
     },
@@ -83,17 +84,21 @@ async function resolveNvidiaSpeechApiKey(
   baseUrl: string,
   cfg: OpenClawConfig,
 ): Promise<string | undefined> {
-  const direct = trimToUndefined(configuredApiKey) ?? trimToUndefined(process.env.NVIDIA_API_KEY);
-  if (direct) {
-    return direct;
+  const explicit = trimToUndefined(configuredApiKey);
+  if (explicit) {
+    return explicit;
+  }
+  if (baseUrl !== NVIDIA_TTS_BASE_URL) {
+    return undefined;
+  }
+  const envKey = trimToUndefined(process.env.NVIDIA_API_KEY);
+  if (envKey) {
+    return envKey;
   }
   const auth = await resolveApiKeyForProvider({ provider: "nvidia", cfg });
   const profileKey = trimToUndefined(auth?.apiKey);
   if (profileKey) {
     return profileKey;
-  }
-  if (baseUrl !== NVIDIA_TTS_BASE_URL) {
-    return undefined;
   }
   throw new Error(
     "NVIDIA credentials missing for TTS. Run `openclaw onboard --auth-choice nvidia-api-key` or set NVIDIA_API_KEY.",
