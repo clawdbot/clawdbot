@@ -103,7 +103,11 @@ describe("OpenClaw state lease", () => {
             db.exec("PRAGMA user_version = 0;");
             closeOpenClawStateDatabaseForTest();
             // Simulate the JSON envelope followed by restored output routing.
-            process.stdout.write(JSON.stringify({ ok: true }) + "\\n");
+            // Await the write callback — stdout is piped in the test harness, so
+            // a bare write() can drop the data before process.exit flushes.
+            await new Promise<void>((resolve) => {
+              process.stdout.write(JSON.stringify({ ok: true }) + "\\n", resolve);
+            });
             loggingState.forceConsoleToStderr = false;
             process.exit(23);
           });
