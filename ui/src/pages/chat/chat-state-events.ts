@@ -37,6 +37,7 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { handleBackgroundTasksEvent } from "./components/chat-background-tasks.ts";
+import { rememberLiveAuthoritativeUserMessage } from "./history-merge.ts";
 import {
   reconcileChatRunFromCurrentSessionRow,
   reconcileChatRunFromSessionRow,
@@ -114,7 +115,7 @@ function applyLiveUserMessage(state: ChatPageHost, payload: unknown): void {
       : null;
   const incoming: LiveUserMessageIdentity = {
     ...sourceIdentity,
-    id: eventId ?? sourceIdentity.id,
+    id: sourceIdentity.id ?? eventId,
     idempotencyKey: sourceIdentity.idempotencyKey ?? clientRunId,
     sequence: eventSequence ?? sourceIdentity.sequence,
   };
@@ -136,6 +137,7 @@ function applyLiveUserMessage(state: ChatPageHost, payload: unknown): void {
       ...(incoming.sequence !== null ? { seq: incoming.sequence } : {}),
     },
   };
+  rememberLiveAuthoritativeUserMessage(message);
   const incomingText = extractText(sourceMessage);
   const existingIndex = state.chatMessages.findIndex((candidate) => {
     const existing = readLiveUserMessageIdentity(candidate);

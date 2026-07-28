@@ -239,7 +239,12 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
     handleAgentEvent(evt);
 
-    expect(chatLog.startTool).toHaveBeenCalledWith("tc1", "exec", { command: "echo hi" });
+    expect(chatLog.startTool).toHaveBeenCalledWith(
+      "tc1",
+      "exec",
+      { command: "echo hi" },
+      "run-123",
+    );
     expect(tui.requestRender).toHaveBeenCalledTimes(1);
   });
 
@@ -968,7 +973,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
     handleAgentEvent(agentEvt);
 
-    expect(chatLog.startTool).toHaveBeenCalledWith("tc1", "exec", undefined);
+    expect(chatLog.startTool).toHaveBeenCalledWith("tc1", "exec", undefined, "run-42");
   });
 
   it("accepts chat events when session key is an alias of the active canonical key", () => {
@@ -1647,7 +1652,12 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       data: { phase: "start", toolCallId: "tc-final", name: "session_status" },
     });
 
-    expect(chatLog.startTool).toHaveBeenCalledWith("tc-final", "session_status", undefined);
+    expect(chatLog.startTool).toHaveBeenCalledWith(
+      "tc-final",
+      "session_status",
+      undefined,
+      "run-final",
+    );
     expect(tui.requestRender).toHaveBeenCalled();
   });
 
@@ -2506,6 +2516,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
         expect(chatLog.addLiveUser).toHaveBeenCalledWith("Sent from the other client.", {
           messageId: "shared-session-user",
+          messageSeq: 1,
           runId,
         });
         expect(state.activeChatRunId).toBe(runId);

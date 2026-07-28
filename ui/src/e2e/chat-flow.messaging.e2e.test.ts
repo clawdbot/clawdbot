@@ -292,104 +292,110 @@ suite.define(() => {
     },
   );
 
-  it("inserts a delayed persisted prompt ahead of an already-finalized reply", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, { historyMessages: [] });
-    const runId = "shared-session-finalized-run";
-    const prompt = "The persisted prompt arrived after the final.";
-    const finalText = "The reply was already finished.";
-    const userMessage = {
-      __openclaw: { id: "finalized-run-user", idempotencyKey: `${runId}:user`, seq: 1 },
-      content: [{ text: prompt, type: "text" }],
-      role: "user",
-      timestamp: Date.now(),
-    };
-    const assistantMessage = {
-      __openclaw: { id: "finalized-run-assistant", seq: 2 },
-      content: [{ text: finalText, type: "text" }],
-      role: "assistant",
-      timestamp: Date.now(),
-    };
+  it.each([
+    { history: "up-to-date", includesPrompt: true },
+    { history: "stale", includesPrompt: false },
+  ])(
+    "preserves a delayed persisted prompt ahead of a finalized reply with $history history",
+    async ({ includesPrompt }) => {
+      const context = await suite.newBrowserContext({
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+      });
+      const page = await context.newPage();
+      const gateway = await installMockGateway(page, { historyMessages: [] });
+      const runId = "shared-session-finalized-run";
+      const prompt = "The persisted prompt arrived after the final.";
+      const finalText = "The reply was already finished.";
+      const userMessage = {
+        __openclaw: { id: "finalized-run-user", idempotencyKey: `${runId}:user`, seq: 1 },
+        content: [{ text: prompt, type: "text" }],
+        role: "user",
+        timestamp: Date.now(),
+      };
+      const assistantMessage = {
+        __openclaw: { id: "finalized-run-assistant", seq: 2 },
+        content: [{ text: finalText, type: "text" }],
+        role: "assistant",
+        timestamp: Date.now(),
+      };
 
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
-      await gateway.emitGatewayEvent("chat", {
-        deltaText: finalText,
-        message: {
-          content: [{ text: finalText, type: "text" }],
-          role: "assistant",
-          timestamp: Date.now(),
-        },
-        runId,
-        seq: 1,
-        sessionKey: "main",
-        state: "delta",
-      });
-      await page.locator(".chat-bubble.streaming", { hasText: finalText }).waitFor({
-        timeout: 10_000,
-      });
-      await gateway.emitChatFinal({ runId, text: finalText });
-      await page.locator(".chat-group.assistant .chat-text", { hasText: finalText }).waitFor({
-        timeout: 10_000,
-      });
-      await gateway.setHistoryMessages([userMessage, assistantMessage]);
-      await gateway.deferNext("chat.history");
-      await gateway.emitGatewayEvent("session.message", {
-        activeRunIds: [],
-        clientRunId: runId,
-        hasActiveRun: false,
-        message: userMessage,
-        messageId: "finalized-run-user",
-        messageSeq: 1,
-        session: {
+      try {
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await gateway.waitForRequest("chat.startup");
+        await gateway.emitGatewayEvent("chat", {
+          deltaText: finalText,
+          message: {
+            content: [{ text: finalText, type: "text" }],
+            role: "assistant",
+            timestamp: Date.now(),
+          },
+          runId,
+          seq: 1,
+          sessionKey: "main",
+          state: "delta",
+        });
+        await page.locator(".chat-bubble.streaming", { hasText: finalText }).waitFor({
+          timeout: 10_000,
+        });
+        await gateway.emitChatFinal({ runId, text: finalText });
+        await page.locator(".chat-group.assistant .chat-text", { hasText: finalText }).waitFor({
+          timeout: 10_000,
+        });
+        await gateway.setHistoryMessages([userMessage, assistantMessage]);
+        await gateway.deferNext("chat.history");
+        await gateway.emitGatewayEvent("session.message", {
           activeRunIds: [],
+          clientRunId: runId,
           hasActiveRun: false,
-          key: "main",
-          kind: "direct",
-          status: "done",
-          updatedAt: Date.now(),
-        },
-        sessionKey: "main",
-      });
+          message: userMessage,
+          messageId: "finalized-run-user",
+          messageSeq: 1,
+          session: {
+            activeRunIds: [],
+            hasActiveRun: false,
+            key: "main",
+            kind: "direct",
+            status: "done",
+            updatedAt: Date.now(),
+          },
+          sessionKey: "main",
+        });
 
-      await expect
-        .poll(() =>
-          page.locator(".chat-thread-inner").evaluate(
-            (thread, texts) => {
-              const user = Array.from(thread.querySelectorAll(".chat-group.user")).find((row) =>
-                row.textContent?.includes(texts.prompt),
-              );
-              const assistant = Array.from(thread.querySelectorAll(".chat-group.assistant")).find(
-                (row) => row.textContent?.includes(texts.finalText),
-              );
-              return Boolean(
-                user &&
-                assistant &&
-                user.compareDocumentPosition(assistant) & Node.DOCUMENT_POSITION_FOLLOWING,
-              );
-            },
-            { finalText, prompt },
-          ),
-        )
-        .toBe(true);
-      await gateway.resolveDeferred("chat.history", {
-        messages: [userMessage, assistantMessage],
-        sessionId: "control-ui-e2e-session",
-        thinkingLevel: null,
-      });
-      await expect
-        .poll(() => page.locator(".chat-group.user", { hasText: prompt }).count())
-        .toBe(1);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
+        await expect
+          .poll(() =>
+            page.locator(".chat-thread-inner").evaluate(
+              (thread, texts) => {
+                const user = Array.from(thread.querySelectorAll(".chat-group.user")).find((row) =>
+                  row.textContent?.includes(texts.prompt),
+                );
+                const assistant = Array.from(thread.querySelectorAll(".chat-group.assistant")).find(
+                  (row) => row.textContent?.includes(texts.finalText),
+                );
+                return Boolean(
+                  user &&
+                  assistant &&
+                  user.compareDocumentPosition(assistant) & Node.DOCUMENT_POSITION_FOLLOWING,
+                );
+              },
+              { finalText, prompt },
+            ),
+          )
+          .toBe(true);
+        await gateway.resolveDeferred("chat.history", {
+          messages: includesPrompt ? [userMessage, assistantMessage] : [assistantMessage],
+          sessionId: "control-ui-e2e-session",
+          thinkingLevel: null,
+        });
+        await expect
+          .poll(() => page.locator(".chat-group.user", { hasText: prompt }).count())
+          .toBe(1);
+      } finally {
+        await suite.closeBrowserContext(context);
+      }
+    },
+  );
 
   it("keeps a browser-local prompt before a clock-skewed Gateway reply", async () => {
     const context = await suite.newBrowserContext({

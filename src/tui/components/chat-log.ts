@@ -21,11 +21,14 @@ type RepeatableSystemMessage = {
 export class ChatLog extends Container {
   private readonly maxComponents: number;
   private toolById = new Map<string, ToolExecutionComponent>();
+  private toolRunIds = new Map<string, string>();
   private streamingRuns = new Map<string, AssistantMessageComponent>();
   private frozenAssistants = new Map<string, Set<AssistantMessageComponent>>();
   private committedAssistantText = new Map<string, string>();
   private latestAssistantText = new Map<string, string>();
   private liveUsers = new Map<string, UserMessageComponent>();
+  private liveUserSequences = new Map<string, number>();
+  private liveEventUserIds = new Set<string>();
   private pendingUsers = new Map<
     string,
     {
@@ -49,6 +52,7 @@ export class ChatLog extends Container {
     for (const [toolId, tool] of this.toolById.entries()) {
       if (tool === component) {
         this.toolById.delete(toolId);
+        this.toolRunIds.delete(toolId);
       }
     }
     for (const [runId, message] of this.streamingRuns.entries()) {
@@ -72,6 +76,8 @@ export class ChatLog extends Container {
     for (const [messageId, user] of this.liveUsers.entries()) {
       if (user === component) {
         this.liveUsers.delete(messageId);
+        this.liveUserSequences.delete(messageId);
+        this.liveEventUserIds.delete(messageId);
       }
     }
     for (const [runId, entry] of this.pendingSystemNotices.entries()) {
@@ -89,8 +95,11 @@ export class ChatLog extends Container {
 
   private pruneOverflow(protectedComponents?: ReadonlySet<Component>) {
     while (this.children.length > this.maxComponents) {
+      // Protect only the inserted prompt, its reply, and tools owned by that run.
+      // If owned tools fill the log, evict the oldest tool, never the prompt or reply.
       const oldest = protectedComponents
-        ? this.children.find((component) => !protectedComponents.has(component))
+        ? (this.children.find((component) => !protectedComponents.has(component)) ??
+          this.children.find((component) => component instanceof ToolExecutionComponent))
         : this.children[0];
       if (!oldest) {
         return;
@@ -110,14 +119,28 @@ export class ChatLog extends Container {
     this.append(component);
   }
 
-  clearAll(opts?: { preservePendingUsers?: boolean }) {
+  clearAll(opts?: { preservePendingUsers?: boolean; preserveLiveUsers?: boolean }) {
     this.clear();
     this.toolById.clear();
+    this.toolRunIds.clear();
     this.streamingRuns.clear();
     this.frozenAssistants.clear();
     this.committedAssistantText.clear();
     this.latestAssistantText.clear();
-    this.liveUsers.clear();
+    if (opts?.preserveLiveUsers) {
+      // History rows are authoritative snapshots, not in-flight live events.
+      // Keeping them would resurrect deleted or switched-away transcript branches.
+      for (const messageId of this.liveUsers.keys()) {
+        if (!this.liveEventUserIds.has(messageId)) {
+          this.liveUsers.delete(messageId);
+          this.liveUserSequences.delete(messageId);
+        }
+      }
+    } else {
+      this.liveUsers.clear();
+      this.liveUserSequences.clear();
+      this.liveEventUserIds.clear();
+    }
     this.pendingSystemNotices.clear();
     this.btwMessage = null;
     this.repeatableSystemMessage = null;
@@ -131,6 +154,29 @@ export class ChatLog extends Container {
       this.removeChild(tool);
     }
     this.toolById.clear();
+    this.toolRunIds.clear();
+  }
+
+  restoreLiveUsers(beforeMessageSeq?: number) {
+    // Rebuilt history replaces matching IDs in addUser; only live prompts
+    // missing from a stale snapshot are restored before the next canonical row.
+    for (const messageId of this.liveEventUserIds) {
+      const component = this.liveUsers.get(messageId);
+      if (!component) {
+        this.liveEventUserIds.delete(messageId);
+        continue;
+      }
+      if (this.children.includes(component)) {
+        continue;
+      }
+      if (beforeMessageSeq !== undefined) {
+        const messageSeq = this.liveUserSequences.get(messageId);
+        if (messageSeq === undefined || messageSeq >= beforeMessageSeq) {
+          continue;
+        }
+      }
+      this.appendNonSystem(component);
+    }
   }
 
   restorePendingUsers() {
@@ -203,15 +249,25 @@ export class ChatLog extends Container {
     return true;
   }
 
-  addUser(text: string, options?: { messageId?: string }) {
+  addUser(text: string, options?: { messageId?: string; messageSeq?: number }) {
     const component = new UserMessageComponent(text);
     if (options?.messageId) {
       this.liveUsers.set(options.messageId, component);
+      // Once authoritative history contains this identity it is no longer a
+      // missing live event and must not survive a later deletion or branch.
+      this.liveEventUserIds.delete(options.messageId);
+      if (options.messageSeq !== undefined) {
+        this.liveUserSequences.set(options.messageId, options.messageSeq);
+      }
     }
     this.appendNonSystem(component);
   }
 
-  addLiveUser(text: string, options: { messageId: string; runId?: string }) {
+  addLiveUser(text: string, options: { messageId: string; messageSeq?: number; runId?: string }) {
+    this.liveEventUserIds.add(options.messageId);
+    if (options.messageSeq !== undefined) {
+      this.liveUserSequences.set(options.messageId, options.messageSeq);
+    }
     const existing = this.liveUsers.get(options.messageId);
     if (existing) {
       existing.setText(text);
@@ -239,7 +295,15 @@ export class ChatLog extends Container {
       // older components so the newly recovered prompt cannot disappear.
       this.repeatableSystemMessage = null;
       this.children.splice(assistantIndex, 0, component);
-      this.pruneOverflow(new Set([component, assistant]));
+      const protectedComponents = new Set<Component>([component, assistant]);
+      if (options.runId) {
+        for (const [toolId, tool] of this.toolById) {
+          if (this.toolRunIds.get(toolId) === options.runId) {
+            protectedComponents.add(tool);
+          }
+        }
+      }
+      this.pruneOverflow(protectedComponents);
       return component;
     }
     this.appendNonSystem(component);
@@ -477,16 +541,21 @@ export class ChatLog extends Container {
     return this.btwMessage !== null;
   }
 
-  startTool(toolCallId: string, toolName: string, args: unknown) {
+  startTool(toolCallId: string, toolName: string, args: unknown, runId?: string) {
     const existing = this.toolById.get(toolCallId);
     if (existing) {
       existing.setArgs(args);
       return existing;
     }
+    const owningRunId =
+      runId ?? (this.streamingRuns.size === 1 ? this.streamingRuns.keys().next().value : undefined);
     this.freezeStreamingAssistants();
     const component = new ToolExecutionComponent(toolName, args);
     component.setExpanded(this.toolsExpanded);
     this.toolById.set(toolCallId, component);
+    if (owningRunId) {
+      this.toolRunIds.set(toolCallId, owningRunId);
+    }
     this.appendNonSystem(component);
     return component;
   }
