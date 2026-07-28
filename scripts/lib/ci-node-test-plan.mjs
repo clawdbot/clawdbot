@@ -1190,7 +1190,12 @@ const SPLIT_NODE_SHARDS = new Map([
       ...createAgentCoreSplitShards(),
       {
         shardName: "agentic-agents-embedded",
-        configs: ["test/vitest/vitest.agents-embedded-agent.config.ts"],
+        configs: [
+          "test/vitest/vitest.agents-embedded-agent.config.ts",
+          "test/vitest/vitest.agents-embedded-agent-incomplete-turn.config.ts",
+          "test/vitest/vitest.agents-embedded-agent-overflow-compaction.config.ts",
+          "test/vitest/vitest.agents-embedded-agent-run.config.ts",
+        ],
         env: AGENTS_EMBEDDED_AGENT_ENV,
         requiresDist: false,
       },

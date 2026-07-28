@@ -50,10 +50,81 @@ type ChatMetadataRefreshOptions = {
   requestVersion?: number;
 };
 
+type ChatMetadataCacheEntry =
+  | { kind: "result"; result: ChatMetadataResult }
+  | { kind: "pending"; pending: Promise<ChatMetadataResult> };
+
+const chatMetadataCache = new WeakMap<GatewayBrowserClient, Map<string, ChatMetadataCacheEntry>>();
+
 const EMPTY_CHAT_METADATA_APPLY_RESULT: ChatMetadataApplyResult = {
   commands: false,
   models: false,
 };
+
+function chatMetadataAgentKey(agentId: string | null | undefined): string {
+  return agentId?.trim() ?? "";
+}
+
+function metadataCacheFor(client: GatewayBrowserClient): Map<string, ChatMetadataCacheEntry> {
+  let cache = chatMetadataCache.get(client);
+  if (!cache) {
+    cache = new Map();
+    chatMetadataCache.set(client, cache);
+  }
+  return cache;
+}
+
+function rememberChatMetadata(
+  client: GatewayBrowserClient,
+  agentId: string | null | undefined,
+  result: ChatMetadataResult,
+): void {
+  metadataCacheFor(client).set(chatMetadataAgentKey(agentId), { kind: "result", result });
+}
+
+function loadChatMetadata(
+  client: GatewayBrowserClient,
+  agentId: string | null | undefined,
+): Promise<ChatMetadataResult> {
+  const cache = metadataCacheFor(client);
+  const key = chatMetadataAgentKey(agentId);
+  const cached = cache.get(key);
+  if (cached?.kind === "result") {
+    return Promise.resolve(cached.result);
+  }
+  if (cached?.kind === "pending") {
+    return cached.pending;
+  }
+  const pending = client
+    .request<ChatMetadataResult>("chat.metadata", agentId ? { agentId } : {})
+    .then(
+      (result) => {
+        const current = cache.get(key);
+        if (current?.kind === "pending" && current.pending === pending) {
+          cache.set(key, { kind: "result", result });
+        }
+        return result;
+      },
+      (error: unknown) => {
+        const current = cache.get(key);
+        if (current?.kind === "pending" && current.pending === pending) {
+          cache.delete(key);
+        }
+        throw error;
+      },
+    );
+  cache.set(key, { kind: "pending", pending });
+  return pending;
+}
+
+export function invalidateChatMetadataCache(
+  host: Pick<ChatPageHost, "chatMetadataRequestVersion" | "client">,
+): void {
+  if (host.client) {
+    chatMetadataCache.delete(host.client);
+  }
+  host.chatMetadataRequestVersion += 1;
+}
 
 function scheduleChatMetadataRefresh(callback: () => void) {
   const requestIdleCallback =
@@ -173,10 +244,7 @@ export async function refreshChatMetadata(
       return EMPTY_CHAT_METADATA_APPLY_RESULT;
     }
 
-    const result = await client.request<ChatMetadataResult>(
-      "chat.metadata",
-      agentId ? { agentId } : {},
-    );
+    const result = await loadChatMetadata(client, agentId);
     if (!ownsChatMetadataRequest(request)) {
       return EMPTY_CHAT_METADATA_APPLY_RESULT;
     }
@@ -347,6 +415,7 @@ export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {
           await refreshChatMetadata(host, { requestVersion: startupMetadataRequestVersion });
           return;
         }
+        rememberChatMetadata(client, agentId, metadata);
         const applied = applyChatMetadataResult(host, client, agentId, metadata);
         if (!applied.models || !applied.commands) {
           // chat.startup owns the first metadata load. Fill only omitted fields here;

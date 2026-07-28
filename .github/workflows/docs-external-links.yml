@@ -22,6 +22,21 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Setup Node.js and pnpm
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          install-deps: "false"
+
+      - name: Install link audit dependencies
+        run: pnpm install --filter . --frozen-lockfile --ignore-scripts
+
+      - name: Prepare MDX link audit input
+        run: >-
+          node scripts/docs-link-audit.mjs
+          --prepare-external-links
+          .artifacts/docs-external-links/mdx
+
       - name: Audit external links
         uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
         with:
@@ -45,10 +60,44 @@ jobs:
             './docs/**/*.md'
             './docs/**/*.mdx'
             './docs/docs.json'
+            './.artifacts/docs-external-links/mdx/**/*.md'
+            './.artifacts/docs-external-links/mdx/**/*.mdx'
           fail: false
           failIfEmpty: true
           format: markdown
           output: .artifacts/docs-external-links/report.md
+
+      # The main pass follows redirects. This pass stops at the first response
+      # so permanent moves remain visible without flagging temporary redirects.
+      - name: Report permanent redirects
+        if: always()
+        continue-on-error: true
+        run: >-
+          lychee
+          --no-progress
+          --base-url https://docs.openclaw.ai
+          --exclude-all-private
+          --accept '100..=300,302..=307,309..=599'
+          --accept-timeouts
+          --max-retries 2
+          --retry-wait-time 2
+          --timeout 20
+          --max-redirects 0
+          --scheme http
+          --scheme https
+          --exclude '^https://docs\.openclaw\.ai/'
+          --exclude '^https://github\.com/openclaw/maintainers/'
+          --exclude '^https://(claude\.ai|help\.openai\.com|openai\.com|platform\.openai\.com|support\.discord\.com|www\.npmjs\.com|www\.raspberrypi\.com)/'
+          --format markdown
+          --output .artifacts/docs-external-links/permanent-redirects.md
+          './README.md'
+          './CONTRIBUTING.md'
+          './SECURITY.md'
+          './docs/**/*.md'
+          './docs/**/*.mdx'
+          './docs/docs.json'
+          './.artifacts/docs-external-links/mdx/**/*.md'
+          './.artifacts/docs-external-links/mdx/**/*.mdx'
 
       - name: Upload audit report
         if: always()

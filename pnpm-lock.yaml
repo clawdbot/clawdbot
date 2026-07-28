@@ -307,6 +307,9 @@ importers:
       lit-analyzer:
         specifier: 2.0.3
         version: 2.0.3
+      markdown-it:
+        specifier: 14.3.0
+        version: 14.3.0
       oxfmt:
         specifier: 0.60.0
         version: 0.60.0

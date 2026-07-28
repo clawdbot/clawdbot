@@ -126,9 +126,14 @@ describe("test-projects args", () => {
           "src/agents/openai-transport-stream.reasoning-and-cache.test.ts",
           "src/agents/openai-transport-stream.replay-and-tools.test.ts",
           "src/agents/openai-transport-stream.replay-sanitization.test.ts",
-          "src/agents/openai-transport-stream.streaming.test.ts",
           "src/agents/openai-transport-stream.usage-and-calls.test.ts",
         ],
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.agents-core-isolated.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/agents/openai-transport-stream.streaming.test.ts"],
         watchMode: false,
       },
     ]);

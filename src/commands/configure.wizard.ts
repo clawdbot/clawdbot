@@ -332,9 +332,10 @@ async function promptWebToolsConfig(
           };
         }
       } else {
-        workingConfig = await runSearchSetupFlow(workingConfig, runtime, prompter, {
+        const searchSetup = await runSearchSetupFlow(workingConfig, runtime, prompter, {
           preserveDisabledSearchState: false,
         });
+        workingConfig = searchSetup.config;
         const selectedSearch = workingConfig.tools?.web?.search;
         nextSearch = {
           ...selectedSearch,

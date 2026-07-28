@@ -1,9 +1,11 @@
 // OpenClaw assistant tests cover plan parsing and inference prompt construction.
 import { describe, expect, it } from "vitest";
 import {
+  SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT,
+  SYSTEM_AGENT_SYSTEM_PROMPT,
   buildSystemAgentAssistantUserPrompt,
   parseSystemAgentAssistantPlanText,
-} from "./assistant.js";
+} from "./assistant-prompts.js";
 import type { SystemAgentOverview } from "./overview.js";
 
 function overview(overrides: Partial<SystemAgentOverview["tools"]> = {}): SystemAgentOverview {
@@ -37,6 +39,15 @@ function overview(overrides: Partial<SystemAgentOverview["tools"]> = {}): System
 }
 
 describe("OpenClaw assistant", () => {
+  it("teaches both planner and agent-loop prompts about hosted skills and search setup", () => {
+    expect(SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT).toContain("- configure skills");
+    expect(SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT).toContain("- configure search");
+    expect(SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT).toContain("- open search wizard");
+    expect(SYSTEM_AGENT_SYSTEM_PROMPT).toContain("call configure_skills");
+    expect(SYSTEM_AGENT_SYSTEM_PROMPT).toContain("call configure_search");
+    expect(SYSTEM_AGENT_SYSTEM_PROMPT).toContain("never ask for or repeat the credential");
+  });
+
   it("parses the first compact JSON command", () => {
     expect(
       parseSystemAgentAssistantPlanText(

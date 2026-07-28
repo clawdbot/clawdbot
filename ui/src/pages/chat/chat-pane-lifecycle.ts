@@ -13,9 +13,13 @@ import {
   exportChatMarkdown,
   handlePageGatewayEvent,
   handleQuestionPromptEvent,
+  invalidateChatAvatarCache,
+  invalidateAssistantIdentityCache,
+  invalidateChatMetadataCache,
   parseCatalogSessionKey,
   readChatSessionSnapshot,
   readPresenceEntries,
+  refreshChatAvatar,
   refreshPageChat,
   resetChatViewState,
   resolveChatPaneObserverRunId,
@@ -315,6 +319,13 @@ export abstract class ChatPaneLifecycle extends ChatPaneReset {
           }
         }
         if (state) {
+          if (event.event === "config.changed") {
+            invalidateChatAvatarCache(state);
+            invalidateAssistantIdentityCache(state.client);
+            state.assistantIdentityRequestVersion += 1;
+            invalidateChatMetadataCache(state);
+            void refreshChatAvatar(state).finally(() => state.requestUpdate?.());
+          }
           handleQuestionPromptEvent(this.questionPromptState, event);
         }
         if (state && !parseCatalogSessionKey(state.sessionKey)) {
