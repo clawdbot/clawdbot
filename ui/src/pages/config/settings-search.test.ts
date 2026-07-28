@@ -394,6 +394,24 @@ describe("findSettingsSearchBlocks", () => {
     ]);
   });
 
+  it("finds archived workspace threads using translated filter text", async () => {
+    await i18n.setLocale("es");
+
+    const matches = findSettingsSearchBlocks({
+      query: "archivadas",
+      schema: null,
+      value: null,
+      uiHints: {},
+    });
+
+    expect(matches).toEqual([
+      expect.objectContaining({
+        routeId: "sessions",
+        hash: "",
+      }),
+    ]);
+  });
+
   it("does not create block results for an empty query", () => {
     expect(
       findSettingsSearchBlocks({

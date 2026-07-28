@@ -64,6 +64,8 @@ type MemoryViewProps = {
   memoryImportHref: string;
   /** New status-led landing view. */
   overview: TemplateResult;
+  /** Search and read the selected agent's indexed memory. */
+  memories: TemplateResult;
   /** Agent-scoped dream diary and scene. */
   dreams: TemplateResult;
   /** One embedded editor for every `memory.*` schema field. */
@@ -284,6 +286,7 @@ export function renderMemory(props: MemoryViewProps) {
         active: props.activeTab,
         tabs: [
           { value: "overview", label: t("memoryPage.tabs.overview") },
+          { value: "memories", label: t("memoryPage.tabs.memories") },
           { value: "dreams", label: t("memoryPage.tabs.dreams") },
           { value: "settings", label: t("memoryPage.tabs.settings") },
         ],
@@ -294,9 +297,11 @@ export function renderMemory(props: MemoryViewProps) {
       <div id=${MEMORY_PANEL_ID} class="memory-page__panel" role="tabpanel">
         ${props.activeTab === "overview"
           ? props.overview
-          : props.activeTab === "dreams"
-            ? props.dreams
-            : renderSettingsTab(props)}
+          : props.activeTab === "memories"
+            ? props.memories
+            : props.activeTab === "dreams"
+              ? props.dreams
+              : renderSettingsTab(props)}
       </div>
     </section>
   `;

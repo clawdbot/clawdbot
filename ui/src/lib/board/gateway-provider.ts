@@ -32,6 +32,7 @@ export class GatewayBoardProvider implements BoardProvider {
   private readonly snapshotSignal: ValueSignal<BoardSnapshot>;
   private readonly eventStream = new EventStream<BoardCommandEvent>();
   private client: BoardGatewayClient;
+  private readonly retiredClients = new WeakSet<BoardGatewayClient>();
   private clientGeneration = 0;
   private unsubscribe: (() => void) | undefined;
   private refreshLoop: Promise<void> | undefined;
@@ -48,10 +49,10 @@ export class GatewayBoardProvider implements BoardProvider {
     readonly sessionKey: string,
     client: BoardGatewayClient,
     connected = true,
-    public canPinWidgets = true,
-    public canPinMcpApps = false,
-    public canMutate = true,
-    public canGrant = true,
+    public readonly canPinWidgets = true,
+    public readonly canPinMcpApps = false,
+    public readonly canMutate = true,
+    public readonly canGrant = true,
   ) {
     this.snapshotSignal = new ValueSignal(emptyBoardSnapshot(sessionKey));
     this.snapshot$ = this.snapshotSignal;
@@ -64,29 +65,20 @@ export class GatewayBoardProvider implements BoardProvider {
     }
   }
 
-  attachClient(
-    client: BoardGatewayClient,
-    connected = true,
-    canPinWidgets = true,
-    canPinMcpApps = false,
-    canMutate = true,
-    canGrant = true,
-  ): void {
-    if (this.disposed) {
+  attachClient(client: BoardGatewayClient, connected = true): void {
+    if (this.disposed || (client !== this.client && this.retiredClients.has(client))) {
       return;
     }
     const connectionActivated = connected && !this.connected;
     this.connected = connected;
-    this.canPinWidgets = canPinWidgets;
-    this.canPinMcpApps = canPinMcpApps;
-    this.canMutate = canMutate;
-    this.canGrant = canGrant;
     if (client === this.client) {
       if (connectionActivated) {
         void this.activate();
       }
       return;
     }
+    // Gateway clients never become current again after a replacement; stale leases must not roll back the shared transport.
+    this.retiredClients.add(this.client);
     this.unsubscribe?.();
     this.client = client;
     this.clientGeneration += 1;
@@ -245,7 +237,7 @@ export class GatewayBoardProvider implements BoardProvider {
 
   private subscribe(client: BoardGatewayClient): void {
     this.unsubscribe = client.addEventListener((event) => {
-      if (this.disposed) {
+      if (this.disposed || client !== this.client) {
         return;
       }
       if (event.event === "board.changed") {

@@ -9,6 +9,7 @@ import {
   type ExecAsk,
   type ExecSecurity,
   maxAsk,
+  minSecurity,
   requiresExecApproval,
   resolveExecApprovalAllowedDecisions,
   resolveExecApprovalUnavailableDecisions,
@@ -24,11 +25,6 @@ import {
   isExecApprovalRunAbortedError,
   registerExecApprovalRequestForHostOrThrow,
 } from "./bash-tools.exec-approval-request.js";
-import {
-  createNodeApprovalRequestFailureFollowup,
-  nodePolicyBlocksAutoReview,
-  resolveNodeAutoReviewReason,
-} from "./bash-tools.exec-host-node-followup.js";
 import {
   analyzeNodeApprovalRequirement,
   buildNodeSystemRunInvoke,
@@ -318,15 +314,13 @@ export async function executeNodeHostCommand(
   let inlineFallbackPolicy: NodeGatewayPolicyCheckpoint | undefined;
   if (requiresAsk) {
     const autoReviewHasBoundCommand = analysisOk && autoReviewArgv !== undefined;
+    // Remote policy may be stricter; local auto-review cannot bypass that floor.
     const autoReviewBlockedByNodePolicy =
       params.autoReview === true &&
       hostAsk !== "always" &&
-      nodePolicyBlocksAutoReview({
-        hostSecurity,
-        nodeApprovalPolicyKnown,
-        nodeSecurity,
-        nodeAsk,
-      });
+      (!nodeApprovalPolicyKnown ||
+        nodeAsk === "always" ||
+        (nodeSecurity !== undefined && minSecurity(hostSecurity, nodeSecurity) !== hostSecurity));
     let autoReviewRequiresHumanApproval =
       autoReviewBlockedByNodePolicy ||
       (params.autoReview === true && hostAsk !== "always" && !autoReviewHasBoundCommand) ||
@@ -339,19 +333,21 @@ export async function executeNodeHostCommand(
       !requiresSecurityAuditSuppressionApproval
     ) {
       const reviewer = params.autoReviewer ?? defaultExecAutoReviewer;
+      const autoReviewReason =
+        inlineEvalHit !== null
+          ? "strict-inline-eval"
+          : hostSecurity === "allowlist" &&
+              (!analysisOk || !allowlistSatisfied) &&
+              !durableApprovalSatisfied
+            ? "allowlist-miss"
+            : "approval-required";
       const pendingDecision = resolveExecAutoReviewDecision(reviewer, {
         command: prepared.rawCommand,
         argv: autoReviewArgv,
         cwd: prepared.cwd,
         envKeys: Object.keys(params.requestedEnv ?? {}).toSorted(),
         host: "node",
-        reason: resolveNodeAutoReviewReason({
-          inlineEvalHit,
-          hostSecurity,
-          analysisOk,
-          allowlistSatisfied,
-          durableApprovalSatisfied,
-        }),
+        reason: autoReviewReason,
         analysis: {
           parsed: analysisOk,
           allowlistMatched: allowlistSatisfied,
@@ -484,14 +480,14 @@ export async function executeNodeHostCommand(
           turnSourceAccountId: params.turnSourceAccountId,
           turnSourceThreadId: params.turnSourceThreadId,
         });
-        const sendApprovalRequestFailedFollowup = createNodeApprovalRequestFailureFollowup({
-          send: execHostShared.sendExecApprovalFollowupResult,
-          target: followupTarget,
-          nodeId: target.nodeId,
-          approvalId,
-          command: params.command,
-          signal: params.signal,
-        });
+        const sendApprovalRequestFailedFollowup = async (): Promise<void> => {
+          if (!params.signal?.aborted) {
+            await execHostShared.sendExecApprovalFollowupResult(
+              followupTarget,
+              `Exec denied (node=${target.nodeId} id=${approvalId}, approval-request-failed): ${params.command}`,
+            );
+          }
+        };
         let nodeInvocationStarted = false;
         let nodeInvocationCompleted = false;
 

@@ -554,6 +554,11 @@ export class GatewayProtocolClient<TPlan> {
         if (this.lastSeq !== null && seq > this.lastSeq + 1) {
           const expected = this.lastSeq + 1;
           this.invoke("gap", () => this.opts.onGap?.({ expected, received: seq }));
+          // Gap recovery can retire this socket synchronously. Never advance a
+          // replacement's sequence or dispatch a frame from the retired owner.
+          if (!this.isActive(socket, generation)) {
+            return;
+          }
         }
         this.lastSeq = seq;
       }

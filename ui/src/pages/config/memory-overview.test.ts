@@ -1,8 +1,25 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { DoctorMemoryStatusPayload } from "../../../../src/gateway/server-methods/doctor.ts";
+
+// The hero derives its lobster from lobsterPetSeed, which mixes in a random
+// per-load salt, so the palette (and with it sprite geometry like the sleeping
+// eye peek) varies per test process. Pin a canonical look so pose assertions
+// stay deterministic.
+vi.mock("../../components/lobster-pet.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../components/lobster-pet.ts")>();
+  return {
+    ...actual,
+    createLobsterPetLook: () =>
+      actual.canonicalLobsterLook(
+        expectDefined(actual.LOBSTER_PET_PALETTES[0], "canonical lobster palette"),
+      ),
+  };
+});
+
 import { renderMemoryOverview, type MemoryOverviewStatus } from "./memory-overview.ts";
 
 function fixturePayload(): DoctorMemoryStatusPayload {
@@ -110,7 +127,7 @@ describe("renderMemoryOverview", () => {
     expect(container.textContent).toContain("Memory is hibernating");
     expect(container.textContent).toContain("Open Settings");
     expect(container.querySelector(".memory-overview__hero--sleeping")).not.toBeNull();
-    expect(container.querySelector(".memory-overview__lobster svg")).not.toBeNull();
+    expect(container.querySelector(".lobster-pet__svg")).not.toBeNull();
     expect(container.querySelector(".lob-reading-book")).toBeNull();
   });
 
@@ -166,5 +183,29 @@ describe("renderMemoryOverview", () => {
     expect(lightRow?.textContent).toContain("Not scheduled");
     expect(lightRow?.textContent).not.toContain("Enabled");
     expect(lightRow?.textContent).not.toContain("next ");
+  });
+
+  it("opens the Memories tab from the overview shortcut", () => {
+    const onNavigate = vi.fn();
+    const container = document.createElement("div");
+    render(
+      renderMemoryOverview({
+        agentId: "main",
+        agents: [],
+        engineSelection: { kind: "auto", engineId: "memory-core" },
+        engineDisabled: false,
+        status: { kind: "ready", payload: fixturePayload() },
+        onAgentChange: vi.fn(),
+        onRefresh: vi.fn(),
+        onNavigate,
+      }),
+      container,
+    );
+
+    const shortcut = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+      button.textContent?.includes("Search memories"),
+    );
+    shortcut?.click();
+    expect(onNavigate).toHaveBeenCalledWith("memories");
   });
 });

@@ -97,7 +97,7 @@ describe("createQaSmokeCiPart", () => {
     expect(new Set(scenarioIds)).toEqual(new Set(smokeProfileScenarioIds));
     expect(
       new Set(scenarioIds.map((scenarioId) => scenarioById.get(scenarioId)?.execution.kind)),
-    ).toEqual(new Set(["flow", "playwright", "script"]));
+    ).toEqual(new Set(smokeSelection.scenarios.map((scenario) => scenario.execution.kind)));
 
     const selectedScenarioPaths = new Set(
       scenarioIds.map((scenarioId) => scenarioById.get(scenarioId)?.sourcePath),
@@ -146,6 +146,32 @@ describe("createQaSmokeCiPart", () => {
     );
     expect(heaviestRunCost - lightestRunCost).toBeLessThanOrEqual(largestScenarioCost);
     expect(primaryScenarioIds.every((ids) => ids.length > 0)).toBe(true);
+  });
+
+  it("keeps real Gateway-hosted proof outside the Crabline smoke profile", () => {
+    const coverageId = "control-ui.gateway-hosted-ui-control";
+    const smokeSelection = resolveQaProfileScenarios({
+      profile: "smoke-ci",
+      providerMode: "mock-openai",
+      eligibleChannels: ["telegram", "matrix"],
+    });
+    const hostedScenario = expectDefined(
+      readQaScenarioPack().scenarios.find(
+        (scenario) => scenario.id === "control-ui-qa-channel-image-roundtrip",
+      ),
+      "real Gateway-hosted Control UI scenario",
+    );
+
+    expect(smokeSelection.profile.channelDriver).toBe("crabline");
+    expect(smokeSelection.profile.coverageIds).not.toContain(coverageId);
+    expect(smokeSelection.scenarios.map((scenario) => scenario.id)).not.toContain(
+      hostedScenario.id,
+    );
+    expect(
+      smokeSelection.scenarios.flatMap((scenario) => scenario.coverage?.primary ?? []),
+    ).not.toContain(coverageId);
+    expect(hostedScenario.execution).toMatchObject({ kind: "flow", channel: "qa-channel" });
+    expect(hostedScenario.coverage?.primary).toContain(coverageId);
   });
 
   it("rejects undeclared profile parts", () => {
