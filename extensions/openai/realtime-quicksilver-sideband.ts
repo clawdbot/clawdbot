@@ -93,7 +93,9 @@ function waitForSocketOpen(params: {
 
 function waitForRetryDelay(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
-    const finish = (error?: unknown) => {
+    // Typed as Error so the rejection reason is provably an Error at the call site;
+    // onAbort normalizes a non-Error AbortSignal reason before it reaches here.
+    const finish = (error?: Error) => {
       clearTimeout(timer);
       signal.removeEventListener("abort", onAbort);
       if (error) {
