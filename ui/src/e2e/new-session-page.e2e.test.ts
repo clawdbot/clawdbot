@@ -961,6 +961,74 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     }
   });
 
+  it("lets users clear an explicit worktree choice after Git rediscovery fails", async () => {
+    const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      workspace: WORKSPACE,
+      workspaceGit: true,
+      methodResponses: {
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+          repositoryStatus: "git",
+        },
+        "fs.listDir": {
+          cases: [
+            {
+              match: { path: WORKSPACE },
+              response: {
+                path: WORKSPACE,
+                parent: "/home/peter",
+                home: "/home/peter",
+                entries: [{ name: "packages", path: PICKED }],
+              },
+            },
+            {
+              match: { path: PICKED },
+              response: { path: PICKED, parent: WORKSPACE, home: "/home/peter", entries: [] },
+            },
+          ],
+        },
+        "sessions.create": { key: "agent:main:worktree-recovery", runStarted: true },
+      },
+    });
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      await choosePackagesFolder(page);
+      await page.locator(".new-session-page__message").fill("continue without a worktree");
+      await gateway.deferNext("worktrees.branches");
+
+      const placeTrigger = page.locator("#new-session-place-trigger");
+      await placeTrigger.click();
+      const worktree = page.getByRole("button", { name: "Worktree" });
+      await worktree.click();
+      await gateway.waitForRequest("worktrees.branches");
+      await gateway.rejectDeferred("worktrees.branches", {
+        code: "UNAVAILABLE",
+        message: "branch lookup unavailable",
+      });
+
+      const start = page.getByRole("button", { name: "Start thread" });
+      await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("true");
+      await expect.poll(() => start.isDisabled()).toBe(true);
+      await expect.poll(() => worktree.isEnabled()).toBe(true);
+      await worktree.click();
+      await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("false");
+      await expect.poll(() => start.isDisabled()).toBe(false);
+
+      await start.click();
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        cwd: PICKED,
+        message: "continue without a worktree",
+      });
+      expect(create.params).not.toHaveProperty("worktree");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("blocks an immediate submit until remembered model and worktree choices validate", async () => {
     const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();

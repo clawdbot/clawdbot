@@ -399,7 +399,9 @@ export function renderPlaceSelect(params: {
                         value: "worktree",
                         label: t("newSession.worktree"),
                         checked: params.worktree,
-                        disabled: Boolean(params.cloudProfileId) || !params.worktreeAvailable,
+                        disabled:
+                          Boolean(params.cloudProfileId) ||
+                          (!params.worktreeAvailable && !params.worktree),
                         title: params.cloudProfileId
                           ? t("newSession.cloudRequiresWorktree")
                           : params.worktreeAvailable
