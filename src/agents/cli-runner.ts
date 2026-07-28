@@ -3,6 +3,8 @@
  */
 import { setReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import { patchSessionEntry } from "../config/sessions/session-accessor.js";
 import { appendExactAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import { buildGenericCliContextEngineHostSupport } from "../context-engine/host-compat.js";
 import {
@@ -10,6 +12,8 @@ import {
   captureAgentRunLifecycleGeneration,
   withAgentRunLifecycleGeneration,
 } from "../infra/agent-events.js";
+import { hasInternalDiagnosticEventListeners } from "../infra/diagnostic-event-listener-presence.js";
+import { areDiagnosticsEnabledForProcess } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -22,6 +26,7 @@ import {
 } from "../plugins/hook-agent-context.js";
 import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { isHeartbeatLifecycleRunKind } from "./bootstrap-mode.js";
 import {
   resolveCliRuntimeArtifactFingerprint,
@@ -36,6 +41,10 @@ import {
 } from "./cli-runner/delivery-evidence.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./cli-runner/log.js";
 import { hashCliReseedPrompt } from "./cli-runner/reseed-envelope.js";
+import {
+  runClaudeCliAgentTurnWithDiagnostics,
+  type ClaudeCliRunDiagnosticLifecycle,
+} from "./cli-runner/run-diagnostics.js";
 import {
   loadCliSessionContextEngineMessages,
   loadCliSessionHistoryMessages,
@@ -130,6 +139,20 @@ function shouldRetryFreshCliSessionAfterFailover(params: {
   }
 }
 
+function shouldRetryForkedCliSessionAfterFailover(error: FailoverError): boolean {
+  return error.reason === "timeout" && error.code === "cli_no_output_timeout";
+}
+
+function isUnsupportedCliResumeAtError(error: unknown, resumeAtArg: string): boolean {
+  const message = formatErrorMessage(error).toLowerCase();
+  return (
+    message.includes(resumeAtArg.toLowerCase()) &&
+    ["unknown", "unexpected", "unrecognized", "not recognized"].some((token) =>
+      message.includes(token),
+    )
+  );
+}
+
 function formatCliEmptyOutputDiagnostics(output: CliOutput): string | undefined {
   const process = output.diagnostics?.process;
   if (!process) {
@@ -176,14 +199,6 @@ export async function isCliBindingFlushed(
     }
   }
   return false;
-}
-
-function flushSessionManagerTranscript(sessionManager: SessionManager): void {
-  (
-    sessionManager as unknown as {
-      replacePersistedTranscript?: () => void;
-    }
-  ).replacePersistedTranscript?.();
 }
 
 async function assertSuccessfulCliRuntimeBindingCurrent(
@@ -460,15 +475,27 @@ async function finalizeCliContextEngineTurn(params: {
 export function runCliAgent(paramsInput: RunCliAgentParams): Promise<EmbeddedAgentRunResult> {
   const lifecycleGeneration =
     paramsInput.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(paramsInput.runId);
+  const params = {
+    ...paramsInput,
+    lifecycleGeneration,
+  };
+  // Observability services register before turns and keep subscriptions process-stable.
+  // Snapshot listener presence here so disabled installs pay no synthetic trace cost.
   return withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
-    runCliAgentInternal({
-      ...paramsInput,
-      lifecycleGeneration,
-    }),
+    isClaudeCliProvider(params.provider) &&
+    areDiagnosticsEnabledForProcess() &&
+    hasInternalDiagnosticEventListeners()
+      ? runClaudeCliAgentTurnWithDiagnostics(params, (diagnosticLifecycle) =>
+          runCliAgentInternal(params, diagnosticLifecycle),
+        )
+      : runCliAgentInternal(params),
   );
 }
 
-async function runCliAgentInternal(params: RunCliAgentParams): Promise<EmbeddedAgentRunResult> {
+async function runCliAgentInternal(
+  params: RunCliAgentParams,
+  diagnosticLifecycle?: ClaudeCliRunDiagnosticLifecycle,
+): Promise<EmbeddedAgentRunResult> {
   assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration!);
   // The hook gate must fire before prepareCliRunContext — that call allocates
   // backend resources released only by runPreparedCliAgent's try…finally.
@@ -536,7 +563,7 @@ async function runCliAgentInternal(params: RunCliAgentParams): Promise<EmbeddedA
   let result: EmbeddedAgentRunResult | undefined;
   let runError: unknown;
   try {
-    result = await runPreparedCliAgent(context);
+    result = await runPreparedCliAgent(context, diagnosticLifecycle);
   } catch (error) {
     runError = error;
   }
@@ -565,6 +592,7 @@ async function runCliAgentInternal(params: RunCliAgentParams): Promise<EmbeddedA
     if (runError || result?.didSendViaMessagingTool === true) {
       log.warn(`cli run cleanup failed after completion: ${formatErrorMessage(cleanupError)}`);
     } else {
+      diagnosticLifecycle?.setPhase("cleanup");
       runError =
         cleanupError instanceof Error ? cleanupError : new Error(formatErrorMessage(cleanupError));
     }
@@ -578,6 +606,7 @@ async function runCliAgentInternal(params: RunCliAgentParams): Promise<EmbeddedA
 /** Runs an already-prepared CLI agent context through hooks and execution. */
 export async function runPreparedCliAgent(
   context: PreparedCliRunContext,
+  diagnosticLifecycle?: ClaudeCliRunDiagnosticLifecycle,
 ): Promise<EmbeddedAgentRunResult> {
   const { executePreparedCliRun } = await import("./cli-runner/execute.runtime.js");
   const { params } = context;
@@ -863,11 +892,48 @@ export async function runPreparedCliAgent(
     }
 
     try {
-      const sessionManager = SessionManager.open(params.sessionFile);
+      const sessionKey = params.sessionKey?.trim() || params.sessionId;
+      const agentId = params.agentId ?? resolveAgentIdFromSessionKey(sessionKey);
+      let sessionManager = params.sessionManager;
+      if (!sessionManager) {
+        const sessionTarget = params.sessionTarget ?? {
+          agentId,
+          sessionId: params.sessionId,
+          sessionKey,
+          storePath:
+            params.storePath ??
+            resolveStorePath(params.config?.session?.store, {
+              agentId,
+            }),
+        };
+        const persistedEntry = await patchSessionEntry(
+          sessionTarget,
+          (entry, patchContext) => {
+            if (patchContext.existingEntry && entry.sessionId !== sessionTarget.sessionId) {
+              return null;
+            }
+            return {
+              sessionId: sessionTarget.sessionId,
+              updatedAt: Date.now(),
+            };
+          },
+          {
+            fallbackEntry: params.sessionEntry
+              ? undefined
+              : { sessionId: sessionTarget.sessionId, updatedAt: Date.now() },
+            skipMaintenance: true,
+          },
+        );
+        if (persistedEntry?.sessionId !== sessionTarget.sessionId) {
+          // Skip only this stale blocked-message write; the outer runner still returns blocked.
+          return;
+        }
+        sessionManager = SessionManager.open(sessionTarget);
+      }
       sessionManager.appendMessage(
         redactedUserMessage as Parameters<typeof sessionManager.appendMessage>[0],
       );
-      flushSessionManagerTranscript(sessionManager);
+      sessionManager.flushPendingPersistence();
     } catch (err) {
       log.warn(
         `before_agent_run block: failed to persist redacted CLI user message: ${formatErrorMessage(
@@ -897,18 +963,55 @@ export async function runPreparedCliAgent(
     throw error;
   };
 
-  const executeCliAttempt = async (cliSessionIdToUse?: string, timeoutMs = params.timeoutMs) => {
+  const executeCliAttempt = async (
+    cliSessionIdToUse?: string,
+    options?: {
+      timeoutMs?: number;
+      forkCliSessionOnResume?: boolean;
+      resumeAt?: string;
+      onForkSuccessorPersisted?: (sessionId: string) => void;
+    },
+  ) => {
+    const timeoutMs = options?.timeoutMs ?? params.timeoutMs;
+    const forkCliSessionOnResume =
+      options?.forkCliSessionOnResume ?? context.params.forkCliSessionOnResume;
+    const cliSessionResumeAt =
+      cliSessionIdToUse && forkCliSessionOnResume
+        ? (options?.resumeAt ??
+          context.params.cliSessionResumeAt ??
+          context.params.cliSessionBinding?.resumeCheckpointId)
+        : undefined;
+    const persistCliSessionForkSuccessor =
+      options?.onForkSuccessorPersisted && context.params.persistCliSessionForkSuccessor
+        ? async (sessionId: string) => {
+            await context.params.persistCliSessionForkSuccessor?.(sessionId);
+            options.onForkSuccessorPersisted?.(sessionId);
+          }
+        : context.params.persistCliSessionForkSuccessor;
     const attemptContext =
-      timeoutMs === params.timeoutMs
+      timeoutMs === params.timeoutMs &&
+      forkCliSessionOnResume === context.params.forkCliSessionOnResume &&
+      cliSessionResumeAt === context.params.cliSessionResumeAt &&
+      persistCliSessionForkSuccessor === context.params.persistCliSessionForkSuccessor
         ? context
         : {
             ...context,
             params: {
               ...context.params,
               timeoutMs,
+              forkCliSessionOnResume,
+              cliSessionResumeAt,
+              persistCliSessionForkSuccessor,
             },
           };
-    const output = await executePreparedCliRun(attemptContext, cliSessionIdToUse);
+    diagnosticLifecycle?.setPhase("send");
+    const output = await executePreparedCliRun(
+      attemptContext,
+      cliSessionIdToUse,
+      diagnosticLifecycle ? { onPhase: diagnosticLifecycle.setPhase } : undefined,
+    );
+    // Test facades and non-instrumented executors may not signal the boundary.
+    diagnosticLifecycle?.setPhase("resolve");
     const sourceReplyMirror = resolveCliSourceReplyMirror(output);
     const assistantText = sourceReplyMirror.delivered
       ? (sourceReplyMirror.visibleText ?? "")
@@ -1120,6 +1223,9 @@ export async function runPreparedCliAgent(
                   ...(context.effectiveAuthProfileId
                     ? { authProfileId: context.effectiveAuthProfileId }
                     : {}),
+                  ...(resultParams.output.resumeCheckpointId
+                    ? { resumeCheckpointId: resultParams.output.resumeCheckpointId }
+                    : {}),
                   ...(context.authEpoch ? { authEpoch: context.authEpoch } : {}),
                   authEpochVersion: context.authEpochVersion,
                   ...(context.extraSystemPromptHash
@@ -1321,9 +1427,20 @@ export async function runPreparedCliAgent(
       hookRunner,
     });
     const reusableCliSessionId = resolveReusableCliSessionId(context.reusableCliSession);
+    const resumeCheckpointId = params.cliSessionBinding?.resumeCheckpointId;
+    let retryableSessionId = reusableCliSessionId;
     try {
       return await finishCliAttempt(
-        await executeCliAttempt(reusableCliSessionId),
+        await executeCliAttempt(
+          reusableCliSessionId,
+          params.forkCliSessionOnResume
+            ? {
+                onForkSuccessorPersisted: (sessionId) => {
+                  retryableSessionId = sessionId;
+                },
+              }
+            : undefined,
+        ),
         reusableCliSessionId,
       );
     } catch (err) {
@@ -1331,11 +1448,77 @@ export async function runPreparedCliAgent(
       if (deliveredFailure) {
         return deliveredFailure;
       }
-      if (isFailoverError(err)) {
-        const retryableSessionId = reusableCliSessionId;
+      let recoveryError = err;
+      if (
+        params.forkCliSessionOnResume &&
+        resumeCheckpointId &&
+        context.preparedBackend.backend.resumeAtArg &&
+        isUnsupportedCliResumeAtError(err, context.preparedBackend.backend.resumeAtArg)
+      ) {
+        recoveryError = new FailoverError("CLI backend cannot resume from the stored checkpoint.", {
+          reason: "session_expired",
+          provider: params.provider,
+          model: context.modelId,
+          sessionId: params.sessionId,
+          lane: params.lane,
+          status: resolveFailoverStatus("session_expired"),
+          cause: err,
+        });
+      }
+      if (isFailoverError(recoveryError)) {
         if (
+          !params.forkCliSessionOnResume &&
+          shouldRetryForkedCliSessionAfterFailover(recoveryError) &&
+          retryableSessionId &&
+          resumeCheckpointId &&
+          params.sessionKey &&
+          context.preparedBackend.backend.forkArg &&
+          context.preparedBackend.backend.resumeAtArg &&
+          params.onBeforeForkedCliSessionRetry
+        ) {
+          try {
+            const retryTimeoutMs = params.timeoutMs - (Date.now() - context.started);
+            if (retryTimeoutMs <= 0) {
+              throw recoveryError;
+            }
+            const forkPrepared = await params.onBeforeForkedCliSessionRetry({
+              provider: params.provider,
+              reason: recoveryError.reason,
+              sessionId: retryableSessionId,
+            });
+            if (!forkPrepared) {
+              throw recoveryError;
+            }
+            cliBackendLog.warn(
+              `cli session recovery fork: provider=${params.provider} reason=${recoveryError.reason} sessionKey=${params.sessionKey}`,
+            );
+            return await finishCliAttempt(
+              await executeCliAttempt(retryableSessionId, {
+                timeoutMs: retryTimeoutMs,
+                forkCliSessionOnResume: true,
+                resumeAt: resumeCheckpointId,
+                onForkSuccessorPersisted: (sessionId) => {
+                  retryableSessionId = sessionId;
+                },
+              }),
+            );
+          } catch (forkError) {
+            const deliveredForkFailure = await finishDeliveredFailure(forkError);
+            if (deliveredForkFailure) {
+              return deliveredForkFailure;
+            }
+            recoveryError = isUnsupportedCliResumeAtError(
+              forkError,
+              context.preparedBackend.backend.resumeAtArg,
+            )
+              ? err
+              : forkError;
+          }
+        }
+        if (
+          isFailoverError(recoveryError) &&
           shouldRetryFreshCliSessionAfterFailover({
-            error: err,
+            error: recoveryError,
             hasHistoryPrompt: Boolean(context.openClawHistoryPrompt),
           }) &&
           retryableSessionId &&
@@ -1344,22 +1527,27 @@ export async function runPreparedCliAgent(
           try {
             const retryTimeoutMs = params.timeoutMs - (Date.now() - context.started);
             if (retryTimeoutMs <= 0) {
-              throw err;
+              throw recoveryError;
             }
             if (params.onBeforeFreshCliSessionRetry) {
               const clearedStaleBinding = await params.onBeforeFreshCliSessionRetry({
                 provider: params.provider,
-                reason: err.reason,
+                reason: recoveryError.reason,
                 sessionId: retryableSessionId,
               });
               if (!clearedStaleBinding) {
-                throw err;
+                throw recoveryError;
               }
             }
             cliBackendLog.warn(
-              `cli session recovery retry: provider=${params.provider} reason=${err.reason} sessionKey=${params.sessionKey}`,
+              `cli session recovery retry: provider=${params.provider} reason=${recoveryError.reason} sessionKey=${params.sessionKey}`,
             );
-            return await finishCliAttempt(await executeCliAttempt(undefined, retryTimeoutMs));
+            return await finishCliAttempt(
+              await executeCliAttempt(undefined, {
+                timeoutMs: retryTimeoutMs,
+                forkCliSessionOnResume: false,
+              }),
+            );
           } catch (retryErr) {
             const deliveredRetryFailure = await finishDeliveredFailure(retryErr);
             if (deliveredRetryFailure) {
@@ -1374,20 +1562,22 @@ export async function runPreparedCliAgent(
             return toCliRunFailure(retryErr);
           }
         }
+      }
+      if (isFailoverError(recoveryError)) {
         await runCliAgentEndHook(params, {
-          event: buildFailedAgentEndEvent(formatErrorMessage(err)),
+          event: buildFailedAgentEndEvent(formatErrorMessage(recoveryError)),
           ctx: hookContext,
           hookRunner,
         });
-        throw err;
+        throw recoveryError;
       }
-      const message = formatErrorMessage(err);
+      const message = formatErrorMessage(recoveryError);
       await runCliAgentEndHook(params, {
         event: buildFailedAgentEndEvent(message),
         ctx: hookContext,
         hookRunner,
       });
-      return toCliRunFailure(err);
+      return toCliRunFailure(recoveryError);
     }
   };
 
@@ -1409,6 +1599,7 @@ export async function runPreparedCliAgent(
           `CLI run also failed before backend cleanup: ${formatErrorMessage(runError)}`,
         );
       }
+      diagnosticLifecycle?.setPhase("cleanup");
       throw cleanupError;
     }
     cliBackendLog.warn(

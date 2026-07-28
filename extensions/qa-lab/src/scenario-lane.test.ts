@@ -1,5 +1,7 @@
 // Qa Lab tests cover canonical scenario lane matching behavior.
 import { describe, expect, it } from "vitest";
+import type { QaProviderMode } from "./model-selection.js";
+import { readQaScenarioById, readQaScenarioPack } from "./scenario-catalog.js";
 import {
   describeQaProviderLaneMismatches,
   scenarioMatchesQaProviderLane,
@@ -7,10 +9,71 @@ import {
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 
 describe("QA scenario lane matching", () => {
+  const planningCoverageIds = new Set(["runtime.no-meta-leak", "workspace.planning"]);
+  const planningScenarios = readQaScenarioPack().scenarios.filter((scenario) =>
+    [...(scenario.coverage?.primary ?? []), ...(scenario.coverage?.secondary ?? [])].some(
+      (coverageId) => planningCoverageIds.has(coverageId),
+    ),
+  );
+
+  it.each(planningScenarios)("selects $id for the GPT-5.6 Luna live lane", (scenario) => {
+    expect(
+      scenarioMatchesQaProviderLane({
+        scenario,
+        providerMode: "live-frontier",
+        primaryModel: "openai/gpt-5.6-luna",
+      }),
+    ).toBe(true);
+    expect(
+      scenarioMatchesQaProviderLane({
+        scenario,
+        providerMode: "mock-openai",
+        primaryModel: "openai/gpt-5.6-luna",
+      }),
+    ).toBe(false);
+  });
+
+  it.each([
+    {
+      id: "cron-empty-response-after-write-recovery",
+      allowedProviderMode: "mock-openai" as const,
+      rejectedProviderMode: "live-frontier" as const,
+    },
+    {
+      id: "cron-explicit-authority-execution",
+      allowedProviderMode: "live-frontier" as const,
+      rejectedProviderMode: "mock-openai" as const,
+    },
+  ])(
+    "keeps $id on its required $allowedProviderMode provider lane",
+    ({ id, allowedProviderMode, rejectedProviderMode }) => {
+      const scenario = readQaScenarioById(id);
+      const modelForMode = (mode: QaProviderMode) =>
+        mode === "mock-openai" ? "mock-openai/gpt-5.6-luna" : "openai/gpt-5.6-luna";
+
+      expect(
+        scenarioMatchesQaProviderLane({
+          scenario,
+          providerMode: allowedProviderMode,
+          primaryModel: modelForMode(allowedProviderMode),
+        }),
+      ).toBe(true);
+      const rejected = {
+        scenario,
+        providerMode: rejectedProviderMode,
+        primaryModel: modelForMode(rejectedProviderMode),
+      };
+      expect(scenarioMatchesQaProviderLane(rejected)).toBe(false);
+      expect(describeQaProviderLaneMismatches(rejected)).toContain(
+        `providerMode=${allowedProviderMode}`,
+      );
+    },
+  );
+
   it("reports every declared mismatch in one decision", () => {
     const scenario = makeQaSuiteTestScenario("strict-live-lane", {
       channel: "matrix",
-      runtimeParityTier: "live-only",
+      runtimePairLane: "core",
       config: {
         requiredProviderMode: "live-frontier",
         requiredProvider: "claude-cli",
@@ -29,7 +92,6 @@ describe("QA scenario lane matching", () => {
         claudeCliAuthMode: "api-key",
       }),
     ).toEqual([
-      "live provider mode",
       "providerMode=live-frontier",
       "channel=matrix",
       "provider=claude-cli",
@@ -82,6 +144,27 @@ describe("QA scenario lane matching", () => {
       }),
     ).toBe(false);
   });
+
+  it.each([
+    { channelDriver: "qa-channel" as const, channel: undefined, matches: true },
+    { channelDriver: "crabline" as const, channel: "telegram", matches: true },
+    { channelDriver: "crabline" as const, channel: "discord", matches: false },
+  ])(
+    "matches channel streaming evidence for $channelDriver channel $channel: $matches",
+    ({ channelDriver, channel, matches }) => {
+      const scenario = readQaScenarioById("channel-message-flows");
+
+      expect(
+        scenarioMatchesQaProviderLane({
+          scenario,
+          providerMode: "mock-openai",
+          primaryModel: "mock-openai/gpt-5.6-luna",
+          channelDriver,
+          channel,
+        }),
+      ).toBe(matches);
+    },
+  );
 
   it("accepts a mock lane only when its selected provider and model satisfy the contract", () => {
     const scenario = makeQaSuiteTestScenario("mock-anthropic", {

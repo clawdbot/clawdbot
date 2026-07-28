@@ -19,6 +19,8 @@ import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
+import okio.Buffer
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -61,6 +63,115 @@ private class NoopDeviceAuthStore : DeviceAuthTokenStore {
 @Config(sdk = [34])
 class GatewaySessionCustomHeadersTest {
   @Test
+  fun managedImageDownload_usesArtifactTicketWithoutGatewayBearer() =
+    runBlocking {
+      val app = RuntimeEnvironment.getApplication()
+      val json = Json { ignoreUnknownKeys = true }
+      val connected = CompletableDeferred<Unit>()
+      val imageRequest = CompletableDeferred<RecordedRequest>()
+      val imageBytes = byteArrayOf(1, 2, 3, 4)
+      val attachmentId = "11111111-1111-4111-8111-111111111111"
+      val artifactId = "artifact_managed_image_$attachmentId"
+      val imagePath = "/api/chat/media/outgoing/main/$attachmentId/full?mediaTicket=ticket"
+      val server =
+        MockWebServer().apply {
+          dispatcher =
+            object : Dispatcher() {
+              override fun dispatch(request: RecordedRequest): MockResponse {
+                if (request.path == imagePath) {
+                  imageRequest.complete(request)
+                  return MockResponse()
+                    .setHeader("Content-Type", "image/png")
+                    .setBody(Buffer().write(imageBytes))
+                }
+                return MockResponse().withWebSocketUpgrade(
+                  object : WebSocketListener() {
+                    override fun onOpen(
+                      webSocket: WebSocket,
+                      response: Response,
+                    ) {
+                      webSocket.send(CONNECT_CHALLENGE_FRAME)
+                    }
+
+                    override fun onMessage(
+                      webSocket: WebSocket,
+                      text: String,
+                    ) {
+                      val frame = json.parseToJsonElement(text).jsonObject
+                      if (frame["type"]?.jsonPrimitive?.content != "req") return
+                      val id = frame["id"]?.jsonPrimitive?.content ?: return
+                      when (frame["method"]?.jsonPrimitive?.content) {
+                        "connect" ->
+                          webSocket.send(
+                            """{"type":"res","id":"$id","ok":true,"payload":{"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}}""",
+                          )
+                        "artifacts.download" ->
+                          webSocket.send(
+                            """{"type":"res","id":"$id","ok":true,"payload":{"url":"$imagePath"}}""",
+                          )
+                      }
+                    }
+                  },
+                )
+              }
+            }
+          start()
+        }
+      val stableId = "manual|127.0.0.1|${server.port}"
+      val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+      val session =
+        GatewaySession(
+          scope = scope,
+          identityStore = testDeviceIdentityStore(app),
+          deviceAuthStore = NoopDeviceAuthStore(),
+          onConnected = { if (!connected.isCompleted) connected.complete(Unit) },
+          onDisconnected = {},
+          onEvent = { _, _ -> },
+        )
+
+      try {
+        session.connect(
+          endpoint = GatewayEndpoint(stableId, "test", "127.0.0.1", server.port, tlsEnabled = false),
+          token = "bootstrap-token",
+          bootstrapToken = null,
+          password = null,
+          options =
+            GatewayConnectOptions(
+              role = "operator",
+              scopes = listOf("operator.read"),
+              caps = emptyList(),
+              commands = emptyList(),
+              permissions = emptyMap(),
+              client =
+                GatewayClientInfo(
+                  id = "openclaw-android-test",
+                  displayName = "Android Test",
+                  version = "1.0.0-test",
+                  platform = "android",
+                  mode = "ui",
+                  instanceId = "android-test-instance",
+                  deviceFamily = "android",
+                  modelIdentifier = "test",
+                ),
+            ),
+          tls = null,
+        )
+        withTimeout(TEST_TIMEOUT_MS) { connected.await() }
+
+        val loaded = session.loadImageArtifact(stableId, "main", "main", artifactId)
+        assertArrayEquals(imageBytes, loaded?.bytes)
+        assertEquals("image/png", loaded?.mimeType)
+        val request = withTimeout(TEST_TIMEOUT_MS) { imageRequest.await() }
+        assertNull(request.getHeader("Authorization"))
+        assertEquals("image/*", request.getHeader("Accept"))
+      } finally {
+        session.disconnectAndJoin()
+        scope.cancel()
+        server.shutdown()
+      }
+    }
+
+  @Test
   fun tlsUpgradeRequest_carriesLatestSanitizedHeadersForOnlyThisGateway() {
     val app = RuntimeEnvironment.getApplication()
     val securePrefsBacking =
@@ -68,7 +179,7 @@ class GatewaySessionCustomHeadersTest {
     val prefs = SecurePrefs(app, securePrefsOverride = securePrefsBacking)
     val stableId = "manual|gateway.example|443"
     val endpoint = GatewayEndpoint.manual(host = "gateway.example", port = 443)
-    val tls = GatewayTlsParams(required = true, expectedFingerprint = "aa", allowTOFU = false, stableId = stableId)
+    val tls = GatewayTlsParams(required = true, expectedFingerprint = "aa".repeat(32), allowTOFU = false, stableId = stableId)
 
     prefs.saveGatewayCustomHeaders(stableId, mapOf("CF-Access-Client-Id" to "client-id"))
     securePrefsBacking
@@ -113,7 +224,7 @@ class GatewaySessionCustomHeadersTest {
       val session =
         GatewaySession(
           scope = scope,
-          identityStore = DeviceIdentityStore(app),
+          identityStore = testDeviceIdentityStore(app),
           deviceAuthStore = NoopDeviceAuthStore(),
           onConnected = { if (!connected.isCompleted) connected.complete(Unit) },
           onDisconnected = {},

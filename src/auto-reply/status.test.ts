@@ -1,6 +1,4 @@
 /** Tests auto-reply status message formatting. */
-import fs from "node:fs";
-import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
@@ -10,11 +8,17 @@ import {
   providerContextTokenCacheKey,
 } from "../agents/context-cache.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import {
+  appendTranscriptMessageSync,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import {
   buildStatusMessage as buildStatusMessageRaw,
   type buildStatusMessage as BuildStatusMessage,
 } from "../status/status-message.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { createSuccessfulImageMediaDecision } from "./media-understanding.test-fixtures.js";
 import { buildCommandsMessage, buildCommandsMessagePaginated, buildHelpMessage } from "./status.js";
 
@@ -390,17 +394,15 @@ describe("buildStatusMessage", () => {
     await withTempHome(async () => {
       const text = buildStatusMessage({
         config: {
-          messages: {
-            tts: {
-              auto: "always",
-              provider: "openai",
-              providers: {
-                openai: {
-                  displayName: "NeuTTS local",
-                  baseUrl: "http://user:secret@127.0.0.1:18801/v1?token=hidden#fragment",
-                  model: "neutts-nano",
-                  voice: "clara",
-                },
+          tts: {
+            auto: "always",
+            provider: "openai",
+            providers: {
+              openai: {
+                displayName: "NeuTTS local",
+                baseUrl: "http://username@127.0.0.1:18801/v1?token=hidden#fragment",
+                model: "neutts-nano",
+                voice: "clara",
               },
             },
           },
@@ -413,7 +415,7 @@ describe("buildStatusMessage", () => {
       expect(normalized).toContain(
         "Voice: always · provider=openai · name=NeuTTS local · model=neutts-nano · voice=clara · endpoint=custom(http://127.0.0.1:18801/v1)",
       );
-      expect(normalized).not.toContain("secret");
+      expect(normalized).not.toContain("username");
       expect(normalized).not.toContain("token=hidden");
       expect(normalized).not.toContain("fragment");
     });
@@ -423,11 +425,7 @@ describe("buildStatusMessage", () => {
     const text = buildStatusMessage({
       config: {
         agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": {},
-            },
-          },
+          defaults: {},
         },
       } as unknown as OpenClawConfig,
       agent: {
@@ -450,11 +448,7 @@ describe("buildStatusMessage", () => {
     const text = buildStatusMessage({
       config: {
         agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": {},
-            },
-          },
+          defaults: {},
         },
       } as unknown as OpenClawConfig,
       agent: {
@@ -844,7 +838,7 @@ describe("buildStatusMessage", () => {
       sessionEntry: {
         sessionId: "abc",
         updatedAt: 0,
-        channel: "discord",
+        delivery: normalizeSessionDeliveryState({ context: { channel: "discord" } }),
         groupId: "123",
       },
       sessionKey: "agent:main:main",
@@ -885,7 +879,7 @@ describe("buildStatusMessage", () => {
       sessionEntry: {
         sessionId: "channel-context-window",
         updatedAt: 0,
-        channel: "discord",
+        delivery: normalizeSessionDeliveryState({ context: { channel: "discord" } }),
         groupId: "123",
         totalTokens: 49_000,
         totalTokensFresh: true,
@@ -1991,29 +1985,21 @@ describe("buildStatusMessage", () => {
       totalTokens: number;
     };
   }) {
-    const logPath = path.join(
-      params.dir,
-      ".openclaw",
-      "agents",
-      params.agentId,
-      "sessions",
-      `${params.sessionId}.jsonl`,
-    );
-    fs.mkdirSync(path.dirname(logPath), { recursive: true });
-    fs.writeFileSync(
-      logPath,
-      [
-        JSON.stringify({
-          type: "message",
-          message: {
-            role: "assistant",
-            model: params.model ?? "claude-opus-4-6",
-            usage: params.usage,
-          },
-        }),
-      ].join("\n"),
-      "utf-8",
-    );
+    void params.dir;
+    const scope = {
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      sessionKey: `agent:${params.agentId}:main`,
+      storePath: resolveStorePath(undefined, { agentId: params.agentId }),
+    };
+    replaceSessionEntrySync(scope, { sessionId: params.sessionId, updatedAt: Date.now() });
+    appendTranscriptMessageSync(scope, {
+      message: {
+        role: "assistant",
+        model: params.model ?? "claude-opus-4-6",
+        usage: params.usage,
+      },
+    });
   }
 
   const baselineTranscriptUsage = {
@@ -2259,51 +2245,28 @@ describe("buildStatusMessage", () => {
     await withTempHome(
       async (dir) => {
         const sessionId = "sess-cache-delivery-mirror";
-        const logPath = path.join(
-          dir,
-          ".openclaw",
-          "agents",
-          "main",
-          "sessions",
-          `${sessionId}.jsonl`,
-        );
-        fs.mkdirSync(path.dirname(logPath), { recursive: true });
-        fs.writeFileSync(
-          logPath,
-          [
-            JSON.stringify({ type: "session", version: 1, id: sessionId }),
-            JSON.stringify({
-              type: "message",
-              message: {
-                role: "assistant",
-                provider: "anthropic",
-                model: "claude-opus-4-6",
-                usage: {
-                  input: 1,
-                  output: 2,
-                  cacheRead: 1000,
-                  cacheWrite: 0,
-                  totalTokens: 1003,
-                },
+        writeBaselineTranscriptUsageLog({ dir, agentId: "main", sessionId });
+        appendTranscriptMessageSync(
+          {
+            agentId: "main",
+            sessionId,
+            sessionKey: "agent:main:main",
+            storePath: resolveStorePath(undefined, { agentId: "main" }),
+          },
+          {
+            message: {
+              role: "assistant",
+              provider: "openclaw",
+              model: "delivery-mirror",
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
               },
-            }),
-            JSON.stringify({
-              type: "message",
-              message: {
-                role: "assistant",
-                provider: "openclaw",
-                model: "delivery-mirror",
-                usage: {
-                  input: 0,
-                  output: 0,
-                  cacheRead: 0,
-                  cacheWrite: 0,
-                  totalTokens: 0,
-                },
-              },
-            }),
-          ].join("\n"),
-          "utf-8",
+            },
+          },
         );
 
         const text = buildTranscriptStatusText({

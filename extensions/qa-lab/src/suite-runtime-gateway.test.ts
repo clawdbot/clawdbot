@@ -158,6 +158,82 @@ describe("qa suite gateway helpers", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("cancels failed suite gateway JSON response bodies before releasing their guard", async () => {
+    const events: string[] = [];
+    const cancelBody = vi.fn(() => {
+      events.push("cancel");
+      throw new Error("cancel failed");
+    });
+    const release = vi.fn(async () => {
+      events.push("release");
+    });
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        new ReadableStream<Uint8Array>({
+          cancel: cancelBody,
+        }),
+        { status: 503 },
+      ),
+      release,
+    });
+
+    await expect(fetchJson("http://127.0.0.1:43123/config")).rejects.toThrow(
+      "request failed 503: http://127.0.0.1:43123/config",
+    );
+    expect(cancelBody).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(events).toEqual(["cancel", "release"]);
+  });
+
+  it("cancels every ignored gateway health body before releasing its guard", async () => {
+    const events: string[] = [];
+    const failedCancel = vi.fn(() => {
+      events.push("failed:cancel");
+    });
+    const successCancel = vi.fn(() => {
+      events.push("success:cancel");
+    });
+    const failedRelease = vi.fn(async () => {
+      events.push("failed:release");
+    });
+    const successRelease = vi.fn(async () => {
+      events.push("success:release");
+    });
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response(
+          new ReadableStream<Uint8Array>({
+            cancel: failedCancel,
+          }),
+          { status: 503 },
+        ),
+        release: failedRelease,
+      })
+      .mockResolvedValueOnce({
+        response: new Response(
+          new ReadableStream<Uint8Array>({
+            cancel: successCancel,
+          }),
+          { status: 200 },
+        ),
+        release: successRelease,
+      });
+
+    await expect(
+      waitForGatewayHealthy({ gateway: { baseUrl: "http://127.0.0.1:43123" } } as never, 1_000),
+    ).resolves.toBeUndefined();
+    expect(failedCancel).toHaveBeenCalledTimes(1);
+    expect(successCancel).toHaveBeenCalledTimes(1);
+    expect(failedRelease).toHaveBeenCalledTimes(1);
+    expect(successRelease).toHaveBeenCalledTimes(1);
+    expect(events).toEqual([
+      "failed:cancel",
+      "failed:release",
+      "success:cancel",
+      "success:release",
+    ]);
+  });
+
   it("bounds a hung gateway health request by the remaining readiness deadline", async () => {
     vi.useFakeTimers();
     fetchWithSsrFGuardMock.mockImplementation(

@@ -113,6 +113,11 @@ export type ProviderAuthMethodNonInteractiveContext = {
   ) => ApiKeyCredential | null;
 };
 
+type ProviderAuthMethodNonInteractiveValidationContext = Omit<
+  ProviderAuthMethodNonInteractiveContext,
+  "toApiKeyCredential"
+>;
+
 /** Read-only context for app-guided discovery of already available inference. */
 export type ProviderAppGuidedSetupContext = {
   config: OpenClawConfig;
@@ -156,6 +161,10 @@ export type ProviderAuthMethod = {
   runNonInteractive?: (
     ctx: ProviderAuthMethodNonInteractiveContext,
   ) => Promise<OpenClawConfig | null>;
+  /** Side-effect-free prerequisite validation used before destructive reset handling. */
+  validateNonInteractive?: (
+    ctx: ProviderAuthMethodNonInteractiveValidationContext,
+  ) => Promise<boolean>;
   /** Provider-owned local model discovery for the shared guided setup ladder. */
   appGuidedSetup?: ProviderAppGuidedSetup;
 };

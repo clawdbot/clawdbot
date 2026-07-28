@@ -31,13 +31,21 @@ type PersistedUiSettings = Omit<UiSettings, "token" | "sessionKey" | "lastActive
 };
 
 import {
-  DEFAULT_SIDEBAR_PINNED_ROUTES,
-  normalizeSidebarPinnedRoutes,
-  type SidebarNavRoute,
+  DEFAULT_SIDEBAR_ENTRIES,
+  normalizeSidebarEntries,
+  SIDEBAR_NAV_ROUTES,
+  serializeSidebarEntry,
 } from "../app-navigation.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
+import { normalizeBoardSessionViews, type BoardSessionViews } from "../lib/board/settings.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { getSafeLocalStorage, getSafeSessionStorage } from "../local-storage.ts";
+import {
+  normalizeSidebarSessionActivePanels,
+  normalizeSidebarSessionLayouts,
+  type SidebarSessionActivePanels,
+  type SidebarSessionLayouts,
+} from "../pages/chat/sidebar-layout-persistence.ts";
 import { normalizeChatSplitLayout, type ChatSplitLayout } from "../pages/chat/split-layout.ts";
 import { resolveControlUiBasePath } from "./browser.ts";
 import { parseImportedCustomTheme, type ImportedCustomTheme } from "./custom-theme.ts";
@@ -48,6 +56,67 @@ import { normalizeLocalUserIdentity, type LocalUserIdentity } from "./user-ident
 
 export const TEXT_SCALE_STOPS = [90, 100, 110, 125, 140] as const;
 export type TextScaleStop = (typeof TEXT_SCALE_STOPS)[number];
+
+const CSS_WIDTH_KEYWORDS = new Set(["none", "min-content", "max-content"]);
+const CSS_WIDTH_FUNCTIONS = new Set(["calc", "clamp", "fit-content", "max", "min"]);
+const CSS_WIDTH_UNITS = new Set(["ch", "em", "rem", "vh", "vmax", "vmin", "vw", "px"]);
+const CSS_WIDTH_ALLOWED_CHARS = /^[0-9A-Za-z.%+\-*/(),\s]+$/;
+const CSS_WIDTH_IDENTIFIER_RE = /[A-Za-z][A-Za-z0-9-]*/g;
+const CSS_WIDTH_SIMPLE_RE = /^(?:\d+(?:\.\d+)?|\.\d+)(?:px|rem|em|ch|vw|vh|vmin|vmax|%)$/i;
+const CSS_WIDTH_MAX_LENGTH = 96;
+
+function hasBalancedParentheses(value: string): boolean {
+  let depth = 0;
+  for (const char of value) {
+    if (char === "(") {
+      depth++;
+    } else if (char === ")") {
+      depth--;
+      if (depth < 0) {
+        return false;
+      }
+    }
+  }
+  return depth === 0;
+}
+
+function hasAllowedWidthIdentifiers(value: string): boolean {
+  for (const match of value.matchAll(CSS_WIDTH_IDENTIFIER_RE)) {
+    const identifier = match[0].toLowerCase();
+    if (
+      !CSS_WIDTH_FUNCTIONS.has(identifier) &&
+      !CSS_WIDTH_KEYWORDS.has(identifier) &&
+      !CSS_WIDTH_UNITS.has(identifier)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function normalizeChatMessageMaxWidth(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().replace(/\s+/g, " ");
+  if (normalized.length === 0) {
+    return undefined;
+  }
+  if (normalized.length > CSS_WIDTH_MAX_LENGTH) {
+    return undefined;
+  }
+  if (CSS_WIDTH_KEYWORDS.has(normalized.toLowerCase()) || CSS_WIDTH_SIMPLE_RE.test(normalized)) {
+    return normalized;
+  }
+  if (
+    !CSS_WIDTH_ALLOWED_CHARS.test(normalized) ||
+    !hasBalancedParentheses(normalized) ||
+    !hasAllowedWidthIdentifiers(normalized)
+  ) {
+    return undefined;
+  }
+  return /^(?:calc|clamp|fit-content|max|min)\(.+\)$/i.test(normalized) ? normalized : undefined;
+}
 
 const CHAT_SEND_SHORTCUTS = ["enter", "modifier-enter"] as const;
 export type ChatSendShortcut = (typeof CHAT_SEND_SHORTCUTS)[number];
@@ -112,12 +181,21 @@ export type UiSettings = {
   chatFollowUpMode?: ChatFollowUpMode; // Default handling for messages sent while a run is active
   catalogOpenTarget?: CatalogOpenTarget;
   realtimeTalkInputDeviceId?: string;
-  splitRatio: number; // Sidebar split ratio (0.4 to 0.7, default 0.6)
+  realtimeTalkVideoDeviceId?: string;
+  composerHoldToRecord?: boolean;
+  // Camera intent is device-local, not per-agent or synced through config ui.prefs.
+  talkCameraAutoEnable?: boolean;
   chatSplitLayout?: ChatSplitLayout;
   chatWorkspaceDock?: ChatWorkspaceDock; // Session workspace rail dock edge (default "right")
+  boardSessionViews?: BoardSessionViews; // Per-device active dashboard tab and dock state
+  sidebarSessionLayouts?: SidebarSessionLayouts; // Sidebar columns and widths per session
+  sidebarSessionActivePanels?: SidebarSessionActivePanels; // Collapsed active panel per session
   navCollapsed: boolean; // Collapsible sidebar state
   navWidth: number; // Sidebar width when expanded (240–400px)
-  sidebarPinnedRoutes: SidebarNavRoute[]; // Nav routes shown above the "More" menu row
+  sidebarEntries: string[]; // Ordered routes, Workboard boards, and pinned sessions below Home
+  sidebarLiveActivity?: boolean; // Latest activity under running sidebar sessions (default true)
+  chatMessageMaxWidth?: string; // Browser-local centered chat transcript max width
+  showAdvancedSettings?: boolean; // Expand advanced schema settings (default false)
   pinnedAgentIds?: string[]; // Agents surfaced first in the agent-chip quick switcher
   textScale?: TextScaleStop; // Browser-local text scale percentage
   customTheme?: ImportedCustomTheme;
@@ -343,15 +421,17 @@ export function loadSettings(): UiSettings {
     themeMode: "system",
     chatShowThinking: true,
     chatShowToolCalls: true,
-    chatPersistCommentary: false,
+    chatPersistCommentary: true,
     chatSendShortcut: "enter",
     catalogOpenTarget: "viewer",
-    splitRatio: 0.6,
     navCollapsed: false,
     navWidth: NAV_WIDTH_DEFAULT,
-    sidebarPinnedRoutes: [...DEFAULT_SIDEBAR_PINNED_ROUTES],
+    sidebarEntries: [...DEFAULT_SIDEBAR_ENTRIES],
+    sidebarLiveActivity: true,
+    showAdvancedSettings: false,
     pinnedAgentIds: [],
     textScale: 100,
+    composerHoldToRecord: true,
   };
 
   try {
@@ -375,6 +455,25 @@ export function loadSettings(): UiSettings {
       (parsed as { theme?: unknown }).theme,
       (parsed as { themeMode?: unknown }).themeMode,
     );
+    const parsedRecord = parsed as unknown as Record<string, unknown>;
+    const hasSidebarEntries = Object.hasOwn(parsedRecord, "sidebarEntries");
+    // One-time read of the retired route-only shape; all writes use sidebarEntries.
+    const migratedSidebarEntries = hasSidebarEntries
+      ? null
+      : Array.isArray(parsedRecord.sidebarPinnedRoutes)
+        ? normalizeSidebarEntries(
+            parsedRecord.sidebarPinnedRoutes.flatMap((value) =>
+              typeof value === "string" && SIDEBAR_NAV_ROUTES.some((route) => route === value)
+                ? [
+                    serializeSidebarEntry({
+                      type: "route",
+                      route: value as (typeof SIDEBAR_NAV_ROUTES)[number],
+                    }),
+                  ]
+                : [],
+            ),
+          )
+        : null;
     const settings: UiSettings = {
       gatewayUrl,
       // Gateway auth is intentionally in-memory only; scrub any legacy persisted token on load.
@@ -399,14 +498,20 @@ export function loadSettings(): UiSettings {
       chatFollowUpMode: normalizeChatFollowUpModeOverride(parsed.chatFollowUpMode),
       catalogOpenTarget: normalizeCatalogOpenTarget(parsed.catalogOpenTarget),
       realtimeTalkInputDeviceId: normalizeOptionalString(parsed.realtimeTalkInputDeviceId),
-      splitRatio:
-        typeof parsed.splitRatio === "number" &&
-        parsed.splitRatio >= 0.4 &&
-        parsed.splitRatio <= 0.7
-          ? parsed.splitRatio
-          : defaults.splitRatio,
+      realtimeTalkVideoDeviceId: normalizeOptionalString(parsed.realtimeTalkVideoDeviceId),
+      composerHoldToRecord:
+        typeof parsed.composerHoldToRecord === "boolean"
+          ? parsed.composerHoldToRecord
+          : defaults.composerHoldToRecord,
+      talkCameraAutoEnable:
+        typeof parsed.talkCameraAutoEnable === "boolean" ? parsed.talkCameraAutoEnable : undefined,
       chatSplitLayout: normalizeChatSplitLayout(parsed.chatSplitLayout),
       chatWorkspaceDock: normalizeChatWorkspaceDock(parsed.chatWorkspaceDock),
+      boardSessionViews: normalizeBoardSessionViews(parsed.boardSessionViews),
+      sidebarSessionLayouts: normalizeSidebarSessionLayouts(parsed.sidebarSessionLayouts),
+      sidebarSessionActivePanels: normalizeSidebarSessionActivePanels(
+        parsed.sidebarSessionActivePanels,
+      ),
       navCollapsed:
         typeof parsed.navCollapsed === "boolean" ? parsed.navCollapsed : defaults.navCollapsed,
       navWidth:
@@ -415,8 +520,19 @@ export function loadSettings(): UiSettings {
         parsed.navWidth <= NAV_WIDTH_MAX
           ? parsed.navWidth
           : defaults.navWidth,
-      sidebarPinnedRoutes:
-        normalizeSidebarPinnedRoutes(parsed.sidebarPinnedRoutes) ?? defaults.sidebarPinnedRoutes,
+      sidebarEntries:
+        normalizeSidebarEntries(parsedRecord.sidebarEntries) ??
+        migratedSidebarEntries ??
+        defaults.sidebarEntries,
+      sidebarLiveActivity:
+        typeof parsed.sidebarLiveActivity === "boolean"
+          ? parsed.sidebarLiveActivity
+          : defaults.sidebarLiveActivity,
+      chatMessageMaxWidth: normalizeChatMessageMaxWidth(parsed.chatMessageMaxWidth),
+      showAdvancedSettings:
+        typeof parsed.showAdvancedSettings === "boolean"
+          ? parsed.showAdvancedSettings
+          : defaults.showAdvancedSettings,
       pinnedAgentIds: normalizePinnedAgentIds(parsed.pinnedAgentIds),
       textScale: normalizeTextScale(parsed.textScale, defaults.textScale),
       customTheme: customTheme ?? undefined,
@@ -426,7 +542,7 @@ export function loadSettings(): UiSettings {
     };
     // Scoped blobs from builds that persisted tokens durably get rewritten once
     // so the plaintext token leaves localStorage.
-    if ("token" in parsed) {
+    if ("token" in parsed || migratedSidebarEntries !== null) {
       persistSettings(settings, { selectGateway: true });
     }
     return settings;
@@ -439,14 +555,26 @@ export function saveSettings(next: UiSettings) {
   persistSettings(next);
 }
 
+// Single change seam over the one write channel every settings mutation uses;
+// the server-prefs sync (app/server-prefs.ts) listens here to write synced
+// prefs through to config ui.prefs without each call site knowing about it.
+type SettingsChangeListener = (previous: UiSettings, next: UiSettings) => void;
+let settingsChangeListener: SettingsChangeListener | null = null;
+
+export function setSettingsChangeListener(listener: SettingsChangeListener | null) {
+  settingsChangeListener = listener;
+}
+
 export function patchSettings(
   patch: Partial<UiSettings>,
   options: { selectGateway?: boolean } = {},
 ): UiSettings {
-  const next = { ...loadSettings(), ...patch };
+  const previous = loadSettings();
+  const next = { ...previous, ...patch };
   persistSettings(next, {
     selectGateway: options.selectGateway ?? patch.gatewayUrl !== undefined,
   });
+  settingsChangeListener?.(previous, next);
   return next;
 }
 
@@ -461,22 +589,6 @@ export function loadLocalUserIdentity(): LocalUserIdentity {
   } catch {
     return normalizeLocalUserIdentity();
   }
-}
-
-export function saveLocalUserIdentity(next: LocalUserIdentity): LocalUserIdentity {
-  const storage = getSafeLocalStorage();
-  const normalized = normalizeLocalUserIdentity(next);
-  try {
-    if (normalized.name === null && normalized.avatar === null) {
-      storage?.removeItem(LOCAL_USER_IDENTITY_KEY);
-    } else {
-      storage?.setItem(LOCAL_USER_IDENTITY_KEY, JSON.stringify(normalized));
-    }
-  } catch {
-    // best-effort — quota exceeded or security restrictions should not
-    // prevent in-memory identity updates from being applied
-  }
-  return normalized;
 }
 
 function persistSettings(next: UiSettings, options: { selectGateway?: boolean } = {}) {
@@ -515,7 +627,7 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     themeMode: next.themeMode,
     chatShowThinking: next.chatShowThinking,
     chatShowToolCalls: next.chatShowToolCalls,
-    chatPersistCommentary: next.chatPersistCommentary ?? false,
+    chatPersistCommentary: next.chatPersistCommentary ?? true,
     ...(normalizeChatSendShortcut(next.chatSendShortcut) === "modifier-enter"
       ? { chatSendShortcut: "modifier-enter" as const }
       : {}),
@@ -526,13 +638,37 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     ...(normalizeOptionalString(next.realtimeTalkInputDeviceId)
       ? { realtimeTalkInputDeviceId: normalizeOptionalString(next.realtimeTalkInputDeviceId) }
       : {}),
-    splitRatio: next.splitRatio,
+    ...(normalizeOptionalString(next.realtimeTalkVideoDeviceId)
+      ? { realtimeTalkVideoDeviceId: normalizeOptionalString(next.realtimeTalkVideoDeviceId) }
+      : {}),
+    ...(next.composerHoldToRecord === false ? { composerHoldToRecord: false } : {}),
+    ...(typeof next.talkCameraAutoEnable === "boolean"
+      ? { talkCameraAutoEnable: next.talkCameraAutoEnable }
+      : {}),
     ...(next.chatSplitLayout ? { chatSplitLayout: next.chatSplitLayout } : {}),
     // Right dock is the default; only the opt-in bottom dock persists.
     ...(next.chatWorkspaceDock === "bottom" ? { chatWorkspaceDock: "bottom" as const } : {}),
+    ...(next.boardSessionViews && Object.keys(next.boardSessionViews).length > 0
+      ? { boardSessionViews: normalizeBoardSessionViews(next.boardSessionViews) }
+      : {}),
+    ...(next.sidebarSessionLayouts && Object.keys(next.sidebarSessionLayouts).length > 0
+      ? { sidebarSessionLayouts: normalizeSidebarSessionLayouts(next.sidebarSessionLayouts) }
+      : {}),
+    ...(next.sidebarSessionActivePanels && Object.keys(next.sidebarSessionActivePanels).length > 0
+      ? {
+          sidebarSessionActivePanels: normalizeSidebarSessionActivePanels(
+            next.sidebarSessionActivePanels,
+          ),
+        }
+      : {}),
     navCollapsed: next.navCollapsed,
     navWidth: next.navWidth,
-    sidebarPinnedRoutes: next.sidebarPinnedRoutes,
+    sidebarEntries: next.sidebarEntries,
+    ...(next.sidebarLiveActivity === false ? { sidebarLiveActivity: false } : {}),
+    ...(normalizeChatMessageMaxWidth(next.chatMessageMaxWidth)
+      ? { chatMessageMaxWidth: normalizeChatMessageMaxWidth(next.chatMessageMaxWidth) }
+      : {}),
+    ...(next.showAdvancedSettings === true ? { showAdvancedSettings: true } : {}),
     // Empty pin list is the default; only real pins persist.
     ...(next.pinnedAgentIds && next.pinnedAgentIds.length > 0
       ? { pinnedAgentIds: next.pinnedAgentIds }

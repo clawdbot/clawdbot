@@ -265,6 +265,9 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
     senderIsOwner: params.senderIsOwner,
+    inputProvenance: params.inputProvenance,
+    trustedInternalHandoff: params.trustedInternalHandoff,
+    scheduledToolPolicy: params.scheduledToolPolicy,
     allowGatewaySubagentBinding:
       params.allowGatewaySubagentBinding || isForcedPrivateQaCodexRuntime(),
     ...sessionKeys,
@@ -392,6 +395,9 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     senderName: params.senderName,
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
+    inputProvenance: params.inputProvenance,
+    trustedInternalHandoff: params.trustedInternalHandoff,
+    scheduledToolPolicy: params.scheduledToolPolicy,
   });
   const senderScopedWebSearchRestriction =
     !webSearchPolicy.allowed && webSearchPolicy.persistentAllowed;
@@ -502,6 +508,9 @@ export function shouldEnableCodexAppServerNativeToolSurface(
   } = {},
 ): boolean {
   if (isCodexMemoryFlushRun(params)) {
+    return false;
+  }
+  if (params.disableTools) {
     return false;
   }
   const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, params);

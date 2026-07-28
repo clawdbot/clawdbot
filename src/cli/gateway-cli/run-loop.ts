@@ -15,6 +15,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import type { GatewayBootLifecycleCompletion } from "../../infra/gateway-boot-lifecycle.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import type { GatewayRestartEmitter } from "../../infra/restart.js";
+import { flushLogger } from "../../logging/logger.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -26,6 +27,7 @@ const RESTART_DRAIN_STILL_PENDING_WARN_MS = 30_000;
 const RESTART_CLOSE_REPLY_DRAIN_SHUTDOWN_RESERVE_MS = 10_000;
 const UPDATE_RESPAWN_HEALTH_TIMEOUT_MS = 10_000;
 const UPDATE_RESPAWN_HEALTH_POLL_MS = 200;
+const LOG_FLUSH_EXIT_TIMEOUT_MS = 4_000;
 
 type GatewayRunSignalAction = "stop" | "restart";
 type RestartDrainTimeoutMs = number | undefined;
@@ -162,6 +164,25 @@ export async function runGatewayLoop(params: {
     cleanupSignals();
     params.runtime.exit(code);
   };
+  const exitProcessAfterLogFlush = async (code: number) => {
+    // Graceful signal/restart paths call process.exit(), which skips beforeExit.
+    let flushTimer: ReturnType<typeof setTimeout> | undefined;
+    const flushed = await Promise.race([
+      flushLogger().then(() => true),
+      new Promise<false>((resolve) => {
+        flushTimer = setTimeout(() => resolve(false), LOG_FLUSH_EXIT_TIMEOUT_MS);
+      }),
+    ]);
+    if (flushTimer) {
+      clearTimeout(flushTimer);
+    }
+    if (!flushed) {
+      gatewayLog.warn(
+        `log flush did not settle within ${LOG_FLUSH_EXIT_TIMEOUT_MS}ms; continuing shutdown`,
+      );
+    }
+    exitProcess(code);
+  };
   const completeForcedStop = (reason: string) => {
     params.completeBoot?.({ outcome: "forced_stop", reason });
   };
@@ -190,6 +211,19 @@ export async function runGatewayLoop(params: {
       exitProcess(1);
       return false;
     }
+  };
+  const confirmLaunchdHandoff = async (respawn: {
+    handoffSpawned?: Promise<boolean>;
+  }): Promise<boolean> => {
+    const delay = new Promise<void>((resolve) => {
+      setTimeout(resolve, LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS);
+    });
+    const spawned = respawn.handoffSpawned
+      ? await Promise.race([respawn.handoffSpawned, delay.then(() => true)])
+      : false;
+    // Preserve the crash-loop throttle window even when spawn settles early.
+    await delay;
+    return spawned;
   };
   const handleRestartAfterServerClose = async () => {
     await releaseLockIfHeld();
@@ -225,7 +259,7 @@ export async function runGatewayLoop(params: {
           gatewayLog.info(
             `restart mode: update process respawn (spawned pid ${respawn.pid ?? "unknown"})`,
           );
-          exitProcess(0);
+          await exitProcessAfterLogFlush(0);
           return;
         }
         gatewayLog.warn(
@@ -277,14 +311,26 @@ export async function runGatewayLoop(params: {
           restartResolver?.();
           return;
         }
-        activeRestartRequest = null;
         gatewayLog.info("restart mode: update process respawn (supervisor restart)");
-        if (supervisorMode === "launchd") {
-          await new Promise((resolve) => {
-            setTimeout(resolve, LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS);
-          });
+        if (supervisorMode === "launchd" && !(await confirmLaunchdHandoff(respawn))) {
+          gatewayLog.warn(
+            "launchd restart handoff failed to spawn; falling back to in-process restart",
+          );
+          await markUpdateRestartSentinelFailure("restart-handoff-unavailable").catch(
+            (err: unknown) => {
+              gatewayLog.warn(`failed to mark update restart handoff unavailable: ${String(err)}`);
+            },
+          );
+          if (!(await reacquireLockForInProcessRestart())) {
+            return;
+          }
+          activeRestartRequest = null;
+          shuttingDown = false;
+          restartResolver?.();
+          return;
         }
-        exitProcess(0);
+        activeRestartRequest = null;
+        await exitProcessAfterLogFlush(0);
         return;
       }
       if (respawn.mode === "failed") {
@@ -349,16 +395,22 @@ export async function runGatewayLoop(params: {
           return;
         }
       }
-      activeRestartRequest = null;
       gatewayLog.info(`restart mode: full process restart (${modeLabel})`);
-      if (supervisorMode === "launchd") {
-        // A short clean-exit pause keeps rapid SIGUSR1/config restarts from
-        // tripping launchd crash-loop throttling before KeepAlive relaunches.
-        await new Promise((resolve) => {
-          setTimeout(resolve, LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS);
-        });
+      if (supervisorMode === "launchd" && !(await confirmLaunchdHandoff(respawn))) {
+        await writeStabilityBundle("gateway.restart_handoff_spawn_failed");
+        gatewayLog.warn(
+          "launchd restart handoff failed to spawn; falling back to in-process restart",
+        );
+        if (!(await reacquireLockForInProcessRestart())) {
+          return;
+        }
+        activeRestartRequest = null;
+        shuttingDown = false;
+        restartResolver?.();
+        return;
       }
-      exitProcess(0);
+      activeRestartRequest = null;
+      await exitProcessAfterLogFlush(0);
       return;
     }
     if (respawn.mode === "failed") {
@@ -389,7 +441,7 @@ export async function runGatewayLoop(params: {
   const handleStopAfterServerClose = async () => {
     params.completeBoot?.({ outcome: "clean_stop", reason: "gateway.stop" });
     await releaseLockIfHeld();
-    exitProcess(0);
+    await exitProcessAfterLogFlush(0);
   };
 
   const SUPERVISOR_STOP_TIMEOUT_MS = 30_000;
@@ -431,10 +483,8 @@ export async function runGatewayLoop(params: {
       return restartIntent.waitMs > 0 ? Math.floor(restartIntent.waitMs) : undefined;
     }
     try {
-      const { getRuntimeConfig, resolveGatewayRestartDeferralTimeoutMs } =
-        await loadGatewayLifecycleRuntimeModule();
-      const timeoutMs = getRuntimeConfig().gateway?.reload?.deferralTimeoutMs;
-      return resolveGatewayRestartDeferralTimeoutMs(timeoutMs);
+      const { resolveGatewayRestartDeferralTimeoutMs } = await loadGatewayLifecycleRuntimeModule();
+      return resolveGatewayRestartDeferralTimeoutMs();
     } catch {
       return DEFAULT_RESTART_DRAIN_TIMEOUT_MS;
     }

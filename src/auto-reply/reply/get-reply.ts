@@ -18,21 +18,27 @@ import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
+import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
+import { hasStagedMediaFacts } from "../../media/media-facts.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   isModelSelectionLocked,
   ModelSelectionLockedError,
 } from "../../sessions/model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import {
+  sessionDeliveryChannel,
+  sessionDeliveryOrigin,
+} from "../../utils/delivery-context.shared.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import type { ReplyPayload } from "../reply-payload.js";
-import type { MsgContext } from "../templating.js";
+import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import { normalizeThinkLevel, normalizeVerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { resolveDefaultModel } from "./directive-handling.defaults.js";
@@ -62,7 +68,10 @@ import {
 } from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createFastTestModelSelectionState, createModelSelectionState } from "./model-selection.js";
-import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
+import {
+  PENDING_FINAL_DELIVERY_CLEAR_PATCH,
+  sanitizePendingFinalDeliveryText,
+} from "./pending-final-delivery.js";
 import { attachProgressNarratorToReplyOptions } from "./progress-narrator.js";
 import { createReplyTimingTracker } from "./reply-timing-tracker.js";
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
@@ -92,14 +101,8 @@ function classifyHeartbeatPendingFinalDelivery(text: string, ackMaxChars: number
   };
 }
 
-function resolveHeartbeatAckMaxChars(cfg: OpenClawConfig, agentId: string): number {
-  const agentHeartbeat = resolveAgentConfig(cfg, agentId)?.heartbeat;
-  return Math.max(
-    0,
-    agentHeartbeat?.ackMaxChars ??
-      cfg.agents?.defaults?.heartbeat?.ackMaxChars ??
-      DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-  );
+function resolveHeartbeatAckMaxChars(_cfg: OpenClawConfig, _agentId: string): number {
+  return DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
 }
 
 const sessionResetModelRuntimeLoader = createLazyImportLoader(
@@ -141,7 +144,7 @@ function loadCommandsCoreRuntime() {
 }
 
 function hasLinkCandidate(ctx: MsgContext): boolean {
-  const message = ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body;
+  const message = ctx.commandText;
   if (!message) {
     return false;
   }
@@ -215,7 +218,7 @@ export async function getReplyFromConfig(
   opts?: GetReplyOptions,
   configOverride?: OpenClawConfig,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
-  const isFastTestEnv = process.env.OPENCLAW_TEST_FAST === "1";
+  const isFastTestEnv = isFastTestRuntimeEnv();
   const cfg = resolveGetReplyConfig({
     getRuntimeConfig,
     isFastTestEnv,
@@ -237,6 +240,7 @@ export async function getReplyFromConfig(
       isFastTestEnv,
     }),
   );
+  const inboundMediaWasAlreadyStaged = hasStagedMediaFacts(ctx.media);
   const finalized = resolverTiming.measureSync("reply.finalize_context", () =>
     finalizeInboundContext(ctx),
   );
@@ -348,8 +352,7 @@ export async function getReplyFromConfig(
       };
     });
   const typing = resolverTiming.measureSync("reply.create_typing_controller", () => {
-    const configuredTypingSeconds =
-      agentCfg?.typingIntervalSeconds ?? sessionCfg?.typingIntervalSeconds;
+    const configuredTypingSeconds = agentCfg?.typingIntervalSeconds;
     const typingIntervalSeconds =
       typeof configuredTypingSeconds === "number" ? configuredTypingSeconds : 6;
     const controller = createTypingController({
@@ -403,6 +406,7 @@ export async function getReplyFromConfig(
 
   if (
     !isFastTestEnv &&
+    !inboundMediaWasAlreadyStaged &&
     normalizeOptionalString(finalized.MediaRemoteHost) &&
     hasInboundMedia(finalized)
   ) {
@@ -529,7 +533,7 @@ export async function getReplyFromConfig(
   const resolvedOpts = attachProgressNarratorToReplyOptions({
     cfg,
     agentId,
-    userMessage: finalized.BodyForAgent ?? finalized.Body,
+    userMessage: finalized.agentText,
     opts: optsWithSkillFilter,
     disabled: sessionModelSelectionLocked,
   });
@@ -553,13 +557,7 @@ export async function getReplyFromConfig(
         resolveHeartbeatAckMaxChars(cfg, agentId),
       );
       if (heartbeatPending.shouldClear) {
-        sessionEntry.pendingFinalDelivery = undefined;
-        sessionEntry.pendingFinalDeliveryText = undefined;
-        sessionEntry.pendingFinalDeliveryCreatedAt = undefined;
-        sessionEntry.pendingFinalDeliveryLastAttemptAt = undefined;
-        sessionEntry.pendingFinalDeliveryAttemptCount = undefined;
-        sessionEntry.pendingFinalDeliveryLastError = undefined;
-        sessionEntry.pendingFinalDeliveryContext = undefined;
+        Object.assign(sessionEntry, PENDING_FINAL_DELIVERY_CLEAR_PATCH);
         sessionEntryHandle.replaceCurrent(sessionEntry);
         if (sessionKey && sessionStore) {
           sessionStore[sessionKey] = sessionEntry;
@@ -568,15 +566,7 @@ export async function getReplyFromConfig(
           const { updateSessionEntry } = await import("../../config/sessions/session-accessor.js");
           await updateSessionEntry(
             { storePath, sessionKey },
-            () => ({
-              pendingFinalDelivery: undefined,
-              pendingFinalDeliveryText: undefined,
-              pendingFinalDeliveryCreatedAt: undefined,
-              pendingFinalDeliveryLastAttemptAt: undefined,
-              pendingFinalDeliveryAttemptCount: undefined,
-              pendingFinalDeliveryLastError: undefined,
-              pendingFinalDeliveryContext: undefined,
-            }),
+            () => ({ ...PENDING_FINAL_DELIVERY_CLEAR_PATCH }),
             {
               skipMaintenance: true,
               takeCacheOwnership: true,
@@ -593,6 +583,8 @@ export async function getReplyFromConfig(
       await applyResetModelOverride({
         cfg,
         agentId,
+        agentDir,
+        workspaceDir,
         resetTriggered,
         bodyStripped,
         sessionCtx,
@@ -624,8 +616,7 @@ export async function getReplyFromConfig(
         cfg,
         channel:
           groupResolution?.channel ??
-          sessionEntry.channel ??
-          sessionEntry.origin?.provider ??
+          sessionDeliveryChannel(sessionEntry) ??
           (typeof finalized.OriginatingChannel === "string"
             ? finalized.OriginatingChannel
             : undefined) ??
@@ -637,9 +628,9 @@ export async function getReplyFromConfig(
         groupSubject: sessionEntry.subject ?? sessionCtx.GroupSubject ?? finalized.GroupSubject,
         parentSessionKey: sessionCtx.ModelParentSessionKey ?? sessionCtx.ParentSessionKey,
         directUserIds: [
-          sessionEntry.origin?.nativeDirectUserId,
-          sessionEntry.origin?.from,
-          sessionEntry.origin?.to,
+          sessionDeliveryOrigin(sessionEntry)?.nativeDirectUserId,
+          sessionDeliveryOrigin(sessionEntry)?.from,
+          sessionDeliveryOrigin(sessionEntry)?.to,
           finalized.OriginatingTo,
           finalized.From,
           finalized.SenderId,
@@ -730,7 +721,7 @@ export async function getReplyFromConfig(
     })
   ) {
     const fastCommand = buildFastReplyCommandContext({
-      ctx,
+      ctx: finalized,
       cfg,
       agentId,
       sessionKey,
@@ -750,15 +741,12 @@ export async function getReplyFromConfig(
         sessionCfg,
         commandAuthorized,
         command: fastCommand,
-        commandSource:
-          finalized.BodyForCommands ?? finalized.CommandBody ?? finalized.RawBody ?? "",
+        commandSource: finalized.commandText,
         allowTextCommands: shouldHandleFastReplyTextCommands({
           cfg,
           commandSource: finalized.CommandSource,
         }),
-        directives: clearInlineDirectives(
-          finalized.BodyForCommands ?? finalized.CommandBody ?? finalized.RawBody ?? "",
-        ),
+        directives: clearInlineDirectives(finalized.commandText),
         defaultActivation: "always",
         resolvedThinkLevel: undefined,
         resolvedVerboseLevel: normalizeVerboseLevel(agentCfg?.verboseDefault),
@@ -858,6 +846,7 @@ export async function getReplyFromConfig(
     resolvedBlockStreamingBreak,
     provider: resolvedProvider,
     model: resolvedModel,
+    requestedRouteResolution,
     modelState,
     contextTokens,
     inlineStatusRequested,
@@ -882,6 +871,7 @@ export async function getReplyFromConfig(
     const action: ResetCommandAction = resetMatch[1]?.toLowerCase() === "reset" ? "reset" : "new";
     await emitResetCommandHooks({
       action,
+      agentId,
       ctx,
       cfg,
       command,
@@ -892,6 +882,16 @@ export async function getReplyFromConfig(
       workspaceDir,
     });
   };
+
+  const shouldPrepareStatusThinkingCatalog =
+    inlineStatusRequested ||
+    directives.hasStatusDirective ||
+    command.commandBodyNormalized.trim() === "/status";
+  const statusThinkingCatalog = shouldPrepareStatusThinkingCatalog
+    ? await traceGetReplyPhase("reply.prepare_status_thinking_catalog", () =>
+        modelState.resolveThinkingCatalog(),
+      )
+    : undefined;
 
   const inlineActionResult = await traceGetReplyPhase("reply.handle_inline_actions", () =>
     handleInlineActions({
@@ -922,6 +922,7 @@ export async function getReplyFromConfig(
       elevatedAllowed,
       elevatedFailures,
       defaultActivation: () => defaultActivation,
+      thinkingCatalog: statusThinkingCatalog,
       resolvedThinkLevel,
       resolvedVerboseLevel,
       resolvedReasoningLevel,
@@ -1021,11 +1022,14 @@ export async function getReplyFromConfig(
     }
   }
 
-  // ctx.MediaStaged=true means the caller (e.g. chat.send RPC) already staged
-  // synchronously so it could surface 5xx before respond(). Skipping here keeps
-  // staging a single-call contract instead of relying on relative-path no-op
-  // semantics in stageSandboxMedia.
-  if (!useFastTestBootstrap && sessionKey && !ctx.MediaStaged && hasInboundMedia(ctx)) {
+  // Already-staged facts or SDK projections must remain a single-stage contract.
+  if (
+    !useFastTestBootstrap &&
+    sessionKey &&
+    !inboundMediaWasAlreadyStaged &&
+    !hasStagedMediaFacts(ctx.media) &&
+    hasInboundMedia(ctx)
+  ) {
     const { stageSandboxMedia } = await loadStageSandboxMediaRuntime();
     await traceGetReplyPhase("reply.stage_media", () =>
       stageSandboxMedia({
@@ -1071,6 +1075,9 @@ export async function getReplyFromConfig(
       modelState: runModelState,
       provider: runProvider,
       model: runModel,
+      requestedRouteResolution: runAutoFallbackPrimaryProbe
+        ? runModelState.requestedRouteResolution
+        : requestedRouteResolution,
       perMessageQueueMode,
       perMessageQueueOptions,
       typing,

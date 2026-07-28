@@ -116,6 +116,7 @@ suite("OpenCode and Pi external session catalogs", () => {
     });
 
     await page.goto(`${server.baseUrl}chat`);
+    await page.locator('[data-session-section="work"] .sidebar-session-group-toggle').click();
     await page.getByText("OpenCode release review", { exact: true }).click();
     await expect.poll(() => page.getByText("OpenCode transcript loaded").count()).toBe(1);
     await page.getByText("Pi architecture notes", { exact: true }).click();

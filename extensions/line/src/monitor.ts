@@ -2,6 +2,7 @@
 import type { webhook } from "@line/bot-sdk";
 import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
 import {
   danger,
@@ -27,17 +28,13 @@ import { createLineBot } from "./bot.js";
 import { processLineMessage } from "./markdown-to-line.js";
 import { resolveLineDurableReplyOptions } from "./monitor-durable.js";
 import { buildLineMediaMessage } from "./outbound-media.js";
-import { sendLineReplyChunks } from "./reply-chunks.js";
 import { getLineRuntime } from "./runtime.js";
 import {
   createFlexMessage,
   createLocationMessage,
   createQuickReplyItems,
-  createTextMessageWithQuickReplies,
   getUserDisplayName,
-  pushMessageLine,
   pushMessagesLine,
-  pushTextMessageWithQuickReplies,
   replyMessageLine,
   showLoadingAnimation,
 } from "./send.js";
@@ -231,12 +228,8 @@ export async function monitorLineProvider(
                       buildTemplateMessageFromPayload,
                       processLineMessage,
                       chunkMarkdownText,
-                      sendLineReplyChunks,
                       replyMessageLine,
-                      pushMessageLine,
-                      pushTextMessageWithQuickReplies,
                       createQuickReplyItems,
-                      createTextMessageWithQuickReplies,
                       pushMessagesLine,
                       createFlexMessage,
                       buildMediaMessage: buildLineMediaMessage,
@@ -400,7 +393,7 @@ export async function monitorLineProvider(
             res.end(JSON.stringify({ error: requestBodyErrorToText("REQUEST_BODY_TIMEOUT") }));
             return;
           }
-          runtime.error?.(danger(`line webhook error: ${String(err)}`));
+          runtime.error?.(danger(`line webhook error: ${formatErrorMessage(err)}`));
           if (!res.headersSent) {
             res.statusCode = 500;
             res.setHeader("Content-Type", "application/json");

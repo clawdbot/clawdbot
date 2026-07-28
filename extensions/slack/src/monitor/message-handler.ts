@@ -278,7 +278,8 @@ export function createSlackMessageHandler(params: {
                   },
                   onAbandoned: () => {
                     releaseClaims();
-                    turnAdoptionLifecycle.onAbandoned();
+                    // Slack has no owner-local teardown gated on core claim release.
+                    void turnAdoptionLifecycle.onAbandoned();
                   },
                 }
               : turnAdoptionLifecycle;

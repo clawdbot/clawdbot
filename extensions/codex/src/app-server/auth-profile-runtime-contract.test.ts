@@ -38,6 +38,36 @@ function resetCodexAppServerClientFactoryForTest(): void {
   codexAppServerClientFactoryForTest = undefined;
 }
 
+/** Keeps native Codex bindings reusable while omitting OpenClaw tools and search. */
+function withPersistentCodexTestToolPolicy(
+  params: EmbeddedRunAttemptParams,
+): EmbeddedRunAttemptParams {
+  const modelCompat =
+    params.model.compat && typeof params.model.compat === "object" ? params.model.compat : {};
+  const model = {
+    ...params.model,
+    compat: { ...modelCompat, supportsTools: false },
+  } as EmbeddedRunAttemptParams["model"] & { compat: { supportsTools: boolean } };
+  return {
+    ...params,
+    disableTools: false,
+    model,
+    config: {
+      ...params.config,
+      tools: {
+        ...params.config?.tools,
+        web: {
+          ...params.config?.tools?.web,
+          search: {
+            ...params.config?.tools?.web?.search,
+            enabled: false,
+          },
+        },
+      },
+    },
+  };
+}
+
 function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParams,
   options: RunCodexAppServerAttemptOptions = {},
@@ -47,7 +77,7 @@ function runCodexAppServerAttempt(
     (codexAppServerClientFactoryForTest
       ? adaptCodexTestClientFactory(codexAppServerClientFactoryForTest)
       : undefined);
-  return runCodexAppServerAttemptImpl(params, {
+  return runCodexAppServerAttemptImpl(withPersistentCodexTestToolPolicy(params), {
     ...options,
     bindingStore: testCodexAppServerBindingStore,
     ...(clientFactory ? { clientFactory } : {}),
@@ -71,7 +101,6 @@ function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAtt
     modelId: "gpt-5.4-codex",
     model: createCodexTestModel(AUTH_PROFILE_RUNTIME_CONTRACT.codexHarnessProvider),
     thinkLevel: "medium",
-    disableTools: true,
     timeoutMs: 5_000,
     authStorage: {} as never,
     authProfileStore: { version: 1, profiles: {} },
@@ -185,6 +214,7 @@ function getMockRuntimeIdentity() {
 
 function mockClientRuntimeMethods() {
   return {
+    getInstanceId: () => "test-client-1",
     getRuntimeIdentity: getMockRuntimeIdentity,
     getServerVersion: getMockServerVersion,
   };
@@ -458,6 +488,51 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
     await harness.completeTurn();
     await run;
   });
+
+  it.each([
+    { label: "a subscription route", authRequirement: "subscription" as const },
+    { label: "a Platform route", authRequirement: "api-key" as const },
+  ])(
+    "keeps a user-home app-server on native Codex auth for $label",
+    async ({ authRequirement }) => {
+      const harness = createCodexAuthProfileHarness({ startMethod: "thread/start" });
+      const sessionFile = path.join(tmpDir, "session.jsonl");
+      const params = createParams(sessionFile, tmpDir);
+      params.agentDir = tmpDir;
+      params.authProfileStore = {
+        version: 1,
+        profiles: {
+          "openai:chatgpt": {
+            type: "oauth",
+            provider: "openai",
+            access: "subscription-token",
+            refresh: "refresh-token",
+            expires: Date.now() + 60 * 60_000,
+          },
+        },
+        order: { openai: ["openai:chatgpt"] },
+      };
+      setPreparedOpenAIRoute(params, authRequirement, "openai:chatgpt");
+
+      const run = runCodexAppServerAttempt(params, {
+        pluginConfig: {
+          appServer: { homeScope: "user" },
+          supervision: { enabled: true },
+        },
+      });
+      await vi.waitFor(
+        () => expect(harness.seenClientOptions).toHaveLength(1),
+        APP_SERVER_START_WAIT,
+      );
+      expect(harness.seenClientOptions[0]).not.toHaveProperty("preparedAuth");
+      expect(harness.seenClientOptions[0]).toMatchObject({
+        startOptions: expect.objectContaining({ homeScope: "user" }),
+      });
+      await harness.waitForMethod("turn/start");
+      await harness.completeTurn();
+      await run;
+    },
+  );
 
   it("fails before profile selection when a prepared Platform route has no key", async () => {
     const harness = createCodexAuthProfileHarness({ startMethod: "thread/start" });

@@ -1,11 +1,12 @@
 /**
  * Resolves provider stream functions and API keys for embedded agents.
  */
-import { getApiProvider } from "@openclaw/ai/internal/runtime";
+import type { LlmRuntime } from "@openclaw/ai";
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
-import { streamSimple } from "../../llm/stream.js";
+import { createBoundaryAwareStreamFnForModel } from "@openclaw/ai/transports";
+import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
+import "../ai-transport-runtime-host.js";
 import { createAnthropicVertexStreamFnForModel } from "../anthropic-vertex-stream.js";
-import { createBoundaryAwareStreamFnForModel } from "../provider-transport-stream.js";
 import type { StreamFn } from "../runtime/index.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
 
@@ -18,28 +19,53 @@ type EmbeddedStreamOptions = Parameters<StreamFn>[2] & {
 
 export function resolveEmbeddedAgentBaseStreamFn(params: {
   session: { agent: { streamFn?: StreamFn } };
-}): StreamFn | undefined {
+}): StreamFn {
   const cached = embeddedAgentBaseStreamFnCache.get(params.session);
   if (cached !== undefined || embeddedAgentBaseStreamFnCache.has(params.session)) {
+    if (!cached) {
+      throw new Error("Agent session has no lifecycle-owned base stream.");
+    }
     return cached;
   }
   const baseStreamFn = params.session.agent.streamFn;
   embeddedAgentBaseStreamFnCache.set(params.session, baseStreamFn);
+  if (!baseStreamFn) {
+    throw new Error("Agent session has no lifecycle-owned base stream.");
+  }
   return baseStreamFn;
+}
+
+type EmbeddedStreamRuntimeOwner =
+  | {
+      llmRuntime: LlmRuntime;
+      currentStreamFn: StreamFn | undefined;
+    }
+  | {
+      llmRuntime?: never;
+      currentStreamFn: StreamFn;
+    };
+
+function resolveEmbeddedStreamRuntime(owner: EmbeddedStreamRuntimeOwner): LlmRuntime {
+  const runtime = owner.llmRuntime ?? getStreamLlmRuntime(owner.currentStreamFn);
+  if (!runtime) {
+    throw new Error("Embedded stream has no lifecycle runtime owner.");
+  }
+  return runtime;
 }
 
 function isDefaultOpenClawStreamFnForModel(
   model: EmbeddedRunAttemptParams["model"],
   streamFn: StreamFn | undefined,
+  llmRuntime: LlmRuntime,
 ): boolean {
-  if (!streamFn || streamFn === streamSimple) {
+  if (!streamFn || streamFn === llmRuntime.streamSimple) {
     return true;
   }
   const api = typeof model.api === "string" ? model.api.trim() : "";
   if (!api) {
     return false;
   }
-  const provider = getApiProvider(api as never);
+  const provider = llmRuntime.registry.getApiProvider(api as never);
   return streamFn === provider?.streamSimple || streamFn === provider?.stream;
 }
 
@@ -54,22 +80,25 @@ function isOpenAICodexResponsesModel(model: EmbeddedRunAttemptParams["model"]): 
 function resolveOpenClawNativeCodexResponsesStreamFn(params: {
   model: EmbeddedRunAttemptParams["model"];
   currentStreamFn: StreamFn | undefined;
+  llmRuntime: LlmRuntime;
 }): StreamFn | undefined {
   if (!isOpenAICodexResponsesModel(params.model)) {
     return undefined;
   }
-  if (!isDefaultOpenClawStreamFnForModel(params.model, params.currentStreamFn)) {
+  if (!isDefaultOpenClawStreamFnForModel(params.model, params.currentStreamFn, params.llmRuntime)) {
     return undefined;
   }
-  return params.currentStreamFn ?? streamSimple;
+  return params.currentStreamFn ?? params.llmRuntime.streamSimple;
 }
 
-export function describeEmbeddedAgentStreamStrategy(params: {
-  currentStreamFn: StreamFn | undefined;
-  providerStreamFn?: StreamFn;
-  model: EmbeddedRunAttemptParams["model"];
-  resolvedApiKey?: string;
-}): string {
+export function describeEmbeddedAgentStreamStrategy(
+  params: EmbeddedStreamRuntimeOwner & {
+    providerStreamFn?: StreamFn;
+    model: EmbeddedRunAttemptParams["model"];
+    resolvedApiKey?: string;
+  },
+): string {
+  const llmRuntime = resolveEmbeddedStreamRuntime(params);
   if (params.providerStreamFn) {
     return "provider";
   }
@@ -80,11 +109,12 @@ export function describeEmbeddedAgentStreamStrategy(params: {
     resolveOpenClawNativeCodexResponsesStreamFn({
       model: params.model,
       currentStreamFn: params.currentStreamFn,
+      llmRuntime,
     })
   ) {
     return "openclaw-native-codex-responses";
   }
-  if (isDefaultOpenClawStreamFnForModel(params.model, params.currentStreamFn)) {
+  if (isDefaultOpenClawStreamFnForModel(params.model, params.currentStreamFn, llmRuntime)) {
     return createBoundaryAwareStreamFnForModel(params.model)
       ? `boundary-aware:${params.model.api}`
       : "stream-simple";
@@ -110,18 +140,20 @@ export async function resolveEmbeddedAgentApiKey(params: {
   return params.authStorage ? await params.authStorage.getApiKey(params.provider) : undefined;
 }
 
-export function resolveEmbeddedAgentStreamFn(params: {
-  currentStreamFn: StreamFn | undefined;
-  providerStreamFn?: StreamFn;
-  sessionId: string;
-  promptCacheKey?: string;
-  signal?: AbortSignal;
-  model: EmbeddedRunAttemptParams["model"];
-  resolvedApiKey?: string;
-  transportAuthAvailable?: boolean;
-  authProfileId?: string;
-  authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
-}): StreamFn {
+export function resolveEmbeddedAgentStreamFn(
+  params: EmbeddedStreamRuntimeOwner & {
+    providerStreamFn?: StreamFn;
+    sessionId: string;
+    promptCacheKey?: string;
+    signal?: AbortSignal;
+    model: EmbeddedRunAttemptParams["model"];
+    resolvedApiKey?: string;
+    transportAuthAvailable?: boolean;
+    authProfileId?: string;
+    authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
+  },
+): StreamFn {
+  const llmRuntime = resolveEmbeddedStreamRuntime(params);
   if (params.providerStreamFn) {
     return wrapEmbeddedAgentStreamFn(params.providerStreamFn, {
       runSignal: params.signal,
@@ -140,7 +172,7 @@ export function resolveEmbeddedAgentStreamFn(params: {
     });
   }
 
-  const currentStreamFn = params.currentStreamFn ?? streamSimple;
+  const currentStreamFn = params.currentStreamFn ?? llmRuntime.streamSimple;
   if (params.model.provider === "anthropic-vertex") {
     return createAnthropicVertexStreamFnForModel(params.model);
   }
@@ -148,6 +180,7 @@ export function resolveEmbeddedAgentStreamFn(params: {
   const openClawNativeCodexResponsesStreamFn = resolveOpenClawNativeCodexResponsesStreamFn({
     model: params.model,
     currentStreamFn: params.currentStreamFn,
+    llmRuntime,
   });
   if (openClawNativeCodexResponsesStreamFn) {
     return wrapEmbeddedAgentStreamFn(openClawNativeCodexResponsesStreamFn, {
@@ -169,7 +202,7 @@ export function resolveEmbeddedAgentStreamFn(params: {
   }
 
   if (
-    isDefaultOpenClawStreamFnForModel(params.model, params.currentStreamFn) ||
+    isDefaultOpenClawStreamFnForModel(params.model, params.currentStreamFn, llmRuntime) ||
     hasResolvedRuntimeApiKey(params.resolvedApiKey) ||
     params.transportAuthAvailable ||
     // Proxied anthropic-messages providers (provider !== "anthropic", e.g. pioneer)

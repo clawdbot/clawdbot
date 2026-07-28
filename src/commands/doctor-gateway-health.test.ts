@@ -120,14 +120,22 @@ describe("checkGatewayHealth", () => {
             ownerId: "discord:ops",
             state: "unavailable",
             paths: ["channels.discord.accounts.ops.token"],
-            reason: "secret reference was not found",
+            reason: "secret reference was not found (env:default:PRIVATE_REF_ID)",
           },
           {
             ownerKind: "capability",
             ownerId: "tts",
             state: "unavailable",
-            paths: ["messages.tts.providers.elevenlabs.apiKey"],
-            reason: "secret provider failed",
+            degradationState: "stale",
+            paths: ["tts.providers.elevenlabs.apiKey"],
+            reason: "secret provider policy denied resolution",
+          },
+          {
+            ownerKind: "capability",
+            ownerId: "web-fetch:firecrawl",
+            state: "unavailable",
+            paths: ["plugins.entries.firecrawl.config.webFetch.apiKey"],
+            reason: "resolved secret value was invalid",
           },
         ],
       })
@@ -138,10 +146,52 @@ describe("checkGatewayHealth", () => {
 
     expect(note).toHaveBeenCalledWith(
       [
-        "- account:discord:ops (channels.discord.accounts.ops.token): secret reference was not found",
-        "- capability:tts (messages.tts.providers.elevenlabs.apiKey): secret provider failed",
+        "- cold account:discord:ops (channels.discord.accounts.ops.token): secret resolution failed",
+        "  Retry: openclaw secrets reload",
+        "- stale capability:tts (tts.providers.elevenlabs.apiKey): secret provider policy denied resolution",
+        "  Retry: openclaw secrets reload",
+        "- cold capability:web-fetch:firecrawl (plugins.entries.firecrawl.config.webFetch.apiKey): resolved secret value was invalid",
+        "  Retry: openclaw secrets reload",
       ].join("\n"),
-      "Secret owners unavailable",
+      "Secret runtime degradation",
+    );
+  });
+
+  it("lists every plugin configured unavailable by Gateway startup", async () => {
+    callGateway
+      .mockResolvedValueOnce({
+        degradedPlugins: [
+          {
+            pluginId: "discord",
+            state: "configured-unavailable",
+            diagnostic: {
+              kind: "plugin-verification",
+              reason: "unreadable-package-json",
+              detail: "permission denied",
+            },
+          },
+          {
+            pluginId: "matrix",
+            state: "configured-unavailable",
+            diagnostic: {
+              kind: "plugin-verification",
+              reason: "missing-main-entry",
+              detail: "dist/index.js is missing",
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({});
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 });
+
+    expect(note).toHaveBeenCalledWith(
+      [
+        "- discord (unreadable-package-json): permission denied",
+        "- matrix (missing-main-entry): dist/index.js is missing",
+      ].join("\n"),
+      "Plugins configured unavailable",
     );
   });
 

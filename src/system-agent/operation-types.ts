@@ -44,5 +44,5 @@ export type SystemAgentOperation =
   | { kind: "plugin-uninstall"; pluginId: string }
   | { kind: "audit" }
   | { kind: "create-agent"; agentId: string; workspace?: string; model?: string }
-  | { kind: "open-tui"; agentId?: string; workspace?: string }
-  | { kind: "set-default-model"; model: string };
+  | { kind: "open-tui"; agentId?: string; workspace?: string; agentDraft?: "hatch" }
+  | { kind: "set-default-model"; model: string; agentId?: string };

@@ -165,6 +165,64 @@ describe("mattermostPlugin", () => {
     });
   });
 
+  it("opts into account-scoped config restarts", () => {
+    expect(mattermostPlugin.reload).toMatchObject({ accountScopedRestart: true });
+  });
+
+  it("keeps sibling resolution stable across named-account additions and edits", () => {
+    const before: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          replyToMode: "first",
+          accounts: {
+            beta: {
+              baseUrl: "https://beta.example.com",
+              chatmode: "onmessage",
+            },
+          },
+        },
+      },
+    };
+    const afterAdd: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          replyToMode: "first",
+          accounts: {
+            alpha: {
+              baseUrl: "https://alpha.example.com",
+              chatmode: "oncall",
+            },
+            beta: {
+              baseUrl: "https://beta.example.com",
+              chatmode: "onmessage",
+            },
+          },
+        },
+      },
+    };
+    const afterEdit: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          replyToMode: "first",
+          accounts: {
+            alpha: {
+              baseUrl: "https://alpha-new.example.com",
+              chatmode: "onchar",
+            },
+            beta: {
+              baseUrl: "https://beta.example.com",
+              chatmode: "onmessage",
+            },
+          },
+        },
+      },
+    };
+
+    const expectedBeta = mattermostPlugin.config.resolveAccount(before, "beta");
+    expect(mattermostPlugin.config.resolveAccount(afterAdd, "beta")).toEqual(expectedBeta);
+    expect(mattermostPlugin.config.resolveAccount(afterEdit, "beta")).toEqual(expectedBeta);
+  });
+
   describe("messaging", () => {
     it("keeps @username targets", () => {
       const normalize = requireMattermostNormalizeTarget();

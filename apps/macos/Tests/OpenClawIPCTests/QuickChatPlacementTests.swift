@@ -2,6 +2,8 @@ import AppKit
 import Testing
 @testable import OpenClaw
 
+@Suite(.serialized)
+@MainActor
 struct QuickChatPlacementTests {
     @Test func `centers bar at spotlight height`() {
         let frame = QuickChatPlacement.barFrame(
@@ -33,5 +35,15 @@ struct QuickChatPlacementTests {
         #expect(QuickChatPlacement.barFrame(
             contentSize: NSSize(width: 620, height: 60),
             visibleFrame: .zero) == .zero)
+    }
+
+    @Test func `scaled rect preserves center and applies factor`() {
+        let source = NSRect(x: 100, y: 200, width: 600, height: 100)
+        let scaled = QuickChatPlacement.scaledRect(source, factor: 0.96)
+
+        #expect(scaled.midX == source.midX)
+        #expect(scaled.midY == source.midY)
+        #expect(scaled.width == 576)
+        #expect(scaled.height == 96)
     }
 }

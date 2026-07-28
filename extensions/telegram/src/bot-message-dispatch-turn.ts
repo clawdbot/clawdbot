@@ -1,5 +1,8 @@
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
-import { runChannelInboundEvent } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  runChannelInboundEvent,
+  type ChannelInboundTurnPlan,
+} from "openclaw/plugin-sdk/channel-inbound";
 // Telegram plugin module wires inbound turn execution to Telegram delivery controllers.
 import {
   createChannelMessageReplyPipeline,
@@ -78,6 +81,13 @@ export async function runTelegramDispatchTurn(params: {
         },
       },
     });
+    const handleDeliveryError = async (err: unknown, info: { kind: string }) => {
+      await Promise.resolve(
+        params.reply.onError(err, info as Parameters<typeof params.reply.onError>[1]),
+      ).catch((callbackError: unknown) => {
+        logVerbose(`telegram reply error callback failed: ${String(callbackError)}`);
+      });
+    };
     const turnResult = await runChannelInboundEvent({
       channel: "telegram",
       accountId: context.route.accountId,
@@ -94,7 +104,7 @@ export async function runTelegramDispatchTurn(params: {
           textForCommands: context.ctxPayload.CommandBody,
           raw: context,
         }),
-        resolveTurn: () => ({
+        resolveTurn: (): ChannelInboundTurnPlan<"provider_message_sending"> => ({
           cfg: params.cfg,
           channel: "telegram",
           accountId: context.route.accountId,
@@ -104,149 +114,160 @@ export async function runTelegramDispatchTurn(params: {
           },
           ctxPayload: context.ctxPayload,
           record: context.turn.record,
-          runDispatch: () =>
-            params.telegramDeps.dispatchReplyWithBufferedBlockDispatcher({
-              ctx: context.ctxPayload,
-              cfg: params.cfg,
-              dispatcherOptions: {
-                ...replyPipeline,
-                beforeDeliver: async (payload) => payload,
-                onBeforeDeliverCancelled: params.reply.onBeforeDeliverCancelled,
-                deliver: params.reply.deliver,
-                onSkip: params.reply.onSkip,
-                onError: params.reply.onError,
-              },
-              replyOptions: {
-                skillFilter: context.skillFilter,
-                disableBlockStreaming: params.draft.disableBlockStreaming,
-                abortSignal: params.turnAdoptionLifecycle?.abortSignal,
-                turnAdoptionLifecycle: params.turnAdoptionLifecycle
-                  ? {
-                      admission: params.turnAdoptionLifecycle.admission ?? "exclusive",
-                      onAdopted: params.turnAdoptionLifecycle.onAdopted,
-                      onDeferred: params.turnAdoptionLifecycle.onDeferred,
-                      onAbandoned: params.turnAdoptionLifecycle.onAbandoned,
-                      abortSignal: params.turnAdoptionLifecycle.abortSignal,
+          delivery: {
+            deliverWithProviderMessageSending: async (payload, info) => {
+              return await params.reply.deliver(payload, info);
+            },
+            // The shipped SDK declaration stays void; core still awaits the runtime promise.
+            onError: handleDeliveryError as NonNullable<
+              ChannelInboundTurnPlan["delivery"]["onError"]
+            >,
+          },
+          dispatcherOptions: {
+            ...replyPipeline,
+            beforeDeliver: async (payload) => payload,
+            onBeforeDeliverCancelled: params.reply.onBeforeDeliverCancelled,
+            onSkip: params.reply.onSkip,
+          },
+          replyOptions: {
+            skillFilter: context.skillFilter,
+            disableBlockStreaming: params.draft.disableBlockStreaming,
+            abortSignal: params.turnAdoptionLifecycle?.abortSignal,
+            turnAdoptionLifecycle: params.turnAdoptionLifecycle
+              ? {
+                  admission: params.turnAdoptionLifecycle.admission ?? "exclusive",
+                  onAdopted: params.turnAdoptionLifecycle.onAdopted,
+                  onDeferred: params.turnAdoptionLifecycle.onDeferred,
+                  onAbandoned: params.turnAdoptionLifecycle.onAbandoned,
+                  abortSignal: params.turnAdoptionLifecycle.abortSignal,
+                }
+              : undefined,
+            sourceReplyDeliveryMode: isRoomEvent ? "message_tool_only" : undefined,
+            queuedDeliveryCorrelations: isRoomEvent
+              ? [{ begin: beginDeliveryCorrelation }]
+              : undefined,
+            suppressTyping: isRoomEvent,
+            onPartialReply:
+              params.draft.answerLane.stream || params.draft.reasoningLane.stream
+                ? (payload) =>
+                    params.draft.enqueueEvent(async () => {
+                      await params.draft.ingestDraftLaneSegments(payload);
+                    })
+                : undefined,
+            onBlockReplyQueued: params.draft.answerLane.stream
+              ? (payload, blockContext) =>
+                  params.draft.enqueueEvent(async () => {
+                    await params.draft.prepareQueuedAnswerBlock(payload, blockContext);
+                  })
+              : undefined,
+            onReasoningStream: params.draft.reasoningLane.stream
+              ? (payload) =>
+                  params.draft.enqueueEvent(async () => {
+                    if (splitReasoningOnNextStream) {
+                      params.draft.repositionLaneForNewMessage(params.draft.reasoningLane);
+                      splitReasoningOnNextStream = false;
                     }
-                  : undefined,
-                sourceReplyDeliveryMode: isRoomEvent ? "message_tool_only" : undefined,
-                queuedDeliveryCorrelations: isRoomEvent
-                  ? [{ begin: beginDeliveryCorrelation }]
-                  : undefined,
-                suppressTyping: isRoomEvent,
-                onPartialReply:
-                  params.draft.answerLane.stream || params.draft.reasoningLane.stream
-                    ? (payload) =>
-                        params.draft.enqueueEvent(async () => {
-                          await params.draft.ingestDraftLaneSegments(payload);
-                        })
-                    : undefined,
-                onBlockReplyQueued: params.draft.answerLane.stream
-                  ? (payload, blockContext) =>
-                      params.draft.enqueueEvent(async () => {
-                        await params.draft.prepareQueuedAnswerBlock(payload, blockContext);
-                      })
-                  : undefined,
-                onReasoningStream: params.draft.reasoningLane.stream
-                  ? (payload) =>
-                      params.draft.enqueueEvent(async () => {
-                        if (splitReasoningOnNextStream) {
-                          params.draft.repositionLaneForNewMessage(params.draft.reasoningLane);
-                          splitReasoningOnNextStream = false;
-                        }
-                        await params.draft.ingestDraftLaneSegments(payload, true);
-                      })
-                  : params.draft.streamReasoningInProgressDraft
-                    ? (payload) =>
-                        params.draft.enqueueEvent(async () => {
-                          await params.progress.pushReasoningProgress(payload);
-                        })
-                    : undefined,
-                onReasoningProgress: params.draft.answerLane.stream
-                  ? (payload) =>
-                      params.draft.enqueueEvent(async () => {
-                        await params.progress.pushThinkingTokenProgress(payload.progressTokens);
-                      })
-                  : undefined,
-                onAssistantMessageStart: params.draft.answerLane.stream
-                  ? () =>
-                      params.draft.enqueueEvent(async () => {
-                        params.reply.reasoningStepState.resetForNextStep();
-                        params.progress.setFinalAnswerDelivered(false);
-                        if (params.streamMode !== "progress") {
-                          params.progress.reset();
-                        }
-                        if (params.draft.answerLane.finalized) {
-                          await params.draft.rotateLaneForNewMessage(params.draft.answerLane);
-                          params.draft.setRotateWhenQueuedBlocksSettle(false);
-                        } else if (
-                          params.draft.answerLane.hasStreamedMessage &&
-                          !params.draft.isAnswerToolProgressOnly()
-                        ) {
-                          params.draft.setRotateWhenQueuedBlocksSettle(true);
-                        }
-                      })
-                  : undefined,
-                onReasoningEnd: params.draft.reasoningLane.stream
-                  ? () =>
-                      params.draft.enqueueEvent(async () => {
-                        params.progress.closeReasoningBurst();
-                        splitReasoningOnNextStream = params.draft.reasoningLane.hasStreamedMessage;
-                        params.progress.reset();
-                      })
-                  : () => params.progress.closeReasoningBurst(),
-                suppressDefaultToolProgressMessages:
-                  !params.draft.streamDeliveryEnabled || Boolean(params.draft.answerLane.stream),
-                forceToolResultProgress:
-                  params.streamMode === "progress" &&
-                  resolveChannelStreamingPreviewToolProgress(params.telegramCfg),
-                allowProgressCallbacksWhenSourceDeliverySuppressed:
-                  !isRoomEvent && Boolean(params.draft.answerLane.stream),
-                onVerboseProgressVisibility: (isActive) => {
-                  params.progress.setVerboseProgressActive(isActive);
-                },
-                commentaryProgressEnabled:
-                  params.streamMode === "progress"
-                    ? params.progress.commentaryProgressEnabled
-                    : undefined,
-                progressPreambleEnabled: params.progress.progressPreambleEnabled,
-                reasoningPayloadsEnabled: params.draft.durableReasoningPayloadsEnabled,
-                onToolStart: params.progress.handleToolStart,
-                onItemEvent: params.progress.handleItemEvent,
-                onPlanUpdate: params.progress.handlePlanUpdate,
-                onApprovalEvent: params.progress.handleApprovalEvent,
-                onToolResult: async (payload) => {
-                  const text = payload.text?.trim();
-                  if (!text) {
-                    return;
-                  }
-                  const updatedDraft = await params.progress.pushToolProgress(text, {
-                    startImmediately: true,
-                  });
-                  if (
-                    !updatedDraft &&
-                    isFastModeAutoProgressPayload(payload) &&
-                    !params.progress.canPushToolProgress()
-                  ) {
-                    await params.delivery.sendPayload(payload);
-                  }
-                },
-                onCommandOutput: params.progress.handleCommandOutput,
-                onPatchSummary: params.progress.handlePatchSummary,
-                onCompactionStart: params.statusReactionController
-                  ? async () => {
-                      await params.statusReactionController?.setCompacting();
+                    await params.draft.ingestDraftLaneSegments(payload, true);
+                  })
+              : params.draft.streamReasoningInProgressDraft
+                ? (payload) =>
+                    params.draft.enqueueEvent(async () => {
+                      await params.progress.pushReasoningProgress(payload);
+                    })
+                : undefined,
+            onReasoningProgress: params.draft.answerLane.stream
+              ? (payload) =>
+                  params.draft.enqueueEvent(async () => {
+                    await params.progress.pushThinkingTokenProgress(payload.progressTokens);
+                  })
+              : undefined,
+            onAssistantMessageStart: params.draft.answerLane.stream
+              ? () =>
+                  params.draft.enqueueEvent(async () => {
+                    params.reply.reasoningStepState.resetForNextStep();
+                    params.progress.setFinalAnswerDelivered(false);
+                    if (params.streamMode !== "progress") {
+                      params.progress.reset();
                     }
-                  : undefined,
-                onCompactionEnd: params.statusReactionController
-                  ? async () => {
-                      params.statusReactionController?.cancelPending();
-                      await params.statusReactionController?.setThinking();
+                    if (params.draft.answerLane.finalized) {
+                      await params.draft.rotateLaneForNewMessage(params.draft.answerLane);
+                      params.draft.setRotateWhenQueuedBlocksSettle(false);
+                    } else if (
+                      params.draft.answerLane.hasStreamedMessage &&
+                      !params.draft.isAnswerToolProgressOnly()
+                    ) {
+                      params.draft.setRotateWhenQueuedBlocksSettle(true);
                     }
-                  : undefined,
-                onModelSelected,
-              },
-            }),
+                  })
+              : undefined,
+            onReasoningEnd: params.draft.reasoningLane.stream
+              ? () =>
+                  params.draft.enqueueEvent(async () => {
+                    params.progress.closeReasoningBurst();
+                    splitReasoningOnNextStream = params.draft.reasoningLane.hasStreamedMessage;
+                    params.progress.reset();
+                  })
+              : () => params.progress.closeReasoningBurst(),
+            onQueuedFollowupAdmitted: () => {
+              params.draft.beginQueuedFollowup();
+              params.progress.beginQueuedFollowup();
+            },
+            onQueuedFollowupSettled: async () => {
+              params.progress.cancel();
+              await params.draft.waitForEvents();
+              await params.draft.cleanup(params.isSuperseded());
+            },
+            suppressDefaultToolProgressMessages:
+              !params.draft.streamDeliveryEnabled || Boolean(params.draft.answerLane.stream),
+            forceToolResultProgress:
+              params.streamMode === "progress" &&
+              resolveChannelStreamingPreviewToolProgress(params.telegramCfg),
+            allowProgressCallbacksWhenSourceDeliverySuppressed:
+              !isRoomEvent && Boolean(params.draft.answerLane.stream),
+            onVerboseProgressVisibility: (isActive) => {
+              params.progress.setVerboseProgressActive(isActive);
+            },
+            commentaryProgressEnabled:
+              params.streamMode === "progress"
+                ? params.progress.commentaryProgressEnabled
+                : undefined,
+            progressPreambleEnabled: params.progress.progressPreambleEnabled,
+            reasoningPayloadsEnabled: params.draft.durableReasoningPayloadsEnabled,
+            onToolStart: params.progress.handleToolStart,
+            onItemEvent: params.progress.handleItemEvent,
+            onPlanUpdate: params.progress.handlePlanUpdate,
+            onApprovalEvent: params.progress.handleApprovalEvent,
+            onToolResult: async (payload) => {
+              const text = payload.text?.trim();
+              if (!text) {
+                return;
+              }
+              const updatedDraft = await params.progress.pushToolProgress(text, {
+                startImmediately: true,
+              });
+              if (
+                !updatedDraft &&
+                isFastModeAutoProgressPayload(payload) &&
+                !params.progress.canPushToolProgress()
+              ) {
+                await params.delivery.sendPayload(payload);
+              }
+            },
+            onCommandOutput: params.progress.handleCommandOutput,
+            onPatchSummary: params.progress.handlePatchSummary,
+            onCompactionStart: params.statusReactionController
+              ? async () => {
+                  await params.statusReactionController?.setCompacting();
+                }
+              : undefined,
+            onCompactionEnd: params.statusReactionController
+              ? async () => {
+                  params.statusReactionController?.cancelPending();
+                  await params.statusReactionController?.setThinking();
+                }
+              : undefined,
+            onModelSelected,
+          },
         }),
       },
     });

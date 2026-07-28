@@ -3,7 +3,10 @@
  */
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
+import {
+  normalizePluginsConfig,
+  resolveLivePluginConfigObject,
+} from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyCliRuntimeRecallTimeoutDefault,
@@ -32,14 +35,18 @@ import {
   ACTIVE_MEMORY_GLOBAL_MUTATION_ADMIN_REQUIRED_TEXT,
   formatActiveMemoryCommandHelp,
   isActiveMemoryGloballyEnabled,
+  isActiveMemoryPluginEnabled,
   isAllowedChatId,
   isAllowedChatType,
   isEligibleInteractiveSession,
   isEnabledForAgent,
+  isPrivateRecallDestination,
   isSessionActiveMemoryDisabled,
   lacksAdminToMutateActiveMemoryGlobal,
   resolveCommandSessionKey,
   setSessionActiveMemoryDisabled,
+  hasRememberAcrossConversationsAgent,
+  shouldRememberAcrossConversations,
   shouldSkipActiveMemoryForHarnessSession,
   updateActiveMemoryGlobalEnabledInConfig,
 } from "./session-policy.js";
@@ -63,7 +70,10 @@ import {
   HOOK_TIMEOUT_RECOVERY_GRACE_MS,
   MAX_SETUP_GRACE_TIMEOUT_MS,
   MAX_TIMEOUT_MS,
+  type ConversationRecallContext,
 } from "./types.js";
+
+const MEMORY_CORE_PLUGIN_ID = "memory-core";
 
 /** Plugin entry registering Active Memory hooks, tools, config schema, and doctor cleanup. */
 export default definePluginEntry({
@@ -109,7 +119,14 @@ export default definePluginEntry({
         "active-memory",
         api.pluginConfig as Record<string, unknown>,
       );
-      config = normalizePluginConfig(livePluginConfig ?? { enabled: false }, readCurrentConfig());
+      const liveConfig = readCurrentConfig();
+      const fallbackConfig =
+        liveConfig && hasRememberAcrossConversationsAgent(liveConfig) ? {} : { enabled: false };
+      const effectivePluginConfig =
+        liveConfig && !isActiveMemoryPluginEnabled(liveConfig)
+          ? { enabled: false }
+          : (livePluginConfig ?? fallbackConfig);
+      config = normalizePluginConfig(effectivePluginConfig, liveConfig);
       if (livePluginConfig) {
         warnDeprecatedModelFallbackPolicy(livePluginConfig);
       }
@@ -126,6 +143,7 @@ export default definePluginEntry({
         if (action === "help") {
           return { text: formatActiveMemoryCommandHelp() };
         }
+        refreshLiveConfigFromRuntime();
         if (isGlobal) {
           const currentConfig = api.runtime.config.current() as OpenClawConfig;
           if (action === "status") {
@@ -178,7 +196,11 @@ export default definePluginEntry({
           };
         }
         const commandAgentId = resolveStatusUpdateAgentId({ sessionKey });
-        if (!isEnabledForAgent(config, commandAgentId)) {
+        const liveConfig = readCurrentConfig() ?? api.config;
+        const commandRecallEnabled =
+          isEnabledForAgent(config, commandAgentId) ||
+          (config.enabled && shouldRememberAcrossConversations(liveConfig, commandAgentId));
+        if (!commandRecallEnabled) {
           return { text: "Active Memory: off for this session." };
         }
         if (action === "status") {
@@ -214,6 +236,7 @@ export default definePluginEntry({
       "before_prompt_build",
       async (event, ctx) => {
         refreshLiveConfigFromRuntime();
+        const liveConfig = readCurrentConfig() ?? api.config;
         // The hook deadline, watchdog, and embedded-run budget all flow from
         // this config, so the CLI-runtime default raise must happen before
         // any of them are armed. Budgeting shares the runner's own dispatch
@@ -224,7 +247,7 @@ export default definePluginEntry({
         // eligibility check treats a missing provider as ineligible.
         const timeoutModelRef =
           (timeoutAgentId
-            ? getModelRef(api, timeoutAgentId, config, {
+            ? getModelRef(liveConfig, timeoutAgentId, config, {
                 modelProviderId: ctx.modelProviderId,
                 modelId: ctx.modelId,
               })
@@ -232,12 +255,12 @@ export default definePluginEntry({
         const cliDispatchEligibility = api.runtime.agent.resolveCliBackendDispatchEligibility({
           provider: timeoutModelRef.provider,
           model: timeoutModelRef.model,
-          config: api.config,
+          config: liveConfig,
           ...(timeoutAgentId
             ? {
                 agentId: timeoutAgentId,
-                agentDir: resolveAgentDir(api.config, timeoutAgentId),
-                workspaceDir: resolveAgentWorkspaceDir(api.config, timeoutAgentId),
+                agentDir: resolveAgentDir(liveConfig, timeoutAgentId),
+                workspaceDir: resolveAgentWorkspaceDir(liveConfig, timeoutAgentId),
               }
             : {}),
         });
@@ -298,7 +321,11 @@ export default definePluginEntry({
               });
               return undefined;
             }
-            if (!isEnabledForAgent(invocationConfig, effectiveAgentId)) {
+            const sessionContext = {
+              ...ctx,
+              sessionKey: resolvedSessionKey ?? ctx.sessionKey,
+            };
+            if (!isEligibleInteractiveSession(sessionContext)) {
               await persistPluginStatusLines({
                 api,
                 agentId: effectiveAgentId,
@@ -306,12 +333,43 @@ export default definePluginEntry({
               });
               return undefined;
             }
-            if (
-              !isEligibleInteractiveSession({
-                ...ctx,
-                sessionKey: resolvedSessionKey ?? ctx.sessionKey,
-              })
-            ) {
+            const destinationContext = {
+              ...sessionContext,
+              mainKey: liveConfig.session?.mainKey ?? api.config.session?.mainKey,
+            };
+            const activeMemoryConfigured = isEnabledForAgent(invocationConfig, effectiveAgentId);
+            const chatIdAllowed = isAllowedChatId(invocationConfig, {
+              sessionKey: destinationContext.sessionKey,
+              messageProvider: destinationContext.messageProvider,
+              channelId: destinationContext.channelId,
+            });
+            const activeMemoryAllowed =
+              activeMemoryConfigured &&
+              isAllowedChatType(invocationConfig, destinationContext) &&
+              chatIdAllowed;
+            const productRecallRequested = Boolean(
+              invocationConfig.enabled &&
+              resolvedSessionKey &&
+              shouldRememberAcrossConversations(liveConfig, effectiveAgentId) &&
+              isPrivateRecallDestination(destinationContext) &&
+              chatIdAllowed,
+            );
+            const memorySlot = normalizePluginsConfig(liveConfig.plugins).slots.memory;
+            const productRecallEligible =
+              productRecallRequested && memorySlot === MEMORY_CORE_PLUGIN_ID;
+            if (productRecallRequested && !productRecallEligible) {
+              api.logger.warn?.(
+                "active-memory: the current memory provider does not support protected private transcript recall; skipping Remember across conversations",
+              );
+            }
+            const productRecallAllowed =
+              productRecallEligible && invocationConfig.toolsAllow.includes("memory_search");
+            if (productRecallEligible && !productRecallAllowed) {
+              api.logger.warn?.(
+                "active-memory: memory_search is unavailable; skipping Remember across conversations private transcript recall",
+              );
+            }
+            if (!activeMemoryAllowed && !productRecallAllowed) {
               await persistPluginStatusLines({
                 api,
                 agentId: effectiveAgentId,
@@ -319,38 +377,23 @@ export default definePluginEntry({
               });
               return undefined;
             }
-            if (
-              !isAllowedChatType(invocationConfig, {
-                ...ctx,
-                sessionKey: resolvedSessionKey ?? ctx.sessionKey,
-                mainKey: api.config.session?.mainKey,
-              })
-            ) {
-              await persistPluginStatusLines({
-                api,
-                agentId: effectiveAgentId,
-                sessionKey: resolvedSessionKey,
-              });
-              return undefined;
-            }
-            if (
-              !isAllowedChatId(invocationConfig, {
-                sessionKey: resolvedSessionKey ?? ctx.sessionKey,
-                messageProvider: ctx.messageProvider,
-              })
-            ) {
-              await persistPluginStatusLines({
-                api,
-                agentId: effectiveAgentId,
-                sessionKey: resolvedSessionKey,
-              });
-              return undefined;
-            }
+            const conversationRecall: ConversationRecallContext | undefined =
+              productRecallAllowed && resolvedSessionKey
+                ? {
+                    anchorSessionKey: resolvedSessionKey,
+                    scope: "same-agent-private",
+                    corpus: activeMemoryAllowed ? "configured" : "sessions",
+                  }
+                : undefined;
+            const recallConfig =
+              productRecallAllowed && !activeMemoryAllowed
+                ? { ...invocationConfig, toolsAllow: ["memory_search"] }
+                : invocationConfig;
             const recentTurns = extractRecentTurns(event.messages);
             const query = buildQuery({
               latestUserMessage: event.prompt,
               recentTurns,
-              config: invocationConfig,
+              config: recallConfig,
             });
             const searchQuery = buildSearchQuery({
               latestUserMessage: event.prompt,
@@ -361,7 +404,8 @@ export default definePluginEntry({
             armHookDeadline(liveRecallTimeoutMs, "recall");
             const result = await maybeResolveActiveRecall({
               api,
-              config: invocationConfig,
+              runtimeConfig: liveConfig,
+              config: recallConfig,
               agentId: effectiveAgentId,
               sessionKey: resolvedSessionKey,
               sessionId: ctx.sessionId,
@@ -371,6 +415,7 @@ export default definePluginEntry({
               searchQuery,
               currentModelProviderId: ctx.modelProviderId,
               currentModelId: ctx.modelId,
+              conversationRecall,
               abortSignal: deadlineController.signal,
             });
             deadlineController.signal.throwIfAborted();

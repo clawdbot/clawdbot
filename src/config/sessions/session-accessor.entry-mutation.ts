@@ -1,15 +1,18 @@
 import { isDeepStrictEqual } from "node:util";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
   resolveAccessStorePath,
+  loadExactSessionEntry,
   loadSessionEntry,
   listSessionEntries,
   patchSessionEntry,
   resolveSessionEntryFromStore,
 } from "./session-accessor.entry.js";
+import type { SessionLifecycleStoreTarget } from "./session-accessor.lifecycle-types.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
 import {
   appendSqliteTranscriptEvent,
@@ -43,14 +46,29 @@ import {
   normalizeTargetStoreKeys,
   resolveFreshestTargetEntry,
 } from "./session-entry-selection.js";
-import { formatSqliteSessionFileMarker } from "./sqlite-marker.js";
+import { projectSessionStoreForPersistence } from "./skill-prompt-blobs.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
-import {
-  projectSessionEntryForPersistenceRevision,
-  type SessionLifecycleStoreTarget,
-} from "./store.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import type { GroupKeyResolution, SessionEntry } from "./types.js";
+
+function projectSessionEntryForPersistenceRevision(params: {
+  storePath: string;
+  entry: SessionEntry;
+}): SessionEntry {
+  const snapshot = params.entry.skillsSnapshot;
+  const stripped =
+    snapshot?.resolvedSkills === undefined
+      ? params.entry
+      : {
+          ...params.entry,
+          skillsSnapshot: (({ resolvedSkills: _drop, ...rest }) => rest)(snapshot),
+        };
+  const projected = projectSessionStoreForPersistence({
+    storePath: params.storePath,
+    store: { entry: stripped },
+  });
+  return projected.store.entry ?? stripped;
+}
 
 export async function forkSessionFromParentTranscript(
   params: ForkSessionFromParentTranscriptParams,
@@ -88,13 +106,16 @@ export async function canonicalizeSessionEntryAliases(params: {
     entry: SessionEntry | undefined,
   ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
 }): Promise<CanonicalizeSessionEntryAliasesResult> {
-  const store = Object.fromEntries(
-    listSessionEntries({ agentId: params.agentId, storePath: params.storePath }).map(
-      ({ sessionKey, entry }) => [sessionKey, entry],
-    ),
-  );
   const targetKeys = normalizeTargetStoreKeys(params.target);
-  const freshest = resolveFreshestTargetEntry(store, targetKeys);
+  const targetEntries = targetKeys.flatMap((sessionKey) => {
+    const entry = loadExactSessionEntry({
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      sessionKey,
+      storePath: params.storePath,
+    });
+    return entry ? [entry] : [];
+  });
+  const freshest = resolveFreshestTargetEntry(targetEntries, targetKeys);
   const patch = params.update ? await params.update(cloneOptionalEntry(freshest?.entry)) : null;
   const entry = patch
     ? ({
@@ -129,7 +150,7 @@ export async function createSessionEntryWithTranscript<TError = string>(
   ) =>
     | Promise<SessionEntryCreateWithTranscriptPrepareResult<TError>>
     | SessionEntryCreateWithTranscriptPrepareResult<TError>,
-  _options: SessionEntryCreateWithTranscriptOptions = {},
+  options: SessionEntryCreateWithTranscriptOptions = {},
 ): Promise<SessionEntryCreateWithTranscriptResult<TError>> {
   const storePath = resolveAccessStorePath(scope);
   const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
@@ -145,11 +166,6 @@ export async function createSessionEntryWithTranscript<TError = string>(
     return { ok: false, error: created.error, phase: "entry" };
   }
 
-  const sessionFile = formatSqliteSessionFileMarker({
-    agentId,
-    sessionId: created.entry.sessionId,
-    storePath,
-  });
   try {
     await appendSqliteTranscriptEvent(
       {
@@ -158,7 +174,7 @@ export async function createSessionEntryWithTranscript<TError = string>(
         sessionKey: resolved.normalizedKey,
         storePath,
       },
-      createSessionTranscriptHeader({ sessionId: created.entry.sessionId }),
+      createSessionTranscriptHeader({ cwd: options.cwd, sessionId: created.entry.sessionId }),
     );
   } catch (err) {
     return {
@@ -168,13 +184,7 @@ export async function createSessionEntryWithTranscript<TError = string>(
     };
   }
 
-  const entry =
-    created.entry.sessionFile === sessionFile
-      ? created.entry
-      : {
-          ...created.entry,
-          sessionFile,
-        };
+  const entry = created.entry;
   await applySessionEntryLifecycleMutation({
     agentId,
     storePath,
@@ -182,7 +192,7 @@ export async function createSessionEntryWithTranscript<TError = string>(
     upserts: [{ sessionKey: resolved.normalizedKey, entry }],
     skipMaintenance: true,
   });
-  return { ok: true, entry, sessionFile };
+  return { ok: true, entry, sessionFile: resolved.normalizedKey };
 }
 
 export function cloneSessionEntries(
@@ -293,13 +303,7 @@ export function createReplySessionInitializationRevision(params: {
   // activity/context writes are merged below; comparing them here would reject
   // before the merge can preserve the concurrent metadata.
   const projected = projectSessionEntryForPersistenceRevision({ storePath, entry });
-  const revisionEntry: Pick<SessionEntry, "sessionFile" | "sessionId"> = {
-    sessionId: projected.sessionId,
-  };
-  if (projected.sessionFile !== undefined) {
-    revisionEntry.sessionFile = projected.sessionFile;
-  }
-  return JSON.stringify(revisionEntry);
+  return JSON.stringify({ sessionId: projected.sessionId });
 }
 
 export function resolveInitializedReplySessionEntry(params: {
@@ -308,15 +312,7 @@ export function resolveInitializedReplySessionEntry(params: {
   sessionEntry: SessionEntry;
   storePath: string;
 }): SessionEntry {
-  const sessionFile = formatSqliteSessionFileMarker({
-    agentId: params.agentId,
-    sessionId: params.sessionEntry.sessionId,
-    storePath: params.storePath,
-  });
-  return {
-    ...params.sessionEntry,
-    sessionFile,
-  };
+  return params.sessionEntry;
 }
 
 /** Updates an existing entry only; returns null when the session is absent. */
@@ -347,7 +343,7 @@ export type UpdateSessionLastRouteParams = {
   /** Account owning the delivery route when the channel is multi-account. */
   accountId?: string;
   /** Delivery channel id persisted as the last route channel. */
-  channel?: SessionEntry["lastChannel"];
+  channel?: string;
   /** Set false to only patch existing entries; missing sessions stay absent. */
   createIfMissing?: boolean;
   /** Optional inbound context whose session metadata is derived alongside the route. */
@@ -357,7 +353,7 @@ export type UpdateSessionLastRouteParams = {
   /** Group routing resolution for group-owned session keys. */
   groupResolution?: GroupKeyResolution | null;
   /** Canonical channel route persisted as the session route slot. */
-  route?: SessionEntry["route"];
+  route?: ChannelRouteRef;
   /** Canonical or alias session key for the routed conversation. */
   sessionKey: string;
   /** Explicit store target for file-backed stores and SQLite migration adapters. */

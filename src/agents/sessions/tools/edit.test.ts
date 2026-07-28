@@ -199,6 +199,10 @@ describe("edit tool", () => {
     ].join("\n");
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(expected);
     const details = result.details as EditToolDetails;
+    expect(details.changed).toBe(true);
+    if (!details.changed) {
+      throw new Error("expected changed edit details");
+    }
     expect(applyPatch(original, details.patch)).toBe(expected);
   });
 
@@ -219,6 +223,10 @@ describe("edit tool", () => {
     const expected = "after\nafter   \n";
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(expected);
     const details = result.details as EditToolDetails;
+    expect(details.changed).toBe(true);
+    if (!details.changed) {
+      throw new Error("expected changed edit details");
+    }
     expect(applyPatch(original, details.patch)).toBe(expected);
   });
 

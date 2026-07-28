@@ -64,6 +64,7 @@ function expectDispatchedContext(ctx: Record<string, unknown> | null): Record<st
 
 function createMockQaRuntime(params?: {
   onDispatch?: (ctx: Record<string, unknown>) => void;
+  onTurn?: (turn: QaDispatchTurn) => void;
   toolStarts?: Array<{ name?: string; phase?: string; args?: Record<string, unknown> }>;
 }): PluginRuntime {
   return createPluginRuntimeMock({
@@ -78,6 +79,7 @@ function createMockQaRuntime(params?: {
       },
       inbound: {
         async dispatch(turn: QaDispatchTurn) {
+          params?.onTurn?.(turn);
           for (const toolStart of params?.toolStarts ?? []) {
             await turn.replyOptions?.onToolStart?.(toolStart);
           }
@@ -391,6 +393,38 @@ describe("qa-channel plugin", () => {
     },
   );
 
+  it("captures tool starts when channel progress is hidden", { timeout: 20_000 }, async () => {
+    let allowHiddenToolLifecycle = false;
+    const harness = await startQaChannelTestHarness({
+      allowFrom: ["*"],
+      runtime: createMockQaRuntime({
+        onTurn: (turn) => {
+          allowHiddenToolLifecycle =
+            turn.replyOptions?.allowToolLifecycleWhenProgressHidden === true;
+        },
+      }),
+    });
+
+    try {
+      harness.state.addInboundMessage({
+        conversation: { id: "alice", kind: "direct" },
+        senderId: "alice",
+        senderName: "Alice",
+        text: "hello",
+      });
+      await harness.state.waitFor({
+        kind: "message-text",
+        textIncludes: "qa-echo: hello",
+        direction: "outbound",
+        timeoutMs: 15_000,
+      });
+
+      expect(allowHiddenToolLifecycle).toBe(true);
+    } finally {
+      await harness.stop();
+    }
+  });
+
   it(
     "surfaces shared group traffic with the room target as From",
     { timeout: 20_000 },
@@ -476,18 +510,15 @@ describe("qa-channel plugin", () => {
       });
 
       const mediaCtx = expectDispatchedContext(dispatchedCtx) as {
-        MediaPath?: string;
-        MediaPaths?: string[];
-        MediaType?: string;
-        MediaTypes?: string[];
+        media?: Array<{ path?: string; contentType?: string }>;
       };
-      expect(typeof mediaCtx.MediaPath).toBe("string");
-      expect(path.basename(mediaCtx.MediaPath ?? "")).toMatch(
+      const media = mediaCtx.media?.[0];
+      expect(typeof media?.path).toBe("string");
+      expect(path.basename(media?.path ?? "")).toMatch(
         /^red-top-blue-bottom---[a-f0-9-]{36}\.png$/,
       );
-      expect(mediaCtx.MediaType).toBe("image/png");
-      expect(mediaCtx.MediaPaths).toEqual([mediaCtx.MediaPath]);
-      expect(mediaCtx.MediaTypes).toEqual(["image/png"]);
+      expect(media?.contentType).toBe("image/png");
+      expect(mediaCtx.media).toHaveLength(1);
     } finally {
       await harness.stop();
     }

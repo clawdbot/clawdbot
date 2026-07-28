@@ -25,6 +25,7 @@ import { readConfiguredLogTail } from "../logging/log-tail.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
 import { redactSensitiveLines, resolveRedactOptions } from "../logging/redact.js";
 import { formatTimestamp } from "../logging/timestamps.js";
+import { defaultRuntime } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
 
@@ -682,7 +683,11 @@ export function registerLogsCli(program: Command) {
           emitJsonLine,
           errorLine,
         );
-        process.exit(1);
+        // Route terminal reset to stderr in JSON mode so structured
+        // stdout stays parseable. Text mode resets to stdout by default.
+        defaultRuntime.exit(1, {
+          resetStream: jsonMode ? process.stderr : undefined,
+        });
         return;
       }
       if (followRetryAttempt > 0) {

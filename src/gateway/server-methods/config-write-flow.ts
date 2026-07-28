@@ -5,6 +5,7 @@ import {
   createConfigIO,
   readConfigFileSnapshotForWrite,
   replaceConfigFile,
+  resolveConfigSnapshotHash,
 } from "../../config/config.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -16,7 +17,7 @@ import {
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { getActiveSecretsRuntimeSnapshot } from "../../secrets/runtime-state.js";
 import { resolveEffectiveSharedGatewayAuth, resolveGatewayAuth } from "../auth.js";
-import { buildGatewayReloadPlan } from "../config-reload-plan.js";
+import { buildGatewayReloadPlan, isNoopGatewayReloadPlan } from "../config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../config-reload-settings.js";
 import { formatControlPlaneActor, type ControlPlaneActor } from "../control-plane-audit.js";
 import { parseRestartRequestParams } from "./restart-request.js";
@@ -130,38 +131,20 @@ function queueSharedGatewayAuthGenerationRefresh(
   });
 }
 
-function isNoopConfigReloadPlan(plan: ReturnType<typeof buildGatewayReloadPlan>): boolean {
-  return (
-    !plan.restartGateway &&
-    plan.hotReasons.length === 0 &&
-    !plan.reloadHooks &&
-    !plan.restartGmailWatcher &&
-    !plan.restartCron &&
-    !plan.restartHeartbeat &&
-    !plan.restartHealthMonitor &&
-    !plan.reloadPlugins &&
-    !plan.disposeMcpRuntimes &&
-    plan.restartChannels.size === 0
-  );
-}
-
 function resolveConfigRestartRequirement(params: {
   changedPaths: string[];
   nextConfig: OpenClawConfig;
 }): { requiresRestart: boolean; scheduleDirectRestart: boolean } {
   const reloadSettings = resolveGatewayReloadSettings(params.nextConfig);
-  const plan = buildGatewayReloadPlan(params.changedPaths);
-  if (isNoopConfigReloadPlan(plan)) {
+  const plan = buildGatewayReloadPlan(params.changedPaths, { candidateConfig: params.nextConfig });
+  if (isNoopGatewayReloadPlan(plan)) {
     return { requiresRestart: false, scheduleDirectRestart: false };
   }
   if (reloadSettings.mode === "off") {
     return { requiresRestart: true, scheduleDirectRestart: true };
   }
-  if (reloadSettings.mode === "restart") {
-    return { requiresRestart: true, scheduleDirectRestart: false };
-  }
   if (plan.restartGateway) {
-    return { requiresRestart: true, scheduleDirectRestart: reloadSettings.mode === "hot" };
+    return { requiresRestart: true, scheduleDirectRestart: false };
   }
   return { requiresRestart: false, scheduleDirectRestart: false };
 }
@@ -246,8 +229,12 @@ export async function commitGatewayConfigWrite(params: {
 }> {
   const result = await replaceConfigFile({
     nextConfig: params.nextConfig,
+    // The early RPC hash check is only advisory until this lock-time CAS. Without
+    // it, concurrent writers can both succeed and overwrite each other's config.
+    baseHash: resolveConfigSnapshotHash(params.snapshot) ?? undefined,
     writeOptions: {
       ...params.writeOptions,
+      auditOrigin: "config-rpc",
       runtimeRefresh: {
         ...params.writeOptions.runtimeRefresh,
         includeAuthStoreRefs: false,

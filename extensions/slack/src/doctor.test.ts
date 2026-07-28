@@ -1,6 +1,14 @@
 // Slack tests cover doctor plugin behavior.
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { slackDoctor } from "./doctor.js";
+
+const mocks = vi.hoisted(() => ({
+  probeSlack: vi.fn(),
+}));
+
+vi.mock("./probe.js", () => ({
+  probeSlack: mocks.probeSlack,
+}));
 
 async function collectSlackWarnings(
   slack: Record<string, unknown>,
@@ -26,6 +34,109 @@ function getSlackCompatibilityNormalizer(): NonNullable<
 }
 
 describe("slack doctor", () => {
+  beforeEach(() => {
+    mocks.probeSlack.mockReset();
+  });
+
+  it("validates and reports the resolved human for user identity", async () => {
+    mocks.probeSlack.mockResolvedValue({
+      ok: true,
+      user: { id: "U12345678", name: "test-human" },
+    });
+
+    const warnings = await slackDoctor.collectPreviewWarnings?.({
+      cfg: {
+        channels: {
+          slack: {
+            postAs: "user",
+            userToken: "test-user-token",
+            appToken: "test-app-token",
+          },
+        },
+      } as never,
+      doctorFixCommand: "openclaw doctor --fix",
+      env: {},
+    });
+
+    expect(mocks.probeSlack).toHaveBeenCalledWith("test-user-token", 2_500, {
+      accountId: "default",
+      identity: "user",
+    });
+    expect(warnings).toEqual([
+      "- channels.slack: user identity authenticated as @test-human (U12345678).",
+    ]);
+    expect(warnings?.join("\n")).not.toContain("test-user-token");
+  });
+
+  it("reports when auth.test identifies a bot token instead of a human", async () => {
+    mocks.probeSlack.mockResolvedValue({
+      ok: false,
+      error: "Slack auth.test identified a bot token; user identity requires a user OAuth token",
+    });
+
+    const warnings = await slackDoctor.collectPreviewWarnings?.({
+      cfg: {
+        channels: {
+          slack: {
+            postAs: "user",
+            userToken: "test-user-token",
+            appToken: "test-app-token",
+          },
+        },
+      } as never,
+      doctorFixCommand: "openclaw doctor --fix",
+      env: {},
+    });
+
+    expect(warnings).toEqual([
+      "- channels.slack: userToken auth.test failed: Slack auth.test identified a bot token; user identity requires a user OAuth token.",
+    ]);
+  });
+
+  it.each([
+    {
+      name: "Socket Mode app token",
+      slack: { postAs: "user", userToken: "test-user-token" },
+      expected: "requires appToken for companion-app events",
+    },
+    {
+      name: "HTTP signing secret",
+      slack: { postAs: "user", mode: "http", userToken: "test-user-token" },
+      expected: "requires signingSecret for companion-app events",
+    },
+  ])("warns when user identity is missing the $name", async ({ slack, expected }) => {
+    mocks.probeSlack.mockResolvedValue({
+      ok: true,
+      user: { id: "U12345678", name: "test-human" },
+    });
+
+    const warnings = await slackDoctor.collectPreviewWarnings?.({
+      cfg: { channels: { slack } } as never,
+      doctorFixCommand: "openclaw doctor --fix",
+      env: {},
+    });
+
+    expect(warnings).toEqual(expect.arrayContaining([expect.stringContaining(expected)]));
+  });
+
+  it("leaves bot-identity doctor behavior unchanged", async () => {
+    const warnings = await slackDoctor.collectPreviewWarnings?.({
+      cfg: {
+        channels: {
+          slack: {
+            botToken: "test-bot-token",
+            appToken: "test-app-token",
+          },
+        },
+      } as never,
+      doctorFixCommand: "openclaw doctor --fix",
+      env: {},
+    });
+
+    expect(warnings).toEqual([]);
+    expect(mocks.probeSlack).not.toHaveBeenCalled();
+  });
+
   it("warns when mutable allowlist entries rely on disabled name matching", async () => {
     const warnings = await Promise.resolve(
       slackDoctor.collectMutableAllowlistWarnings?.({

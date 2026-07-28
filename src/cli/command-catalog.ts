@@ -71,6 +71,12 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { bypassConfigGuard: true, loadPlugins: "never", ensureCliPath: false },
   },
   {
+    commandPath: ["qa"],
+    // Private QA commands create or inspect repo-owned fixtures. They must not
+    // read, validate, migrate, or inherit proxy policy from operator state.
+    policy: { bypassConfigGuard: true, loadPlugins: "never", networkProxy: "bypass" },
+  },
+  {
     commandPath: ["crestodian"], // hidden alias
     policy: { bypassConfigGuard: true, loadPlugins: "never", ensureCliPath: false },
   },
@@ -82,7 +88,18 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
       networkProxy: ({ argv }) => (hasFlag(argv, "--local") ? "default" : "bypass"),
     },
   },
+  {
+    commandPath: ["agent", "exec"],
+    policy: {
+      bypassConfigGuard: true,
+      loadPlugins: "never",
+      ownsProtocolStdout: true,
+      hideBanner: true,
+      networkProxy: "default",
+    },
+  },
   { commandPath: ["message"], policy: { loadPlugins: "never" } },
+  { commandPath: ["docs"], policy: { bypassConfigGuard: true } },
   {
     commandPath: ["channels"],
     policy: {
@@ -191,7 +208,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["sessions"],
     exact: true,
-    policy: { ensureCliPath: false, networkProxy: "bypass" },
+    policy: { ensureCliPath: false, ownsProtocolStdout: true, networkProxy: "bypass" },
     route: { id: "sessions" },
   },
   {
@@ -210,9 +227,25 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     route: { id: "agents-list" },
   },
   {
+    commandPath: ["config", "file"],
+    exact: true,
+    // A path query must work before config validation and must not initialize state.
+    policy: {
+      bypassConfigGuard: true,
+      ensureCliPath: false,
+      loadPlugins: "never",
+      networkProxy: "bypass",
+    },
+  },
+  {
     commandPath: ["config", "get"],
     exact: true,
-    policy: { ensureCliPath: false, networkProxy: "bypass" },
+    policy: {
+      bypassConfigGuard: true,
+      routeConfigGuard: "always",
+      ensureCliPath: false,
+      networkProxy: "bypass",
+    },
     route: { id: "config-get" },
   },
   {
@@ -374,7 +407,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["config", "schema"],
     exact: true,
-    policy: { bypassConfigGuard: true, networkProxy: "bypass" },
+    policy: { bypassConfigGuard: true, ownsProtocolStdout: true, networkProxy: "bypass" },
   },
   {
     commandPath: ["plugins", "update"],
@@ -391,6 +424,21 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     commandPath: ["onboard"],
     exact: true,
     policy: { loadPlugins: "never" },
+  },
+  {
+    commandPath: ["onboard", "recommendations"],
+    exact: true,
+    policy: { bypassConfigGuard: true, loadPlugins: "never", networkProxy: "bypass" },
+  },
+  {
+    commandPath: ["onboard", "recommendations", "acknowledge"],
+    exact: true,
+    policy: { bypassConfigGuard: true, loadPlugins: "never", networkProxy: "bypass" },
+  },
+  {
+    commandPath: ["onboard", "recommendations", "refresh"],
+    exact: true,
+    policy: { bypassConfigGuard: true, loadPlugins: "never", networkProxy: "bypass" },
   },
   {
     commandPath: ["channels", "add"],
@@ -440,4 +488,5 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["skills", "list"], exact: true, policy: { networkProxy: "bypass" } },
   { commandPath: ["skills", "search"], exact: true },
   { commandPath: ["skills", "update"], exact: true },
+  { commandPath: ["skills", "verify"], exact: true },
 ];

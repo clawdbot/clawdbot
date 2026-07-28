@@ -1,5 +1,15 @@
 # OpenClaw iOS Changelog
 
+## Unreleased
+
+- Prevented stale Watch reconnect recovery from disconnecting a newly selected Gateway, kept delivered Watch messages from reappearing after a crash, and preserved attachments when retrying uncertain offline sends.
+
+## 2026.7.21
+
+- Fixed background Gateway sessions restarting while waiting for pairing or authentication attention.
+- Prevented failed offline-data resets from reusing retired chat database handles and kept byte-distinct Gateway owners isolated.
+- Made Apple Watch message acknowledgments wait for persisted handling and preserved pending voice turns across navigation and relaunches.
+
 ## 2026.7.2 - 2026-07-13
 
 - Added native Automations search, filtering, details, history, revision-safe editing, run tracking, enable/disable, and confirmed deletion.

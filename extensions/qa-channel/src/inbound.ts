@@ -1,17 +1,14 @@
 import {
   buildChannelInboundEventContext,
   resolveChannelInboundRouteEnvelope,
+  toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 // Qa Channel plugin module implements inbound behavior.
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  buildAgentMediaPayload,
-  saveMediaBuffer,
-  saveMediaSource,
-} from "openclaw/plugin-sdk/media-runtime";
+import { saveMediaBuffer, saveMediaSource } from "openclaw/plugin-sdk/media-runtime";
 import {
   sanitizeQaBusToolCallArguments,
   type QaBusToolCall,
@@ -47,9 +44,9 @@ function decodeAttachmentBase64(value: string): Buffer | null {
   return buffer;
 }
 
-async function resolveQaInboundMediaPayload(attachments: QaBusMessage["attachments"]) {
+async function resolveQaInboundMediaFacts(attachments: QaBusMessage["attachments"]) {
   if (!Array.isArray(attachments) || attachments.length === 0) {
-    return {};
+    return [];
   }
   const mediaList: Array<{ path: string; contentType?: string | null }> = [];
   for (const attachment of attachments) {
@@ -89,7 +86,7 @@ async function resolveQaInboundMediaPayload(attachments: QaBusMessage["attachmen
       });
     }
   }
-  return mediaList.length > 0 ? buildAgentMediaPayload(mediaList) : {};
+  return toInboundMediaFacts(mediaList);
 }
 
 function resolveQaGroupConfig(params: {
@@ -114,6 +111,33 @@ function formatQaErrorForLog(error: unknown): string {
   return escaped;
 }
 
+function normalizeQaToolCallSnapshotValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(normalizeQaToolCallSnapshotValue);
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+        .map(([key, entry]) => [key, normalizeQaToolCallSnapshotValue(entry)]),
+    );
+  }
+  return value;
+}
+
+function serializeQaToolCallSnapshot(toolCalls: QaBusToolCall[]): string {
+  // Call order is chronological trace data; nested argument keys are the
+  // unordered surface that must be canonicalized before comparison.
+  return JSON.stringify(
+    toolCalls.map((toolCall) => ({
+      name: toolCall.name,
+      ...(toolCall.arguments
+        ? { arguments: normalizeQaToolCallSnapshotValue(toolCall.arguments) }
+        : {}),
+    })),
+  );
+}
+
 function createQaReplyPreview(params: {
   account: ResolvedQaChannelAccount;
   inbound: QaBusMessage;
@@ -122,6 +146,8 @@ function createQaReplyPreview(params: {
 }) {
   let messageId: string | null = null;
   let currentText = "";
+  let lastDurableText = "";
+  let lastDurableToolCallSnapshot = "[]";
   let pending = Promise.resolve();
 
   const write = (text: string) => {
@@ -173,6 +199,7 @@ function createQaReplyPreview(params: {
     if (!text.trim()) {
       return;
     }
+    const toolCallSnapshot = serializeQaToolCallSnapshot(params.toolCalls);
     await sendQaBusMessage({
       baseUrl: params.account.baseUrl,
       accountId: params.account.accountId,
@@ -184,12 +211,26 @@ function createQaReplyPreview(params: {
       replyToId: params.inbound.id,
       toolCalls: params.toolCalls,
     });
+    lastDurableText = text;
+    lastDurableToolCallSnapshot = toolCallSnapshot;
   };
 
   return {
     clear,
     async deliver(text: string, kind: string) {
       await pending;
+      // Core may close a streamed block with an identical final payload.
+      // The block is already durable, so posting the final again duplicates the reply.
+      if (
+        kind === "final" &&
+        text === lastDurableText &&
+        serializeQaToolCallSnapshot(params.toolCalls) === lastDurableToolCallSnapshot
+      ) {
+        // Count equality is not record equality: a same-count final with changed
+        // tool records must still be delivered.
+        await clear();
+        return;
+      }
       if (kind === "final" && messageId && params.toolCalls.length === 0) {
         await write(text);
         return;
@@ -293,7 +334,7 @@ export async function handleQaInbound(params: {
     timestamp: inbound.timestamp,
     body: inbound.text,
   });
-  const mediaPayload = await resolveQaInboundMediaPayload(inbound.attachments);
+  const media = await resolveQaInboundMediaFacts(inbound.attachments);
   const nativeCommand = inbound.nativeCommand;
   const commandTargets = nativeCommand
     ? resolveNativeCommandSessionTargets({
@@ -327,6 +368,7 @@ export async function handleQaInbound(params: {
     },
     route: {
       agentId: route.agentId,
+      dmScope: route.dmScope,
       accountId: route.accountId,
       routeSessionKey: sessionKey,
       dispatchSessionKey: sessionKey,
@@ -339,6 +381,7 @@ export async function handleQaInbound(params: {
       threadParentId: inbound.threadId ? inbound.conversation.id : undefined,
     },
     message: { body, bodyForAgent: inbound.text, rawBody: inbound.text, commandBody },
+    media,
     access: {
       commands: { authorized: true },
       mentions: { canDetectMention: isGroup, wasMentioned: Boolean(wasMentioned) },
@@ -353,7 +396,6 @@ export async function handleQaInbound(params: {
         : undefined,
       GroupChannel: inbound.conversation.kind === "channel" ? inbound.conversation.id : undefined,
       ThreadLabel: inbound.threadTitle,
-      ...mediaPayload,
     },
   });
 
@@ -361,7 +403,7 @@ export async function handleQaInbound(params: {
     cfg: params.config as OpenClawConfig,
     channel: params.channelId,
     accountId: params.account.accountId,
-    route: { agentId: route.agentId, sessionKey: route.sessionKey },
+    route: { agentId: route.agentId, dmScope: route.dmScope, sessionKey: route.sessionKey },
     ctxPayload,
     delivery: {
       deliver: async (payload, info) => {
@@ -384,6 +426,7 @@ export async function handleQaInbound(params: {
       },
     },
     replyOptions: {
+      allowToolLifecycleWhenProgressHidden: true,
       onPartialReply: async (payload) => {
         await preview.update(payload.text ?? "");
       },

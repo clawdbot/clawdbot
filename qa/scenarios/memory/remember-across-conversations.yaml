@@ -1,0 +1,523 @@
+title: Remember across conversations
+
+scenario:
+  id: remember-across-conversations
+  surface: session-memory
+  risk: high
+  coverage:
+    primary:
+      - session-memory.active-memory-active-recall
+    secondary:
+      - session-memory.active-memory-recall
+      - session-memory.active-memory-qa-channel
+  objective: Verify bounded private transcript recall across separate conversations without crossing shared, anchor, disabled, or paused conversation boundaries.
+  plugins:
+    - active-memory
+  gatewayConfigPatch:
+    session:
+      dmScope: per-channel-peer
+    memory:
+      search:
+        rememberAcrossConversations: true
+    plugins:
+      entries:
+        active-memory:
+          enabled: true
+          config:
+            enabled: true
+            agents: []
+            toolsAllow:
+              - memory_search
+            logging: true
+            persistTranscripts: true
+            transcriptDir: qa-remember-across-conversations
+            queryMode: message
+            maxSummaryChars: 220
+  successCriteria:
+    - Two private conversations keep distinct session keys and transcript files.
+    - A private reply recalls the relevant fact from the other private conversation.
+    - Accepted memory-search evidence excludes the group transcript and anchor transcript.
+    - Group destinations, the disabled setting, and a session-scoped pause do not start product recall.
+    - The feature does not widen tools.sessions.visibility.
+  docsRefs:
+    - docs/concepts/active-memory.md
+    - docs/reference/memory-config.md
+    - docs/concepts/session.md
+  codeRefs:
+    - extensions/active-memory/index.ts
+    - extensions/memory-core/src/session-search-visibility.ts
+    - extensions/qa-lab/src/suite-runtime-flow.ts
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
+  execution:
+    kind: flow
+    channel: qa-channel
+    suiteIsolation: isolated
+    isolationReason: Mutates transcript indexing, Active Memory session toggles, and Gateway config while comparing private and shared conversations.
+    summary: Prove private transcript recall, source filtering, setting-off behavior, and per-conversation pause behavior.
+    config:
+      requiredChannelDriver: qa-channel
+      sourceConversationId: remember-source
+      targetConversationId: remember-target
+      groupConversationId: remember-group
+      pausedConversationId: remember-paused
+      disabledConversationId: remember-disabled
+      freshConversationId: remember-fresh
+      privateFact: lemon pepper wings with blue cheese
+      groupFact: GROUP-ONLY loaded nachos with black olives
+      anchorFact: ANCHOR-ONLY pretzel bites test marker
+      sourceMarker: QA-REMEMBER-SOURCE-SEEDED
+      recallPrompt: "Remember across conversations QA check: what snack do I usually want for QA movie night? Reply in one short sentence."
+      expectedNeedle: lemon pepper wings with blue cheese
+      transcriptDir: qa-remember-across-conversations
+
+flow:
+  steps:
+    - name: recalls only eligible private transcript context
+      actions:
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - resetTransport: true
+        - call: fs.rm
+          args:
+            - expr: "path.join(env.gateway.workspaceDir, 'MEMORY.md')"
+            - force: true
+        - call: fs.rm
+          args:
+            - expr: "path.join(env.gateway.workspaceDir, 'memory', `${formatMemoryDreamingDay(Date.now())}.md`)"
+            - force: true
+        - call: readConfigSnapshot
+          saveAs: original
+          args:
+            - ref: env
+        - set: originalMemorySearch
+          value:
+            expr: "original.config.memory && typeof original.config.memory === 'object' ? structuredClone(original.config.memory.search) : undefined"
+        - set: initialSessionsVisibility
+          value:
+            expr: "original.config.tools && typeof original.config.tools === 'object' && typeof original.config.tools.sessions === 'object' ? original.config.tools.sessions.visibility : undefined"
+        - set: sourceDelivery
+          value:
+            expr: "transport.buildAgentDelivery({ target: `dm:${config.sourceConversationId}` })"
+        - set: targetDelivery
+          value:
+            expr: "transport.buildAgentDelivery({ target: `dm:${config.targetConversationId}` })"
+        - set: groupDelivery
+          value:
+            expr: "transport.buildAgentDelivery({ target: `channel:${config.groupConversationId}` })"
+        - set: pausedDelivery
+          value:
+            expr: "transport.buildAgentDelivery({ target: `dm:${config.pausedConversationId}` })"
+        - set: sourceSessionKey
+          value:
+            expr: "buildAgentSessionKey({ agentId: 'qa', channel: sourceDelivery.channel, accountId: transport.accountId, peer: { kind: 'direct', id: sourceDelivery.replyTo }, dmScope: original.config.session?.dmScope, identityLinks: original.config.session?.identityLinks })"
+        - set: targetSessionKey
+          value:
+            expr: "buildAgentSessionKey({ agentId: 'qa', channel: targetDelivery.channel, accountId: transport.accountId, peer: { kind: 'direct', id: targetDelivery.replyTo }, dmScope: original.config.session?.dmScope, identityLinks: original.config.session?.identityLinks })"
+        - set: groupSessionKey
+          value:
+            expr: "buildAgentSessionKey({ agentId: 'qa', channel: groupDelivery.channel, accountId: transport.accountId, peer: { kind: 'channel', id: groupDelivery.replyTo } })"
+        - set: pausedSessionKey
+          value:
+            expr: "buildAgentSessionKey({ agentId: 'qa', channel: pausedDelivery.channel, accountId: transport.accountId, peer: { kind: 'direct', id: pausedDelivery.replyTo }, dmScope: original.config.session?.dmScope, identityLinks: original.config.session?.identityLinks })"
+        - set: transcriptRoot
+          value:
+            expr: "path.join(env.gateway.tempRoot, 'state', 'plugins', 'active-memory', 'transcripts', 'agents', 'qa', config.transcriptDir)"
+        - call: fs.rm
+          args:
+            - ref: transcriptRoot
+            - recursive: true
+              force: true
+        - try:
+            actions:
+              - sendInbound:
+                  conversation:
+                    id:
+                      expr: config.sourceConversationId
+                    kind: direct
+                  senderId:
+                    expr: config.sourceConversationId
+                  senderName: Remember Source
+                  text:
+                    expr: "`Stable QA movie night usual favorite snack preference: ${config.privateFact}. Reply exactly: ${config.sourceMarker}.`"
+              - waitForOutbound:
+                  conversation:
+                    id:
+                      expr: config.sourceConversationId
+                    kind: direct
+                  textIncludes:
+                    expr: config.sourceMarker
+                  timeoutMs:
+                    expr: liveTurnTimeoutMs(env, 60000)
+                saveAs: sourceOutbound
+              - sendInbound:
+                  conversation:
+                    id:
+                      expr: config.groupConversationId
+                    kind: channel
+                    title: Remember Group
+                  senderId: remember-group-member
+                  senderName: Remember Group Member
+                  text:
+                    expr: "`@openclaw Stable QA movie night usual favorite snack preference: ${config.groupFact}. This applies only inside this group. Acknowledge briefly.`"
+              - waitForOutbound:
+                  conversation:
+                    id:
+                      expr: config.groupConversationId
+                    kind: channel
+                  timeoutMs:
+                    expr: liveTurnTimeoutMs(env, 60000)
+                saveAs: groupOutbound
+              - sendInbound:
+                  conversation:
+                    id:
+                      expr: config.targetConversationId
+                    kind: direct
+                  senderId:
+                    expr: config.targetConversationId
+                  senderName: Remember Target
+                  text:
+                    expr: "`QA movie night snack recall anchor fixture: ${config.anchorFact}. This is a test marker, not a preference. Acknowledge briefly.`"
+              - waitForOutbound:
+                  conversation:
+                    id:
+                      expr: config.targetConversationId
+                    kind: direct
+                  timeoutMs:
+                    expr: liveTurnTimeoutMs(env, 60000)
+                saveAs: anchorOutbound
+              - call: readRawQaSessionStore
+                saveAs: seededStore
+                args:
+                  - ref: env
+              - set: sourceSession
+                value:
+                  expr: seededStore[sourceSessionKey]
+              - set: targetSession
+                value:
+                  expr: seededStore[targetSessionKey]
+              - set: groupSession
+                value:
+                  expr: seededStore[groupSessionKey]
+              - assert:
+                  expr: "Boolean(sourceSession?.sessionId && sourceSession?.sessionFile)"
+                  message:
+                    expr: "`private source session missing: key=${sourceSessionKey} storeKeys=${Object.keys(seededStore).join(',')}`"
+              - assert:
+                  expr: "Boolean(targetSession?.sessionId && targetSession?.sessionFile)"
+                  message:
+                    expr: "`private target session missing: key=${targetSessionKey} storeKeys=${Object.keys(seededStore).join(',')}`"
+              - assert:
+                  expr: "Boolean(groupSession?.sessionId && groupSession?.sessionFile)"
+                  message:
+                    expr: "`group source session missing: key=${groupSessionKey} storeKeys=${Object.keys(seededStore).join(',')}`"
+              - assert:
+                  expr: "new Set([sourceSession.sessionId, targetSession.sessionId, groupSession.sessionId]).size === 3"
+                  message: source, target, and group sessions unexpectedly share a transcript id
+              - assert:
+                  expr: "new Set([sourceSession.sessionFile, targetSession.sessionFile, groupSession.sessionFile]).size === 3"
+                  message: source, target, and group sessions unexpectedly share a transcript file
+              - call: runQaCli
+                args:
+                  - ref: env
+                  - - memory
+                    - index
+                    - --agent
+                    - qa
+                    - --force
+                  - timeoutMs:
+                      expr: liveTurnTimeoutMs(env, 60000)
+              - call: env.gateway.restartAfterStateMutation
+                args:
+                  - lambda:
+                      async: true
+                      expr: await Promise.resolve()
+              - call: fs.rm
+                args:
+                  - ref: transcriptRoot
+                  - recursive: true
+                    force: true
+              - set: requestCountBeforeRecall
+                value:
+                  expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
+              - set: targetStartIndex
+                value:
+                  expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+              - sendInbound:
+                  conversation:
+                    id:
+                      expr: config.targetConversationId
+                    kind: direct
+                  senderId:
+                    expr: config.targetConversationId
+                  senderName: Remember Target
+                  text:
+                    expr: config.recallPrompt
+              - call: waitForOutboundMessage
+                saveAs: targetOutbound
+                args:
+                  - ref: state
+                  - lambda:
+                      params: [candidate]
+                      expr: "candidate.conversation.id === config.targetConversationId && candidate.direction === 'outbound'"
+                  - expr: liveTurnTimeoutMs(env, 60000)
+                  - sinceIndex:
+                      ref: targetStartIndex
+              - call: waitForCondition
+                saveAs: helperTranscriptPath
+                args:
+                  - lambda:
+                      async: true
+                      expr: "await (async () => { const entries = (await fs.readdir(transcriptRoot).catch(() => [])).filter((entry) => entry.endsWith('.jsonl')).toSorted(); return entries.length > 0 ? path.join(transcriptRoot, entries.at(-1)) : undefined; })()"
+                  - expr: liveTurnTimeoutMs(env, 30000)
+                  - 250
+              - call: fs.readFile
+                saveAs: helperTranscriptText
+                args:
+                  - ref: helperTranscriptPath
+                  - utf8
+              - set: recallRequests
+                value:
+                  expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).slice(requestCountBeforeRecall) : []"
+              - set: recallRequestDebug
+                value:
+                  expr: "recallRequests.map((request) => ({ plannedToolName: request.plannedToolName ?? null, plannedToolArgs: request.plannedToolArgs ?? null, toolOutput: String(request.toolOutput ?? '').slice(0, 1200), finalText: String(request.finalText ?? '').slice(0, 300), allInputText: String(request.allInputText ?? '').slice(-500) }))"
+              - assert:
+                  expr: "normalizeLowercaseStringOrEmpty(targetOutbound.text).includes(normalizeLowercaseStringOrEmpty(config.expectedNeedle))"
+                  message:
+                    expr: "`private target missed recalled preference: reply=${targetOutbound.text}; sessions=${JSON.stringify({ sourceSession, targetSession, groupSession })}; helper=${helperTranscriptText}; requests=${JSON.stringify(recallRequestDebug)}`"
+              - assert:
+                  expr: helperTranscriptText.includes('memory_search')
+                  message: Remember across conversations helper transcript missing memory_search
+              - assert:
+                  expr: helperTranscriptText.includes(sourceSession.sessionId)
+                  message:
+                    expr: "`accepted helper evidence missing private source transcript ${sourceSession.sessionId}: ${helperTranscriptText}`"
+              - assert:
+                  expr: "!helperTranscriptText.includes(groupSession.sessionId)"
+                  message:
+                    expr: "`group transcript ${groupSession.sessionId} leaked into accepted helper evidence: ${helperTranscriptText}`"
+              - assert:
+                  expr: "!helperTranscriptText.includes(targetSession.sessionId)"
+                  message:
+                    expr: "`anchor transcript ${targetSession.sessionId} leaked into accepted helper evidence: ${helperTranscriptText}`"
+              - call: readConfigSnapshot
+                saveAs: afterRecall
+                args:
+                  - ref: env
+              - set: afterSessionsVisibility
+                value:
+                  expr: "afterRecall.config.tools && typeof afterRecall.config.tools === 'object' && typeof afterRecall.config.tools.sessions === 'object' ? afterRecall.config.tools.sessions.visibility : undefined"
+              - assert:
+                  expr: afterSessionsVisibility === initialSessionsVisibility
+                  message:
+                    expr: "`tools.sessions.visibility changed from ${initialSessionsVisibility} to ${afterSessionsVisibility}`"
+              - if:
+                  expr: Boolean(env.mock)
+                  then:
+                    - assert:
+                        expr: "recallRequests.some((request) => String(request.allInputText ?? '').includes('Remember across conversations QA check') && request.plannedToolName === 'memory_search')"
+                        message: deterministic recall did not issue memory_search
+                    - set: helperCountBeforeGroupDestination
+                      value:
+                        expr: "(await fs.readdir(transcriptRoot).catch(() => [])).filter((entry) => entry.endsWith('.jsonl')).length"
+                    - set: groupRequestCountBefore
+                      value:
+                        expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length"
+                    - sendInbound:
+                        conversation:
+                          id:
+                            expr: config.groupConversationId
+                          kind: channel
+                          title: Remember Group
+                        senderId: remember-group-member
+                        senderName: Remember Group Member
+                        text:
+                          expr: "`@openclaw ${config.recallPrompt}`"
+                    - call: waitForCondition
+                      saveAs: groupDestinationRequests
+                      args:
+                        - lambda:
+                            async: true
+                            expr: "await (async () => { const requests = await fetchJson(`${env.mock.baseUrl}/debug/requests`); return requests.length > groupRequestCountBefore ? requests.slice(groupRequestCountBefore) : undefined; })()"
+                        - expr: liveTurnTimeoutMs(env, 60000)
+                        - 100
+                    - set: helperCountAfterGroupDestination
+                      value:
+                        expr: "(await fs.readdir(transcriptRoot).catch(() => [])).filter((entry) => entry.endsWith('.jsonl')).length"
+                    - assert:
+                        expr: helperCountAfterGroupDestination === helperCountBeforeGroupDestination
+                        message: group destination unexpectedly started Remember across conversations recall
+                    - assert:
+                        expr: "groupDestinationRequests.some((request) => String(request.allInputText ?? '').includes('Remember across conversations QA check'))"
+                        message: group destination did not reach the main model request
+                    - assert:
+                        expr: "groupDestinationRequests.every((request) => !String(request.allInputText ?? '').includes(config.privateFact) && !String(request.allInputText ?? '').includes('<active_memory_plugin>'))"
+                        message:
+                          expr: "`group destination received private recall context: ${JSON.stringify(groupDestinationRequests)}`"
+                    - set: pauseCommandStartIndex
+                      value:
+                        expr: state.getSnapshot().messages.length
+                    - sendInbound:
+                        conversation:
+                          id:
+                            expr: config.pausedConversationId
+                          kind: direct
+                        senderId: qa-operator
+                        senderName: QA Operator
+                        text: /active-memory off
+                    - call: sleep
+                      args:
+                        - 2000
+                    - set: pauseCommandMessages
+                      value:
+                        expr: state.getSnapshot().messages.slice(pauseCommandStartIndex)
+                    - set: pauseCommandOutbound
+                      value:
+                        expr: "pauseCommandMessages.find((candidate) => candidate.direction === 'outbound')"
+                    - assert:
+                        expr: Boolean(pauseCommandOutbound)
+                        message:
+                          expr: "`Active Memory command produced no outbound message: ${JSON.stringify(pauseCommandMessages)}`"
+                    - assert:
+                        expr: "pauseCommandOutbound.text.includes('Active Memory: off for this session.')"
+                        message:
+                          expr: "`unexpected Active Memory command response: ${JSON.stringify(pauseCommandOutbound)}`"
+                    - set: helperCountBeforePaused
+                      value:
+                        expr: "(await fs.readdir(transcriptRoot).catch(() => [])).filter((entry) => entry.endsWith('.jsonl')).length"
+                    - set: pausedRequestCountBefore
+                      value:
+                        expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length"
+                    - sendInbound:
+                        conversation:
+                          id:
+                            expr: config.pausedConversationId
+                          kind: direct
+                        senderId:
+                          expr: config.pausedConversationId
+                        senderName: Remember Paused
+                        text:
+                          expr: config.recallPrompt
+                    - call: waitForCondition
+                      saveAs: pausedRequests
+                      args:
+                        - lambda:
+                            async: true
+                            expr: "await (async () => { const requests = await fetchJson(`${env.mock.baseUrl}/debug/requests`); return requests.length > pausedRequestCountBefore ? requests.slice(pausedRequestCountBefore) : undefined; })()"
+                        - expr: liveTurnTimeoutMs(env, 60000)
+                        - 100
+                    - set: helperCountAfterPaused
+                      value:
+                        expr: "(await fs.readdir(transcriptRoot).catch(() => [])).filter((entry) => entry.endsWith('.jsonl')).length"
+                    - assert:
+                        expr: helperCountAfterPaused === helperCountBeforePaused
+                        message: session-scoped pause unexpectedly started recall
+                    - assert:
+                        expr: "pausedRequests.every((request) => !String(request.allInputText ?? '').includes(config.privateFact) && !String(request.allInputText ?? '').includes('<active_memory_plugin>'))"
+                        message:
+                          expr: "`paused conversation received private recall context: ${JSON.stringify(pausedRequests)}`"
+                    - set: freshRequestCountBefore
+                      value:
+                        expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length"
+                    - sendInbound:
+                        conversation:
+                          id:
+                            expr: config.freshConversationId
+                          kind: direct
+                        senderId:
+                          expr: config.freshConversationId
+                        senderName: Remember Fresh
+                        text:
+                          expr: config.recallPrompt
+                    - call: waitForCondition
+                      saveAs: freshRequests
+                      args:
+                        - lambda:
+                            async: true
+                            expr: "await (async () => { const requests = (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).slice(freshRequestCountBefore); return requests.some((request) => String(request.allInputText ?? '').includes('<active_memory_plugin>')) ? requests : undefined; })()"
+                        - expr: liveTurnTimeoutMs(env, 60000)
+                        - 100
+                    - set: helperCountAfterFresh
+                      value:
+                        expr: "(await fs.readdir(transcriptRoot).catch(() => [])).filter((entry) => entry.endsWith('.jsonl')).length"
+                    - assert:
+                        expr: helperCountAfterFresh > helperCountAfterPaused
+                        message: session-scoped pause incorrectly disabled recall for a fresh private conversation
+                    - assert:
+                        expr: "freshRequests.some((request) => String(request.allInputText ?? '').includes('<active_memory_plugin>'))"
+                        message:
+                          expr: "`fresh private conversation missed Active Memory context: ${JSON.stringify(freshRequests)}`"
+                    - call: patchConfig
+                      args:
+                        - env:
+                            ref: env
+                          patch:
+                            memory:
+                              search:
+                                expr: "{ ...structuredClone(originalMemorySearch ?? {}), rememberAcrossConversations: false }"
+                    - call: waitForGatewayHealthy
+                      args:
+                        - ref: env
+                        - 60000
+                    - call: waitForQaChannelReady
+                      args:
+                        - ref: env
+                        - 60000
+                    - set: helperCountBeforeDisabled
+                      value:
+                        expr: "(await fs.readdir(transcriptRoot).catch(() => [])).filter((entry) => entry.endsWith('.jsonl')).length"
+                    - set: disabledRequestCountBefore
+                      value:
+                        expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length"
+                    - sendInbound:
+                        conversation:
+                          id:
+                            expr: config.disabledConversationId
+                          kind: direct
+                        senderId:
+                          expr: config.disabledConversationId
+                        senderName: Remember Disabled
+                        text:
+                          expr: config.recallPrompt
+                    - call: waitForCondition
+                      saveAs: disabledRequests
+                      args:
+                        - lambda:
+                            async: true
+                            expr: "await (async () => { const requests = await fetchJson(`${env.mock.baseUrl}/debug/requests`); return requests.length > disabledRequestCountBefore ? requests.slice(disabledRequestCountBefore) : undefined; })()"
+                        - expr: liveTurnTimeoutMs(env, 60000)
+                        - 100
+                    - set: helperCountAfterDisabled
+                      value:
+                        expr: "(await fs.readdir(transcriptRoot).catch(() => [])).filter((entry) => entry.endsWith('.jsonl')).length"
+                    - assert:
+                        expr: helperCountAfterDisabled === helperCountBeforeDisabled
+                        message: disabled setting unexpectedly started Remember across conversations recall
+                    - assert:
+                        expr: "disabledRequests.every((request) => !String(request.allInputText ?? '').includes(config.privateFact) && !String(request.allInputText ?? '').includes('<active_memory_plugin>'))"
+                        message:
+                          expr: "`disabled setting received private recall context: ${JSON.stringify(disabledRequests)}`"
+            finally:
+              - call: patchConfig
+                args:
+                  - env:
+                      ref: env
+                    patch:
+                      memory:
+                        search:
+                          expr: "originalMemorySearch === undefined ? null : structuredClone(originalMemorySearch)"
+              - call: waitForGatewayHealthy
+                args:
+                  - ref: env
+                  - 60000
+              - call: waitForQaChannelReady
+                args:
+                  - ref: env
+                  - 60000
+      detailsExpr: "[`sourceSession=${sourceSessionKey}`, `targetSession=${targetSessionKey}`, `groupSession=${groupSessionKey}`, `reply=${targetOutbound.text}`, `helperTranscript=${helperTranscriptPath}`, `visibility=${String(afterSessionsVisibility)}`].join('\\n')"

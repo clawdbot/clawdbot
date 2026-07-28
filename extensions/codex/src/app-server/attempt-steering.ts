@@ -15,6 +15,7 @@ const CODEX_STEER_ALL_DEBOUNCE_MS = 500;
 export type CodexSteeringQueueOptions = {
   debounceMs?: number;
   images?: EmbeddedRunAttemptParams["images"];
+  isInboundUserMessage?: boolean;
 };
 
 /**

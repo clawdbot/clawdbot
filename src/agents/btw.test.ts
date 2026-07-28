@@ -20,6 +20,7 @@ const buildSessionContextMock = vi.fn();
 const ensureOpenClawModelsJsonMock = vi.fn();
 const discoverAuthStorageMock = vi.fn();
 const discoverModelsMock = vi.fn();
+const getModelRegistryRuntimeMock = vi.fn();
 const resolveModelWithRegistryMock = vi.fn();
 const ensureAuthProfileStoreMock = vi.fn();
 const ensureAuthProfileStoreWithoutExternalProfilesMock = vi.fn();
@@ -80,6 +81,44 @@ vi.mock("./models-config.js", () => ({
 vi.mock("./agent-model-discovery.js", () => ({
   discoverAuthStorage: (...args: unknown[]) => discoverAuthStorageMock(...args),
   discoverModels: (...args: unknown[]) => discoverModelsMock(...args),
+}));
+
+vi.mock("./sessions/model-registry-runtime.js", () => ({
+  getModelRegistryRuntime: (...args: unknown[]) => getModelRegistryRuntimeMock(...args),
+}));
+
+vi.mock("./prepared-model-runtime.js", () => ({
+  preparedModelRuntimeConfigsMatch: (left: unknown, right: unknown) => left === right,
+  loadPreparedModelRuntimeSnapshot: async (params: {
+    agentId?: string;
+    agentDir: string;
+    config: unknown;
+    inheritedAuthDir?: string;
+    workspaceDir?: string;
+  }) => {
+    const workspaceOptions = params.workspaceDir ? { workspaceDir: params.workspaceDir } : {};
+    await ensureOpenClawModelsJsonMock(params.config, params.agentDir, workspaceOptions);
+    const authStorage = discoverAuthStorageMock(params.agentDir, {
+      config: params.config,
+      ...(params.inheritedAuthDir ? { inheritedAuthDir: params.inheritedAuthDir } : {}),
+      ...workspaceOptions,
+    });
+    const modelRegistry = discoverModelsMock(authStorage, params.agentDir, {
+      config: params.config,
+      ...workspaceOptions,
+    });
+    return {
+      agentId: params.agentId,
+      agentDir: params.agentDir,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      createStores: () => ({ authStorage, modelRegistry }),
+    };
+  },
+}));
+
+vi.mock("./model-discovery-context.js", () => ({
+  resolveModelPluginMetadataSnapshot: () => undefined,
 }));
 
 vi.mock("./embedded-agent-runner/model.js", () => ({
@@ -169,6 +208,7 @@ vi.mock("./agent-scope.js", () => ({
   resolveSessionAgentIds: (...args: unknown[]) => resolveSessionAgentIdsMock(...args),
   resolveSessionAgentId: (...args: unknown[]) => resolveSessionAgentIdMock(...args),
   resolveAgentWorkspaceDir: (...args: unknown[]) => resolveAgentWorkspaceDirMock(...args),
+  resolveDefaultAgentDir: () => "/tmp/agent",
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => ({
@@ -326,12 +366,14 @@ function supportsPreparedOpenAIAuth(ctx: Parameters<AgentHarness["supports"]>[0]
 
 function runSideQuestion(overrides: Partial<RunBtwSideQuestionParams> = {}) {
   return runBtwSideQuestion({
-    cfg: {} as never,
+    cfg: { agents: { entries: { main: { default: true } } } } as never,
     agentDir: DEFAULT_AGENT_DIR,
     provider: DEFAULT_PROVIDER,
     model: DEFAULT_MODEL,
     question: DEFAULT_QUESTION,
     sessionEntry: createSessionEntry(),
+    sessionKey: DEFAULT_SESSION_KEY,
+    storePath: DEFAULT_STORE_PATH,
     resolvedReasoningLevel: DEFAULT_REASONING_LEVEL,
     opts: {},
     isNewSession: false,
@@ -393,6 +435,7 @@ function createTranscriptEntry(params: { id: string; parentId?: string | null; m
 
 function mockTranscriptEntries(entries: unknown[]) {
   parseSessionEntriesMock.mockReturnValue(entries);
+  loadTranscriptEventsMock.mockResolvedValue(entries);
 }
 
 function mockActiveTranscript(messages: unknown[]) {
@@ -532,6 +575,11 @@ describe("runBtwSideQuestion", () => {
     ensureOpenClawModelsJsonMock.mockReset();
     discoverAuthStorageMock.mockReset();
     discoverModelsMock.mockReset();
+    getModelRegistryRuntimeMock.mockReset();
+    getModelRegistryRuntimeMock.mockReturnValue({
+      apiRegistry: {},
+      llmRuntime: { streamSimple: streamSimpleMock },
+    });
     resolveModelAsyncMock.mockReset();
     resolveModelWithRegistryMock.mockReset();
     ensureAuthProfileStoreMock.mockReset();
@@ -562,7 +610,7 @@ describe("runBtwSideQuestion", () => {
 
     readFileMock.mockResolvedValue("mock transcript");
     loadTranscriptEventsMock.mockResolvedValue([]);
-    parseSessionEntriesMock.mockReturnValue([
+    mockTranscriptEntries([
       createTranscriptEntry({
         id: "user-1",
         message: { role: "user", content: [{ type: "text", text: "hi" }], timestamp: 1 },
@@ -659,7 +707,7 @@ describe("runBtwSideQuestion", () => {
     );
 
     const result = await runBtwSideQuestion({
-      cfg: {} as never,
+      cfg: { agents: { entries: { main: { default: true } } } } as never,
       agentDir: DEFAULT_AGENT_DIR,
       provider: DEFAULT_PROVIDER,
       model: DEFAULT_MODEL,
@@ -934,12 +982,16 @@ describe("runBtwSideQuestion", () => {
     resolveModelWithRegistryMock.mockReturnValue(platformModel);
     resolveSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
     ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
+    getApiKeyForModelMock.mockResolvedValue({
+      apiKey: undefined,
+      mode: "api-key",
+      source: "none",
+    });
 
     await expect(runSideQuestion({ provider: "openai", model: "gpt-5.5" })).resolves.toEqual({
       text: "Codex side answer.",
     });
 
-    expect(getApiKeyForModelMock).not.toHaveBeenCalled();
     expect(codexSideQuestionMock).toHaveBeenCalledOnce();
     const preparedRuntimeAuth = (
       mockArg(codexSideQuestionMock, 0, 0) as {
@@ -952,20 +1004,13 @@ describe("runBtwSideQuestion", () => {
     ).preparedRuntimeAuth;
     expect(preparedRuntimeAuth?.plan).toMatchObject({
       harnessAuthProvider: "openai",
-      deferredRouteSupport: {
-        requestTransportOverrides: "none",
-        runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
-      },
     });
-    expect(preparedRuntimeAuth?.plan?.modelRoute).toBeUndefined();
     expect(preparedRuntimeAuth?.plan?.forwardedAuthProfileId).toBeUndefined();
     expect(preparedRuntimeAuth?.resolvedApiKey).toBeUndefined();
     expect(Object.keys(preparedRuntimeAuth?.authProfileStore?.profiles ?? {})).toEqual([]);
     expect(supports).toHaveBeenCalledWith(
       expect.objectContaining({
         modelProvider: expect.objectContaining({
-          requestTransportOverrides: "none",
-          runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
           preparedAuth: { source: "harness" },
         }),
       }),
@@ -2164,6 +2209,8 @@ describe("runBtwSideQuestion", () => {
       model: "us.anthropic.claude-sonnet-4-5-v1:0",
       question: DEFAULT_QUESTION,
       sessionEntry: createSessionEntry(),
+      sessionKey: DEFAULT_SESSION_KEY,
+      storePath: DEFAULT_STORE_PATH,
       resolvedReasoningLevel: DEFAULT_REASONING_LEVEL,
       opts: {},
       isNewSession: false,
@@ -2326,6 +2373,13 @@ describe("runBtwSideQuestion", () => {
   });
 
   it("reads SQLite marker transcripts through the accessor when no active snapshot exists", async () => {
+    const header = {
+      type: "session",
+      version: 3,
+      id: "session-1",
+      timestamp: "2026-01-01T00:00:00.000Z",
+      cwd: "/tmp",
+    };
     const userEntry = createTranscriptEntry({
       id: "user-seed",
       message: createUserTranscriptMessage(),
@@ -2335,15 +2389,14 @@ describe("runBtwSideQuestion", () => {
       parentId: "user-seed",
       message: createAssistantTranscriptMessage([{ type: "text", text: "seed answer" }]),
     });
-    loadTranscriptEventsMock.mockResolvedValue([userEntry, assistantEntry]);
+    loadTranscriptEventsMock.mockResolvedValue([header, userEntry, assistantEntry]);
     readFileMock.mockRejectedValue(new Error("sqlite marker must not be read as a file"));
     mockDoneAnswer(MATH_ANSWER);
 
     const result = await runMathSideQuestion({
       sessionKey: DEFAULT_SESSION_KEY,
-      sessionEntry: createSessionEntry({
-        sessionFile: `sqlite:main:session-1:${DEFAULT_STORE_PATH}`,
-      }),
+      sessionEntry: createSessionEntry(),
+      storePath: DEFAULT_STORE_PATH,
     });
 
     expect(result).toEqual({ text: MATH_ANSWER });

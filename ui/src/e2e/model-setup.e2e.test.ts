@@ -31,7 +31,7 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
     await server?.close();
   });
 
-  it("detects a reusable CLI login, activates it, and opens chat", async () => {
+  it("hands first-run model setup to the custodian in onboarding chrome", async () => {
     const context = await browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -44,12 +44,14 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
         "chat.startup",
         "openclaw.setup.detect",
         "openclaw.setup.activate",
+        "openclaw.chat",
       ],
       methodResponses: {
         "openclaw.setup.detect": {
           candidates: [
             {
               kind: "codex-cli",
+              brandId: "openai",
               label: "Codex CLI",
               detail: "Signed in locally",
               modelRef: "openai/gpt-5",
@@ -67,14 +69,31 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
           latencyMs: 73,
           lines: ["Model ready"],
         },
+        "openclaw.chat": {
+          sessionId: "e2e-custodian",
+          reply: "## Hi, I'm OpenClaw",
+          action: "none",
+          question: {
+            id: "onboarding-next-step",
+            header: "Next step",
+            question: "What would you like to do first?",
+            options: [
+              { label: "Talk to my agent", reply: "talk to agent", recommended: true },
+              { label: "Connect WhatsApp", reply: "connect whatsapp" },
+            ],
+            isOther: true,
+            skipAction: "exit",
+          },
+        },
       },
     });
 
     try {
-      const response = await page.goto(`${server.baseUrl}settings/model-setup`);
+      const response = await page.goto(`${server.baseUrl}settings/model-setup?firstRun=1`);
       expect(response?.status()).toBe(200);
       await page.getByRole("heading", { name: "Connect your AI" }).waitFor();
       const candidate = page.locator('[data-candidate-kind="codex-cli"]');
+      await expect.poll(() => candidate.locator('[data-provider-icon="codex"]').count()).toBe(1);
       await candidate.getByRole("button", { name: "Test & use" }).click();
 
       const detect = await gateway.waitForRequest("openclaw.setup.detect");
@@ -87,7 +106,29 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
         .poll(async () => page.locator(".model-setup__success").textContent())
         .toContain("openai/gpt-5 · 73 ms");
       await page.getByRole("button", { name: "Open Chat" }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/custodian");
+      expect(new URL(page.url()).searchParams.get("onboarding")).toBe("1");
+      await page.getByRole("heading", { name: "OpenClaw", exact: true }).waitFor();
+      await expect
+        .poll(() => page.locator(".shell").getAttribute("class"))
+        .toContain("shell--onboarding");
+      expect(await page.locator(".shell-nav").isVisible()).toBe(false);
+
+      const chatRequest = await gateway.waitForRequest("openclaw.chat");
+      expect(chatRequest.params).toMatchObject({
+        sessionId: expect.stringMatching(/^control-ui-onboarding-/u),
+        welcomeVariant: "onboarding",
+      });
+      await page.getByRole("button", { name: "Skip for now" }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/chat");
+      await expect
+        .poll(() => page.locator(".shell").getAttribute("class"))
+        .not.toContain("shell--onboarding");
+      const userTurns = (await gateway.getRequests("openclaw.chat")).filter((request) => {
+        const params = request.params;
+        return typeof params === "object" && params !== null && "message" in params;
+      });
+      expect(userTurns).toHaveLength(0);
     } finally {
       await context.close();
     }

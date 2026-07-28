@@ -7,6 +7,7 @@ import {
   parseConfigSearchQuery,
 } from "../../components/config-form.search.ts";
 import { schemaType, type JsonSchema } from "../../components/config-form.shared.ts";
+import { splitConfigSchemaByTier } from "../../components/config-form.tiers.ts";
 import { t } from "../../i18n/index.ts";
 import {
   AI_AGENTS_SECTION_KEYS,
@@ -14,11 +15,23 @@ import {
   AUTOMATION_SECTION_KEYS,
   COMMUNICATION_SECTION_KEYS,
   INFRASTRUCTURE_SECTION_KEYS,
+  MCP_SECTION_KEYS,
+  MEMORY_SECTION_KEYS,
+  SECURITY_SECTION_KEYS,
 } from "./config-sections.ts";
+import {
+  memoryVisibleSchemaKeys,
+  resolveMemoryBackend,
+  MEMORY_BACKEND_ANCHOR_ID,
+  MEMORY_CURATED_SCHEMA_KEYS,
+  MEMORY_SEARCH_TAB_SCHEMA_KEYS,
+} from "./memory-schema.ts";
 import {
   APPEARANCE_SETTINGS_TARGET_IDS,
   COMMUNICATION_SETTINGS_TARGET_IDS,
+  CONNECTION_SETTINGS_TARGET_IDS,
   GENERAL_SETTINGS_TARGET_IDS,
+  PROFILE_SETTINGS_TARGET_IDS,
 } from "./settings-targets.ts";
 
 type StaticSettingsBlockDescriptor = Omit<SettingsSearchBlock, "label"> & {
@@ -50,20 +63,16 @@ const GENERAL_SETTINGS_BLOCKS = {
     ],
   },
   channels: {
-    routeId: "config",
+    routeId: "channels",
     labelKey: "quickSettings.channels.title",
-    hash: `#${GENERAL_SETTINGS_TARGET_IDS.channels}`,
-    searchKeys: [
-      "quickSettings.channels.connectedCount",
-      "quickSettings.channels.empty",
-      "quickSettings.channels.connect",
-    ],
+    hash: "",
+    searchKeys: ["quickSettings.channels.connect"],
     aliases: "telegram discord slack whatsapp signal imessage",
   },
   security: {
-    routeId: "config",
+    routeId: "security",
     labelKey: "quickSettings.security.title",
-    hash: `#${GENERAL_SETTINGS_TARGET_IDS.security}`,
+    hash: "",
     searchKeys: [
       "quickSettings.security.gatewayAuth",
       "quickSettings.security.execPolicy",
@@ -73,9 +82,9 @@ const GENERAL_SETTINGS_BLOCKS = {
     ],
   },
   system: {
-    routeId: "config",
+    routeId: "connection",
     labelKey: "quickSettings.system.gatewayHost",
-    hash: `#${GENERAL_SETTINGS_TARGET_IDS.system}`,
+    hash: `#${CONNECTION_SETTINGS_TARGET_IDS.host}`,
     searchKeys: [
       "quickSettings.system.cpu",
       "quickSettings.system.memory",
@@ -85,51 +94,18 @@ const GENERAL_SETTINGS_BLOCKS = {
     ],
     aliases: "system uptime node address pid",
   },
-  appearance: {
-    routeId: "config",
-    labelKey: "quickSettings.appearance.title",
-    hash: `#${GENERAL_SETTINGS_TARGET_IDS.appearance}`,
-    searchKeys: [
-      "quickSettings.appearance.theme",
-      "quickSettings.appearance.textSize",
-      "quickSettings.appearance.importedTheme",
-      "quickSettings.appearance.lobsterVisits",
-      "quickSettings.appearance.lobsterSounds",
-      "quickSettings.appearance.lobsterdex",
-    ],
-    aliases: "mode",
-  },
   personal: {
-    routeId: "config",
-    labelKey: "quickSettings.personal.title",
-    hash: `#${GENERAL_SETTINGS_TARGET_IDS.personal}`,
+    routeId: "profile",
+    labelKey: "profilePage.identity.title",
+    hash: `#${PROFILE_SETTINGS_TARGET_IDS.identity}`,
     searchKeys: [
-      "quickSettings.personal.user",
-      "quickSettings.personal.assistant",
-      "quickSettings.personal.localIdentity",
-      "quickSettings.personal.assistantIdentity",
-      "quickSettings.personal.avatarText",
-      "quickSettings.personal.chooseImage",
-      "quickSettings.personal.browserOnly",
+      "profilePage.identity.description",
+      "profilePage.identity.avatar",
+      "profilePage.identity.chooseAvatar",
+      "profilePage.identity.displayName",
+      "profilePage.identity.linkedEmails",
     ],
-    aliases: "avatar image",
-  },
-  automations: {
-    routeId: "config",
-    labelKey: "quickSettings.automation.title",
-    hash: `#${GENERAL_SETTINGS_TARGET_IDS.automations}`,
-    searchKeys: [
-      "quickSettings.automation.scheduledTask",
-      "quickSettings.automation.scheduledTasks",
-      "quickSettings.automation.installedSkill",
-      "quickSettings.automation.installedSkills",
-      "quickSettings.automation.mcpServer",
-      "quickSettings.automation.mcpServers",
-      "quickSettings.automation.manage",
-      "quickSettings.automation.browse",
-      "quickSettings.automation.configure",
-    ],
-    aliases: "cron",
+    aliases: "profile avatar image email",
   },
 } as const satisfies Record<string, StaticSettingsBlockDescriptor>;
 
@@ -204,9 +180,8 @@ const APPEARANCE_SETTINGS_BLOCKS = {
 
 const COMMUNICATION_SETTINGS_BLOCKS = {
   notifications: {
-    routeId: "communications",
+    routeId: "notifications",
     labelKey: "configView.notifications.title",
-    search: "?section=__notifications__",
     hash: `#${COMMUNICATION_SETTINGS_TARGET_IDS.notifications}`,
     searchKeys: [
       "configView.notifications.hint",
@@ -216,8 +191,30 @@ const COMMUNICATION_SETTINGS_BLOCKS = {
       "configView.notifications.subscribed",
       "configView.notifications.notSubscribed",
       "configView.notifications.enable",
+      "configView.notifications.nativeTitle",
+      "configView.notifications.nativeHint",
+      "configView.notifications.openSystemSettings",
     ],
     aliases: "vapid gateway",
+  },
+} as const satisfies Record<string, StaticSettingsBlockDescriptor>;
+
+// Sessions-hub workspace pages have no schema-backed config section, so they
+// only surface in search through these static entries.
+const WORKSPACE_SETTINGS_BLOCKS = {
+  sessions: {
+    routeId: "sessions",
+    labelKey: "sessionsView.title",
+    hash: "",
+    searchKeys: ["sessionsView.subtitle", "sessionsView.archivedOnly"],
+    aliases: "history archive overrides",
+  },
+  worktrees: {
+    routeId: "worktrees",
+    labelKey: "worktrees.title",
+    hash: "",
+    searchKeys: ["worktrees.subtitle"],
+    aliases: "git checkout branch cleanup",
   },
 } as const satisfies Record<string, StaticSettingsBlockDescriptor>;
 
@@ -225,11 +222,15 @@ const STATIC_SETTINGS_BLOCKS: readonly StaticSettingsBlockDescriptor[] = [
   ...Object.values(GENERAL_SETTINGS_BLOCKS),
   ...Object.values(APPEARANCE_SETTINGS_BLOCKS),
   ...Object.values(COMMUNICATION_SETTINGS_BLOCKS),
+  ...Object.values(WORKSPACE_SETTINGS_BLOCKS),
 ];
 
 const COMMUNICATION_SECTIONS = new Set<string>(COMMUNICATION_SECTION_KEYS);
 const APPEARANCE_SECTIONS = new Set<string>(APPEARANCE_SECTION_KEYS);
+const SECURITY_SECTIONS = new Set<string>(SECURITY_SECTION_KEYS);
 const AUTOMATION_SECTIONS = new Set<string>(AUTOMATION_SECTION_KEYS);
+const MCP_SECTIONS = new Set<string>(MCP_SECTION_KEYS);
+const MEMORY_SECTIONS = new Set<string>(MEMORY_SECTION_KEYS);
 const INFRASTRUCTURE_SECTIONS = new Set<string>(INFRASTRUCTURE_SECTION_KEYS);
 const AI_AGENTS_SECTIONS = new Set<string>(AI_AGENTS_SECTION_KEYS);
 
@@ -243,15 +244,93 @@ function resolveStaticSettingsBlock(block: StaticSettingsBlockDescriptor): Stati
   };
 }
 
+/**
+ * The Memory page hides `memory.*` children the current engine/backend makes
+ * inapplicable — `memory.qmd` only renders once qmd is the selected backend.
+ * Matching the raw section would offer a destination whose editor omits the very
+ * field that matched, so search sees only what the page can show.
+ */
+function visibleMemorySchema(
+  sectionSchema: JsonSchema,
+  config: Record<string, unknown>,
+): JsonSchema {
+  const properties = sectionSchema.properties;
+  if (!properties) {
+    return sectionSchema;
+  }
+  const visible = new Set(memoryVisibleSchemaKeys(resolveMemoryBackend(config)));
+  return {
+    ...sectionSchema,
+    properties: Object.fromEntries(
+      Object.entries(properties).filter(([child]) => visible.has(child)),
+    ),
+  };
+}
+
+/**
+ * The Memory page splits `memory.*` across tabs and lifts `memory.backend` out
+ * of the editor into a curated row, so the bare section destination can land on
+ * a tab or an editor slice that omits the matched control. Only a hit one
+ * surface alone can show re-routes; a section-level match (key, label,
+ * description) is symmetric across slices and keeps the default destination.
+ */
+function memoryDestination(params: {
+  key: string;
+  schema: JsonSchema;
+  value: unknown;
+  hints: ConfigUiHints;
+  query: string;
+  editorHash: string;
+}): { search: string; hash: string } {
+  const properties = params.schema.properties;
+  if (!properties) {
+    return { search: "", hash: params.editorHash };
+  }
+  const sliceMatches = (keys: readonly string[]) => {
+    const sliced = Object.fromEntries(
+      Object.entries(properties).filter(([child]) => keys.includes(child)),
+    );
+    return (
+      Object.keys(sliced).length > 0 &&
+      matchesConfigSectionSearch({
+        key: params.key,
+        schema: { ...params.schema, properties: sliced },
+        value: params.value,
+        hints: params.hints,
+        query: params.query,
+        textMatcher: settingsSearchTextMatches,
+      })
+    );
+  };
+  const onlySliceMatches = (keys: readonly string[]) =>
+    sliceMatches(keys) &&
+    !sliceMatches(Object.keys(properties).filter((child) => !keys.includes(child)));
+  if (onlySliceMatches(MEMORY_SEARCH_TAB_SCHEMA_KEYS)) {
+    return { search: "&tab=search", hash: params.editorHash };
+  }
+  // memoryVisibleSchemaKeys drops `backend` when no engine renders the curated
+  // row, so a match here always has the anchor on the page to scroll to.
+  if (onlySliceMatches(MEMORY_CURATED_SCHEMA_KEYS)) {
+    return { search: "", hash: `#${MEMORY_BACKEND_ANCHOR_ID}` };
+  }
+  return { search: "", hash: params.editorHash };
+}
+
 function routeForConfigSection(key: string): RouteId {
-  if (key === "mcp") {
+  if (MCP_SECTIONS.has(key)) {
     return "mcp";
+  }
+  if (MEMORY_SECTIONS.has(key)) {
+    return "memory";
   }
   if (COMMUNICATION_SECTIONS.has(key)) {
     return "communications";
   }
   if (APPEARANCE_SECTIONS.has(key)) {
     return "appearance";
+  }
+  if (SECURITY_SECTIONS.has(key)) {
+    return "security";
   }
   if (AUTOMATION_SECTIONS.has(key)) {
     return "automation";
@@ -262,7 +341,8 @@ function routeForConfigSection(key: string): RouteId {
   if (AI_AGENTS_SECTIONS.has(key)) {
     return "ai-agents";
   }
-  return "config";
+  // Sections without a curated home render on the Advanced page.
+  return "advanced";
 }
 
 export function findSettingsSearchBlocks(params: {
@@ -270,6 +350,7 @@ export function findSettingsSearchBlocks(params: {
   schema: unknown;
   value: Record<string, unknown> | null;
   uiHints: ConfigUiHints;
+  identityAvailable?: boolean;
 }): SettingsSearchBlock[] {
   if (!params.query.trim()) {
     return [];
@@ -277,9 +358,11 @@ export function findSettingsSearchBlocks(params: {
   const criteria = parseConfigSearchQuery(params.query);
   const matches: SettingsSearchBlock[] =
     criteria.tags.length === 0 && criteria.text
-      ? STATIC_SETTINGS_BLOCKS.map(resolveStaticSettingsBlock).filter((block) =>
-          settingsSearchTextMatches(block.searchText, criteria.text),
+      ? STATIC_SETTINGS_BLOCKS.filter(
+          (block) => params.identityAvailable || block !== GENERAL_SETTINGS_BLOCKS.personal,
         )
+          .map(resolveStaticSettingsBlock)
+          .filter((block) => settingsSearchTextMatches(block.searchText, criteria.text))
       : [];
   const schema =
     params.schema && typeof params.schema === "object" && !Array.isArray(params.schema)
@@ -289,27 +372,53 @@ export function findSettingsSearchBlocks(params: {
     return matches;
   }
   const value = params.value ?? {};
-  for (const [key, sectionSchema] of Object.entries(schema.properties)) {
+  for (const [key, rawSectionSchema] of Object.entries(schema.properties)) {
+    const routeId = routeForConfigSection(key);
+    const sectionSchema =
+      routeId === "memory" ? visibleMemorySchema(rawSectionSchema, value) : rawSectionSchema;
     const meta = SECTION_META[key];
-    const matchesSection = matchesConfigSectionSearch({
-      key,
+    const tierSplit = splitConfigSchemaByTier({
       schema: sectionSchema,
-      value: value[key],
+      path: [key],
       hints: params.uiHints,
-      query: params.query,
-      label: meta?.label,
-      description: meta?.description,
-      textMatcher: settingsSearchTextMatches,
     });
-    if (!matchesSection) {
+    const matchesTier = (tierSchema: JsonSchema | null) =>
+      Boolean(
+        tierSchema &&
+        matchesConfigSectionSearch({
+          key,
+          schema: tierSchema,
+          value: value[key],
+          hints: params.uiHints,
+          query: params.query,
+          label: meta?.label,
+          description: meta?.description,
+          textMatcher: settingsSearchTextMatches,
+        }),
+      );
+    const matchesCommon = matchesTier(tierSplit.common);
+    const matchesAdvanced = matchesTier(tierSplit.advanced);
+    if (!matchesCommon && !matchesAdvanced) {
       continue;
     }
     const encodedKey = encodeURIComponent(key);
+    const editorHash = `#config-section-${encodedKey}`;
+    const destination =
+      routeId === "memory"
+        ? memoryDestination({
+            key,
+            schema: sectionSchema,
+            value: value[key],
+            hints: params.uiHints,
+            query: params.query,
+            editorHash,
+          })
+        : { search: "", hash: editorHash };
     matches.push({
-      routeId: routeForConfigSection(key),
+      routeId,
       label: meta?.label ?? sectionSchema.title ?? key,
-      search: `?section=${encodedKey}`,
-      hash: `#config-section-${encodedKey}`,
+      search: `?section=${encodedKey}${matchesAdvanced ? "&advanced=1" : ""}${destination.search}`,
+      hash: destination.hash,
     });
   }
   return matches;

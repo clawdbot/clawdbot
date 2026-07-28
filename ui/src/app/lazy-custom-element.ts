@@ -56,6 +56,25 @@ export const BROWSER_PANEL_ELEMENT = {
   loadModule: () => import("../components/browser/browser-panel.ts"),
 } satisfies OptionalCustomElement;
 
+// Loaded only for approval document URLs: the approval page pulls the protocol
+// validators (typebox runtime) and must stay out of the normal startup graph.
+export const APPROVAL_PAGE_ELEMENT = {
+  tagName: "openclaw-approval-page",
+  label: "approval page",
+  loadModule: () => import("../pages/approval/approval-page-registration.ts"),
+} satisfies OptionalCustomElement;
+
+// The card is in the chat graph, but modal-only queue controls stay off the
+// startup path until an approval is actually pending.
+const EXEC_APPROVAL_TAG = "openclaw-exec-approval";
+
+export const EXEC_APPROVAL_ELEMENT = {
+  tagName: EXEC_APPROVAL_TAG,
+  // This diagnostic uses the tag rather than user-facing copy.
+  label: EXEC_APPROVAL_TAG,
+  loadModule: () => import("../components/exec-approval.ts"),
+} satisfies OptionalCustomElement;
+
 const hostElementLoads = new WeakMap<UpdatingHost, Map<string, Promise<void>>>();
 
 export function isOptionalElementDefined(element: OptionalCustomElement): boolean {

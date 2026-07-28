@@ -757,6 +757,55 @@ describe("parseCliJsonl", () => {
     });
   });
 
+  it("captures the last Claude assistant transcript UUID as a resume checkpoint", () => {
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({ type: "system", subtype: "init", session_id: "session-checkpoint" }),
+        JSON.stringify({
+          type: "assistant",
+          uuid: "assistant-checkpoint-1",
+          message: {
+            id: "provider-message-1",
+            role: "assistant",
+            content: [{ type: "text", text: "first" }],
+          },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          uuid: "assistant-checkpoint-2",
+          message: {
+            id: "provider-message-2",
+            role: "assistant",
+            content: [{ type: "text", text: "done" }],
+          },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          uuid: "subagent-checkpoint",
+          parent_tool_use_id: "tool-use-1",
+          message: {
+            id: "provider-subagent-message",
+            role: "assistant",
+            content: [{ type: "text", text: "nested" }],
+          },
+        }),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-checkpoint",
+          result: "done",
+        }),
+      ].join("\n"),
+      {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result?.resumeCheckpointId).toBe("assistant-checkpoint-2");
+  });
+
   it("preserves Claude session metadata even when the final result text is empty", () => {
     const result = parseCliJsonl(
       [
@@ -1228,33 +1277,6 @@ describe("createCliJsonlStreamingParser", () => {
       text: "hello world",
       sessionId: "session-stream",
       usage: undefined,
-    });
-  });
-
-  it("reports an output-limit error and ignores later chunks", () => {
-    const parser = createCliJsonlStreamingParser({
-      backend: {
-        command: "local-cli",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        reliability: { outputLimits: { maxTurnRawChars: 1024 } },
-      },
-      providerId: "local-cli",
-      onAssistantDelta: () => {},
-    });
-
-    parser.push("x".repeat(1025));
-    parser.push(`${JSON.stringify({ type: "result", result: "late" })}\n`);
-    parser.finish();
-
-    expect(parser.getErrorText()).toBe(
-      "CLI JSONL output exceeded 1024 characters; refusing to parse output.",
-    );
-    expect(parser.getOutput()).toEqual({
-      text: "",
-      sessionId: undefined,
-      usage: undefined,
-      errorText: "CLI JSONL output exceeded 1024 characters; refusing to parse output.",
     });
   });
 
@@ -2008,6 +2030,13 @@ describe("createCliJsonlStreamingParser", () => {
       input: 11,
       output: 6,
       cacheRead: 125,
+      cacheWrite: undefined,
+      total: undefined,
+    });
+    expect(output?.diagnosticUsage).toEqual({
+      input: 30,
+      output: 15,
+      cacheRead: 300,
       cacheWrite: undefined,
       total: undefined,
     });

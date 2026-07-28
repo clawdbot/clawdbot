@@ -1,7 +1,7 @@
 // Imported by loader.test.ts to keep its mocked suite in one Vitest module graph.
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import { createHookRunner } from "./hooks.js";
 import { loadOpenClawPlugins } from "./loader.js";
@@ -19,6 +19,7 @@ import {
   createSetupEntryChannelPluginFixture,
   globalAfterEach0,
   globalAfterAll1,
+  updatePluginManifest,
 } from "./loader.test-harness.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 
@@ -1534,19 +1535,17 @@ describe("loadOpenClawPlugins", () => {
     expectDiagnosticContaining({ registry, message: "escapes" });
   });
 
-  it("blocks before_prompt_build but preserves legacy model overrides when prompt injection is disabled", async () => {
+  it("blocks before_prompt_build but preserves model resolution overrides when prompt injection is disabled", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "hook-policy",
       filename: "hook-policy.cjs",
       body: `module.exports = { id: "hook-policy", register(api) {
     api.on("before_prompt_build", () => ({ prependContext: "prepend" }));
-    api.on("before_agent_start", () => ({
-      prependContext: "legacy",
-      modelOverride: "demo-legacy-model",
-      providerOverride: "demo-legacy-provider",
+    api.on("before_model_resolve", () => ({
+      modelOverride: "demo-model",
+      providerOverride: "demo-provider",
     }));
-    api.on("before_model_resolve", () => ({ providerOverride: "demo-explicit-provider" }));
   } };`,
     });
 
@@ -1566,15 +1565,12 @@ describe("loadOpenClawPlugins", () => {
     });
 
     expect(registry.plugins.find((entry) => entry.id === "hook-policy")?.status).toBe("loaded");
-    expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual([
-      "before_agent_start",
-      "before_model_resolve",
-    ]);
+    expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual(["before_model_resolve"]);
     const runner = createHookRunner(registry);
-    const legacyResult = await runner.runBeforeAgentStart({ prompt: "hello", messages: [] }, {});
-    expect(legacyResult).toEqual({
-      modelOverride: "demo-legacy-model",
-      providerOverride: "demo-legacy-provider",
+    const result = await runner.runBeforeModelResolve({ prompt: "hello" }, {});
+    expect(result).toEqual({
+      modelOverride: "demo-model",
+      providerOverride: "demo-provider",
     });
     const blockedDiagnostics = registry.diagnostics.filter((diag) =>
       diag.message.includes(
@@ -1582,12 +1578,6 @@ describe("loadOpenClawPlugins", () => {
       ),
     );
     expect(blockedDiagnostics).toHaveLength(1);
-    const constrainedDiagnostics = registry.diagnostics.filter((diag) =>
-      diag.message.includes(
-        "prompt fields constrained by plugins.entries.hook-policy.hooks.allowPromptInjection=false",
-      ),
-    );
-    expect(constrainedDiagnostics).toHaveLength(1);
   });
 
   it("blocks next-turn injections when prompt injection is disabled", () => {
@@ -1637,7 +1627,6 @@ describe("loadOpenClawPlugins", () => {
       filename: "hook-policy-default.cjs",
       body: `module.exports = { id: "hook-policy-default", register(api) {
     api.on("before_prompt_build", () => ({ prependContext: "prepend" }));
-    api.on("before_agent_start", () => ({ prependContext: "legacy" }));
   } };`,
     });
 
@@ -1648,10 +1637,7 @@ describe("loadOpenClawPlugins", () => {
       },
     });
 
-    expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual([
-      "before_prompt_build",
-      "before_agent_start",
-    ]);
+    expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual(["before_prompt_build"]);
   });
 
   it("applies configured typed hook timeout overrides", () => {
@@ -1662,7 +1648,6 @@ describe("loadOpenClawPlugins", () => {
       body: `module.exports = { id: "hook-timeouts", register(api) {
     api.on("before_prompt_build", () => ({ prependContext: "prepend" }), { timeoutMs: 5000 });
     api.on("before_model_resolve", () => ({ providerOverride: "demo-provider" }));
-    api.on("before_agent_start", () => ({ modelOverride: "demo-model" }));
   } };`,
     });
 
@@ -1689,8 +1674,157 @@ describe("loadOpenClawPlugins", () => {
     ).toEqual({
       before_prompt_build: 250,
       before_model_resolve: 750,
-      before_agent_start: 250,
     });
+  });
+
+  it.each([
+    {
+      label: "per-hook timeout over the global timeout",
+      hooks: { timeoutMs: 250, timeouts: { after_tool_call: 25 } },
+      expectedTimeoutMs: 25,
+    },
+    {
+      label: "global timeout when no per-hook timeout is configured",
+      hooks: { timeoutMs: 40 },
+      expectedTimeoutMs: 40,
+    },
+  ])("bounds agent tool-result middleware with $label", async ({ hooks, expectedTimeoutMs }) => {
+    useNoBundledPlugins();
+    const pluginId = `tool-result-middleware-timeout-${expectedTimeoutMs}`;
+    const plugin = writePlugin({
+      id: pluginId,
+      filename: `${pluginId}.cjs`,
+      body: `module.exports = { id: ${JSON.stringify(pluginId)}, register(api) {
+    api.registerAgentToolResultMiddleware(() => new Promise(() => {}), {
+      runtimes: ["openclaw"],
+    });
+  } };`,
+    });
+    updatePluginManifest(plugin, {
+      contracts: { agentToolResultMiddleware: ["openclaw"] },
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: [pluginId],
+        entries: {
+          [pluginId]: {
+            hooks,
+          },
+        },
+      },
+    });
+    const middleware = registry.agentToolResultMiddlewares[0];
+    if (!middleware) {
+      throw new Error("expected tool-result middleware registration");
+    }
+
+    vi.useFakeTimers();
+    try {
+      const middlewareRun = middleware.handler(
+        {
+          toolCallId: "call-1",
+          toolName: "exec",
+          args: {},
+          result: { content: [{ type: "text", text: "raw" }], details: {} },
+        },
+        { runtime: "openclaw" },
+      );
+      const outcome = Promise.resolve(middlewareRun).then(
+        () => ({ status: "resolved" as const }),
+        (error: unknown) => ({
+          status: "rejected" as const,
+          message: error instanceof Error ? error.message : String(error),
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(expectedTimeoutMs);
+
+      await expect(outcome).resolves.toEqual({
+        status: "rejected",
+        message: `agent tool result middleware for ${pluginId} timed out after ${expectedTimeoutMs}ms`,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves agent tool-result middleware unbounded when no timeout is configured", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "tool-result-middleware-no-timeout",
+      filename: "tool-result-middleware-no-timeout.cjs",
+      body: `module.exports = { id: "tool-result-middleware-no-timeout", register(api) {
+    api.registerAgentToolResultMiddleware(() => new Promise(() => {}), {
+      runtimes: ["openclaw"],
+    });
+  } };`,
+    });
+    updatePluginManifest(plugin, {
+      contracts: { agentToolResultMiddleware: ["openclaw"] },
+    });
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["tool-result-middleware-no-timeout"] },
+    });
+    const middleware = registry.agentToolResultMiddlewares[0];
+    if (!middleware) {
+      throw new Error("expected tool-result middleware registration");
+    }
+
+    vi.useFakeTimers();
+    try {
+      let settled = false;
+      void Promise.resolve(
+        middleware.handler(
+          {
+            toolCallId: "call-1",
+            toolName: "exec",
+            args: {},
+            result: { content: [{ type: "text", text: "raw" }], details: {} },
+          },
+          { runtime: "openclaw" },
+        ),
+      ).finally(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(settled).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses the registration option when typed hook policy has no timeout", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "after-tool-call-option-timeout",
+      filename: "after-tool-call-option-timeout.cjs",
+      body: `module.exports = { id: "after-tool-call-option-timeout", register(api) {
+    api.on("after_tool_call", () => new Promise(() => {}), { timeoutMs: 30 });
+  } };`,
+    });
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["after-tool-call-option-timeout"] },
+    });
+    const logger = { debug: vi.fn(), error: vi.fn(), warn: vi.fn() };
+    const runner = createHookRunner(registry, { logger });
+
+    vi.useFakeTimers();
+    try {
+      const run = runner.runAfterToolCall({ toolName: "exec", params: {} }, { toolName: "exec" });
+      await vi.advanceTimersByTimeAsync(30);
+
+      await expect(run).resolves.toBeUndefined();
+      expect(logger.error).toHaveBeenCalledWith(
+        "[hooks] after_tool_call handler from after-tool-call-option-timeout failed: timed out after 30ms",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("blocks conversation typed hooks for non-bundled plugins unless explicitly allowed", () => {

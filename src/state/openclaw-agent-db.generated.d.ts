@@ -10,6 +10,14 @@ export type Generated<T> =
     ? ColumnType<S, I | undefined, U>
     : ColumnType<T, T | undefined, T>;
 
+export interface AcpParentStreamEvents {
+  created_at: number;
+  event_json: string;
+  run_id: string;
+  seq: number;
+  session_id: string;
+}
+
 export interface AuthProfileState {
   state_json: string;
   state_key: string;
@@ -20,6 +28,38 @@ export interface AuthProfileStore {
   store_json: string;
   store_key: string;
   updated_at: number;
+}
+
+export interface BoardTabs {
+  chat_dock: Generated<string>;
+  created_by: string;
+  position: number;
+  revision: number;
+  session_key: string;
+  tab_id: string;
+  title: string;
+}
+
+export interface BoardWidgets {
+  content_kind: string;
+  created_at: number;
+  created_by: string;
+  descriptor_json: string | null;
+  grant_state: Generated<string>;
+  granted_sha: string | null;
+  html: Uint8Array | null;
+  manifest: Generated<string>;
+  name: string;
+  position: number;
+  revision: number;
+  session_key: string;
+  sha256: string;
+  size_h: number;
+  size_w: number;
+  tab_id: string;
+  title: string | null;
+  updated_at: number;
+  view_generation: string | null;
 }
 
 export interface CacheEntries {
@@ -145,18 +185,50 @@ export interface SessionConversations {
   session_id: string;
 }
 
-export interface SessionEntries {
-  entry_json: string;
-  session_id: string;
+export interface SessionMembers {
+  added_at: number;
+  added_by: string;
+  identity_id: string;
   session_key: string;
+}
+
+export interface SessionNodes {
+  archived_at: number | null;
+  category: string | null;
+  created_actor_id: string | null;
+  created_actor_type: string | null;
+  created_at: number | null;
+  created_via: string | null;
+  current_session_id: string;
+  display_name: string | null;
+  entry_json: string;
+  fork_source_entry_id: string | null;
+  fork_source_session_id: string | null;
+  fork_source_session_key: string | null;
+  icon: string | null;
+  label: string | null;
+  last_activity_at: number | null;
+  last_interaction_at: number | null;
+  last_read_at: number | null;
+  parent_session_key: string | null;
+  pinned_at: number | null;
+  session_key: string;
+  spawned_by: string | null;
   status: string | null;
   updated_at: number;
 }
 
-export interface SessionRoutes {
-  session_id: string;
+export interface SessionSuggestions {
+  author_id: string;
+  author_label: string | null;
+  created_at: number;
+  dispatch_resolution: string | null;
+  dispatch_started_at: number | null;
+  dispatch_token: string | null;
+  id: string;
   session_key: string;
-  updated_at: number;
+  state: string;
+  text: string;
 }
 
 export interface SessionTranscriptActiveEvents {
@@ -214,7 +286,7 @@ export interface SessionTranscriptIndexState {
   updated_at: number;
 }
 
-export interface Sessions {
+export interface SessionWindows {
   account_id: string | null;
   acp_owned: Generated<number>;
   agent_harness_id: string | null;
@@ -228,7 +300,9 @@ export interface Sessions {
   model_provider: string | null;
   parent_session_key: string | null;
   plugin_owner_id: string | null;
+  previous_session_id: string | null;
   primary_conversation_id: string | null;
+  reason: string | null;
   session_entry_provenance: Generated<number>;
   session_id: string;
   session_key: string;
@@ -277,9 +351,18 @@ export interface TranscriptEvents {
   session_id: string;
 }
 
+export interface TranscriptRewriteWatermarks {
+  generation: string;
+  session_id: string;
+  updated_at: number;
+}
+
 export interface DB {
+  acp_parent_stream_events: AcpParentStreamEvents;
   auth_profile_state: AuthProfileState;
   auth_profile_store: AuthProfileStore;
+  board_tabs: BoardTabs;
+  board_widgets: BoardWidgets;
   cache_entries: CacheEntries;
   conversation_deliveries: ConversationDeliveries;
   conversations: Conversations;
@@ -291,8 +374,9 @@ export interface DB {
   memory_index_state: MemoryIndexState;
   schema_meta: SchemaMeta;
   session_conversations: SessionConversations;
-  session_entries: SessionEntries;
-  session_routes: SessionRoutes;
+  session_members: SessionMembers;
+  session_nodes: SessionNodes;
+  session_suggestions: SessionSuggestions;
   session_transcript_active_events: SessionTranscriptActiveEvents;
   session_transcript_fts: SessionTranscriptFts;
   session_transcript_fts_config: SessionTranscriptFtsConfig;
@@ -301,9 +385,10 @@ export interface DB {
   session_transcript_fts_docsize: SessionTranscriptFtsDocsize;
   session_transcript_fts_idx: SessionTranscriptFtsIdx;
   session_transcript_index_state: SessionTranscriptIndexState;
-  sessions: Sessions;
+  session_windows: SessionWindows;
   state_leases: StateLeases;
   trajectory_runtime_events: TrajectoryRuntimeEvents;
   transcript_event_identities: TranscriptEventIdentities;
   transcript_events: TranscriptEvents;
+  transcript_rewrite_watermarks: TranscriptRewriteWatermarks;
 }

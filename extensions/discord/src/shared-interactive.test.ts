@@ -109,7 +109,13 @@ describe("buildDiscordInteractiveComponents", () => {
               buttons: [
                 {
                   label: "Review",
-                  action: { type, url: "https://example.com/review" } as MessagePresentationAction,
+                  action: {
+                    type,
+                    url:
+                      type === "web-app"
+                        ? "https://node.tailnet.ts.net/__openclaw__/mcp-app#opaque-ticket"
+                        : "https://example.com/review",
+                  } as MessagePresentationAction,
                 },
               ],
             },
@@ -123,7 +129,10 @@ describe("buildDiscordInteractiveComponents", () => {
               {
                 label: "Review",
                 style: "link",
-                url: "https://example.com/review",
+                url:
+                  type === "web-app"
+                    ? "https://node.tailnet.ts.net/__openclaw__/mcp-app#opaque-ticket"
+                    : "https://example.com/review",
               },
             ],
           },
@@ -268,6 +277,37 @@ describe("buildDiscordInteractiveComponents", () => {
       approvalId: "opaque:approval;id=7",
       approvalKind: "plugin",
       action: "deny",
+    });
+  });
+
+  it("renders question choices with compact option indices", () => {
+    const questionId = "ask_0123456789abcdef0123456789abcdef";
+    expect(
+      buildDiscordPresentationComponents({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: ["Staging", "Production"].map((label) => ({
+              label,
+              action: { type: "question" as const, questionId, optionValue: label },
+            })),
+          },
+        ],
+      }),
+    ).toEqual({
+      blocks: [
+        {
+          type: "actions",
+          buttons: [
+            { label: "Staging", style: "secondary", internalCustomId: `ocq:id=${questionId};i=0` },
+            {
+              label: "Production",
+              style: "secondary",
+              internalCustomId: `ocq:id=${questionId};i=1`,
+            },
+          ],
+        },
+      ],
     });
   });
 

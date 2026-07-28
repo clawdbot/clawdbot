@@ -99,10 +99,11 @@ extension RootTabsSourceGuardTests {
         // root's only remediation surface must not depend on aggregate status.
         #expect(activeProblemToast.contains("appModel.lastGatewayProblem"))
         #expect(!activeProblemToast.contains("gatewayStatus"))
-        // Every problem report re-surfaces a swiped-away toast or shakes the
-        // visible one; value equality alone must not keep the toast hidden.
+        // Every problem report re-surfaces a swiped-away toast. Visible problem
+        // banners stay stationary when reconnects re-report the same failure.
         #expect(rootSource.contains("self.appModel.gatewayProblemReportCount"))
-        #expect(rootSource.contains("GatewayToastShakeEffect"))
+        #expect(rootSource.contains("guard self.isGatewayToastSwipeDismissed else { return }"))
+        #expect(!rootSource.contains("GatewayToastShakeEffect"))
 
         #expect(actionsSource.contains("await self.gatewayController.connectActiveGateway()"))
         #expect(actionsSource.contains("self.gatewayController.refreshActiveGatewayRegistrationFromSettings()"))
@@ -120,7 +121,7 @@ extension RootTabsSourceGuardTests {
         #expect(settingsSource.contains("let acceptsGatewaySetupRequests: Bool"))
         #expect(settingsSource.contains("guard self.acceptsGatewaySetupRequests else { return }"))
         #expect(settingsSource.contains(".onChange(of: self.acceptsGatewaySetupRequests)"))
-        #expect(rootSource.matches(of: /acceptsGatewaySetupRequests: !self\.showOnboarding/).count == 2)
+        #expect(rootSource.matches(of: /acceptsGatewaySetupRequests: !self\.showOnboarding/).count == 1)
         #expect(actionsSource.contains("func syncAfterOnboardingReset()"))
         #expect(actionsSource.contains("self.pendingManualAuthOverride = nil"))
         // The root toast is the only gateway problem surface outside covers, so it
@@ -144,6 +145,8 @@ extension RootTabsSourceGuardTests {
         #expect(!settingsSource.contains(".onChange(of: self.showQRScanner)"))
         #expect(actionsSource.contains("case let .gatewayLink(link):"))
         #expect(actionsSource.contains("case let .setupCode(code):"))
+        #expect(actionsSource.contains(
+            "self.stagedGatewaySetupLink = nil\n        self.setupCode = \"\"\n        await self.applyGatewayLink(link)"))
         #expect(stopScanning.lowerBound < deliverResult.lowerBound)
         #expect(trustSource.contains("Trust this gateway?"))
         #expect(trustSource.contains("Trust and connect"))
@@ -229,7 +232,7 @@ extension RootTabsSourceGuardTests {
         #expect(connectionFailure.contains("self.localConnectionFailure = message"))
         #expect(!connectionFailure.contains("self.connectMessage = message"))
         #expect(connectionFailure.contains("self.statusLine = message"))
-        #expect(onboardingSource.contains(".failedStatus(message: message, allowsRetry: false)"))
+        #expect(onboardingSource.contains(".failedStatus(message: localFailure, allowsRetry: false)"))
         #expect(onboardingSource.contains(
             "primaryActionTitle: allowsRetry ? OpenClawTextValue.localized(\"Retry\") : nil"))
         #expect(onboardingSource.contains("onPrimaryAction: allowsRetry ? self.onRetry : nil"))

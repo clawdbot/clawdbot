@@ -45,13 +45,12 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: pluginRegistryMocks.loadPluginMetadataSnapshot,
 }));
 
-import {
-  clearCurrentPluginMetadataSnapshot,
-  setCurrentPluginMetadataSnapshot,
-} from "../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { InstalledPluginIndexRecord } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 import { resetProviderAuthAliasMapCacheForTest } from "./provider-auth-aliases.test-support.js";
@@ -209,6 +208,36 @@ describe("provider auth aliases", () => {
     );
 
     expect(resolveProviderIdForAuth("fixture", { config, env })).toBe("provider-two");
+  });
+
+  it("refreshes cached aliases when plugin metadata changes without changing config or env", () => {
+    const config = {};
+    const env = { HOME: "/home/test" } as NodeJS.ProcessEnv;
+
+    const setProviderAuthAlias = (target: string) => {
+      setCurrentPluginMetadataSnapshot(
+        createPluginMetadataSnapshot({
+          config,
+          plugins: [
+            createPluginManifestRecord({
+              id: "alias-owner",
+              origin: "global",
+              providerAuthAliases: { fixture: target },
+            }),
+          ],
+        }),
+        { config, env },
+      );
+    };
+
+    setProviderAuthAlias("provider-one");
+    expect(resolveProviderIdForAuth("fixture", { config, env })).toBe("provider-one");
+
+    clearPluginMetadataLifecycleCaches();
+    setProviderAuthAlias("provider-two");
+
+    expect(resolveProviderIdForAuth("fixture", { config, env })).toBe("provider-two");
+    expect(pluginRegistryMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 
   it("uses caller-provided metadata snapshots without loading plugin metadata", () => {

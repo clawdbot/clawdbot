@@ -21,6 +21,15 @@ const loadConfig = vi.fn<() => OpenClawConfig>(() => ({
 }));
 const writeGatewayRestartIntentSync = vi.fn();
 const clearGatewayRestartIntentSync = vi.fn();
+const appendGatewayLifecycleAudit = vi.fn();
+const createGatewayLifecycleMutationAudit = vi.fn(
+  (params: { action: string; source?: string }) => (mutation: { mode: string; pid?: number }) =>
+    appendGatewayLifecycleAudit({
+      action: params.action,
+      source: params.source ?? "cli",
+      ...mutation,
+    }),
+);
 
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: () => loadConfig(),
@@ -35,6 +44,28 @@ vi.mock("../../runtime.js", () => ({
 vi.mock("../../infra/restart-intent.js", () => ({
   clearGatewayRestartIntentSync: () => clearGatewayRestartIntentSync(),
   writeGatewayRestartIntentSync: (opts: unknown) => writeGatewayRestartIntentSync(opts),
+}));
+
+vi.mock("./lifecycle-audit.js", () => ({
+  appendGatewayLifecycleAudit: (params: unknown) => appendGatewayLifecycleAudit(params),
+  createGatewayLifecycleMutationAudit: (params: { action: string; source?: string }) =>
+    createGatewayLifecycleMutationAudit(params),
+  createServiceLifecycleMutationAudit: (params: { serviceNoun: string; action: string }) =>
+    params.serviceNoun === "Gateway" ? createGatewayLifecycleMutationAudit(params) : undefined,
+  appendServiceLifecycleRepairAudit: (params: {
+    serviceNoun: string;
+    action: string;
+    pid?: number;
+  }) => {
+    if (params.serviceNoun === "Gateway") {
+      appendGatewayLifecycleAudit({
+        action: params.action,
+        source: "cli",
+        mode: "service-repair",
+        ...(params.pid === undefined ? {} : { pid: params.pid }),
+      });
+    }
+  },
 }));
 
 let runServiceRestart: typeof import("./lifecycle-core.js").runServiceRestart;
@@ -113,6 +144,8 @@ describe("runServiceRestart token drift", () => {
   });
 
   beforeEach(() => {
+    appendGatewayLifecycleAudit.mockClear();
+    createGatewayLifecycleMutationAudit.mockClear();
     resetLifecycleRuntimeLogs();
     loadConfig.mockReset();
     loadConfig.mockReturnValue({
@@ -403,7 +436,7 @@ describe("runServiceRestart token drift", () => {
     expect(payload.result).toBe("started");
     expect(payload.message).toContain("re-bootstrapped");
     expect(payload.service?.loaded).toBe(true);
-    expect(service.restart).not.toHaveBeenCalled();
+    expect(service.start).not.toHaveBeenCalled();
   });
 
   it("runs restart health checks after an unmanaged restart signal", async () => {
@@ -547,8 +580,8 @@ describe("runServiceRestart token drift", () => {
     expect(clearGatewayRestartIntentSync).toHaveBeenCalledOnce();
   });
 
-  it("emits scheduled when service start routes through a scheduled restart", async () => {
-    service.restart.mockResolvedValue({ outcome: "scheduled" });
+  it("reports an already-running gateway without starting it", async () => {
+    service.readRuntime.mockResolvedValue({ status: "running", pid: 4242 });
 
     await runServiceStart({
       serviceNoun: "Gateway",
@@ -557,18 +590,111 @@ describe("runServiceRestart token drift", () => {
       opts: { json: true },
     });
 
-    expect(service.isLoaded).toHaveBeenCalled();
-    const payload = readJsonLog<{ result?: string; message?: string }>();
-    expect(payload.result).toBe("scheduled");
-    expect(payload.message).toBe("restart scheduled, gateway will restart momentarily");
+    const payload = readJsonLog<{ ok?: boolean; result?: string; message?: string }>();
+    expect(payload).toMatchObject({
+      ok: true,
+      result: "already-running",
+      message: "Gateway service already running (pid 4242).",
+    });
+    expect(service.start).not.toHaveBeenCalled();
+    expect(appendGatewayLifecycleAudit).not.toHaveBeenCalled();
+  });
+
+  it("warns in json when an already-running gateway definition needs repair", async () => {
+    service.readRuntime.mockResolvedValue({ status: "running", pid: 4242 });
+    service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "run"],
+      environment: { OPENCLAW_SERVICE_VERSION: "2026.4.24" },
+    });
+
+    await runServiceStart(createServiceRunArgs());
+
+    const payload = readJsonLog<{ result?: string; warnings?: string[] }>();
+    expect(payload.result).toBe("already-running");
+    expect(payload.warnings).toEqual([
+      expect.stringMatching(
+        /^Gateway service already running, but its installed service definition needs repair: service was installed by OpenClaw 2026\.4\.24, current CLI is .+; run `openclaw gateway restart` to apply\.$/,
+      ),
+    ]);
+    expect(service.start).not.toHaveBeenCalled();
+  });
+
+  it("prints one warning line when an already-running gateway definition needs repair", async () => {
+    service.readRuntime.mockResolvedValue({ status: "running", pid: 4242 });
+    service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "run"],
+      environment: { OPENCLAW_SERVICE_VERSION: "2026.4.24" },
+    });
+
+    await runServiceStart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+    });
+
+    const repairWarnings = runtimeLogs.filter((line) =>
+      line.startsWith(
+        "Gateway service already running, but its installed service definition needs repair:",
+      ),
+    );
+    expect(repairWarnings).toHaveLength(1);
+    expect(repairWarnings[0]).toContain("run `openclaw gateway restart` to apply.");
+    expect(service.start).not.toHaveBeenCalled();
+  });
+
+  it("audits a service start that actually mutates the gateway", async () => {
+    service.start.mockImplementationOnce(async (args?: GatewayServiceControlArgs) => {
+      args?.onMutation?.({ mode: "kickstart" });
+    });
+
+    await runServiceStart(createServiceRunArgs());
+
+    expect(appendGatewayLifecycleAudit).toHaveBeenCalledWith({
+      action: "start",
+      source: "cli",
+      mode: "kickstart",
+    });
+  });
+
+  it("audits direct managed restart mutations", async () => {
+    service.readRuntime.mockResolvedValue({ status: "running", pid: 4242 });
+    service.restart.mockImplementationOnce(async (args?: GatewayServiceControlArgs) => {
+      args?.onMutation?.({ mode: "kickstart" });
+      return { outcome: "completed" };
+    });
+
+    await runServiceRestart(createServiceRunArgs());
+
+    expect(appendGatewayLifecycleAudit).toHaveBeenCalledWith({
+      action: "restart",
+      source: "cli",
+      mode: "kickstart",
+    });
+  });
+
+  it("audits direct managed stop mutations", async () => {
+    service.stop.mockImplementationOnce(async (args?: GatewayServiceControlArgs) => {
+      args?.onMutation?.({ mode: "bootout" });
+    });
+
+    await runServiceStop({
+      serviceNoun: "Gateway",
+      service,
+      opts: { json: true },
+    });
+
+    expect(appendGatewayLifecycleAudit).toHaveBeenCalledWith({
+      action: "stop",
+      source: "cli",
+      mode: "bootout",
+    });
   });
 
   it("captures service start warnings in json start output", async () => {
-    service.restart.mockImplementationOnce(async (args?: GatewayServiceControlArgs) => {
+    service.start.mockImplementationOnce(async (args?: GatewayServiceControlArgs) => {
       args?.warn?.(
         "Existing generated LaunchAgent env wrapper contains custom behavior and will be overwritten.",
       );
-      return { outcome: "completed" };
     });
 
     await runServiceStart({
@@ -582,7 +708,7 @@ describe("runServiceRestart token drift", () => {
     expect(payload.warnings).toContain(
       "Existing generated LaunchAgent env wrapper contains custom behavior and will be overwritten.",
     );
-    expect(service.restart).toHaveBeenCalledWith(
+    expect(service.start).toHaveBeenCalledWith(
       expect.objectContaining({ warn: expect.any(Function) }),
     );
   });
@@ -616,7 +742,7 @@ describe("runServiceRestart token drift", () => {
     });
 
     expect(repairLoadedService).toHaveBeenCalledTimes(1);
-    expect(service.restart).not.toHaveBeenCalled();
+    expect(service.start).not.toHaveBeenCalled();
     const payload = readJsonLog<{
       result?: string;
       message?: string;
@@ -646,12 +772,12 @@ describe("runServiceRestart token drift", () => {
     expect(payload.ok).toBe(false);
     expect(payload.error).toContain("service needs repair");
     expect(payload.hints).toEqual(["openclaw gateway install --force"]);
-    expect(service.restart).not.toHaveBeenCalled();
+    expect(service.start).not.toHaveBeenCalled();
   });
 
-  it("fails start when restarting a stopped installed service errors", async () => {
+  it("fails start when starting a stopped installed service errors", async () => {
     service.isLoaded.mockResolvedValue(false);
-    service.restart.mockRejectedValue(new Error("launchctl kickstart failed: permission denied"));
+    service.start.mockRejectedValue(new Error("launchctl kickstart failed: permission denied"));
 
     await expect(runServiceStart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
 
@@ -685,6 +811,6 @@ describe("runServiceRestart token drift", () => {
         (item) => item.kind === "install" && item.text === "openclaw gateway install",
       ),
     ).toBe(true);
-    expect(service.restart).not.toHaveBeenCalled();
+    expect(service.start).not.toHaveBeenCalled();
   });
 });

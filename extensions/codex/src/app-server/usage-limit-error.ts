@@ -161,6 +161,7 @@ async function refreshCodexUsageLimitError(params: {
     message: params.source.message,
     codexErrorInfo: params.source.codexErrorInfo,
     rateLimits,
+    rateLimitsAuthoritative: true,
   });
   const message = refreshedMessage ?? initialMessage;
   return message ? { message, rateLimitsForProfile: rateLimits } : undefined;

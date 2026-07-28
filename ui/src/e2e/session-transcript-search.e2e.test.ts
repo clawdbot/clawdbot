@@ -5,6 +5,7 @@ import { chromium, type Browser, type BrowserContext, type Page } from "playwrig
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
+  controlUiSessionPath,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -145,7 +146,7 @@ describeControlUiE2e("Control UI session transcript search", () => {
 
     await page.goto(`${server?.baseUrl ?? ""}sessions`);
     const search = page.getByRole("search", { name: "Search transcripts" });
-    const input = search.getByRole("searchbox", { name: "Search session transcripts" });
+    const input = search.getByRole("searchbox", { name: "Search thread transcripts" });
     await input.waitFor({ state: "visible", timeout: 10_000 });
     await captureUiProof("01-initial.png");
 
@@ -178,7 +179,9 @@ describeControlUiE2e("Control UI session transcript search", () => {
     await result.waitFor({ state: "visible", timeout: 10_000 });
     await expect.poll(async () => gateway.getRequests("sessions.search")).toHaveLength(2);
     await result.click();
-    await expect.poll(() => page?.url()).toContain("session=agent%3Amain%3Alaunch");
+    await expect
+      .poll(() => (page ? new URL(page.url()).pathname : ""))
+      .toBe(controlUiSessionPath("agent:main:launch"));
     await page
       .getByText("The nebula launch checklist is ready.", { exact: true })
       .waitFor({ state: "visible", timeout: 10_000 });
@@ -218,7 +221,7 @@ describeControlUiE2e("Control UI session transcript search", () => {
 
     await page.goto(`${server?.baseUrl ?? ""}sessions`);
     const search = page.getByRole("search", { name: "Search transcripts" });
-    const input = search.getByRole("searchbox", { name: "Search session transcripts" });
+    const input = search.getByRole("searchbox", { name: "Search thread transcripts" });
     const submit = search.getByRole("button", { name: "Search" });
     await input.waitFor({ state: "visible", timeout: 10_000 });
     await input.fill("   ");
@@ -299,7 +302,7 @@ describeControlUiE2e("Control UI session transcript search", () => {
 
     await page.goto(`${server?.baseUrl ?? ""}sessions`);
     const search = page.getByRole("search", { name: "Search transcripts" });
-    const input = search.getByRole("searchbox", { name: "Search session transcripts" });
+    const input = search.getByRole("searchbox", { name: "Search thread transcripts" });
     await input.waitFor({ state: "visible", timeout: 10_000 });
     await expect.poll(() => input.isDisabled()).toBe(true);
     await page

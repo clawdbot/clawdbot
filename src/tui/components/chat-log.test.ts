@@ -75,6 +75,197 @@ describe("ChatLog", () => {
     expect(chatLog.children.length).toBe(1);
   });
 
+  it("keeps cumulative assistant text in chronological order around a tool call", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.updateAssistant("Before the tool.", "run-1");
+    chatLog.startTool("tool-1", "read_file", { path: "a.txt" });
+    chatLog.updateAssistant("Before the tool.\n\nAfter the tool.", "run-1");
+
+    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
+      "AssistantMessageComponent",
+      "ToolExecutionComponent",
+      "AssistantMessageComponent",
+    ]);
+    expect(rendered.indexOf("Before the tool.")).toBeLessThan(rendered.indexOf("Read File"));
+    expect(rendered.indexOf("Read File")).toBeLessThan(rendered.indexOf("After the tool."));
+  });
+
+  it("does not repeat cumulative text across multiple tool calls", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.updateAssistant("First segment.", "run-1");
+    chatLog.startTool("tool-1", "read_file", { path: "a.txt" });
+    chatLog.updateAssistant("First segment.\n\nSecond segment.", "run-1");
+    chatLog.startTool("tool-2", "read_file", { path: "b.txt" });
+    chatLog.updateAssistant("First segment.\n\nSecond segment.\n\nThird segment.", "run-1");
+
+    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    for (const text of ["First segment.", "Second segment.", "Third segment."]) {
+      expect(rendered.split(text)).toHaveLength(2);
+    }
+    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
+      "AssistantMessageComponent",
+      "ToolExecutionComponent",
+      "AssistantMessageComponent",
+      "ToolExecutionComponent",
+      "AssistantMessageComponent",
+    ]);
+  });
+
+  it("reconciles revised assistant snapshots without repeating stale frozen text", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.updateAssistant("Hello before the tool.", "run-1");
+    chatLog.startTool("tool-1", "read_file", { path: "a.txt" });
+    chatLog.updateAssistant("Hallo before the tool.\n\nRevised answer.", "run-1");
+
+    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(rendered).not.toContain("Hello before the tool.");
+    expect(rendered.split("Hallo before the tool.")).toHaveLength(2);
+    expect(rendered.split("Revised answer.")).toHaveLength(2);
+    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
+      "ToolExecutionComponent",
+      "AssistantMessageComponent",
+    ]);
+    expect(rendered.indexOf("Read File")).toBeLessThan(rendered.indexOf("Revised answer."));
+
+    chatLog.updateAssistant("Hallo before the tool.\n\nRevised answer.\n\nNext segment.", "run-1");
+
+    const continued = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(continued.indexOf("Read File")).toBeLessThan(continued.indexOf("Next segment."));
+    expect(continued.split("Revised answer.")).toHaveLength(2);
+  });
+
+  it("reconciles a revised final snapshot after multiple frozen tool calls", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.updateAssistant("First segment.", "run-1");
+    chatLog.startTool("tool-1", "read_file", { path: "a.txt" });
+    chatLog.updateAssistant("First segment.\n\nSecond segment.", "run-1");
+    chatLog.startTool("tool-2", "read_file", { path: "b.txt" });
+    chatLog.finalizeAssistant("Revised first segment.\n\nFinal answer.", "run-1");
+
+    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(rendered.split("Revised first segment.")).toHaveLength(2);
+    expect(rendered.split("Final answer.")).toHaveLength(2);
+    expect(rendered).not.toContain("Second segment.");
+    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
+      "ToolExecutionComponent",
+      "ToolExecutionComponent",
+      "AssistantMessageComponent",
+    ]);
+    expect(rendered.lastIndexOf("Read File")).toBeLessThan(rendered.indexOf("Final answer."));
+  });
+
+  it("removes frozen provisional text when the final snapshot retracts it", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.updateAssistant("Retracted provisional answer.", "run-1");
+    chatLog.startTool("tool-1", "read_file", { path: "a.txt" });
+    chatLog.finalizeAssistant("", "run-1");
+
+    expect(normalizeTestText(chatLog.render(120).join("\n"))).not.toContain(
+      "Retracted provisional answer.",
+    );
+    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
+      "ToolExecutionComponent",
+    ]);
+  });
+
+  it("removes an empty post-tool component when its final snapshot is retracted", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.updateAssistant("Before the tool.", "run-1");
+    chatLog.startTool("tool-1", "read_file", { path: "a.txt" });
+    chatLog.updateAssistant("Before the tool.\n\nRetracted answer.", "run-1");
+    chatLog.finalizeAssistant("Before the tool.", "run-1");
+
+    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
+      "AssistantMessageComponent",
+      "ToolExecutionComponent",
+    ]);
+    expect(normalizeTestText(chatLog.render(120).join("\n"))).not.toContain("Retracted answer.");
+  });
+
+  it("preserves indentation in assistant text that follows a tool call", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.updateAssistant("I ran it:", "run-1");
+    chatLog.startTool("tool-1", "read_file", { path: "a.txt" });
+    chatLog.updateAssistant("I ran it:\n\n    command output", "run-1");
+
+    const segment = chatLog.children.at(-1);
+    expect(segment?.constructor.name).toBe("AssistantMessageComponent");
+    const rendered = normalizeTestText(segment?.render(120).join("\n") ?? "");
+    expect(rendered).toContain("```");
+    expect(rendered).toMatch(/\n {2}command output/);
+  });
+
+  it("finalizes only assistant text that follows an intervening tool call", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.updateAssistant("Before the tool.", "run-1");
+    chatLog.startTool("tool-1", "read_file", { path: "a.txt" });
+    chatLog.finalizeAssistant("Before the tool.\n\nFinal answer.", "run-1");
+
+    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(rendered.split("Before the tool.")).toHaveLength(2);
+    expect(rendered.indexOf("Read File")).toBeLessThan(rendered.indexOf("Final answer."));
+  });
+
+  it("does not add an empty final assistant segment after a tool call", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.updateAssistant("Complete before the tool.", "run-1");
+    chatLog.startTool("tool-1", "read_file", { path: "a.txt" });
+    chatLog.finalizeAssistant("Complete before the tool.", "run-1");
+
+    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
+      "AssistantMessageComponent",
+      "ToolExecutionComponent",
+    ]);
+  });
+
+  it("clears frozen assistant segments when the chat history is rebuilt", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.updateAssistant("Before the tool.", "run-1");
+    chatLog.startTool("tool-1", "read_file", { path: "a.txt" });
+    chatLog.clearAll();
+    chatLog.updateAssistant("Before the tool.\n\nNew history.", "run-1");
+
+    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(rendered).toContain("Before the tool.");
+    expect(rendered).toContain("New history.");
+    expect(chatLog.children).toHaveLength(1);
+  });
+
+  it("removes every frozen assistant segment when a tool-using run is dropped", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.updateAssistant("First segment.", "run-1");
+    chatLog.startTool("tool-1", "read_file", { path: "a.txt" });
+    chatLog.updateAssistant("First segment.\n\nSecond segment.", "run-1");
+    chatLog.startTool("tool-2", "read_file", { path: "b.txt" });
+    chatLog.updateAssistant("First segment.\n\nSecond segment.\n\nThird segment.", "run-1");
+
+    chatLog.dropAssistant("run-1");
+
+    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
+      "ToolExecutionComponent",
+      "ToolExecutionComponent",
+    ]);
+    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(rendered).not.toContain("First segment.");
+    expect(rendered).not.toContain("Second segment.");
+    expect(rendered).not.toContain("Third segment.");
+
+    chatLog.updateAssistant("Fresh run.", "run-1");
+    expect(normalizeTestText(chatLog.render(120).join("\n"))).toContain("Fresh run.");
+  });
+
   it("reserves assistant position without clearing existing streamed text", () => {
     const chatLog = new ChatLog(40);
     chatLog.startAssistant("partial", "run-active");
@@ -172,6 +363,79 @@ describe("ChatLog", () => {
 
     expect(chatLog.children.length).toBe(1);
     expect(chatLog.render(120).join("\n")).toContain("queued hello");
+  });
+
+  it("inserts another client's persisted prompt ahead of an already-streaming reply", () => {
+    const chatLog = new ChatLog(40);
+    chatLog.updateAssistant("Already streaming.", "shared-run");
+
+    chatLog.addLiveUser("Sent from the other client.", {
+      messageId: "shared-user",
+      runId: "shared-run",
+    });
+
+    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(rendered.indexOf("Sent from the other client.")).toBeLessThan(
+      rendered.indexOf("Already streaming."),
+    );
+    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
+      "UserMessageComponent",
+      "AssistantMessageComponent",
+    ]);
+
+    chatLog.updateAssistant("Still streaming.", "shared-run");
+    expect(normalizeTestText(chatLog.render(120).join("\n"))).toContain("Still streaming.");
+  });
+
+  it("deduplicates authoritative user events and adopts the matching pending prompt", () => {
+    const chatLog = new ChatLog(40);
+    chatLog.addPendingUser("shared-run", "Persisted prompt.");
+    chatLog.updateAssistant("Already streaming.", "shared-run");
+
+    chatLog.addLiveUser("Persisted prompt.", { messageId: "shared-user", runId: "shared-run" });
+    chatLog.addLiveUser("Persisted prompt.", { messageId: "shared-user", runId: "shared-run" });
+
+    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(rendered).toContain("Persisted prompt.");
+    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
+      "UserMessageComponent",
+      "AssistantMessageComponent",
+    ]);
+    expect(chatLog.countPendingUsers()).toBe(0);
+  });
+
+  it("preserves a different pending prompt when another client uses the same run", () => {
+    const chatLog = new ChatLog(40);
+    chatLog.addPendingUser("shared-run", "My local steering prompt.");
+    chatLog.updateAssistant("Already streaming.", "shared-run");
+
+    chatLog.addLiveUser("Another client's persisted prompt.", {
+      messageId: "shared-remote-user",
+      runId: "shared-run",
+    });
+
+    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(rendered).toContain("My local steering prompt.");
+    expect(rendered).toContain("Another client's persisted prompt.");
+    expect(rendered.indexOf("Another client's persisted prompt.")).toBeLessThan(
+      rendered.indexOf("Already streaming."),
+    );
+    expect(chatLog.countPendingUsers()).toBe(1);
+  });
+
+  it("deduplicates a replayed live prompt already loaded from authoritative history", () => {
+    const chatLog = new ChatLog(40);
+    chatLog.addUser("Loaded from history.", { messageId: "history-user" });
+
+    chatLog.addLiveUser("Loaded from history.", {
+      messageId: "history-user",
+      runId: "history-run",
+    });
+
+    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
+      "UserMessageComponent",
+    ]);
+    expect(normalizeTestText(chatLog.render(120).join("\n"))).toContain("Loaded from history.");
   });
 
   it("re-keys a pending user in place without moving its position", () => {

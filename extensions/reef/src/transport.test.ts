@@ -2,7 +2,7 @@ import { createPublicKey, verify as verifySignature } from "node:crypto";
 import { once } from "node:events";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket, { WebSocketServer } from "ws";
 import { canonicalBytes, fromBase64url, sha256Hex } from "../protocol/index.js";
 import {
@@ -10,8 +10,10 @@ import {
   ReefRelayError,
   ReefTransportClient,
   createReefWebSocket,
+  isRetryableReefRelayFailure,
+  type WebSocketLike,
 } from "./transport.js";
-import type { ReefKeys, RelayFriend } from "./types.js";
+import type { InboxEntry, ReefKeys, RelayFriend } from "./types.js";
 
 const ts = 1_752_300_000;
 const signing = {
@@ -28,6 +30,66 @@ const keys: ReefKeys = {
   replayKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
   keyEpoch: 1,
 };
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe("isRetryableReefRelayFailure", () => {
+  it("accepts transient relay responses and timeouts", () => {
+    expect(isRetryableReefRelayFailure(new ReefRelayError(408, "timeout"))).toBe(true);
+    expect(isRetryableReefRelayFailure(new ReefRelayError(429, "rate_limited"))).toBe(true);
+    expect(isRetryableReefRelayFailure(new ReefRelayError(503, "unavailable"))).toBe(true);
+    expect(
+      isRetryableReefRelayFailure(Object.assign(new Error("timed out"), { name: "TimeoutError" })),
+    ).toBe(true);
+  });
+
+  it("rejects definitive relay and local failures", () => {
+    expect(isRetryableReefRelayFailure(new ReefRelayError(401, "unauthorized"))).toBe(false);
+    expect(isRetryableReefRelayFailure(new Error("approval store unavailable"))).toBe(false);
+  });
+});
+
+describe("ReefTransportClient network failures", () => {
+  it("normalizes fetch failures without swallowing the cause", async () => {
+    const cause = new TypeError("fetch failed");
+    const client = new ReefTransportClient("https://relay.example", "alice", keys, async () => {
+      throw cause;
+    });
+
+    const error = await client.listFriends().catch((failure: unknown) => failure);
+    expect(error).toMatchObject({
+      name: "ReefRelayUnavailableError",
+      message: "fetch failed",
+      cause,
+    });
+    expect(isRetryableReefRelayFailure(error)).toBe(true);
+  });
+
+  it("normalizes connection loss while reading a successful response body", async () => {
+    const cause = new TypeError("terminated");
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.error(cause);
+        },
+      }),
+    );
+    const client = new ReefTransportClient(
+      "https://relay.example",
+      "alice",
+      keys,
+      async () => response,
+    );
+
+    await expect(client.listFriends()).rejects.toMatchObject({
+      name: "ReefRelayUnavailableError",
+      message: "terminated",
+      cause,
+    });
+  });
+});
 
 function verifyRelaySignature(
   signature: string,
@@ -330,6 +392,485 @@ describe("ReefTransportClient response body bounds", () => {
 
 const INBOX_WEBSOCKET_MAX_PAYLOAD_BYTES = 64 * 1024;
 
+class ControlledSocket {
+  private readonly listeners = new Map<string, Array<(event: unknown) => void>>();
+  private closed = false;
+
+  addEventListener(type: string, listener: (event: unknown) => void): void {
+    const listeners = this.listeners.get(type) ?? [];
+    listeners.push(listener);
+    this.listeners.set(type, listeners);
+  }
+
+  close(): void {
+    if (this.closed) {
+      return;
+    }
+    this.closed = true;
+    this.emit("close");
+  }
+
+  emit(type: string, event: unknown = {}): void {
+    for (const listener of this.listeners.get(type) ?? []) {
+      listener(event);
+    }
+  }
+}
+
+function receiptEntry(seq: number): InboxEntry {
+  return {
+    seq,
+    peer: "bob",
+    id: `01ARZ3NDEKTSV4RRFFQ69G5F${String(seq).padStart(2, "0")}`,
+    kind: "receipt",
+    receipt: { id: `receipt-${seq}` } as never,
+    ts,
+  };
+}
+
+function parseRequestUrl(input: URL | RequestInfo): URL {
+  if (input instanceof URL) {
+    return input;
+  }
+  return new URL(typeof input === "string" ? input : input.url);
+}
+
+describe("ReefInboxConnection recovery", () => {
+  it("starts REST catch-up at the durable cursor and advances only processed entries", async () => {
+    const requestedAfter: number[] = [];
+    const persisted: number[] = [];
+    const processed: number[] = [];
+    const client = new ReefTransportClient(
+      "https://relay.example",
+      "alice",
+      keys,
+      async (input) => {
+        const after = Number(parseRequestUrl(input).searchParams.get("after"));
+        requestedAfter.push(after);
+        return after === 7
+          ? Response.json({ entries: [receiptEntry(8)], cursor: 8 })
+          : Response.json({ entries: [], cursor: after });
+      },
+      () => ts,
+    );
+    const inbox = new ReefInboxConnection(
+      client,
+      async (entries) => {
+        processed.push(...entries.map((entry) => entry.seq));
+      },
+      () => {
+        throw new Error("socket should not open during direct drain");
+      },
+      { initialCursor: 7, persistCursor: (cursor) => persisted.push(cursor) },
+    );
+
+    await inbox.drain();
+
+    expect(requestedAfter).toEqual([7, 8]);
+    expect(processed).toEqual([8]);
+    expect(persisted).toEqual([8]);
+  });
+
+  it("does not advance past an entry that failed processing", async () => {
+    const persisted: number[] = [];
+    const client = new ReefTransportClient(
+      "https://relay.example",
+      "alice",
+      keys,
+      async () => Response.json({ entries: [receiptEntry(8), receiptEntry(9)], cursor: 9 }),
+      () => ts,
+    );
+    const inbox = new ReefInboxConnection(
+      client,
+      async ([entry]) => {
+        if (entry?.seq === 9) {
+          throw new Error("entry failed");
+        }
+      },
+      () => {
+        throw new Error("socket should not open during direct drain");
+      },
+      { initialCursor: 7, persistCursor: (cursor) => persisted.push(cursor) },
+    );
+
+    await expect(inbox.drain()).rejects.toThrow("entry failed");
+    expect(persisted).toEqual([8]);
+  });
+
+  it("rejects an inconsistent REST page before dispatch or persistence", async () => {
+    const processed: number[] = [];
+    const persisted: number[] = [];
+    const client = new ReefTransportClient(
+      "https://relay.example",
+      "alice",
+      keys,
+      async () => Response.json({ entries: [receiptEntry(9)], cursor: 8 }),
+      () => ts,
+    );
+    const inbox = new ReefInboxConnection(
+      client,
+      async (entries) => {
+        processed.push(...entries.map((entry) => entry.seq));
+      },
+      () => new ControlledSocket() as unknown as WebSocketLike,
+      { initialCursor: 7, persistCursor: (cursor) => persisted.push(cursor) },
+    );
+
+    await expect(inbox.drain()).rejects.toThrow(
+      "Reef relay inbox cursor does not match its entries",
+    );
+    expect(processed).toEqual([]);
+    expect(persisted).toEqual([]);
+  });
+
+  it("persists cursor-only progress when retained entries have expired", async () => {
+    const requestedAfter: number[] = [];
+    const persisted: number[] = [];
+    const client = new ReefTransportClient(
+      "https://relay.example",
+      "alice",
+      keys,
+      async (input) => {
+        requestedAfter.push(Number(parseRequestUrl(input).searchParams.get("after")));
+        return Response.json({ entries: [], cursor: 12 });
+      },
+      () => ts,
+    );
+    const inbox = new ReefInboxConnection(
+      client,
+      async () => {},
+      () => new ControlledSocket() as unknown as WebSocketLike,
+      {
+        initialCursor: 7,
+        persistCursor: (cursor) => persisted.push(cursor),
+      },
+    );
+
+    await inbox.drain();
+
+    expect(requestedAfter).toEqual([7]);
+    expect(persisted).toEqual([12]);
+  });
+
+  it("reports connected before a slow REST catch-up completes", async () => {
+    const socket = new ControlledSocket();
+    const states: string[] = [];
+    let releasePull!: () => void;
+    const pullGate = new Promise<void>((resolve) => {
+      releasePull = resolve;
+    });
+    let pullStarted = false;
+    const client = new ReefTransportClient(
+      "https://relay.example",
+      "alice",
+      keys,
+      async () => {
+        pullStarted = true;
+        await pullGate;
+        return Response.json({ entries: [], cursor: 0 });
+      },
+      () => ts,
+    );
+    const abort = new AbortController();
+    const inbox = new ReefInboxConnection(
+      client,
+      async () => {},
+      () => socket as unknown as WebSocketLike,
+      { onState: (state) => states.push(state) },
+    );
+
+    const running = inbox.start(abort.signal);
+    socket.emit("open");
+    await vi.waitFor(() => expect(pullStarted).toBe(true));
+    expect(states).toEqual(["connected"]);
+
+    releasePull();
+    abort.abort();
+    await running;
+    expect(states).toEqual(["connected", "disconnected"]);
+  });
+
+  it("serializes socket frames behind catch-up and skips pull/socket duplicates", async () => {
+    const socket = new ControlledSocket();
+    const processed: number[] = [];
+    const persisted: number[] = [];
+    let releaseFirstPull!: () => void;
+    const firstPullGate = new Promise<void>((resolve) => {
+      releaseFirstPull = resolve;
+    });
+    const client = new ReefTransportClient(
+      "https://relay.example",
+      "alice",
+      keys,
+      async (input) => {
+        const after = Number(parseRequestUrl(input).searchParams.get("after"));
+        if (after === 0) {
+          await firstPullGate;
+          return Response.json({ entries: [receiptEntry(1), receiptEntry(2)], cursor: 2 });
+        }
+        return Response.json({ entries: [], cursor: after });
+      },
+      () => ts,
+    );
+    const abort = new AbortController();
+    const inbox = new ReefInboxConnection(
+      client,
+      async (entries) => {
+        processed.push(...entries.map((entry) => entry.seq));
+      },
+      () => socket as unknown as WebSocketLike,
+      { persistCursor: (cursor) => persisted.push(cursor) },
+    );
+
+    const running = inbox.start(abort.signal);
+    socket.emit("open");
+    socket.emit("message", { data: JSON.stringify({ type: "entry", entry: receiptEntry(2) }) });
+    socket.emit("message", { data: JSON.stringify({ type: "entry", entry: receiptEntry(3) }) });
+    releaseFirstPull();
+    await vi.waitFor(() => expect(processed).toEqual([1, 2, 3]));
+
+    expect(persisted).toEqual([1, 2, 3]);
+    abort.abort();
+    await running;
+  });
+
+  it("reports a socket close immediately while catch-up is still pending", async () => {
+    const socket = new ControlledSocket();
+    const states: string[] = [];
+    let releasePull!: () => void;
+    const pullGate = new Promise<void>((resolve) => {
+      releasePull = resolve;
+    });
+    let pullStarted = false;
+    const client = new ReefTransportClient(
+      "https://relay.example",
+      "alice",
+      keys,
+      async () => {
+        pullStarted = true;
+        await pullGate;
+        return Response.json({ entries: [], cursor: 0 });
+      },
+      () => ts,
+    );
+    const abort = new AbortController();
+    const inbox = new ReefInboxConnection(
+      client,
+      async () => {},
+      () => socket as unknown as WebSocketLike,
+      { onState: (state) => states.push(state) },
+    );
+
+    const running = inbox.start(abort.signal);
+    socket.emit("open");
+    await vi.waitFor(() => expect(pullStarted).toBe(true));
+    socket.emit("close");
+    await vi.waitFor(() => expect(states).toEqual(["connected", "disconnected"]));
+
+    abort.abort();
+    releasePull();
+    await running;
+  });
+
+  it("reports unexpected socket close details before retrying", async () => {
+    const socket = new ControlledSocket();
+    const states: string[] = [];
+    const errors: string[] = [];
+    const client = new ReefTransportClient(
+      "https://relay.example",
+      "alice",
+      keys,
+      async () => Response.json({ entries: [], cursor: 0 }),
+      () => ts,
+    );
+    const abort = new AbortController();
+    const inbox = new ReefInboxConnection(
+      client,
+      async () => {},
+      () => socket as unknown as WebSocketLike,
+      {
+        onState: (state) => states.push(state),
+        onError: (error) => {
+          errors.push(error.message);
+          abort.abort();
+        },
+      },
+    );
+
+    const running = inbox.start(abort.signal);
+    socket.emit("open");
+    socket.emit("close", { code: 1008, reason: "policy" });
+    await running;
+
+    expect(states).toEqual(["connected", "disconnected"]);
+    expect(errors).toEqual(["reef inbox socket closed unexpectedly code=1008 reason=policy"]);
+  });
+
+  it("resets reconnect backoff after a socket completes catch-up", async () => {
+    vi.useFakeTimers();
+    const sockets: ControlledSocket[] = [];
+    const persisted: number[] = [];
+    const client = new ReefTransportClient(
+      "https://relay.example",
+      "alice",
+      keys,
+      async () => Response.json({ entries: [], cursor: 1 }),
+      () => ts,
+    );
+    const abort = new AbortController();
+    const inbox = new ReefInboxConnection(
+      client,
+      async () => {},
+      () => {
+        const socket = new ControlledSocket();
+        sockets.push(socket);
+        return socket as unknown as WebSocketLike;
+      },
+      { persistCursor: (cursor) => persisted.push(cursor) },
+    );
+
+    const running = inbox.start(abort.signal);
+    sockets[0]!.emit("close");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(sockets).toHaveLength(2);
+
+    sockets[1]!.emit("open");
+    await vi.waitFor(() => expect(persisted).toEqual([1]));
+    await Promise.resolve();
+    sockets[1]!.emit("close");
+
+    await vi.advanceTimersByTimeAsync(249);
+    expect(sockets).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(sockets).toHaveLength(3);
+
+    abort.abort();
+    await running;
+  });
+
+  it("waits for an in-flight handler before completing channel abort", async () => {
+    const socket = new ControlledSocket();
+    const persisted: number[] = [];
+    let releaseHandler!: () => void;
+    const handlerGate = new Promise<void>((resolve) => {
+      releaseHandler = resolve;
+    });
+    let handlerStarted = false;
+    const client = new ReefTransportClient(
+      "https://relay.example",
+      "alice",
+      keys,
+      async () => Response.json({ entries: [receiptEntry(1)], cursor: 1 }),
+      () => ts,
+    );
+    const abort = new AbortController();
+    const inbox = new ReefInboxConnection(
+      client,
+      async () => {
+        handlerStarted = true;
+        await handlerGate;
+      },
+      () => socket as unknown as WebSocketLike,
+      { persistCursor: (cursor) => persisted.push(cursor) },
+    );
+
+    let finished = false;
+    const running = inbox.start(abort.signal).then(() => {
+      finished = true;
+    });
+    socket.emit("open");
+    await vi.waitFor(() => expect(handlerStarted).toBe(true));
+    abort.abort();
+    await Promise.resolve();
+    expect(finished).toBe(false);
+
+    releaseHandler();
+    await running;
+    expect(persisted).toEqual([1]);
+  });
+
+  it("bounds live frames during catch-up and reconnects through REST on overflow", async () => {
+    const socket = new ControlledSocket();
+    const errors: string[] = [];
+    let releasePull!: () => void;
+    const pullGate = new Promise<void>((resolve) => {
+      releasePull = resolve;
+    });
+    let pullStarted = false;
+    const client = new ReefTransportClient(
+      "https://relay.example",
+      "alice",
+      keys,
+      async () => {
+        pullStarted = true;
+        await pullGate;
+        return Response.json({ entries: [], cursor: 0 });
+      },
+      () => ts,
+    );
+    const abort = new AbortController();
+    const inbox = new ReefInboxConnection(
+      client,
+      async () => {},
+      () => socket as unknown as WebSocketLike,
+      {
+        onError: (error) => {
+          errors.push(error.message);
+          abort.abort();
+        },
+      },
+    );
+
+    const running = inbox.start(abort.signal);
+    socket.emit("open");
+    await vi.waitFor(() => expect(pullStarted).toBe(true));
+    for (let seq = 1; seq <= 257; seq += 1) {
+      socket.emit("message", {
+        data: JSON.stringify({ type: "entry", entry: receiptEntry(seq) }),
+      });
+    }
+    releasePull();
+    await running;
+
+    expect(errors).toEqual(["Reef inbox live buffer overflow; reconnecting for REST recovery"]);
+  });
+
+  it("surfaces catch-up failures to channel diagnostics", async () => {
+    const socket = new ControlledSocket();
+    const states: string[] = [];
+    const errors: string[] = [];
+    const abort = new AbortController();
+    const client = new ReefTransportClient(
+      "https://relay.example",
+      "alice",
+      keys,
+      async () => {
+        throw new Error("relay catch-up failed");
+      },
+      () => ts,
+    );
+    const inbox = new ReefInboxConnection(
+      client,
+      async () => {},
+      () => socket as unknown as WebSocketLike,
+      {
+        onState: (state) => states.push(state),
+        onError: (error) => {
+          errors.push(error.message);
+          abort.abort();
+        },
+      },
+    );
+
+    const running = inbox.start(abort.signal);
+    socket.emit("open");
+    await running;
+
+    expect(states).toEqual(["connected", "disconnected"]);
+    expect(errors).toEqual(["relay catch-up failed"]);
+  });
+});
+
 function inboxFrameAtSize(bytes: number): string {
   const prefix =
     '{"type":"entry","entry":{"seq":1,"peer":"bob","id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","kind":"receipt","receipt":{"pad":"';
@@ -366,11 +907,13 @@ async function deliverInboxFrame(frame: string): Promise<{
       abort.abort();
     },
     createReefWebSocket,
-    (state) => {
-      states.push(state);
-      if (state === "disconnected") {
-        abort.abort();
-      }
+    {
+      onState: (state) => {
+        states.push(state);
+        if (state === "disconnected") {
+          abort.abort();
+        }
+      },
     },
   );
 

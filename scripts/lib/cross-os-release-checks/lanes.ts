@@ -46,6 +46,7 @@ import {
 import {
   ensureDevUpdateGitInstall,
   ensureManagedGatewayReady,
+  resolveInstalledGatewayStopArgs,
   resolveInstallerTargetVersion,
   runInstalledAgentTurn,
   runInstalledCli,
@@ -59,7 +60,12 @@ import {
   waitForInstalledGatewayToStop,
 } from "./installed.ts";
 import { maybeRunDiscordRoundtrip } from "./network-smokes.ts";
-import { runCleanup, startStaticFileServer, stopGateway } from "./process.ts";
+import {
+  reserveGatewayPortForLane,
+  runCleanup,
+  startStaticFileServer,
+  stopGateway,
+} from "./process.ts";
 import { logLanePhase, runTimedLanePhase } from "./reporting.ts";
 import {
   exerciseManagedGatewayLifecycle,
@@ -432,6 +438,15 @@ export async function runInstallerFreshSuite(
       });
     }
 
+    // Hold the configured port through onboarding and model setup so another runner process
+    // cannot claim it before the manual gateway starts. Release immediately before spawn.
+    const gatewayPortReservation = usesManagedGateway
+      ? null
+      : await reserveGatewayPortForLane(lane);
+    if (gatewayPortReservation) {
+      cleanup.push(() => gatewayPortReservation.release());
+    }
+
     logLanePhase(lane, "onboard");
     await runOnboardWithInstalledCli({
       lane,
@@ -440,6 +455,7 @@ export async function runInstallerFreshSuite(
       providerConfig: params.providerConfig,
       installDaemon: usesManagedGateway,
       logPath: join(params.logsDir, "installer-fresh-onboard.log"),
+      allocateGatewayPort: gatewayPortReservation === null,
     });
 
     if (shouldExerciseManagedGatewayLifecycleAfterInstall()) {
@@ -469,7 +485,12 @@ export async function runInstallerFreshSuite(
         logLanePhase(lane, "gateway-stop-managed");
         await runInstalledCli({
           cliPath: freshShell.cliPath,
-          args: ["gateway", "stop"],
+          args: await resolveInstalledGatewayStopArgs({
+            cliPath: freshShell.cliPath,
+            cwd: lane.homeDir,
+            env,
+            logPath: join(params.logsDir, "installer-fresh-gateway-stop-managed-help.log"),
+          }),
           env,
           cwd: lane.homeDir,
           logPath: join(params.logsDir, "installer-fresh-gateway-stop-managed.log"),
@@ -483,6 +504,7 @@ export async function runInstallerFreshSuite(
           logPath: join(params.logsDir, "installer-fresh-gateway-stop-managed-status.log"),
         });
       }
+      await gatewayPortReservation?.release();
       logLanePhase(lane, "gateway-start");
       const gateway = await startManualGatewayFromInstalledCli({
         lane,

@@ -20,6 +20,7 @@
     }
   },
   "app": {
+    "macOSPrivateApi": true,
     "withGlobalTauri": true,
     "windows": [
       {
@@ -35,7 +36,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src ipc: http://ipc.localhost",
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: http: https:; connect-src ipc: http://ipc.localhost",
       "capabilities": [
         {
           "identifier": "local-companion",
@@ -65,6 +66,17 @@
           "local": true,
           "windows": ["canvas"],
           "permissions": ["allow-canvas-a2ui-action"]
+        },
+        {
+          "identifier": "quickchat",
+          "description": "Quick Chat can select agents, configure its shortcut, send messages, render hosted widgets, and receive window events.",
+          "local": true,
+          "webviews": ["quickchat"],
+          "permissions": [
+            "allow-quickchat",
+            "core:event:allow-listen",
+            "core:event:allow-unlisten"
+          ]
         }
       ]
     }

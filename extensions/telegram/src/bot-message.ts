@@ -254,7 +254,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
           : context.ctxPayload.To,
         chatType: context.ctxPayload.ChatType,
         body: context.ctxPayload.RawBody,
-        mediaType: allMedia[0]?.contentType,
+        mediaType: allMedia[0]?.contentType ?? allMedia[0]?.kind,
       }),
     );
     const spooledReplay =
@@ -262,7 +262,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     if (!spooledReplay) {
       await turnContext.onDispatchStart?.();
     }
-    const runDispatch = async (params: {
+    const runTelegramDispatch = async (params: {
       turnAdoptionLifecycle?: {
         admission?: "exclusive" | "cancel-only";
         onAdopted: () => void | Promise<void>;
@@ -402,7 +402,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
           }
           return AbortSignal.any([participant.abortSignal, ...extras]);
         })();
-        const result = await runDispatch({
+        const result = await runTelegramDispatch({
           turnAdoptionLifecycle: {
             admission: "exclusive",
             abortSignal: turnAbortSignal,
@@ -431,7 +431,9 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
               if (!adopted) {
                 void settle({ kind: "skipped" }, "terminal");
               }
-              drainLifecycle?.onAbandoned();
+              // Generic reply abandonment is synchronous; Telegram has no
+              // owner-local resource teardown gated on core claim release.
+              void drainLifecycle?.onAbandoned();
             },
           },
         });
@@ -507,6 +509,6 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       return await participant.task;
     }
 
-    return await runDispatch({});
+    return await runTelegramDispatch({});
   };
 };

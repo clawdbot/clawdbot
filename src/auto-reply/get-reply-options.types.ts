@@ -2,6 +2,7 @@ import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 /** Public option types for reply generation callbacks, streaming, and delivery policy. */
 import type { AgentPlanStep } from "../channels/streaming.js";
 import type { ImageContent } from "../llm/types.js";
+import type { MediaFact } from "../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.types.js";
 import type { ReplyPayload } from "./reply-payload.js";
@@ -109,6 +110,8 @@ export type GetReplyOptions = {
   images?: ImageContent[];
   /** Original inline/offloaded attachment order for inbound images. */
   imageOrder?: PromptImageOrderEntry[];
+  /** Ordered media facts whose model-facing text projection is already present in the prompt. */
+  media?: MediaFact[];
   /** Notifies when an agent run actually starts (useful for webchat command handling). */
   onAgentRunStart?: (runId: string) => void;
   /**
@@ -306,6 +309,8 @@ export type GetReplyOptions = {
   queuedDeliveryCorrelations?: QueuedReplyDeliveryCorrelation[];
   /** Called after a queued followup owns the reply lane, before its model run starts. */
   onQueuedFollowupAdmitted?: () => Promise<void> | void;
+  /** Called after an admitted queued followup finishes, including failed attempts. */
+  onQueuedFollowupSettled?: () => Promise<void> | void;
   /** Allow channel-owned progress UI while final/source reply delivery remains message-tool-only. */
   allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
   /** Called when a suppressed source reply mode observes visible delivery through another path. */

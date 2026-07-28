@@ -1,5 +1,4 @@
 // Status message helpers read and format stored status messages.
-import fs from "node:fs";
 import {
   type FastMode,
   normalizeLowercaseStringOrEmpty,
@@ -37,8 +36,6 @@ import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import {
   resolveMainSessionKey,
   resolveFreshSessionTotalTokens,
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
   type SessionEntry,
@@ -62,6 +59,7 @@ import type { MediaUnderstandingDecision } from "../media-understanding/types.js
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { formatFastModeStatusValue } from "../shared/fast-mode.js";
 import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
+import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.shared.js";
 import {
   estimateUsageCost,
   formatTokenCount,
@@ -309,28 +307,13 @@ const readUsageFromSessionLog = (
   if (!sessionId) {
     return undefined;
   }
-  let logPath: string;
   try {
     const resolvedAgentId =
       agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined);
-    logPath = resolveSessionFilePath(
-      sessionId,
-      sessionEntry,
-      resolveSessionFilePathOptions({ agentId: resolvedAgentId, storePath }),
-    );
-  } catch {
-    return undefined;
-  }
-  if (!fs.existsSync(logPath)) {
-    return undefined;
-  }
-
-  try {
     const snapshot = readRecentSessionUsageFromTranscript(
       {
-        agentId: agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined),
+        agentId: resolvedAgentId,
         sessionEntry,
-        sessionFile: logPath,
         sessionId,
         sessionKey,
         storePath,
@@ -525,16 +508,16 @@ function resolveChannelModelNote(params: {
   }
   const channelOverride = resolveChannelModelOverride({
     cfg: params.config,
-    channel: params.entry.channel ?? params.entry.origin?.provider,
+    channel: sessionDeliveryChannel(params.entry),
     groupId: params.entry.groupId,
-    groupChatType: params.entry.chatType ?? params.entry.origin?.chatType,
+    groupChatType: params.entry.chatType ?? sessionDeliveryOrigin(params.entry)?.chatType,
     groupChannel: params.entry.groupChannel,
     groupSubject: params.entry.subject,
     parentSessionKey: params.parentSessionKey,
     directUserIds: [
-      params.entry.origin?.nativeDirectUserId,
-      params.entry.origin?.from,
-      params.entry.origin?.to,
+      sessionDeliveryOrigin(params.entry)?.nativeDirectUserId,
+      sessionDeliveryOrigin(params.entry)?.from,
+      sessionDeliveryOrigin(params.entry)?.to,
     ],
   });
   if (!channelOverride) {
@@ -943,6 +926,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   const sessionStartedAt = resolveSessionLifecycleTimestamps({
     entry,
     agentId: args.agentId,
+    sessionKey: args.sessionKey,
     storePath: args.sessionStorePath,
   }).sessionStartedAt;
   const sessionDuration =
@@ -1101,8 +1085,11 @@ export function buildStatusMessage(args: StatusArgs): string {
       ? ` · pinned session; config primary ${configuredDefaultModelLabel} · clear /model default`
       : ` · auto fallback; config primary ${configuredDefaultModelLabel} · check provider`
     : "";
+  // A user-driven live switch that no completed turn has applied yet: surface
+  // it so /status does not imply the new selection is already running.
+  const liveSwitchNote = entry?.liveModelSwitchPending ? " · ⏳ live switch pending" : "";
   const modelLines = [
-    `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}${overrideLabel}`,
+    `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}${overrideLabel}${liveSwitchNote}`,
   ];
 
   // Show configured fallback models (from agent model config)

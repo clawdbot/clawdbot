@@ -459,6 +459,26 @@
           ],
           "title": "InputImageDynamicToolCallOutputContentItem",
           "type": "object"
+        },
+        {
+          "properties": {
+            "audioUrl": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "inputAudio"
+              ],
+              "title": "InputAudioDynamicToolCallOutputContentItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "audioUrl",
+            "type"
+          ],
+          "title": "InputAudioDynamicToolCallOutputContentItem",
+          "type": "object"
         }
       ]
     },
@@ -563,12 +583,6 @@
           ]
         },
         "resourceUri": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "templateId": {
           "type": [
             "string",
             "null"
@@ -1050,6 +1064,13 @@
           "description": "Optional role (agent_role) assigned to an AgentControl-spawned sub-agent.",
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "canAcceptDirectInput": {
+          "description": "Whether the app server accepts direct turn input for this loaded thread. `None` means the capability is unavailable, such as for an unloaded stored thread.",
+          "type": [
+            "boolean",
             "null"
           ]
         },
@@ -1795,6 +1816,15 @@
             "query": {
               "type": "string"
             },
+            "results": {
+              "default": null,
+              "description": "Structured search results returned out-of-band by standalone web search.\n\nThese stay as opaque JSON at the extension/app-server boundary so new result fields and result types can pass through without a Codex release.",
+              "items": true,
+              "type": [
+                "array",
+                "null"
+              ]
+            },
             "type": {
               "enum": [
                 "webSearch"
@@ -1836,6 +1866,7 @@
           "type": "object"
         },
         {
+          "description": "Display item emitted by the interruptible `clock.sleep` tool.",
           "properties": {
             "durationMs": {
               "format": "uint64",
@@ -2303,6 +2334,46 @@
         },
         {
           "properties": {
+            "type": {
+              "enum": [
+                "audio"
+              ],
+              "title": "AudioUserInputType",
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "url"
+          ],
+          "title": "AudioUserInput",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "localAudio"
+              ],
+              "title": "LocalAudioUserInputType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "LocalAudioUserInput",
+          "type": "object"
+        },
+        {
+          "properties": {
             "name": {
               "type": "string"
             },
@@ -2500,6 +2571,14 @@
       },
       "type": "array"
     },
+    "itemsBackwardsCursor": {
+      "default": null,
+      "description": "Opaque head cursor for hydrating paginated items backwards.\n\nPass this as `cursor` to `thread/items/list` with `sortDirection: \"desc\"`. The first page includes the cursor's head item.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "model": {
       "type": "string"
     },
@@ -2549,6 +2628,14 @@
     },
     "thread": {
       "$ref": "#/definitions/Thread"
+    },
+    "turnsBackwardsCursor": {
+      "default": null,
+      "description": "Opaque head cursor for hydrating paginated turns backwards.\n\nPass this as `cursor` to `thread/turns/list` with `sortDirection: \"desc\"`. The first page includes the cursor's head turn.",
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "required": [

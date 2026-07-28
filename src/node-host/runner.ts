@@ -32,6 +32,7 @@ type NodeHostRunOptions = {
   gatewayContextPath?: string;
   nodeId?: string;
   displayName?: string;
+  installedAppsSharing?: boolean;
 };
 
 function resolveNodeHostGatewayPlatform(platform: NodeJS.Platform): string {
@@ -123,9 +124,6 @@ function isUnsupportedNodeSkillsUpdateError(error: unknown): boolean {
 }
 
 async function publishNodePluginTools(client: GatewayClient, tools: unknown[]): Promise<void> {
-  if (tools.length === 0) {
-    return;
-  }
   try {
     await client.request("node.pluginTools.update", { tools });
   } catch (error) {
@@ -157,8 +155,7 @@ async function resolveNodeHostGatewayCredentials(params: {
   return await resolveGatewayConnectionAuth({
     config: configForResolution,
     env: params.env,
-    localTokenPrecedence: "env-first",
-    localPasswordPrecedence: "env-first", // pragma: allowlist secret
+    localPrecedence: "env-first",
     remoteTokenPrecedence: "env-first",
     remotePasswordPrecedence: "env-first", // pragma: allowlist secret
   });
@@ -192,6 +189,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     displayName: opts.displayName,
     fallbackDisplayName,
     gateway: plannedGateway,
+    installedAppsSharing: opts.installedAppsSharing,
   });
   const nodeId = config.nodeId;
   const displayName = config.displayName ?? fallbackDisplayName;
@@ -202,6 +200,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     config: cfg,
     env: process.env,
     enableAgentRuns: true,
+    installedAppsSharingEnabled: config.installedAppsSharing,
   });
   const { token, password } = await resolveNodeHostGatewayCredentials({
     config: cfg,
@@ -236,7 +235,6 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     url,
     token: token || undefined,
     password: password || undefined,
-    preauthHandshakeTimeoutMs: cfg.gateway?.handshakeTimeoutMs,
     instanceId: nodeId,
     clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
     clientDisplayName: displayName,
@@ -353,9 +351,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   process.once("SIGINT", onSigint);
   process.once("SIGTERM", onSigterm);
 
-  const readinessPromise = startGatewayClientWhenEventLoopReady(client, {
-    clientOptions: { preauthHandshakeTimeoutMs: cfg.gateway?.handshakeTimeoutMs },
-  });
+  const readinessPromise = startGatewayClientWhenEventLoopReady(client);
   let readiness;
   try {
     readiness = await readinessPromise;

@@ -124,8 +124,8 @@ Codex heartbeat turns get `heartbeat_respond` in the searchable OpenClaw tool
 catalog by default so the agent can record whether the wake should stay quiet
 or notify. Heartbeat initiative guidance is sent as a Codex collaboration-mode
 developer instruction scoped to the heartbeat turn; ordinary chat turns stay
-in Codex Default mode. When `HEARTBEAT.md` is non-empty, the heartbeat
-instructions point Codex at the file instead of inlining its contents.
+in Codex Default mode. The heartbeat monitor's cron scratch is appended to the
+heartbeat prompt when present.
 
 ## Hook boundaries
 
@@ -149,10 +149,13 @@ hooks such as `SessionStart` and `UserPromptSubmit` remain Codex-level
 controls; they are not exposed as OpenClaw plugin hooks in the v1 contract.
 
 For OpenClaw dynamic tools, OpenClaw executes the tool after Codex asks for
-the call, so plugin and middleware behavior runs in the harness adapter. For
-Codex-native tools, Codex owns the canonical tool record; OpenClaw can mirror
-selected events but cannot rewrite the native thread unless Codex exposes that
-through app-server or native hook callbacks.
+the call, so plugin and middleware behavior runs in the harness adapter. Codex
+Code Mode receives generic dynamic results as text and serializes nested
+dynamic calls; callers must parse JSON-looking results and cannot rely on
+`Promise.all` for concurrent submission. For Codex-native tools, Codex owns the
+canonical tool record; OpenClaw can mirror selected events but cannot rewrite
+the native thread unless Codex exposes that through app-server or native hook
+callbacks.
 
 Codex app-server report-mode `PreToolUse` events defer plugin approval to the
 matching app-server approval. If an OpenClaw `before_tool_call` hook returns
@@ -227,12 +230,14 @@ cwd creates a fresh approval.
 
 Codex MCP tool approval elicitations route through OpenClaw's plugin approval
 flow when Codex marks `_meta.codex_approval_kind` as `"mcp_tool_call"`. Codex
-`request_user_input` prompts are sent back to the originating chat. A single
-non-secret choice uses typed channel buttons when the channel supports them,
-and the Control UI shows non-secret questions as a structured card. The next
-queued follow-up message answers that native server request instead of being
-steered as extra context. Secret questions stay on the warned text-reply path.
-Other MCP elicitation requests fail closed.
+`request_user_input` registers a provider-neutral gateway question for the
+originating session. The Control UI renders the gateway question card, and a
+single non-secret choice uses typed channel buttons when the channel supports
+them. Button taps, Control UI answers, and the next queued plain-text reply all
+resolve the same gateway record before OpenClaw returns the app-server answer.
+Codex auto-resolution and attempt aborts bound the wait and cancel the record.
+Secret questions stay entirely on the warned text-reply path. Other MCP
+elicitation requests fail closed.
 
 For the general plugin approval flow that carries these prompts, see
 [Plugin permission requests](/plugins/plugin-permission-requests).
@@ -315,8 +320,8 @@ writes an OpenClaw-owned session transcript tool result.
 
 OpenClaw continues to own media delivery and media provider selection. Image,
 video, music, PDF, TTS, and media understanding use matching provider/model
-settings such as `agents.defaults.imageGenerationModel`,
-`videoGenerationModel`, `pdfModel`, and `messages.tts`.
+settings such as `agents.defaults.mediaModels.image`,
+`agents.defaults.mediaModels.video`, `pdfModel`, and `tts`.
 
 Text, images, video, music, TTS, approvals, and messaging-tool output continue
 through the normal OpenClaw delivery path; media generation does not require

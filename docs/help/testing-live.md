@@ -12,6 +12,22 @@ For quick start, QA runners, unit/integration suites, and Docker flows, see
 [Testing](/help/testing). This page covers **live** (network-touching) tests:
 model matrix, CLI backends, ACP, media providers, and credential handling.
 
+## Live tests vs your real gateway
+
+Live suites and ad hoc smokes must never disturb a gateway that is already
+serving real traffic (yours or another operator's):
+
+- Bring your own gateway: use the in-process gateway (Layer 2 below) or start a
+  dev instance with an isolated state dir (`OPENCLAW_STATE_DIR=<scratch>`) and a
+  free port. Do not bind the default gateway port (18789) while a real gateway
+  is running on it.
+- Do not `openclaw gateway stop`/`restart` (or `launchctl`/`systemctl`/tmux
+  equivalents) a service you did not start in this session — that is the
+  operator's live instance. Get explicit approval first.
+- Need realistic data? Copy the live state/DB into your dev state dir and test
+  against the copy. In-place migrations of a live gateway's state also require
+  explicit approval.
+
 ## Live: local smoke commands
 
 Export the needed provider key in the process environment before ad hoc live
@@ -304,14 +320,47 @@ Docker notes:
 - Default thinking: `low`
 - Model override: `OPENCLAW_LIVE_CODEX_HARNESS_MODEL=openai/<model>`
 - Thinking override: `OPENCLAW_LIVE_CODEX_HARNESS_THINKING=<level>`
+- Non-default model effort assertion:
+  `OPENCLAW_LIVE_CODEX_HARNESS_EXPECTED_EFFORT=<level>`
 - Matrix override: `OPENCLAW_LIVE_CODEX_HARNESS_TARGETS=<model>=<thinking>,...`
 - Auth mode: `OPENCLAW_LIVE_CODEX_HARNESS_AUTH=codex-auth` (default) uses the
   copied Codex login; `api-key` uses `OPENAI_API_KEY` through Codex app-server.
 - Optional image probe: `OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=1`
 - Optional MCP/tool probe: `OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=1`
 - Optional Guardian probe: `OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=1`
+- Optional resume stress: `OPENCLAW_LIVE_CODEX_HARNESS_RESUME_STRESS=1` adds
+  four history turns, then closes and restarts the Gateway and Codex app-server
+  three times while requiring the same native thread id and conversation
+  history. Override the bounded counts with
+  `OPENCLAW_LIVE_CODEX_HARNESS_RESUME_STRESS_HISTORY_TURNS` (1-20) and
+  `OPENCLAW_LIVE_CODEX_HARNESS_RESUME_STRESS_RESTARTS` (1-10).
+- Optional fan-out stress: set `OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE=1`
+  and `OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_COUNT` (1-12). The harness starts
+  every child concurrently, waits for every terminal run, and verifies each
+  unique child reply and native thread identity.
+- Optional compaction stress: `OPENCLAW_LIVE_CODEX_HARNESS_COMPACTION_STRESS=1`
+  generates bounded native tool output, requires automatic compaction events,
+  verifies the persisted compaction count and hidden-marker recall, restarts
+  the Gateway and physical Codex app-server, then repeats the output and
+  compaction wave. Tune the bounded work with
+  `OPENCLAW_LIVE_CODEX_HARNESS_COMPACTION_STRESS_TURNS` (1-8) and
+  `OPENCLAW_LIVE_CODEX_HARNESS_LARGE_OUTPUT_BYTES` (100000-800000).
+- Full direct-API context: `OPENCLAW_LIVE_CODEX_HARNESS_FULL_CONTEXT=1` applies
+  the `922000` context and `700000` total compaction limits, sends dense bounded
+  user turns, runs two explicit native compaction checkpoints per wave, and
+  continues with later turns after each checkpoint. It requires
+  `OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key` plus an absolute
+  `OPENCLAW_LIVE_CODEX_HARNESS_MODEL_CATALOG` path. The catalog must expose the
+  selected model with `max_context_window: 922000` so Codex does not clamp the
+  override back to its normal catalog window. The ordinary reduced-threshold
+  stress above keeps the stricter automatic-compaction and hidden-marker
+  retention assertions.
 - Optional loop-relay opt-out probe:
   `OPENCLAW_LIVE_CODEX_HARNESS_DISABLE_LOOP_RELAY=1`
+- The requested thinking preference may map to the nearest effort advertised
+  by Codex for that model. For example, Luna maps `minimal` to `low`.
+- Known Codex catalog models derive that exact native effort automatically.
+  Unknown model overrides must state the expected mapped effort.
 - The smoke forces provider/model `agentRuntime.id: "codex"` so a broken Codex
   harness cannot pass by silently falling back to OpenClaw.
 - Auth: Codex app-server auth from the local Codex subscription login, or
@@ -335,6 +384,38 @@ Docker recipe:
 pnpm test:docker:live-codex-harness
 ```
 
+Restart and history stress:
+
+```bash
+OPENCLAW_LIVE_CODEX_HARNESS_RESUME_STRESS=1 \
+pnpm test:docker:live-codex-harness
+```
+
+Fan-out, large-output, compaction, and restart stress:
+
+```bash
+OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key \
+  OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE=1 \
+  OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_COUNT=8 \
+  OPENCLAW_LIVE_CODEX_HARNESS_RESUME_STRESS=1 \
+  OPENCLAW_LIVE_CODEX_HARNESS_COMPACTION_STRESS=1 \
+  pnpm test:docker:live-codex-harness
+```
+
+Full native Codex `922000` input-budget compaction stress:
+
+```bash
+OPENCLAW_LIVE_CODEX_HARNESS=1 \
+  OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key \
+  OPENCLAW_LIVE_CODEX_HARNESS_FULL_CONTEXT=1 \
+  OPENCLAW_LIVE_CODEX_HARNESS_MODEL_CATALOG=/absolute/path/to/models-api-1m.json \
+  OPENCLAW_LIVE_CODEX_HARNESS_MODEL=openai/gpt-5.6-terra \
+  OPENCLAW_LIVE_CODEX_HARNESS_THINKING=medium \
+  OPENCLAW_LIVE_CODEX_HARNESS_COMPACTION_STRESS_TURNS=8 \
+  OPENCLAW_LIVE_CODEX_HARNESS_LARGE_OUTPUT_BYTES=800000 \
+  pnpm test:live -- src/gateway/gateway-codex-harness.live.test.ts
+```
+
 GPT-5.6 native Codex matrix:
 
 ```bash
@@ -342,6 +423,43 @@ OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key \
   OPENCLAW_LIVE_CODEX_HARNESS_TARGETS='openai/gpt-5.6-sol=ultra,openai/gpt-5.6-terra=ultra,openai/gpt-5.6-luna=max' \
   pnpm test:docker:live-codex-harness
 ```
+
+## Live: OpenAI repeated compaction
+
+- Goal: exercise the embedded OpenClaw `openai-responses` agent loop through at
+  least two real automatic compactions, then verify a durable marker survives.
+- Test: `src/agents/sessions/agent-session.openai-compaction.live.test.ts`
+- Enable: `OPENCLAW_LIVE_OPENAI_COMPACTION=1`
+- Default model: `gpt-5.6-luna`
+- Model override: `OPENCLAW_LIVE_OPENAI_COMPACTION_MODEL=<model>`
+- The normal stress mode uses a reduced client context budget to reach the same
+  real compaction path with bounded API spend.
+- Full-context mode sets the client budget to `922000` and compaction reserve to
+  `222000`, so automatic compaction starts at `700000`. It also requires an
+  observed provider input count above the `272000` long-context pricing boundary.
+
+Bounded live recipe:
+
+```bash
+OPENCLAW_LIVE_TEST=1 \
+  OPENCLAW_LIVE_OPENAI_COMPACTION=1 \
+  pnpm test:live -- src/agents/sessions/agent-session.openai-compaction.live.test.ts
+```
+
+Full `922000` input-budget recipe:
+
+```bash
+OPENCLAW_LIVE_TEST=1 \
+  OPENCLAW_LIVE_OPENAI_COMPACTION=1 \
+  OPENCLAW_LIVE_OPENAI_COMPACTION_FULL=1 \
+  OPENCLAW_LIVE_OPENAI_COMPACTION_MODEL=gpt-5.6-terra \
+  pnpm test:live -- src/agents/sessions/agent-session.openai-compaction.live.test.ts
+```
+
+<Warning>
+The full mode deliberately crosses OpenAI's long-context pricing boundary and
+can make several large API calls. Use it only with explicit spend approval.
+</Warning>
 
 Fresh OpenAI API-key default:
 
@@ -430,6 +548,7 @@ Live is opt-in, so there is no fixed "CI model list." `OPENCLAW_LIVE_MODELS=mode
 
 | Provider/model                                | Notes      |
 | --------------------------------------------- | ---------- |
+| `anthropic/claude-opus-5`                     |            |
 | `anthropic/claude-opus-4-8`                   |            |
 | `anthropic/claude-sonnet-5`                   |            |
 | `anthropic/claude-sonnet-4-6`                 |            |

@@ -1,5 +1,6 @@
 package ai.openclaw.app.wear
 
+import ai.openclaw.wear.shared.WearConnectionFailure
 import ai.openclaw.wear.shared.WearDecodeResult
 import ai.openclaw.wear.shared.WearEventType
 import ai.openclaw.wear.shared.WearMessage
@@ -77,7 +78,7 @@ internal class WearProxyBridge(
   private val sender: WearMessageSender,
   private val peerResolver: WearPeerResolver = WearPeerResolver { emptySet() },
   private val monotonicMillis: () -> Long = SystemClock::elapsedRealtime,
-  private val handleRequest: suspend (WearMessage.Request) -> WearMessage.Response,
+  private val handleRequest: suspend (String, WearMessage.Request) -> WearMessage.Response,
 ) {
   private val peerLock = Any()
   private val peers = LinkedHashMap<String, Long>()
@@ -125,7 +126,7 @@ internal class WearProxyBridge(
       is WearBridgeOperation.Request -> {
         try {
           val response =
-            handleRequest(operation.message).copy(
+            handleRequest(operation.sourcePeer.nodeId, operation.message).copy(
               eventStreamId = eventStreamId,
               eventSequence = lastDeliveredSequence,
             )
@@ -178,6 +179,7 @@ internal class WearProxyBridge(
   fun publishConnection(
     connected: Boolean,
     status: String,
+    failure: WearConnectionFailure? = null,
   ) {
     synchronized(overflowLock) {
       if (!connected) chatStreamProjector.reset()
@@ -186,6 +188,7 @@ internal class WearProxyBridge(
         buildJsonObject {
           put("connected", connected)
           put("status", status)
+          failure?.let { put("failure", it.wireValue) }
         },
       )
     }
@@ -204,6 +207,18 @@ internal class WearProxyBridge(
     }
   }
 
+  fun publishTalk(payload: JsonElement) {
+    synchronized(overflowLock) {
+      publishEventLocked(WearEventType.Talk, payload)
+    }
+  }
+
+  fun publishResync() {
+    synchronized(overflowLock) {
+      publishEventLocked(WearEventType.Resync)
+    }
+  }
+
   /** Test-only actor barrier; proves every operation queued before this call has settled. */
   internal suspend fun awaitIdleForTests() {
     val completion = CompletableDeferred<Unit>()
@@ -214,7 +229,7 @@ internal class WearProxyBridge(
   /** Projection/reset, sequence allocation, and actor insertion share [overflowLock]. */
   private fun publishEventLocked(
     type: WearEventType,
-    payload: JsonElement,
+    payload: JsonElement? = null,
     terminal: Boolean = false,
   ) {
     val event =
@@ -475,6 +490,18 @@ internal class WearProxyBridge(
   }
 }
 
+internal fun wearConnectionFailure(
+  problemCode: String?,
+  status: String,
+): WearConnectionFailure =
+  when {
+    problemCode == "PROTOCOL_MISMATCH" -> WearConnectionFailure.Incompatible
+    // Protocol v1 shipped with status-only disconnect events. Keep that exact
+    // staggered-update signal while newer peers use the typed failure field.
+    status.contains("update", ignoreCase = true) -> WearConnectionFailure.Incompatible
+    else -> WearConnectionFailure.GatewayOffline
+  }
+
 private data class PeerRegistration(
   val nodeId: String,
   val generation: Long,
@@ -505,9 +532,7 @@ internal class WearChatStreamProjector {
     val streamKey = streamKey(projected)
     if (state != "delta") {
       if (state == "final" || state == "aborted" || state == "error") {
-        streamKey?.let { terminalKey ->
-          streams.keys.removeAll { key -> key.sessionKey == terminalKey.sessionKey }
-        }
+        streamKey?.let(::clearTerminalStream)
       }
       return projected
     }
@@ -556,14 +581,24 @@ internal class WearChatStreamProjector {
     }
   }
 
+  private fun clearTerminalStream(terminalKey: StreamKey) {
+    if (terminalKey.runId != null) {
+      // A delayed identified terminal cannot prove that an anonymous
+      // accumulator belongs to the same run or interrupt another live run.
+      streams.remove(terminalKey)
+      return
+    }
+    streams.keys.removeAll { key -> key.sessionKey == terminalKey.sessionKey }
+  }
+
   private fun streamKey(projected: JsonObject): StreamKey? {
     val sessionKey =
       (projected["sessionKey"] as? JsonPrimitive)
         ?.contentOrNull
         ?.takeIf { it.isNotBlank() } ?: return null
     val runId = (projected["runId"] as? JsonPrimitive)?.contentOrNull
-    // Some gateway deltas omit runId. Sessions serialize active runs, and every
-    // terminal event clears all keys for that session before another run starts.
+    // Anonymous deltas adopt the session's latest identified accumulator;
+    // only a runless terminal can safely retire every run in that session.
     return StreamKey(sessionKey = sessionKey, runId = runId)
   }
 

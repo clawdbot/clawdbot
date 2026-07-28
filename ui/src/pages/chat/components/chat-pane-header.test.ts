@@ -3,6 +3,10 @@
 import { html, nothing, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
+import type {
+  NativeGatewaysCapability,
+  NativeGatewaysSnapshot,
+} from "../../../app/native-gateways.runtime.ts";
 import {
   COMMAND_PALETTE_OPEN_EVENT,
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
@@ -20,7 +24,41 @@ const containers: HTMLElement[] = [];
 
 afterEach(() => {
   containers.splice(0).forEach((container) => container.remove());
+  Reflect.deleteProperty(window, "__OPENCLAW_NATIVE_WEB_CHROME__");
 });
+
+function nativeGateways(snapshot: NativeGatewaysSnapshot): NativeGatewaysCapability {
+  return {
+    snapshot,
+    subscribe: () => () => undefined,
+    select: vi.fn(),
+    openWindow: vi.fn(),
+    setPrimary: vi.fn(),
+    openSettings: vi.fn(),
+  };
+}
+
+const gatewaySnapshot: NativeGatewaysSnapshot = {
+  gateways: [
+    {
+      id: "primary",
+      name: "Local Gateway",
+      kind: "local",
+      isPrimary: true,
+      canPromote: false,
+      health: "ok",
+    },
+    {
+      id: "profile:studio",
+      name: "Studio",
+      kind: "remote",
+      isPrimary: false,
+      canPromote: true,
+      health: "unknown",
+    },
+  ],
+  currentId: "primary",
+};
 
 function row(patch: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
   return { key: "agent:main:test", kind: "direct", updatedAt: 0, ...patch };
@@ -42,11 +80,14 @@ function mount(patch: Partial<ChatPaneHeaderProps> = {}) {
     workspaceRoot: "/repo/openclaw",
     workspaceLabel: "openclaw",
     branch: "feature/header",
+    branches: [],
+    branchSwitchDisabledReason: null,
     platform: "darwin",
     canReveal: true,
     copiedAction: null,
     canRename: true,
     terminalAction: nothing,
+    discussionAction: nothing,
     diffAction: nothing,
     backgroundTasksAction: nothing,
     workspaceAction: nothing,
@@ -56,13 +97,114 @@ function mount(patch: Partial<ChatPaneHeaderProps> = {}) {
     onCancelRename: vi.fn(),
     onMenuOpenChange: vi.fn(),
     onMenuAction: vi.fn(),
+    onBranchSelect: vi.fn(),
     ...patch,
   };
+  props.gatewaysSnapshot ??= props.nativeGateways?.snapshot;
   render(html`${renderChatPaneHeader(props)}`, container);
   return { container, props };
 }
 
 describe("chat pane header", () => {
+  it("hides the gateway picker without capability and with one gateway", () => {
+    Object.assign(window, { __OPENCLAW_NATIVE_WEB_CHROME__: true });
+    expect(mount().container.querySelector(".chat-pane__gateway-menu")).toBeNull();
+    const one = nativeGateways({ gateways: [gatewaySnapshot.gateways[0]!], currentId: "primary" });
+    expect(
+      mount({ nativeGateways: one }).container.querySelector(".chat-pane__gateway-menu"),
+    ).toBeNull();
+  });
+
+  it("renders gateway rows, primary tag, and current checkmark", () => {
+    Object.assign(window, { __OPENCLAW_NATIVE_WEB_CHROME__: true });
+    const { container } = mount({ nativeGateways: nativeGateways(gatewaySnapshot) });
+    const rows = container.querySelectorAll(".chat-pane__gateway-item");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.textContent).toContain("Local Gateway");
+    expect(rows[0]?.textContent).toContain("primary");
+    expect(rows[0]?.querySelector(".chat-pane__gateway-check")).not.toBeNull();
+  });
+
+  it("selects normally and opens a new window on alt-click", () => {
+    Object.assign(window, { __OPENCLAW_NATIVE_WEB_CHROME__: true });
+    const select = vi.fn();
+    const openWindow = vi.fn();
+    const capability = { ...nativeGateways(gatewaySnapshot), select, openWindow };
+    const first = mount({ nativeGateways: capability }).container.querySelectorAll(
+      ".chat-pane__gateway-item",
+    )[1];
+    first?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(select).toHaveBeenCalledWith("profile:studio");
+    const second = mount({ nativeGateways: capability }).container.querySelectorAll(
+      ".chat-pane__gateway-item",
+    )[1];
+    second?.dispatchEvent(new MouseEvent("click", { bubbles: true, altKey: true }));
+    expect(openWindow).toHaveBeenCalledWith("profile:studio");
+  });
+
+  it("opens a new window when alt-clicking the current gateway", () => {
+    Object.assign(window, { __OPENCLAW_NATIVE_WEB_CHROME__: true });
+    const select = vi.fn();
+    const openWindow = vi.fn();
+    const capability = { ...nativeGateways(gatewaySnapshot), select, openWindow };
+    const current = mount({ nativeGateways: capability }).container.querySelector(
+      ".chat-pane__gateway-item",
+    );
+    current?.dispatchEvent(new MouseEvent("click", { bubbles: true, altKey: true }));
+    expect(openWindow).toHaveBeenCalledWith("primary");
+    expect(select).not.toHaveBeenCalled();
+  });
+
+  it("re-renders gateway rows from a changed snapshot property", () => {
+    Object.assign(window, { __OPENCLAW_NATIVE_WEB_CHROME__: true });
+    let current = gatewaySnapshot;
+    const capability = {
+      ...nativeGateways(gatewaySnapshot),
+      get snapshot() {
+        return current;
+      },
+    };
+    const mounted = mount({ nativeGateways: capability, gatewaysSnapshot: current });
+    const next = {
+      ...gatewaySnapshot,
+      gateways: [
+        ...gatewaySnapshot.gateways,
+        {
+          id: "profile:backup",
+          name: "Backup",
+          kind: "remote" as const,
+          isPrimary: false,
+          canPromote: true,
+          health: "unknown" as const,
+        },
+      ],
+    };
+    current = next;
+    window.dispatchEvent(new CustomEvent("openclaw:native-gateways-changed", { detail: next }));
+
+    const props = { ...mounted.props, gatewaysSnapshot: capability.snapshot };
+    render(html`${renderChatPaneHeader(props)}`, mounted.container);
+
+    expect(mounted.container.querySelectorAll(".chat-pane__gateway-item")).toHaveLength(3);
+    expect(mounted.container.textContent).toContain("Backup");
+  });
+
+  it("disables set-primary when the viewed gateway cannot be promoted", () => {
+    Object.assign(window, { __OPENCLAW_NATIVE_WEB_CHROME__: true });
+    const snapshot = {
+      ...gatewaySnapshot,
+      gateways: gatewaySnapshot.gateways.map((gateway) =>
+        Object.assign({}, gateway, { canPromote: false }),
+      ),
+      currentId: "profile:studio",
+    };
+    const { container } = mount({ nativeGateways: nativeGateways(snapshot) });
+    const item = Array.from(container.querySelectorAll("wa-dropdown-item")).find((candidate) =>
+      candidate.textContent?.includes("Set as primary"),
+    );
+    expect(item?.hasAttribute("disabled")).toBe(true);
+  });
+
   it("renders and dispatches merged chrome actions for catalog sessions", () => {
     const drawerEvents: CustomEvent<ShellNavDrawerToggleDetail>[] = [];
     const paletteEvents: Event[] = [];
@@ -103,6 +245,51 @@ describe("chat pane header", () => {
     expect(chip?.textContent?.trim()).toContain("openclaw");
     title?.click();
     expect(props.onBeginRename).toHaveBeenCalledOnce();
+  });
+
+  it("places pane presence between the workspace chip and face control", () => {
+    const { container } = mount({
+      presence: html`<span data-slot="presence"></span>`,
+      faceControl: html`<span data-slot="face"></span>`,
+    });
+    const workspace = container.querySelector(".chat-pane__workspace-menu");
+    expect(workspace?.nextElementSibling?.getAttribute("data-slot")).toBe("presence");
+    expect(workspace?.nextElementSibling?.nextElementSibling?.getAttribute("data-slot")).toBe(
+      "face",
+    );
+  });
+
+  it("renders the permanent owner chip only when attribution chrome is enabled", () => {
+    const shown = mount({
+      showOwnerChip: true,
+      session: row({ createdActor: { type: "human", id: "profile-ada", label: "Ada" } }),
+    });
+    expect(shown.container.querySelector("openclaw-session-owner-chip")).not.toBeNull();
+
+    const dormant = mount({
+      showOwnerChip: false,
+      session: row({ createdActor: { type: "human", id: "profile-ada", label: "Ada" } }),
+    });
+    expect(dormant.container.querySelector("openclaw-session-owner-chip")).toBeNull();
+  });
+
+  it("renders a resolved owner avatar with the header attribution semantics", async () => {
+    const mounted = mount({
+      showOwnerChip: true,
+      session: row({ createdActor: { type: "human", id: "profile-ada", label: "Ada" } }),
+      ownerUser: {
+        id: "profile-ada",
+        name: "Ada",
+        avatarUrl: "/api/users/profile-ada/avatar",
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(mounted.container.querySelector("openclaw-session-owner-chip img")).not.toBeNull();
+    });
+    const chip = mounted.container.querySelector(".session-owner-chip--header");
+    expect(chip?.getAttribute("aria-label")).toBe("Created by Ada");
+    expect(chip?.getAttribute("title")).toBe("Created by Ada");
   });
 
   it("routes Enter and Escape from the rename input", () => {
@@ -162,6 +349,65 @@ describe("chat pane header", () => {
     expect(container.querySelector(".chat-pane__cloud")).not.toBeNull();
     expect(container.querySelector('wa-dropdown-item[value="reveal"]')).toBeNull();
     expect(container.querySelector('wa-dropdown-item[value="copy-path"]')).not.toBeNull();
+  });
+
+  it("shows an incognito indicator for in-memory threads", () => {
+    const { container } = mount({ session: row({ incognito: true }) });
+    expect(container.querySelector(".chat-pane__incognito")?.getAttribute("aria-label")).toBe(
+      "Incognito thread",
+    );
+  });
+
+  it("hides one branch and lists multiple branches with the active tip marked", () => {
+    const one = mount({
+      branches: [{ leafEntryId: "only", headline: "Only path", messageCount: 1, active: true }],
+    });
+    expect(one.container.querySelector(".chat-pane__branches-trigger")).toBeNull();
+
+    const multiple = mount({
+      branches: [
+        { leafEntryId: "active", headline: "Current work", messageCount: 4, active: true },
+        {
+          leafEntryId: "other",
+          headline: "Earlier idea",
+          messageCount: 2,
+          updatedAt: new Date(Date.now() - 60_000).toISOString(),
+          active: false,
+        },
+      ],
+    });
+    const items = multiple.container.querySelectorAll(".chat-pane__branch-item");
+    expect(multiple.container.querySelector(".chat-pane__branches-trigger")).not.toBeNull();
+    expect(items).toHaveLength(2);
+    expect(items[0]?.textContent).toContain("Current work");
+    expect(items[0]?.getAttribute("data-active")).toBe("true");
+    expect(items[0]?.querySelector(".chat-pane__branch-active")).not.toBeNull();
+    expect(items[1]?.textContent).toContain("Earlier idea");
+
+    multiple.container.querySelector(".chat-pane__branches-menu")?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: { value: "other" } },
+      }),
+    );
+    expect(multiple.props.onBranchSelect).toHaveBeenCalledWith("other");
+  });
+
+  it("disables branch switching while the agent is working", () => {
+    const { container, props } = mount({
+      branchSwitchDisabledReason: "Branch switch is unavailable while the agent is working.",
+      branches: [
+        { leafEntryId: "active", headline: "Current work", messageCount: 4, active: true },
+        { leafEntryId: "other", headline: "Earlier idea", messageCount: 2, active: false },
+      ],
+    });
+    const trigger = container.querySelector<HTMLButtonElement>(".chat-pane__branches-trigger");
+    expect(trigger?.disabled).toBe(true);
+    container.querySelector(".chat-pane__branches-menu")?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: { value: "other" } },
+      }),
+    );
+    expect(props.onBranchSelect).not.toHaveBeenCalled();
   });
 });
 

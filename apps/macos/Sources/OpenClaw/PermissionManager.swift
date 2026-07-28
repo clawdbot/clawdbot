@@ -13,6 +13,16 @@ extension Notification.Name {
     static let openclawPermissionsChanged = Notification.Name("openclaw.permissions.changed")
 }
 
+enum CapabilityAuthorizationStatus: Equatable, Sendable {
+    case granted
+    case notGranted
+    case unknown
+
+    var isGranted: Bool {
+        self == .granted
+    }
+}
+
 enum PermissionManager {
     static func isLocationAuthorized(status: CLAuthorizationStatus, requireAlways: Bool) -> Bool {
         if requireAlways { return status == .authorizedAlways }
@@ -84,11 +94,10 @@ enum PermissionManager {
     }
 
     private static func ensureAppleScript(interactive: Bool) async -> Bool {
-        let granted = await MainActor.run { AppleScriptPermission.isAuthorized() }
-        if interactive, !granted {
-            await AppleScriptPermission.requestAuthorization()
+        if interactive {
+            return await TerminalAutomationPermission.requestAuthorization()
         }
-        return await MainActor.run { AppleScriptPermission.isAuthorized() }
+        return await TerminalAutomationPermission.isAuthorized()
     }
 
     private static func ensureAccessibility(interactive: Bool) async -> Bool {
@@ -194,45 +203,55 @@ enum PermissionManager {
         return results[.microphone] == true && results[.speechRecognition] == true
     }
 
-    static func status(_ caps: [Capability] = Capability.allCases) async -> [Capability: Bool] {
-        var results: [Capability: Bool] = [:]
+    static func authorizationStatus(
+        _ caps: [Capability] = Capability.allCases) async -> [Capability: CapabilityAuthorizationStatus]
+    {
+        var results: [Capability: CapabilityAuthorizationStatus] = [:]
         for cap in caps {
             switch cap {
             case .notifications:
                 let center = UNUserNotificationCenter.current()
                 let settings = await center.notificationSettings()
                 results[cap] = settings.authorizationStatus == .authorized
-                    || settings.authorizationStatus == .provisional
+                    || settings.authorizationStatus == .provisional ? .granted : .notGranted
 
             case .appleScript:
-                results[cap] = await MainActor.run { AppleScriptPermission.isAuthorized() }
+                results[cap] = await TerminalAutomationPermission.authorizationStatus()
 
             case .accessibility:
-                results[cap] = await MainActor.run { AXIsProcessTrusted() }
+                results[cap] = await MainActor.run { AXIsProcessTrusted() } ? .granted : .notGranted
 
             case .screenRecording:
                 if #available(macOS 10.15, *) {
-                    results[cap] = CGPreflightScreenCaptureAccess()
+                    results[cap] = CGPreflightScreenCaptureAccess() ? .granted : .notGranted
                 } else {
-                    results[cap] = true
+                    results[cap] = .granted
                 }
 
             case .microphone:
                 results[cap] = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+                    ? .granted : .notGranted
 
             case .speechRecognition:
                 results[cap] = SFSpeechRecognizer.authorizationStatus() == .authorized
+                    ? .granted : .notGranted
 
             case .camera:
                 results[cap] = AVCaptureDevice.authorizationStatus(for: .video) == .authorized
+                    ? .granted : .notGranted
 
             case .location:
                 let status = CLLocationManager().authorizationStatus
                 results[cap] = CLLocationManager.locationServicesEnabled()
-                    && self.isLocationAuthorized(status: status, requireAlways: false)
+                    && self.isLocationAuthorized(status: status, requireAlways: false) ? .granted : .notGranted
             }
         }
         return results
+    }
+
+    static func grantedStatus(_ caps: [Capability] = Capability.allCases) async -> [Capability: Bool] {
+        let statuses = await self.authorizationStatus(caps)
+        return statuses.mapValues(\.isGranted)
     }
 }
 
@@ -357,58 +376,12 @@ final class LocationPermissionRequester: NSObject, CLLocationManagerDelegate {
     }
 }
 
-enum AppleScriptPermission {
-    private static let logger = Logger(subsystem: "ai.openclaw", category: "AppleScriptPermission")
-
-    /// Sends a benign AppleScript to Terminal to verify Automation permission.
-    @MainActor
-    static func isAuthorized() -> Bool {
-        let script = """
-        tell application "Terminal"
-            return "openclaw-ok"
-        end tell
-        """
-
-        var error: NSDictionary?
-        let appleScript = NSAppleScript(source: script)
-        let result = appleScript?.executeAndReturnError(&error)
-
-        if let error, let code = error["NSAppleScriptErrorNumber"] as? Int {
-            if code == -1743 { // errAEEventWouldRequireUserConsent
-                Self.logger.debug("AppleScript permission denied (-1743)")
-                return false
-            }
-            Self.logger.debug("AppleScript check failed with code \(code)")
-        }
-
-        return result != nil
-    }
-
-    /// Triggers the TCC prompt and opens System Settings → Privacy & Security → Automation.
-    @MainActor
-    static func requestAuthorization() async {
-        _ = self.isAuthorized() // first attempt triggers the dialog if not granted
-
-        // Open the Automation pane to help the user if the prompt was dismissed.
-        let urlStrings = [
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation",
-            "x-apple.systempreferences:com.apple.preference.security",
-        ]
-
-        for candidate in urlStrings {
-            if let url = URL(string: candidate), NSWorkspace.shared.open(url) {
-                break
-            }
-        }
-    }
-}
-
 @MainActor
 @Observable
 final class PermissionMonitor {
     static let shared = PermissionMonitor()
 
-    private(set) var status: [Capability: Bool] = [:]
+    private(set) var status: [Capability: CapabilityAuthorizationStatus] = [:]
 
     private var monitorTimer: Timer?
     private var isChecking = false
@@ -462,7 +435,7 @@ final class PermissionMonitor {
 
         self.isChecking = true
 
-        let latest = await PermissionManager.status()
+        let latest = await PermissionManager.authorizationStatus()
         if latest != self.status {
             self.status = latest
             NotificationCenter.default.post(name: .openclawPermissionsChanged, object: nil)

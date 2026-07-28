@@ -1,6 +1,9 @@
 // Tests for SQLite user_version pragma helper.
 import { describe, expect, it } from "vitest";
-import { readSqliteUserVersion } from "./sqlite-user-version.js";
+import {
+  createNewerSqliteSchemaVersionError,
+  readSqliteUserVersion,
+} from "./sqlite-user-version.js";
 
 describe("readSqliteUserVersion", () => {
   it("returns 0 when row is undefined", () => {
@@ -43,5 +46,14 @@ describe("readSqliteUserVersion", () => {
       prepare: () => ({ get: () => ({}) }),
     };
     expect(readSqliteUserVersion(db)).toBe(0);
+  });
+});
+
+describe("createNewerSqliteSchemaVersionError", () => {
+  it("returns a stable named error with the schema guide", () => {
+    const error = createNewerSqliteSchemaVersionError("test database", "/tmp/test.sqlite", 12, 11);
+
+    expect(error.name).toBe("SqliteSchemaVersionError");
+    expect(error.message).toContain("https://docs.openclaw.ai/reference/database-schemas");
   });
 });

@@ -7,8 +7,11 @@ import { getRuntimeConfig, readConfigFileSnapshotForWrite } from "../config/io.j
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { discoverConfigSecretTargetsByIds } from "../secrets/target-registry.js";
+import { listAgentEntries } from "./agent-scope.js";
 
 /** Loads runtime/source config and resolves command SecretRefs when the agent path needs them. */
 export async function resolveAgentRuntimeConfig(
@@ -21,6 +24,7 @@ export async function resolveAgentRuntimeConfig(
   loadedRaw: OpenClawConfig;
   sourceConfig: OpenClawConfig;
   cfg: OpenClawConfig;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
 }> {
   const loadedRaw = getRuntimeConfig();
   const includeChannelTargets = params?.runtimeTargetsChannelSecrets === true;
@@ -30,15 +34,18 @@ export async function resolveAgentRuntimeConfig(
     includeChannelTargets,
     channel: channelSecretScope?.channel,
   });
+  let pluginMetadataSnapshot: PluginMetadataSnapshot | undefined;
   const sourceConfig = await (async () => {
     try {
-      const { snapshot } = await readConfigFileSnapshotForWrite();
+      const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
       if (snapshot.valid) {
+        pluginMetadataSnapshot = writeOptions.basePluginMetadataSnapshot;
         return snapshot.resolved;
       }
     } catch {
       // Fall back to runtime-loaded config when source snapshot is unavailable.
     }
+    pluginMetadataSnapshot = resolvePluginMetadataSnapshot({ config: loadedRaw });
     return loadedRaw;
   })();
   const cfg = hasRuntimeSecretRefs
@@ -63,8 +70,25 @@ export async function resolveAgentRuntimeConfig(
         ).resolvedConfig;
       })()
     : loadedRaw;
-  setRuntimeConfigSnapshot(cfg, sourceConfig);
-  return { loadedRaw, sourceConfig, cfg };
+  const secretsRuntime = await import("../secrets/runtime.js");
+  if (secretsRuntime.getActiveSecretsRuntimeSnapshot()) {
+    setRuntimeConfigSnapshot(cfg, sourceConfig);
+  } else {
+    // Standalone local agent commands have no Gateway-owned snapshot. Materialize
+    // auth-profile refs too; resolving only config refs leaves selected credentials unusable.
+    const snapshot = await secretsRuntime.prepareSecretsRuntimeSnapshot({
+      config: sourceConfig,
+      assignmentConfig: cfg,
+      includeConfigRefs: false,
+    });
+    secretsRuntime.activateSecretsRuntimeSnapshot(snapshot);
+  }
+  return {
+    loadedRaw,
+    sourceConfig,
+    cfg,
+    ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+  };
 }
 
 function hasNestedSecretRef(value: unknown): boolean {
@@ -89,16 +113,20 @@ function hasAgentRuntimeSecretRefs(params: {
   if (hasNestedSecretRef(config.models?.providers)) {
     return true;
   }
-  if (hasNestedSecretRef(config.agents?.defaults?.memorySearch?.remote?.apiKey)) {
+  if (hasNestedSecretRef(config.memory?.search?.remote)) {
     return true;
   }
   if (
-    Array.isArray(config.agents?.list) &&
-    config.agents.list.some((agent) => hasNestedSecretRef(agent?.memorySearch?.remote?.apiKey))
+    listAgentEntries(config).some((agent) =>
+      hasNestedSecretRef({
+        memoryRemote: agent.memory?.search?.remote,
+        ttsProviders: agent.tts?.providers,
+      }),
+    )
   ) {
     return true;
   }
-  if (hasNestedSecretRef(config.messages?.tts?.providers)) {
+  if (hasNestedSecretRef(config.tts?.providers)) {
     return true;
   }
   if (hasNestedSecretRef(config.skills?.entries)) {

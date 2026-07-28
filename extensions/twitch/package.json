@@ -21,6 +21,9 @@
       "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts",
+    "setupFeatures": {
+      "configPromotion": true
+    },
     "install": {
       "npmSpec": "@openclaw/twitch",
       "defaultChoice": "npm",
@@ -34,13 +37,21 @@
     },
     "channel": {
       "id": "twitch",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "OPENCLAW_TWITCH_ACCESS_TOKEN"
+          ]
+        }
+      },
       "label": "Twitch",
       "selectionLabel": "Twitch (Chat)",
       "docsPath": "/channels/twitch",
       "blurb": "Twitch chat integration",
       "aliases": [
         "twitch-chat"
-      ]
+      ],
+      "setup": { "fields": [] }
     },
     "release": {
       "publishToClawHub": true,

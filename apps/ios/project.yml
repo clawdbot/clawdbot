@@ -95,7 +95,7 @@ targets:
           export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin"
           "$SRCROOT/../../scripts/check-swift-tools.sh" swiftformat
           swiftformat --lint --config "$SRCROOT/../../config/swiftformat" \
-            --unexclude "$SRCROOT/Sources,$SRCROOT/ShareExtension,$SRCROOT/ActivityWidget,$SRCROOT/WatchApp,$SRCROOT/../shared/OpenClawKit/Sources/OpenClawChatUI,$SRCROOT/../shared/OpenClawKit/Sources/OpenClawKit,$SRCROOT/../shared/OpenClawKit/Sources/OpenClawProtocol,$SRCROOT/../swabble/Sources/SwabbleKit" \
+            --unexclude "$SRCROOT/Sources,$SRCROOT/ShareExtension,$SRCROOT/ActivityWidget,$SRCROOT/WatchApp,$SRCROOT/../shared/OpenClawKit/Sources/OpenClawChatUI,$SRCROOT/../shared/OpenClawKit/Sources/OpenClawKit,$SRCROOT/../shared/OpenClawKit/Sources/OpenClawNativeState,$SRCROOT/../shared/OpenClawKit/Sources/OpenClawProtocol,$SRCROOT/../swabble/Sources/SwabbleKit" \
             --filelist "$SRCROOT/SwiftSources.input.xcfilelist"
       - name: SwiftLint
         basedOnDependencyAnalysis: false
@@ -114,7 +114,6 @@ targets:
         CODE_SIGN_STYLE: "$(OPENCLAW_CODE_SIGN_STYLE)"
         DEVELOPMENT_TEAM: "$(OPENCLAW_DEVELOPMENT_TEAM)"
         OPENCLAW_ACTIVE_APP_GROUP_ID: "$(OPENCLAW_APP_GROUP_ID)"
-        OPENCLAW_APP_DISPLAY_NAME: OpenClaw
         OPENCLAW_URL_SCHEME: openclaw
         PRODUCT_BUNDLE_IDENTIFIER: "$(OPENCLAW_APP_BUNDLE_ID)"
         PROVISIONING_PROFILE_SPECIFIER: "$(OPENCLAW_APP_PROFILE)"
@@ -129,7 +128,6 @@ targets:
           ASSETCATALOG_COMPILER_APPICON_NAME: AppIconDebug
           CODE_SIGN_STYLE: Automatic
           OPENCLAW_ACTIVE_APP_GROUP_ID: "$(OPENCLAW_DEBUG_APP_GROUP_ID)"
-          OPENCLAW_APP_DISPLAY_NAME: OpenClaw
           OPENCLAW_CODE_SIGN_ENTITLEMENTS: Sources/OpenClaw.entitlements
           OPENCLAW_APNS_ENTITLEMENT_ENVIRONMENT: development
           OPENCLAW_URL_SCHEME: openclaw-debug
@@ -145,7 +143,7 @@ targets:
     info:
       path: Sources/Info.plist
       properties:
-        CFBundleDisplayName: "$(OPENCLAW_APP_DISPLAY_NAME)"
+        CFBundleDisplayName: OpenClaw
         CFBundleIconName: "$(ASSETCATALOG_COMPILER_APPICON_NAME)"
         CFBundleURLTypes:
           - CFBundleURLName: ai.openclawfoundation.app
@@ -181,8 +179,8 @@ targets:
         NSLocationAlwaysAndWhenInUseUsageDescription: OpenClaw can share your location in the background when you enable Always.
         NSMicrophoneUsageDescription: OpenClaw uses the microphone for realtime chat, voice wake, push-to-talk, and voice notes.
         NSMotionUsageDescription: OpenClaw may use motion data to support device-aware interactions and automations.
-        NSHealthShareUsageDescription: After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.
-        NSHealthUpdateUsageDescription: OpenClaw does not write or change Health data. Health Summaries read steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.
+        NSHealthShareUsageDescription: OpenClaw reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider.
+        NSHealthUpdateUsageDescription: OpenClaw does not write to the Apple Health app. It uses read-only data to create summaries you request and send them through your Gateway to your configured AI provider.
         NSPhotoLibraryUsageDescription: OpenClaw lets your assistant read photos you allow and lets you choose photos to share.
         PHPhotoLibraryPreventAutomaticLimitedAccessAlert: true
         NSRemindersFullAccessUsageDescription: OpenClaw uses your reminders to list, add, and complete tasks when you enable reminders access.
@@ -262,6 +260,9 @@ targets:
     sources:
       - path: ActivityWidget
       - path: Sources/LiveActivity/OpenClawActivityAttributes.swift
+      # Shared continuous avatar waveform; dependency-free for widget isolation.
+      - path: ../shared/OpenClawKit/Sources/OpenClawChatUI/TalkWaveformView.swift
+        group: Shared
       - path: Sources/Fonts
         buildPhase: resources
       - path: Resources/Localizable.xcstrings
@@ -415,7 +416,7 @@ targets:
     info:
       path: Tests/Info.plist
       properties:
-        CFBundleDisplayName: OpenClawTests
+        CFBundleDisplayName: "$(PRODUCT_NAME)"
         CFBundleShortVersionString: "$(OPENCLAW_MARKETING_VERSION)"
         CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"
 
@@ -467,7 +468,7 @@ targets:
     info:
       path: Tests/Info.plist
       properties:
-        CFBundleDisplayName: OpenClawLogicTests
+        CFBundleDisplayName: "$(PRODUCT_NAME)"
         CFBundleShortVersionString: "$(OPENCLAW_MARKETING_VERSION)"
         CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"
 

@@ -118,4 +118,61 @@ describe("subagent registry persistence resume", () => {
       });
     });
   });
+
+  it("retries pending child delivery before a recovered requester-turn wake", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    const stateDir = tempStateDir;
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const run: SubagentRunRecord = {
+        runId: "run-pending-delivery",
+        requesterTurnRunId: "run-requester",
+        childSessionKey: "agent:main:subagent:pending-delivery",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "deliver before waking requester",
+        cleanup: "keep",
+        createdAt: 100,
+        startedAt: 110,
+        endedAt: 200,
+        endedReason: "subagent-complete",
+        outcome: { status: "ok" },
+        execution: { status: "terminal", startedAt: 110, endedAt: 200 },
+        expectsCompletionMessage: true,
+        completion: { required: true, resultText: "done", capturedAt: 200 },
+        delivery: {
+          status: "pending",
+          payload: {
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "main",
+            childSessionKey: "agent:main:subagent:pending-delivery",
+            childRunId: "run-pending-delivery",
+            task: "deliver before waking requester",
+            startedAt: 110,
+            endedAt: 200,
+            outcome: { status: "ok" },
+            expectsCompletionMessage: true,
+          },
+        },
+        cleanupHandled: false,
+      };
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+      await writeSubagentSessionEntry({
+        stateDir,
+        agentId: "main",
+        sessionKey: run.childSessionKey,
+        sessionId: "sess-pending-delivery",
+        defaultSessionId: "sess-pending-delivery",
+      });
+
+      mod.initSubagentRegistry();
+
+      await vi.waitFor(() => expect(announceSpy).toHaveBeenCalled(), {
+        timeout: 1_000,
+        interval: 10,
+      });
+      expect(announceSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ childRunId: "run-pending-delivery" }),
+      );
+    });
+  });
 });

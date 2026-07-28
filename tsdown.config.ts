@@ -9,7 +9,7 @@ import {
 import {
   buildPluginSdkEntrySources,
   pluginSdkEntrypoints,
-  publicPluginSdkEntrypoints,
+  productionPluginSdkEntrypoints,
 } from "./scripts/lib/plugin-sdk-entries.mjs";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
@@ -165,9 +165,9 @@ function nodeWorkspacePackageBuildConfig(packageDir: string, config: UserConfig 
 
 const bundledPluginBuildEntries = collectBundledPluginBuildEntries();
 const shouldBuildPrivateQaEntries = process.env.OPENCLAW_BUILD_PRIVATE_QA === "1";
-const productionPluginSdkEntrypoints = shouldBuildPrivateQaEntries
+const selectedPluginSdkEntrypoints = shouldBuildPrivateQaEntries
   ? pluginSdkEntrypoints
-  : publicPluginSdkEntrypoints;
+  : productionPluginSdkEntrypoints;
 
 function buildBundledHookEntries(): Record<string, string> {
   const hooksRoot = path.join(process.cwd(), "src", "hooks", "bundled");
@@ -233,7 +233,11 @@ function shouldAlwaysBundleDependency(id: string): boolean {
     id === "@openclaw/retry" ||
     id === "@openclaw/media-core" ||
     id.startsWith("@openclaw/media-core/") ||
-    ["@openclaw/acp-core", "@openclaw/workboard-contract"].includes(id) ||
+    [
+      "@openclaw/acp-core",
+      "@openclaw/session-url-contract",
+      "@openclaw/workboard-contract",
+    ].includes(id) ||
     id.startsWith("@openclaw/acp-core/") ||
     id === "zod" ||
     id.startsWith("zod/")
@@ -277,6 +281,9 @@ function buildCoreDistEntries(): Record<string, string> {
     "audit/audit-event-writer.worker": "src/audit/audit-event-writer.worker.ts",
     "config/sessions/session-transcript-reconcile.worker":
       "src/config/sessions/session-transcript-reconcile.worker.ts",
+    "state/openclaw-database-verify.worker": "src/state/openclaw-database-verify.worker.ts",
+    "system-agent/setup-inference-detection.worker":
+      "src/system-agent/setup-inference-detection.worker.ts",
     "acp/control-plane/manager": "src/acp/control-plane/manager.ts",
     "cli/gateway-lifecycle.runtime": "src/cli/gateway-cli/lifecycle.runtime.ts",
     "provider-dispatcher.runtime": "src/auto-reply/reply/provider-dispatcher.runtime.ts",
@@ -300,7 +307,6 @@ function buildCoreDistEntries(): Record<string, string> {
     "plugins/loader": "src/plugins/loader.ts",
     "plugins/sdk-alias": "src/plugins/sdk-alias.ts",
     "facade-activation-check.runtime": "src/plugin-sdk/facade-activation-check.runtime.ts",
-    extensionAPI: "src/extensionAPI.ts",
     "infra/warning-filter": "src/infra/warning-filter.ts",
     "telegram-ingress-worker.runtime": bundledPluginFile(
       "telegram",
@@ -333,6 +339,8 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
     "commitments/runtime.test-support": "src/commitments/runtime.test-support.ts",
     "commitments/store": "src/commitments/store.ts",
     "config/config": "src/config/config.ts",
+    "infra/sqlite-audit-record-store": "src/infra/sqlite-audit-record-store.ts",
+    "system-agent/audit": "src/system-agent/audit.ts",
     "system-agent/system-agent": "src/system-agent/system-agent.ts",
     "system-agent/rescue-message": "src/system-agent/rescue-message.ts",
     "system-agent/setup-inference": "src/system-agent/setup-inference.ts",
@@ -351,24 +359,16 @@ function buildAgentCoreDistEntries(): Record<string, string> {
     agent: "packages/agent-core/src/agent.ts",
     "agent-loop": "packages/agent-core/src/agent-loop.ts",
     llm: "packages/agent-core/src/llm.ts",
-    node: "packages/agent-core/src/node.ts",
     "runtime-deps": "packages/agent-core/src/runtime-deps.ts",
     types: "packages/agent-core/src/types.ts",
     validation: "packages/agent-core/src/validation.ts",
-    "harness/agent-harness": "packages/agent-core/src/harness/agent-harness.ts",
-    "harness/types": "packages/agent-core/src/harness/types.ts",
     "harness/messages": "packages/agent-core/src/harness/messages.ts",
     "harness/env/kill-tree": "packages/agent-core/src/harness/env/kill-tree.ts",
-    "harness/session": "packages/agent-core/src/harness/session/session.ts",
-    "harness/session/jsonl-storage": "packages/agent-core/src/harness/session/jsonl-storage.ts",
-    "harness/session/memory-storage": "packages/agent-core/src/harness/session/memory-storage.ts",
-    "harness/session/uuid": "packages/agent-core/src/harness/session/uuid.ts",
     "harness/compaction": "packages/agent-core/src/harness/compaction/compaction.ts",
     "harness/branch-summarization":
       "packages/agent-core/src/harness/compaction/branch-summarization.ts",
     "harness/prompt-template-arguments":
       "packages/agent-core/src/harness/prompt-template-arguments.ts",
-    "harness/skills": "packages/agent-core/src/harness/skills.ts",
     "harness/utils/truncate": "packages/agent-core/src/harness/utils/truncate.ts",
   };
 }
@@ -439,7 +439,7 @@ function shouldExternalizeGatewayProtocolDependency(id: string): boolean {
 }
 
 function shouldExternalizeGatewayClientDependency(id: string): boolean {
-  return ["ws", "@openclaw/net-policy", "@openclaw/gateway-protocol"].some(
+  return ["ws", "@openclaw/gateway-protocol"].some(
     (dependency) => id === dependency || id.startsWith(`${dependency}/`),
   );
 }
@@ -505,12 +505,10 @@ function buildUnifiedDistEntries(): Record<string, string> {
         source,
       ]),
     ),
-    // Internal compat artifact for the root-alias.cjs lazy loader.
-    "plugin-sdk/compat": "src/plugin-sdk/compat.ts",
     // Private bundled Codex helper for app-server user MCP config projection.
     "plugin-sdk/codex-mcp-projection": "src/plugin-sdk/codex-mcp-projection.ts",
     ...Object.fromEntries(
-      Object.entries(buildPluginSdkEntrySources(productionPluginSdkEntrypoints)).map(
+      Object.entries(buildPluginSdkEntrySources(selectedPluginSdkEntrypoints)).map(
         ([entry, source]) => [`plugin-sdk/${entry}`, source],
       ),
     ),
@@ -566,9 +564,6 @@ const configs = [
     deps: {
       neverBundle: shouldExternalizeTerminalCoreDependency,
     },
-  }),
-  nodeWorkspacePackageBuildConfig("web-content-core", {
-    outDir: "packages/web-content-core/dist",
   }),
   nodeWorkspacePackageBuildConfig("speech-core", {
     entry: buildSpeechCoreDistEntries(),

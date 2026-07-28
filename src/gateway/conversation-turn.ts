@@ -1,11 +1,12 @@
 import type { ConversationTurnResult } from "../../packages/gateway-protocol/src/schema/agent.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
 import { ConversationDeliveryInputError } from "../config/sessions/conversation-delivery-store.js";
 import {
   resolveConversation,
+  resolveConversationRegistryScope,
   type ConversationRecord,
   type ConversationRegistryScope,
 } from "../config/sessions/conversation-registry.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOutboundChannelPlugin } from "../infra/outbound/channel-resolution.js";
 import {
@@ -14,6 +15,10 @@ import {
   sendGatewayConversationMessage,
   type ConversationDeliveryDeps,
 } from "../infra/outbound/conversation-delivery.js";
+import {
+  bindOutboundSessionEntry,
+  resolveOutboundSessionRoute,
+} from "../infra/outbound/outbound-session.js";
 import { registerPendingConversationTurn } from "../sessions/conversation-turns.js";
 import {
   ConversationInputError,
@@ -24,27 +29,29 @@ type ConversationTurnDeps = ConversationDeliveryDeps & {
   registerPendingConversationTurn: typeof registerPendingConversationTurn;
   resolveConversation: typeof resolveConversation;
   resolveOutboundChannelPlugin: typeof resolveOutboundChannelPlugin;
+  bindOutboundSessionEntry: typeof bindOutboundSessionEntry;
+  resolveOutboundSessionRoute: typeof resolveOutboundSessionRoute;
 };
+
+type BoundConversationRecord = ConversationRecord & {
+  sessionId: string;
+  sessionKey: string;
+};
+
+function hasConversationSessionBinding(
+  conversation: ConversationRecord,
+): conversation is BoundConversationRecord {
+  return Boolean(conversation.sessionId && conversation.sessionKey);
+}
 
 const defaultDeps: ConversationTurnDeps = {
   ...defaultConversationDeliveryDeps,
   registerPendingConversationTurn,
   resolveConversation,
   resolveOutboundChannelPlugin,
+  bindOutboundSessionEntry,
+  resolveOutboundSessionRoute,
 };
-
-function resolveConversationScope(params: {
-  agentId: string;
-  config: OpenClawConfig;
-}): ConversationRegistryScope {
-  const configuredStore = params.config.session?.store;
-  return {
-    agentId: params.agentId,
-    ...(configuredStore
-      ? { storePath: resolveStorePath(configuredStore, { agentId: params.agentId }) }
-      : {}),
-  };
-}
 
 function resultForCompletedOperation(params: {
   operation: ReturnType<ConversationDeliveryDeps["beginOperation"]>["record"];
@@ -121,15 +128,12 @@ function resultForCompletedOperation(params: {
 }
 
 function prepareConversationMessageId(params: {
-  deps: ConversationTurnDeps;
+  plugin: ReturnType<typeof resolveOutboundChannelPlugin>;
   config: OpenClawConfig;
   conversation: ConversationRecord;
   message: string;
 }): string {
-  const prepare = params.deps.resolveOutboundChannelPlugin({
-    channel: params.conversation.channel,
-    cfg: params.config,
-  })?.outbound?.prepareConversationTurnMessageId;
+  const prepare = params.plugin?.outbound?.prepareConversationTurnMessageId;
   if (!prepare) {
     throw new ConversationInputError(
       `Channel ${params.conversation.channel} does not support correlated conversation turns; use conversations_send`,
@@ -155,6 +159,47 @@ function prepareConversationMessageId(params: {
   return preparedMessageId;
 }
 
+async function ensureConversationContextBinding(params: {
+  deps: ConversationTurnDeps;
+  scope: ConversationRegistryScope;
+  config: OpenClawConfig;
+  agentId: string;
+  conversation: ConversationRecord;
+  plugin: ReturnType<typeof resolveOutboundChannelPlugin>;
+}): Promise<BoundConversationRecord> {
+  if (hasConversationSessionBinding(params.conversation)) {
+    return params.conversation;
+  }
+  const channel = (params.plugin?.id ?? params.conversation.channel) as ChannelId;
+  const route = await params.deps.resolveOutboundSessionRoute({
+    cfg: params.config,
+    channel,
+    ...(params.plugin ? { plugin: params.plugin } : {}),
+    agentId: params.agentId,
+    accountId: params.conversation.accountId,
+    target: params.conversation.target,
+    ...(params.conversation.threadId ? { threadId: params.conversation.threadId } : {}),
+  });
+  if (!route) {
+    throw new ConversationInputError(
+      `Conversation ${params.conversation.conversationRef} no longer resolves to a channel route`,
+    );
+  }
+  await params.deps.bindOutboundSessionEntry({
+    cfg: params.config,
+    channel,
+    accountId: params.conversation.accountId,
+    route,
+  });
+  const bound = params.deps.resolveConversation(params.scope, params.conversation.conversationRef);
+  if (!bound || !hasConversationSessionBinding(bound)) {
+    throw new Error(
+      `Conversation ${params.conversation.conversationRef} could not create its local context binding`,
+    );
+  }
+  return bound;
+}
+
 /** Owns correlation, delivery, and waiting inside the Gateway process that receives ingress. */
 export async function runGatewayConversationTurn(
   params: {
@@ -169,7 +214,7 @@ export async function runGatewayConversationTurn(
   },
   deps: ConversationTurnDeps = defaultDeps,
 ): Promise<ConversationTurnResult> {
-  const scope = resolveConversationScope(params);
+  const scope = resolveConversationRegistryScope(params);
   const prior = deps.getOperation(scope, params.turnId);
   let begun: ReturnType<ConversationDeliveryDeps["beginOperation"]> | undefined;
   try {
@@ -194,19 +239,38 @@ export async function runGatewayConversationTurn(
     throw error;
   }
 
-  const conversation = deps.resolveConversation(scope, params.conversationRef);
-  if (!conversation) {
+  const discoveredConversation = deps.resolveConversation(scope, params.conversationRef);
+  if (!discoveredConversation) {
     throw new ConversationInputError(
       `Conversation not found: ${params.conversationRef} (use conversations_list)`,
     );
   }
+  const plugin = deps.resolveOutboundChannelPlugin({
+    channel: discoveredConversation.channel,
+    cfg: params.config,
+  });
+  const candidatePreparedMessageId = begun
+    ? begun.record.preparedMessageId
+    : prepareConversationMessageId({
+        plugin,
+        config: params.config,
+        conversation: discoveredConversation,
+        message: params.message,
+      });
+  if (!candidatePreparedMessageId) {
+    throw new ConversationInputError(
+      `Conversation turn ${params.turnId} is missing its prepared message id`,
+    );
+  }
+  const conversation = await ensureConversationContextBinding({
+    deps,
+    scope,
+    config: params.config,
+    agentId: params.agentId,
+    conversation: discoveredConversation,
+    plugin,
+  });
   if (!begun) {
-    const candidatePreparedMessageId = prepareConversationMessageId({
-      deps,
-      config: params.config,
-      conversation,
-      message: params.message,
-    });
     try {
       begun = deps.beginOperation(scope, {
         operationId: params.turnId,

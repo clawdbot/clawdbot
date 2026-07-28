@@ -1,6 +1,12 @@
 {
   "name": "openclaw",
   "version": "2026.7.2",
+  "openclaw": {
+    "schemaVersions": {
+      "state": 6,
+      "agent": 16
+    }
+  },
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -8,7 +14,7 @@
     "url": "https://github.com/openclaw/openclaw/issues"
   },
   "license": "MIT",
-  "author": "",
+  "author": "OpenClaw Foundation (https://openclaw.org)",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/openclaw/openclaw.git"
@@ -23,7 +29,6 @@
   "files": [
     "CHANGELOG.md",
     "LICENSE",
-    "npm-shrinkwrap.json",
     "openclaw.mjs",
     "pnpm-workspace.yaml",
     "README.md",
@@ -34,34 +39,168 @@
     "!dist/OpenClaw.app/**",
     "!dist/**/*.map",
     "!dist/plugin-sdk/.tsbuildinfo",
+    "!dist/plugin-sdk/access-groups.d.ts",
+    "!dist/plugin-sdk/account-resolution-runtime.d.ts",
+    "!dist/plugin-sdk/acp-binding-resolve-runtime.d.ts",
+    "!dist/plugin-sdk/acp-binding-runtime.d.ts",
+    "!dist/plugin-sdk/acp-runtime.d.ts",
+    "!dist/plugin-sdk/acp-runtime-backend.d.ts",
+    "!dist/plugin-sdk/agent-core.d.ts",
+    "!dist/plugin-sdk/agent-harness-exec-review-runtime.d.ts",
+    "!dist/plugin-sdk/agent-harness-task-runtime.d.ts",
+    "!dist/plugin-sdk/agent-harness-tool-runtime.d.ts",
     "!dist/plugin-sdk/agent-runtime-test-contracts.js",
     "!dist/plugin-sdk/agent-runtime-test-contracts.d.ts",
+    "!dist/plugin-sdk/agent-sessions.d.ts",
+    "!dist/plugin-sdk/approval-reaction-runtime.d.ts",
+    "!dist/plugin-sdk/approval-reference-runtime.d.ts",
+    "!dist/plugin-sdk/async-lock-runtime.d.ts",
+    "!dist/plugin-sdk/browser-config.d.ts",
+    "!dist/plugin-sdk/bundled-channel-config-schema.d.ts",
+    "!dist/plugin-sdk/channel-activity-runtime.d.ts",
+    "!dist/plugin-sdk/channel-config-writes.d.ts",
     "!dist/plugin-sdk/channel-contract-testing.js",
     "!dist/plugin-sdk/channel-contract-testing.d.ts",
+    "!dist/plugin-sdk/channel-mention-gating.d.ts",
+    "!dist/plugin-sdk/channel-route.d.ts",
+    "!dist/plugin-sdk/channel-secret-tts-runtime.d.ts",
     "!dist/plugin-sdk/channel-target-testing.js",
     "!dist/plugin-sdk/channel-target-testing.d.ts",
+    "!dist/plugin-sdk/channel-targets.d.ts",
     "!dist/plugin-sdk/channel-test-helpers.js",
     "!dist/plugin-sdk/channel-test-helpers.d.ts",
-    "!dist/plugin-sdk/codex-native-task-runtime.js",
-    "!dist/plugin-sdk/codex-native-task-runtime.d.ts",
+    "!dist/plugin-sdk/chat-channel-ids.d.ts",
+    "!dist/plugin-sdk/cli-backend.d.ts",
+    "!dist/plugin-sdk/cli-runtime.d.ts",
+    "!dist/plugin-sdk/codex-mcp-projection.d.ts",
+    "!dist/plugin-sdk/command-status-runtime.d.ts",
+    "!dist/plugin-sdk/command-surface.d.ts",
+    "!dist/plugin-sdk/concurrency-runtime.d.ts",
+    "!dist/plugin-sdk/context-visibility-runtime.d.ts",
+    "!dist/plugin-sdk/conversation-binding-runtime.d.ts",
+    "!dist/plugin-sdk/cron-store-runtime.d.ts",
+    "!dist/plugin-sdk/dangerous-name-runtime.d.ts",
+    "!dist/plugin-sdk/delivery-queue-runtime.d.ts",
+    "!dist/plugin-sdk/direct-dm-guard-policy.d.ts",
+    "!dist/plugin-sdk/directory-config-runtime.d.ts",
+    "!dist/plugin-sdk/document-extractor.d.ts",
+    "!dist/plugin-sdk/embedding-providers.d.ts",
+    "!dist/plugin-sdk/exec-approvals-runtime.d.ts",
+    "!dist/plugin-sdk/expect-runtime.d.ts",
+    "!dist/plugin-sdk/fetch-runtime.d.ts",
+    "!dist/plugin-sdk/file-access-runtime.d.ts",
+    "!dist/plugin-sdk/file-lock.d.ts",
+    "!dist/plugin-sdk/global-singleton.d.ts",
+    "!dist/plugin-sdk/group-activation.d.ts",
+    "!dist/plugin-sdk/heartbeat-runtime.d.ts",
+    "!dist/plugin-sdk/host-runtime.d.ts",
+    "!dist/plugin-sdk/html-entity-runtime.d.ts",
+    "!dist/plugin-sdk/image-generation.d.ts",
+    "!dist/plugin-sdk/image-generation-core.d.ts",
+    "!dist/plugin-sdk/image-generation-runtime.d.ts",
+    "!dist/plugin-sdk/inline-image-data-url-runtime.d.ts",
+    "!dist/plugin-sdk/json-schema-runtime.d.ts",
+    "!dist/plugin-sdk/json-unsafe-integers.d.ts",
+    "!dist/plugin-sdk/keyed-async-queue.d.ts",
+    "!dist/plugin-sdk/llm.d.ts",
+    "!dist/plugin-sdk/markdown-table-runtime.d.ts",
+    "!dist/plugin-sdk/media-generation-runtime.d.ts",
+    "!dist/plugin-sdk/memory-core-host-embedding-registry.d.ts",
+    "!dist/plugin-sdk/memory-core-host-engine-embeddings.d.ts",
+    "!dist/plugin-sdk/memory-core-host-engine-qmd.d.ts",
+    "!dist/plugin-sdk/memory-core-host-engine-storage.d.ts",
+    "!dist/plugin-sdk/memory-core-host-runtime-cli.d.ts",
+    "!dist/plugin-sdk/memory-core-host-runtime-core.d.ts",
+    "!dist/plugin-sdk/memory-core-host-runtime-files.d.ts",
+    "!dist/plugin-sdk/memory-core-host-secret.d.ts",
+    "!dist/plugin-sdk/memory-core-host-status.d.ts",
+    "!dist/plugin-sdk/memory-host-events.d.ts",
+    "!dist/plugin-sdk/memory-host-markdown.d.ts",
+    "!dist/plugin-sdk/memory-host-search.d.ts",
+    "!dist/plugin-sdk/message-tool-delivery-hints.d.ts",
+    "!dist/plugin-sdk/migration.d.ts",
+    "!dist/plugin-sdk/migration-runtime.d.ts",
+    "!dist/plugin-sdk/music-generation.d.ts",
+    "!dist/plugin-sdk/node-host.d.ts",
+    "!dist/plugin-sdk/number-runtime.d.ts",
+    "!dist/plugin-sdk/outbound-media.d.ts",
+    "!dist/plugin-sdk/pair-loop-guard-runtime.d.ts",
+    "!dist/plugin-sdk/plugin-state-runtime.d.ts",
+    "!dist/plugin-sdk/plugin-state-test-runtime.js",
+    "!dist/plugin-sdk/plugin-state-test-runtime.d.ts",
     "!dist/plugin-sdk/plugin-test-api.js",
     "!dist/plugin-sdk/plugin-test-api.d.ts",
     "!dist/plugin-sdk/plugin-test-contracts.js",
     "!dist/plugin-sdk/plugin-test-contracts.d.ts",
-    "!dist/plugin-sdk/plugin-state-test-runtime.js",
-    "!dist/plugin-sdk/plugin-state-test-runtime.d.ts",
     "!dist/plugin-sdk/plugin-test-runtime.js",
     "!dist/plugin-sdk/plugin-test-runtime.d.ts",
+    "!dist/plugin-sdk/poll-runtime.d.ts",
+    "!dist/plugin-sdk/process-runtime.d.ts",
+    "!dist/plugin-sdk/provider-auth-api-key.d.ts",
+    "!dist/plugin-sdk/provider-auth-login-flow-runtime.d.ts",
+    "!dist/plugin-sdk/provider-auth-result.d.ts",
+    "!dist/plugin-sdk/provider-auth-runtime.d.ts",
+    "!dist/plugin-sdk/provider-catalog-live-runtime.d.ts",
+    "!dist/plugin-sdk/provider-catalog-shared.d.ts",
+    "!dist/plugin-sdk/provider-entry.d.ts",
+    "!dist/plugin-sdk/provider-env-vars.d.ts",
+    "!dist/plugin-sdk/provider-http.d.ts",
     "!dist/plugin-sdk/provider-http-test-mocks.js",
     "!dist/plugin-sdk/provider-http-test-mocks.d.ts",
+    "!dist/plugin-sdk/provider-model-shared.d.ts",
+    "!dist/plugin-sdk/provider-model-types.d.ts",
+    "!dist/plugin-sdk/provider-oauth-runtime.d.ts",
+    "!dist/plugin-sdk/provider-onboard.d.ts",
+    "!dist/plugin-sdk/provider-selection-runtime.d.ts",
+    "!dist/plugin-sdk/provider-setup.d.ts",
+    "!dist/plugin-sdk/provider-stream.d.ts",
+    "!dist/plugin-sdk/provider-stream-family.d.ts",
+    "!dist/plugin-sdk/provider-stream-shared.d.ts",
     "!dist/plugin-sdk/provider-test-contracts.js",
     "!dist/plugin-sdk/provider-test-contracts.d.ts",
+    "!dist/plugin-sdk/provider-tools.d.ts",
+    "!dist/plugin-sdk/provider-transport-runtime.d.ts",
+    "!dist/plugin-sdk/provider-usage.d.ts",
+    "!dist/plugin-sdk/provider-web-fetch.d.ts",
+    "!dist/plugin-sdk/provider-web-fetch-contract.d.ts",
+    "!dist/plugin-sdk/provider-web-search.d.ts",
+    "!dist/plugin-sdk/provider-web-search-config-contract.d.ts",
+    "!dist/plugin-sdk/provider-web-search-contract.d.ts",
+    "!dist/plugin-sdk/qa-runner-runtime.d.ts",
+    "!dist/plugin-sdk/realtime-bootstrap-context.d.ts",
+    "!dist/plugin-sdk/realtime-transcription.d.ts",
+    "!dist/plugin-sdk/realtime-voice.d.ts",
     "!dist/plugin-sdk/reply-payload-testing.js",
     "!dist/plugin-sdk/reply-payload-testing.d.ts",
+    "!dist/plugin-sdk/reply-reference.d.ts",
+    "!dist/plugin-sdk/request-url.d.ts",
+    "!dist/plugin-sdk/response-limit-runtime.d.ts",
+    "!dist/plugin-sdk/retry-runtime.d.ts",
+    "!dist/plugin-sdk/runtime-doctor.d.ts",
+    "!dist/plugin-sdk/runtime-fetch.d.ts",
+    "!dist/plugin-sdk/sandbox.d.ts",
+    "!dist/plugin-sdk/secret-file-runtime.d.ts",
+    "!dist/plugin-sdk/secure-random-runtime.d.ts",
+    "!dist/plugin-sdk/session-binding-runtime.d.ts",
+    "!dist/plugin-sdk/session-catalog.d.ts",
+    "!dist/plugin-sdk/session-catalog-runtime.d.ts",
+    "!dist/plugin-sdk/session-key-runtime.d.ts",
+    "!dist/plugin-sdk/session-transcript-hit.d.ts",
+    "!dist/plugin-sdk/session-transcript-runtime.d.ts",
+    "!dist/plugin-sdk/session-visibility.d.ts",
+    "!dist/plugin-sdk/simple-completion-runtime.d.ts",
+    "!dist/plugin-sdk/speech.d.ts",
+    "!dist/plugin-sdk/speech-core.d.ts",
+    "!dist/plugin-sdk/sqlite-runtime.d.ts",
     "!dist/plugin-sdk/sqlite-runtime-testing.js",
     "!dist/plugin-sdk/sqlite-runtime-testing.d.ts",
+    "!dist/plugin-sdk/ssrf-dispatcher.d.ts",
     "!dist/plugin-sdk/ssrf-runtime-internal.js",
     "!dist/plugin-sdk/ssrf-runtime-internal.d.ts",
+    "!dist/plugin-sdk/string-normalization-runtime.d.ts",
+    "!dist/plugin-sdk/system-event-runtime.d.ts",
+    "!dist/plugin-sdk/talk-config-runtime.d.ts",
+    "!dist/plugin-sdk/target-resolver-runtime.d.ts",
     "!dist/plugin-sdk/test-env.js",
     "!dist/plugin-sdk/test-env.d.ts",
     "!dist/plugin-sdk/test-fixtures.js",
@@ -74,10 +213,27 @@
     "!dist/plugin-sdk/test-media-generation.d.ts",
     "!dist/plugin-sdk/test-media-understanding.js",
     "!dist/plugin-sdk/test-media-understanding.d.ts",
+    "!dist/plugin-sdk/test-state.js",
+    "!dist/plugin-sdk/test-state.d.ts",
     "!dist/plugin-sdk/test-node-mocks.js",
     "!dist/plugin-sdk/test-node-mocks.d.ts",
-    "!dist/plugin-sdk/test-utils.js",
-    "!dist/plugin-sdk/test-utils.d.ts",
+    "!dist/plugin-sdk/text-autolink-runtime.d.ts",
+    "!dist/plugin-sdk/text-utility-runtime.d.ts",
+    "!dist/plugin-sdk/thread-bindings-runtime.d.ts",
+    "!dist/plugin-sdk/thread-bindings-session-runtime.d.ts",
+    "!dist/plugin-sdk/time-runtime.d.ts",
+    "!dist/plugin-sdk/tool-payload.d.ts",
+    "!dist/plugin-sdk/tool-results.d.ts",
+    "!dist/plugin-sdk/transcripts.d.ts",
+    "!dist/plugin-sdk/transport-ready-runtime.d.ts",
+    "!dist/plugin-sdk/tts-runtime.d.ts",
+    "!dist/plugin-sdk/types.d.ts",
+    "!dist/plugin-sdk/video-generation.d.ts",
+    "!dist/plugin-sdk/video-generation-core.d.ts",
+    "!dist/plugin-sdk/video-generation-runtime.d.ts",
+    "!dist/plugin-sdk/web-content-extractor.d.ts",
+    "!dist/plugin-sdk/webhook-targets.d.ts",
+    "!dist/plugin-sdk/windows-spawn.d.ts",
     "!dist/plugin-sdk/src/agents/test-helpers/**",
     "!dist/plugin-sdk/src/test-helpers/**",
     "!dist/plugin-sdk/src/test-utils/**",
@@ -91,6 +247,7 @@
     "!dist/extensions/arcee/**",
     "!dist/extensions/baseten/**",
     "!dist/extensions/brave/**",
+    "!dist/extensions/buzz/**",
     "!dist/extensions/cerebras/**",
     "!dist/extensions/chutes/**",
     "!dist/extensions/clickclack/**",
@@ -189,6 +346,7 @@
     "scripts/lib/official-external-channel-catalog.json",
     "scripts/lib/official-external-plugin-catalog.json",
     "scripts/lib/official-external-provider-catalog.json",
+    "scripts/lib/guard-inventory-utils.mjs",
     "scripts/lib/package-dist-imports.mjs",
     "scripts/lib/recommended-tool-installs.json",
     "scripts/postinstall-bundled-plugins.mjs",
@@ -198,33 +356,15 @@
   "main": "dist/index.js",
   "exports": {
     ".": "./dist/index.js",
-    "./plugin-sdk": {
-      "types": "./dist/plugin-sdk/index.d.ts",
-      "default": "./dist/plugin-sdk/index.js"
-    },
     "./plugin-sdk/core": {
       "types": "./dist/plugin-sdk/core.d.ts",
       "default": "./dist/plugin-sdk/core.js"
     },
-    "./plugin-sdk/lmstudio": {
-      "types": "./dist/plugin-sdk/lmstudio.d.ts",
-      "default": "./dist/plugin-sdk/lmstudio.js"
-    },
-    "./plugin-sdk/lmstudio-runtime": {
-      "types": "./dist/plugin-sdk/lmstudio-runtime.d.ts",
-      "default": "./dist/plugin-sdk/lmstudio-runtime.js"
-    },
     "./plugin-sdk/provider-setup": {
-      "types": "./dist/plugin-sdk/provider-setup.d.ts",
       "default": "./dist/plugin-sdk/provider-setup.js"
     },
     "./plugin-sdk/sandbox": {
-      "types": "./dist/plugin-sdk/sandbox.d.ts",
       "default": "./dist/plugin-sdk/sandbox.js"
-    },
-    "./plugin-sdk/self-hosted-provider-setup": {
-      "types": "./dist/plugin-sdk/self-hosted-provider-setup.d.ts",
-      "default": "./dist/plugin-sdk/self-hosted-provider-setup.js"
     },
     "./plugin-sdk/routing": {
       "types": "./dist/plugin-sdk/routing.d.ts",
@@ -239,32 +379,19 @@
       "default": "./dist/plugin-sdk/health.js"
     },
     "./plugin-sdk/runtime-doctor": {
-      "types": "./dist/plugin-sdk/runtime-doctor.d.ts",
       "default": "./dist/plugin-sdk/runtime-doctor.js"
     },
     "./plugin-sdk/runtime-env": {
       "types": "./dist/plugin-sdk/runtime-env.d.ts",
       "default": "./dist/plugin-sdk/runtime-env.js"
     },
-    "./plugin-sdk/runtime-logger": {
-      "types": "./dist/plugin-sdk/runtime-logger.d.ts",
-      "default": "./dist/plugin-sdk/runtime-logger.js"
-    },
     "./plugin-sdk/proxy-capture": {
       "types": "./dist/plugin-sdk/proxy-capture.d.ts",
       "default": "./dist/plugin-sdk/proxy-capture.js"
     },
-    "./plugin-sdk/runtime-secret-resolution": {
-      "types": "./dist/plugin-sdk/runtime-secret-resolution.d.ts",
-      "default": "./dist/plugin-sdk/runtime-secret-resolution.js"
-    },
     "./plugin-sdk/setup": {
       "types": "./dist/plugin-sdk/setup.d.ts",
       "default": "./dist/plugin-sdk/setup.js"
-    },
-    "./plugin-sdk/setup-adapter-runtime": {
-      "types": "./dist/plugin-sdk/setup-adapter-runtime.d.ts",
-      "default": "./dist/plugin-sdk/setup-adapter-runtime.js"
     },
     "./plugin-sdk/setup-runtime": {
       "types": "./dist/plugin-sdk/setup-runtime.d.ts",
@@ -281,6 +408,18 @@
     "./plugin-sdk/setup-tools": {
       "types": "./dist/plugin-sdk/setup-tools.d.ts",
       "default": "./dist/plugin-sdk/setup-tools.js"
+    },
+    "./plugin-sdk/archive": {
+      "types": "./dist/plugin-sdk/archive.d.ts",
+      "default": "./dist/plugin-sdk/archive.js"
+    },
+    "./plugin-sdk/root-walk": {
+      "types": "./dist/plugin-sdk/root-walk.d.ts",
+      "default": "./dist/plugin-sdk/root-walk.js"
+    },
+    "./plugin-sdk/secret-file": {
+      "types": "./dist/plugin-sdk/secret-file.d.ts",
+      "default": "./dist/plugin-sdk/secret-file.js"
     },
     "./plugin-sdk/approval-auth-runtime": {
       "types": "./dist/plugin-sdk/approval-auth-runtime.d.ts",
@@ -299,7 +438,6 @@
       "default": "./dist/plugin-sdk/approval-gateway-runtime.js"
     },
     "./plugin-sdk/approval-reference-runtime": {
-      "types": "./dist/plugin-sdk/approval-reference-runtime.d.ts",
       "default": "./dist/plugin-sdk/approval-reference-runtime.js"
     },
     "./plugin-sdk/approval-handler-adapter-runtime": {
@@ -319,7 +457,6 @@
       "default": "./dist/plugin-sdk/approval-native-runtime.js"
     },
     "./plugin-sdk/approval-reaction-runtime": {
-      "types": "./dist/plugin-sdk/approval-reaction-runtime.d.ts",
       "default": "./dist/plugin-sdk/approval-reaction-runtime.js"
     },
     "./plugin-sdk/approval-reply-runtime": {
@@ -330,6 +467,10 @@
       "types": "./dist/plugin-sdk/approval-runtime.d.ts",
       "default": "./dist/plugin-sdk/approval-runtime.js"
     },
+    "./plugin-sdk/question-gateway-runtime": {
+      "types": "./dist/plugin-sdk/question-gateway-runtime.d.ts",
+      "default": "./dist/plugin-sdk/question-gateway-runtime.js"
+    },
     "./plugin-sdk/config-runtime": {
       "types": "./dist/plugin-sdk/config-runtime.d.ts",
       "default": "./dist/plugin-sdk/config-runtime.js"
@@ -337,10 +478,6 @@
     "./plugin-sdk/config-contracts": {
       "types": "./dist/plugin-sdk/config-contracts.d.ts",
       "default": "./dist/plugin-sdk/config-contracts.js"
-    },
-    "./plugin-sdk/config-types": {
-      "types": "./dist/plugin-sdk/config-types.d.ts",
-      "default": "./dist/plugin-sdk/config-types.js"
     },
     "./plugin-sdk/plugin-config-runtime": {
       "types": "./dist/plugin-sdk/plugin-config-runtime.d.ts",
@@ -351,35 +488,23 @@
       "default": "./dist/plugin-sdk/config-mutation.js"
     },
     "./plugin-sdk/cron-store-runtime": {
-      "types": "./dist/plugin-sdk/cron-store-runtime.d.ts",
       "default": "./dist/plugin-sdk/cron-store-runtime.js"
     },
-    "./plugin-sdk/config-schema": {
-      "types": "./dist/plugin-sdk/config-schema.d.ts",
-      "default": "./dist/plugin-sdk/config-schema.js"
-    },
     "./plugin-sdk/json-schema-runtime": {
-      "types": "./dist/plugin-sdk/json-schema-runtime.d.ts",
       "default": "./dist/plugin-sdk/json-schema-runtime.js"
     },
     "./plugin-sdk/json-unsafe-integers": {
-      "types": "./dist/plugin-sdk/json-unsafe-integers.d.ts",
       "default": "./dist/plugin-sdk/json-unsafe-integers.js"
     },
     "./plugin-sdk/reply-runtime": {
       "types": "./dist/plugin-sdk/reply-runtime.d.ts",
       "default": "./dist/plugin-sdk/reply-runtime.js"
     },
-    "./plugin-sdk/reply-dedupe": {
-      "types": "./dist/plugin-sdk/reply-dedupe.d.ts",
-      "default": "./dist/plugin-sdk/reply-dedupe.js"
-    },
     "./plugin-sdk/reply-dispatch-runtime": {
       "types": "./dist/plugin-sdk/reply-dispatch-runtime.d.ts",
       "default": "./dist/plugin-sdk/reply-dispatch-runtime.js"
     },
     "./plugin-sdk/reply-reference": {
-      "types": "./dist/plugin-sdk/reply-reference.d.ts",
       "default": "./dist/plugin-sdk/reply-reference.js"
     },
     "./plugin-sdk/reply-chunking": {
@@ -406,48 +531,26 @@
       "types": "./dist/plugin-sdk/channel-reply-pipeline.d.ts",
       "default": "./dist/plugin-sdk/channel-reply-pipeline.js"
     },
-    "./plugin-sdk/channel-reply-options-runtime": {
-      "types": "./dist/plugin-sdk/channel-reply-options-runtime.d.ts",
-      "default": "./dist/plugin-sdk/channel-reply-options-runtime.js"
-    },
-    "./plugin-sdk/channel-runtime": {
-      "types": "./dist/plugin-sdk/channel-runtime.d.ts",
-      "default": "./dist/plugin-sdk/channel-runtime.js"
-    },
     "./plugin-sdk/interactive-runtime": {
       "types": "./dist/plugin-sdk/interactive-runtime.d.ts",
       "default": "./dist/plugin-sdk/interactive-runtime.js"
     },
     "./plugin-sdk/outbound-media": {
-      "types": "./dist/plugin-sdk/outbound-media.d.ts",
       "default": "./dist/plugin-sdk/outbound-media.js"
     },
-    "./plugin-sdk/outbound-send-deps": {
-      "types": "./dist/plugin-sdk/outbound-send-deps.d.ts",
-      "default": "./dist/plugin-sdk/outbound-send-deps.js"
-    },
-    "./plugin-sdk/outbound-runtime": {
-      "types": "./dist/plugin-sdk/outbound-runtime.d.ts",
-      "default": "./dist/plugin-sdk/outbound-runtime.js"
-    },
     "./plugin-sdk/pair-loop-guard-runtime": {
-      "types": "./dist/plugin-sdk/pair-loop-guard-runtime.d.ts",
       "default": "./dist/plugin-sdk/pair-loop-guard-runtime.js"
     },
     "./plugin-sdk/poll-runtime": {
-      "types": "./dist/plugin-sdk/poll-runtime.d.ts",
       "default": "./dist/plugin-sdk/poll-runtime.js"
     },
     "./plugin-sdk/async-lock-runtime": {
-      "types": "./dist/plugin-sdk/async-lock-runtime.d.ts",
       "default": "./dist/plugin-sdk/async-lock-runtime.js"
     },
     "./plugin-sdk/channel-activity-runtime": {
-      "types": "./dist/plugin-sdk/channel-activity-runtime.d.ts",
       "default": "./dist/plugin-sdk/channel-activity-runtime.js"
     },
     "./plugin-sdk/concurrency-runtime": {
-      "types": "./dist/plugin-sdk/concurrency-runtime.d.ts",
       "default": "./dist/plugin-sdk/concurrency-runtime.js"
     },
     "./plugin-sdk/dedupe-runtime": {
@@ -455,39 +558,30 @@
       "default": "./dist/plugin-sdk/dedupe-runtime.js"
     },
     "./plugin-sdk/delivery-queue-runtime": {
-      "types": "./dist/plugin-sdk/delivery-queue-runtime.d.ts",
       "default": "./dist/plugin-sdk/delivery-queue-runtime.js"
     },
     "./plugin-sdk/file-access-runtime": {
-      "types": "./dist/plugin-sdk/file-access-runtime.d.ts",
       "default": "./dist/plugin-sdk/file-access-runtime.js"
     },
     "./plugin-sdk/heartbeat-runtime": {
-      "types": "./dist/plugin-sdk/heartbeat-runtime.d.ts",
       "default": "./dist/plugin-sdk/heartbeat-runtime.js"
     },
     "./plugin-sdk/expect-runtime": {
-      "types": "./dist/plugin-sdk/expect-runtime.d.ts",
       "default": "./dist/plugin-sdk/expect-runtime.js"
     },
     "./plugin-sdk/number-runtime": {
-      "types": "./dist/plugin-sdk/number-runtime.d.ts",
       "default": "./dist/plugin-sdk/number-runtime.js"
     },
     "./plugin-sdk/secure-random-runtime": {
-      "types": "./dist/plugin-sdk/secure-random-runtime.d.ts",
       "default": "./dist/plugin-sdk/secure-random-runtime.js"
     },
     "./plugin-sdk/system-event-runtime": {
-      "types": "./dist/plugin-sdk/system-event-runtime.d.ts",
       "default": "./dist/plugin-sdk/system-event-runtime.js"
     },
     "./plugin-sdk/transport-ready-runtime": {
-      "types": "./dist/plugin-sdk/transport-ready-runtime.d.ts",
       "default": "./dist/plugin-sdk/transport-ready-runtime.js"
     },
     "./plugin-sdk/exec-approvals-runtime": {
-      "types": "./dist/plugin-sdk/exec-approvals-runtime.d.ts",
       "default": "./dist/plugin-sdk/exec-approvals-runtime.js"
     },
     "./plugin-sdk/infra-runtime": {
@@ -507,7 +601,6 @@
       "default": "./dist/plugin-sdk/model-session-runtime.js"
     },
     "./plugin-sdk/talk-config-runtime": {
-      "types": "./dist/plugin-sdk/talk-config-runtime.d.ts",
       "default": "./dist/plugin-sdk/talk-config-runtime.js"
     },
     "./plugin-sdk/ssrf-policy": {
@@ -522,6 +615,10 @@
       "types": "./dist/plugin-sdk/media-runtime.d.ts",
       "default": "./dist/plugin-sdk/media-runtime.js"
     },
+    "./plugin-sdk/media-local-roots": {
+      "types": "./dist/plugin-sdk/media-local-roots.d.ts",
+      "default": "./dist/plugin-sdk/media-local-roots.js"
+    },
     "./plugin-sdk/media-store": {
       "types": "./dist/plugin-sdk/media-store.d.ts",
       "default": "./dist/plugin-sdk/media-store.js"
@@ -531,15 +628,12 @@
       "default": "./dist/plugin-sdk/media-mime.js"
     },
     "./plugin-sdk/embedding-providers": {
-      "types": "./dist/plugin-sdk/embedding-providers.d.ts",
       "default": "./dist/plugin-sdk/embedding-providers.js"
     },
     "./plugin-sdk/media-generation-runtime": {
-      "types": "./dist/plugin-sdk/media-generation-runtime.d.ts",
       "default": "./dist/plugin-sdk/media-generation-runtime.js"
     },
     "./plugin-sdk/conversation-binding-runtime": {
-      "types": "./dist/plugin-sdk/conversation-binding-runtime.d.ts",
       "default": "./dist/plugin-sdk/conversation-binding-runtime.js"
     },
     "./plugin-sdk/conversation-runtime": {
@@ -547,11 +641,9 @@
       "default": "./dist/plugin-sdk/conversation-runtime.js"
     },
     "./plugin-sdk/thread-bindings-runtime": {
-      "types": "./dist/plugin-sdk/thread-bindings-runtime.d.ts",
       "default": "./dist/plugin-sdk/thread-bindings-runtime.js"
     },
     "./plugin-sdk/thread-bindings-session-runtime": {
-      "types": "./dist/plugin-sdk/thread-bindings-session-runtime.d.ts",
       "default": "./dist/plugin-sdk/thread-bindings-session-runtime.js"
     },
     "./plugin-sdk/text-runtime": {
@@ -567,11 +659,9 @@
       "default": "./dist/plugin-sdk/agent-runtime.js"
     },
     "./plugin-sdk/simple-completion-runtime": {
-      "types": "./dist/plugin-sdk/simple-completion-runtime.d.ts",
       "default": "./dist/plugin-sdk/simple-completion-runtime.js"
     },
     "./plugin-sdk/speech-core": {
-      "types": "./dist/plugin-sdk/speech-core.d.ts",
       "default": "./dist/plugin-sdk/speech-core.js"
     },
     "./plugin-sdk/speech-settings": {
@@ -579,16 +669,11 @@
       "default": "./dist/plugin-sdk/speech-settings.js"
     },
     "./plugin-sdk/tts-runtime": {
-      "types": "./dist/plugin-sdk/tts-runtime.d.ts",
       "default": "./dist/plugin-sdk/tts-runtime.js"
     },
     "./plugin-sdk/plugin-runtime": {
       "types": "./dist/plugin-sdk/plugin-runtime.d.ts",
       "default": "./dist/plugin-sdk/plugin-runtime.js"
-    },
-    "./plugin-sdk/skills-runtime": {
-      "types": "./dist/plugin-sdk/skills-runtime.d.ts",
-      "default": "./dist/plugin-sdk/skills-runtime.js"
     },
     "./plugin-sdk/channel-secret-basic-runtime": {
       "types": "./dist/plugin-sdk/channel-secret-basic-runtime.d.ts",
@@ -599,19 +684,13 @@
       "default": "./dist/plugin-sdk/channel-secret-runtime.js"
     },
     "./plugin-sdk/channel-secret-tts-runtime": {
-      "types": "./dist/plugin-sdk/channel-secret-tts-runtime.d.ts",
       "default": "./dist/plugin-sdk/channel-secret-tts-runtime.js"
     },
     "./plugin-sdk/secret-ref-runtime": {
       "types": "./dist/plugin-sdk/secret-ref-runtime.d.ts",
       "default": "./dist/plugin-sdk/secret-ref-runtime.js"
     },
-    "./plugin-sdk/secret-provider-integration": {
-      "types": "./dist/plugin-sdk/secret-provider-integration.d.ts",
-      "default": "./dist/plugin-sdk/secret-provider-integration.js"
-    },
     "./plugin-sdk/secret-file-runtime": {
-      "types": "./dist/plugin-sdk/secret-file-runtime.d.ts",
       "default": "./dist/plugin-sdk/secret-file-runtime.js"
     },
     "./plugin-sdk/security-runtime": {
@@ -626,20 +705,20 @@
       "types": "./dist/plugin-sdk/gateway-runtime.d.ts",
       "default": "./dist/plugin-sdk/gateway-runtime.js"
     },
+    "./plugin-sdk/cli-argv": {
+      "types": "./dist/plugin-sdk/cli-argv.d.ts",
+      "default": "./dist/plugin-sdk/cli-argv.js"
+    },
     "./plugin-sdk/cli-runtime": {
-      "types": "./dist/plugin-sdk/cli-runtime.d.ts",
       "default": "./dist/plugin-sdk/cli-runtime.js"
     },
     "./plugin-sdk/cli-backend": {
-      "types": "./dist/plugin-sdk/cli-backend.d.ts",
       "default": "./dist/plugin-sdk/cli-backend.js"
     },
     "./plugin-sdk/codex-mcp-projection": {
-      "types": "./dist/plugin-sdk/codex-mcp-projection.d.ts",
       "default": "./dist/plugin-sdk/codex-mcp-projection.js"
     },
     "./plugin-sdk/agent-harness-task-runtime": {
-      "types": "./dist/plugin-sdk/agent-harness-task-runtime.d.ts",
       "default": "./dist/plugin-sdk/agent-harness-task-runtime.js"
     },
     "./plugin-sdk/agent-harness": {
@@ -647,7 +726,6 @@
       "default": "./dist/plugin-sdk/agent-harness.js"
     },
     "./plugin-sdk/agent-harness-exec-review-runtime": {
-      "types": "./dist/plugin-sdk/agent-harness-exec-review-runtime.d.ts",
       "default": "./dist/plugin-sdk/agent-harness-exec-review-runtime.js"
     },
     "./plugin-sdk/agent-harness-runtime": {
@@ -655,7 +733,6 @@
       "default": "./dist/plugin-sdk/agent-harness-runtime.js"
     },
     "./plugin-sdk/agent-harness-tool-runtime": {
-      "types": "./dist/plugin-sdk/agent-harness-tool-runtime.d.ts",
       "default": "./dist/plugin-sdk/agent-harness-tool-runtime.js"
     },
     "./plugin-sdk/hook-runtime": {
@@ -663,39 +740,30 @@
       "default": "./dist/plugin-sdk/hook-runtime.js"
     },
     "./plugin-sdk/html-entity-runtime": {
-      "types": "./dist/plugin-sdk/html-entity-runtime.d.ts",
       "default": "./dist/plugin-sdk/html-entity-runtime.js"
     },
     "./plugin-sdk/host-runtime": {
-      "types": "./dist/plugin-sdk/host-runtime.d.ts",
       "default": "./dist/plugin-sdk/host-runtime.js"
     },
     "./plugin-sdk/types": {
-      "types": "./dist/plugin-sdk/types.d.ts",
       "default": "./dist/plugin-sdk/types.js"
     },
     "./plugin-sdk/process-runtime": {
-      "types": "./dist/plugin-sdk/process-runtime.d.ts",
       "default": "./dist/plugin-sdk/process-runtime.js"
     },
     "./plugin-sdk/windows-spawn": {
-      "types": "./dist/plugin-sdk/windows-spawn.d.ts",
       "default": "./dist/plugin-sdk/windows-spawn.js"
     },
     "./plugin-sdk/acp-runtime": {
-      "types": "./dist/plugin-sdk/acp-runtime.d.ts",
       "default": "./dist/plugin-sdk/acp-runtime.js"
     },
     "./plugin-sdk/acp-runtime-backend": {
-      "types": "./dist/plugin-sdk/acp-runtime-backend.d.ts",
       "default": "./dist/plugin-sdk/acp-runtime-backend.js"
     },
     "./plugin-sdk/acp-binding-runtime": {
-      "types": "./dist/plugin-sdk/acp-binding-runtime.d.ts",
       "default": "./dist/plugin-sdk/acp-binding-runtime.js"
     },
     "./plugin-sdk/acp-binding-resolve-runtime": {
-      "types": "./dist/plugin-sdk/acp-binding-resolve-runtime.d.ts",
       "default": "./dist/plugin-sdk/acp-binding-resolve-runtime.js"
     },
     "./plugin-sdk/lazy-runtime": {
@@ -707,7 +775,6 @@
       "default": "./dist/plugin-sdk/temp-path.js"
     },
     "./plugin-sdk/time-runtime": {
-      "types": "./dist/plugin-sdk/time-runtime.d.ts",
       "default": "./dist/plugin-sdk/time-runtime.js"
     },
     "./plugin-sdk/logging-core": {
@@ -715,19 +782,15 @@
       "default": "./dist/plugin-sdk/logging-core.js"
     },
     "./plugin-sdk/migration": {
-      "types": "./dist/plugin-sdk/migration.d.ts",
       "default": "./dist/plugin-sdk/migration.js"
     },
     "./plugin-sdk/migration-runtime": {
-      "types": "./dist/plugin-sdk/migration-runtime.d.ts",
       "default": "./dist/plugin-sdk/migration-runtime.js"
     },
     "./plugin-sdk/plugin-state-runtime": {
-      "types": "./dist/plugin-sdk/plugin-state-runtime.d.ts",
       "default": "./dist/plugin-sdk/plugin-state-runtime.js"
     },
     "./plugin-sdk/markdown-table-runtime": {
-      "types": "./dist/plugin-sdk/markdown-table-runtime.d.ts",
       "default": "./dist/plugin-sdk/markdown-table-runtime.js"
     },
     "./plugin-sdk/account-helpers": {
@@ -747,7 +810,6 @@
       "default": "./dist/plugin-sdk/account-resolution.js"
     },
     "./plugin-sdk/account-resolution-runtime": {
-      "types": "./dist/plugin-sdk/account-resolution-runtime.d.ts",
       "default": "./dist/plugin-sdk/account-resolution-runtime.js"
     },
     "./plugin-sdk/agent-config-primitives": {
@@ -755,7 +817,6 @@
       "default": "./dist/plugin-sdk/agent-config-primitives.js"
     },
     "./plugin-sdk/access-groups": {
-      "types": "./dist/plugin-sdk/access-groups.d.ts",
       "default": "./dist/plugin-sdk/access-groups.js"
     },
     "./plugin-sdk/allow-from": {
@@ -767,15 +828,17 @@
       "default": "./dist/plugin-sdk/allowlist-config-edit.js"
     },
     "./plugin-sdk/browser-config": {
-      "types": "./dist/plugin-sdk/browser-config.d.ts",
       "default": "./dist/plugin-sdk/browser-config.js"
     },
     "./plugin-sdk/boolean-param": {
       "types": "./dist/plugin-sdk/boolean-param.d.ts",
       "default": "./dist/plugin-sdk/boolean-param.js"
     },
+    "./plugin-sdk/channel-dm-policy": {
+      "types": "./dist/plugin-sdk/channel-dm-policy.d.ts",
+      "default": "./dist/plugin-sdk/channel-dm-policy.js"
+    },
     "./plugin-sdk/dangerous-name-runtime": {
-      "types": "./dist/plugin-sdk/dangerous-name-runtime.d.ts",
       "default": "./dist/plugin-sdk/dangerous-name-runtime.js"
     },
     "./plugin-sdk/command-auth": {
@@ -786,10 +849,6 @@
       "types": "./dist/plugin-sdk/command-auth-native.d.ts",
       "default": "./dist/plugin-sdk/command-auth-native.js"
     },
-    "./plugin-sdk/command-gating": {
-      "types": "./dist/plugin-sdk/command-gating.d.ts",
-      "default": "./dist/plugin-sdk/command-gating.js"
-    },
     "./plugin-sdk/command-primitives-runtime": {
       "types": "./dist/plugin-sdk/command-primitives-runtime.d.ts",
       "default": "./dist/plugin-sdk/command-primitives-runtime.js"
@@ -799,7 +858,6 @@
       "default": "./dist/plugin-sdk/command-status.js"
     },
     "./plugin-sdk/command-status-runtime": {
-      "types": "./dist/plugin-sdk/command-status-runtime.d.ts",
       "default": "./dist/plugin-sdk/command-status-runtime.js"
     },
     "./plugin-sdk/command-detection": {
@@ -807,36 +865,18 @@
       "default": "./dist/plugin-sdk/command-detection.js"
     },
     "./plugin-sdk/command-surface": {
-      "types": "./dist/plugin-sdk/command-surface.d.ts",
       "default": "./dist/plugin-sdk/command-surface.js"
     },
     "./plugin-sdk/collection-runtime": {
       "types": "./dist/plugin-sdk/collection-runtime.d.ts",
       "default": "./dist/plugin-sdk/collection-runtime.js"
     },
-    "./plugin-sdk/compat": {
-      "types": "./dist/plugin-sdk/compat.d.ts",
-      "default": "./dist/plugin-sdk/compat.js"
-    },
-    "./plugin-sdk/direct-dm": {
-      "types": "./dist/plugin-sdk/direct-dm.d.ts",
-      "default": "./dist/plugin-sdk/direct-dm.js"
-    },
-    "./plugin-sdk/direct-dm-access": {
-      "types": "./dist/plugin-sdk/direct-dm-access.d.ts",
-      "default": "./dist/plugin-sdk/direct-dm-access.js"
-    },
     "./plugin-sdk/direct-dm-guard-policy": {
-      "types": "./dist/plugin-sdk/direct-dm-guard-policy.d.ts",
       "default": "./dist/plugin-sdk/direct-dm-guard-policy.js"
     },
     "./plugin-sdk/discord": {
       "types": "./dist/plugin-sdk/discord.d.ts",
       "default": "./dist/plugin-sdk/discord.js"
-    },
-    "./plugin-sdk/mattermost": {
-      "types": "./dist/plugin-sdk/mattermost.d.ts",
-      "default": "./dist/plugin-sdk/mattermost.js"
     },
     "./plugin-sdk/matrix": {
       "types": "./dist/plugin-sdk/matrix.d.ts",
@@ -863,7 +903,6 @@
       "default": "./dist/plugin-sdk/channel-config-helpers.js"
     },
     "./plugin-sdk/channel-config-writes": {
-      "types": "./dist/plugin-sdk/channel-config-writes.d.ts",
       "default": "./dist/plugin-sdk/channel-config-writes.js"
     },
     "./plugin-sdk/channel-config-primitives": {
@@ -875,16 +914,10 @@
       "default": "./dist/plugin-sdk/channel-config-schema.js"
     },
     "./plugin-sdk/bundled-channel-config-schema": {
-      "types": "./dist/plugin-sdk/bundled-channel-config-schema.d.ts",
       "default": "./dist/plugin-sdk/bundled-channel-config-schema.js"
     },
     "./plugin-sdk/chat-channel-ids": {
-      "types": "./dist/plugin-sdk/chat-channel-ids.d.ts",
       "default": "./dist/plugin-sdk/chat-channel-ids.js"
-    },
-    "./plugin-sdk/channel-config-schema-legacy": {
-      "types": "./dist/plugin-sdk/channel-config-schema-legacy.d.ts",
-      "default": "./dist/plugin-sdk/channel-config-schema-legacy.js"
     },
     "./plugin-sdk/channel-actions": {
       "types": "./dist/plugin-sdk/channel-actions.d.ts",
@@ -906,10 +939,6 @@
       "types": "./dist/plugin-sdk/channel-contract.d.ts",
       "default": "./dist/plugin-sdk/channel-contract.js"
     },
-    "./plugin-sdk/channel-envelope": {
-      "types": "./dist/plugin-sdk/channel-envelope.d.ts",
-      "default": "./dist/plugin-sdk/channel-envelope.js"
-    },
     "./plugin-sdk/channel-feedback": {
       "types": "./dist/plugin-sdk/channel-feedback.d.ts",
       "default": "./dist/plugin-sdk/channel-feedback.js"
@@ -922,20 +951,11 @@
       "types": "./dist/plugin-sdk/channel-inbound-debounce.d.ts",
       "default": "./dist/plugin-sdk/channel-inbound-debounce.js"
     },
-    "./plugin-sdk/channel-inbound-roots": {
-      "types": "./dist/plugin-sdk/channel-inbound-roots.d.ts",
-      "default": "./dist/plugin-sdk/channel-inbound-roots.js"
-    },
     "./plugin-sdk/channel-logging": {
       "types": "./dist/plugin-sdk/channel-logging.d.ts",
       "default": "./dist/plugin-sdk/channel-logging.js"
     },
-    "./plugin-sdk/channel-location": {
-      "types": "./dist/plugin-sdk/channel-location.d.ts",
-      "default": "./dist/plugin-sdk/channel-location.js"
-    },
     "./plugin-sdk/channel-mention-gating": {
-      "types": "./dist/plugin-sdk/channel-mention-gating.d.ts",
       "default": "./dist/plugin-sdk/channel-mention-gating.js"
     },
     "./plugin-sdk/channel-lifecycle": {
@@ -950,10 +970,6 @@
       "types": "./dist/plugin-sdk/channel-message.d.ts",
       "default": "./dist/plugin-sdk/channel-message.js"
     },
-    "./plugin-sdk/channel-message-runtime": {
-      "types": "./dist/plugin-sdk/channel-message-runtime.d.ts",
-      "default": "./dist/plugin-sdk/channel-message-runtime.js"
-    },
     "./plugin-sdk/channel-outbound": {
       "types": "./dist/plugin-sdk/channel-outbound.d.ts",
       "default": "./dist/plugin-sdk/channel-outbound.js"
@@ -961,10 +977,6 @@
     "./plugin-sdk/channel-pairing": {
       "types": "./dist/plugin-sdk/channel-pairing.d.ts",
       "default": "./dist/plugin-sdk/channel-pairing.js"
-    },
-    "./plugin-sdk/channel-pairing-paths": {
-      "types": "./dist/plugin-sdk/channel-pairing-paths.d.ts",
-      "default": "./dist/plugin-sdk/channel-pairing-paths.js"
     },
     "./plugin-sdk/channel-policy": {
       "types": "./dist/plugin-sdk/channel-policy.d.ts",
@@ -975,51 +987,46 @@
       "default": "./dist/plugin-sdk/channel-send-result.js"
     },
     "./plugin-sdk/channel-route": {
-      "types": "./dist/plugin-sdk/channel-route.d.ts",
       "default": "./dist/plugin-sdk/channel-route.js"
     },
     "./plugin-sdk/channel-targets": {
-      "types": "./dist/plugin-sdk/channel-targets.d.ts",
       "default": "./dist/plugin-sdk/channel-targets.js"
     },
     "./plugin-sdk/context-visibility-runtime": {
-      "types": "./dist/plugin-sdk/context-visibility-runtime.d.ts",
       "default": "./dist/plugin-sdk/context-visibility-runtime.js"
     },
     "./plugin-sdk/file-lock": {
-      "types": "./dist/plugin-sdk/file-lock.d.ts",
       "default": "./dist/plugin-sdk/file-lock.js"
     },
     "./plugin-sdk/fetch-runtime": {
-      "types": "./dist/plugin-sdk/fetch-runtime.d.ts",
       "default": "./dist/plugin-sdk/fetch-runtime.js"
     },
     "./plugin-sdk/runtime-fetch": {
-      "types": "./dist/plugin-sdk/runtime-fetch.d.ts",
       "default": "./dist/plugin-sdk/runtime-fetch.js"
     },
     "./plugin-sdk/inline-image-data-url-runtime": {
-      "types": "./dist/plugin-sdk/inline-image-data-url-runtime.d.ts",
       "default": "./dist/plugin-sdk/inline-image-data-url-runtime.js"
     },
     "./plugin-sdk/node-host": {
-      "types": "./dist/plugin-sdk/node-host.d.ts",
       "default": "./dist/plugin-sdk/node-host.js"
     },
     "./plugin-sdk/response-limit-runtime": {
-      "types": "./dist/plugin-sdk/response-limit-runtime.d.ts",
       "default": "./dist/plugin-sdk/response-limit-runtime.js"
     },
     "./plugin-sdk/session-binding-runtime": {
-      "types": "./dist/plugin-sdk/session-binding-runtime.d.ts",
       "default": "./dist/plugin-sdk/session-binding-runtime.js"
     },
     "./plugin-sdk/session-catalog": {
-      "types": "./dist/plugin-sdk/session-catalog.d.ts",
       "default": "./dist/plugin-sdk/session-catalog.js"
     },
+    "./plugin-sdk/session-catalog-runtime": {
+      "default": "./dist/plugin-sdk/session-catalog-runtime.js"
+    },
+    "./plugin-sdk/session-discussion": {
+      "types": "./dist/plugin-sdk/session-discussion.d.ts",
+      "default": "./dist/plugin-sdk/session-discussion.js"
+    },
     "./plugin-sdk/session-key-runtime": {
-      "types": "./dist/plugin-sdk/session-key-runtime.d.ts",
       "default": "./dist/plugin-sdk/session-key-runtime.js"
     },
     "./plugin-sdk/session-store-runtime": {
@@ -1027,23 +1034,18 @@
       "default": "./dist/plugin-sdk/session-store-runtime.js"
     },
     "./plugin-sdk/session-transcript-runtime": {
-      "types": "./dist/plugin-sdk/session-transcript-runtime.d.ts",
       "default": "./dist/plugin-sdk/session-transcript-runtime.js"
     },
     "./plugin-sdk/sqlite-runtime": {
-      "types": "./dist/plugin-sdk/sqlite-runtime.d.ts",
       "default": "./dist/plugin-sdk/sqlite-runtime.js"
     },
     "./plugin-sdk/session-transcript-hit": {
-      "types": "./dist/plugin-sdk/session-transcript-hit.d.ts",
       "default": "./dist/plugin-sdk/session-transcript-hit.js"
     },
     "./plugin-sdk/session-visibility": {
-      "types": "./dist/plugin-sdk/session-visibility.d.ts",
       "default": "./dist/plugin-sdk/session-visibility.js"
     },
     "./plugin-sdk/ssrf-dispatcher": {
-      "types": "./dist/plugin-sdk/ssrf-dispatcher.d.ts",
       "default": "./dist/plugin-sdk/ssrf-dispatcher.js"
     },
     "./plugin-sdk/string-coerce-runtime": {
@@ -1051,7 +1053,6 @@
       "default": "./dist/plugin-sdk/string-coerce-runtime.js"
     },
     "./plugin-sdk/group-activation": {
-      "types": "./dist/plugin-sdk/group-activation.d.ts",
       "default": "./dist/plugin-sdk/group-activation.js"
     },
     "./plugin-sdk/group-access": {
@@ -1059,51 +1060,34 @@
       "default": "./dist/plugin-sdk/group-access.js"
     },
     "./plugin-sdk/global-singleton": {
-      "types": "./dist/plugin-sdk/global-singleton.d.ts",
       "default": "./dist/plugin-sdk/global-singleton.js"
     },
     "./plugin-sdk/directory-config-runtime": {
-      "types": "./dist/plugin-sdk/directory-config-runtime.d.ts",
       "default": "./dist/plugin-sdk/directory-config-runtime.js"
     },
     "./plugin-sdk/directory-runtime": {
       "types": "./dist/plugin-sdk/directory-runtime.d.ts",
       "default": "./dist/plugin-sdk/directory-runtime.js"
     },
-    "./plugin-sdk/media-generation-runtime-shared": {
-      "types": "./dist/plugin-sdk/media-generation-runtime-shared.d.ts",
-      "default": "./dist/plugin-sdk/media-generation-runtime-shared.js"
-    },
     "./plugin-sdk/image-generation": {
-      "types": "./dist/plugin-sdk/image-generation.d.ts",
       "default": "./dist/plugin-sdk/image-generation.js"
     },
     "./plugin-sdk/image-generation-runtime": {
-      "types": "./dist/plugin-sdk/image-generation-runtime.d.ts",
       "default": "./dist/plugin-sdk/image-generation-runtime.js"
     },
     "./plugin-sdk/image-generation-core": {
-      "types": "./dist/plugin-sdk/image-generation-core.d.ts",
       "default": "./dist/plugin-sdk/image-generation-core.js"
     },
     "./plugin-sdk/music-generation": {
-      "types": "./dist/plugin-sdk/music-generation.d.ts",
       "default": "./dist/plugin-sdk/music-generation.js"
     },
-    "./plugin-sdk/music-generation-core": {
-      "types": "./dist/plugin-sdk/music-generation-core.d.ts",
-      "default": "./dist/plugin-sdk/music-generation-core.js"
-    },
     "./plugin-sdk/video-generation": {
-      "types": "./dist/plugin-sdk/video-generation.d.ts",
       "default": "./dist/plugin-sdk/video-generation.js"
     },
     "./plugin-sdk/video-generation-runtime": {
-      "types": "./dist/plugin-sdk/video-generation-runtime.d.ts",
       "default": "./dist/plugin-sdk/video-generation-runtime.js"
     },
     "./plugin-sdk/video-generation-core": {
-      "types": "./dist/plugin-sdk/video-generation-core.d.ts",
       "default": "./dist/plugin-sdk/video-generation-core.js"
     },
     "./plugin-sdk/reply-history": {
@@ -1111,15 +1095,12 @@
       "default": "./dist/plugin-sdk/reply-history.js"
     },
     "./plugin-sdk/realtime-transcription": {
-      "types": "./dist/plugin-sdk/realtime-transcription.d.ts",
       "default": "./dist/plugin-sdk/realtime-transcription.js"
     },
     "./plugin-sdk/realtime-bootstrap-context": {
-      "types": "./dist/plugin-sdk/realtime-bootstrap-context.d.ts",
       "default": "./dist/plugin-sdk/realtime-bootstrap-context.js"
     },
     "./plugin-sdk/realtime-voice": {
-      "types": "./dist/plugin-sdk/realtime-voice.d.ts",
       "default": "./dist/plugin-sdk/realtime-voice.js"
     },
     "./plugin-sdk/meeting-runtime": {
@@ -1127,7 +1108,6 @@
       "default": "./dist/plugin-sdk/meeting-runtime.js"
     },
     "./plugin-sdk/transcripts": {
-      "types": "./dist/plugin-sdk/transcripts.d.ts",
       "default": "./dist/plugin-sdk/transcripts.js"
     },
     "./plugin-sdk/media-understanding": {
@@ -1143,7 +1123,6 @@
       "default": "./dist/plugin-sdk/messaging-targets.js"
     },
     "./plugin-sdk/request-url": {
-      "types": "./dist/plugin-sdk/request-url.d.ts",
       "default": "./dist/plugin-sdk/request-url.js"
     },
     "./plugin-sdk/runtime-store": {
@@ -1158,28 +1137,20 @@
       "types": "./dist/plugin-sdk/persistent-dedupe.d.ts",
       "default": "./dist/plugin-sdk/persistent-dedupe.js"
     },
+    "./plugin-sdk/ingress-effect-once": {
+      "types": "./dist/plugin-sdk/ingress-effect-once.d.ts",
+      "default": "./dist/plugin-sdk/ingress-effect-once.js"
+    },
     "./plugin-sdk/keyed-async-queue": {
-      "types": "./dist/plugin-sdk/keyed-async-queue.d.ts",
       "default": "./dist/plugin-sdk/keyed-async-queue.js"
     },
     "./plugin-sdk/qa-runner-runtime": {
-      "types": "./dist/plugin-sdk/qa-runner-runtime.d.ts",
       "default": "./dist/plugin-sdk/qa-runner-runtime.js"
     },
-    "./plugin-sdk/memory-core": {
-      "types": "./dist/plugin-sdk/memory-core.d.ts",
-      "default": "./dist/plugin-sdk/memory-core.js"
-    },
-    "./plugin-sdk/memory-core-engine-runtime": {
-      "types": "./dist/plugin-sdk/memory-core-engine-runtime.d.ts",
-      "default": "./dist/plugin-sdk/memory-core-engine-runtime.js"
-    },
     "./plugin-sdk/memory-core-host-embedding-registry": {
-      "types": "./dist/plugin-sdk/memory-core-host-embedding-registry.d.ts",
       "default": "./dist/plugin-sdk/memory-core-host-embedding-registry.js"
     },
     "./plugin-sdk/memory-core-host-engine-embeddings": {
-      "types": "./dist/plugin-sdk/memory-core-host-engine-embeddings.d.ts",
       "default": "./dist/plugin-sdk/memory-core-host-engine-embeddings.js"
     },
     "./plugin-sdk/memory-core-host-engine-foundation": {
@@ -1187,43 +1158,24 @@
       "default": "./dist/plugin-sdk/memory-core-host-engine-foundation.js"
     },
     "./plugin-sdk/memory-core-host-engine-qmd": {
-      "types": "./dist/plugin-sdk/memory-core-host-engine-qmd.d.ts",
       "default": "./dist/plugin-sdk/memory-core-host-engine-qmd.js"
     },
     "./plugin-sdk/memory-core-host-engine-storage": {
-      "types": "./dist/plugin-sdk/memory-core-host-engine-storage.d.ts",
       "default": "./dist/plugin-sdk/memory-core-host-engine-storage.js"
     },
-    "./plugin-sdk/memory-core-host-multimodal": {
-      "types": "./dist/plugin-sdk/memory-core-host-multimodal.d.ts",
-      "default": "./dist/plugin-sdk/memory-core-host-multimodal.js"
-    },
-    "./plugin-sdk/memory-core-host-query": {
-      "types": "./dist/plugin-sdk/memory-core-host-query.d.ts",
-      "default": "./dist/plugin-sdk/memory-core-host-query.js"
-    },
     "./plugin-sdk/memory-core-host-secret": {
-      "types": "./dist/plugin-sdk/memory-core-host-secret.d.ts",
       "default": "./dist/plugin-sdk/memory-core-host-secret.js"
     },
-    "./plugin-sdk/memory-core-host-events": {
-      "types": "./dist/plugin-sdk/memory-core-host-events.d.ts",
-      "default": "./dist/plugin-sdk/memory-core-host-events.js"
-    },
     "./plugin-sdk/memory-core-host-status": {
-      "types": "./dist/plugin-sdk/memory-core-host-status.d.ts",
       "default": "./dist/plugin-sdk/memory-core-host-status.js"
     },
     "./plugin-sdk/memory-core-host-runtime-cli": {
-      "types": "./dist/plugin-sdk/memory-core-host-runtime-cli.d.ts",
       "default": "./dist/plugin-sdk/memory-core-host-runtime-cli.js"
     },
     "./plugin-sdk/memory-core-host-runtime-core": {
-      "types": "./dist/plugin-sdk/memory-core-host-runtime-core.d.ts",
       "default": "./dist/plugin-sdk/memory-core-host-runtime-core.js"
     },
     "./plugin-sdk/memory-core-host-runtime-files": {
-      "types": "./dist/plugin-sdk/memory-core-host-runtime-files.d.ts",
       "default": "./dist/plugin-sdk/memory-core-host-runtime-files.js"
     },
     "./plugin-sdk/memory-host-core": {
@@ -1231,27 +1183,15 @@
       "default": "./dist/plugin-sdk/memory-host-core.js"
     },
     "./plugin-sdk/memory-host-events": {
-      "types": "./dist/plugin-sdk/memory-host-events.d.ts",
       "default": "./dist/plugin-sdk/memory-host-events.js"
     },
-    "./plugin-sdk/memory-host-files": {
-      "types": "./dist/plugin-sdk/memory-host-files.d.ts",
-      "default": "./dist/plugin-sdk/memory-host-files.js"
-    },
     "./plugin-sdk/memory-host-markdown": {
-      "types": "./dist/plugin-sdk/memory-host-markdown.d.ts",
       "default": "./dist/plugin-sdk/memory-host-markdown.js"
     },
     "./plugin-sdk/memory-host-search": {
-      "types": "./dist/plugin-sdk/memory-host-search.d.ts",
       "default": "./dist/plugin-sdk/memory-host-search.js"
     },
-    "./plugin-sdk/memory-host-status": {
-      "types": "./dist/plugin-sdk/memory-host-status.d.ts",
-      "default": "./dist/plugin-sdk/memory-host-status.js"
-    },
     "./plugin-sdk/message-tool-delivery-hints": {
-      "types": "./dist/plugin-sdk/message-tool-delivery-hints.d.ts",
       "default": "./dist/plugin-sdk/message-tool-delivery-hints.js"
     },
     "./plugin-sdk/models-provider-runtime": {
@@ -1275,31 +1215,21 @@
       "default": "./dist/plugin-sdk/provider-auth.js"
     },
     "./plugin-sdk/provider-oauth-runtime": {
-      "types": "./dist/plugin-sdk/provider-oauth-runtime.d.ts",
       "default": "./dist/plugin-sdk/provider-oauth-runtime.js"
     },
     "./plugin-sdk/provider-auth-runtime": {
-      "types": "./dist/plugin-sdk/provider-auth-runtime.d.ts",
       "default": "./dist/plugin-sdk/provider-auth-runtime.js"
     },
     "./plugin-sdk/provider-auth-login-flow-runtime": {
-      "types": "./dist/plugin-sdk/provider-auth-login-flow-runtime.d.ts",
       "default": "./dist/plugin-sdk/provider-auth-login-flow-runtime.js"
     },
     "./plugin-sdk/provider-auth-api-key": {
-      "types": "./dist/plugin-sdk/provider-auth-api-key.d.ts",
       "default": "./dist/plugin-sdk/provider-auth-api-key.js"
     },
     "./plugin-sdk/provider-auth-result": {
-      "types": "./dist/plugin-sdk/provider-auth-result.d.ts",
       "default": "./dist/plugin-sdk/provider-auth-result.js"
     },
-    "./plugin-sdk/provider-auth-login": {
-      "types": "./dist/plugin-sdk/provider-auth-login.d.ts",
-      "default": "./dist/plugin-sdk/provider-auth-login.js"
-    },
     "./plugin-sdk/provider-selection-runtime": {
-      "types": "./dist/plugin-sdk/provider-selection-runtime.d.ts",
       "default": "./dist/plugin-sdk/provider-selection-runtime.js"
     },
     "./plugin-sdk/plugin-entry": {
@@ -1307,7 +1237,6 @@
       "default": "./dist/plugin-sdk/plugin-entry.js"
     },
     "./plugin-sdk/provider-catalog-live-runtime": {
-      "types": "./dist/plugin-sdk/provider-catalog-live-runtime.d.ts",
       "default": "./dist/plugin-sdk/provider-catalog-live-runtime.js"
     },
     "./plugin-sdk/provider-catalog-runtime": {
@@ -1315,87 +1244,66 @@
       "default": "./dist/plugin-sdk/provider-catalog-runtime.js"
     },
     "./plugin-sdk/provider-catalog-shared": {
-      "types": "./dist/plugin-sdk/provider-catalog-shared.d.ts",
       "default": "./dist/plugin-sdk/provider-catalog-shared.js"
     },
     "./plugin-sdk/provider-entry": {
-      "types": "./dist/plugin-sdk/provider-entry.d.ts",
       "default": "./dist/plugin-sdk/provider-entry.js"
     },
     "./plugin-sdk/provider-env-vars": {
-      "types": "./dist/plugin-sdk/provider-env-vars.d.ts",
       "default": "./dist/plugin-sdk/provider-env-vars.js"
     },
     "./plugin-sdk/provider-http": {
-      "types": "./dist/plugin-sdk/provider-http.d.ts",
       "default": "./dist/plugin-sdk/provider-http.js"
     },
     "./plugin-sdk/provider-model-types": {
-      "types": "./dist/plugin-sdk/provider-model-types.d.ts",
       "default": "./dist/plugin-sdk/provider-model-types.js"
     },
     "./plugin-sdk/provider-model-shared": {
-      "types": "./dist/plugin-sdk/provider-model-shared.d.ts",
       "default": "./dist/plugin-sdk/provider-model-shared.js"
     },
     "./plugin-sdk/provider-onboard": {
-      "types": "./dist/plugin-sdk/provider-onboard.d.ts",
       "default": "./dist/plugin-sdk/provider-onboard.js"
     },
     "./plugin-sdk/provider-stream-family": {
-      "types": "./dist/plugin-sdk/provider-stream-family.d.ts",
       "default": "./dist/plugin-sdk/provider-stream-family.js"
     },
     "./plugin-sdk/provider-stream-shared": {
-      "types": "./dist/plugin-sdk/provider-stream-shared.d.ts",
       "default": "./dist/plugin-sdk/provider-stream-shared.js"
     },
     "./plugin-sdk/provider-transport-runtime": {
-      "types": "./dist/plugin-sdk/provider-transport-runtime.d.ts",
       "default": "./dist/plugin-sdk/provider-transport-runtime.js"
     },
     "./plugin-sdk/provider-stream": {
-      "types": "./dist/plugin-sdk/provider-stream.d.ts",
       "default": "./dist/plugin-sdk/provider-stream.js"
     },
     "./plugin-sdk/provider-tools": {
-      "types": "./dist/plugin-sdk/provider-tools.d.ts",
       "default": "./dist/plugin-sdk/provider-tools.js"
     },
     "./plugin-sdk/provider-usage": {
-      "types": "./dist/plugin-sdk/provider-usage.d.ts",
       "default": "./dist/plugin-sdk/provider-usage.js"
     },
     "./plugin-sdk/document-extractor": {
-      "types": "./dist/plugin-sdk/document-extractor.d.ts",
       "default": "./dist/plugin-sdk/document-extractor.js"
     },
     "./plugin-sdk/web-content-extractor": {
-      "types": "./dist/plugin-sdk/web-content-extractor.d.ts",
       "default": "./dist/plugin-sdk/web-content-extractor.js"
     },
     "./plugin-sdk/provider-web-fetch-contract": {
-      "types": "./dist/plugin-sdk/provider-web-fetch-contract.d.ts",
       "default": "./dist/plugin-sdk/provider-web-fetch-contract.js"
     },
     "./plugin-sdk/provider-web-fetch": {
-      "types": "./dist/plugin-sdk/provider-web-fetch.d.ts",
       "default": "./dist/plugin-sdk/provider-web-fetch.js"
     },
     "./plugin-sdk/provider-web-search-config-contract": {
-      "types": "./dist/plugin-sdk/provider-web-search-config-contract.d.ts",
       "default": "./dist/plugin-sdk/provider-web-search-config-contract.js"
     },
     "./plugin-sdk/provider-web-search-contract": {
-      "types": "./dist/plugin-sdk/provider-web-search-contract.d.ts",
       "default": "./dist/plugin-sdk/provider-web-search-contract.js"
     },
     "./plugin-sdk/provider-web-search": {
-      "types": "./dist/plugin-sdk/provider-web-search.d.ts",
       "default": "./dist/plugin-sdk/provider-web-search.js"
     },
     "./plugin-sdk/retry-runtime": {
-      "types": "./dist/plugin-sdk/retry-runtime.d.ts",
       "default": "./dist/plugin-sdk/retry-runtime.js"
     },
     "./plugin-sdk/run-command": {
@@ -1405,10 +1313,6 @@
     "./plugin-sdk/param-readers": {
       "types": "./dist/plugin-sdk/param-readers.d.ts",
       "default": "./dist/plugin-sdk/param-readers.js"
-    },
-    "./plugin-sdk/provider-zai-endpoint": {
-      "types": "./dist/plugin-sdk/provider-zai-endpoint.d.ts",
-      "default": "./dist/plugin-sdk/provider-zai-endpoint.js"
     },
     "./plugin-sdk/secret-input": {
       "types": "./dist/plugin-sdk/secret-input.d.ts",
@@ -1427,11 +1331,9 @@
       "default": "./dist/plugin-sdk/status-helpers.js"
     },
     "./plugin-sdk/speech": {
-      "types": "./dist/plugin-sdk/speech.d.ts",
       "default": "./dist/plugin-sdk/speech.js"
     },
     "./plugin-sdk/string-normalization-runtime": {
-      "types": "./dist/plugin-sdk/string-normalization-runtime.d.ts",
       "default": "./dist/plugin-sdk/string-normalization-runtime.js"
     },
     "./plugin-sdk/state-paths": {
@@ -1439,23 +1341,16 @@
       "default": "./dist/plugin-sdk/state-paths.js"
     },
     "./plugin-sdk/target-resolver-runtime": {
-      "types": "./dist/plugin-sdk/target-resolver-runtime.d.ts",
       "default": "./dist/plugin-sdk/target-resolver-runtime.js"
     },
     "./plugin-sdk/telegram-account": {
       "types": "./dist/plugin-sdk/telegram-account.d.ts",
       "default": "./dist/plugin-sdk/telegram-account.js"
     },
-    "./plugin-sdk/telegram-command-config": {
-      "types": "./dist/plugin-sdk/telegram-command-config.d.ts",
-      "default": "./dist/plugin-sdk/telegram-command-config.js"
-    },
     "./plugin-sdk/text-autolink-runtime": {
-      "types": "./dist/plugin-sdk/text-autolink-runtime.d.ts",
       "default": "./dist/plugin-sdk/text-autolink-runtime.js"
     },
     "./plugin-sdk/text-utility-runtime": {
-      "types": "./dist/plugin-sdk/text-utility-runtime.d.ts",
       "default": "./dist/plugin-sdk/text-utility-runtime.js"
     },
     "./plugin-sdk/widget-html": {
@@ -1467,11 +1362,9 @@
       "default": "./dist/plugin-sdk/tool-plugin.js"
     },
     "./plugin-sdk/tool-payload": {
-      "types": "./dist/plugin-sdk/tool-payload.d.ts",
       "default": "./dist/plugin-sdk/tool-payload.js"
     },
     "./plugin-sdk/tool-results": {
-      "types": "./dist/plugin-sdk/tool-results.d.ts",
       "default": "./dist/plugin-sdk/tool-results.js"
     },
     "./plugin-sdk/tool-send": {
@@ -1483,53 +1376,40 @@
       "default": "./dist/plugin-sdk/webhook-ingress.js"
     },
     "./plugin-sdk/webhook-targets": {
-      "types": "./dist/plugin-sdk/webhook-targets.d.ts",
       "default": "./dist/plugin-sdk/webhook-targets.js"
     },
     "./plugin-sdk/webhook-request-guards": {
       "types": "./dist/plugin-sdk/webhook-request-guards.d.ts",
       "default": "./dist/plugin-sdk/webhook-request-guards.js"
     },
-    "./plugin-sdk/webhook-path": {
-      "types": "./dist/plugin-sdk/webhook-path.d.ts",
-      "default": "./dist/plugin-sdk/webhook-path.js"
-    },
     "./plugin-sdk/web-media": {
       "types": "./dist/plugin-sdk/web-media.d.ts",
       "default": "./dist/plugin-sdk/web-media.js"
-    },
-    "./plugin-sdk/zalouser": {
-      "types": "./dist/plugin-sdk/zalouser.d.ts",
-      "default": "./dist/plugin-sdk/zalouser.js"
     },
     "./plugin-sdk/zod": {
       "types": "./dist/plugin-sdk/zod.d.ts",
       "default": "./dist/plugin-sdk/zod.js"
     },
     "./plugin-sdk/agent-core": {
-      "types": "./dist/plugin-sdk/agent-core.d.ts",
       "default": "./dist/plugin-sdk/agent-core.js"
     },
     "./plugin-sdk/agent-sessions": {
-      "types": "./dist/plugin-sdk/agent-sessions.d.ts",
       "default": "./dist/plugin-sdk/agent-sessions.js"
     },
     "./plugin-sdk/llm": {
-      "types": "./dist/plugin-sdk/llm.d.ts",
       "default": "./dist/plugin-sdk/llm.js"
     },
-    "./extension-api": "./dist/extensionAPI.js",
     "./cli-entry": "./openclaw.mjs"
   },
   "scripts": {
-    "android:assemble": "node scripts/run-android-gradle.mjs :app:assemblePlayDebug :wear-shared:assembleDebug",
+    "android:assemble": "node scripts/run-android-gradle.mjs :app:assemblePlayDebug :wear:assembleDebug :wear-shared:assembleDebug",
     "android:assemble:third-party": "node scripts/run-android-gradle.mjs :app:assembleThirdPartyDebug",
     "android:bundle:release": "bash -lc 'source ./scripts/lib/android-fastlane.sh && cd apps/android && run_android_fastlane android play_store_archive'",
-    "android:format": "cd apps/android && ./gradlew :app:ktlintFormat :benchmark:ktlintFormat :wear-shared:ktlintFormat",
+    "android:format": "cd apps/android && ./gradlew :app:ktlintFormat :benchmark:ktlintFormat :wear:ktlintFormat :wear-shared:ktlintFormat",
     "android:install": "node scripts/run-android-gradle.mjs :app:installPlayDebug",
     "android:install:third-party": "node scripts/run-android-gradle.mjs :app:installThirdPartyDebug",
-    "android:lint": "cd apps/android && ./gradlew :app:ktlintCheck :benchmark:ktlintCheck :wear-shared:ktlintCheck",
-    "android:lint:android": "node scripts/run-android-gradle.mjs :app:lintPlayDebug :app:lintThirdPartyDebug :wear-shared:lintDebug",
+    "android:lint": "cd apps/android && ./gradlew :app:ktlintCheck :benchmark:ktlintCheck :wear:ktlintCheck :wear-shared:ktlintCheck",
+    "android:lint:android": "node scripts/run-android-gradle.mjs :app:lintPlayDebug :app:lintThirdPartyDebug :wear:lintDebug :wear-shared:lintDebug",
     "android:run": "node scripts/run-android-gradle.mjs :app:installPlayDebug -- adb shell am start -n ai.openclaw.app/.MainActivity",
     "android:run:third-party": "node scripts/run-android-gradle.mjs :app:installThirdPartyDebug -- adb shell am start -n ai.openclaw.app/.MainActivity",
     "android:release": "bash scripts/android-release.sh",
@@ -1543,7 +1423,7 @@
     "android:release:signing:sync:push": "bash -lc 'source ./scripts/lib/android-fastlane.sh && cd apps/android && run_android_fastlane android signing_sync_push'",
     "android:release:upload": "bash scripts/android-release-upload.sh",
     "android:screenshots": "bash scripts/android-screenshots.sh",
-    "android:test": "node scripts/run-android-gradle.mjs :app:testPlayDebugUnitTest :wear-shared:testDebugUnitTest",
+    "android:test": "node scripts/run-android-gradle.mjs :app:testPlayDebugUnitTest :wear:testDebugUnitTest :wear-shared:testDebugUnitTest",
     "android:test:integration": "node scripts/run-with-env.mjs OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_ANDROID_NODE=1 -- node scripts/run-vitest.mjs run --config test/vitest/vitest.live.config.ts src/gateway/android-node.capabilities.live.test.ts",
     "android:test:third-party": "node scripts/run-android-gradle.mjs :app:testThirdPartyDebugUnitTest",
     "android:version": "node --import tsx scripts/android-version.ts --json",
@@ -1571,6 +1451,7 @@
     "check:deprecated-api-usage": "node scripts/check-deprecated-api-usage.mjs",
     "check:deprecated-jsdoc": "node scripts/check-deprecated-jsdoc.mjs",
     "check:docs": "pnpm format:docs:check && pnpm lint:docs && pnpm docs:check-mdx && pnpm docs:check-i18n-glossary && pnpm docs:check-links && pnpm docs:map:check",
+    "check:env-var-count": "node scripts/check-env-var-count.mjs",
     "check:host-env-policy:swift": "node scripts/generate-host-env-security-policy-swift.mjs --check",
     "check:import-cycles": "node --import tsx scripts/check-import-cycles.ts",
     "check:max-lines-ratchet": "node scripts/check-max-lines-ratchet.mjs",
@@ -1581,6 +1462,7 @@
     "check:opengrep-rule-metadata": "node security/opengrep/check-rule-metadata.mjs",
     "check:protocol-coverage": "node scripts/check-protocol-event-coverage.mjs",
     "check:runtime-sidecar-loaders": "node --import tsx scripts/check-runtime-sidecar-loaders.mjs",
+    "check:script-declarations": "node scripts/check-script-declarations.mjs",
     "check:static-import-sccs": "pnpm check:madge-import-cycles",
     "check:temp-path-guardrails": "node --import tsx scripts/check-temp-path-guardrails.ts",
     "check:test-types": "pnpm tsgo:test",
@@ -1617,12 +1499,8 @@
     "deps:changes:report": "node scripts/dependency-changes-report.mjs",
     "deps:patches:check": "node scripts/check-package-patches.mjs",
     "deps:pins:check": "node scripts/check-dependency-pins.mjs",
-    "deps:shrinkwrap:check": "node scripts/generate-npm-shrinkwrap.mjs --all --check",
-    "deps:shrinkwrap:changed:check": "node scripts/generate-npm-shrinkwrap.mjs --changed --check",
-    "deps:shrinkwrap:changed:generate": "node scripts/generate-npm-shrinkwrap.mjs --changed",
-    "deps:shrinkwrap:generate": "node scripts/generate-npm-shrinkwrap.mjs --all",
-    "deps:shrinkwrap:root:check": "node scripts/generate-npm-shrinkwrap.mjs --check",
-    "deps:shrinkwrap:root:generate": "node scripts/generate-npm-shrinkwrap.mjs",
+    "deps:npm-lock:check": "node scripts/generate-npm-package-lock.mjs --all",
+    "deps:npm-lock:check:changed": "node scripts/generate-npm-package-lock.mjs --changed",
     "deps:ownership-surface:check": "node scripts/dependency-ownership-surface-report.mjs --check",
     "deps:ownership-surface:report": "node scripts/dependency-ownership-surface-report.mjs",
     "deps:transitive-risk:report": "node scripts/transitive-manifest-risk-report.mjs",
@@ -1667,6 +1545,8 @@
     "ios:gen": "bash -c 'export PATH=\"$PATH:/opt/homebrew/bin:/usr/local/bin\"; ./scripts/ios-configure-signing.sh && ./scripts/ios-write-version-xcconfig.sh && node scripts/ios-write-swift-filelist.mjs && cd apps/ios && xcodegen generate'",
     "ios:open": "bash -c 'export PATH=\"$PATH:/opt/homebrew/bin:/usr/local/bin\"; ./scripts/ios-configure-signing.sh && ./scripts/ios-write-version-xcconfig.sh && node scripts/ios-write-swift-filelist.mjs && cd apps/ios && xcodegen generate && open OpenClaw.xcodeproj'",
     "ios:release:archive": "bash scripts/ios-release-archive.sh",
+    "ios:release:cut": "bash scripts/ios-release-cut.sh",
+    "ios:release:plan": "bash scripts/ios-release-plan.sh",
     "ios:release:prepare": "bash scripts/ios-release-prepare.sh",
     "ios:release:signing:check": "bash -lc 'source ./scripts/lib/ios-fastlane.sh && cd apps/ios && run_ios_fastlane ios signing_check'",
     "ios:release:signing:plan": "bash -lc 'source ./scripts/lib/ios-fastlane.sh && cd apps/ios && run_ios_fastlane ios signing_plan'",
@@ -1680,7 +1560,7 @@
     "ios:version:check": "node --import tsx scripts/ios-sync-versioning.ts --check",
     "ios:version:sync": "node --import tsx scripts/ios-sync-versioning.ts --write",
     "leak:embedded-run": "node --import tsx --expose-gc scripts/embedded-run-abort-leak.ts",
-    "lint": "pnpm lint:ui:i18n && node scripts/run-oxlint-shards.mjs",
+    "lint": "node scripts/run-lint.mjs",
     "lint:agent:ingress-owner": "node scripts/check-ingress-agent-owner-context.mjs",
     "lint:all": "node scripts/run-oxlint.mjs",
     "lint:apps": "pnpm lint:swift",
@@ -1719,7 +1599,9 @@
     "lint:tmp:sqlite-transaction-boundary": "node scripts/check-sqlite-transaction-boundary.mjs",
     "lint:tmp:tsgo-core-boundary": "node scripts/check-tsgo-core-boundary.mjs",
     "lint:ui:i18n": "pnpm ui:i18n:verify",
+    "lint:ui:lit": "lit-analyzer \"ui/src/**/*.ts\" --quiet",
     "lint:ui:no-raw-window-open": "node scripts/run-oxlint.mjs --openclaw-focused-config --config config/oxlint/boundary-guards.json ui/src",
+    "lint:ui:styles": "stylelint --config config/stylelint.config.mjs \"ui/src/**/*.css\" \"ui/src/**/*.ts\"",
     "lint:web-fetch-provider-boundaries": "node scripts/check-web-fetch-provider-boundaries.mjs",
     "lint:web-search-provider-boundaries": "node scripts/check-web-search-provider-boundaries.mjs",
     "lint:webhook:no-low-level-body-read": "node scripts/check-webhook-auth-body-order.mjs",
@@ -1731,7 +1613,6 @@
     "mobile:release:resolve": "node --import tsx scripts/mobile-release-ref.ts resolve",
     "openclaw": "node scripts/run-node.mjs",
     "openclaw:rpc": "node scripts/run-node.mjs agent --mode rpc --json",
-    "perf:issue-78851": "node --import tsx scripts/perf/issue-78851-model-resolution.ts",
     "perf:web-fetch": "node --import tsx scripts/bench-web-fetch.ts",
     "perf:kova:summary": "node scripts/kova-ci-summary.mjs",
     "perf:source:summary": "node scripts/openclaw-performance-source-summary.mjs",
@@ -1748,6 +1629,7 @@
     "plugins:boundary-report:json": "node --import tsx scripts/plugin-boundary-report.ts --json",
     "plugins:boundary-report:summary": "node --import tsx scripts/plugin-boundary-report.ts --summary",
     "plugins:assets:build": "node scripts/bundled-plugin-assets.mjs --phase build",
+    "plugins:assets:check": "node scripts/bundled-plugin-assets.mjs --phase build --check",
     "plugins:assets:copy": "node scripts/bundled-plugin-assets.mjs --phase copy",
     "plugins:inventory:check": "node scripts/generate-plugin-inventory-doc.mjs --check",
     "plugins:inventory:gen": "node scripts/generate-plugin-inventory-doc.mjs --write",
@@ -1763,11 +1645,12 @@
     "prompt:snapshots:check": "node --import tsx scripts/generate-prompt-snapshots.ts --check",
     "prompt:snapshots:gen": "node --import tsx scripts/generate-prompt-snapshots.ts --write",
     "prompt:snapshots:sync-codex-model": "node --import tsx scripts/sync-codex-model-prompt-fixture.ts",
-    "protocol:check": "pnpm protocol:gen && pnpm protocol:gen:swift && pnpm protocol:gen:kotlin && git diff --exit-code -- dist/protocol.schema.json apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewayProtocol.kt apps/android/app/src/main/java/ai/openclaw/app/protocol/OpenClawProtocolConstants.kt",
+    "protocol:check": "pnpm protocol-registry:check && pnpm protocol:gen && pnpm protocol:gen:swift && pnpm protocol:gen:kotlin && node scripts/check-protocol-since.mjs && git diff --exit-code -- dist/protocol.schema.json apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewayProtocol.kt apps/android/app/src/main/java/ai/openclaw/app/protocol/OpenClawProtocolConstants.kt",
     "protocol:check:kotlin": "pnpm protocol:gen:kotlin && git diff --exit-code -- apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewayProtocol.kt apps/android/app/src/main/java/ai/openclaw/app/protocol/OpenClawProtocolConstants.kt",
     "protocol:gen": "node --import tsx scripts/protocol-gen.ts",
     "protocol:gen:kotlin": "node --import tsx scripts/protocol-gen-kotlin.ts",
     "protocol:gen:swift": "node --import tsx scripts/protocol-gen-swift.ts",
+    "protocol-registry:check": "node --import tsx scripts/check-protocol-registry.mjs",
     "proxy:coverage": "node scripts/run-node.mjs proxy coverage",
     "proxy:gateway": "node scripts/run-node.mjs proxy run -- node scripts/run-node.mjs gateway",
     "proxy:install-ca": "node --import tsx scripts/proxy-install-ca.mjs",
@@ -1905,6 +1788,7 @@
     "test:docker:update-corrupt-plugin": "bash scripts/e2e/update-corrupt-plugin-docker.sh",
     "test:docker:update-migration": "env OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@2026.4.23} OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-plugin-deps-cleanup} bash scripts/e2e/upgrade-survivor-docker.sh",
     "test:docker:update-restart-auth": "env OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT=${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s} bash scripts/e2e/upgrade-survivor-docker.sh",
+    "test:docker:update-run-package-self-upgrade": "bash scripts/e2e/update-run-package-self-upgrade-docker.sh",
     "test:docker:upgrade-survivor": "bash scripts/e2e/upgrade-survivor-docker.sh",
     "test:env-mutations:report": "node --import tsx scripts/test-env-mutation-report.ts",
     "test:skip-inventory:report": "node --import tsx scripts/test-skip-inventory.ts",
@@ -1982,7 +1866,7 @@
     "test:unit:fast:audit": "node scripts/test-unit-fast-audit.mjs",
     "test:voicecall:closedloop": "node scripts/test-voicecall-closedloop.mjs",
     "test:watch": "node scripts/test-projects.mjs --watch",
-    "test:windows:ci": "node scripts/test-projects.mjs src/shared/runtime-import.test.ts src/agents/sessions/windows-git-bash-path.test.ts src/process/exec.windows.test.ts src/process/windows-command.test.ts src/infra/windows-install-roots.test.ts src/node-host/invoke-system-run-allowlist.test.ts src/daemon/schtasks.startup-fallback.test.ts extensions/lobster/src/lobster-runner.test.ts test/scripts/format-generated-module.test.ts test/scripts/npm-runner.test.ts test/scripts/openclaw-cross-os-installer.windows.test.ts test/scripts/openclaw-cross-os-release-workflow.test.ts test/scripts/pnpm-runner.test.ts test/scripts/run-with-env.test.ts test/scripts/ts-topology.test.ts test/scripts/ui.test.ts test/scripts/vitest-process-group.test.ts",
+    "test:windows:ci": "node scripts/test-projects.mjs src/shared/runtime-import.test.ts src/infra/sqlite-snapshot.test.ts src/infra/update-managed-service-handoff.test.ts src/snapshot/local-repository.windows.test.ts src/state/openclaw-database-paths.windows.test.ts src/commands/backup-verify.test.ts src/infra/state-migrations.legacy-session-store.test.ts src/test-utils/openclaw-test-state.test.ts src/agents/sessions/windows-git-bash-path.test.ts src/process/exec.windows.test.ts src/process/exec.windows.integration.test.ts src/process/windows-command.test.ts src/infra/windows-install-roots.test.ts src/node-host/invoke-system-run-allowlist.test.ts src/daemon/schtasks.startup-fallback.test.ts extensions/lobster/src/lobster-runner.test.ts test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts test/scripts/format-generated-module.test.ts test/scripts/npm-runner.test.ts test/scripts/openclaw-cross-os-installer.windows.test.ts test/scripts/openclaw-cross-os-release-workflow.test.ts test/scripts/pnpm-runner.test.ts test/scripts/run-with-env.test.ts test/scripts/ts-topology.test.ts test/scripts/ui.test.ts test/scripts/vitest-process-group.test.ts",
     "tool-display:check": "node --import tsx scripts/tool-display.ts --check",
     "tool-display:write": "node --import tsx scripts/tool-display.ts --write",
     "ts-topology": "node --import tsx scripts/ts-topology.ts",
@@ -2017,31 +1901,34 @@
     "ui:i18n:report": "node --import tsx scripts/control-ui-i18n-report.ts",
     "ui:i18n:sync": "node --import tsx scripts/control-ui-i18n.ts sync --write",
     "ui:i18n:verify": "node --import tsx scripts/control-ui-i18n-verify.ts verify",
+    "native:i18n:baseline": "node --import tsx scripts/native-app-i18n.ts baseline --write",
     "native:i18n:check": "node --import tsx scripts/native-app-i18n.ts check",
     "native:i18n:sync": "node --import tsx scripts/native-app-i18n.ts sync --write",
+    "native:i18n:verify": "node --import tsx scripts/native-app-i18n.ts verify",
     "android:i18n:check": "node --import tsx scripts/android-app-i18n.ts check",
     "apple:i18n:check": "node --import tsx scripts/apple-app-i18n.ts check",
     "ui:install": "node scripts/ui.js install",
     "verify": "node scripts/verify.mjs"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "1.1.0",
-    "@anthropic-ai/sdk": "0.109.1",
-    "@clack/core": "1.4.2",
-    "@clack/prompts": "1.6.0",
-    "@earendil-works/pi-tui": "0.80.9",
-    "@google/genai": "2.10.0",
+    "@agentclientprotocol/sdk": "1.3.0",
+    "@anthropic-ai/sdk": "0.112.3",
+    "@clack/core": "1.4.3",
+    "@clack/prompts": "1.7.0",
+    "@earendil-works/pi-tui": "0.81.1",
+    "@google/genai": "2.12.0",
     "@grammyjs/runner": "2.0.3",
     "@grammyjs/transformer-throttler": "1.2.1",
-    "@homebridge/ciao": "1.3.9",
+    "@homebridge/ciao": "1.3.10",
     "@lydell/node-pty": "1.2.0-beta.12",
-    "@mistralai/mistralai": "2.4.0",
-    "@modelcontextprotocol/sdk": "1.29.0",
+    "@mistralai/mistralai": "2.5.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "@mozilla/readability": "0.6.0",
     "@openclaw/ai": "workspace:*",
-    "@openclaw/fs-safe": "0.4.1",
-    "@openclaw/proxyline": "0.3.3",
+    "@openclaw/fs-safe": "0.5.0",
+    "@openclaw/proxyline": "0.3.4",
     "@silvia-odwyer/photon-node": "0.3.4",
+    "acorn": "8.17.0",
     "chalk": "5.6.2",
     "chokidar": "5.0.0",
     "clawpdf": "0.3.0",
@@ -2050,82 +1937,84 @@
     "diff": "9.0.0",
     "dotenv": "17.4.2",
     "entities": "8.0.0",
-    "execa": "9.6.1",
+    "execa": "10.0.0",
     "express": "5.2.1",
     "file-type": "22.0.1",
-    "grammy": "1.44.0",
+    "grammy": "1.45.1",
     "highlight.js": "11.11.1",
     "hosted-git-info": "10.1.1",
-    "iconv-lite": "0.7.2",
-    "ignore": "7.0.5",
+    "iconv-lite": "0.7.3",
+    "ignore": "7.0.6",
     "jiti": "2.7.0",
     "json5": "2.2.3",
     "jszip": "3.10.1",
-    "kysely": "0.29.2",
-    "linkedom": "0.18.12",
+    "kysely": "0.29.4",
+    "linkedom": "0.18.13",
     "minimatch": "10.2.5",
     "ms": "2.1.3",
     "node-edge-tts": "1.2.10",
-    "openai": "6.45.0",
-    "partial-json": "0.1.7",
+    "openai": "6.48.0",
     "p-limit": "7.3.0",
     "p-map": "7.0.5",
+    "partial-json": "0.1.7",
     "playwright-core": "1.61.1",
     "pretty-ms": "9.3.0",
-    "proper-lockfile": "4.1.2",
     "qrcode": "1.5.4",
     "quickjs-wasi": "3.0.2",
     "rastermill": "0.3.1",
     "semver": "7.8.5",
-    "tar": "7.5.19",
+    "tar": "7.5.22",
     "tree-sitter-bash": "0.25.1",
-    "tslog": "4.10.2",
-    "typebox": "1.3.3",
+    "tslog": "4.11.0",
+    "typebox": "1.3.6",
     "typescript": "6.0.3",
-    "undici": "8.5.0",
+    "undici": "8.6.0",
     "web-push": "3.6.7",
-    "web-tree-sitter": "0.26.10",
-    "ws": "8.21.0",
+    "web-tree-sitter": "0.26.11",
+    "ws": "8.21.1",
     "yaml": "2.9.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
-    "@a2ui/lit": "0.10.1",
-    "@copilotkit/aimock": "1.35.0",
+    "@a2ui/lit": "0.10.2",
+    "@copilotkit/aimock": "1.37.2",
     "@lit-labs/signals": "0.3.0",
     "@lit/context": "1.1.6",
     "@mdx-js/mdx": "3.1.1",
-    "@shikijs/core": "4.3.0",
-    "@shikijs/engine-javascript": "4.3.0",
-    "@shikijs/engine-oniguruma": "4.3.0",
+    "@shikijs/core": "4.3.1",
+    "@shikijs/engine-javascript": "4.3.1",
+    "@shikijs/engine-oniguruma": "4.3.1",
     "@types/express": "5.0.6",
     "@types/hosted-git-info": "3.0.5",
     "@types/markdown-it": "14.1.2",
     "@types/ms": "2.1.0",
-    "@types/node": "26.1.0",
-    "@types/proper-lockfile": "4.1.4",
+    "@types/node": "26.1.1",
     "@types/semver": "7.7.1",
     "@types/web-push": "3.6.4",
     "@types/ws": "8.18.1",
     "@typescript/native-preview": "7.0.0-dev.20260707.2",
     "@vitest/coverage-v8": "4.1.10",
-    "acorn": "8.17.0",
     "esbuild": "0.28.1",
     "fast-glob": "3.3.3",
+    "ipaddr.js": "2.4.0",
     "jscpd": "4.2.4",
     "jsdom": "29.1.1",
     "lit": "3.3.3",
-    "oxfmt": "0.58.0",
-    "oxlint": "1.73.0",
-    "oxlint-tsgolint": "0.24.0",
+    "lit-analyzer": "2.0.3",
+    "oxfmt": "0.60.0",
+    "oxlint": "1.74.0",
+    "oxlint-tsgolint": "0.25.0",
     "playwright": "1.61.1",
-    "shiki": "4.3.0",
+    "postcss-lit": "1.4.1",
+    "shiki": "4.3.1",
     "signal-utils": "0.21.1",
-    "sigstore": "4.1.1",
+    "sigstore": "5.0.0",
+    "stylelint": "17.14.1",
+    "stylelint-config-recommended": "18.0.0",
     "tsdown": "0.22.1",
-    "tsx": "4.22.4",
+    "tsx": "4.23.1",
     "unrun": "0.3.1",
-    "vite": "8.1.3",
+    "vite": "8.1.5",
     "vitest": "4.1.10"
   },
   "optionalDependencies": {
@@ -2134,5 +2023,5 @@
   "engines": {
     "node": ">=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0"
   },
-  "packageManager": "pnpm@11.2.2+sha512.36e6621fad506178936455e70247b8808ef4ec25797a9f437a93281a020484e2607f6a469a22e982987c3dbb8866e3071514ab10a4a1749e06edcd1ec118436f"
+  "packageManager": "pnpm@11.15.1+sha512.81350b07e53c9538a02f1f2303b4290fa2d7be04e56e2a970c4cc4b417dc761de196edabd49d55c7dc9580db81007c44143e4e3d7e462b3000d23c255122d065"
 }

@@ -1,6 +1,8 @@
 // Mattermost tests cover monitor.inbound system event plugin behavior.
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { MattermostPost } from "./client.js";
+import type { MattermostEventPayload } from "./monitor-websocket.js";
 import { monitorMattermostProvider } from "./monitor.js";
 import type { OpenClawConfig, ReplyPayload, RuntimeEnv } from "./runtime-api.js";
 
@@ -86,6 +88,7 @@ const mockState = vi.hoisted(() => ({
   dispatchInboundMessage: vi.fn(),
   enqueueSystemEvent: vi.fn(),
   fetchMattermostMe: vi.fn(),
+  getGlobalHookRunner: vi.fn(),
   registerMattermostMonitorSlashCommands: vi.fn(),
   registerPluginHttpRoute: vi.fn(),
   recordMattermostThreadParticipation: vi.fn(),
@@ -95,6 +98,11 @@ const mockState = vi.hoisted(() => ({
   runtimeCore: undefined as unknown,
   sendMessageMattermost: vi.fn(),
   updateMattermostPost: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/plugin-runtime")>()),
+  getGlobalHookRunner: mockState.getGlobalHookRunner,
 }));
 
 vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
@@ -144,6 +152,36 @@ vi.mock("./monitor-resources.js", async (importOriginal) => ({
   }),
 }));
 
+vi.mock("./monitor-ingress.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./monitor-ingress.js")>();
+  return {
+    ...actual,
+    createMattermostIngressMonitor: (
+      options: Parameters<typeof actual.createMattermostIngressMonitor>[0],
+    ) => ({
+      receive: async (rawEvent: string) => {
+        const payload = JSON.parse(rawEvent) as MattermostEventPayload;
+        const post =
+          typeof payload.data?.post === "string"
+            ? (JSON.parse(payload.data.post) as MattermostPost)
+            : (payload.data?.post as MattermostPost | undefined);
+        if (payload.event !== "posted" || !post) {
+          return;
+        }
+        await options.dispatch(post, payload, {
+          abortSignal: new AbortController().signal,
+          onAdopted: async () => {},
+          onDeferred: () => {},
+          onAdoptionFinalizing: () => {},
+          onAbandoned: async () => {},
+        });
+      },
+      stop: async () => {},
+      waitForIdle: async () => {},
+    }),
+  };
+});
+
 vi.mock("./monitor-slash.js", () => ({
   registerMattermostMonitorSlashCommands: mockState.registerMattermostMonitorSlashCommands,
 }));
@@ -165,7 +203,7 @@ vi.mock("./runtime-api.js", async () => {
     createChannelMessageReplyPipeline: vi.fn((params: { cfg: OpenClawConfig }) => ({
       onModelSelected: vi.fn(),
       typingCallbacks: {},
-      resolveResponsePrefix: () => params.cfg.messages?.responsePrefix,
+      resolveResponsePrefix: () => params.cfg.channels?.mattermost?.responsePrefix,
     })),
     registerPluginHttpRoute: mockState.registerPluginHttpRoute,
     resolveChannelMediaMaxBytes: vi.fn(() => 8 * 1024 * 1024),
@@ -239,20 +277,27 @@ function createRuntimeCore(
     };
   };
   const recordInboundSession = vi.fn(async (_params: RecordInboundSessionInput) => {});
-  const dispatchPreparedForTest = vi.fn(
+  const dispatchPlanForTest = vi.fn(
     async (turn: {
+      cfg: OpenClawConfig;
+      channel: string;
       route: { agentId: string; sessionKey: string };
       ctxPayload: { SessionKey?: string };
+      dispatcherOptions?: Record<string, unknown>;
+      delivery: {
+        deliver: (
+          payload: ReplyPayload,
+          info: { kind: "tool" | "block" | "final" },
+        ) => Promise<unknown>;
+        onError?: unknown;
+      };
+      replyOptions?: Record<string, unknown>;
       record?: {
         groupResolution?: unknown;
         createIfMissing?: boolean;
         updateLastRoute?: RecordInboundSessionInput["updateLastRoute"];
         onRecordError?: (err: unknown) => void;
       };
-      runDispatch: () => Promise<{
-        queuedFinal: boolean;
-        counts: { tool: number; block: number; final: number };
-      }>;
     }) => {
       await recordInboundSession({
         storePath: "/tmp/openclaw-test-sessions.json",
@@ -263,7 +308,18 @@ function createRuntimeCore(
         updateLastRoute: turn.record?.updateLastRoute,
         onRecordError: turn.record?.onRecordError ?? (() => undefined),
       });
-      const dispatchResult = await turn.runDispatch();
+      const prepared = mockState.createReplyDispatcherWithTyping({
+        ...turn.dispatcherOptions,
+        deliver: turn.delivery.deliver,
+        onError: turn.delivery.onError,
+      }) as { dispatcher: unknown; replyOptions?: Record<string, unknown> };
+      const dispatchResult = await mockState.dispatchInboundMessage({
+        ctx: turn.ctxPayload,
+        cfg: turn.cfg,
+        dispatcher: prepared.dispatcher,
+        replyOptions: { ...prepared.replyOptions, ...turn.replyOptions },
+        onSettled: turn.dispatcherOptions?.onSettled,
+      });
       return {
         admission: { kind: "dispatch" as const },
         dispatched: true,
@@ -282,7 +338,7 @@ function createRuntimeCore(
           input: unknown,
           eventClass: { kind: "message"; canStartAgentTurn: true },
           preflight: Record<string, never>,
-        ) => Parameters<typeof dispatchPreparedForTest>[0];
+        ) => Parameters<typeof dispatchPlanForTest>[0];
       };
     }) => {
       const input = params.adapter.ingest(params.raw);
@@ -291,7 +347,7 @@ function createRuntimeCore(
         { kind: "message", canStartAgentTurn: true },
         {},
       );
-      return await dispatchPreparedForTest(turn);
+      return await dispatchPlanForTest(turn);
     },
   );
   return {
@@ -437,6 +493,7 @@ describe("mattermost inbound user posts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockState.abortController = undefined;
+    mockState.getGlobalHookRunner.mockReturnValue(null);
     mockState.runtimeCore = createRuntimeCore(testConfig);
     mockState.createMattermostClient.mockReturnValue({});
     mockState.createMattermostDraftStream.mockReturnValue({
@@ -730,7 +787,6 @@ describe("mattermost inbound user posts", () => {
     const abortController = new AbortController();
     mockState.abortController = abortController;
     const inlineCommandConfig: OpenClawConfig = {
-      commands: { useAccessGroups: true },
       channels: {
         mattermost: {
           enabled: true,
@@ -992,7 +1048,6 @@ describe("mattermost inbound user posts", () => {
     const abortController = new AbortController();
     mockState.abortController = abortController;
     const mentionConfig: OpenClawConfig = {
-      commands: { useAccessGroups: false },
       messages: { inbound: { debounceMs: 60_000 } },
       channels: {
         mattermost: {
@@ -1002,6 +1057,7 @@ describe("mattermost inbound user posts", () => {
           chatmode: "oncall",
           dmPolicy: "open",
           groupPolicy: "open",
+          groupAllowFrom: ["user-1"],
         },
       },
     };
@@ -1244,8 +1300,7 @@ describe("mattermost inbound user posts", () => {
           chatmode: "onmessage",
           dmPolicy: "open",
           groupPolicy: "open",
-          streaming: "off",
-          blockStreaming: true,
+          streaming: { mode: "off", block: { enabled: true } },
         },
       },
     };
@@ -1278,6 +1333,82 @@ describe("mattermost inbound user posts", () => {
     const replyOptions = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].replyOptions;
     expect(replyOptions?.disableBlockStreaming).toBe(false);
     expect(replyOptions?.preserveProgressCallbackStartOrder).toBeUndefined();
+  });
+
+  it("preserves provider previews for observer-only hooks", async () => {
+    mockState.getGlobalHookRunner.mockReturnValue({
+      hasHooks: vi.fn((hookName: string) => hookName === "message_sent"),
+    });
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+
+    const monitor = monitorMattermostProvider({
+      config: testConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await emitMattermostChannelPost(socket, {
+      id: "post-observer-hook-preview",
+      message: "show a preview",
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(mockState.createMattermostDraftStream).toHaveBeenCalledTimes(1);
+    const replyOptions = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].replyOptions;
+    expect(replyOptions?.disableBlockStreaming).toBe(true);
+    expect(replyOptions?.preserveProgressCallbackStartOrder).toBe(true);
+  });
+
+  it.each([
+    { label: "reply_payload_sending", hooks: ["reply_payload_sending"] },
+    { label: "message_sending", hooks: ["message_sending"] },
+    {
+      label: "both modifying hooks",
+      hooks: ["reply_payload_sending", "message_sending"],
+    },
+  ])("suppresses provider previews when $label is registered", async ({ hooks }) => {
+    const registeredHooks = new Set(hooks);
+    mockState.getGlobalHookRunner.mockReturnValue({
+      hasHooks: vi.fn((hookName: string) => registeredHooks.has(hookName)),
+    });
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+
+    const monitor = monitorMattermostProvider({
+      config: testConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await emitMattermostChannelPost(socket, {
+      id: `post-${hooks.join("-")}-preview`,
+      message: "do not expose this preview",
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(mockState.createMattermostDraftStream).not.toHaveBeenCalled();
+    const replyOptions = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].replyOptions;
+    expect(replyOptions?.disableBlockStreaming).toBeUndefined();
+    expect(replyOptions?.preserveProgressCallbackStartOrder).toBeUndefined();
+    expect(replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBeUndefined();
+    expect(replyOptions?.onObservedReplyDelivery).toBeUndefined();
   });
 
   it("preserves text-tool-text boundaries while grouping interleaved tool updates", async () => {
@@ -1506,7 +1637,6 @@ describe("mattermost inbound user posts", () => {
 
   it("finalizes only the current block when the terminal reply is cumulative", async () => {
     const blockConfig: OpenClawConfig = {
-      messages: { responsePrefix: "[bot]" },
       channels: {
         mattermost: {
           enabled: true,
@@ -1516,6 +1646,7 @@ describe("mattermost inbound user posts", () => {
           dmPolicy: "open",
           groupPolicy: "open",
           streaming: { mode: "block" },
+          responsePrefix: "[bot]",
         },
       },
     };

@@ -13,29 +13,48 @@ const sessionRow = vi.hoisted(() => ({
   thinkingDefault: "medium",
   agentRuntime: { id: "openclaw", source: "model" },
 }));
-const isEmbeddedAgentRunActiveMock = vi.hoisted(() => vi.fn());
+const isEmbeddedAgentRunInProgressMock = vi.hoisted(() => vi.fn());
+const projectChatDisplayMessageMock = vi.hoisted(() => vi.fn((message: unknown) => message));
+const loadAccessorSessionEntryReadOnlyMock = vi.hoisted(() => vi.fn());
+const readSessionMessageCountAsyncMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => ({}) }));
+vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
+  return {
+    ...actual,
+    loadSessionEntryReadOnly: loadAccessorSessionEntryReadOnlyMock,
+  };
+});
 vi.mock("./chat-display-projection.js", () => ({
-  projectChatDisplayMessage: (message: unknown) => message,
+  projectChatDisplayMessage: projectChatDisplayMessageMock,
 }));
 vi.mock("./session-utils.js", () => ({
   attachOpenClawTranscriptMeta: (message: unknown) => message,
   loadGatewaySessionRow: () => sessionRow,
   loadSessionEntry: () => ({ entry: undefined, storePath: "" }),
-  readSessionMessageCountAsync: vi.fn(),
 }));
+vi.mock("./session-transcript-readers.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./session-transcript-readers.js")>();
+  return {
+    ...actual,
+    readSessionMessageCountAsync: readSessionMessageCountAsyncMock,
+  };
+});
 vi.mock("../agents/embedded-agent-runner/runs.js", async () => {
   const actual = await vi.importActual<typeof import("../agents/embedded-agent-runner/runs.js")>(
     "../agents/embedded-agent-runner/runs.js",
   );
   return {
     ...actual,
-    isEmbeddedAgentRunActive: (...args: unknown[]) => isEmbeddedAgentRunActiveMock(...args),
+    isEmbeddedAgentRunInProgress: (...args: unknown[]) => isEmbeddedAgentRunInProgressMock(...args),
   };
 });
 
-const { createTranscriptUpdateBroadcastHandler } = await import("./server-session-events.js");
+const { createLifecycleEventBroadcastHandler, createTranscriptUpdateBroadcastHandler } =
+  await import("./server-session-events.js");
+const { createGatewayBroadcaster } = await import("./server-broadcast.js");
+const { subscribePluginSessionsChanged } = await import("../plugins/gateway-events.js");
 
 function createActiveRun(projectSessionActive: boolean): ChatAbortControllerEntry {
   return {
@@ -78,7 +97,9 @@ async function emitAssistantTranscriptUpdate(
 describe("createTranscriptUpdateBroadcastHandler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    isEmbeddedAgentRunActiveMock.mockReturnValue(false);
+    isEmbeddedAgentRunInProgressMock.mockReturnValue(false);
+    loadAccessorSessionEntryReadOnlyMock.mockReturnValue(undefined);
+    readSessionMessageCountAsyncMock.mockResolvedValue(undefined);
     sessionRow.thinkingLevel = "ultra";
   });
 
@@ -127,14 +148,14 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
   });
 
   it("keeps transcript snapshots active for embedded or channel reply runs", async () => {
-    isEmbeddedAgentRunActiveMock.mockImplementation((sessionId) => sessionId === "sess-main");
+    isEmbeddedAgentRunInProgressMock.mockImplementation((sessionId) => sessionId === "sess-main");
 
     await expect(emitAssistantTranscriptUpdate(false)).resolves.toMatchObject({
       sessionKey: "agent:main:main",
       hasActiveRun: true,
       session: { key: "agent:main:main", sessionId: "sess-main", hasActiveRun: true },
     });
-    expect(isEmbeddedAgentRunActiveMock).toHaveBeenCalledWith("sess-main");
+    expect(isEmbeddedAgentRunInProgressMock).toHaveBeenCalledWith("sess-main");
   });
 
   it("broadcasts user idempotency keys in session.message metadata", async () => {
@@ -165,5 +186,121 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     ).resolves.toMatchObject({
       senderIsOwner: true,
     });
+  });
+  it("publishes message-phase changes to plugins without websocket subscribers", async () => {
+    const received = vi.fn();
+    const unsubscribe = subscribePluginSessionsChanged(received);
+    const { broadcastToConnIds } = createGatewayBroadcaster({ clients: new Set() });
+    const handler = createTranscriptUpdateBroadcastHandler({
+      broadcastToConnIds,
+      sessionEventSubscribers: { getAll: () => new Set() },
+      sessionMessageSubscribers: { get: () => new Set() },
+      chatAbortControllers: new Map(),
+    });
+    projectChatDisplayMessageMock.mockReturnValueOnce(undefined).mockReturnValueOnce(undefined);
+
+    try {
+      handler({
+        sessionFile: "/tmp/sess-main.jsonl",
+        sessionKey: "agent:main:main",
+        message: { role: "toolResult", content: [] },
+        messageId: "message-1",
+        messageSeq: 1,
+      });
+      await vi.waitFor(() => expect(received).toHaveBeenCalledOnce());
+      expect(received).toHaveBeenCalledWith({
+        sessionKey: "agent:main:main",
+        phase: "message",
+      });
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("resolves messageSeq through a partial target's explicit store", async () => {
+    loadAccessorSessionEntryReadOnlyMock.mockReturnValue({
+      sessionId: "sess-main",
+      updatedAt: 1,
+    });
+    readSessionMessageCountAsyncMock.mockResolvedValue(7);
+    const { broadcastToConnIds, handler } = createHandler(false);
+
+    handler({
+      agentId: "main",
+      message: { role: "assistant", content: [{ type: "text", text: "Final answer" }] },
+      messageId: "message-partial-target",
+      sessionKey: "agent:main:main",
+      target: {
+        agentId: "main",
+        sessionId: "partial-target-session",
+        sessionKey: "agent:main:main",
+        storePath: "/tmp/explicit-sessions.json",
+      },
+    });
+    await vi.waitFor(() => expect(broadcastToConnIds).toHaveBeenCalledTimes(1));
+
+    expect(loadAccessorSessionEntryReadOnlyMock).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      storePath: "/tmp/explicit-sessions.json",
+    });
+    expect(broadcastToConnIds.mock.calls[0]?.[1]).toMatchObject({ messageSeq: 7 });
+  });
+});
+
+describe("createLifecycleEventBroadcastHandler", () => {
+  it("projects swarm phase and log payload fields", () => {
+    const broadcastToConnIds = vi.fn();
+    const handler = createLifecycleEventBroadcastHandler({
+      broadcastToConnIds,
+      sessionEventSubscribers: { getAll: () => new Set(["conn-1"]) },
+      chatAbortControllers: new Map(),
+    });
+
+    handler({
+      sessionKey: "agent:main:main",
+      reason: "swarm-note",
+      swarmGroupId: "swarm:agent:main:main:run-1",
+      kind: "phase",
+      text: "Research",
+    } as never);
+
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({
+        swarmGroupId: "swarm:agent:main:main:run-1",
+        kind: "phase",
+        text: "Research",
+      }),
+      new Set(["conn-1"]),
+      { dropIfSlow: true },
+    );
+  });
+
+  it("publishes lifecycle changes to plugins without websocket subscribers", async () => {
+    const received = vi.fn();
+    const unsubscribe = subscribePluginSessionsChanged(received);
+    const { broadcastToConnIds } = createGatewayBroadcaster({ clients: new Set() });
+    const handler = createLifecycleEventBroadcastHandler({
+      broadcastToConnIds,
+      sessionEventSubscribers: { getAll: () => new Set() },
+      chatAbortControllers: new Map(),
+    });
+
+    try {
+      handler({
+        sessionKey: "agent:main:main",
+        reason: "rename",
+        label: "Renamed session",
+      });
+      await Promise.resolve();
+      expect(received).toHaveBeenCalledWith({
+        sessionKey: "agent:main:main",
+        label: "Renamed session",
+        reason: "rename",
+      });
+    } finally {
+      unsubscribe();
+    }
   });
 });

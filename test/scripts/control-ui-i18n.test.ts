@@ -14,6 +14,7 @@ import {
 import {
   analyzeControlUiCatalogs,
   flattenControlUiCatalog,
+  formatControlUiCatalogFallbackDriftError,
 } from "../../scripts/control-ui-i18n-verify.ts";
 import {
   appendBoundedProcessOutput,
@@ -158,6 +159,14 @@ async function waitForChildClose(
 }
 
 describe("control-ui-i18n process runner", () => {
+  it("points strict catalog drift at the generated release repair", () => {
+    const message = formatControlUiCatalogFallbackDriftError();
+
+    expect(message).toContain("pnpm ui:i18n:sync");
+    expect(message).toContain("pnpm release:prep");
+    expect(message).not.toContain("pnpm ui:i18n:baseline");
+  });
+
   it("builds a deterministic fallback list without accepting catalog drift", () => {
     const source = flattenControlUiCatalog(
       { group: { first: "First {count}", second: "Second" } },

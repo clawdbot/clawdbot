@@ -1,17 +1,29 @@
 import { createRouter } from "@openclaw/uirouter";
 import type { PageDefinition, Router, RouterHistory } from "@openclaw/uirouter";
-import { routeIdFromPath, type RouteId } from "./app-route-paths.ts";
+import {
+  INTERNAL_SESSION_PATH_PARAM,
+  pathForRoute,
+  routeIdFromPath,
+  sessionRouteNamespaceFromPath,
+  workboardBoardIdFromPath,
+  type RouteId,
+} from "./app-route-paths.ts";
 import type { ApplicationContext } from "./app/context.ts";
 import { page as aboutPage } from "./pages/about/route.ts";
 import { page as activityPage } from "./pages/activity/route.ts";
 import { page as agentsPage } from "./pages/agents/route.ts";
 import { page as approvalsPage } from "./pages/approvals/route.ts";
+import { page as appsPage } from "./pages/apps/route.ts";
 import { page as channelsPage } from "./pages/channels/route.ts";
-import { page as chatPage } from "./pages/chat/route.ts";
+import { pages as chatPages } from "./pages/chat/route.ts";
 import { pages as configPages } from "./pages/config/route.ts";
 import { page as connectionPage } from "./pages/connection/route.ts";
 import { page as cronPage } from "./pages/cron/route.ts";
+import { page as custodianPage } from "./pages/custodian/route.ts";
+import { page as dashboardsPage } from "./pages/dashboards/route.ts";
 import { page as debugPage } from "./pages/debug/route.ts";
+import { page as labsPage } from "./pages/labs/route.ts";
+import { page as lobsterdexPage } from "./pages/lobsterdex/route.ts";
 import { page as logsPage } from "./pages/logs/route.ts";
 import { page as memoryImportPage } from "./pages/memory-import/route.ts";
 import { page as modelProvidersPage } from "./pages/model-providers/route.ts";
@@ -42,14 +54,19 @@ export type ApplicationRouter = Router<
 type AppRoute = PageDefinition<RouteId, ApplicationContext<RouteId>, AppRouteModule>;
 
 const APP_ROUTE_TREE = [
-  chatPage,
+  ...chatPages,
+  custodianPage,
   newSessionPage,
   activityPage,
+  dashboardsPage,
+  appsPage,
   agentsPage,
   approvalsPage,
   channelsPage,
   connectionPage,
+  labsPage,
   aboutPage,
+  lobsterdexPage,
   ...configPages,
   modelSetupPage,
   modelProvidersPage,
@@ -73,9 +90,41 @@ const APP_ROUTE_TREE = [
 const appRoutes = APP_ROUTE_TREE as readonly AppRoute[];
 
 export function createApplicationRouter(): ApplicationRouter {
-  return createRouter<RouteId, ApplicationContext<RouteId>, AppRouteModule>({
+  const router = createRouter<RouteId, ApplicationContext<RouteId>, AppRouteModule>({
     routes: appRoutes,
   });
+  // The shared router intentionally matches exact paths only. Workboard ids
+  // and session refs are runtime data, so the app owns those dynamic paths.
+  return {
+    ...router,
+    routeIdFromPath,
+  };
+}
+
+type DynamicRoute = readonly [routeId: RouteId, searchKey: string, searchValue: string];
+
+function dynamicRouteFromPath(pathname: string, basePath: string): DynamicRoute | null {
+  const boardId = workboardBoardIdFromPath(pathname, basePath);
+  if (boardId) {
+    return ["workboard", "board", boardId];
+  }
+  const sessionNamespace = sessionRouteNamespaceFromPath(pathname, basePath);
+  return sessionNamespace ? [sessionNamespace, INTERNAL_SESSION_PATH_PARAM, pathname] : null;
+}
+
+function routerHistoryLocation(location: ReturnType<RouterHistory["location"]>, basePath: string) {
+  const dynamicRoute = dynamicRouteFromPath(location.pathname, basePath);
+  if (!dynamicRoute) {
+    return location;
+  }
+  const [routeId, searchKey, searchValue] = dynamicRoute;
+  const search = new URLSearchParams(location.search);
+  search.set(searchKey, searchValue);
+  return {
+    ...location,
+    pathname: pathForRoute(routeId, basePath),
+    search: `?${search.toString()}`,
+  };
 }
 
 export async function startApplicationRouter(
@@ -84,7 +133,7 @@ export async function startApplicationRouter(
   basePath: string,
   context: ApplicationContext<RouteId>,
 ): Promise<void> {
-  const location = history.location();
+  let location = history.location();
   // Unknown paths (including retired routes like /overview) land on chat, so
   // removed pages need no legacy aliases for stale bookmarks or history.
   if (routeIdFromPath(location.pathname, basePath) === null) {
@@ -92,15 +141,44 @@ export async function startApplicationRouter(
       ...location,
       pathname: router.pathForRoute("chat", basePath),
     });
+    location = history.location();
   }
-  await router.start(history, basePath, context);
+  const initialDynamicRoute = dynamicRouteFromPath(location.pathname, basePath);
+  const applicationHistory: RouterHistory = {
+    location: () => routerHistoryLocation(history.location(), basePath),
+    push: (next) => history.push(next),
+    replace: (next) => history.replace(next),
+    listen: (listener) =>
+      history.listen((next) => {
+        const dynamicRoute = dynamicRouteFromPath(next.pathname, basePath);
+        if (dynamicRoute) {
+          void router
+            .navigate(dynamicRoute[0], context, { history: "none" }, next)
+            .catch((error: unknown) => {
+              console.error("[openclaw] Dynamic route navigation failed", error);
+            });
+          return;
+        }
+        listener(next);
+      }),
+  };
+  await router.start(applicationHistory, basePath, context);
+  if (initialDynamicRoute) {
+    // Replace the synthetic exact-match location with the real browser path
+    // before the shell renders; the matching loader data is already cached.
+    await router.navigate(
+      initialDynamicRoute[0],
+      context,
+      { history: "none", revalidate: true },
+      location,
+    );
+  }
 }
 
 export {
   APP_ROUTE_IDS,
   isRouteId,
   locationForRoute,
-  pathForRoute,
   routeIdFromPath,
   type RouteId,
 } from "./app-route-paths.ts";

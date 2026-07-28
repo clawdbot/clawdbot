@@ -72,9 +72,10 @@ Where does the **Gateway** run?
 
 Once the Gateway is ready, onboarding looks for AI access you already have:
 a Claude Code or Codex login, `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`, or a
-tool-capable model already installed in a reachable Ollama or LM Studio server.
-Detection runs on the Gateway host, including when the macOS app connects to a
-Linux Gateway. The best option is tested with a real completion and only saved
+tool-capable model with at least 16K of measured effective context already
+installed in a reachable Ollama or LM Studio server. Detection runs on the
+Gateway host, including when the macOS app connects to a Linux Gateway. The best
+option is tested with a real completion and only saved
 after it answers; when a test fails the app automatically tries the next option
 and shows why the previous one failed. If several options are found you can
 switch between them before continuing. Automatic local discovery never pulls
@@ -103,7 +104,10 @@ the credential with the same live test before storing its auth profile. Next
 remains locked until one backend has passed, so the first agent chat cannot
 start without working inference. After that live check passes, OpenClaw becomes
 available to help configure the remaining workspace, Gateway, channels, and
-other optional features; it is also available later under Settings → OpenClaw.
+other optional features. When OpenClaw offers a short list of choices, the app
+shows native option cards; choosing one sends the selection, and **Skip for
+now** always leaves the choice optional. OpenClaw is also available later under
+Settings → OpenClaw.
 </Step>
 <Step title="Import memories (shown when detected)">
 For a local Gateway, onboarding checks the Mac for memories from supported AI

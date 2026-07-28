@@ -37,8 +37,9 @@ function createDeferred<T>() {
 function createGateway(client: GatewayBrowserClient, connected: boolean): TestGateway {
   const snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected,
-    reconnecting: false,
+    phase: connected ? "connected" : "stopped",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",
@@ -158,6 +159,71 @@ afterEach(() => {
 });
 
 describe("CronPage editor state sync", () => {
+  it.each([
+    {
+      scenario: "a new task for the selected agent",
+      scopeId: "writer",
+      suggested: false,
+      expectedAgentId: "writer",
+    },
+    {
+      scenario: "a suggested task for the selected agent",
+      scopeId: "writer",
+      suggested: true,
+      expectedAgentId: "writer",
+    },
+    {
+      scenario: "a new task for the default agent",
+      scopeId: "main",
+      suggested: false,
+      expectedAgentId: "main",
+    },
+    {
+      scenario: "a new task from the all-agents view",
+      scopeId: null,
+      suggested: false,
+      expectedAgentId: undefined,
+    },
+  ])("creates $scenario with its intended agent ownership", async (scenario) => {
+    const request = createRequest();
+    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
+    const page = createPage(createContext(gateway, scenario.scopeId), { render: true });
+
+    const createSelector = scenario.suggested
+      ? '[data-suggestion="repoPulse"]'
+      : '[data-test-id="cron-new-task"]';
+    await waitForCronPage(() => expect(page.querySelector(createSelector)).not.toBeNull());
+    (page.querySelector(createSelector) as HTMLButtonElement).click();
+
+    await waitForCronPage(() => {
+      expect(page.querySelector("#cron-name")).not.toBeNull();
+      expect(page.querySelector("#cron-payload-text")).not.toBeNull();
+    });
+    const name = page.querySelector("#cron-name") as HTMLInputElement;
+    name.value = "Agent-scoped task";
+    name.dispatchEvent(new Event("input", { bubbles: true }));
+    const payload = page.querySelector("#cron-payload-text") as HTMLTextAreaElement;
+    payload.value = "Run for the selected agent";
+    payload.dispatchEvent(new Event("input", { bubbles: true }));
+
+    await waitForCronPage(() => {
+      const submit = page.querySelector('[data-test-id="cron-submit"]') as HTMLButtonElement;
+      expect(submit).not.toBeNull();
+      expect(submit.disabled).toBe(false);
+    });
+    (page.querySelector('[data-test-id="cron-submit"]') as HTMLButtonElement).click();
+
+    await waitForCronPage(() => {
+      expect(request).toHaveBeenCalledWith(
+        "cron.add",
+        expect.objectContaining({
+          name: "Agent-scoped task",
+          agentId: scenario.expectedAgentId,
+        }),
+      );
+    });
+  });
+
   it("scopes list, stats, and run history requests to the selected agent", async () => {
     const request = createRequest();
     const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
@@ -193,7 +259,7 @@ describe("CronPage editor state sync", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const gateway = createGateway(client, true);
-    const page = createPage(createContext(gateway), { render: true });
+    const page = createPage(createContext(gateway, "writer"), { render: true });
 
     await waitForCronPage(() =>
       expect(page.querySelector('[data-test-id="cron-new-task"]')).not.toBeNull(),
@@ -208,6 +274,10 @@ describe("CronPage editor state sync", () => {
       const methods = request.mock.calls.map((call) => call[0]);
       expect(methods.indexOf("cron.run")).toBeGreaterThan(methods.indexOf("cron.add"));
     });
+    expect(request).toHaveBeenCalledWith(
+      "cron.add",
+      expect.objectContaining({ agentId: "writer" }),
+    );
     expect(request).toHaveBeenCalledWith("cron.run", { id: "job-fresh", mode: "force" });
     await waitForCronPage(() => expect(page.cron.cronCreateOpen).toBe(false));
   });
@@ -304,12 +374,12 @@ describe("CronPage editor state sync", () => {
 });
 
 describe("CronPage lifecycle", () => {
-  it("registers idempotently after a module reset with the shared custom element registry", async () => {
+  it("registers idempotently when the module is evaluated again", async () => {
     const registered = customElements.get("openclaw-cron-page");
     expect(registered).toBeDefined();
 
-    vi.resetModules();
-    await expect(import("./cron-page.ts")).resolves.toBeDefined();
+    const freshModulePath = "./cron-page.ts?custom-element-idempotence";
+    await expect(import(/* @vite-ignore */ freshModulePath)).resolves.toBeDefined();
 
     expect(customElements.get("openclaw-cron-page")).toBe(registered);
   });
@@ -329,7 +399,7 @@ describe("CronPage lifecycle", () => {
     };
     page.cronModelSuggestions = ["old/model"];
 
-    gateway.emitSnapshot({ connected: false });
+    gateway.emitSnapshot({ phase: "stopped" });
     const disconnectedState = page.cron;
 
     expect(disconnectedState).not.toBe(connectedState);
@@ -338,7 +408,7 @@ describe("CronPage lifecycle", () => {
     expect(page.cronModelSuggestions).toEqual([]);
     expect(disconnectedState.cronCreateOpen).toBe(false);
 
-    gateway.emitSnapshot({ connected: true });
+    gateway.emitSnapshot({ phase: "connected" });
     expect(page.cron).not.toBe(disconnectedState);
   });
 
@@ -363,10 +433,10 @@ describe("CronPage lifecycle", () => {
     const page = createPage(createContext(gateway));
     await page.updateComplete;
 
-    gateway.emitSnapshot({ connected: true });
+    gateway.emitSnapshot({ phase: "connected" });
     await waitForCronPage(() => expect(modelRequestCount).toBe(1));
-    gateway.emitSnapshot({ connected: false });
-    gateway.emitSnapshot({ connected: true });
+    gateway.emitSnapshot({ phase: "stopped" });
+    gateway.emitSnapshot({ phase: "connected" });
     await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(["fresh/model"]));
 
     staleModels.resolve({ models: [{ id: "stale/model" }] });

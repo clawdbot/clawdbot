@@ -209,7 +209,6 @@ describe("discord live qa runtime", () => {
     expect(next.messages?.ackReactionScope).toBe("all");
     expect(next.messages?.groupChat?.visibleReplies).toBe("message_tool");
     expect(next.messages?.statusReactions?.enabled).toBe(true);
-    expect(next.messages?.statusReactions?.timing?.debounceMs).toBe(0);
     const discordAccount = next.channels?.discord?.accounts?.sut;
     expect(discordAccount?.allowBots).toBe(true);
     expect(discordAccount?.guilds?.["123456789012345678"]?.requireMention).toBe(false);

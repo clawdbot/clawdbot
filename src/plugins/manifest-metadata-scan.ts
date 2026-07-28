@@ -6,9 +6,17 @@ import { normalizeOptionalString as normalizeTrimmedString } from "@openclaw/nor
 import { resolveStateDir } from "../config/paths.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { readRegularFileSync } from "../infra/regular-file.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { readPersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
+
+// Plugin manifest files are small metadata descriptors. Bound reads to prevent
+// a corrupted or hostile manifest from exhausting memory during metadata scan.
+const PLUGIN_MANIFEST_METADATA_MAX_BYTES = 256 * 1024;
+
+const log = createSubsystemLogger("plugins/manifest-metadata-scan");
 
 type PluginManifestMetadataRecord = {
   pluginDir: string;
@@ -56,9 +64,18 @@ function listChildPluginDirs(
 
 function readJsonObject(filePath: string): Record<string, unknown> | undefined {
   try {
-    const parsed = parseJsonWithJson5Fallback(fs.readFileSync(filePath, "utf8"));
+    const { buffer } = readRegularFileSync({
+      filePath,
+      maxBytes: PLUGIN_MANIFEST_METADATA_MAX_BYTES,
+    });
+    const parsed = parseJsonWithJson5Fallback(buffer.toString("utf-8"));
     return isRecord(parsed) ? parsed : undefined;
-  } catch {
+  } catch (err) {
+    if (err instanceof Error && err.message.includes("exceeds")) {
+      log.warn(
+        `Ignoring oversized plugin manifest at ${filePath}: file exceeds the ${PLUGIN_MANIFEST_METADATA_MAX_BYTES}-byte limit`,
+      );
+    }
     return undefined;
   }
 }

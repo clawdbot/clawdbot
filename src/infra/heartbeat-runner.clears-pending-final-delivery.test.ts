@@ -137,7 +137,13 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
       // not depend on a byte-equal text match or prefixed agents stay stuck.
       const cfg = {
         ...createHeartbeatConfig(storePath),
-        messages: { responsePrefix: "🤖" },
+        channels: {
+          ...createHeartbeatConfig(storePath).channels,
+          telegram: {
+            ...createHeartbeatConfig(storePath).channels?.telegram,
+            responsePrefix: "🤖",
+          },
+        },
       } as unknown as OpenClawConfig;
 
       const body = "Heartbeat update: everything is green.";

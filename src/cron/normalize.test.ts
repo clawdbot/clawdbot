@@ -773,6 +773,7 @@ describe("normalizeCronJobCreate", () => {
 
     expect(normalized.sessionTarget).toBe("current");
     expect(normalized.sessionKey).toBe("agent:main:discord:group:ops");
+    expect(normalized.delivery).toEqual({ mode: "announce" });
   });
 
   it("falls back current sessionTarget to isolated without context", () => {
@@ -784,6 +785,7 @@ describe("normalizeCronJobCreate", () => {
     }) as unknown as Record<string, unknown>;
 
     expect(normalized.sessionTarget).toBe("isolated");
+    expect(normalized.delivery).toEqual({ mode: "announce" });
   });
 
   it("preserves custom session ids with a session: prefix", () => {
@@ -795,6 +797,7 @@ describe("normalizeCronJobCreate", () => {
     }) as unknown as Record<string, unknown>;
 
     expect(normalized.sessionTarget).toBe("session:MySessionID");
+    expect(normalized.delivery).toEqual({ mode: "announce" });
   });
 
   it("preserves custom session ids with channel-native separators", () => {

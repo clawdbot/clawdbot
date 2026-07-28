@@ -8,6 +8,7 @@ import {
   createParameterFreeTool,
   normalizedParameterFreeSchema,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tools.js";
 import {
@@ -237,6 +238,30 @@ describe("AgentRuntimePlan tool policy helpers", () => {
         toolName: "lookup_note",
       },
     });
+  });
+
+  it("preserves declared output schemas when runtime normalization clones tools", () => {
+    const outputSchema = Type.Object(
+      { id: Type.String(), ready: Type.Boolean() },
+      { additionalProperties: false },
+    );
+    const tool = {
+      ...createParameterFreeTool("fixture_status"),
+      outputSchema,
+    } as unknown as AgentTool;
+    const normalized = {
+      ...createParameterFreeTool("fixture_status"),
+      parameters: normalizedParameterFreeSchema(),
+    } as unknown as AgentTool;
+    mocks.normalizeProviderToolSchemas.mockReturnValueOnce([normalized]);
+
+    const result = normalizeAgentRuntimeTools({
+      tools: [tool],
+      provider: "openai",
+    });
+
+    expect(result[0]).toBe(normalized);
+    expect(result[0]?.outputSchema).toBe(outputSchema);
   });
 
   it("preserves private execution metadata when provider normalization clones tools", () => {

@@ -173,6 +173,7 @@ declare module "*openclaw-changelog-update/scripts/verify-release-notes.mjs" {
   };
   export function countTopLevelSectionBullets(sectionSource: string, heading: string): number;
   export function highlightCountError(sectionSource: string): string | undefined;
+  export function isEligibleHandle(handle: string): boolean;
   export function ledgerChecks(...args: unknown[]): string[];
 }
 
@@ -260,6 +261,12 @@ declare module "*openclaw-live-updater/scripts/update-main.mjs" {
         activeCount: number;
         blockers: Array<{ kind: string; count: number; message: string }>;
       };
+  export function runBuiltGatewayCli(
+    checkout: string,
+    args: string[],
+    deployment?: GatewayDeployment | null,
+    options?: { stderr?: "inherit" | "pipe"; timeoutMs?: number },
+  ): string;
   export function verifyGatewayReadiness(
     runCommand: (command: string, args: string[], checkout: string) => unknown,
     checkout: string,

@@ -176,21 +176,6 @@ export function resolveDefaultFeishuAccountId(cfg: ClawdbotConfig): string {
   return resolveDefaultAccountId(cfg);
 }
 
-function resolveRawFeishuAccountConfig(
-  accounts: Record<string, Partial<FeishuConfig>> | undefined,
-  accountId: string,
-): Partial<FeishuConfig> | undefined {
-  if (!accounts || typeof accounts !== "object") {
-    return undefined;
-  }
-  if (Object.hasOwn(accounts, accountId)) {
-    return accounts[accountId];
-  }
-  const normalized = accountId.toLowerCase();
-  const matchKey = Object.keys(accounts).find((key) => key.toLowerCase() === normalized);
-  return matchKey ? accounts[matchKey] : undefined;
-}
-
 /**
  * Merge top-level config with account-specific config.
  * Account-specific fields override top-level fields.
@@ -198,7 +183,6 @@ function resolveRawFeishuAccountConfig(
 function mergeFeishuAccountConfig(cfg: ClawdbotConfig, accountId: string): FeishuConfig {
   const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
   const accounts = feishuCfg?.accounts as Record<string, Partial<FeishuConfig>> | undefined;
-  const accountTools = resolveRawFeishuAccountConfig(accounts, accountId)?.tools;
   const merged = resolveMergedAccountConfig<FeishuConfig>({
     channelConfig: feishuCfg,
     accounts,
@@ -210,26 +194,12 @@ function mergeFeishuAccountConfig(cfg: ClawdbotConfig, accountId: string): Feish
   if (merged.tools === undefined && topTools !== undefined) {
     return { ...merged, tools: topTools };
   }
-  if (
-    topTools?.bitable === false ||
-    (topTools?.bitable === undefined && topTools?.base === false)
-  ) {
+  if (topTools?.bitable === false) {
     return {
       ...merged,
       tools: {
         ...merged.tools,
         bitable: false,
-        base: false,
-      },
-    };
-  }
-  if (accountTools?.bitable === undefined && accountTools?.base !== undefined) {
-    return {
-      ...merged,
-      tools: {
-        ...merged.tools,
-        bitable: accountTools.base,
-        base: accountTools.base,
       },
     };
   }

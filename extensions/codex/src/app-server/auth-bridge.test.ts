@@ -30,6 +30,13 @@ const oauthMocks = vi.hoisted(() => ({
   refreshOpenAICodexToken: vi.fn(),
 }));
 
+const computerUseServiceMocks = vi.hoisted(() => ({
+  ensureCodexComputerUseServiceApp: vi.fn(async () => ({
+    status: "already_installed" as const,
+    changed: false,
+  })),
+}));
+
 const providerRuntimeMocks = vi.hoisted(() => ({
   formatProviderAuthProfileApiKeyWithPlugin: vi.fn(),
   refreshProviderOAuthCredentialWithPlugin: vi.fn(
@@ -117,12 +124,17 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
   };
 });
 
+vi.mock("./computer-use-service.js", () => ({
+  ensureCodexComputerUseServiceApp: computerUseServiceMocks.ensureCodexComputerUseServiceApp,
+}));
+
 afterEach(() => {
   vi.unstubAllEnvs();
   clearRuntimeAuthProfileStoreSnapshots();
   oauthMocks.refreshOpenAICodexToken.mockReset();
   providerRuntimeMocks.formatProviderAuthProfileApiKeyWithPlugin.mockReset();
   providerRuntimeMocks.refreshProviderOAuthCredentialWithPlugin.mockClear();
+  computerUseServiceMocks.ensureCodexComputerUseServiceApp.mockClear();
 });
 
 function createStartOptions(
@@ -239,6 +251,50 @@ describe("bridgeCodexAppServerStartOptions", () => {
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
+  });
+
+  it("provisions the native Computer Use client before auto-install startup", async () => {
+    await withTempDir("openclaw-codex-computer-use-service-", async (agentDir) => {
+      const startOptions = createStartOptions();
+      const codexHome = resolveCodexAppServerHomeDir(agentDir);
+
+      await bridgeCodexAppServerStartOptions({
+        startOptions,
+        agentDir,
+        pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
+      });
+
+      expect(computerUseServiceMocks.ensureCodexComputerUseServiceApp).toHaveBeenCalledWith({
+        codexHome,
+        appServerCommand: startOptions.command,
+      });
+    });
+  });
+
+  it("does not provision the native client without auto-install authorization", async () => {
+    await withTempDir("openclaw-codex-computer-use-service-", async (agentDir) => {
+      await bridgeCodexAppServerStartOptions({
+        startOptions: createStartOptions(),
+        agentDir,
+        pluginConfig: { computerUse: { enabled: true, autoInstall: false } },
+      });
+
+      expect(computerUseServiceMocks.ensureCodexComputerUseServiceApp).not.toHaveBeenCalled();
+    });
+  });
+
+  it("classifies native client provisioning failures as harness preflight", async () => {
+    computerUseServiceMocks.ensureCodexComputerUseServiceApp.mockRejectedValueOnce(
+      new Error("copy failed"),
+    );
+
+    await expect(
+      bridgeCodexAppServerStartOptions({
+        startOptions: createStartOptions(),
+        agentDir: "/tmp/openclaw-codex-computer-use-failed",
+        pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
+      }),
+    ).rejects.toMatchObject({ name: "AgentHarnessPreflightError" });
   });
 
   it("uses the native user Codex home for coexistence mode", async () => {
@@ -539,6 +595,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
             },
           },
         },
+        homeScope: "agent",
         subscriptionProfileRequiredError: "unused",
         subscriptionProfileUnusableError: "unused",
       }),
@@ -566,6 +623,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
       authProfileId: "openai:work",
       authProfileStore,
       agentDir: "/tmp/openclaw-agent",
+      homeScope: "agent",
       subscriptionProfileRequiredError: "profile required",
       subscriptionProfileUnusableError: "profile unusable",
     });
@@ -637,6 +695,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
       resolveCodexAppServerPreparedAuthHandoff({
         authProfileId: "openai:legacy",
         authProfileStore,
+        homeScope: "agent",
         subscriptionProfileRequiredError: "unused",
         subscriptionProfileUnusableError: "unused",
       }),
@@ -1633,6 +1692,44 @@ describe("bridgeCodexAppServerStartOptions", () => {
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
+  });
+
+  it("selects ordered Codex OAuth before an OpenAI API-key backup", async () => {
+    const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
+    const accessToken = "test-access-token";
+    const authProfileStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:media-api": {
+          type: "api_key",
+          provider: "openai",
+          key: "test-api-key",
+        },
+        "openai:qa-oauth": {
+          type: "oauth",
+          provider: "openai",
+          access: accessToken,
+          refresh: "test-refresh",
+          expires: Date.UTC(2036, 0, 1),
+          accountId: "qa-codex-account",
+        },
+      },
+      order: { openai: ["openai:qa-oauth", "openai:media-api"] },
+    };
+
+    expect(resolveCodexAppServerAuthProfileId({ store: authProfileStore })).toBe("openai:qa-oauth");
+    await applyCodexAppServerAuthProfile({
+      client: { request } as never,
+      agentDir: "/tmp/openclaw-codex-auth-product-proof",
+      authProfileStore,
+    });
+
+    expect(request).toHaveBeenCalledWith("account/login/start", {
+      type: "chatgptAuthTokens",
+      accessToken,
+      chatgptAccountId: "qa-codex-account",
+      chatgptPlanType: null,
+    });
   });
 
   it("does not select Codex profiles without inline OAuth credential material", () => {

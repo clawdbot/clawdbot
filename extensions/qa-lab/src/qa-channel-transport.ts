@@ -131,7 +131,7 @@ function createQaChannelReportNotes(params: QaTransportReportParams) {
     params.isolatedWorkers === true
       ? `Scenarios run in isolated gateway workers with concurrency ${params.concurrency}.`
       : "Scenarios run serially in one gateway worker.",
-    "Cron uses a one-minute schedule assertion plus forced execution for fast verification.",
+    "Scheduling scenarios verify stored schedules and execution behavior through the Gateway.",
   ];
 }
 

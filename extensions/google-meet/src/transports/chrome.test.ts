@@ -31,6 +31,57 @@ function browserRuntime(request: TestGatewayRequest): PluginRuntime {
 }
 
 describe("google meet chrome transport", () => {
+  it("prefers a meeting tab over a login fallback during untargeted recovery", async () => {
+    const statusScripts: string[] = [];
+    const gatewayRequest = vi.fn(async (_method, params) => {
+      if (params.path === "/tabs") {
+        return {
+          tabs: [
+            {
+              targetId: "google-login-tab",
+              title: "Sign in - Google Accounts",
+              url: "https://accounts.google.com/signin",
+            },
+            {
+              targetId: "meet-tab",
+              title: "Meet",
+              url: "https://meet.google.com/abc-defg-hij?hl=en",
+            },
+          ],
+        };
+      }
+      if (params.path === "/tabs/focus") {
+        return { ok: true };
+      }
+      if (params.path === "/act") {
+        const fn = (params.body as { fn?: unknown } | undefined)?.fn;
+        if (typeof fn === "string") {
+          statusScripts.push(fn);
+        }
+        return {
+          result: JSON.stringify({
+            inCall: true,
+            micMuted: true,
+            url: "https://meet.google.com/abc-defg-hij?hl=en",
+          }),
+        };
+      }
+      throw new Error(`unexpected browser request path ${String(params.path)}`);
+    });
+
+    const recovered = await recoverCurrentMeetTab({
+      runtime: browserRuntime(gatewayRequest),
+      config: resolveGoogleMeetConfig({}),
+      fullConfig: { transcripts: { enabled: false } },
+      mode: "agent",
+      readOnly: true,
+    });
+
+    expect(recovered).toMatchObject({ found: true, targetId: "meet-tab" });
+    expect(statusScripts).toHaveLength(1);
+    expect(statusScripts[0]).toContain("const captureCaptions = false");
+  });
+
   it("prefers the tracked target for an unchanged Google Meet URL", async () => {
     const gatewayRequest = vi.fn(async (_method, params) => {
       if (params.path === "/tabs") {
@@ -180,8 +231,10 @@ describe("google meet chrome transport", () => {
       if (params.path === "/act") {
         return {
           result: JSON.stringify({
-            manualActionRequired: true,
-            manualActionReason: "meet-admission-required",
+            manualAction: {
+              reason: "meet-admission-required",
+              message: "Waiting for admission",
+            },
           }),
         };
       }

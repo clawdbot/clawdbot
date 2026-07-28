@@ -41,6 +41,7 @@ export class QmdDocumentResolver {
     private readonly workspaceDir: string,
     private readonly collectionRoots: ReadonlyMap<string, QmdCollectionRoot>,
     private readonly ensureDb: () => SqliteDatabase,
+    private readonly sessionCollectionsReadable: boolean,
   ) {}
 
   clearCache(): void {
@@ -153,6 +154,12 @@ export class QmdDocumentResolver {
       const rootResult = this.collectionRoots.get(collection);
       if (!rootResult) {
         throw new Error(`unknown qmd collection: ${collection}`);
+      }
+      // Remember-only session exports are search-only for trusted recall;
+      // memory_get may read them only when the operator explicitly enabled
+      // memory.qmd.sessions.
+      if (rootResult.kind === "sessions" && !this.sessionCollectionsReadable) {
+        throw new Error("path required");
       }
       const resolved = path.resolve(rootResult.path, rest.join("/"));
       if (!isPathInside(rootResult.path, resolved)) {
@@ -300,6 +307,10 @@ export class QmdDocumentResolver {
   private isIndexedWorkspaceReadPath(absPath: string): boolean {
     const normalizedAbsPath = path.normalize(absPath);
     for (const [collection, rootValue] of this.collectionRoots.entries()) {
+      // Apply the same read gate to workspace-relative indexed-path resolution.
+      if (rootValue.kind === "sessions" && !this.sessionCollectionsReadable) {
+        continue;
+      }
       if (!isPathInside(rootValue.path, normalizedAbsPath)) {
         continue;
       }

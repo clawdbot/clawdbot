@@ -1,7 +1,8 @@
 // Channels page renders WhatsApp status.
+import { formatInternationalPhoneNumberForDisplay } from "@openclaw/normalization-core/phone-presentation";
 import { html, nothing } from "lit";
 import type { WhatsAppStatus } from "../../api/types.ts";
-import { t } from "../../i18n/index.ts";
+import { i18n, t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp, formatDurationHuman } from "../../lib/format.ts";
 import { renderChannelConfigSection } from "./view.config.ts";
 import {
@@ -21,6 +22,10 @@ export function renderWhatsAppCard(params: {
   const configured = resolveChannelConfigured("whatsapp", props);
   const linked = whatsapp?.linked === true;
   const hasQr = props.whatsappQrDataUrl != null;
+  const rawPhoneNumber = whatsapp?.self?.e164;
+  const phoneNumber = rawPhoneNumber
+    ? (formatInternationalPhoneNumberForDisplay(rawPhoneNumber, i18n.getLocale()) ?? rawPhoneNumber)
+    : undefined;
 
   return renderSingleAccountChannelCard({
     title: t("channels.whatsapp.title"),
@@ -37,6 +42,14 @@ export function renderWhatsAppCard(params: {
         value: whatsapp?.linked ? t("common.yes") : t("common.no"),
         kind: boolStatusKind(whatsapp?.linked),
       },
+      ...(phoneNumber
+        ? [
+            {
+              label: t("channels.whatsapp.phoneNumber"),
+              value: phoneNumber,
+            },
+          ]
+        : []),
       {
         label: t("common.running"),
         value: whatsapp?.running ? t("common.yes") : t("common.no"),

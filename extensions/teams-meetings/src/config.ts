@@ -17,7 +17,7 @@ import {
 
 export type TeamsMeetingsMode = "agent" | "bidi" | "transcribe";
 export type TeamsMeetingsTransport = "chrome" | "chrome-node";
-export type TeamsMeetingsToolPolicy = RealtimeVoiceAgentConsultToolPolicy;
+type TeamsMeetingsToolPolicy = RealtimeVoiceAgentConsultToolPolicy;
 type TeamsMeetingsRealtimeStrategy = "agent" | "bidi";
 type TeamsMeetingsAudioFormat = "pcm16-24khz" | "g711-ulaw-8khz";
 
@@ -105,7 +105,7 @@ const DEFAULT_CONFIG: TeamsMeetingsConfig = {
     reuseExistingTab: true,
     autoJoin: true,
     joinTimeoutMs: 30_000,
-    waitForInCallMs: 20_000,
+    waitForInCallMs: 60_000,
     audioInputCommand: [...DEFAULT_TEAMS_MEETINGS_AUDIO_INPUT_COMMAND],
     audioOutputCommand: [...DEFAULT_TEAMS_MEETINGS_AUDIO_OUTPUT_COMMAND],
     bargeInRmsThreshold: 650,

@@ -139,6 +139,7 @@ describe("legacy node-host Doctor migration", () => {
         tlsFingerprint: fixtureDigest,
         contextPath: "/openclaw-gw",
       },
+      installedAppsSharing: false,
     });
     expect(readCanonicalRow(env)?.token).toBeNull();
     expect(fs.existsSync(sourcePath)).toBe(false);

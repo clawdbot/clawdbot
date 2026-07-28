@@ -5,27 +5,41 @@ export type RealtimeTalkInputDevice = {
   label: string;
 };
 
-type RealtimeTalkInputDiscovery = {
+export type RealtimeTalkCameraDevice = RealtimeTalkInputDevice;
+
+type RealtimeTalkDeviceDiscovery = {
   devices: RealtimeTalkInputDevice[];
+  permissionRequired: boolean;
   warning: string | null;
 };
 
-function mediaDevices(): MediaDevices {
+type RealtimeTalkDeviceKind = "audioinput" | "videoinput";
+
+function mediaDevices(kind: RealtimeTalkDeviceKind): MediaDevices {
   const devices = globalThis.navigator?.mediaDevices;
   if (!devices?.enumerateDevices) {
-    throw new Error(t("chat.composer.microphoneListUnsupported"));
+    throw new Error(
+      t(
+        kind === "audioinput"
+          ? "chat.composer.microphoneListUnsupported"
+          : "chat.composer.cameraListUnsupported",
+      ),
+    );
   }
   return devices;
 }
 
-function normalizeInputDevices(devices: MediaDeviceInfo[]): RealtimeTalkInputDevice[] {
+function normalizeDevices(
+  devices: MediaDeviceInfo[],
+  kind: RealtimeTalkDeviceKind,
+): RealtimeTalkInputDevice[] {
   const normalized: RealtimeTalkInputDevice[] = [];
   const seen = new Set<string>();
   for (const device of devices) {
     const deviceId = device.deviceId.trim();
     // Chromium exposes a synthetic `default` alias. The picker already owns a
     // provider-neutral System default entry, so listing the alias duplicates it.
-    if (device.kind !== "audioinput" || !deviceId || deviceId === "default" || seen.has(deviceId)) {
+    if (device.kind !== kind || !deviceId || deviceId === "default" || seen.has(deviceId)) {
       continue;
     }
     seen.add(deviceId);
@@ -33,58 +47,108 @@ function normalizeInputDevices(devices: MediaDeviceInfo[]): RealtimeTalkInputDev
       deviceId,
       label:
         device.label.trim() ||
-        t("chat.composer.microphoneFallback", { number: String(normalized.length + 1) }),
+        t(
+          kind === "audioinput"
+            ? "chat.composer.microphoneFallback"
+            : "chat.composer.cameraFallback",
+          { number: String(normalized.length + 1) },
+        ),
     });
   }
   return normalized;
 }
 
-function describeInputError(error: unknown): string {
+function deviceDetailsHidden(devices: MediaDeviceInfo[], kind: RealtimeTalkDeviceKind): boolean {
+  const inputs = devices.filter((device) => device.kind === kind);
+  return inputs.length === 0 || inputs.some((device) => !device.deviceId || !device.label);
+}
+
+function describeDeviceError(error: unknown, kind: RealtimeTalkDeviceKind): string {
   const name = error instanceof DOMException ? error.name : "";
   if (name === "NotAllowedError") {
-    return t("chat.composer.microphonePermissionBlocked");
+    return t(
+      kind === "audioinput"
+        ? "chat.composer.microphonePermissionBlocked"
+        : "chat.composer.cameraPermissionBlocked",
+    );
   }
   if (name === "NotFoundError") {
-    return t("chat.composer.microphoneNoneFound");
+    return t(
+      kind === "audioinput" ? "chat.composer.microphoneNoneFound" : "chat.composer.cameraNoneFound",
+    );
   }
   if (name === "NotReadableError") {
-    return t("chat.composer.microphoneBusy");
+    return t(kind === "audioinput" ? "chat.composer.microphoneBusy" : "chat.composer.cameraBusy");
   }
   if (name === "InvalidStateError") {
-    return t("chat.composer.microphonePageInactive");
+    return t(
+      kind === "audioinput"
+        ? "chat.composer.microphonePageInactive"
+        : "chat.composer.cameraPageInactive",
+    );
   }
-  return t("chat.composer.microphoneAccessFailed");
+  return t(
+    kind === "audioinput"
+      ? "chat.composer.microphoneAccessFailed"
+      : "chat.composer.cameraAccessFailed",
+  );
+}
+
+export function describeRealtimeTalkInputError(error: unknown): string {
+  return describeDeviceError(error, "audioinput");
+}
+
+async function discoverRealtimeTalkDevices(
+  requestPermission: boolean,
+  kind: RealtimeTalkDeviceKind,
+): Promise<RealtimeTalkDeviceDiscovery> {
+  let devices: MediaDevices;
+  let entries: MediaDeviceInfo[];
+  try {
+    devices = mediaDevices(kind);
+    entries = await devices.enumerateDevices();
+  } catch (error) {
+    return {
+      devices: [],
+      permissionRequired: false,
+      warning: describeDeviceError(error, kind),
+    };
+  }
+  const permissionRequired = deviceDetailsHidden(entries, kind);
+  if (!requestPermission || !permissionRequired || !devices.getUserMedia) {
+    return { devices: normalizeDevices(entries, kind), permissionRequired, warning: null };
+  }
+
+  try {
+    const probe = await devices.getUserMedia(
+      kind === "audioinput" ? { audio: true } : { video: true },
+    );
+    probe.getTracks().forEach((track) => track.stop());
+    entries = await devices.enumerateDevices();
+    return {
+      devices: normalizeDevices(entries, kind),
+      permissionRequired: deviceDetailsHidden(entries, kind),
+      warning: null,
+    };
+  } catch (error) {
+    return {
+      devices: normalizeDevices(entries, kind),
+      permissionRequired,
+      warning: describeDeviceError(error, kind),
+    };
+  }
 }
 
 export async function discoverRealtimeTalkInputs(
   requestPermission: boolean,
-): Promise<RealtimeTalkInputDiscovery> {
-  let devices: MediaDevices;
-  let entries: MediaDeviceInfo[];
-  try {
-    devices = mediaDevices();
-    entries = await devices.enumerateDevices();
-  } catch (error) {
-    return { devices: [], warning: describeInputError(error) };
-  }
-  const inputs = entries.filter((device) => device.kind === "audioinput");
-  const detailsHidden =
-    inputs.length === 0 || inputs.some((device) => !device.deviceId || !device.label);
-  if (!requestPermission || !detailsHidden || !devices.getUserMedia) {
-    return { devices: normalizeInputDevices(entries), warning: null };
-  }
+): Promise<RealtimeTalkDeviceDiscovery> {
+  return discoverRealtimeTalkDevices(requestPermission, "audioinput");
+}
 
-  try {
-    const probe = await devices.getUserMedia({ audio: true });
-    probe.getTracks().forEach((track) => track.stop());
-    entries = await devices.enumerateDevices();
-    return { devices: normalizeInputDevices(entries), warning: null };
-  } catch (error) {
-    return {
-      devices: normalizeInputDevices(entries),
-      warning: describeInputError(error),
-    };
-  }
+export async function discoverRealtimeTalkCameras(
+  requestPermission: boolean,
+): Promise<RealtimeTalkDeviceDiscovery> {
+  return discoverRealtimeTalkDevices(requestPermission, "videoinput");
 }
 
 function realtimeTalkAudioConstraints(inputDeviceId: string | undefined): MediaTrackConstraints {
@@ -105,7 +169,7 @@ function realtimeTalkAbortReason(signal: AbortSignal): Error {
 
 export async function openRealtimeTalkInput(
   inputDeviceId: string | undefined,
-  options: { video?: boolean; signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal } = {},
 ): Promise<MediaStream> {
   const devices = globalThis.navigator?.mediaDevices;
   if (!devices?.getUserMedia) {
@@ -130,31 +194,34 @@ export async function openRealtimeTalkInput(
     audio.getTracks().forEach((track) => track.stop());
     throw realtimeTalkAbortReason(options.signal);
   }
-  if (!options.video) {
-    return audio;
-  }
+  return audio;
+}
 
-  let audioStopped = false;
-  const stopAudio = () => {
-    if (audioStopped) {
-      return;
-    }
-    audioStopped = true;
-    audio.getTracks().forEach((track) => track.stop());
-  };
-  options.signal?.addEventListener("abort", stopAudio, { once: true });
-  let camera: MediaStream | undefined;
+export async function openRealtimeTalkCamera(
+  videoDeviceId: string | undefined,
+  options: { signal?: AbortSignal } = {},
+): Promise<MediaStream> {
+  const devices = globalThis.navigator?.mediaDevices;
+  if (!devices?.getUserMedia) {
+    throw new Error(t("chat.composer.cameraAccessFailed"));
+  }
+  const deviceId = videoDeviceId?.trim();
+  let camera: MediaStream;
   try {
-    camera = await devices.getUserMedia({ video: true });
+    camera = await devices.getUserMedia({
+      video: deviceId ? { deviceId: { exact: deviceId } } : true,
+    });
+    if (options.signal?.aborted) {
+      camera.getTracks().forEach((track) => track.stop());
+      throw realtimeTalkAbortReason(options.signal);
+    }
+    return camera;
+  } catch (error) {
     if (options.signal?.aborted) {
       throw realtimeTalkAbortReason(options.signal);
     }
-    return new MediaStream([...audio.getAudioTracks(), ...camera.getVideoTracks()]);
-  } catch (error) {
-    camera?.getTracks().forEach((track) => track.stop());
-    stopAudio();
-    if (options.signal?.aborted) {
-      throw realtimeTalkAbortReason(options.signal);
+    if (deviceId && error instanceof DOMException && error.name === "OverconstrainedError") {
+      throw new Error(t("chat.composer.selectedCameraUnavailable"), { cause: error });
     }
     if (error instanceof DOMException && error.name === "NotAllowedError") {
       throw new Error(t("chat.composer.cameraPermissionBlocked"), { cause: error });
@@ -165,8 +232,6 @@ export async function openRealtimeTalkInput(
     if (error instanceof DOMException && error.name === "NotReadableError") {
       throw new Error(t("chat.composer.cameraBusy"), { cause: error });
     }
-    throw error;
-  } finally {
-    options.signal?.removeEventListener("abort", stopAudio);
+    throw new Error(t("chat.composer.cameraAccessFailed"), { cause: error });
   }
 }

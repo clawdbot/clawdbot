@@ -476,10 +476,14 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         await options.deliver(deliverPayload, dispatchInfo);
         deliveryOutcome = "delivered";
       })
-      .catch((err: unknown) => {
+      .catch(async (err: unknown) => {
         deliveryOutcome = deliveryStarted ? "failed-deliver" : "failed-before-deliver";
         failedCounts[kind] += 1;
-        void options.onError?.(err, buildReplyDispatchRuntimeInfo(normalized, kind));
+        // Error cleanup belongs to this send: idle/finalization must not race it.
+        // Observer failures stay isolated from later queued deliveries.
+        try {
+          await options.onError?.(err, buildReplyDispatchRuntimeInfo(normalized, kind));
+        } catch {}
       })
       .finally(() => {
         const dispatchInfo = buildReplyDispatchRuntimeInfo(normalized, kind);

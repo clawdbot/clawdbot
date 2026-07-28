@@ -1,13 +1,17 @@
 // Bundled Plugin Assets tests cover bundled plugin assets script behavior.
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildDiscordActivitySdk } from "../../scripts/build-discord-activity-sdk.mjs";
 import {
+  listStaleGeneratedPluginAssets,
   parseBundledPluginAssetArgs,
   readBundledPluginAssetHooks,
 } from "../../scripts/bundled-plugin-assets.mjs";
+import { listGeneratedExtensionAssetSources } from "../../scripts/lib/static-extension-assets.mjs";
 import {
+  createRunNodePathClassifier,
   isBuildRelevantRunNodePath,
   isRestartRelevantRunNodePath,
 } from "../../scripts/run-node-watch-paths.mjs";
@@ -26,6 +30,7 @@ async function withPluginAssetFixture(run: (rootDir: string) => Promise<void>) {
         openclaw: {
           assetScripts: {
             build: "node scripts/bundle-a2ui.mjs",
+            buildOutputs: ["assets/generated-runtime.js"],
             copy: "node scripts/copy-a2ui.mjs",
           },
         },
@@ -86,25 +91,53 @@ describe("bundled plugin assets", () => {
   it("keeps build-generated static assets out of the source watcher", async () => {
     const rootDir = process.cwd();
     const hooks = await readBundledPluginAssetHooks({ phase: "build", rootDir });
-    const generatedAssetSources = hooks.flatMap((hook) => {
-      const packageJson = JSON.parse(
-        fs.readFileSync(path.join(hook.pluginDir, "package.json"), "utf8"),
-      ) as {
-        openclaw?: { build?: { staticAssets?: Array<{ source?: string }> } };
-      };
-      const pluginPath = path.relative(rootDir, hook.pluginDir).replaceAll(path.sep, "/");
-      return (packageJson.openclaw?.build?.staticAssets ?? []).flatMap((asset) => {
-        const source = asset.source?.replace(/^\.\/+/u, "");
-        return source ? [path.posix.join(pluginPath, source)] : [];
-      });
-    });
+    const generatedAssetSources = listGeneratedExtensionAssetSources({ rootDir });
 
+    for (const hook of hooks) {
+      const pluginPath = path.relative(rootDir, hook.pluginDir).replaceAll(path.sep, "/");
+      expect(
+        generatedAssetSources.some((source) => source.startsWith(`${pluginPath}/`)),
+        `${hook.pluginId} build hook must declare at least one generated output`,
+      ).toBe(true);
+    }
+
+    expect(generatedAssetSources).toContain(
+      "extensions/browser/chrome-extension/modules/copilot-runtime.js",
+    );
+    expect(generatedAssetSources).toContain("extensions/canvas/src/host/a2ui/.bundle.hash");
+    expect(generatedAssetSources).toContain("extensions/canvas/src/host/a2ui/a2ui.bundle.js");
     expect(generatedAssetSources).toContain("extensions/discord/assets/embedded-app-sdk.mjs");
     for (const source of generatedAssetSources) {
       expect(isBuildRelevantRunNodePath(source), source).toBe(false);
       expect(isRestartRelevantRunNodePath(source), source).toBe(false);
     }
+    expect(
+      isRestartRelevantRunNodePath("extensions/browser/scripts/copilot-runtime-entry.ts"),
+    ).toBe(true);
     expect(isRestartRelevantRunNodePath("extensions/discord/src/activities/http.ts")).toBe(true);
+  });
+
+  it("refreshes generated output metadata without recreating the watcher", async () => {
+    await withPluginAssetFixture(async (rootDir) => {
+      const packagePath = path.join(rootDir, "extensions", "canvas", "package.json");
+      const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf8")) as {
+        openclaw: { assetScripts: { buildOutputs?: string[] } };
+      };
+      delete packageJson.openclaw.assetScripts.buildOutputs;
+      fs.writeFileSync(packagePath, JSON.stringify(packageJson, null, 2));
+
+      const classifier = createRunNodePathClassifier({ rootDir });
+      classifier.refreshGeneratedPluginAssetPaths();
+      const generatedPath = "extensions/canvas/assets/generated-runtime.js";
+      expect(classifier.isRestartRelevantRunNodePath(generatedPath)).toBe(true);
+
+      packageJson.openclaw.assetScripts.buildOutputs = ["assets/generated-runtime.js"];
+      fs.writeFileSync(packagePath, JSON.stringify(packageJson, null, 2));
+      classifier.refreshGeneratedPluginAssetPaths();
+
+      expect(classifier.isBuildRelevantRunNodePath(generatedPath)).toBe(false);
+      expect(classifier.isRestartRelevantRunNodePath(generatedPath)).toBe(false);
+    });
   });
 
   it("discovers plugin-owned asset scripts by manifest id", async () => {
@@ -138,8 +171,49 @@ describe("bundled plugin assets", () => {
 
   it("parses phase and plugin filters", () => {
     expect(parseBundledPluginAssetArgs(["--phase", "build", "--plugin=canvas"])).toEqual({
+      check: false,
       phase: "build",
       plugins: ["canvas"],
+    });
+  });
+
+  it("parses whole-repo check runs and rejects filtered or copy-phase checks", () => {
+    expect(parseBundledPluginAssetArgs(["--phase", "build", "--check"])).toEqual({
+      check: true,
+      phase: "build",
+      plugins: [],
+    });
+    expect(() => parseBundledPluginAssetArgs(["--phase", "copy", "--check"])).toThrow(
+      "--check requires --phase build",
+    );
+    expect(() =>
+      parseBundledPluginAssetArgs(["--phase", "build", "--check", "--plugin=canvas"]),
+    ).toThrow("--check cannot be combined with --plugin filters");
+  });
+
+  it("reports declared generated outputs that differ from the committed bytes", async () => {
+    await withPluginAssetFixture(async (rootDir) => {
+      const generatedPath = path.join(
+        rootDir,
+        "extensions",
+        "canvas",
+        "assets",
+        "generated-runtime.js",
+      );
+      fs.mkdirSync(path.dirname(generatedPath), { recursive: true });
+      fs.writeFileSync(generatedPath, "export const generated = 1;\n");
+      const git = (...args: string[]) =>
+        execFileSync("git", args, { cwd: rootDir, stdio: ["ignore", "pipe", "pipe"] });
+      git("init", "--quiet");
+      git("-c", "user.email=t@t", "-c", "user.name=t", "add", ".");
+      git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "--quiet", "-m", "init");
+
+      expect(listStaleGeneratedPluginAssets({ rootDir })).toEqual([]);
+
+      fs.writeFileSync(generatedPath, "export const generated = 2;\n");
+      expect(listStaleGeneratedPluginAssets({ rootDir })).toEqual([
+        "extensions/canvas/assets/generated-runtime.js",
+      ]);
     });
   });
 });

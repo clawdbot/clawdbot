@@ -201,6 +201,8 @@ export async function createCopilotToolBridge(
     executeTool: (toolParams) => executeCatalogTool(input, toolParams),
     forceMessageTool: shouldForceCopilotMessageTool(attemptParams),
     isRawModelRun: isCopilotRawModelRun(attemptParams),
+    // Carries catalog compat so `tools.codeMode.enabled: "auto"` can resolve per model.
+    model: attemptParams.model,
     modelId: input.modelId,
     modelProvider: input.modelProvider,
     modelToolsEnabled: true,
@@ -209,6 +211,7 @@ export async function createCopilotToolBridge(
     runtimeToolAllowlist: effectiveToolPlan.runtimeToolAllowlist,
     sessionId: input.sessionId,
     sessionKey: attemptParams.sandboxSessionKey ?? attemptParams.sessionKey ?? input.sessionKey,
+    scheduledToolPolicy: attemptParams.scheduledToolPolicy,
     sourceReplyDeliveryMode: attemptParams.sourceReplyDeliveryMode,
     toolsAllow: attemptParams.toolsAllow,
   });
@@ -380,6 +383,7 @@ function buildOpenClawCodingToolsOptions(
     senderUsername: a.senderUsername,
     senderE164: a.senderE164,
     senderIsOwner: a.senderIsOwner,
+    scheduledToolPolicy: a.scheduledToolPolicy,
     allowGatewaySubagentBinding: a.allowGatewaySubagentBinding,
     sessionKey: sandboxSessionKey,
     runSessionKey,

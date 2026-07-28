@@ -351,8 +351,9 @@ public actor GatewayChannelActor {
         self.activeConnectAttemptID = attemptID
         self.task = connectTask
         connectTask.resume()
+        let connectHello: HelloOk
         do {
-            try await AsyncTimeout.withTimeout(
+            connectHello = try await AsyncTimeout.withTimeout(
                 seconds: self.connectTimeoutSeconds,
                 onTimeout: {
                     NSError(
@@ -395,6 +396,13 @@ public actor GatewayChannelActor {
         self.listen(connectionGeneration: connectionGeneration)
         self.startTickWatchdog(connectionGeneration: connectionGeneration)
         self.startKeepalive(connectionGeneration: connectionGeneration)
+        // Snapshot callbacks may resolve a route through currentConnectionGeneration().
+        // Publish only after the physical socket is admitted and its receive loop is armed.
+        Task { [weak self] in
+            await self?.deliverPushIfCurrent(
+                .snapshot(connectHello),
+                connectionGeneration: connectionGeneration)
+        }
     }
 
     private func startKeepalive(connectionGeneration: UInt64) {
@@ -422,10 +430,24 @@ public actor GatewayChannelActor {
         }
     }
 
+    private static func loadDeviceIdentityForConnect(
+        includeDeviceIdentity: Bool,
+        profile: GatewayDeviceIdentityProfile) throws -> DeviceIdentity?
+    {
+        guard includeDeviceIdentity else { return nil }
+        guard let identity = DeviceIdentityStore.loadOrCreatePersisted(profile: profile) else {
+            throw NSError(
+                domain: "Gateway",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "Could not access the persisted device identity"])
+        }
+        return identity
+    }
+
     private func sendConnect(
         task: WebSocketTaskBox,
         attemptID: UUID,
-        connectionGeneration: UInt64) async throws
+        connectionGeneration: UInt64) async throws -> HelloOk
     {
         defer { self.testConnectAttemptFinishedHandler?(attemptID) }
         try self.ensureCurrentConnectAttempt(attemptID, task: task)
@@ -452,7 +474,9 @@ public actor GatewayChannelActor {
         let includeDeviceIdentity = options.includeDeviceIdentity
         let allowStoredDeviceAuth = options.allowStoredDeviceAuth
         let deviceAuthGatewayID = options.deviceAuthGatewayID
-        let identity = includeDeviceIdentity ? DeviceIdentityStore.loadOrCreate(profile: deviceIdentityProfile) : nil
+        let identity = try Self.loadDeviceIdentityForConnect(
+            includeDeviceIdentity: includeDeviceIdentity,
+            profile: deviceIdentityProfile)
         let selectedAuth = self.selectConnectAuth(
             role: role,
             includeDeviceIdentity: includeDeviceIdentity,
@@ -536,20 +560,21 @@ public actor GatewayChannelActor {
                 attemptID: attemptID)
             try self.ensureCurrentConnectAttempt(attemptID, task: task)
             try self.requireCurrentConnection(connectionGeneration)
-            let issuedRoles = try await self.handleConnectResponse(
+            let outcome = try await self.handleConnectResponse(
                 response,
                 identity: identity,
                 role: role,
                 deviceAuthGatewayID: deviceAuthGatewayID,
                 deviceIdentityProfile: deviceIdentityProfile,
                 connectionGeneration: connectionGeneration)
-            self.issuedDeviceAuthRoles.formUnion(issuedRoles)
-            if issuedRoles.contains(role) {
+            self.issuedDeviceAuthRoles.formUnion(outcome.issuedRoles)
+            if outcome.issuedRoles.contains(role) {
                 // Only a token persisted from this endpoint may unlock stored auth for its role.
                 self.connectOptions?.allowStoredDeviceAuth = true
             }
             self.pendingDeviceTokenRetry = false
             self.deviceTokenRetryBudgetUsed = false
+            return outcome.hello
         } catch {
             try self.ensureCurrentConnectAttempt(attemptID, task: task)
             try self.requireCurrentConnection(connectionGeneration)
@@ -792,6 +817,7 @@ extension GatewayChannelActor {
             let allowedOperatorScopes: Set = [
                 "operator.admin",
                 "operator.approvals",
+                "operator.questions",
                 "operator.read",
                 "operator.talk.secrets",
                 "operator.write",
@@ -880,7 +906,7 @@ extension GatewayChannelActor {
         role: String,
         deviceAuthGatewayID: String?,
         deviceIdentityProfile: GatewayDeviceIdentityProfile,
-        connectionGeneration: UInt64) async throws -> Set<String>
+        connectionGeneration: UInt64) async throws -> (issuedRoles: Set<String>, hello: HelloOk)
     {
         if res.ok == false {
             let error = res.error
@@ -988,12 +1014,7 @@ extension GatewayChannelActor {
         {
             await self.connectSnapshotAdmissionHandler?(ok, connectionGeneration)
         }
-        Task { [weak self] in
-            await self?.deliverPushIfCurrent(
-                .snapshot(ok),
-                connectionGeneration: connectionGeneration)
-        }
-        return issuedRoles
+        return (issuedRoles, ok)
     }
 
     private func deliverPushIfCurrent(

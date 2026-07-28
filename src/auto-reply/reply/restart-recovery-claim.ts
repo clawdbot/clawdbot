@@ -13,7 +13,10 @@ import type {
   SessionTranscriptTurnLifecyclePatch,
 } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import type {
+  UserTurnTranscriptRecorder,
+  UserTurnTranscriptTarget,
+} from "../../sessions/user-turn-transcript.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 
@@ -140,6 +143,12 @@ export function createReplyRestartRecoveryClaimController(params: {
   resolveDeliveryContext: (entry: SessionEntry | undefined) => DeliveryContext | undefined;
   requesterAccountId?: unknown;
   requesterSenderId?: unknown;
+  resolveUserTurnTarget?: (params: {
+    entry: SessionEntry;
+    sessionId: string;
+    sessionKey: string;
+    storePath: string;
+  }) => UserTurnTranscriptTarget | undefined;
   sessionKey?: string;
   setEntry: (entry: SessionEntry) => void;
   sameChannelThreadRequired?: boolean;
@@ -162,6 +171,12 @@ export function createReplyRestartRecoveryClaimController(params: {
     const expectedSessionState = buildExpectedSessionState(options.entry);
     if (options.recorder && !options.recorder.hasPersisted()) {
       const result = await options.recorder.persistApproved({
+        target: params.resolveUserTurnTarget?.({
+          entry: options.entry,
+          sessionId: options.sessionId,
+          sessionKey: options.sessionKey,
+          storePath: options.storePath,
+        }),
         expectedSessionId: options.sessionId,
         expectedSessionState,
         sessionLifecyclePatch: options.patch,
@@ -191,7 +206,17 @@ export function createReplyRestartRecoveryClaimController(params: {
     if (!recorder || recorder.hasPersisted()) {
       return;
     }
-    const result = await recorder.persistApproved({ expectedSessionId: sessionId });
+    const entry = params.getEntry();
+    const target =
+      entry && params.sessionKey && params.storePath
+        ? params.resolveUserTurnTarget?.({
+            entry,
+            sessionId,
+            sessionKey: params.sessionKey,
+            storePath: params.storePath,
+          })
+        : undefined;
+    const result = await recorder.persistApproved({ target, expectedSessionId: sessionId });
     if (!result) {
       throw new Error("session changed before durable user-turn admission");
     }

@@ -1,508 +1,574 @@
 package ai.openclaw.wear
 
+import ai.openclaw.wear.shared.WearRealtimeTalkRole
 import android.Manifest
 import android.app.Activity
 import android.app.RemoteInput
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.speech.RecognizerIntent
+import android.view.HapticFeedbackConstants
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.stringResource
 import androidx.core.content.ContextCompat
-import androidx.wear.compose.foundation.lazy.TransformingLazyColumn
-import androidx.wear.compose.foundation.lazy.rememberTransformingLazyColumnState
+import androidx.core.net.toUri
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.wear.compose.material3.AppScaffold
-import androidx.wear.compose.material3.Button
-import androidx.wear.compose.material3.ButtonDefaults
-import androidx.wear.compose.material3.MaterialTheme
-import androidx.wear.compose.material3.ScreenScaffold
-import androidx.wear.compose.material3.Text
 import androidx.wear.input.RemoteInputIntentHelper
+import kotlinx.coroutines.delay
+import java.util.Locale
+
+internal const val extraWearLaunchTarget = "openclaw.wear.launchTarget"
+
+internal enum class WearLaunchTarget(
+  val rawValue: String,
+  val initialPage: WearHomePage,
+) {
+  Chat("chat", WearHomePage.Chat),
+  Voice("voice", WearHomePage.Voice),
+  ;
+
+  companion object {
+    fun fromRawValue(raw: String?): WearLaunchTarget = entries.firstOrNull { target -> target.rawValue == raw?.trim()?.lowercase() } ?: Chat
+  }
+}
+
+internal fun parseWearLaunchTarget(intent: Intent?): WearLaunchTarget = WearLaunchTarget.fromRawValue(intent?.getStringExtra(extraWearLaunchTarget))
+
+internal fun consumeWearLaunchTarget(intent: Intent?): WearLaunchTarget =
+  parseWearLaunchTarget(intent).also {
+    intent?.removeExtra(extraWearLaunchTarget)
+  }
+
+internal data class WearNavigationRequest(
+  val id: Int,
+  val target: WearLaunchTarget,
+)
+
+internal data class WearLaunchState(
+  val initialTarget: WearLaunchTarget = WearLaunchTarget.Chat,
+  val navigationRequest: WearNavigationRequest? = null,
+  val nextRequestId: Int = 0,
+) {
+  fun next(intent: Intent?): WearLaunchState {
+    val requestId = nextRequestId + 1
+    return copy(
+      navigationRequest =
+        WearNavigationRequest(
+          id = requestId,
+          target = consumeWearLaunchTarget(intent),
+        ),
+      nextRequestId = requestId,
+    )
+  }
+
+  fun handled(requestId: Int): WearLaunchState = if (navigationRequest?.id == requestId) copy(navigationRequest = null) else this
+
+  companion object {
+    fun initial(intent: Intent?): WearLaunchState = WearLaunchState(initialTarget = consumeWearLaunchTarget(intent))
+  }
+}
+
+@Composable
+internal fun WearLaunchContent(
+  launchState: WearLaunchState,
+  content: @Composable (WearHomePage, WearNavigationRequest?) -> Unit,
+) {
+  // Warm launches are pager events. Keeping this composition identity stable preserves
+  // pending-reply, autospeak, and real-time UI state owned below this boundary.
+  content(launchState.initialTarget.initialPage, launchState.navigationRequest)
+}
+
+internal fun shouldRecreateForScreenshotMode(
+  currentScene: WearScreenshotScene?,
+  intent: Intent?,
+  screenshotModeEnabled: Boolean,
+): Boolean =
+  screenshotModeEnabled &&
+    (currentScene != null || parseWearScreenshotModeIntent(intent) != null)
 
 class MainActivity : ComponentActivity() {
   private val viewModel: WearViewModel by viewModels()
+  private var screenshotScene: WearScreenshotScene? = null
+  private var launchState by mutableStateOf(WearLaunchState())
+
+  private val screenshotModeEnabled: Boolean
+    get() = applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
-    setContent {
-      val state by viewModel.state.collectAsState()
-      OpenClawWearApp(
-        state = state,
-        onRefresh = viewModel::refresh,
-        onOpenSession = viewModel::openSession,
-        onBack = viewModel::closeSession,
-        onReply = viewModel::sendReply,
-        onAbort = viewModel::abort,
-      )
+    if (screenshotModeEnabled) {
+      screenshotScene = parseWearScreenshotModeIntent(intent)
     }
+    launchState = WearLaunchState.initial(intent)
+    setContent {
+      val scene = screenshotScene
+      if (scene == null) {
+        WearLaunchContent(launchState) { initialPage, navigationRequest ->
+          OpenClawWearApp(
+            viewModel = viewModel,
+            settingsStore = remember { WearSettingsStore(applicationContext) },
+            speaker = remember { WearReplySpeaker(applicationContext) },
+            initialPage = initialPage,
+            navigationRequest = navigationRequest,
+            onNavigationRequestHandled = { requestId ->
+              launchState = launchState.handled(requestId)
+            },
+          )
+        }
+      } else {
+        OpenClawWearScreenshotApp(scene)
+      }
+    }
+  }
+
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent)
+    if (shouldRecreateForScreenshotMode(screenshotScene, intent, screenshotModeEnabled)) {
+      recreate()
+      return
+    }
+    launchState = launchState.next(intent)
   }
 
   override fun onStart() {
     super.onStart()
-    (application as WearApplication).onActivityStarted()
+    if (screenshotScene == null) {
+      (application as WearApplication).onActivityStarted()
+    }
   }
 
   override fun onStop() {
-    (application as WearApplication).onActivityStopped()
+    if (screenshotScene == null) {
+      (application as WearApplication).onActivityStopped()
+    }
     super.onStop()
   }
 }
 
 @Composable
 internal fun OpenClawWearApp(
-  state: WearUiState,
-  onRefresh: () -> Unit,
-  onOpenSession: (WearSession) -> Unit,
-  onBack: () -> Unit,
-  onReply: (String) -> Unit,
-  onAbort: () -> Unit,
+  viewModel: WearViewModel,
+  settingsStore: WearSettingsStore,
+  speaker: WearReplySpeaker,
+  initialPage: WearHomePage = WearHomePage.Chat,
+  navigationRequest: WearNavigationRequest? = null,
+  onNavigationRequestHandled: (Int) -> Unit = {},
 ) {
-  BackHandler(enabled = state.selectedSession != null, onBack = onBack)
-  MaterialTheme {
-    AppScaffold {
-      if (state.selectedSession == null) {
-        SessionListScreen(state, onRefresh, onOpenSession)
-      } else {
-        TranscriptScreen(state, onBack, onRefresh, onReply, onAbort)
-      }
-    }
-  }
-}
-
-@Composable
-private fun SessionListScreen(
-  state: WearUiState,
-  onRefresh: () -> Unit,
-  onOpenSession: (WearSession) -> Unit,
-) {
-  val context = LocalContext.current
+  val state by viewModel.state.collectAsState()
+  val snapshot = state.toConversationSnapshot()
+  val speaking by speaker.isSpeaking.collectAsState()
+  val view = LocalView.current
+  val lifecycleOwner = LocalLifecycleOwner.current
+  val activity = LocalActivity.current
+  val initialSettings = remember(settingsStore) { settingsStore.read() }
+  var interaction by remember { mutableStateOf(WearInteractionState.READY) }
+  var themeMode by remember { mutableStateOf(initialSettings.themeMode) }
+  var autoSpeak by remember { mutableStateOf(initialSettings.autoSpeak) }
   var notificationsGranted by remember {
     mutableStateOf(
       Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
-        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED,
+        ContextCompat.checkSelfPermission(view.context, Manifest.permission.POST_NOTIFICATIONS) ==
+        PackageManager.PERMISSION_GRANTED,
     )
   }
-  val permissionLauncher =
+  var expectedAssistantKey by remember { mutableStateOf<String?>(null) }
+  var awaitingReplySessionId by remember { mutableStateOf<String?>(null) }
+  var awaitingReply by remember { mutableStateOf(false) }
+  var previousRealtimeSnapshot by remember { mutableStateOf(snapshot) }
+  var realtimeThinkingTurnId by remember { mutableStateOf<String?>(null) }
+  val speakPrompt = stringResource(R.string.speak_to_agent)
+  val messageLabel = stringResource(R.string.message)
+  val messageTitle = stringResource(R.string.message_agent)
+  val sendLabel = stringResource(R.string.send)
+
+  fun submitMessage(rawMessage: String) {
+    val message = rawMessage.trim()
+    val sessionId = snapshot?.activeSessionId
+    if (message.isEmpty()) {
+      interaction = WearInteractionState.READY
+      return
+    }
+    if (state.sending || !state.streamText.isNullOrBlank()) {
+      interaction = WearInteractionState.READY
+      view.performHapticFeedback(HapticFeedbackConstants.REJECT)
+      return
+    }
+    if (!state.connected || sessionId == null) {
+      interaction = WearInteractionState.READY
+      view.performHapticFeedback(HapticFeedbackConstants.REJECT)
+      return
+    }
+    expectedAssistantKey = snapshot.latestAssistantMessage()?.stableKey()
+    awaitingReplySessionId = sessionId
+    awaitingReply = true
+    interaction = WearInteractionState.SENDING
+    speaker.stop()
+    viewModel.sendReply(message)
+  }
+
+  val speechLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+      val transcript =
+        result.data
+          ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+          ?.firstOrNull()
+      if (result.resultCode == Activity.RESULT_OK && !transcript.isNullOrBlank()) {
+        submitMessage(transcript)
+      } else {
+        interaction = WearInteractionState.READY
+      }
+    }
+  val textLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+      val text =
+        result.data
+          ?.let(RemoteInput::getResultsFromIntent)
+          ?.getCharSequence(REMOTE_INPUT_KEY)
+          ?.toString()
+      if (result.resultCode == Activity.RESULT_OK && !text.isNullOrBlank()) {
+        submitMessage(text)
+      } else {
+        interaction = WearInteractionState.READY
+      }
+    }
+
+  fun startRealtimeTalk() {
+    speaker.stop()
+    viewModel.startRealtimeTalk()
+  }
+
+  fun leaveConversationContext() {
+    awaitingReply = false
+    awaitingReplySessionId = null
+    expectedAssistantKey = null
+    interaction = WearInteractionState.READY
+    speaker.stop()
+  }
+
+  val audioPermissionLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+      if (granted) {
+        startRealtimeTalk()
+      } else {
+        interaction = WearInteractionState.ERROR
+        view.performHapticFeedback(HapticFeedbackConstants.REJECT)
+      }
+    }
+
+  val notificationPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
       notificationsGranted = granted
     }
-  val listState = rememberTransformingLazyColumnState()
-  ScreenScaffold(scrollState = listState) { contentPadding ->
-    TransformingLazyColumn(
-      modifier = Modifier.background(OpenClawBackground),
-      state = listState,
-      contentPadding = contentPadding,
-      horizontalAlignment = Alignment.CenterHorizontally,
-      verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-      item { WearHeader(section = "SESSIONS") }
-      item { ConnectionPanel(state = state, onRefresh = onRefresh) }
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !notificationsGranted) {
-        item {
-          ActionButton(
-            label = "ENABLE ALERTS",
-            onClick = { permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) },
-            accent = OpenClawCyan,
-          )
-        }
-      }
-      for (session in state.sessions) {
-        item {
-          SessionButton(session = session, onClick = { onOpenSession(session) })
-        }
-      }
-      if (!state.loading && state.connected && state.sessions.isEmpty()) {
-        item { EmptyLabel("NO RECENT SESSIONS") }
-      }
-      state.error?.let { error -> item { ErrorLabel(error) } }
-    }
-  }
-}
 
-@Composable
-private fun TranscriptScreen(
-  state: WearUiState,
-  onBack: () -> Unit,
-  onRefresh: () -> Unit,
-  onReply: (String) -> Unit,
-  onAbort: () -> Unit,
-) {
-  val session = state.selectedSession ?: return
-  val context = LocalContext.current
-  val voiceIntent = remember { createVoiceInputIntent() }
-  var voiceAvailable by remember(context) {
-    mutableStateOf(voiceIntent.resolveActivity(context.packageManager) != null)
-  }
-  val textInputLauncher =
-    rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-      if (result.resultCode != Activity.RESULT_OK) return@rememberLauncherForActivityResult
-      val data = result.data ?: return@rememberLauncherForActivityResult
-      val text = RemoteInput.getResultsFromIntent(data)?.getCharSequence(REPLY_RESULT_KEY)?.toString()
-      text?.takeIf { it.isNotBlank() }?.let(onReply)
-    }
-  val voiceInputLauncher =
-    rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-      if (result.resultCode != Activity.RESULT_OK) return@rememberLauncherForActivityResult
-      val data = result.data ?: return@rememberLauncherForActivityResult
-      val text = data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
-      text?.takeIf { it.isNotBlank() }?.let(onReply)
-    }
-  val listState = rememberTransformingLazyColumnState()
-  ScreenScaffold(scrollState = listState) { contentPadding ->
-    TransformingLazyColumn(
-      modifier = Modifier.background(OpenClawBackground),
-      state = listState,
-      contentPadding = contentPadding,
-      horizontalAlignment = Alignment.CenterHorizontally,
-      verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-      item { WearHeader(section = session.title.uppercase()) }
-      item {
-        Text(
-          text = if (state.connected) "PHONE READY" else state.status.uppercase(),
-          color = if (state.connected) OpenClawGreen else OpenClawWarning,
-          fontSize = 10.sp,
-          fontWeight = FontWeight.Bold,
-          letterSpacing = 0.8.sp,
-          textAlign = TextAlign.Center,
-          modifier = Modifier.fillMaxWidth(),
-        )
-      }
-      item {
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-          CompactAction(label = "BACK", onClick = onBack, modifier = Modifier.weight(1f))
-          CompactAction(label = "SYNC", onClick = onRefresh, modifier = Modifier.weight(1f))
+  DisposableEffect(lifecycleOwner, view.context) {
+    val observer =
+      LifecycleEventObserver { _, event ->
+        if (event == Lifecycle.Event.ON_RESUME) {
+          notificationsGranted =
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(view.context, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
         }
       }
-      for (message in state.messages) {
-        item { MessagePanel(message) }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+  }
+
+  fun toggleRealtimeTalk() {
+    if (state.talkBusy || state.controlBusy) return
+    if (state.realtimeTalk.active || state.realtimeCapturing) {
+      viewModel.stopRealtimeTalk()
+      return
+    }
+    if (!state.connected || state.selectedSession == null) return
+    if (
+      ContextCompat.checkSelfPermission(view.context, Manifest.permission.RECORD_AUDIO) ==
+      PackageManager.PERMISSION_GRANTED
+    ) {
+      startRealtimeTalk()
+    } else {
+      audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+    }
+  }
+
+  LaunchedEffect(
+    snapshot?.activeSessionId,
+    state.messages,
+    state.activeRunId,
+    state.sending,
+    state.failure,
+    awaitingReply,
+  ) {
+    if (!awaitingReply) return@LaunchedEffect
+    val activeSnapshot = snapshot
+    if (
+      state.failure != null ||
+      activeSnapshot == null ||
+      activeSnapshot.activeSessionId != awaitingReplySessionId
+    ) {
+      awaitingReply = false
+      awaitingReplySessionId = null
+      expectedAssistantKey = null
+      interaction = WearInteractionState.READY
+      return@LaunchedEffect
+    }
+    if (state.sending || state.activeRunId != null) return@LaunchedEffect
+    val reply =
+      newAssistantReplyForSession(
+        awaitingSessionId = awaitingReplySessionId,
+        activeSessionId = activeSnapshot.activeSessionId,
+        expectedAssistantKey = expectedAssistantKey,
+        latestAssistantMessage = activeSnapshot.latestAssistantMessage(),
+      )
+    if (reply != null) {
+      awaitingReply = false
+      awaitingReplySessionId = null
+      expectedAssistantKey = null
+      interaction = WearInteractionState.READY
+      view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+      if (autoSpeak) speaker.speak(reply.text)
+    }
+  }
+
+  LaunchedEffect(snapshot?.realtimeTalk) {
+    val next = snapshot
+    realtimeThinkingTurnId =
+      if (next == null) {
+        null
+      } else {
+        nextRealtimeThinkingTurnId(previousRealtimeSnapshot, next, realtimeThinkingTurnId)
       }
-      state.streamText?.takeIf { it.isNotBlank() }?.let { text ->
-        item { StreamingPanel(text) }
+    previousRealtimeSnapshot = next
+  }
+  LaunchedEffect(realtimeThinkingTurnId) {
+    val turnId = realtimeThinkingTurnId ?: return@LaunchedEffect
+    delay(MINIMUM_REALTIME_THINKING_VISIBLE_MILLIS)
+    if (realtimeThinkingTurnId == turnId) {
+      realtimeThinkingTurnId = null
+    }
+  }
+
+  DisposableEffect(speaker) {
+    onDispose(speaker::shutdown)
+  }
+
+  val failure =
+    state.failure
+      ?: WearConversationFailure.PHONE_UNAVAILABLE.takeIf {
+        state.phoneNodeId == null && !state.loading
       }
-      if (!state.loading && state.messages.isEmpty() && state.streamText.isNullOrBlank()) {
-        item { EmptyLabel("NO MESSAGES YET") }
-      }
-      item {
-        ActionButton(
-          label = if (state.sending) "SENDING…" else "REPLY",
-          onClick = {
-            val remoteInput = RemoteInput.Builder(REPLY_RESULT_KEY).setLabel("Reply").build()
-            val intent = RemoteInputIntentHelper.createActionRemoteInputIntent()
-            RemoteInputIntentHelper.putRemoteInputsExtra(intent, listOf(remoteInput))
-            textInputLauncher.launch(intent)
-          },
-          enabled = state.connected && !state.sending,
-          accent = OpenClawRed,
-        )
-      }
-      item {
-        CompactAction(
-          label = if (voiceAvailable) "VOICE REPLY" else "VOICE UNAVAILABLE",
-          onClick = {
+  val resolvedInteraction =
+    when {
+      state.failure != null -> WearInteractionState.ERROR
+      state.sending -> WearInteractionState.SENDING
+      state.activeRunId != null -> WearInteractionState.AGENT_WORKING
+      else -> interaction
+    }
+
+  OpenClawWearTheme(themeMode = themeMode) {
+    AppScaffold {
+      OpenClawWearScreens(
+        snapshot = snapshot,
+        failure = failure,
+        loading = state.loading,
+        interaction = resolvedInteraction,
+        speaking = speaking,
+        realtimeCapturing = state.realtimeCapturing,
+        realtimePlaying = state.realtimePlaying,
+        realtimeMouthLevel = state.realtimeMouthLevel,
+        realtimePlaybackFailed = state.realtimePlaybackFailed,
+        realtimeThinkingOverride = realtimeThinkingTurnId != null,
+        actionBusy =
+          state.loading ||
+            state.sending ||
+            state.talkBusy ||
+            state.controlBusy ||
+            state.activeRunId != null ||
+            !state.streamText.isNullOrBlank() ||
+            state.realtimeTalk.active ||
+            state.realtimeCapturing ||
+            state.realtimePlaying,
+        inputEnabled = state.connected && snapshot?.activeSessionId != null,
+        canAbort = state.activeRunId != null || !state.streamText.isNullOrBlank(),
+        themeMode = themeMode,
+        autoSpeak = autoSpeak,
+        notificationsGranted = notificationsGranted,
+        initialPage = initialPage,
+        navigationRequest = navigationRequest,
+        onNavigationRequestHandled = onNavigationRequestHandled,
+        onTalk = {
+          if (!state.connected || snapshot?.activeSessionId == null) return@OpenClawWearScreens
+          interaction = WearInteractionState.LISTENING
+          val intent =
+            Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+              .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+              .putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
+              .putExtra(RecognizerIntent.EXTRA_PROMPT, speakPrompt)
+          try {
+            speechLauncher.launch(intent)
+          } catch (_: ActivityNotFoundException) {
+            interaction = WearInteractionState.ERROR
+            view.performHapticFeedback(HapticFeedbackConstants.REJECT)
+          }
+        },
+        onType = {
+          if (!state.connected || snapshot?.activeSessionId == null) return@OpenClawWearScreens
+          interaction = WearInteractionState.TYPING
+          val remoteInput =
+            RemoteInput
+              .Builder(REMOTE_INPUT_KEY)
+              .setLabel(messageLabel)
+              .build()
+          val intent =
+            RemoteInputIntentHelper
+              .createActionRemoteInputIntent()
+              .also { inputIntent ->
+                RemoteInputIntentHelper.putRemoteInputsExtra(inputIntent, listOf(remoteInput))
+                RemoteInputIntentHelper.putTitleExtra(inputIntent, messageTitle)
+                RemoteInputIntentHelper.putConfirmLabelExtra(inputIntent, sendLabel)
+              }
+          textLauncher.launch(intent)
+        },
+        onRealtimeTalk = ::toggleRealtimeTalk,
+        onAbort = {
+          awaitingReply = false
+          awaitingReplySessionId = null
+          expectedAssistantKey = null
+          interaction = WearInteractionState.READY
+          speaker.stop()
+          viewModel.abort()
+        },
+        onSelectAgent = { agentId ->
+          leaveConversationContext()
+          viewModel.selectAgent(agentId)
+        },
+        onSelectSession = { sessionKey ->
+          state.sessions.firstOrNull { it.key == sessionKey }?.let { session ->
+            leaveConversationContext()
+            viewModel.openSession(session)
+          }
+        },
+        onSelectModel = { modelRef ->
+          leaveConversationContext()
+          viewModel.selectModel(modelRef)
+        },
+        onRefresh = viewModel::refresh,
+        onGatewayEnabledChange = { enabled ->
+          speaker.stop()
+          viewModel.setGatewayEnabled(enabled)
+        },
+        onThemeModeChange = { selectedMode ->
+          themeMode = selectedMode
+          settingsStore.writeThemeMode(selectedMode)
+        },
+        onAutoSpeakChange = { enabled ->
+          autoSpeak = enabled
+          settingsStore.writeAutoSpeak(enabled)
+          if (!enabled) speaker.stop()
+        },
+        onRequestNotifications = {
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+          }
+        },
+        onOpenNotificationSettings = {
+          if (activity != null) {
+            val notificationSettings =
+              Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                .putExtra(Settings.EXTRA_APP_PACKAGE, activity.packageName)
             try {
-              voiceInputLauncher.launch(voiceIntent)
+              activity.startActivity(notificationSettings)
             } catch (_: ActivityNotFoundException) {
-              voiceAvailable = false
+              activity.startActivity(
+                Intent(
+                  Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                  "package:${activity.packageName}".toUri(),
+                ),
+              )
             }
-          },
-          modifier = Modifier.fillMaxWidth(),
-          enabled = state.connected && !state.sending && voiceAvailable,
-        )
-      }
-      if (state.activeRunId != null || !state.streamText.isNullOrBlank()) {
-        item {
-          ActionButton(label = "ABORT RUN", onClick = onAbort, accent = OpenClawWarning)
-        }
-      }
-      state.error?.let { error -> item { ErrorLabel(error) } }
-    }
-  }
-}
-
-private fun createVoiceInputIntent(): Intent =
-  Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-    putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-    putExtra(RecognizerIntent.EXTRA_PROMPT, "Reply to OpenClaw")
-  }
-
-@Composable
-private fun WearHeader(section: String) {
-  Column(
-    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-    horizontalAlignment = Alignment.CenterHorizontally,
-  ) {
-    Text(
-      text = "OPENCLAW",
-      color = OpenClawRed,
-      fontSize = 11.sp,
-      fontWeight = FontWeight.Bold,
-      letterSpacing = 1.4.sp,
-    )
-    Text(
-      text = section,
-      color = Color.White,
-      fontSize = 17.sp,
-      fontWeight = FontWeight.SemiBold,
-      maxLines = 1,
-      overflow = TextOverflow.Ellipsis,
-    )
-  }
-}
-
-@Composable
-private fun ConnectionPanel(
-  state: WearUiState,
-  onRefresh: () -> Unit,
-) {
-  Column(
-    modifier =
-      Modifier
-        .fillMaxWidth()
-        .background(OpenClawPanel, RoundedCornerShape(20.dp))
-        .padding(horizontal = 14.dp, vertical = 12.dp),
-    horizontalAlignment = Alignment.CenterHorizontally,
-  ) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-      Box(
-        modifier =
-          Modifier
-            .size(8.dp)
-            .background(if (state.connected) OpenClawGreen else OpenClawRed, CircleShape),
-      )
-      Spacer(Modifier.size(7.dp))
-      Text(
-        text =
-          when {
-            state.loading -> "CHECKING PHONE"
-            state.connected -> "PHONE READY"
-            else -> "PHONE UNAVAILABLE"
-          },
-        color = Color.White,
-        fontSize = 13.sp,
-        fontWeight = FontWeight.SemiBold,
+          }
+        },
+        onSpeakLatest = {
+          snapshot.latestAssistantMessage()?.text?.let(speaker::speak)
+        },
+        onStopSpeaking = speaker::stop,
       )
     }
-    Spacer(Modifier.height(5.dp))
-    Text(
-      text = state.status,
-      color = OpenClawMuted,
-      fontSize = 11.sp,
-      lineHeight = 14.sp,
-      textAlign = TextAlign.Center,
-      maxLines = 2,
-      overflow = TextOverflow.Ellipsis,
-    )
-    if (!state.loading) {
-      Spacer(Modifier.height(8.dp))
-      CompactAction(label = "REFRESH", onClick = onRefresh, modifier = Modifier.fillMaxWidth())
+  }
+}
+
+private fun WearConversationSnapshot?.latestAssistantMessage(): WearChatMessage? =
+  this
+    ?.messages
+    ?.lastOrNull { message ->
+      message.chatRole == WearChatRole.ASSISTANT && message.text.isNotBlank()
     }
+
+private fun WearChatMessage.stableKey(): String = id ?: role + ":" + timestamp + ":" + text.hashCode()
+
+internal fun newAssistantReplyForSession(
+  awaitingSessionId: String?,
+  activeSessionId: String?,
+  expectedAssistantKey: String?,
+  latestAssistantMessage: WearChatMessage?,
+): WearChatMessage? =
+  latestAssistantMessage?.takeIf { message ->
+    awaitingSessionId != null &&
+      awaitingSessionId == activeSessionId &&
+      message.stableKey() != expectedAssistantKey
   }
+
+internal fun nextRealtimeThinkingTurnId(
+  previous: WearConversationSnapshot?,
+  next: WearConversationSnapshot,
+  currentTurnId: String?,
+): String? {
+  if (!next.realtimeTalk.active) return null
+  return newlyCompletedRealtimeUserTurnId(previous, next) ?: currentTurnId
 }
 
-@Composable
-private fun SessionButton(
-  session: WearSession,
-  onClick: () -> Unit,
-) {
-  Button(
-    onClick = onClick,
-    modifier = Modifier.fillMaxWidth(),
-    colors = ButtonDefaults.buttonColors(containerColor = OpenClawPanel, contentColor = Color.White),
-    label = {
-      Column(modifier = Modifier.fillMaxWidth()) {
-        Text(
-          text = session.title,
-          fontSize = 14.sp,
-          fontWeight = FontWeight.SemiBold,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
-        Text(
-          text = if (session.hasActiveRun) "ACTIVE RUN" else session.key.takeLast(32),
-          color = if (session.hasActiveRun) OpenClawCyan else OpenClawMuted,
-          fontSize = 10.sp,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
-      }
-    },
-  )
+internal fun newlyCompletedRealtimeUserTurnId(
+  previous: WearConversationSnapshot?,
+  next: WearConversationSnapshot,
+): String? {
+  if (previous?.realtimeTalk?.active != true || !next.realtimeTalk.active) return null
+  val previousFinalUserTurnIds =
+    previous.realtimeTalk.conversation
+      .asSequence()
+      .filter { entry -> entry.role == WearRealtimeTalkRole.USER && !entry.streaming }
+      .map { entry -> entry.id }
+      .toSet()
+  return next.realtimeTalk.conversation
+    .lastOrNull { entry ->
+      entry.role == WearRealtimeTalkRole.USER &&
+        !entry.streaming &&
+        entry.id !in previousFinalUserTurnIds
+    }?.id
 }
 
-@Composable
-private fun MessagePanel(message: WearChatMessage) {
-  val assistant = message.role == "assistant"
-  Column(
-    modifier =
-      Modifier
-        .fillMaxWidth()
-        .background(if (assistant) OpenClawPanel else OpenClawAccentPanel, RoundedCornerShape(18.dp))
-        .padding(horizontal = 13.dp, vertical = 10.dp),
-  ) {
-    Text(
-      text = if (assistant) "OPENCLAW" else "YOU",
-      color = if (assistant) OpenClawCyan else OpenClawRed,
-      fontSize = 9.sp,
-      fontWeight = FontWeight.Bold,
-      letterSpacing = 1.sp,
-    )
-    Spacer(Modifier.height(3.dp))
-    Text(
-      text = message.text,
-      color = Color.White,
-      fontSize = 12.sp,
-      lineHeight = 16.sp,
-      maxLines = 8,
-      overflow = TextOverflow.Ellipsis,
-    )
-  }
-}
-
-@Composable
-private fun StreamingPanel(text: String) {
-  Column(
-    modifier =
-      Modifier
-        .fillMaxWidth()
-        .background(OpenClawPanel, RoundedCornerShape(18.dp))
-        .padding(horizontal = 13.dp, vertical = 10.dp),
-  ) {
-    Text(
-      text = "LIVE",
-      color = OpenClawGreen,
-      fontSize = 9.sp,
-      fontWeight = FontWeight.Bold,
-      letterSpacing = 1.sp,
-    )
-    Text(
-      text = text,
-      color = Color.White,
-      fontSize = 12.sp,
-      lineHeight = 16.sp,
-      maxLines = 8,
-      overflow = TextOverflow.Ellipsis,
-    )
-  }
-}
-
-@Composable
-private fun ActionButton(
-  label: String,
-  onClick: () -> Unit,
-  accent: Color,
-  enabled: Boolean = true,
-) {
-  Button(
-    onClick = onClick,
-    enabled = enabled,
-    modifier = Modifier.fillMaxWidth(),
-    colors = ButtonDefaults.buttonColors(containerColor = accent, contentColor = OpenClawBackground),
-    label = {
-      Text(
-        text = label,
-        modifier = Modifier.fillMaxWidth(),
-        textAlign = TextAlign.Center,
-        fontSize = 12.sp,
-        fontWeight = FontWeight.Bold,
-        letterSpacing = 0.8.sp,
-      )
-    },
-  )
-}
-
-@Composable
-private fun CompactAction(
-  label: String,
-  onClick: () -> Unit,
-  modifier: Modifier,
-  enabled: Boolean = true,
-) {
-  Button(
-    onClick = onClick,
-    enabled = enabled,
-    modifier = modifier,
-    colors = ButtonDefaults.buttonColors(containerColor = OpenClawPanel, contentColor = Color.White),
-    label = {
-      Text(
-        text = label,
-        modifier = Modifier.fillMaxWidth(),
-        textAlign = TextAlign.Center,
-        fontSize = 10.sp,
-        fontWeight = FontWeight.Bold,
-      )
-    },
-  )
-}
-
-@Composable
-private fun EmptyLabel(text: String) {
-  Text(
-    text = text,
-    color = OpenClawMuted,
-    fontSize = 11.sp,
-    fontWeight = FontWeight.Medium,
-    textAlign = TextAlign.Center,
-    modifier = Modifier.fillMaxWidth().padding(10.dp),
-  )
-}
-
-@Composable
-private fun ErrorLabel(text: String) {
-  Text(
-    text = text,
-    color = OpenClawWarning,
-    fontSize = 11.sp,
-    lineHeight = 14.sp,
-    textAlign = TextAlign.Center,
-    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp),
-  )
-}
-
-internal const val REPLY_RESULT_KEY = "openclaw_wear_reply"
-
-private val OpenClawBackground = Color(0xFF07080A)
-private val OpenClawPanel = Color(0xFF17191F)
-private val OpenClawAccentPanel = Color(0xFF21181C)
-private val OpenClawRed = Color(0xFFFF5A67)
-private val OpenClawCyan = Color(0xFF70DDF2)
-private val OpenClawGreen = Color(0xFF68D391)
-private val OpenClawWarning = Color(0xFFF0B35A)
-private val OpenClawMuted = Color(0xFFB7BAC2)
+internal const val REPLY_RESULT_KEY = "openclaw_watch_message"
+private const val REMOTE_INPUT_KEY = REPLY_RESULT_KEY
+private const val MINIMUM_REALTIME_THINKING_VISIBLE_MILLIS = 900L

@@ -1,3 +1,4 @@
+import type { LlmRuntime } from "@openclaw/ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
@@ -14,6 +15,7 @@ import { mapThinkingLevelForProvider } from "./utils.js";
 
 export async function prepareCompactionSessionAgent(params: {
   session: { agent: { streamFn?: unknown } };
+  llmRuntime: LlmRuntime;
   providerStreamFn: unknown;
   sessionId: string;
   signal: AbortSignal;
@@ -58,6 +60,7 @@ export async function prepareCompactionSessionAgent(params: {
       })
     : params.resolvedApiKey;
   params.session.agent.streamFn = resolveEmbeddedAgentStreamFn({
+    llmRuntime: params.llmRuntime,
     currentStreamFn: resolveEmbeddedAgentBaseStreamFn({ session: params.session as never }),
     providerStreamFn: params.providerStreamFn as never,
     sessionId: params.sessionId,

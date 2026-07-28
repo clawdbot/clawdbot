@@ -299,6 +299,13 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         .flatMap((shard) => shard.groups)
         .find((group) => group.shard_name === "agentic-control-plane-startup-health-runtime")?.env,
     ).toEqual({ OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000" });
+    const embeddedAgentJob = compact.find((shard) =>
+      shard.groups.some((group) => group.shard_name === "agentic-agents-embedded"),
+    );
+    expect(embeddedAgentJob?.groups).toHaveLength(1);
+    expect(embeddedAgentJob?.groups[0]?.env).toEqual({
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "660000",
+    });
     expect(
       compact
         .filter((shard) => shard.groups.some((group) => !group.includePatterns))
@@ -664,6 +671,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
           "test/vitest/vitest.media-understanding.config.ts",
           "test/vitest/vitest.tui.config.ts",
           "test/vitest/vitest.ui.config.ts",
+          "test/vitest/vitest.ui-isolated.config.ts",
           "test/vitest/vitest.wizard.config.ts",
         ],
         requiresDist: false,
@@ -841,7 +849,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     expect(cliShard).toEqual({
       checkName: "checks-node-agentic-cli",
       shardName: "agentic-cli",
-      configs: ["test/vitest/vitest.cli.config.ts"],
+      configs: ["test/vitest/vitest.cli.config.ts", "test/vitest/vitest.cli-process.config.ts"],
       requiresDist: false,
       runner: DEFAULT_NODE_TEST_RUNNER,
     });
@@ -996,6 +1004,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       {
         checkName: "checks-node-agentic-agents-embedded",
         configs: ["test/vitest/vitest.agents-embedded-agent.config.ts"],
+        env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "660000" },
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
         shardName: "agentic-agents-embedded",

@@ -7,10 +7,12 @@ type ChannelHealthSnapshot = {
   connected?: boolean;
   enabled?: boolean;
   configured?: boolean;
+  linked?: boolean;
   restartPending?: boolean;
   busy?: boolean;
   activeRuns?: number;
   lastRunActivityAt?: number | null;
+  activeRunStartedAt?: number | null;
   lastEventAt?: number | null;
   lastConnectedAt?: number | null;
   lastTransportActivityAt?: number | null;
@@ -46,7 +48,7 @@ export type ChannelHealthPolicy = {
 type ChannelRestartReason = "gave-up" | "stopped" | "stale-socket" | "stuck" | "disconnected";
 
 function isManagedAccount(snapshot: ChannelHealthSnapshot): boolean {
-  return snapshot.enabled !== false && snapshot.configured !== false;
+  return snapshot.enabled !== false && snapshot.configured !== false && snapshot.linked !== false;
 }
 
 const BUSY_ACTIVITY_STALE_THRESHOLD_MS = 25 * 60_000;
@@ -81,6 +83,10 @@ export function evaluateChannelHealth(
     typeof snapshot.lastRunActivityAt === "number" && Number.isFinite(snapshot.lastRunActivityAt)
       ? snapshot.lastRunActivityAt
       : null;
+  const activeRunStartedAt =
+    typeof snapshot.activeRunStartedAt === "number" && Number.isFinite(snapshot.activeRunStartedAt)
+      ? snapshot.activeRunStartedAt
+      : null;
   const lastTransportActivityAt =
     typeof snapshot.lastTransportActivityAt === "number" &&
     Number.isFinite(snapshot.lastTransportActivityAt)
@@ -100,7 +106,12 @@ export function evaluateChannelHealth(
         lastRunActivityAt == null
           ? Number.POSITIVE_INFINITY
           : Math.max(0, policy.now - lastRunActivityAt);
-      if (runActivityAge < BUSY_ACTIVITY_STALE_THRESHOLD_MS) {
+      const disconnectedRunStartAge =
+        snapshot.connected === false && activeRunStartedAt != null
+          ? Math.max(0, policy.now - activeRunStartedAt)
+          : 0;
+      const busyAge = Math.max(runActivityAge, disconnectedRunStartAge);
+      if (busyAge < BUSY_ACTIVITY_STALE_THRESHOLD_MS) {
         return { healthy: true, reason: "busy" };
       }
       return { healthy: false, reason: "stuck" };

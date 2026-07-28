@@ -14,7 +14,11 @@ import {
   resolveExecApprovalAllowedDecisions,
   resolveExecApprovalUnavailableDecisions,
 } from "../infra/exec-approvals.js";
-import { defaultExecAutoReviewer, type ExecAutoReviewInput } from "../infra/exec-auto-review.js";
+import {
+  defaultExecAutoReviewer,
+  resolveExecAutoReviewDecision,
+  type ExecAutoReviewInput,
+} from "../infra/exec-auto-review.js";
 import { tail } from "./bash-process-registry.js";
 import {
   buildExecApprovalRequesterContext,
@@ -38,6 +42,7 @@ import {
   normalizeNotifyOutput,
 } from "./bash-tools.exec-runtime.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import { abortable } from "./embedded-agent-runner/run/abortable.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
@@ -224,6 +229,21 @@ export async function executeNodeHostCommand(
     }) ||
     inlineEvalHit !== null ||
     requiresSecurityAuditSuppressionApproval;
+  if (requiresAsk && params.nonInteractiveApproval) {
+    const text = `Exec denied (approval_required): ${params.command}`;
+    return {
+      content: [{ type: "text", text }],
+      details: {
+        status: "failed",
+        exitCode: null,
+        failureKind: "approval_required",
+        durationMs: 0,
+        aggregated: text,
+        timedOut: false,
+        cwd: prepared.cwd,
+      },
+    };
+  }
   if (requiresSecurityAuditSuppressionApproval) {
     params.warnings.push(
       "Warning: security audit suppression changes require explicit approval unless exec is running in yolo mode.",
@@ -240,6 +260,7 @@ export async function executeNodeHostCommand(
       workdir: prepared.cwd,
       host: "node",
       nodeId: target.nodeId,
+      toolCallId: params.toolCallId,
       security: hostSecurity,
       ask: hostAsk,
       ...unavailableDecisionRequestParams,
@@ -360,7 +381,7 @@ export async function executeNodeHostCommand(
       !requiresSecurityAuditSuppressionApproval
     ) {
       const reviewer = params.autoReviewer ?? defaultExecAutoReviewer;
-      const decision = await reviewer({
+      const pendingDecision = resolveExecAutoReviewDecision(reviewer, {
         command: prepared.rawCommand,
         argv: autoReviewArgv,
         cwd: prepared.cwd,
@@ -384,6 +405,10 @@ export async function executeNodeHostCommand(
           sessionKey: prepared.sessionKey,
         },
       });
+      // An injected reviewer cannot keep a cancelled node invocation or approval alive.
+      const decision = params.signal
+        ? await abortable(params.signal, pendingDecision)
+        : await pendingDecision;
       params.signal?.throwIfAborted();
       const autoReviewAllowed = decision.decision === "allow-once" && decision.risk === "low";
       if (autoReviewAllowed) {

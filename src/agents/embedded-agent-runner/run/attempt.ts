@@ -6,6 +6,11 @@ import {
 import { resolveContextEngineOwnerPluginId } from "../../../context-engine/registry.js";
 import { createBundleLspToolRuntime } from "../../agent-bundle-lsp-runtime.js";
 import { materializeBundleMcpToolsForRun } from "../../agent-bundle-mcp-tools.js";
+import {
+  mergeAgentRunAttemptTerminal,
+  projectAgentRunAttemptTerminal,
+  type AgentRunAttemptTerminal,
+} from "../../agent-run-terminal-outcome.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../../agent-scope.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
@@ -68,18 +73,15 @@ export async function runEmbeddedAttempt(
 
   let restoreSkillEnv: (() => void) | undefined;
   const executionState: EmbeddedAttemptExecutionState = {
-    aborted: Boolean(params.abortSignal?.aborted),
     beforeAgentRunBlocked: false,
     beforeAgentRunBlockedBy: undefined,
-    cleanupYieldAborted: false,
-    externalAbort: false,
-    idleTimedOut: false,
-    promptError: null,
-    timedOut: false,
-    timedOutByRunBudget: false,
-    timedOutDuringCompaction: false,
-    timedOutDuringToolExecution: false,
+    terminal: params.abortSignal?.aborted
+      ? { kind: "aborted", source: "external" }
+      : { kind: "ok" },
     trajectoryEndRecorded: false,
+  };
+  const mergeTerminal = (incoming: AgentRunAttemptTerminal) => {
+    executionState.terminal = mergeAgentRunAttemptTerminal(executionState.terminal, incoming);
   };
   let emitDiagnosticRunCompleted: EmitDiagnosticRunCompleted | undefined;
   // Releases the eager session lock if post-prompt code exits before cleanup.
@@ -116,25 +118,23 @@ export async function runEmbeddedAttempt(
     }
   };
   const abortState: EmbeddedAttemptAbortStatePort = {
-    markAborted: () => {
-      executionState.aborted = true;
-    },
-    markExternalAbort: () => {
-      executionState.externalAbort = true;
-    },
-    markTimedOut: () => {
-      executionState.timedOut = true;
-    },
-    markTimedOutDuringCompaction: () => {
-      executionState.timedOutDuringCompaction = true;
-    },
-    markTimedOutDuringToolExecution: () => {
-      executionState.timedOutDuringToolExecution = true;
-    },
-    readTimedOutDuringCompaction: () => executionState.timedOutDuringCompaction,
-    setPromptError: (error) => {
-      executionState.promptError = error;
-    },
+    markAborted: () =>
+      mergeTerminal({
+        kind: "aborted",
+        source:
+          runAbortController.signal.reason === SESSIONS_YIELD_ABORT_REASON
+            ? "yield_cleanup"
+            : "runtime",
+      }),
+    markExternalAbort: () => mergeTerminal({ kind: "aborted", source: "external" }),
+    markTimedOut: () => mergeTerminal({ kind: "timeout", phase: "prompt", source: "runtime" }),
+    markTimedOutDuringCompaction: () =>
+      mergeTerminal({ kind: "timeout", phase: "compaction", source: "observation" }),
+    markTimedOutDuringToolExecution: () =>
+      mergeTerminal({ kind: "timeout", phase: "tool_execution", source: "observation" }),
+    readTimedOutDuringCompaction: () =>
+      projectAgentRunAttemptTerminal(executionState.terminal).timedOutDuringCompaction,
+    setPromptError: (error) => mergeTerminal({ kind: "failed", source: "prompt", error }),
   };
   const externalAbortController = createEmbeddedAttemptExternalAbortController({
     abortSignal: params.abortSignal,
@@ -151,7 +151,7 @@ export async function runEmbeddedAttempt(
       sessionAgentId,
     });
     restoreSkillEnv = preparedSkills.restoreSkillEnv;
-    const { skillUsagePaths, skillsPrompt, skillsSnapshotForRun } = preparedSkills;
+    const { codeModeSkills, skillUsagePaths, skillsPrompt, skillsSnapshotForRun } = preparedSkills;
     prepStages.mark("skills");
 
     const isRawModelRun = params.modelRun === true || params.promptMode === "none";
@@ -196,6 +196,7 @@ export async function runEmbeddedAttempt(
       sessionAgentId,
       skillUsagePaths,
       skillsSnapshot: skillsSnapshotForRun,
+      codeModeSkills,
       toolSearchCatalogExecutor: (toolParams) => {
         if (!toolSearchCatalogExecutor) {
           throw new Error("Tool Search catalog executor is unavailable for this run.");
@@ -209,6 +210,7 @@ export async function runEmbeddedAttempt(
       computerContextEpoch,
       localModelLeanEnabled,
       replaySafetyOptions,
+      toolSearchControlsEnabledForRun,
       toolSearchRuntimeConfig,
       toolsEnabled,
       toolsRaw,
@@ -286,7 +288,6 @@ export async function runEmbeddedAttempt(
       bootstrap: preparedBootstrap,
       capabilityToolNames: toolSearchRunPlan.capabilityToolNames,
       defaultAgentId,
-      deferredDirectoryToolsCallable,
       effectiveCwd,
       effectiveTools,
       effectiveWorkspace,
@@ -298,7 +299,10 @@ export async function runEmbeddedAttempt(
       sandboxSessionKey,
       sessionAgentId,
       skillsPrompt,
+      codeModeActive: codeModeControlsEnabledForRun,
       toolSearchCatalogRef,
+      toolSearchDirectoryEnabled: toolSearchControlsEnabledForRun && toolSearch.catalogRegistered,
+      toolSearchRuntimeConfig,
     });
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     const {
@@ -330,6 +334,7 @@ export async function runEmbeddedAttempt(
         ...(activeContextEngine ? { activeContextEngine } : {}),
         agentDir,
         effectiveCwd,
+        effectiveFsWorkspaceOnly,
         effectiveWorkspace,
         initialSystemPrompt: preparedSystemPrompt.systemPromptText,
         isRawModelRun,
@@ -403,7 +408,7 @@ export async function runEmbeddedAttempt(
           },
         },
       });
-      return await runEmbeddedAttemptExecutionPhase({
+      const executionResult = await runEmbeddedAttemptExecutionPhase({
         attempt: params,
         ...(activeContextEngine ? { activeContextEngine } : {}),
         agentDir,
@@ -444,7 +449,24 @@ export async function runEmbeddedAttempt(
           },
         },
       });
+      // Read catalog counters before the finally-phase cleanup clears the
+      // run-scoped catalog session; afterwards the counts are gone.
+      const catalogSession = toolSearchCatalogRef?.current;
+      return {
+        ...executionResult,
+        codeModeEngaged: codeModeControlsEnabledForRun,
+        ...(catalogSession
+          ? {
+              bridgeCalls: {
+                search: catalogSession.searchCount,
+                describe: catalogSession.describeCount,
+                call: catalogSession.callCount,
+              },
+            }
+          : {}),
+      };
     } finally {
+      const terminal = projectAgentRunAttemptTerminal(executionState.terminal);
       await cleanupEmbeddedAttemptSessionPhase({
         attempt: params,
         session,
@@ -459,17 +481,10 @@ export async function runEmbeddedAttempt(
         buildAbortSettlePromise,
         trajectoryRecorder,
         trajectoryEndRecorded: executionState.trajectoryEndRecorded,
-        cleanupYieldAborted: executionState.cleanupYieldAborted,
+        cleanupYieldAborted: terminal.cleanupYieldAborted,
         emitDiagnosticRunCompleted,
         readState: () => ({
-          aborted: executionState.aborted,
-          externalAbort: executionState.externalAbort,
-          timedOut: executionState.timedOut,
-          idleTimedOut: executionState.idleTimedOut,
-          timedOutDuringCompaction: executionState.timedOutDuringCompaction,
-          timedOutDuringToolExecution: executionState.timedOutDuringToolExecution,
-          timedOutByRunBudget: executionState.timedOutByRunBudget,
-          promptError: executionState.promptError,
+          ...projectAgentRunAttemptTerminal(executionState.terminal),
           beforeAgentRunBlocked: executionState.beforeAgentRunBlocked,
           beforeAgentRunBlockedBy: executionState.beforeAgentRunBlockedBy,
         }),
@@ -493,9 +508,10 @@ export async function runEmbeddedAttempt(
       );
     }
     retainedSessionFileOwner?.release();
+    const terminal = projectAgentRunAttemptTerminal(executionState.terminal);
     emitDiagnosticRunCompleted?.(
-      executionState.aborted ? "aborted" : "error",
-      executionState.promptError ?? new Error("run exited before diagnostic completion"),
+      terminal.aborted ? "aborted" : "error",
+      terminal.promptError ?? new Error("run exited before diagnostic completion"),
     );
     restoreSkillEnv?.();
   }

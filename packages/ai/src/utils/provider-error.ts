@@ -1,3 +1,5 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+
 const MAX_ERROR_BODY_LENGTH = 4000;
 
 type HttpErrorShape = Error & {
@@ -14,8 +16,20 @@ type HttpErrorShape = Error & {
 };
 
 function stringify(value: unknown): string {
+  const seen = new WeakSet<object>();
   try {
-    return JSON.stringify(value) ?? String(value);
+    return (
+      JSON.stringify(value, (_key, candidate: unknown) => {
+        if (typeof candidate !== "object" || candidate === null) {
+          return candidate;
+        }
+        if (seen.has(candidate)) {
+          return "[Circular]";
+        }
+        seen.add(candidate);
+        return candidate;
+      }) ?? String(value)
+    );
   } catch {
     return String(value);
   }
@@ -47,7 +61,7 @@ function readBody(error: HttpErrorShape): string | undefined {
     if (body.length > 0) {
       return body.length <= MAX_ERROR_BODY_LENGTH
         ? body
-        : `${body.slice(0, MAX_ERROR_BODY_LENGTH)}... [truncated]`;
+        : `${truncateUtf16Safe(body, MAX_ERROR_BODY_LENGTH)}... [truncated]`;
     }
   }
   return undefined;

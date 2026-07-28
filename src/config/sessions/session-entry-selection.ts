@@ -10,6 +10,40 @@ type SessionProjectionTarget = {
   primaryKey: string;
 };
 
+/** Carries only user/runtime selection into a new dashboard fork. */
+export function inheritSessionSelection(
+  parentEntry: SessionEntry | undefined,
+): Partial<SessionEntry> {
+  if (!parentEntry) {
+    return {};
+  }
+  return {
+    ...(parentEntry.providerOverride ? { providerOverride: parentEntry.providerOverride } : {}),
+    ...(parentEntry.modelOverride ? { modelOverride: parentEntry.modelOverride } : {}),
+    ...(parentEntry.modelOverrideSource
+      ? { modelOverrideSource: parentEntry.modelOverrideSource }
+      : {}),
+    ...(parentEntry.modelOverrideRouteResolution
+      ? { modelOverrideRouteResolution: parentEntry.modelOverrideRouteResolution }
+      : {}),
+    ...(parentEntry.agentRuntimeOverride
+      ? { agentRuntimeOverride: parentEntry.agentRuntimeOverride }
+      : {}),
+    ...(parentEntry.thinkingLevel ? { thinkingLevel: parentEntry.thinkingLevel } : {}),
+    ...(parentEntry.fastMode !== undefined ? { fastMode: parentEntry.fastMode } : {}),
+    ...(parentEntry.verboseLevel ? { verboseLevel: parentEntry.verboseLevel } : {}),
+    ...(parentEntry.traceLevel ? { traceLevel: parentEntry.traceLevel } : {}),
+    ...(parentEntry.reasoningLevel ? { reasoningLevel: parentEntry.reasoningLevel } : {}),
+    ...(parentEntry.elevatedLevel ? { elevatedLevel: parentEntry.elevatedLevel } : {}),
+    ...(parentEntry.authProfileOverride
+      ? { authProfileOverride: parentEntry.authProfileOverride }
+      : {}),
+    ...(parentEntry.authProfileOverrideSource
+      ? { authProfileOverrideSource: parentEntry.authProfileOverrideSource }
+      : {}),
+  };
+}
+
 /** Normalizes caller aliases while always preserving the canonical key. */
 export function normalizeTargetStoreKeys(target: SessionStoreTarget): string[] {
   const keys = new Set<string>();
@@ -28,12 +62,15 @@ export function normalizeTargetStoreKeys(target: SessionStoreTarget): string[] {
 
 /** Selects the row that alias migration would promote. */
 export function resolveFreshestTargetEntry(
-  store: Record<string, SessionEntry>,
+  entries: Iterable<{ sessionKey: string; entry: SessionEntry }>,
   targetKeys: readonly string[],
 ): { key: string; entry: SessionEntry } | undefined {
+  const store = new Map(
+    Array.from(entries, ({ entry, sessionKey }) => [sessionKey, entry] as const),
+  );
   let freshest: { key: string; entry: SessionEntry } | undefined;
   for (const key of targetKeys) {
-    const entry = store[key];
+    const entry = store.get(key);
     if (entry && (!freshest || (entry.updatedAt ?? 0) > (freshest.entry.updatedAt ?? 0))) {
       freshest = { key, entry };
     }
