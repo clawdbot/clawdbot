@@ -874,6 +874,173 @@ describe("ChatLog", () => {
     },
   );
 
+  it.each([20, 40])(
+    "reserves a delayed prompt slot when one run fills all %i scrollback components",
+    (capacity) => {
+      const chatLog = new ChatLog(capacity);
+      const runId = `full-run-${capacity}`;
+      let assistantText = "";
+
+      for (let index = 0; index < capacity; index += 1) {
+        assistantText += `${index === 0 ? "" : "\n\n"}Assistant segment ${index}.`;
+        chatLog.updateAssistant(assistantText, runId);
+        if (index < capacity - 1) {
+          chatLog.startTool(
+            `${runId}-tool-${index}`,
+            "read_file",
+            { path: `segment-${index}.txt` },
+            runId,
+          );
+          chatLog.clearTools();
+        }
+      }
+      chatLog.finalizeAssistant(assistantText, runId);
+
+      const prompt = { messageId: `${runId}-user`, runId };
+      chatLog.addLiveUser("Delayed prompt before a full reply.", prompt);
+      chatLog.addLiveUser("Delayed prompt before a full reply.", prompt);
+
+      const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+      expect(chatLog.children).toHaveLength(capacity);
+      expect(rendered.match(/Delayed prompt before a full reply\./g)).toHaveLength(1);
+      expect(rendered.indexOf("Delayed prompt before a full reply.")).toBeLessThan(
+        rendered.indexOf("Assistant segment 0."),
+      );
+      expect(rendered).toContain(`Assistant segment ${capacity - 1}.`);
+    },
+  );
+
+  it.each([20, 40])(
+    "retains an executing tool while reserving a delayed prompt at capacity %i",
+    (capacity) => {
+      const chatLog = new ChatLog(capacity);
+      const runId = `active-tool-${capacity}`;
+      let assistantText = "";
+
+      for (let index = 0; index < capacity - 1; index += 1) {
+        assistantText += `${index === 0 ? "" : "\n\n"}Running reply segment ${index}.`;
+        chatLog.updateAssistant(assistantText, runId);
+        chatLog.startTool(
+          `${runId}-previous-tool-${index}`,
+          "read_file",
+          { path: `previous-${index}.txt` },
+          runId,
+        );
+        chatLog.clearTools();
+      }
+
+      const activeToolId = `${runId}-active-tool`;
+      chatLog.startTool(activeToolId, "read_file", { path: "still-running.txt" }, runId);
+      chatLog.addLiveUser("Delayed prompt during active tool.", {
+        messageId: `${runId}-user`,
+        runId,
+      });
+      chatLog.updateToolResult(
+        activeToolId,
+        { content: [{ type: "text", text: "Visible partial tool output." }] },
+        { partial: true },
+      );
+
+      let rendered = normalizeTestText(chatLog.render(120).join("\n"));
+      expect(chatLog.children).toHaveLength(capacity);
+      expect(rendered).toContain("Visible partial tool output.");
+      expect(rendered.indexOf("Delayed prompt during active tool.")).toBeLessThan(
+        rendered.indexOf("Running reply segment 0."),
+      );
+
+      chatLog.updateToolResult(activeToolId, {
+        content: [{ type: "text", text: "Visible final tool output." }],
+      });
+      rendered = normalizeTestText(chatLog.render(120).join("\n"));
+      expect(rendered).toContain("Visible final tool output.");
+      expect(chatLog.children).toHaveLength(capacity);
+    },
+  );
+
+  it.each([20, 40])(
+    "preserves both a streaming reply and an executing tool at full capacity %i",
+    (capacity) => {
+      const chatLog = new ChatLog(capacity);
+      const runId = `live-components-${capacity}`;
+      chatLog.updateAssistant("First preserved live reply.", runId);
+
+      const activeToolId = `${runId}-active-tool`;
+      for (let index = 0; index < capacity - 2; index += 1) {
+        const toolId = index === 0 ? activeToolId : `${runId}-completed-tool-${index}`;
+        chatLog.startTool(toolId, "read_file", { path: `live-tool-${index}.txt` }, runId);
+        if (index > 0) {
+          chatLog.updateToolResult(toolId, {
+            content: [{ type: "text", text: `Completed historical tool ${index}.` }],
+          });
+        }
+      }
+      chatLog.updateAssistant(
+        "First preserved live reply.\n\nStreaming reply remains visible.",
+        runId,
+      );
+
+      chatLog.addLiveUser("Delayed prompt during live components.", {
+        messageId: `${runId}-user`,
+        runId,
+      });
+      chatLog.updateToolResult(
+        activeToolId,
+        { content: [{ type: "text", text: "Live tool progress remains visible." }] },
+        { partial: true },
+      );
+      chatLog.updateAssistant("First preserved live reply.\n\nUpdated streaming reply.", runId);
+
+      const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+      expect(chatLog.children).toHaveLength(capacity);
+      expect(rendered.match(/Delayed prompt during live components\./g)).toHaveLength(1);
+      expect(rendered.indexOf("Delayed prompt during live components.")).toBeLessThan(
+        rendered.indexOf("First preserved live reply."),
+      );
+      expect(rendered).toContain("Live tool progress remains visible.");
+      expect(rendered).toContain("Updated streaming reply.");
+      expect(rendered).not.toContain("Completed historical tool 1.");
+    },
+  );
+
+  it.each([20, 40])(
+    "evicts a completed first segment before an executing tool at capacity %i",
+    (capacity) => {
+      const chatLog = new ChatLog(capacity);
+      const runId = `only-completed-anchor-${capacity}`;
+      chatLog.updateAssistant("Only completed reply segment.", runId);
+
+      for (let index = 0; index < capacity - 2; index += 1) {
+        chatLog.startTool(
+          `${runId}-active-tool-${index}`,
+          "read_file",
+          { path: `active-only-${index}.txt` },
+          runId,
+        );
+      }
+      chatLog.updateAssistant("Only completed reply segment.\n\nProtected live reply.", runId);
+      chatLog.addLiveUser("Delayed prompt before concurrent tools.", {
+        messageId: `${runId}-user`,
+        runId,
+      });
+
+      for (const index of [0, capacity - 3]) {
+        chatLog.updateToolResult(
+          `${runId}-active-tool-${index}`,
+          { content: [{ type: "text", text: `Protected active tool ${index}.` }] },
+          { partial: true },
+        );
+      }
+
+      const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+      expect(chatLog.children).toHaveLength(capacity);
+      expect(rendered.match(/Delayed prompt before concurrent tools\./g)).toHaveLength(1);
+      expect(rendered).not.toContain("Only completed reply segment.");
+      expect(rendered).toContain("Protected live reply.");
+      expect(rendered).toContain("Protected active tool 0.");
+      expect(rendered).toContain(`Protected active tool ${capacity - 3}.`);
+    },
+  );
+
   it("deduplicates authoritative user events and adopts the matching pending prompt", () => {
     const chatLog = new ChatLog(40);
     chatLog.addPendingUser("shared-run", "Persisted prompt.");

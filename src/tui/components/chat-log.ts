@@ -22,6 +22,7 @@ export class ChatLog extends Container {
   private readonly maxComponents: number;
   private toolById = new Map<string, ToolExecutionComponent>();
   private toolRunIds = new Map<string, string>();
+  private activeTools = new Set<ToolExecutionComponent>();
   private streamingRuns = new Map<string, AssistantMessageComponent>();
   private frozenAssistants = new Map<string, Set<AssistantMessageComponent>>();
   private finalizedAssistants = new Map<string, Set<AssistantMessageComponent>>();
@@ -54,6 +55,7 @@ export class ChatLog extends Container {
       if (tool === component) {
         this.toolById.delete(toolId);
         this.toolRunIds.delete(toolId);
+        this.activeTools.delete(tool);
       }
     }
     for (const [runId, message] of this.streamingRuns.entries()) {
@@ -130,6 +132,7 @@ export class ChatLog extends Container {
     this.clear();
     this.toolById.clear();
     this.toolRunIds.clear();
+    this.activeTools.clear();
     this.streamingRuns.clear();
     this.frozenAssistants.clear();
     this.finalizedAssistants.clear();
@@ -163,6 +166,7 @@ export class ChatLog extends Container {
     }
     this.toolById.clear();
     this.toolRunIds.clear();
+    this.activeTools.clear();
   }
 
   restoreLiveUsers(beforeMessageSeq?: number) {
@@ -314,10 +318,49 @@ export class ChatLog extends Container {
       protectedComponents.has(entry),
     );
     if (firstRunComponentIndex >= 0) {
+      const firstRunComponent = this.children[firstRunComponentIndex];
       // Scrollback may evict early reply segments before a peer prompt arrives;
       // anchor before the earliest surviving reply or tool from the same run.
       this.repeatableSystemMessage = null;
       this.children.splice(firstRunComponentIndex, 0, component);
+      if (protectedComponents.size > this.maxComponents) {
+        // Prefer completed history, but keep the sole reply when only tools
+        // remain: dropping it would leave a prompt with no visible response.
+        const streaming = options.runId ? this.streamingRuns.get(options.runId) : undefined;
+        const evictable =
+          this.children.find(
+            (entry) =>
+              entry !== firstRunComponent &&
+              entry !== streaming &&
+              entry instanceof AssistantMessageComponent &&
+              protectedComponents.has(entry),
+          ) ??
+          this.children.find(
+            (entry) =>
+              entry !== firstRunComponent &&
+              entry instanceof ToolExecutionComponent &&
+              !this.activeTools.has(entry) &&
+              protectedComponents.has(entry),
+          ) ??
+          (streaming &&
+          firstRunComponent instanceof AssistantMessageComponent &&
+          firstRunComponent !== streaming
+            ? firstRunComponent
+            : undefined) ??
+          (firstRunComponent instanceof ToolExecutionComponent &&
+          !this.activeTools.has(firstRunComponent)
+            ? firstRunComponent
+            : undefined) ??
+          this.children.find(
+            (entry) =>
+              entry !== firstRunComponent &&
+              entry instanceof ToolExecutionComponent &&
+              protectedComponents.has(entry),
+          );
+        if (evictable) {
+          protectedComponents.delete(evictable);
+        }
+      }
       this.pruneOverflow(protectedComponents);
       return component;
     }
@@ -587,6 +630,7 @@ export class ChatLog extends Container {
     const component = new ToolExecutionComponent(toolName, args);
     component.setExpanded(this.toolsExpanded);
     this.toolById.set(toolCallId, component);
+    this.activeTools.add(component);
     if (owningRunId) {
       this.toolRunIds.set(toolCallId, owningRunId);
     }
@@ -604,9 +648,11 @@ export class ChatLog extends Container {
       return;
     }
     if (opts?.partial) {
+      this.activeTools.add(existing);
       existing.setPartialResult(result as Record<string, unknown>);
       return;
     }
+    this.activeTools.delete(existing);
     existing.setResult(result as Record<string, unknown>, {
       isError: opts?.isError,
     });
