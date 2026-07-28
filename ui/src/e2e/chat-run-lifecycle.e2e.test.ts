@@ -109,6 +109,10 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
     await currentPage.goto(`${server?.baseUrl ?? ""}chat`);
     await currentPage.getByText("saved 875.3k tokens", { exact: true }).waitFor();
     await currentPage.locator(".agent-chat__input textarea").fill("keep working");
+    // Pause the virtual clock before sending: the working timer starts at the
+    // send click, and an unpaused installed clock still ticks in real time,
+    // letting slow CI inflate the fast-forwarded "2m 57s" to "2m 59s".
+    await currentPage.clock.pauseAt((await currentPage.evaluate(() => Date.now())) + 5_000);
     await currentPage.getByRole("button", { name: "Send message" }).click();
     await gateway.waitForRequest("chat.send");
     await currentPage.locator(".chat-working-indicator").waitFor();
