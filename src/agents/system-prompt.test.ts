@@ -1840,4 +1840,61 @@ describe("buildSubagentSystemPrompt", () => {
     }
   });
 });
+
+describe("watched sessions prompt surfaces", () => {
+  it("renders prepared watched sessions with titles, overflow, and recall guidance", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_list", "sessions_history", "sessions_search"],
+      preparedWatchedSessions: {
+        sessions: [
+          { key: "agent:main:telegram:group:alpha", title: "Family group" },
+          { key: "agent:main:telegram:group:beta" },
+        ],
+        hiddenCount: 1,
+        readToolNames: ["sessions_history", "sessions_search"],
+        listToolAvailable: true,
+      },
+    });
+
+    expect(prompt).toContain("## Watched Sessions");
+    expect(prompt).toContain(
+      "Readable now (read-only) via sessions_history/sessions_search; rows appear in sessions_list.",
+    );
+    expect(prompt).toContain("- agent:main:telegram:group:alpha — Family group");
+    expect(prompt).toContain("- agent:main:telegram:group:beta");
+    expect(prompt).toContain('(+1 more: sessions_list kinds=["group"].)');
+    expect(prompt).toContain(
+      "Asked about another chat/group/session not in context: check `sessions_list`/`sessions_search` before claiming no access.",
+    );
+  });
+
+  it("names only granted read tools and skips the sessions_list overflow hint without it", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_history"],
+      preparedWatchedSessions: {
+        sessions: [{ key: "agent:main:telegram:group:alpha" }],
+        hiddenCount: 2,
+        readToolNames: ["sessions_history"],
+        listToolAvailable: false,
+      },
+    });
+
+    expect(prompt).toContain("Readable now (read-only) via sessions_history.");
+    expect(prompt).not.toContain("rows appear in sessions_list");
+    expect(prompt).toContain("(+2 more.)");
+    expect(prompt).not.toContain('sessions_list kinds=["group"]');
+  });
+
+  it("omits the watched section and recall line without prepared data or session tools", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["read", "exec"],
+    });
+
+    expect(prompt).not.toContain("## Watched Sessions");
+    expect(prompt).not.toContain("before claiming no access");
+  });
+});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
