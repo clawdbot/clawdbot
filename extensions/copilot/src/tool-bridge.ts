@@ -212,6 +212,7 @@ export async function createCopilotToolBridge(
     sessionId: input.sessionId,
     sessionKey: attemptParams.sandboxSessionKey ?? attemptParams.sessionKey ?? input.sessionKey,
     scheduledToolPolicy: attemptParams.scheduledToolPolicy,
+    skillWorkshopProposalOnly: attemptParams.skillWorkshopProposalOnly,
     sourceReplyDeliveryMode: attemptParams.sourceReplyDeliveryMode,
     toolsAllow: attemptParams.toolsAllow,
   });
