@@ -19,6 +19,45 @@ const SESSION: WorkerSessionPlacementIdentity = {
   sessionKey: "agent:main:placement",
 };
 
+const ENVIRONMENT_ID = "environment-placement";
+const BUNDLE_HASH = "a".repeat(64);
+const MANIFEST_REF = `sha256:${"b".repeat(64)}`;
+const OWNER_EPOCH = 7;
+
+// Reaches `active` worker ownership so a later failure carries worker state
+// (activeOwnerEpoch set), the case that must NOT bypass reconciliation.
+function advanceToActive(s: WorkerSessionPlacementStore, identity = SESSION) {
+  let placement = s.startDispatch(identity);
+  placement = s.transition({
+    sessionId: identity.sessionId,
+    from: "requested",
+    to: "provisioning",
+    expectedGeneration: placement.generation,
+    patch: { environmentId: ENVIRONMENT_ID },
+  });
+  placement = s.transition({
+    sessionId: identity.sessionId,
+    from: "provisioning",
+    to: "syncing",
+    expectedGeneration: placement.generation,
+    patch: { workerBundleHash: BUNDLE_HASH },
+  });
+  placement = s.transition({
+    sessionId: identity.sessionId,
+    from: "syncing",
+    to: "starting",
+    expectedGeneration: placement.generation,
+    patch: { remoteWorkspaceDir: "/worker/workspace", workspaceBaseManifestRef: MANIFEST_REF },
+  });
+  return s.transition({
+    sessionId: identity.sessionId,
+    from: "starting",
+    to: "active",
+    expectedGeneration: placement.generation,
+    patch: { activeOwnerEpoch: OWNER_EPOCH },
+  });
+}
+
 describe("worker session placement failed recovery", () => {
   let root: string;
   let database: OpenClawStateDatabase;
@@ -71,5 +110,38 @@ describe("worker session placement failed recovery", () => {
         expectedGeneration: reclaimed.generation,
       }),
     ).toThrow("Cannot reclaim failed worker placement");
+  });
+
+  it("refuses to reclaim a failed placement that reached worker ownership", () => {
+    const active = advanceToActive(store);
+    const draining = store.startDrain({
+      sessionId: SESSION.sessionId,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      expectedGeneration: active.generation,
+    });
+    const reconciling = store.startReconcile({
+      sessionId: SESSION.sessionId,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      expectedGeneration: draining.generation,
+    });
+    const failed = store.transition({
+      sessionId: SESSION.sessionId,
+      from: "reconciling",
+      to: "failed",
+      expectedGeneration: reconciling.generation,
+      patch: { recoveryError: "reconcile failed with remote work in flight" },
+    });
+    expect(failed).toMatchObject({ state: "failed", activeOwnerEpoch: active.activeOwnerEpoch });
+
+    // A post-worker failure may carry unreconciled remote workspace changes, so
+    // it must not be reset to local; recovery has to go through drain/reconcile.
+    expect(() =>
+      store.reclaimFailedToLocal({
+        sessionId: SESSION.sessionId,
+        expectedGeneration: failed.generation,
+      }),
+    ).toThrow("worker ownership was reached");
   });
 });

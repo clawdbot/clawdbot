@@ -233,6 +233,37 @@ describe("worker turn launcher", () => {
     return reclaimed;
   }
 
+  function seedFailedAfterWorkerPlacement() {
+    seedActivePlacement();
+    const active = placements.get(SESSION_ID);
+    if (active?.state !== "active") {
+      throw new Error("expected active placement to fail after worker ownership");
+    }
+    const draining = placements.startDrain({
+      sessionId: SESSION_ID,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      expectedGeneration: active.generation,
+    });
+    const reconciling = placements.startReconcile({
+      sessionId: SESSION_ID,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      expectedGeneration: draining.generation,
+    });
+    const failed = placements.transition({
+      sessionId: SESSION_ID,
+      from: "reconciling",
+      to: "failed",
+      expectedGeneration: reconciling.generation,
+      patch: { recoveryError: "reconcile failed with remote work in flight" },
+    });
+    if (failed.state !== "failed") {
+      throw new Error("expected failed placement after worker ownership");
+    }
+    return failed;
+  }
+
   function attachedEnvironment(): WorkerTurnEnvironmentRecord {
     return {
       environmentId: ENVIRONMENT_ID,
@@ -370,6 +401,33 @@ describe("worker turn launcher", () => {
     const after = placements.get(SESSION_ID);
     expect(after?.state).toBe("local");
     expect(after?.recoveryError).toBeNull();
+  });
+
+  it("does not reclaim a post-worker failed placement that may hold unreconciled work", async () => {
+    const environments = unusedEnvironments();
+    const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+    const failed = seedFailedAfterWorkerPlacement();
+    expect(failed.activeOwnerEpoch).not.toBeNull();
+
+    // A failed placement reached after worker ownership may carry unreconciled
+    // remote workspace changes; it must recover via drain/reconcile, not a
+    // silent local reset, so the turn is rejected and the placement stays failed.
+    await expect(
+      provider.executeTurn(
+        {
+          sessionId: SESSION_ID,
+          sessionKey: SESSION_KEY,
+          agentId: "main",
+          runId: "run-postworker",
+        },
+        turn("run-postworker"),
+        async () => ({ payloads: [{ text: "must not run" }], meta: { durationMs: 1 } }),
+      ),
+    ).rejects.toThrow("Worker turn rejected in placement failed");
+    expect(placements.get(SESSION_ID)).toMatchObject({
+      state: "failed",
+      activeOwnerEpoch: failed.activeOwnerEpoch,
+    });
   });
 
   it("leaves no placement row for an auxiliary model run without a session key", async () => {

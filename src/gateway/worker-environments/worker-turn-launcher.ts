@@ -573,18 +573,21 @@ export function createWorkerSessionTurnPlacementProvider(
       return await executeLocalTurn({ claim, placements: options.placements, runLocal });
     },
     async executeTurn(claim, turn, runLocal) {
-      let current = options.placements.get(claim.sessionId);
-      if (current?.state === "failed") {
-        // `failed` is otherwise a terminal sink: turns reject it via
-        // requireActivePlacement, and sessions.dispatch/sessions.reclaim both
-        // refuse it, so one bootstrap or dispatch failure would brick the
-        // session until a manual state-store repair. Degrade it to local so the
-        // turn keeps working; cloud dispatch can be requested again from `local`.
+      const current = options.placements.get(claim.sessionId);
+      // Recover only pre-worker failures: a `failed` placement that never reached
+      // active worker ownership (activeOwnerEpoch is null) has no worker state to
+      // reconcile, so the next turn can safely reclaim it to local instead of
+      // rejecting every turn until a manual state-store repair. A `failed`
+      // placement reached from reconciling still holds worker ownership and may
+      // have unreconciled remote workspace changes; recovering those must go
+      // through the drain/reconcile path, not an unconditional local reset, so
+      // leave them to the existing recovery machinery instead of discarding work.
+      if (current?.state === "failed" && current.activeOwnerEpoch === null) {
         options.placements.reclaimFailedToLocal({
           sessionId: current.sessionId,
           expectedGeneration: current.generation,
         });
-        current = options.placements.get(claim.sessionId);
+        return await executeLocalTurn({ claim, placements: options.placements, runLocal });
       }
       if (
         !current &&
