@@ -87,6 +87,8 @@ describe("session connection hydration", () => {
       sessionKey: "agent:main:main",
       assistantAgentId: "main" as string | null,
       hello: null as GatewayHelloOk | null,
+      canvasPluginSurfaceUrl: null as string | null,
+      selfUser: null as { id: string; name?: string } | null,
     };
     let gatewayListener: ((next: typeof snapshot) => void) | undefined;
     const sessions = createSessionCapability({
@@ -104,14 +106,73 @@ describe("session connection hydration", () => {
     gatewayListener?.(snapshot);
     await waitForFast(() => expect(listCalls).toBe(1));
 
-    gatewayListener?.({ ...snapshot });
-    gatewayListener?.({ ...snapshot });
+    snapshot = { ...snapshot, canvasPluginSurfaceUrl: "https://gateway.example.test/canvas" };
+    gatewayListener?.(snapshot);
+    snapshot = { ...snapshot, selfUser: { id: "operator", name: "Operator" } };
+    gatewayListener?.(snapshot);
     resolveList(result);
     await waitForFast(() => expect(sessions.state.result).toBe(result));
     await Promise.resolve();
     await Promise.resolve();
 
     expect(listCalls).toBe(1);
+    sessions.dispose();
+  });
+
+  it("hydrates again after the current client reconnects", async () => {
+    let listCalls = 0;
+    const result: SessionsListResult = {
+      ts: 1,
+      path: "(multiple)",
+      count: 0,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions: [],
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.subscribe") {
+        return {};
+      }
+      if (method === "sessions.list") {
+        listCalls += 1;
+        return result;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    let snapshot = {
+      client,
+      phase: "connected" as "connected" | "reconnecting",
+      sessionKey: "agent:main:main",
+      assistantAgentId: "main" as string | null,
+      hello: null as GatewayHelloOk | null,
+      canvasPluginSurfaceUrl: null as string | null,
+      selfUser: null as { id: string; name?: string } | null,
+    };
+    let gatewayListener: ((next: typeof snapshot) => void) | undefined;
+    const sessions = createSessionCapability({
+      get snapshot() {
+        return snapshot;
+      },
+      subscribe(listener) {
+        gatewayListener = listener;
+        return () => undefined;
+      },
+      subscribeEvents: () => () => undefined,
+    });
+
+    gatewayListener?.(snapshot);
+    await waitForFast(() => expect(listCalls).toBe(1));
+    await waitForFast(() => expect(sessions.state.result).toBe(result));
+
+    snapshot = { ...snapshot, phase: "reconnecting" };
+    gatewayListener?.(snapshot);
+    expect(sessions.state.result).toBeNull();
+
+    snapshot = { ...snapshot, phase: "connected" };
+    gatewayListener?.(snapshot);
+    await waitForFast(() => expect(listCalls).toBe(2));
+    await waitForFast(() => expect(sessions.state.result).toBe(result));
+
     sessions.dispose();
   });
 });
