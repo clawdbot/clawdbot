@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   createEmptyChangedLanes,
   detectChangedLanes,
+  hasChangedExportSignature,
   isChangedLaneTestPath,
   isLiveDockerPackageScriptOnlyChange,
   isPackageScriptOnlyChange,
@@ -639,6 +640,57 @@ describe("scripts/changed-lanes", () => {
     expectLanes(result.lanes, { core: true, coreTests: true });
   });
 
+  it.each([
+    {
+      name: "added export",
+      before: "const value = 1;\n",
+      after: "export const value = 1;\n",
+      expected: true,
+    },
+    {
+      name: "removed export",
+      before: "export const value = 1;\n",
+      after: "const value = 1;\n",
+      expected: true,
+    },
+    {
+      name: "body-only edit",
+      before: "export function value() {\n  return 1;\n}\n",
+      after: "export function value() {\n  return 2;\n}\n",
+      expected: false,
+    },
+  ])("detects changed export signatures for a $name", ({ before, after, expected }) => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-export-signature-");
+    git(dir, ["init", "-q", "--initial-branch=main"]);
+    writeRepoFile(dir, "src/api.ts", before);
+    commitAll(dir, "initial");
+    writeRepoFile(dir, "src/api.ts", after);
+
+    expect(
+      hasChangedExportSignature({
+        base: "HEAD",
+        changedPaths: ["src/api.ts"],
+        cwd: dir,
+      }),
+    ).toBe(expected);
+  });
+
+  it("ignores changed export lines outside production scan trees", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-unrelated-export-signature-");
+    git(dir, ["init", "-q", "--initial-branch=main"]);
+    writeRepoFile(dir, "docs/example.ts", "const value = 1;\n");
+    commitAll(dir, "initial");
+    writeRepoFile(dir, "docs/example.ts", "export const value = 1;\n");
+
+    expect(
+      hasChangedExportSignature({
+        base: "HEAD",
+        changedPaths: ["docs/example.ts"],
+        cwd: dir,
+      }),
+    ).toBe(false);
+  });
+
   it("ignores the explicit path separator", () => {
     const result = detectChangedLanes(["--", "scripts/test-live-acp-bind-docker.sh"]);
 
@@ -1010,6 +1062,36 @@ describe("scripts/changed-lanes", () => {
       "--head",
       "HEAD",
     ]);
+  });
+
+  it("keeps a changed export signature on the heavy remote route", () => {
+    const result = detectChangedLanes(["docs/reference/test.md"]);
+
+    expect(changedCheckRequiresRemote(result, { exportSignatureChanged: true })).toBe(true);
+    expect(
+      shouldDelegateChangedCheckToCrabbox([], {}, { result, exportSignatureChanged: true }),
+    ).toBe(true);
+  });
+
+  it("adds the dead export scan only for changed export signatures", () => {
+    const result = detectChangedLanes(["src/config/config.ts"]);
+    const command = {
+      name: "dead export scan (skip with OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE=1)",
+      bin: "node",
+      args: ["scripts/check-deadcode-exports.mjs"],
+      env: expect.any(Object),
+    };
+
+    expect(
+      createChangedCheckPlan(result, { exportSignatureChanged: true }).commands,
+    ).toContainEqual(command);
+    expect(createChangedCheckPlan(result).commands).not.toContainEqual(command);
+    expect(
+      createChangedCheckPlan(result, {
+        exportSignatureChanged: true,
+        env: { OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE: "1" },
+      }).commands,
+    ).not.toContainEqual(command);
   });
 
   it("keeps small changed gates local only with a ready dependency install", () => {

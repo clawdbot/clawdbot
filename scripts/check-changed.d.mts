@@ -19,6 +19,7 @@ export type ChangedCheckPlanOptions = {
   head?: string;
   platform?: NodeJS.Platform;
   swiftlintAvailable?: boolean;
+  exportSignatureChanged?: boolean;
 };
 
 export type TargetedLintOptions = {
@@ -31,11 +32,19 @@ export type TargetedLintCommand = Required<
 
 export function createChangedCheckChildEnv(baseEnv?: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
 export function changedCheckLocalDependenciesReady(cwd?: string): boolean;
-export function changedCheckRequiresRemote(result?: ChangedLaneResult): boolean;
+export function changedCheckRequiresRemote(
+  result?: ChangedLaneResult,
+  options?: { exportSignatureChanged?: boolean },
+): boolean;
 export function shouldDelegateChangedCheckToCrabbox(
   argv?: string[],
   env?: NodeJS.ProcessEnv,
-  options?: { cwd?: string; result?: ChangedLaneResult; diffRefsReady?: boolean },
+  options?: {
+    cwd?: string;
+    result?: ChangedLaneResult;
+    diffRefsReady?: boolean;
+    exportSignatureChanged?: boolean;
+  },
 ): boolean;
 export function buildChangedCheckCrabboxArgs(argv?: string[], options?: { cwd?: string }): string[];
 export function delegationFailedBeforeRunning(output: string): boolean;

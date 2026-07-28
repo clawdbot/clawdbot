@@ -15,6 +15,7 @@ import { performance } from "node:perf_hooks";
 import {
   LIVE_DOCKER_AUTH_SHELL_TARGETS,
   detectChangedLanesForPaths,
+  hasChangedExportSignature,
   listChangedPathsFromGit,
   listStagedChangedPaths,
 } from "./changed-lanes.mjs";
@@ -151,9 +152,12 @@ export function changedCheckLocalDependenciesReady(cwd = process.cwd()) {
   );
 }
 
-export function changedCheckRequiresRemote(result) {
+export function changedCheckRequiresRemote(result, options = {}) {
   if (!result || result.paths.length === 0) {
     return false;
+  }
+  if (options.exportSignatureChanged) {
+    return true;
   }
   if (
     shouldRunSqliteSessionSchemaBaselineCheck(result.paths) ||
@@ -195,7 +199,7 @@ export function shouldDelegateChangedCheckToCrabbox(argv = [], env = process.env
     return true;
   }
   return (
-    changedCheckRequiresRemote(result) ||
+    changedCheckRequiresRemote(result, options) ||
     !changedCheckLocalDependenciesReady(options.cwd ?? process.cwd())
   );
 }
@@ -557,6 +561,17 @@ export function createChangedCheckPlan(result, options = {}) {
     );
   }
   add("package patch guard", ["deps:patches:check"]);
+  if (
+    options.exportSignatureChanged &&
+    !isTruthyEnvFlag(baseEnv.OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE)
+  ) {
+    addCommand(
+      "dead export scan (skip with OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE=1)",
+      "node",
+      ["scripts/check-deadcode-exports.mjs"],
+      baseEnv,
+    );
+  }
 
   if (result.docsOnly) {
     return {
@@ -1078,10 +1093,17 @@ if (isDirectRun()) {
         head: args.head,
         staged: args.staged,
       });
+      const exportSignatureChanged = hasChangedExportSignature({
+        base: args.staged ? "HEAD" : args.base,
+        head: args.head,
+        staged: args.staged,
+        changedPaths: paths,
+      });
       if (
         shouldDelegateChangedCheckToCrabbox(argv, process.env, {
           cwd: process.cwd(),
           result,
+          exportSignatureChanged,
           diffRefsReady: result.lanes.releaseMetadata
             ? args.staged ||
               changedCheckDiffRefsReady({
@@ -1103,12 +1125,14 @@ if (isDirectRun()) {
           ? await runChangedCheck(result, {
               ...args,
               explicitPaths: args.paths.length > 0,
+              exportSignatureChanged,
             })
           : delegated.exitCode;
       } else {
         process.exitCode = await runChangedCheck(result, {
           ...args,
           explicitPaths: args.paths.length > 0,
+          exportSignatureChanged,
         });
       }
     }

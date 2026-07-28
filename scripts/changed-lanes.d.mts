@@ -49,6 +49,13 @@ export function listChangedPathsFromGit(params: {
   mergeHeadFirstParent?: boolean;
 }): string[];
 export function listStagedChangedPaths(cwd?: string): string[];
+export function hasChangedExportSignature(params: {
+  base: string;
+  head?: string;
+  staged?: boolean;
+  changedPaths: string[];
+  cwd?: string;
+}): boolean;
 export function isLiveDockerPackageScriptOnlyChange(before: string, after: string): boolean;
 export function isPackageScriptOnlyChange(before: string, after: string): boolean;
 

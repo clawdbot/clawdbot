@@ -8,6 +8,8 @@ import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
 const GIT_OUTPUT_MAX_BUFFER = 64 * 1024 * 1024;
 const IMPLAUSIBLE_NO_MERGE_BASE_DIFF_PATHS = 200;
 const RAW_SYNC_CHANGED_LANES_ENV = "OPENCLAW_CHANGED_LANES_RAW_SYNC";
+const DEADCODE_EXPORT_PATH_RE = /^(?:src|extensions|ui|packages)\//u;
+const CHANGED_EXPORT_LINE_RE = /^[+-](?![+-]).*\bexport\b/mu;
 
 const SCRIPTS_TYPECHECK_PATH_RE =
   /^(?:scripts\/.*\.(?:[cm]?ts|[cm]?tsx)|tsconfig\.scripts\.json)$/u;
@@ -373,6 +375,39 @@ export function listStagedChangedPaths(cwd = process.cwd()) {
     maxBuffer: GIT_OUTPUT_MAX_BUFFER,
   });
   return output.split("\n").map(normalizeChangedPath).filter(Boolean);
+}
+
+/** Returns whether the selected production diff adds or removes an export token. */
+export function hasChangedExportSignature(params) {
+  const paths = params.changedPaths
+    .map(normalizeChangedPath)
+    .filter((changedPath) => DEADCODE_EXPORT_PATH_RE.test(changedPath));
+  if (paths.length === 0) {
+    return false;
+  }
+  const cwd = params.cwd ?? process.cwd();
+  const base = params.staged
+    ? params.base
+    : resolveMergeHeadDiffBase({
+        base: params.base,
+        head: params.head ?? "HEAD",
+        cwd,
+        maxBuffer: GIT_OUTPUT_MAX_BUFFER,
+      });
+  if (!base) {
+    return false;
+  }
+  const runDiff = (args) =>
+    execFileSync("git", ["diff", "--no-ext-diff", "-U0", ...args, "--", ...paths], {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf8",
+      maxBuffer: GIT_OUTPUT_MAX_BUFFER,
+    });
+  const outputs = params.staged
+    ? [runDiff(["--cached", base])]
+    : [runDiff([base, params.head ?? "HEAD"]), runDiff(["HEAD"])];
+  return outputs.some((output) => CHANGED_EXPORT_LINE_RE.test(output));
 }
 
 /**
