@@ -1054,6 +1054,55 @@ describe("qa mock openai server", () => {
     expect(body).not.toContain("older-progress-target.txt");
   });
 
+  it.each([
+    {
+      name: "preview",
+      prompt:
+        "@openclaw:matrix-qa.test Tool progress QA check: call the read tool exactly once on `QA_KICKOFF_TASK.md` before answering. After that read completes, reply exactly `CURRENT_PREVIEW_OK`.",
+      toolName: "read",
+      expectedArgs: { path: "QA_KICKOFF_TASK.md" },
+    },
+    {
+      name: "command preview",
+      prompt:
+        "@openclaw:matrix-qa.test Tool progress QA check: call the exec tool exactly once with this exact command before answering: `printf 'matrix-command-progress-start\\n'; sleep 2`. After that exec command completes or fails, reply exactly `CURRENT_COMMAND_OK`.",
+      toolName: "exec",
+      expectedArgs: { command: "printf 'matrix-command-progress-start\\n'; sleep 2" },
+    },
+    {
+      name: "error",
+      prompt:
+        "@openclaw:matrix-qa.test Tool progress error QA check: read `missing-matrix-tool-progress-target.txt` before answering. After the read fails, reply exactly `CURRENT_ERROR_OK`.",
+      toolName: "read",
+      expectedArgs: { path: "missing-matrix-tool-progress-target.txt" },
+    },
+    {
+      name: "mention safety",
+      prompt:
+        "@openclaw:matrix-qa.test Tool progress QA check: read the missing workspace file `matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt` before answering. After that read fails, reply exactly `CURRENT_MENTION_OK`.",
+      toolName: "read",
+      expectedArgs: {
+        path: "matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt",
+      },
+    },
+  ])("routes current Matrix $name after stale streaming history", async (fixture) => {
+    const server = await startMockServer();
+    const payload = await expectResponsesJson(server, {
+      stream: false,
+      input: [
+        makeUserInput(
+          "@openclaw:matrix-qa.test Quiet streaming QA check: reply exactly `STALE_STREAMING_OK`.",
+        ),
+        makeUserInput(fixture.prompt),
+        makeUserInput("Continue with the current Matrix QA scenario."),
+      ],
+    });
+
+    const toolCall = outputToolCall(payload, fixture.toolName);
+    expect(outputToolArgsFromItem(toolCall)).toEqual(fixture.expectedArgs);
+    expect(JSON.stringify(payload)).not.toContain("STALE_STREAMING_OK");
+  });
+
   it("prefers path-like refs over generic quoted keys in prompts", async () => {
     const server = await startMockServer();
 

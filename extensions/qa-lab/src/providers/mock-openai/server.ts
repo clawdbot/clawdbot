@@ -179,6 +179,9 @@ function extractPlannedToolDebugFields(events: StreamEvent[]) {
   };
 }
 
+const QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE =
+  /(?:partial|quiet) streaming qa check|final-only marker streaming qa check|block streaming qa check|tool progress(?: error)? qa check/i;
+
 async function buildResponsesPayload(
   body: Record<string, unknown>,
   scenarioState: MockScenarioState,
@@ -200,7 +203,14 @@ async function buildResponsesPayload(
   const toolJson = parseToolOutputJson(scenarioToolOutput);
   const promptExactReplyDirective = extractExactReplyDirective(prompt);
   const promptExactMarkerDirective = extractExactMarkerDirective(prompt);
-  const allUserText = extractAllUserTexts(input).join("\n");
+  const allUserTexts = extractAllUserTexts(input);
+  const allUserText = allUserTexts.join("\n");
+  const scenarioFamilyPrompt =
+    extractLastMatchingUserText(allUserTexts, QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE) ||
+    prompt;
+  const scenarioFamilyReplyDirective =
+    extractExactReplyDirective(scenarioFamilyPrompt) ??
+    extractExactMarkerDirective(scenarioFamilyPrompt);
   const userExactReplyDirective =
     promptExactReplyDirective ?? extractExactReplyDirective(allUserText);
   const userExactMarkerDirective =
@@ -219,7 +229,7 @@ async function buildResponsesPayload(
     ? extractWhatsAppStickerMarkerDirective(allInputText)
     : "";
   const blockStreamingPrompt =
-    extractLastMatchingUserText(extractAllUserTexts(input), QA_BLOCK_STREAMING_PROMPT_RE) ||
+    extractLastMatchingUserText(allUserTexts, QA_BLOCK_STREAMING_PROMPT_RE) ||
     prompt ||
     allInputText;
   const blockStreamingMarkers =
@@ -633,28 +643,31 @@ async function buildResponsesPayload(
       },
     ]);
   }
-  if (QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(allInputText) && exactReplyDirective) {
+  if (
+    QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(scenarioFamilyPrompt) &&
+    scenarioFamilyReplyDirective
+  ) {
     return buildAssistantEvents([
       {
         id: "msg_mock_final_only_marker_stream",
         phase: "final_answer",
         streamDeltas: splitMockStreamingText("QA streaming preview in progress"),
-        text: exactReplyDirective,
+        text: scenarioFamilyReplyDirective,
       },
     ]);
   }
-  if (QA_STREAMING_PROMPT_RE.test(allInputText) && exactReplyDirective) {
+  if (QA_STREAMING_PROMPT_RE.test(scenarioFamilyPrompt) && scenarioFamilyReplyDirective) {
     return buildAssistantEvents([
       {
         id: "msg_mock_quiet_stream",
         phase: "final_answer",
-        streamDeltas: splitMockStreamingText(exactReplyDirective),
-        text: exactReplyDirective,
+        streamDeltas: splitMockStreamingText(scenarioFamilyReplyDirective),
+        text: scenarioFamilyReplyDirective,
       },
     ]);
   }
-  const toolProgressReplyDirective = exactReplyDirective ?? exactMarkerDirective;
-  if (QA_TOOL_PROGRESS_ERROR_PROMPT_RE.test(allInputText) && toolProgressReplyDirective) {
+  const toolProgressReplyDirective = scenarioFamilyReplyDirective;
+  if (QA_TOOL_PROGRESS_ERROR_PROMPT_RE.test(scenarioFamilyPrompt) && toolProgressReplyDirective) {
     if (!toolOutput) {
       return buildToolProgressReadEvents(QA_TOOL_PROGRESS_ERROR_PROMPT_RE);
     }
@@ -664,7 +677,7 @@ async function buildResponsesPayload(
         : "BUG-TOOL-DID-NOT-FAIL",
     );
   }
-  if (QA_TOOL_PROGRESS_PROMPT_RE.test(allInputText) && toolProgressReplyDirective) {
+  if (QA_TOOL_PROGRESS_PROMPT_RE.test(scenarioFamilyPrompt) && toolProgressReplyDirective) {
     if (!toolOutput) {
       return (
         buildToolProgressExecEvents(QA_TOOL_PROGRESS_PROMPT_RE) ??
@@ -673,7 +686,7 @@ async function buildResponsesPayload(
     }
     return buildAssistantEvents(toolProgressReplyDirective);
   }
-  if (QA_BLOCK_STREAMING_PROMPT_RE.test(allInputText) && blockStreamingMarkers) {
+  if (QA_BLOCK_STREAMING_PROMPT_RE.test(scenarioFamilyPrompt) && blockStreamingMarkers) {
     if (!toolOutput) {
       return buildAssistantThenToolCallEvents(
         {
