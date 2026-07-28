@@ -53,19 +53,27 @@ export function revalidatePendingDelegateForSpawn(
   delegate: Pick<PendingContinuationDelegate, "flowId" | "expectedRevision" | "task">,
   controller: "pending" | "post-compaction",
 ): DelegateSpawnFenceResult {
-  if (!delegate.flowId || delegate.expectedRevision === undefined) {
+  const { flowId, expectedRevision } = delegate;
+  if ((flowId === undefined) !== (expectedRevision === undefined)) {
+    return {
+      allowed: false,
+      reason: "stale",
+      summary: "Continuation delegate source metadata is incomplete before spawn.",
+    };
+  }
+  if (flowId === undefined || expectedRevision === undefined) {
     return { allowed: true };
   }
 
-  let current = delegateFlowRecords.get(delegate.flowId);
+  let current = delegateFlowRecords.get(flowId);
   const isExpectedController =
     controller === "pending" ? isPendingDelegateFlow : isPostCompactionDelegateFlow;
   const isExpectedClaimRevision =
-    current?.revision === delegate.expectedRevision && current.status === "running";
+    current?.revision === expectedRevision && current?.status === "running";
   const isExpectedDurableHandoffRevision =
     controller === "post-compaction" &&
-    current?.revision === delegate.expectedRevision + 1 &&
-    current.status === "succeeded";
+    current?.revision === expectedRevision + 1 &&
+    current?.status === "succeeded";
   if (
     current &&
     isExpectedController(current) &&

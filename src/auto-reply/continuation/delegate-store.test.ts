@@ -1076,6 +1076,22 @@ describe("post-compaction delegate staging", () => {
     expect(JSON.stringify(flow.stateJson)).not.toContain(secret);
   });
 
+  it("rejects one-sided source metadata at the pre-spawn fence", () => {
+    for (const delegate of [
+      { task: "missing expected revision", flowId: "source-flow" },
+      { task: "missing source flow", expectedRevision: 7 },
+    ]) {
+      expect(revalidatePendingDelegateForSpawn(delegate, "post-compaction")).toEqual({
+        allowed: false,
+        reason: "stale",
+        summary: "Continuation delegate source metadata is incomplete before spawn.",
+      });
+    }
+    expect(
+      revalidatePendingDelegateForSpawn({ task: "unmanaged delegate" }, "post-compaction"),
+    ).toEqual({ allowed: true });
+  });
+
   it("accepts the single source revision committed by durable post-compaction handoff", () => {
     const sessionKey = "post-compaction-durable-handoff-revision";
     stagePostCompactionTaskFlowDelegate(sessionKey, {

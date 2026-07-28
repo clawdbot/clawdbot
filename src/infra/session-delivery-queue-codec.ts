@@ -419,6 +419,13 @@ const QueuedPostCompactionDelegateSchema = z
   })
   .strict()
   .superRefine((entry, ctx) => {
+    if ((entry.sourceFlowId === undefined) !== (entry.sourceExpectedRevision === undefined)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: entry.sourceFlowId === undefined ? ["sourceFlowId"] : ["sourceExpectedRevision"],
+        message: "source flow id and expected revision must be provided together",
+      });
+    }
     if (
       entry.fanoutMode &&
       (entry.targetSessionKey || (entry.targetSessionKeys?.length ?? 0) > 0)

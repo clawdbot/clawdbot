@@ -471,6 +471,32 @@ describe("session-delivery queue storage", () => {
     });
   });
 
+  it("rejects one-sided post-compaction source metadata before persistence", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const mismatchedMetadata = [
+        { sourceFlowId: "flow-without-revision" },
+        { sourceExpectedRevision: 7 },
+      ];
+
+      for (const [sequence, metadata] of mismatchedMetadata.entries()) {
+        await expect(
+          enqueueSessionDelivery(
+            {
+              kind: "postCompactionDelegate",
+              sessionKey: "agent:main:main",
+              task: "reject incomplete source metadata",
+              createdAt: 900 + sequence,
+              ...metadata,
+            },
+            tempDir,
+          ),
+        ).rejects.toThrow("invalid postCompactionDelegate delivery payload: invalid shape");
+      }
+
+      await expect(loadPendingSessionDeliveries(tempDir)).resolves.toEqual([]);
+    });
+  });
+
   it("dead-letters noncanonical recovered post-compaction mount hints and scrubs them", async () => {
     await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const invalidMountPaths = [

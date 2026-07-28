@@ -126,6 +126,51 @@ describe("session-delivery queue recovery", () => {
     });
   });
 
+  it("dead-letters recovered post-compaction rows with one-sided source metadata", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const deliver = vi.fn(async () => undefined);
+      const missingFields = ["sourceExpectedRevision", "sourceFlowId"] as const;
+
+      for (const [sequence, missingField] of missingFields.entries()) {
+        const id = await enqueueSessionDelivery(
+          buildPostCompactionDelegateDeliveryPayload({
+            sessionKey: "agent:main:main",
+            delegate: {
+              task: "do not recover incomplete source metadata",
+              createdAt: 200 + sequence,
+              flowId: `source-flow-${sequence}`,
+              expectedRevision: 7,
+            },
+            sequence,
+          }),
+          tempDir,
+        );
+        const row = readSessionQueueRow(tempDir, id);
+        const corrupted = JSON.parse(row?.entry_json ?? "{}") as Record<string, unknown>;
+        delete corrupted[missingField];
+        const { db } = openOpenClawStateDatabase({
+          env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
+        });
+        db.prepare(
+          `UPDATE delivery_queue_entries
+              SET entry_json = ?
+            WHERE queue_name = 'session' AND id = ?`,
+        ).run(JSON.stringify(corrupted), id);
+
+        await recoverPendingSessionDeliveries({
+          deliver,
+          stateDir: tempDir,
+          log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        });
+
+        expect(readSessionQueueRow(tempDir, id)?.status, missingField).toBe("failed");
+      }
+
+      expect(deliver).not.toHaveBeenCalled();
+      await expect(loadPendingSessionDeliveries(tempDir)).resolves.toEqual([]);
+    });
+  });
+
   it("dead-letters invalid recovered mount hints without delivering or retaining snapshots", async () => {
     await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const invalidMountPaths = [
