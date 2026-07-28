@@ -44,7 +44,7 @@ export const MCP_SECTION_KEYS = ["mcp"] as const;
 // the engine choice and dreaming's global cron are not agent defaults.
 export const MEMORY_SECTION_KEYS = ["memory"] as const;
 
-export const AI_AGENTS_SECTION_KEYS = ["agents", "models", "skills", "tools", "session"] as const;
+export const AI_AGENTS_SECTION_KEYS = ["agents", "skills", "tools", "session"] as const;
 
 export const SCOPED_CONFIG_SECTION_KEYS = new Set<string>([
   ...COMMUNICATION_SECTION_KEYS,

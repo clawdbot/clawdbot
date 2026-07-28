@@ -1440,6 +1440,7 @@ Slack native progress task cards are opt-in for progress mode. Set `channels.sla
 - A reply thread must be available for native text streaming and Slack assistant thread status to appear. Thread selection still follows `replyToMode`.
 - Channel, group-chat, and top-level DM roots can still use the normal draft preview when native streaming is unavailable or no reply thread exists.
 - Top-level Slack DMs stay off-thread by default, so they do not show Slack's thread-style native stream/status preview; OpenClaw posts and edits a draft preview in the DM instead.
+- Custom outbound username/icon settings keep portable previews enabled. OpenClaw keeps the preview app-authored so partial/block previews can be removed before a separately customized final; progress mode may instead collapse the app-authored draft into a receipt. Slack does not allow impersonated messages to be deleted.
 - Media and non-text payloads fall back to normal delivery.
 - Media/error finals cancel pending preview edits; eligible text/block finals flush only when they can edit the preview in place.
 - If streaming fails mid-reply, OpenClaw falls back to normal delivery for remaining payloads.
@@ -1691,6 +1692,13 @@ to pass raw blocks through `channelData.slack.blocks`; OpenClaw derives fallback
 text from valid raw `data_table` cells, while malformed custom blocks may
 degrade to their caption or general Block Kit fallback. Portable agent, CLI,
 and plugin output should use `presentation`.
+
+Slack clients can also deliver pasted spreadsheet content as a legacy `table`
+block in the message's top-level blocks or attachments. OpenClaw renders those
+inbound cells as delimiter-safe TSV for live agent input, thread context, and
+Slack `read` actions. Only native table blocks are admitted from ordinary
+attachments; link-unfurl and other non-forwarded attachment text remains
+excluded.
 
 ## Plugin-owned modal submissions
 

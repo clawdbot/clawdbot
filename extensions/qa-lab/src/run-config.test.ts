@@ -30,9 +30,30 @@ import {
 
 const DEFAULT_LIVE_FRONTIER_MODEL = defaultQaProviderModelForMode("live-frontier");
 const profiles: QaScorecardTaxonomyReport["profiles"] = [
-  { id: "smoke-ci", evidenceMode: "slim", channelDriver: "crabline", categoryIds: [] },
-  { id: "release", evidenceMode: "full", channelDriver: "live", categoryIds: [] },
-  { id: "all", evidenceMode: "full", channelDriver: "live", categoryIds: [] },
+  {
+    id: "smoke-ci",
+    evidenceMode: "slim",
+    channelDriver: "crabline",
+    categoryIds: [],
+    coverageIds: [],
+    scenarioRefs: [],
+  },
+  {
+    id: "release",
+    evidenceMode: "full",
+    channelDriver: "live",
+    categoryIds: [],
+    coverageIds: [],
+    scenarioRefs: [],
+  },
+  {
+    id: "all",
+    evidenceMode: "full",
+    channelDriver: "live",
+    categoryIds: [],
+    coverageIds: [],
+    scenarioRefs: [],
+  },
 ];
 
 const scenarios = [

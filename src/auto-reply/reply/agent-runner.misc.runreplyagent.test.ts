@@ -3313,6 +3313,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     strandedReplyRetry?: boolean;
     sendPolicyDenied?: boolean;
     isHeartbeat?: boolean;
+    onObservedReplyDelivery?: () => Promise<void> | void;
     replyOperation?: ReturnType<typeof createReplyOperation>;
     turnAdoptionLifecycle?: FollowupRun["turnAdoptionLifecycle"];
   }) {
@@ -3427,7 +3428,16 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       resolvedBlockStreamingBreak: "message_end",
       shouldInjectGroupIntro: false,
       typingMode: "instant",
-      ...(params.isHeartbeat ? { opts: { isHeartbeat: true } } : {}),
+      ...(params.isHeartbeat || params.onObservedReplyDelivery
+        ? {
+            opts: {
+              ...(params.isHeartbeat ? { isHeartbeat: true } : {}),
+              ...(params.onObservedReplyDelivery
+                ? { onObservedReplyDelivery: params.onObservedReplyDelivery }
+                : {}),
+            },
+          }
+        : {}),
       ...(params.replyOperation ? { replyOperation: params.replyOperation } : {}),
     });
     return { storePath, tmp, sessionKey, result, finalAssistantText };
@@ -3437,6 +3447,17 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     await runPrivateFinalCase({});
     expect(warnPrivateFinalSpy).toHaveBeenCalledTimes(1);
     expect(warnPrivateFinalSpy.mock.calls[0]?.[0]).toMatchObject({ sessionKey: "stranded" });
+  });
+
+  it("attests observed delivery for message-tool source replies outside message_tool_only", async () => {
+    // A source-routed message-tool answer plus NO_REPLY must not draw the
+    // no-visible-reply fallback into the source conversation (#114799).
+    const onObservedReplyDelivery = vi.fn(async () => {});
+    await runPrivateFinalCase({
+      didDeliverSourceReplyViaMessageTool: true,
+      onObservedReplyDelivery,
+    });
+    expect(onObservedReplyDelivery).toHaveBeenCalledTimes(1);
   });
 
   it("enqueues a one-shot recovery retry by default for substantive stranded finals", async () => {

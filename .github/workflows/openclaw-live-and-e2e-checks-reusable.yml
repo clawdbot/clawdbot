@@ -2000,7 +2000,11 @@ jobs:
         if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_id != ''
         env:
           CI: "true"
-        run: pnpm --dir .release-harness install --frozen-lockfile --prefer-offline --ignore-scripts
+        # Corepack resolves packageManager from the process cwd before pnpm can
+        # process --dir. Keep this in the trusted harness so a frozen candidate
+        # pin cannot select a different pnpm binary for its harness install.
+        working-directory: .release-harness
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Validate OpenClaw package artifact identity
         id: input_package_artifact

@@ -84,7 +84,6 @@ import {
   type QaRuntimePairLane,
 } from "./scenario-catalog.js";
 import { scenarioMatchesQaProviderLane } from "./scenario-lane.js";
-import { resolveQaScenarioPackScenarioIds } from "./scenario-packs.js";
 import { attachQaProfileScorecardEvidenceToFile } from "./scorecard-evidence.js";
 import {
   qaScorecardChannelDriverSchema,
@@ -150,7 +149,6 @@ export type QaSuiteCommandOptions = QaScenarioRunCommandOptions & {
   thinking?: string;
   cliAuthMode?: string;
   parityPack?: string;
-  pack?: string;
   scenarioIds?: string[];
   enabledPluginIds?: string[];
   image?: string;
@@ -812,12 +810,9 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   const primaryModel = normalizeQaOptionalModelRef(opts.primaryModel);
   const alternateModel = normalizeQaOptionalModelRef(opts.alternateModel);
   const channelDriver = normalizeQaSuiteChannelDriver(opts.channelDriver);
-  const explicitScenarioIds = resolveQaScenarioPackScenarioIds({
-    pack: opts.pack,
-    scenarioIds: resolveQaParityPackScenarioIds({
-      parityPack: opts.parityPack,
-      scenarioIds: opts.scenarioIds,
-    }),
+  const explicitScenarioIds = resolveQaParityPackScenarioIds({
+    parityPack: opts.parityPack,
+    scenarioIds: opts.scenarioIds,
   });
   const runtimePairLanes = parseQaRuntimePairLaneFilters(opts.runtimePairLane);
   const runtimePairLaneSelection = resolveQaRuntimePairLaneScenarioIds({

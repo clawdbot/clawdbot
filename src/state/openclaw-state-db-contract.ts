@@ -11,6 +11,9 @@ export const LAZY_ADDITIVE_STATE_TABLES = [
   "agentic_os_runtime_snapshots",
   "model_catalog_remote",
   "sidebar_sections",
+  "skill_workshop_proposal_origin_runs",
+  "skill_workshop_proposal_rollbacks",
+  "skill_workshop_proposals",
 ] as const;
 /** Maximum time one synchronous SQLite call may wait for a lock. */
 export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 5_000;

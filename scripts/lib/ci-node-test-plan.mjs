@@ -64,7 +64,9 @@ const UNIT_FAST_NODE_TEST_STRIPES = 2;
 const COMPACT_GROUP_SECONDS_HINTS = new Map([
   ["agentic-agents-core-auth", 27],
   ["agentic-agents-core-isolated", 9],
-  ["agentic-agents-core-models", 51],
+  // Model catalog and full UI both cold-load broad graphs. Keep their combined
+  // hint above the compact-bin cap so model visibility cannot starve for 120s.
+  ["agentic-agents-core-models", 70],
   // Reliability's runtime-free provider check dropped its wall time from
   // ~245s to ~5s; the narrow anthropic cli-api artifact removes the same
   // full-barrel evaluation for the remaining facade importers (spawn).
@@ -1190,7 +1192,12 @@ const SPLIT_NODE_SHARDS = new Map([
       ...createAgentCoreSplitShards(),
       {
         shardName: "agentic-agents-embedded",
-        configs: ["test/vitest/vitest.agents-embedded-agent.config.ts"],
+        configs: [
+          "test/vitest/vitest.agents-embedded-agent.config.ts",
+          "test/vitest/vitest.agents-embedded-agent-incomplete-turn.config.ts",
+          "test/vitest/vitest.agents-embedded-agent-overflow-compaction.config.ts",
+          "test/vitest/vitest.agents-embedded-agent-run.config.ts",
+        ],
         env: AGENTS_EMBEDDED_AGENT_ENV,
         requiresDist: false,
       },

@@ -244,6 +244,9 @@ importers:
       '@lit/context':
         specifier: 1.1.6
         version: 1.1.6
+      '@lit/task':
+        specifier: 1.0.3
+        version: 1.0.3
       '@mdx-js/mdx':
         specifier: 3.1.1
         version: 3.1.1(supports-color@10.2.2)
@@ -307,6 +310,9 @@ importers:
       lit-analyzer:
         specifier: 2.0.3
         version: 2.0.3
+      markdown-it:
+        specifier: 14.3.0
+        version: 14.3.0
       oxfmt:
         specifier: 0.60.0
         version: 0.60.0
@@ -2336,6 +2342,9 @@ importers:
       '@lit/context':
         specifier: 1.1.6
         version: 1.1.6
+      '@lit/task':
+        specifier: 1.0.3
+        version: 1.0.3
       '@modelcontextprotocol/ext-apps':
         specifier: 1.7.4
         version: 1.7.4(@modelcontextprotocol/sdk@1.30.0(supports-color@10.2.2)(zod@4.4.3))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(zod@4.4.3)
@@ -3607,6 +3616,9 @@ packages:
 
   '@lit/reactive-element@2.1.2':
     resolution: {integrity: sha512-pbCDiVMnne1lYUIaYNN5wrwQXDtHaYtg7YEFPeW+hws6U47WeFvISGUWekPGKWOP1ygrs0ef0o1VJMk1exos5A==}
+
+  '@lit/task@1.0.3':
+    resolution: {integrity: sha512-1gJGJl8WON+2j0y9xfcD+XsS1rvcy3XDgsIhcdUW++yTR8ESjZW6o7dn8M8a4SZM8NnJe6ynS2cKWwsbfLOurg==}
 
   '@lydell/node-pty-darwin-arm64@1.2.0-beta.12':
     resolution: {integrity: sha512-tqaifcY9Cr41SblO1+FLzh8oxxtkNhuW9Dhl22lKme9BreYvKvxEZcdPIXTuqkJc5tagOEC4QHShKmJjLyLXLQ==}
@@ -10557,6 +10569,10 @@ snapshots:
   '@lit/reactive-element@2.1.2':
     dependencies:
       '@lit-labs/ssr-dom-shim': 1.6.0
+
+  '@lit/task@1.0.3':
+    dependencies:
+      '@lit/reactive-element': 2.1.2
 
   '@lydell/node-pty-darwin-arm64@1.2.0-beta.12':
     optional: true

@@ -204,6 +204,7 @@ export function createResponsesTerminalController(params: {
       ResponseStreamEvent,
       { type: "response.completed" | "response.incomplete" }
     >["response"],
+    terminalEventType: "response.completed" | "response.incomplete",
   ) => {
     params.markFinalized();
     backfillReasoning(response.output ?? []);
@@ -226,6 +227,7 @@ export function createResponsesTerminalController(params: {
     }
     const terminal = resolveResponsesTerminalStopReason({
       status: response.status,
+      terminalEventType,
       incompleteReason: response.incomplete_details?.reason,
       hasToolCall: blocks.some((block) => block.type === "toolCall"),
     });

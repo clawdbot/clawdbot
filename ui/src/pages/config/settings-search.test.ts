@@ -307,8 +307,12 @@ describe("findSettingsSearchBlocks", () => {
 
     expect(matches).toEqual([
       expect.objectContaining({
-        routeId: "config",
-        hash: "#settings-general-model",
+        routeId: "model-providers",
+        hash: "#settings-model-behavior",
+      }),
+      expect.objectContaining({
+        routeId: "appearance",
+        hash: "#settings-appearance-sidebar",
       }),
     ]);
   });
@@ -328,6 +332,35 @@ describe("findSettingsSearchBlocks", () => {
         hash: "#settings-appearance-chat",
       }),
     ]);
+  });
+
+  it.each([
+    ["sidebar", "Sidebar", "#settings-appearance-sidebar"],
+    ["live agent activity", "Sidebar", "#settings-appearance-sidebar"],
+    ["session observer", "Sidebar", "#settings-appearance-sidebar"],
+    ["small model", "Sidebar", "#settings-appearance-sidebar"],
+    ["camera", "Chat", "#settings-appearance-chat"],
+    ["message width", "Chat", "#settings-appearance-chat"],
+    ["centered transcript", "Chat", "#settings-appearance-chat"],
+    ["hold microphone", "Chat", "#settings-appearance-chat"],
+    ["dictate", "Chat", "#settings-appearance-chat"],
+    ["dictation", "Chat", "#settings-appearance-chat"],
+  ])("finds the appearance control for %s", (query, label, hash) => {
+    const matches = findSettingsSearchBlocks({
+      query,
+      schema: null,
+      value: null,
+      uiHints: {},
+    });
+
+    expect(matches).toContainEqual(
+      expect.objectContaining({
+        routeId: "appearance",
+        label,
+        search: "?section=__appearance__",
+        hash,
+      }),
+    );
   });
 
   it("routes workspace queries to the sessions-hub pages", () => {

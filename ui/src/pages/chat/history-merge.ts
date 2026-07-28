@@ -19,6 +19,8 @@ type IndexedHistoryMessage = {
 
 type HistoryMessageIndex = Map<string, IndexedHistoryMessage[]>;
 
+const liveAuthoritativeUserMessages = new WeakSet<object>();
+
 function readTranscriptMetadata(message: unknown): Record<string, unknown> | null {
   if (!message || typeof message !== "object" || Array.isArray(message)) {
     return null;
@@ -222,6 +224,64 @@ function findTranscriptHistoryAnchor(
   // Display text is not transcript identity. A copied legacy row is safe to
   // anchor only when its visible signature has exactly one history candidate.
   return sameInstance ?? (entries.length === 1 ? (entries[0] ?? null) : null);
+}
+
+export function rememberLiveAuthoritativeUserMessage(message: unknown): void {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return;
+  }
+  const identity = readTranscriptMessageIdentity(message);
+  if (identity.role === "user" && (identity.id !== null || identity.sequence !== null)) {
+    liveAuthoritativeUserMessages.add(message);
+  }
+}
+
+export function preserveLiveAuthoritativeUserMessages(
+  historyMessages: unknown[],
+  currentMessages: unknown[],
+  shouldHideMessage: (message: unknown) => boolean = () => false,
+): unknown[] {
+  let preservedMessages = historyMessages;
+  for (let currentIndex = 0; currentIndex < currentMessages.length; currentIndex += 1) {
+    const message = currentMessages[currentIndex];
+    if (
+      !message ||
+      typeof message !== "object" ||
+      !liveAuthoritativeUserMessages.has(message) ||
+      shouldHideMessage(message)
+    ) {
+      continue;
+    }
+    const historyIndex = createHistoryMessageIndex(preservedMessages, shouldHideMessage);
+    if (findTranscriptHistoryAnchor(historyIndex, message)) {
+      continue;
+    }
+    const sequence = readTranscriptSequence(message);
+    let insertionIndex =
+      sequence === null
+        ? -1
+        : preservedMessages.findIndex((candidate) => {
+            const candidateSequence = readTranscriptSequence(candidate);
+            return candidateSequence !== null && candidateSequence > sequence;
+          });
+    if (insertionIndex < 0 && sequence === null) {
+      for (const nextMessage of currentMessages.slice(currentIndex + 1)) {
+        const anchor = findTranscriptHistoryAnchor(historyIndex, nextMessage);
+        if (anchor) {
+          insertionIndex = anchor.index;
+          break;
+        }
+      }
+    }
+    // Only a gateway-projected, identity-backed prompt may outlive a stale
+    // snapshot; transcript sequence or the next known row keeps its reply after it.
+    preservedMessages = preservedMessages.toSpliced(
+      insertionIndex < 0 ? preservedMessages.length : insertionIndex,
+      0,
+      message,
+    );
+  }
+  return preservedMessages;
 }
 
 function findOptimisticHistoryMatch(

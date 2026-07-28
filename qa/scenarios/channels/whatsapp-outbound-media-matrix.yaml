@@ -8,7 +8,6 @@ scenario:
       - whatsapp.outbound-document
       - whatsapp.outbound-audio
   execution:
-    profiles: { "whatsapp:mock-default": 18 }
     kind: flow
     channel: whatsapp
     timeoutMs: 120000

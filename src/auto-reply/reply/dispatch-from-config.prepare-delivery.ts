@@ -30,7 +30,6 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     acpDispatchSessionKey,
     cfg,
     ctx,
-    dispatcher,
     getDispatchAbortSignal,
     groupId,
     isGroup,
@@ -39,6 +38,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     replyRoute,
     routeReplyThreadId,
     sessionStoreEntry,
+    turnLedger,
     workspaceDir,
   } = state;
   // Check if we should route replies to originating channel instead of dispatcher.
@@ -157,7 +157,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
       (ctx.CommandSource === "native"
         ? (resolveCommandTurnTargetSessionKey(ctx) ?? ctx.SessionKey)
         : ctx.SessionKey);
-    return await routeReplyRuntime.routeReply({
+    const result = await routeReplyRuntime.routeReply({
       payload,
       channel: routeReplyChannel,
       to: routeReplyTo,
@@ -181,6 +181,10 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
       runId: params.replyOptions?.runId,
       responsePrefixContext: options?.responsePrefixContext,
     });
+    // Routed sends settle here: the transport result is the settlement. This is
+    // the single routed choke point, so every routed lane feeds the turn ledger.
+    turnLedger.recordRoutedDelivery(payload, isRoutedReplyDelivered(result));
+    return result;
   };
 
   const isRoutedReplyDelivered = (result: { ok: boolean; suppressed?: boolean }) =>
@@ -260,8 +264,8 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     }
     markInboundDedupeReplayUnsafe();
     return mode === "additive"
-      ? dispatcher.sendToolResult(bindingPayload)
-      : dispatcher.sendFinalReply(bindingPayload);
+      ? turnLedger.sendQueued("tool", bindingPayload).queued
+      : turnLedger.sendQueued("final", bindingPayload).queued;
   };
   const nextState = extendPreparedDispatchState(
     state,

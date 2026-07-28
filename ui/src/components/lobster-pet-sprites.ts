@@ -250,7 +250,104 @@ export const PATTERNED_PALETTES: ReadonlySet<LobsterPetPaletteId> = new Set([
   "clawtron",
   "selene",
   "pixel",
+  "banana",
+  "bee",
+  "rubberduck",
+  "sourdough",
+  "zombie",
+  "plush",
+  "disco",
+  "invisible",
+  "goldenretro",
 ]);
+
+const BANANA_MARKS = svg`
+  <g fill="#8a6430">
+    <rect x="56" y="8" width="8" height="6" rx="2.5" />
+    <ellipse cx="60" cy="91" rx="6" ry="3.5" />
+    <circle cx="37" cy="48" r="2.5" />
+    <circle cx="79" cy="55" r="2" />
+    <circle cx="47" cy="70" r="1.8" />
+    <circle cx="72" cy="79" r="2.3" />
+  </g>
+`;
+
+const BEE_PARTS = svg`
+  <g class="lob-bee-wings" fill="#ffffff" opacity="0.45">
+    <ellipse cx="38" cy="14" rx="8" ry="4.5" transform="rotate(-24 38 14)" />
+    <ellipse cx="82" cy="14" rx="8" ry="4.5" transform="rotate(24 82 14)" />
+  </g>
+  <g fill="#2b2b23" opacity="0.9">
+    <path d="M19 42 Q60 51 101 42 L103 50 Q60 60 17 50 Z" />
+    <path d="M17 58 Q60 67 103 58 L101 67 Q60 76 19 67 Z" />
+    <path d="M24 76 Q60 84 96 76 L90 85 Q60 92 30 85 Z" />
+  </g>
+`;
+
+const DUCK_BILL = svg`
+  <g>
+    <ellipse cx="60" cy="71" rx="21" ry="14" fill="#ffffff" opacity="0.5" />
+    <rect x="47" y="41" width="26" height="8" rx="4" fill="#ff9a2e" />
+    <rect x="50" y="47" width="20" height="5" rx="2.5" fill="#e98322" />
+  </g>
+`;
+
+const SOURDOUGH_SCORING = svg`
+  <g fill="none" stroke="#a8763e" stroke-width="2.5" stroke-linecap="round">
+    <path d="M38 23 Q45 29 52 30" />
+    <path d="M52 17 Q59 24 66 25" />
+    <path d="M67 18 Q74 24 81 25" />
+  </g>
+  <g fill="#ffffff" opacity="0.5">
+    <circle cx="34" cy="39" r="1.2" /><circle cx="86" cy="38" r="1" />
+    <circle cx="45" cy="57" r="1.4" /><circle cx="74" cy="62" r="1.1" />
+    <circle cx="56" cy="78" r="1" /><circle cx="83" cy="75" r="1.3" />
+  </g>
+`;
+
+const ZOMBIE_STITCHES = svg`
+  <g fill="none" stroke="#5a6b52" stroke-width="2" stroke-linecap="round">
+    <path d="M32 24 Q47 19 61 23" />
+    <path d="M38 19 L40 26 M46 18 L47 25 M54 19 L53 26" />
+    <path d="M57 72 Q72 78 87 72" />
+    <path d="M65 72 L63 79 M73 73 L72 80 M81 71 L83 78" />
+  </g>
+  <ellipse cx="35" cy="61" rx="9" ry="6" fill="#86987a" opacity="0.8" transform="rotate(-18 35 61)" />
+`;
+
+const PLUSH_SEAMS = svg`
+  <g fill="none" stroke="#c97a5e" stroke-width="1.5" stroke-dasharray="3 3">
+    <path d="M30 32 Q60 4 90 32" />
+    <path d="M60 50 Q58 72 60 96" />
+  </g>
+  <g class="lob-plush-button">
+    <circle cx="78" cy="44" r="3.5" fill="#7a4a3a" />
+    <circle cx="76.8" cy="44" r="0.7" fill="#e8967a" />
+    <circle cx="79.2" cy="44" r="0.7" fill="#e8967a" />
+  </g>
+`;
+
+const DISCO_FACETS = svg`
+  <g class="lob-disco" fill="#ffffff">
+    <rect x="42" y="18" width="4" height="4" opacity="0.3" /><rect x="52" y="16" width="4" height="4" opacity="0.5" />
+    <rect x="63" y="17" width="4" height="4" opacity="0.25" /><rect x="74" y="20" width="4" height="4" opacity="0.4" />
+    <rect x="31" y="40" width="4" height="4" opacity="0.4" /><rect x="53" y="39" width="4" height="4" opacity="0.25" />
+    <rect x="65" y="42" width="4" height="4" opacity="0.5" /><rect x="86" y="40" width="4" height="4" opacity="0.3" />
+    <rect x="39" y="59" width="4" height="4" opacity="0.25" /><rect x="51" y="62" width="4" height="4" opacity="0.45" />
+    <rect x="68" y="60" width="4" height="4" opacity="0.3" /><rect x="80" y="58" width="4" height="4" opacity="0.5" />
+    <rect x="49" y="79" width="4" height="4" opacity="0.35" /><rect x="70" y="80" width="4" height="4" opacity="0.25" />
+  </g>
+`;
+
+export const PALETTE_OVERLAYS: Partial<Record<LobsterPetPaletteId, TemplateResult>> = {
+  banana: BANANA_MARKS,
+  bee: BEE_PARTS,
+  rubberduck: DUCK_BILL,
+  sourdough: SOURDOUGH_SCORING,
+  zombie: ZOMBIE_STITCHES,
+  plush: PLUSH_SEAMS,
+  disco: DISCO_FACETS,
+};
 
 // Calico mottling: dark blotches scattered clear of the eye line.
 export const CALICO_SPOTS = svg`
@@ -285,6 +382,7 @@ export const RETRO_MEGA_CLAW = svg`
   />
   <path
     d="M92 14 C97 22 99 31 95 41"
+    class="lob-retro-claw-line"
     stroke="#b8151b"
     stroke-width="3"
     stroke-linecap="round"

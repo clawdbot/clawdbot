@@ -9,6 +9,21 @@ type TuiSessionEvent = {
   agentId?: string;
 };
 
+/** Reads the monotonic transcript position shared by persisted and live messages. */
+export function readTuiTranscriptMessageSequence(message: unknown): number | undefined {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return undefined;
+  }
+  const marker = (message as Record<string, unknown>)["__openclaw"];
+  if (!marker || typeof marker !== "object" || Array.isArray(marker)) {
+    return undefined;
+  }
+  const sequence = (marker as Record<string, unknown>).seq;
+  return typeof sequence === "number" && Number.isSafeInteger(sequence) && sequence > 0
+    ? sequence
+    : undefined;
+}
+
 /** Reads the durable user identity without mistaking another run's prompt for this one. */
 export function readTuiSessionUserMessage(event: SessionMessageEvent): {
   text: string;

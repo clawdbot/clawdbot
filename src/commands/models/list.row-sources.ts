@@ -6,6 +6,7 @@ import {
   appendConfiguredRows,
   appendDiscoveredRows,
   appendPreparedModelCatalogRows,
+  loadListModelCatalogSnapshot,
   type RowBuilderContext,
 } from "./list.rows.js";
 import type { ConfiguredEntry, ModelRow } from "./list.types.js";
@@ -69,7 +70,11 @@ export async function appendConfiguredModelRowSources(params: {
   modelRegistry?: ModelRegistry;
   context: RowBuilderContext;
 }): Promise<void> {
-  await appendConfiguredRows(params);
+  // Configured rows are emitted first for tag ordering, so they must read the
+  // same committed generation the catalog rows below use; otherwise a ref that
+  // only exists in a plugin catalog renders default placeholder metadata.
+  const catalogSnapshot = await loadListModelCatalogSnapshot(params.context);
+  await appendConfiguredRows({ ...params, catalogSnapshot });
   const seenKeys = new Set(params.rows.map((row) => row.key));
   await appendConfiguredProviderRows({
     rows: params.rows,
@@ -80,5 +85,6 @@ export async function appendConfiguredModelRowSources(params: {
     rows: params.rows,
     context: params.context,
     seenKeys,
+    catalogSnapshot,
   });
 }

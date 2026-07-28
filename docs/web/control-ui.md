@@ -146,7 +146,13 @@ Theme, theme mode, text size, language, and chat display preferences sync throug
 
 ## OpenClaw system care
 
-Open **Settings → Ask OpenClaw** to talk to the system setup and repair agent. Outside onboarding, this page can show at most one dismissible event chip per visit. It stays silent for routine Gateway traffic and reacts only to health snapshots that report a disabled configuration reloader, a configured channel disconnect/degradation, a failed channel probe, or unavailable channel credentials. A newer event replaces the pending chip only when it is more severe; dismissing or using the chip silences event prompts for that visit. Clicking the chip sends its diagnosis question as a real `openclaw.chat` message, so the transcript records the request and OpenClaw performs the diagnosis. Onboarding never shows these event chips.
+Open **Settings → Ask OpenClaw** to talk to the system setup and repair agent. The page renders a centered chat with the animated OpenClaw mascot, which switches to a thinking pose while a turn is in flight. The conversation is not trapped in Settings: the lobster button in the thread workspace rail toggles the same live session as a dockable panel (right or bottom, with placement and size persisted in the browser profile), and leaving the full page mid-conversation automatically minimizes the chat into that dock so the session follows you. The dock hides itself while the full Ask OpenClaw page is open.
+
+Each chat message carries the Control UI page you are currently viewing as an untrusted ambient hint, so requests like "configure this channel" or "why is this page empty?" resolve against the page you are looking at.
+
+Guided channel setup, workspace skills setup, and web-search provider setup run as hosted wizards inside the chat: wizard steps render as structured question cards, secret steps mask input in the browser, and every applied write is approved, audited, and re-validated. If a chosen web-search provider needs a plugin install and that install fails, setup stops and reports the failure instead of pretending the provider is configured. See [`openclaw setup`](/cli/openclaw) for the operation and approval contract.
+
+Outside onboarding, this page can show at most one dismissible event chip per visit. It stays silent for routine Gateway traffic and reacts only to health snapshots that report a disabled configuration reloader, a configured channel disconnect/degradation, a failed channel probe, or unavailable channel credentials. A newer event replaces the pending chip only when it is more severe; dismissing or using the chip silences event prompts for that visit. Clicking the chip sends its diagnosis question as a real `openclaw.chat` message, so the transcript records the request and OpenClaw performs the diagnosis. Onboarding never shows these event chips.
 
 ## Manage plugins
 

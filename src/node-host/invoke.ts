@@ -720,7 +720,7 @@ async function dispatchInvoke(
   }
 
   if (command === NODE_MCP_TOOLS_CALL_COMMAND) {
-    await handleMcpToolsCall(frame, client, mcpManager);
+    await handleMcpToolsCall(frame, client, mcpManager, runtime.signal);
     return;
   }
 
@@ -1009,6 +1009,7 @@ async function handleMcpToolsCall(
   frame: NodeInvokeRequestPayload,
   client: NodeHostClient,
   mcpManager: NodeHostMcpManager | undefined,
+  signal?: AbortSignal,
 ): Promise<void> {
   if (!mcpManager) {
     await sendErrorResult(client, frame, "MCP_SERVER_UNAVAILABLE", "node host MCP is unavailable");
@@ -1025,6 +1026,7 @@ async function handleMcpToolsCall(
     const result = await mcpManager.callMcpTool({
       ...params,
       timeoutMs: frame.timeoutMs ?? undefined,
+      ...(signal ? { signal } : {}),
     });
     if (result.isError) {
       await sendErrorResult(client, frame, "MCP_TOOL_ERROR", mcpToolErrorMessage(result));

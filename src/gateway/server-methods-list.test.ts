@@ -22,6 +22,10 @@ describe("GATEWAY_EVENTS", () => {
     expect(GATEWAY_EVENTS).toContain("node.presence");
   });
 
+  it("advertises skill invalidation updates", () => {
+    expect(GATEWAY_EVENTS).toContain("skills.changed");
+  });
+
   it("advertises session observer digests", () => {
     expect(GATEWAY_EVENTS).toContain("session.observer");
   });

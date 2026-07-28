@@ -1734,6 +1734,7 @@ function renderChatThreadContents(
     props.gatewayUrl,
     props.boardProvider,
     props.boardProvider?.canPinWidgets,
+    props.boardProvider?.canPinMcpApps,
     props.boardProvider?.snapshot$.value.revision,
     props.fullMessageAgentId,
     showReasoning,

@@ -22,6 +22,8 @@ const PROVENANCE_TRIGGER_START =
 const PROVENANCE_TRIGGER_END = "CREATE INDEX IF NOT EXISTS idx_memory_embedding_cache_updated_at";
 const STANDING_CREATOR_COLUMN =
   "  creator_sender TEXT CHECK (creator_sender IS NULL OR length(trim(creator_sender)) > 0),\n";
+const MEMORY_CHUNK_METADATA_COLUMNS =
+  ",\n  importance INTEGER CHECK (importance IS NULL OR importance BETWEEN 1 AND 10),\n  triggers TEXT";
 
 function removeSchemaSection(schema: string, startMarker: string, endMarker: string): string {
   const start = schema.indexOf(startMarker);
@@ -50,6 +52,13 @@ function schemaWithoutStandingIntentCreator(): string {
     throw new Error("standing-intent creator column missing in test fixture");
   }
   return OPENCLAW_AGENT_SCHEMA_SQL.replace(STANDING_CREATOR_COLUMN, "");
+}
+
+function schemaWithoutMemoryChunkMetadata(): string {
+  if (!OPENCLAW_AGENT_SCHEMA_SQL.includes(MEMORY_CHUNK_METADATA_COLUMNS)) {
+    throw new Error("memory chunk metadata columns missing in test fixture");
+  }
+  return OPENCLAW_AGENT_SCHEMA_SQL.replace(MEMORY_CHUNK_METADATA_COLUMNS, "");
 }
 
 describe("additive memory agent schemas", () => {
@@ -224,6 +233,38 @@ describe("additive memory agent schemas", () => {
       expect(() =>
         ensureOpenClawAgentDatabaseSchema(db, { agentId: "main", path: databasePath }),
       ).not.toThrow();
+    } finally {
+      db.close();
+    }
+  });
+
+  it("accepts pre-provenance databases missing the memory chunk metadata columns", async () => {
+    tempDir = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chunk-metadata-schema-")),
+    );
+    const databasePath = path.join(tempDir, "openclaw-agent.sqlite");
+    const db = openNodeSqliteDatabase(databasePath);
+    try {
+      db.exec(schemaWithoutMemoryChunkMetadata());
+      db.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`);
+      db.prepare(
+        `INSERT INTO schema_meta (
+          meta_key, role, schema_version, agent_id, app_version, created_at, updated_at
+        ) VALUES ('primary', 'agent', ?, 'main', 'test', 1, 1)`,
+      ).run(OPENCLAW_AGENT_SCHEMA_VERSION);
+
+      // Regression: shipped pre-provenance agent DBs must pass the canonical
+      // check before memory-core's lazy ensure ALTERs the columns in, or every
+      // existing deployment fails doctor and the updater rolls back.
+      expect(() =>
+        ensureOpenClawAgentDatabaseSchema(db, { agentId: "main", path: databasePath }),
+      ).not.toThrow();
+      expect(
+        db
+          .prepare("SELECT name FROM pragma_table_info('memory_index_chunks')")
+          .all()
+          .map((row) => (row as { name: string }).name),
+      ).not.toContain("importance");
     } finally {
       db.close();
     }

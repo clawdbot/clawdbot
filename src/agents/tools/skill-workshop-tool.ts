@@ -224,7 +224,11 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         const limit = readListLimitParam(params);
         const proposals = listProposalEntries({
           proposals: (
-            await listSkillProposals({ workspaceDir: options.workspaceDir, env: options.env })
+            await listSkillProposals({
+              agentId: options.agentId,
+              workspaceDir: options.workspaceDir,
+              env: options.env,
+            })
           ).proposals,
           status,
           query,
@@ -239,7 +243,12 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       }
 
       if (action === "inspect") {
-        const proposal = await readProposalForInspect(params, options.workspaceDir, options.env);
+        const proposal = await readProposalForInspect(
+          params,
+          options.workspaceDir,
+          options.env,
+          options.agentId,
+        );
         return proposalResult(proposal, {
           contentText: formatProposalInspect(proposal),
           includeContent: true,
@@ -249,6 +258,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       if (action === "apply") {
         const applied = await applySkillProposal({
           workspaceDir: options.workspaceDir,
+          agentId: options.agentId,
           config: options.config,
           env: options.env,
           proposalId: readLifecycleProposalIdParam(params),
@@ -263,6 +273,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       if (action === "reject") {
         const rejected = await rejectSkillProposal({
           workspaceDir: options.workspaceDir,
+          agentId: options.agentId,
           env: options.env,
           proposalId: readLifecycleProposalIdParam(params),
           reason: readStringParam(params, "reason"),
@@ -275,6 +286,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       if (action === "quarantine") {
         const quarantined = await quarantineSkillProposal({
           workspaceDir: options.workspaceDir,
+          agentId: options.agentId,
           env: options.env,
           proposalId: readLifecycleProposalIdParam(params),
           reason: readStringParam(params, "reason"),
@@ -319,6 +331,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         if (action === "create") {
           proposal = await proposeCreateSkill({
             workspaceDir: options.workspaceDir,
+            agentId: options.agentId,
             config: options.config,
             env: options.env,
             name: readStringParam(params, "name", { required: true }),
@@ -334,9 +347,9 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         } else if (action === "update") {
           proposal = await proposeUpdateSkill({
             workspaceDir: options.workspaceDir,
+            agentId: options.agentId,
             config: options.config,
             env: options.env,
-            agentId: options.agentId,
             skillName: readStringParam(params, "skill_name", {
               required: true,
               label: "skill_name",
@@ -357,10 +370,12 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
             }),
             name: readStringParam(params, "name"),
             workspaceDir: options.workspaceDir,
+            agentId: options.agentId,
             env: options.env,
           });
           proposal = await reviseSkillProposal({
             workspaceDir: options.workspaceDir,
+            agentId: options.agentId,
             config: options.config,
             env: options.env,
             proposalId: pendingProposal.record.id,

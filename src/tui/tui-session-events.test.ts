@@ -110,6 +110,53 @@ describe("matchesSelectedTuiSession", () => {
 });
 
 describe("readTuiSessionUserMessage", () => {
+  it.each([
+    {
+      name: "image block",
+      content: [{ type: "image", source: { type: "url", url: "/image.png" } }],
+      media: undefined,
+      expected: "Attached image",
+    },
+    {
+      name: "document block",
+      content: [
+        {
+          type: "attachment",
+          attachment: { url: "/report.pdf", kind: "document", label: "report.pdf" },
+        },
+      ],
+      media: undefined,
+      expected: "Attached file: report.pdf",
+    },
+    {
+      name: "canonical persisted media",
+      content: "",
+      media: [{ path: "/media/inbound/image.png", contentType: "image/png" }],
+      expected: "Attached image",
+    },
+  ])("accepts an authoritative attachment-only $name event", ({ content, media, expected }) => {
+    expect(
+      readTuiSessionUserMessage({
+        sessionKey: "agent:main:main",
+        messageId: "attachment-user-1",
+        message: {
+          role: "user",
+          content,
+          __openclaw: {
+            id: "attachment-user-1",
+            idempotencyKey: "attachment-run-1:user",
+            seq: 1,
+            ...(media ? { media } : {}),
+          },
+        },
+      } satisfies SessionMessageEvent),
+    ).toEqual({
+      messageId: "attachment-user-1",
+      runId: "attachment-run-1",
+      text: expected,
+    });
+  });
+
   it("recovers the durable prompt identity and owning chat run", () => {
     expect(
       readTuiSessionUserMessage({

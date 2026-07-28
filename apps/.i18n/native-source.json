@@ -21595,7 +21595,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 334,
+      "line": 336,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Forget Gateway",
       "surface": "apple",
@@ -21603,7 +21603,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 340,
+      "line": 342,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Cancel",
       "surface": "apple",
@@ -21611,7 +21611,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 348,
+      "line": 350,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "This removes saved credentials, device access, TLS trust, and cached chats for this gateway.",
       "surface": "apple",
@@ -21619,7 +21619,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 402,
+      "line": 404,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Enable OpenClaw Hosted Push Relay?",
       "surface": "apple",
@@ -21627,7 +21627,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 416,
+      "line": 418,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Continue",
       "surface": "apple",
@@ -21635,7 +21635,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 424,
+      "line": 426,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Not Now",
       "surface": "apple",
@@ -21763,7 +21763,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 157,
+      "line": 156,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Could not forget %@.",
       "surface": "apple",
@@ -21771,7 +21771,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 166,
+      "line": 165,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Forgot %@.",
       "surface": "apple",
@@ -21779,7 +21779,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 181,
+      "line": 180,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Saved endpoint unavailable",
       "surface": "apple",
@@ -21787,7 +21787,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 183,
+      "line": 182,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "\\(endpoint) • TLS",
       "surface": "apple",
@@ -21795,7 +21795,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 186,
+      "line": 185,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Discovered • TLS",
       "surface": "apple",
@@ -21803,7 +21803,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 187,
+      "line": 186,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Discovered",
       "surface": "apple",
@@ -21811,7 +21811,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 330,
+      "line": 329,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "TLS",
       "surface": "apple",
@@ -21819,7 +21819,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 330,
+      "line": 329,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "plain",
       "surface": "apple",
@@ -21827,7 +21827,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 333,
+      "line": 332,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Setup link loaded for %@:%@ (%@). Tap Connect to apply.",
       "surface": "apple",
@@ -21835,7 +21835,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 344,
+      "line": 343,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Paste a setup code to continue.",
       "surface": "apple",
@@ -21843,7 +21843,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 359,
+      "line": 358,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Setup code not recognized or uses an insecure ws:// gateway URL.",
       "surface": "apple",
@@ -21851,7 +21851,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 405,
+      "line": 404,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Opening QR scanner...",
       "surface": "apple",
@@ -21859,7 +21859,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 411,
+      "line": 410,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "QR loaded. Closing scanner...",
       "surface": "apple",
@@ -21867,7 +21867,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 441,
+      "line": 440,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Apple Review demo mode enabled.",
       "surface": "apple",
@@ -21875,7 +21875,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 492,
+      "line": 491,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Failed: host required",
       "surface": "apple",
@@ -21883,7 +21883,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 500,
+      "line": 499,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Failed: invalid port",
       "surface": "apple",
@@ -21891,7 +21891,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 558,
+      "line": 557,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Tailscale is off on this device. Turn it on, then try again.",
       "surface": "apple",
@@ -21899,7 +21899,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 935,
+      "line": 934,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Gateway",
       "surface": "apple",
@@ -21907,7 +21907,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 936,
+      "line": 935,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "OpenClaw",
       "surface": "apple",
@@ -21915,7 +21915,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 937,
+      "line": 936,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Apple Watch",
       "surface": "apple",
@@ -21923,7 +21923,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 938,
+      "line": 937,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Approvals",
       "surface": "apple",
@@ -21931,7 +21931,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 939,
+      "line": 938,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Permissions",
       "surface": "apple",
@@ -21939,7 +21939,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 940,
+      "line": 939,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Channels",
       "surface": "apple",
@@ -21947,7 +21947,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 941,
+      "line": 940,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Skills",
       "surface": "apple",
@@ -21955,7 +21955,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 942,
+      "line": 941,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Voice & Talk",
       "surface": "apple",
@@ -21963,7 +21963,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 943,
+      "line": 942,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Diagnostics",
       "surface": "apple",
@@ -21971,7 +21971,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 944,
+      "line": 943,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Privacy",
       "surface": "apple",
@@ -21979,7 +21979,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 946,
+      "line": 945,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Licenses",
       "surface": "apple",
@@ -21987,7 +21987,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 947,
+      "line": 946,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "About",
       "surface": "apple",
@@ -21995,7 +21995,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 954,
+      "line": 953,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Preparing one-time setup…",
       "surface": "apple",
@@ -22003,7 +22003,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 959,
+      "line": 958,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Setup sent. Open OpenClaw on the watch to connect.",
       "surface": "apple",
@@ -22011,7 +22011,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 961,
+      "line": 960,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Setup queued for the watch. Open OpenClaw before the code expires.",
       "surface": "apple",
@@ -22019,7 +22019,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1051,
+      "line": 1050,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "This gateway is on your tailnet. Turn on Tailscale on this device, then tap Connect.",
       "surface": "apple",
@@ -22027,7 +22027,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1058,
+      "line": 1057,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Pairing required. Run /pair approve in your OpenClaw chat, then connect again.",
       "surface": "apple",
@@ -22035,7 +22035,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1061,
+      "line": 1060,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Secure handshake failed. Check Tailscale, then connect again.",
       "surface": "apple",
@@ -22043,7 +22043,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1070,
+      "line": 1069,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Connection timed out. Make sure Tailscale is connected, then try again.",
       "surface": "apple",
@@ -22051,7 +22051,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1074,
+      "line": 1073,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Connected, but some controls are restricted for nodes. This is expected.",
       "surface": "apple",
@@ -22059,7 +22059,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1081,
+      "line": 1080,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Setup code applied. Connecting...",
       "surface": "apple",
@@ -22067,7 +22067,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1082,
+      "line": 1081,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Checking gateway reachability...",
       "surface": "apple",
@@ -22075,7 +22075,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1083,
+      "line": 1082,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "QR loaded. Connecting to %@:%@...",
       "surface": "apple",
@@ -22083,7 +22083,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1146,
+      "line": 1145,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Not loaded",
       "surface": "apple",
@@ -22091,7 +22091,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1149,
+      "line": 1148,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Configured",
       "surface": "apple",
@@ -22099,7 +22099,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1150,
+      "line": 1149,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Not configured",
       "surface": "apple",
@@ -22107,7 +22107,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1157,
+      "line": 1156,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Not active",
       "surface": "apple",
@@ -22115,7 +22115,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1193,
+      "line": 1192,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Apple Review demo mode",
       "surface": "apple",
@@ -22123,7 +22123,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1196,
+      "line": 1195,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Connected",
       "surface": "apple",
@@ -22131,7 +22131,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1202,
+      "line": 1201,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "offline",
       "surface": "apple",
@@ -22139,7 +22139,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1202,
+      "line": 1201,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "online",
       "surface": "apple",
@@ -22147,7 +22147,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1220,
+      "line": 1219,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Live gateway requests are disabled in demo mode.",
       "surface": "apple",
@@ -22155,7 +22155,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1224,
+      "line": 1223,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Foreground approvals still appear while OpenClaw is connected.",
       "surface": "apple",
@@ -22163,7 +22163,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1227,
+      "line": 1226,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Gateway requests will appear here.",
       "surface": "apple",
@@ -22171,7 +22171,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1228,
+      "line": 1227,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Connect to the gateway.",
       "surface": "apple",
@@ -22179,7 +22179,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1232,
+      "line": 1231,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Demo mode only",
       "surface": "apple",
@@ -22187,7 +22187,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1239,
+      "line": 1238,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "loaded",
       "surface": "apple",
@@ -22195,7 +22195,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1240,
+      "line": 1239,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "missing",
       "surface": "apple",
@@ -22203,7 +22203,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1249,
+      "line": 1248,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Waiting for gateway",
       "surface": "apple",
@@ -22211,7 +22211,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1266,
+      "line": 1265,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "1 waiting",
       "surface": "apple",
@@ -22219,7 +22219,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1269,
+      "line": 1268,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "%@ waiting",
       "surface": "apple",
@@ -22227,7 +22227,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1280,
+      "line": 1279,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Review gateway action",
       "surface": "apple",
@@ -22235,7 +22235,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1282,
+      "line": 1281,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Agent: %@",
       "surface": "apple",
@@ -22243,7 +22243,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1291,
+      "line": 1290,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Resolving",
       "surface": "apple",
@@ -22251,7 +22251,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1292,
+      "line": 1291,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "High",
       "surface": "apple",
@@ -22259,7 +22259,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1298,
+      "line": 1297,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Permission can be saved",
       "surface": "apple",
@@ -22267,7 +22267,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1299,
+      "line": 1298,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "One-time approval",
       "surface": "apple",
@@ -22275,7 +22275,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1302,
+      "line": 1301,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Medium",
       "surface": "apple",
@@ -22283,7 +22283,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1303,
+      "line": 1302,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Review",
       "surface": "apple",
@@ -22291,7 +22291,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1309,
+      "line": 1308,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Talk + Wake",
       "surface": "apple",
@@ -22299,7 +22299,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1310,
+      "line": 1309,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Talk on",
       "surface": "apple",
@@ -22307,7 +22307,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1311,
+      "line": 1310,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Wake on",
       "surface": "apple",
@@ -22315,7 +22315,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1312,
+      "line": 1311,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Off",
       "surface": "apple",
@@ -22323,7 +22323,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1316,
+      "line": 1315,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "demo",
       "surface": "apple",
@@ -22331,7 +22331,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1317,
+      "line": 1316,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "ready",
       "surface": "apple",
@@ -22339,7 +22339,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1318,
+      "line": 1317,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "check",
       "surface": "apple",
@@ -22347,7 +22347,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1319,
+      "line": 1318,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "partial",
       "surface": "apple",
@@ -22355,7 +22355,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1323,
+      "line": 1322,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "pending",
       "surface": "apple",
@@ -22363,7 +22363,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1325,
+      "line": 1324,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "pass",
       "surface": "apple",
@@ -22371,7 +22371,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1336,
+      "line": 1335,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Requesting iOS location permission…",
       "surface": "apple",
@@ -22379,7 +22379,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1402,
+      "line": 1401,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "This build uses OpenClaw's hosted push relay at %@ for notification delivery data.",
       "surface": "apple",
@@ -22387,7 +22387,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1406,
+      "line": 1405,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "This build is not configured to use OpenClaw's hosted push relay.",
       "surface": "apple",
@@ -22395,7 +22395,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1411,
+      "line": 1410,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Enabling this sends delivery data through OpenClaw's hosted push relay.",
       "surface": "apple",
@@ -37875,7 +37875,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 24,
+      "line": 23,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Skills",
       "surface": "apple",
@@ -37883,7 +37883,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 25,
+      "line": 24,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Manage installed capabilities or discover verified releases on ClawHub.",
       "surface": "apple",
@@ -37891,7 +37891,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 62,
+      "line": 66,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Skills section",
       "surface": "apple",
@@ -37899,7 +37899,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 87,
+      "line": 91,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Loading skills",
       "surface": "apple",
@@ -37907,7 +37907,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 87,
+      "line": 91,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "\\(ready) ready · \\(needsSetup) need setup",
       "surface": "apple",
@@ -37915,7 +37915,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 89,
+      "line": 93,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Enable ready skills, or install missing tools on the Gateway or this Mac.",
       "surface": "apple",
@@ -37923,7 +37923,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 98,
+      "line": 102,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "\\(total)",
       "surface": "apple",
@@ -37931,7 +37931,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 113,
+      "line": 117,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Controls",
       "surface": "apple",
@@ -37939,7 +37939,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 115,
+      "line": 119,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Skill catalog",
       "surface": "apple",
@@ -37947,7 +37947,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 116,
+      "line": 120,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Refresh after changing binaries, environment variables, or skill config.",
       "surface": "apple",
@@ -37955,7 +37955,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 126,
+      "line": 130,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Refresh",
       "surface": "apple",
@@ -37963,7 +37963,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 131,
+      "line": 135,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Search installed skills",
       "surface": "apple",
@@ -37971,7 +37971,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 158,
+      "line": 162,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Loading…",
       "surface": "apple",
@@ -37979,7 +37979,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 158,
+      "line": 162,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "No skills reported yet",
       "surface": "apple",
@@ -37987,7 +37987,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 159,
+      "line": 163,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Reading the Gateway skill catalog.",
       "surface": "apple",
@@ -37995,7 +37995,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 194,
+      "line": 198,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "No skills match this filter.",
       "surface": "apple",
@@ -38003,7 +38003,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 206,
+      "line": 210,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Filter",
       "surface": "apple",
@@ -38011,7 +38011,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 249,
+      "line": 253,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Installed",
       "surface": "apple",
@@ -38019,7 +38019,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 250,
+      "line": 254,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Browse",
       "surface": "apple",
@@ -38027,7 +38027,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 268,
+      "line": 272,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "All",
       "surface": "apple",
@@ -38035,7 +38035,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 270,
+      "line": 274,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Ready",
       "surface": "apple",
@@ -38043,7 +38043,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 272,
+      "line": 276,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Needs Setup",
       "surface": "apple",
@@ -38051,7 +38051,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 274,
+      "line": 278,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Disabled",
       "surface": "apple",
@@ -38059,7 +38059,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 359,
+      "line": 363,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Website",
       "surface": "apple",
@@ -38067,7 +38067,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 393,
+      "line": 397,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Details",
       "surface": "apple",
@@ -38075,7 +38075,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 419,
+      "line": 423,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Needs setup",
       "surface": "apple",
@@ -38083,7 +38083,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 434,
+      "line": 438,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Managed",
       "surface": "apple",
@@ -38091,7 +38091,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 436,
+      "line": 440,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Workspace",
       "surface": "apple",
@@ -38099,7 +38099,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 438,
+      "line": 442,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Extra",
       "surface": "apple",
@@ -38107,7 +38107,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 440,
+      "line": 444,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Plugin",
       "surface": "apple",
@@ -38115,7 +38115,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 507,
+      "line": 511,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Missing binaries: \\(self.missingBins.joined(separator: \", \"))",
       "surface": "apple",
@@ -38123,7 +38123,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 512,
+      "line": 516,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Needs any binary: \\(self.missingAnyBins.joined(separator: \", \"))",
       "surface": "apple",
@@ -38131,7 +38131,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 517,
+      "line": 521,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Missing env: \\(self.missingEnv.joined(separator: \", \"))",
       "surface": "apple",
@@ -38139,7 +38139,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 522,
+      "line": 526,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Requires config: \\(self.missingConfig.joined(separator: \", \"))",
       "surface": "apple",
@@ -38147,7 +38147,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 527,
+      "line": 531,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Requires OS: \\(self.missingOS.joined(separator: \", \"))",
       "surface": "apple",
@@ -38155,7 +38155,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 554,
+      "line": 558,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Set \\(envKey)",
       "surface": "apple",
@@ -38163,7 +38163,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 570,
+      "line": 574,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Install on Gateway",
       "surface": "apple",
@@ -38171,7 +38171,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 583,
+      "line": 587,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Install on This Mac",
       "surface": "apple",
@@ -38179,7 +38179,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 588,
+      "line": 592,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Switches to Local mode to install on this Mac.",
       "surface": "apple",
@@ -38187,7 +38187,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 693,
+      "line": 697,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Get your key →",
       "surface": "apple",
@@ -38195,7 +38195,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 698,
+      "line": 702,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Saved to openclaw.json under skills.entries.\\(self.editor.skillKey)",
       "surface": "apple",
@@ -38203,7 +38203,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 702,
+      "line": 706,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Cancel",
       "surface": "apple",
@@ -38211,7 +38211,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 704,
+      "line": 708,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Save",
       "surface": "apple",
@@ -38219,7 +38219,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 732,
+      "line": 736,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Set API Key",
       "surface": "apple",
@@ -38227,7 +38227,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 732,
+      "line": 736,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Set Environment Variable",
       "surface": "apple",
@@ -38235,7 +38235,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 807,
+      "line": 869,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Skill disabled",
       "surface": "apple",
@@ -38243,7 +38243,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 807,
+      "line": 869,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Skill enabled",
       "surface": "apple",
@@ -38251,7 +38251,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 885,
+      "line": 947,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Bundled",
       "surface": "apple",

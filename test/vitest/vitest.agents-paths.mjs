@@ -8,9 +8,11 @@ export const agentsCoreIsolatedTestFiles = [
   "src/agents/media-generation-task-status-shared.test.ts",
   "src/agents/mcp-http-fetch.test.ts",
   "src/agents/mcp-transport.test.ts",
+  "src/agents/model-catalog-visibility.test.ts",
   "src/agents/model-auth-env.provider-aliases.test.ts",
   "src/agents/model-selection.plugin-runtime.test.ts",
   "src/agents/models-config.runtime-source-snapshot.test.ts",
+  "src/agents/openai-transport-stream.streaming.test.ts",
   "src/agents/subagent-orphan-recovery.test.ts",
   "src/agents/video-generation-task-status.test.ts",
 ];
@@ -23,7 +25,17 @@ export function isAgentsCoreIsolatedTestFile(value) {
 
 export const agentsCoreTestPatterns = ["src/agents/*.test.ts"];
 
-export const agentsEmbeddedTestPatterns = ["src/agents/embedded-agent-runner/**/*.test.ts"];
+export const agentsEmbeddedTestPatterns = ["src/agents/embedded-agent-runner/*.test.ts"];
+
+export const agentsEmbeddedIncompleteTurnTestFiles = [
+  "src/agents/embedded-agent-runner/run.incomplete-turn.test.ts",
+];
+
+export const agentsEmbeddedOverflowCompactionTestFiles = [
+  "src/agents/embedded-agent-runner/run.overflow-compaction.test.ts",
+];
+
+export const agentsEmbeddedRunTestPatterns = ["src/agents/embedded-agent-runner/run/**/*.test.ts"];
 
 export const agentsToolsTestPatterns = ["src/agents/tools/**/*.test.ts"];
 
