@@ -1,11 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { WebSocket } from "ws";
+import { WebSocket } from "ws";
 import {
   createDiagnosticTraceContext,
   getActiveDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
+import {
+  connectOk,
+  getFreePort,
+  installGatewayTestHooks,
+  onceMessage,
+  startGatewayServer,
+  trackConnectChallengeNonce,
+} from "../../test-helpers.js";
+import {
+  resetTestPluginRegistry,
+  setTestPluginRegistry,
+} from "../../test-helpers.plugin-registry.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import { createGatewayAuthenticatedRequestDispatcher } from "./authenticated-request-dispatch.js";
 import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
@@ -14,6 +27,8 @@ const TRACEPARENTS = {
   first: "00-11111111111111111111111111111111-1111111111111111-01",
   second: "00-22222222222222222222222222222222-2222222222222222-00",
 } as const;
+
+installGatewayTestHooks({ scope: "suite" });
 
 function createClient(): GatewayWsClient {
   return {
@@ -79,6 +94,63 @@ async function dispatchInFreshMessageScope(
       client,
     ),
   );
+}
+
+async function openAuthenticatedTraceSocket(params: {
+  port: number;
+  token: string;
+  connectTraceparent: string;
+}): Promise<WebSocket> {
+  const ws = new WebSocket(`ws://127.0.0.1:${params.port}`);
+  trackConnectChallengeNonce(ws);
+  await new Promise<void>((resolve, reject) => {
+    const onOpen = () => {
+      ws.off("error", onError);
+      resolve();
+    };
+    const onError = (error: Error) => {
+      ws.off("open", onOpen);
+      reject(error);
+    };
+    ws.once("open", onOpen);
+    ws.once("error", onError);
+  });
+  try {
+    await connectOk(ws, {
+      token: params.token,
+      traceparent: params.connectTraceparent,
+    });
+    return ws;
+  } catch (error) {
+    ws.terminate();
+    throw error;
+  }
+}
+
+async function sendTraceRequest(
+  ws: WebSocket,
+  id: string,
+  traceparent?: string,
+): Promise<{ ok: boolean }> {
+  const response = onceMessage<{ type: "res"; id: string; ok: boolean }>(ws, (value) =>
+    Boolean(
+      value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      value.type === "res" &&
+      value.id === id,
+    ),
+  );
+  ws.send(
+    JSON.stringify({
+      type: "req",
+      id,
+      method: "test.trace",
+      params: {},
+      ...(traceparent ? { traceparent } : {}),
+    }),
+  );
+  return await response;
 }
 
 describe("authenticated WebSocket request trace dispatch", () => {
@@ -171,5 +243,94 @@ describe("authenticated WebSocket request trace dispatch", () => {
     expect(observed.get("second")?.before?.traceId).toBe("22222222222222222222222222222222");
     expect(observed.get("first")?.after).toEqual(observed.get("first")?.before);
     expect(observed.get("second")?.after).toEqual(observed.get("second")?.before);
+  });
+
+  it("preserves request isolation through a real authenticated WebSocket session", async () => {
+    const observed = new Map<
+      string,
+      { before: DiagnosticTraceContext | undefined; after?: DiagnosticTraceContext }
+    >();
+    let requestBarrier: Promise<void> | undefined;
+    let releaseRequests: (() => void) | undefined;
+    const registry = createEmptyPluginRegistry();
+    registry.gatewayHandlers["test.trace"] = async ({ req, respond }) => {
+      const observation: {
+        before: DiagnosticTraceContext | undefined;
+        after?: DiagnosticTraceContext;
+      } = { before: getActiveDiagnosticTraceContext() };
+      observed.set(req.id, observation);
+      await requestBarrier;
+      observation.after = getActiveDiagnosticTraceContext();
+      respond(true, { traced: true });
+    };
+    setTestPluginRegistry(registry);
+
+    const token = "gateway-request-trace-test-token";
+    const port = await getFreePort();
+    const server = await startGatewayServer(port, {
+      auth: { mode: "token", token },
+      bind: "loopback",
+      controlUiEnabled: false,
+    });
+    let ws: WebSocket | undefined;
+    try {
+      ws = await openAuthenticatedTraceSocket({
+        port,
+        token,
+        connectTraceparent: TRACEPARENTS.first,
+      });
+
+      await expect(sendTraceRequest(ws, "untraced-after-connect")).resolves.toMatchObject({
+        ok: true,
+      });
+      await expect(
+        sendTraceRequest(
+          ws,
+          "malformed",
+          "00-11111111111111111111111111111111-1111111111111111-zz",
+        ),
+      ).resolves.toMatchObject({ ok: true });
+      const afterConnect = observed.get("untraced-after-connect")?.before;
+      const malformed = observed.get("malformed")?.before;
+      expect(afterConnect).toBeDefined();
+      expect(malformed).toBeDefined();
+      expect(afterConnect?.traceId).not.toBe("11111111111111111111111111111111");
+      expect(malformed?.traceId).not.toBe("11111111111111111111111111111111");
+      expect(malformed?.traceId).not.toBe(afterConnect?.traceId);
+
+      requestBarrier = new Promise<void>((resolve) => {
+        releaseRequests = resolve;
+      });
+      const first = sendTraceRequest(ws, "concurrent-first", TRACEPARENTS.first);
+      const second = sendTraceRequest(ws, "concurrent-second", TRACEPARENTS.second);
+      await vi.waitFor(() => {
+        expect(observed.has("concurrent-first")).toBe(true);
+        expect(observed.has("concurrent-second")).toBe(true);
+      });
+      releaseRequests?.();
+      await expect(Promise.all([first, second])).resolves.toMatchObject([
+        { ok: true },
+        { ok: true },
+      ]);
+
+      const firstObservation = observed.get("concurrent-first");
+      const secondObservation = observed.get("concurrent-second");
+      expect(firstObservation?.before).toMatchObject({
+        traceId: "11111111111111111111111111111111",
+        parentSpanId: "1111111111111111",
+        traceFlags: "01",
+      });
+      expect(secondObservation?.before).toMatchObject({
+        traceId: "22222222222222222222222222222222",
+        parentSpanId: "2222222222222222",
+        traceFlags: "00",
+      });
+      expect(firstObservation?.after).toEqual(firstObservation?.before);
+      expect(secondObservation?.after).toEqual(secondObservation?.before);
+    } finally {
+      ws?.terminate();
+      await server.close();
+      resetTestPluginRegistry();
+    }
   });
 });

@@ -953,6 +953,7 @@ type ConnectReqOptions = {
   prePairDevice?: boolean;
   browserOrigin?: string;
   timeoutMs?: number;
+  traceparent?: string;
 };
 
 function shouldPrePairTestDevice(params: {
@@ -1142,6 +1143,7 @@ export async function connectReq(
       type: "req",
       id,
       method: "connect",
+      ...(opts?.traceparent ? { traceparent: opts.traceparent } : {}),
       params: {
         minProtocol: opts?.minProtocol ?? PROTOCOL_VERSION,
         maxProtocol: opts?.maxProtocol ?? PROTOCOL_VERSION,

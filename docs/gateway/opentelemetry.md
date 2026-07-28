@@ -150,9 +150,10 @@ interleaves.
 
 The field is accepted only after the existing Gateway authentication handshake
 and does not affect authentication or method authorization. A `traceparent` on
-the initial `connect` frame is ignored. Missing or malformed values silently
-fall back to a fresh request trace. `tracestate` and `baggage` are not accepted
-by the Gateway WebSocket protocol.
+the initial `connect` frame is ignored. Missing or syntactically malformed
+values within the 128-character field limit silently fall back to a fresh
+request trace; longer values make the request frame invalid. `tracestate` and
+`baggage` are not accepted by the Gateway WebSocket protocol.
 
 ## Privacy and content capture
 
