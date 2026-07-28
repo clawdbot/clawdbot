@@ -4378,7 +4378,11 @@ describe("diagnostics-otel service", () => {
             content: [
               { type: "thinking", thinking: "input-internal-canary" },
               { type: "reasoning", content: "input-part-internal-canary" },
-              { type: "text", text: "visible input" },
+              {
+                type: "text",
+                text: "visible input",
+                textSignature: "input-text-signature-internal-canary",
+              },
             ],
           },
         ],
@@ -4390,6 +4394,13 @@ describe("diagnostics-otel service", () => {
             content: [
               { type: "redacted_thinking", data: "output-internal-canary" },
               { type: "text", text: "visible output" },
+              {
+                type: "toolCall",
+                id: "tool-1",
+                name: "lookup",
+                arguments: { query: "visible" },
+                thoughtSignature: "output-thought-signature-internal-canary",
+              },
             ],
           },
         ],
@@ -4406,6 +4417,8 @@ describe("diagnostics-otel service", () => {
       "output-internal-canary",
       "output-message-internal-canary",
       "output-text-internal-canary",
+      "input-text-signature-internal-canary",
+      "output-thought-signature-internal-canary",
     ];
     for (const key of [
       "gen_ai.input.messages",
@@ -4423,6 +4436,12 @@ describe("diagnostics-otel service", () => {
     ]);
     expect(JSON.parse(stringAttribute(attrs, "gen_ai.output.messages"))[0]?.parts).toEqual([
       { type: "text", content: "visible output" },
+      {
+        type: "tool_call",
+        id: "tool-1",
+        name: "lookup",
+        arguments: { query: "visible" },
+      },
     ]);
     expect(
       JSON.parse(stringAttribute(attrs, "openclaw.content.input_messages"))[0]?.content[0],
@@ -4433,6 +4452,17 @@ describe("diagnostics-otel service", () => {
     expect(
       JSON.parse(stringAttribute(attrs, "openclaw.content.output_messages"))[0]?.content[0],
     ).toEqual({ type: "reasoning", redacted: true });
+    expect(
+      JSON.parse(stringAttribute(attrs, "openclaw.content.input_messages"))[0]?.content[2],
+    ).toEqual({ type: "text", text: "visible input" });
+    expect(
+      JSON.parse(stringAttribute(attrs, "openclaw.content.output_messages"))[0]?.content[2],
+    ).toEqual({
+      type: "toolCall",
+      id: "tool-1",
+      name: "lookup",
+      arguments: { query: "visible" },
+    });
   });
 
   test("emits semconv response text for tool response parts", async () => {

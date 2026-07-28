@@ -148,6 +148,12 @@ const INTERNAL_REASONING_MESSAGE_FIELDS = [
   "reasoning_text",
 ] as const;
 
+const INTERNAL_REASONING_PART_FIELDS = [
+  "textSignature",
+  "thinkingSignature",
+  "thoughtSignature",
+] as const;
+
 function redactInternalReasoningParts(value: unknown): unknown {
   if (!Array.isArray(value)) {
     return value;
@@ -159,7 +165,16 @@ function redactInternalReasoningParts(value: unknown): unknown {
     ) {
       return { type: "reasoning", redacted: true };
     }
-    return part;
+    if (!isRecord(part)) {
+      return part;
+    }
+    const redacted = { ...part };
+    // Replay signatures carry opaque provider reasoning state even when attached
+    // to visible text or tool calls. Preserve the visible part, not replay state.
+    for (const field of INTERNAL_REASONING_PART_FIELDS) {
+      delete redacted[field];
+    }
+    return redacted;
   });
 }
 
