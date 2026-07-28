@@ -38,6 +38,7 @@ import {
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   createSessionStore,
   createSubagentRunParams,
@@ -1603,115 +1604,67 @@ describe("subagent registry seam flow", () => {
     });
   });
 
-  it("keeps explicit run timeout terminal when late lifecycle success arrives", async () => {
-    const startedAt = Date.now();
-    mockGatewayMethods(mocks.callGateway, {
-      "agent.wait": { status: "timeout" },
-    });
-    mocks.loadSessionStore.mockReturnValue(
-      createSessionStore({
-        updatedAt: startedAt,
-        status: "running",
-      }),
-    );
-
-    mod.registerSubagentRun({
+  it.each([
+    {
+      name: "keeps explicit run timeout terminal when late lifecycle success arrives",
       runId: "run-timeout-late-lifecycle-ok",
       task: "timeout should stay terminal",
-      runTimeoutSeconds: 1,
-    });
-
-    await vi.advanceTimersByTimeAsync(10_000);
-    await waitForFast(() => {
-      const completedRun = findRequesterRun("run-timeout-late-lifecycle-ok");
-      expect(completedRun?.endedAt).toBe(startedAt + 1_000);
-      expect(completedRun?.outcome?.status).toBe("timeout");
-    });
-
-    const lifecycleHandler = getLifecycleHandler();
-
-    lifecycleHandler?.({
-      runId: "run-timeout-late-lifecycle-ok",
-      stream: "lifecycle",
-      data: {
-        phase: "end",
-        endedAt: startedAt + 2_000,
-      },
-    });
-
-    await waitForFast(() => {
-      const run = findRequesterRun("run-timeout-late-lifecycle-ok");
-      expect(run?.endedAt).toBe(startedAt + 1_000);
-      expectRecordFields(
-        run?.outcome,
-        {
-          status: "timeout",
-          startedAt,
-          endedAt: startedAt + 1_000,
-          elapsedMs: 1_000,
-        },
-        "late lifecycle timeout outcome",
-      );
-    });
-    await waitForFast(() => {
-      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  it("keeps published explicit timeout stable when pre-deadline lifecycle success arrives late", async () => {
-    const startedAt = Date.now();
-    mockGatewayMethods(mocks.callGateway, {
-      "agent.wait": { status: "timeout" },
-    });
-    mocks.loadSessionStore.mockReturnValue(
-      createSessionStore({
-        updatedAt: startedAt,
-        status: "running",
-      }),
-    );
-
-    mod.registerSubagentRun({
+      eventStartedAfterMs: undefined,
+      eventEndedAfterMs: 2_000,
+      expectCapturedReply: false,
+    },
+    {
+      name: "keeps published explicit timeout stable when pre-deadline lifecycle success arrives late",
       runId: "run-timeout-late-lifecycle-predeadline-ok",
       task: "published timeout should stay stable",
-      runTimeoutSeconds: 1,
-    });
+      eventStartedAfterMs: 10,
+      eventEndedAfterMs: 500,
+      expectCapturedReply: true,
+    },
+  ])(
+    "$name",
+    async ({ runId, task, eventStartedAfterMs, eventEndedAfterMs, expectCapturedReply }) => {
+      const startedAt = Date.now();
+      mockGatewayMethods(mocks.callGateway, { "agent.wait": { status: "timeout" } });
+      mocks.loadSessionStore.mockReturnValue(
+        createSessionStore({ updatedAt: startedAt, status: "running" }),
+      );
+      mod.registerSubagentRun({ runId, task, runTimeoutSeconds: 1 });
 
-    await vi.advanceTimersByTimeAsync(5_000);
-    await waitForFast(() => {
-      const completedRun = findRequesterRun("run-timeout-late-lifecycle-predeadline-ok");
-      expect(completedRun?.endedAt).toBe(startedAt + 1_000);
-      expect(completedRun?.outcome?.status).toBe("timeout");
-    });
-
-    const lifecycleHandler = getLifecycleHandler();
-
-    lifecycleHandler?.({
-      runId: "run-timeout-late-lifecycle-predeadline-ok",
-      stream: "lifecycle",
-      data: {
-        phase: "end",
-        startedAt: startedAt + 10,
-        endedAt: startedAt + 500,
-      },
-    });
-
-    await waitForFast(() => {
-      const run = findRequesterRun("run-timeout-late-lifecycle-predeadline-ok");
-      expect(run?.endedAt).toBe(startedAt + 1_000);
-      expectRecordFields(
-        run?.outcome,
-        {
+      await vi.advanceTimersByTimeAsync(5_000);
+      await waitForFast(() => {
+        expect(findRequesterRun(runId)).toMatchObject({
+          endedAt: startedAt + 1_000,
+          outcome: { status: "timeout" },
+        });
+      });
+      getLifecycleHandler()({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          ...(eventStartedAfterMs === undefined
+            ? {}
+            : { startedAt: startedAt + eventStartedAfterMs }),
+          endedAt: startedAt + eventEndedAfterMs,
+        },
+      });
+      await waitForFast(() => {
+        const run = findRequesterRun(runId);
+        expect(run?.endedAt).toBe(startedAt + 1_000);
+        expectRecordFields(run?.outcome, {
           status: "timeout",
           startedAt,
           endedAt: startedAt + 1_000,
           elapsedMs: 1_000,
-        },
-        "stable published timeout outcome",
-      );
-    });
-    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
-    expect(mocks.captureSubagentCompletionReply).toHaveBeenCalledTimes(1);
-  });
+        });
+        expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+      });
+      if (expectCapturedReply) {
+        expect(mocks.captureSubagentCompletionReply).toHaveBeenCalledTimes(1);
+      }
+    },
+  );
 
   it("converts first lifecycle success after the explicit run deadline into timeout", async () => {
     const startedAt = Date.now();
@@ -1923,65 +1876,25 @@ describe("subagent registry seam flow", () => {
     });
   });
 
-  it("allows non-explicit published timeouts to be corrected by lifecycle success", async () => {
-    const startedAt = Date.parse("2026-03-24T11:59:00Z");
-    mod.registerSubagentRun({
+  it.each([
+    {
+      name: "allows non-explicit published timeouts to be corrected by lifecycle success",
       runId: "run-non-explicit-timeout-corrected",
       task: "non-explicit timeout remains correctable",
-    });
-    const run = mod.getSubagentRunByChildSessionKey("agent:main:subagent:child");
-    expect(run).not.toBeNull();
-    Object.assign(run ?? {}, {
-      startedAt,
-      sessionStartedAt: startedAt,
-      endedAt: startedAt + 30_000,
-      outcome: {
-        status: "timeout",
-        startedAt,
-        endedAt: startedAt + 30_000,
-        elapsedMs: 30_000,
-      },
-      delivery: {
-        status: "delivered",
-        announcedAt: startedAt + 30_000,
-        deliveredAt: startedAt + 30_000,
-      },
-    });
-
-    const lifecycleHandler = getLifecycleHandler();
-
-    lifecycleHandler?.({
-      runId: "run-non-explicit-timeout-corrected",
-      stream: "lifecycle",
-      data: {
-        phase: "end",
-        startedAt,
-        endedAt: startedAt + 35_000,
-      },
-    });
-
-    await waitForFast(() => {
-      const correctedRun = findRequesterRun("run-non-explicit-timeout-corrected");
-      expect(correctedRun?.endedAt).toBe(startedAt + 35_000);
-      expectRecordFields(
-        correctedRun?.outcome,
-        {
-          status: "ok",
-          startedAt,
-          endedAt: startedAt + 35_000,
-          elapsedMs: 35_000,
-        },
-        "non-explicit published timeout corrected outcome",
-      );
-    });
-  });
-
-  it("allows pre-deadline lifecycle timeouts to be corrected by lifecycle success", async () => {
-    const startedAt = Date.parse("2026-03-24T11:59:00Z");
-    mod.registerSubagentRun({
+      runTimeoutSeconds: undefined,
+    },
+    {
+      name: "allows pre-deadline lifecycle timeouts to be corrected by lifecycle success",
       runId: "run-predeadline-timeout-corrected",
       task: "pre-deadline timeout remains correctable",
       runTimeoutSeconds: 60,
+    },
+  ])("$name", async ({ runId, task, runTimeoutSeconds }) => {
+    const startedAt = Date.parse("2026-03-24T11:59:00Z");
+    mod.registerSubagentRun({
+      runId,
+      task,
+      ...(runTimeoutSeconds === undefined ? {} : { runTimeoutSeconds }),
     });
     const run = mod.getSubagentRunByChildSessionKey("agent:main:subagent:child");
     expect(run).not.toBeNull();
@@ -1989,44 +1902,27 @@ describe("subagent registry seam flow", () => {
       startedAt,
       sessionStartedAt: startedAt,
       endedAt: startedAt + 30_000,
-      outcome: {
-        status: "timeout",
-        startedAt,
-        endedAt: startedAt + 30_000,
-        elapsedMs: 30_000,
-      },
+      outcome: { status: "timeout", startedAt, endedAt: startedAt + 30_000, elapsedMs: 30_000 },
       delivery: {
         status: "delivered",
         announcedAt: startedAt + 30_000,
         deliveredAt: startedAt + 30_000,
       },
     });
-
-    const lifecycleHandler = getLifecycleHandler();
-
-    lifecycleHandler?.({
-      runId: "run-predeadline-timeout-corrected",
+    getLifecycleHandler()({
+      runId,
       stream: "lifecycle",
-      data: {
-        phase: "end",
+      data: { phase: "end", startedAt, endedAt: startedAt + 35_000 },
+    });
+    await waitForFast(() => {
+      const correctedRun = findRequesterRun(runId);
+      expect(correctedRun?.endedAt).toBe(startedAt + 35_000);
+      expectRecordFields(correctedRun?.outcome, {
+        status: "ok",
         startedAt,
         endedAt: startedAt + 35_000,
-      },
-    });
-
-    await waitForFast(() => {
-      const correctedRun = findRequesterRun("run-predeadline-timeout-corrected");
-      expect(correctedRun?.endedAt).toBe(startedAt + 35_000);
-      expectRecordFields(
-        correctedRun?.outcome,
-        {
-          status: "ok",
-          startedAt,
-          endedAt: startedAt + 35_000,
-          elapsedMs: 35_000,
-        },
-        "pre-deadline published timeout corrected outcome",
-      );
+        elapsedMs: 35_000,
+      });
     });
   });
 
@@ -4574,6 +4470,85 @@ describe("subagent registry seam flow", () => {
         .listSubagentRunsForRequester("agent:main:main")
         .find((entry) => entry.runId === "run-durability-required"),
     ).toBeUndefined();
+  });
+
+  it.each([
+    { name: "running", queued: false },
+    { name: "queued", queued: true },
+  ])("persists a $name registration exactly once", ({ queued }) => {
+    mockGatewayMethods(mocks.callGateway, {
+      "agent.wait": { status: "pending" },
+    });
+
+    mod.registerSubagentRun({
+      runId: `run-single-persist-${queued ? "queued" : "running"}`,
+      task: "persist one registry snapshot",
+      queued,
+    });
+
+    expect(mocks.persistSubagentRunsToDiskOrThrow).toHaveBeenCalledOnce();
+    expect(mocks.persistSubagentRunsToDisk).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "running", queued: false },
+    { name: "queued", queued: true },
+  ])("isolates a $name registration from task runtime input mutation", ({ queued }) => {
+    const runId = `run-isolated-origin-${queued ? "queued" : "running"}`;
+    const expectedRequesterOrigin = {
+      channel: "discord",
+      to: "channel:123",
+      accountId: "acct-1",
+      threadId: 42,
+    };
+    const requesterOrigin = {
+      ...expectedRequesterOrigin,
+      deliveryIntent: {
+        id: "delivery-1",
+        kind: "outbound_queue" as const,
+        queuePolicy: "required" as const,
+      },
+    };
+    let persistedEntry: SubagentRunRecord | undefined;
+    mocks.persistSubagentRunsToDiskOrThrow.mockImplementationOnce((runs) => {
+      persistedEntry = structuredClone(runs.get(runId));
+    });
+    mockGatewayMethods(mocks.callGateway, {
+      "agent.wait": { status: "pending" },
+    });
+    const defaultRuntime = getDetachedTaskLifecycleRuntime();
+    const createMutatingTaskRun = vi.fn(
+      (taskParams: Parameters<typeof defaultRuntime.createQueuedTaskRun>[0]) => {
+        if (!taskParams.requesterOrigin) {
+          throw new Error("expected requester origin");
+        }
+        Object.assign(taskParams.requesterOrigin, {
+          channel: "mutated",
+          to: "mutated",
+          accountId: "mutated",
+          threadId: "mutated",
+        });
+        return null;
+      },
+    );
+    setDetachedTaskLifecycleRuntime({
+      ...defaultRuntime,
+      createQueuedTaskRun: createMutatingTaskRun,
+      createRunningTaskRun: createMutatingTaskRun,
+    });
+
+    mod.registerSubagentRun({
+      runId,
+      task: "isolate the registry delivery context",
+      queued,
+      requesterOrigin,
+    });
+
+    expect(createMutatingTaskRun).toHaveBeenCalledOnce();
+    expect(findRequesterRun(runId)?.requesterOrigin).toEqual(expectedRequesterOrigin);
+    expect(persistedEntry?.requesterOrigin).toEqual(expectedRequesterOrigin);
+    expect(mocks.persistSubagentRunsToDiskOrThrow).toHaveBeenCalledOnce();
+    expect(mocks.persistSubagentRunsToDisk).not.toHaveBeenCalled();
   });
 
   it("retains an already-running replacement when its durable write fails", () => {

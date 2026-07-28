@@ -26,6 +26,10 @@ import type { SessionDataController } from "./session-data-controller.ts";
 import { renderSessionLeadingState } from "./session-leading-indicator.ts";
 import type { SessionPullRequestIndicatorState } from "./session-menu-work.ts";
 import type { SessionOrganizerController } from "./session-organizer-controller.ts";
+import {
+  resolveSessionOwnerUser,
+  type SessionOwnerIdentityHost,
+} from "./session-owner-identity.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 import {
   renderSidebarSessionSubtitle,
@@ -36,7 +40,7 @@ import "./elapsed-time.ts";
 
 const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
 
-export interface SessionListHost {
+export interface SessionListHost extends SessionOwnerIdentityHost {
   readonly sidebarLiveActivity: boolean;
   readonly sidebarNarrationLines: ReadonlyMap<string, string>;
   readonly sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest>;
@@ -164,6 +168,7 @@ export function renderRecentSession(params: {
     pullRequestState,
     ownerActor,
     ownerAttribution,
+    resolveSessionOwnerUser(host, ownerActor?.id),
   );
   const meta = display?.meta ?? session.meta;
   const rowMeta = session.pinned ? "" : meta;

@@ -33,7 +33,10 @@ export type AgentHarnessAttemptResult = Extract<
   { terminal: unknown }
 >;
 type AttemptTerminal = AgentHarnessAttemptResult["terminal"];
-export type AttemptResultWithSdkSessionId = AgentHarnessAttemptResult & { sdkSessionId?: string };
+export type AttemptResultWithSdkSessionId = AgentHarnessAttemptResult & {
+  journalValidated?: boolean;
+  sdkSessionId?: string;
+};
 export function withPromptFailure(terminal: AttemptTerminal, error: unknown): AttemptTerminal {
   return terminal.kind === "aborted" || terminal.kind === "timeout"
     ? { ...terminal, failure: { source: "prompt", error } }
@@ -93,7 +96,10 @@ export type AttemptParamsLike = AgentHarnessAttemptParams & {
   enableSessionTelemetry?: boolean;
   hooksConfig?: CopilotHooksConfig;
   infiniteSessionConfig?: SessionConfig["infiniteSessions"];
-  initialReplayState?: AgentHarnessAttemptParams["initialReplayState"] & { sdkSessionId?: string };
+  initialReplayState?: AgentHarnessAttemptParams["initialReplayState"] & {
+    journalValidated?: boolean;
+    sdkSessionId?: string;
+  };
   messages?: AgentMessage[];
   model?: string | { api?: string; id?: string; input?: string[]; provider?: string };
   onAssistantDelta?: (payload: OnAssistantDeltaPayload) => void | Promise<void>;

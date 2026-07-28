@@ -144,6 +144,11 @@ function createContext(
       setScope: () => undefined,
       subscribe,
     },
+    // Session rows carry the durable boardFace that generic navigation reads.
+    sessions: {
+      state: { result: null, loading: false },
+      subscribe,
+    },
     navigate: vi.fn(),
     preload: vi.fn(async () => undefined),
   } as unknown as ApplicationContext;

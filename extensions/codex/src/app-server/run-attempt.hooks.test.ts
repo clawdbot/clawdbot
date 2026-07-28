@@ -6,6 +6,7 @@ import {
   resolveActiveEmbeddedRunSessionId,
   type AgentEventPayload,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { installSessionManagerFileCompat } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import {
   onInternalDiagnosticEvent,
@@ -39,6 +40,8 @@ import {
   readCodexAppServerBinding,
   testCodexAppServerBindingStore,
 } from "./session-binding.test-helpers.js";
+
+installSessionManagerFileCompat();
 
 type ReplyBackend = Parameters<
   NonNullable<ReturnType<typeof createParams>["replyOperation"]>["attachBackend"]
@@ -115,7 +118,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     );
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    const sessionManager = SessionManager.open(sessionFile);
+    const sessionManager = SessionManager.openFile(sessionFile);
     sessionManager.appendMessage(assistantMessage("existing context", Date.now()));
     const harness = createStartedThreadHarness();
 
@@ -311,7 +314,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
         return {};
       });
       const params = createParams(sessionFile, workspaceDir);
-      const sessionManager = SessionManager.open(sessionFile);
+      const sessionManager = SessionManager.openFile(sessionFile);
       sessionManager.appendMessage(assistantMessage("existing context", Date.now()));
       params.runtimePlan = createCodexRuntimePlanFixture();
       params.config = {
@@ -943,7 +946,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     );
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    SessionManager.open(sessionFile).appendMessage(
+    SessionManager.openFile(sessionFile).appendMessage(
       assistantMessage("existing context", Date.now()),
     );
     createStartedThreadHarness(async (method) => {

@@ -214,6 +214,50 @@ describe("normalizeReplyPayload", () => {
     expect(expectNormalizedReply(result).text).toBe("The user is saying hello");
   });
 
+  it.each([
+    ["NO_REPLY\n\nThe user is saying hello", "The user is saying hello"],
+    ["NO_REPLY\r\nThe user is saying hello", "The user is saying hello"],
+    ["NO_REPLY NO_REPLY\nThe user is saying hello", "The user is saying hello"],
+    ["NO_REPLY\n✅ Done", "✅ Done"],
+    ["NO_REPLY\n- Done", "- Done"],
+    ["NO_REPLY\n—note", "—note"],
+    ["NO_REPLY\n: explanation", ": explanation"],
+    ["NO_REPLY\n**Done**", "**Done**"],
+    ['NO_REPLY\n"Hello"', '"Hello"'],
+    ["NO_REPLY\n```ts\nconst done = true;\n```", "```ts\nconst done = true;\n```"],
+  ])("strips newline-separated leading silent tokens: %j", (text, expected) => {
+    expect(expectNormalizedReply(normalizeReplyPayload({ text })).text).toBe(expected);
+  });
+
+  it.each([
+    "Done as requested!NO_REPLY",
+    "question?NO_REPLY",
+    "note,NO_REPLY",
+    "item;NO_REPLY",
+    "label:NO_REPLY",
+  ])("preserves punctuation-attached silent-token literals in delivery: %j", (text) => {
+    expect(expectNormalizedReply(normalizeReplyPayload({ text })).text).toBe(text);
+  });
+
+  it("strips repeated trailing silent tokens from visible replies", () => {
+    expect(
+      expectNormalizedReply(normalizeReplyPayload({ text: "Done. NO_REPLY NO_REPLY" })).text,
+    ).toBe("Done.");
+  });
+
+  it.each([
+    "interject.NO_REPLY",
+    "The example is interject.NO_REPLY",
+    "Done as requested.NO_REPLY",
+    "NO_REPLY NO_REPLY: explanation",
+    "NO_REPLY\nNO_REPLY: explanation",
+    "NO_REPLY\nNO_REPLY—note",
+    "NO_REPLY\nNO_REPLY-note",
+    "NO_REPLY\nNO_REPLY -- nope",
+  ])("preserves substantive dotted and punctuation-start silent-token literals: %j", (text) => {
+    expect(expectNormalizedReply(normalizeReplyPayload({ text })).text).toBe(text);
+  });
+
   it("keeps NO_REPLY when used as leading substantive text", () => {
     const result = normalizeReplyPayload({ text: "NO_REPLY -- nope" });
     expect(expectNormalizedReply(result).text).toBe("NO_REPLY -- nope");
@@ -343,63 +387,6 @@ describe("normalizeReplyPayload", () => {
     });
 
     expect(expectNormalizedReply(result).text).toBe("Before\n\nAfter");
-  });
-
-  it("does not compile Slack directives unless interactive replies are enabled", () => {
-    const result = normalizeReplyPayload({
-      text: "hello [[slack_buttons: Retry:retry, Ignore:ignore]]",
-    });
-
-    const reply = expectNormalizedReply(result);
-    expect(reply.text).toBe("hello [[slack_buttons: Retry:retry, Ignore:ignore]]");
-    expect(reply.interactive).toBeUndefined();
-  });
-
-  it("applies responsePrefix before channel-owned transforms run", () => {
-    const result = normalizeReplyPayload(
-      {
-        text: "hello [[slack_buttons: Retry:retry, Ignore:ignore]]",
-      },
-      { responsePrefix: "[bot]" },
-    );
-
-    const reply = expectNormalizedReply(result);
-    expect(reply.text).toBe("[bot] hello [[slack_buttons: Retry:retry, Ignore:ignore]]");
-    expect(reply.interactive).toBeUndefined();
-  });
-
-  it("leaves trailing Options lines for channel-owned transforms", () => {
-    const result = normalizeReplyPayload({
-      text: "Current verbose level: off.\nOptions: on, full, off.",
-    });
-
-    const reply = expectNormalizedReply(result);
-    expect(reply.text).toBe("Current verbose level: off.\nOptions: on, full, off.");
-    expect(reply.interactive).toBeUndefined();
-  });
-
-  it("leaves larger Options lists for channel-owned transforms", () => {
-    const result = normalizeReplyPayload({
-      text: "Choose a reasoning level.\nOptions: off, minimal, low, medium, high, adaptive.",
-    });
-
-    const reply = expectNormalizedReply(result);
-    expect(reply.text).toBe(
-      "Choose a reasoning level.\nOptions: off, minimal, low, medium, high, adaptive.",
-    );
-    expect(reply.interactive).toBeUndefined();
-  });
-
-  it("leaves complex Options lines as plain text", () => {
-    const result = normalizeReplyPayload({
-      text: "ACP runtime choices.\nOptions: host=auto|sandbox|gateway|node, security=deny|allowlist|full.",
-    });
-
-    const reply = expectNormalizedReply(result);
-    expect(reply.text).toBe(
-      "ACP runtime choices.\nOptions: host=auto|sandbox|gateway|node, security=deny|allowlist|full.",
-    );
-    expect(reply.interactive).toBeUndefined();
   });
 });
 

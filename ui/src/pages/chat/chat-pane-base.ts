@@ -131,6 +131,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected sessionRailLoad: Promise<void> | null = null;
   protected sessionRailOpenRequest = 0;
   protected sessionRailOpenSessionKey = "";
+  protected deferredSessionHydrationRequestVersion = 0;
   protected sessionCompanionHydrationKey = "";
   protected readonly sessionCompanionThreads = new ChatSessionCompanionThreads(() => {
     this.requestUpdate();

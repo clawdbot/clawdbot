@@ -6,6 +6,7 @@ import {
   installAssistantTranscriptRoleMarkdown,
 } from "./markdown-assistant-transcript.ts";
 import { markdownCodeBlockCopyText, renderMarkdownCodeBlock } from "./markdown-code-blocks.ts";
+import { installMarkdownDetails } from "./markdown-details.ts";
 import {
   isHostLocalMarkdownFileHref,
   MARKDOWN_FILE_LINK_SCAN_RE,
@@ -50,6 +51,7 @@ export function createMarkdownParser(): MarkdownIt {
   // markdown-it uses <s> tags; we added "s" to the sanitizer allowlist.
   markdownParser.enable("strikethrough");
   installAssistantTranscriptRoleMarkdown(markdownParser, escapeMarkdownHtml);
+  installMarkdownDetails(markdownParser);
 
   // Disable fuzzy link detection to prevent bare filenames like "README.md"
   // from being auto-linked as "http://README.md". URLs with explicit protocol

@@ -6,7 +6,7 @@ import {
   toAgentEntriesRecord,
 } from "../agents/agent-scope-config.js";
 import { readConfigFileSnapshot } from "../config/config.js";
-import { createMergePatch } from "../config/io.write-prepare.js";
+import { createMergePatch } from "../config/merge-patch.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 

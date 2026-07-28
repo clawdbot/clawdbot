@@ -273,6 +273,25 @@ describe("chat pane header", () => {
     expect(dormant.container.querySelector("openclaw-session-owner-chip")).toBeNull();
   });
 
+  it("renders a resolved owner avatar with the header attribution semantics", async () => {
+    const mounted = mount({
+      showOwnerChip: true,
+      session: row({ createdActor: { type: "human", id: "profile-ada", label: "Ada" } }),
+      ownerUser: {
+        id: "profile-ada",
+        name: "Ada",
+        avatarUrl: "/api/users/profile-ada/avatar",
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(mounted.container.querySelector("openclaw-session-owner-chip img")).not.toBeNull();
+    });
+    const chip = mounted.container.querySelector(".session-owner-chip--header");
+    expect(chip?.getAttribute("aria-label")).toBe("Created by Ada");
+    expect(chip?.getAttribute("title")).toBe("Created by Ada");
+  });
+
   it("routes Enter and Escape from the rename input", () => {
     const enter = mount({ editing: true, renameValue: "  Updated  " });
     const enterInput = enter.container.querySelector<HTMLInputElement>("input");

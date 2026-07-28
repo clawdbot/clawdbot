@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createMeetingSession,
+  MeetingPlatformAdapter,
   MeetingSessionRuntime,
   type MeetingSessionRuntimeHandles,
   type MeetingSessionRuntimeJoinContext,
@@ -27,11 +28,7 @@ import {
   readTeamsMeetingTranscript,
   recoverCurrentTeamsMeetingTab,
 } from "./transports/chrome.js";
-import {
-  TEAMS_MEETINGS_PLATFORM_ADAPTER,
-  isTeamsMeetingsRealtimeRouteReady,
-  isTeamsMeetingsTalkBackMode,
-} from "./transports/teams-meetings-platform-adapter.js";
+import { TEAMS_MEETINGS_PLATFORM_ADAPTER } from "./transports/teams-meetings-platform-adapter.js";
 import type {
   TeamsMeetingsBrowserTab,
   TeamsMeetingsChromeHealth,
@@ -40,7 +37,7 @@ import type {
   TeamsMeetingsSession,
 } from "./transports/types.js";
 
-type ManualActionReason = NonNullable<TeamsMeetingsChromeHealth["manualActionReason"]>;
+type ManualActionReason = NonNullable<TeamsMeetingsChromeHealth["manualAction"]>["reason"];
 type SpeechBlockedReason = NonNullable<TeamsMeetingsChromeHealth["speechBlockedReason"]>;
 type SessionRuntime = MeetingSessionRuntime<
   TeamsMeetingsSession,
@@ -126,8 +123,6 @@ export class TeamsMeetingsRuntime {
         speech: {
           audioBridgeUnavailable: "Realtime speech requires an active Chrome audio bridge.",
           browserUnverified: "Microsoft Teams browser state has not been verified yet.",
-          manualActionFallback:
-            "Resolve the Microsoft Teams browser prompt before asking OpenClaw to speak.",
           microphoneMuted: "Turn on the OpenClaw Teams microphone before asking OpenClaw to speak.",
           microphoneMutedReason: "teams-microphone-muted",
           notInCall: "Microsoft Teams has not reported that the browser guest is in the call.",
@@ -157,7 +152,7 @@ export class TeamsMeetingsRuntime {
       resolveSpeechInstructions: (request) =>
         request.message ?? params.config.realtime.introMessage,
       isBrowserTransport: () => true,
-      isTalkBackMode: isTeamsMeetingsTalkBackMode,
+      isTalkBackMode: (mode) => MeetingPlatformAdapter.isTalkBackMode(mode),
       isTranscribeMode: (mode) => mode === "transcribe",
       sameMeetingUrl: (left, right) =>
         TEAMS_MEETINGS_PLATFORM_ADAPTER.urls.isSameMeeting(left, right),
@@ -378,11 +373,11 @@ export class TeamsMeetingsRuntime {
     session: TeamsMeetingsSession,
   ): Promise<MeetingSessionRuntimeHandles<TeamsMeetingsChromeHealth> | undefined> {
     if (
-      !isTeamsMeetingsTalkBackMode(session.mode) ||
+      !MeetingPlatformAdapter.isTalkBackMode(session.mode) ||
       session.state !== "active" ||
       !session.chrome ||
       session.chrome.audioBridge ||
-      !isTeamsMeetingsRealtimeRouteReady(session.mode, session.chrome.health)
+      !MeetingPlatformAdapter.isRealtimeRouteReady(session.mode, session.chrome.health)
     ) {
       return undefined;
     }

@@ -30,6 +30,7 @@ import { isCodexAppServerApprovalRequest, type CodexAppServerClient } from "./cl
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
   readCodexPluginConfig,
+  resolveCodexAppServerHomeScope,
   resolveOpenClawExecPolicyForCodexAppServer,
   resolveCodexModelBackedReviewerPolicyContext,
   shouldAutoApproveCodexAppServerApprovals,
@@ -199,6 +200,7 @@ export async function runCodexAppServerSideQuestion(
         authProfileId: preparedRuntimeAuth.plan.forwardedAuthProfileId,
         authProfileStore: preparedRuntimeAuth.authProfileStore,
         agentDir: params.agentDir,
+        homeScope: resolveCodexAppServerHomeScope({ appServer: pluginConfig.appServer }),
         config: params.cfg,
         subscriptionProfileRequiredError:
           "Prepared Codex subscription route requires a scoped native OAuth or token profile.",

@@ -314,7 +314,7 @@ describe("resolveGatewayConnection", () => {
     expect(result.token).toBeUndefined();
   });
 
-  it("keeps normal TUI local password mode env precedence by default", async () => {
+  it("keeps configured local password ahead of the ambient env password", async () => {
     loadConfig.mockReturnValue({
       gateway: {
         mode: "local",
@@ -327,7 +327,7 @@ describe("resolveGatewayConnection", () => {
 
     await withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: "env-password" }, async () => {
       const result = await resolveGatewayConnection({});
-      expect(result.password).toBe("env-password");
+      expect(result.password).toBe("config-password");
     });
   });
 

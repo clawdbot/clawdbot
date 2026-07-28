@@ -14,6 +14,10 @@ import {
   resetSubagentRegistryForTests,
 } from "../../agents/subagent-registry.test-helpers.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  persistSessionTranscriptTurn,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { ProviderThinkingProfile } from "../../plugins/provider-thinking.types.js";
 import {
@@ -235,7 +239,7 @@ afterEach(() => {
   });
 });
 
-function writeTranscriptUsageLog(params: {
+async function writeTranscriptUsageLog(params: {
   dir: string;
   agentId: string;
   sessionId: string;
@@ -247,26 +251,33 @@ function writeTranscriptUsageLog(params: {
     totalTokens: number;
   };
 }) {
-  const logPath = path.join(
+  const storePath = path.join(
     params.dir,
     ".openclaw",
     "agents",
     params.agentId,
     "sessions",
-    `${params.sessionId}.jsonl`,
+    "sessions.json",
   );
-  fs.mkdirSync(path.dirname(logPath), { recursive: true });
-  fs.writeFileSync(
-    logPath,
-    JSON.stringify({
-      type: "message",
-      message: {
-        role: "assistant",
-        model: "claude-opus-4-5",
-        usage: params.usage,
-      },
-    }),
-    "utf-8",
+  const sessionKey = `agent:${params.agentId}:main`;
+  await replaceSessionEntry(
+    { agentId: params.agentId, sessionKey, storePath },
+    { sessionId: params.sessionId, updatedAt: Date.now() },
+  );
+  await persistSessionTranscriptTurn(
+    { agentId: params.agentId, sessionId: params.sessionId, sessionKey, storePath },
+    {
+      messages: [
+        {
+          message: {
+            role: "assistant",
+            model: "claude-opus-4-5",
+            usage: params.usage,
+          },
+        },
+      ],
+      touchSessionEntry: false,
+    },
   );
 }
 
@@ -623,7 +634,7 @@ describe("buildStatusReply subagent summary", () => {
   it("uses transcript usage fallback in /status output", async () => {
     await withTempHome(async (dir) => {
       const sessionId = "sess-status-transcript";
-      writeTranscriptUsageLog({
+      await writeTranscriptUsageLog({
         dir,
         agentId: "main",
         sessionId,

@@ -1071,6 +1071,43 @@ class TalkModeManagerTest {
     }
 
   @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun cancelledQueuedFinalizerResumesOnlyItsRealtimeCaptureOnMain() =
+    runTest {
+      val finalizerDispatcher = StandardTestDispatcher()
+      val manager =
+        createManager(
+          scope = CoroutineScope(SupervisorJob() + finalizerDispatcher),
+        )
+      Dispatchers.setMain(Dispatchers.Unconfined)
+      try {
+        setMutableStateFlow(manager, "_isEnabled", true)
+        manager.pauseRealtimeCaptureForPushToTalk("capture-1")
+        setPrivateField(manager, "activePttCaptureId", "capture-1")
+        @Suppress("UNCHECKED_CAST")
+        (readPrivateField(manager, "pttFinalSegments") as MutableList<String>) += "finish this capture"
+
+        val payload = manager.endPushToTalk("capture-1")
+        val finalizer = readPrivateField(manager, "finishingPttJob") as Job
+
+        assertEquals("queued", payload.status)
+        assertEquals("capture-1", manager.finishingPushToTalkCaptureId)
+        assertTrue(readPrivateField(manager, "realtimeCapturePause") != null)
+
+        finalizer.cancel()
+        finalizerDispatcher.scheduler.runCurrent()
+
+        assertTrue(finalizer.isCancelled)
+        assertNull(manager.finishingPushToTalkCaptureId)
+        assertNull(readPrivateField(manager, "realtimeCapturePause"))
+        assertNull(readPrivateField(manager, "activePttCaptureId"))
+      } finally {
+        manager.stopAllCapture()
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
   fun relayClosePreservesFinishingPushToTalkOwnership() =
     runTest {
       val manager = createManager(scope = this)

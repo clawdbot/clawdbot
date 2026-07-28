@@ -42,7 +42,6 @@ export async function finalizeEmbeddedAttemptStreamPhase(input: {
 }): Promise<{ sessionIdUsed: string; sessionFileUsed?: string }> {
   const { activeSession, sessionManager, sessionLockController, withOwnedSessionWriteLock } = input;
 
-  await sessionLockController.waitForSessionEvents(activeSession);
   await input.waitForPendingEvents();
   if (input.repairedRejectedThinkingReplay) {
     activeSession.agent.state.messages = sessionManager.buildSessionContext().messages;

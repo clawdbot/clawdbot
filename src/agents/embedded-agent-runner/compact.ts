@@ -16,11 +16,9 @@ import { hasMeaningfulConversationContent } from "../compaction-real-conversatio
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { coerceToFailoverError } from "../failover-error.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
-import {
-  isFallbackSummaryError,
-  resolveModelCandidateChain,
-  runWithModelFallback,
-} from "../model-fallback.js";
+import { isFallbackSummaryError } from "../model-fallback-attempt.js";
+import { resolveModelCandidateChain } from "../model-fallback-candidates.js";
+import { runWithModelFallback } from "../model-fallback-runner.js";
 import { acquireAgentRunPreparedModelRuntime } from "../prepared-model-runtime.js";
 import {
   applyAgentRunSessionTargetIdentity,
@@ -46,7 +44,6 @@ import { resolveEmbeddedCompactionTarget } from "./compaction-runtime-context.js
 import { prepareCompactionSessionAgent } from "./compaction-session-agent.js";
 import type { PreparedCompactEmbeddedAgentSessionParams } from "./direct-compaction-preparation.js";
 import { compactEmbeddedAgentSessionDirectOnce } from "./direct-compaction.js";
-import { hardenManualCompactionBoundary } from "./manual-compaction-boundary.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
 export type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
@@ -131,10 +128,11 @@ export async function compactEmbeddedAgentSessionDirect(
   const runSessionTarget = await resolveAgentRunSessionTarget(paramsBase);
   const requestedParams: CompactEmbeddedAgentSessionParamsWithSessionFile = {
     ...paramsBase,
-    agentId: paramsBase.agentId ?? runSessionTarget.agentId,
+    agentId: runSessionTarget.agentId,
     sessionId: runSessionTarget.sessionId,
-    sessionKey: paramsBase.sessionKey ?? runSessionTarget.sessionKey,
-    sessionFile: runSessionTarget.sessionFile,
+    sessionKey: runSessionTarget.sessionKey,
+    sessionTarget: runSessionTarget,
+    sessionFile: runSessionTarget.sessionKey,
   };
   const requestedAgentIds = resolveSessionAgentIds({
     sessionKey: requestedParams.sessionKey,
@@ -188,6 +186,7 @@ export async function compactEmbeddedAgentSessionDirect(
       cfg: params.config,
       provider: primaryProvider,
       model: primaryModel,
+      requestedRouteResolution: "resolved",
       fallbacksOverride,
     })[0];
     const fallbackAgentId = resolveSessionAgentIds({
@@ -200,6 +199,7 @@ export async function compactEmbeddedAgentSessionDirect(
       cfg: params.config,
       provider: primaryProvider,
       model: primaryModel,
+      requestedRouteResolution: "resolved",
       runId: params.runId ?? params.sessionId,
       agentDir: params.agentDir,
       agentId: fallbackAgentId,
@@ -256,7 +256,6 @@ export const testing = {
   containsRealConversationMessages,
   estimateTokensAfterCompaction,
   buildBeforeCompactionHookMetrics,
-  hardenManualCompactionBoundary,
   resolveCompactionProviderStream,
   prepareCompactionSessionAgent,
   runBeforeCompactionHooks,

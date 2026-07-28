@@ -28,6 +28,8 @@ import {
 } from "./chat-pane-shared.ts";
 
 export abstract class ChatPaneHistory extends ChatPaneSession {
+  private activeCatalogContinuation: symbol | null = null;
+
   protected hasOlderMessages(): boolean {
     const state = this.state;
     if (!state) {
@@ -311,25 +313,76 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
   }
 
   protected async continueCatalogSession(key: CatalogSessionKey) {
-    const state = this.state;
-    const client = state?.client;
+    const scope = this.captureConnectionScope();
+    const state = scope?.state;
+    const client = scope?.client;
     const draft = state?.chatMessage.trim();
-    if (!state || !client || !draft || !this.catalogSession?.canContinue) {
+    if (!scope || !state || !client || !draft || !this.catalogSession?.canContinue) {
       return;
     }
+    const sourceSessionKey = state.sessionKey;
+    const sourceCatalogGeneration = this.catalogLoadGeneration;
+    const continuation = Symbol("catalog-continuation");
+    let adoptedSessionKey: string | null = null;
+    let adoptedCatalogGeneration: number | null = null;
+    this.activeCatalogContinuation = continuation;
     state.chatSending = true;
     state.requestUpdate();
+    const releaseStaleContinuation = () => {
+      if (this.activeCatalogContinuation !== continuation) {
+        return;
+      }
+      this.activeCatalogContinuation = null;
+      if (state.chatSendingScopeKey != null || !state.chatSending) {
+        return;
+      }
+      state.chatSending = false;
+      state.requestUpdate();
+    };
     try {
       const result = await client.request<SessionsCatalogContinueResult>(
         "sessions.catalog.continue",
         key,
       );
+      // A catalog adoption must not navigate or send into a pane that switched
+      // sessions or reconnected while its original continuation was in flight.
+      if (
+        this.activeCatalogContinuation !== continuation ||
+        !this.isConnectionScopeCurrent(scope) ||
+        this.catalogLoadGeneration !== sourceCatalogGeneration ||
+        state.sessionKey !== sourceSessionKey
+      ) {
+        releaseStaleContinuation();
+        return;
+      }
+      adoptedSessionKey = result.sessionKey;
       announceCatalogSessionContinued({ ...key, sessionKey: result.sessionKey });
-      this.onPaneSessionChange?.(this.paneId, result.sessionKey);
+      // Make the adopted session authoritative before routing; otherwise the
+      // outgoing catalog pane can immediately restore the previous chat URL.
       this.switchPaneSession(result.sessionKey);
+      adoptedCatalogGeneration = this.catalogLoadGeneration;
+      this.onPaneSessionChange?.(this.paneId, result.sessionKey);
       state.handleChatDraftChange(draft);
       await state.handleSendChat();
+      if (this.activeCatalogContinuation === continuation) {
+        this.activeCatalogContinuation = null;
+      }
     } catch (error) {
+      if (
+        this.activeCatalogContinuation !== continuation ||
+        !this.isConnectionScopeCurrent(scope) ||
+        (adoptedSessionKey === null
+          ? this.catalogLoadGeneration !== sourceCatalogGeneration ||
+            state.sessionKey !== sourceSessionKey
+          : adoptedCatalogGeneration === null
+            ? state.sessionKey !== sourceSessionKey && state.sessionKey !== adoptedSessionKey
+            : this.catalogLoadGeneration !== adoptedCatalogGeneration ||
+              state.sessionKey !== adoptedSessionKey)
+      ) {
+        releaseStaleContinuation();
+        return;
+      }
+      this.activeCatalogContinuation = null;
       state.lastError = error instanceof Error ? error.message : String(error);
       state.chatSending = false;
       state.requestUpdate();

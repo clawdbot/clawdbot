@@ -28,6 +28,21 @@ vi.mock("./sessions.runtime.js", () => ({
   })),
 }));
 
+function normalizeBoardGetSnapshot(snapshot: BoardSnapshot): BoardSnapshot {
+  return {
+    ...snapshot,
+    widgets: snapshot.widgets.map(
+      ({ frameUrl, viewTicket, viewGeneration, instanceId, ...widget }) => ({
+        ...widget,
+        ...(frameUrl ? { frameUrl: frameUrl.replace(/bt=[^&]+/u, "bt=<ticket>") } : {}),
+        ...(viewTicket ? { viewTicket: "<ticket>" } : {}),
+        ...(viewGeneration ? { viewGeneration: "<generation>" } : {}),
+        ...(instanceId ? { instanceId: "<instance>" } : {}),
+      }),
+    ),
+  };
+}
+
 describe("board gateway methods", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -147,7 +162,7 @@ describe("board gateway methods", () => {
     );
     expect(first.widgets.find((widget) => widget.name === "plain")).toMatchObject({
       viewTicket: expect.stringMatching(/^v1\./u),
-      viewTicketTtlMs: 120_000,
+      viewTicketTtlMs: 1_200_000,
       viewGeneration: expect.stringMatching(/^[a-f0-9]{32}$/u),
       sandboxUrl: expect.stringMatching(/^\/mcp-app-sandbox\?csp=/u),
       sandboxPort: 18790,
@@ -198,6 +213,62 @@ describe("board gateway methods", () => {
 
     expect(ensureSandboxHostPort).toHaveBeenCalledOnce();
     expect(snapshot.widgets[0]).toMatchObject({ sandboxPort: 18790 });
+  });
+
+  it("returns the same board.get wire structure from memory and SQLite stores", async () => {
+    const sessionKey = "agent:main:board-get-parity";
+    const stateDir = tempDirs.make("openclaw-board-get-parity-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey, storePath: database.path },
+      { sessionId: "board-get-parity", updatedAt: Date.now() },
+    );
+    const sqliteStore = new SqliteBoardStore({
+      resolveSession: () => ({ agentId: "main", sessionKey }),
+      env,
+    });
+    const memory = createHarness();
+    const sqlite = createHarness(undefined, {}, sqliteStore);
+    for (const harness of [memory, sqlite]) {
+      await harness.invoke("board.widget.put", {
+        sessionKey,
+        name: "status",
+        title: "Status",
+        content: { kind: "html", html: "<p>ready</p>" },
+      });
+    }
+
+    const memoryResponse = await memory.invoke("board.get", { sessionKey });
+    const sqliteResponse = await sqlite.invoke("board.get", { sessionKey });
+    const memorySnapshot = memoryResponse.mock.calls[0]?.[1] as BoardSnapshot;
+    const sqliteSnapshot = sqliteResponse.mock.calls[0]?.[1] as BoardSnapshot;
+
+    expect(memorySnapshot.widgets[0]?.viewTicket).not.toBe(sqliteSnapshot.widgets[0]?.viewTicket);
+    expect(normalizeBoardGetSnapshot(sqliteSnapshot)).toEqual(
+      normalizeBoardGetSnapshot(memorySnapshot),
+    );
+  });
+
+  it("prepares HTML view metadata with the snapshot instead of rereading the store", async () => {
+    const { invoke, store } = createHarness();
+    await invoke("board.widget.put", {
+      sessionKey: "agent:main:main",
+      name: "first",
+      content: { kind: "html", html: "<p>first</p>" },
+    });
+    await invoke("board.widget.put", {
+      sessionKey: "agent:main:main",
+      name: "second",
+      content: { kind: "html", html: "<p>second</p>" },
+    });
+    const preparedRead = vi.spyOn(store, "getSnapshotWithHtmlViewMetadata");
+    const documentRead = vi.spyOn(store, "readWidgetHtml");
+
+    await invoke("board.get", { sessionKey: "agent:main:main" });
+
+    expect(preparedRead).toHaveBeenCalledOnce();
+    expect(documentRead).not.toHaveBeenCalled();
   });
 
   it("applies updates and broadcasts board.changed", async () => {

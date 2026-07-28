@@ -315,9 +315,7 @@ export async function executeSendQueue(
           await sendFallbackText(resolveUserFacingMediaError(result));
         }
       } else if (item.type === "voice") {
-        const uploadFormats =
-          account.config?.audioFormatPolicy?.uploadDirectFormats ??
-          account.config?.voiceDirectUploadFormats;
+        const uploadFormats = account.config?.audioFormatPolicy?.uploadDirectFormats;
         const transcodeEnabled = account.config?.audioFormatPolicy?.transcodeEnabled !== false;
         const voiceTimeout = 45_000;
         try {

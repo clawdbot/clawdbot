@@ -10,7 +10,7 @@ const OBSERVER_DIGEST_HISTORY_LIMIT = 50;
 
 type ProjectedObserverDigest = Pick<
   SessionObserverDigest,
-  "runId" | "headline" | "health" | "updatedAt" | "revision"
+  "agentId" | "runId" | "headline" | "health" | "updatedAt" | "revision"
 >;
 
 export function isCriticalObserverHealth(health: unknown): health is "stuck" | "waiting-on-user" {
@@ -73,6 +73,7 @@ function compareObserverDigestFreshness(
 function observerDigestsEqual(left: SessionObserverDigest, right: SessionObserverDigest): boolean {
   return (
     left.sessionKey === right.sessionKey &&
+    left.agentId === right.agentId &&
     left.runId === right.runId &&
     left.revision === right.revision &&
     left.updatedAt === right.updatedAt &&

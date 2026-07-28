@@ -175,6 +175,7 @@ const threadBindingSchema = z
     threadId: z.string().refine((value) => Boolean(value.trim())),
     clientId: optionalStringSchema,
     cwd: z.string(),
+    rolloutPath: optionalNonBlankStringSchema,
     // Private runtime ownership. Only the supervision catalog creates this
     // marker; public OpenClaw session metadata must never authorize user-home access.
     connectionScope: z.literal("supervision").optional(),
@@ -523,6 +524,9 @@ export type CodexAppServerBindingStore = {
     identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>,
     expectedPreviousSessionId: string,
   ): Promise<CodexSessionGenerationAdoptionResult>;
+  resetSessionGeneration(
+    identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>,
+  ): Promise<CodexSessionGenerationRetirementResult>;
   retireSessionGeneration(
     identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>,
   ): Promise<CodexSessionGenerationRetirementResult>;
@@ -757,11 +761,16 @@ export function createCodexAppServerBindingStore(
         return { kind: "resolved", result: true };
       }
       const currentSessionId = current.sessionId;
-      if (!currentSessionId || currentSessionId === identity.sessionId) {
+      if (!currentSessionId) {
         return {
           kind: "resolved",
           result: current.state !== "cleared" || current.retired !== true,
         };
+      }
+      if (currentSessionId === identity.sessionId) {
+        return current.state === "cleared" && current.retired === true
+          ? { kind: "verify", expectedPreviousSessionId: currentSessionId }
+          : { kind: "resolved", result: true };
       }
       return { kind: "verify", expectedPreviousSessionId: currentSessionId };
     },
@@ -787,6 +796,24 @@ export function createCodexAppServerBindingStore(
                 return { result: true };
               }
               if (ownsGeneration) {
+                if (
+                  current.state === "cleared" &&
+                  current.retired === true &&
+                  current.sessionId === mutation.expectedPreviousSessionId
+                ) {
+                  // Reset boundaries now retain the OpenClaw session id. The
+                  // authoritative session-store check above proves this fence
+                  // belongs to the previous in-place lifecycle, not live work.
+                  return {
+                    result: true,
+                    next: {
+                      version: 1,
+                      state: "cleared",
+                      sessionId: identity.sessionId,
+                      ...ownedLease,
+                    },
+                  };
+                }
                 return {
                   result: current.state !== "cleared" || current.retired !== true,
                 };
@@ -930,6 +957,40 @@ export function createCodexAppServerBindingStore(
             next: { ...current, sessionId: targetSessionId },
           };
         });
+      });
+    },
+
+    async resetSessionGeneration(identity) {
+      return await runBindingMutation(async () => {
+        const key = bindingStoreKey(identity);
+        return await transactKey(
+          key,
+          (current, leaseToken) => {
+            if (!current) {
+              return { result: "absent" as const };
+            }
+            if (!ownsStoredSessionGeneration(identity, current)) {
+              return { result: "conflict" as const };
+            }
+            // A retired same-id row may be a deletion fence. Only the authoritative
+            // session-store reclaim path can prove it belongs to an in-place reset.
+            if (current.state === "cleared" && current.retired === true) {
+              return { result: "conflict" as const };
+            }
+            return {
+              result: "applied" as const,
+              next: {
+                version: 1,
+                state: "cleared",
+                ...storedSessionGeneration(identity, current),
+                ...(current.lease && current.lease.token === leaseToken
+                  ? { lease: current.lease }
+                  : {}),
+              },
+            };
+          },
+          leaseContext.getStore()?.has(key) ? undefined : 1,
+        );
       });
     },
 

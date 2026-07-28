@@ -1,4 +1,4 @@
-import { jsonResult } from "openclaw/plugin-sdk/channel-actions";
+import { jsonResult, stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import { formatErrorMessage as errorMessage } from "openclaw/plugin-sdk/error-runtime";
 // Ollama node inference exposes local models to agents through paired node hosts.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
@@ -24,6 +24,7 @@ import {
   buildOllamaBaseUrlSsrFPolicy,
   enrichOllamaModelsWithContext,
   fetchOllamaModels,
+  isOllamaCloudModel,
   resolveOllamaApiBase,
 } from "./provider-models.js";
 
@@ -185,7 +186,7 @@ async function discoverOllamaNodeModels(
     throw new Error(`Ollama is not running at ${apiBase}`);
   }
   const localModels = discovered.models
-    .filter((model) => !model.remote_host?.trim())
+    .filter((model) => !model.remote_host?.trim() && !isOllamaCloudModel(model.name))
     .slice(0, MAX_DISCOVERED_MODELS);
   const [models, loadedNames] = await Promise.all([
     enrichOllamaModelsWithContext(apiBase, localModels),
@@ -247,7 +248,8 @@ async function runOllamaNodeChat(params: {
   const apiBase = resolveOllamaApiBase(params.baseUrl);
   const discovered = await fetchOllamaModels(apiBase);
   const localModel = discovered.models.find(
-    (model) => model.name === params.model && !model.remote_host?.trim(),
+    (model) =>
+      model.name === params.model && !model.remote_host?.trim() && !isOllamaCloudModel(model.name),
   );
   const [model] = localModel ? await enrichOllamaModelsWithContext(apiBase, [localModel]) : [];
   if (!discovered.reachable || model?.capabilities?.includes("completion") !== true) {
@@ -424,7 +426,7 @@ const ollamaNodeInferenceToolDefinition = {
     "Discover and run chat-capable Ollama models installed on paired desktop/server nodes. Use action=discover first, then action=run with a node and model from that result. Inference stays on the selected node.",
   parameters: Type.Object(
     {
-      action: Type.Union([Type.Literal("discover"), Type.Literal("run")]),
+      action: stringEnum(["discover", "run"] as const),
       node: Type.Optional(
         Type.String({ description: "Connected node id or display name. Required when ambiguous." }),
       ),
@@ -450,7 +452,7 @@ export function createOllamaNodeInferenceTool(api: OpenClawPluginApi): AnyAgentT
       const nodeQuery = readStringParam(params, "node");
       const listed = await api.runtime.nodes.list({ connected: true });
       const modelNodes = listed.nodes.filter((node) =>
-        node.commands?.includes(OLLAMA_MODELS_COMMAND),
+        (node.invocableCommands ?? node.commands)?.includes(OLLAMA_MODELS_COMMAND),
       );
 
       if (action === "discover") {
@@ -494,7 +496,9 @@ export function createOllamaNodeInferenceTool(api: OpenClawPluginApi): AnyAgentT
       if (action !== "run") {
         throw new Error("action must be discover or run");
       }
-      const chatNodes = modelNodes.filter((node) => node.commands?.includes(OLLAMA_CHAT_COMMAND));
+      const chatNodes = modelNodes.filter((node) =>
+        (node.invocableCommands ?? node.commands)?.includes(OLLAMA_CHAT_COMMAND),
+      );
       const node = nodeQuery
         ? findNode(chatNodes, nodeQuery)
         : chatNodes.length === 1

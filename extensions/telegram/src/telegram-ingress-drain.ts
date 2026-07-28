@@ -191,6 +191,14 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
             };
           }
         }
+        if (!participant) {
+          // A dispatched update that records no outcome and defers no participant
+          // was consumed silently; completing here tombstones the spool row with
+          // attempts=0 and no trace, so keep a diagnostic trail for regressions.
+          params.onLog?.(
+            `telegram ingress: update ${resolveTelegramUpdateId(update) ?? "unknown"} completed without a recorded processing outcome`,
+          );
+        }
         await lifecycle.onAdopted();
         return { kind: "completed" };
       } catch (error) {

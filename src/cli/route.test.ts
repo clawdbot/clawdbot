@@ -37,7 +37,7 @@ vi.mock("../runtime.js", () => ({
 
 function firstConfigReadyCall() {
   return ensureConfigReadyMock.mock.calls[0]?.[0] as
-    | { runtime?: unknown; commandPath?: unknown }
+    | { runtime?: unknown; commandPath?: unknown; suppressDoctorStdout?: boolean }
     | undefined;
 }
 
@@ -118,6 +118,23 @@ describe("tryRouteCli", () => {
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "channels",
     });
+  });
+
+  it("suppresses config get machine output without running an observing startup guard", async () => {
+    const captured: boolean[] = [];
+    runRouteMock.mockImplementationOnce(async () => {
+      captured.push(loggingState.forceConsoleToStderr);
+      return true;
+    });
+
+    await expect(
+      tryRouteCli(["node", "openclaw", "config", "get", "gateway.port"], {
+        machineOutput: true,
+      }),
+    ).resolves.toBe(true);
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(captured).toEqual([true]);
   });
 
   it("keeps logs routed to stderr for routed --json commands", async () => {

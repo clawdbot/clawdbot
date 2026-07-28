@@ -283,17 +283,13 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
     ) {
       continue;
     }
+    const hasRecord = Object.hasOwn(records, candidate.pluginId);
     const hasUsableRecord =
-      Object.hasOwn(records, candidate.pluginId) &&
-      !isInstalledRecordMissingOnDisk(records[candidate.pluginId], env);
+      hasRecord && !isInstalledRecordMissingOnDisk(records[candidate.pluginId], env);
     if (
       !shouldReplaceBrokenOfficialInstall &&
-      knownIds.has(candidate.pluginId) &&
-      hasUsableRecord
+      (hasUsableRecord || (knownIds.has(candidate.pluginId) && !hasRecord))
     ) {
-      continue;
-    }
-    if (!shouldReplaceBrokenOfficialInstall && hasUsableRecord) {
       continue;
     }
     const installSpec = resolveCandidateInstallSpec({
