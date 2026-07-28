@@ -534,7 +534,7 @@ Query-string tokens are rejected.
 
     Fields: `message` (required), `name`, `agentId`, `sessionKey` (requires `hooks.allowRequestSessionKey=true`), `idempotencyKey`, `wakeMode`, `deliver`, `channel`, `to`, `model`, `thinking`, `timeoutSeconds`.
 
-    `deliver: true` sends the final agent reply, not the incoming hook message. To target Discord, use `channel: "discord"` and `to: "<channel-id>"`; `channelId` is rejected because it is not a hook delivery field.
+    `deliver: true` sends the final agent reply, not the incoming hook message. Target delivery with `channel` and `to` (for example, `channel: "discord"` and `to: "<channel-id>"`). Unsupported `channelId` is rejected with HTTP 400; it is not a hook delivery field and was previously ignored.
 
   </Accordion>
   <Accordion title="Mapped hooks (POST /hooks/<name>)">

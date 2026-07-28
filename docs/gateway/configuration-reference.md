@@ -927,6 +927,8 @@ Validation and safety notes:
 - `POST /hooks/wake` → `{ text, mode?: "now"|"next-heartbeat" }`
 - `POST /hooks/agent` → `{ message, name?, agentId?, sessionKey?, wakeMode?, deliver?, channel?, to?, model?, thinking?, timeoutSeconds? }`
   - `sessionKey` from request payload is accepted only when `hooks.allowRequestSessionKey=true` (default: `false`).
+  - `deliver: true` sends the final agent reply to a channel (not the inbound hook message); `channel` defaults to `last`.
+  - Target a channel with `channel` plus `to` (for example, `channel: "discord"` and `to: "<channel-id>"`). Unsupported `channelId` is rejected with HTTP 400; it is not a delivery field and was previously ignored.
 - `POST /hooks/<name>` → resolved via `hooks.mappings`
   - Template-rendered mapping `sessionKey` values are treated as externally supplied and also require `hooks.allowRequestSessionKey=true`.
 
@@ -943,7 +945,7 @@ Validation and safety notes:
 - `defaultSessionKey`: optional fixed session key for hook agent runs without explicit `sessionKey`.
 - `allowRequestSessionKey`: allow `/hooks/agent` callers and template-driven mapping session keys to set `sessionKey` (default: `false`).
 - `allowedSessionKeyPrefixes`: optional prefix allowlist for explicit `sessionKey` values (request + mapping), e.g. `["hook:"]`. It becomes required when any mapping or preset uses a templated `sessionKey`.
-- `deliver: true` sends the final agent reply to a channel; `channel` defaults to `last`. To target Discord explicitly, use `channel: "discord"` and `to: "<channel-id>"`. The endpoint rejects unsupported `channelId` payload fields instead of treating them as a delivery target.
+- `deliver: true` sends the final agent reply to a channel; `channel` defaults to `last`.
 - `model` overrides LLM for this hook run (must be allowed if model catalog is set).
 
 </Accordion>

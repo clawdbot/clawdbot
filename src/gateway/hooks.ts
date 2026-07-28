@@ -245,7 +245,7 @@ const getHookChannelSet = () => new Set<string>(listHookChannelValues());
 /** Render the current hook channel validation error from registered channel plugins. */
 export const getHookChannelError = () => `channel must be ${listHookChannelValues().join("|")}`;
 
-/** Reject Discord-style channelId payloads; hooks deliver via channel + to. */
+/** Reject unsupported channelId payloads; hooks deliver via channel + to. */
 export const getUnsupportedHookChannelIdError = () =>
   "channelId is not supported; use channel and to to deliver the final agent reply";
 
