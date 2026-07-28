@@ -16,7 +16,7 @@ import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { danger, warn } from "openclaw/plugin-sdk/runtime-env";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { firstDefined, type NormalizedAllowFrom } from "./bot-access.js";
-import { isRecoverableMediaGroupError } from "./bot-handlers.media.js";
+import { hasInboundMedia, isRecoverableMediaGroupError } from "./bot-handlers.media.js";
 import type { TelegramHandlerMessageRuntime } from "./bot-handlers.message.runtime.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
 import type { TelegramAmbientTranscriptWatermark } from "./bot-message-context.types.js";
@@ -114,7 +114,11 @@ export function createTelegramInboundMediaGroupRuntime(
     const mayNeedDownload =
       !textParts.text.trim() &&
       Boolean(msg.audio ?? msg.voice ?? documentMime?.startsWith("audio/"));
-    if (!isGroup || mayNeedDownload) {
+    // Media-less messages have nothing to skip-download. They must reach the
+    // canonical mention gate (bot-message-context.body), which records group
+    // history, fires ingest hooks, and settles an explicit skipped result;
+    // consuming them here tombstones the ingress row without any trace.
+    if (!isGroup || !hasInboundMedia(msg) || mayNeedDownload) {
       return false;
     }
     const sessionState = resolveTelegramSessionState({

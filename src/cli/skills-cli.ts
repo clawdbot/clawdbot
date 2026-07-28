@@ -55,6 +55,7 @@ import {
   reviseSkillProposal,
 } from "../skills/workshop/service.js";
 import type {
+  SkillProposalApplyResult,
   SkillProposalManifest,
   SkillProposalReadResult,
   SkillProposalSupportFileInput,
@@ -120,6 +121,7 @@ type ResolveSkillsWorkspaceOptions = {
 type ResolvedSkillsWorkspace = ReturnType<typeof resolveSkillsWorkspace>;
 
 const GATEWAY_SKILLS_STATUS_TIMEOUT_MS = 1_500;
+const GATEWAY_SKILLS_MUTATION_TIMEOUT_MS = 10_000;
 
 function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
   config: ReturnType<typeof getRuntimeConfig>;
@@ -393,6 +395,49 @@ async function runSkillCuratorMutation(method: "pin" | "restore" | "unpin", skil
     return unpinCuratedSkill(skill);
   }
   return restoreCuratedSkill(skill);
+}
+
+async function runSkillProposalApply(
+  resolved: ResolvedSkillsWorkspace,
+  proposalId: string,
+): Promise<SkillProposalApplyResult> {
+  const { callGateway, isGatewayTransportError } = await import("../gateway/call.js");
+  try {
+    // Decide offline fallback before dispatching the non-idempotent mutation.
+    // Once a Gateway answers, apply failures must never be replayed locally.
+    await callGateway({
+      config: resolved.config,
+      method: "health",
+      params: {},
+      timeoutMs: GATEWAY_SKILLS_STATUS_TIMEOUT_MS,
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+      mode: GATEWAY_CLIENT_MODES.CLI,
+      requiredMethods: ["skills.proposals.apply"],
+    });
+  } catch (err) {
+    if (
+      resolved.config.gateway?.mode === "remote" ||
+      !isGatewayTransportError(err) ||
+      err.kind !== "closed" ||
+      err.code !== 1006
+    ) {
+      throw err;
+    }
+    return await applySkillProposal({
+      workspaceDir: resolved.workspaceDir,
+      config: resolved.config,
+      proposalId,
+    });
+  }
+
+  return await callGateway<SkillProposalApplyResult>({
+    config: resolved.config,
+    method: "skills.proposals.apply",
+    params: { agentId: resolved.agentId, proposalId },
+    timeoutMs: GATEWAY_SKILLS_MUTATION_TIMEOUT_MS,
+    clientName: GATEWAY_CLIENT_NAMES.CLI,
+    mode: GATEWAY_CLIENT_MODES.CLI,
+  });
 }
 
 async function readSkillProposalInput(options: {
@@ -1031,8 +1076,8 @@ export function registerSkillsCli(program: Command) {
     .action(
       async (proposalId: string, opts: { json?: boolean; agent?: string }, command: Command) => {
         try {
-          const { config, workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
-          const applied = await applySkillProposal({ workspaceDir, config, proposalId });
+          const resolved = resolveSkillsWorkspaceForCommand(command.parent, opts);
+          const applied = await runSkillProposalApply(resolved, proposalId);
           if (opts.json) {
             defaultRuntime.writeJson(applied);
             return;

@@ -93,7 +93,22 @@ function collectFishPathOptionFlags(
   return [...flags];
 }
 
-function generateFishPathHelper(rootCmd: string): string {
+function generateFishPathHelper(rootCmd: string, program: Command): string {
+  const knownCommandPaths = collectBashCompletionContexts(program, [])
+    .flatMap((context) => context.pathVariants)
+    .map((pathSegments) => `'${pathSegments.join(" ").replaceAll("'", "'\\''")}'`)
+    .join(" ");
+  const rejectDescendantCommands = knownCommandPaths
+    ? `
+  if test (count $command_tokens) -gt (count $expected)
+    set -l next_index (math (count $expected) + 1)
+    set -l candidate_path (string join " " $expected $command_tokens[$next_index])
+    switch "$candidate_path"
+      case ${knownCommandPaths}
+        return 1
+    end
+  end`
+    : "";
   // Fish needs a helper to ignore option values while matching nested command paths.
   return `
 function __${rootCmd}_command_path_matches
@@ -137,6 +152,7 @@ function __${rootCmd}_command_path_matches
       return 1
     end
   end
+${rejectDescendantCommands}
   return 0
 end
 `;
@@ -211,6 +227,15 @@ export function registerCompletionCli(program: Command) {
       // Route logs to stderr so plugin loading messages do not corrupt
       // the completion script written to stdout.
       routeLogsToStderr();
+
+      // Cached installation needs only the existing script; loading the command tree can
+      // introduce unrelated plugin failures before the cache can be checked or installed.
+      if (options.install && !options.writeState) {
+        const targetShell = options.shell ?? resolveShellFromEnv();
+        await installCompletion(targetShell, Boolean(options.yes), program.name());
+        return;
+      }
+
       const shell = options.shell ?? "zsh";
 
       // Completion needs the full Commander command tree (including nested subcommands).
@@ -507,11 +532,23 @@ function generatePowerShellCompletion(program: Command): string {
   const segments: string[] = [];
   const formatPowerShellArray = (entries: string[]) =>
     entries.length > 0 ? `@(${entries.map((entry) => `'${entry}'`).join(",")})` : "@()";
+  const rootValueOptions = completionOptionFlags(program.options, true);
+  const contexts = collectBashCompletionContexts(program, rootValueOptions);
+  const commandPathCases = contexts
+    .flatMap((context) =>
+      context.pathVariants.map(
+        (pathSegments) => `            '${pathSegments.join(" ")}' {
+                $commandPath = $candidatePath
+                $valueOptions = ${formatPowerShellArray(context.valueOptions)}
+            }`,
+      ),
+    )
+    .join("\n");
 
   const visit = (cmd: Command, pathVariants: string[][]) => {
     // Command completion for this level
     const subCommands = cmd.commands.flatMap((c) => commandNameVariants(c));
-    const options = cmd.options.map((option) => preferredCompletionFlag(option));
+    const options = cmd.options.flatMap((option) => completionFlags(option));
     const allCompletions = formatPowerShellArray([...subCommands, ...options]);
 
     if ([...subCommands, ...options].length > 0) {
@@ -545,22 +582,31 @@ Register-ArgumentCompleter -Native -CommandName ${rootCmd} -ScriptBlock {
     
     $commandElements = $commandAst.CommandElements
     $commandPath = ""
-    
-    # Reconstruct command path (simple approximation)
-    # Skip the executable name
+    $valueOptions = ${formatPowerShellArray(rootValueOptions)}
+
+    # Skip option values so global and nested flags cannot hide the command path.
     for ($i = 1; $i -lt $commandElements.Count; $i++) {
         $element = $commandElements[$i].Extent.Text
-        if ($element -like "-*") { break }
-        if ($i -eq $commandElements.Count - 1 -and $wordToComplete -ne "") { break } # Don't include current word being typed
-        $commandPath += "$element "
+        if ($i -eq $commandElements.Count - 1 -and $wordToComplete -ne "") { break }
+        if ($element -like "-*") {
+            $flag = ($element -split '=', 2)[0]
+            if ($element -notlike '*=*' -and $valueOptions -contains $flag) {
+                $i++
+            }
+            continue
+        }
+
+        $candidatePath = if ($commandPath -eq '') { $element } else { "$commandPath $element" }
+        switch ($candidatePath) {
+${commandPathCases}
+        }
     }
-    $commandPath = $commandPath.Trim()
     
     # Root command
     if ($commandPath -eq "") {
          $completions = ${formatPowerShellArray([
            ...program.commands.flatMap((command) => commandNameVariants(command)),
-           ...program.options.map((option) => preferredCompletionFlag(option)),
+           ...program.options.flatMap((option) => completionFlags(option)),
          ])}
          $completions | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
             [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterName', $_)
@@ -574,7 +620,7 @@ Register-ArgumentCompleter -Native -CommandName ${rootCmd} -ScriptBlock {
 
 function generateFishCompletion(program: Command): string {
   const rootCmd = program.name();
-  const segments: string[] = [generateFishPathHelper(rootCmd)];
+  const segments: string[] = [generateFishPathHelper(rootCmd, program)];
 
   const visit = (cmd: Command, parentVariants: string[][]) => {
     // One condition per alias-expanded parent path so completion keeps working

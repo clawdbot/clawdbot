@@ -17,7 +17,8 @@ import { createCliRuntimeCapture, mockRuntimeModule } from "./test-runtime-captu
  * but before runtime defaults), so runtime defaults don't leak into the written config.
  */
 
-const mockReadConfigFileSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>();
+const mockReadConfigFileSnapshot =
+  vi.fn<(options?: { observe?: boolean }) => Promise<ConfigFileSnapshot>>();
 const mockWriteConfigFile = vi.fn<
   (
     cfg: OpenClawConfig,
@@ -36,7 +37,8 @@ const mockLoadPluginMetadataSnapshot = vi.fn((_configForTest: unknown) =>
 );
 
 vi.mock("../config/config.js", () => ({
-  readConfigFileSnapshot: () => mockReadConfigFileSnapshot(),
+  readConfigFileSnapshot: (...args: Parameters<typeof mockReadConfigFileSnapshot>) =>
+    mockReadConfigFileSnapshot(...args),
   writeConfigFile: (
     cfg: OpenClawConfig,
     options?: {
@@ -1180,6 +1182,15 @@ describe("config cli", () => {
   });
 
   describe("config get", () => {
+    it("reads the valid configuration without observing persistent health state", async () => {
+      setGatewaySnapshot();
+
+      await runConfigCommand(["config", "get", "gateway.port", "--json"]);
+
+      expect(mockReadConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
+      expect(parseLastLogPayload()).toBe(18789);
+    });
+
     it("redacts sensitive values", async () => {
       const resolved: OpenClawConfig = {
         gateway: {
@@ -1226,9 +1237,64 @@ describe("config cli", () => {
       const payload = parseLastLogPayload() as { error: string };
       expect(payload.error).toBe("Config path not found: nonexistent.path");
     });
+
+    it.each([
+      {
+        path: "gateway.__proto__.token",
+        error: "Invalid path segment: __proto__",
+      },
+      {
+        path: ".gateway.port",
+        error: "Invalid path (empty segment): .gateway.port",
+      },
+      {
+        path: "agents.list[0]id",
+        error: "Invalid path (missing separator after bracket): agents.list[0]id",
+      },
+    ])(
+      "returns a JSON error without reading configuration for malformed $path",
+      async (testCase) => {
+        await expect(runConfigCommand(["config", "get", testCase.path, "--json"])).rejects.toThrow(
+          ExitError,
+        );
+
+        expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+        expect(mockError).not.toHaveBeenCalled();
+        expect(parseLastLogPayload()).toMatchObject({
+          error: expect.stringContaining(testCase.error),
+        });
+      },
+    );
+
+    it("returns invalid configuration as JSON without observing persistent state", async () => {
+      setSnapshotOnce(
+        makeInvalidSnapshot({
+          issues: [{ path: "gateway.bind", message: "Invalid enum value" }],
+        }),
+      );
+
+      await expect(runConfigCommand(["config", "get", "gateway.port", "--json"])).rejects.toThrow(
+        ExitError,
+      );
+
+      expect(mockReadConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
+      expect(mockError).not.toHaveBeenCalled();
+      expect(parseLastLogPayload()).toMatchObject({
+        error: expect.stringContaining("OpenClaw config is invalid"),
+        issues: [{ path: "gateway.bind", message: "Invalid enum value" }],
+      });
+    });
   });
 
   describe("config validate", () => {
+    it("validates without observing persistent configuration health state", async () => {
+      setGatewaySnapshot();
+
+      await runConfigCommand(["config", "validate"]);
+
+      expect(mockReadConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
+    });
+
     it("prints success and exits 0 when config is valid", async () => {
       setGatewaySnapshot();
 

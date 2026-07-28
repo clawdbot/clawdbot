@@ -1,7 +1,13 @@
 import type { DatabaseSync } from "node:sqlite";
-import { migrateMemoryIndexSourcesIdentity } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
+import {
+  ensureMemoryRecallMetadataColumns,
+  migrateMemoryIndexSourcesIdentity,
+} from "../../packages/memory-host-sdk/src/host/memory-schema.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
+import {
+  repairCanonicalSqliteIndexes,
+  verifyAndRepairCanonicalSqliteIndexes,
+} from "../infra/sqlite-index-schema.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { migrateSqliteSchemaToStrictInTransaction } from "../infra/sqlite-strict.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
@@ -470,17 +476,13 @@ export function assertAgentDatabaseIntegrityBeforeMutation(
       toVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
     });
   }
-  // Named indexes are repairable; the full schema assertion below must run
-  // after this repair while still rejecting table and constraint drift.
-  const rebuiltIndexes =
-    userVersion === OPENCLAW_AGENT_SCHEMA_VERSION
-      ? repairCanonicalSqliteIndexes(database, pathname, OPENCLAW_AGENT_SCHEMA_SQL, {
-          allowMissingColumns: true,
-          validateAfterRepair: () =>
-            assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname }),
-        })
-      : [];
-  if (rebuiltIndexes.length === 0) {
+  if (userVersion === OPENCLAW_AGENT_SCHEMA_VERSION) {
+    verifyAndRepairCanonicalSqliteIndexes(database, pathname, OPENCLAW_AGENT_SCHEMA_SQL, {
+      allowMissingColumns: true,
+      validateAfterRepair: () =>
+        assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname }),
+    });
+  } else {
     // Every physical open proves the full file before schema mutation or exposure.
     assertSqliteIntegrity(database, pathname);
   }
@@ -557,6 +559,7 @@ function ensureAgentSchema(
       backfillSessionEntryProvenance(db, previousVersion);
       migrateSessionNodesAndWindows(db, previousVersion);
       db.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+      ensureMemoryRecallMetadataColumns(db);
       if (previousVersion < targetVersion) {
         ensureOpenClawAgentBoardSchemaInTransaction(db);
       }

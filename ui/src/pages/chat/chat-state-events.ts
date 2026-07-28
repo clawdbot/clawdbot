@@ -44,7 +44,10 @@ import {
 } from "./run-lifecycle.ts";
 import { preserveQueuedUserTurn, retireSteeredChipsForTerminalRun } from "./steer-lifecycle.ts";
 import { isAckedSteeredChip } from "./steered-chip.ts";
-import { rememberAuthoritativeTerminal } from "./terminal-message-identity.ts";
+import {
+  isLiveTerminalForRun,
+  rememberAuthoritativeTerminal,
+} from "./terminal-message-identity.ts";
 import { handleAgentEvent, handleSessionOperationEvent } from "./tool-stream.ts";
 
 function sessionMessageMatchesChat(
@@ -52,6 +55,126 @@ function sessionMessageMatchesChat(
   event: NonNullable<ReturnType<typeof readSessionChangedEvent>>,
 ): boolean {
   return chatScopedEventSessionMatches(state, event.key, event.agentId ?? undefined);
+}
+
+type LiveUserMessageIdentity = {
+  id: string | null;
+  idempotencyKey: string | null;
+  sequence: number | null;
+};
+
+function readLiveUserMessageIdentity(message: unknown): LiveUserMessageIdentity | null {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return null;
+  }
+  const record = message as Record<string, unknown>;
+  if (record.role !== "user") {
+    return null;
+  }
+  const marker = record["__openclaw"];
+  const metadata =
+    marker && typeof marker === "object" && !Array.isArray(marker)
+      ? (marker as Record<string, unknown>)
+      : null;
+  const id = typeof metadata?.id === "string" && metadata.id.trim() ? metadata.id : null;
+  const idempotencyValue = metadata?.idempotencyKey ?? record.idempotencyKey;
+  const idempotencyKey =
+    typeof idempotencyValue === "string" && idempotencyValue.trim() ? idempotencyValue : null;
+  const sequence =
+    typeof metadata?.seq === "number" && Number.isSafeInteger(metadata.seq) && metadata.seq > 0
+      ? metadata.seq
+      : null;
+  return { id, idempotencyKey, sequence };
+}
+
+function applyLiveUserMessage(state: ChatPageHost, payload: unknown): void {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return;
+  }
+  const event = payload as {
+    clientRunId?: unknown;
+    message?: unknown;
+    messageId?: unknown;
+    messageSeq?: unknown;
+  };
+  const sourceMessage = event.message;
+  const sourceIdentity = readLiveUserMessageIdentity(sourceMessage);
+  if (!sourceIdentity) {
+    return;
+  }
+  const eventId =
+    typeof event.messageId === "string" && event.messageId.trim() ? event.messageId : null;
+  const clientRunId =
+    typeof event.clientRunId === "string" && event.clientRunId.trim() ? event.clientRunId : null;
+  const eventSequence =
+    typeof event.messageSeq === "number" &&
+    Number.isSafeInteger(event.messageSeq) &&
+    event.messageSeq > 0
+      ? event.messageSeq
+      : null;
+  const incoming: LiveUserMessageIdentity = {
+    ...sourceIdentity,
+    id: eventId ?? sourceIdentity.id,
+    idempotencyKey: sourceIdentity.idempotencyKey ?? clientRunId,
+    sequence: eventSequence ?? sourceIdentity.sequence,
+  };
+  if (!incoming || (!incoming.id && !incoming.idempotencyKey && incoming.sequence === null)) {
+    return;
+  }
+  const sourceRecord = sourceMessage as Record<string, unknown>;
+  const marker = sourceRecord["__openclaw"];
+  const sourceMetadata =
+    marker && typeof marker === "object" && !Array.isArray(marker)
+      ? (marker as Record<string, unknown>)
+      : {};
+  const message = {
+    ...sourceRecord,
+    __openclaw: {
+      ...sourceMetadata,
+      ...(incoming.id ? { id: incoming.id } : {}),
+      ...(incoming.idempotencyKey ? { idempotencyKey: incoming.idempotencyKey } : {}),
+      ...(incoming.sequence !== null ? { seq: incoming.sequence } : {}),
+    },
+  };
+  const incomingText = extractText(sourceMessage);
+  const existingIndex = state.chatMessages.findIndex((candidate) => {
+    const existing = readLiveUserMessageIdentity(candidate);
+    return Boolean(
+      existing &&
+      ((incoming.id && incoming.id === existing.id) ||
+        (incoming.sequence !== null && incoming.sequence === existing.sequence) ||
+        (incoming.idempotencyKey &&
+          existing.id === null &&
+          existing.sequence === null &&
+          existing.idempotencyKey &&
+          incomingText !== null &&
+          extractText(candidate) === incomingText &&
+          (incoming.idempotencyKey === existing.idempotencyKey ||
+            incoming.idempotencyKey === `${existing.idempotencyKey}:user` ||
+            `${incoming.idempotencyKey}:user` === existing.idempotencyKey))),
+    );
+  });
+  if (existingIndex < 0) {
+    const ownerRunId = clientRunId ?? incoming.idempotencyKey;
+    const terminalIndex = ownerRunId
+      ? state.chatMessages.findIndex((candidate) =>
+          isLiveTerminalForRun(
+            candidate,
+            ownerRunId.endsWith(":user") ? ownerRunId.slice(0, -":user".length) : ownerRunId,
+          ),
+        )
+      : -1;
+    // A persisted prompt can trail either a live stream or its already
+    // materialized terminal; both projections must retain transcript order.
+    state.chatMessages =
+      terminalIndex < 0
+        ? [...state.chatMessages, message]
+        : state.chatMessages.toSpliced(terminalIndex, 0, message);
+    return;
+  }
+  if (state.chatMessages[existingIndex] !== message) {
+    state.chatMessages = state.chatMessages.toSpliced(existingIndex, 1, message);
+  }
 }
 
 function selectedGlobalEventAgentId(state: ChatPageHost, agentId: string | null): string {
@@ -121,6 +244,7 @@ function handleSessionMessageEvent(state: ChatPageHost, payload: unknown) {
   }
   const matchesChat = sessionMessageMatchesChat(state, event);
   if (matchesChat) {
+    applyLiveUserMessage(state, payload);
     void loadChatBranches(state);
   }
   if (matchesChat && event.archived !== null) {
@@ -349,6 +473,8 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
       payload?.state === "delta" &&
       typeof payload.runId === "string" &&
       chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId) &&
+      // Same-session background streams cannot clear the foreground run's status.
+      (!state.chatRunId || state.chatRunId === payload.runId) &&
       state.observerDigest &&
       state.observerDigest.runId !== payload.runId
     ) {

@@ -243,7 +243,7 @@ describe("qa scenario catalog", () => {
     if (scenario.execution.kind !== "playwright") {
       throw new Error(`expected Playwright scenario, got ${scenario.execution.kind}`);
     }
-    expect(scenario.execution.path).toBe("ui/src/e2e/chat-flow.e2e.test.ts");
+    expect(scenario.execution.path).toBe("ui/src/e2e/chat-flow.messaging.e2e.test.ts");
     expect(scenario.execution.testNamePattern).toBe(
       "sends a chat turn through the GUI and renders the final Gateway event",
     );
@@ -375,8 +375,25 @@ describe("qa scenario catalog", () => {
       toolCoverage: {
         bucket: "codex-native-workspace",
         expectedLayer: "codex-native-workspace",
+        required: true,
       },
     });
+    expect(readQaScenarioExecutionConfig(applyPatch.id)).not.toHaveProperty("knownHarnessGap");
+    expect(readQaScenarioExecutionConfig(applyPatch.id)?.happyPrompt).toContain(
+      "runtime-tool-fixture-patch.txt",
+    );
+    expect(readQaScenarioExecutionConfig(applyPatch.id)?.failurePrompt).toContain(
+      "../runtime-tool-fixture-denied.txt",
+    );
+    expect(readQaScenarioExecutionConfig(applyPatch.id)?.failurePrompt).toContain(
+      "runtime-tool-fixture-denied-original",
+    );
+    expect(readQaScenarioExecutionConfig(applyPatch.id)?.failurePrompt).toContain(
+      "runtime patch outside the workspace",
+    );
+    expect(readQaScenarioExecutionConfig(applyPatch.id)?.failurePrompt).not.toContain(
+      "missing-context",
+    );
     expect(readQaScenarioExecutionConfig(messageTool.id)).toMatchObject({
       toolName: "message",
       expectedAvailable: false,
@@ -707,6 +724,15 @@ describe("qa scenario catalog", () => {
     expect(scenario?.execution.flow?.steps.map((step) => step.name)).toContain(
       "keeps codex coordination chatter out of the visible reply",
     );
+  });
+
+  it("binds model switch follow-up assertions to the configured alternate model", () => {
+    const scenario = requireFlowScenario(readQaScenarioById("model-switch-follow-up"));
+    const flow = JSON.stringify(scenario.execution.flow);
+
+    expect(flow).toContain("alternate?.model");
+    expect(flow).toContain("config.followupPrompt");
+    expect(flow).not.toContain("gpt-5.6-luna-alt");
   });
 
   it("keeps provider-sensitive QA flow scenarios on their supported lanes", () => {

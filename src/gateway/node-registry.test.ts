@@ -834,7 +834,7 @@ describe("gateway/node-registry", () => {
     });
   });
 
-  it("keeps a reconnected node when the old connection unregisters", async () => {
+  it("settles zero-timeout invokes when a node reconnects before its old connection closes", async () => {
     const registry = createTestNodeRegistry();
     const oldFrames: string[] = [];
     const newClient = makeClient("conn-new", "node-1");
@@ -843,7 +843,7 @@ describe("gateway/node-registry", () => {
     const oldInvoke = registry.invoke({
       nodeId: "node-1",
       command: "system.run",
-      timeoutMs: 1_000,
+      timeoutMs: 0,
     });
     const oldDisconnected = oldInvoke.catch((err: unknown) => err);
     const oldRequest = JSON.parse(oldFrames[0] ?? "{}") as { payload?: { id?: string } };
@@ -857,9 +857,33 @@ describe("gateway/node-registry", () => {
         ok: true,
       }),
     ).toBe(false);
+    await expect(oldDisconnected).resolves.toEqual(new Error("node disconnected (system.run)"));
+    expect(registry.get("node-1")).toBe(newSession);
     expect(registry.unregister("conn-old")).toBeNull();
     expect(registry.get("node-1")).toBe(newSession);
-    await expect(oldDisconnected).resolves.toBeInstanceOf(Error);
+  });
+
+  it("settles zero-timeout MCP calls without disconnecting the replacement node", async () => {
+    const registry = createNodeRegistry();
+    registerNodeSession(registry, makeClient("conn-old", "node-1"));
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "mcp.tools.call.v1",
+      timeoutMs: 0,
+    });
+
+    const replacement = registerNodeSession(registry, makeClient("conn-new", "node-1"));
+
+    await expect(invoke).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "MCP_SERVER_UNAVAILABLE",
+        message: "node host disconnected during MCP tool call",
+      },
+    });
+    expect(registry.get("node-1")).toBe(replacement);
+    expect(registry.unregister("conn-old")).toBeNull();
+    expect(registry.get("node-1")).toBe(replacement);
   });
 
   it("rejects invoke when the node connection changed before dispatch", async () => {

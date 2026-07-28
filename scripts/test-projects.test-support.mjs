@@ -12,6 +12,10 @@ import {
 } from "../test/vitest/vitest.agents-paths.mjs";
 import { isChannelSurfaceTestFile } from "../test/vitest/vitest.channel-paths.mjs";
 import {
+  cliProcessTestFiles,
+  isCliProcessTestFile,
+} from "../test/vitest/vitest.cli-process-paths.mjs";
+import {
   commandsLightTestFiles,
   isCommandsLightTarget,
   resolveCommandsLightIncludePattern,
@@ -87,6 +91,12 @@ const DEFAULT_VITEST_CONFIG = "test/vitest/vitest.unit.config.ts";
 const AGENTS_CORE_ISOLATED_VITEST_CONFIG = "test/vitest/vitest.agents-core-isolated.config.ts";
 const AGENTS_CORE_VITEST_CONFIG = "test/vitest/vitest.agents-core.config.ts";
 const AGENTS_EMBEDDED_AGENT_VITEST_CONFIG = "test/vitest/vitest.agents-embedded-agent.config.ts";
+const AGENTS_EMBEDDED_AGENT_INCOMPLETE_TURN_VITEST_CONFIG =
+  "test/vitest/vitest.agents-embedded-agent-incomplete-turn.config.ts";
+const AGENTS_EMBEDDED_AGENT_OVERFLOW_COMPACTION_VITEST_CONFIG =
+  "test/vitest/vitest.agents-embedded-agent-overflow-compaction.config.ts";
+const AGENTS_EMBEDDED_AGENT_RUN_VITEST_CONFIG =
+  "test/vitest/vitest.agents-embedded-agent-run.config.ts";
 const AGENTS_SUPPORT_VITEST_CONFIG = "test/vitest/vitest.agents-support.config.ts";
 const AGENTS_TOOLS_VITEST_CONFIG = "test/vitest/vitest.agents-tools.config.ts";
 const AGENTS_VITEST_CONFIG = "test/vitest/vitest.agents.config.ts";
@@ -98,6 +108,7 @@ const AUTO_REPLY_TOP_LEVEL_VITEST_CONFIG = "test/vitest/vitest.auto-reply-top-le
 const BOUNDARY_VITEST_CONFIG = "test/vitest/vitest.boundary.config.ts";
 const BUNDLED_VITEST_CONFIG = "test/vitest/vitest.bundled.config.ts";
 const CHANNEL_VITEST_CONFIG = "test/vitest/vitest.channels.config.ts";
+const CLI_PROCESS_VITEST_CONFIG = "test/vitest/vitest.cli-process.config.ts";
 const CLI_VITEST_CONFIG = "test/vitest/vitest.cli.config.ts";
 const COMMANDS_LIGHT_VITEST_CONFIG = "test/vitest/vitest.commands-light.config.ts";
 const COMMANDS_VITEST_CONFIG = "test/vitest/vitest.commands.config.ts";
@@ -189,6 +200,9 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   [COMMANDS_VITEST_CONFIG, 175],
   [AGENTS_CORE_VITEST_CONFIG, 170],
   [AGENTS_EMBEDDED_AGENT_VITEST_CONFIG, 169],
+  [AGENTS_EMBEDDED_AGENT_INCOMPLETE_TURN_VITEST_CONFIG, 169],
+  [AGENTS_EMBEDDED_AGENT_OVERFLOW_COMPACTION_VITEST_CONFIG, 169],
+  [AGENTS_EMBEDDED_AGENT_RUN_VITEST_CONFIG, 169],
   [AGENTS_SUPPORT_VITEST_CONFIG, 168],
   [AGENTS_TOOLS_VITEST_CONFIG, 167],
   [EXTENSION_CODEX_VITEST_CONFIG, 168],
@@ -225,6 +239,7 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   [EXTENSION_TELEGRAM_VITEST_CONFIG, 94],
   [EXTENSION_WHATSAPP_VITEST_CONFIG, 92],
   [AUTO_REPLY_CORE_VITEST_CONFIG, 90],
+  [CLI_PROCESS_VITEST_CONFIG, 87],
   [CLI_VITEST_CONFIG, 86],
   [MEDIA_VITEST_CONFIG, 84],
   [PLUGINS_VITEST_CONFIG, 82],
@@ -329,6 +344,9 @@ const VITEST_CONFIG_BY_KIND = {
   acp: ACP_VITEST_CONFIG,
   agentCore: AGENTS_CORE_VITEST_CONFIG,
   agentEmbedded: AGENTS_EMBEDDED_AGENT_VITEST_CONFIG,
+  agentEmbeddedIncompleteTurn: AGENTS_EMBEDDED_AGENT_INCOMPLETE_TURN_VITEST_CONFIG,
+  agentEmbeddedOverflowCompaction: AGENTS_EMBEDDED_AGENT_OVERFLOW_COMPACTION_VITEST_CONFIG,
+  agentEmbeddedRun: AGENTS_EMBEDDED_AGENT_RUN_VITEST_CONFIG,
   agentSupport: AGENTS_SUPPORT_VITEST_CONFIG,
   agentTools: AGENTS_TOOLS_VITEST_CONFIG,
   agent: AGENTS_VITEST_CONFIG,
@@ -343,6 +361,7 @@ const VITEST_CONFIG_BY_KIND = {
   boundary: BOUNDARY_VITEST_CONFIG,
   bundled: BUNDLED_VITEST_CONFIG,
   channel: CHANNEL_VITEST_CONFIG,
+  cliProcess: CLI_PROCESS_VITEST_CONFIG,
   cli: CLI_VITEST_CONFIG,
   command: COMMANDS_VITEST_CONFIG,
   commandLight: COMMANDS_LIGHT_VITEST_CONFIG,
@@ -4215,6 +4234,9 @@ function classifyTarget(arg, cwd) {
   if (isPathAtOrUnder(relative, "src/acp")) {
     return "acp";
   }
+  if (isCliProcessTestFile(relative)) {
+    return "cliProcess";
+  }
   if (isPathAtOrUnder(relative, "src/cli")) {
     return "cli";
   }
@@ -4438,6 +4460,21 @@ export function buildVitestRunPlans(
     }
     groupedTargets.set("uiIsolated", current);
   }
+  const cliTargets = groupedTargets.get("cli") ?? [];
+  const impliedCliProcessTargets = cliProcessTestFiles.filter((file) =>
+    cliTargets.some((targetArg) =>
+      includePatternMatchesAnyFile(toScopedIncludePattern(targetArg, cwd), [file]),
+    ),
+  );
+  if (impliedCliProcessTargets.length > 0) {
+    const current = groupedTargets.get("cliProcess") ?? [];
+    for (const target of impliedCliProcessTargets) {
+      if (!current.includes(target)) {
+        current.push(target);
+      }
+    }
+    groupedTargets.set("cliProcess", current);
+  }
 
   if (watchMode && groupedTargets.size > 1) {
     throw new Error(
@@ -4482,6 +4519,7 @@ export function buildVitestRunPlans(
     "tuiPty",
     "mediaUnderstanding",
     "acp",
+    "cliProcess",
     "cli",
     "commandLight",
     "command",
@@ -4491,6 +4529,9 @@ export function buildVitestRunPlans(
     "autoReplyTopLevel",
     "agentCore",
     "agentEmbedded",
+    "agentEmbeddedIncompleteTurn",
+    "agentEmbeddedOverflowCompaction",
+    "agentEmbeddedRun",
     "agentSupport",
     "agentTools",
     "agent",

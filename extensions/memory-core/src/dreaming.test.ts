@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   DEFAULT_MEMORY_DEEP_DREAMING_LIMIT,
   DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
+  DEFAULT_MEMORY_DEEP_DREAMING_MAX_PRIOR_ENTRY_LOSS_FRACTION,
   DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT,
   DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE,
   DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES,
@@ -24,6 +25,14 @@ import {
 } from "./dreaming.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
+// `runDreamingSweepPhases` is the only binding the dreaming trigger imports from this module.
+const runDreamingSweepPhasesMock = vi.hoisted(() =>
+  vi.fn(async (_params: { agentId?: string; workspaceDir: string }) => {}),
+);
+vi.mock("./dreaming-phases.js", () => ({
+  runDreamingSweepPhases: runDreamingSweepPhasesMock,
+}));
+
 const constants = {
   MANAGED_DREAMING_CRON_NAME: MANAGED_MEMORY_DREAMING_CRON_NAME,
   MANAGED_DREAMING_CRON_TAG: MANAGED_MEMORY_DREAMING_CRON_TAG,
@@ -35,6 +44,8 @@ const constants = {
   DEFAULT_DREAMING_MIN_UNIQUE_QUERIES: DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES,
   DEFAULT_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS:
     DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
+  DEFAULT_DREAMING_MAX_PRIOR_ENTRY_LOSS_FRACTION:
+    DEFAULT_MEMORY_DEEP_DREAMING_MAX_PRIOR_ENTRY_LOSS_FRACTION,
   DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS: DEFAULT_MEMORY_DEEP_DREAMING_RECENCY_HALF_LIFE_DAYS,
   RUNTIME_CRON_RECONCILE_INTERVAL_MS: 60_000,
   STARTUP_CRON_RETRY_DELAY_MS: 5_000,
@@ -247,7 +258,7 @@ function getBeforeAgentReplyHandler(
   onMock: ReturnType<typeof vi.fn>,
 ): (
   event: { cleanedBody: string },
-  ctx: { trigger?: string; workspaceDir?: string; sessionKey?: string },
+  ctx: { agentId?: string; trigger?: string; workspaceDir?: string; sessionKey?: string },
 ) => Promise<unknown> {
   const call = onMock.mock.calls.find(([eventName]) => eventName === "before_agent_reply");
   if (!call) {
@@ -255,7 +266,7 @@ function getBeforeAgentReplyHandler(
   }
   return call[1] as (
     event: { cleanedBody: string },
-    ctx: { trigger?: string; workspaceDir?: string; sessionKey?: string },
+    ctx: { agentId?: string; trigger?: string; workspaceDir?: string; sessionKey?: string },
   ) => Promise<unknown>;
 }
 
@@ -323,7 +334,7 @@ describe("short-term dreaming config", () => {
       cfg,
     });
     expect(resolved).toEqual({
-      enabled: false,
+      enabled: true,
       cron: constants.DEFAULT_DREAMING_CRON_EXPR,
       timezone: "America/Los_Angeles",
       limit: constants.DEFAULT_DREAMING_LIMIT,
@@ -333,6 +344,7 @@ describe("short-term dreaming config", () => {
       recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
       maxAgeDays: 30,
       maxPromotedSnippetTokens: constants.DEFAULT_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
+      maxPriorEntryLossFraction: constants.DEFAULT_DREAMING_MAX_PRIOR_ENTRY_LOSS_FRACTION,
       verboseLogging: false,
       storage: {
         mode: "separate",
@@ -375,6 +387,7 @@ describe("short-term dreaming config", () => {
       recencyHalfLifeDays: 21,
       maxAgeDays: 30,
       maxPromotedSnippetTokens: 333,
+      maxPriorEntryLossFraction: constants.DEFAULT_DREAMING_MAX_PRIOR_ENTRY_LOSS_FRACTION,
       verboseLogging: true,
       storage: {
         mode: "separate",
@@ -416,6 +429,7 @@ describe("short-term dreaming config", () => {
       recencyHalfLifeDays: 9,
       maxAgeDays: 45,
       maxPromotedSnippetTokens: 222,
+      maxPriorEntryLossFraction: constants.DEFAULT_DREAMING_MAX_PRIOR_ENTRY_LOSS_FRACTION,
       verboseLogging: false,
       storage: {
         mode: "separate",
@@ -453,6 +467,7 @@ describe("short-term dreaming config", () => {
       recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
       maxAgeDays: 30,
       maxPromotedSnippetTokens: constants.DEFAULT_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
+      maxPriorEntryLossFraction: constants.DEFAULT_DREAMING_MAX_PRIOR_ENTRY_LOSS_FRACTION,
       verboseLogging: false,
       storage: {
         mode: "separate",
@@ -1587,7 +1602,7 @@ describe("gateway startup reconciliation", () => {
     }
   });
 
-  it("does not recreate startup cron from stale enabled config after live memory-core config is removed", async () => {
+  it("uses default-on cadence instead of stale startup config when live memory-core config is removed", async () => {
     vi.useFakeTimers();
     clearInternalHooks();
     const logger = createLogger();
@@ -1639,7 +1654,8 @@ describe("gateway startup reconciliation", () => {
       await vi.advanceTimersByTimeAsync(constants.STARTUP_CRON_RETRY_DELAY_MS);
 
       expect(runtimeCurrentConfig).toHaveBeenCalled();
-      expect(harness.addCalls).toHaveLength(0);
+      expect(harness.addCalls).toHaveLength(1);
+      expect(harness.addCalls[0]?.schedule.expr).toBe(constants.DEFAULT_DREAMING_CRON_EXPR);
       expectLogNotContains(logger.warn, "cron service unavailable");
     } finally {
       vi.useRealTimers();
@@ -1784,8 +1800,9 @@ describe("gateway startup reconciliation", () => {
     ]);
   });
 
-  it("does not fall back to startup plugin config when live memory-core config is removed", async () => {
+  it("uses the product default instead of startup plugin config when live config is removed", async () => {
     clearInternalHooks();
+    const workspaceDir = await createTempWorkspace("memory-dreaming-default-on-live-config-");
     const logger = createLogger();
     const harness = createCronHarness();
     const onMock = vi.fn();
@@ -1793,7 +1810,8 @@ describe("gateway startup reconciliation", () => {
       () =>
         ({
           agents: {
-            list: [{ id: "main", default: true }],
+            defaults: { workspace: workspaceDir },
+            list: [{ id: "main", default: true, workspace: workspaceDir }],
           },
         }) as OpenClawConfig,
     );
@@ -1839,13 +1857,13 @@ describe("gateway startup reconciliation", () => {
       const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
       const result = await beforeAgentReply(
         { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
-        { trigger: "heartbeat", workspaceDir: ".", sessionKey },
+        { trigger: "heartbeat", workspaceDir, sessionKey },
       );
 
       expect(runtimeCurrentConfig).toHaveBeenCalled();
       expect(result).toEqual({
         handled: true,
-        reason: "memory-core: short-term dreaming disabled",
+        reason: "memory-core: short-term dreaming processed",
       });
     } finally {
       clearInternalHooks();
@@ -1894,6 +1912,73 @@ describe("gateway startup reconciliation", () => {
         handled: true,
         reason: "memory-core: short-term dreaming disabled",
       });
+    } finally {
+      clearInternalHooks();
+    }
+  });
+
+  // Regression: the sweep dropped the agent id entirely, so narrative subagent sessions used
+  // unscoped keys that no per-agent SQLite store could resolve and every phase failed.
+  it("sweeps each workspace as its owning agent rather than the roster default", async () => {
+    clearInternalHooks();
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-owner-");
+    const logger = createLogger();
+    const harness = createCronHarness();
+    const onMock = vi.fn();
+    runDreamingSweepPhasesMock.mockClear();
+    const api: DreamingPluginApiTestDouble = {
+      config: {
+        agents: {
+          defaults: { workspace: workspaceDir },
+        },
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  limit: 5,
+                  phases: {
+                    light: { enabled: false },
+                    rem: { enabled: false },
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      pluginConfig: {},
+      logger,
+      runtime: {},
+      on: onMock,
+    };
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+      await triggerGatewayStart(onMock, {
+        config: api.config,
+        getCron: () => harness.cron,
+      });
+
+      const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
+      await beforeAgentReply(
+        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+        {
+          trigger: "cron",
+          agentId: "researcher",
+          workspaceDir,
+          sessionKey: "agent:researcher:cron:memory-dreaming",
+        },
+      );
+
+      expect(runDreamingSweepPhasesMock).toHaveBeenCalledTimes(1);
+      const sweepArgs = expectDefined(
+        runDreamingSweepPhasesMock.mock.calls[0],
+        "dreaming sweep call",
+      )[0];
+      expect(sweepArgs.agentId).toBe("researcher");
+      expect(sweepArgs.workspaceDir).toBe(workspaceDir);
     } finally {
       clearInternalHooks();
     }

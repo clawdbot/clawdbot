@@ -4,7 +4,11 @@ import { createServer } from "node:net";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { GatewayClient } from "./client.js";
-import type { GatewayProtocolSocket } from "./protocol-client.js";
+import {
+  GatewayProtocolClient,
+  type GatewayProtocolSocket,
+  type GatewayProtocolSocketHandlers,
+} from "./protocol-client.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS } from "./timeouts.js";
 import { rawDataToString } from "./websocket-data.js";
 
@@ -119,6 +123,75 @@ async function stopSyntheticClient(client: GatewayClient): Promise<void> {
   await vi.advanceTimersByTimeAsync(250);
 }
 
+type SyntheticGatewayProtocolConnection = {
+  handlers: GatewayProtocolSocketHandlers;
+  send: ReturnType<typeof vi.fn<(data: string) => void>>;
+  close: ReturnType<typeof vi.fn<(code?: number, reason?: string) => void>>;
+};
+
+function createSyntheticGatewayProtocol(options?: {
+  retryOnClose?: boolean;
+  initialSocketFactoryFailures?: number;
+}): {
+  client: GatewayProtocolClient<Record<string, never>>;
+  connections: SyntheticGatewayProtocolConnection[];
+} {
+  const connections: SyntheticGatewayProtocolConnection[] = [];
+  let nextRequestId = 0;
+  let remainingSocketFactoryFailures = options?.initialSocketFactoryFailures ?? 0;
+  const client = new GatewayProtocolClient<Record<string, never>>({
+    createSocket: (handlers) => {
+      if (remainingSocketFactoryFailures > 0) {
+        remainingSocketFactoryFailures -= 1;
+        throw new Error("synthetic socket factory failure");
+      }
+      let open = true;
+      const send = vi.fn<(data: string) => void>();
+      const close = vi.fn<(code?: number, reason?: string) => void>((code, reason) => {
+        open = false;
+        handlers.close(code ?? 1000, reason ?? "");
+      });
+      connections.push({ handlers, send, close });
+      return {
+        isOpen: () => open,
+        send: (data) => send(data),
+        close: (code, reason) => close(code, reason),
+      };
+    },
+    createRequestId: () => `request-${++nextRequestId}`,
+    buildConnectPlan: () => ({}),
+    buildConnectParams: (plan) => plan,
+    resolveClose: () => ({ retry: options?.retryOnClose ?? true, notify: true }),
+    handshake: { mode: "require-challenge", timeoutMs: 100 },
+    reconnect: { initialMs: 10, multiplier: 2, maxMs: 100 },
+  });
+  return { client, connections };
+}
+
+function completeSyntheticGatewayProtocolHandshake(
+  connection: SyntheticGatewayProtocolConnection,
+): void {
+  connection.handlers.open();
+  connection.handlers.message(
+    JSON.stringify({
+      type: "event",
+      event: "connect.challenge",
+      payload: { nonce: "synthetic-nonce" },
+    }),
+  );
+  const connectFrame = JSON.parse(String(connection.send.mock.calls[0]?.[0])) as {
+    id: string;
+  };
+  connection.handlers.message(
+    JSON.stringify({
+      type: "res",
+      id: connectFrame.id,
+      ok: true,
+      payload: { type: "hello-ok" },
+    }),
+  );
+}
+
 describe("GatewayClient", () => {
   let wss: WebSocketServer | null = null;
   let httpsServer: ReturnType<typeof createHttpsServer> | null = null;
@@ -143,6 +216,173 @@ describe("GatewayClient", () => {
       });
       httpsServer = null;
     }
+  });
+
+  test("keeps one socket when the protocol is started twice during its handshake", () => {
+    const { client, connections } = createSyntheticGatewayProtocol();
+
+    client.start();
+    client.start();
+
+    expect(connections).toHaveLength(1);
+    expect(connections[0]?.close).not.toHaveBeenCalled();
+    client.stop();
+  });
+
+  test("settles the original unbounded request when an active protocol is started again", async () => {
+    const { client, connections } = createSyntheticGatewayProtocol();
+    client.start();
+    const connection = connections[0];
+    if (!connection) {
+      throw new Error("synthetic protocol connection missing");
+    }
+    completeSyntheticGatewayProtocolHandshake(connection);
+    await Promise.resolve();
+
+    const request = client.request<{ status: string }>("agent", undefined, {
+      expectFinal: true,
+      timeoutMs: null,
+    });
+    const frame = JSON.parse(String(connection.send.mock.calls.at(-1)?.[0])) as { id: string };
+    client.start();
+
+    expect(connections).toHaveLength(1);
+    connection.handlers.message(
+      JSON.stringify({
+        type: "res",
+        id: frame.id,
+        ok: true,
+        payload: { status: "ok" },
+      }),
+    );
+
+    await expect(request).resolves.toEqual({ status: "ok" });
+    expect(client.hasPendingRequests).toBe(false);
+    client.stop();
+  });
+
+  test("preserves the one scheduled reconnect when the running protocol is started again", async () => {
+    vi.useFakeTimers();
+    const { client, connections } = createSyntheticGatewayProtocol();
+    client.start();
+    const connection = connections[0];
+    if (!connection) {
+      throw new Error("synthetic protocol connection missing");
+    }
+
+    connection.close(1012, "service restart");
+    expect(vi.getTimerCount()).toBe(1);
+    client.start();
+
+    expect(connections).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(9);
+    expect(connections).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(connections).toHaveLength(2);
+    client.stop();
+  });
+
+  test("restarts immediately after resetting a pending reconnect", async () => {
+    vi.useFakeTimers();
+    const { client, connections } = createSyntheticGatewayProtocol();
+    client.start();
+    const firstConnection = connections[0];
+    if (!firstConnection) {
+      throw new Error("synthetic protocol connection missing");
+    }
+
+    firstConnection.close(1012, "first service restart");
+    expect(vi.getTimerCount()).toBe(1);
+    client.resetReconnectBackoff(10);
+    client.start();
+
+    expect(connections).toHaveLength(2);
+    const secondConnection = connections[1];
+    if (!secondConnection) {
+      throw new Error("synthetic replacement connection missing");
+    }
+    secondConnection.close(1012, "second service restart");
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(1);
+    client.start();
+    expect(connections).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(connections).toHaveLength(3);
+    client.stop();
+  });
+
+  test("starts a fresh protocol socket after an explicit stop", () => {
+    const { client, connections } = createSyntheticGatewayProtocol();
+
+    client.start();
+    client.stop();
+    client.start();
+
+    expect(connections).toHaveLength(2);
+    expect(connections[0]?.close).toHaveBeenCalledOnce();
+    expect(connections[1]?.close).not.toHaveBeenCalled();
+    client.stop();
+  });
+
+  test("allows manual restart after a terminal socket close", () => {
+    vi.useFakeTimers();
+    const { client, connections } = createSyntheticGatewayProtocol({ retryOnClose: false });
+    client.start();
+    const connection = connections[0];
+    if (!connection) {
+      throw new Error("synthetic protocol connection missing");
+    }
+
+    connection.close(1008, "terminal close");
+    expect(vi.getTimerCount()).toBe(0);
+    client.start();
+
+    expect(connections).toHaveLength(2);
+    expect(vi.getTimerCount()).toBe(0);
+    client.stop();
+  });
+
+  test("allows manual restart after a socket factory failure", () => {
+    const { client, connections } = createSyntheticGatewayProtocol({
+      initialSocketFactoryFailures: 1,
+    });
+
+    client.start();
+    expect(connections).toHaveLength(0);
+    client.start();
+
+    expect(connections).toHaveLength(1);
+    client.stop();
+  });
+
+  test("does not let a canceled retry clear the next scheduled reconnect", async () => {
+    vi.useFakeTimers();
+    const { client, connections } = createSyntheticGatewayProtocol();
+    client.start();
+    const firstConnection = connections[0];
+    if (!firstConnection) {
+      throw new Error("synthetic protocol connection missing");
+    }
+
+    firstConnection.close(1012, "first service restart");
+    client.stop();
+    client.start();
+    const secondConnection = connections[1];
+    if (!secondConnection) {
+      throw new Error("synthetic replacement connection missing");
+    }
+    secondConnection.close(1012, "second service restart");
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(1);
+    client.start();
+    expect(connections).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(connections).toHaveLength(3);
+    client.stop();
   });
 
   test("sends the configured websocket origin", async () => {

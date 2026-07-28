@@ -206,6 +206,11 @@ export class TuiStreamAssembler {
     return state.displayText;
   }
 
+  /** Reports whether a run already has real displayable streamed content. */
+  hasDisplayText(runId: string): boolean {
+    return Boolean(this.runs.get(runId)?.displayText);
+  }
+
   /** Finalizes a run, combines any error text, and drops stored stream state. */
   finalize(runId: string, message: unknown, showThinking: boolean, errorMessage?: string): string {
     // Late finals must not insert an evicted run and displace a live stream.

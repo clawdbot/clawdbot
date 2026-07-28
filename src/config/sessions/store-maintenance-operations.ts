@@ -92,8 +92,8 @@ function rememberRemovedSessionFile(
   removedSessionFiles: RemovedSessionFiles,
   entry: SessionEntry,
 ): void {
-  if (!removedSessionFiles.has(entry.sessionId) || entry.sessionFile) {
-    removedSessionFiles.set(entry.sessionId, entry.sessionFile);
+  if (!removedSessionFiles.has(entry.sessionId)) {
+    removedSessionFiles.set(entry.sessionId, undefined);
   }
 }
 

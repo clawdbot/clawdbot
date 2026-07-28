@@ -212,15 +212,11 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
   it("preserves the active session and cleans artifacts using the final referenced session set", async () => {
     const now = Date.now();
     const store = makeStore([
-      [
-        "stale",
-        { sessionId: "stale-session", sessionFile: "stale.jsonl", updatedAt: now - 30 * DAY_MS },
-      ],
+      ["stale", { sessionId: "stale-session", updatedAt: now - 30 * DAY_MS }],
       [
         "stale-shared",
         {
           sessionId: "shared-session",
-          sessionFile: "shared-old.jsonl",
           updatedAt: now - 30 * DAY_MS,
         },
       ],
@@ -270,8 +266,8 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
     expect(archiveCalls).toEqual([
       {
         removedSessionFiles: [
-          ["stale-session", "stale.jsonl"],
-          ["shared-session", "shared-old.jsonl"],
+          ["stale-session", undefined],
+          ["shared-session", undefined],
         ],
         referencedSessionIds: new Set(["shared-session", "active-session"]),
       },

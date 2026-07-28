@@ -399,7 +399,11 @@ export function renderPlaceSelect(params: {
                         value: "worktree",
                         label: t("newSession.worktree"),
                         checked: params.worktree,
-                        disabled: Boolean(params.cloudProfileId) || !params.worktreeAvailable,
+                        // Failed discovery blocks enabling Worktree, but an existing selection
+                        // must stay actionable so the user can clear the submit-blocking state.
+                        disabled:
+                          Boolean(params.cloudProfileId) ||
+                          (!params.worktreeAvailable && !params.worktree),
                         title: params.cloudProfileId
                           ? t("newSession.cloudRequiresWorktree")
                           : params.worktreeAvailable

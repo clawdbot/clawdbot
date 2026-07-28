@@ -21,6 +21,7 @@ import {
   openSessionWorkspaceFile,
   parseCatalogSessionKey,
   pickFreshestObserverDigest,
+  projectSessionObserverDigest,
   readPresenceEntries,
   refreshChatCommands,
   refreshPageChat,
@@ -30,6 +31,7 @@ import {
   resolveActiveRunOutputTokens,
   resolveChatProjectionRunId,
   resolveAssistantAttachmentAuthToken,
+  resolveChatArtifactDownload,
   resolveChatAgentId,
   resolveChatAvatarUrl,
   resolveControlUiFollowUpMode,
@@ -54,7 +56,6 @@ import {
   workspaceResultConflictFromPlacement,
   type BoardViewCallbacks,
   type ChatProps,
-  type SessionObserverDigest,
   type SidebarSide,
   type SidebarSlotId,
 } from "./chat-pane-deps.ts";
@@ -79,19 +80,10 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       return html`<main class="app-shell app-shell--booting" aria-busy="true"></main>`;
     }
     const selectedSession = selectedChatSessionRow(state);
-    const projectedObserverDigest: SessionObserverDigest | null = selectedSession?.observerDigest
-      ? {
-          sessionKey: selectedSession.key,
-          ...(selectedSession.observerDigest.agentId
-            ? { agentId: selectedSession.observerDigest.agentId }
-            : {}),
-          runId: selectedSession.observerDigest.runId,
-          revision: selectedSession.observerDigest.revision,
-          updatedAt: selectedSession.observerDigest.updatedAt,
-          headline: selectedSession.observerDigest.headline,
-          health: selectedSession.observerDigest.health,
-        }
-      : null;
+    const projectedObserverDigest = projectSessionObserverDigest(
+      selectedSession?.key ?? state.sessionKey,
+      selectedSession?.observerDigest,
+    );
     const observerDigest = pickFreshestObserverDigest(
       state.observerDigest,
       projectedObserverDigest,
@@ -559,6 +551,7 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       allowExternalEmbedUrls: state.allowExternalEmbedUrls,
       chatMessageMaxWidth: state.settings.chatMessageMaxWidth,
       assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state as never),
+      resolveArtifactDownload: (params) => resolveChatArtifactDownload(state, params),
       basePath: state.basePath,
       gatewayUrl: state.settings.gatewayUrl,
     };

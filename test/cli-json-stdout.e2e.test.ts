@@ -30,6 +30,142 @@ function runSourceCli(tempHome: string, args: string[], envOverrides: NodeJS.Pro
 
 describe("cli json stdout contract", () => {
   it.each([
+    {
+      name: "routed config get",
+      args: ["config", "get", "gateway.port", "--json"],
+      overrides: {},
+    },
+    {
+      name: "Commander config get",
+      args: ["config", "get", "gateway.port", "--json"],
+      overrides: { OPENCLAW_DISABLE_ROUTE_FIRST: "1" },
+    },
+    {
+      name: "Nix config get",
+      args: ["config", "get", "gateway.port", "--json"],
+      overrides: { OPENCLAW_NIX_MODE: "1" },
+    },
+    { name: "config schema", args: ["config", "schema"], overrides: {} },
+    {
+      name: "Nix config schema",
+      args: ["config", "schema"],
+      overrides: { OPENCLAW_NIX_MODE: "1" },
+    },
+    { name: "config validate", args: ["config", "validate", "--json"], overrides: {} },
+    {
+      name: "Nix config validate",
+      args: ["config", "validate", "--json"],
+      overrides: { OPENCLAW_NIX_MODE: "1" },
+    },
+  ])("does not initialize shared SQLite for $name", async (testCase) => {
+    await withTempHome(
+      async (tempHome) => {
+        const stateDir = path.join(tempHome, "read-only-state");
+        const configPath = path.join(tempHome, "read-only-openclaw.json");
+        await fs.writeFile(
+          configPath,
+          `${JSON.stringify({ gateway: { mode: "local", port: 18789 } })}\n`,
+          "utf8",
+        );
+
+        const result = runSourceCli(tempHome, testCase.args, {
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_STATE_DIR: stateDir,
+          ...testCase.overrides,
+        });
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(() => JSON.parse(result.stdout)).not.toThrow();
+        await expect(
+          fs.access(path.join(stateDir, "state", "openclaw.sqlite")),
+        ).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      },
+      { prefix: "openclaw-read-only-config-e2e-" },
+    );
+  });
+
+  it.each([
+    { name: "routed malformed config get", overrides: {} },
+    {
+      name: "Commander malformed config get",
+      overrides: { OPENCLAW_DISABLE_ROUTE_FIRST: "1" },
+    },
+  ])("returns actionable JSON without creating state for $name", async (testCase) => {
+    await withTempHome(
+      async (tempHome) => {
+        const stateDir = path.join(tempHome, "read-only-state");
+        const configPath = path.join(tempHome, "read-only-openclaw.json");
+        await fs.writeFile(configPath, "{}\n", "utf8");
+
+        const result = runSourceCli(
+          tempHome,
+          ["config", "get", "gateway.__proto__.token", "--json"],
+          {
+            OPENCLAW_CONFIG_PATH: configPath,
+            OPENCLAW_STATE_DIR: stateDir,
+            ...testCase.overrides,
+          },
+        );
+
+        expect(result.status, result.stderr).toBe(1);
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          error: expect.stringContaining("Invalid path segment: __proto__"),
+        });
+        expect(result.stderr).toBe("");
+        await expect(
+          fs.access(path.join(stateDir, "state", "openclaw.sqlite")),
+        ).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      },
+      { prefix: "openclaw-read-only-invalid-config-e2e-" },
+    );
+  });
+
+  it.each([
+    { name: "routed invalid config get", overrides: {} },
+    {
+      name: "Commander invalid config get",
+      overrides: { OPENCLAW_DISABLE_ROUTE_FIRST: "1" },
+    },
+  ])("reports invalid configuration as JSON without creating state for $name", async (testCase) => {
+    await withTempHome(
+      async (tempHome) => {
+        const stateDir = path.join(tempHome, "read-only-state");
+        const configPath = path.join(tempHome, "read-only-openclaw.json");
+        await fs.writeFile(
+          configPath,
+          `${JSON.stringify({ gateway: { bind: "not-a-supported-mode" } })}\n`,
+          "utf8",
+        );
+
+        const result = runSourceCli(tempHome, ["config", "get", "gateway.port", "--json"], {
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_STATE_DIR: stateDir,
+          ...testCase.overrides,
+        });
+
+        expect(result.status, result.stderr).toBe(1);
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          error: expect.stringContaining("OpenClaw config is invalid"),
+          issues: expect.arrayContaining([
+            expect.objectContaining({ path: "gateway.bind", message: expect.any(String) }),
+          ]),
+        });
+        expect(result.stderr).toBe("");
+        await expect(
+          fs.access(path.join(stateDir, "state", "openclaw.sqlite")),
+        ).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      },
+      { prefix: "openclaw-read-only-invalid-snapshot-e2e-" },
+    );
+  });
+
+  it.each([
     { name: "default service", inheritedProfile: undefined, inheritedStateName: ".openclaw" },
     { name: "named service", inheritedProfile: "main", inheritedStateName: ".openclaw-main" },
   ])("resolves the requested profile from inherited $name state", async (inherited) => {

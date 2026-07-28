@@ -23,6 +23,8 @@ tts ui update wizard
 // Curated from the common-settings seed. Broad containers stay listed only
 // when their user-facing children are uniformly common; operational tuning
 // beneath those containers is restored to advanced while tiers are resolved.
+// Per-tool toggles plus deny/alsoAllow stay common; absolute allowlists,
+// agent-to-agent policy, per-sender routing, and elevated access stay advanced.
 const COMMON_TIER_PATHS = `
 bindings commands messages session
 acp.allowedAgents
@@ -50,14 +52,14 @@ agents.entries.*.model agents.entries.*.model.primary agents.entries.*.name
 agents.entries.*.runtime.acp.agent agents.entries.*.runtime.type
 agents.entries.*.sandbox.ssh.workspaceRoot agents.entries.*.sandbox.workspaceRoot
 agents.entries.*.subagents.model agents.entries.*.subagents.model.primary agents.entries.*.workspace
-agents.entries.*.tools.allow agents.entries.*.tools.alsoAllow agents.entries.*.tools.byProvider
-agents.entries.*.tools.deny agents.entries.*.tools.elevated
+agents.entries.*.tools.alsoAllow agents.entries.*.tools.deny
 agents.entries.*.tools.exec.applyPatch.workspaceOnly agents.entries.*.tools.exec.host
 agents.entries.*.tools.exec.mode agents.entries.*.tools.exec.strictInlineEval
 agents.entries.*.tools.exec.reviewer.model agents.entries.*.tools.exec.reviewer.model.primary
 agents.entries.*.tools.fs.workspaceOnly agents.entries.*.tools.message
-agents.entries.*.tools.profile agents.entries.*.tools.sandbox.tools
-agents.entries.*.tools.toolsBySender agents.entries.*.tts.auto
+agents.entries.*.tools.profile agents.entries.*.tools.sandbox.tools.alsoAllow
+agents.entries.*.tools.sandbox.tools.deny
+agents.entries.*.tts.auto
 agents.entries.*.tts.modelOverrides agents.entries.*.tts.persona
 agents.entries.*.tts.personas.*.providers.*.apiKey agents.entries.*.tts.provider
 agents.entries.*.tts.providers.*.apiKey
@@ -159,16 +161,16 @@ skills.load.allowSymlinkTargets skills.load.extraDirs skills.workshop.approvalPo
 skills.workshop.autonomous.enabled talk.provider talk.providers.*.apiKey
 talk.realtime.brain talk.realtime.mode talk.realtime.provider
 talk.realtime.model talk.realtime.providers.*.apiKey talk.realtime.speakerVoice talk.speechLocale
-tools.agentToAgent tools.allow tools.alsoAllow tools.deny tools.elevated tools.exec
+tools.alsoAllow tools.deny tools.exec
 tools.fs tools.media.audio tools.media.image tools.media.video tools.message
 tools.exec.reviewer.model.primary tools.media.models.*.model
 tools.media.models.*.request.auth.token tools.profile tools.sessions
-tools.toolsBySender tools.web transcripts.enabled
+tools.web transcripts.enabled
 tts.auto tts.persona tts.personas.*.providers.*.apiKey tts.provider
 tts.providers.* tts.providers.*.apiKey
 ui.assistant.avatar ui.assistant.name ui.prefs.chatFollowUpMode
 ui.prefs.chatPersistCommentary ui.prefs.chatSendShortcut ui.prefs.chatShowThinking
-ui.prefs.chatShowToolCalls ui.prefs.locale ui.prefs.showAdvancedSettings
+ui.prefs.chatShowToolCalls ui.prefs.locale
 ui.prefs.theme ui.prefs.themeMode update.auto.enabled update.channel
 wizard.accessMode wizard.appRecommendations
 `

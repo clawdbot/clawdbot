@@ -1,18 +1,12 @@
 // GitHub Copilot OAuth tests cover device flow polling and timeout behavior.
 import { getEventListeners } from "node:events";
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Model } from "../../types.js";
 import { githubCopilotOAuthProvider } from "./github-copilot.js";
 import type { OAuthCredentials } from "./types.js";
 
-async function refreshThroughGitHubCopilotProvider(refreshToken: string, enterpriseUrl?: string) {
-  return await githubCopilotOAuthProvider.refreshToken({
-    access: "expired-access-token",
-    refresh: refreshToken,
-    expires: 0,
-    enterpriseUrl,
-  } as OAuthCredentials);
-}
+type FetchImplementation = (...args: Parameters<typeof fetch>) => Promise<Response>;
 
 function startGitHubCopilotLogin(enterpriseUrl = "", signal?: AbortSignal) {
   return githubCopilotOAuthProvider.login({
@@ -54,15 +48,42 @@ function copilotTokenResponse(): Response {
 }
 
 async function finishGitHubCopilotLogin(login: Promise<OAuthCredentials>) {
+  const outcome = login.then(
+    (credentials) => ({ credentials }) as const,
+    (error: unknown) => ({ error }) as const,
+  );
   await vi.advanceTimersByTimeAsync(1_200);
-  return await login;
+  const settled = await outcome;
+  if ("error" in settled) {
+    throw settled.error;
+  }
+  return settled.credentials;
+}
+
+function startGitHubCopilotLoginAtTokenExchange(
+  tokenExchangeFetch: FetchImplementation,
+  enterpriseUrl = "",
+): {
+  fetchMock: ReturnType<typeof vi.fn>;
+  login: Promise<OAuthCredentials>;
+} {
+  vi.useFakeTimers();
+  const fetchMock = vi
+    .fn(tokenExchangeFetch)
+    .mockResolvedValueOnce(deviceCodeResponse())
+    .mockResolvedValueOnce(deviceTokenResponse());
+  vi.stubGlobal("fetch", fetchMock);
+  return {
+    fetchMock,
+    login: finishGitHubCopilotLogin(startGitHubCopilotLogin(enterpriseUrl)),
+  };
 }
 
 function abortListenerCount(signal: AbortSignal): number {
   return getEventListeners(signal, "abort").length;
 }
 
-function stubHangingFetch(timeoutMs: number): void {
+function createHangingFetch(timeoutMs: number): FetchImplementation {
   vi.spyOn(AbortSignal, "timeout").mockImplementation((actualTimeoutMs) => {
     expect(actualTimeoutMs).toBe(timeoutMs);
     const controller = new AbortController();
@@ -72,31 +93,28 @@ function stubHangingFetch(timeoutMs: number): void {
     return controller.signal;
   });
 
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(
-      (_input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
-        new Promise<Response>((_resolve, reject) => {
-          const signal = init?.signal;
-          if (!signal) {
-            reject(new Error("missing abort signal"));
-            return;
-          }
+  return vi.fn(
+    (_input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
+      new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (!signal) {
+          reject(new Error("missing abort signal"));
+          return;
+        }
 
-          const abort = () => {
-            reject(
-              signal.reason instanceof Error
-                ? signal.reason
-                : new DOMException("aborted", "AbortError"),
-            );
-          };
-          if (signal.aborted) {
-            abort();
-            return;
-          }
-          signal.addEventListener("abort", abort, { once: true });
-        }),
-    ),
+        const abort = () => {
+          reject(
+            signal.reason instanceof Error
+              ? signal.reason
+              : new DOMException("aborted", "AbortError"),
+          );
+        };
+        if (signal.aborted) {
+          abort();
+          return;
+        }
+        signal.addEventListener("abort", abort, { once: true });
+      }),
   );
 }
 
@@ -162,7 +180,7 @@ describe("GitHub Copilot OAuth model policy", () => {
   });
 
   it("times out device code requests", async () => {
-    stubHangingFetch(30_000);
+    vi.stubGlobal("fetch", createHangingFetch(30_000));
 
     await expect(startGitHubCopilotLogin()).rejects.toThrow(
       "GitHub Copilot device code request timed out after 30000ms",
@@ -185,28 +203,23 @@ describe("GitHub Copilot OAuth model policy", () => {
   });
 
   it("times out token refresh requests", async () => {
-    stubHangingFetch(30_000);
+    const { login } = startGitHubCopilotLoginAtTokenExchange(createHangingFetch(30_000));
 
-    await expect(refreshThroughGitHubCopilotProvider("refresh-token")).rejects.toThrow(
+    await expect(login).rejects.toThrow(
       "GitHub Copilot token refresh request timed out after 30000ms",
     );
   });
 
   it("rejects unsafe Copilot token expiry values", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          new Response('{"token":"copilot-token","expires_at":1e309}', {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          }),
-      ),
+    const { login } = startGitHubCopilotLoginAtTokenExchange(
+      async () =>
+        new Response('{"token":"copilot-token","expires_at":1e309}', {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
     );
 
-    await expect(refreshThroughGitHubCopilotProvider("refresh-token")).rejects.toThrow(
-      "Invalid Copilot token response fields",
-    );
+    await expect(login).rejects.toThrow("Invalid Copilot token response fields");
   });
 
   it("cancels model enablement response bodies", async () => {
@@ -232,35 +245,25 @@ describe("GitHub Copilot OAuth model policy", () => {
 });
 
 describe("GitHub Copilot OAuth enterprise domain allowlist", () => {
-  function stubTokenFetch(): ReturnType<typeof vi.fn> {
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(
-          JSON.stringify({
-            token: "fake",
-            expires_at: Math.floor(Date.now() / 1000) + 3600,
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        ),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-    return fetchMock;
+  function fetchToken(): Promise<Response> {
+    return Promise.resolve(copilotTokenResponse());
   }
 
   it("rejects an unlisted enterprise domain without sending any request", async () => {
-    const fetchMock = stubTokenFetch();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
 
-    await expect(
-      refreshThroughGitHubCopilotProvider("refresh-token", "attacker.example"),
-    ).rejects.toThrow('unsupported enterprise domain "attacker.example"');
+    await expect(startGitHubCopilotLogin("attacker.example")).rejects.toThrow(
+      'Unsupported GitHub Enterprise domain "attacker.example"',
+    );
 
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("keeps a data-residency ghe.com tenant for the refresh endpoint", async () => {
-    const fetchMock = stubTokenFetch();
+    const { fetchMock, login } = startGitHubCopilotLoginAtTokenExchange(fetchToken, "acme.ghe.com");
 
-    await refreshThroughGitHubCopilotProvider("refresh-token", "acme.ghe.com");
+    await login;
 
     expect(fetchMock).toHaveBeenCalledWith(
       "https://api.acme.ghe.com/copilot_internal/v2/token",
@@ -269,9 +272,9 @@ describe("GitHub Copilot OAuth enterprise domain allowlist", () => {
   });
 
   it("defaults to public github.com when no enterprise domain is set", async () => {
-    const fetchMock = stubTokenFetch();
+    const { fetchMock, login } = startGitHubCopilotLoginAtTokenExchange(fetchToken);
 
-    await refreshThroughGitHubCopilotProvider("refresh-token");
+    await login;
 
     expect(fetchMock).toHaveBeenCalledWith(
       "https://api.github.com/copilot_internal/v2/token",
@@ -294,6 +297,24 @@ describe("GitHub Copilot OAuth model routing", () => {
       ...overrides,
     } as OAuthCredentials;
   }
+
+  it("exposes the durable GitHub token to provider runtime auth", () => {
+    expect(githubCopilotOAuthProvider.getApiKey(credential({}))).toBe("refresh-token");
+  });
+
+  it("normalizes an expired legacy access token without exchanging it", async () => {
+    const expired = credential({ expires: 1 });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(githubCopilotOAuthProvider.refreshToken(expired)).resolves.toEqual({
+      ...expired,
+      access: "refresh-token",
+      expires: MAX_DATE_TIMESTAMP_MS,
+    });
+    expect(expired).toMatchObject({ access: "access-token", expires: 1 });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 
   it("drops github-copilot models for an unsupported persisted enterprise domain", () => {
     const result = githubCopilotOAuthProvider.modifyModels?.(
@@ -360,38 +381,23 @@ describe("GitHub Copilot OAuth bounded reads", () => {
         controller.enqueue(encoder.encode("a".repeat(CHUNK)));
       },
     });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          new Response(stream, {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          }),
-      ),
+    const { login } = startGitHubCopilotLoginAtTokenExchange(
+      async () =>
+        new Response(stream, {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
     );
 
-    await expect(refreshThroughGitHubCopilotProvider("refresh-token")).rejects.toThrow(
+    await expect(login).rejects.toThrow(
       "GitHub Copilot token refresh request: JSON response exceeds 16777216 bytes",
     );
   });
 
   it("parses normal-size OAuth JSON responses under the byte cap", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          new Response(
-            JSON.stringify({
-              token: "copilot-token",
-              expires_at: Math.floor(Date.now() / 1000) + 3600,
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          ),
-      ),
-    );
+    const { login } = startGitHubCopilotLoginAtTokenExchange(async () => copilotTokenResponse());
 
-    const result = await refreshThroughGitHubCopilotProvider("refresh-token");
+    const result = await login;
     expect(result.access).toBe("copilot-token");
     expect(typeof result.expires).toBe("number");
   });
@@ -405,20 +411,15 @@ describe("GitHub Copilot OAuth bounded reads", () => {
       },
       cancel,
     });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          new Response(source, {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          }),
-      ),
+    const { login } = startGitHubCopilotLoginAtTokenExchange(
+      async () =>
+        new Response(source, {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
     );
 
-    await expect(refreshThroughGitHubCopilotProvider("refresh-token")).rejects.toThrow(
-      "GitHub Copilot token refresh request",
-    );
+    await expect(login).rejects.toThrow("GitHub Copilot token refresh request");
 
     expect(cancel).toHaveBeenCalled();
   });
@@ -518,12 +519,9 @@ describe("GitHub Copilot OAuth error responses", () => {
 
   it("bounds and redacts Copilot-token HTTP failures", async () => {
     const { response, cancel } = createOversizedOAuthErrorResponse();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => response),
-    );
+    const { login } = startGitHubCopilotLoginAtTokenExchange(async () => response);
 
-    const error = await captureError(refreshThroughGitHubCopilotProvider("refresh-token"));
+    const error = await captureError(login);
 
     expectBoundedRedactedError(error, "GitHub Copilot token refresh request");
     expect(cancel).toHaveBeenCalledOnce();

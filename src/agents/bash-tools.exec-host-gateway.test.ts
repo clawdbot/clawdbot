@@ -212,7 +212,8 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => ({
   resolveExecApprovalUnavailableDecisions: resolveExecApprovalUnavailableDecisionsMock,
 }));
 
-vi.mock("../infra/exec-auto-review.js", () => ({
+vi.mock("../infra/exec-auto-review.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/exec-auto-review.js")>()),
   defaultExecAutoReviewer: defaultExecAutoReviewerMock,
 }));
 
@@ -886,6 +887,43 @@ describe("processGatewayAllowlist", () => {
 
     await expect(result).rejects.toThrow("cancelled during review");
     expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "throws synchronously",
+      reviewer: () => {
+        throw new Error("provider\n\u001b[31mfailed\u001b[0m\u202e");
+      },
+    },
+    {
+      name: "rejects asynchronously",
+      reviewer: async () => {
+        throw new Error("provider\n\u001b[31mfailed\u001b[0m\u202e");
+      },
+    },
+  ])("requests human approval when a gateway reviewer $name", async ({ reviewer }) => {
+    const command = "echo ok";
+    await configurePlanBackedCommand({ command });
+    const autoReviewer = vi.fn<ExecAutoReviewer>(reviewer);
+    const warnings: string[] = [];
+
+    const result = await runGatewayAllowlist({
+      command,
+      ask: "on-miss",
+      autoReview: true,
+      autoReviewer,
+      warnings,
+    });
+
+    expect(autoReviewer).toHaveBeenCalledTimes(1);
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+    expect(commitExecAuthorizationMock).not.toHaveBeenCalled();
+    expect(runExecProcessMock).not.toHaveBeenCalled();
+    expect(warnings).toEqual([
+      "Exec auto-review deferred to human approval (risk=unknown): exec reviewer failed: provider\\nfailed",
+    ]);
   });
 
   it("reviews and executes the same PATH-resolved executable", async () => {

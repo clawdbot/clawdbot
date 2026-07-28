@@ -427,9 +427,8 @@ function isReplayDroppableTrailingAssistant(message: AgentMessage | undefined): 
     const stopReason = (message as { stopReason?: unknown }).stopReason;
     return stopReason === "error" || isZeroUsageEmptyStopAssistantTurn(message);
   }
-  // Sentinel-text content is the post-rewrite shape produced by either
-  // session-file-repair.rewriteAssistantEntryWithEmptyContent (always
-  // stopReason="error") or the in-memory rewrite earlier in this same
+  // Sentinel-text content is the post-rewrite shape produced by either a
+  // doctor-imported legacy repair (always stopReason="error") or the in-memory rewrite earlier in this same
   // normalizeAssistantReplayContent loop (preserves the original
   // stopReason — "error" or zero-usage "stop"). Drop only when the trailing
   // turn carries that synthetic provenance: without this guard, a real

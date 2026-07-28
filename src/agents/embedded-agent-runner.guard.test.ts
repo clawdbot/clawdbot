@@ -1,6 +1,7 @@
 // Covers session-manager guard behavior for tool-result pairing and transcript
 // redaction.
 import { readFileSync } from "node:fs";
+import "../../test/helpers/session-manager-file-compat.js";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import {

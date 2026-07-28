@@ -489,9 +489,9 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
         ]
       : [];
     const lifecycleResult = await applySessionEntryLifecycleMutation({
+      activeSessionKey: isolatedSessionKey,
       storePath: isolatedStorePath,
       removals,
-      preserveActiveWork: true,
       upserts: [
         {
           sessionKey: isolatedSessionKey,
@@ -513,7 +513,6 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
           },
         },
       ],
-      restrictArchivedTranscriptsToStoreDir: true,
       captureArtifactCleanupError: true,
     });
     if (lifecycleResult.artifactCleanupError) {

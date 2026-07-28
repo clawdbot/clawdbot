@@ -27,6 +27,13 @@
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/app/lazy-custom-element.ts",
+      "text": "custodian panel"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/lazy-custom-element.ts",
       "text": "terminal panel"
     },
     {
@@ -637,13 +644,6 @@
       "name": "placeholder",
       "path": "ui/src/pages/cron/view.ts",
       "text": "default"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/custodian/custodian-page.ts",
-      "text": "OC"
     },
     {
       "count": 1,

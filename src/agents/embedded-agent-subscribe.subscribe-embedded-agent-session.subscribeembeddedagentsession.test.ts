@@ -7,7 +7,7 @@ import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-response.js";
 import * as agentEvents from "../infra/agent-events.js";
-import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
 import {
   THINKING_TAG_CASES,
@@ -170,6 +170,8 @@ describe("subscribeEmbeddedAgentSession", () => {
         result: { ok: true },
       });
 
+      // The file transport appends asynchronously; drain it before reading.
+      await flushLogger();
       const logText = await fs.readFile(logFile, "utf8");
       const subsystems: string[] = [];
       for (const line of logText.trim().split(/\n+/)) {

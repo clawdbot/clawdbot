@@ -83,4 +83,30 @@ describe("inspectSlackAccount", () => {
       userTokenStatus: "missing",
     });
   });
+
+  it("does not fall through an unavailable configured ref to environment tokens", () => {
+    const account = inspectSlackAccount({
+      cfg: {
+        channels: {
+          slack: {
+            botToken: {
+              source: "env",
+              provider: "default",
+              id: "OPENCLAW_TEST_MISSING_SLACK_BOT_TOKEN",
+            },
+            appToken: "test-app-token",
+          },
+        },
+      } as OpenClawConfig,
+      envBotToken: "xoxb-lower-precedence",
+      envAppToken: "",
+      envUserToken: "",
+    });
+
+    expect(account.botToken).toBeUndefined();
+    expect(account).toMatchObject({
+      botTokenSource: "config",
+      botTokenStatus: "configured_unavailable",
+    });
+  });
 });

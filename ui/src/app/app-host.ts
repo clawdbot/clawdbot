@@ -44,6 +44,7 @@ import {
 import { icons } from "../components/icons.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
+  CUSTODIAN_PANEL_TOGGLE_EVENT,
   isTerminalPanelShortcut,
   TERMINAL_PANEL_TOGGLE_EVENT,
   UI_COMMAND_EVENT,
@@ -91,6 +92,7 @@ import {
   APPROVAL_PAGE_ELEMENT,
   BROWSER_PANEL_ELEMENT,
   COMMAND_PALETTE_ELEMENT,
+  CUSTODIAN_PANEL_ELEMENT,
   EXEC_APPROVAL_ELEMENT,
   ensureOptionalElementForHost,
   isOptionalElementDefined,
@@ -519,6 +521,7 @@ class OpenClawShell extends OpenClawLightDomElement {
   private readonly commandPaletteElement = COMMAND_PALETTE_ELEMENT;
   private readonly terminalPanelElement = TERMINAL_PANEL_ELEMENT;
   private readonly browserPanelElement = BROWSER_PANEL_ELEMENT;
+  private readonly custodianPanelElement = CUSTODIAN_PANEL_ELEMENT;
   private readonly execApprovalElement = EXEC_APPROVAL_ELEMENT;
   @query("openclaw-command-palette") private commandPalette?: CommandPaletteElement;
   @query("openclaw-exec-approval")
@@ -529,6 +532,8 @@ class OpenClawShell extends OpenClawLightDomElement {
   // chat (the app default route) when settings was the entry point.
   private lastWorkspaceLocation: { routeId: RouteId; pathname: string; search: string } | null =
     null;
+  private custodianMinimizeRequestId = 0;
+  private lastConcreteRouteId: RouteId | undefined;
   private agentsListClient: GatewayBrowserClient | null = null;
   private agentsListSource: ApplicationContext["agents"] | null = null;
   private sessionKeyClient: GatewayBrowserClient | null = null;
@@ -733,6 +738,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     window.addEventListener("openclaw:native-new-session", this.handleNativeNewSession);
     window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle);
     window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle);
+    window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, this.handleDeferredCustodianToggle);
     // Write-through of synced display prefs to config ui.prefs. Server-applied
     // deltas are suppressed so a reconcile never echoes back to the gateway.
     setSettingsChangeListener((previous, next) => {
@@ -769,6 +775,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     window.removeEventListener("openclaw:native-new-session", this.handleNativeNewSession);
     window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle);
     window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle);
+    window.removeEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, this.handleDeferredCustodianToggle);
     this.outboxStoreImport.dispose();
     this.outboxStoreUnsubscribe?.();
     this.outboxStoreUnsubscribe = null;
@@ -1352,6 +1359,17 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.deliverPanelEventAfterLoad(this.browserPanelElement, event);
   };
 
+  private readonly handleDeferredCustodianToggle = (event: Event) => {
+    if (isOptionalElementDefined(this.custodianPanelElement)) {
+      return;
+    }
+    const snapshot = this.context?.gateway?.snapshot;
+    if (!snapshot || isGatewayMethodAdvertised(snapshot, "openclaw.chat") !== true) {
+      return;
+    }
+    this.deliverPanelEventAfterLoad(this.custodianPanelElement, event);
+  };
+
   private readonly handleCommandPaletteSlashCommand = (command: string) => {
     const chatHandler = this.commandPaletteTarget?.owner.isConnected
       ? this.commandPaletteTarget.onSlashCommand
@@ -1433,6 +1451,9 @@ class OpenClawShell extends OpenClawLightDomElement {
       }
       if (isBrowserPanelAvailable(gatewaySnapshot)) {
         preloadOptionalElement(this, this.browserPanelElement);
+      }
+      if (isGatewayMethodAdvertised(gatewaySnapshot, "openclaw.chat") === true) {
+        preloadOptionalElement(this, this.custodianPanelElement);
       }
     }
     if ((context.overlays?.snapshot.approvalQueue.length ?? 0) > 0) {
@@ -1630,6 +1651,12 @@ class OpenClawShell extends OpenClawLightDomElement {
 
   private updateRouteState(routeState: ShellRouteState) {
     this.routeState = routeState;
+    if (routeState.routeId !== undefined) {
+      if (this.lastConcreteRouteId === "custodian" && routeState.routeId !== "custodian") {
+        this.custodianMinimizeRequestId += 1;
+      }
+      this.lastConcreteRouteId = routeState.routeId;
+    }
     const committedRouteId = routeState.committedRouteId;
     const committedPathname = routeState.committedLocation?.pathname ?? "";
     const committedSearch = routeState.committedLocation?.search ?? "";
@@ -1719,6 +1746,8 @@ class OpenClawShell extends OpenClawLightDomElement {
       context.config.current.terminalEnabled ?? false,
     );
     const browserPanelAvailable = isBrowserPanelAvailable(gatewaySnapshot);
+    const custodianPanelAvailable =
+      gatewayConnected && isGatewayMethodAdvertised(gatewaySnapshot, "openclaw.chat") === true;
     const activeRoute = this.routeState.routeId ?? "chat";
     // Plugin tabs share one route; the search picks the active item.
     const activePluginRef =
@@ -1763,8 +1792,8 @@ class OpenClawShell extends OpenClawLightDomElement {
     const uiSettings = loadSettings();
     // The new-session draft shares the chat layout: full-height pane that owns
     // its scrolling and pins the composer dock to the bottom.
-    const chatLikeRoute =
-      isSessionRouteId(activeRoute) || activeRoute === "custodian" || activeRoute === "new-session";
+    const chatLikeRoute = isSessionRouteId(activeRoute) || activeRoute === "new-session";
+    const custodianRoute = activeRoute === "custodian";
     const inlineApproval = isSessionRouteId(activeRoute)
       ? findInlineApproval(overlaySnapshot.approvalQueue, this.activeSessionKey)
       : null;
@@ -1958,9 +1987,9 @@ class OpenClawShell extends OpenClawLightDomElement {
           : nothing}
         <main
           id="control-ui-main"
-          class="content ${chatLikeRoute ? "content--chat" : ""} ${activeRoute === "workboard"
-            ? "content--workboard"
-            : ""}"
+          class="content ${chatLikeRoute ? "content--chat" : ""} ${custodianRoute
+            ? "content--custodian"
+            : ""} ${activeRoute === "workboard" ? "content--workboard" : ""}"
           .tabIndex=${-1}
         >
           ${gatewaySnapshot.hello?.deviceAuthMigration?.pending === true
@@ -2029,6 +2058,11 @@ class OpenClawShell extends OpenClawLightDomElement {
             password: context.gateway.connection.password,
           })}
         ></openclaw-browser-panel>
+        <openclaw-custodian-panel
+          .available=${custodianPanelAvailable}
+          .suppressed=${activeRoute === "custodian"}
+          .minimizeRequestId=${this.custodianMinimizeRequestId}
+        ></openclaw-custodian-panel>
         ${isOptionalElementDefined(this.execApprovalElement)
           ? html`<openclaw-exec-approval
               .props=${{

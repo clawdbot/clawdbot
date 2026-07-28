@@ -43,6 +43,7 @@ export function enforceEmbeddingMaxInputTokens(
         text,
         hash: hashText(text),
         embeddingInput: { text },
+        ...(chunk.provenance ? { provenance: chunk.provenance } : {}),
       });
     }
   }

@@ -22,6 +22,7 @@ import {
   type OAuthCredential,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { hasUsableOAuthCredential } from "openclaw/plugin-sdk/provider-auth";
+import { readSecretFile } from "openclaw/plugin-sdk/secret-file";
 import { resolveCodexAppServerHomeDir, withEphemeralCodexAuthStore } from "./auth-start-options.js";
 import type { CodexAppServerClient } from "./client.js";
 import { ensureCodexComputerUseSharedPluginCache } from "./computer-use-cache.js";
@@ -260,7 +261,8 @@ export async function resolveCodexAppServerPreparedAuthHandoff(params: {
   authProfileId?: string;
   authProfileStore: AuthProfileStore;
   agentDir?: string;
-  homeScope?: CodexAppServerHomeScope;
+  /** Required: an omitted scope would silently reintroduce prepared logins on native homes. */
+  homeScope: CodexAppServerHomeScope;
   config?: AuthProfileOrderConfig;
   subscriptionProfileRequiredError: string;
   subscriptionProfileUnusableError: string;
@@ -514,16 +516,7 @@ export async function applyCodexAppServerAuthProfile(params: {
     return;
   }
   if (params.authProfileId === null) {
-    if (params.authRequirement === "subscription") {
-      const response = await params.client.request<CodexGetAccountResponse>("account/read", {
-        refreshToken: false,
-      });
-      if (!isJsonObject(response.account) || response.account.type !== "chatgpt") {
-        throw createCodexAppServerAuthError(
-          "Codex subscription auth profile could not produce login credentials.",
-        );
-      }
-    }
+    await assertNativeCodexAccountMatchesRoute(params.client, params.authRequirement);
     return;
   }
   let loginParams: CodexLoginAccountParams | undefined;
@@ -574,6 +567,39 @@ export async function applyCodexAppServerAuthProfile(params: {
     return;
   }
   await params.client.request("account/login/start", loginParams);
+}
+
+/**
+ * Native-home connections are verified, never logged into. Both directions of the
+ * check protect the same billing boundary: a subscription route cannot run without
+ * ChatGPT tokens, and a Platform route must not silently spend the operator's
+ * ChatGPT plan. An absent account is left alone because the native home may serve a
+ * custom model provider that reports no OpenAI account at all.
+ */
+async function assertNativeCodexAccountMatchesRoute(
+  client: CodexAppServerClient,
+  authRequirement: CodexAppServerAuthRequirement | undefined,
+): Promise<void> {
+  if (!authRequirement) {
+    return;
+  }
+  const response = await client.request<CodexGetAccountResponse>("account/read", {
+    refreshToken: false,
+  });
+  const accountType = isJsonObject(response.account) ? response.account.type : undefined;
+  if (authRequirement === "subscription") {
+    if (accountType !== "chatgpt") {
+      throw createCodexAppServerAuthError(
+        "Codex subscription auth profile could not produce login credentials.",
+      );
+    }
+    return;
+  }
+  if (accountType === "chatgpt") {
+    throw createCodexAppServerAuthError(
+      'Codex Platform route requires an API-key account, but the native Codex home is signed in with a ChatGPT subscription. Sign that home in with `codex login --with-api-key`, or set appServer.homeScope="agent" so OpenClaw can inject its own key.',
+    );
+  }
 }
 
 function createCodexAppServerAuthError(message: string, cause?: unknown): Error & { status: 401 } {
@@ -730,7 +756,9 @@ function parseCodexCliAuthFileApiKey(raw: string): string | undefined {
 
 async function readCodexCliAuthFileApiKey(env: NodeJS.ProcessEnv): Promise<string | undefined> {
   try {
-    return parseCodexCliAuthFileApiKey(await fs.readFile(resolveCodexCliAuthFilePath(env), "utf8"));
+    return parseCodexCliAuthFileApiKey(
+      await readSecretFile(resolveCodexCliAuthFilePath(env), "Codex CLI auth file"),
+    );
   } catch {
     return undefined;
   }

@@ -3,7 +3,9 @@
  * namespaced tool scopes here; code mode receives descriptors, virtual API
  * files, and a guarded invocation runtime.
  */
+import { tokTypes } from "acorn";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
+import type { PluginToolMcpMeta } from "../plugins/tools.js";
 import { toCodeModeJsonSafe } from "./code-mode-json.js";
 
 const FORBIDDEN_NAMESPACE_PATH_SEGMENTS = new Set(["__proto__", "constructor", "prototype"]);
@@ -34,6 +36,12 @@ const RESERVED_NAMESPACE_GLOBALS = new Set([
   "text",
   "tools",
   "yield_control",
+]);
+// API declarations use function names, so JS keywords and TypeScript's `enum`
+// must be escaped even though those words are valid MCP tool identifiers.
+const RESERVED_NAMESPACE_FUNCTION_IDENTIFIERS = new Set([
+  ...Object.values(tokTypes).flatMap((token) => (token.keyword ? [token.keyword] : [])),
+  "enum",
 ]);
 
 /** Object installed into a code-mode namespace global. */
@@ -80,12 +88,7 @@ type CodeModeNamespaceCatalogEntry = {
   sourceName?: string;
   description?: string;
   parameters?: unknown;
-  mcp?: {
-    serverName: string;
-    safeServerName: string;
-    toolName: string;
-    operation: "tool" | "resources_list" | "resources_read" | "prompts_list" | "prompts_get";
-  };
+  mcp?: PluginToolMcpMeta;
 };
 
 /** Runtime dispatcher for invoking callable namespace paths. */
@@ -178,6 +181,7 @@ function uniqueIdentifier(base: string, used: Set<string>): string {
   while (
     used.has(candidate) ||
     RESERVED_NAMESPACE_GLOBALS.has(candidate) ||
+    RESERVED_NAMESPACE_FUNCTION_IDENTIFIERS.has(candidate) ||
     FORBIDDEN_NAMESPACE_PATH_SEGMENTS.has(candidate)
   ) {
     candidate = `${base}${index}`;
@@ -385,6 +389,7 @@ type McpApiToolDoc = {
 type McpApiServerDoc = {
   identifier: string;
   serverName: string;
+  nodeLabel?: string;
   tools: McpApiToolDoc[];
 };
 
@@ -594,6 +599,74 @@ type McpNamespaceModel = {
   docs: McpApiServerDoc[];
 };
 
+type McpNamespaceServer = {
+  key: string;
+  serverName: string;
+  safeServerName: string;
+  node?: NonNullable<NonNullable<CodeModeNamespaceCatalogEntry["mcp"]>["node"]>;
+};
+
+function mcpNamespaceServerKey(mcp: NonNullable<CodeModeNamespaceCatalogEntry["mcp"]>): string {
+  return mcp.node
+    ? JSON.stringify(["node", mcp.node.id, mcp.serverName])
+    : JSON.stringify(["gateway", mcp.safeServerName]);
+}
+
+function sanitizeNodeFragment(value: string): string {
+  const fragment = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 32);
+  if (!fragment) {
+    return "node";
+  }
+  return /^[a-z]/.test(fragment) ? fragment : `node_${fragment}`.slice(0, 32);
+}
+
+function assignMcpNamespaceServerNames(
+  servers: readonly McpNamespaceServer[],
+): Map<string, string> {
+  const baseCounts = new Map<string, number>();
+  const used = new Set<string>();
+  const assignments = new Map<string, string>();
+  for (const server of servers) {
+    const normalized = server.safeServerName.toLowerCase();
+    baseCounts.set(normalized, (baseCounts.get(normalized) ?? 0) + 1);
+    if (!server.node) {
+      assignments.set(server.key, server.safeServerName);
+      used.add(normalized);
+    }
+  }
+  for (const server of servers) {
+    if (!server.node || (baseCounts.get(server.safeServerName.toLowerCase()) ?? 0) > 1) {
+      continue;
+    }
+    assignments.set(server.key, server.safeServerName);
+    used.add(server.safeServerName.toLowerCase());
+  }
+  for (const server of servers) {
+    if (!server.node || assignments.has(server.key)) {
+      continue;
+    }
+    const base = `${sanitizeNodeFragment(server.node.id)}_${server.safeServerName}`;
+    let candidate = base;
+    let index = 2;
+    while (used.has(candidate.toLowerCase())) {
+      candidate = `${base}_${index}`;
+      index += 1;
+    }
+    assignments.set(server.key, candidate);
+    used.add(candidate.toLowerCase());
+  }
+  return assignments;
+}
+
+function mcpNodeLabel(node: NonNullable<McpNamespaceServer["node"]>): string {
+  return (node.displayName?.trim() || node.id).replace(/\s+/gu, " ").slice(0, 128);
+}
+
 function createMcpNamespaceModel(
   catalog: readonly CodeModeNamespaceCatalogEntry[],
 ): McpNamespaceModel | undefined {
@@ -601,15 +674,30 @@ function createMcpNamespaceModel(
   if (mcpEntries.length === 0) {
     return undefined;
   }
-  const serverNames = new Map<string, string>();
-  const usedServerIdentifiers = new Set<string>();
-  for (const entry of mcpEntries) {
-    const safeServerName = entry.mcp?.safeServerName ?? entry.sourceName ?? "mcp";
-    if (serverNames.has(safeServerName)) {
+  const serversByKey = new Map<string, McpNamespaceServer>();
+  for (const entry of mcpEntries.toSorted((a, b) => (a.id ?? "").localeCompare(b.id ?? ""))) {
+    const mcp = entry.mcp;
+    if (!mcp) {
       continue;
     }
-    serverNames.set(
-      safeServerName,
+    const key = mcpNamespaceServerKey(mcp);
+    if (!serversByKey.has(key)) {
+      serversByKey.set(key, {
+        key,
+        serverName: mcp.serverName,
+        safeServerName: mcp.safeServerName,
+        ...(mcp.node ? { node: mcp.node } : {}),
+      });
+    }
+  }
+  const servers = [...serversByKey.values()].toSorted((a, b) => a.key.localeCompare(b.key));
+  const assignedServerNames = assignMcpNamespaceServerNames(servers);
+  const serverIdentifiers = new Map<string, string>();
+  const usedServerIdentifiers = new Set<string>();
+  for (const server of servers) {
+    const safeServerName = assignedServerNames.get(server.key) ?? server.safeServerName;
+    serverIdentifiers.set(
+      server.key,
       uniqueIdentifier(toIdentifier(safeServerName, "server"), usedServerIdentifiers),
     );
   }
@@ -621,13 +709,19 @@ function createMcpNamespaceModel(
     if (!mcp || !entry.id) {
       continue;
     }
+    const serverKey = mcpNamespaceServerKey(mcp);
     const serverIdentifier =
-      serverNames.get(mcp.safeServerName) ?? uniqueIdentifier("server", usedServerIdentifiers);
+      serverIdentifiers.get(serverKey) ?? uniqueIdentifier("server", usedServerIdentifiers);
     const serverScope = scopeAtPath(root, [serverIdentifier]);
     serverScope.$serverName = mcp.serverName;
     let serverDoc = serverDocs.get(serverIdentifier);
     if (!serverDoc) {
-      serverDoc = { identifier: serverIdentifier, serverName: mcp.serverName, tools: [] };
+      serverDoc = {
+        identifier: serverIdentifier,
+        serverName: mcp.serverName,
+        ...(mcp.node ? { nodeLabel: mcpNodeLabel(mcp.node) } : {}),
+        tools: [],
+      };
       serverDocs.set(serverIdentifier, serverDoc);
     }
     const path =
@@ -661,11 +755,13 @@ function createMcpNamespaceModel(
       params: buildMcpParamDocs(entry.parameters),
     });
   }
-  const docs = [...serverDocs.values()].map((server) =>
-    Object.assign({}, server, {
-      tools: server.tools.toSorted((a, b) => a.method.localeCompare(b.method)),
-    }),
-  );
+  const docs = [...serverDocs.values()]
+    .map((server) =>
+      Object.assign({}, server, {
+        tools: server.tools.toSorted((a, b) => a.method.localeCompare(b.method)),
+      }),
+    )
+    .toSorted((a, b) => a.identifier.localeCompare(b.identifier));
   root.$api = createCodeModeNamespaceLocalFunction("$api", (args) =>
     buildMcpApiResponse({ servers: docs, args }),
   );
@@ -773,20 +869,21 @@ function createMcpNamespaceEntry(
 function describeMcpNamespaceForPrompt(
   catalog: readonly CodeModeNamespaceCatalogEntry[],
 ): string[] {
-  const scope = createMcpNamespaceScope(catalog);
-  if (!scope) {
+  const model = createMcpNamespaceModel(catalog);
+  if (!model) {
     return [];
   }
-  const servers = Object.entries(scope)
-    .filter(([, value]) => isRecord(value) && typeof value.$serverName === "string")
-    .map(([key]) => key)
-    .toSorted();
+  const servers = model.docs.map(
+    (server) => `${server.identifier}${server.nodeLabel ? ` (node: ${server.nodeLabel})` : ""}`,
+  );
   if (servers.length === 0) {
     return [];
   }
+  // Node-backed servers keep the gateway-style name when unique. Collisions
+  // use the existing node-id fragment prefix idiom, then a numeric suffix.
   return [
     "- MCP: MCP server tools grouped by server.",
-    `Read API files such as mcp/index.d.ts and mcp/<server>.d.ts for TypeScript-style MCP headers; visible servers: ${servers.join(", ")}.`,
+    `Read API files such as mcp/index.d.ts and mcp/<server>.d.ts for TypeScript-style MCP headers; visible servers: ${servers.join(", ")}. Node-backed name collisions use a sanitized node-id fragment prefix.`,
     "Call MCP tools as MCP.<server>.<tool>({ ...input }) with one object argument matching the header.",
   ];
 }

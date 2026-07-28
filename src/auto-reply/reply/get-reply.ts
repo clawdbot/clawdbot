@@ -871,6 +871,7 @@ export async function getReplyFromConfig(
     const action: ResetCommandAction = resetMatch[1]?.toLowerCase() === "reset" ? "reset" : "new";
     await emitResetCommandHooks({
       action,
+      agentId,
       ctx,
       cfg,
       command,

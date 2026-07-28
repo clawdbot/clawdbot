@@ -25,7 +25,7 @@ export type DeliveryQueueCompletionRetention =
     }>;
 
 /** Indexed metadata extracted from queue payloads for diagnostics and recovery. */
-export type DeliveryQueueRowMetadata = {
+type DeliveryQueueRowMetadata = {
   entryKind?: string;
   sessionKey?: string;
   channel?: string;
@@ -114,7 +114,7 @@ function inflate(row: QueueRow): DeliveryQueueEntryState | null {
   };
 }
 
-function metadata(entry: DeliveryQueueEntryState): DeliveryQueueRowMetadata {
+function metadata(queueName: string, entry: DeliveryQueueEntryState): DeliveryQueueRowMetadata {
   const item = entry as DeliveryQueueEntryState & {
     kind?: string;
     sessionKey?: string;
@@ -126,7 +126,7 @@ function metadata(entry: DeliveryQueueEntryState): DeliveryQueueRowMetadata {
     deliveryContext?: { channel?: string; to?: string; accountId?: string };
   };
   return {
-    entryKind: item.kind,
+    entryKind: item.kind ?? queueName,
     sessionKey: item.sessionKey ?? item.session?.key,
     channel: item.channel ?? item.route?.channel ?? item.deliveryContext?.channel,
     target: item.to ?? item.route?.to ?? item.deliveryContext?.to,
@@ -140,7 +140,7 @@ function upsertDeliveryQueueEntryInDatabase(
 ): boolean {
   const now = Date.now();
   const status = params.status ?? "pending";
-  const meta = params.metadata ?? metadata(params.entry);
+  const meta = params.metadata ?? metadata(params.queueName, params.entry);
   const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
   const insert = queueDb.insertInto("delivery_queue_entries").values({
     queue_name: params.queueName,

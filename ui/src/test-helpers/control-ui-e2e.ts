@@ -121,6 +121,8 @@ export type ControlUiMockGatewayScenario = {
     provider: string;
     available?: boolean;
   }>;
+  /** Operator scopes returned by the mocked connect handshake. */
+  operatorScopes?: string[];
   sessionKey?: string;
   /** Initial gateway-owned custom group catalog (sessions.groups.*), in order. */
   sessionGroups?: string[];
@@ -324,6 +326,13 @@ function normalizeScenario(
     inFlightRun: scenario.inFlightRun ?? null,
     presenceUsers: scenario.presenceUsers ?? [],
     models: scenario.models ?? [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }],
+    operatorScopes: scenario.operatorScopes ?? [
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+      "operator.approvals",
+      "operator.pairing",
+    ],
     repeatingSessionEvents: scenario.repeatingSessionEvents ?? { events: [] },
     sessionInfo: scenario.sessionInfo ?? null,
     sessionArchiveFiltering: scenario.sessionArchiveFiltering ?? false,
@@ -985,13 +994,7 @@ function installControlUiMockGateway(input: {
           auth: {
             ...(deviceAuthMigrationPending ? {} : { deviceToken: scenario.deviceToken }),
             role: "operator",
-            scopes: [
-              "operator.admin",
-              "operator.read",
-              "operator.write",
-              "operator.approvals",
-              "operator.pairing",
-            ],
+            scopes: scenario.operatorScopes,
           },
           features: {
             capabilities: scenario.featureCapabilities,
