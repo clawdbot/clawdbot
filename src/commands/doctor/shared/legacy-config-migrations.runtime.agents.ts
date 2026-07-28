@@ -6,7 +6,7 @@ import {
   isCanonicalToolProviderPolicyKey,
   normalizeToolProviderPolicyKey,
 } from "../../../agents/provider-tool-policy.js";
-import { DEFAULT_SANDBOX_BROWSER_NETWORK } from "../../../agents/sandbox/constants.js";
+import { DEFAULT_SANDBOX_BROWSER_NETWORK } from "../../../agents/sandbox/browser-network.js";
 import { isKnownCoreToolId } from "../../../agents/tool-catalog.js";
 import { isToolAllowedByPolicyName } from "../../../agents/tool-policy-match.js";
 import { resolveToolProfilePolicy } from "../../../agents/tool-policy-shared.js";
