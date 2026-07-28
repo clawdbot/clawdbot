@@ -32,7 +32,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
@@ -77,6 +76,7 @@ import androidx.wear.compose.material3.ButtonDefaults
 import androidx.wear.compose.material3.HorizontalPagerScaffold
 import androidx.wear.compose.material3.ScreenScaffold
 import androidx.wear.compose.material3.Text
+import androidx.wear.compose.material3.minimumInteractiveComponentSize
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.isActive
@@ -91,7 +91,6 @@ internal enum class WearHomePage {
 private const val VOICE_MODE_COUNT = 2
 private const val VOICE_HOME_MODE = 0
 private const val VOICE_THREAD_MODE = 1
-private val minimumTouchTarget = 48.dp
 
 internal data class WearVoiceLayout(
   val horizontalPadding: Dp,
@@ -629,8 +628,8 @@ private fun VoiceHomeMode(
           modifier =
             Modifier
               .align(Alignment.TopCenter)
-              .height(minimumTouchTarget)
-              .fillMaxWidth(),
+              .fillMaxWidth()
+              .minimumInteractiveComponentSize(),
         )
         Box(
           modifier =
@@ -719,7 +718,7 @@ private fun VoiceGestureLabel(
         .then(interactionModifier)
         .then(
           if (onClick != null) {
-            Modifier.sizeIn(minWidth = minimumTouchTarget, minHeight = minimumTouchTarget)
+            Modifier.minimumInteractiveComponentSize()
           } else {
             Modifier
           },
@@ -844,7 +843,7 @@ private fun ThreadVoiceMode(
           Modifier
             .align(Alignment.BottomCenter)
             .padding(bottom = 44.dp)
-            .sizeIn(minHeight = minimumTouchTarget)
+            .minimumInteractiveComponentSize()
             .background(colors.voiceAccentSoft, RoundedCornerShape(14.dp))
             .border(1.dp, colors.voiceAccent, RoundedCornerShape(14.dp))
             .clickable(
@@ -880,7 +879,7 @@ private fun ThreadVoiceMode(
         modifier =
           Modifier
             .width(70.dp)
-            .height(minimumTouchTarget)
+            .minimumInteractiveComponentSize()
             .background(colors.surfaceRaised, RoundedCornerShape(24.dp))
             .border(1.dp, colors.borderStrong, RoundedCornerShape(24.dp))
             .clickable(
@@ -906,7 +905,7 @@ private fun ThreadVoiceMode(
       Box(
         modifier =
           Modifier
-            .size(minimumTouchTarget)
+            .minimumInteractiveComponentSize()
             .background(
               color = if (realtimeActive) colors.voiceAccent else colors.surfaceRaised,
               shape = CircleShape,
@@ -1782,7 +1781,7 @@ private fun ThemeModeOption(
   Box(
     modifier =
       modifier
-        .height(minimumTouchTarget)
+        .minimumInteractiveComponentSize()
         .background(
           color = if (selected) colors.primary else Color.Transparent,
           shape = RoundedCornerShape(9.dp),
