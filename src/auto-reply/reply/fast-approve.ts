@@ -1,10 +1,10 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { shouldHandleTextCommands } from "../commands-text-routing.js";
+import type { ReplyPayload } from "../reply-payload.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import { handleApproveCommandFromContext } from "./commands-approve.js";
 import { buildCommandContext } from "./commands-context.js";
 import { resolveCommandContextText } from "./context-text.js";
-import type { ReplyPayload } from "./reply-payload.js";
 
 export type FastApproveResult = { handled: false } | { handled: true; reply?: ReplyPayload };
 
@@ -26,7 +26,9 @@ export async function tryFastApproveFromMessage(params: {
     sessionKey: params.sessionKey,
     isGroup: params.ctx.ChatType === "group" || params.ctx.ChatType === "channel",
     triggerBodyNormalized,
-    commandAuthorized: params.ctx.CommandAuthorized === true,
+    // Inbound finalization canonicalizes missing authorization to false before
+    // constructing FinalizedRuntimeMsgContext, so this remains fail-closed.
+    commandAuthorized: params.ctx.CommandAuthorized,
   });
   const result = await handleApproveCommandFromContext(
     { cfg: params.cfg, ctx: params.ctx, command },

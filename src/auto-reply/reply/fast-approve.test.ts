@@ -109,7 +109,6 @@ describe("tryFastApproveFromMessage", () => {
     const ctx = buildTestCtx({
       Body: "Please explain this command:\n/approve exec-1 allow-once",
       CommandBody: "Please explain this command:\n/approve exec-1 allow-once",
-      CommandSource: "message",
       CommandAuthorized: true,
       Provider: "imessage",
       Surface: "imessage",
@@ -125,7 +124,6 @@ describe("tryFastApproveFromMessage", () => {
   it("ignores ordinary text", async () => {
     const ctx = buildTestCtx({
       Body: "hello",
-      CommandSource: "message",
       Provider: "imessage",
     });
     await expect(tryFastApproveFromMessage({ ctx, cfg: {} as OpenClawConfig })).resolves.toEqual({
