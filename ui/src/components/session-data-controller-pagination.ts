@@ -152,7 +152,9 @@ export async function loadMoreSidebarSessions(
   const context = owner.context;
   const previous = owner.sessionsResult;
   const agentId = owner.sessionsAgentId;
-  const offset = previous?.nextOffset;
+  // Gateway cursors are optional; accumulated rows provide the same next page.
+  const offset =
+    previous?.nextOffset === undefined ? previous?.sessions.length : previous.nextOffset;
   const state = sidebarSessionPaginationState(owner);
   // A pending first-page refresh owns the list; its old offset cannot safely
   // start a page that would append to a superseded session snapshot.

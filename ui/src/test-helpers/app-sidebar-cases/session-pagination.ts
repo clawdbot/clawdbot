@@ -128,6 +128,115 @@ describe("AppSidebar gateway session pagination", () => {
     expect(sidebar.querySelector('button[aria-label="Show more"]')).toBeNull();
   });
 
+  it("derives the active page offset when the Gateway omits its optional cursor", async () => {
+    const keys = Array.from({ length: 51 }, (_, index) => `agent:main:session-${index}`);
+    const harness = createSessionsHarness("main", keys.slice(0, 50));
+    const initialResult = harness.sessions.state.result;
+    if (!initialResult) {
+      throw new Error("expected an active paginated session result");
+    }
+    harness.publishList({
+      agentId: "main",
+      result: {
+        ...initialResult,
+        count: 50,
+        totalCount: 51,
+        limitApplied: 50,
+        nextOffset: undefined,
+        hasMore: true,
+      },
+    });
+    const { sidebar } = await mountSidebar(
+      createGateway({} as GatewayBrowserClient),
+      harness.sessions,
+    );
+
+    await sidebar.sessionData.loadMoreSidebarSessions();
+
+    expect(harness.refresh).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "main", archivedFilter: "active", offset: 50 }),
+    );
+  });
+
+  it("does not turn an explicit terminal session cursor into another page", async () => {
+    const harness = createSessionsHarness("main", ["agent:main:session-0"]);
+    const initialResult = harness.sessions.state.result;
+    if (!initialResult) {
+      throw new Error("expected a terminal paginated session result");
+    }
+    harness.publishList({
+      agentId: "main",
+      result: {
+        ...initialResult,
+        count: 1,
+        totalCount: 2,
+        limitApplied: 1,
+        nextOffset: null,
+        hasMore: true,
+      },
+    });
+    const { sidebar } = await mountSidebar(
+      createGateway({} as GatewayBrowserClient),
+      harness.sessions,
+    );
+    harness.refresh.mockClear();
+
+    await sidebar.sessionData.loadMoreSidebarSessions();
+
+    expect(harness.refresh).not.toHaveBeenCalled();
+  });
+
+  it.each(["archived", "all"] as const)(
+    "derives the %s page offset when the Gateway omits its optional cursor",
+    async (statusFilter) => {
+      const keys = Array.from({ length: 61 }, (_, index) => `agent:main:session-${index}`);
+      const harness = createSessionsHarness("main", ["agent:main:canonical-active"]);
+      const firstResult = createSessionState("main", keys.slice(0, 60)).result;
+      const nextResult = createSessionState("main", keys.slice(60)).result;
+      if (!firstResult || !nextResult) {
+        throw new Error("expected paginated archived session results");
+      }
+      const archived = statusFilter === "archived";
+      const firstPage = {
+        ...firstResult,
+        sessions: firstResult.sessions.map((row) => Object.assign({}, row, { archived })),
+        count: 60,
+        totalCount: 61,
+        limitApplied: 60,
+        nextOffset: undefined,
+        hasMore: true,
+      };
+      const nextPage = {
+        ...nextResult,
+        sessions: nextResult.sessions.map((row) => Object.assign({}, row, { archived })),
+        count: 1,
+        totalCount: 61,
+        offset: 60,
+        nextOffset: null,
+        hasMore: false,
+      };
+      harness.list.mockImplementation(async (options) =>
+        options?.offset === 60 ? nextPage : firstPage,
+      );
+      const { sidebar } = await mountSidebar(
+        createGateway({} as GatewayBrowserClient),
+        harness.sessions,
+      );
+      (sidebar as unknown as { sessionsStatusFilter: "archived" | "all" }).sessionsStatusFilter =
+        statusFilter;
+      sidebar.sessionData.resetForStatusFilter(statusFilter);
+      await sidebar.sessionData.refreshSidebarSessions("main");
+      harness.list.mockClear();
+
+      await sidebar.sessionData.loadMoreSidebarSessions();
+
+      expect(harness.list).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "main", archivedFilter: statusFilter, offset: 60 }),
+      );
+      expect(harness.sessions.state.result?.sessions[0]?.key).toBe("agent:main:canonical-active");
+    },
+  );
+
   it.each(["archived", "all"] as const)(
     "loads the 61st %s session without replacing the canonical active list",
     async (statusFilter) => {

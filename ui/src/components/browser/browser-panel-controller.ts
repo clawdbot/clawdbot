@@ -297,6 +297,7 @@ export class BrowserPanelController implements ReactiveController {
     this.setState("loading", true);
     this.setState("errorText", null);
     this.setState("pendingNewTab", false);
+    let previousNavigationQueued = false;
     try {
       if (options.newTab || !this.activeTargetId) {
         const tab = await openBrowserTab(client, url);
@@ -323,9 +324,13 @@ export class BrowserPanelController implements ReactiveController {
         invocation.epoch = this.operations.epoch;
         this.exitCaptureModes();
         const targetId = this.activeTargetId;
+        previousNavigationQueued =
+          this.operations.hasQueuedNavigation(client, targetId) ||
+          this.operations.hasUnreconciledNavigation(client, targetId);
         await this.operations.queueNavigation(client, targetId, async () => {
           if (invocation.isCurrent()) {
             await navigateBrowser(client, { url, targetId });
+            this.operations.markNavigationCommitted(client, targetId);
           }
         });
         if (!invocation.isCurrent()) {
@@ -335,11 +340,40 @@ export class BrowserPanelController implements ReactiveController {
       }
       const refreshed = await this.refreshTabsOnly(client, () => invocation.isCurrent());
       if (refreshed !== "rejected" && invocation.isCurrent() && this.activeTargetId) {
-        await this.refreshView(this.activeTargetId, invocation.epoch);
+        const targetId = this.activeTargetId;
+        await this.refreshView(targetId, invocation.epoch);
+        if (!options.newTab && invocation.isCurrent() && this.view?.targetId === targetId) {
+          this.operations.markNavigationReconciled(client, targetId);
+        }
       }
     } catch (error) {
       if (invocation.isCurrent()) {
         this.reportError(error);
+        if (previousNavigationQueued && this.activeTargetId) {
+          const targetId = this.activeTargetId;
+          const navigationErrorText = this.errorText;
+          // An earlier queued navigation may already have committed remotely.
+          // Recover its actual document without replacing an unchanged view.
+          try {
+            const refreshed = await this.refreshTabsOnly(client, () => invocation.isCurrent());
+            const active = this.tabs.find((tab) => tab.id === targetId);
+            if (refreshed === "accepted" && invocation.isCurrent() && active) {
+              await this.refreshView(targetId, invocation.epoch);
+              if (
+                invocation.isCurrent() &&
+                this.view?.targetId === targetId &&
+                this.errorText === navigationErrorText
+              ) {
+                this.operations.markNavigationReconciled(client, targetId);
+              }
+            }
+          } catch {
+            // Recovery is best-effort; retain the original navigation failure.
+          }
+          if (invocation.isCurrent()) {
+            this.reportError(error);
+          }
+        }
       }
     } finally {
       if (invocation.isCurrent()) {

@@ -557,12 +557,17 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       // The More menu is transient: closed after reload, unpinned routes inside.
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("false");
       await moreButton.click();
+      await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("true");
+      const editPersistedPinnedItems = moreMenu.getByRole("menuitem", {
+        name: "Edit pinned items",
+      });
+      await expect.poll(() => editPersistedPinnedItems.isVisible()).toBe(true);
       await expect
         .poll(() => trimmedTextContents(moreMenu.getByRole("menuitem")))
         .not.toContain("Tasks");
       await captureUiProof(page, "03-persisted-customization.png");
 
-      await moreMenu.getByRole("menuitem", { name: "Edit pinned items" }).click();
+      await editPersistedPinnedItems.click();
       await menu.getByRole("menuitem", { name: "Reset pinned items" }).click();
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Automations", "Plugins"]);
 

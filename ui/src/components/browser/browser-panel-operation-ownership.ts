@@ -24,6 +24,11 @@ type BrowserPanelInvocation = {
   isCurrent(): boolean;
 };
 
+type BrowserNavigationCommit = {
+  committed: number;
+  reconciled: number;
+};
+
 export type BrowserPanelSnapshotOutcome = "accepted" | "rejected" | "failed";
 
 /** Owns the panel lifecycle, tab snapshots, captures, and pointer operations. */
@@ -38,6 +43,10 @@ export class BrowserPanelOperationOwnership {
   private readonly navigationQueues = new WeakMap<
     GatewayBrowserClient,
     Map<string, Promise<unknown>>
+  >();
+  private readonly navigationCommits = new WeakMap<
+    GatewayBrowserClient,
+    Map<string, BrowserNavigationCommit>
   >();
 
   constructor(private readonly host: BrowserPanelControllerHost) {}
@@ -86,6 +95,35 @@ export class BrowserPanelOperationOwnership {
         this.isLive(invocation.epoch, client) && invocation.id === this.requestedMutation,
     };
     return invocation;
+  }
+
+  /** A queued predecessor can commit even if the newest navigation later fails. */
+  hasQueuedNavigation(client: GatewayBrowserClient, targetId: string): boolean {
+    return this.navigationQueues.get(client)?.has(targetId) ?? false;
+  }
+
+  /** A committed document still needs its first owner-authoritative screenshot. */
+  hasUnreconciledNavigation(client: GatewayBrowserClient, targetId: string): boolean {
+    const state = this.navigationCommits.get(client)?.get(targetId);
+    return state !== undefined && state.committed !== state.reconciled;
+  }
+
+  markNavigationCommitted(client: GatewayBrowserClient, targetId: string): void {
+    let commits = this.navigationCommits.get(client);
+    if (!commits) {
+      commits = new Map();
+      this.navigationCommits.set(client, commits);
+    }
+    const state = commits.get(targetId) ?? { committed: 0, reconciled: 0 };
+    state.committed += 1;
+    commits.set(targetId, state);
+  }
+
+  markNavigationReconciled(client: GatewayBrowserClient, targetId: string): void {
+    const state = this.navigationCommits.get(client)?.get(targetId);
+    if (state) {
+      state.reconciled = state.committed;
+    }
   }
 
   /** Remote navigations for one gateway tab must commit in user-intent order. */
