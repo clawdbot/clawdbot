@@ -93,6 +93,10 @@ export type CodeModeHeadlessResult =
       toolCallCount: number;
     };
 
+export type CodeModeSettlementMode =
+  | { kind: "awaiting" }
+  | { kind: "draining"; requiredRequestIds: string[] };
+
 export type CodeModeWorkerResult =
   | {
       status: "completed";
@@ -103,6 +107,7 @@ export type CodeModeWorkerResult =
       status: "waiting";
       snapshotBytes: Uint8Array;
       pendingRequests: PendingBridgeRequest[];
+      settlementMode: CodeModeSettlementMode;
       output: unknown[];
     }
   | {
