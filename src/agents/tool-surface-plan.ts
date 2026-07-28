@@ -52,9 +52,10 @@ export function resolveAgentToolSurfacePlan(params: AgentToolSurfacePlanParams) 
 
 type CodeModeCatalogParams = Parameters<typeof applyCodeModeCatalog>[0];
 export type ApplyAgentToolSurfaceCatalogParams = Omit<CodeModeCatalogParams, "directToolNames"> & {
-  /** Required: the tool-search branches resolve their mode from this, so a
-   * missing value would silently downgrade the run to schema defaults. */
-  toolSearchRuntimeConfig: OpenClawConfig;
+  /** Required key (may be undefined for a config-less run): the tool-search
+   * branches resolve their mode from this, so omitting it would silently
+   * downgrade the run to schema defaults. */
+  toolSearchRuntimeConfig: OpenClawConfig | undefined;
   codeModeControlsEnabled: boolean;
   toolSearchConfig: ToolSearchConfig;
   forceDirectMessageTool: boolean;
