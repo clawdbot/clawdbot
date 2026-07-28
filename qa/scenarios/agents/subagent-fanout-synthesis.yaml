@@ -175,14 +175,9 @@ flow:
                           - if:
                               expr: "/timed out after/i.test(formatErrorMessage(attemptError))"
                               then:
-                                - call: waitForOutboundMessage
-                                  saveAs: timeoutParentOutbound
-                                  args:
-                                    - ref: state
-                                    - lambda:
-                                        params: [candidate]
-                                        expr: "config.expectedReplyGroups.every((group) => group.some((needle) => normalizeLowercaseStringOrEmpty(candidate.text).includes(needle)))"
-                                    - 30000
+                                - set: timeoutParentOutbound
+                                  value:
+                                    expr: "await waitForOutboundMessage(state, (candidate) => config.expectedReplyGroups.every((group) => group.some((needle) => normalizeLowercaseStringOrEmpty(candidate.text).includes(needle))), 30000).catch(() => undefined)"
                                 - set: timeoutAlphaExpected
                                   value:
                                     expr: "Boolean(env.mock) ? config.expectedChildCompletionMarkers[0] : 'ok'"
