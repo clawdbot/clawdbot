@@ -1736,6 +1736,63 @@ describe("message tool secret scoping", () => {
       rejected: true,
       broadcast: true,
     },
+    {
+      name: "delegated channel-less uniformly prefixed broadcast",
+      channel: "googlechat",
+      accountId: "alternate",
+      requesterAccountId: "current",
+      trusted: true,
+      origin: undefined,
+      rejected: true,
+      broadcast: true,
+      broadcastTargets: ["slack:channel:one", "slack:channel:two"],
+    },
+    {
+      name: "delegated all-channel uniformly prefixed broadcast",
+      channel: "googlechat",
+      accountId: "alternate",
+      requesterAccountId: "current",
+      trusted: true,
+      origin: undefined,
+      rejected: true,
+      broadcast: true,
+      broadcastChannel: "all",
+      broadcastTargets: ["slack:channel:one", "slack:channel:two"],
+    },
+    {
+      name: "delegated explicitly scoped cross-provider broadcast",
+      channel: "slack",
+      accountId: "alternate",
+      requesterAccountId: "current",
+      trusted: true,
+      origin: undefined,
+      rejected: false,
+      broadcast: true,
+      broadcastChannel: "slack",
+      broadcastTargets: ["slack:channel:one", "slack:channel:two"],
+    },
+    {
+      name: "delegated channel-less broadcast with matching current account",
+      channel: "googlechat",
+      accountId: "current",
+      requesterAccountId: "current",
+      trusted: true,
+      origin: undefined,
+      rejected: false,
+      broadcast: true,
+      broadcastTargets: ["slack:channel:one", "slack:channel:two"],
+    },
+    {
+      name: "direct channel-less uniformly prefixed broadcast",
+      channel: "googlechat",
+      accountId: "alternate",
+      requesterAccountId: undefined,
+      trusted: false,
+      origin: "direct-operator" as const,
+      rejected: false,
+      broadcast: true,
+      broadcastTargets: ["slack:channel:one", "slack:channel:two"],
+    },
   ])(
     "$name respects trusted current-turn account isolation before secret resolution",
     async (testCase) => {
@@ -1820,7 +1877,13 @@ describe("message tool secret scoping", () => {
       const invocation = testCase.broadcast
         ? tool.execute("1", {
             action: "broadcast",
-            targets: ["googlechat:spaces/current", "slack:channel:other"],
+            ...("broadcastChannel" in testCase && testCase.broadcastChannel
+              ? { channel: testCase.broadcastChannel }
+              : {}),
+            targets:
+              "broadcastTargets" in testCase
+                ? testCase.broadcastTargets
+                : ["googlechat:spaces/current", "slack:channel:other"],
             accountId: testCase.accountId,
             message: "hi",
           })

@@ -1603,8 +1603,13 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         accountId: requestedAccountId,
         fallbackAccountId: agentAccountId,
       });
+      const requestedBroadcastChannel = normalizeOptionalLowercaseString(params.channel);
+      // Broadcast execution only narrows on an explicit non-all channel. Target
+      // prefixes cannot authorize fewer providers than the runner will execute.
       const unscopedExplicitBroadcast =
-        action === "broadcast" && !requestedScope.channel && requestedAccountId !== undefined;
+        action === "broadcast" &&
+        (!requestedBroadcastChannel || requestedBroadcastChannel === "all") &&
+        requestedAccountId !== undefined;
       const explicitAccountId = validateExplicitMessageAccountSelection({
         cfg: rawConfig,
         channel: unscopedExplicitBroadcast ? undefined : scope.channel,
