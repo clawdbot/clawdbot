@@ -73,7 +73,7 @@ SecretRefs are validated only on effectively active surfaces:
 - Disabled channel/account entries.
 - Top-level channel credentials that no enabled account inherits.
 - Disabled tool/feature surfaces.
-- Web search provider-specific keys not selected by `tools.web.search.provider`. In auto mode (provider unset), keys are consulted by precedence for auto-detection until one resolves; after selection, non-selected provider keys are inactive.
+- Web search provider-specific keys not selected by `tools.web.search.provider`. In auto mode (provider unset), keys are consulted by precedence for auto-detection until one resolves; after selection, non-selected provider keys are inactive, unless the provider belongs to an effectively enabled plugin that declares standalone web tools (for example, Tavily's `tavily_search` and `tavily_extract` when Brave is selected for generic web search). Those standalone-tool credentials stay active and fail startup/reload if their SecretRef cannot resolve.
 - Sandbox SSH auth material (`agents.defaults.sandbox.ssh.identityData`, `certificateData`, `knownHostsData`, plus per-agent overrides) is active only when the effective sandbox backend is `ssh` and sandbox mode is not `off`, for the default agent or an enabled agent.
 - `gateway.remote.token` / `gateway.remote.password` SecretRefs are active if any of these hold:
   - `gateway.mode=remote`
