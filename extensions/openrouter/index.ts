@@ -14,6 +14,7 @@ import {
   getOpenRouterModelCapabilities,
   loadOpenRouterModelCapabilities,
 } from "openclaw/plugin-sdk/provider-stream-family";
+import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { buildOpenRouterImageGenerationProvider } from "./image-generation-provider.js";
 import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
@@ -41,6 +42,24 @@ import {
 
 const PROVIDER_ID = "openrouter";
 const OPENROUTER_DEFAULT_MAX_TOKENS = 8192;
+
+const openAiTools = buildProviderToolCompatFamilyHooks("openai");
+const deepSeekTools = buildProviderToolCompatFamilyHooks("deepseek");
+const geminiTools = buildProviderToolCompatFamilyHooks("gemini");
+
+function resolveOpenRouterToolFamily(modelId: string) {
+  const normalized = (normalizeOpenRouterApiModelId(modelId) ?? modelId).toLowerCase();
+  if (normalized.startsWith("deepseek/")) {
+    return deepSeekTools;
+  }
+  if (normalized.startsWith("google/")) {
+    return geminiTools;
+  }
+  if (normalized.startsWith("moonshot/") || normalized.startsWith("moonshotai/")) {
+    return deepSeekTools;
+  }
+  return openAiTools;
+}
 const OPENROUTER_FUSION_MODEL_ID = "openrouter/fusion";
 const OPENROUTER_CACHE_TTL_MODEL_PREFIXES = [
   "anthropic/",
@@ -334,6 +353,10 @@ export default defineSingleProviderPluginEntry({
       },
       ...passthroughGeminiReplayHooks,
       buildReplayPolicy: buildOpenRouterReplayPolicy,
+      normalizeToolSchemas: (ctx) =>
+        resolveOpenRouterToolFamily(ctx.modelId ?? "").normalizeToolSchemas(ctx),
+      inspectToolSchemas: (ctx) =>
+        resolveOpenRouterToolFamily(ctx.modelId ?? "").inspectToolSchemas(ctx),
       resolveReasoningOutputMode: () => "native",
       resolveThinkingProfile: ({ modelId }) => resolveOpenRouterThinkingProfile(modelId),
       isModernModelRef: () => true,
