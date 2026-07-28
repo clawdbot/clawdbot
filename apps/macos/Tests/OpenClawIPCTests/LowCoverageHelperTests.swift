@@ -339,9 +339,11 @@ struct LowCoverageHelperTests {
 
     @Test func `port guardian reads current process metadata without spawning children`() throws {
         let info = try #require(PortGuardian._testTunnelProcessInfo(pid: getpid()))
+        let now = Date().timeIntervalSince1970
 
         #expect(info.parentPid > 0)
-        #expect(abs(info.startedAt - Date().timeIntervalSince1970) < 60)
+        #expect(info.startedAt > now - ProcessInfo.processInfo.systemUptime - 1)
+        #expect(info.startedAt <= now + 1)
         #expect(info.fullCommand?.isEmpty == false)
     }
 
