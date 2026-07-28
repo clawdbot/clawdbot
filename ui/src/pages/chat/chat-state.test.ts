@@ -1909,7 +1909,13 @@ describe("refreshChatMetadata", () => {
     const secondFreshMetadata = createDeferred<MetadataResult>();
     const metadataResults = [sharedMetadata, firstFreshMetadata, secondFreshMetadata];
     let requestCount = 0;
-    const request = vi.fn(async () => await metadataResults[requestCount++].promise);
+    const request = vi.fn(async () => {
+      const metadata = metadataResults[requestCount++];
+      if (!metadata) {
+        throw new Error("unexpected metadata request");
+      }
+      return await metadata.promise;
+    });
     const client = { request } as unknown as GatewayBrowserClient;
     const firstState = createMetadataState(request, { client, connectionEpoch: 1 });
     const secondState = createMetadataState(request, { client, connectionEpoch: 1 });

@@ -2200,7 +2200,13 @@ describe("loadChatHistory filtering", () => {
     const secondFreshStartup = createDeferred<StartupResult>();
     const startups = [sharedStartup, firstFreshStartup, secondFreshStartup];
     let requestCount = 0;
-    const request = vi.fn(() => startups[requestCount++].promise);
+    const request = vi.fn(() => {
+      const startup = startups[requestCount++];
+      if (!startup) {
+        throw new Error("unexpected startup request");
+      }
+      return startup.promise;
+    });
     const client = { request } as unknown as ChatState["client"];
     const firstState = createState({
       client,

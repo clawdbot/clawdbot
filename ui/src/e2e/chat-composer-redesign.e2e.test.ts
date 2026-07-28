@@ -920,7 +920,10 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
         },
         "chat.startup": {
           agentsList: {
-            agents: [{ id: "work", name: "Work" }],
+            agents: [
+              { id: "main", name: "Main" },
+              { id: "work", name: "Work" },
+            ],
             defaultId: "main",
             mainKey: "main",
             scope: "agent",

@@ -73,6 +73,7 @@ type TestChatHost = Omit<ChatHost, "settings"> & {
   chatAvatarSource?: string | null;
   chatAvatarStatus?: "none" | "local" | "remote" | "data" | null;
   chatAvatarReason?: string | null;
+  chatModelsLoading: boolean;
   sessionsError?: string | null;
   sessionsResultAgentId?: string | null;
   sessionsArchivedFilter?: "active" | "archived" | "all";
