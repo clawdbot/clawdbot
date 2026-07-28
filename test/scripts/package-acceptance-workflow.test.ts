@@ -2655,9 +2655,7 @@ describe("package artifact reuse", () => {
 
     expect(run).toContain('grep -Fq -- "--shard <index/total>"');
     expect(run).toContain('matrix_selection=(--shard "${{ matrix.shard }}/5")');
-    expect(run).toContain(
-      "legacy_profiles=(transport media e2ee-smoke e2ee-deep e2ee-cli)",
-    );
+    expect(run).toContain("legacy_profiles=(transport media e2ee-smoke e2ee-deep e2ee-cli)");
     expect(run).toContain('legacy_profile="${legacy_profiles[shard_index - 1]}"');
     expect(run).toContain('matrix_selection=(--profile "${legacy_profile}")');
     expect(run).toContain('"${matrix_selection[@]}" \\');
