@@ -93,7 +93,22 @@ function collectFishPathOptionFlags(
   return [...flags];
 }
 
-function generateFishPathHelper(rootCmd: string): string {
+function generateFishPathHelper(rootCmd: string, program: Command): string {
+  const knownCommandPaths = collectBashCompletionContexts(program, [])
+    .flatMap((context) => context.pathVariants)
+    .map((pathSegments) => `'${pathSegments.join(" ").replaceAll("'", "'\\''")}'`)
+    .join(" ");
+  const rejectDescendantCommands = knownCommandPaths
+    ? `
+  if test (count $command_tokens) -gt (count $expected)
+    set -l next_index (math (count $expected) + 1)
+    set -l candidate_path (string join " " $expected $command_tokens[$next_index])
+    switch "$candidate_path"
+      case ${knownCommandPaths}
+        return 1
+    end
+  end`
+    : "";
   // Fish needs a helper to ignore option values while matching nested command paths.
   return `
 function __${rootCmd}_command_path_matches
@@ -137,6 +152,7 @@ function __${rootCmd}_command_path_matches
       return 1
     end
   end
+${rejectDescendantCommands}
   return 0
 end
 `;
@@ -604,7 +620,7 @@ ${commandPathCases}
 
 function generateFishCompletion(program: Command): string {
   const rootCmd = program.name();
-  const segments: string[] = [generateFishPathHelper(rootCmd)];
+  const segments: string[] = [generateFishPathHelper(rootCmd, program)];
 
   const visit = (cmd: Command, parentVariants: string[][]) => {
     // One condition per alias-expanded parent path so completion keeps working
