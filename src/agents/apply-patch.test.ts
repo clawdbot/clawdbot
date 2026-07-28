@@ -187,6 +187,72 @@ describe("applyPatch", () => {
     expect(result.summary.added).toEqual(["hello.txt"]);
   });
 
+  it("rejects an add hunk that targets an existing file", async () => {
+    const memory = createMemoryPatchSandbox({ "notes.txt": "keep me\n" });
+    const patch = `*** Begin Patch
+*** Add File: notes.txt
++replacement
+*** End Patch`;
+
+    await expect(applyPatch(patch, memory.options)).rejects.toThrow(
+      /Cannot create notes\.txt: the file already exists/,
+    );
+    expect(memory.files.get("/sandbox/notes.txt")).toBe("keep me\n");
+    expect(memory.writeFile.mock.calls).toHaveLength(0);
+  });
+
+  it("keeps existing workspace contents when an add hunk targets them", async () => {
+    await withWorkspaceTempDir(async (dir) => {
+      const target = path.join(dir, "notes.txt");
+      await fs.writeFile(target, "IMPORTANT USER DATA\nsecond line\n", "utf8");
+      const tool = createApplyPatchTool({ cwd: dir });
+      const patch = `*** Begin Patch
+*** Add File: notes.txt
++replacement
+*** End Patch`;
+
+      await expect(tool.execute("call-add-existing", { input: patch }, undefined)).rejects.toThrow(
+        /Cannot create notes\.txt: the file already exists/,
+      );
+      expect(await fs.readFile(target, "utf8")).toBe("IMPORTANT USER DATA\nsecond line\n");
+    });
+  });
+
+  it("allows an add hunk after the same path is deleted in the patch", async () => {
+    const memory = createMemoryPatchSandbox({ "notes.txt": "old\n" });
+    const patch = `*** Begin Patch
+*** Delete File: notes.txt
+*** Add File: notes.txt
++new
+*** End Patch`;
+
+    const result = await applyPatch(patch, memory.options);
+
+    expect(memory.files.get("/sandbox/notes.txt")).toBe("new\n");
+    expect(result.summary.added).toEqual(["notes.txt"]);
+  });
+
+  it("rejects a move hunk that targets an existing file", async () => {
+    const memory = createMemoryPatchSandbox({
+      "source.txt": "foo\nbar\n",
+      "dest.txt": "keep me\n",
+    });
+    const patch = `*** Begin Patch
+*** Update File: source.txt
+*** Move to: dest.txt
+@@
+ foo
+-bar
++baz
+*** End Patch`;
+
+    await expect(applyPatch(patch, memory.options)).rejects.toThrow(
+      /Cannot create dest\.txt: the file already exists/,
+    );
+    expect(memory.files.get("/sandbox/dest.txt")).toBe("keep me\n");
+    expect(memory.files.get("/sandbox/source.txt")).toBe("foo\nbar\n");
+  });
+
   it("updates and moves a file", async () => {
     const memory = createMemoryPatchSandbox({
       "source.txt": "foo\nbar\n",
