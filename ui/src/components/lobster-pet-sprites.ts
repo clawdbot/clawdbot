@@ -261,7 +261,7 @@ export const PATTERNED_PALETTES: ReadonlySet<LobsterPetPaletteId> = new Set([
   "goldenretro",
 ]);
 
-export const BANANA_MARKS = svg`
+const BANANA_MARKS = svg`
   <g fill="#8a6430">
     <rect x="56" y="8" width="8" height="6" rx="2.5" />
     <ellipse cx="60" cy="91" rx="6" ry="3.5" />
@@ -272,7 +272,7 @@ export const BANANA_MARKS = svg`
   </g>
 `;
 
-export const BEE_PARTS = svg`
+const BEE_PARTS = svg`
   <g class="lob-bee-wings" fill="#ffffff" opacity="0.45">
     <ellipse cx="38" cy="14" rx="8" ry="4.5" transform="rotate(-24 38 14)" />
     <ellipse cx="82" cy="14" rx="8" ry="4.5" transform="rotate(24 82 14)" />
@@ -284,7 +284,7 @@ export const BEE_PARTS = svg`
   </g>
 `;
 
-export const DUCK_BILL = svg`
+const DUCK_BILL = svg`
   <g>
     <ellipse cx="60" cy="71" rx="21" ry="14" fill="#ffffff" opacity="0.5" />
     <rect x="47" y="41" width="26" height="8" rx="4" fill="#ff9a2e" />
@@ -292,7 +292,7 @@ export const DUCK_BILL = svg`
   </g>
 `;
 
-export const SOURDOUGH_SCORING = svg`
+const SOURDOUGH_SCORING = svg`
   <g fill="none" stroke="#a8763e" stroke-width="2.5" stroke-linecap="round">
     <path d="M38 23 Q45 29 52 30" />
     <path d="M52 17 Q59 24 66 25" />
@@ -305,7 +305,7 @@ export const SOURDOUGH_SCORING = svg`
   </g>
 `;
 
-export const ZOMBIE_STITCHES = svg`
+const ZOMBIE_STITCHES = svg`
   <g fill="none" stroke="#5a6b52" stroke-width="2" stroke-linecap="round">
     <path d="M32 24 Q47 19 61 23" />
     <path d="M38 19 L40 26 M46 18 L47 25 M54 19 L53 26" />
@@ -315,7 +315,7 @@ export const ZOMBIE_STITCHES = svg`
   <ellipse cx="35" cy="61" rx="9" ry="6" fill="#86987a" opacity="0.8" transform="rotate(-18 35 61)" />
 `;
 
-export const PLUSH_SEAMS = svg`
+const PLUSH_SEAMS = svg`
   <g fill="none" stroke="#c97a5e" stroke-width="1.5" stroke-dasharray="3 3">
     <path d="M30 32 Q60 4 90 32" />
     <path d="M60 50 Q58 72 60 96" />
@@ -327,7 +327,7 @@ export const PLUSH_SEAMS = svg`
   </g>
 `;
 
-export const DISCO_FACETS = svg`
+const DISCO_FACETS = svg`
   <g class="lob-disco" fill="#ffffff">
     <rect x="42" y="18" width="4" height="4" opacity="0.3" /><rect x="52" y="16" width="4" height="4" opacity="0.5" />
     <rect x="63" y="17" width="4" height="4" opacity="0.25" /><rect x="74" y="20" width="4" height="4" opacity="0.4" />
