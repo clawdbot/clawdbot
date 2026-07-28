@@ -111,19 +111,19 @@ Direct generation example:
 | ComfyUI    | `workflow`                   | Up to 1 image    | Workflow-defined music or audio                       | `COMFY_API_KEY`, `COMFY_CLOUD_API_KEY` |
 | fal        | `fal-ai/minimax-music/v2.6`  | None             | `lyrics`, `instrumental`, `durationSeconds`, `format` | `FAL_KEY` or `FAL_API_KEY`             |
 | Google     | `lyria-3-clip-preview`       | Up to 10 images  | `lyrics`, `instrumental`, `format`                    | `GEMINI_API_KEY`, `GOOGLE_API_KEY`     |
-| MiniMax    | `music-2.6`                  | None             | `lyrics`, `instrumental`, `format` (mp3 only)         | `MINIMAX_API_KEY` or MiniMax OAuth     |
+| MiniMax    | `music-3.0`                  | None             | `lyrics`, `instrumental`, `format` (mp3 only)         | `MINIMAX_API_KEY` or MiniMax OAuth     |
 | OpenRouter | `google/lyria-3-pro-preview` | Up to 1 image    | `lyrics`, `instrumental`, `durationSeconds`, `format` | `OPENROUTER_API_KEY`                   |
 
 MiniMax registers two provider ids sharing the same models: `minimax` for
 API-key auth and `minimax-portal` for OAuth. Model refs follow the auth path
-(`minimax/music-2.6` vs `minimax-portal/music-2.6`); see
+(`minimax/music-3.0` vs `minimax-portal/music-3.0`); see
 [MiniMax](/providers/minimax#music-generation).
 
 fal also exposes `fal-ai/ace-step/prompt-to-audio` (wav, no lyrics, no
 instrumental toggle) and `fal-ai/stable-audio-25/text-to-audio` (wav,
 prompt-only) alongside its default MiniMax-backed model. Google's default
 `lyria-3-clip-preview` outputs mp3 only; `lyria-3-pro-preview` also supports
-wav. MiniMax also exposes `music-2.6-free`, `music-cover`, and
+wav. MiniMax also exposes `music-2.6`, `music-3.0-free`, `music-2.6-free`, `music-cover`, and
 `music-cover-free`. OpenRouter also exposes `google/lyria-3-clip-preview`.
 
 ### Capability matrix
@@ -240,7 +240,7 @@ openclaw tasks cancel <taskId>
     defaults: {
       musicGenerationModel: {
         primary: "google/lyria-3-clip-preview",
-        fallbacks: ["fal/fal-ai/minimax-music/v2.6", "minimax/music-2.6"],
+        fallbacks: ["fal/fal-ai/minimax-music/v2.6", "minimax/music-3.0"],
       },
     },
   },
@@ -292,8 +292,9 @@ Automatic fallback across authenticated providers is always enabled. A per-call
   <Accordion title="MiniMax">
     Uses the batch `music_generation` endpoint. Supports prompt, optional
     lyrics, instrumental mode, and mp3 output through either `minimax`
-    API-key auth or `minimax-portal` OAuth. Also exposes `music-2.6-free`,
-    `music-cover`, and `music-cover-free` models.
+    API-key auth or `minimax-portal` OAuth. Also exposes `music-2.6`,
+    `music-3.0-free`, `music-2.6-free`, `music-cover`, and `music-cover-free`
+    models.
   </Accordion>
   <Accordion title="OpenRouter">
     Uses OpenRouter chat completions audio output with streaming enabled. The

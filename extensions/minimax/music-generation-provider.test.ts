@@ -135,7 +135,7 @@ describe("minimax music generation provider", () => {
     const request = mockCallArg(postJsonRequestMock);
     expect(request.url).toBe("https://api.minimax.io/v1/music_generation");
     const body = request.body as Record<string, unknown>;
-    expect(body.model).toBe("music-2.6");
+    expect(body.model).toBe("music-3.0");
     expect(body.prompt).toBe("upbeat dance-pop with female vocals");
     expect(body.prompt).not.toContain("Target duration");
     expect(body).not.toHaveProperty("duration");

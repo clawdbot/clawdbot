@@ -26,7 +26,7 @@ Referral link for MiniMax Coding Plan (10% off): [MiniMax Coding Plan](https://p
 | `MiniMax-M2.7-highspeed` | Chat (reasoning) | Faster M2.7 reasoning tier               |
 | `MiniMax-VL-01`          | Vision           | Image understanding model                |
 | `image-01`               | Image generation | Text-to-image and image-to-image editing |
-| `music-2.6`              | Music generation | Default music model                      |
+| `music-3.0`              | Music generation | Default music model                      |
 | `MiniMax-Hailuo-2.3`     | Video generation | Text-to-video and image-to-video flows   |
 
 Model refs follow the auth path: `minimax/<model>` for API-key setups, `minimax-portal/<model>` for OAuth setups.
@@ -250,8 +250,8 @@ The bundled `minimax` plugin registers MiniMax T2A v2 as a speech provider for `
 
 The bundled MiniMax plugin registers music generation through the shared `music_generate` tool for both `minimax` and `minimax-portal`.
 
-- Default music model: `minimax/music-2.6` (OAuth: `minimax-portal/music-2.6`)
-- Also supports `music-2.6-free`, `music-cover`, and `music-cover-free`
+- Default music model: `minimax/music-3.0` (OAuth: `minimax-portal/music-3.0`)
+- Also supports `music-2.6`, `music-3.0-free`, `music-2.6-free`, `music-cover`, and `music-cover-free`
 - Prompt controls: `lyrics`, `instrumental`
 - Output format: `mp3`
 - Session-backed runs detach through the shared task/status flow, including `action: "status"`
@@ -260,7 +260,7 @@ The bundled MiniMax plugin registers music generation through the shared `music_
 {
   agents: {
     defaults: {
-      musicGenerationModel: { primary: "minimax/music-2.6" },
+      musicGenerationModel: { primary: "minimax/music-3.0" },
     },
   },
 }
