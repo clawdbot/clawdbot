@@ -17,12 +17,16 @@ type RepeatableSystemMessage = {
   count: number;
 };
 
+type TrackedTool = {
+  component: ToolExecutionComponent;
+  runId?: string;
+  active: boolean;
+};
+
 /** Scrollback container that tracks pending users, streaming assistant runs, tools, and notices. */
 export class ChatLog extends Container {
   private readonly maxComponents: number;
-  private toolById = new Map<string, ToolExecutionComponent>();
-  private toolRunIds = new Map<string, string>();
-  private activeTools = new Set<ToolExecutionComponent>();
+  private tools = new Map<string, TrackedTool>();
   private streamingRuns = new Map<string, AssistantMessageComponent>();
   private frozenAssistants = new Map<string, Set<AssistantMessageComponent>>();
   private finalizedAssistants = new Map<string, Set<AssistantMessageComponent>>();
@@ -51,11 +55,9 @@ export class ChatLog extends Container {
 
   // Pruning must clear side maps so future stream/tool updates do not target detached components.
   private dropComponentReferences(component: Component) {
-    for (const [toolId, tool] of this.toolById.entries()) {
-      if (tool === component) {
-        this.toolById.delete(toolId);
-        this.toolRunIds.delete(toolId);
-        this.activeTools.delete(tool);
+    for (const [toolId, tool] of this.tools.entries()) {
+      if (tool.component === component) {
+        this.tools.delete(toolId);
       }
     }
     for (const [runId, message] of this.streamingRuns.entries()) {
@@ -118,6 +120,58 @@ export class ChatLog extends Container {
     }
   }
 
+  private reserveLiveUserSlot(
+    protectedComponents: Set<Component>,
+    firstRunComponent: Component | undefined,
+    runId?: string,
+  ) {
+    if (protectedComponents.size <= this.maxComponents) {
+      return;
+    }
+
+    // Keep live output and the sole reply; completed run history is the
+    // first choice when a delayed prompt needs a bounded scrollback slot.
+    const streaming = runId ? this.streamingRuns.get(runId) : undefined;
+    const completedTools = new Set<ToolExecutionComponent>();
+    for (const tool of this.tools.values()) {
+      if (!tool.active) {
+        completedTools.add(tool.component);
+      }
+    }
+    const evictable =
+      this.children.find(
+        (entry) =>
+          entry !== firstRunComponent &&
+          entry !== streaming &&
+          entry instanceof AssistantMessageComponent &&
+          protectedComponents.has(entry),
+      ) ??
+      this.children.find(
+        (entry) =>
+          entry !== firstRunComponent &&
+          entry instanceof ToolExecutionComponent &&
+          completedTools.has(entry) &&
+          protectedComponents.has(entry),
+      ) ??
+      (streaming &&
+      firstRunComponent instanceof AssistantMessageComponent &&
+      firstRunComponent !== streaming
+        ? firstRunComponent
+        : undefined) ??
+      (firstRunComponent instanceof ToolExecutionComponent && completedTools.has(firstRunComponent)
+        ? firstRunComponent
+        : undefined) ??
+      this.children.find(
+        (entry) =>
+          entry !== firstRunComponent &&
+          entry instanceof ToolExecutionComponent &&
+          protectedComponents.has(entry),
+      );
+    if (evictable) {
+      protectedComponents.delete(evictable);
+    }
+  }
+
   private append(component: Component) {
     this.addChild(component);
     this.pruneOverflow();
@@ -130,9 +184,7 @@ export class ChatLog extends Container {
 
   clearAll(opts?: { preservePendingUsers?: boolean; preserveLiveUsers?: boolean }) {
     this.clear();
-    this.toolById.clear();
-    this.toolRunIds.clear();
-    this.activeTools.clear();
+    this.tools.clear();
     this.streamingRuns.clear();
     this.frozenAssistants.clear();
     this.finalizedAssistants.clear();
@@ -161,12 +213,10 @@ export class ChatLog extends Container {
   }
 
   clearTools() {
-    for (const tool of this.toolById.values()) {
-      this.removeChild(tool);
+    for (const tool of this.tools.values()) {
+      this.removeChild(tool.component);
     }
-    this.toolById.clear();
-    this.toolRunIds.clear();
-    this.activeTools.clear();
+    this.tools.clear();
   }
 
   restoreLiveUsers(beforeMessageSeq?: number) {
@@ -308,9 +358,9 @@ export class ChatLog extends Container {
       for (const segment of this.finalizedAssistants.get(options.runId) ?? []) {
         protectedComponents.add(segment);
       }
-      for (const [toolId, tool] of this.toolById) {
-        if (this.toolRunIds.get(toolId) === options.runId) {
-          protectedComponents.add(tool);
+      for (const tool of this.tools.values()) {
+        if (tool.runId === options.runId) {
+          protectedComponents.add(tool.component);
         }
       }
     }
@@ -323,44 +373,7 @@ export class ChatLog extends Container {
       // anchor before the earliest surviving reply or tool from the same run.
       this.repeatableSystemMessage = null;
       this.children.splice(firstRunComponentIndex, 0, component);
-      if (protectedComponents.size > this.maxComponents) {
-        // Prefer completed history, but keep the sole reply when only tools
-        // remain: dropping it would leave a prompt with no visible response.
-        const streaming = options.runId ? this.streamingRuns.get(options.runId) : undefined;
-        const evictable =
-          this.children.find(
-            (entry) =>
-              entry !== firstRunComponent &&
-              entry !== streaming &&
-              entry instanceof AssistantMessageComponent &&
-              protectedComponents.has(entry),
-          ) ??
-          this.children.find(
-            (entry) =>
-              entry !== firstRunComponent &&
-              entry instanceof ToolExecutionComponent &&
-              !this.activeTools.has(entry) &&
-              protectedComponents.has(entry),
-          ) ??
-          (streaming &&
-          firstRunComponent instanceof AssistantMessageComponent &&
-          firstRunComponent !== streaming
-            ? firstRunComponent
-            : undefined) ??
-          (firstRunComponent instanceof ToolExecutionComponent &&
-          !this.activeTools.has(firstRunComponent)
-            ? firstRunComponent
-            : undefined) ??
-          this.children.find(
-            (entry) =>
-              entry !== firstRunComponent &&
-              entry instanceof ToolExecutionComponent &&
-              protectedComponents.has(entry),
-          );
-        if (evictable) {
-          protectedComponents.delete(evictable);
-        }
-      }
+      this.reserveLiveUserSlot(protectedComponents, firstRunComponent, options.runId);
       this.pruneOverflow(protectedComponents);
       return component;
     }
@@ -619,21 +632,17 @@ export class ChatLog extends Container {
   }
 
   startTool(toolCallId: string, toolName: string, args: unknown, runId?: string) {
-    const existing = this.toolById.get(toolCallId);
+    const existing = this.tools.get(toolCallId);
     if (existing) {
-      existing.setArgs(args);
-      return existing;
+      existing.component.setArgs(args);
+      return existing.component;
     }
     const owningRunId =
       runId ?? (this.streamingRuns.size === 1 ? this.streamingRuns.keys().next().value : undefined);
     this.freezeStreamingAssistants();
     const component = new ToolExecutionComponent(toolName, args);
     component.setExpanded(this.toolsExpanded);
-    this.toolById.set(toolCallId, component);
-    this.activeTools.add(component);
-    if (owningRunId) {
-      this.toolRunIds.set(toolCallId, owningRunId);
-    }
+    this.tools.set(toolCallId, { component, runId: owningRunId, active: true });
     this.appendNonSystem(component);
     return component;
   }
@@ -643,25 +652,25 @@ export class ChatLog extends Container {
     result: unknown,
     opts?: { isError?: boolean; partial?: boolean },
   ) {
-    const existing = this.toolById.get(toolCallId);
+    const existing = this.tools.get(toolCallId);
     if (!existing) {
       return;
     }
     if (opts?.partial) {
-      this.activeTools.add(existing);
-      existing.setPartialResult(result as Record<string, unknown>);
+      existing.active = true;
+      existing.component.setPartialResult(result as Record<string, unknown>);
       return;
     }
-    this.activeTools.delete(existing);
-    existing.setResult(result as Record<string, unknown>, {
+    existing.active = false;
+    existing.component.setResult(result as Record<string, unknown>, {
       isError: opts?.isError,
     });
   }
 
   setToolsExpanded(expanded: boolean) {
     this.toolsExpanded = expanded;
-    for (const tool of this.toolById.values()) {
-      tool.setExpanded(expanded);
+    for (const tool of this.tools.values()) {
+      tool.component.setExpanded(expanded);
     }
   }
 }
