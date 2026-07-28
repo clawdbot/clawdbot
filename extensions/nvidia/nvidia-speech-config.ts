@@ -33,6 +33,7 @@ export function normalizeNvidiaBaseUrl(value: string): string {
 export function normalizeNvidiaTtsConfig(rawConfig: Record<string, unknown>): NvidiaTtsConfig {
   const providers = asObject(rawConfig.providers);
   const raw = asObject(providers?.nvidia) ?? asObject(rawConfig.nvidia) ?? rawConfig;
+  const voice = trimToUndefined(raw.voice) ?? NVIDIA_DEFAULT_VOICE;
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw.apiKey,
@@ -44,12 +45,18 @@ export function normalizeNvidiaTtsConfig(rawConfig: Record<string, unknown>): Nv
         NVIDIA_TTS_BASE_URL,
     ),
     model: trimToUndefined(raw.model) ?? NVIDIA_DEFAULT_TTS_MODEL,
-    voice: trimToUndefined(raw.voice) ?? NVIDIA_DEFAULT_VOICE,
-    language: trimToUndefined(raw.language) ?? NVIDIA_DEFAULT_LANGUAGE,
+    voice,
+    language:
+      trimToUndefined(raw.language) ?? resolveMagpieVoiceLanguage(voice) ?? NVIDIA_DEFAULT_LANGUAGE,
     sampleRateHz: asFiniteNumber(raw.sampleRateHz) ?? 44_100,
     customDictionary: trimToUndefined(raw.customDictionary),
     customConfiguration: trimToUndefined(raw.customConfiguration),
   };
+}
+
+export function resolveMagpieVoiceLanguage(voice: string): string | undefined {
+  const locale = /^Magpie-Multilingual\.([A-Za-z]{2})-([A-Za-z]{2})\./.exec(voice);
+  return locale ? `${locale[1].toLowerCase()}-${locale[2].toUpperCase()}` : undefined;
 }
 
 export function isNvidiaHostedAsrBaseUrl(value: string): boolean {

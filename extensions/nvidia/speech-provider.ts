@@ -15,6 +15,7 @@ import {
   NVIDIA_TTS_BASE_URL,
   isNvidiaHostedTtsBaseUrl,
   normalizeNvidiaTtsConfig,
+  resolveMagpieVoiceLanguage,
 } from "./nvidia-speech-config.js";
 
 const MAGPIE_VOICES = [
@@ -57,13 +58,20 @@ export function buildNvidiaSpeechProvider(): SpeechProviderPlugin {
       const config = normalizeNvidiaTtsConfig(req.providerConfig);
       const apiKey = await resolveNvidiaSpeechApiKey(config.apiKey, config.baseUrl, req.cfg);
       const overrides = req.providerOverrides ?? {};
+      const overrideVoice = trimToUndefined(overrides.voice);
+      const voice = overrideVoice ?? config.voice ?? NVIDIA_DEFAULT_VOICE;
+      const language =
+        trimToUndefined(overrides.language) ??
+        (overrideVoice ? resolveMagpieVoiceLanguage(voice) : undefined) ??
+        config.language ??
+        NVIDIA_DEFAULT_LANGUAGE;
       const { magpieSynthesize } = await import("./nvidia-speech-http.runtime.js");
       const audioBuffer = await magpieSynthesize({
         text: req.text,
         apiKey,
         baseUrl: config.baseUrl,
-        voice: trimToUndefined(overrides.voice) ?? config.voice ?? NVIDIA_DEFAULT_VOICE,
-        language: trimToUndefined(overrides.language) ?? config.language ?? NVIDIA_DEFAULT_LANGUAGE,
+        voice,
+        language,
         sampleRateHz: config.sampleRateHz,
         customDictionary: trimToUndefined(overrides.customDictionary) ?? config.customDictionary,
         customConfiguration:

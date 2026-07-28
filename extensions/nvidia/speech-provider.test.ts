@@ -66,6 +66,16 @@ describe("NVIDIA Magpie speech provider", () => {
     expect(config.customConfiguration).toBe("key:value");
   });
 
+  it("infers language from a configured multilingual voice", () => {
+    const config = provider.resolveConfig!({
+      rawConfig: { voice: "Magpie-Multilingual.HI-IN.Sofia" },
+      cfg: {} as never,
+      timeoutMs: 30_000,
+    });
+
+    expect(config.language).toBe("hi-IN");
+  });
+
   it("forwards multilingual Talk voice and language overrides", () => {
     expect(
       provider.resolveTalkOverrides?.({
@@ -119,6 +129,26 @@ describe("NVIDIA Magpie speech provider", () => {
     );
     expect(result.outputFormat).toBe("wav");
     expect(result.voiceCompatible).toBe(false);
+  });
+
+  it("infers language from a Talk voice override", async () => {
+    process.env.NVIDIA_API_KEY = "hosted-secret";
+
+    await provider.synthesize({
+      text: "hola",
+      cfg: {},
+      providerConfig: {},
+      providerOverrides: { voice: "Magpie-Multilingual.ES-US.Diego" },
+      target: "audio-file",
+      timeoutMs: 5_000,
+    });
+
+    expect(magpieSynthesizeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        voice: "Magpie-Multilingual.ES-US.Diego",
+        language: "es-US",
+      }),
+    );
   });
 
   it("uses shared credentials for the hosted Magpie /v1 base URL", async () => {
