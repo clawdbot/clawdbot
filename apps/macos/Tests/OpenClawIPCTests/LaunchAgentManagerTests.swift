@@ -16,22 +16,42 @@ struct LaunchAgentManagerTests {
         #expect(args == ["/Applications/OpenClaw.app/Contents/MacOS/OpenClaw"])
     }
 
-    @Test func `launch at login plist preserves OpenClaw profile environment overrides`() throws {
-        setenv("OPENCLAW_CONFIG_PATH", "/tmp/custom-openclaw.json", 1)
-        setenv("OPENCLAW_STATE_DIR", "/tmp/openclaw-state", 1)
-        defer {
-            unsetenv("OPENCLAW_CONFIG_PATH")
-            unsetenv("OPENCLAW_STATE_DIR")
+    @MainActor
+    @Test func `launch at login plist preserves normalized profile environment once`() async throws {
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": "  /tmp/custom&<openclaw>\"'.json  ",
+            "OPENCLAW_STATE_DIR": "/tmp/openclaw-state",
+            "PATH": "/tmp/custom&<bin>",
+        ]) {
+            let plist = LaunchAgentManager.plistContents(bundlePath: "/Applications/OpenClaw.app")
+            let data = try #require(plist.data(using: .utf8))
+            let object = try #require(
+                PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+
+            let environment = try #require(object["EnvironmentVariables"] as? [String: String])
+            #expect(environment["OPENCLAW_CONFIG_PATH"] == "/tmp/custom&<openclaw>\"'.json")
+            #expect(environment["OPENCLAW_STATE_DIR"] == "/tmp/openclaw-state")
+            #expect(environment["PATH"]?.contains("/tmp/custom&<bin>") == true)
+            #expect(plist.components(separatedBy: "<key>OPENCLAW_CONFIG_PATH</key>").count == 2)
+            #expect(plist.components(separatedBy: "<key>OPENCLAW_STATE_DIR</key>").count == 2)
         }
+    }
 
-        let plist = LaunchAgentManager.plistContents(bundlePath: "/Applications/OpenClaw.app")
-        let data = try #require(plist.data(using: .utf8))
-        let object = try #require(
-            PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+    @MainActor
+    @Test func `launch at login plist omits unset and blank profile environment`() async throws {
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": nil,
+            "OPENCLAW_STATE_DIR": " \n ",
+        ]) {
+            let plist = LaunchAgentManager.plistContents(bundlePath: "/Applications/OpenClaw.app")
+            let data = try #require(plist.data(using: .utf8))
+            let object = try #require(
+                PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
 
-        let environment = try #require(object["EnvironmentVariables"] as? [String: String])
-        #expect(environment["OPENCLAW_CONFIG_PATH"] == "/tmp/custom-openclaw.json")
-        #expect(environment["OPENCLAW_STATE_DIR"] == "/tmp/openclaw-state")
-        #expect(environment["PATH"]?.isEmpty == false)
+            let environment = try #require(object["EnvironmentVariables"] as? [String: String])
+            #expect(environment.keys.sorted() == ["PATH"])
+            #expect(!plist.contains("OPENCLAW_CONFIG_PATH"))
+            #expect(!plist.contains("OPENCLAW_STATE_DIR"))
+        }
     }
 }

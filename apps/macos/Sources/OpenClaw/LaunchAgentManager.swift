@@ -31,55 +31,46 @@ enum LaunchAgentManager {
     }
 
     static func plistContents(bundlePath: String) -> String {
-        let environmentVariables = self.launchAgentEnvironmentVariables()
-            .flatMap { key, value in
-                [
-                    "            <key>\(self.escapePlistText(key))</key>",
-                    "            <string>\(self.escapePlistText(value))</string>",
-                ]
-            }
-
-        return ([
-            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
-            "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" " +
-                "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">",
-            "<plist version=\"1.0\">",
-            "<dict>",
-            "  <key>Label</key>",
-            "  <string>ai.openclaw.mac</string>",
-            "  <key>ProgramArguments</key>",
-            "  <array>",
-            "    <string>\(bundlePath)/Contents/MacOS/OpenClaw</string>",
-            "  </array>",
-            "  <key>WorkingDirectory</key>",
-            "  <string>\(FileManager().homeDirectoryForCurrentUser.path)</string>",
-            "  <key>RunAtLoad</key>",
-            "  <true/>",
-            "  <key>EnvironmentVariables</key>",
-            "  <dict>",
-        ] + environmentVariables + [
-            "  </dict>",
-            "  <key>StandardOutPath</key>",
-            "  <string>\(LogLocator.launchdLogPath)</string>",
-            "  <key>StandardErrorPath</key>",
-            "  <string>\(LogLocator.launchdLogPath)</string>",
-            "</dict>",
-            "</plist>",
-        ]).joined(separator: "\n")
+        let path = self.escapePlistText(CommandResolver.preferredPaths().joined(separator: ":"))
+        let profileEnvironment = self.profileEnvironmentPlistEntries()
+        return """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+          <key>Label</key>
+          <string>ai.openclaw.mac</string>
+          <key>ProgramArguments</key>
+          <array>
+            <string>\(bundlePath)/Contents/MacOS/OpenClaw</string>
+          </array>
+          <key>WorkingDirectory</key>
+          <string>\(FileManager().homeDirectoryForCurrentUser.path)</string>
+          <key>RunAtLoad</key>
+          <true/>
+          <key>EnvironmentVariables</key>
+          <dict>
+            <key>PATH</key>
+            <string>\(path)</string>\(profileEnvironment)
+          </dict>
+          <key>StandardOutPath</key>
+          <string>\(LogLocator.launchdLogPath)</string>
+          <key>StandardErrorPath</key>
+          <string>\(LogLocator.launchdLogPath)</string>
+        </dict>
+        </plist>
+        """
     }
 
-    private static func launchAgentEnvironmentVariables() -> [(String, String)] {
-        var entries = [("PATH", CommandResolver.preferredPaths().joined(separator: ":"))]
-        let environment = ProcessInfo.processInfo.environment
-        for key in ["OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR"] {
-            guard let value = environment[key]?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !value.isEmpty
-            else {
-                continue
-            }
-            entries.append((key, value))
-        }
-        return entries
+    private static func profileEnvironmentPlistEntries() -> String {
+        ["OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR"].compactMap { key in
+            guard let value = OpenClawEnv.path(key) else { return nil }
+            return """
+
+                        <key>\(key)</key>
+                        <string>\(self.escapePlistText(value))</string>
+            """
+        }.joined()
     }
 
     private static func escapePlistText(_ value: String) -> String {
@@ -87,6 +78,8 @@ enum LaunchAgentManager {
             .replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")
             .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&apos;")
     }
 
     @discardableResult
