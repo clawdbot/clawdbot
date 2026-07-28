@@ -4207,6 +4207,7 @@ export const en: TranslationMap = {
       updateAvailable: "Update available",
       updateMacAndGateway: "Update Mac app + Gateway",
       updateGateway: "Update Gateway",
+      betaChannel: "(beta)",
       allSessions: "All threads",
       threads: "Threads",
       groups: "Groups",

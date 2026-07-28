@@ -107,9 +107,10 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
       : this.nativeUpdateAvailable
         ? t("chat.sidebar.updateMacAndGateway")
         : t("chat.sidebar.updateGateway");
-    const versionLabel = update.channel === "beta"
-      ? `v${update.latestVersion} (beta)`
-      : `v${update.latestVersion}`;
+    const versionLabel =
+      update.channel === "beta"
+        ? `v${update.latestVersion} ${t("chat.sidebar.betaChannel")}`
+        : `v${update.latestVersion}`;
     return html`
       <div class="sidebar-update-card" role="status" aria-live="polite">
         <button
