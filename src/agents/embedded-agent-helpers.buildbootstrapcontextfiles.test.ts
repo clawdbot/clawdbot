@@ -116,6 +116,25 @@ describe("buildBootstrapContextFiles", () => {
     expect(result?.content).toContain("[...truncated, read USER.md for full content...]");
     expect(result?.content.length).toBeLessThanOrEqual(maxChars);
   });
+  it("gives USER.md its own small bootstrap budget", () => {
+    const files = [
+      makeFile({
+        name: "USER.md",
+        path: "/tmp/USER.md",
+        content: "u".repeat(10_000),
+      }),
+      makeFile({
+        name: "MEMORY.md",
+        path: "/tmp/MEMORY.md",
+        content: "m".repeat(10_000),
+      }),
+    ];
+    const result = buildBootstrapContextFiles(files);
+
+    expect(result[0]?.content.length).toBeLessThanOrEqual(4_000);
+    expect(result[0]?.content).toContain("read USER.md for full content");
+    expect(result[1]?.content).toBe("m".repeat(10_000));
+  });
   it("keeps policy digest lines from oversized AGENTS.md middle content", () => {
     // AGENTS.md truncation keeps scoped-policy signals from the middle so model
     // prompts do not lose routing instructions just because head/tail are large.
@@ -185,7 +204,8 @@ describe("buildBootstrapContextFiles", () => {
     const totalChars = result.reduce((sum, entry) => sum + entry.content.length, 0);
     expect(totalChars).toBeLessThanOrEqual(EXPECTED_DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS);
     expect(result).toHaveLength(3);
-    expect(result[2]?.content).toBe("c".repeat(10_000));
+    expect(result[2]?.content.length).toBeLessThanOrEqual(4_000);
+    expect(result[2]?.content).toContain("read USER.md for full content");
   });
 
   it("caps total injected bootstrap characters when totalMaxChars is configured", () => {

@@ -25,7 +25,13 @@ type OpenFence = {
 
 const DEFAULT_MAX_CHARS = 2000;
 const DEFAULT_MAX_LINES = 17;
+const REASONING_ITALICS_MARKER_CHARS = 2;
+const MIN_REASONING_ITALICS_CHUNK_CHARS = 4;
 const FENCE_RE = /^( {0,3})(`{3,}|~{3,})(.*)$/;
+
+function hasReasoningItalics(text: string): boolean {
+  return /^(?:Reasoning:|Thinking\.{0,3})\n+_/u.test(text) && text.trimEnd().endsWith("_");
+}
 
 function resolveDiscordChunkLimit(value: unknown, fallback: number) {
   return resolveIntegerOption(value, fallback, { min: 1 });
@@ -98,7 +104,7 @@ function closeFenceIfNeeded(text: string, openFence: OpenFence | null, maxChars:
  * while keeping fenced code blocks balanced across chunks.
  */
 function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string[] {
-  const maxChars = resolveDiscordChunkLimit(opts.maxChars, DEFAULT_MAX_CHARS);
+  const hardMaxChars = resolveDiscordChunkLimit(opts.maxChars, DEFAULT_MAX_CHARS);
   const maxLines = resolveDiscordChunkLimit(opts.maxLines, DEFAULT_MAX_LINES);
 
   const body = text ?? "";
@@ -106,10 +112,17 @@ function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string
     return [];
   }
 
-  const alreadyOk = body.length <= maxChars && countLines(body) <= maxLines;
+  const alreadyOk = body.length <= hardMaxChars && countLines(body) <= maxLines;
   if (alreadyOk) {
     return [body];
   }
+
+  // Reasoning rebalancing can add an opening and closing marker to each chunk.
+  // Reserve both before splitting so the rendered payload still fits Discord.
+  const maxChars =
+    hardMaxChars >= MIN_REASONING_ITALICS_CHUNK_CHARS && hasReasoningItalics(body)
+      ? hardMaxChars - REASONING_ITALICS_MARKER_CHARS
+      : hardMaxChars;
 
   const lines = body.split("\n");
   const chunks: string[] = [];
@@ -216,7 +229,7 @@ function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string
     }
   }
 
-  return rebalanceReasoningItalics(text, chunks);
+  return rebalanceReasoningItalics(text, chunks, hardMaxChars);
 }
 
 export function chunkDiscordTextWithMode(
@@ -248,14 +261,12 @@ export function chunkDiscordTextWithMode(
 // When Discord chunking splits the message, we close italics at the end of
 // each chunk and reopen at the start of the next so every chunk renders
 // consistently.
-function rebalanceReasoningItalics(source: string, chunks: string[]): string[] {
-  if (chunks.length <= 1) {
+function rebalanceReasoningItalics(source: string, chunks: string[], maxChars: number): string[] {
+  if (chunks.length <= 1 || maxChars < MIN_REASONING_ITALICS_CHUNK_CHARS) {
     return chunks;
   }
 
-  const opensWithReasoningItalics =
-    /^(?:Reasoning:|Thinking\.{0,3})\n+_/u.test(source) && source.trimEnd().endsWith("_");
-  if (!opensWithReasoningItalics) {
+  if (!hasReasoningItalics(source)) {
     return chunks;
   }
 

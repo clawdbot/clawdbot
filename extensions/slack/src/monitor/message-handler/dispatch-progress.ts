@@ -58,6 +58,7 @@ export function createSlackProgressRuntime(runtimeParams: {
     account,
     cfg,
     ctx,
+    hasSlackCustomIdentity,
     message,
     prepared,
     replyPlan,
@@ -78,7 +79,9 @@ export function createSlackProgressRuntime(runtimeParams: {
         token: ctx.botToken,
         accountId: account.accountId,
         ...(prepared.eventScope ? { eventScope: prepared.eventScope } : {}),
-        identity: slackIdentity,
+        // Impersonated Slack messages cannot be deleted. Keep the temporary
+        // preview app-authored and apply custom identity only to final delivery.
+        ...(!hasSlackCustomIdentity && slackIdentity ? { identity: slackIdentity } : {}),
         ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
         maxChars: Math.min(ctx.textLimit, SLACK_TEXT_LIMIT),
         resolveThreadTs: () => {

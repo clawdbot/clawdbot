@@ -409,6 +409,18 @@
       "types": "./dist/plugin-sdk/setup-tools.d.ts",
       "default": "./dist/plugin-sdk/setup-tools.js"
     },
+    "./plugin-sdk/archive": {
+      "types": "./dist/plugin-sdk/archive.d.ts",
+      "default": "./dist/plugin-sdk/archive.js"
+    },
+    "./plugin-sdk/root-walk": {
+      "types": "./dist/plugin-sdk/root-walk.d.ts",
+      "default": "./dist/plugin-sdk/root-walk.js"
+    },
+    "./plugin-sdk/secret-file": {
+      "types": "./dist/plugin-sdk/secret-file.d.ts",
+      "default": "./dist/plugin-sdk/secret-file.js"
+    },
     "./plugin-sdk/approval-auth-runtime": {
       "types": "./dist/plugin-sdk/approval-auth-runtime.d.ts",
       "default": "./dist/plugin-sdk/approval-auth-runtime.js"
@@ -1390,14 +1402,14 @@
     "./cli-entry": "./openclaw.mjs"
   },
   "scripts": {
-    "android:assemble": "node scripts/run-android-gradle.mjs :app:assemblePlayDebug :wear-shared:assembleDebug",
+    "android:assemble": "node scripts/run-android-gradle.mjs :app:assemblePlayDebug :wear:assembleDebug :wear-shared:assembleDebug",
     "android:assemble:third-party": "node scripts/run-android-gradle.mjs :app:assembleThirdPartyDebug",
     "android:bundle:release": "bash -lc 'source ./scripts/lib/android-fastlane.sh && cd apps/android && run_android_fastlane android play_store_archive'",
-    "android:format": "cd apps/android && ./gradlew :app:ktlintFormat :benchmark:ktlintFormat :wear-shared:ktlintFormat",
+    "android:format": "cd apps/android && ./gradlew :app:ktlintFormat :benchmark:ktlintFormat :wear:ktlintFormat :wear-shared:ktlintFormat",
     "android:install": "node scripts/run-android-gradle.mjs :app:installPlayDebug",
     "android:install:third-party": "node scripts/run-android-gradle.mjs :app:installThirdPartyDebug",
-    "android:lint": "cd apps/android && ./gradlew :app:ktlintCheck :benchmark:ktlintCheck :wear-shared:ktlintCheck",
-    "android:lint:android": "node scripts/run-android-gradle.mjs :app:lintPlayDebug :app:lintThirdPartyDebug :wear-shared:lintDebug",
+    "android:lint": "cd apps/android && ./gradlew :app:ktlintCheck :benchmark:ktlintCheck :wear:ktlintCheck :wear-shared:ktlintCheck",
+    "android:lint:android": "node scripts/run-android-gradle.mjs :app:lintPlayDebug :app:lintThirdPartyDebug :wear:lintDebug :wear-shared:lintDebug",
     "android:run": "node scripts/run-android-gradle.mjs :app:installPlayDebug -- adb shell am start -n ai.openclaw.app/.MainActivity",
     "android:run:third-party": "node scripts/run-android-gradle.mjs :app:installThirdPartyDebug -- adb shell am start -n ai.openclaw.app/.MainActivity",
     "android:release": "bash scripts/android-release.sh",
@@ -1411,7 +1423,7 @@
     "android:release:signing:sync:push": "bash -lc 'source ./scripts/lib/android-fastlane.sh && cd apps/android && run_android_fastlane android signing_sync_push'",
     "android:release:upload": "bash scripts/android-release-upload.sh",
     "android:screenshots": "bash scripts/android-screenshots.sh",
-    "android:test": "node scripts/run-android-gradle.mjs :app:testPlayDebugUnitTest :wear-shared:testDebugUnitTest",
+    "android:test": "node scripts/run-android-gradle.mjs :app:testPlayDebugUnitTest :wear:testDebugUnitTest :wear-shared:testDebugUnitTest",
     "android:test:integration": "node scripts/run-with-env.mjs OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_ANDROID_NODE=1 -- node scripts/run-vitest.mjs run --config test/vitest/vitest.live.config.ts src/gateway/android-node.capabilities.live.test.ts",
     "android:test:third-party": "node scripts/run-android-gradle.mjs :app:testThirdPartyDebugUnitTest",
     "android:version": "node --import tsx scripts/android-version.ts --json",
@@ -1910,10 +1922,10 @@
     "@homebridge/ciao": "1.3.10",
     "@lydell/node-pty": "1.2.0-beta.12",
     "@mistralai/mistralai": "2.5.0",
-    "@modelcontextprotocol/sdk": "1.29.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "@mozilla/readability": "0.6.0",
     "@openclaw/ai": "workspace:*",
-    "@openclaw/fs-safe": "0.4.7",
+    "@openclaw/fs-safe": "0.5.0",
     "@openclaw/proxyline": "0.3.4",
     "@silvia-odwyer/photon-node": "0.3.4",
     "acorn": "8.17.0",
@@ -1947,12 +1959,11 @@
     "partial-json": "0.1.7",
     "playwright-core": "1.61.1",
     "pretty-ms": "9.3.0",
-    "proper-lockfile": "4.1.2",
     "qrcode": "1.5.4",
     "quickjs-wasi": "3.0.2",
     "rastermill": "0.3.1",
     "semver": "7.8.5",
-    "tar": "7.5.20",
+    "tar": "7.5.22",
     "tree-sitter-bash": "0.25.1",
     "tslog": "4.11.0",
     "typebox": "1.3.6",
@@ -1978,7 +1989,6 @@
     "@types/markdown-it": "14.1.2",
     "@types/ms": "2.1.0",
     "@types/node": "26.1.1",
-    "@types/proper-lockfile": "4.1.4",
     "@types/semver": "7.7.1",
     "@types/web-push": "3.6.4",
     "@types/ws": "8.18.1",

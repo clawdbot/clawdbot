@@ -7,6 +7,7 @@ import type {
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import pMap, { pMapSkip } from "p-map";
+import { walkMemoryWikiDirectory } from "./bounded-walk.js";
 
 const LEGACY_IMPORT_RUN_READ_CONCURRENCY = 16;
 
@@ -465,19 +466,25 @@ export async function readLegacyMemoryWikiImportRunRecords(
   vaultRoot: string,
 ): Promise<ChatGptImportRunRecord[]> {
   const importRunsDir = resolveMemoryWikiImportRunsDir(vaultRoot);
-  const entries = await fs
-    .readdir(importRunsDir, { withFileTypes: true })
-    .catch((error: unknown) => {
-      const code = asRecord(error)?.code;
-      if (code === "ENOENT") {
-        return [];
-      }
-      throw error;
-    });
+  const entries = await walkMemoryWikiDirectory(importRunsDir, "", {
+    maxDepth: 1,
+    entryFilter: (entry) =>
+      entry.kind === "directory"
+        ? "skip-subtree"
+        : entry.kind === "file" && entry.relativePath.endsWith(".json")
+          ? "include"
+          : "skip",
+  }).catch((error: unknown) => {
+    const code = asRecord(error)?.code;
+    if (code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  });
   return await pMap(
-    entries.filter((entry) => entry.isFile() && entry.name.endsWith(".json")),
+    entries.filter((entry) => entry.kind === "file"),
     async (entry) => {
-      const raw = await fs.readFile(path.join(importRunsDir, entry.name), "utf8");
+      const raw = await fs.readFile(path.join(importRunsDir, entry.relativePath), "utf8");
       return normalizeMemoryWikiImportRunRecord(JSON.parse(raw) as unknown) ?? pMapSkip;
     },
     { concurrency: LEGACY_IMPORT_RUN_READ_CONCURRENCY, stopOnError: true },

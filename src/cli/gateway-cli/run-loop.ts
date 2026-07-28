@@ -17,7 +17,6 @@ import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import type { GatewayRestartEmitter } from "../../infra/restart.js";
 import { flushLogger } from "../../logging/logger.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { waitForActiveGatewayRootWork } from "../../process/gateway-work-admission.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { formatActiveTaskRestartBlocker } from "../../tasks/task-restart-blocker.js";
@@ -28,7 +27,6 @@ const RESTART_DRAIN_STILL_PENDING_WARN_MS = 30_000;
 const RESTART_CLOSE_REPLY_DRAIN_SHUTDOWN_RESERVE_MS = 10_000;
 const UPDATE_RESPAWN_HEALTH_TIMEOUT_MS = 10_000;
 const UPDATE_RESPAWN_HEALTH_POLL_MS = 200;
-const STOP_ROOT_WORK_DRAIN_TIMEOUT_MS = 2_000;
 const LOG_FLUSH_EXIT_TIMEOUT_MS = 4_000;
 
 type GatewayRunSignalAction = "stop" | "restart";
@@ -442,17 +440,6 @@ export async function runGatewayLoop(params: {
   };
   const handleStopAfterServerClose = async () => {
     params.completeBoot?.({ outcome: "clean_stop", reason: "gateway.stop" });
-    // Drain any remaining gateway root work continuations (e.g. session_end
-    // hooks started by reset/delete/compaction that the shutdown tracker has
-    // already forgotten). Without this bounded wait, the process exits before
-    // these fire-and-forget hooks settle, losing database writes and memory
-    // summaries (#105697).
-    const drainResult = await waitForActiveGatewayRootWork(STOP_ROOT_WORK_DRAIN_TIMEOUT_MS);
-    if (!drainResult.drained) {
-      gatewayLog.warn(
-        `stop drain timed out with ${drainResult.active} root work continuation(s) still pending`,
-      );
-    }
     await releaseLockIfHeld();
     await exitProcessAfterLogFlush(0);
   };
@@ -610,6 +597,7 @@ export async function runGatewayLoop(params: {
                 listActiveEmbeddedRunSessionIds,
                 listActiveEmbeddedRunSessionKeys,
                 markRestartAbortedMainSessions,
+                waitForActiveGatewayRootWork,
                 waitForActiveEmbeddedRuns,
                 waitForActiveTasks,
               } = await loadGatewayLifecycleRuntimeModule();
@@ -758,6 +746,25 @@ export async function runGatewayLoop(params: {
           );
         }
 
+        if (!isRestart) {
+          // Keep reset-started finalizers alive without spending the shutdown
+          // reserve that server teardown and the supervisor watchdog need.
+          try {
+            const rootDrain = await eagerLifecycleRuntime.waitForActiveGatewayRootWork(
+              Math.max(0, SHUTDOWN_TIMEOUT_MS - RESTART_CLOSE_REPLY_DRAIN_SHUTDOWN_RESERVE_MS),
+            );
+            if (!rootDrain.drained) {
+              gatewayLog.warn(
+                `gateway root transaction drain timeout reached with ${rootDrain.active} root(s) still active; proceeding with shutdown`,
+              );
+            }
+          } catch (err) {
+            gatewayLog.warn(
+              `gateway root transaction drain failed; proceeding with shutdown: ${formatErrorMessage(err)}`,
+            );
+          }
+        }
+
         armCloseForceExitTimerForIndefiniteRestart();
         const closeDrainTimeoutMs = resolveRestartCloseDrainTimeoutMs();
         await server?.close({
@@ -843,9 +850,9 @@ export async function runGatewayLoop(params: {
       return;
     }
     const isRestart = action === "restart";
-    if (isRestart) {
-      markRestartDraining();
-    }
+    // Fence new roots synchronously for stops as well as restarts so admitted
+    // detached finalizers can drain before the signal tears down the gateway.
+    markRestartDraining();
     shuttingDown = true;
     gatewayLog.info(`received ${signal}; ${isRestart ? "restarting" : "shutting down"}`);
     if (isRestart) {

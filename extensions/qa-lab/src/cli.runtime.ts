@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  isCrablineServerChannel,
   OPENCLAW_CRABLINE_DEFAULT_CHANNEL,
   resolveOpenClawCrablineChannelDriverSelection,
 } from "@openclaw/crabline";
@@ -35,7 +36,6 @@ import {
 } from "./coverage-report.js";
 import { buildQaDockerHarnessImage, writeQaDockerHarnessFiles } from "./docker-harness.js";
 import { runQaDockerUp } from "./docker-up.runtime.js";
-import { QaSuiteArtifactError, QaSuiteInfraError } from "./errors.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import {
   createMockJsonlReplayCellRunner,
@@ -93,7 +93,11 @@ import {
   type QaScorecardEvidenceMode,
 } from "./scorecard-taxonomy.js";
 import { isQaSelfCheckSuccessful } from "./self-check.js";
-import { runQaFlowSuiteFromRuntime, runQaSuite } from "./suite-launch.runtime.js";
+import {
+  runQaFlowSuiteFromRuntime,
+  runQaSuite,
+  runQaSuiteWithInfraRetry,
+} from "./suite-launch.runtime.js";
 import { resolveQaSuiteScenarioChannel, resolveQaSuiteScenarioChannels } from "./suite-planning.js";
 import { readQaSuiteFailedOrSkippedScenarioCountFromFile } from "./suite-summary.js";
 import {
@@ -107,16 +111,8 @@ import {
   type QaToolCoverageSuiteSummary,
 } from "./tool-coverage-report.js";
 
-const QA_SUITE_INFRA_RETRY_LIMIT = 1;
 const QA_CREDENTIAL_PAYLOAD_MAX_BYTES_ENV = "OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES";
 const DEFAULT_QA_CREDENTIAL_PAYLOAD_MAX_BYTES = 64 * 1024 * 1024;
-const QA_SUITE_INFRA_RETRY_NETWORK_ERROR_CODES = new Set([
-  "ECONNRESET",
-  "ECONNREFUSED",
-  "EPIPE",
-  "ETIMEDOUT",
-  "UND_ERR_SOCKET",
-]);
 type InterruptibleServer = {
   baseUrl: string;
   stop(): Promise<void>;
@@ -342,51 +338,6 @@ function rejectNonFlowScenarioIds(params: {
       `${params.option} requires execution.kind: flow scenarios; unsupported scenario(s): ${nonFlowScenarios.join(", ")}`,
     );
   }
-}
-
-function isQaSuiteInfraRetryableError(error: unknown) {
-  if (error instanceof QaSuiteArtifactError || error instanceof QaSuiteInfraError) {
-    return true;
-  }
-  return hasQaSuiteRetryableNetworkCode(error);
-}
-
-function hasQaSuiteRetryableNetworkCode(error: unknown) {
-  let current: unknown = error;
-  for (let depth = 0; depth < 4 && current; depth += 1) {
-    if (typeof current !== "object") {
-      return false;
-    }
-    const record = current as { cause?: unknown; code?: unknown };
-    if (
-      typeof record.code === "string" &&
-      QA_SUITE_INFRA_RETRY_NETWORK_ERROR_CODES.has(record.code.toUpperCase())
-    ) {
-      return true;
-    }
-    current = record.cause;
-  }
-  return false;
-}
-
-async function runQaSuiteWithInfraRetry<Result>(
-  run: () => Promise<Result>,
-  maxRetries = QA_SUITE_INFRA_RETRY_LIMIT,
-) {
-  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
-    try {
-      return await run();
-    } catch (error) {
-      const retryable = isQaSuiteInfraRetryableError(error);
-      if (!retryable || attempt >= maxRetries) {
-        throw error;
-      }
-      process.stderr.write(
-        `[qa-suite] infra retry ${attempt + 1}/${maxRetries}: ${formatErrorMessage(error)}\n`,
-      );
-    }
-  }
-  throw new Error("unreachable qa suite retry state");
 }
 
 async function runQaParityPreflight(params: {
@@ -720,6 +671,8 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
     channelDriver: profileReport.channelDriver,
     defaultChannel:
       profileReport.channelDriver === "crabline" ? OPENCLAW_CRABLINE_DEFAULT_CHANNEL : undefined,
+    supportsChannel:
+      profileReport.channelDriver === "crabline" ? isCrablineServerChannel : undefined,
   });
   if (requestedScenarioIds.length > 0 && executionSelection.excludedScenarios.length > 0) {
     const exclusions = executionSelection.excludedScenarios
@@ -1020,45 +973,43 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
     return undefined;
   }
   const thinkingDefault = parseQaThinkingLevel("--thinking", opts.thinking);
-  const runtimeResult = await runQaSuiteWithInfraRetry(() =>
-    runQaSuite({
-      repoRoot,
-      outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
-      evidenceMode: opts.evidenceMode,
-      transportId,
-      channelDriver,
-      ...(liveAdapterFactories
-        ? {
-            adapterFactories: liveAdapterFactories,
-            ...(liveChannelId ? { channelId: liveChannelId } : {}),
-            adapterOptions: {
-              repoRoot,
-              sutAccountId: opts.sutAccountId,
-              credentialSource: opts.credentialSource,
-              credentialRole: opts.credentialRole,
-              explicitScenarioSelection:
-                opts.explicitScenarioSelection ?? Boolean(opts.scenarioIds?.length),
-            },
-          }
+  const runtimeResult = await runQaSuite({
+    repoRoot,
+    outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
+    evidenceMode: opts.evidenceMode,
+    transportId,
+    channelDriver,
+    ...(liveAdapterFactories
+      ? {
+          adapterFactories: liveAdapterFactories,
+          ...(liveChannelId ? { channelId: liveChannelId } : {}),
+          adapterOptions: {
+            repoRoot,
+            sutAccountId: opts.sutAccountId,
+            credentialSource: opts.credentialSource,
+            credentialRole: opts.credentialRole,
+            explicitScenarioSelection:
+              opts.explicitScenarioSelection ?? Boolean(opts.scenarioIds?.length),
+          },
+        }
+      : {}),
+    channelDriverSelection,
+    ...(opts.providerMode !== undefined ? { providerMode } : {}),
+    primaryModel,
+    alternateModel,
+    fastMode: opts.fastMode,
+    failFast: opts.failFast,
+    ...(thinkingDefault ? { thinkingDefault } : {}),
+    ...(claudeCliAuthMode ? { claudeCliAuthMode } : {}),
+    scenarioIds: liveChannelId ? scenarioIds : hostScenarioIds,
+    ...(opts.enabledPluginIds !== undefined ? { enabledPluginIds: opts.enabledPluginIds } : {}),
+    ...(liveChannelId
+      ? { concurrency: 1 }
+      : opts.concurrency !== undefined
+        ? { concurrency: parseQaPositiveIntegerOption("--concurrency", opts.concurrency) }
         : {}),
-      channelDriverSelection,
-      ...(opts.providerMode !== undefined ? { providerMode } : {}),
-      primaryModel,
-      alternateModel,
-      fastMode: opts.fastMode,
-      failFast: opts.failFast,
-      ...(thinkingDefault ? { thinkingDefault } : {}),
-      ...(claudeCliAuthMode ? { claudeCliAuthMode } : {}),
-      scenarioIds: liveChannelId ? scenarioIds : hostScenarioIds,
-      ...(opts.enabledPluginIds !== undefined ? { enabledPluginIds: opts.enabledPluginIds } : {}),
-      ...(liveChannelId
-        ? { concurrency: 1 }
-        : opts.concurrency !== undefined
-          ? { concurrency: parseQaPositiveIntegerOption("--concurrency", opts.concurrency) }
-          : {}),
-      ...(runtimePair ? { runtimePair } : {}),
-    }),
-  );
+    ...(runtimePair ? { runtimePair } : {}),
+  });
   switch (runtimeResult.executionKind) {
     case "suite": {
       const result = runtimeResult.result;

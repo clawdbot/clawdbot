@@ -51,6 +51,7 @@ import {
   extractTranscriptAttachments,
   schedulePairingQrExpiryRefresh,
   type AttachmentItem,
+  type ArtifactDownloadResolver,
   type PairingQrExpiryNotice,
 } from "./chat-message-media.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
@@ -176,6 +177,7 @@ export function renderGroupedMessage(
     basePath?: string;
     localMediaPreviewRoots?: readonly string[];
     assistantAttachmentAuthToken?: string | null;
+    resolveArtifactDownload?: ArtifactDownloadResolver;
     onAssistantAttachmentLoaded?: () => void;
     onRequestOpenImage?: () => number;
     onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
@@ -209,6 +211,7 @@ export function renderGroupedMessage(
     onRequestUpdate: opts.onRequestUpdate,
     onRequestOpenImage: opts.onRequestOpenImage,
     onOpenImage: opts.onOpenImage,
+    resolveArtifactDownload: opts.resolveArtifactDownload,
   };
   schedulePairingQrExpiryRefresh(messageKey, message, opts.onRequestUpdate);
   const images = resolveRenderableMessageImages(extractImages(message), imageRenderOptions);
