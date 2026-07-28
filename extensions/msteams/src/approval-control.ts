@@ -15,9 +15,14 @@ function parseApprovalCommand(text: string): {
   if (!match) {
     return null;
   }
+  const approvalId = match[1];
+  const decision = match[2];
+  if (!approvalId || !decision) {
+    return null;
+  }
   return {
-    approvalId: match[1],
-    decision: match[2].toLowerCase() as ExecApprovalReplyDecision,
+    approvalId,
+    decision: decision.toLowerCase() as ExecApprovalReplyDecision,
   };
 }
 
