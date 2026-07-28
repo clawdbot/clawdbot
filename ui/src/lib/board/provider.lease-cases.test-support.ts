@@ -1,8 +1,90 @@
 import { expect, it, vi } from "vitest";
+import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { acquireBoardProviderForSession, mcpAppWidgetNameForViewId } from "./provider.ts";
 
 export function registerBoardProviderLeaseCases(disableMockBoard: () => void): void {
+  it("keeps retired gateway clients from rolling back shared board leases", async () => {
+    disableMockBoard();
+    const sessionKey = "agent:main:monotonic-board-lease";
+    const capabilities = {
+      canPinWidgets: true,
+      canPinMcpApps: true,
+      canMutate: true,
+      canGrant: true,
+    };
+    const createClient = (revision: number) => {
+      const snapshot = { sessionKey, revision, tabs: [], widgets: [] };
+      const requests = vi.fn(async () => snapshot);
+      const listeners = new Set<(event: GatewayEventFrame) => void>();
+      const addEventListener = vi.fn((listener: (event: GatewayEventFrame) => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      });
+      return {
+        snapshot,
+        requests,
+        listeners,
+        addEventListener,
+        request: requests as never,
+      };
+    };
+    const previous = createClient(1);
+    const current = createClient(2);
+    const future = createClient(3);
+    const writer = acquireBoardProviderForSession(sessionKey, previous);
+    const stale = acquireBoardProviderForSession(sessionKey, previous);
+
+    try {
+      await vi.waitFor(() => expect(writer.provider.snapshot$.value).toEqual(previous.snapshot));
+      const retiredListener = [...previous.listeners][0];
+      expect(retiredListener).toBeDefined();
+
+      writer.update(current, true, capabilities);
+      await vi.waitFor(() => expect(writer.provider.snapshot$.value).toEqual(current.snapshot));
+      expect(stale.provider.snapshot$.value).toEqual(current.snapshot);
+      expect(previous.listeners.size).toBe(0);
+      expect(current.listeners.size).toBe(1);
+
+      stale.update(previous, false, capabilities);
+      expect(writer.provider.snapshot$.value).toEqual(current.snapshot);
+      expect(stale.provider.snapshot$.value).toEqual(current.snapshot);
+      expect(previous.addEventListener).toHaveBeenCalledOnce();
+      expect(previous.requests).toHaveBeenCalledOnce();
+      expect(current.listeners.size).toBe(1);
+
+      retiredListener?.({
+        type: "event",
+        event: "board.changed",
+        payload: { sessionKey, revision: 4 },
+      });
+      await Promise.resolve();
+      expect(current.requests).toHaveBeenCalledOnce();
+
+      await expect(writer.provider.applyOps([])).resolves.toBeUndefined();
+      expect(current.requests).toHaveBeenCalledWith("board.update", { sessionKey, ops: [] });
+      expect(previous.requests).toHaveBeenCalledOnce();
+
+      writer.update(current, false, capabilities);
+      writer.update(current, true, capabilities);
+      await vi.waitFor(() => expect(current.requests).toHaveBeenCalledTimes(3));
+      expect(writer.provider.snapshot$.value).toEqual(current.snapshot);
+
+      stale.update(future, true, capabilities);
+      await vi.waitFor(() => expect(writer.provider.snapshot$.value).toEqual(future.snapshot));
+      expect(stale.provider.snapshot$.value).toEqual(future.snapshot);
+      expect(current.listeners.size).toBe(0);
+      expect(future.listeners.size).toBe(1);
+
+      await expect(writer.provider.applyOps([])).resolves.toBeUndefined();
+      expect(future.requests).toHaveBeenCalledWith("board.update", { sessionKey, ops: [] });
+      expect(previous.requests).toHaveBeenCalledOnce();
+    } finally {
+      writer.release();
+      stale.release();
+    }
+  });
+
   it.each(["chat-first", "dashboard-first"] as const)(
     "isolates concurrent board lease capabilities in %s order",
     async (order) => {
