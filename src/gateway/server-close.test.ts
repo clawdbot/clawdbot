@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   logInfo: vi.fn(),
   logWarn: vi.fn(),
   listChannelPlugins: vi.fn((): Array<{ id: "telegram" | "discord" }> => []),
+  disposeAllCodeModeRuns: vi.fn(),
   disposeAgentHarnesses: vi.fn(async () => undefined),
   disposeAllSessionMcpRuntimes: vi.fn(async () => undefined),
   triggerInternalHook: vi.fn<TriggerInternalHookMock>(async (_eventValue) => undefined),
@@ -48,6 +49,10 @@ vi.mock("../hooks/internal-hooks.js", async () => {
 
 vi.mock("../agents/harness/registry.js", () => ({
   disposeRegisteredAgentHarnesses: mocks.disposeAgentHarnesses,
+}));
+
+vi.mock("../agents/code-mode-state.js", () => ({
+  disposeAllCodeModeRuns: mocks.disposeAllCodeModeRuns,
 }));
 
 vi.mock("../agents/agent-bundle-mcp-tools.js", async () => ({
@@ -159,6 +164,7 @@ describe("createGatewayCloseHandler", () => {
     mocks.logWarn.mockClear();
     mocks.listChannelPlugins.mockReset();
     mocks.listChannelPlugins.mockReturnValue([]);
+    mocks.disposeAllCodeModeRuns.mockReset();
     mocks.disposeAgentHarnesses.mockClear();
     mocks.disposeAgentHarnesses.mockResolvedValue(undefined);
     mocks.disposeAllSessionMcpRuntimes.mockClear();
@@ -1467,8 +1473,20 @@ describe("createGatewayCloseHandler", () => {
     expect(stopChannel.mock.calls.map(([id]) => id)).toEqual(["telegram", "discord"]);
   });
 
-  it("unsubscribes lifecycle listeners and disposes bundle runtimes during shutdown", async () => {
+  it("disposes Code Mode runs before agent and bundle runtimes during shutdown", async () => {
     const closeOrder: string[] = [];
+    mocks.disposeAllCodeModeRuns.mockImplementation(() => {
+      closeOrder.push("code-mode-runs");
+    });
+    mocks.disposeAgentHarnesses.mockImplementation(async () => {
+      closeOrder.push("agent-harnesses");
+    });
+    mocks.disposeAllSessionMcpRuntimes.mockImplementation(async () => {
+      closeOrder.push("bundle-mcp");
+    });
+    mocks.disposeAllBundleLspRuntimes.mockImplementation(async () => {
+      closeOrder.push("bundle-lsp");
+    });
     mocks.drainRetainedEmbeddingProviders.mockImplementation(async () => {
       closeOrder.push("embedding-providers");
     });
@@ -1498,11 +1516,19 @@ describe("createGatewayCloseHandler", () => {
     expect(taskUnsub).toHaveBeenCalledTimes(1);
     expect(transcriptUnsub).toHaveBeenCalledTimes(1);
     expect(stopTaskRegistryMaintenance).toHaveBeenCalledTimes(1);
+    expect(mocks.disposeAllCodeModeRuns).toHaveBeenCalledTimes(1);
     expect(mocks.disposeAgentHarnesses).toHaveBeenCalledTimes(1);
     expect(mocks.disposeAllSessionMcpRuntimes).toHaveBeenCalledTimes(1);
     expect(mocks.disposeAllBundleLspRuntimes).toHaveBeenCalledTimes(1);
     expect(mocks.drainRetainedEmbeddingProviders).toHaveBeenCalledTimes(1);
-    expect(closeOrder).toEqual(["http-server", "embedding-providers"]);
+    expect(closeOrder).toEqual([
+      "code-mode-runs",
+      "agent-harnesses",
+      "bundle-mcp",
+      "bundle-lsp",
+      "http-server",
+      "embedding-providers",
+    ]);
   });
 
   it("starts bundle MCP and LSP runtime disposal concurrently", async () => {

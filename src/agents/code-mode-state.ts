@@ -107,6 +107,13 @@ export function disposeCodeModeRun(runId: string): void {
   scheduleActiveRunExpiry();
 }
 
+/** Cancel suspended bridge work before its Gateway-owned runtimes disappear. */
+export function disposeAllCodeModeRuns(): void {
+  for (const runId of activeRuns.keys()) {
+    disposeCodeModeRun(runId);
+  }
+}
+
 /** Advance the snapshot frontier before exposing output to a wait observer. */
 export function takeUndeliveredCodeModeRunOutput(state: CodeModeRunState): unknown[] {
   const output = state.output.slice(state.deliveredOutputCount);
@@ -181,8 +188,14 @@ function enforceActiveRunLimit(): void {
   }
 }
 
-export function reserveActiveRunSlot(): () => void {
-  enforceActiveRunLimit();
+export function reserveActiveRunSlot(ownedRunId?: string): () => void {
+  if (ownedRunId === undefined) {
+    enforceActiveRunLimit();
+  } else if (!activeRuns.delete(ownedRunId)) {
+    throw new ToolInputError("code mode run is unavailable or expired.");
+  }
+  // Resume transfers an existing slot without exposing a free capacity window
+  // to concurrent exec calls or rejecting its own run at the global limit.
   activeRunReservations += 1;
   let released = false;
   return () => {
@@ -205,6 +218,7 @@ export function snapshotState(params: {
   namespaceRuntime: CodeModeNamespaceRuntime;
   output: unknown[];
   deliveredOutputCount?: number;
+  reservedActiveRunSlot?: boolean;
   replaySafe: boolean;
   settlementMode: CodeModeSettlementMode;
   signal?: AbortSignal;
@@ -261,8 +275,11 @@ function enforceSnapshotStateLimits(params: {
   snapshotBytes: Uint8Array;
   config: CodeModeConfig;
   output: unknown[];
+  reservedActiveRunSlot?: boolean;
 }) {
-  enforceActiveRunLimit();
+  if (!params.reservedActiveRunSlot) {
+    enforceActiveRunLimit();
+  }
   enforceSnapshotPayloadLimits(params);
 }
 

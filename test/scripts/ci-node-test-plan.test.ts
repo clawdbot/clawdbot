@@ -12,10 +12,8 @@ import {
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, sortRepoPaths, toRepoPath } from "../../src/test-utils/repo-files.js";
 import {
-  agentsEmbeddedIncompleteTurnTestFiles,
-  agentsEmbeddedOverflowCompactionTestFiles,
-  agentsEmbeddedRunTestPatterns,
-  agentsEmbeddedTestPatterns,
+  agentVitestProjectOwners,
+  embeddedAgentVitestProjectOwners,
 } from "../vitest/vitest.agents-paths.mjs";
 import { commandsLightTestFiles } from "../vitest/vitest.commands-light-paths.mjs";
 import { createPluginsVitestConfig } from "../vitest/vitest.plugins.config.ts";
@@ -292,6 +290,12 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       OPENCLAW_TUI_PTY_INCLUDE_LOCAL: "1",
       // Timing-sensitive groups pin the worker budget while the job-level
       // default scales with the runner class.
+      OPENCLAW_VITEST_MAX_WORKERS: "2",
+    });
+    expect(
+      compact.flatMap((shard) => shard.groups).find((group) => group.shard_name === "agentic-cli")
+        ?.env,
+    ).toEqual({
       OPENCLAW_VITEST_MAX_WORKERS: "2",
     });
     const startupCoreJob = compact.find((shard) =>
@@ -1111,26 +1115,23 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     const shard = createNodeTestShards().find(
       (candidate) => candidate.shardName === "agentic-agents-embedded",
     );
-    const incompleteTurnFiles = new Set(agentsEmbeddedIncompleteTurnTestFiles);
-    const overflowCompactionFiles = new Set(agentsEmbeddedOverflowCompactionTestFiles);
+    const incompleteTurnFiles = new Set(agentVitestProjectOwners.embeddedIncompleteTurn.include);
+    const overflowCompactionFiles = new Set(
+      agentVitestProjectOwners.embeddedOverflowCompaction.include,
+    );
     const actual = [
       ...fg
-        .sync(agentsEmbeddedTestPatterns)
+        .sync(agentVitestProjectOwners.embedded.include)
         .filter((file) => !incompleteTurnFiles.has(file) && !overflowCompactionFiles.has(file)),
-      ...agentsEmbeddedIncompleteTurnTestFiles,
-      ...agentsEmbeddedOverflowCompactionTestFiles,
-      ...fg.sync(agentsEmbeddedRunTestPatterns),
+      ...agentVitestProjectOwners.embeddedIncompleteTurn.include,
+      ...agentVitestProjectOwners.embeddedOverflowCompaction.include,
+      ...fg.sync(agentVitestProjectOwners.embeddedRun.include),
     ].toSorted((left, right) => left.localeCompare(right));
     const expected = listTestFiles("src/agents/embedded-agent-runner").toSorted((left, right) =>
       left.localeCompare(right),
     );
 
-    expect(shard?.configs).toEqual([
-      "test/vitest/vitest.agents-embedded-agent.config.ts",
-      "test/vitest/vitest.agents-embedded-agent-incomplete-turn.config.ts",
-      "test/vitest/vitest.agents-embedded-agent-overflow-compaction.config.ts",
-      "test/vitest/vitest.agents-embedded-agent-run.config.ts",
-    ]);
+    expect(shard?.configs).toEqual(embeddedAgentVitestProjectOwners.map((owner) => owner.config));
     expect(actual).toEqual(expected);
     expect(new Set(actual).size).toBe(actual.length);
   });

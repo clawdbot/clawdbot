@@ -672,6 +672,81 @@ describe("tui session actions", () => {
     expect(rendered).toContain("Persisted reply");
   });
 
+  it("keeps native and separately imported users with the same provider-local ID distinct", async () => {
+    const chatLog = new ChatLog();
+    const state = createBaseState({ currentSessionId: "session-main" });
+    const sharedId = "provider-local-user";
+    const { loadHistory } = createTestSessionActions({
+      client: {
+        listSessions: vi.fn(),
+        loadHistory: vi.fn().mockResolvedValue({
+          sessionId: "session-main",
+          sessionInfo: { key: "agent:main:main", sessionId: "session-main" },
+          messages: [
+            {
+              role: "user",
+              content: "Native canonical prompt",
+              __openclaw: { id: sharedId, seq: 1 },
+            },
+            {
+              role: "user",
+              content: "First imported prompt",
+              __openclaw: {
+                id: sharedId,
+                importedFrom: "claude-cli",
+                cliSessionId: "first-cli-session",
+                externalId: sharedId,
+                seq: 2,
+              },
+            },
+            {
+              role: "user",
+              content: "Second imported prompt",
+              __openclaw: {
+                id: sharedId,
+                importedFrom: "claude-cli",
+                cliSessionId: "second-cli-session",
+                externalId: sharedId,
+                seq: 3,
+              },
+            },
+            {
+              role: "user",
+              content: "First partially imported prompt",
+              __openclaw: {
+                id: sharedId,
+                importedFrom: "claude-cli",
+                externalId: sharedId,
+                seq: 4,
+              },
+            },
+            {
+              role: "user",
+              content: "Second partially imported prompt",
+              __openclaw: {
+                id: sharedId,
+                importedFrom: "claude-cli",
+                externalId: sharedId,
+                seq: 5,
+              },
+            },
+          ],
+        }),
+      } as unknown as TuiBackend,
+      chatLog,
+      state,
+    });
+
+    await expect(loadHistory()).resolves.toMatchObject({ loaded: true });
+
+    const rendered = chatLog.render(120).join("\n");
+    expect(rendered.match(/Native canonical prompt/g)).toHaveLength(1);
+    expect(rendered.match(/First imported prompt/g)).toHaveLength(1);
+    expect(rendered.match(/Second imported prompt/g)).toHaveLength(1);
+    expect(rendered.match(/First partially imported prompt/g)).toHaveLength(1);
+    expect(rendered.match(/Second partially imported prompt/g)).toHaveLength(1);
+  });
+
   it("preserves new-session live users without leaking the previous session during a switch", async () => {
     const deferredHistory = createDeferred<unknown>();
     const chatLog = new ChatLog();
@@ -2000,9 +2075,7 @@ describe("tui session actions", () => {
       preserveLiveUsers: true,
     });
     expect(chatLog.restoreLiveUsers).toHaveBeenCalledTimes(1);
-    expect(chatLog.reconcilePendingUsers).toHaveBeenCalledWith([
-      { text: "persisted", timestamp: 2_000 },
-    ]);
+    expect(chatLog.reconcilePendingUsers).toHaveBeenCalledWith([{ text: "persisted" }]);
     expect(chatLog.restorePendingUsers).toHaveBeenCalledTimes(1);
     expect(result).toEqual({ loaded: true, inFlightRunId: null });
   });
@@ -2034,6 +2107,91 @@ describe("tui session actions", () => {
     await runLoadHistory();
 
     expect(state.pendingSubmit).toBeNull();
+  });
+
+  it("releases a pending submit only when its canonical persisted run appears in history", async () => {
+    const chatLog = new ChatLog(40);
+    chatLog.addPendingUser("run-pending", "persisted");
+    const state = createBaseState({
+      currentSessionId: "session-main",
+      pendingSubmit: acceptedSubmit("run-pending", "persisted"),
+    });
+    const { loadHistory } = createTestSessionActions({
+      client: {
+        listSessions: vi.fn(),
+        loadHistory: vi.fn().mockResolvedValue({
+          sessionId: "session-main",
+          sessionInfo: { key: "agent:main:main", sessionId: "session-main" },
+          messages: [
+            {
+              role: "user",
+              content: "persisted",
+              __openclaw: {
+                id: "persisted-pending-user",
+                idempotencyKey: "run-pending:user",
+                seq: 1,
+              },
+            },
+          ],
+        }),
+      } as unknown as TuiBackend,
+      chatLog,
+      state,
+    });
+
+    await expect(loadHistory()).resolves.toMatchObject({ loaded: true });
+
+    expect(state.pendingSubmit).toBeNull();
+    expect(chatLog.countPendingUsers()).toBe(0);
+    expect(
+      chatLog
+        .render(120)
+        .join("\n")
+        .match(/persisted/g),
+    ).toHaveLength(1);
+  });
+
+  it("preserves a pending submit when another client persists the identical prompt", async () => {
+    const chatLog = new ChatLog(40);
+    chatLog.addPendingUser("local-run", "continue");
+    const state = createBaseState({
+      currentSessionId: "session-main",
+      pendingSubmit: acceptedSubmit("local-run", "continue"),
+    });
+    const { loadHistory } = createTestSessionActions({
+      client: {
+        listSessions: vi.fn(),
+        loadHistory: vi.fn().mockResolvedValue({
+          sessionId: "session-main",
+          sessionInfo: { key: "agent:main:main", sessionId: "session-main" },
+          messages: [
+            {
+              role: "user",
+              content: "continue",
+              timestamp: Date.now(),
+              __openclaw: {
+                id: "remote-user",
+                idempotencyKey: "remote-client-run:user",
+                seq: 1,
+              },
+            },
+          ],
+        }),
+      } as unknown as TuiBackend,
+      chatLog,
+      state,
+    });
+
+    await expect(loadHistory()).resolves.toMatchObject({ loaded: true });
+
+    expect(getPendingSubmitAcceptedRunId(state)).toBe("local-run");
+    expect(chatLog.countPendingUsers()).toBe(1);
+    expect(
+      chatLog
+        .render(120)
+        .join("\n")
+        .match(/continue/g),
+    ).toHaveLength(2);
   });
 
   it("keeps a pending submit when reconnect history has not accepted it", async () => {

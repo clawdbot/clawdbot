@@ -19,7 +19,6 @@ profiles:
       - agent-runtime.tool-task-followthrough
       - channels.outbound-group-reply
       - channels.resumed-final-reply
-      - control-ui.gateway-hosted-ui-control
       - gateway.health-apis
       - gateway.hello-ok-snapshot
       - gateway.websocket-transport

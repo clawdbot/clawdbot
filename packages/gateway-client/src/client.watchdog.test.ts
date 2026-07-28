@@ -1,6 +1,7 @@
 // Gateway Client tests cover client.watchdog behavior.
 import { createServer as createHttpsServer } from "node:https";
 import { createServer } from "node:net";
+import type { EventFrame } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { GatewayClient } from "./client.js";
@@ -132,6 +133,8 @@ type SyntheticGatewayProtocolConnection = {
 function createSyntheticGatewayProtocol(options?: {
   retryOnClose?: boolean;
   initialSocketFactoryFailures?: number;
+  onEvent?: (event: EventFrame) => void;
+  onGap?: (info: { expected: number; received: number }) => void;
 }): {
   client: GatewayProtocolClient<Record<string, never>>;
   connections: SyntheticGatewayProtocolConnection[];
@@ -162,6 +165,8 @@ function createSyntheticGatewayProtocol(options?: {
     buildConnectPlan: () => ({}),
     buildConnectParams: (plan) => plan,
     resolveClose: () => ({ retry: options?.retryOnClose ?? true, notify: true }),
+    onEvent: options?.onEvent,
+    onGap: options?.onGap,
     handshake: { mode: "require-challenge", timeoutMs: 100 },
     reconnect: { initialMs: 10, multiplier: 2, maxMs: 100 },
   });
@@ -216,6 +221,109 @@ describe("GatewayClient", () => {
       });
       httpsServer = null;
     }
+  });
+
+  test.each([
+    { recovery: "stops the socket", restart: false },
+    { recovery: "replaces the socket", restart: true },
+  ])("drops a gapped frame when recovery $recovery", ({ restart }) => {
+    const onEvent = vi.fn();
+    const listener = vi.fn();
+    const onGap = vi.fn(() => {
+      client.stop();
+      if (restart) {
+        client.start();
+      }
+    });
+    const { client, connections } = createSyntheticGatewayProtocol({ onEvent, onGap });
+    client.addEventListener(listener);
+    client.start();
+    const first = connections[0];
+    if (!first) {
+      throw new Error("synthetic protocol connection missing");
+    }
+    first.handlers.message(
+      JSON.stringify({ type: "event", event: "board.changed", payload: {}, seq: 1 }),
+    );
+    onEvent.mockClear();
+    listener.mockClear();
+
+    first.handlers.message(
+      JSON.stringify({
+        type: "event",
+        event: "board.command",
+        payload: { command: "stale" },
+        seq: 3,
+      }),
+    );
+
+    expect(onGap).toHaveBeenCalledExactlyOnceWith({ expected: 2, received: 3 });
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(listener).not.toHaveBeenCalled();
+    expect(connections).toHaveLength(restart ? 2 : 1);
+
+    if (restart) {
+      const replacement = connections[1];
+      if (!replacement) {
+        throw new Error("synthetic replacement protocol connection missing");
+      }
+      const fresh = {
+        type: "event" as const,
+        event: "board.command",
+        payload: { command: "current" },
+        seq: 2,
+      };
+      replacement.handlers.message(JSON.stringify(fresh));
+
+      expect(onGap).toHaveBeenCalledOnce();
+      expect(onEvent).toHaveBeenCalledExactlyOnceWith(fresh);
+      expect(listener).toHaveBeenCalledExactlyOnceWith(fresh);
+    }
+
+    client.stop();
+  });
+
+  test("delivers a gapped frame when gap recovery retains the active socket", () => {
+    const onEvent = vi.fn();
+    const onGap = vi.fn();
+    const listener = vi.fn();
+    const { client, connections } = createSyntheticGatewayProtocol({ onEvent, onGap });
+    client.addEventListener(listener);
+    client.start();
+    const connection = connections[0];
+    if (!connection) {
+      throw new Error("synthetic protocol connection missing");
+    }
+    connection.handlers.message(
+      JSON.stringify({ type: "event", event: "board.changed", payload: {}, seq: 1 }),
+    );
+    onEvent.mockClear();
+    listener.mockClear();
+    const gapped = {
+      type: "event" as const,
+      event: "board.command",
+      payload: { command: "current" },
+      seq: 3,
+    };
+
+    connection.handlers.message(JSON.stringify(gapped));
+
+    expect(onGap).toHaveBeenCalledExactlyOnceWith({ expected: 2, received: 3 });
+    expect(onEvent).toHaveBeenCalledExactlyOnceWith(gapped);
+    expect(listener).toHaveBeenCalledExactlyOnceWith(gapped);
+
+    const next = {
+      type: "event" as const,
+      event: "board.changed",
+      payload: {},
+      seq: 4,
+    };
+    connection.handlers.message(JSON.stringify(next));
+
+    expect(onGap).toHaveBeenCalledOnce();
+    expect(onEvent).toHaveBeenLastCalledWith(next);
+    expect(listener).toHaveBeenLastCalledWith(next);
+    client.stop();
   });
 
   test("keeps one socket when the protocol is started twice during its handshake", () => {

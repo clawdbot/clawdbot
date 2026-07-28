@@ -191,10 +191,18 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     cfg,
   });
   if (fallbackTransition.stateChanged && !fallbackExhausted && !preserveUserFacingSessionState) {
+    const fallbackNotice = fallbackTransition.nextState.selectedModel
+      ? {
+          kind: "active" as const,
+          selectedModel: fallbackTransition.nextState.selectedModel,
+          activeModel: fallbackTransition.nextState.activeModel!,
+          ...(fallbackTransition.nextState.reason
+            ? { reason: fallbackTransition.nextState.reason }
+            : {}),
+        }
+      : undefined;
     if (fallbackStateEntry) {
-      fallbackStateEntry.fallbackNoticeSelectedModel = fallbackTransition.nextState.selectedModel;
-      fallbackStateEntry.fallbackNoticeActiveModel = fallbackTransition.nextState.activeModel;
-      fallbackStateEntry.fallbackNoticeReason = fallbackTransition.nextState.reason;
+      fallbackStateEntry.fallbackNotice = fallbackNotice;
       fallbackStateEntry.updatedAt = Date.now();
       activeSessionEntry = fallbackStateEntry;
     }
@@ -202,18 +210,10 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
       activeSessionStore[sessionKey] = fallbackStateEntry;
     }
     if (sessionKey && storePath) {
-      await updateSessionEntry(
-        { storePath, sessionKey },
-        () => ({
-          fallbackNoticeSelectedModel: fallbackTransition.nextState.selectedModel,
-          fallbackNoticeActiveModel: fallbackTransition.nextState.activeModel,
-          fallbackNoticeReason: fallbackTransition.nextState.reason,
-        }),
-        {
-          skipMaintenance: true,
-          takeCacheOwnership: true,
-        },
-      );
+      await updateSessionEntry({ storePath, sessionKey }, () => ({ fallbackNotice }), {
+        skipMaintenance: true,
+        takeCacheOwnership: true,
+      });
     }
   }
   const usedCliProvider = isCliProvider(providerUsed, cfg);

@@ -5,6 +5,11 @@ import {
   formatValidationErrors,
   validateRequestFrame,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import {
+  createChildDiagnosticTraceContext,
+  parseDiagnosticTraceparent,
+  runWithDiagnosticTraceContext,
+} from "../../../infra/diagnostic-trace-context.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
@@ -137,21 +142,31 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       });
     };
 
-    const requestDispatch = (async () => {
-      const { handleGatewayRequest } = await import("../../server-methods.js");
-      await handleGatewayRequest({
-        req,
-        respond,
-        client,
-        isWebchatConnect: params.isWebchatConnect,
-        extraHandlers,
-        methodRegistry: getMethodRegistry?.(),
-        context: buildRequestContext(),
-      });
-    })().catch((err: unknown) => {
-      logGateway.error(`request handler failed: ${formatForLog(err)}`);
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
-    });
+    const executeRequest = async () => {
+      try {
+        const { handleGatewayRequest } = await import("../../server-methods.js");
+        await handleGatewayRequest({
+          req,
+          respond,
+          client,
+          isWebchatConnect: params.isWebchatConnect,
+          extraHandlers,
+          methodRegistry: getMethodRegistry?.(),
+          context: buildRequestContext(),
+        });
+      } catch (err) {
+        // Failure diagnostics and responses belong to the same request trace as the handler.
+        logGateway.error(`request handler failed: ${formatForLog(err)}`);
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+      }
+    };
+    const upstreamTrace = parseDiagnosticTraceparent(req.traceparent);
+    const requestDispatch = upstreamTrace
+      ? runWithDiagnosticTraceContext(
+          createChildDiagnosticTraceContext(upstreamTrace),
+          executeRequest,
+        )
+      : executeRequest();
     if (DEVICE_CREDENTIAL_INVALIDATING_METHODS.has(req.method)) {
       const barrier = requestDispatch.finally(() => {
         if (deviceCredentialMutationBarrier === barrier) {

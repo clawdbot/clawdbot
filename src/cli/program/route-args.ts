@@ -7,6 +7,7 @@ import {
   getVerboseFlag,
   hasFlag,
 } from "../argv.js";
+import { parseGatewayPortOption } from "../gateway-port-option.js";
 import { parseStrictPositiveIntOrUndefined } from "./helpers.js";
 
 type OptionalFlagParse = {
@@ -175,6 +176,60 @@ export function parseGatewayStatusRouteArgs(argv: string[]) {
     json: hasFlag(argv, "--json"),
     requireRpc: hasFlag(argv, "--require-rpc"),
     probe: !hasFlag(argv, "--no-probe"),
+  };
+}
+
+/** Parse machine-readable `openclaw gateway health` calls for route-first execution. */
+export function parseGatewayHealthRouteArgs(argv: string[]) {
+  if (!hasFlag(argv, "--json")) {
+    return null;
+  }
+  const positionals = getRoutedCommandPositionals(argv, {
+    commandPath: ["gateway", "health"],
+    booleanFlags: ["--expect-final", "--json"],
+    valueFlags: ["--url", "--token", "--password", "--timeout", "--port"],
+  });
+  if (!positionals || positionals.length !== 0) {
+    return null;
+  }
+  const url = parseOptionalFlagValue(argv, "--url");
+  const token = parseOptionalFlagValue(argv, "--token");
+  const password = parseOptionalFlagValue(argv, "--password");
+  const timeout = parseOptionalFlagValue(argv, "--timeout");
+  const port = parseOptionalFlagValue(argv, "--port");
+  if (!url.ok || !token.ok || !password.ok || !timeout.ok || !port.ok) {
+    return null;
+  }
+  if (
+    timeout.value !== undefined &&
+    parseStrictPositiveIntOrUndefined(timeout.value) === undefined
+  ) {
+    return null;
+  }
+  let localPortOverride: number | undefined;
+  if (port.value !== undefined) {
+    try {
+      localPortOverride = parseGatewayPortOption(port.value);
+    } catch {
+      return null;
+    }
+    if (localPortOverride === undefined) {
+      return null;
+    }
+  }
+  if (url.value && localPortOverride !== undefined) {
+    return null;
+  }
+  return {
+    rpc: {
+      url: url.value,
+      token: token.value,
+      password: password.value,
+      timeout: timeout.value ?? "10000",
+      expectFinal: hasFlag(argv, "--expect-final"),
+      json: true as const,
+    },
+    localPortOverride,
   };
 }
 

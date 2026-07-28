@@ -1709,6 +1709,212 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatRunError).toEqual({ summary: "Error: raw provider failure" });
   });
 
+  it("deduplicates a delivered final and its late provider diagnostic", () => {
+    const state = createState({ sessionKey: "main", chatRunId: "run-source-reply" });
+    const final = {
+      runId: "run-source-reply",
+      sessionKey: "main",
+      state: "final" as const,
+      message: createTextChatMessage("assistant", "Source reply delivered."),
+    };
+    const error = {
+      runId: "run-source-reply",
+      sessionKey: "main",
+      state: "error" as const,
+      errorMessage: "raw provider failure",
+    };
+
+    expect(handleChatGatewayEvent(state, final)).toBe("final");
+    expect(handleChatGatewayEvent(state, final)).toBe("final");
+    expect(handleChatGatewayEvent(state, error)).toBe("error");
+    const displayedDiagnostic = state.chatRunError;
+    expect(handleChatGatewayEvent(state, error)).toBe("error");
+
+    expect(state.chatMessages).toHaveLength(1);
+    expectTextChatMessage(state.chatMessages[0], "assistant", "Source reply delivered.");
+    expect(state.chatRunError).toBe(displayedDiagnostic);
+    expect(state.chatRunError).toEqual({ summary: "Error: raw provider failure" });
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+  });
+
+  it.each([
+    {
+      name: "canonical persisted assistant identities",
+      sourceMetadata: { id: "message-tool-source-reply", seq: 7 },
+      finalMetadata: { id: "automatic-final-reply", seq: 8 },
+    },
+    {
+      name: "legacy assistant replies without transcript metadata",
+      sourceMetadata: undefined,
+      finalMetadata: undefined,
+    },
+  ])("keeps distinct same-run finals with $name", ({ sourceMetadata, finalMetadata }) => {
+    const state = createState({ sessionKey: "main", chatRunId: "run-message-tool" });
+    const sourceReply = createTextChatMessage(
+      "assistant",
+      "Visible progress from the targetless message tool.",
+      sourceMetadata,
+    );
+    const automaticReply = createTextChatMessage(
+      "assistant",
+      "Visible automatic final reply.",
+      finalMetadata,
+    );
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-message-tool",
+        sessionKey: "main",
+        state: "final",
+        message: sourceReply,
+      }),
+    ).toBe("final");
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-message-tool",
+        sessionKey: "main",
+        state: "final",
+        message: automaticReply,
+      }),
+    ).toBe("final");
+
+    expect(state.chatMessages).toEqual([sourceReply, automaticReply]);
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+  });
+
+  it.each([
+    {
+      name: "canonical persisted assistant identities",
+      sourceMetadata: { id: "message-tool-source-reply", seq: 7 },
+      finalMetadata: { id: "automatic-final-reply", seq: 8 },
+    },
+    {
+      name: "legacy assistant replies without transcript metadata",
+      sourceMetadata: undefined,
+      finalMetadata: undefined,
+    },
+  ])(
+    "deduplicates the second distinct same-run final with $name",
+    ({ sourceMetadata, finalMetadata }) => {
+      const state = createState({ sessionKey: "main", chatRunId: "run-message-tool" });
+      const sourceReply = createTextChatMessage(
+        "assistant",
+        "Visible progress from the targetless message tool.",
+        sourceMetadata,
+      );
+      const automaticReply = createTextChatMessage(
+        "assistant",
+        "Visible automatic final reply.",
+        finalMetadata,
+      );
+      const sourceEvent = {
+        runId: "run-message-tool",
+        sessionKey: "main",
+        state: "final" as const,
+        message: sourceReply,
+      };
+      const finalEvent = {
+        runId: "run-message-tool",
+        sessionKey: "main",
+        state: "final" as const,
+        message: automaticReply,
+      };
+
+      expect(handleChatGatewayEvent(state, sourceEvent)).toBe("final");
+      expect(handleChatGatewayEvent(state, finalEvent)).toBe("final");
+      expect(handleChatGatewayEvent(state, finalEvent)).toBe("final");
+
+      expect(state.chatMessages).toEqual([sourceReply, automaticReply]);
+      expect(state.chatRunId).toBeNull();
+      expect(state.chatStream).toBeNull();
+    },
+  );
+
+  it("does not let a completed run's late error interrupt a newer response", () => {
+    const state = createState({ sessionKey: "main", chatRunId: "run-completed" });
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-completed",
+        sessionKey: "main",
+        state: "final",
+        message: createTextChatMessage("assistant", "Delivered once."),
+      }),
+    ).toBe("final");
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-newer",
+        sessionKey: "main",
+        state: "delta",
+        message: createTextChatMessage("assistant", "Newer response"),
+      }),
+    ).toBe("delta");
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-completed",
+        sessionKey: "main",
+        state: "error",
+        errorMessage: "late provider failure",
+      }),
+    ).toBe("error");
+
+    expect(state.chatRunId).toBe("run-newer");
+    expect(state.chatStream).toBe("Newer response");
+    expect(state.chatMessages).toHaveLength(1);
+    expectTextChatMessage(state.chatMessages[0], "assistant", "Delivered once.");
+    expect(state.chatRunError).toEqual({ summary: "Error: late provider failure" });
+  });
+
+  it("upgrades an empty final to one authoritative assistant reply", () => {
+    const state = createState({ sessionKey: "main", chatRunId: "run-empty-final" });
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-empty-final",
+        sessionKey: "main",
+        state: "final",
+      }),
+    ).toBe("final");
+    const deliveredFinal = {
+      runId: "run-empty-final",
+      sessionKey: "main",
+      state: "final" as const,
+      message: createTextChatMessage("assistant", "Delayed authoritative reply."),
+    };
+    expect(handleChatGatewayEvent(state, deliveredFinal)).toBe("final");
+    expect(handleChatGatewayEvent(state, deliveredFinal)).toBe("final");
+
+    expect(state.chatMessages).toHaveLength(1);
+    expectTextChatMessage(state.chatMessages[0], "assistant", "Delayed authoritative reply.");
+    expect(state.chatRunId).toBeNull();
+  });
+
+  it("ignores a stale assistant delta after its run has completed", () => {
+    const state = createState({ sessionKey: "main", chatRunId: "run-completed" });
+
+    handleChatGatewayEvent(state, {
+      runId: "run-completed",
+      sessionKey: "main",
+      state: "final",
+      message: createTextChatMessage("assistant", "Delivered once."),
+    });
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-completed",
+        sessionKey: "main",
+        state: "delta",
+        message: createTextChatMessage("assistant", "stale streamed fragment"),
+      }),
+    ).toBeNull();
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+    expect(state.chatMessages).toHaveLength(1);
+    expectTextChatMessage(state.chatMessages[0], "assistant", "Delivered once.");
+  });
+
   it("does not append an orphan error bubble when no run was active", () => {
     const existingMessage = createTextChatMessage(
       "assistant",

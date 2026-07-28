@@ -1,3 +1,7 @@
+import {
+  hasSessionProjectionAcceptedFinal,
+  reduceSessionProjection,
+} from "@openclaw/gateway-client/browser";
 import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 // Control UI page module reconciles Chat Gateway events into Chat state.
@@ -12,6 +16,7 @@ import {
   type ChatEventPayload,
   type ChatState,
 } from "./chat-history.ts";
+import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { appendChatMessageToCache } from "./session-message-cache.ts";
 import { retireSteeredChipsForTerminalRun } from "./steer-lifecycle.ts";
@@ -57,6 +62,72 @@ function isEventForDifferentActiveRun(
   activeRunId: string | null,
 ): boolean {
   return Boolean(activeRunId && payload && payload.runId !== activeRunId);
+}
+
+function reduceChatRunEvent(state: ChatState, payload: ChatEventPayload) {
+  if (!payload.runId || payload.state === "status") {
+    return null;
+  }
+  const scope = {
+    sessionKey: state.sessionKey,
+    ...(state.currentSessionId ? { sessionId: state.currentSessionId } : {}),
+    ...(state.chatDisplayedLeafEntryId !== undefined
+      ? { activeLeafEntryId: state.chatDisplayedLeafEntryId }
+      : {}),
+  };
+  const projection = getChatSessionProjection(state, state.chatMessages, scope);
+  const previous = projection.runs[payload.runId];
+  const record = payload as ChatEventPayload & { errorKind?: unknown };
+  const message =
+    payload.message && typeof payload.message === "object" && !Array.isArray(payload.message)
+      ? (payload.message as Record<string, unknown>)
+      : null;
+  const stopReason =
+    payload.stopReason ??
+    (typeof message?.stopReason === "string" ? message.stopReason : undefined);
+  const errorKind = typeof record.errorKind === "string" ? record.errorKind : undefined;
+  const next =
+    payload.state === "delta"
+      ? reduceSessionProjection(projection, {
+          type: "runDelta",
+          runId: payload.runId,
+          ...(payload.message === undefined ? {} : { message: payload.message }),
+          scope,
+        })
+      : reduceSessionProjection(projection, {
+          type: "runTerminal",
+          runId: payload.runId,
+          status:
+            payload.state === "aborted"
+              ? "aborted"
+              : payload.state === "error"
+                ? errorKind === "timeout"
+                  ? "timeout"
+                  : "error"
+                : payload.yielded === true && stopReason === "end_turn"
+                  ? "yielded"
+                  : stopReason === "error"
+                    ? "error"
+                    : "completed",
+          ...(payload.message === undefined ? {} : { message: payload.message }),
+          ...(stopReason === undefined ? {} : { stopReason }),
+          ...(errorKind === undefined ? {} : { errorKind }),
+          ...(payload.errorMessage === undefined ? {} : { errorMessage: payload.errorMessage }),
+          scope,
+        });
+  setChatSessionProjection(state, next);
+  return { previous, current: next.runs[payload.runId] };
+}
+
+function isReplayedFinalAssistantMessage(
+  previousRun: Parameters<typeof hasSessionProjectionAcceptedFinal>[0],
+  incomingMessage: unknown,
+) {
+  const incoming = normalizeFinalAssistantMessage(incomingMessage);
+  if (!incoming || shouldHideAssistantChatMessage(incoming)) {
+    return true;
+  }
+  return hasSessionProjectionAcceptedFinal(previousRun, incoming);
 }
 
 function resolveDeltaChatStreamText(
@@ -211,6 +282,31 @@ function handleChatEvent(
       }
     }
     return null;
+  }
+  const projectedRun = reduceChatRunEvent(state, payload);
+  const previousTerminalRun = projectedRun?.previous;
+  if (previousTerminalRun && previousTerminalRun.status !== "streaming") {
+    if (payload.state === "delta") {
+      return null;
+    }
+    if (payload.state === "error") {
+      if (
+        payload.errorMessage?.trim() &&
+        projectedRun.current?.errorMessage !== previousTerminalRun.errorMessage
+      ) {
+        // A completed transcript is immutable; retain provider guidance without
+        // adopting its old run or interrupting a newer in-flight response.
+        setChatRunError(state, resolveGatewayErrorText(payload, null));
+      }
+      return "error";
+    }
+    if (
+      payload.state === "aborted" ||
+      (payload.state === "final" &&
+        isReplayedFinalAssistantMessage(previousTerminalRun, payload.message))
+    ) {
+      return payload.state;
+    }
   }
   if (
     !state.chatRunId &&

@@ -42,8 +42,10 @@ import {
   toDatabaseOptions,
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
+import { rememberCommittedSqliteTranscriptMessageSequencesInTransaction } from "./session-accessor.sqlite-transcript-sequences.js";
 import {
   advanceTranscriptMutationAtInTransaction,
+  readTranscriptGenerationInTransaction,
   touchTranscriptMutationInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
 import {
@@ -55,6 +57,7 @@ import {
   readTranscriptMessageByScopedIdempotencyKey,
   redactTranscriptMessageForStorage,
   replaceSqliteTranscriptEventsInTransaction,
+  rewriteSqliteTranscriptEventRowsInTransaction,
 } from "./session-accessor.sqlite-transcript-store.js";
 import type { SessionTranscriptWriteTransactionContext } from "./session-accessor.types.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
@@ -125,6 +128,39 @@ export async function replaceSqliteTranscriptEvents(
     runOpenClawAgentWriteTransaction((database) => {
       replaceSqliteTranscriptEventsInTransaction(database, resolved, events);
     }, toDatabaseOptions(resolved));
+  });
+}
+
+/** Rewrites exact transcript rows after atomically validating their generation and bytes. */
+export async function rewriteSqliteTranscriptEventRowsExact(
+  scope: SessionTranscriptAccessScope,
+  params: {
+    allowInitialGenerationMaterialization?: boolean;
+    expectedGeneration: string | null;
+    rows: readonly { event: TranscriptEvent; expectedEventJson: string; seq: number }[];
+  },
+): Promise<{ generation: string } | null> {
+  if (params.rows.length === 0) {
+    return null;
+  }
+  const resolved = resolveSqliteTranscriptScope(scope);
+  return await runExclusiveSqliteSessionWrite(resolved, async () => {
+    let result: { generation: string } | null = null;
+    runOpenClawAgentWriteTransaction((database) => {
+      const currentGeneration =
+        readTranscriptGenerationInTransaction(database, resolved.sessionId) ?? null;
+      const initialGenerationMaterialized =
+        params.allowInitialGenerationMaterialization === true && params.expectedGeneration === null;
+      if (currentGeneration !== params.expectedGeneration && !initialGenerationMaterialized) {
+        return;
+      }
+      rewriteSqliteTranscriptEventRowsInTransaction(database, resolved, params.rows);
+      const generation = readTranscriptGenerationInTransaction(database, resolved.sessionId);
+      if (generation) {
+        result = { generation };
+      }
+    }, toDatabaseOptions(resolved));
+    return result;
   });
 }
 
@@ -394,6 +430,14 @@ export async function appendSqliteExpectedSessionTranscriptTurn(
       ) {
         throw new Error("SQLite transcript batch was not wholly inserted or replayed");
       }
+
+      // Later explicit parents can abandon earlier rows. Capture every cursor
+      // from the final active projection before this atomic transaction commits.
+      rememberCommittedSqliteTranscriptMessageSequencesInTransaction(
+        transactionDb,
+        resolved.sessionId,
+        appendedMessages,
+      );
 
       const sessionPatch = buildExpectedTranscriptTurnSessionPatch({
         appendedMessages,

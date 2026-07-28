@@ -1360,28 +1360,33 @@ export function buildGatewayCronService(params: {
     unregisterSessionAutomationSource(automationSource);
   };
   cron.stopAndDrain = async () => {
-    stopCron();
-    stopExitWatchers();
-    stopHeartbeatReconcileRetry();
-    const streamWatchersStop = stopStreamWatchers().then(
-      () => ({ ok: true as const }),
-      (error: unknown) => ({ ok: false as const, error }),
-    );
-    const abortedRuns = abortActiveCronTaskRuns("Gateway shutting down.");
-    const [activeRunDrain, streamWatchersResult] = await Promise.all([
-      waitForActiveCronTaskRuns(CRON_ACTIVE_RUN_SHUTDOWN_DRAIN_MS),
-      streamWatchersStop,
-    ]);
-    if (!activeRunDrain.drained) {
-      cronLogger.warn(
-        { abortedRuns, activeRuns: activeRunDrain.active },
-        "cron: active runs did not drain before shutdown timeout",
+    try {
+      stopCron();
+      stopExitWatchers();
+      stopHeartbeatReconcileRetry();
+      const streamWatchersStop = stopStreamWatchers().then(
+        () => ({ ok: true as const }),
+        (error: unknown) => ({ ok: false as const, error }),
       );
+      const abortedRuns = abortActiveCronTaskRuns("Gateway shutting down.");
+      const [activeRunDrain, streamWatchersResult] = await Promise.all([
+        waitForActiveCronTaskRuns(CRON_ACTIVE_RUN_SHUTDOWN_DRAIN_MS),
+        streamWatchersStop,
+      ]);
+      if (!activeRunDrain.drained) {
+        cronLogger.warn(
+          { abortedRuns, activeRuns: activeRunDrain.active },
+          "cron: active runs did not drain before shutdown timeout",
+        );
+      }
+      if (!streamWatchersResult.ok) {
+        throw streamWatchersResult.error;
+      }
+    } finally {
+      // A failed drain still stops this source; owner comparison protects a
+      // replacement that registered while the old watchers were settling.
+      unregisterSessionAutomationSource(automationSource);
     }
-    if (!streamWatchersResult.ok) {
-      throw streamWatchersResult.error;
-    }
-    unregisterSessionAutomationSource(automationSource);
   };
   // Reconciliations serialize on one tail and only the latest requested epoch
   // executes, so an older reload's convergence can never clobber a newer one.

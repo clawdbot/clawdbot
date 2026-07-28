@@ -4,6 +4,10 @@ import path from "node:path";
 import { chromium, type Browser, type Locator } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  waitForControlUiGatewayReady,
+  waitForControlUiTerminalReady,
+} from "../test-helpers/control-ui-e2e-readiness.ts";
+import {
   canRunPlaywrightChromium,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
@@ -74,17 +78,8 @@ describeControlUiE2e("Control UI terminal repaint", () => {
 
     try {
       await page.goto(server.baseUrl);
-      await gateway.waitForRequest("connect");
-      // The connect request is observable before its response upgrades the lazy terminal panel.
-      // Wait for the advertised surface before exercising the real keyboard shortcut.
-      await page.waitForFunction(
-        () =>
-          (
-            document.querySelector("openclaw-terminal-panel") as
-              | (HTMLElement & { available?: boolean })
-              | null
-          )?.available === true,
-      );
+      await waitForControlUiGatewayReady(page);
+      await waitForControlUiTerminalReady(page);
       await page.keyboard.press("Control+Backquote");
       await gateway.waitForRequest("terminal.open");
 

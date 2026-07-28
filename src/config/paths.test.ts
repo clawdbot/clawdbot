@@ -7,6 +7,7 @@ import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   CONFIG_PATH,
   DEFAULT_GATEWAY_PORT,
+  isDefaultStateDir,
   isNixMode,
   normalizeStateDirEnv,
   pinRuntimePaths,
@@ -23,6 +24,22 @@ import {
 function envWith(overrides: Record<string, string | undefined>): NodeJS.ProcessEnv {
   return { ...overrides };
 }
+
+describe("default state directory", () => {
+  it("matches filesystem aliases of the default state directory", async () => {
+    await withTempDir({ prefix: "openclaw-default-state-" }, async (root) => {
+      const home = path.join(root, "home");
+      const defaultStateDir = path.join(home, ".openclaw");
+      const stateAlias = path.join(home, "state-alias");
+      await fs.mkdir(defaultStateDir, { recursive: true });
+      await fs.symlink(defaultStateDir, stateAlias, "dir");
+
+      expect(isDefaultStateDir({ HOME: home, OPENCLAW_STATE_DIR: stateAlias }, () => home)).toBe(
+        true,
+      );
+    });
+  });
+});
 
 describe("oauth paths", () => {
   it("prefers OPENCLAW_OAUTH_DIR over OPENCLAW_STATE_DIR", () => {

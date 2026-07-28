@@ -27,18 +27,25 @@ vi.mock("../plugins/provider-runtime.runtime.js", () => ({
   ) => mocks.augmentModelCatalogWithProviderPlugins(...args),
 }));
 
-const metadataSnapshot = { plugins: [] } as unknown as PluginMetadataSnapshot;
+const metadataSnapshot = {
+  plugins: [],
+  manifestRegistry: { plugins: [] },
+} as unknown as PluginMetadataSnapshot;
 
 function providerManifestSnapshot(params: {
   provider: string;
   discovery: "static" | "refreshable" | "runtime";
   modelIds: string[];
+  aliases?: string[];
 }): PluginMetadataSnapshot {
   const plugin = {
     id: params.provider,
     origin: "bundled",
     providers: [params.provider],
     modelCatalog: {
+      aliases: Object.fromEntries(
+        (params.aliases ?? []).map((alias) => [alias, { provider: params.provider }]),
+      ),
       providers: {
         [params.provider]: {
           api: "openai-responses",
@@ -146,6 +153,26 @@ describe("prepared model catalog builder", () => {
     ]);
   });
 
+  it("canonicalizes manifest-owned provider aliases in registry rows", async () => {
+    const snapshot = await build({
+      entries: [
+        { id: "kimi-k3", name: "Kimi K3", provider: "moonshotai" },
+        { id: "kimi-k2.7-code", name: "Kimi K2.7 Code", provider: "moonshot-ai" },
+      ],
+      metadataSnapshot: providerManifestSnapshot({
+        provider: "moonshot",
+        aliases: ["moonshotai", "moonshot-ai"],
+        discovery: "static",
+        modelIds: ["kimi-k3", "kimi-k2.7-code"],
+      }),
+    });
+
+    expect(snapshot.entries.map((entry) => `${entry.provider}/${entry.id}`)).toEqual([
+      "moonshot/kimi-k3",
+      "moonshot/kimi-k2.7-code",
+    ]);
+  });
+
   it("does not augment an account with undiscovered runtime-provider models", async () => {
     mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValueOnce([
       { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
@@ -169,6 +196,37 @@ describe("prepared model catalog builder", () => {
     expect(snapshot.entries[0]?.contextWindow).toBe(128_000);
     expect(snapshot.routeVariants.map((entry) => `${entry.provider}/${entry.id}`)).toEqual([
       "openai/gpt-5.5",
+    ]);
+  });
+
+  it("keeps provider-owned strongest-first order after runtime augmentation", async () => {
+    mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValueOnce([
+      { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
+      { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", provider: "openai" },
+      { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
+      { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+    ]);
+
+    const snapshot = await build({
+      entries: [
+        { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+        { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
+        { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
+        { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", provider: "openai" },
+      ],
+      metadataSnapshot: providerManifestSnapshot({
+        provider: "openai",
+        discovery: "runtime",
+        modelIds: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.4"],
+      }),
+      readOnly: false,
+    });
+
+    expect(snapshot.entries.map((entry) => entry.id)).toEqual([
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+      "gpt-5.4",
     ]);
   });
 

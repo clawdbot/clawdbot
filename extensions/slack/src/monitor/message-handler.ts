@@ -169,11 +169,12 @@ export function createSlackMessageHandler(params: {
         await (async () => {
           // Logical-identity claims: Slack sends message + app_mention twins with
           // distinct event_ids for one post, so the durable queue cannot dedupe
-          // them. Same-flush twins share one claim; a later twin claims duplicate
-          // and is dropped before it can produce a second visible reply.
+          // them. Same-flush twins share one claim and one logical message while
+          // retaining the latest event's routing and any earlier mention.
           const claims: SlackMessageDispatchReplayClaim[] = [];
-          const claimedKeys = new Set<string>();
+          const claimedKeys = new Map<string, number>();
           const surviving: typeof entries = [];
+          let latestSurviving: (typeof entries)[number] | undefined;
           for (const entry of entries) {
             const replayKey = buildSlackMessageDispatchReplayKey({
               accountId: ctx.accountId,
@@ -181,8 +182,26 @@ export function createSlackMessageHandler(params: {
               ts: entry.message.ts,
               teamId: entry.opts.eventScope?.teamId,
             });
-            if (!replayKey || claimedKeys.has(replayKey)) {
+            if (!replayKey) {
               surviving.push(entry);
+              latestSurviving = entry;
+              continue;
+            }
+            const existingIndex = claimedKeys.get(replayKey);
+            if (existingIndex !== undefined) {
+              const existing = surviving[existingIndex];
+              const merged = {
+                ...entry,
+                opts: {
+                  ...entry.opts,
+                  ...(existing?.opts.source === "app_mention"
+                    ? { source: "app_mention" as const }
+                    : {}),
+                  ...(existing?.opts.wasMentioned ? { wasMentioned: true } : {}),
+                },
+              };
+              surviving[existingIndex] = merged;
+              latestSurviving = merged;
               continue;
             }
             const claim = await claimSlackMessageDispatchReplay({
@@ -191,8 +210,9 @@ export function createSlackMessageHandler(params: {
             });
             if (claim.kind === "claimed") {
               claims.push(claim.handle);
-              claimedKeys.add(replayKey);
+              claimedKeys.set(replayKey, surviving.length);
               surviving.push(entry);
+              latestSurviving = entry;
             }
           }
           const releaseClaims = (error?: unknown) => {
@@ -205,7 +225,7 @@ export function createSlackMessageHandler(params: {
               await handle.commit();
             }
           };
-          const last = surviving.at(-1);
+          const last = latestSurviving;
           if (!last) {
             releaseClaims();
             return;

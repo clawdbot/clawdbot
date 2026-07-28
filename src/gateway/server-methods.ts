@@ -161,6 +161,10 @@ const loadLogsHandlers = lazyHandlerModule(
   () => import("./server-methods/logs.js"),
   (module) => module.logsHandlers,
 );
+const loadMemorySearchHandlers = lazyHandlerModule(
+  () => import("./server-methods/memory-search.js"),
+  (module) => module.memorySearchHandlers,
+);
 const loadTerminalHandlers = lazyHandlerModule(
   () => import("./server-methods/terminal.js"),
   (module) => module.terminalHandlers,
@@ -878,6 +882,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["agents.workspace.list", "agents.workspace.get"],
     loadHandlers: loadAgentsWorkspaceHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["memory.search"],
+    loadHandlers: loadMemorySearchHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["artifacts.list", "artifacts.get", "artifacts.download"],

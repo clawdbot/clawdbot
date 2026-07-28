@@ -37,7 +37,7 @@ import {
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils-store-lookup.js";
-import type { GatewayAgentRow, GatewaySessionRow } from "./session-utils.types.js";
+import type { GatewayAgentRow } from "./session-utils.types.js";
 
 /**
  * Returns the owning agent id if the session key belongs to an agent that is no
@@ -248,22 +248,6 @@ export function migrateAndPruneGatewaySessionStoreKey(params: {
     candidates: target.storeKeys,
   });
   return { target, primaryKey, entry: params.store[primaryKey] };
-}
-
-export function classifySessionKey(key: string, entry?: SessionEntry): GatewaySessionRow["kind"] {
-  if (key === "global") {
-    return "global";
-  }
-  if (key === "unknown") {
-    return "unknown";
-  }
-  if (entry?.chatType === "group" || entry?.chatType === "channel") {
-    return "group";
-  }
-  if (key.includes(":group:") || key.includes(":channel:")) {
-    return "group";
-  }
-  return "direct";
 }
 
 export function parseGroupKey(

@@ -50,7 +50,7 @@ import {
 } from "./config-sections.ts";
 import { renderMcp } from "./mcp.ts";
 import { renderMemoryPage } from "./memory-page.ts";
-import { narrowMemorySchema, normalizeMemoryTab } from "./memory-schema.ts";
+import { memoryTabForRoute, narrowMemorySchema } from "./memory-schema.ts";
 import { renderQuickSettings } from "./quick.ts";
 import { configTargetIdFromHash, type ConfigRouteData } from "./route-data.ts";
 import { renderSecurity, type SecurityOverview } from "./security.ts";
@@ -58,6 +58,7 @@ import {
   buildSessionObserverTogglePatch,
   buildSessionObserverUtilityModelPatch,
 } from "./session-observer-settings.ts";
+import { SETTINGS_SEARCH_TARGETS } from "./settings-targets.ts";
 import {
   createConfigViewState,
   renderConfig,
@@ -89,8 +90,8 @@ type ConfigPageSetting =
 // settings-search links predating the move must land on the new home.
 const MOVED_TARGET_ROUTES: Record<string, { routeId: RouteId; hash: string }> = {
   "config:settings-general-model": {
-    routeId: "model-providers",
-    hash: "#settings-model-behavior",
+    routeId: SETTINGS_SEARCH_TARGETS.modelBehavior.routeId,
+    hash: SETTINGS_SEARCH_TARGETS.modelBehavior.hash,
   },
 };
 
@@ -1035,7 +1036,7 @@ export class ConfigPage extends OpenClawLightDomElement {
         configObject,
         pluginsHref: pathForRoute("plugins", this.context.basePath),
         memoryImportHref: pathForRoute("memory-import", this.context.basePath),
-        tab: normalizeMemoryTab(this.routeData?.tab),
+        tab: memoryTabForRoute(this.routeData ?? {}),
         // Memory's engine and backend are product decisions, not power-user
         // knobs: this page forces the advanced tier open so they never hide
         // behind the global Advanced toggle.

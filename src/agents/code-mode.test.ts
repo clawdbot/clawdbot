@@ -681,6 +681,30 @@ describe("Code Mode", () => {
     expect(index).not.toContain("fake_099");
   });
 
+  it("keeps a thousand-tool catalog index deterministic and within its character budget", () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    const catalogTools = Array.from({ length: 1_024 }, (_, index) =>
+      pluginTool(`tool_${index.toString().padStart(4, "0")}`, "Deferred", "catalog-owner"),
+    );
+    const compacted = applyCodeModeCatalog({
+      tools: [...tools, ...catalogTools],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const description = compacted.tools[0]?.description ?? "";
+    const indexStart = description.indexOf("OpenClaw/plugin tool quick index");
+    const index = indexStart >= 0 ? description.slice(indexStart) : "";
+
+    expect(index.length).toBeLessThanOrEqual(8_000);
+    expect(index).toContain('"openclaw:catalog-owner:tool_0000"');
+    expect(index).toContain("additional OpenClaw/plugin tools omitted");
+    expect(index).not.toContain('"openclaw:catalog-owner:tool_1023"');
+  });
+
   it("omits MCP and namespace guidance from the exec schema when the run catalog has neither", () => {
     const { config, catalogRef, tools } = createCodeModeHarness();
     const compacted = applyCodeModeCatalog({
@@ -2743,6 +2767,69 @@ describe("Code Mode", () => {
     expect(stillWaiting.runId).toBe(first.runId);
   });
 
+  it("resumes and reparks a yielding run at the suspended-run capacity limit", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const first = resultDetails(
+      await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+        "code-call-at-capacity",
+        {
+          code: `
+            await yield_control("first");
+            await yield_control("second");
+            return "done";
+          `,
+        },
+      ),
+    );
+    expect(first.status).toBe("waiting");
+    const firstRunId = first.runId;
+    expect(typeof firstRunId).toBe("string");
+    if (typeof firstRunId !== "string") {
+      throw new Error("expected a parked Code Mode run");
+    }
+    const parked = testing.activeRuns.get(firstRunId);
+    expect(parked).toBeDefined();
+    if (!parked) {
+      throw new Error("expected a parked Code Mode snapshot");
+    }
+
+    // Inert snapshots occupy real capacity without starting 63 extra workers.
+    for (let index = 0; index < 63; index += 1) {
+      const runId = `cm_code_mode_capacity_${index}`;
+      testing.activeRuns.set(runId, { ...parked, runId, pending: [] });
+    }
+
+    const second = resultDetails(
+      await expectDefined(codeModeTools[1], "Code Mode wait test invariant").execute(
+        "code-wait-at-capacity",
+        { runId: firstRunId },
+      ),
+    );
+
+    expect(second.status).toBe("waiting");
+    expect(second.reason).toBe("yield");
+    expect(testing.activeRuns.size).toBe(64);
+
+    const completed = resultDetails(
+      await expectDefined(codeModeTools[1], "Code Mode wait test invariant").execute(
+        "code-wait-after-capacity",
+        { runId: second.runId },
+      ),
+    );
+
+    expect(completed).toMatchObject({ status: "completed", value: "done" });
+    expect(testing.activeRuns.size).toBe(63);
+  });
+
   it("reports only unsettled pending tool calls when wait times out", async () => {
     const catalogRef = createToolSearchCatalogRef();
     const config = {
@@ -3247,6 +3334,67 @@ describe("Code Mode", () => {
     expect(typedShell.status).toBe("failed");
     expect(typedShell.code).toBe("invalid_input");
     expect(typedShell.error).toMatch(/JavaScript or TypeScript, not shell commands/);
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
+  it("times out an unfinished TypeScript runtime load without starting a worker", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    (config as { tools: { codeMode: unknown } }).tools.codeMode = {
+      enabled: true,
+      timeoutMs: 100,
+    };
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+    testing.setTypescriptRuntimeForTest(new Promise<typeof import("typescript")>(() => {}));
+
+    const result = resultDetails(
+      await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+        "code-call-typescript-load-timeout",
+        { code: "return 42;", language: "typescript" },
+      ),
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "timeout",
+      error: "code mode timeout exceeded",
+      output: [],
+    });
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
+  it("aborts an unfinished TypeScript runtime load without starting a worker", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+    testing.setTypescriptRuntimeForTest(new Promise<typeof import("typescript")>(() => {}));
+    const controller = new AbortController();
+    const resultPromise = expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+      "code-call-typescript-load-abort",
+      { code: "return 42;", language: "typescript" },
+      controller.signal,
+    );
+
+    controller.abort();
+
+    expect(resultDetails(await resultPromise)).toMatchObject({
+      status: "failed",
+      code: "aborted",
+      error: "code mode execution aborted",
+      output: [],
+    });
     expect(testing.activeRuns.size).toBe(0);
   });
 

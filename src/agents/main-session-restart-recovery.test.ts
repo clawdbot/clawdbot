@@ -1547,18 +1547,20 @@ describe("main-session-restart-recovery", () => {
     await writeMainSession({
       sessionsDir,
       restartRecoveryForceSafeTools: true,
-      pendingFinalDelivery: true,
-      pendingFinalDeliveryText: pendingPayload,
+      pendingFinalDelivery: {
+        kind: "replayable",
+        text: pendingPayload,
+        createdAt: Date.now() - 5_000,
+        context: {
+          channel: "discord",
+          to: "discord:dm:final",
+          accountId: "main",
+        },
+      },
       restartRecoveryBeforeAgentReplyState: "handled-reply",
       restartRecoveryDeliveryRunId: "discord-message-1",
       restartRecoveryDeliverySourceRunId: "discord-message-1",
       restartRecoverySourceIngress: "channel",
-      pendingFinalDeliveryContext: {
-        channel: "discord",
-        to: "discord:dm:final",
-        accountId: "main",
-      },
-      pendingFinalDeliveryCreatedAt: Date.now() - 5_000,
       restartRecoveryDeliveryContext: {
         channel: "discord",
         to: "discord:dm:stale",
@@ -1588,16 +1590,12 @@ describe("main-session-restart-recovery", () => {
     const store = readStore(path.join(sessionsDir, "sessions.json"));
     const entry = store["agent:main:main"];
     expect(entry?.abortedLastRun).toBe(false);
-    expect(entry?.pendingFinalDelivery).toBe(true);
-    expect(entry?.pendingFinalDeliveryText).toBe(pendingPayload);
-    expect(entry?.pendingFinalDeliveryAttemptCount).toBe(1);
-    expect(entry?.pendingFinalDeliveryLastError).toBeNull();
+    expect(entry?.pendingFinalDelivery).toMatchObject({
+      kind: "replayable",
+      text: pendingPayload,
+    });
     expect(entry?.restartRecoveryForceSafeTools).toBe(true);
-    expect(entry?.pendingFinalDeliveryCreatedAt).toBeLessThanOrEqual(beforeStoreRead);
-    expect(entry?.pendingFinalDeliveryLastAttemptAt).toBeLessThanOrEqual(beforeStoreRead);
-    expect(entry?.pendingFinalDeliveryLastAttemptAt ?? 0).toBeGreaterThanOrEqual(
-      entry?.pendingFinalDeliveryCreatedAt ?? Number.POSITIVE_INFINITY,
-    );
+    expect(entry?.pendingFinalDelivery?.createdAt).toBeLessThanOrEqual(beforeStoreRead);
   });
 
   it("keeps a hook-owned pending final behind the unsafe-hook gate after claim cleanup", async () => {
@@ -1608,11 +1606,14 @@ describe("main-session-restart-recovery", () => {
     await writeMainSession({
       sessionsDir,
       sessionKey,
-      pendingFinalDelivery: true,
-      pendingFinalDeliveryText: "hook reply",
-      pendingFinalDeliveryContext: {
-        channel: "discord",
-        to: "discord:dm:123",
+      pendingFinalDelivery: {
+        kind: "replayable",
+        text: "hook reply",
+        createdAt: Date.now(),
+        context: {
+          channel: "discord",
+          to: "discord:dm:123",
+        },
       },
       restartRecoveryBeforeAgentReplyState: "handled-reply",
       restartRecoveryForceSafeTools: true,
@@ -1634,9 +1635,11 @@ describe("main-session-restart-recovery", () => {
     const sessionsDir = await makeSessionsDir();
     await writeMainSession({
       sessionsDir,
-      pendingFinalDelivery: true,
-      pendingFinalDeliveryText: "Safe work finished.",
-      pendingFinalDeliveryCreatedAt: Date.now() - 5_000,
+      pendingFinalDelivery: {
+        kind: "replayable",
+        text: "Safe work finished.",
+        createdAt: Date.now() - 5_000,
+      },
     });
     await writeTranscript(sessionsDir, "main-session", [
       { role: "user", content: "do the thing" },
@@ -1674,9 +1677,11 @@ describe("main-session-restart-recovery", () => {
     ].join("\n");
     await writeMainSession({
       sessionsDir,
-      pendingFinalDelivery: true,
-      pendingFinalDeliveryText: pendingPayload,
-      pendingFinalDeliveryCreatedAt: Date.now() - 5_000,
+      pendingFinalDelivery: {
+        kind: "replayable",
+        text: pendingPayload,
+        createdAt: Date.now() - 5_000,
+      },
     });
     await writeTranscript(sessionsDir, "main-session", [
       { role: "user", content: "calculate the answer" },
@@ -1690,7 +1695,10 @@ describe("main-session-restart-recovery", () => {
     expect(gatewayParams().message).not.toContain("Conversation info");
 
     const store = readStore(path.join(sessionsDir, "sessions.json"));
-    expect(store["agent:main:main"]?.pendingFinalDeliveryText).toBe("The final answer is 42.");
+    expect(store["agent:main:main"]?.pendingFinalDelivery).toMatchObject({
+      kind: "replayable",
+      text: "The final answer is 42.",
+    });
   });
 
   it("resumes an unguarded pending final delivery without a transcript", async () => {
@@ -1699,9 +1707,11 @@ describe("main-session-restart-recovery", () => {
       "agent:main:main": {
         ...runningSessionEntry("missing-transcript-session"),
         abortedLastRun: true,
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: "The durable final answer.",
-        pendingFinalDeliveryCreatedAt: Date.now() - 5_000,
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: "The durable final answer.",
+          createdAt: Date.now() - 5_000,
+        },
       },
     });
 
@@ -1714,9 +1724,11 @@ describe("main-session-restart-recovery", () => {
     const sessionsDir = await makeSessionsDir();
     await writeMainSession({
       sessionsDir,
-      pendingFinalDelivery: true,
-      pendingFinalDeliveryText: "assistant final was already captured",
-      pendingFinalDeliveryCreatedAt: Date.now() - 5_000,
+      pendingFinalDelivery: {
+        kind: "replayable",
+        text: "assistant final was already captured",
+        createdAt: Date.now() - 5_000,
+      },
     });
     await writeTranscript(sessionsDir, "main-session", [
       { role: "user", content: "finish" },
@@ -1728,10 +1740,10 @@ describe("main-session-restart-recovery", () => {
     expect(gatewayParams().message).toContain("assistant final was already captured");
     const store = readStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:main"]?.status).toBe("running");
-    expect(store["agent:main:main"]?.pendingFinalDelivery).toBe(true);
-    expect(store["agent:main:main"]?.pendingFinalDeliveryText).toBe(
-      "assistant final was already captured",
-    );
+    expect(store["agent:main:main"]?.pendingFinalDelivery).toMatchObject({
+      kind: "replayable",
+      text: "assistant final was already captured",
+    });
   });
 
   it("does not scan ordinary running sessions without the restart-aborted marker", async () => {
@@ -2137,8 +2149,11 @@ describe("main-session-restart-recovery", () => {
     const sessionsDir = await makeSessionsDir();
     await writeMainSession({
       sessionsDir,
-      pendingFinalDelivery: true,
-      pendingFinalDeliveryText: "interrupted response",
+      pendingFinalDelivery: {
+        kind: "replayable",
+        text: "interrupted response",
+        createdAt: Date.now(),
+      },
     });
 
     const suspensionRef: {
@@ -2535,8 +2550,11 @@ describe("main-session-restart-recovery", () => {
         revision: 1,
         chargedAttempts: 2,
       },
-      pendingFinalDelivery: true,
-      pendingFinalDeliveryText: "interrupted response",
+      pendingFinalDelivery: {
+        kind: "replayable",
+        text: "interrupted response",
+        createdAt: Date.now(),
+      },
     });
     vi.mocked(callGateway)
       .mockImplementationOnce(async () => {
@@ -2887,7 +2905,6 @@ describe("main-session-restart-recovery", () => {
         status: "running",
         abortedLastRun: true,
         restartRecoveryBeforeAgentReplyState: "pending",
-        pendingFinalDeliveryIntentId: "pending-1",
         restartRecoveryDeliveryRunId: "recovery-1",
         restartRecoveryDeliverySourceRunId: "discord-message-1",
         restartRecoveryDeliveryContext: discordDeliveryContext,
@@ -2936,8 +2953,6 @@ describe("main-session-restart-recovery", () => {
     expect(completed?.restartRecoveryDeliveryContext).toBeUndefined();
     expect(completed?.restartRecoveryBeforeAgentReplyState).toBeUndefined();
     expect(completed?.pendingFinalDelivery).toBeUndefined();
-    expect(completed?.pendingFinalDeliveryText).toBeUndefined();
-    expect(completed?.pendingFinalDeliveryIntentId).toBeUndefined();
   });
 
   it("resumes after an unhandled before_agent_reply hook checkpoint", async () => {

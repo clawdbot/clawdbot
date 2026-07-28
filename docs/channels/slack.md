@@ -1224,6 +1224,10 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
     - `dm.groupEnabled` (group DMs default false)
     - `dm.groupChannels` (optional MPIM allowlist)
 
+    <Note>
+    `dm.groupEnabled` and `dm.groupChannels` only filter group DMs Slack already delivers to the app. They cannot make the app see a group DM it never joined. Convert the group DM to a private channel and invite the app, or have the app open a new MPDM with `conversations.open`. See [Group DMs (MPDMs) and bots](/channels/slack#group-dms-mpdms-and-bots).
+    </Note>
+
     Multi-account precedence:
 
     - `channels.slack.accounts.default.allowFrom` applies only to the `default` account.
@@ -1323,6 +1327,20 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
 
   </Tab>
 </Tabs>
+
+### Group DMs (MPDMs) and bots
+
+Slack group DMs, also called multi-person direct messages or MPDMs, are not channels an app can join by being mentioned. Typing `@YourBot` in an existing group DM does not add the app or make the conversation visible to it.
+
+- If the app was included when the group DM was created, Slack delivers `message.mpim` events and OpenClaw can respond when DM policy allows it.
+- If the app is mentioned in an existing group DM where it is not a member, the bot token cannot see the conversation at all. Slack Web API calls such as `conversations.info`, `conversations.members`, and `conversations.history` fail with method- and context-dependent access or not-found errors, the MPDM does not appear in `conversations.list?types=mpim`, and no event is delivered to OpenClaw.
+- OpenClaw wakes in MPDMs through delivered `message.mpim` events. `app_mention` events do not add the app to DM or MPDM contexts.
+- `dm.groupEnabled` and `dm.groupChannels` only filter MPDMs Slack already delivers to the app. They cannot grant membership or visibility into a group DM the app was never part of. There is no OpenClaw config setting that makes the app see a group DM it never joined.
+
+To bring the app into a group DM, use one of these Slack-supported paths:
+
+1. Convert the group DM to a private channel, then ask a current member to invite the app with `/invite @YourBot`. An API-based invite must call `conversations.invite` with a token whose actor is already a member and allowed to invite the app.
+2. Have the app open a new MPDM with `conversations.open` using a bot token with `mpim:write`, passing the human recipients in `users`. Slack includes the calling bot user automatically.
 
 ## Threading, sessions, and reply tags
 
