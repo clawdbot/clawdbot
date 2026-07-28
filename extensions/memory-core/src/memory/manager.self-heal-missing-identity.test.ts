@@ -157,7 +157,6 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
     db.close();
   }
 
-  // Real SQLite indexing can exceed the global timeout on packed 4-vCPU CI shards.
   it("self-heals missing identity on non-forced gateway sync when all chunks are FTS-only and provider is unavailable", async () => {
     await seedChunksWithNoMeta();
     const memoryManager = await createManager({ vectorEnabled: false });
@@ -171,7 +170,7 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
     expect(indexIdentityStatus(memoryManager)).toBe("valid");
     expect(statusAfter.chunks).toBeGreaterThan(0);
     expect(statusAfter.dirty).toBe(false);
-  }, 240_000);
+  });
 
   it("does not rebuild missing-identity semantic chunks when the provider is unavailable", async () => {
     await seedChunksWithNoMeta("text-embedding-3-small");
