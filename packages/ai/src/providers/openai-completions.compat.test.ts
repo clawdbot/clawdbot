@@ -671,6 +671,39 @@ describe("OpenAI-compatible completions compatibility", () => {
       expected: { ...proxyResolvedCompat, supportsPromptCacheKey: true },
     },
     {
+      name: "non-OpenAI deployment on an Azure Foundry host",
+      model: createModel({
+        id: "MAI-DS-R1",
+        provider: "azure-openai",
+        baseUrl: "https://example.services.ai.azure.com/openai/v1",
+      }),
+      expected: proxyResolvedCompat,
+    },
+    {
+      name: "gpt-oss deployment on an Azure Foundry host",
+      model: createModel({
+        id: "gpt-oss-120b",
+        provider: "azure-openai",
+        baseUrl: "https://example.services.ai.azure.com/openai/v1",
+      }),
+      expected: proxyResolvedCompat,
+    },
+    {
+      name: "non-OpenAI deployment on a dedicated Azure OpenAI host",
+      model: createModel({
+        id: "my-custom-deployment",
+        provider: "azure-openai",
+        baseUrl: "https://example.openai.azure.com/openai/v1",
+      }),
+      expected: {
+        ...defaultResolvedCompat,
+        supportsDeveloperRole: false,
+        supportsUsageInStreaming: false,
+        supportsStrictMode: false,
+        supportsPromptCacheKey: true,
+      },
+    },
+    {
       name: "uppercase Azure OpenAI host",
       model: createModel({
         id: "gpt-5.6-luna",

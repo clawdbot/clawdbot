@@ -11,7 +11,7 @@ import {
 } from "../utils/stream-first-event-timeout.js";
 import { buildGuardedModelFetch } from "./host-policy.js";
 import { hasOpenAICompatibleConversationTurn } from "./openai-compatible-conversation-turn.js";
-import { isAzureOpenAICompatibleHost } from "./openai-completions-host.js";
+import { isAzureOpenAICompatibleHostname } from "./azure-openai-hostnames-internal.js";
 import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
 import {
   processCompletionsStream,

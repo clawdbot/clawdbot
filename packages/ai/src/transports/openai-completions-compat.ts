@@ -8,6 +8,10 @@ import type { Model, OpenAICompletionsCompat } from "@openclaw/llm-core";
 import type { AiProviderRequestCapabilities, AiProviderRequestPolicyInput } from "../host.js";
 import { isKnownOpenAIJsonSchemaModelId } from "../providers/openai-response-format.js";
 import { resolveProviderRequestCapabilities as resolveModelProviderRequestCapabilities } from "./host-policy.js";
+import {
+  isAzureFoundryMultiModelHostname,
+  isDedicatedAzureOpenAIHostname,
+} from "./azure-openai-hostnames-internal.js";
 
 type ProviderEndpointClass = string;
 type ProviderRequestCapabilities = AiProviderRequestCapabilities;
@@ -62,13 +66,26 @@ function isDefaultRouteProvider(provider: string | undefined, ...ids: string[]) 
   return provider !== undefined && ids.includes(provider);
 }
 
-/** Matches Azure OpenAI-compatible API hostnames (shared with the completions transport). */
-export function isAzureOpenAICompatibleHostname(hostname: string): boolean {
+/**
+ * Azure AI Foundry resources front arbitrary model vendors, so on those hosts
+ * the prompt-cache-key default only applies to deployments that look like
+ * first-party OpenAI models. `gpt-oss` is the open-weight family served via
+ * serverless inference, not an Azure OpenAI deployment, so it stays excluded.
+ */
+function isOpenAIFamilyFoundryDeployment(modelId: string | undefined): boolean {
+  if (!modelId) {
+    return false;
+  }
+  const tail = modelId.slice(modelId.lastIndexOf("/") + 1).toLowerCase();
+  if (tail.startsWith("gpt-oss")) {
+    return false;
+  }
   return (
-    hostname.endsWith(".openai.azure.com") ||
-    hostname.endsWith(".services.ai.azure.com") ||
-    hostname.endsWith(".cognitiveservices.azure.com") ||
-    hostname.endsWith(".api.cognitive.microsoft.com")
+    tail.startsWith("gpt-") ||
+    tail.startsWith("chatgpt-") ||
+    tail === "codex" ||
+    tail.startsWith("codex-") ||
+    /^o\d+(?:[.-]|$)/.test(tail)
   );
 }
 
@@ -146,7 +163,9 @@ function resolveOpenAICompletionsCompatDefaults(
   // Other OpenAI-compatible proxies may reject the field, so it stays off by default.
   // With the inert package host every route resolves to the "default" endpoint class,
   // so the default route only counts as first-party OpenAI when no custom base URL
-  // overrides the destination.
+  // overrides the destination. Dedicated Azure OpenAI hosts always qualify;
+  // multi-model Azure Foundry hosts only for OpenAI-family deployment ids, since
+  // those resources also front non-OpenAI models (MAI, Llama, ...).
   const supportsPromptCacheKey =
     endpointClass === "openai-public" ||
     endpointClass === "azure-openai" ||
@@ -154,7 +173,10 @@ function resolveOpenAICompletionsCompatDefaults(
     (isDefaultRoute &&
       isDefaultRouteProvider(provider, "openai") &&
       baseUrlHostname === undefined) ||
-    (baseUrlHostname !== undefined && isAzureOpenAICompatibleHostname(baseUrlHostname));
+    (baseUrlHostname !== undefined &&
+      (isDedicatedAzureOpenAIHostname(baseUrlHostname) ||
+        (isAzureFoundryMultiModelHostname(baseUrlHostname) &&
+          isOpenAIFamilyFoundryDeployment(modelId))));
   const usesMaxTokens =
     endpointClass === "chutes-native" ||
     endpointClass === "mistral-public" ||
