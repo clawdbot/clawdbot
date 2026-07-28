@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { TemplateContext } from "../templating.js";
 import {
   setupAgentRunnerExecutionTestState,
-  getRunAgentTurnWithFallback,
+  getExecuteAgentTurnForTest,
   createMockTypingSignaler,
   createFollowupRun,
   createMinimalRunAgentTurnParams,
@@ -32,7 +32,7 @@ describe("runAgentTurnWithFallback: transient connection/timeout retry (#87180)"
       },
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const runAgentTurnWithFallback = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     vi.useFakeTimers();
     try {
@@ -74,7 +74,7 @@ describe("runAgentTurnWithFallback: transient connection/timeout retry (#87180)"
     // surface a terminal failure instead of spinning the full cycle forever.
     state.runWithModelFallbackMock.mockRejectedValue(new Error("socket hang up"));
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const runAgentTurnWithFallback = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     vi.useFakeTimers();
     try {
@@ -131,7 +131,7 @@ describe("runAgentTurnWithFallback: transient connection/timeout retry (#87180)"
       },
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const runAgentTurnWithFallback = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     vi.useFakeTimers();
     try {
@@ -173,7 +173,7 @@ describe("runAgentTurnWithFallback: transient connection/timeout retry (#87180)"
     // terminal failure instead of spinning the full cycle forever.
     state.runWithModelFallbackMock.mockRejectedValue(new Error("Request timed out."));
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const runAgentTurnWithFallback = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     vi.useFakeTimers();
     try {
@@ -218,7 +218,7 @@ describe("runAgentTurnWithFallback: transient connection/timeout retry (#87180)"
       new Error("CLI exceeded timeout (300s) and was terminated."),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const runAgentTurnWithFallback = await getExecuteAgentTurnForTest();
     const result = await runAgentTurnWithFallback({
       ...createMinimalRunAgentTurnParams(),
     });
@@ -241,7 +241,7 @@ describe("runAgentTurnWithFallback: transient connection/timeout retry (#87180)"
       new Error("codex app-server turn idle timed out waiting for turn/completed"),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const runAgentTurnWithFallback = await getExecuteAgentTurnForTest();
     const result = await runAgentTurnWithFallback({
       ...createMinimalRunAgentTurnParams(),
     });
@@ -268,7 +268,7 @@ describe("runAgentTurnWithFallback: transient connection/timeout retry (#87180)"
     summary.name = "FallbackSummaryError";
     state.runWithModelFallbackMock.mockRejectedValueOnce(summary);
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const runAgentTurnWithFallback = await getExecuteAgentTurnForTest();
     const result = await runAgentTurnWithFallback({
       ...createMinimalRunAgentTurnParams(),
     });
@@ -286,7 +286,7 @@ describe("runAgentTurnWithFallback: transient connection/timeout retry (#87180)"
     // attempt, then a terminal failure is surfaced once the budget is exhausted.
     state.runWithModelFallbackMock.mockRejectedValue(new Error("Connection error."));
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const runAgentTurnWithFallback = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.providerRetryMaxRetries = 3;
     vi.useFakeTimers();
@@ -344,7 +344,7 @@ describe("runAgentTurnWithFallback: transient connection/timeout retry (#87180)"
       },
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const runAgentTurnWithFallback = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.providerRetryMaxRetries = 3;
     vi.useFakeTimers();

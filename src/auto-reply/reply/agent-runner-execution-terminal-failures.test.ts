@@ -380,7 +380,7 @@ describe("executeAgentTurn: terminal failures", () => {
     // a rejected fallback mock would skip terminal setup and mask the emit.
     state.runEmbeddedAgentMock.mockRejectedValueOnce(takeoverError);
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const runAgentTurnWithFallback = await getExecuteAgentTurnForTest();
     const result = await runAgentTurnWithFallback({
       ...createMinimalRunAgentTurnParams(),
       replyOperation,
@@ -411,7 +411,7 @@ describe("executeAgentTurn: terminal failures", () => {
     expect(lifecycleErrorEvent).toBeDefined();
   });
 
-  it("preserves restart lifecycle text when a takeover error is thrown after a restart abort", async () => {
+  it("lets restart abort ownership win over takeover resend guidance", async () => {
     const { replyOperation, failMock } = createMockReplyOperation();
     // Gateway restart already aborted the operation before the takeover error
     // surfaced during cleanup/reacquire; abort ownership must win.
@@ -431,7 +431,7 @@ describe("executeAgentTurn: terminal failures", () => {
     );
     state.runWithModelFallbackMock.mockRejectedValueOnce(takeoverError);
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const runAgentTurnWithFallback = await getExecuteAgentTurnForTest();
     const result = await runAgentTurnWithFallback({
       ...createMinimalRunAgentTurnParams(),
       replyOperation,
@@ -441,12 +441,13 @@ describe("executeAgentTurn: terminal failures", () => {
     if (result.kind !== "final") {
       throw new Error("expected final reply");
     }
-    expect(result.payload.text).toBe(
-      "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
-    );
+    // executeAgentTurn returns a restart-aborted outcome here (abort ownership
+    // wins), which the test-support wrapper surfaces as the silent token. The
+    // takeover error must not clobber it with resend guidance or a run_failed
+    // fail(); the restart lifecycle text is delivered by the restart path, not
+    // this turn outcome.
+    expect(result.payload.text).toBe(SILENT_REPLY_TOKEN);
     expect(result.payload.text).not.toContain("Please resend your message");
-    // The takeover branch must not clobber the restart outcome with a
-    // run_failed failure.
     expect(failMock).not.toHaveBeenCalled();
   });
 
@@ -470,7 +471,7 @@ describe("executeAgentTurn: terminal failures", () => {
     );
     state.runWithModelFallbackMock.mockRejectedValueOnce(takeoverError);
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const runAgentTurnWithFallback = await getExecuteAgentTurnForTest();
     const result = await runAgentTurnWithFallback({
       ...createMinimalRunAgentTurnParams(),
       replyOperation,
@@ -504,7 +505,7 @@ describe("executeAgentTurn: terminal failures", () => {
     });
     state.runWithModelFallbackMock.mockRejectedValueOnce(wrappedError);
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const runAgentTurnWithFallback = await getExecuteAgentTurnForTest();
     const result = await runAgentTurnWithFallback({
       ...createMinimalRunAgentTurnParams(),
       replyOperation,
@@ -546,7 +547,7 @@ describe("executeAgentTurn: terminal failures", () => {
     );
     state.runWithModelFallbackMock.mockRejectedValueOnce(takeoverError);
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const runAgentTurnWithFallback = await getExecuteAgentTurnForTest();
     const result = await runAgentTurnWithFallback({
       ...createMinimalRunAgentTurnParams(),
       replyOperation,

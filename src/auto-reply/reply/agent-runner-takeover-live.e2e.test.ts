@@ -211,7 +211,11 @@ vi.mock("./reply-media-paths.runtime.js", () => ({
 }));
 
 async function getRunAgentTurnWithFallback() {
-  return (await import("./agent-runner-execution.js")).runAgentTurnWithFallback;
+  // The orchestrator entry point is executeAgentTurn; the test-support helper
+  // adapts its AgentTurnExecutionResult into the { kind, runResult, payload }
+  // shape these assertions read.
+  const { getExecuteAgentTurnForTest } = await import("./agent-runner-execution.test-support.js");
+  return getExecuteAgentTurnForTest();
 }
 
 type Deferred<T> = {
@@ -409,7 +413,6 @@ async function withRealLockWindow(params: {
   installEmbeddedPromptRetryDefault(session);
   installPromptSubmissionLockRelease({
     session,
-    waitForSessionEvents: () => controller.waitForSessionEvents(session),
     releaseForPrompt: () => controller.releaseForPrompt(),
     reacquireAfterPrompt: () => controller.reacquireAfterPrompt(),
     sessionFile: params.sessionFile,
