@@ -13,7 +13,7 @@ type ControlUiE2eSuiteOptions = {
   trackBrowserContexts?: boolean;
 };
 
-export type ControlUiE2eSuite = {
+type ControlUiE2eSuite = {
   readonly browser: Browser;
   readonly server: ControlUiE2eServer;
   closeBrowserContext: (context: BrowserContext) => Promise<void>;
