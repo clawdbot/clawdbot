@@ -1,11 +1,23 @@
 /** Registry-owned message-tool metadata prepared once per channel registry generation. */
-import type { PreparedMessageToolCatalog } from "../channels/plugins/message-action-discovery.js";
 import { listLoadedChannelPluginsForRegistry } from "../channels/plugins/registry-loaded.js";
+import type { ChannelMessageActionAdapter } from "../channels/plugins/types.core.js";
 import type { PluginRegistry } from "./registry-types.js";
 import {
   getActivePluginChannelRegistrySnapshotFromState,
   type ActivePluginChannelRegistrySnapshot,
 } from "./runtime-channel-state.js";
+
+type PreparedMessageToolCatalogEntry = Readonly<{
+  id: string;
+  actions?: ChannelMessageActionAdapter;
+  reconcilesUnknownSend: boolean;
+}>;
+
+export type PreparedMessageToolCatalog = Readonly<{
+  version: number;
+  channels: readonly PreparedMessageToolCatalogEntry[];
+  getChannel: (id: string) => PreparedMessageToolCatalogEntry | undefined;
+}>;
 
 const catalogsByRegistry = new WeakMap<PluginRegistry, Map<number, PreparedMessageToolCatalog>>();
 const latestCatalogByRegistry = new WeakMap<PluginRegistry, PreparedMessageToolCatalog>();

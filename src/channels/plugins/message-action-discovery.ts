@@ -8,7 +8,10 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { Type, type TSchema } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { getPreparedMessageToolCatalog } from "../../plugins/prepared-message-tool-catalog.js";
+import {
+  getPreparedMessageToolCatalog,
+  type PreparedMessageToolCatalog,
+} from "../../plugins/prepared-message-tool-catalog.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeAnyChannelId } from "../registry.js";
 import { getChannelPlugin, getLoadedChannelPlugin, listChannelPlugins } from "./index.js";
@@ -18,34 +21,19 @@ import {
   type ChannelMessageToolDiscoveryAdapter,
 } from "./message-tool-api.js";
 import type {
-  ChannelMessageActionAdapter,
   ChannelMessageActionDiscoveryContext,
   ChannelMessageActionName,
   ChannelMessageToolDiscovery,
   ChannelMessageToolSchemaContribution,
 } from "./types.public.js";
 
-type PreparedMessageToolCatalogEntry = Readonly<{
-  id: string;
-  actions?: ChannelMessageActionAdapter;
-  reconcilesUnknownSend: boolean;
-}>;
-
-export type PreparedMessageToolCatalog = Readonly<{
-  version: number;
-  channels: readonly PreparedMessageToolCatalogEntry[];
-  getChannel: (id: string) => PreparedMessageToolCatalogEntry | undefined;
-}>;
+export type { PreparedMessageToolCatalog } from "../../plugins/prepared-message-tool-catalog.js";
 
 /** Lists message-action adapters from the caller's exact prepared registry. */
-export function listMessageActionDiscoveryChannels(
+export const listMessageActionDiscoveryChannels = (
   preparedMessageToolCatalog?: PreparedMessageToolCatalog,
-) {
-  return (
-    (preparedMessageToolCatalog ?? getPreparedMessageToolCatalog())?.channels ??
-    listChannelPlugins()
-  );
-}
+) =>
+  (preparedMessageToolCatalog ?? getPreparedMessageToolCatalog())?.channels ?? listChannelPlugins();
 
 /**
  * Input used to discover channel message actions for agent tool schemas.
