@@ -189,7 +189,19 @@ describe("hasProviderAuthForTool", () => {
   });
 
   it("rejects providers without config, env, or profile auth", () => {
-    expect(hasProviderAuthForTool({ provider: "unconfigured-provider" })).toBe(false);
+    expect(
+      hasProviderAuthForTool({
+        provider: "unconfigured-provider",
+        runtimeLookup: {
+          envApiKey: {
+            aliasMap: {},
+            candidateMap: {},
+            authEvidenceMap: {},
+            skipSetupProviderFallback: true,
+          },
+        },
+      }),
+    ).toBe(false);
     expect(authMocks.resolveEnvApiKey).toHaveBeenCalledTimes(1);
   });
 });

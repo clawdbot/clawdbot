@@ -70,12 +70,14 @@ export function hasAuthForProvider(params: {
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
+  runtimeLookup?: RuntimeProviderAuthLookup;
 }): boolean {
   // Env-key resolution is config/workspace aware: plugin-provider env candidates
   // come from the metadata snapshot resolved for this config. Non-bundled or
   // config-scoped provider plugins are invisible without it, so a config-blind
   // lookup would wrongly report "no auth" for env-key providers.
   if (
+    !params.runtimeLookup &&
     resolveEnvApiKey(params.provider, undefined, {
       config: params.cfg,
       workspaceDir: params.workspaceDir,
@@ -145,13 +147,13 @@ export function hasProviderAuthForTool(params: {
   ) {
     return true;
   }
-  // Runtime auth above already covers config-aware environment keys. Fall
-  // through to profile-only lookup so negative checks do not repeat metadata discovery.
-  return hasAuthProfileForProvider({
+  return hasAuthForProvider({
     provider: params.provider,
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
-    includeExternalCli: true,
+    runtimeLookup: params.runtimeLookup,
   });
 }
 
