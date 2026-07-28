@@ -10,20 +10,22 @@ import {
 import { danger, type RuntimeEnv, warn } from "openclaw/plugin-sdk/runtime-env";
 import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 import { getLineRuntime } from "./runtime.js";
+import {
+  errorText,
+  eventIdFor,
+  laneKeyFor,
+  LINE_WEBHOOK_SPOOL_INVALID_PAYLOAD_MESSAGE,
+  LINE_WEBHOOK_SPOOL_VERSION,
+  LineWebhookPayloadError,
+  type LineWebhookSpoolPayload,
+} from "./webhook-spool-contract.js";
 
-const LINE_WEBHOOK_SPOOL_VERSION = 1;
 const LINE_WEBHOOK_DRAIN_INTERVAL_MS = 500;
 const LINE_WEBHOOK_MAX_CONCURRENT_DELIVERIES = 8;
 const LINE_WEBHOOK_DRAIN_SCAN_LIMIT = 100;
 const LINE_WEBHOOK_ACTIVE_DELIVERY_STOP_GRACE_MS = 5_000;
 const LINE_WEBHOOK_TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60_000;
 const LINE_WEBHOOK_TOMBSTONE_MAX_ENTRIES = 4096;
-
-type LineWebhookSpoolPayload = {
-  version: number;
-  rawEvent: string;
-  destination: string;
-};
 
 type LineWebhookIngressEvent = {
   event: webhook.Event;
@@ -50,13 +52,6 @@ type LineWebhookSpoolOptions = {
   queue?: ChannelIngressQueue<LineWebhookSpoolPayload>;
 };
 
-class LineWebhookPayloadError extends Error {
-  constructor(message: string, options?: { cause?: unknown }) {
-    super(message, options);
-    this.name = "LineWebhookPayloadError";
-  }
-}
-
 export class LineWebhookTerminalDeliveryError extends Error {
   readonly reason = "delivery-side-effects-committed" as const;
 
@@ -72,59 +67,6 @@ type LineWebhookSpool = {
   stop: () => Promise<void>;
 };
 
-function nonEmptyString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-/** Message ids preserve the shipped replay-guard keyspace; other events use LINE's delivery id. */
-function eventIdFor(event: unknown): string {
-  if (!event || typeof event !== "object") {
-    throw new LineWebhookPayloadError("LINE webhook event must be an object.");
-  }
-  const candidate = event as {
-    type?: unknown;
-    message?: { id?: unknown };
-    webhookEventId?: unknown;
-  };
-  if (candidate.type === "message") {
-    const messageId = nonEmptyString(candidate.message?.id);
-    if (messageId) {
-      return `message:${messageId}`;
-    }
-  }
-  const webhookEventId = nonEmptyString(candidate.webhookEventId);
-  if (webhookEventId) {
-    return `event:${webhookEventId}`;
-  }
-  throw new LineWebhookPayloadError("LINE webhook event is missing a stable delivery id.");
-}
-
-function laneKeyFor(event: unknown, eventId: string): string {
-  if (!event || typeof event !== "object") {
-    return eventId;
-  }
-  const source = (event as { source?: Record<string, unknown> }).source;
-  if (source?.type === "group") {
-    const groupId = nonEmptyString(source.groupId);
-    if (groupId) {
-      return `group:${groupId}`;
-    }
-  }
-  if (source?.type === "room") {
-    const roomId = nonEmptyString(source.roomId);
-    if (roomId) {
-      return `room:${roomId}`;
-    }
-  }
-  if (source?.type === "user") {
-    const userId = nonEmptyString(source.userId);
-    if (userId) {
-      return `user:${userId}`;
-    }
-  }
-  return eventId;
-}
-
 function parseStoredEvent(rawEvent: string): webhook.Event {
   let event: unknown;
   try {
@@ -133,10 +75,6 @@ function parseStoredEvent(rawEvent: string): webhook.Event {
     throw new LineWebhookPayloadError("LINE webhook event JSON is invalid.", { cause: error });
   }
   return event as webhook.Event;
-}
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function isLineAuthenticationFailure(error: unknown): boolean {
@@ -203,7 +141,7 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
       }),
       decode: (payload) => {
         if (typeof payload.rawEvent !== "string" || typeof payload.destination !== "string") {
-          throw new LineWebhookPayloadError("LINE webhook spool payload is invalid.");
+          throw new LineWebhookPayloadError(LINE_WEBHOOK_SPOOL_INVALID_PAYLOAD_MESSAGE);
         }
         return {
           version: payload.version,
@@ -213,7 +151,7 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
       createClaimError: (kind) =>
         new LineWebhookPayloadError(
           kind === "invalid-version"
-            ? "LINE webhook spool payload is invalid."
+            ? LINE_WEBHOOK_SPOOL_INVALID_PAYLOAD_MESSAGE
             : "LINE webhook event identity changed after durable admission.",
         ),
     },
