@@ -3182,14 +3182,14 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     },
   );
 
-  it("runs additive column migration before canonical schema assertion for legacy tables missing agent_id", () => {
-    // Regression test: ensureAdditiveStateColumns must run regardless of
-    // whether audit_events exists. The old code gated the additive migration
-    // behind tableExists("audit_events"), so when audit_events was absent
-    // (e.g. pre-beta.2 databases that never had it), the additive columns
-    // agent_id, cleanup_pending, and original_media_root were silently
-    // skipped. Subsequent canonical DDL creating indexes on agent_id would
-    // then fail with "no such column: agent_id".
+  it("runs additive column migration before canonical schema DDL for legacy tables missing agent_id", () => {
+    // Regression test: repairOpenClawStateDatabaseSchema must run
+    // ensureAdditiveStateColumns before executeCanonicalStateSchema when
+    // audit_events exists. The canonical DDL creates indexes on
+    // managed_outgoing_image_records.agent_id — if additive columns are
+    // not added first, the DDL fails with "no such column: agent_id".
+    // This exercises the if (tableExists("audit_events")) branch in
+    // repairOpenClawStateDatabaseSchema at line 218-220.
     // Fixes #109867 — "no such column: agent_id" during doctor --fix.
     const stateDir = createTempStateDir();
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
@@ -3198,34 +3198,33 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
 
     const { DatabaseSync } = requireNodeSqlite();
     const legacyDb = new DatabaseSync(databasePath);
+    // replaceManagedImageRecordsWithLegacyTable sets user_version=2,
+    // which is below OPENCLAW_STATE_SCHEMA_VERSION (6), so the repair
+    // function enters the legacy migration path. The canonical
+    // audit_events table from the fresh DB remains intact, so
+    // tableExists("audit_events") is true and the repair block runs
+    // ensureAdditiveStateColumns → executeCanonicalStateSchema.
     replaceManagedImageRecordsWithLegacyTable(legacyDb, { withRow: true });
-    // Drop audit_events so tableExists("audit_events") is false —
-    // this is the condition that caused ensureAdditiveStateColumns
-    // to be skipped before the fix.
-    legacyDb.exec("DROP TABLE IF EXISTS audit_events");
-    legacyDb.exec("DROP TABLE IF EXISTS audit_identity_keys");
-    // Set user_version below AUDIT_EVENT_STATE_SCHEMA_VERSION so
-    // hasCanonicalAuditEventsSchema returns true without audit_events
-    // (the table never existed in this database), allowing the repair
-    // path to proceed past the schema assertion.
-    legacyDb.exec("PRAGMA user_version = 1");
     legacyDb.close();
 
-    // The repair must succeed without throwing any error.
+    // The repair must succeed and add the missing columns in the
+    // repair function itself (not via the subsequent normal-open path).
     const result = repairOpenClawStateDatabaseSchema(options);
     expect(result.warnings).toEqual([]);
 
-    const reopened = openOpenClawStateDatabase(options);
-    const columns = reopened.db
+    // Verify the repair function added the columns — open the DB
+    // directly to confirm the repair path, not the open path, did the work.
+    const verifyDb = new DatabaseSync(databasePath);
+    const repairColumns = verifyDb
       .prepare("PRAGMA table_info(managed_outgoing_image_records)")
       .all() as Array<{ name?: unknown }>;
-    // Additive columns must exist after repair —
-    // ensureAdditiveStateColumns runs unconditionally with the fix.
-    expect(columns).toContainEqual(expect.objectContaining({ name: "agent_id" }));
-    expect(columns).toContainEqual(expect.objectContaining({ name: "cleanup_pending" }));
-    expect(columns).toContainEqual(expect.objectContaining({ name: "original_media_root" }));
+    expect(repairColumns).toContainEqual(expect.objectContaining({ name: "agent_id" }));
+    expect(repairColumns).toContainEqual(expect.objectContaining({ name: "cleanup_pending" }));
+    expect(repairColumns).toContainEqual(expect.objectContaining({ name: "original_media_root" }));
+    verifyDb.close();
 
-    // Legacy row data must be preserved.
+    // The database must also open successfully via the normal path.
+    const reopened = openOpenClawStateDatabase(options);
     const row = reopened.db
       .prepare(
         "SELECT attachment_id, agent_id, cleanup_pending FROM managed_outgoing_image_records",
