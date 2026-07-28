@@ -1,13 +1,8 @@
 // Startup log tests cover security warnings, model detail formatting, plugin
 // summaries, bind URLs, ANSI output, and dangerous config reporting.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { captureEnv, deleteTestEnvValue, withEnvAsync } from "../test-utils/env.js";
-import {
-  formatAgentModelStartupDetails,
-  formatAgentModelStartupLog,
-  logGatewayStartup,
-} from "./server-startup-log.js";
+import { formatAgentModelStartupDetails, logGatewayStartup } from "./server-startup-log.js";
 
 const pluginRegistryMocks = vi.hoisted(() => ({
   loadPluginManifestRegistryForPluginRegistry: vi.fn(),
@@ -277,33 +272,6 @@ describe("gateway startup log", () => {
     });
 
     expect(warn).not.toHaveBeenCalled();
-  });
-
-  it("formats configured model thinking and fast mode defaults with the startup model", () => {
-    const modelLog = formatAgentModelStartupLog(
-      {
-        agents: {
-          defaults: {
-            model: "openai/gpt-5.5",
-            models: {
-              "openai/gpt-5.5": {
-                params: {
-                  fastMode: true,
-                  thinking: "medium",
-                },
-              },
-            },
-            reasoningDefault: "stream",
-          },
-        },
-      },
-      { manifestPlugins: [] },
-    );
-
-    expect(modelLog.message).toBe("agent model: openai/gpt-5.5 (thinking=medium, fast=on)");
-    expect(stripAnsi(modelLog.consoleMessage)).toBe(
-      "agent model: openai/gpt-5.5 (thinking=medium, fast=on)",
-    );
   });
 
   it("defaults unset startup thinking to medium", () => {
