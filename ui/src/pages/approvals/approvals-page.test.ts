@@ -96,7 +96,12 @@ describe("ApprovalsPage", () => {
 
     await settle(page);
 
-    expect(request).toHaveBeenNthCalledWith(1, "approval.history", { limit: 50 });
+    expect(request).toHaveBeenNthCalledWith(
+      1,
+      "approval.history",
+      { limit: 50 },
+      { signal: expect.any(AbortSignal) },
+    );
     expect(page.querySelectorAll(".approval-history-table tbody tr")).toHaveLength(1);
     expect(page.querySelector(".approval-history-table")?.textContent).toContain("agent:main:test");
     expect(page.querySelector(".approval-history-table")?.textContent).toContain("echo first");

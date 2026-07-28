@@ -1,4 +1,5 @@
 import { consume } from "@lit/context";
+import { initialState, Task, TaskStatus } from "@lit/task";
 import { html, nothing } from "lit";
 import { state } from "lit/decorators.js";
 import {
@@ -121,7 +122,6 @@ class ApprovalsPage extends OpenClawLightDomElement {
 
   @state() private items: TerminalApprovalSnapshot[] = [];
   @state() private nextCursor: string | null = null;
-  @state() private loading = false;
   @state() private loadingMore = false;
   @state() private error: string | null = null;
   @state() private connected = false;
@@ -131,6 +131,38 @@ class ApprovalsPage extends OpenClawLightDomElement {
   private gatewaySource: ApplicationContext["gateway"] | null = null;
   private requestGeneration = 0;
   private hasLoaded = false;
+  private resetTaskActiveClient: GatewayBrowserClient | null = null;
+  private readonly resetTask = new Task(this, {
+    autoRun: false,
+    // Gateway identity prevents a replacement source from adopting a same-client response.
+    args: () =>
+      [this.connected ? this.gatewaySource : null, this.connected ? this.client : null] as const,
+    task: async ([gateway, client], { signal }) => {
+      if (!gateway || !client) {
+        return initialState;
+      }
+      const result = await client.request<ApprovalHistoryResult>(
+        "approval.history",
+        { limit: APPROVAL_HISTORY_PAGE_SIZE },
+        { signal },
+      );
+      if (!validateApprovalHistoryResult(result)) {
+        throw new Error(t("approvalHistory.invalidResponse"));
+      }
+      return result;
+    },
+    onComplete: (result) => {
+      this.resetTaskActiveClient = null;
+      this.items = result.items;
+      this.nextCursor = result.nextCursor ?? null;
+      this.hasLoaded = true;
+    },
+    onError: (error) => {
+      this.resetTaskActiveClient = null;
+      this.error = String(error);
+      this.hasLoaded = true;
+    },
+  });
   private readonly subscriptions = new SubscriptionsController(this).effect(
     () => this.context?.gateway,
     (gateway) => {
@@ -140,7 +172,8 @@ class ApprovalsPage extends OpenClawLightDomElement {
       // cannot append across sources. Mirrors the client-change reset below.
       if (this.gatewaySource !== gateway) {
         this.requestGeneration += 1;
-        this.loading = false;
+        this.resetTaskActiveClient = null;
+        void this.resetTask.run([null, null]);
         this.loadingMore = false;
         this.hasLoaded = false;
         this.items = [];
@@ -160,6 +193,8 @@ class ApprovalsPage extends OpenClawLightDomElement {
   override disconnectedCallback() {
     this.subscriptions.clear();
     this.requestGeneration += 1;
+    this.resetTaskActiveClient = null;
+    void this.resetTask.run([null, null]);
     this.gatewaySource = null;
     super.disconnectedCallback();
   }
@@ -175,15 +210,17 @@ class ApprovalsPage extends OpenClawLightDomElement {
     if (clientChanged || approvalAccessChanged) {
       this.client = snapshot.client;
       this.requestGeneration += 1;
+      this.resetTaskActiveClient = null;
+      void this.resetTask.run([null, null]);
       this.items = [];
       this.nextCursor = null;
       this.error = null;
       this.hasLoaded = false;
-      this.loading = false;
       this.loadingMore = false;
     } else if (connectionChanged) {
       this.requestGeneration += 1;
-      this.loading = false;
+      this.resetTaskActiveClient = null;
+      void this.resetTask.run([null, null]);
       this.loadingMore = false;
       if (snapshot.phase === "connected") {
         this.hasLoaded = false;
@@ -194,7 +231,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
       snapshot.client &&
       this.approvalsAccess &&
       !this.hasLoaded &&
-      !this.loading
+      this.resetTaskActiveClient === null
     ) {
       void this.loadPage(true);
     }
@@ -203,26 +240,27 @@ class ApprovalsPage extends OpenClawLightDomElement {
   private async loadPage(reset: boolean): Promise<void> {
     const client = this.client;
     const gateway = this.gatewaySource;
-    if (
-      !client ||
-      !gateway ||
-      !this.connected ||
-      !this.approvalsAccess ||
-      this.loading ||
-      this.loadingMore
-    ) {
-      return;
-    }
-    const generation = this.requestGeneration;
-    const cursor = reset ? undefined : (this.nextCursor ?? undefined);
-    if (!reset && !cursor) {
+    if (!client || !gateway || !this.connected || !this.approvalsAccess || this.loadingMore) {
       return;
     }
     if (reset) {
-      this.loading = true;
-    } else {
-      this.loadingMore = true;
+      if (this.resetTaskActiveClient !== null) {
+        return;
+      }
+      this.error = null;
+      this.resetTaskActiveClient = client;
+      await this.resetTask.run([gateway, client]);
+      return;
     }
+    if (this.resetTask.status === TaskStatus.PENDING) {
+      return;
+    }
+    const generation = this.requestGeneration;
+    const cursor = this.nextCursor ?? undefined;
+    if (!cursor) {
+      return;
+    }
+    this.loadingMore = true;
     this.error = null;
     const isCurrent = () =>
       this.isConnected &&
@@ -244,7 +282,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
       if (!isCurrent()) {
         return;
       }
-      this.items = reset ? result.items : [...this.items, ...result.items];
+      this.items = [...this.items, ...result.items];
       this.nextCursor = result.nextCursor ?? null;
       this.hasLoaded = true;
     } catch (error) {
@@ -254,7 +292,6 @@ class ApprovalsPage extends OpenClawLightDomElement {
       }
     } finally {
       if (isCurrent()) {
-        this.loading = false;
         this.loadingMore = false;
       }
     }
@@ -281,7 +318,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
                   <tr>
                     <td colspan="7" class="data-table-empty-cell">
                       <div class="data-table-empty-state" role="status" aria-live="polite">
-                        ${this.loading
+                        ${this.resetTask.status === TaskStatus.PENDING
                           ? t("approvalHistory.loading")
                           : this.error || !this.hasLoaded
                             ? t("approvalHistory.unknown")

@@ -57,8 +57,14 @@ function errorMessage(error: unknown): string {
 
 export async function loadModelProvidersData(
   client: GatewayBrowserClient,
-  opts?: { refresh?: boolean; agentId?: string },
+  opts?: { refresh?: boolean; agentId?: string; signal?: AbortSignal },
 ): Promise<ModelProvidersData> {
+  const request = <T>(method: string, params?: unknown): Promise<T> =>
+    opts?.signal
+      ? client.request<T>(method, params, { signal: opts.signal })
+      : params === undefined
+        ? client.request<T>(method)
+        : client.request<T>(method, params);
   const [authStatus, models, catalogModels, config, providerUsage, costByProvider] =
     await Promise.all([
       loadModelAuthStatus(client, opts).then(
@@ -66,18 +72,16 @@ export async function loadModelProvidersData(
         (error: unknown) => ({ ok: false as const, error }),
       ),
       loadModels(client, opts).catch(() => null),
-      client
-        .request<{ models?: ModelCatalogEntry[] }>("models.list", {
-          view: "all",
-          includeProviderCapabilities: true,
-        })
+      request<{ models?: ModelCatalogEntry[] }>("models.list", {
+        view: "all",
+        includeProviderCapabilities: true,
+      })
         .then((result) => result?.models ?? null)
         .catch(() => null),
-      client
-        .request<ConfigSnapshot>("config.get", {})
+      request<ConfigSnapshot>("config.get", {})
         .then((snapshot) => resolveEditableSnapshotConfig(snapshot))
         .catch(() => null),
-      client.request<UsageSummary>("usage.status").catch(() => null),
+      request<UsageSummary>("usage.status").catch(() => null),
       requestSessionUsage(client, {
         startDate: localDate(MODEL_PROVIDERS_COST_DAYS - 1),
         endDate: localDate(0),
