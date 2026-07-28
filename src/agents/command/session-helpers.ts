@@ -35,10 +35,7 @@ export async function persistSessionEntry(
   return await persistSessionEntryBase(params);
 }
 
-export function clearPendingFinalDeliveryFields(
-  entry: SessionEntry,
-  updatedAt: number,
-): SessionEntry {
+export function clearPendingFinalDelivery(entry: SessionEntry, updatedAt: number): SessionEntry {
   return {
     ...entry,
     pendingFinalDelivery: undefined,

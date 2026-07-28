@@ -2949,6 +2949,33 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     );
   });
 
+  it("clears a pre-existing transport-only pending delivery after an empty delivered run", async () => {
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockResolvedValue(makeEmptyResult("openai", "gpt-5.4"));
+    setupBareStoredSession({
+      pendingFinalDelivery: {
+        kind: "transport-only",
+        createdAt: 2,
+        context: { channel: "tui" },
+        intentId: "intent-1",
+      },
+    });
+    state.deliverAgentCommandResultMock.mockResolvedValue(undefined);
+
+    await agentCommand({
+      message: "hello",
+      channel: "whatsapp",
+      to: "+1234567890",
+      deliver: true,
+    });
+
+    expect(state.persistSessionEntryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entry: expect.objectContaining({ pendingFinalDelivery: undefined }),
+      }),
+    );
+  });
+
   it("passes SQLite transcript markers to visible agent attempts", async () => {
     setupSingleAttemptFallback();
     const visibleEntry: SessionEntry = {
