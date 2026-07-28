@@ -1876,7 +1876,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Examples
   - H2: Operations and approval
   - H3: Change history
-  - H3: Switching to masked channel setup
+  - H3: Switching to a masked terminal wizard
   - H2: Setup bootstrap
   - H2: AI conversation
   - H3: CLI harness trust model
