@@ -166,6 +166,21 @@ describe("renderModelProviders", () => {
     expect([...groups].every((group) => group.disabled)).toBe(true);
   });
 
+  it("keeps model behavior available while provider data loads", () => {
+    const container = mount(props({ loading: true, thinkingLevel: "high", fastMode: true }));
+    const behavior = container.querySelector("#settings-model-behavior");
+
+    expect(behavior).not.toBeNull();
+    expect(
+      settingsRow(behavior!, "Thinking").querySelector<SegmentedGroup>("wa-radio-group")?.value,
+    ).toBe("high");
+    expect(
+      settingsRow(behavior!, "Fast mode").querySelector<SegmentedGroup>("wa-radio-group")?.value,
+    ).toBe("on");
+    expect(container.querySelector('[aria-busy="true"]')).not.toBeNull();
+    expect(container.querySelector('[data-provider-id="openai"]')).toBeNull();
+  });
+
   it("renders credential provenance and probe results", () => {
     const container = mount(
       props({

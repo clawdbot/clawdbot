@@ -528,11 +528,10 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
     );
   }
   if (props.loading) {
-    return renderSettingsPage(
-      html`<div aria-busy="true">
-        ${renderSettingsGroup(renderSettingsEmpty(t("common.loading")))}
-      </div>`,
-    );
+    return renderSettingsPage(html`
+      ${renderModelBehavior(props)}
+      <div aria-busy="true">${renderSettingsGroup(renderSettingsEmpty(t("common.loading")))}</div>
+    `);
   }
   const providerRows = html`
     ${props.error

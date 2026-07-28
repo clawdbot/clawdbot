@@ -88,7 +88,8 @@ export async function loadModelProvidersData(
         .catch(() => null),
     ]);
   return {
-    authStatus: authStatus.ok ? authStatus.result : null,
+    authStatus:
+      authStatus.ok && Array.isArray(authStatus.result?.providers) ? authStatus.result : null,
     models,
     catalogModels,
     config,
