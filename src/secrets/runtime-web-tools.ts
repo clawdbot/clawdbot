@@ -813,8 +813,10 @@ export async function resolveRuntimeWebTools(params: {
   // Providers whose plugins declare standalone tools (contracts.tools) need their
   // credentials to stay active even when a different web search/fetch provider is
   // selected, because the standalone tools share the same configured credential path.
-  // Only consider plugins that are effectively enabled; disabled plugins must not
-  // bypass the inactive-surface secret boundary.
+  // This intentionally expands the active-secret boundary, so it stays fail-closed
+  // only when BOTH conditions hold: the manifest declares non-empty contracts.tools,
+  // and the plugin entry is effectively enabled (missing entry defaults to enabled,
+  // consistent with the plugin lifecycle; enabled: false is treated as disabled).
   const pluginEntries = params.sourceConfig.plugins?.entries;
   const standalonePluginIds = new Set(
     (params.context.manifestRegistry?.plugins ?? [])
