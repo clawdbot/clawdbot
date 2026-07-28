@@ -534,7 +534,9 @@ export async function buildPreparedModelCatalogSnapshot(
     // Gateway startup may publish registry rows without runtime augmentation.
     // Rank them here so both static startup and later live enrichment preserve
     // provider-owned order instead of falling back to model-id sorting.
-    const orderedRegistryModels = assignProviderModelOrder(models, declaredManifestModels);
+    const orderedRegistryModels = assignProviderModelOrder(models, declaredManifestModels, {
+      appendUnknown: false,
+    });
     models.splice(0, models.length, ...orderedRegistryModels);
     mergeCatalogRouteVariants(routeVariants, orderedRegistryModels);
     const supplementalManifestPlan = planEffectiveModelCatalogRows({

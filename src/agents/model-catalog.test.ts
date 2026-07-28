@@ -112,6 +112,18 @@ describe("prepared model catalog builder", () => {
     expect(snapshot.routeVariants).toEqual(snapshot.entries);
   });
 
+  it("keeps unranked registry rows in deterministic model-id order", async () => {
+    const snapshot = await build({
+      entries: [
+        { id: "model-b", name: "Model B", provider: "demo" },
+        { id: "model-a", name: "Model A", provider: "demo" },
+      ],
+    });
+
+    expect(snapshot.entries.map((entry) => entry.id)).toEqual(["model-a", "model-b"]);
+    expect(snapshot.entries.every((entry) => entry.providerOrder === undefined)).toBe(true);
+  });
+
   it("keeps account-denied runtime models out of the prepared catalog", async () => {
     const config: OpenClawConfig = { plugins: { enabled: false } };
     const runtimeManifest = providerManifestSnapshot({
