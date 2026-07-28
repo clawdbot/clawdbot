@@ -287,6 +287,29 @@ describe("WebSocket connect suspension admission", () => {
     suspension?.release();
   });
 
+  it("tracks a prepared control handshake across a concurrent restart", async () => {
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+    const harness = attachHarness({ deferSocketSend: true });
+
+    harness.sendConnect();
+
+    await vi.waitFor(() => {
+      expect(harness.socketSend).toHaveBeenCalledOnce();
+    });
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+    markGatewayRestartDraining();
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+
+    harness.finishSocketSend();
+    await vi.waitFor(() => {
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    });
+    expect(harness.setClient).toHaveBeenCalledOnce();
+    expect(harness.client).not.toBeNull();
+    suspension?.release();
+  });
+
   it("rejects a node connect while suspension is prepared", async () => {
     const suspension = tryBeginGatewaySuspendAdmission(() => {});
     expect(suspension?.commit()).toBe(true);

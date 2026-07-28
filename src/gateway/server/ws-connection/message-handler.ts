@@ -30,6 +30,7 @@ import {
   isGatewayRestartDraining,
   runWithGatewayIndependentRootWorkAdmission,
   tryBeginGatewayRestartStartupRootWorkAdmission,
+  tryBeginGatewaySuspendedHandshakeAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { isWebchatClient } from "../../../utils/message-channel.js";
@@ -428,7 +429,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     if (!parsed) {
       return false;
     }
-
     const restartDraining = isGatewayRestartDraining();
     const reason = restartDraining ? "gateway-restarting" : "gateway-suspending";
     const operation = restartDraining ? "restart" : "suspension";
@@ -482,16 +482,22 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           return;
         }
       }
-      if (
+      const suspendedControlAdmission =
         !isGatewayRestartDraining() &&
         getGatewaySuspendAdmissionPhase() === "prepared" &&
         isPreparedControlConnect(data)
-      ) {
+          ? tryBeginGatewaySuspendedHandshakeAdmission()
+          : null;
+      if (suspendedControlAdmission) {
         // Refuse-only suspension fences work, not control-plane visibility. Only
         // operator connects are admitted while prepared, and they can only reach
         // suspend-control methods after handshake; node and worker connects would
         // attach presence/registry state, so they stay refused.
-        await handleMessage(data);
+        try {
+          await suspendedControlAdmission.run(() => handleMessage(data));
+        } finally {
+          suspendedControlAdmission.release();
+        }
         return;
       }
       if (await rejectConnectForClosedAdmission(data)) {

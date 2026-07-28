@@ -304,6 +304,21 @@ function tryBeginGatewayIndependentRootWorkAdmission(): GatewayRootWorkAdmission
   return createGatewayRootWorkAdmission();
 }
 
+/**
+ * Tracks a bounded control handshake while suspension owns admission.
+ * The caller must restrict this to a non-enrolling probe shape before invoking it.
+ */
+export function tryBeginGatewaySuspendedHandshakeAdmission(): GatewayRootWorkAdmissionLease | null {
+  if (
+    GATEWAY_WORK_ADMISSION_STATE.restartDraining ||
+    GATEWAY_WORK_ADMISSION_STATE.restartSignalPending ||
+    GATEWAY_WORK_ADMISSION_STATE.suspendPhase === "accepting"
+  ) {
+    return null;
+  }
+  return createGatewayRootWorkAdmission();
+}
+
 /** Waits through a prepared lease, then joins the root-work set atomically. */
 export async function beginGatewayRootWorkAdmissionWhenOpen(): Promise<GatewayRootWorkAdmissionLease> {
   while (true) {
