@@ -8,21 +8,13 @@ import {
   type MovePathWithCopyFallbackOptions as BaseMovePathWithCopyFallbackOptions,
 } from "@openclaw/fs-safe/atomic";
 
-export {
-  replaceDirectoryAtomic,
-  replaceFileAtomicSync,
-  type ReplaceFileAtomicFileSystem,
-  type ReplaceFileAtomicOptions,
-  type ReplaceFileAtomicResult,
-  type ReplaceFileAtomicSyncFileSystem,
-  type ReplaceFileAtomicSyncOptions,
-} from "@openclaw/fs-safe/atomic";
+export { replaceDirectoryAtomic, replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 
 /** Atomic file replacement primitive re-exported through the fs-safe defaults shim. */
 export const replaceFileAtomic = replaceFileAtomicBase;
 
 /** Options for moving paths while optionally rejecting hardlinked source files. */
-export type MovePathWithCopyFallbackOptions = BaseMovePathWithCopyFallbackOptions & {
+type MovePathWithCopyFallbackOptions = BaseMovePathWithCopyFallbackOptions & {
   sourceHardlinks?: "allow" | "reject";
 };
 

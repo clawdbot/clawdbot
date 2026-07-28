@@ -12,11 +12,8 @@ import {
 } from "../../agent-settings.js";
 import { toToolDefinitions } from "../../agent-tool-definition-adapter.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
-import {
-  createAgentSession,
-  type AgentSession,
-  type CreateAgentSessionOptions,
-} from "../../sessions/index.js";
+import type { AgentSession, CreateAgentSessionOptions } from "../../sessions/index.js";
+import { createAgentSessionForEmbeddedRunner } from "../../sessions/sdk.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import { resolveToolSearchCatalogTool } from "../../tool-search.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
@@ -109,7 +106,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   });
   const { allCustomTools, sessionToolAllowlist, ...clientToolRuntime } = preparedClientTools;
 
-  const createdSession = await createAgentSession({
+  const sessionOptions: CreateAgentSessionOptions = {
     cwd: input.effectiveCwd,
     agentDir: input.agentDir,
     authStorage: attempt.authStorage,
@@ -161,6 +158,10 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
       : undefined,
     withSessionWriteLock: (operation) =>
       input.sessionLockController.withSessionWriteLock(operation),
+  };
+  const createdSession = await createAgentSessionForEmbeddedRunner(sessionOptions, {
+    // Without a resolved model budget, the outer loop cannot own bounded recovery.
+    contextOverflowRecoveryOwner: attempt.contextTokenBudget === undefined ? "session" : "caller",
   });
   const activeSession = createdSession.session;
   if (!activeSession) {

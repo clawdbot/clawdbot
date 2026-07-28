@@ -2,11 +2,10 @@
 import { html } from "lit";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
 import { resolveGatewayTokenForUrlEdit, type UiSettings } from "../../app/settings.ts";
-import "../../components/tooltip.ts";
-import { icons } from "../../components/icons.ts";
 import {
   renderSettingsPage,
   renderSettingsRow,
+  renderSettingsSecretInput,
   renderSettingsSection,
   renderSettingsStatus,
   renderSettingsValue,
@@ -43,31 +42,8 @@ function renderSecretRow(params: {
   onInput: (next: string) => void;
   onToggle: () => void;
 }) {
-  return renderSettingsRow({
-    title: params.label,
-    control: html`
-      <input
-        class="settings-input"
-        type=${params.visible ? "text" : "password"}
-        autocomplete="off"
-        spellcheck="false"
-        .value=${params.value}
-        @input=${(e: Event) => params.onInput((e.target as HTMLInputElement).value)}
-        placeholder=${params.placeholder}
-      />
-      <openclaw-tooltip .content=${params.visible ? params.hideLabel : params.showLabel}>
-        <button
-          type="button"
-          class="btn btn--icon ${params.visible ? "active" : ""}"
-          aria-label=${params.toggleLabel}
-          aria-pressed=${params.visible}
-          @click=${params.onToggle}
-        >
-          ${params.visible ? icons.eye : icons.eyeOff}
-        </button>
-      </openclaw-tooltip>
-    `,
-  });
+  const { label, ...secret } = params;
+  return renderSettingsRow({ title: label, control: renderSettingsSecretInput(secret) });
 }
 
 export function renderConnection(props: ConnectionProps) {

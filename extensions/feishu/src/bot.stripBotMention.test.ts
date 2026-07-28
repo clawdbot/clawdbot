@@ -23,6 +23,14 @@ function makeEvent(
 const BOT_OPEN_ID = "ou_bot";
 
 describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
+  it("classifies Feishu bot senders without changing legacy sender defaults", () => {
+    const botEvent = makeEvent("hello");
+    botEvent.sender.sender_type = "bot";
+
+    expect(parseFeishuMessageEvent(botEvent, BOT_OPEN_ID).senderType).toBe("bot");
+    expect(parseFeishuMessageEvent(makeEvent("hello"), BOT_OPEN_ID).senderType).toBe("user");
+  });
+
   it("returns original text when mentions are missing", () => {
     const ctx = parseFeishuMessageEvent(makeEvent("hello world", undefined), BOT_OPEN_ID);
     expect(ctx.content).toBe("hello world");

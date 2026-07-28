@@ -1,0 +1,19 @@
+title: WhatsApp group broadcast fans out to multiple agents
+scenario:
+  id: whatsapp-broadcast-group-fanout
+  surface: channels
+  coverage:
+    primary:
+      - whatsapp.group-session-keys
+  execution:
+    profiles: { "whatsapp:mock-default": 3 }
+    kind: flow
+    channel: whatsapp
+    timeoutMs: 120000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { whatsappScenarioId: whatsapp-broadcast-group-fanout }
+flow:
+  module: ./live-transports/whatsapp/scenario-runtime.js
+  call: runWhatsAppBroadcastGroupFanoutScenario
+  args: [{ expr: whatsappScenarioContext }]

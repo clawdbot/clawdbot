@@ -51,7 +51,7 @@ export function createGithubCopilotDynamicModelHooks(params: {
     if (!params.discoveryEnabled(ctx.config)) {
       return null;
     }
-    const { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } =
+    const { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotRuntimeAuth } =
       await loadGithubCopilotRuntime();
     const { githubToken, hasProfile } = await resolveFirstGithubToken({
       agentDir: ctx.agentDir,
@@ -67,13 +67,13 @@ export function createGithubCopilotDynamicModelHooks(params: {
     let copilotApiToken: string | undefined;
     if (githubToken) {
       try {
-        const token = await resolveCopilotApiToken({
+        const auth = await resolveCopilotRuntimeAuth({
           githubToken,
           env: ctx.env,
           githubDomain: resolveGithubCopilotDomain({ env: ctx.env, config: ctx.config }),
         });
-        baseUrl = token.baseUrl;
-        copilotApiToken = token.token;
+        baseUrl = auth.baseUrl;
+        copilotApiToken = auth.apiKey;
       } catch {
         baseUrl = DEFAULT_COPILOT_API_BASE_URL;
       }

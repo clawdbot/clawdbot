@@ -1,22 +1,7 @@
 // Matrix plugin module implements media behavior.
 import { getMatrixRuntime } from "../../runtime.js";
 import { MatrixMediaSizeLimitError, isMatrixMediaSizeLimitError } from "../media-errors.js";
-import type { MatrixClient } from "../sdk.js";
-
-// Type for encrypted file info
-type EncryptedFile = {
-  url: string;
-  key: {
-    kty: string;
-    key_ops: string[];
-    alg: string;
-    k: string;
-    ext: boolean;
-  };
-  iv: string;
-  hashes: Record<string, string>;
-  v: string;
-};
+import type { EncryptedFile, MatrixClient } from "../sdk.js";
 
 const MATRIX_MEDIA_DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
 
@@ -52,13 +37,10 @@ async function fetchEncryptedMediaBuffer(params: {
     throw new Error("Cannot decrypt media: crypto not enabled");
   }
 
-  const decrypted = await params.client.crypto.decryptMedia(
-    params.file as Parameters<typeof params.client.crypto.decryptMedia>[0],
-    {
-      maxBytes: params.maxBytes,
-      readIdleTimeoutMs: MATRIX_MEDIA_DOWNLOAD_IDLE_TIMEOUT_MS,
-    },
-  );
+  const decrypted = await params.client.crypto.decryptMedia(params.file, {
+    maxBytes: params.maxBytes,
+    readIdleTimeoutMs: MATRIX_MEDIA_DOWNLOAD_IDLE_TIMEOUT_MS,
+  });
 
   if (decrypted.byteLength > params.maxBytes) {
     throw new MatrixMediaSizeLimitError();

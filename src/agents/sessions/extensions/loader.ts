@@ -9,7 +9,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { createJiti } from "jiti/static";
-import * as bundledLlm from "openclaw/plugin-sdk/llm";
 // Static imports of packages that extensions may use.
 // These MUST be static so Bun bundles them into the compiled binary.
 // The virtualModules option then makes them available to extensions.
@@ -17,13 +16,40 @@ import * as bundledTypebox from "typebox";
 import * as bundledTypeboxCompile from "typebox/compile";
 import * as bundledTypeboxFormat from "typebox/format";
 import * as bundledTypeboxValue from "typebox/value";
+import * as bundledLlm from "../../../plugin-sdk/llm.js";
 import { installOpenClawInternalCorePackageNativeResolver } from "../../../plugins/plugin-sdk-native-resolver.js";
 import {
   buildPluginLoaderAliasMap,
   buildPluginLoaderJitiOptions,
 } from "../../../plugins/sdk-alias.js";
-import { CONFIG_DIR_NAME, getAgentDir, isBunBinary } from "../../config.js";
-import * as bundledAgentCore from "../../runtime/index.js";
+import { isBunBinary } from "../../config.js";
+import {
+  Agent,
+  bashExecutionToText,
+  buildSessionContext,
+  calculateContextTokens,
+  collectEntriesForBranchSummaryFromBranches,
+  compact,
+  estimateContextTokens,
+  estimateTokens,
+  findCutPoint,
+  findTurnStartIndex,
+  generateBranchSummary,
+  generateSummary,
+  getLastAssistantUsage,
+  openClawAgentCoreRuntime,
+  prepareBranchEntries,
+  prepareCompaction,
+  runAgentLoop,
+  serializeConversation,
+  shouldCompact,
+  uuidv7,
+  BRANCH_SUMMARY_PREFIX,
+  BRANCH_SUMMARY_SUFFIX,
+  COMPACTION_SUMMARY_PREFIX,
+  COMPACTION_SUMMARY_SUFFIX,
+  DEFAULT_COMPACTION_SETTINGS,
+} from "../../runtime/index.js";
 import { createEventBus, type EventBus } from "../event-bus.js";
 import type { ExecOptions } from "../exec.js";
 import { execCommand } from "../exec.js";
@@ -43,6 +69,34 @@ import type {
 } from "./types.js";
 
 /** Modules available to extensions via virtualModules (for compiled Bun binary) */
+const bundledAgentCore = {
+  Agent,
+  bashExecutionToText,
+  buildSessionContext,
+  calculateContextTokens,
+  collectEntriesForBranchSummaryFromBranches,
+  compact,
+  estimateContextTokens,
+  estimateTokens,
+  findCutPoint,
+  findTurnStartIndex,
+  generateBranchSummary,
+  generateSummary,
+  getLastAssistantUsage,
+  openClawAgentCoreRuntime,
+  prepareBranchEntries,
+  prepareCompaction,
+  runAgentLoop,
+  serializeConversation,
+  shouldCompact,
+  uuidv7,
+  BRANCH_SUMMARY_PREFIX,
+  BRANCH_SUMMARY_SUFFIX,
+  COMPACTION_SUMMARY_PREFIX,
+  COMPACTION_SUMMARY_SUFFIX,
+  DEFAULT_COMPACTION_SETTINGS,
+};
+
 const VIRTUAL_MODULES: Record<string, unknown> = {
   typebox: bundledTypebox,
   "typebox/compile": bundledTypeboxCompile,
@@ -64,8 +118,12 @@ const require = createRequire(import.meta.url);
 
 let aliases: Record<string, string> | null = null;
 let createJitiLoaderFactory: typeof createJiti | undefined;
-let extensionSourceTransformLoader: ReturnType<typeof createJiti> | undefined;
 let nativeExtensionLoadCounter = 0;
+// One cwd slot bounds the process cache. The generation keeps an in-flight
+// load from repopulating it after an explicit reload or cwd change.
+let extensionCacheCwd: string | undefined;
+let extensionCacheGeneration = 0;
+const extensionFactoryCache = new Map<string, ExtensionFactory>();
 const EXTENSION_LOADER_ALIAS_IMPORT_PATTERN =
   /(?:@openclaw\/plugin-sdk|openclaw\/plugin-sdk|@sinclair\/typebox|typebox)(?:\/[A-Za-z0-9_-]+)?/u;
 const RELATIVE_EXTENSION_IMPORT_PATTERN =
@@ -147,6 +205,39 @@ function resolvePath(extPath: string, cwd: string): string {
 }
 
 type HandlerFn = (...args: unknown[]) => Promise<unknown>;
+
+type ExtensionCacheScope = {
+  cwd: string;
+  generation: number;
+};
+
+type ExtensionLoadContext = {
+  cacheScope?: ExtensionCacheScope;
+  sourceTransformLoader?: ReturnType<typeof createJiti>;
+};
+
+export function clearExtensionCache(): void {
+  extensionFactoryCache.clear();
+  extensionCacheCwd = undefined;
+  extensionCacheGeneration++;
+}
+
+function useExtensionCacheCwd(cwd: string): ExtensionCacheScope {
+  const resolvedCwd = path.resolve(expandPath(cwd));
+  if (extensionCacheCwd !== undefined && extensionCacheCwd !== resolvedCwd) {
+    clearExtensionCache();
+  }
+  extensionCacheCwd = resolvedCwd;
+  return { cwd: resolvedCwd, generation: extensionCacheGeneration };
+}
+
+function isCurrentCacheScope(scope: ExtensionCacheScope | undefined): scope is ExtensionCacheScope {
+  return (
+    scope !== undefined &&
+    extensionCacheCwd === scope.cwd &&
+    extensionCacheGeneration === scope.generation
+  );
+}
 
 /**
  * Create a runtime with throwing stubs for action methods.
@@ -428,35 +519,50 @@ async function loadNativeExtensionModule(
 
 async function loadExtensionSourceTransformModule(
   extensionPath: string,
+  context: ExtensionLoadContext,
 ): Promise<ExtensionFactory | undefined> {
-  if (!extensionSourceTransformLoader) {
+  if (!context.sourceTransformLoader) {
     installOpenClawInternalCorePackageNativeResolver({ moduleUrl: import.meta.url });
     const createJitiLoader = await loadCreateJitiLoaderFactory();
-    extensionSourceTransformLoader = createJitiLoader(import.meta.url, {
+    context.sourceTransformLoader = createJitiLoader(import.meta.url, {
       ...(isBunBinary
         ? {
             ...buildPluginLoaderJitiOptions({}),
             // Bun binaries need virtual modules because extension SDK files are
             // bundled into the executable rather than present on disk.
-            tryNative: false,
             virtualModules: VIRTUAL_MODULES,
           }
         : buildPluginLoaderJitiOptions(getExtensionLoaderAliases())),
+      // Extension entry modules must bypass the native ESM cache so an explicit
+      // reload observes edited source. Product modules stay native via nativeModules.
+      tryNative: false,
       moduleCache: false,
     });
   }
 
   return resolveExtensionFactory(
-    await extensionSourceTransformLoader.import(extensionPath, { default: true }),
+    await context.sourceTransformLoader.import(extensionPath, { default: true }),
   );
 }
 
-async function loadExtensionModule(extensionPath: string) {
-  if (shouldLoadExtensionWithNativeImport(extensionPath)) {
-    return loadNativeExtensionModule(extensionPath);
+async function loadExtensionModule(
+  extensionPath: string,
+  context: ExtensionLoadContext,
+): Promise<ExtensionFactory | undefined> {
+  if (isCurrentCacheScope(context.cacheScope)) {
+    const cachedFactory = extensionFactoryCache.get(extensionPath);
+    if (cachedFactory) {
+      return cachedFactory;
+    }
   }
 
-  return loadExtensionSourceTransformModule(extensionPath);
+  const factory = shouldLoadExtensionWithNativeImport(extensionPath)
+    ? await loadNativeExtensionModule(extensionPath)
+    : await loadExtensionSourceTransformModule(extensionPath, context);
+  if (factory && isCurrentCacheScope(context.cacheScope)) {
+    extensionFactoryCache.set(extensionPath, factory);
+  }
+  return factory;
 }
 
 /**
@@ -487,11 +593,12 @@ async function loadExtension(
   cwd: string,
   eventBus: EventBus,
   runtime: ExtensionRuntime,
+  context: ExtensionLoadContext,
 ): Promise<{ extension: Extension | null; error: string | null }> {
   const resolvedPath = resolvePath(extensionPath, cwd);
 
   try {
-    const factory = await loadExtensionModule(resolvedPath);
+    const factory = await loadExtensionModule(resolvedPath, context);
     if (!factory) {
       return {
         extension: null,
@@ -529,7 +636,7 @@ export async function loadExtensionFromFactory(
 /**
  * Load extensions from paths.
  */
-export async function loadExtensions(
+export async function loadExtensionsCached(
   paths: string[],
   cwd: string,
   eventBus?: EventBus,
@@ -538,9 +645,18 @@ export async function loadExtensions(
   const errors: Array<{ path: string; error: string }> = [];
   const resolvedEventBus = eventBus ?? createEventBus();
   const runtime = createExtensionRuntime();
+  const cacheScope = useExtensionCacheCwd(cwd);
+  const resolvedCwd = cacheScope.cwd;
+  const context: ExtensionLoadContext = { cacheScope };
 
   for (const extPath of paths) {
-    const { extension, error } = await loadExtension(extPath, cwd, resolvedEventBus, runtime);
+    const { extension, error } = await loadExtension(
+      extPath,
+      resolvedCwd,
+      resolvedEventBus,
+      runtime,
+      context,
+    );
 
     if (error) {
       errors.push({ path: extPath, error });
@@ -557,164 +673,4 @@ export async function loadExtensions(
     errors,
     runtime,
   };
-}
-
-interface ResourceManifest {
-  extensions?: string[];
-  themes?: string[];
-  skills?: string[];
-  prompts?: string[];
-}
-
-function readResourceManifest(packageJsonPath: string): ResourceManifest | null {
-  try {
-    const content = fs.readFileSync(packageJsonPath, "utf-8");
-    const pkg = JSON.parse(content);
-    if (pkg.openclaw && typeof pkg.openclaw === "object") {
-      return pkg.openclaw as ResourceManifest;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function isExtensionFile(name: string): boolean {
-  return name.endsWith(".ts") || name.endsWith(".js");
-}
-
-/**
- * Resolve extension entry points from a directory.
- *
- * Checks for:
- * 1. package.json with "openclaw.extensions" field -> returns declared paths
- * 2. index.ts or index.js -> returns the index file
- *
- * Returns resolved paths or null if no entry points found.
- */
-function resolveExtensionEntries(dir: string): string[] | null {
-  // Check for package.json with "openclaw" field first
-  const packageJsonPath = path.join(dir, "package.json");
-  if (fs.existsSync(packageJsonPath)) {
-    const manifest = readResourceManifest(packageJsonPath);
-    if (manifest?.extensions?.length) {
-      const entries: string[] = [];
-      for (const extPath of manifest.extensions) {
-        const resolvedExtPath = path.resolve(dir, extPath);
-        if (fs.existsSync(resolvedExtPath)) {
-          entries.push(resolvedExtPath);
-        }
-      }
-      if (entries.length > 0) {
-        return entries;
-      }
-    }
-  }
-
-  // Check for index.ts or index.js
-  const indexTs = path.join(dir, "index.ts");
-  const indexJs = path.join(dir, "index.js");
-  if (fs.existsSync(indexTs)) {
-    return [indexTs];
-  }
-  if (fs.existsSync(indexJs)) {
-    return [indexJs];
-  }
-
-  return null;
-}
-
-/**
- * Discover extensions in a directory.
- *
- * Discovery rules:
- * 1. Direct files: `extensions/*.ts` or `*.js` → load
- * 2. Subdirectory with index: `extensions/* /index.ts` or `index.js` → load
- * 3. Subdirectory with package.json: `extensions/* /package.json` with "openclaw" field → load what it declares
- *
- * No recursion beyond one level. Complex packages must use package.json manifest.
- */
-function discoverExtensionsInDir(dir: string): string[] {
-  if (!fs.existsSync(dir)) {
-    return [];
-  }
-
-  const discovered: string[] = [];
-
-  try {
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-
-    for (const entry of entries) {
-      const entryPath = path.join(dir, entry.name);
-
-      // 1. Direct files: *.ts or *.js
-      if ((entry.isFile() || entry.isSymbolicLink()) && isExtensionFile(entry.name)) {
-        discovered.push(entryPath);
-        continue;
-      }
-
-      // 2 & 3. Subdirectories
-      if (entry.isDirectory() || entry.isSymbolicLink()) {
-        const entriesLocal = resolveExtensionEntries(entryPath);
-        if (entriesLocal) {
-          discovered.push(...entriesLocal);
-        }
-      }
-    }
-  } catch {
-    return [];
-  }
-
-  return discovered;
-}
-
-/**
- * Discover and load extensions from standard locations.
- */
-export async function discoverAndLoadExtensions(
-  configuredPaths: string[],
-  cwd: string,
-  agentDir: string = getAgentDir(),
-  eventBus?: EventBus,
-): Promise<LoadExtensionsResult> {
-  const allPaths: string[] = [];
-  const seen = new Set<string>();
-
-  const addPaths = (paths: string[]) => {
-    for (const p of paths) {
-      const resolved = path.resolve(p);
-      if (!seen.has(resolved)) {
-        seen.add(resolved);
-        allPaths.push(p);
-      }
-    }
-  };
-
-  // 1. Project-local extensions: cwd/${CONFIG_DIR_NAME}/extensions/
-  const localExtDir = path.join(cwd, CONFIG_DIR_NAME, "extensions");
-  addPaths(discoverExtensionsInDir(localExtDir));
-
-  // 2. Global extensions: agentDir/extensions/
-  const globalExtDir = path.join(agentDir, "extensions");
-  addPaths(discoverExtensionsInDir(globalExtDir));
-
-  // 3. Explicitly configured paths
-  for (const p of configuredPaths) {
-    const resolved = resolvePath(p, cwd);
-    if (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) {
-      // Check for package.json with OpenClaw manifest or index.ts
-      const entries = resolveExtensionEntries(resolved);
-      if (entries) {
-        addPaths(entries);
-        continue;
-      }
-      // No explicit entries - discover individual files in directory
-      addPaths(discoverExtensionsInDir(resolved));
-      continue;
-    }
-
-    addPaths([resolved]);
-  }
-
-  return loadExtensions(allPaths, cwd, eventBus);
 }

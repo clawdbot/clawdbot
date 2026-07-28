@@ -5,24 +5,25 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
 import type { ResolvedSlackAccount } from "../accounts.js";
 import type { SlackSendIdentity } from "../send.js";
 import type { SlackMessageEvent } from "../types.js";
 import { stripSlackMentionsForCommandDetection } from "./commands.js";
 import type { SlackMonitorContext } from "./context.js";
 import type { SlackEventScope } from "./event-scope.js";
+import type { SlackIngressTurnLifecycle } from "./ingress.js";
 import {
-  hasSlackInboundMessageDelivery,
-  recordSlackInboundMessageDeliveries,
-} from "./inbound-delivery-state.js";
+  buildSlackMessageDispatchReplayKey,
+  claimSlackMessageDispatchReplay,
+  createSlackMessageDispatchReplayGuard,
+  type SlackMessageDispatchReplayClaim,
+  type SlackMessageDispatchReplayGuard,
+} from "./message-dispatch-dedupe.js";
 import {
   buildSlackDebounceKey,
   buildTopLevelSlackConversationKey,
 } from "./message-handler/debounce-key.js";
+import type { PreparedSlackMessage } from "./message-handler/types.js";
 import { createSlackThreadTsResolver } from "./thread-resolution.js";
 
 const loadSlackMessagePipeline = createLazyRuntimeModule(
@@ -39,6 +40,8 @@ export type SlackMessageHandler = (
     eventScope?: SlackEventScope;
     /** Wait until any inbound debounce flush and dispatch has completed. */
     awaitDispatch?: boolean;
+    /** Durable ingress ownership carried into reply-lane adoption. */
+    turnAdoptionLifecycle?: SlackIngressTurnLifecycle;
   },
 ) => Promise<void>;
 
@@ -66,7 +69,6 @@ function createSlackDispatchCompletion(): SlackDispatchCompletion {
   return { promise, resolve, reject };
 }
 
-const APP_MENTION_RETRY_TTL_MS = 60_000;
 const RETRYABLE_FLUSH_MAX_ATTEMPTS = 3;
 const RETRYABLE_FLUSH_RETRY_DELAY_MS = 1_000;
 const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization conflicted for \S+/u;
@@ -87,24 +89,24 @@ function shouldDebounceSlackMessage(message: SlackMessageEvent, cfg: SlackMonito
   });
 }
 
-function buildSeenMessageKey(
-  channelId: string | undefined,
-  ts: string | undefined,
-  teamId?: string,
-): string | null {
-  if (!channelId || !ts) {
-    return null;
-  }
-  return `${teamId ? `${teamId}:` : ""}${channelId}:${ts}`;
-}
-
 export function createSlackMessageHandler(params: {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;
   /** Called on each inbound event to update liveness tracking. */
   trackEvent?: () => void;
+  /** Called after access/routing preparation accepts a human message. */
+  onPrepared?: (prepared: PreparedSlackMessage) => void;
+  dispatchReplayGuard?: SlackMessageDispatchReplayGuard;
 }): SlackMessageHandler {
-  const { ctx, account, trackEvent } = params;
+  const { ctx, account, trackEvent, onPrepared } = params;
+  const dispatchReplayGuard =
+    params.dispatchReplayGuard ??
+    createSlackMessageDispatchReplayGuard({
+      onDiskError: (error) =>
+        ctx.runtime.error?.(
+          `slack message dispatch dedupe persistence failed: ${formatErrorMessage(error)}`,
+        ),
+    });
   const { debounceMs, debouncer } = createChannelInboundDebouncer<{
     message: SlackMessageEvent;
     opts: QueuedSlackMessageOptions;
@@ -149,8 +151,7 @@ export function createSlackMessageHandler(params: {
         }
         const retryTimer = setTimeout(() => {
           for (const entry of nextEntries) {
-            // Re-enter ingress so a relay replay or another successful attempt wins
-            // through the normal delivery and seen-message gates before dispatch.
+            // Re-enter the normal inbound path so retry ordering and debouncing stay consistent.
             void enqueueSlackMessage(entry.message, entry.opts).catch((err: unknown) => {
               ctx.runtime.error?.(`slack inbound retry enqueue failed: ${formatErrorMessage(err)}`);
             });
@@ -164,8 +165,47 @@ export function createSlackMessageHandler(params: {
         .filter((completion) => completion !== undefined);
       try {
         await (async () => {
-          const last = entries.at(-1);
+          // Logical-identity claims: Slack sends message + app_mention twins with
+          // distinct event_ids for one post, so the durable queue cannot dedupe
+          // them. Same-flush twins share one claim; a later twin claims duplicate
+          // and is dropped before it can produce a second visible reply.
+          const claims: SlackMessageDispatchReplayClaim[] = [];
+          const claimedKeys = new Set<string>();
+          const surviving: typeof entries = [];
+          for (const entry of entries) {
+            const replayKey = buildSlackMessageDispatchReplayKey({
+              accountId: ctx.accountId,
+              channelId: entry.message.channel,
+              ts: entry.message.ts,
+              teamId: entry.opts.eventScope?.teamId,
+            });
+            if (!replayKey || claimedKeys.has(replayKey)) {
+              surviving.push(entry);
+              continue;
+            }
+            const claim = await claimSlackMessageDispatchReplay({
+              guard: dispatchReplayGuard,
+              key: replayKey,
+            });
+            if (claim.kind === "claimed") {
+              claims.push(claim.handle);
+              claimedKeys.add(replayKey);
+              surviving.push(entry);
+            }
+          }
+          const releaseClaims = (error?: unknown) => {
+            for (const handle of claims) {
+              handle.release(error === undefined ? {} : { error });
+            }
+          };
+          const commitClaims = async () => {
+            for (const handle of claims) {
+              await handle.commit();
+            }
+          };
+          const last = surviving.at(-1);
           if (!last) {
+            releaseClaims();
             return;
           }
           const teamId = last.opts.eventScope?.teamId;
@@ -185,127 +225,83 @@ export function createSlackMessageHandler(params: {
             }
           }
           const combinedText =
-            entries.length === 1
+            surviving.length === 1
               ? (last.message.text ?? "")
-              : entries
+              : surviving
                   .map((entry) => entry.message.text ?? "")
                   .filter(Boolean)
                   .join("\n");
-          const combinedMentioned = entries.some((entry) => Boolean(entry.opts.wasMentioned));
+          const combinedMentioned = surviving.some((entry) => Boolean(entry.opts.wasMentioned));
           const syntheticMessage: SlackMessageEvent = {
             ...last.message,
             text: combinedText,
           };
-          const seenMessageKey = buildSeenMessageKey(
-            last.message.channel,
-            last.message.ts,
-            last.opts.eventScope?.teamId,
-          );
+          const { prepareSlackMessage, dispatchPreparedSlackMessage } =
+            await loadSlackMessagePipeline();
+          const {
+            dispatchCompletion: _completion,
+            awaitDispatch: _awaitDispatch,
+            turnAdoptionLifecycle,
+            ...lastOpts
+          } = last.opts;
+          let prepared: Awaited<ReturnType<typeof prepareSlackMessage>>;
+          let settlementHandedOff = false;
           try {
-            const { prepareSlackMessage, dispatchPreparedSlackMessage } =
-              await loadSlackMessagePipeline();
-            const {
-              dispatchCompletion: _completion,
-              awaitDispatch: _awaitDispatch,
-              ...lastOpts
-            } = last.opts;
-            const appMentionRetryKey =
-              seenMessageKey && lastOpts.source === "app_mention" && !ctx.botUserId
-                ? seenMessageKey
-                : undefined;
-            if (appMentionRetryKey) {
-              // Keep a concurrent message copy from recording this timestamp while the trusted
-              // app_mention prepares and removes any already-recorded copy from its routed history.
-              appMentionPreparingKeys.add(appMentionRetryKey);
-            }
-            const prepared = await (async () => {
-              try {
-                const result = await prepareSlackMessage({
-                  ctx,
-                  account,
-                  message: syntheticMessage,
-                  opts: {
-                    ...lastOpts,
-                    wasMentioned: combinedMentioned || last.opts.wasMentioned,
-                    ...(seenMessageKey && lastOpts.source === "message"
-                      ? {
-                          shouldRecordDroppedHistory: () =>
-                            !appMentionPreparingKeys.has(seenMessageKey) &&
-                            !appMentionDispatchedKeys.has(seenMessageKey),
-                        }
-                      : {}),
-                  },
-                });
-                if (result && seenMessageKey) {
-                  pruneAppMentionRetryKeys(Date.now());
-                  if (last.opts.source === "app_mention") {
-                    // If app_mention wins the race and dispatches first, drop the later message.
-                    rememberExpiringAppMentionKey(appMentionDispatchedKeys, seenMessageKey);
-                  } else if (
-                    last.opts.source === "message" &&
-                    appMentionDispatchedKeys.has(seenMessageKey)
-                  ) {
-                    appMentionDispatchedKeys.delete(seenMessageKey);
-                    appMentionRetryKeys.delete(seenMessageKey);
-                    return null;
-                  }
-                  appMentionRetryKeys.delete(seenMessageKey);
-                }
-                return result;
-              } finally {
-                if (appMentionRetryKey) {
-                  appMentionPreparingKeys.delete(appMentionRetryKey);
-                }
-              }
-            })();
+            prepared = await prepareSlackMessage({
+              ctx,
+              account,
+              message: syntheticMessage,
+              opts: {
+                ...lastOpts,
+                wasMentioned: combinedMentioned || last.opts.wasMentioned,
+              },
+            });
             if (!prepared) {
+              // Gated before dispatch: release so the surviving twin can run the
+              // same gate; nothing visible was produced, so no duplicate risk.
+              releaseClaims();
               return;
             }
-            if (entries.length > 1) {
-              const ids = entries.map((entry) => entry.message.ts).filter(Boolean) as string[];
+            // Commit at adoption (durable turn ownership), release on abandonment;
+            // deferred turns hand settlement to the reply lane with the claim held.
+            prepared.turnAdoptionLifecycle = turnAdoptionLifecycle
+              ? {
+                  ...turnAdoptionLifecycle,
+                  onAdopted: async () => {
+                    settlementHandedOff = true;
+                    await commitClaims();
+                    await turnAdoptionLifecycle.onAdopted();
+                  },
+                  onDeferred: () => {
+                    settlementHandedOff = true;
+                    turnAdoptionLifecycle.onDeferred();
+                  },
+                  onAbandoned: () => {
+                    releaseClaims();
+                    // Slack has no owner-local teardown gated on core claim release.
+                    void turnAdoptionLifecycle.onAbandoned();
+                  },
+                }
+              : turnAdoptionLifecycle;
+            onPrepared?.(prepared);
+            if (surviving.length > 1) {
+              const ids = surviving.map((entry) => entry.message.ts).filter(Boolean) as string[];
               if (ids.length > 0) {
                 prepared.ctxPayload.MessageSids = ids;
                 prepared.ctxPayload.MessageSidFirst = ids[0];
                 prepared.ctxPayload.MessageSidLast = ids[ids.length - 1];
               }
             }
-            try {
-              await dispatchPreparedSlackMessage(prepared);
-              await recordSlackInboundMessageDeliveries({
-                accountId: ctx.accountId,
-                ...(last.opts.eventScope ? { teamId: last.opts.eventScope.teamId } : {}),
-                messages: entries.map((entry) => entry.message),
-              });
-            } catch (error) {
-              if (!isRetryableSlackInboundError(error)) {
-                await recordSlackInboundMessageDeliveries({
-                  accountId: ctx.accountId,
-                  ...(last.opts.eventScope ? { teamId: last.opts.eventScope.teamId } : {}),
-                  messages: entries.map((entry) => entry.message),
-                });
-              }
-              throw error;
+            await dispatchPreparedSlackMessage(prepared);
+            if (!turnAdoptionLifecycle) {
+              await commitClaims();
+            } else if (!settlementHandedOff) {
+              // Dispatch finished without adoption or deferral (skip/no-reply):
+              // deliberate terminal handling, release for gate-idempotent twins.
+              releaseClaims();
             }
           } catch (error) {
-            if (isRetryableSlackInboundError(error)) {
-              // Every buffered event passed the seen gate before this combined dispatch.
-              // Release all of them so the retry can rebuild the same batch.
-              for (const entry of entries) {
-                const entrySeenKey = buildSeenMessageKey(
-                  entry.message.channel,
-                  entry.message.ts,
-                  entry.opts.eventScope?.teamId,
-                );
-                if (entrySeenKey) {
-                  appMentionDispatchedKeys.delete(entrySeenKey);
-                }
-                ctx.releaseSeenMessage(
-                  entry.message.channel,
-                  entry.message.ts,
-                  entry.opts.eventScope,
-                );
-              }
-            }
+            releaseClaims(error);
             throw error;
           }
         })();
@@ -326,56 +322,6 @@ export function createSlackMessageHandler(params: {
   });
   const threadTsResolver = createSlackThreadTsResolver({ client: ctx.app.client });
   const pendingTopLevelDebounceKeys = new Map<string, Set<string>>();
-  const appMentionRetryKeys = new Map<string, number>();
-  const appMentionPreparingKeys = new Set<string>();
-  const appMentionDispatchedKeys = new Map<string, number>();
-
-  const pruneAppMentionRetryKeys = (rawNow: number): boolean => {
-    const now = asDateTimestampMs(rawNow);
-    if (now === undefined) {
-      appMentionRetryKeys.clear();
-      appMentionDispatchedKeys.clear();
-      return false;
-    }
-    for (const [key, expiresAt] of appMentionRetryKeys) {
-      if (asDateTimestampMs(expiresAt) === undefined || expiresAt <= now) {
-        appMentionRetryKeys.delete(key);
-      }
-    }
-    for (const [key, expiresAt] of appMentionDispatchedKeys) {
-      if (asDateTimestampMs(expiresAt) === undefined || expiresAt <= now) {
-        appMentionDispatchedKeys.delete(key);
-      }
-    }
-    return true;
-  };
-
-  const rememberExpiringAppMentionKey = (map: Map<string, number>, key: string): void => {
-    const now = Date.now();
-    if (!pruneAppMentionRetryKeys(now)) {
-      return;
-    }
-    const expiresAt = resolveExpiresAtMsFromDurationMs(APP_MENTION_RETRY_TTL_MS, { nowMs: now });
-    if (expiresAt !== undefined) {
-      map.set(key, expiresAt);
-    }
-  };
-
-  const rememberAppMentionRetryKey = (key: string) => {
-    rememberExpiringAppMentionKey(appMentionRetryKeys, key);
-  };
-
-  const consumeAppMentionRetryKey = (key: string) => {
-    const now = Date.now();
-    if (!pruneAppMentionRetryKeys(now)) {
-      return false;
-    }
-    if (!appMentionRetryKeys.has(key)) {
-      return false;
-    }
-    appMentionRetryKeys.delete(key);
-    return true;
-  };
 
   async function enqueueSlackMessage(
     message: SlackMessageEvent,
@@ -393,40 +339,9 @@ export function createSlackMessageHandler(params: {
     ) {
       return undefined;
     }
-    // Record Slack's explicit type before delivery-state or thread-resolution awaits.
+    // Record Slack's explicit type before thread-resolution awaits.
     // Relay and native events can overlap; a following typeless bot event must see it.
     ctx.rememberSlackChannelType(message.channel, message.channel_type, opts.eventScope);
-    const seenMessageKey = buildSeenMessageKey(
-      message.channel,
-      message.ts,
-      opts.eventScope?.teamId,
-    );
-    if (
-      seenMessageKey &&
-      (await hasSlackInboundMessageDelivery({
-        accountId: ctx.accountId,
-        channelId: message.channel,
-        ts: message.ts,
-        ...(opts.eventScope ? { teamId: opts.eventScope.teamId } : {}),
-      }))
-    ) {
-      return undefined;
-    }
-    const wasSeen = seenMessageKey
-      ? ctx.markMessageSeen(message.channel, message.ts, opts.eventScope)
-      : false;
-    if (seenMessageKey && opts.source === "message" && !wasSeen) {
-      // Prime exactly one fallback app_mention allowance immediately so a near-simultaneous
-      // app_mention is not dropped while message handling is still in-flight.
-      rememberAppMentionRetryKey(seenMessageKey);
-    }
-    if (seenMessageKey && wasSeen) {
-      // Allow exactly one app_mention retry if the same ts was previously dropped
-      // from the message stream before it reached dispatch.
-      if (opts.source !== "app_mention" || !consumeAppMentionRetryKey(seenMessageKey)) {
-        return undefined;
-      }
-    }
     trackEvent?.();
     const resolvedMessage = await (
       opts.eventScope

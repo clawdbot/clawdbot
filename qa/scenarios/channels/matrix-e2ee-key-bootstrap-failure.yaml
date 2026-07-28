@@ -1,0 +1,35 @@
+title: Matrix E2EE bootstrap reports room-key backup failures
+scenario:
+  id: matrix-e2ee-key-bootstrap-failure
+  surface: channels
+  coverage:
+    primary:
+      - matrix.encryption-setup
+  execution:
+    profiles: { "matrix:all": 65, "matrix:e2ee-smoke": 7 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 90000
+    retryCount: 0
+    config:
+      matrixConfigOverrides:
+        encryption: true
+        startupVerification: off
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: true
+            key: e2ee-key-bootstrap-failure
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA E2EE Key Bootstrap Failure Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee-recovery.js
+  call: runMatrixQaE2eeKeyBootstrapFailureScenario
+  args:
+    - expr: "scenarioContext"

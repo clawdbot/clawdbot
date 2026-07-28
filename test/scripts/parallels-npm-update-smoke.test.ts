@@ -4,6 +4,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  posixAgentWorkspaceScript,
+  windowsAgentWorkspaceScript,
+} from "../../scripts/e2e/parallels/agent-workspace.ts";
 import { runWindowsBackgroundPowerShell } from "../../scripts/e2e/parallels/guest-transports.ts";
 import { run as hostCommandRun } from "../../scripts/e2e/parallels/host-command.ts";
 import {
@@ -55,7 +59,7 @@ async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
       return;
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 20);
+      setTimeout(resolve, 5);
     });
   }
   throw new Error(`timeout waiting for pid ${pid} to exit`);
@@ -68,7 +72,7 @@ async function waitFor(predicate: () => boolean, label: string, timeoutMs = 2_00
       return;
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 20);
+      setTimeout(resolve, 5);
     });
   }
   throw new Error(`timeout waiting for ${label}`);
@@ -112,9 +116,12 @@ describe("parallels npm update smoke", () => {
         "/tmp/openclaw-candidate.tgz",
         "--dependency-tarball",
         "/tmp/openclaw-ai-candidate.tgz",
+        "--registry-package-tarball",
+        "/tmp/openclaw-codex-candidate.tgz",
       ]),
     ).toMatchObject({
       dependencyTarballs: ["/tmp/openclaw-ai-candidate.tgz"],
+      registryPackageTarballs: ["/tmp/openclaw-codex-candidate.tgz"],
       targetTarball: "/tmp/openclaw-candidate.tgz",
       updateTarget: "",
       freshTargetSpec: undefined,
@@ -125,6 +132,18 @@ describe("parallels npm update smoke", () => {
     expect(() => parseArgs(["--dependency-tarball", "/tmp/openclaw-ai-candidate.tgz"])).toThrow(
       "--dependency-tarball requires --target-tarball",
     );
+    expect(() =>
+      parseArgs(["--registry-package-tarball", "/tmp/openclaw-codex-candidate.tgz"]),
+    ).toThrow("--registry-package-tarball requires --target-tarball");
+  });
+
+  it("passes an explicit macOS snapshot hint through fresh lanes", () => {
+    expect(
+      parseArgs(["--platform", "macos", "--macos-snapshot-hint", "macOS 26.5 Node 24"]),
+    ).toMatchObject({
+      macosSnapshotHint: "macOS 26.5 Node 24",
+      platforms: new Set(["macos"]),
+    });
   });
 
   it("stops the host artifact server when the wrapper fails mid-run", async () => {
@@ -154,6 +173,7 @@ describe("parallels npm update smoke", () => {
       const smoke = new FailingNpmUpdateSmoke({
         ...TEST_AUTH,
         dependencyTarballs: [],
+        registryPackageTarballs: [],
         json: false,
         packageSpec: "openclaw@latest",
         platforms: new Set<Platform>(["linux"]),
@@ -204,6 +224,7 @@ exit 1
         const smoke = new NpmUpdateSmoke({
           ...TEST_AUTH,
           dependencyTarballs: [],
+          registryPackageTarballs: [],
           json: false,
           packageSpec: "openclaw@latest",
           platforms: new Set<Platform>(["linux"]),
@@ -249,12 +270,17 @@ exit 1
 
     expect(script).toContain("--target-tarball <path>");
     expect(script).toContain("--dependency-tarball <path>");
+    expect(script).toContain("--registry-package-tarball <path>");
     expect(script).toContain('label: "prepared candidate tgz"');
     expect(script).toContain("await copyFile(this.targetTarballPath, hostedTarballPath)");
     expect(script).toContain("startNpmRegistryServer");
+    expect(script).toContain("...this.targetRegistryPackages");
     expect(script).toContain("this.updateTargetEffective = this.targetTarballVersion");
-    expect(script).toContain("this.freshTargetSpec = this.updateTargetTarball");
+    expect(script).toContain("this.freshTargetSpec = `openclaw@${this.targetTarballVersion}`");
+    expect(script).toContain("NPM_CONFIG_REGISTRY: this.targetRegistryHostUrl");
+    expect(script).toContain("npm_config_registry: this.targetRegistryHostUrl");
     expect(script).toContain("this.updateExpectedNeedle = this.targetTarballVersion");
+    expect(script).toContain('readPositiveIntEnv("OPENCLAW_PARALLELS_NPM_UPDATE_TIMEOUT_S", 2700)');
   });
 
   it("routes update installs through the prepared package registry", () => {
@@ -269,6 +295,37 @@ exit 1
     expect(macosUpdateScript(input)).toContain(`NPM_CONFIG_REGISTRY='${registry}'`);
     expect(linuxUpdateScript(input)).toContain(`NPM_CONFIG_REGISTRY='${registry}'`);
     expect(windowsUpdateScript(input)).toContain(`NPM_CONFIG_REGISTRY = '${registry}'`);
+  });
+
+  it("relaunches POSIX gateways after a transient post-update startup failure", () => {
+    const input = {
+      auth: TEST_AUTH,
+      expectedNeedle: "2026.7.2-beta.5",
+      updateTarget: "2026.7.2-beta.5",
+    };
+
+    for (const script of [macosUpdateScript(input), linuxUpdateScript(input)]) {
+      expect(script).toContain("attempt=$((attempt + 1))");
+      expect(script).toContain('if [ "$attempt" -eq 4 ]; then\n      start_openclaw_gateway');
+    }
+  });
+
+  it("does not recreate retired workspace setup state in release smoke scripts", () => {
+    const input = {
+      auth: TEST_AUTH,
+      expectedNeedle: "2026.7.2-beta.2",
+      updateTarget: "2026.7.2-beta.2",
+    };
+
+    for (const script of [macosUpdateScript(input), linuxUpdateScript(input)]) {
+      expect(script).toContain("IDENTITY.md");
+      expect(script).not.toContain("workspace-state.json");
+    }
+    expect(windowsUpdateScript(input)).toContain("IDENTITY.md");
+    expect(windowsUpdateScript(input)).not.toContain("workspace-state.json");
+
+    expect(posixAgentWorkspaceScript("test")).not.toContain("workspace-state.json");
+    expect(windowsAgentWorkspaceScript("test")).not.toContain("workspace-state.json");
   });
 
   it("accepts keyed and nested npm metadata for published update targets", () => {
@@ -543,6 +600,7 @@ exit 1
         new NpmUpdateSmoke({
           ...TEST_AUTH,
           dependencyTarballs: [],
+          registryPackageTarballs: [],
           json: false,
           packageSpec: "openclaw@latest",
           platforms: new Set<Platform>(["linux"]),
@@ -584,6 +642,7 @@ exit 1
           new NpmUpdateSmoke({
             ...TEST_AUTH,
             dependencyTarballs: [],
+            registryPackageTarballs: [],
             json: false,
             packageSpec: "openclaw@latest",
             platforms: new Set<Platform>(["linux"]),
@@ -817,6 +876,7 @@ exit 7
         const smoke = new NpmUpdateSmoke({
           ...TEST_AUTH,
           dependencyTarballs: [],
+          registryPackageTarballs: [],
           json: false,
           packageSpec: "openclaw@latest",
           platforms: new Set<Platform>(["macos"]),
@@ -859,6 +919,7 @@ exit 7
         const smoke = new NpmUpdateSmoke({
           ...TEST_AUTH,
           dependencyTarballs: [],
+          registryPackageTarballs: [],
           json: false,
           packageSpec: "openclaw@latest",
           platforms: new Set<Platform>(["macos"]),

@@ -41,13 +41,6 @@ function expectRowByTitle(container: Element, text: string): HTMLElement {
   return row;
 }
 
-function expectFileInput(input: Element | null | undefined): HTMLInputElement {
-  if (!(input instanceof HTMLInputElement)) {
-    throw new Error("Expected file input");
-  }
-  return input;
-}
-
 function expectStatByLabel(container: Element, text: string): HTMLElement {
   const stat = Array.from(container.querySelectorAll<HTMLElement>(".config-host__stat")).find(
     (candidate) =>
@@ -63,78 +56,21 @@ function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettings
   return {
     locale: "en",
     onLocaleChange: vi.fn(),
-    lobsterPetVisits: true,
-    setLobsterPetVisits: () => {},
-    lobsterPetSounds: false,
-    setLobsterPetSounds: () => {},
     currentModel: "gpt-5.5",
     thinkingLevel: "off",
     fastMode: false,
     onModelChange: vi.fn(),
     onThinkingChange: vi.fn(),
     onFastModeChange: vi.fn(),
-    channels: [],
-    onChannelConfigure: vi.fn(),
-    automation: {
-      cronJobCount: 0,
-      skillCount: 0,
-      mcpServerCount: 0,
-    },
-    onManageCron: vi.fn(),
-    onBrowseSkills: vi.fn(),
-    onConfigureMcp: vi.fn(),
-    security: {
-      gatewayAuth: "Unknown",
-      execPolicy: "Allowlist",
-      deviceAuth: true,
-      browserEnabled: true,
-      toolProfile: "coding",
-    },
-    onSecurityConfigure: vi.fn(),
-    canPairDevice: true,
-    onPairMobile: vi.fn(),
-    onBrowserEnabledToggle: vi.fn(),
-    onToolProfileChange: vi.fn(),
-    theme: "claw",
-    themeMode: "system",
-    hasCustomTheme: false,
-    customThemeLabel: null,
-    textScale: 100,
-    setTheme: vi.fn(),
-    onOpenCustomThemeImport: vi.fn(),
-    setThemeMode: vi.fn(),
-    setTextScale: vi.fn(),
-    userAvatar: null,
-    onUserAvatarChange: vi.fn(),
     connected: true,
-    gatewayUrl: "ws://localhost:18789",
     assistantName: "OpenClaw",
-    assistantAvatar: null,
-    assistantAvatarUrl: null,
-    assistantAvatarSource: null,
-    assistantAvatarStatus: null,
-    assistantAvatarReason: null,
-    assistantAvatarOverride: null,
-    assistantAvatarUploadBusy: false,
-    assistantAvatarUploadError: null,
-    onAssistantAvatarOverrideChange: vi.fn(),
-    onAssistantAvatarClearOverride: vi.fn(),
-    basePath: "",
     version: "2026.4.22",
     ...overrides,
   };
 }
 
-function expectAssistantAvatarSource(container: Element): { label: string; source: string } {
-  const source = container.querySelector(".config-identity--assistant .config-identity__source");
-  return {
-    label: source?.querySelector("span")?.textContent?.trim() ?? "",
-    source: source?.querySelector("code")?.textContent?.trim() ?? "",
-  };
-}
-
 describe("renderQuickSettings", () => {
-  it("renders the single-column settings sections with stable target ids", () => {
+  it("renders the slim general hub with stable target ids", () => {
     const container = document.createElement("div");
 
     render(renderQuickSettings(createProps()), container);
@@ -143,16 +79,9 @@ describe("renderQuickSettings", () => {
     const targetIds = Array.from(
       container.querySelectorAll<HTMLElement>("[id^='settings-general-']"),
     ).map((element) => element.id);
-    expect(targetIds).toEqual([
-      "settings-general-model",
-      "settings-general-channels",
-      "settings-general-security",
-      "settings-general-automations",
-      "settings-general-appearance",
-      "settings-general-personal",
-      "settings-general-system",
-    ]);
-    // One group surface per section; no nested cards.
+    expect(targetIds).toEqual(["settings-general-model", "settings-general-system"]);
+    // One group surface per section; no nested cards. Channels, security,
+    // automations, appearance, and identity all have dedicated pages now.
     for (const id of targetIds) {
       const section = container.querySelector(`#${id}`);
       expect(section?.querySelectorAll(".settings-group")).toHaveLength(1);
@@ -188,32 +117,6 @@ describe("renderQuickSettings", () => {
     expect(row.querySelector(".settings-row__value")?.textContent?.trim()).toBe("gpt-5.5");
     row.click();
     expect(onModelChange).toHaveBeenCalledTimes(1);
-  });
-
-  it("shows channel status and connect actions", () => {
-    const onChannelConfigure = vi.fn();
-    const container = document.createElement("div");
-
-    render(
-      renderQuickSettings(
-        createProps({
-          channels: [
-            { id: "discord", label: "Discord", connected: true, detail: "Configured" },
-            { id: "telegram", label: "Telegram", connected: false },
-          ],
-          onChannelConfigure,
-        }),
-      ),
-      container,
-    );
-
-    const discordRow = expectRowByTitle(container, "Discord");
-    expect(discordRow.querySelector(".settings-status")?.textContent?.trim()).toBe("Configured");
-    const telegramRow = expectRowByTitle(container, "Telegram");
-    const connectButton = telegramRow.querySelector("button");
-    expect(connectButton?.textContent?.trim()).toBe("Connect →");
-    connectButton?.click();
-    expect(onChannelConfigure).toHaveBeenCalledWith("telegram");
   });
 
   it("renders Gateway host identity and resources", () => {
@@ -352,48 +255,114 @@ describe("renderQuickSettings", () => {
     expect(systemSection?.querySelector(".config-host__address")).toBeNull();
   });
 
-  it("hides the pending changes bar when the config is clean", () => {
+  it("hides the restart banner while the config needs no apply", () => {
     const container = document.createElement("div");
 
     render(renderQuickSettings(createProps()), container);
 
-    expect(container.querySelector(".settings-group[aria-live='polite']")).toBeNull();
+    expect(container.querySelector(".config-apply-banner")).toBeNull();
+    expect(expectButtonByText.bind(null, container, "Save")).toThrow();
+    expect(expectButtonByText.bind(null, container, "Apply Now")).toThrow();
   });
 
-  it("renders pending config actions and calls their handlers", () => {
-    const onResetConfig = vi.fn();
-    const onSaveConfig = vi.fn();
+  it("renders the restart banner and wires it to apply", () => {
     const onApplyConfig = vi.fn();
     const container = document.createElement("div");
 
+    render(renderQuickSettings(createProps({ configNeedsApply: true, onApplyConfig })), container);
+
+    const banner = container.querySelector(".config-apply-banner");
+    expect(banner).not.toBeNull();
+    expect(banner?.textContent).toContain("Saved to openclaw.json — restart the gateway to apply.");
+    const applyButton = expectButtonByText(container, "Restart & apply");
+    expect(applyButton.disabled).toBe(false);
+    applyButton.click();
+    expect(onApplyConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("gates the restart action while a raw draft is pending", () => {
+    const container = document.createElement("div");
+
+    // apply() always refuses while a raw draft is unsaved; an enabled button
+    // here would be a dead action with a misleading generic failure.
     render(
-      renderQuickSettings(
-        createProps({
-          configDirty: true,
-          configReady: true,
-          connected: true,
-          onResetConfig,
-          onSaveConfig,
-          onApplyConfig,
-        }),
-      ),
+      renderQuickSettings(createProps({ configNeedsApply: true, configRawDraftPending: true })),
       container,
     );
 
-    const pending = container.querySelector(".settings-group[aria-live='polite']");
-    expect(pending).not.toBeNull();
-    const discardButton = expectButtonByText(container, "Discard");
-    const saveButton = expectButtonByText(container, "Save");
-    const applyButton = expectButtonByText(container, "Apply Now");
-    expect(saveButton.disabled).toBe(false);
+    expect(expectButtonByText(container, "Restart & apply").disabled).toBe(true);
+  });
 
-    discardButton.click();
-    saveButton.click();
-    applyButton.click();
+  it("surfaces the shared autosave status with its recovery actions", () => {
+    const container = document.createElement("div");
 
-    expect(onResetConfig).toHaveBeenCalledTimes(1);
-    expect(onSaveConfig).toHaveBeenCalledTimes(1);
-    expect(onApplyConfig).toHaveBeenCalledTimes(1);
+    render(renderQuickSettings(createProps()), container);
+    expect(container.querySelector(".config-toolbar__status")).toBeNull();
+
+    render(renderQuickSettings(createProps({ configAutoSaveStatus: "saved" })), container);
+    expect(container.querySelector(".config-toolbar__status")).toBeNull();
+    expect(container.textContent).not.toContain("Saved");
+
+    render(renderQuickSettings(createProps({ configAutoSaveStatus: "saving" })), container);
+    expect(container.querySelector(".config-toolbar__status")?.textContent?.trim()).toBe("Saving…");
+
+    const onRetrySaveConfig = vi.fn();
+    render(
+      renderQuickSettings(createProps({ configAutoSaveStatus: "error", onRetrySaveConfig })),
+      container,
+    );
+    expect(container.querySelector(".config-toolbar__status")?.textContent).toContain(
+      "Save failed",
+    );
+    expectButtonByText(container, "Retry").click();
+    expect(onRetrySaveConfig).toHaveBeenCalledTimes(1);
+
+    const onDiscardConfig = vi.fn();
+    render(
+      renderQuickSettings(createProps({ configAutoSaveStatus: "conflict", onDiscardConfig })),
+      container,
+    );
+    expect(container.querySelector(".config-toolbar__status")?.textContent).toContain(
+      "Settings changed elsewhere",
+    );
+    expectButtonByText(container, "Reload").click();
+    expect(onDiscardConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a busy restart banner while applying", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(createProps({ configNeedsApply: true, configApplying: true })),
+      container,
+    );
+
+    const banner = container.querySelector(".config-apply-banner");
+    expect(banner?.textContent).toContain("Applying…");
+    expect(banner?.querySelector("button")?.disabled).toBe(true);
+
+    // Other in-flight config writes gate the action too.
+    render(
+      renderQuickSettings(createProps({ configNeedsApply: true, configSaving: true })),
+      container,
+    );
+    expect(container.querySelector(".config-apply-banner button")?.hasAttribute("disabled")).toBe(
+      true,
+    );
+    render(
+      renderQuickSettings(createProps({ configNeedsApply: true, configAutoSaveStatus: "saving" })),
+      container,
+    );
+    expect(container.querySelector(".config-apply-banner button")?.hasAttribute("disabled")).toBe(
+      true,
+    );
+    render(
+      renderQuickSettings(createProps({ configNeedsApply: true, configUpdating: true })),
+      container,
+    );
+    expect(container.querySelector(".config-apply-banner button")?.hasAttribute("disabled")).toBe(
+      true,
+    );
   });
 
   it("locks config-backed quick controls while a config operation is pending", () => {
@@ -405,18 +374,9 @@ describe("renderQuickSettings", () => {
     ]) {
       const onThinkingChange = vi.fn();
       const onFastModeChange = vi.fn();
-      const onToolProfileChange = vi.fn();
       const container = document.createElement("div");
       render(
-        renderQuickSettings(
-          createProps({
-            configDirty: true,
-            onThinkingChange,
-            onFastModeChange,
-            onToolProfileChange,
-            ...pending,
-          }),
-        ),
+        renderQuickSettings(createProps({ onThinkingChange, onFastModeChange, ...pending })),
         container,
       );
 
@@ -432,31 +392,7 @@ describe("renderQuickSettings", () => {
       ).toBe(true);
       fastButton.click();
       expect(onFastModeChange).not.toHaveBeenCalled();
-      const profileButton = expectButtonByText(expectRowByTitle(container, "Tool profile"), "full");
-      expect(
-        (profileButton.closest("wa-radio-group") as HTMLElement & { disabled?: boolean }).disabled,
-      ).toBe(true);
-      profileButton.click();
-      expect(onToolProfileChange).not.toHaveBeenCalled();
-      const browserRow = expectRowByTitle(container, "Browser enabled");
-      expect(browserRow.querySelector("wa-switch")?.hasAttribute("disabled")).toBe(true);
-      const pendingRow = expectRowByTitle(container, "Unsaved changes");
-      expect(
-        [...pendingRow.querySelectorAll<HTMLButtonElement>("button")].every(
-          (button) => button.disabled,
-        ),
-      ).toBe(true);
     }
-  });
-
-  it("disables commit actions until the config is ready", () => {
-    const container = document.createElement("div");
-
-    render(renderQuickSettings(createProps({ configDirty: true, configReady: false })), container);
-
-    expect(expectButtonByText(container, "Save").disabled).toBe(true);
-    expect(expectButtonByText(container, "Apply Now").disabled).toBe(true);
-    expect(expectButtonByText(container, "Discard").disabled).toBe(false);
   });
 
   it("keeps auto as a first-class quick settings fast mode", () => {
@@ -480,536 +416,5 @@ describe("renderQuickSettings", () => {
     selectRadio(expectButtonByText(row, "Standard"));
 
     expect(onFastModeChange).toHaveBeenCalledWith(false);
-  });
-
-  it("lets operators change browser and tool profile from Security quick settings", () => {
-    const onBrowserEnabledToggle = vi.fn();
-    const onToolProfileChange = vi.fn();
-    const container = document.createElement("div");
-
-    render(
-      renderQuickSettings(
-        createProps({
-          security: {
-            gatewayAuth: "token",
-            execPolicy: "allowlist",
-            deviceAuth: true,
-            browserEnabled: false,
-            toolProfile: "messaging",
-          },
-          onBrowserEnabledToggle,
-          onToolProfileChange,
-        }),
-      ),
-      container,
-    );
-
-    const browserRow = expectRowByTitle(container, "Browser enabled");
-    const browserInput = browserRow.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
-    expect(browserInput).toBeInstanceOf(HTMLElement);
-    expect(browserInput?.checked).toBe(false);
-
-    if (!browserInput) {
-      throw new Error("Expected browser switch");
-    }
-    browserInput.checked = true;
-    browserInput?.dispatchEvent(new Event("change"));
-    expect(onBrowserEnabledToggle).toHaveBeenCalledWith(true);
-
-    selectRadio(expectButtonByText(container, "full"));
-    expect(onToolProfileChange).toHaveBeenCalledWith("full");
-    const activeProfile = expectButtonByText(container, "messaging");
-    expect(activeProfile.classList.contains("settings-segmented__btn--active")).toBe(true);
-  });
-
-  it("shows gateway auth and device auth as dot statuses, not pills", () => {
-    const container = document.createElement("div");
-
-    render(
-      renderQuickSettings(
-        createProps({
-          security: {
-            gatewayAuth: "none",
-            execPolicy: "allowlist",
-            deviceAuth: true,
-            browserEnabled: true,
-            toolProfile: "full",
-          },
-        }),
-      ),
-      container,
-    );
-
-    const authRow = expectRowByTitle(container, "Gateway auth");
-    const authStatus = authRow.querySelector(".settings-status");
-    expect(authStatus?.textContent?.trim()).toBe("none");
-    expect(authStatus?.classList.contains("settings-status--warn")).toBe(true);
-    const deviceRow = expectRowByTitle(container, "Device auth");
-    expect(deviceRow.querySelector(".settings-status--ok")?.textContent?.trim()).toBe("Enabled");
-  });
-
-  it("opens mobile pairing from Security quick settings", () => {
-    const onPairMobile = vi.fn();
-    const container = document.createElement("div");
-
-    render(renderQuickSettings(createProps({ onPairMobile })), container);
-
-    expectRowByTitle(container, "OpenClaw mobile");
-    const button = expectButtonByText(container, "Pair mobile device");
-    expect(button.disabled).toBe(false);
-    button.click();
-    expect(onPairMobile).toHaveBeenCalledOnce();
-  });
-
-  it("lets operators change text size from Appearance quick settings", () => {
-    const setTextScale = vi.fn();
-    const container = document.createElement("div");
-
-    render(renderQuickSettings(createProps({ textScale: 125, setTextScale })), container);
-
-    const textSizeRow = expectRowByTitle(container, "Text size");
-    const active = Array.from(textSizeRow.querySelectorAll("wa-radio")).find((button) =>
-      button.classList.contains("settings-segmented__btn--active"),
-    );
-    expect(active?.textContent?.trim()).toBe("XL");
-    expect(active?.getAttribute("title")).toBe("125%");
-
-    const xxlButton = expectButtonByText(textSizeRow, "XXL");
-    expect(xxlButton.getAttribute("title")).toBe("140%");
-    selectRadio(xxlButton);
-    expect(setTextScale).toHaveBeenCalledWith(140);
-  });
-
-  it("anchors theme mode transitions on the clicked segmented button", () => {
-    const setThemeMode = vi.fn();
-    const container = document.createElement("div");
-
-    render(renderQuickSettings(createProps({ themeMode: "system", setThemeMode })), container);
-
-    const modeRow = expectRowByTitle(container, "Mode");
-    const darkButton = expectButtonByText(modeRow, "Dark");
-    selectRadio(darkButton);
-    expect(setThemeMode).toHaveBeenCalledWith("dark", { element: darkButton });
-  });
-
-  it("renders lobster pet rows as label-wrapped toggle rows", () => {
-    const setLobsterPetVisits = vi.fn();
-    const container = document.createElement("div");
-
-    render(renderQuickSettings(createProps({ setLobsterPetVisits })), container);
-
-    const visitsRow = expectRowByTitle(container, "Lobster visits");
-    const input = visitsRow.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
-    if (!(input instanceof HTMLElement)) {
-      throw new Error("Expected lobster visits switch");
-    }
-    input.checked = false;
-    input.dispatchEvent(new Event("change"));
-    expect(setLobsterPetVisits).toHaveBeenCalledWith(false);
-  });
-
-  it("keeps the local user name fixed and shows the assistant identity", () => {
-    const container = document.createElement("div");
-
-    render(
-      renderQuickSettings(
-        createProps({
-          assistantName: "Nova",
-          assistantAvatar: "assets/avatars/nova-portrait.png",
-          assistantAvatarUrl: "blob:nova",
-        }),
-      ),
-      container,
-    );
-
-    const titles = Array.from(container.querySelectorAll(".config-identity__title")).map((node) =>
-      node.textContent?.trim(),
-    );
-    expect(titles).toEqual(["You", "Nova"]);
-    expect(container.querySelector('input[placeholder="You"]')).toBeNull();
-    expect(
-      Array.from(container.querySelectorAll(".settings-row__title")).some(
-        (node) => node.textContent?.trim() === "Name",
-      ),
-    ).toBe(false);
-    expect(
-      container
-        .querySelector(".config-identity--assistant .config-identity__avatar")
-        ?.getAttribute("src"),
-    ).toBe("blob:nova");
-  });
-
-  it("renders same-origin configured assistant avatar routes", () => {
-    const container = document.createElement("div");
-
-    render(
-      renderQuickSettings(
-        createProps({
-          assistantName: "Nova",
-          assistantAvatar: "/avatar/main",
-          assistantAvatarUrl: "/avatar/main",
-          assistantAvatarSource: "assets/avatars/nova-portrait.png",
-          assistantAvatarStatus: "local",
-        }),
-      ),
-      container,
-    );
-
-    expect(
-      container
-        .querySelector(".config-identity--assistant .config-identity__avatar")
-        ?.getAttribute("src"),
-    ).toBe("/avatar/main");
-  });
-
-  it("shows the configured avatar source when the assistant falls back to the logo", () => {
-    const container = document.createElement("div");
-
-    render(
-      renderQuickSettings(
-        createProps({
-          assistantName: "Nova",
-          assistantAvatar: "/avatar/main",
-          assistantAvatarUrl: null,
-          assistantAvatarSource: "assets/avatars/nova-portrait.png",
-          assistantAvatarStatus: "none",
-          assistantAvatarReason: "missing",
-        }),
-      ),
-      container,
-    );
-
-    expect(
-      container
-        .querySelector(".config-identity--assistant .config-identity__avatar")
-        ?.getAttribute("src"),
-    ).toBe("/apple-touch-icon.png");
-    expect(expectAssistantAvatarSource(container)).toEqual({
-      label: "Configured avatar",
-      source: "assets/avatars/nova-portrait.png",
-    });
-    expect(container.querySelector(".config-identity__issue")?.textContent?.trim()).toBe(
-      "File not found",
-    );
-    expect(
-      Array.from(container.querySelectorAll("label.btn")).some(
-        (label) => label.textContent?.trim() === "Choose image",
-      ),
-    ).toBe(true);
-  });
-
-  it("renders the gateway fallback without retrying a rejected avatar route", () => {
-    const container = document.createElement("div");
-
-    render(
-      renderQuickSettings(
-        createProps({
-          assistantName: "Nova",
-          assistantAvatar: "A",
-          assistantAvatarUrl: "A",
-          assistantAvatarSource: "assets/avatars/missing.png",
-          assistantAvatarStatus: "none",
-          assistantAvatarReason: "missing",
-        }),
-      ),
-      container,
-    );
-
-    expect(container.querySelector(".config-identity__avatar--fallback")?.getAttribute("src")).toBe(
-      "/apple-touch-icon.png",
-    );
-    expect(
-      container.querySelector(
-        '.config-identity--assistant .config-identity__avatar[src*="/avatar/"]',
-      ),
-    ).toBeNull();
-    expect(container.querySelector(".config-identity__issue")?.textContent?.trim()).toBe(
-      "File not found",
-    );
-  });
-
-  it("shows unreadable avatar failures without retrying the protected route", () => {
-    const container = document.createElement("div");
-
-    render(
-      renderQuickSettings(
-        createProps({
-          assistantName: "Nova",
-          assistantAvatar: "A",
-          assistantAvatarUrl: "A",
-          assistantAvatarSource: "assets/avatars/avatar.png",
-          assistantAvatarStatus: "none",
-          assistantAvatarReason: "unreadable",
-        }),
-      ),
-      container,
-    );
-
-    expect(
-      container.querySelector(
-        '.config-identity--assistant .config-identity__avatar[src*="/avatar/"]',
-      ),
-    ).toBeNull();
-    expect(container.querySelector(".config-identity__issue")?.textContent?.trim()).toBe(
-      "Cannot render avatar",
-    );
-  });
-
-  it("keeps a bounded avatar source free of lone surrogates", () => {
-    const container = document.createElement("div");
-    const source = `${"a".repeat(33)}😀${"m".repeat(20)}😀${"b".repeat(23)}`;
-
-    render(
-      renderQuickSettings(
-        createProps({
-          assistantAvatar: "/avatar/main",
-          assistantAvatarUrl: null,
-          assistantAvatarSource: source,
-          assistantAvatarStatus: "none",
-        }),
-      ),
-      container,
-    );
-
-    expect(expectAssistantAvatarSource(container).source).toBe(
-      `${"a".repeat(33)}...${"b".repeat(23)}`,
-    );
-  });
-
-  it("keeps a malformed data-image header free of lone surrogates", () => {
-    const container = document.createElement("div");
-    const source = `data:image/${"a".repeat(20)}😀tail`;
-
-    render(
-      renderQuickSettings(
-        createProps({
-          assistantAvatar: "/avatar/main",
-          assistantAvatarUrl: null,
-          assistantAvatarSource: source,
-          assistantAvatarStatus: "none",
-        }),
-      ),
-      container,
-    );
-
-    expect(expectAssistantAvatarSource(container).source).toBe(`data:image/${"a".repeat(20)},...`);
-  });
-
-  it("reads assistant image imports into an override", () => {
-    const onAssistantAvatarOverrideChange = vi.fn();
-    const readAsDataURL = vi.fn(function (this: FileReader) {
-      Object.defineProperty(this, "result", {
-        configurable: true,
-        value: "data:image/png;base64,YXZhdGFy",
-      });
-      this.dispatchEvent(new Event("load"));
-    });
-    class MockFileReader {
-      result: string | null = null;
-      listeners = new Map<string, Array<(event: Event) => void>>();
-      addEventListener(type: string, listener: (event: Event) => void) {
-        this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
-      }
-      dispatchEvent(event: Event) {
-        for (const listener of this.listeners.get(event.type) ?? []) {
-          listener(event);
-        }
-        return true;
-      }
-      readAsDataURL = readAsDataURL;
-    }
-    vi.stubGlobal("FileReader", MockFileReader);
-
-    try {
-      const container = document.createElement("div");
-      render(
-        renderQuickSettings(
-          createProps({
-            assistantAvatarSource: "assets/avatars/nova-portrait.png",
-            assistantAvatarStatus: "none",
-            assistantAvatarReason: "missing",
-            onAssistantAvatarOverrideChange,
-          }),
-        ),
-        container,
-      );
-
-      const inputs = Array.from(container.querySelectorAll('input[type="file"]'));
-      const input = inputs.find((node) =>
-        node.closest(".config-identity--assistant"),
-      ) as HTMLInputElement | null;
-      expect(input?.type).toBe("file");
-      if (!input) {
-        throw new Error("expected assistant avatar file input");
-      }
-
-      Object.defineProperty(input, "files", {
-        configurable: true,
-        value: [new File(["avatar"], "avatar.png", { type: "image/png" })],
-      });
-      input.dispatchEvent(new Event("change"));
-
-      expect(readAsDataURL).toHaveBeenCalledTimes(1);
-      expect(onAssistantAvatarOverrideChange).toHaveBeenCalledWith(
-        "data:image/png;base64,YXZhdGFy",
-      );
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it("can clear an assistant avatar override back to the configured avatar", () => {
-    const onAssistantAvatarClearOverride = vi.fn();
-    const container = document.createElement("div");
-
-    render(
-      renderQuickSettings(
-        createProps({
-          assistantAvatar: "data:image/png;base64,b3ZlcnJpZGU=",
-          assistantAvatarUrl: "data:image/png;base64,b3ZlcnJpZGU=",
-          assistantAvatarSource: "data:image/png;base64,...",
-          assistantAvatarStatus: "data",
-          assistantAvatarOverride: "data:image/png;base64,b3ZlcnJpZGU=",
-          onAssistantAvatarClearOverride,
-        }),
-      ),
-      container,
-    );
-
-    expect(expectAssistantAvatarSource(container)).toEqual({
-      label: "UI override",
-      source: "data:image/png;base64,...",
-    });
-    expectButtonByText(container, "Clear override").dispatchEvent(new Event("click"));
-
-    expect(onAssistantAvatarClearOverride).toHaveBeenCalledTimes(1);
-  });
-
-  it("lets the browser-local assistant avatar override stale missing source metadata", () => {
-    const dataUrl = "data:image/png;base64,bG9jYWwtYXNzaXN0YW50";
-    const container = document.createElement("div");
-
-    render(
-      renderQuickSettings(
-        createProps({
-          assistantName: "Nova",
-          assistantAvatar: "/avatar/main",
-          assistantAvatarUrl: null,
-          assistantAvatarSource: "avatars/missing.png",
-          assistantAvatarStatus: "none",
-          assistantAvatarReason: "missing",
-          assistantAvatarOverride: dataUrl,
-        }),
-      ),
-      container,
-    );
-
-    expect(
-      container
-        .querySelector(".config-identity--assistant .config-identity__avatar")
-        ?.getAttribute("src"),
-    ).toBe(dataUrl);
-    expect(expectAssistantAvatarSource(container)).toEqual({
-      label: "UI override",
-      source: "data:image/png;base64,...",
-    });
-    expect(container.querySelector(".config-identity__issue")).toBeNull();
-    expect(
-      Array.from(container.querySelectorAll("label.btn")).some(
-        (label) => label.textContent?.trim() === "Replace image",
-      ),
-    ).toBe(true);
-    expect(
-      Array.from(container.querySelectorAll("button")).some(
-        (button) => button.textContent?.trim() === "Clear override",
-      ),
-    ).toBe(true);
-  });
-
-  it("rejects oversized avatar uploads before reading them", () => {
-    const onUserAvatarChange = vi.fn();
-    const fileReader = vi.fn();
-    vi.stubGlobal("FileReader", fileReader);
-
-    try {
-      const container = document.createElement("div");
-      render(renderQuickSettings(createProps({ onUserAvatarChange })), container);
-
-      const input = expectFileInput(
-        Array.from(container.querySelectorAll('input[type="file"]')).find(
-          (node) => !node.closest(".config-identity--assistant"),
-        ),
-      );
-
-      const file = new File([new Uint8Array(1_500_001)], "avatar.png", { type: "image/png" });
-      Object.defineProperty(input, "files", {
-        configurable: true,
-        value: [file],
-      });
-
-      input.dispatchEvent(new Event("change"));
-
-      expect(fileReader).not.toHaveBeenCalled();
-      expect(onUserAvatarChange).not.toHaveBeenCalled();
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it("shows an import theme option in quick settings before a theme is imported", () => {
-    const container = document.createElement("div");
-
-    render(renderQuickSettings(createProps()), container);
-
-    const importButton = expectButtonByText(container, "Import");
-    expect(importButton.localName).toBe("button");
-    expect(importButton.closest("wa-radio-group")).toBeNull();
-  });
-
-  it("routes custom clicks into the tweakcn importer until a custom theme exists", () => {
-    const setTheme = vi.fn();
-    const onOpenCustomThemeImport = vi.fn();
-    const container = document.createElement("div");
-
-    render(
-      renderQuickSettings(
-        createProps({
-          hasCustomTheme: false,
-          setTheme,
-          onOpenCustomThemeImport,
-        }),
-      ),
-      container,
-    );
-
-    expectButtonByText(container, "Import").click();
-
-    expect(onOpenCustomThemeImport).toHaveBeenCalledTimes(1);
-    expect(setTheme).not.toHaveBeenCalled();
-  });
-
-  it("applies the imported custom theme from quick settings once it exists", () => {
-    const setTheme = vi.fn();
-    const onOpenCustomThemeImport = vi.fn();
-    const container = document.createElement("div");
-
-    render(
-      renderQuickSettings(
-        createProps({
-          theme: "claw",
-          hasCustomTheme: true,
-          customThemeLabel: "Light Green",
-          setTheme,
-          onOpenCustomThemeImport,
-        }),
-      ),
-      container,
-    );
-
-    const customButton = expectButtonByText(container, "Light Green");
-    selectRadio(customButton);
-
-    expect(setTheme).toHaveBeenCalledWith("custom", { element: customButton });
-    expect(onOpenCustomThemeImport).not.toHaveBeenCalled();
   });
 });

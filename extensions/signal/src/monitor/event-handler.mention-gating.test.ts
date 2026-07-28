@@ -2,8 +2,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { buildDispatchInboundCaptureMock } from "openclaw/plugin-sdk/channel-contract-testing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { HistoryMediaEntry } from "openclaw/plugin-sdk/reply-history";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { formatSignalMediaText } from "../media-text.js";
 
 type SignalMsgContext = Pick<MsgContext, "Body" | "WasMentioned"> & {
   Body?: string;
@@ -20,7 +22,10 @@ function getCapturedCtx() {
 }
 
 function getGroupHistoryEntries(
-  groupHistories: Map<string, Array<{ sender?: string; body?: string }>>,
+  groupHistories: Map<
+    string,
+    Array<{ sender?: string; body?: string; media?: HistoryMediaEntry[] }>
+  >,
   groupId = "g1",
 ) {
   const entries = groupHistories.get(groupId);
@@ -39,11 +44,59 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
   });
 });
 
+vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
+    "openclaw/plugin-sdk/channel-inbound",
+  );
+  type RunParams = Parameters<typeof actual.runChannelInboundEvent>[0];
+  return {
+    ...actual,
+    runChannelInboundEvent: async (params: RunParams) => {
+      const input = await params.adapter.ingest(params.raw);
+      if (!input) {
+        return { admission: { kind: "drop" as const, reason: "ingest-null" }, dispatched: false };
+      }
+      const eventClass = (await params.adapter.classify?.(input)) ?? {
+        kind: "message" as const,
+        canStartAgentTurn: true,
+      };
+      const preflight = (await params.adapter.preflight?.(input, eventClass)) ?? {};
+      const resolved = await params.adapter.resolveTurn(
+        input,
+        eventClass,
+        "kind" in preflight ? { admission: preflight } : preflight,
+      );
+      if (!("route" in resolved) || !("delivery" in resolved)) {
+        throw new Error("expected assembled Signal channel turn plan");
+      }
+      const result = await actual.runPreparedInboundReply({
+        channel: resolved.channel,
+        accountId: resolved.accountId,
+        routeSessionKey: resolved.route.sessionKey,
+        storePath: "/tmp/openclaw/signal-sessions.json",
+        ctxPayload: resolved.ctxPayload,
+        recordInboundSession: async () => {},
+        afterRecord: resolved.afterRecord,
+        record: resolved.record,
+        history: resolved.history,
+        admission: resolved.admission,
+        botLoopProtection: resolved.botLoopProtection,
+        runDispatch: async () => {
+          capturedCtx = resolved.ctxPayload as SignalMsgContext;
+          return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+        },
+      });
+      await params.adapter.onFinalize?.(result);
+      return result;
+    },
+  };
+});
+
 const [
   { createBaseSignalEventHandlerDeps, createSignalReceiveEvent },
   { createSignalEventHandler },
   { renderSignalMentions, resolveSignalMentionFacts },
-  { clearSignalReplyAuthorsForTest, resolveSignalReplyContextWithPersistence },
+  { resolveSignalReplyContextWithPersistence },
 ] = await Promise.all([
   import("./event-handler.test-harness.js"),
   import("./event-handler.js"),
@@ -55,6 +108,7 @@ type GroupEventOpts = {
   message?: string;
   attachments?: unknown[];
   quoteText?: string;
+  timestamp?: number;
   mentions?: Array<{
     uuid?: string;
     number?: string;
@@ -65,6 +119,7 @@ type GroupEventOpts = {
 
 function makeGroupEvent(opts: GroupEventOpts) {
   return createSignalReceiveEvent({
+    ...(opts.timestamp !== undefined ? { timestamp: opts.timestamp } : {}),
     dataMessage: {
       message: opts.message ?? "",
       attachments: opts.attachments ?? [],
@@ -118,20 +173,25 @@ function createSignalConfig(params: { requireMention: boolean; mentionPattern?: 
   } as unknown as OpenClawConfig;
 }
 
-async function expectSkippedGroupHistory(opts: GroupEventOpts, expectedBody: string) {
+async function expectSkippedGroupHistory(
+  opts: GroupEventOpts,
+  expectedBody: string,
+  expectedMediaText = "",
+) {
   capturedCtx = undefined;
   const { handler, groupHistories } = createMentionGatedHistoryHandler();
   await handler(makeGroupEvent(opts));
   expect(capturedCtx).toBeUndefined();
   const entries = getGroupHistoryEntries(groupHistories);
   expect(entries).toHaveLength(1);
-  expect(expectDefined(entries[0], "Signal group history entry").body).toBe(expectedBody);
+  const entry = expectDefined(entries[0], "Signal group history entry");
+  expect(entry.body).toBe(expectedBody);
+  expect(formatSignalMediaText(entry.media ?? [])).toBe(expectedMediaText);
 }
 
 describe("signal mention gating", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     capturedCtx = undefined;
-    await clearSignalReplyAuthorsForTest();
   });
 
   it("drops group messages without mention when requireMention is configured", async () => {
@@ -219,11 +279,22 @@ describe("signal mention gating", () => {
     ).resolves.toEqual({ author: "+15550001111", body: "edited without mention" });
   });
 
-  it("records attachment placeholder in pending history for skipped attachment-only group messages", async () => {
+  it("records a structured fact for skipped attachment-only group messages", async () => {
     await expectSkippedGroupHistory(
-      { message: "", attachments: [{ id: "a1" }] },
+      { message: "", attachments: [{ id: "a1" }], timestamp: 1700000000123 },
+      "",
       "<media:attachment>",
     );
+    await expect(
+      resolveSignalReplyContextWithPersistence({
+        accountId: "default",
+        to: "group:g1",
+        replyToId: "1700000000123",
+      }),
+    ).resolves.toEqual({
+      author: "+15550001111",
+      media: [{ contentType: undefined, kind: "unknown" }],
+    });
   });
 
   it("normalizes mixed-case parameterized attachment MIME in skipped pending history", async () => {
@@ -247,7 +318,9 @@ describe("signal mention gating", () => {
     expect(capturedCtx).toBeUndefined();
     const entries = getGroupHistoryEntries(groupHistories);
     expect(entries).toHaveLength(1);
-    expect(expectDefined(entries[0], "Signal audio history entry").body).toBe("<media:audio>");
+    const entry = expectDefined(entries[0], "Signal audio history entry");
+    expect(entry.body).toBe("");
+    expect(formatSignalMediaText(entry.media ?? [])).toBe("<media:audio>");
   });
 
   it("summarizes multiple skipped attachments with stable file count wording", async () => {
@@ -274,9 +347,9 @@ describe("signal mention gating", () => {
     expect(capturedCtx).toBeUndefined();
     const entries = getGroupHistoryEntries(groupHistories);
     expect(entries).toHaveLength(1);
-    expect(expectDefined(entries[0], "Signal attachment history entry").body).toBe(
-      "[2 files attached]",
-    );
+    const entry = expectDefined(entries[0], "Signal attachment history entry");
+    expect(entry.body).toBe("");
+    expect(formatSignalMediaText(entry.media ?? [])).toBe("[2 files attached]");
   });
 
   it("records quote text in pending history for skipped quote-only group messages", async () => {

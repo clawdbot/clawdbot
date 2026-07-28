@@ -86,6 +86,7 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => agentRuntimeMocks);
 import { resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
 import {
   readCodexAppServerBinding,
+  registerCodexTestSessionIdentity,
   resetCodexTestBindingStore,
   testCodexAppServerBindingStore,
   type CodexAppServerThreadBinding,
@@ -253,6 +254,8 @@ describe("codex conversation binding", () => {
 
   it("uses the default Codex auth profile and omits the public OpenAI provider for new binds", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
+    const sessionKey = "agent:main:dashboard:incognito-native-bind";
+    registerCodexTestSessionIdentity(sessionFile, sessionFile, sessionKey);
     const config = {
       auth: { order: { openai: ["openai:default"] } },
     };
@@ -281,6 +284,7 @@ describe("codex conversation binding", () => {
     await startCodexConversationThread({
       config: config as never,
       sessionFile,
+      sessionKey,
       workspaceDir: tempDir,
       model: "gpt-5.4-mini",
       modelProvider: "openai",
@@ -300,6 +304,7 @@ describe("codex conversation binding", () => {
     expect(requests[0]?.method).toBe("thread/start");
     expect(requests[0]?.params.model).toBe("gpt-5.4-mini");
     expect(requests[0]?.params.personality).toBe("none");
+    expect(requests[0]?.params.ephemeral).toBe(true);
     expect(requests[0]?.params).not.toHaveProperty("modelProvider");
     await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
       authProfileId: "openai:default",
@@ -760,7 +765,7 @@ describe("codex conversation binding", () => {
     expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
-  it("routes bound Codex CLI node sessions through node resume", async () => {
+  it("routes a programmatically bound Control UI session through node resume", async () => {
     const resumeCodexCliSessionOnNode = vi.fn(async () => ({
       ok: true as const,
       sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
@@ -770,21 +775,21 @@ describe("codex conversation binding", () => {
     const result = await handleCodexConversationInboundClaim(
       {
         content: "continue the task",
-        channel: "discord",
-        isGroup: true,
+        channel: "webchat",
+        isGroup: false,
         commandAuthorized: true,
         sessionKey: "node-session",
       },
       {
-        channelId: "discord",
+        channelId: "webchat",
         sessionKey: "node-session",
         pluginBinding: {
           bindingId: "binding-1",
           pluginId: "codex",
           pluginRoot: tempDir,
-          channel: "discord",
+          channel: "webchat",
           accountId: "default",
-          conversationId: "channel-1",
+          conversationId: "node-session",
           boundAt: Date.now(),
           data: {
             kind: "codex-cli-node-session",
@@ -1824,6 +1829,7 @@ describe("codex conversation binding", () => {
 
   it("returns a clean failure reply when app-server turn start rejects", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
+    const sessionKey = "agent:main:dashboard:incognito-bound-failure";
     const agentDir = path.join(tempDir, "agents", "bot-b", "agent");
     await writeTestConversationBinding(sessionFile, {
       threadId: "thread-1",
@@ -1835,12 +1841,17 @@ describe("codex conversation binding", () => {
       unhandledRejections.push(reason);
     };
     process.on("unhandledRejection", onUnhandledRejection);
+    const requests: string[] = [];
     sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
       request: vi.fn(async (method: string) => {
+        requests.push(method);
         if (method === "turn/start") {
           throw new Error(
             "unexpected status 401 Unauthorized: Missing bearer <@U123> [trusted](https://evil) @here",
           );
+        }
+        if (method === "thread/unsubscribe") {
+          return {};
         }
         throw new Error(`unexpected method: ${method}`);
       }),
@@ -1856,9 +1867,11 @@ describe("codex conversation binding", () => {
           channel: "telegram",
           isGroup: false,
           commandAuthorized: true,
+          sessionKey,
         },
         {
           channelId: "telegram",
+          sessionKey,
           pluginBinding: {
             bindingId: "binding-1",
             pluginId: "codex",
@@ -1893,6 +1906,8 @@ describe("codex conversation binding", () => {
       expect(replyText).not.toContain("[trusted](https://evil)");
       expect(replyText).not.toContain("@here");
       expect(unhandledRejections).toStrictEqual([]);
+      expect(requests).toEqual(["turn/start", "thread/unsubscribe"]);
+      await expect(readTestConversationBinding(sessionFile)).resolves.toBeUndefined();
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);
     }
@@ -2334,3 +2349,4 @@ describe("codex conversation binding", () => {
     expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

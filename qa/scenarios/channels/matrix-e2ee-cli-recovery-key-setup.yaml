@@ -1,0 +1,35 @@
+title: Matrix E2EE CLI encryption setup accepts a recovery key on a second device
+scenario:
+  id: matrix-e2ee-cli-recovery-key-setup
+  surface: channels
+  coverage:
+    primary:
+      - matrix.encryption-setup
+  execution:
+    profiles: { "matrix:all": 88, "matrix:e2ee-cli": 4 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 120000
+    retryCount: 0
+    config:
+      matrixConfigOverrides:
+        encryption: true
+        startupVerification: off
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: true
+            key: e2ee-cli-recovery-key-setup
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA E2EE CLI Recovery Key Setup Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-recovery.js
+  call: runMatrixQaE2eeCliRecoveryKeySetupScenario
+  args:
+    - expr: "scenarioContext"

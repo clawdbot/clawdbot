@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { ChannelThreadingToolContext } from "../channels/plugins/types.public.js";
+import type { InternalChannelThreadingToolContext } from "../channels/threading-tool-context-internal.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   isDeliverableMessageChannel,
@@ -10,14 +10,28 @@ import {
 const DEFAULT_TTL_MS = 15 * 60_000;
 const MAX_TTL_MS = 24 * 60 * 60_000;
 const MAX_ACTIVE_CAPABILITIES = 4096;
+const RUN_LIFETIME_EXPIRES_AT_MS = Number.MAX_SAFE_INTEGER;
+const CAPABILITY_COMPLETION_GRACE_MS = 60_000;
 
-export type AgentRuntimeMessageActionContext = {
+type AgentRuntimeMessageActionContextBase = {
   expiresAtMs: number;
   sessionId?: string;
   requesterAccountId?: string;
   requesterSenderId?: string;
-  toolContext?: ChannelThreadingToolContext;
+  toolContext?: InternalChannelThreadingToolContext;
 };
+
+export type AgentRuntimeMessageActionContext = AgentRuntimeMessageActionContextBase &
+  (
+    | {
+        sourceReplyFinal: true;
+        sourceReplyToolCallId: string;
+      }
+    | {
+        sourceReplyFinal?: false;
+        sourceReplyToolCallId?: string;
+      }
+  );
 
 type MessageActionTurnCapability = AgentRuntimeMessageActionContext & {
   agentId: string;
@@ -39,9 +53,18 @@ function resolveTtlMs(value: number | undefined): number {
   return Math.min(Math.trunc(value), MAX_TTL_MS);
 }
 
+/** Mirrors agent timeout semantics while leaving unlimited runs to explicit revocation. */
+export function resolveMessageActionTurnCapabilityLifetime(
+  timeoutMs: number,
+): { expiresWithRun: true } | { ttlMs: number } {
+  return Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? { ttlMs: timeoutMs + CAPABILITY_COMPLETION_GRACE_MS }
+    : { expiresWithRun: true };
+}
+
 function copyToolContext(
-  context: ChannelThreadingToolContext | undefined,
-): ChannelThreadingToolContext | undefined {
+  context: InternalChannelThreadingToolContext | undefined,
+): InternalChannelThreadingToolContext | undefined {
   if (!context) {
     return undefined;
   }
@@ -53,6 +76,7 @@ function copyToolContext(
     currentChannelProvider: context.currentChannelProvider,
     currentThreadTs: normalizeOptionalString(context.currentThreadTs),
     currentMessageId: context.currentMessageId,
+    currentSourceTurnId: normalizeOptionalString(context.currentSourceTurnId),
     replyToMode: context.replyToMode,
     // Reply-to-first state is intentionally shared across actions in one turn.
     // Preserve only this trusted process-local mutable reference.
@@ -91,7 +115,8 @@ export function mintMessageActionTurnCapability(params: {
   sessionId?: string;
   requesterAccountId?: string;
   requesterSenderId?: string;
-  toolContext?: ChannelThreadingToolContext;
+  toolContext?: InternalChannelThreadingToolContext;
+  expiresWithRun?: boolean;
   ttlMs?: number;
   nowMs?: number;
 }): string {
@@ -113,7 +138,9 @@ export function mintMessageActionTurnCapability(params: {
     agentId,
     runId,
     sessionKey,
-    expiresAtMs: nowMs + resolveTtlMs(params.ttlMs),
+    expiresAtMs: params.expiresWithRun
+      ? RUN_LIFETIME_EXPIRES_AT_MS
+      : nowMs + resolveTtlMs(params.ttlMs),
     sessionId: normalizeOptionalString(params.sessionId),
     requesterAccountId: normalizeOptionalString(params.requesterAccountId),
     requesterSenderId: normalizeOptionalString(params.requesterSenderId),

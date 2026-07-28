@@ -68,7 +68,7 @@ class GatewaySessionCustomHeadersTest {
     val prefs = SecurePrefs(app, securePrefsOverride = securePrefsBacking)
     val stableId = "manual|gateway.example|443"
     val endpoint = GatewayEndpoint.manual(host = "gateway.example", port = 443)
-    val tls = GatewayTlsParams(required = true, expectedFingerprint = "aa", allowTOFU = false, stableId = stableId)
+    val tls = GatewayTlsParams(required = true, expectedFingerprint = "aa".repeat(32), allowTOFU = false, stableId = stableId)
 
     prefs.saveGatewayCustomHeaders(stableId, mapOf("CF-Access-Client-Id" to "client-id"))
     securePrefsBacking
@@ -113,7 +113,7 @@ class GatewaySessionCustomHeadersTest {
       val session =
         GatewaySession(
           scope = scope,
-          identityStore = DeviceIdentityStore(app),
+          identityStore = testDeviceIdentityStore(app),
           deviceAuthStore = NoopDeviceAuthStore(),
           onConnected = { if (!connected.isCompleted) connected.complete(Unit) },
           onDisconnected = {},

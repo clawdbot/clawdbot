@@ -973,3 +973,4 @@ export const feishuDoctor: ChannelDoctorAdapter = {
   runConfigSequence: async ({ cfg, env, shouldRepair }) =>
     await runFeishuDoctorSequence({ cfg, env, shouldRepair }),
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

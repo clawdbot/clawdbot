@@ -1,6 +1,11 @@
 // Google tests cover oauth plugin behavior.
 import { join, parse } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearGoogleOAuthCredentialsCache,
+  setGoogleOAuthCredentialsFs,
+  setGoogleOAuthSettingsFs,
+} from "./google-oauth.test-support.js";
 
 vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
@@ -57,16 +62,14 @@ function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean):
   return count;
 }
 
-describe("resolveGeminiCliSelectedAuthType", () => {
+describe("isGeminiCliPersonalOAuth", () => {
   const ENV_KEYS = ["GOOGLE_GENAI_USE_GCA"] as const;
 
   let envSnapshot: Partial<Record<(typeof ENV_KEYS)[number], string>>;
-  let resolveGeminiCliSelectedAuthType: typeof import("./oauth.settings.js").resolveGeminiCliSelectedAuthType;
-  let setOAuthSettingsFsForTest: typeof import("./oauth.settings.js").setOAuthSettingsFsForTest;
+  let isGeminiCliPersonalOAuth: typeof import("./oauth.settings.js").isGeminiCliPersonalOAuth;
 
   beforeAll(async () => {
-    ({ resolveGeminiCliSelectedAuthType, setOAuthSettingsFsForTest } =
-      await import("./oauth.settings.js"));
+    ({ isGeminiCliPersonalOAuth } = await import("./oauth.settings.js"));
   });
 
   beforeEach(() => {
@@ -74,7 +77,7 @@ describe("resolveGeminiCliSelectedAuthType", () => {
     delete process.env.GOOGLE_GENAI_USE_GCA;
     mockSettingsExistsSync.mockReset();
     mockSettingsReadFileSync.mockReset();
-    setOAuthSettingsFsForTest({
+    setGoogleOAuthSettingsFs({
       existsSync: (...args) => mockSettingsExistsSync(...args),
       readFileSync: (...args) => mockSettingsReadFileSync(...args),
       homedir: () => "/mock/home",
@@ -90,14 +93,14 @@ describe("resolveGeminiCliSelectedAuthType", () => {
         process.env[key] = value;
       }
     }
-    setOAuthSettingsFsForTest();
+    setGoogleOAuthSettingsFs();
   });
 
   it("uses GOOGLE_GENAI_USE_GCA as an oauth-personal fallback when settings are absent", () => {
     process.env.GOOGLE_GENAI_USE_GCA = "true";
     mockSettingsExistsSync.mockReturnValue(false);
 
-    expect(resolveGeminiCliSelectedAuthType()).toBe("oauth-personal");
+    expect(isGeminiCliPersonalOAuth()).toBe(true);
   });
 
   it("prefers settings auth selection over the GOOGLE_GENAI_USE_GCA fallback", () => {
@@ -113,7 +116,7 @@ describe("resolveGeminiCliSelectedAuthType", () => {
       }),
     );
 
-    expect(resolveGeminiCliSelectedAuthType()).toBe("oauth-code-assist");
+    expect(isGeminiCliPersonalOAuth()).toBe(false);
   });
 
   it("reads the nested security auth selection from ~/.gemini/settings.json", () => {
@@ -128,7 +131,7 @@ describe("resolveGeminiCliSelectedAuthType", () => {
       }),
     );
 
-    expect(resolveGeminiCliSelectedAuthType()).toBe("oauth-personal");
+    expect(isGeminiCliPersonalOAuth()).toBe(true);
   });
 
   it("falls back to legacy top-level selectedAuthType keys", () => {
@@ -137,11 +140,11 @@ describe("resolveGeminiCliSelectedAuthType", () => {
       JSON.stringify({ selectedAuthType: "oauth-personal" }),
     );
 
-    expect(resolveGeminiCliSelectedAuthType()).toBe("oauth-personal");
+    expect(isGeminiCliPersonalOAuth()).toBe(true);
   });
 });
 
-describe("extractGeminiCliCredentials", () => {
+describe("resolveOAuthClientConfig", () => {
   const ENV_KEYS = [
     "OPENCLAW_GEMINI_OAUTH_CLIENT_ID",
     "OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET",
@@ -160,13 +163,18 @@ describe("extractGeminiCliCredentials", () => {
 
   let originalPath: string | undefined;
   let envSnapshot: Partial<Record<(typeof ENV_KEYS)[number], string>>;
-  let extractGeminiCliCredentials: typeof import("./oauth.credentials.js").extractGeminiCliCredentials;
   let resolveOAuthClientConfig: typeof import("./oauth.credentials.js").resolveOAuthClientConfig;
-  let clearCredentialsCache: typeof import("./oauth.credentials.js").clearCredentialsCache;
-  let setOAuthCredentialsFsForTest: typeof import("./oauth.credentials.js").setOAuthCredentialsFsForTest;
+
+  function resolveExtractedCredentialsOrNull() {
+    try {
+      return resolveOAuthClientConfig();
+    } catch {
+      return null;
+    }
+  }
 
   async function installMockFs() {
-    setOAuthCredentialsFsForTest({
+    setGoogleOAuthCredentialsFs({
       existsSync: (...args) => mockExistsSync(...args),
       readFileSync: (...args) => mockReadFileSync(...args),
       realpathSync: (...args) => mockRealpathSync(...args),
@@ -454,12 +462,7 @@ describe("extractGeminiCliCredentials", () => {
   }
 
   beforeAll(async () => {
-    ({
-      extractGeminiCliCredentials,
-      resolveOAuthClientConfig,
-      clearCredentialsCache,
-      setOAuthCredentialsFsForTest,
-    } = await import("./oauth.credentials.js"));
+    ({ resolveOAuthClientConfig } = await import("./oauth.credentials.js"));
   });
 
   beforeEach(async () => {
@@ -482,22 +485,22 @@ describe("extractGeminiCliCredentials", () => {
         process.env[key] = value;
       }
     }
-    setOAuthCredentialsFsForTest();
+    setGoogleOAuthCredentialsFs();
   });
 
   it("returns null when gemini binary is not in PATH", () => {
     process.env.PATH = "/nonexistent";
     mockExistsSync.mockReturnValue(false);
 
-    clearCredentialsCache();
-    expect(extractGeminiCliCredentials()).toBeNull();
+    clearGoogleOAuthCredentialsCache();
+    expect(resolveExtractedCredentialsOrNull()).toBeNull();
   });
 
   it("includes missing binary details when resolving OAuth client config", async () => {
     process.env.PATH = "/nonexistent";
     mockExistsSync.mockReturnValue(false);
 
-    clearCredentialsCache();
+    clearGoogleOAuthCredentialsCache();
     expect(() => resolveOAuthClientConfig()).toThrow(
       /Details: Gemini CLI binary was not found in PATH/,
     );
@@ -506,8 +509,8 @@ describe("extractGeminiCliCredentials", () => {
   it("extracts credentials from oauth2.js in known path", () => {
     installGeminiLayout({ oauth2Exists: true, oauth2Content: FAKE_OAUTH2_CONTENT });
 
-    clearCredentialsCache();
-    const result = extractGeminiCliCredentials();
+    clearGoogleOAuthCredentialsCache();
+    const result = resolveExtractedCredentialsOrNull();
 
     expectFakeCliCredentials(result);
   });
@@ -515,8 +518,8 @@ describe("extractGeminiCliCredentials", () => {
   it("extracts credentials when PATH entry is an npm global shim", () => {
     installNpmShimLayout({ oauth2Exists: true, oauth2Content: FAKE_OAUTH2_CONTENT });
 
-    clearCredentialsCache();
-    const result = extractGeminiCliCredentials();
+    clearGoogleOAuthCredentialsCache();
+    const result = resolveExtractedCredentialsOrNull();
 
     expectFakeCliCredentials(result);
   });
@@ -529,8 +532,8 @@ describe("extractGeminiCliCredentials", () => {
       `,
     });
 
-    clearCredentialsCache();
-    const result = extractGeminiCliCredentials();
+    clearGoogleOAuthCredentialsCache();
+    const result = resolveExtractedCredentialsOrNull();
 
     expectFakeCliCredentials(result);
   });
@@ -538,8 +541,8 @@ describe("extractGeminiCliCredentials", () => {
   it("extracts credentials from Homebrew libexec installs", () => {
     installHomebrewLibexecLayout({ oauth2Content: FAKE_OAUTH2_CONTENT });
 
-    clearCredentialsCache();
-    const result = extractGeminiCliCredentials();
+    clearGoogleOAuthCredentialsCache();
+    const result = resolveExtractedCredentialsOrNull();
 
     expectFakeCliCredentials(result);
   });
@@ -547,14 +550,14 @@ describe("extractGeminiCliCredentials", () => {
   it("returns null when oauth2.js cannot be found", () => {
     installGeminiLayout({ oauth2Exists: false, readdir: [] });
 
-    clearCredentialsCache();
-    expect(extractGeminiCliCredentials()).toBeNull();
+    clearGoogleOAuthCredentialsCache();
+    expect(resolveExtractedCredentialsOrNull()).toBeNull();
   });
 
   it("includes missing oauth2.js details when resolving OAuth client config", async () => {
     installGeminiLayout({ oauth2Exists: false, readdir: [] });
 
-    clearCredentialsCache();
+    clearGoogleOAuthCredentialsCache();
     expect(() => resolveOAuthClientConfig()).toThrow(/Could not locate oauth2\.js/);
     expect(() => resolveOAuthClientConfig()).toThrow(/recursiveSearchDepth=10/);
   });
@@ -562,8 +565,8 @@ describe("extractGeminiCliCredentials", () => {
   it("returns null when oauth2.js lacks credentials", () => {
     installGeminiLayout({ oauth2Exists: true, oauth2Content: "// no credentials here" });
 
-    clearCredentialsCache();
-    expect(extractGeminiCliCredentials()).toBeNull();
+    clearGoogleOAuthCredentialsCache();
+    expect(resolveExtractedCredentialsOrNull()).toBeNull();
   });
 
   it("includes parse failure details when resolving OAuth client config", async () => {
@@ -573,7 +576,7 @@ describe("extractGeminiCliCredentials", () => {
       readdir: [],
     });
 
-    clearCredentialsCache();
+    clearGoogleOAuthCredentialsCache();
     expect(() => resolveOAuthClientConfig()).toThrow(
       /Candidate credential files did not contain a parseable OAuth client id\/secret/,
     );
@@ -585,7 +588,7 @@ describe("extractGeminiCliCredentials", () => {
       throw new Error("mock read failure");
     });
 
-    clearCredentialsCache();
+    clearGoogleOAuthCredentialsCache();
     expect(() => resolveOAuthClientConfig()).toThrow(
       /Unexpected errors occurred while reading candidate credential files\/directories/,
     );
@@ -595,15 +598,15 @@ describe("extractGeminiCliCredentials", () => {
   it("caches credentials after first extraction", () => {
     installGeminiLayout({ oauth2Exists: true, oauth2Content: FAKE_OAUTH2_CONTENT });
 
-    clearCredentialsCache();
+    clearGoogleOAuthCredentialsCache();
 
     // First call
-    const result1 = extractGeminiCliCredentials();
+    const result1 = resolveExtractedCredentialsOrNull();
     expectFakeCliCredentials(result1);
 
     // Second call should use cache (readFileSync not called again)
     const readCount = mockReadFileSync.mock.calls.length;
-    const result2 = extractGeminiCliCredentials();
+    const result2 = resolveExtractedCredentialsOrNull();
     expect(result2).toEqual(result1);
     expect(mockReadFileSync.mock.calls.length).toBe(readCount);
   });
@@ -614,8 +617,8 @@ describe("extractGeminiCliCredentials", () => {
       unrelatedOauth2Content: "// unrelated oauth file",
     });
 
-    clearCredentialsCache();
-    const result = extractGeminiCliCredentials();
+    clearGoogleOAuthCredentialsCache();
+    const result = resolveExtractedCredentialsOrNull();
 
     expectFakeCliCredentials(result);
     expect(
@@ -869,10 +872,9 @@ describe("loginGeminiCliOAuth", () => {
   });
 
   let envSnapshot: Partial<Record<(typeof ENV_KEYS)[number], string>>;
-  let setOAuthSettingsFsForTest: typeof import("./oauth.settings.js").setOAuthSettingsFsForTest;
 
   beforeAll(async () => {
-    ({ setOAuthSettingsFsForTest } = await import("./oauth.settings.js"));
+    await import("./oauth.settings.js");
   });
 
   beforeEach(() => {
@@ -886,7 +888,7 @@ describe("loginGeminiCliOAuth", () => {
     delete process.env.GOOGLE_GENAI_USE_GCA;
     mockSettingsExistsSync.mockReset();
     mockSettingsReadFileSync.mockReset();
-    setOAuthSettingsFsForTest({
+    setGoogleOAuthSettingsFs({
       existsSync: (...args) => mockSettingsExistsSync(...args),
       readFileSync: (...args) => mockSettingsReadFileSync(...args),
       homedir: () => "/mock/home",
@@ -903,7 +905,7 @@ describe("loginGeminiCliOAuth", () => {
         process.env[key] = value;
       }
     }
-    setOAuthSettingsFsForTest();
+    setGoogleOAuthSettingsFs();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -1286,3 +1288,4 @@ describe("loginGeminiCliOAuth", () => {
     expect(result.email).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

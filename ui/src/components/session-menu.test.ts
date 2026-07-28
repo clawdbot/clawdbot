@@ -11,9 +11,11 @@ type SessionMenuData = {
   unread: boolean;
   archived: boolean;
   category: string | null;
+  icon?: string;
 };
 type SessionMenuElement = HTMLElement & {
   anchor: { x: number; y: number };
+  lastActive: string;
   session: SessionMenuData;
   updateComplete: Promise<boolean>;
 };
@@ -34,7 +36,9 @@ async function mountMenu(
     work?: SessionMenuWork | null;
     workboard?: { captured: boolean; busy: boolean } | null;
     archiveAllowed?: boolean;
+    cloudWorkerStopAllowed?: boolean;
     selectionCount?: number;
+    lastActive?: string;
     groups?: readonly string[];
     trigger?: HTMLElement | null;
     onAction?: (action: SessionMenuAction) => void;
@@ -56,11 +60,13 @@ async function mountMenu(
     html`<openclaw-session-menu
       .session=${session}
       .selectionCount=${options.selectionCount ?? 1}
+      .lastActive=${options.lastActive ?? "57d"}
       .anchor=${{ x: 100, y: 100 }}
       .trigger=${options.trigger ?? null}
       .disabled=${false}
       .forkDisabled=${false}
       .archiveAllowed=${options.archiveAllowed ?? true}
+      .cloudWorkerStopAllowed=${options.cloudWorkerStopAllowed ?? false}
       .groups=${options.groups ?? []}
       .canOpenChat=${options.canOpenChat ?? true}
       .work=${options.work ?? null}
@@ -102,19 +108,32 @@ function menuItem(menu: ParentNode, label: string): SessionMenuItem {
   return item;
 }
 
+async function openIconPicker(menu: SessionMenuElement) {
+  menuItem(menu, "Change icon").click();
+  await menu.updateComplete;
+  await Promise.resolve();
+}
+
 describe("session menu", () => {
+  it("shows when the session was last active", async () => {
+    const menu = await mountMenu({ lastActive: "57d" });
+
+    expect(menu.querySelector(".session-menu__info")?.textContent?.trim()).toBe("Last active 57d");
+  });
+
   it("renders the full plain-session item set in order", async () => {
     const menu = await mountMenu();
 
     expect(menuItemLabels(menu)).toEqual([
       "Open chat",
-      "Pin session",
+      "Pin thread",
+      "Change icon",
       "Mark as unread",
       "Rename…",
       "Fork",
       "Add to Workboard",
       "Move to group",
-      "Archive session",
+      "Archive thread",
       "Delete…",
     ]);
   });
@@ -131,6 +150,21 @@ describe("session menu", () => {
       "Archive 3",
       "Delete 3…",
     ]);
+  });
+
+  it("offers an explicit cloud worker stop action for a stoppable placement", async () => {
+    const onAction = vi.fn<(action: SessionMenuAction) => void>();
+    const menu = await mountMenu({ cloudWorkerStopAllowed: true, onAction });
+
+    menuItem(menu, "Stop cloud worker…").click();
+
+    expect(onAction).toHaveBeenCalledWith({ kind: "stop-cloud-worker" });
+  });
+
+  it("hides cloud worker stop from batch actions", async () => {
+    const menu = await mountMenu({ cloudWorkerStopAllowed: true, selectionCount: 2 });
+
+    expect(menuItemLabels(menu)).not.toContain("Stop cloud worker…");
   });
 
   it("offers Mark N as read when every selected session is unread", async () => {
@@ -152,15 +186,15 @@ describe("session menu", () => {
       session: { archived: true },
     });
 
-    expect(menuItem(menu, "Restore session").disabled).toBe(false);
+    expect(menuItem(menu, "Restore thread").disabled).toBe(false);
     expect(menuItem(menu, "Delete…").disabled).toBe(false);
-    expect(menuItem(menu, "Pin session").disabled).toBe(true);
+    expect(menuItem(menu, "Pin thread").disabled).toBe(true);
   });
 
   it("disables archive and delete when an active session cannot be archived", async () => {
     const menu = await mountMenu({ archiveAllowed: false });
 
-    expect(menuItem(menu, "Archive session").disabled).toBe(true);
+    expect(menuItem(menu, "Archive thread").disabled).toBe(true);
     expect(menuItem(menu, "Delete…").disabled).toBe(true);
   });
 
@@ -171,9 +205,48 @@ describe("session menu", () => {
       onAction: (action) => calls.push(action.kind),
     });
 
-    menuItem(menu, "Pin session").click();
+    menuItem(menu, "Pin thread").click();
 
     expect(calls).toEqual(["close", "toggle-pin"]);
+  });
+
+  it("dispatches curated, emoji, and remove icon choices", async () => {
+    const onAction = vi.fn<(action: SessionMenuAction) => void>();
+    let menu = await mountMenu({ onAction });
+    await openIconPicker(menu);
+
+    menu
+      .querySelector<HTMLButtonElement>('.session-menu__icon-choice[aria-label="spark"]')
+      ?.click();
+    expect(onAction).toHaveBeenLastCalledWith({ kind: "set-icon", icon: "name:spark" });
+
+    menu = await mountMenu({ onAction });
+    await openIconPicker(menu);
+    const input = menu.querySelector<HTMLInputElement>(".session-menu__emoji-field input");
+    if (input) {
+      input.value = "🦞";
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    }
+    expect(onAction).toHaveBeenLastCalledWith({ kind: "set-icon", icon: "🦞" });
+
+    menu = await mountMenu({ session: { icon: "name:spark" }, onAction });
+    await openIconPicker(menu);
+    menu.querySelector<HTMLButtonElement>(".session-menu__remove-icon")?.click();
+    expect(onAction).toHaveBeenLastCalledWith({ kind: "set-icon", icon: null });
+  });
+
+  it("opens an accessible icon picker with keyboard grid navigation", async () => {
+    const menu = await mountMenu();
+
+    await openIconPicker(menu);
+
+    expect(menu.querySelector(".session-menu__icon-picker")?.getAttribute("role")).toBe("dialog");
+    const choices = Array.from(
+      menu.querySelectorAll<HTMLButtonElement>(".session-menu__icon-choice"),
+    );
+    expect(document.activeElement).toBe(choices[0]);
+    choices[0]?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    expect(document.activeElement).toBe(choices[1]);
   });
 
   it("opens group actions and dispatches group, removal, and creation choices", async () => {
@@ -328,7 +401,7 @@ describe("session menu", () => {
       onAction: (action) => calls.push(action.kind),
     });
 
-    const pin = menuItem(menu, "Pin session");
+    const pin = menuItem(menu, "Pin thread");
     expect(pin.querySelector(".session-menu__shortcut")?.textContent).toBe("P");
     expect(pin.getAttribute("aria-keyshortcuts")).toBe("P");
     expect(menuItem(menu, "Move to group").dataset.shortcut).toBeUndefined();

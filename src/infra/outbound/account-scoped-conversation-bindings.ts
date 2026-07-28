@@ -1,3 +1,4 @@
+import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 // Account-scoped conversation binding managers adapt channel-local thread maps
 // into the shared session binding service.
 import { resolveThreadBindingConversationIdFromBindingId } from "../../channels/thread-binding-id.js";
@@ -175,7 +176,11 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
         agentId:
           typeof metadata?.agentId === "string" && metadata.agentId.trim()
             ? metadata.agentId.trim()
-            : (existingLocal?.agentId ?? resolveAgentIdFromSessionKey(normalizedTargetSessionKey)),
+            : (existingLocal?.agentId ??
+              resolveAgentIdFromSessionKey(
+                normalizedTargetSessionKey,
+                resolveDefaultAgentId(params.cfg),
+              )),
         label:
           typeof metadata?.label === "string" && metadata.label.trim()
             ? metadata.label.trim()

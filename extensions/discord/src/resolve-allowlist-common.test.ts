@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   buildDiscordUnresolvedResults,
   filterDiscordGuilds,
-  findDiscordGuildByName,
   resolveDiscordAllowlistToken,
 } from "./resolve-allowlist-common.js";
 
@@ -14,7 +13,7 @@ describe("resolve-allowlist-common", () => {
   ];
 
   it("resolves and filters guilds by id or name", () => {
-    const mainGuild = findDiscordGuildByName(guilds, "Main Guild");
+    const [mainGuild] = filterDiscordGuilds(guilds, { guildName: "Main Guild" });
     if (!mainGuild) {
       throw new Error("expected Main Guild lookup result");
     }

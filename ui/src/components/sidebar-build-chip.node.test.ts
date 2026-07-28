@@ -9,6 +9,7 @@ function buildInfo(overrides: Partial<ControlUiBuildInfo> = {}): ControlUiBuildI
   return {
     version: "2026.7.10",
     commit: COMMIT,
+    commitAt: null,
     builtAt: BUILT_AT,
     branch: "main",
     dirty: false,
@@ -18,32 +19,25 @@ function buildInfo(overrides: Partial<ControlUiBuildInfo> = {}): ControlUiBuildI
 }
 
 describe("formatBuildChipText", () => {
-  const nowMs = Date.parse(BUILT_AT) + 24 * 60_000;
   const cases: Array<{
     name: string;
     info: ControlUiBuildInfo;
-    nowMs?: number;
     expected: string | null;
   }> = [
     {
       name: "main clean build",
       info: buildInfo(),
-      expected: "e8cbc62 · 24m",
+      expected: "e8cbc62",
     },
     {
       name: "non-main branch",
-      info: buildInfo({ branch: "feat/x", builtAt: "2026-07-10T12:19:00.000Z" }),
-      expected: "feat/x@e8cbc62 · 5m",
+      info: buildInfo({ branch: "feat/x" }),
+      expected: "feat/x@e8cbc62",
     },
     {
       name: "dirty worktree",
-      info: buildInfo({ dirty: true, builtAt: "2026-07-10T09:00:00.000Z" }),
-      expected: "e8cbc62* · 3h",
-    },
-    {
-      name: "missing build timestamp",
-      info: buildInfo({ builtAt: null }),
-      expected: "e8cbc62",
+      info: buildInfo({ dirty: true }),
+      expected: "e8cbc62*",
     },
     {
       name: "missing commit",
@@ -52,19 +46,24 @@ describe("formatBuildChipText", () => {
     },
     {
       name: "long branch",
-      info: buildInfo({ branch: "abcdefghijklmnop", builtAt: null }),
+      info: buildInfo({ branch: "abcdefghijklmnop" }),
       expected: "abcdefghijklmn…@e8cbc62",
     },
     {
-      name: "future build timestamp",
-      info: buildInfo({ builtAt: "2026-07-10T12:25:00.000Z" }),
-      expected: "e8cbc62 · 0s",
+      name: "long branch keeps an emoji that fits exactly at the boundary",
+      info: buildInfo({ branch: `${"a".repeat(12)}😀suffix` }),
+      expected: "aaaaaaaaaaaa😀…@e8cbc62",
+    },
+    {
+      name: "long branch does not split an emoji across the boundary",
+      info: buildInfo({ branch: `${"a".repeat(13)}😀suffix` }),
+      expected: "aaaaaaaaaaaaa…@e8cbc62",
     },
   ];
 
   for (const testCase of cases) {
     it(testCase.name, () => {
-      expect(formatBuildChipText(testCase.info, testCase.nowMs ?? nowMs)).toBe(testCase.expected);
+      expect(formatBuildChipText(testCase.info)).toBe(testCase.expected);
     });
   }
 });

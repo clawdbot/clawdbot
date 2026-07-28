@@ -1,0 +1,35 @@
+title: Matrix E2EE encrypted room replies decrypt end-to-end
+scenario:
+  id: matrix-e2ee-basic-reply
+  surface: channels
+  coverage:
+    primary:
+      - matrix.encryption-setup
+  execution:
+    profiles: { "matrix:all": 58, "matrix:e2ee-smoke": 0, "matrix:fast": 11 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 75000
+    retryCount: 0
+    config:
+      matrixConfigOverrides:
+        encryption: true
+        startupVerification: off
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: true
+            key: e2ee-basic-reply
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA E2EE Basic Reply Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee-messages.js
+  call: runMatrixQaE2eeBasicReplyScenario
+  args:
+    - expr: "scenarioContext"

@@ -3,6 +3,10 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Control UI view renders usage render details screen content.
 import { html, svg, nothing } from "lit";
 import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
+import {
+  renderPanelRefreshStatus,
+  type PanelRefreshStatus,
+} from "../../components/panel-refresh-status.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/tooltip.ts";
 import { formatDateTimeMs, formatMs, formatTimeMs } from "../../lib/format.ts";
@@ -35,6 +39,22 @@ function pct(part: number, total: number): number {
 /** Normalize a log timestamp to milliseconds (handles seconds vs ms). */
 function normalizeLogTimestamp(ts: number): number {
   return ts < 1e12 ? ts * 1000 : ts;
+}
+
+function dateBoundaryMs(date: string, timeZone: "local" | "utc", dayOffset: 0 | 1): number {
+  const year = Number(date.slice(0, 4));
+  const month = Number(date.slice(5, 7)) - 1;
+  const day = Number(date.slice(8, 10)) + dayOffset;
+  // Build the target date directly; advancing a normalized skipped midnight can retain 01:00.
+  return timeZone === "utc" ? Date.UTC(year, month, day) : new Date(year, month, day).getTime();
+}
+
+function dateKey(timestamp: number, timeZone: "local" | "utc"): string {
+  const value = new Date(timestamp);
+  const year = timeZone === "utc" ? value.getUTCFullYear() : value.getFullYear();
+  const month = (timeZone === "utc" ? value.getUTCMonth() : value.getMonth()) + 1;
+  const day = timeZone === "utc" ? value.getUTCDate() : value.getDate();
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
 /** Filter session logs by a timestamp range. */
@@ -231,6 +251,8 @@ function renderSessionDetailPanel(
   session: UsageSessionEntry,
   timeSeries: { points: TimeSeriesPoint[] } | null,
   timeSeriesLoading: boolean,
+  timeSeriesStatus: PanelRefreshStatus,
+  onRetryTimeSeries: () => void,
   timeSeriesMode: "cumulative" | "per-turn",
   onTimeSeriesModeChange: (mode: "cumulative" | "per-turn") => void,
   timeSeriesBreakdownMode: "total" | "by-type",
@@ -241,8 +263,11 @@ function renderSessionDetailPanel(
   startDate: string,
   endDate: string,
   selectedDays: string[],
+  timeZone: "local" | "utc",
   sessionLogs: SessionLogEntry[] | null,
   sessionLogsLoading: boolean,
+  sessionLogsStatus: PanelRefreshStatus,
+  onRetrySessionLogs: () => void,
   sessionLogsExpanded: boolean,
   onToggleSessionLogsExpanded: () => void,
   logFilters: {
@@ -329,6 +354,8 @@ function renderSessionDetailPanel(
           ${renderTimeSeriesCompact(
             timeSeries,
             timeSeriesLoading,
+            timeSeriesStatus,
+            onRetryTimeSeries,
             timeSeriesMode,
             onTimeSeriesModeChange,
             timeSeriesBreakdownMode,
@@ -336,6 +363,7 @@ function renderSessionDetailPanel(
             startDate,
             endDate,
             selectedDays,
+            timeZone,
             timeSeriesCursorStart,
             timeSeriesCursorEnd,
             onTimeSeriesCursorRangeChange,
@@ -345,6 +373,8 @@ function renderSessionDetailPanel(
           ${renderSessionLogsCompact(
             sessionLogs,
             sessionLogsLoading,
+            sessionLogsStatus,
+            onRetrySessionLogs,
             sessionLogsExpanded,
             onToggleSessionLogsExpanded,
             logFilters,
@@ -371,6 +401,8 @@ function renderSessionDetailPanel(
 function renderTimeSeriesCompact(
   timeSeries: { points: TimeSeriesPoint[] } | null,
   loading: boolean,
+  status: PanelRefreshStatus,
+  onRetry: () => void,
   mode: "cumulative" | "per-turn",
   onModeChange: (mode: "cumulative" | "per-turn") => void,
   breakdownMode: "total" | "by-type",
@@ -378,20 +410,41 @@ function renderTimeSeriesCompact(
   startDate?: string,
   endDate?: string,
   selectedDays?: string[],
+  timeZone: "local" | "utc" = "local",
   cursorStart?: number | null,
   cursorEnd?: number | null,
   onCursorRangeChange?: (start: number | null, end: number | null) => void,
 ) {
-  if (loading) {
+  if (loading && !status.hasLoaded) {
     return html`
       <div class="session-timeseries-compact">
         <div class="usage-empty-block">${t("usage.loading.badge")}</div>
       </div>
     `;
   }
+  const refreshStatus = renderPanelRefreshStatus({
+    status,
+    errorMessage: status.error
+      ? t("usage.details.loadFailed", {
+          detail: normalizeLowercaseStringOrEmpty(t("usage.details.usageOverTime")),
+          error: status.error,
+        })
+      : undefined,
+    onRetry,
+    className: "usage-callout usage-detail-error--timeline",
+  });
+  if (status.error && !status.hasLoaded) {
+    return html`
+      <div class="session-timeseries-compact">
+        <div class="card-title usage-section-title">${t("usage.details.usageOverTime")}</div>
+        ${refreshStatus}
+      </div>
+    `;
+  }
   if (!timeSeries || timeSeries.points.length < 2) {
     return html`
       <div class="session-timeseries-compact">
+        ${refreshStatus}
         <div class="usage-empty-block">${t("usage.details.noTimeline")}</div>
       </div>
     `;
@@ -400,17 +453,15 @@ function renderTimeSeriesCompact(
   // Filter and recalculate (same logic as main function)
   let points = timeSeries.points;
   if (startDate || endDate || (selectedDays && selectedDays.length > 0)) {
-    const startTs = startDate ? new Date(startDate + "T00:00:00").getTime() : 0;
-    const endTs = endDate ? new Date(endDate + "T23:59:59").getTime() : Infinity;
+    const startTs = startDate ? dateBoundaryMs(startDate, timeZone, 0) : 0;
+    const endTs = endDate ? dateBoundaryMs(endDate, timeZone, 1) : Infinity;
     const selectedDaySet = selectedDays?.length ? new Set(selectedDays) : undefined;
     points = timeSeries.points.filter((p) => {
-      if (p.timestamp < startTs || p.timestamp > endTs) {
+      if (p.timestamp < startTs || p.timestamp >= endTs) {
         return false;
       }
       if (selectedDaySet) {
-        const d = new Date(p.timestamp);
-        const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-        return selectedDaySet.has(dateStr);
+        return selectedDaySet.has(dateKey(p.timestamp, timeZone));
       }
       return true;
     });
@@ -418,6 +469,7 @@ function renderTimeSeriesCompact(
   if (points.length < 2) {
     return html`
       <div class="session-timeseries-compact">
+        ${refreshStatus}
         <div class="usage-empty-block">${t("usage.details.noDataInRange")}</div>
       </div>
     `;
@@ -474,6 +526,7 @@ function renderTimeSeriesCompact(
   const chartHeight = height - padding.top - padding.bottom;
   const isCumulative = mode === "cumulative";
   const breakdownByType = mode === "per-turn" && breakdownMode === "by-type";
+  const timeZoneOptions: Intl.DateTimeFormatOptions = timeZone === "utc" ? { timeZone: "UTC" } : {};
 
   const totalTypeTokens = filteredOutput + filteredInput + filteredCacheRead + filteredCacheWrite;
   const barTotals = points.map((p) =>
@@ -547,6 +600,7 @@ function renderTimeSeriesCompact(
             : nothing}
         </div>
       </div>
+      ${refreshStatus}
       <div class="timeseries-chart-wrapper">
         <svg viewBox="0 0 ${width} ${height + 18}" class="timeseries-svg">
           <!-- Y axis -->
@@ -585,8 +639,8 @@ function renderTimeSeriesCompact(
           <!-- X axis labels (first and last) -->
           ${points.length > 0
             ? svg`
-            <text x="${padding.left}" y="${padding.top + chartHeight + 10}" text-anchor="start" class="ts-axis-label">${formatTimeMs(expectDefined(points[0], "time series first point").timestamp, { hour: "2-digit", minute: "2-digit" }, "")}</text>
-            <text x="${width - padding.right}" y="${padding.top + chartHeight + 10}" text-anchor="end" class="ts-axis-label">${formatTimeMs(expectDefined(points.at(-1), "time series last point").timestamp, { hour: "2-digit", minute: "2-digit" }, "")}</text>
+            <text x="${padding.left}" y="${padding.top + chartHeight + 10}" text-anchor="start" class="ts-axis-label">${formatTimeMs(expectDefined(points[0], "time series first point").timestamp, { hour: "2-digit", minute: "2-digit", ...timeZoneOptions }, "")}</text>
+            <text x="${width - padding.right}" y="${padding.top + chartHeight + 10}" text-anchor="end" class="ts-axis-label">${formatTimeMs(expectDefined(points.at(-1), "time series last point").timestamp, { hour: "2-digit", minute: "2-digit", ...timeZoneOptions }, "")}</text>
           `
             : nothing}
           <!-- Bars -->
@@ -603,6 +657,7 @@ function renderTimeSeriesCompact(
                   day: "numeric",
                   hour: "2-digit",
                   minute: "2-digit",
+                  ...timeZoneOptions,
                 },
                 "",
               ),
@@ -761,9 +816,13 @@ function renderTimeSeriesCompact(
               ·
               ${formatTimeMs(
                 rangeStartTs,
-                { hour: "2-digit", minute: "2-digit" },
+                { hour: "2-digit", minute: "2-digit", ...timeZoneOptions },
                 "",
-              )}–${formatTimeMs(rangeEndTs, { hour: "2-digit", minute: "2-digit" }, "")}
+              )}–${formatTimeMs(
+                rangeEndTs,
+                { hour: "2-digit", minute: "2-digit", ...timeZoneOptions },
+                "",
+              )}
               ·
               ${formatTokens(
                 filteredOutput + filteredInput + filteredCacheRead + filteredCacheWrite,
@@ -1029,6 +1088,8 @@ function renderContextPanel(
 function renderSessionLogsCompact(
   logs: SessionLogEntry[] | null,
   loading: boolean,
+  status: PanelRefreshStatus,
+  onRetry: () => void,
   expandedAll: boolean,
   onToggleExpandedAll: () => void,
   filters: {
@@ -1045,7 +1106,7 @@ function renderSessionLogsCompact(
   cursorStart?: number | null,
   cursorEnd?: number | null,
 ) {
-  if (loading) {
+  if (loading && !status.hasLoaded) {
     return html`
       <div class="session-logs-compact">
         <div class="session-logs-header">${t("usage.details.conversation")}</div>
@@ -1053,10 +1114,30 @@ function renderSessionLogsCompact(
       </div>
     `;
   }
+  const refreshStatus = renderPanelRefreshStatus({
+    status,
+    errorMessage: status.error
+      ? t("usage.details.loadFailed", {
+          detail: normalizeLowercaseStringOrEmpty(t("usage.details.conversation")),
+          error: status.error,
+        })
+      : undefined,
+    onRetry,
+    className: "usage-callout usage-detail-error--conversation",
+  });
+  if (status.error && !status.hasLoaded) {
+    return html`
+      <div class="session-logs-compact">
+        <div class="session-logs-header">${t("usage.details.conversation")}</div>
+        ${refreshStatus}
+      </div>
+    `;
+  }
   if (!logs || logs.length === 0) {
     return html`
       <div class="session-logs-compact">
         <div class="session-logs-header">${t("usage.details.conversation")}</div>
+        ${refreshStatus}
         <div class="usage-empty-block">${t("usage.details.noMessages")}</div>
       </div>
     `;
@@ -1128,6 +1209,7 @@ function renderSessionLogsCompact(
           ${expandedAll ? t("usage.details.collapseAll") : t("usage.details.expandAll")}
         </button>
       </div>
+      ${refreshStatus}
       <div class="usage-filters-inline session-log-filters">
         <select
           multiple
@@ -1235,3 +1317,4 @@ function renderSessionLogsCompact(
 }
 
 export { renderSessionDetailPanel };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

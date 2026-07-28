@@ -4,7 +4,7 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
-import { isCrestodianOnlyCodexDynamicToolAllowlist } from "./dynamic-tool-profile.js";
+import { isSystemAgentOnlyCodexDynamicToolAllowlist } from "./dynamic-tool-profile.js";
 import type {
   CodexDynamicToolCallParams,
   CodexDynamicToolCallResponse,
@@ -108,15 +108,15 @@ export function handleApprovalRequest(params: {
 
 export function resolveCodexDynamicToolDirectNames(
   params: EmbeddedRunAttemptParams,
-  hostCrestodianActive = false,
+  hostSystemAgentActive = false,
 ): string[] {
   // Tools with catalogMode=direct-only use the model-only namespace. This list
   // remains for control tools that intentionally live at the dynamic-tool root.
   const names: string[] = [];
-  // Crestodian is the run's only tool and must stay callable when Codex tool
+  // OpenClaw is the run's only tool and must stay callable when Codex tool
   // search is unavailable. Exact toolsAllow is the public harness contract.
-  if (hostCrestodianActive && isCrestodianOnlyCodexDynamicToolAllowlist(params.toolsAllow)) {
-    names.push("crestodian");
+  if (hostSystemAgentActive && isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow)) {
+    names.push("openclaw");
   }
   if (params.sourceReplyDeliveryMode === "message_tool_only") {
     names.push("message");

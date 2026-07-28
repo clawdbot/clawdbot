@@ -28,6 +28,7 @@ import { registerExecApprovalFollowupRuntimeHandoff } from "./bash-tools.exec-ap
 import { sendExecApprovalFollowup } from "./bash-tools.exec-approval-followup.js";
 import {
   type ExecApprovalRegistration,
+  isExecApprovalRunAbortedError,
   resolveRegisteredExecApprovalDecision,
 } from "./bash-tools.exec-approval-request.js";
 import { buildApprovalPendingMessage } from "./bash-tools.exec-runtime.js";
@@ -82,10 +83,6 @@ type ExecApprovalUnavailableReason =
   | "no-approval-route"
   | "initiating-platform-disabled"
   | "initiating-platform-unsupported";
-
-function isHeadlessExecTrigger(trigger?: string): boolean {
-  return trigger === "cron";
-}
 
 /** Context returned after a default approval request is registered. */
 type RegisteredExecApprovalRequestContext = {
@@ -258,7 +255,10 @@ export async function resolveApprovalDecisionOrUndefined(params: {
       approvalId: params.approvalId,
       preResolvedDecision: params.preResolvedDecision,
     });
-  } catch {
+  } catch (error) {
+    if (isExecApprovalRunAbortedError(error)) {
+      throw error;
+    }
     params.onFailure();
     return undefined;
   }
@@ -414,17 +414,14 @@ export function enforceStrictInlineEvalApprovalBoundary(params: {
   };
 }
 
-/** Returns true when a headless run should resolve an unavailable approval inline. */
+/** Returns true when registration proved no approval decision can arrive later. */
 export function shouldResolveExecApprovalUnavailableInline(params: {
-  trigger?: string;
   unavailableReason: ExecApprovalUnavailableReason | null;
   preResolvedDecision: string | null | undefined;
 }): boolean {
-  return (
-    isHeadlessExecTrigger(params.trigger) &&
-    params.unavailableReason === "no-approval-route" &&
-    params.preResolvedDecision === null
-  );
+  // finalDecision:null is emitted only after the gateway expires a no-route record.
+  // Resolve fallback inline; an async wait can never observe a later decision.
+  return params.unavailableReason === "no-approval-route" && params.preResolvedDecision === null;
 }
 
 /** Builds the denial copy for headless runs that cannot wait for approval. */

@@ -972,3 +972,4 @@ function formatRelative(ms: number): string {
   }
   return new Date(ms).toLocaleDateString();
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

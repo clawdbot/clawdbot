@@ -64,7 +64,9 @@ describe("MattermostConfigSchema", () => {
           label: "Shelling",
           maxLines: 4,
           toolProgress: false,
+          commandText: "status",
         },
+        preview: { commandText: "raw" },
       },
       accounts: {
         quiet: {
@@ -102,6 +104,18 @@ describe("MattermostConfigSchema", () => {
           groups: {
             "*": { requireMention: true },
           },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts implicit mention policy at root and account scope", () => {
+    const result = MattermostConfigSchema.safeParse({
+      implicitMentions: { threadParticipation: false },
+      accounts: {
+        main: {
+          implicitMentions: { replyToBot: false },
         },
       },
     });

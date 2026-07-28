@@ -45,7 +45,7 @@ import {
   markExited,
   tail,
 } from "./bash-process-registry.js";
-import { renderExecUpdateText } from "./bash-tools.exec-output.js";
+import { appendExecTimeoutRetryGuidance, renderExecUpdateText } from "./bash-tools.exec-output.js";
 import {
   buildDockerExecArgs,
   chunkString,
@@ -54,7 +54,7 @@ import {
 } from "./bash-tools.shared.js";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
 import { maybeWrapCommandWithShellSnapshot } from "./shell-snapshot.js";
-import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
+import { createStreamingBinaryOutputSanitizer, getShellConfig } from "./shell-utils.js";
 
 export { execSchema } from "./bash-tools.schemas.js";
 
@@ -331,11 +331,12 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   const summary = output
     ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
     : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
+  const eventText = appendExecTimeoutRetryGuidance(summary, session.exitReason);
   const eventRouting = session.eventRouting ?? {
     mainKey: session.mainKey,
     sessionScope: session.sessionScope,
   };
-  enqueueSystemEvent(summary, {
+  enqueueSystemEvent(eventText, {
     sessionKey: resolveEventSessionKeyForPolicy(sessionKey, eventRouting),
     deliveryContext: session.notifyDeliveryContext,
   });
@@ -450,12 +451,18 @@ function formatExecFailureReason(params: {
       return "Command not found";
     case "shell-not-executable":
       return "Command not executable (permission denied)";
-    case "overall-timeout":
-      return typeof params.timeoutSec === "number" && params.timeoutSec > 0
-        ? `Command timed out after ${params.timeoutSec} seconds. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300). If it should keep running, start it with exec background=true or yieldMs so OpenClaw can register a pollable process session. Do not rely on shell backgrounding with a trailing &.`
-        : "Command timed out. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300). If it should keep running, start it with exec background=true or yieldMs so OpenClaw can register a pollable process session. Do not rely on shell backgrounding with a trailing &.";
+    case "overall-timeout": {
+      const timeoutText =
+        typeof params.timeoutSec === "number" && params.timeoutSec > 0
+          ? `Command timed out after ${params.timeoutSec} seconds.`
+          : "Command timed out.";
+      return `${appendExecTimeoutRetryGuidance(timeoutText, params.failureKind)}\n\nIf it should keep running, start it with exec background=true or yieldMs so OpenClaw can register a pollable process session. Do not rely on shell backgrounding with a trailing &.`;
+    }
     case "no-output-timeout":
-      return "Command timed out waiting for output";
+      return appendExecTimeoutRetryGuidance(
+        "Command timed out waiting for output.",
+        params.failureKind,
+      );
     case "signal":
       return `Command aborted by signal ${params.exitSignal}`;
     case "aborted":
@@ -600,6 +607,8 @@ export async function runExecProcess(opts: {
   notifyDeliveryContext?: DeliveryContext;
   timeoutSec: number | null;
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
+  /** Runs after process finalization and before the exit wake is queued. */
+  onSettledBeforeNotify?: (outcome: ExecProcessOutcome) => void;
 }): Promise<ExecProcessHandle> {
   const startedAt = Date.now();
   const sessionId = createSessionSlug();
@@ -685,16 +694,20 @@ export async function runExecProcess(opts: {
     });
   };
 
+  // One parser per stream so ESC sequences split across chunks are not mangled.
+  const sanitizeStdout = createStreamingBinaryOutputSanitizer();
+  const sanitizeStderr = createStreamingBinaryOutputSanitizer();
+
   const handleStdout = (data: string) => {
     const raw = data;
-    // Detect smkx/rmkx BEFORE sanitizeBinaryOutput strips ESC sequences.
+    // Detect smkx/rmkx BEFORE the sanitizer strips ESC sequences.
     // Note: PTY chunking is arbitrary, but smkx/rmkx sequences are typically short (4-5 bytes)
     // and sent atomically by terminals. Split across chunks is rare in practice.
     const mode = detectCursorKeyMode(raw);
     if (mode) {
       session.cursorKeyMode = mode;
     }
-    const str = sanitizeBinaryOutput(raw);
+    const str = sanitizeStdout(raw);
     for (const chunk of chunkString(str)) {
       appendOutput(session, "stdout", chunk);
       emitUpdate();
@@ -702,7 +715,7 @@ export async function runExecProcess(opts: {
   };
 
   const handleStderr = (data: string) => {
-    const str = sanitizeBinaryOutput(data);
+    const str = sanitizeStderr(data);
     for (const chunk of chunkString(str)) {
       appendOutput(session, "stderr", chunk);
       emitUpdate();
@@ -751,7 +764,8 @@ export async function runExecProcess(opts: {
       // Finalization can release remote process/session resources. Keep the
       // background-work blocker until that owner transition has settled.
       session.finalizing = false;
-      if (!session.exited) {
+      const shouldNotify = !session.exited;
+      if (shouldNotify) {
         markExited(
           session,
           finalOutcome.exitCode,
@@ -760,6 +774,9 @@ export async function runExecProcess(opts: {
           finalOutcome.exitReason,
           finalOutcome.noOutputTimedOut,
         );
+      }
+      opts.onSettledBeforeNotify?.(finalOutcome);
+      if (shouldNotify) {
         maybeNotifyOnExit(session, finalOutcome.status);
       }
     }
@@ -1015,3 +1032,4 @@ export async function runExecProcess(opts: {
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

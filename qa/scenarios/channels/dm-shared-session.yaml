@@ -5,8 +5,8 @@ scenario:
   surface: dm
   coverage:
     primary:
-      - channels.dm
-      - memory.session-key-construction
+      - matrix.sender-bound-dm-routing
+      - channels.session-key-construction
   objective: Verify the default Matrix per-user DM session emits a cross-room notice when the same sender moves to another DM room.
   successCriteria:
     - Both DM rooms receive top-level marker replies.
@@ -15,13 +15,13 @@ scenario:
     - docs/channels/matrix.md
   codeRefs:
     - extensions/matrix/src/matrix/monitor/handler.ts
-    - extensions/qa-matrix/src/adapter.runtime.ts
+    - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
   execution:
+    profiles: { "matrix:adapter": 11, "matrix:all": 15, "matrix:transport": 14 }
     kind: flow
     channel: matrix
     summary: Send consecutive DMs from one Matrix user in two rooms and require the shared-session notice.
     config:
-      requiredChannelDriver: live
       primaryConversationId: driver-dm
       secondaryConversationId: driver-dm-shared
       primaryMarker: QA-MATRIX-DM-PRIMARY-OK
@@ -31,16 +31,13 @@ flow:
   steps:
     - name: emits the cross-room shared-session notice
       actions:
-        - assert:
-            expr: transport.id === 'matrix'
-            message: Matrix shared DM session scenario requires the live Matrix adapter
         - resetTransport: true
         - sendInbound:
             conversation:
               id:
                 ref: config.primaryConversationId
               kind: direct
-            senderId: "@driver:matrix.test"
+            senderId: driver
             senderName: QA Driver
             text:
               expr: "`Reply exactly: ${config.primaryMarker}`"
@@ -61,7 +58,7 @@ flow:
               id:
                 ref: config.secondaryConversationId
               kind: direct
-            senderId: "@driver:matrix.test"
+            senderId: driver
             senderName: QA Driver
             text:
               expr: "`Reply exactly: ${config.secondaryMarker}`"

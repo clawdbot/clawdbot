@@ -62,7 +62,7 @@ type QaConfidenceManifestLane = {
   labels?: string[];
 };
 
-export type QaConfidenceManifest = {
+type QaConfidenceManifest = {
   version: 1;
   profile: string;
   lanes: QaConfidenceManifestLane[];
@@ -1028,7 +1028,7 @@ async function detectRuntimeDrift(params: {
   const result = await runRuntimeParityScenario({
     scenarioId: params.scenarioId,
     runCell: async (runtime) => ({
-      scenarioStatus: "pass",
+      status: "pass",
       cell: runtime === "openclaw" ? params.openclaw : params.codex,
     }),
   });
@@ -1100,7 +1100,10 @@ function detectTokenEfficiencyRegression(): boolean {
   });
   const runtimeParity: RuntimeParityResult = {
     scenarioId: "token-efficiency-regression",
-    cells: { openclaw, codex },
+    cells: {
+      openclaw: { ...openclaw, status: "pass" },
+      codex: { ...codex, status: "pass" },
+    },
     drift: "none",
   };
   const report = buildTokenEfficiencyReport({
@@ -1136,7 +1139,7 @@ function detectJsonlReplayDrift(): boolean {
   }).passed;
 }
 
-export async function buildQaConfidenceSelfTestSummary(
+async function buildQaConfidenceSelfTestSummary(
   generatedAt = new Date().toISOString(),
 ): Promise<QaConfidenceSelfTestSummary> {
   const promptDriftDetected = detectHarnessDrift({
@@ -1300,3 +1303,4 @@ export async function writeQaConfidenceSelfTestArtifacts(params: {
   await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
   return { reportPath, summaryPath, summary };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

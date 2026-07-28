@@ -5,7 +5,7 @@
  * maps active scopes to caller-provided text formatters.
  */
 import { createRequire } from "node:module";
-import { decodeHtmlEntities } from "./html.js";
+import { decodeHtmlEntities } from "../../shared/html-entities.js";
 
 type HighlightJs = {
   getLanguage(name: string): unknown;

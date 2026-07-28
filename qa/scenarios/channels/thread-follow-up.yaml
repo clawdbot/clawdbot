@@ -5,10 +5,10 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.threads
       - channels.thread-parent-child-placement
+      - channels.native-threads
     secondary:
-      - runtime.delivery
+      - channels.automatic-final-reply
   objective: Verify a follow-up sent inside a thread receives one reply in the same thread.
   successCriteria:
     - The transport accepts a normalized threaded inbound message.
@@ -20,10 +20,17 @@ scenario:
   codeRefs:
     - extensions/qa-lab/src/qa-transport.ts
     - extensions/qa-lab/src/live-transports/slack/adapter.runtime.ts
-    - extensions/qa-matrix/src/adapter.runtime.ts
+    - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
   execution:
+    profiles:
+      {
+        "matrix:adapter": 8,
+        "matrix:all": 1,
+        "matrix:fast": 1,
+        "matrix:transport": 0,
+        "slack:adapter": 4,
+      }
     kind: flow
-    channel: matrix
     summary: Send a deterministic follow-up through the shared host and require native thread relation evidence.
     config:
       rootMarker: QA-THREAD-ROOT-OK

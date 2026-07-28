@@ -342,11 +342,11 @@ export function readProvidedCandidate(params: {
   };
 }
 
-export function readPackageJson(packageRoot: string): PackageJson {
+function readPackageJson(packageRoot: string): PackageJson {
   return JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")) as PackageJson;
 }
 
-export function packageJsonHasScript(packageJson: PackageJson, scriptName: string) {
+function packageJsonHasScript(packageJson: PackageJson, scriptName: string) {
   return typeof packageJson?.scripts?.[scriptName] === "string";
 }
 
@@ -740,7 +740,7 @@ export function readInstalledMetadata(prefixDir: string) {
   return readInstalledMetadataFromManifest(packageJson, packageRoot);
 }
 
-export function readInstalledMetadataFromPackageRoot(packageRoot: string) {
+function readInstalledMetadataFromPackageRoot(packageRoot: string) {
   const { packageJson } = readInstalledPackageManifestFromPackageRoot(packageRoot);
   return readInstalledMetadataFromManifest(packageJson, packageRoot);
 }
@@ -822,7 +822,7 @@ export function resolveInstalledPackageRootFromCliPath(
   throw new Error(`Installed package manifest missing. Checked: ${checked.join(", ")}`);
 }
 
-export function installedPackageRoot(prefixDir: string, platform = process.platform) {
+function installedPackageRoot(prefixDir: string, platform = process.platform) {
   return platform === "win32"
     ? join(prefixDir, "node_modules", "openclaw")
     : join(prefixDir, "lib", "node_modules", "openclaw");
@@ -832,7 +832,7 @@ export function installedEntryPath(prefixDir: string) {
   return join(installedPackageRoot(prefixDir), "openclaw.mjs");
 }
 
-export function npmShimPath(prefixDir: string) {
+function npmShimPath(prefixDir: string) {
   return process.platform === "win32" ? join(prefixDir, "npm.cmd") : join(prefixDir, "bin", "npm");
 }
 
@@ -840,7 +840,7 @@ export function binDirForPrefix(prefixDir: string) {
   return process.platform === "win32" ? prefixDir : join(prefixDir, "bin");
 }
 
-export function pnpmCommand() {
+function pnpmCommand() {
   return process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 }
 
@@ -848,7 +848,7 @@ export function npmCommand() {
   return process.platform === "win32" ? "npm.cmd" : "npm";
 }
 
-export function gitCommand() {
+function gitCommand() {
   return process.platform === "win32" ? "git.exe" : "git";
 }
 

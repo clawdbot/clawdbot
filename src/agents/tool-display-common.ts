@@ -816,3 +816,4 @@ export function formatToolDetailText(
   }
   return opts.prefixWithWith ? `with ${normalized}` : normalized;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

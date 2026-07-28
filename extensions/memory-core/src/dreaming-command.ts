@@ -6,7 +6,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { asRecord } from "./dreaming-shared.js";
 import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
 
-function resolveMemoryCorePluginConfig(cfg: OpenClawConfig): Record<string, unknown> {
+function resolveDreamingPluginConfig(cfg: OpenClawConfig): Record<string, unknown> {
   const entry = asRecord(cfg.plugins?.entries?.["memory-core"]);
   return asRecord(entry?.config) ?? {};
 }
@@ -49,7 +49,7 @@ function formatPhaseGuide(): string {
 }
 
 function formatStatus(cfg: OpenClawConfig): string {
-  const pluginConfig = resolveMemoryCorePluginConfig(cfg);
+  const pluginConfig = resolveDreamingPluginConfig(cfg);
   const dreaming = resolveMemoryDreamingConfig({
     pluginConfig,
     cfg,

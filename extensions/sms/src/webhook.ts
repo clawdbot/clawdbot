@@ -1,16 +1,14 @@
 // Sms plugin module implements webhook behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { performance } from "node:perf_hooks";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createFixedWindowRateLimiter,
   resolveRequestClientIp,
 } from "openclaw/plugin-sdk/webhook-ingress";
-import { dispatchSmsInboundEvent, type SmsChannelRuntime } from "./inbound.js";
 import {
-  buildTwilioInboundMessage,
   readTwilioWebhookForm,
   respondTwiml,
+  resolveTwilioMessageSid,
   resolveTwilioWebhookSignatureUrl,
   verifyTwilioSignature,
 } from "./twilio.js";
@@ -32,81 +30,6 @@ const callbackDispatchRateLimiter = createFixedWindowRateLimiter({
   windowMs: 60_000,
   maxTrackedKeys: 5_000,
 });
-const REPLAY_CACHE_TTL_MS = 10 * 60_000;
-const REPLAY_CACHE_MAX_KEYS = 10_000;
-
-type ReplayCacheDecision =
-  | { kind: "accepted" }
-  | { kind: "replayed" }
-  | { kind: "saturated"; retryAfterMs: number };
-
-type SmsWebhookReplayGuard = {
-  remember: (messageSid: string) => ReplayCacheDecision;
-};
-
-const replayGuardsByAccount = new Map<string, SmsWebhookReplayGuard>();
-
-function createSmsWebhookReplayGuard(
-  options: {
-    ttlMs?: number;
-    maxKeys?: number;
-    now?: () => number;
-  } = {},
-): SmsWebhookReplayGuard {
-  const ttlMs = options.ttlMs ?? REPLAY_CACHE_TTL_MS;
-  const maxKeys = options.maxKeys ?? REPLAY_CACHE_MAX_KEYS;
-  const now = options.now ?? (() => performance.now());
-  const entries = new Map<string, number>();
-
-  const pruneExpired = (nowMs: number) => {
-    // Fixed TTLs on a monotonic clock expire in insertion order, so only inspect
-    // the expired prefix. Full live caches stay O(1) instead of rescanning 10k keys.
-    for (const [key, expiresAt] of entries) {
-      if (expiresAt > nowMs) {
-        break;
-      }
-      entries.delete(key);
-    }
-  };
-
-  return {
-    remember: (messageSid) => {
-      const nowMs = now();
-      pruneExpired(nowMs);
-      if (entries.has(messageSid)) {
-        return { kind: "replayed" };
-      }
-      if (entries.size >= maxKeys) {
-        const oldestExpiresAt = entries.values().next().value ?? nowMs;
-        return {
-          kind: "saturated",
-          retryAfterMs: Math.max(0, oldestExpiresAt - nowMs),
-        };
-      }
-      entries.set(messageSid, nowMs + ttlMs);
-      return { kind: "accepted" };
-    },
-  };
-}
-
-function resolveSmsWebhookReplayGuard(account: ResolvedSmsAccount): SmsWebhookReplayGuard {
-  // Config reloads replace route handlers. Keep the guard with the Twilio account
-  // identity so retries cannot cross that lifecycle boundary or block sibling accounts.
-  const key = `${account.accountId}\0${account.accountSid}`;
-  const existing = replayGuardsByAccount.get(key);
-  if (existing) {
-    return existing;
-  }
-  const created = createSmsWebhookReplayGuard();
-  replayGuardsByAccount.set(key, created);
-  return created;
-}
-
-function resetSmsWebhookReplayGuardsForTest(): void {
-  replayGuardsByAccount.clear();
-  invalidRequestRateLimiter.clear();
-  callbackDispatchRateLimiter.clear();
-}
 
 type SmsWebhookLog = {
   info?: (message: string) => void;
@@ -117,7 +40,9 @@ type SmsWebhookLog = {
 export type SmsWebhookHandlerParams = {
   cfg: OpenClawConfig;
   account: ResolvedSmsAccount;
-  channelRuntime: SmsChannelRuntime;
+  ingress: {
+    enqueue: (form: Record<string, string>) => Promise<{ duplicate: boolean }>;
+  };
   log?: SmsWebhookLog;
 };
 
@@ -154,17 +79,8 @@ function rejectInvalidRequestRateLimit(params: {
   return true;
 }
 
-/** Test-only hooks for webhook state that is otherwise private. */
-export const testing = {
-  createSmsWebhookReplayGuard,
-  resetSmsWebhookReplayGuardsForTest,
-};
-
-// Each account route owns its guard so one saturated account cannot block sibling accounts.
-export function createSmsWebhookHandler(
-  params: SmsWebhookHandlerParams,
-  webhookReplayGuard: SmsWebhookReplayGuard = resolveSmsWebhookReplayGuard(params.account),
-) {
+// Each account route owns one durable ingress adapter.
+export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
   return async (req: IncomingMessage, res: ServerResponse) => {
     if (req.method !== "POST") {
       respondTwiml(res, 405, "Method not allowed");
@@ -206,22 +122,6 @@ export function createSmsWebhookHandler(
       }
     }
 
-    const msg = buildTwilioInboundMessage(form);
-    if (!msg) {
-      if (invalidRequestRateLimited) {
-        return rejectInvalidRequestRateLimit({ key, log: params.log, res });
-      }
-      respondTwiml(res, 400, "Missing SMS payload");
-      return true;
-    }
-    if (msg.accountSid && msg.accountSid !== params.account.accountSid) {
-      if (invalidRequestRateLimited) {
-        return rejectInvalidRequestRateLimit({ key, log: params.log, res });
-      }
-      params.log?.warn?.("SMS webhook rejected mismatched Twilio AccountSid");
-      respondTwiml(res, 403, "Invalid account");
-      return true;
-    }
     if (invalidRequestRateLimited && params.account.dangerouslyDisableSignatureValidation) {
       return rejectInvalidRequestRateLimit({ key, log: params.log, res });
     }
@@ -230,32 +130,19 @@ export function createSmsWebhookHandler(
       respondTwiml(res, 429, "Rate limit exceeded");
       return true;
     }
-    const replayDecision = webhookReplayGuard.remember(msg.messageSid);
-    if (replayDecision.kind === "replayed") {
-      params.log?.warn?.(`SMS webhook ignored replayed message ${msg.messageSid}`);
-      respondTwiml(res, 200);
+    const messageSid = resolveTwilioMessageSid(form);
+    if (!messageSid) {
+      respondTwiml(res, 400, "Missing MessageSid");
       return true;
     }
-    if (replayDecision.kind === "saturated") {
-      const retryAfterSeconds = Math.max(1, Math.ceil(replayDecision.retryAfterMs / 1000));
-      params.log?.warn?.("SMS webhook replay cache is full of unexpired message SIDs");
-      res.setHeader("Retry-After", String(retryAfterSeconds));
-      respondTwiml(res, 429, "Replay cache saturated");
-      return true;
+    // Signature validation owns the parsed-but-otherwise-raw Twilio form.
+    // A 200 is impossible until SQLite commits this exact transport envelope.
+    const verdict = await params.ingress.enqueue(form);
+    if (verdict.duplicate) {
+      params.log?.warn?.(`SMS webhook ignored replayed message ${messageSid}`);
     }
-
-    void dispatchSmsInboundEvent({
-      cfg: params.cfg,
-      account: params.account,
-      msg,
-      channelRuntime: params.channelRuntime,
-      log: params.log,
-    }).catch((err: unknown) => {
-      params.log?.error?.(
-        `SMS webhook dispatch failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    });
-
+    // Durable admission also reserves the monitor pump under this HTTP request's
+    // detached work root, so the response can acknowledge immediately after commit.
     respondTwiml(res, 200);
     return true;
   };

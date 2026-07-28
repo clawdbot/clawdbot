@@ -1,0 +1,28 @@
+title: Matrix approval prompt preserves thread targeting metadata
+scenario:
+  id: matrix-approval-thread-target
+  surface: channels
+  coverage:
+    primary:
+      - channels.channel-native-approval-prompts
+  execution:
+    profiles: { "matrix:all": 29, "matrix:transport": 28 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 75000
+    retryCount: 0
+    config:
+      matrixConfigOverrides:
+        approvalForwarding:
+          exec: true
+        dm:
+          enabled: true
+        execApprovals:
+          enabled: true
+          target: channel
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-approval.js
+  call: runApprovalThreadTargetScenario
+  args:
+    - expr: "scenarioContext"

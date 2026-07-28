@@ -63,6 +63,7 @@ export async function mergeHybridResults(params: {
   keyword: HybridKeywordResult[];
   vectorWeight: number;
   textWeight: number;
+  isNonTextMediaPath?: (path: string) => boolean;
   workspaceDir?: string;
   /** MMR configuration for diversity-aware re-ranking */
   mmr?: Partial<MMRConfig>;
@@ -96,6 +97,8 @@ export async function mergeHybridResults(params: {
       rankingScore: number;
       pathScore: number;
       exactPathSpecificity: ExactPathSpecificity;
+      hasVector: boolean;
+      hasKeyword: boolean;
     }
   >();
 
@@ -112,6 +115,8 @@ export async function mergeHybridResults(params: {
       rankingScore: 0,
       pathScore: 0,
       exactPathSpecificity: r.exactPathSpecificity ?? 0,
+      hasVector: true,
+      hasKeyword: false,
     });
   }
 
@@ -126,6 +131,7 @@ export async function mergeHybridResults(params: {
         existing.exactPathSpecificity,
         exactPathSpecificity,
       ) as ExactPathSpecificity;
+      existing.hasKeyword = true;
       if (r.snippet && r.snippet.length > 0) {
         existing.snippet = r.snippet;
       }
@@ -142,6 +148,8 @@ export async function mergeHybridResults(params: {
         rankingScore: r.rankingScore ?? r.textScore,
         pathScore: r.pathScore ?? 0,
         exactPathSpecificity,
+        hasVector: false,
+        hasKeyword: true,
       });
     }
   }
@@ -156,7 +164,14 @@ export async function mergeHybridResults(params: {
         : entry.exactPathSpecificity > 0
           ? 0
           : entry.pathScore;
-    const contentScore = params.vectorWeight * entry.vectorScore + params.textWeight * keywordScore;
+    const dropMediaTextSignal =
+      entry.hasVector &&
+      !entry.hasKeyword &&
+      params.vectorWeight > 0 &&
+      params.isNonTextMediaPath?.(entry.path) === true;
+    const contentScore = dropMediaTextSignal
+      ? entry.vectorScore
+      : params.vectorWeight * entry.vectorScore + params.textWeight * keywordScore;
     const hasWeightedContentRelevance = contentScore > 0;
     // With decay enabled, reserve the lower half of an exact tier for path
     // identity and the upper half for content relevance. This lets recency beat

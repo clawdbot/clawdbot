@@ -1,3 +1,4 @@
+import type { ResolvedChannelImplicitMentions } from "openclaw/plugin-sdk/channel-ingress-runtime";
 // Mattermost type declarations define plugin contracts.
 import type { ChannelPreviewStreamingConfig } from "openclaw/plugin-sdk/channel-outbound";
 import type { DmPolicy, GroupPolicy } from "./runtime-api.js";
@@ -41,6 +42,8 @@ export type MattermostAccountConfig = {
   oncharPrefixes?: string[];
   /** Require @mention to respond in channels. Default: true. */
   requireMention?: boolean;
+  /** Implicit mention policy for replies, quotes, and participated threads. */
+  implicitMentions?: Partial<ResolvedChannelImplicitMentions>;
   /** Direct message policy (pairing/allowlist/open/disabled). */
   dmPolicy?: DmPolicy;
   /** Allowlist for direct messages (user ids or @usernames). */

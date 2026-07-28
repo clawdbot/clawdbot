@@ -50,6 +50,13 @@ export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRun
   const legacy = entry as LegacySubagentRunRecord;
   const taskRunId = typeof entry.taskRunId === "string" ? entry.taskRunId.trim() : "";
   entry.taskRunId = taskRunId || undefined;
+  const requesterTurnRunId =
+    typeof entry.requesterTurnRunId === "string" ? entry.requesterTurnRunId.trim() : "";
+  entry.requesterTurnRunId = requesterTurnRunId || undefined;
+  entry.requesterTurnYielded =
+    requesterTurnRunId && entry.requesterTurnYielded === true ? true : undefined;
+  entry.retireAfterRequesterTurn =
+    requesterTurnRunId && entry.retireAfterRequesterTurn === true ? true : undefined;
   entry.generation =
     typeof entry.generation === "number" &&
     Number.isSafeInteger(entry.generation) &&

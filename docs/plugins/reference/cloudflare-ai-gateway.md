@@ -16,7 +16,7 @@ Adds Cloudflare AI Gateway model provider support to OpenClaw.
 
 ## Surface
 
-providers: cloudflare-ai-gateway
+providers: `cloudflare-ai-gateway`
 
 ## Related docs
 

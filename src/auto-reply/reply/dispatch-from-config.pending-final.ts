@@ -1,5 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntryReadOnly,
+  updateSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
@@ -20,6 +23,46 @@ type PendingFinalDeliveryIdentity = {
   present: boolean;
   text?: string;
 };
+
+function buildPendingFinalDeliveryCleanupPatch(entry: SessionEntry): Partial<SessionEntry> {
+  // An active receipt/claim may outlive outer reply settlement. Only claimless pending finals
+  // borrow hook provenance until their exact transport intent settles.
+  const clearsRestartRecoveryProof =
+    normalizeOptionalString(entry.restartRecoveryDeliveryRunId) === undefined;
+  const completesHookHandledTurn =
+    clearsRestartRecoveryProof &&
+    (entry.restartRecoveryBeforeAgentReplyState === "handled-reply" ||
+      entry.restartRecoveryBeforeAgentReplyState === "handled-unrecoverable");
+  const endedAt = completesHookHandledTurn ? Date.now() : undefined;
+  return {
+    pendingFinalDelivery: undefined,
+    pendingFinalDeliveryText: undefined,
+    pendingFinalDeliveryCreatedAt: undefined,
+    pendingFinalDeliveryLastAttemptAt: undefined,
+    pendingFinalDeliveryAttemptCount: undefined,
+    pendingFinalDeliveryLastError: undefined,
+    pendingFinalDeliveryContext: undefined,
+    pendingFinalDeliveryIntentId: undefined,
+    ...(clearsRestartRecoveryProof
+      ? {
+          restartRecoveryBeforeAgentReplyState: undefined,
+          restartRecoverySourceIngress: undefined,
+          restartRecoveryForceSafeTools: undefined,
+        }
+      : {}),
+    ...(endedAt !== undefined
+      ? {
+          abortedLastRun: false,
+          endedAt,
+          runtimeMs:
+            typeof entry.startedAt === "number"
+              ? Math.max(0, endedAt - entry.startedAt)
+              : undefined,
+          status: "done" as const,
+        }
+      : {}),
+  };
+}
 
 function matchesPendingFinalDeliveryIdentity(
   entry: SessionEntry,
@@ -57,14 +100,7 @@ export async function clearPendingFinalDeliveryAfterSuccess(params: {
         return null;
       }
       return {
-        pendingFinalDelivery: undefined,
-        pendingFinalDeliveryText: undefined,
-        pendingFinalDeliveryCreatedAt: undefined,
-        pendingFinalDeliveryLastAttemptAt: undefined,
-        pendingFinalDeliveryAttemptCount: undefined,
-        pendingFinalDeliveryLastError: undefined,
-        pendingFinalDeliveryContext: undefined,
-        pendingFinalDeliveryIntentId: undefined,
+        ...buildPendingFinalDeliveryCleanupPatch(entry),
         updatedAt: Date.now(),
       };
     },
@@ -81,7 +117,7 @@ export function capturePendingFinalDeliveryIdentity(params: {
     return undefined;
   }
   try {
-    const entry = loadSessionEntry({
+    const entry = loadSessionEntryReadOnly({
       storePath: params.storePath,
       sessionKey: params.sessionKey,
       hydrateSkillPromptRefs: false,
@@ -213,14 +249,7 @@ export async function reconcilePendingFinalDeliveryAfterSettlement(params: {
         }
       }
       return {
-        pendingFinalDelivery: undefined,
-        pendingFinalDeliveryText: undefined,
-        pendingFinalDeliveryCreatedAt: undefined,
-        pendingFinalDeliveryLastAttemptAt: undefined,
-        pendingFinalDeliveryAttemptCount: undefined,
-        pendingFinalDeliveryLastError: undefined,
-        pendingFinalDeliveryContext: undefined,
-        pendingFinalDeliveryIntentId: undefined,
+        ...buildPendingFinalDeliveryCleanupPatch(entry),
         updatedAt: Date.now(),
       };
     },

@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Control UI tests cover translate behavior.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -87,6 +88,7 @@ describe("i18n", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it("should return the key if translation is missing", () => {
@@ -132,6 +134,30 @@ describe("i18n", () => {
     expect(fresh.i18n.getLocale()).toBe("zh-CN");
     expect(fresh.t("common.health")).toBe("健康状况");
   });
+
+  it.each([
+    ["zh-Hant", "zh-TW"],
+    ["zh-Hant-TW", "zh-TW"],
+    ["zh-Hant-HK", "zh-TW"],
+    ["zh-Hant-MO", "zh-TW"],
+    ["zh-MO", "zh-TW"],
+    ["ZH-hAnT-hK", "zh-TW"],
+    ["zh-Hans-HK", "zh-CN"],
+    ["ZH-hAnS-hK", "zh-CN"],
+  ] as const)(
+    "loads the %s browser language as the registered %s locale on startup",
+    async (browserLanguage, expectedLocale) => {
+      vi.stubGlobal("navigator", { language: browserLanguage } as Navigator);
+      localStorage.removeItem("openclaw.i18n.locale");
+
+      const fresh = await importFreshTranslate();
+
+      await vi.waitFor(() => expect(fresh.i18n.getLocale()).toBe(expectedLocale));
+      expect(fresh.t("common.health")).toBe(
+        readString(expectedLocale === "zh-TW" ? zh_TW : zh_CN, "common.health"),
+      );
+    },
+  );
 
   it("skips node localStorage accessors that warn without a storage file", async () => {
     vi.unstubAllGlobals();

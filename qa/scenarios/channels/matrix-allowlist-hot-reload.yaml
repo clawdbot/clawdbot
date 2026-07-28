@@ -13,82 +13,20 @@ scenario:
   docsRefs:
     - docs/channels/matrix.md
   codeRefs:
-    - extensions/qa-matrix/src/adapter.runtime.ts
+    - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
   execution:
+    profiles: { "matrix:all": 46, "matrix:release": 1, "matrix:transport": 45 }
     kind: flow
     channel: matrix
+    timeoutMs: 75000
+    retryCount: 0
     suiteIsolation: isolated
     summary: Exercise Matrix observer-role allowlist hot reload through normalized transport state.
     config:
-      requiredChannelDriver: live
       accountId: sut
 
 flow:
-  steps:
-    - name: removes observer access without restart
-      actions:
-        - call: waitForGatewayHealthy
-          args: [{ ref: env }, 60000]
-        - call: waitForTransportReady
-          args: [{ ref: env }, 60000]
-        - call: patchConfig
-          args:
-            - env: { ref: env }
-              patch:
-                channels:
-                  matrix:
-                    accounts:
-                      sut:
-                        groupAllowFrom:
-                          expr: "[env.gateway.runtimeEnv.OPENCLAW_QA_MATRIX_DRIVER_USER_ID, env.gateway.runtimeEnv.OPENCLAW_QA_MATRIX_OBSERVER_USER_ID]"
-                gateway:
-                  reload:
-                    mode: "off"
-              replacePaths:
-                - channels.matrix.accounts.sut.groupAllowFrom
-              restartDelayMs: 300000
-        - resetTransport: true
-        - set: acceptedMarker
-          value:
-            expr: "`MATRIX_QA_GROUP_RELOAD_ACCEPTED_${randomUUID().slice(0, 8).toUpperCase()}`"
-        - sendInbound:
-            conversation: { id: qa-matrix-room, kind: group }
-            senderId: observer
-            senderName: QA Observer
-            text:
-              expr: "`@openclaw Reply with only this exact marker: ${acceptedMarker}`"
-        - waitForOutbound:
-            textIncludes: { ref: acceptedMarker }
-            timeoutMs: 60000
-        - set: outboundCount
-          value:
-            expr: "getTransportSnapshot().messages.filter((message) => message.direction === 'outbound').length"
-        - call: patchConfig
-          args:
-            - env: { ref: env }
-              patch:
-                channels:
-                  matrix:
-                    accounts:
-                      sut:
-                        groupAllowFrom:
-                          expr: "[env.gateway.runtimeEnv.OPENCLAW_QA_MATRIX_DRIVER_USER_ID]"
-                gateway:
-                  reload:
-                    mode: "off"
-              replacePaths:
-                - channels.matrix.accounts.sut.groupAllowFrom
-              restartDelayMs: 300000
-        - set: blockedMarker
-          value:
-            expr: "`MATRIX_QA_GROUP_RELOAD_REMOVED_${randomUUID().slice(0, 8).toUpperCase()}`"
-        - sendInbound:
-            conversation: { id: qa-matrix-room, kind: group }
-            senderId: observer
-            senderName: QA Observer
-            text:
-              expr: "`@openclaw Reply with only this exact marker: ${blockedMarker}`"
-        - waitForNoOutbound:
-            quietMs: 8000
-            sinceIndex: { ref: outboundCount }
-      detailsExpr: "`${acceptedMarker} accepted; ${blockedMarker} blocked after hot reload`"
+  module: ./live-transports/matrix/scenarios/scenario-runtime-config.js
+  call: runMatrixQaAllowlistHotReloadScenario
+  args:
+    - expr: "scenarioContext"

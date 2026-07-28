@@ -1,0 +1,23 @@
+title: Matrix streaming replaces command progress lines inside the preview message
+scenario:
+  id: matrix-room-tool-progress-command-preview
+  surface: channels
+  coverage:
+    primary:
+      - matrix.message-presentation-metadata
+  execution:
+    profiles: { "matrix:all": 10, "matrix:transport": 9 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 60000
+    retryCount: 0
+    config:
+      matrixConfigOverrides:
+        streaming: quiet
+        toolProfile: coding
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-room.js
+  call: runToolProgressCommandPreviewScenario
+  args:
+    - expr: "scenarioContext"

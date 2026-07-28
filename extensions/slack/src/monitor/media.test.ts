@@ -1350,3 +1350,4 @@ describe("resolveSlackThreadStarter", () => {
     expectVerboseLogContains("rate_limited");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

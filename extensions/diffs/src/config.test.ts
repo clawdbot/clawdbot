@@ -1,34 +1,32 @@
 // Diffs tests cover config plugin behavior.
 import fs from "node:fs";
-import os from "node:os";
-import { join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   validateJsonSchemaValue,
   type JsonSchemaObject,
 } from "openclaw/plugin-sdk/json-schema-runtime";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
-  DEFAULT_DIFFS_PLUGIN_SECURITY,
-  DEFAULT_DIFFS_TOOL_DEFAULTS,
   diffsPluginConfigSchema,
   resolveDiffImageRenderOptions,
   resolveDiffsPluginDefaults,
   resolveDiffsPluginSecurity,
   resolveDiffsPluginViewerBaseUrl,
 } from "./config.js";
-import { resolveDiffsLanguagePackAvailability } from "./plugin.js";
 import { ensureCuratedViewerRuntimeForTests } from "./test-helpers.js";
 import { buildViewerUrl, normalizeViewerBaseUrl } from "./url.js";
 import {
   getServedLanguagePackViewerAsset,
   getServedViewerAsset,
-  resolveViewerRuntimeFileUrl,
-  LANGUAGE_PACK_VIEWER_LOADER_PATH,
-  VIEWER_LOADER_PATH,
+  LANGUAGE_PACK_VIEWER_ASSET_PREFIX,
+  VIEWER_ASSET_PREFIX,
   VIEWER_RUNTIME_PATH,
 } from "./viewer-assets.js";
 import { parseViewerPayloadJson } from "./viewer-payload.js";
+
+const DEFAULT_DIFFS_TOOL_DEFAULTS = resolveDiffsPluginDefaults(undefined);
+const DEFAULT_DIFFS_PLUGIN_SECURITY = resolveDiffsPluginSecurity(undefined);
+const VIEWER_LOADER_PATH = `${VIEWER_ASSET_PREFIX}viewer.js`;
+const LANGUAGE_PACK_VIEWER_LOADER_PATH = `${LANGUAGE_PACK_VIEWER_ASSET_PREFIX}viewer.js`;
 
 const FULL_DEFAULTS = {
   fontFamily: "JetBrains Mono",
@@ -477,62 +475,6 @@ describe("diffs viewer URL helpers", () => {
 });
 
 describe("viewer assets", () => {
-  it("prefers the built plugin asset layout when present", async () => {
-    const repoRoot = join(process.cwd(), "tmp", "diffs-viewer-assets-test-repo");
-    const builtRuntimePath = join(
-      repoRoot,
-      "dist",
-      "extensions",
-      "diffs",
-      "assets",
-      "viewer-runtime.js",
-    );
-    const stat = vi.fn(async (path: string) => {
-      if (path === builtRuntimePath) {
-        return { mtimeMs: 1 };
-      }
-      const error = Object.assign(new Error(`missing: ${path}`), { code: "ENOENT" });
-      throw error;
-    });
-
-    const runtimeUrl = await resolveViewerRuntimeFileUrl({
-      baseUrl: pathToFileURL(join(repoRoot, "dist", "extensions", "diffs", "index.js")),
-      stat,
-    });
-
-    expect(fileURLToPath(runtimeUrl)).toBe(builtRuntimePath);
-    expect(stat).toHaveBeenCalledTimes(1);
-  });
-
-  it("falls back to the source asset layout when the built artifact is absent", async () => {
-    const repoRoot = join(process.cwd(), "tmp", "diffs-viewer-assets-test-repo");
-    const sourceCandidatePath = join(
-      repoRoot,
-      "extensions",
-      "diffs",
-      "src",
-      "assets",
-      "viewer-runtime.js",
-    );
-    const sourceRuntimePath = join(repoRoot, "extensions", "diffs", "assets", "viewer-runtime.js");
-    const stat = vi.fn(async (path: string) => {
-      if (path === sourceRuntimePath) {
-        return { mtimeMs: 1 };
-      }
-      const error = Object.assign(new Error(`missing: ${path}`), { code: "ENOENT" });
-      throw error;
-    });
-
-    const runtimeUrl = await resolveViewerRuntimeFileUrl({
-      baseUrl: pathToFileURL(join(repoRoot, "extensions", "diffs", "src", "viewer-assets.js")),
-      stat,
-    });
-
-    expect(fileURLToPath(runtimeUrl)).toBe(sourceRuntimePath);
-    expect(stat).toHaveBeenNthCalledWith(1, sourceCandidatePath);
-    expect(stat).toHaveBeenNthCalledWith(2, sourceRuntimePath);
-  });
-
   it("serves a stable loader that points at the current runtime bundle", async () => {
     const loader = await getServedViewerAsset(VIEWER_LOADER_PATH);
 
@@ -563,39 +505,6 @@ describe("viewer assets", () => {
   it("returns null for unknown asset paths", async () => {
     await expect(getServedViewerAsset("/plugins/diffs/assets/not-real.js")).resolves.toBeNull();
   });
-});
-
-describe("resolveDiffsLanguagePackAvailability", () => {
-  it.each(["assets", "dist/assets"])(
-    "requires both the sibling language-pack manifest and generated runtime asset in %s",
-    (assetDir) => {
-      const root = fs.mkdtempSync(join(os.tmpdir(), "openclaw-diffs-language-pack-"));
-      try {
-        const diffsRoot = join(root, "diffs");
-        const languagePackRoot = join(root, "diffs-language-pack");
-        fs.mkdirSync(diffsRoot, { recursive: true });
-        fs.mkdirSync(languagePackRoot, { recursive: true });
-        fs.writeFileSync(
-          join(languagePackRoot, "openclaw.plugin.json"),
-          '{"id":"diffs-language-pack"}\n',
-        );
-        const api = {
-          rootDir: diffsRoot,
-          config: { plugins: {} },
-          runtime: { config: { current: () => ({ plugins: {} }) } },
-        } as Parameters<typeof resolveDiffsLanguagePackAvailability>[0];
-
-        expect(resolveDiffsLanguagePackAvailability(api)).toBe(false);
-
-        fs.mkdirSync(join(languagePackRoot, assetDir), { recursive: true });
-        fs.writeFileSync(join(languagePackRoot, assetDir, "viewer-runtime.js"), "export {};\n");
-
-        expect(resolveDiffsLanguagePackAvailability(api)).toBe(true);
-      } finally {
-        fs.rmSync(root, { force: true, recursive: true });
-      }
-    },
-  );
 });
 
 describe("parseViewerPayloadJson", () => {

@@ -257,7 +257,7 @@ type CreateMSTeamsAppOptions = {
  * - Managed identity: clientId + managedIdentityClientId → SDK built-in MI support
  * - Certificate: clientId + custom token provider via @azure/identity
  */
-export async function createMSTeamsApp(
+async function createMSTeamsApp(
   creds: MSTeamsCredentials,
   options?: CreateMSTeamsAppOptions,
 ): Promise<MSTeamsApp> {

@@ -241,7 +241,7 @@ async function preValidateTarball(
   return { ok: true };
 }
 
-export async function validateTarUncompressedBudget(
+async function validateTarUncompressedBudget(
   tarBuffer: Buffer,
   maxBytes = DIR_FETCH_MAX_UNCOMPRESSED_BYTES,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
@@ -568,9 +568,3 @@ export function createDirFetchTool(): AnyAgentTool {
     },
   };
 }
-
-export const testing = {
-  preValidateTarball,
-  unpackTar,
-  validateTarUncompressedBudget,
-};

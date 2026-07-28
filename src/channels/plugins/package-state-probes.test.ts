@@ -86,6 +86,42 @@ describe("channel package-state probes", () => {
     ).toBe(false);
   });
 
+  it("uses manifest env metadata without loading a configured-state module", () => {
+    listChannelCatalogEntriesMock.mockReturnValue([
+      {
+        ...makeBundledChannelCatalogEntry({
+          pluginId: "env-chat",
+          channelId: "env-chat",
+        }),
+        channel: {
+          id: "env-chat",
+          configuredState: {
+            env: { allOf: ["ENV_CHAT_TOKEN"] },
+            specifier: "./missing-configured-state",
+            exportName: "missingConfiguredState",
+          },
+        },
+      } satisfies PluginChannelCatalogEntry,
+    ]);
+
+    expect(
+      hasBundledChannelPackageState({
+        metadataKey: "configuredState",
+        channelId: "env-chat",
+        cfg: {},
+        env: { ENV_CHAT_TOKEN: "token" },
+      }),
+    ).toBe(true);
+    expect(
+      hasBundledChannelPackageState({
+        metadataKey: "configuredState",
+        channelId: "env-chat",
+        cfg: {},
+        env: { ENV_CHAT_TOKEN: " " },
+      }),
+    ).toBe(false);
+  });
+
   it("prefers built bundled package-state probes when the catalog root is source", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-state-probe-"));
     tempDirs.push(root);

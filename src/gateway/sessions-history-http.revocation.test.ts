@@ -17,6 +17,7 @@ let gatewayConfig: {
   allowRealIpFallback: false,
 };
 let authCheckCalls = 0;
+let transcriptReadError: Error | undefined;
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => ({
@@ -94,9 +95,19 @@ vi.mock("./session-utils.js", () => ({
 }));
 
 vi.mock("./session-transcript-readers.js", () => ({
-  readRecentSessionMessagesWithStatsAsync: async () => ({ messages: [], totalMessages: 0 }),
+  readRecentSessionMessagesWithStatsAsync: async () => {
+    if (transcriptReadError) {
+      throw transcriptReadError;
+    }
+    return { messages: [], totalMessages: 0 };
+  },
   readSessionMessagesAsync: async () => [],
-  readSessionMessagesWithSourceAsync: async () => ({ messages: [] }),
+  readSessionMessagesWithSourceAsync: async () => {
+    if (transcriptReadError) {
+      throw transcriptReadError;
+    }
+    return { messages: [] };
+  },
 }));
 
 vi.mock("./session-history-state.js", () => ({
@@ -117,6 +128,7 @@ vi.mock("./session-history-state.js", () => ({
   },
 }));
 
+import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-accessor.js";
 import { handleSessionHistoryHttpRequest } from "./sessions-history-http.js";
 
 const SESSION_HISTORY_URL = "/sessions/agent%3Amain/history";
@@ -331,6 +343,7 @@ afterEach(() => {
   transcriptUpdateHandler = undefined;
   authRevoked = false;
   authCheckCalls = 0;
+  transcriptReadError = undefined;
   gatewayConfig = {
     trustedProxies: ["10.0.0.1"],
     allowRealIpFallback: false,
@@ -338,6 +351,19 @@ afterEach(() => {
 });
 
 describe("session history SSE auth revocation", () => {
+  it("returns retryable HTTP unavailable while a dirty projection rebuilds", async () => {
+    transcriptReadError = new SessionTranscriptProjectionUnavailableError("session-1");
+
+    const { req, res } = await openSessionHistoryStreamPair(TRUSTED_PROXY_STARTUP_OPTIONS, {
+      expectSubscribed: false,
+    });
+
+    expect(res.statusCode).toBe(503);
+    expect(res.headers.get("retry-after")).toBe("1");
+    expect(res.writes.join("")).toContain('"retryable":true');
+    expect(req.listenerCount("error")).toBe(0);
+  });
+
   it("closes the stream before delivering transcript updates after auth is revoked", async () => {
     const res = await openSessionHistoryStream({ auth: { mode: "trusted-proxy" } as never });
 

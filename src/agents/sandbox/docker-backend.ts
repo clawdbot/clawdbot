@@ -41,6 +41,9 @@ export async function createDockerSandboxBackend(
     agentWorkspaceDir: params.agentWorkspaceDir,
     skillsWorkspaceDir: params.skillsWorkspaceDir,
     cfg: params.cfg,
+    ...(params.requireCurrentConfig !== undefined
+      ? { requireCurrentConfig: params.requireCurrentConfig }
+      : {}),
   });
   return createDockerSandboxBackendHandle({
     containerName,

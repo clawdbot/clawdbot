@@ -6,9 +6,9 @@ import {
   getActiveBackgroundExecSessionCount,
   markBackgrounded,
   markExited,
-  resetProcessRegistryForTests,
 } from "../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
+import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
 import {
   isGatewayWorkAdmissionClosed,
   markGatewayRestartDraining,

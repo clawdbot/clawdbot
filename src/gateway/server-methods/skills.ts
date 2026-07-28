@@ -583,6 +583,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
         version: p.version,
         force: Boolean(p.force),
         ...(p.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
+        logger: context.logGateway,
         config: cfg,
       });
       const errorDetails = result.ok ? undefined : buildClawHubTrustErrorDetails(result);
@@ -705,6 +706,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
         workspaceDir: resolved.workspaceDir,
         slug: p.slug,
         ...(p.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
+        logger: context.logGateway,
         config: resolved.cfg,
       });
       const errors = results.filter((result) => !result.ok);
@@ -744,3 +746,4 @@ export const skillsHandlers: GatewayRequestHandlers = {
     );
   },
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

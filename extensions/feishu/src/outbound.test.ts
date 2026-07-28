@@ -7,6 +7,7 @@ import {
   adaptMessagePresentationForChannel,
   renderMessagePresentationFallbackText,
   type MessagePresentation,
+  type MessagePresentationAction,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
@@ -19,9 +20,36 @@ const sendStructuredCardFeishuMock = vi.hoisted(() => vi.fn());
 const deliverCommentThreadTextMock = vi.hoisted(() => vi.fn());
 const cleanupAmbientCommentTypingReactionMock = vi.hoisted(() => vi.fn(async () => false));
 const shouldSuppressFeishuTextForVoiceMediaMock = vi.hoisted(
-  () => (params: { mediaUrl?: string; audioAsVoice?: boolean }) =>
-    params.audioAsVoice === true || /\.(?:ogg|opus)(?:[?#]|$)/i.test(params.mediaUrl ?? ""),
+  () =>
+    (params: {
+      mediaUrl?: string;
+      audioAsVoice?: boolean;
+      ttsSupplement?: { visibleTextAlreadyDelivered?: boolean };
+    }) =>
+      params.ttsSupplement
+        ? params.ttsSupplement.visibleTextAlreadyDelivered === true
+        : params.audioAsVoice === true || /\.(?:ogg|opus)(?:[?#]|$)/i.test(params.mediaUrl ?? ""),
 );
+const resolvePinnedHostnameWithPolicyMock = vi.hoisted(() =>
+  vi.fn(async (hostname: string) => {
+    if (hostname === "files.example.test") {
+      throw new Error("Blocked: resolves to private/internal/special-use IP address");
+    }
+    return {
+      hostname,
+      addresses: ["93.184.216.34"],
+      lookup: vi.fn(),
+    };
+  }),
+);
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    resolvePinnedHostnameWithPolicy: resolvePinnedHostnameWithPolicyMock,
+  };
+});
 
 vi.mock("./media.js", () => ({
   sendMediaFeishu: sendMediaFeishuMock,
@@ -79,6 +107,7 @@ vi.mock("./comment-reaction.js", () => ({
 
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import { feishuPlugin } from "./channel.js";
+import { buildFeishuPostMessageContent } from "./markdown.js";
 import { feishuOutbound } from "./outbound.js";
 import { createFeishuSendReceipt } from "./send-result.js";
 
@@ -184,6 +213,7 @@ afterAll(() => {
   vi.doUnmock("./client.js");
   vi.doUnmock("./drive.js");
   vi.doUnmock("./comment-reaction.js");
+  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
   vi.resetModules();
 });
 
@@ -327,12 +357,101 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     expect(chunker("hello world", 5)).toEqual(["hello", "world"]);
   });
 
+  it("preserves single newlines in chunker text (card and comment text must not be modified)", () => {
+    const chunker = feishuOutbound.chunker;
+    if (!chunker) {
+      throw new Error("feishuOutbound.chunker missing");
+    }
+
+    const text = "line one\nline two\nline three";
+    const chunks = chunker(text, 100);
+    // All chunks joined should equal the original text with single newlines intact
+    expect(chunks.join("")).toBe(text);
+    expect(chunks.join("")).not.toContain("\n\n");
+  });
+
   async function createTmpImage(ext = ".png"): Promise<{ dir: string; file: string }> {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-feishu-outbound-"));
     const file = path.join(dir, `sample${ext}`);
     await fs.writeFile(file, "image-data");
     return { dir, file };
   }
+
+  it("sends missing TTS text before its voice supplement", async () => {
+    const payload = {
+      text: "Readable answer",
+      mediaUrl: "https://example.com/reply.ogg",
+      audioAsVoice: true,
+      ttsSupplement: { spokenText: "Readable answer" },
+    };
+
+    await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: payload.text,
+      accountId: "main",
+      payload,
+    });
+
+    expect(sendMessageCall()?.text).toBe("Readable answer");
+    expect(sendMediaCall()?.mediaUrl).toBe("https://example.com/reply.ogg");
+    expect(sendMediaCall()?.audioAsVoice).toBe(true);
+    expect(sendMessageFeishuMock.mock.invocationCallOrder[0]).toBeLessThan(
+      sendMediaFeishuMock.mock.invocationCallOrder[0] ?? 0,
+    );
+  });
+
+  it("sends only TTS media when its text is already visible", async () => {
+    const payload = {
+      text: "Readable answer",
+      mediaUrl: "https://example.com/reply.ogg",
+      audioAsVoice: true,
+      ttsSupplement: {
+        spokenText: "Readable answer",
+        visibleTextAlreadyDelivered: true,
+      },
+    };
+
+    await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: payload.text,
+      accountId: "main",
+      payload,
+    });
+
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMediaCall()?.mediaUrl).toBe("https://example.com/reply.ogg");
+  });
+
+  it("preserves a structured card before its TTS supplement", async () => {
+    const card = {
+      schema: "2.0",
+      body: { elements: [{ tag: "markdown", content: "Readable answer" }] },
+    };
+    const payload = {
+      text: "Readable answer",
+      mediaUrl: "https://example.com/reply.ogg",
+      audioAsVoice: true,
+      ttsSupplement: { spokenText: "Readable answer" },
+      channelData: { feishu: { card } },
+    };
+
+    await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: payload.text,
+      accountId: "main",
+      payload,
+    });
+
+    expect(sendCardCall()?.card).toMatchObject(card);
+    expect(sendMediaCall()?.mediaUrl).toBe("https://example.com/reply.ogg");
+    expect(sendCardFeishuMock.mock.invocationCallOrder[0]).toBeLessThan(
+      sendMediaFeishuMock.mock.invocationCallOrder[0] ?? 0,
+    );
+  });
 
   it("sends an absolute existing local image path as media", async () => {
     const { dir, file } = await createTmpImage();
@@ -398,7 +517,7 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     expectFeishuResult(result, "native_card_msg");
   });
 
-  it("falls back to plain text if local-image media send fails", async () => {
+  it("does not leak local-image paths if auto-send fails", async () => {
     const { dir, file } = await createTmpImage();
     sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
     try {
@@ -411,7 +530,8 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
 
       expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
       expect(sendMessageCall()?.to).toBe("chat_1");
-      expect(sendMessageCall()?.text).toBe(file);
+      expect(sendMessageCall()?.text).toBe("Media upload failed. Please try again.");
+      expect(sendMessageCall()?.text).not.toContain(file);
       expect(sendMessageCall()?.accountId).toBe("main");
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
@@ -993,7 +1113,7 @@ describe("feishuOutbound.sendPayload native cards", () => {
             buttons: [
               {
                 label: "Review",
-                action: { type, url: "https://example.com/review" },
+                action: { type, url: "https://example.com/review" } as MessagePresentationAction,
               },
             ],
           },
@@ -1716,6 +1836,25 @@ describe("feishuOutbound.sendPayload native cards", () => {
     expectFeishuResult(result, "reply_msg");
   });
 
+  it("keeps TTS supplements on the document-comment delivery path", async () => {
+    await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "comment:docx:doxcn123:7623358762119646411",
+      text: "Readable answer",
+      accountId: "main",
+      payload: {
+        text: "Readable answer",
+        mediaUrl: "https://example.com/reply.ogg",
+        audioAsVoice: true,
+        ttsSupplement: { spokenText: "Readable answer" },
+      },
+    });
+
+    expect(deliverCommentThreadTextMock).toHaveBeenCalled();
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendMediaFeishuMock).not.toHaveBeenCalled();
+  });
+
   it("rejects card-only document comments instead of reporting an empty delivery", async () => {
     const text = JSON.stringify({
       header: { title: { tag: "plain_text", content: "Raw card" } },
@@ -1957,6 +2096,26 @@ describe("feishuOutbound comment-thread routing", () => {
     expectFeishuResult(result, "reply_msg");
   });
 
+  it.each([
+    ["local path", path.join(os.tmpdir(), "openclaw-feishu-comment-local-voice.mp3")],
+    ["loopback URL", "http://127.0.0.1:3000/tmp/openclaw-voice.mp3"],
+  ])("does not leak a %s in comment-thread media fallbacks", async (_label, mediaUrl) => {
+    const result = await feishuOutbound.sendMedia?.({
+      cfg: emptyConfig,
+      to: "comment:docx:doxcn123:7623358762119646411",
+      text: "see attachment",
+      mediaUrl,
+      accountId: "main",
+    });
+
+    expect(commentThreadParams()?.content).toBe(
+      "see attachment\n\nMedia upload failed. Please try again.",
+    );
+    expect(commentThreadParams()?.content).not.toContain(mediaUrl);
+    expect(sendMediaFeishuMock).not.toHaveBeenCalled();
+    expectFeishuResult(result, "reply_msg");
+  });
+
   it("preserves comment-thread routing when deliverCommentThreadText falls back to add_comment", async () => {
     deliverCommentThreadTextMock.mockResolvedValueOnce({
       delivery_mode: "add_comment",
@@ -2098,6 +2257,92 @@ describe("feishuOutbound.sendText replyToId forwarding", () => {
 
     expect(sendMessageCall()?.replyToMessageId).toBe("om_inline");
     expect(sendMessageCall()?.replyInThread).toBe(false);
+  });
+
+  it("materializes post-md prose soft breaks after raw render-mode routing", async () => {
+    await sendText({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "first line\nsecond line",
+      accountId: "main",
+    });
+
+    expect(sendMessageCall()?.text).toBe("first line  \nsecond line");
+  });
+
+  it("re-chunks expanded post-md text and scopes reply metadata to the first send", async () => {
+    await sendText({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: Array.from({ length: 2_200 }, () => "a").join("\n"),
+      replyToId: "om_reply_target",
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock.mock.calls.length).toBeGreaterThan(1);
+    for (const [index, [params]] of sendMessageFeishuMock.mock.calls.entries()) {
+      expect(params.text.length).toBeLessThanOrEqual(4_000);
+      expect(params.replyToMessageId).toBe(index === 0 ? "om_reply_target" : undefined);
+    }
+  });
+
+  it("re-chunks expanded post-md text at the selected account limit", async () => {
+    await sendText({
+      cfg: {
+        channels: {
+          feishu: {
+            accounts: {
+              main: { textChunkLimit: 10 },
+            },
+          },
+        },
+      },
+      to: "chat_1",
+      text: Array.from({ length: 10 }, () => "a").join("\n"),
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock.mock.calls.length).toBeGreaterThan(1);
+    for (const [params] of sendMessageFeishuMock.mock.calls) {
+      expect(params.text.length).toBeLessThanOrEqual(10);
+    }
+  });
+
+  it("re-chunks expanded post-md text at the serialized byte envelope", async () => {
+    await sendText({
+      cfg: {
+        channels: {
+          feishu: {
+            textChunkLimit: 25_000,
+          },
+        },
+      },
+      to: "chat_1",
+      text: Array.from({ length: 6_150 }, () => "a").join("\n"),
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock.mock.calls.length).toBeGreaterThan(1);
+    for (const [params] of sendMessageFeishuMock.mock.calls) {
+      const content = buildFeishuPostMessageContent({ messageText: params.text });
+      expect(Buffer.byteLength(content, "utf8")).toBeLessThanOrEqual(30 * 1024);
+    }
+  });
+
+  it("keeps every expanded post-md subchunk in the requested thread", async () => {
+    await sendText({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: Array.from({ length: 2_200 }, () => "a").join("\n"),
+      threadId: "om_thread_root",
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock.mock.calls.length).toBeGreaterThan(1);
+    for (const [params] of sendMessageFeishuMock.mock.calls) {
+      expect(params.replyToMessageId).toBe("om_thread_root");
+      expect(params.replyInThread).toBe(true);
+    }
   });
 });
 
@@ -2308,6 +2553,32 @@ describe("feishuOutbound.sendMedia replyToId forwarding", () => {
     expect(sendMessageCall()?.text).toBe("spoken reply\n\n📎 https://example.com/reply.mp3");
   });
 
+  it.each([
+    ["local path", path.join(os.tmpdir(), "openclaw-feishu-local-voice.mp3")],
+    ["file URL", "file:///tmp/openclaw-feishu-local-voice.mp3"],
+    ["relative path", "./outbound/openclaw-feishu-local-voice.mp3"],
+    ["loopback URL", "http://127.0.0.1:3000/tmp/openclaw-voice.mp3"],
+    ["localhost URL", "https://localhost/tmp/openclaw-voice.mp3"],
+    ["private-DNS URL", "https://files.example.test/openclaw-voice.mp3"],
+    ["credentialed URL", "https://user@example.com/openclaw-voice.mp3"],
+    ["control-character URL", "https://example.com/\nhttp://127.0.0.1/private"],
+  ])("does not leak a %s in the upload failure fallback", async (_label, mediaUrl) => {
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
+
+    await feishuOutbound.sendMedia?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "spoken reply",
+      mediaUrl,
+      audioAsVoice: true,
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageCall()?.text).toBe("spoken reply\n\nMedia upload failed. Please try again.");
+    expect(sendMessageCall()?.text).not.toContain(mediaUrl);
+  });
+
   it("forwards replyToId to text caption send", async () => {
     await feishuOutbound.sendMedia?.({
       cfg: emptyConfig,
@@ -2366,3 +2637,4 @@ describe("feishuOutbound.sendMedia renderMode", () => {
     expect(sendMessageCall()?.accountId).toBe("main");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

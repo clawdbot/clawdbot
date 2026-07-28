@@ -2,6 +2,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildChannelInboundEventContextMock,
+  channelInboundRunMock,
   dispatchReplyWithBufferedBlockDispatcher,
   finalizeInboundContextMock,
   registerPluginHttpRouteMock,
@@ -10,7 +11,7 @@ import {
 } from "./channel.test-mocks.js";
 import { makeFormBody, makeReq, makeRes } from "./test-http-utils.js";
 
-let createSynologyChatPlugin: typeof import("./channel.js").createSynologyChatPlugin;
+let synologyChatPlugin: typeof import("./channel.js").synologyChatPlugin;
 
 function makeStartContext<T>(cfg: T, accountId: string, abortSignal: AbortSignal) {
   setSynologyRuntimeConfigForTest(cfg);
@@ -43,20 +44,21 @@ function requireMockCall<TArgs extends unknown[]>(
 
 describe("Synology channel wiring integration", () => {
   beforeAll(async () => {
-    ({ createSynologyChatPlugin } = await import("./channel.js"));
+    ({ synologyChatPlugin } = await import("./channel.js"));
   });
 
   beforeEach(() => {
     registerPluginHttpRouteMock.mockClear();
     dispatchReplyWithBufferedBlockDispatcher.mockClear();
     buildChannelInboundEventContextMock.mockClear();
+    channelInboundRunMock.mockClear();
     finalizeInboundContextMock.mockClear();
     resolveAgentRouteMock.mockClear();
     setSynologyRuntimeConfigForTest({});
   });
 
   it("registers real webhook handler with resolved account config and enforces allowlist", async () => {
-    const plugin = createSynologyChatPlugin();
+    const plugin = synologyChatPlugin;
     const abortController = new AbortController();
     const cfg = {
       channels: {
@@ -96,6 +98,7 @@ describe("Synology channel wiring integration", () => {
         user_id: "123",
         username: "unauthorized-user",
         text: "Hello",
+        post_id: "post-allowlist-rejected",
       }),
     );
     const res = makeRes();
@@ -109,7 +112,7 @@ describe("Synology channel wiring integration", () => {
   });
 
   it("uses gateway trusted proxy settings for pre-auth invalid-token throttling", async () => {
-    const plugin = createSynologyChatPlugin();
+    const plugin = synologyChatPlugin;
     const abortController = new AbortController();
     const cfg = {
       gateway: {
@@ -128,9 +131,8 @@ describe("Synology channel wiring integration", () => {
       },
     };
 
-    const started = plugin.gateway.startAccount(
-      makeStartContext(cfg, "default", abortController.signal),
-    );
+    const startContext = makeStartContext(cfg, "default", abortController.signal);
+    const started = plugin.gateway.startAccount(startContext);
     expect(registerPluginHttpRouteMock).toHaveBeenCalledTimes(1);
     const [registered] = requireMockCall(registerPluginHttpRouteMock, 0, "default Synology route");
 
@@ -158,6 +160,7 @@ describe("Synology channel wiring integration", () => {
         user_id: "123",
         username: "legitimate-user",
         text: "Hello",
+        post_id: "post-proxy-accepted",
       }),
       { headers: { "x-forwarded-for": "203.0.113.11" } },
     );
@@ -165,14 +168,19 @@ describe("Synology channel wiring integration", () => {
     const validRes = makeRes();
     await registered.handler(validReq, validRes);
 
-    expect(validRes.status).toBe(204);
+    expect(validRes.status, JSON.stringify(startContext.log.error.mock.calls)).toBe(204);
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    expect(channelInboundRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        turnAdoptionLifecycle: expect.objectContaining({ admission: "exclusive" }),
+      }),
+    );
     abortController.abort();
     await started;
   });
 
   it("isolates same user_id across different accounts", async () => {
-    const plugin = createSynologyChatPlugin();
+    const plugin = synologyChatPlugin;
     const alphaAbortController = new AbortController();
     const betaAbortController = new AbortController();
     const cfg = {
@@ -222,6 +230,7 @@ describe("Synology channel wiring integration", () => {
         user_id: "123",
         username: "alice",
         text: "alpha secret",
+        post_id: "post-alpha",
       }),
     );
     const alphaRes = makeRes();
@@ -234,6 +243,7 @@ describe("Synology channel wiring integration", () => {
         user_id: "123",
         username: "bob",
         text: "beta secret",
+        post_id: "post-beta",
       }),
     );
     const betaRes = makeRes();

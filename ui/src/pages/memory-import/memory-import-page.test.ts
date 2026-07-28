@@ -1,34 +1,19 @@
 /* @vitest-environment jsdom */
 
-import { ContextProvider } from "@lit/context";
-import { LitElement } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import {
-  applicationContext,
-  type ApplicationContext,
-  type ApplicationGatewaySnapshot,
-} from "../../app/context.ts";
+import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import "./memory-import-page.ts";
-
-const PROVIDER_TAG = "test-memory-import-context-provider";
-
-class MemoryImportContextProvider extends LitElement {
-  private readonly provider = new ContextProvider(this, { context: applicationContext });
-
-  setContext(context: ApplicationContext) {
-    this.provider.setValue(context);
-  }
-}
-
-if (!customElements.get(PROVIDER_TAG)) {
-  customElements.define(PROVIDER_TAG, MemoryImportContextProvider);
-}
 
 type MemoryImportPageElement = HTMLElement & {
   updateComplete: Promise<boolean>;
   requestUpdate(): void;
 };
+
+function waitForMemoryImport(assertion: () => void) {
+  return vi.waitFor(assertion, { interval: 1 });
+}
 
 function createPlan(agentId = "research") {
   const workspace = `/tmp/openclaw-${agentId}`;
@@ -75,8 +60,9 @@ function createContext(request: ReturnType<typeof vi.fn>): ApplicationContext {
   const client = { request } as unknown as GatewayBrowserClient;
   const snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected: true,
-    reconnecting: false,
+    phase: "connected",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: "research",
     sessionKey: "agent:research:main",
@@ -109,9 +95,8 @@ function createContext(request: ReturnType<typeof vi.fn>): ApplicationContext {
 }
 
 async function mountPage(context: ApplicationContext): Promise<MemoryImportPageElement> {
-  const provider = document.createElement(PROVIDER_TAG) as MemoryImportContextProvider;
+  const provider = createApplicationContextProvider(context);
   const page = document.createElement("openclaw-memory-import-page") as MemoryImportPageElement;
-  provider.setContext(context);
   provider.append(page);
   document.body.append(provider);
   await page.updateComplete;
@@ -130,7 +115,7 @@ describe("MemoryImportPage", () => {
     });
     const page = await mountPage(createContext(request));
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    await waitForMemoryImport(() => expect(request).toHaveBeenCalledTimes(1));
     await page.updateComplete;
     await Promise.resolve();
     await page.updateComplete;
@@ -144,7 +129,7 @@ describe("MemoryImportPage", () => {
       throw new Error("expected Refresh button");
     }
     refresh.click();
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitForMemoryImport(() => expect(request).toHaveBeenCalledTimes(2));
   });
 
   it("keeps apply recovery results visible when the follow-up plan fails", async () => {
@@ -187,7 +172,7 @@ describe("MemoryImportPage", () => {
     });
     const page = await mountPage(createContext(request));
 
-    await vi.waitFor(() =>
+    await waitForMemoryImport(() =>
       expect(
         page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']"),
       ).not.toBeNull(),
@@ -195,14 +180,14 @@ describe("MemoryImportPage", () => {
     page
       .querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']")
       ?.click();
-    await vi.waitFor(() =>
+    await waitForMemoryImport(() =>
       expect(
         page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']"),
       ).not.toBeNull(),
     );
     page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']")?.click();
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+    await waitForMemoryImport(() => expect(request).toHaveBeenCalledTimes(3));
     await page.updateComplete;
     expect(page.textContent).toContain("post-apply planning unavailable");
     expect(page.textContent).toContain("replacement interrupted");
@@ -239,7 +224,7 @@ describe("MemoryImportPage", () => {
     });
     const page = await mountPage(createContext(request));
 
-    await vi.waitFor(() =>
+    await waitForMemoryImport(() =>
       expect(
         page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']"),
       ).not.toBeNull(),
@@ -247,15 +232,15 @@ describe("MemoryImportPage", () => {
     page
       .querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']")
       ?.click();
-    await vi.waitFor(() =>
+    await waitForMemoryImport(() =>
       expect(
         page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']"),
       ).not.toBeNull(),
     );
     page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']")?.click();
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
-    await vi.waitFor(() =>
+    await waitForMemoryImport(() => expect(request).toHaveBeenCalledTimes(3));
+    await waitForMemoryImport(() =>
       expect(
         page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']")
           ?.disabled,
@@ -293,7 +278,7 @@ describe("MemoryImportPage", () => {
     });
     const page = await mountPage(createContext(request));
 
-    await vi.waitFor(() =>
+    await waitForMemoryImport(() =>
       expect(
         page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']"),
       ).not.toBeNull(),
@@ -301,16 +286,16 @@ describe("MemoryImportPage", () => {
     page
       .querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']")
       ?.click();
-    await vi.waitFor(() =>
+    await waitForMemoryImport(() =>
       expect(
         page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']"),
       ).not.toBeNull(),
     );
     page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']")?.click();
-    await vi.waitFor(() => expect(page.textContent).toContain("response lost"));
+    await waitForMemoryImport(() => expect(page.textContent).toContain("response lost"));
     page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']")?.click();
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(4));
+    await waitForMemoryImport(() => expect(request).toHaveBeenCalledTimes(4));
     const firstApply = request.mock.calls[1]?.[1] as { idempotencyKey?: string } | undefined;
     const retryApply = request.mock.calls[2]?.[1] as { idempotencyKey?: string } | undefined;
     expect(firstApply?.idempotencyKey).toMatch(/\S/u);
@@ -327,7 +312,7 @@ describe("MemoryImportPage", () => {
     const context = createContext(request);
     const page = await mountPage(context);
 
-    await vi.waitFor(() =>
+    await waitForMemoryImport(() =>
       expect(
         page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']"),
       ).not.toBeNull(),
@@ -335,11 +320,11 @@ describe("MemoryImportPage", () => {
     page
       .querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']")
       ?.click();
-    await vi.waitFor(() =>
+    await waitForMemoryImport(() =>
       expect(page.querySelector("[data-test-id='memory-import-confirm']")).not.toBeNull(),
     );
 
-    context.gateway.snapshot.connected = false;
+    context.gateway.snapshot.phase = "stopped";
     context.gateway.snapshot.client = null;
     page.requestUpdate();
     await page.updateComplete;
@@ -348,9 +333,9 @@ describe("MemoryImportPage", () => {
 
     const replacementClient = { request } as unknown as GatewayBrowserClient;
     context.gateway.snapshot.client = replacementClient;
-    context.gateway.snapshot.connected = true;
+    context.gateway.snapshot.phase = "connected";
     page.requestUpdate();
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitForMemoryImport(() => expect(request).toHaveBeenCalledTimes(2));
     expect(page.querySelector("[data-test-id='memory-import-confirm']")).toBeNull();
   });
 
@@ -389,7 +374,7 @@ describe("MemoryImportPage", () => {
     const context = createContext(request);
     const page = await mountPage(context);
 
-    await vi.waitFor(() =>
+    await waitForMemoryImport(() =>
       expect(
         page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']"),
       ).not.toBeNull(),
@@ -397,14 +382,14 @@ describe("MemoryImportPage", () => {
     page
       .querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']")
       ?.click();
-    await vi.waitFor(() =>
+    await waitForMemoryImport(() =>
       expect(page.querySelector("[data-test-id='memory-import-confirm']")).not.toBeNull(),
     );
     page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']")?.click();
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitForMemoryImport(() => expect(request).toHaveBeenCalledTimes(2));
     const firstApply = request.mock.calls[1]?.[1] as { idempotencyKey?: string } | undefined;
 
-    context.gateway.snapshot.connected = false;
+    context.gateway.snapshot.phase = "stopped";
     context.gateway.snapshot.client = null;
     page.requestUpdate();
     await page.updateComplete;
@@ -414,14 +399,14 @@ describe("MemoryImportPage", () => {
 
     const replacementClient = { request } as unknown as GatewayBrowserClient;
     context.gateway.snapshot.client = replacementClient;
-    context.gateway.snapshot.connected = true;
+    context.gateway.snapshot.phase = "connected";
     page.requestUpdate();
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
-    await vi.waitFor(() =>
+    await waitForMemoryImport(() => expect(request).toHaveBeenCalledTimes(3));
+    await waitForMemoryImport(() =>
       expect(page.querySelector("[data-test-id='memory-import-confirm']")).not.toBeNull(),
     );
     page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']")?.click();
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(4));
+    await waitForMemoryImport(() => expect(request).toHaveBeenCalledTimes(4));
 
     const retryApply = request.mock.calls[3]?.[1] as { idempotencyKey?: string } | undefined;
     expect(firstApply?.idempotencyKey).toMatch(/\S/u);
@@ -450,7 +435,7 @@ describe("MemoryImportPage", () => {
     mutableContext.agents.state.agentsList.agents.push({ id: "writer", name: "Writer" });
     const page = await mountPage(context);
 
-    await vi.waitFor(() =>
+    await waitForMemoryImport(() =>
       expect(
         page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']"),
       ).not.toBeNull(),
@@ -458,7 +443,7 @@ describe("MemoryImportPage", () => {
     page
       .querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']")
       ?.click();
-    await vi.waitFor(() =>
+    await waitForMemoryImport(() =>
       expect(
         page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']"),
       ).not.toBeNull(),
@@ -469,7 +454,7 @@ describe("MemoryImportPage", () => {
     expect(request).toHaveBeenCalledTimes(1);
 
     page.requestUpdate();
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitForMemoryImport(() => expect(request).toHaveBeenCalledTimes(2));
     await page.updateComplete;
     expect(request.mock.calls[1]?.[1]).toMatchObject({ agentId: "writer" });
     expect(page.querySelector("[data-test-id='memory-import-confirm']")).toBeNull();

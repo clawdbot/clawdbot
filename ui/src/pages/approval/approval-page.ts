@@ -1,3 +1,4 @@
+import "../../styles/approval.css";
 import { consume } from "@lit/context";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type PropertyValues } from "lit";
@@ -21,7 +22,6 @@ import {
 import { controlUiPublicAssetPath } from "../../app/public-assets.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
-
 const APPROVAL_POLL_INTERVAL_MS = 2_000;
 const APPROVAL_MIN_POLL_DELAY_MS = 250;
 
@@ -106,15 +106,24 @@ function renderPresentation(presentation: ApprovalPresentation) {
   return html`
     <div class="approval-page__preview-label">${t("approvalPage.requestLabel")}</div>
     <div class=${previewClass}>${presentation.description}</div>
+    ${presentation.kind === "plugin" && presentation.detail
+      ? html`<pre class="approval-page__preview mono" dir="ltr">${presentation.detail}</pre>`
+      : nothing}
     <dl class="approval-page__meta">
-      ${renderMetaRow(t("execApproval.labels.severity"), presentation.severity)}
-      ${renderMetaRow(t("execApproval.labels.plugin"), presentation.pluginId)}
-      ${renderMetaRow(t("approvalPage.toolLabel"), presentation.toolName)}
+      ${
+        // severity/pluginId/toolName exist only on the plugin presentation.
+        // exec is rendered in its own branch above and carries no toolName
+        // (ExecApprovalPresentationSchema is closed); system-agent has none.
+        presentation.kind === "plugin"
+          ? html`${renderMetaRow(t("execApproval.labels.severity"), presentation.severity)}
+            ${renderMetaRow(t("execApproval.labels.plugin"), presentation.pluginId)}
+            ${renderMetaRow(t("approvalPage.toolLabel"), presentation.toolName)}`
+          : nothing
+      }
       ${renderMetaRow(t("execApproval.labels.agent"), presentation.agentId)}
     </dl>
   `;
 }
-
 function terminalTitle(approval: ApprovalSnapshot, origin: ResolutionOrigin): string {
   if (origin === "elsewhere" && (approval.status === "allowed" || approval.status === "denied")) {
     return t("approvalPage.resolvedElsewhere");
@@ -247,17 +256,17 @@ export class ApprovalPage extends OpenClawLightDomElement {
 
   private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
     const clientChanged = snapshot.client !== this.client;
-    const connectionChanged = snapshot.connected !== this.connected;
-    const becameConnected = snapshot.connected && !this.connected;
+    const connectionChanged = (snapshot.phase === "connected") !== this.connected;
+    const becameConnected = snapshot.phase === "connected" && !this.connected;
     this.client = snapshot.client;
-    this.connected = snapshot.connected;
+    this.connected = snapshot.phase === "connected";
     if (clientChanged || connectionChanged) {
       this.invalidateOperations();
       this.clearPollTimer();
       this.resolving = false;
       this.resolvingDecision = null;
     }
-    if (!snapshot.connected || !snapshot.client) {
+    if (snapshot.phase !== "connected" || !snapshot.client) {
       if (this.approvalId) {
         this.loading = false;
         this.requestError =
@@ -359,7 +368,7 @@ export class ApprovalPage extends OpenClawLightDomElement {
       !this.connected ||
       !id ||
       approval?.status !== "pending" ||
-      !approval.presentation.allowedDecisions.includes(decision) ||
+      !Array.prototype.includes.call(approval.presentation.allowedDecisions, decision) ||
       this.resolving
     ) {
       return;

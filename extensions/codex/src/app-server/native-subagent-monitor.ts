@@ -1629,3 +1629,4 @@ function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
     (timer as { unref: () => void }).unref();
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

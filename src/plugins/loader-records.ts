@@ -3,8 +3,17 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginActivationState } from "./config-state.js";
 import type { PluginBundleFormat, PluginDiagnosticCode, PluginFormat } from "./manifest-types.js";
-import type { PluginManifestContracts } from "./manifest.js";
+import type {
+  PluginManifestContracts,
+  PluginManifestDashboard,
+  PluginManifestMcpServer,
+} from "./manifest.js";
+import { isPluginLifecycleTraceEnabled } from "./plugin-lifecycle-trace.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
+import {
+  formatPluginVerificationDiagnostic,
+  type DegradedPlugin,
+} from "./runtime-degraded-state.js";
 import type { PluginLogger } from "./types.js";
 
 /** Builds the registry record shape shared by plugin loading, status, and diagnostics. */
@@ -13,6 +22,7 @@ export function createPluginRecord(params: {
   name?: string;
   description?: string;
   version?: string;
+  builtWithOpenClawVersion?: string;
   packageName?: string;
   format?: PluginFormat;
   bundleFormat?: PluginBundleFormat;
@@ -30,12 +40,15 @@ export function createPluginRecord(params: {
   providerIds?: readonly string[];
   configSchema: boolean;
   contracts?: PluginManifestContracts;
+  dashboard?: PluginManifestDashboard;
+  mcpServers?: Record<string, PluginManifestMcpServer>;
 }): PluginRecord {
   return {
     id: params.id,
     name: params.name ?? params.id,
     description: params.description,
     version: params.version,
+    builtWithOpenClawVersion: params.builtWithOpenClawVersion,
     packageName: params.packageName,
     format: params.format ?? "openclaw",
     bundleFormat: params.bundleFormat,
@@ -84,6 +97,8 @@ export function createPluginRecord(params: {
     configUiHints: undefined,
     configJsonSchema: undefined,
     contracts: params.contracts,
+    dashboard: params.dashboard,
+    mcpServers: params.mcpServers,
   };
 }
 
@@ -92,6 +107,31 @@ export function markPluginActivationDisabled(record: PluginRecord, reason?: stri
   record.activated = false;
   record.activationSource = "disabled";
   record.activationReason = reason;
+}
+
+/** Records a boot-time payload quarantine without importing or activating the plugin. */
+export function recordPluginConfiguredUnavailable(params: {
+  registry: PluginRegistry;
+  record: PluginRecord;
+  seenIds: Map<string, PluginRecord["origin"]>;
+  origin: PluginRecord["origin"];
+  degradedPlugin: DegradedPlugin;
+}): void {
+  const error = formatPluginVerificationDiagnostic(params.degradedPlugin.diagnostic);
+  params.record.status = "error";
+  params.record.error = error;
+  params.record.failurePhase = "validation";
+  params.record.activated = false;
+  params.record.activationReason = `configured-unavailable: ${params.degradedPlugin.diagnostic.reason}`;
+  params.registry.plugins.push(params.record);
+  params.seenIds.set(params.record.id, params.origin);
+  params.registry.diagnostics.push({
+    level: "error",
+    pluginId: params.record.id,
+    source: params.record.source,
+    code: "plugin-verification",
+    message: error,
+  });
 }
 
 /** Joins auto-enable reasons into the single registry field shown by status surfaces. */
@@ -119,7 +159,7 @@ export function recordPluginError(params: {
   diagnosticCode?: PluginDiagnosticCode;
 }) {
   const errorText =
-    process.env.OPENCLAW_PLUGIN_LOADER_DEBUG_STACKS === "1" &&
+    isPluginLifecycleTraceEnabled() &&
     params.error instanceof Error &&
     typeof params.error.stack === "string"
       ? params.error.stack

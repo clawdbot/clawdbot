@@ -31,8 +31,10 @@ import {
   hasEnvironmentFileSource,
   hasInlineEnvironmentSource,
   isEnvironmentFileOnlySource,
+  readEnvironmentValueSource,
   readManagedServiceEnvKeysFromEnvironment,
 } from "./service-managed-env.js";
+import { createGatewayLifecycleMutationReporter } from "./service-mutation.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
@@ -253,22 +255,6 @@ function normalizeSystemdEnvironmentKey(key: string): string | null {
   return normalizeEnvVarKey(key, { portable: true })?.toUpperCase() ?? null;
 }
 
-function readSystemdEnvironmentValueSource(params: {
-  environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
-  key: string;
-}): GatewayServiceEnvironmentValueSource | undefined {
-  const normalizedKey = normalizeSystemdEnvironmentKey(params.key);
-  if (!normalizedKey) {
-    return undefined;
-  }
-  for (const [rawKey, source] of Object.entries(params.environmentValueSources ?? {})) {
-    if (normalizeSystemdEnvironmentKey(rawKey) === normalizedKey) {
-      return source;
-    }
-  }
-  return undefined;
-}
-
 function collectSystemdInlineManagedKeys(params: {
   environment?: GatewayServiceEnv;
   environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
@@ -287,10 +273,7 @@ function collectSystemdInlineManagedKeys(params: {
     if (!key) {
       continue;
     }
-    const source = readSystemdEnvironmentValueSource({
-      environmentValueSources: params.environmentValueSources,
-      key: rawKey,
-    });
+    const source = readEnvironmentValueSource(params.environmentValueSources, rawKey);
     if (hasInlineEnvironmentSource(source) && !hasEnvironmentFileSource(source)) {
       keys.add(key);
     }
@@ -617,7 +600,7 @@ type SystemdServiceInfo = {
   memoryCurrent?: number;
 };
 
-export function parseSystemdShow(output: string): SystemdServiceInfo {
+function parseSystemdShow(output: string): SystemdServiceInfo {
   const entries = parseKeyValueOutput(output, "=");
   const info: SystemdServiceInfo = {};
   const activeState = entries.activestate;
@@ -1039,10 +1022,7 @@ async function writeSystemdUnit({
       if (typeof value !== "string") {
         return false;
       }
-      const source = readSystemdEnvironmentValueSource({
-        environmentValueSources,
-        key,
-      });
+      const source = readEnvironmentValueSource(environmentValueSources, key);
       if (hasEnvironmentFileSource(source) && isUnresolvedShellReference(value)) {
         return false;
       }
@@ -1340,8 +1320,9 @@ function isRunningAsRoot(): boolean {
 async function runSystemdServiceAction(params: {
   stdout: NodeJS.WritableStream;
   env?: GatewayServiceEnv;
-  action: "stop" | "restart";
+  action: "start" | "stop" | "restart";
   label: string;
+  onMutation?: () => void;
 }) {
   const env = params.env ?? process.env;
   const installed = await findInstalledSystemdGatewayScope(env);
@@ -1363,6 +1344,7 @@ async function runSystemdServiceAction(params: {
     if (res.code !== 0) {
       throw new Error(`systemctl ${params.action} failed: ${res.stderr || res.stdout}`.trim());
     }
+    params.onMutation?.();
     params.stdout.write(`${formatLine(params.label, unitName)}\n`);
     return;
   }
@@ -1376,30 +1358,52 @@ async function runSystemdServiceAction(params: {
   if (res.code !== 0) {
     throw new Error(`systemctl ${params.action} failed: ${res.stderr || res.stdout}`.trim());
   }
+  params.onMutation?.();
   params.stdout.write(`${formatLine(params.label, unitName)}\n`);
+}
+
+export async function startSystemdService({
+  stdout,
+  env,
+  onMutation,
+}: GatewayServiceControlArgs): Promise<void> {
+  const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
+  await runSystemdServiceAction({
+    stdout,
+    env,
+    action: "start",
+    label: "Started systemd service",
+    onMutation: () => reportMutation("systemctl-start"),
+  });
 }
 
 export async function stopSystemdService({
   stdout,
   env,
+  onMutation,
 }: GatewayServiceControlArgs): Promise<void> {
+  const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
   await runSystemdServiceAction({
     stdout,
     env,
     action: "stop",
     label: "Stopped systemd service",
+    onMutation: () => reportMutation("systemctl-stop"),
   });
 }
 
 export async function restartSystemdService({
   stdout,
   env,
+  onMutation,
 }: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
+  const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
   await runSystemdServiceAction({
     stdout,
     env,
     action: "restart",
     label: "Restarted systemd service",
+    onMutation: () => reportMutation("systemctl-restart"),
   });
   return { outcome: "completed" };
 }
@@ -1548,3 +1552,4 @@ export async function uninstallLegacySystemdUnits({
 
   return units;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

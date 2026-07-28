@@ -23,6 +23,7 @@ import { resolveSandboxDockerUser } from "./docker-user.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
 import { updateRegistry } from "./registry.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
+import { assertSshSandboxSecretOwnerAvailable } from "./secret-owner.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
 import type { SandboxContext, SandboxWorkspaceInfo } from "./types.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
@@ -135,7 +136,11 @@ async function ensureSandboxWorkspaceLayout(params: {
   };
 }
 
-function resolveSandboxSession(params: { config?: OpenClawConfig; sessionKey?: string }) {
+function resolveSandboxSession(params: {
+  config?: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string;
+}) {
   const rawSessionKey = params.sessionKey?.trim();
   if (!rawSessionKey) {
     return null;
@@ -143,6 +148,7 @@ function resolveSandboxSession(params: { config?: OpenClawConfig; sessionKey?: s
 
   const runtime = resolveSandboxRuntimeStatus({
     cfg: params.config,
+    agentId: params.agentId,
     sessionKey: rawSessionKey,
   });
   if (!runtime.sandboxed) {
@@ -150,6 +156,15 @@ function resolveSandboxSession(params: { config?: OpenClawConfig; sessionKey?: s
   }
 
   const cfg = resolveSandboxConfigForAgent(params.config, runtime.agentId);
+  if (cfg.backend === "ssh") {
+    // Never let an unresolved inline SSH credential silently fall through to
+    // ambient host SSH identities for this agent.
+    assertSshSandboxSecretOwnerAvailable({
+      config: params.config,
+      scope: cfg.scope,
+      agentId: runtime.agentId,
+    });
+  }
   return { rawSessionKey, runtime, cfg };
 }
 
@@ -173,7 +188,9 @@ function resolveSandboxWorkspaceInfoWorkdir(params: {
 
 export async function resolveSandboxContext(params: {
   config?: OpenClawConfig;
+  agentId?: string;
   execOverrides?: ExecPolicyOverrides;
+  requireCurrentConfig?: boolean;
   sessionKey?: string;
   workspaceDir?: string;
 }): Promise<SandboxContext | null> {
@@ -217,6 +234,9 @@ export async function resolveSandboxContext(params: {
     agentWorkspaceDir,
     skillsWorkspaceDir,
     cfg: resolvedCfg,
+    ...(params.requireCurrentConfig !== undefined
+      ? { requireCurrentConfig: params.requireCurrentConfig }
+      : {}),
   });
   await updateRegistry({
     containerName: backend.runtimeId,

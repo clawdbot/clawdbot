@@ -855,6 +855,8 @@ export function renderUsage(props: UsageProps) {
                         primarySelectedEntry,
                         detail.timeSeries,
                         detail.timeSeriesLoading,
+                        detail.timeSeriesStatus,
+                        detailActions.onRetryTimeSeries,
                         detail.timeSeriesMode,
                         detailActions.onTimeSeriesModeChange,
                         detail.timeSeriesBreakdownMode,
@@ -865,8 +867,11 @@ export function renderUsage(props: UsageProps) {
                         filters.startDate,
                         filters.endDate,
                         filters.selectedDays,
+                        filters.timeZone,
                         detail.sessionLogs,
                         detail.sessionLogsLoading,
+                        detail.sessionLogsStatus,
+                        detailActions.onRetrySessionLogs,
                         detail.sessionLogsExpanded,
                         detailActions.onToggleSessionLogsExpanded,
                         detail.logFilters,
@@ -890,3 +895,4 @@ export function renderUsage(props: UsageProps) {
 }
 
 // Exposed for Playwright/Vitest browser unit tests.
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

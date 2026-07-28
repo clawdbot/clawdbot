@@ -1,4 +1,5 @@
 // Control UI view renders dreaming screen content.
+import "../../../styles/lobster-pet.css";
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
@@ -1557,3 +1558,4 @@ function renderDiarySection(props: DreamingProps) {
     </section>
   `;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

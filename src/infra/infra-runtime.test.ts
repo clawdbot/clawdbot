@@ -1,21 +1,22 @@
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 // Tests infra runtime loading and platform-dependent helpers.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
+import { clearRuntimeConfigSnapshot } from "../config/config.js";
 import {
+  beginGatewayRestartSignalAdmission,
   isGatewayWorkAdmissionClosed,
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 type RestartModule = typeof import("./restart.js");
 
-let consumeGatewaySigusr1RestartIntent: RestartModule["consumeGatewaySigusr1RestartIntent"];
 let consumeGatewaySigusr1RestartAuthorization: RestartModule["consumeGatewaySigusr1RestartAuthorization"];
 let deferGatewayRestartUntilIdle: RestartModule["deferGatewayRestartUntilIdle"];
 let isGatewaySigusr1RestartExternallyAllowed: RestartModule["isGatewaySigusr1RestartExternallyAllowed"];
 let markGatewaySigusr1RestartHandled: RestartModule["markGatewaySigusr1RestartHandled"];
 let peekGatewaySigusr1RestartReason: RestartModule["peekGatewaySigusr1RestartReason"];
 let requestGatewayRestartWithSignalAdmission: RestartModule["requestGatewayRestartWithSignalAdmission"];
+let rollbackGatewayRestartSignalAdmission: RestartModule["rollbackGatewayRestartSignalAdmission"];
 let scheduleGatewaySigusr1Restart: RestartModule["scheduleGatewaySigusr1Restart"];
 let setGatewaySigusr1RestartPolicy: RestartModule["setGatewaySigusr1RestartPolicy"];
 let setPreRestartDeferralCheck: RestartModule["setPreRestartDeferralCheck"];
@@ -99,13 +100,13 @@ describe("infra runtime", () => {
         `./restart.js?infra-runtime=${freshRestartModuleId++}`,
       );
       ({
-        consumeGatewaySigusr1RestartIntent,
         consumeGatewaySigusr1RestartAuthorization,
         deferGatewayRestartUntilIdle,
         isGatewaySigusr1RestartExternallyAllowed,
         markGatewaySigusr1RestartHandled,
         peekGatewaySigusr1RestartReason,
         requestGatewayRestartWithSignalAdmission,
+        rollbackGatewayRestartSignalAdmission,
         scheduleGatewaySigusr1Restart,
         setGatewaySigusr1RestartPolicy,
         setPreRestartDeferralCheck,
@@ -167,6 +168,128 @@ describe("infra runtime", () => {
         const root = tryBeginGatewayRootWorkAdmission();
         expect(root).not.toBeNull();
         root?.release();
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
+    it("reopens admission when refused-handler rollback finds no live emission lease", () => {
+      // Fence closed outside restart.ts ownership (lost/overwritten lease).
+      const orphanLease = beginGatewayRestartSignalAdmission();
+      expect(orphanLease).not.toBeNull();
+      expect(isGatewayWorkAdmissionClosed()).toBe(true);
+
+      // Run-loop refused path: mark handled / explicit rollback with no stored lease.
+      expect(rollbackGatewayRestartSignalAdmission()).toBe(true);
+      expect(isGatewayWorkAdmissionClosed()).toBe(false);
+      expect(orphanLease?.rollback()).toBe(false);
+
+      const root = tryBeginGatewayRootWorkAdmission();
+      expect(root).not.toBeNull();
+      root?.release();
+    });
+
+    it("does not leave admission closed when a deferred emission is cancelled mid-prepare", async () => {
+      let releasePrepare: (() => void) | undefined;
+      const prepareGate = new Promise<void>((resolve) => {
+        releasePrepare = resolve;
+      });
+      const handle = deferGatewayRestartUntilIdle({
+        getPendingCount: () => 0,
+        reason: "config.reload.cancelled",
+        emitHooks: {
+          beforeEmit: async () => {
+            await prepareGate;
+          },
+        },
+      });
+      await Promise.resolve();
+      expect(isGatewayWorkAdmissionClosed()).toBe(true);
+
+      handle.cancel();
+      releasePrepare?.();
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(isGatewayWorkAdmissionClosed()).toBe(false);
+      const root = tryBeginGatewayRootWorkAdmission();
+      expect(root).not.toBeNull();
+      root?.release();
+    });
+
+    it("keeps admission open when a deferred restart emission races config supersession", async () => {
+      let pending = 1;
+      let releasePrepare: (() => void) | undefined;
+      const prepareGate = new Promise<void>((resolve) => {
+        releasePrepare = resolve;
+      });
+      const handle = deferGatewayRestartUntilIdle({
+        getPendingCount: () => pending,
+        reason: "config.reload.superseded",
+        emitHooks: {
+          beforeEmit: async () => {
+            await prepareGate;
+          },
+          emitRestart: () => ({ status: "coalesced" as const }),
+        },
+      });
+      expect(isGatewayWorkAdmissionClosed()).toBe(false);
+
+      pending = 0;
+      await vi.advanceTimersByTimeAsync(500);
+      await Promise.resolve();
+      expect(isGatewayWorkAdmissionClosed()).toBe(true);
+
+      // Superseding reload cancels the in-flight emission before signal delivery.
+      handle.cancel();
+      releasePrepare?.();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(isGatewayWorkAdmissionClosed()).toBe(false);
+    });
+
+    it("keeps the signal fence closed when cancel races a concurrent emitted SIGUSR1", async () => {
+      let releasePrepare: (() => void) | undefined;
+      const prepareGate = new Promise<void>((resolve) => {
+        releasePrepare = resolve;
+      });
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        const handle = deferGatewayRestartUntilIdle({
+          getPendingCount: () => 0,
+          reason: "config.reload.shared-fence",
+          emitHooks: {
+            beforeEmit: async () => {
+              await prepareGate;
+            },
+          },
+        });
+        await Promise.resolve();
+        expect(isGatewayWorkAdmissionClosed()).toBe(true);
+
+        // Concurrent path reuses the deferred prepare lease and queues SIGUSR1.
+        expect(requestGatewayRestartWithSignalAdmission("concurrent.emit")).toEqual({
+          status: "emitted",
+        });
+        expect(isGatewayWorkAdmissionClosed()).toBe(true);
+
+        handle.cancel();
+        expect(isGatewayWorkAdmissionClosed()).toBe(true);
+        expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
+
+        releasePrepare?.();
+        await Promise.resolve();
+        await Promise.resolve();
+
+        // In-flight signal still owns the fence until the handled path reopens it.
+        expect(isGatewayWorkAdmissionClosed()).toBe(true);
+        expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
+
+        markGatewaySigusr1RestartHandled();
+        expect(isGatewayWorkAdmissionClosed()).toBe(false);
       } finally {
         process.removeListener("SIGUSR1", handler);
       }
@@ -1160,47 +1283,6 @@ describe("infra runtime", () => {
       }
     });
 
-    it("keeps SIGUSR1 deferred when deferral timeout is explicitly disabled", async () => {
-      const emitSpy = vi.spyOn(process, "emit");
-      const handler = () => {};
-      process.on("SIGUSR1", handler);
-      try {
-        setRuntimeConfigSnapshot({ gateway: { reload: { deferralTimeoutMs: 0 } } });
-        setPreRestartDeferralCheck(() => 5); // always pending
-        scheduleGatewaySigusr1Restart({ delayMs: 0 });
-
-        await vi.advanceTimersByTimeAsync(0);
-        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
-
-        await vi.advanceTimersByTimeAsync(300_000);
-        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
-      } finally {
-        process.removeListener("SIGUSR1", handler);
-      }
-    });
-
-    it("emits SIGUSR1 after explicit deferral timeout even if still pending", async () => {
-      const emitSpy = vi.spyOn(process, "emit");
-      const handler = () => {};
-      process.on("SIGUSR1", handler);
-      try {
-        setRuntimeConfigSnapshot({ gateway: { reload: { deferralTimeoutMs: 1_000 } } });
-        setPreRestartDeferralCheck(() => 5); // always pending
-        scheduleGatewaySigusr1Restart({ delayMs: 0 });
-
-        await vi.advanceTimersByTimeAsync(0);
-        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
-
-        await vi.advanceTimersByTimeAsync(1_000);
-        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
-        expect(consumeGatewaySigusr1RestartIntent()).toEqual({
-          force: true,
-        });
-      } finally {
-        process.removeListener("SIGUSR1", handler);
-      }
-    });
-
     it("emits SIGUSR1 if deferral check throws", async () => {
       const emitSpy = vi.spyOn(process, "emit");
       const handler = () => {};
@@ -1218,3 +1300,4 @@ describe("infra runtime", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

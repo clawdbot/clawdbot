@@ -31,7 +31,9 @@ import type {
   PluginFormat,
 } from "./manifest-types.js";
 import {
+  isCoreReservedPluginId,
   loadPluginManifest,
+  PLUGIN_MANIFEST_FILENAME,
   type OpenClawPackageManifest,
   type PluginManifestActivation,
   type PluginManifestCatalog,
@@ -41,7 +43,9 @@ import {
   type PluginManifestChannelCommandDefaults,
   type PluginManifestChannelConfig,
   type PluginManifestContracts,
+  type PluginManifestDashboard,
   type PluginManifestMediaUnderstandingProviderMetadata,
+  type PluginManifestMcpServer,
   type PluginManifestModelCatalog,
   type PluginManifestModelIdNormalization,
   type PluginManifestModelPricing,
@@ -68,6 +72,7 @@ import { resolvePackagePluginApiRange } from "./package-compat.js";
 import { isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import type { PluginDependencySpecMap } from "./status-dependencies-core.js";
 
 function resolvePluginSourcePath(sourcePath: string): string {
@@ -233,10 +238,8 @@ export type PluginManifestRecord = {
   syntheticAuthRefs?: string[];
   nonSecretAuthMarkers?: string[];
   commandAliases?: PluginManifestCommandAlias[];
-  providerAuthEnvVars?: Record<string, string[]>;
   providerUsageAuthEnvVars?: Record<string, string[]>;
   providerAuthAliases?: Record<string, string>;
-  channelEnvVars?: Record<string, string[]>;
   providerAuthChoices?: PluginManifest["providerAuthChoices"];
   activation?: PluginManifestActivation;
   setup?: PluginManifestSetup;
@@ -247,6 +250,8 @@ export type PluginManifestRecord = {
   packageInstall?: PluginPackageInstall;
   trustedOfficialInstall?: boolean;
   qaRunners?: PluginManifestQaRunner[];
+  dashboard?: PluginManifestDashboard;
+  mcpServers?: Record<string, PluginManifestMcpServer>;
   skills: string[];
   settingsFiles?: string[];
   hooks: string[];
@@ -290,6 +295,38 @@ export type BundledChannelConfigCollector = (params: {
   manifest: PluginManifest;
   packageManifest?: OpenClawPackageManifest;
 }) => Record<string, PluginManifestChannelConfig> | undefined;
+
+function rejectCaseFoldedIdCollisions(
+  records: readonly PluginManifestRecord[],
+  diagnostics: PluginDiagnostic[],
+): PluginManifestRecord[] {
+  const recordsByPolicyId = new Map<string, PluginManifestRecord[]>();
+  for (const record of records) {
+    const policyId = normalizePluginPolicyId(record.id);
+    const matches = recordsByPolicyId.get(policyId) ?? [];
+    matches.push(record);
+    recordsByPolicyId.set(policyId, matches);
+  }
+
+  const rejected = new Set<PluginManifestRecord>();
+  for (const [policyId, matches] of recordsByPolicyId) {
+    const declaredIds = [...new Set(matches.map((record) => record.id))].toSorted();
+    if (declaredIds.length < 2) {
+      continue;
+    }
+    const message = `plugin ids ${declaredIds.map((id) => JSON.stringify(id)).join(", ")} collide as normalized id ${JSON.stringify(policyId)}; refusing all colliding plugins`;
+    for (const record of matches) {
+      rejected.add(record);
+      diagnostics.push({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message,
+      });
+    }
+  }
+  return records.filter((record) => !rejected.has(record));
+}
 
 function safeStatMtimeMs(filePath: string): number | null {
   try {
@@ -553,10 +590,8 @@ function buildRecord(params: {
     syntheticAuthRefs: params.manifest.syntheticAuthRefs ?? [],
     nonSecretAuthMarkers: params.manifest.nonSecretAuthMarkers ?? [],
     commandAliases: params.manifest.commandAliases,
-    providerAuthEnvVars: params.manifest.providerAuthEnvVars,
     providerUsageAuthEnvVars: params.manifest.providerUsageAuthEnvVars,
     providerAuthAliases: params.manifest.providerAuthAliases,
-    channelEnvVars: params.manifest.channelEnvVars,
     providerAuthChoices: params.manifest.providerAuthChoices,
     activation: params.manifest.activation,
     setup: params.manifest.setup,
@@ -567,6 +602,8 @@ function buildRecord(params: {
     packageInstall: params.candidate.packageManifest?.install,
     trustedOfficialInstall: params.trustedOfficialInstall === true ? true : undefined,
     qaRunners: params.manifest.qaRunners,
+    dashboard: params.manifest.dashboard,
+    mcpServers: params.manifest.mcpServers,
     skills: params.manifest.skills ?? [],
     settingsFiles: [],
     hooks: [],
@@ -666,39 +703,6 @@ function buildBundleRecord(params: {
   };
 }
 
-function pushProviderAuthEnvVarsCompatDiagnostic(params: {
-  record: PluginManifestRecord;
-  diagnostics: PluginDiagnostic[];
-}): void {
-  if (params.record.origin === "bundled" || !params.record.providerAuthEnvVars) {
-    return;
-  }
-  const setupProviderEnvVars = new Map(
-    (params.record.setup?.providers ?? []).map(
-      (provider) => [provider.id, new Set(provider.envVars ?? [])] as const,
-    ),
-  );
-  const providerIds = Object.entries(params.record.providerAuthEnvVars)
-    .filter(([providerId, envVars]) => {
-      if (!providerId.trim() || envVars.length === 0) {
-        return false;
-      }
-      const mirroredEnvVars = setupProviderEnvVars.get(providerId);
-      return !mirroredEnvVars || envVars.some((envVar) => !mirroredEnvVars.has(envVar));
-    })
-    .map(([providerId]) => providerId)
-    .toSorted((left, right) => left.localeCompare(right));
-  if (providerIds.length === 0) {
-    return;
-  }
-  params.diagnostics.push({
-    level: "warn",
-    pluginId: sanitizeForLog(params.record.id),
-    source: sanitizeForLog(params.record.manifestPath),
-    message: `providerAuthEnvVars is deprecated compatibility metadata for provider env-var lookup; mirror ${providerIds.map(sanitizeForLog).join(", ")} env vars to setup.providers[].envVars before the deprecation window closes`,
-  });
-}
-
 function pushNonBundledChannelConfigDescriptorDiagnostic(params: {
   record: PluginManifestRecord;
   diagnostics: PluginDiagnostic[];
@@ -743,7 +747,6 @@ function pushManifestCompatibilityDiagnostics(params: {
   diagnostics: PluginDiagnostic[];
   normalized?: ReturnType<typeof normalizePluginsConfigWithResolver>;
 }): void {
-  pushProviderAuthEnvVarsCompatDiagnostic(params);
   pushNonBundledChannelConfigDescriptorDiagnostic(params);
 }
 
@@ -859,8 +862,12 @@ function isTrustedOfficialPluginInstall(params: {
           record: installRecord,
         })
       : undefined;
+  // Local npm-pack archives also persist source="npm". Only registry installs
+  // may inherit catalog trust; local artifacts and source links stay untrusted.
   if (
     installRecord.source === "npm" &&
+    installRecord.artifactKind === undefined &&
+    installRecord.sourcePath === undefined &&
     officialInstall?.npmSpec === packageName &&
     [
       installRecord.resolvedName,
@@ -1009,6 +1016,12 @@ export function loadPluginManifestRegistry(
   const seenIds = new Map<string, SeenIdEntry>();
   const realpathCache = new Map<string, string>();
   const currentHostVersion = resolveCompatibilityHostVersion(env);
+  const explicitConfiguredFileSources = new Set(
+    normalized.loadPaths
+      .map((loadPath) => resolveUserPath(loadPath, env))
+      .filter((loadPath) => safeStatSync(loadPath)?.isFile() === true)
+      .map((loadPath) => path.resolve(loadPath)),
+  );
 
   for (const candidate of candidates) {
     const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
@@ -1018,6 +1031,19 @@ export function loadPluginManifestRegistry(
       realpathCache,
     });
     const isBundleRecord = (candidate.format ?? "openclaw") === "bundle";
+    const isManifestlessConfiguredFile =
+      candidate.origin === "config" &&
+      explicitConfiguredFileSources.has(path.resolve(candidate.source)) &&
+      !fs.existsSync(path.join(candidate.rootDir, PLUGIN_MANIFEST_FILENAME));
+    if (isManifestlessConfiguredFile && isCoreReservedPluginId(candidate.idHint)) {
+      diagnostics.push({
+        level: "error",
+        pluginId: candidate.idHint,
+        source: candidate.source,
+        message: `plugin manifest id "${candidate.idHint}" is reserved by OpenClaw core`,
+      });
+      continue;
+    }
     const manifestRes:
       | ReturnType<typeof loadPluginManifest>
       | ReturnType<typeof loadBundleManifest>
@@ -1034,7 +1060,16 @@ export function loadPluginManifestRegistry(
               bundleFormat: candidate.bundleFormat,
               rejectHardlinks,
             })
-          : loadPluginManifest(candidate.rootDir, rejectHardlinks);
+          : isManifestlessConfiguredFile
+            ? {
+                ok: true,
+                manifest: {
+                  id: candidate.idHint,
+                  configSchema: { type: "object", additionalProperties: false },
+                },
+                manifestPath: candidate.source,
+              }
+            : loadPluginManifest(candidate.rootDir, rejectHardlinks);
     if (!manifestRes.ok) {
       diagnostics.push({
         level: "error",
@@ -1096,7 +1131,7 @@ export function loadPluginManifestRegistry(
           level: "warn",
           pluginId: manifest.id,
           source: packageManifestSource,
-          message: `plugin requires plugin API ${packagePluginApiRange}, but this host is ${currentHostVersion}; skipping load`,
+          message: `plugin requires plugin API ${packagePluginApiRange}, but this host is ${currentHostVersion}; skipping load (check "openclaw --version", OPENCLAW_COMPATIBILITY_HOST_VERSION, or run "openclaw doctor")`,
         });
         continue;
       }
@@ -1217,6 +1252,25 @@ export function loadPluginManifestRegistry(
     pushManifestCompatibilityDiagnostics({ record, diagnostics, normalized });
   }
 
-  const registry = { plugins: records, diagnostics: dedupePluginDiagnostics(diagnostics) };
+  const plugins = rejectCaseFoldedIdCollisions(records, diagnostics);
+  const registry = { plugins, diagnostics: dedupePluginDiagnostics(diagnostics) };
   return registry;
 }
+
+/** Load manifest metadata from the bundled/source plugin tree without consulting operator state. */
+export function loadBundledPluginManifestRegistry(
+  params: { env?: NodeJS.ProcessEnv } = {},
+): PluginManifestRegistry {
+  const env = params.env ?? process.env;
+  const installRecords: Record<string, PluginInstallRecord> = {};
+  return loadPluginManifestRegistry({
+    env,
+    installRecords,
+    discovery: discoverOpenClawPlugins({
+      env,
+      installRecords,
+      rootScope: "bundled",
+    }),
+  });
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

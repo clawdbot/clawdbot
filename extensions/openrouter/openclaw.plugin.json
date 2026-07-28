@@ -6,6 +6,11 @@
   },
   "enabledByDefault": true,
   "providers": ["openrouter"],
+  "modelCatalog": {
+    "discovery": {
+      "openrouter": "runtime"
+    }
+  },
   "modelIdNormalization": {
     "providers": {
       "openrouter": {

@@ -14,11 +14,10 @@ import type { McpCatalogTool } from "./agent-bundle-mcp-types.js";
 import type { McpToolCatalogDiagnostic } from "./agent-bundle-mcp-types.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { applyEmbeddedAttemptToolsAllow } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
-import {
-  getMcpAppViewLease,
-  MCP_APP_RESOURCE_MIME_TYPE,
-  testing as mcpUiResourceTesting,
-} from "./mcp-ui-resource.js";
+import { getMcpAppViewLease } from "./mcp-ui-resource.js";
+import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.js";
+
+const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 
 function expectTextContentBlock(block: unknown, text: string) {
   const content = block as { type?: string; text?: string } | undefined;
@@ -158,6 +157,7 @@ describe("createBundleMcpToolRuntime", () => {
         _meta: { "ui/state": { selected: true } },
       },
     });
+    sessionRuntime.sessionKey = "agent:main:main";
     sessionRuntime.mcpAppsEnabled = true;
     sessionRuntime.readResource = async () => ({
       contents: [
@@ -184,6 +184,7 @@ describe("createBundleMcpToolRuntime", () => {
           toolName: "show",
           uiResourceUri: "ui://demo/app",
           toolCallId: "call-1",
+          originSessionKey: "agent:main:main",
           resultMetaState: "unavailable",
         },
       },
@@ -196,6 +197,29 @@ describe("createBundleMcpToolRuntime", () => {
         sessionRuntime,
       )?.allowedAppToolNames,
     ).toEqual(new Set(["show"]));
+  });
+
+  it("never mints app views for tools from requester-scoped servers", async () => {
+    const tool: McpCatalogTool = {
+      serverName: "user-mail",
+      safeServerName: "user-mail",
+      toolName: "show",
+      inputSchema: { type: "object" },
+      fallbackDescription: "show",
+      uiResourceUri: "ui://user-mail/app",
+    };
+    const sessionRuntime = makeToolRuntime({ tools: [tool], serverName: "user-mail" });
+    sessionRuntime.mcpAppsEnabled = true;
+    // View recovery (peek + transcript reconstruction) has no requester
+    // identity, so scoped servers stay fail-closed at view creation.
+    sessionRuntime.isRequesterScopedServer = (serverName) => serverName === "user-mail";
+    const materialized = await materializeBundleMcpToolsForRun({ runtime: sessionRuntime });
+
+    const result = await expectDefined(
+      materialized.tools[0],
+      "materialized.tools[0] test invariant",
+    ).execute("call-1", {}, undefined, undefined);
+    expect(result.details ?? {}).not.toHaveProperty("mcpAppPreview");
   });
 
   it("materializes bundle MCP tools and executes them", async () => {

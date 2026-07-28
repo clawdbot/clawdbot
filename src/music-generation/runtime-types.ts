@@ -7,7 +7,6 @@ import type {
   MusicGenerationIgnoredOverride,
   MusicGenerationNormalization,
   MusicGenerationOutputFormat,
-  MusicGenerationProvider,
   MusicGenerationSourceImage,
 } from "./types.js";
 
@@ -45,11 +44,3 @@ export type GenerateMusicRuntimeResult = {
   metadata?: Record<string, unknown>;
   ignoredOverrides: MusicGenerationIgnoredOverride[];
 };
-
-/** Parameters for listing music generation providers visible to runtime code. */
-export type ListRuntimeMusicGenerationProvidersParams = {
-  config?: OpenClawConfig;
-};
-
-/** Provider shape exposed by runtime listing APIs. */
-export type RuntimeMusicGenerationProvider = MusicGenerationProvider;

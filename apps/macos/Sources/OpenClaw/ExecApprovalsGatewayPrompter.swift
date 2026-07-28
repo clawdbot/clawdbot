@@ -40,7 +40,7 @@ final class ExecApprovalsGatewayPrompter {
 
     private func handle(push: GatewayPush) async {
         guard case let .event(evt) = push else { return }
-        guard evt.event == "exec.approval.requested" else { return }
+        guard evt.event == "exec.approval.requested" || evt.event == "openclaw.approval.requested" else { return }
         guard let payload = evt.payload else { return }
         do {
             let data = try JSONEncoder().encode(payload)
@@ -58,13 +58,24 @@ final class ExecApprovalsGatewayPrompter {
             else {
                 return
             }
-            try await GatewayConnection.shared.requestVoid(
-                method: .execApprovalResolve,
-                params: [
-                    "id": AnyCodable(request.id),
-                    "decision": AnyCodable(decision.rawValue),
-                ],
-                timeoutMs: 10000)
+            if evt.event == "openclaw.approval.requested" {
+                try await GatewayConnection.shared.requestVoid(
+                    method: .approvalResolve,
+                    params: [
+                        "id": AnyCodable(request.id),
+                        "kind": AnyCodable("system-agent"),
+                        "decision": AnyCodable(decision.rawValue),
+                    ],
+                    timeoutMs: 10000)
+            } else {
+                try await GatewayConnection.shared.requestVoid(
+                    method: .execApprovalResolve,
+                    params: [
+                        "id": AnyCodable(request.id),
+                        "decision": AnyCodable(decision.rawValue),
+                    ],
+                    timeoutMs: 10000)
+            }
         } catch {
             self.logger.error("exec approval handling failed \(error.localizedDescription, privacy: .public)")
         }

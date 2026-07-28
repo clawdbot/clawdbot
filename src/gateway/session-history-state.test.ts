@@ -588,8 +588,41 @@ describe("SessionHistorySseState", () => {
       ],
     });
 
-    expectOnlyAssistantText(snapshot, "Disk usage crossed 95 percent.", 4);
+    expect(snapshot.history.messages).toEqual([
+      {
+        ...assistantTextMessage("Disk usage crossed 95 percent.", 4),
+        __openclaw: { seq: 4, turnBoundary: true },
+      },
+    ]);
     expect(snapshot.rawTranscriptSeq).toBe(4);
+  });
+
+  test("carries a hidden heartbeat boundary into the next visible SSE append", () => {
+    const state = newState([
+      assistantTextMessage("already visible", 1),
+      {
+        role: "user",
+        content: HEARTBEAT_PROMPT,
+        __openclaw: { seq: 2 },
+      },
+    ]);
+
+    expect(appendAssistantText(state, "HEARTBEAT_OK", 3)).toBeNull();
+
+    const compaction = state.appendInlineMessage({
+      message: {
+        role: "system",
+        content: textContent("Compaction summary"),
+      },
+      messageSeq: 4,
+    });
+    expect(compaction?.message?.["__openclaw"]?.turnBoundary).toBeUndefined();
+
+    const appended = appendAssistantText(state, "Disk usage crossed 95 percent.", 5);
+    expect(appended?.message).toMatchObject({
+      role: "assistant",
+      __openclaw: { seq: 5, turnBoundary: true },
+    });
   });
 
   test("does not append heartbeat or internal-only SSE messages", () => {

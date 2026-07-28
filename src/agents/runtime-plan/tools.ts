@@ -68,6 +68,9 @@ function copyRuntimeToolMetadata(source: AgentTool, target: AgentTool): void {
   if (catalogMode) {
     (target as AnyAgentTool).catalogMode = catalogMode;
   }
+  if (source.outputSchema !== undefined) {
+    target.outputSchema = source.outputSchema;
+  }
   copyPluginToolMeta(source as never, target as never);
   copyChannelAgentToolMeta(source as never, target as never);
   copyBeforeToolCallHookMarker(source as never, target as never);

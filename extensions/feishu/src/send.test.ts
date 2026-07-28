@@ -174,6 +174,34 @@ describe("getMessageFeishu", () => {
     });
   });
 
+  it("materializes prose soft breaks in the public post send path", async () => {
+    const create = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_newlines" } });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create,
+          reply: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+
+    await sendMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_send",
+      text: "first line\nsecond line\n\n```ts\nconst value = 1\n```",
+    });
+
+    const request = create.mock.calls[0]?.[0] as { data?: { content?: string } } | undefined;
+    const element = JSON.parse(request?.data?.content ?? "null").zh_cn.content[0][0];
+    expect(element).toEqual({
+      tag: "md",
+      text: "first line  \nsecond line\n\n```ts\nconst value = 1\n```",
+    });
+  });
+
   it("sends automatic mentions as native post elements without rewriting body text", async () => {
     const create = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_mentions" } });
     mockCreateFeishuClient.mockReturnValue({
@@ -718,6 +746,32 @@ describe("editMessageFeishu", () => {
     expect(result).toEqual({ messageId: "om_edit", contentType: "post" });
   });
 
+  it("normalizes post edits and accepts content beyond the delivery chunk size", async () => {
+    mockClientPatch.mockResolvedValueOnce({ code: 0 });
+    const text = `${"a".repeat(4_500)}\nsecond line`;
+
+    await editMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_edit",
+      text,
+    });
+
+    const request = mockClientPatch.mock.calls[0]?.[0] as { data?: { content?: string } };
+    const element = JSON.parse(request.data?.content ?? "null").zh_cn.content[0][0];
+    expect(element.text).toBe(`${"a".repeat(4_500)}  \nsecond line`);
+  });
+
+  it("rejects edits that exceed the rich-post byte envelope", async () => {
+    await expect(
+      editMessageFeishu({
+        cfg: {} as ClawdbotConfig,
+        messageId: "om_edit",
+        text: "界".repeat(11_000),
+      }),
+    ).rejects.toThrow("Feishu message edit exceeds the 30 KB rich-post API limit");
+    expect(mockClientPatch).not.toHaveBeenCalled();
+  });
+
   it("patches interactive content for card edits", async () => {
     mockClientPatch.mockResolvedValueOnce({ code: 0 });
 
@@ -744,5 +798,71 @@ describe("resolveFeishuCardTemplate", () => {
 
   it("drops unsupported free-form identity themes", () => {
     expect(resolveFeishuCardTemplate("space lobster")).toBeUndefined();
+  });
+});
+describe("Feishu card-mode newline preservation", () => {
+  function createCardClient() {
+    const create = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_card" } });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create,
+          reply: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+    return create;
+  }
+
+  function parseCardContent(create: ReturnType<typeof vi.fn>) {
+    const request = create.mock.calls[0]?.[0] as { data?: { content?: string } } | undefined;
+    return JSON.parse(request?.data?.content ?? "null") as {
+      body: { elements: Array<{ tag: string; content: string }> };
+    };
+  }
+
+  it("preserves single newlines in markdown card text", async () => {
+    const create = createCardClient();
+    await sendMarkdownCardFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_card",
+      text: "line one\nline two\nline three",
+    });
+    expect(parseCardContent(create).body.elements[0]?.content).toBe(
+      "line one\nline two\nline three",
+    );
+  });
+
+  it("preserves single newlines in structured card text", async () => {
+    const create = createCardClient();
+    await sendStructuredCardFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_card",
+      text: "first\nsecond\nthird",
+    });
+    expect(parseCardContent(create).body.elements[0]?.content).toBe("first\nsecond\nthird");
+  });
+
+  it("keeps existing double newlines unchanged in markdown card text", async () => {
+    const create = createCardClient();
+    await sendMarkdownCardFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_card",
+      text: "para a\n\npara b",
+    });
+    expect(parseCardContent(create).body.elements[0]?.content).toBe("para a\n\npara b");
+  });
+
+  it("keeps existing double newlines unchanged in structured card text", async () => {
+    const create = createCardClient();
+    await sendStructuredCardFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_card",
+      text: "section 1\n\nsection 2",
+    });
+    expect(parseCardContent(create).body.elements[0]?.content).toBe("section 1\n\nsection 2");
   });
 });

@@ -368,6 +368,45 @@ describe("createMattermostClient", () => {
     );
   });
 
+  it("rejects relative API path segments before fetch", async () => {
+    const { client, calls } = createTestClient();
+
+    await expect(client.request("/posts/../users/me")).rejects.toThrow(
+      "Mattermost API path must not contain unsafe path segments",
+    );
+
+    expect(calls).toEqual([]);
+  });
+
+  it("rejects encoded relative API path segments before fetch", async () => {
+    const { client, calls } = createTestClient();
+
+    await expect(client.request("/posts/%2e%2e/users/me")).rejects.toThrow(
+      "Mattermost API path must not contain unsafe path segments",
+    );
+
+    expect(calls).toEqual([]);
+  });
+
+  it("rejects URL-normalized relative API path bypasses before fetch", async () => {
+    const { client, calls } = createTestClient();
+
+    for (const path of [
+      "/posts/..?x=1",
+      "/posts/%2e%2e?x=1",
+      "/posts\\..\\users/me",
+      "/posts/.\n./users/me",
+      "/posts/.%0a./users/me",
+      "/posts/%2e%2e%2fusers%80%2f..%2fme",
+    ]) {
+      await expect(client.request(path)).rejects.toThrow(
+        "Mattermost API path must not contain unsafe path segments",
+      );
+    }
+
+    expect(calls).toEqual([]);
+  });
+
   it("sends Authorization header with Bearer token", async () => {
     const { mockFetch, calls } = createMockFetch({ body: { id: "u1" } });
     const client = createMattermostClient({

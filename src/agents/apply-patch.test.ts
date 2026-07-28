@@ -11,7 +11,8 @@ import {
   createRebindableDirectoryAlias,
   withRealpathSymlinkRebindRace,
 } from "../test-utils/symlink-rebind-race.js";
-import { applyPatch, createApplyPatchTool } from "./apply-patch.js";
+import { createApplyPatchTool } from "./apply-patch.js";
+import { applyPatch } from "./apply-patch.test-support.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>) {

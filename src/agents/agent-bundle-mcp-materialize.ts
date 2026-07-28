@@ -22,9 +22,22 @@ import { mcpContentBlockToAgentContent } from "./mcp-content.js";
 import { buildMcpAppCanvasPayload, fetchMcpAppView } from "./mcp-ui-resource.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
-
 function isAppOnlyTool(tool: McpCatalogTool): boolean {
   return tool.uiVisibility !== undefined && !tool.uiVisibility.includes("model");
+}
+
+async function releaseRuntimeLease(params: {
+  runtime: SessionMcpRuntime;
+  releaseLease?: () => void;
+}): Promise<void> {
+  params.releaseLease?.();
+  // Lease retirement is a lifecycle-only edge. Keep the manager graph out of
+  // read-only CLI startup paths that load tool materialization metadata.
+  const { completeDeferredSessionMcpRuntimeRetirement } =
+    await import("./agent-bundle-mcp-manager-api.js");
+  await completeDeferredSessionMcpRuntimeRetirement(params.runtime).catch((error: unknown) => {
+    logWarn(`bundle-mcp: deferred runtime cleanup failed: ${String(error)}`);
+  });
 }
 
 function buildAppToolPolicyProjections(params: {
@@ -385,9 +398,8 @@ export function buildBundleMcpToolsFromCatalog(params: {
     }
   }
 
-  // Sort tools deterministically by name so the tools block in API requests is stable across
-  // turns (defensive — listTools() order is usually stable but not guaranteed).
-  // Cannot fix name collisions: collision suffixes above are order-dependent.
+  // Sort deterministically by name: keeps the API tools block stable across turns
+  // (listTools() order is not guaranteed). Collision suffixes above stay order-dependent.
   tools.sort((a, b) => a.name.localeCompare(b.name));
   return tools;
 }
@@ -405,7 +417,7 @@ export async function materializeBundleMcpToolsForRun(params: {
   try {
     catalog = await params.runtime.getCatalog();
   } catch (error) {
-    releaseLease?.();
+    await releaseRuntimeLease({ runtime: params.runtime, releaseLease });
     throw error;
   }
   const reservedToolNames = params.reservedToolNames
@@ -422,7 +434,9 @@ export async function materializeBundleMcpToolsForRun(params: {
         toolName: tool.toolName,
         result,
       });
-      if (params.runtime.mcpAppsEnabled && tool.uiResourceUri) {
+      // Requester-scoped servers never mint app views (outlive run; no requester id on view boundary).
+      const scopedServer = params.runtime.isRequesterScopedServer?.(tool.serverName) === true;
+      if (params.runtime.mcpAppsEnabled && tool.uiResourceUri && !scopedServer) {
         const allowedAppToolNames = allowedAppToolsByServer
           ? (allowedAppToolsByServer.get(tool.serverName) ?? new Set<string>())
           : undefined;
@@ -440,6 +454,7 @@ export async function materializeBundleMcpToolsForRun(params: {
           (agentResult.details as Record<string, unknown>).mcpAppPreview = buildMcpAppCanvasPayload(
             {
               ...view,
+              ...(params.runtime.sessionKey ? { originSessionKey: params.runtime.sessionKey } : {}),
               ...(result["_meta"] !== undefined ? { resultMetaState: "unavailable" as const } : {}),
             },
           );
@@ -522,7 +537,9 @@ export async function materializeBundleMcpToolsForRun(params: {
         return;
       }
       disposed = true;
-      releaseLease?.();
+      // Reset/delete can request retirement while this run owns the lease.
+      // Dispose as soon as the final run, view, or request lease has released.
+      await releaseRuntimeLease({ runtime: params.runtime, releaseLease });
       await params.disposeRuntime?.();
     },
   };

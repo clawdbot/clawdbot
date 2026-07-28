@@ -20,8 +20,6 @@ export {
 } from "openclaw/plugin-sdk/reply-history";
 export { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 export {
-  dispatchReplyWithBufferedBlockDispatcher,
-  finalizeInboundContext,
   resolveChunkMode,
   resolveTextChunkLimit,
   type getReplyFromConfig,

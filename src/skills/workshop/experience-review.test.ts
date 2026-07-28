@@ -341,3 +341,35 @@ describe("skill experience review scheduler", () => {
     expect(prompt).toContain("[tool call: exec]");
   });
 });
+
+function hasDanglingSurrogate(value: string): boolean {
+  return /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value);
+}
+
+describe("formatSkillExperienceReviewTranscript", () => {
+  it("keeps first-message truncation UTF-16 safe at the 6 000-char boundary", () => {
+    const content = `${"a".repeat(5_992)}😀rest`;
+    const messages = [
+      { role: "user", content },
+      { role: "user", content: "d".repeat(60_000) },
+    ];
+    expect(hasDanglingSurrogate(`[user]\n${content}`.slice(0, 6_000))).toBe(true);
+
+    const transcript = formatSkillExperienceReviewTranscript(messages);
+    expect(hasDanglingSurrogate(transcript)).toBe(false);
+    expect(transcript).toContain("[older trajectory omitted]");
+  });
+
+  it("keeps tail truncation UTF-16 safe", () => {
+    const messages = [
+      { role: "user", content: "b".repeat(20_000) },
+      { role: "user", content: `🦞${"z".repeat(53_919)}` },
+    ];
+    const full = `[user]\n${messages[0]?.content}\n\n[user]\n${messages[1]?.content}`;
+    expect(hasDanglingSurrogate(full.slice(-53_920))).toBe(true);
+
+    const transcript = formatSkillExperienceReviewTranscript(messages);
+    expect(hasDanglingSurrogate(transcript)).toBe(false);
+    expect(transcript.length).toBeLessThanOrEqual(60_000);
+  });
+});

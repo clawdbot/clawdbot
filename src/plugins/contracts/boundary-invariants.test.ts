@@ -15,6 +15,7 @@ const tsFilesCache = new Map<string, string[]>();
 const BUNDLED_TYPED_HOOK_REGISTRATION_FILES = [
   "extensions/acpx/index.ts",
   "extensions/active-memory/index.ts",
+  "extensions/clickclack/src/discussions/register.ts",
   "extensions/codex/index.ts",
   "extensions/diffs/src/plugin.ts",
   "extensions/discord/subagent-hooks-api.ts",
@@ -29,9 +30,15 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_FILES = [
 const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
   "extensions/acpx/index.ts": ["reply_dispatch"],
   "extensions/active-memory/index.ts": ["before_prompt_build"],
+  "extensions/clickclack/src/discussions/register.ts": ["before_tool_call"],
   "extensions/codex/index.ts": ["after_compaction", "inbound_claim", "session_end"],
   "extensions/diffs/src/plugin.ts": ["before_prompt_build"],
-  "extensions/discord/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
+  "extensions/discord/subagent-hooks-api.ts": [
+    "gateway_start",
+    "subagent_delivery_target",
+    "subagent_ended",
+    "subagent_progress",
+  ],
   "extensions/feishu/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
   "extensions/matrix/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
   "extensions/memory-core/src/dreaming.ts": ["before_agent_reply", "gateway_start", "gateway_stop"],
@@ -53,7 +60,7 @@ const BUNDLED_LIVE_CONFIG_HOOK_GUARDS = {
   ],
   "extensions/memory-core/src/dreaming.ts": [
     'params.reason === "runtime"',
-    "resolveMemoryCorePluginConfig(startupCfg)",
+    "resolveMemoryDreamingPluginConfig(startupCfg)",
     "api.runtime.config?.current?.() ?? api.config",
   ],
   "extensions/memory-lancedb/index.ts": ["resolveLivePluginConfigObject(", '"memory-lancedb"'],
@@ -81,11 +88,6 @@ const BUNDLED_LIVE_CONFIG_PROVIDER_GUARDS = {
     "resolvePluginConfigObject(",
     "const startupPluginConfig = (api.pluginConfig ?? {})",
     "const currentPluginConfig = resolveCurrentPluginConfig(ctx.config);",
-  ],
-  "extensions/codex/provider.ts": [
-    "resolvePluginConfigObject(",
-    "const runtimePluginConfig = resolvePluginConfigObject(ctx.config, CODEX_PROVIDER_ID);",
-    "const pluginConfig = runtimePluginConfig ?? (ctx.config ? undefined : options.pluginConfig);",
   ],
   "extensions/github-copilot/index.ts": [
     "resolvePluginConfigObject(",
@@ -377,12 +379,6 @@ describe("plugin contract boundary invariants", () => {
       const source = readRepoSource(file);
       return /extensions\/\$\{|\.\.\/\.\.\/\.\.\/\.\.\/extensions\//u.test(source);
     });
-    expect(offenders).toStrictEqual([]);
-  });
-
-  it("keeps bundled plugin production code off legacy before_agent_start hooks", () => {
-    const files = listTsFiles("extensions", { excludeTests: true });
-    const offenders = files.filter((file) => readRepoSource(file).includes("before_agent_start"));
     expect(offenders).toStrictEqual([]);
   });
 

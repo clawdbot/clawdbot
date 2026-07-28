@@ -31,7 +31,7 @@ describe("applyProviderAuthConfigPatch", () => {
     expect(next.agents?.defaults?.model).toEqual(base.agents.defaults.model);
   });
 
-  it("keeps configured primary and fallback refs in a newly introduced allowlist", () => {
+  it("does not turn primary and fallback refs into per-model config entries", () => {
     const next = applyProviderAuthConfigPatch(
       {
         agents: {
@@ -48,12 +48,10 @@ describe("applyProviderAuthConfigPatch", () => {
 
     expect(next.agents?.defaults?.models).toEqual({
       "openai/gpt-5.6-sol": {},
-      "openai/gpt-5.5": {},
-      "anthropic/claude-opus-4-6": {},
     });
   });
 
-  it("replaces the allowlist only when replaceDefaultModels is set", () => {
+  it("replaces the per-model config only when replaceDefaultModels is set", () => {
     const patch = {
       agents: {
         defaults: {
@@ -198,7 +196,6 @@ describe("applyProviderAuthConfigPatch", () => {
         alias: "gemini",
         params: { thinking: "high", maxTokens: 12_000 },
       },
-      "openai/gpt-5.5": {},
     });
   });
 
@@ -352,7 +349,6 @@ describe("applyDefaultModel", () => {
     });
     expect(next.agents?.defaults?.models).toEqual({
       "openrouter/auto": {},
-      "anthropic/claude-opus-4-6": {},
     });
   });
 
@@ -392,12 +388,10 @@ describe("applyDefaultModel", () => {
     });
     expect(next.agents?.defaults?.models).toEqual({
       "openrouter/auto": {},
-      "anthropic/claude-opus-4-6": {},
-      "openai/gpt-5.4": {},
     });
   });
 
-  it("adds the model to the allowlist", () => {
+  it("adds the model to per-model config", () => {
     const config = {
       agents: { defaults: { models: { "anthropic/claude-sonnet-4-6": {} } } },
     } as OpenClawConfig;

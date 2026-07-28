@@ -6,7 +6,7 @@ read_when: "You want a dedicated explanation of sandboxing or need to tune agent
 status: active
 ---
 
-OpenClaw can run tool execution inside a sandbox backend to reduce blast radius. Sandboxing is off by default and controlled by `agents.defaults.sandbox` (global) or `agents.list[].sandbox` (per-agent). The Gateway process always stays on the host; only tool execution moves into the sandbox when enabled.
+OpenClaw can run tool execution inside a sandbox backend to reduce blast radius. Sandboxing is off by default and controlled by `agents.defaults.sandbox` (global) or `agents.entries.*.sandbox` (per-agent). The Gateway process always stays on the host; only tool execution moves into the sandbox when enabled.
 
 <Note>
 This is not a perfect security boundary, but it materially limits filesystem and process access when the model does something dumb.
@@ -177,11 +177,70 @@ Inbound media is copied into the active sandbox workspace (`media/inbound/*`).
 **Skills**: the `read` tool is sandbox-rooted. With `workspaceAccess: "none"`, OpenClaw mirrors eligible skills into the sandbox workspace (`.../skills`) so they can be read. With `"rw"`, workspace skills are readable from `/workspace/skills`, and eligible managed, bundled, or plugin skills are materialized into the generated read-only path `/workspace/.openclaw/sandbox-skills/skills`.
 </Note>
 
-## Custom bind mounts
+## Multiple folders for one agent
 
-`agents.defaults.sandbox.docker.binds` mounts additional host directories into the container. Format: `host:container:mode` (e.g., `"/home/user/source:/source:rw"`).
+Use Docker bind mounts when one sandboxed agent needs more than its primary workspace. Each entry maps a host folder to a container path with an explicit access mode:
 
-Global and per-agent binds are merged (not replaced). Under `scope: "shared"`, per-agent binds are ignored.
+```text
+host-directory:container-directory:ro
+host-directory:container-directory:rw
+```
+
+- `ro` makes the mounted folder read-only inside the sandbox.
+- `rw` lets sandboxed tools and processes change the host folder.
+- The container path is the path the agent uses. Host paths are not exposed automatically.
+
+This example gives the `research` agent a writable primary workspace, read-only reference material at `/reference`, and a separate writable output folder at `/drafts`:
+
+```json5
+{
+  agents: {
+    defaults: {
+      sandbox: {
+        mode: "all",
+        scope: "agent",
+      },
+    },
+    list: [
+      {
+        id: "research",
+        workspace: "/srv/openclaw/research-workspace",
+        sandbox: {
+          workspaceAccess: "rw",
+          docker: {
+            binds: ["/srv/shared/reference:/reference:ro", "/srv/shared/drafts:/drafts:rw"],
+            // Required because these sources are outside the agent workspace.
+            dangerouslyAllowExternalBindSources: true,
+          },
+        },
+      },
+    ],
+  },
+}
+```
+
+`workspaceAccess` and bind modes are independent:
+
+| Setting                          | Controls                                                                    |
+| -------------------------------- | --------------------------------------------------------------------------- |
+| `workspaceAccess: "none"`        | Uses an isolated sandbox workspace; does not expose the agent workspace.    |
+| `workspaceAccess: "ro"`          | Mounts the agent workspace read-only at `/agent`.                           |
+| `workspaceAccess: "rw"`          | Mounts the agent workspace read/write at `/workspace`.                      |
+| `docker.binds` entry `:ro`/`:rw` | Controls only that additional host folder at its configured container path. |
+
+Changing `workspaceAccess` does not change an additional bind from `ro` to `rw`, or vice versa. Global and per-agent `docker.binds` are merged. Keep `scope: "agent"` or `"session"` for per-agent binds; `scope: "shared"` ignores all per-agent Docker overrides and uses only global binds.
+
+Bind mounts are the supported multi-folder boundary because Docker constructs the container's filesystem view with mount isolation, and the `ro`/`rw` mode applies to every process in the sandbox. That boundary covers `exec`, filesystem tools, child processes, and libraries without duplicating path-authorization checks across each OpenClaw code path. A host-side path allowlist cannot provide the same complete boundary when an allowed shell or dependency can access files directly.
+
+The opt-in `dangerouslyAllowExternalBindSources` only permits sources outside the workspace roots. It does not disable OpenClaw's blocked system, credential, Docker socket, symlink-parent, or reserved-target checks. Prefer the smallest folder, use `ro` unless writes are required, and recreate the sandbox after changing mounts:
+
+```bash
+openclaw sandbox recreate --agent research
+```
+
+### Other bind behavior
+
+`agents.defaults.sandbox.docker.binds` configures global mounts. The format is the same `host:container:mode` form (for example, `"/home/user/source:/source:rw"`).
 
 `agents.defaults.sandbox.browser.binds` mounts additional host directories into the **sandbox browser** container only. When set (including `[]`), it replaces `docker.binds` for the browser container; when omitted, the browser container falls back to `docker.binds`.
 
@@ -337,7 +396,7 @@ For Docker gateway deployments, `scripts/docker/setup.sh` can bootstrap sandbox 
 Paths:
 
 - Global: `agents.defaults.sandbox.docker.setupCommand`
-- Per-agent: `agents.list[].sandbox.docker.setupCommand`
+- Per-agent: `agents.entries.*.sandbox.docker.setupCommand`
 
 <AccordionGroup>
   <Accordion title="Common pitfalls">
@@ -366,7 +425,7 @@ Debugging:
 
 ## Multi-agent overrides
 
-Each agent can override sandbox + tools: `agents.list[].sandbox` and `agents.list[].tools` (plus `agents.list[].tools.sandbox.tools` for sandbox tool policy). See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for precedence.
+Each agent can override sandbox + tools: `agents.entries.*.sandbox` and `agents.entries.*.tools` (plus `agents.entries.*.tools.sandbox.tools` for sandbox tool policy). See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for precedence.
 
 ## Minimal enable example
 

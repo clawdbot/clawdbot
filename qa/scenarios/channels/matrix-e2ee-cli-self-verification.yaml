@@ -1,0 +1,32 @@
+title: Matrix E2EE CLI interactive self-verification establishes identity trust
+scenario:
+  id: matrix-e2ee-cli-self-verification
+  surface: channels
+  coverage:
+    primary:
+      - matrix.encryption-setup
+  execution:
+    profiles: { "matrix:all": 92, "matrix:e2ee-cli": 8 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 180000
+    retryCount: 0
+    config:
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: true
+            key: e2ee-cli-self-verification
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA E2EE CLI Self Verification Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-verification.js
+  call: runMatrixQaE2eeCliSelfVerificationScenario
+  args:
+    - expr: "scenarioContext"

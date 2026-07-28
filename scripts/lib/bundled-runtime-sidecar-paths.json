@@ -8,6 +8,7 @@
   "dist/extensions/memory-core/runtime-api.js",
   "dist/extensions/ollama/runtime-api.js",
   "dist/extensions/open-prose/runtime-api.js",
+  "dist/extensions/reef/runtime-api.js",
   "dist/extensions/telegram/runtime-api.js",
   "dist/extensions/telegram/runtime-setter-api.js",
   "dist/extensions/webhooks/runtime-api.js",

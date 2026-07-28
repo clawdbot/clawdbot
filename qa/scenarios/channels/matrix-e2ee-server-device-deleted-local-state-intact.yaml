@@ -1,0 +1,35 @@
+title: Matrix E2EE server-side device deletion invalidates surviving local state
+scenario:
+  id: matrix-e2ee-server-device-deleted-local-state-intact
+  surface: channels
+  coverage:
+    primary:
+      - matrix.encryption-setup
+  execution:
+    profiles: { "matrix:all": 74, "matrix:e2ee-deep": 8 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 120000
+    retryCount: 0
+    config:
+      matrixConfigOverrides:
+        encryption: true
+        startupVerification: off
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: true
+            key: e2ee-server-device-deleted-local-state-intact
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA E2EE Server Device Deleted Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee-destructive.js
+  call: runMatrixQaE2eeServerDeviceDeletedLocalStateIntactScenario
+  args:
+    - expr: "scenarioContext"

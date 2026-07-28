@@ -1,0 +1,32 @@
+title: Matrix initial catchup is followed by incremental replies
+scenario:
+  id: matrix-initial-catchup-then-incremental
+  surface: channels
+  coverage:
+    primary:
+      - matrix.conversation-routing-and-delivery
+  execution:
+    profiles: { "matrix:all": 31, "matrix:transport": 30 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 90000
+    retryCount: 0
+    config:
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: false
+            key: restart
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA Restart Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-restart.js
+  call: runInitialCatchupThenIncrementalScenario
+  args:
+    - expr: "scenarioContext"

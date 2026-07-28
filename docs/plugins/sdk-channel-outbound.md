@@ -4,7 +4,7 @@ title: "Channel outbound API"
 read_when:
   - You are building or refactoring a messaging channel plugin send path
   - You need durable final reply delivery, receipts, live preview finalization, or receive acknowledgement policy
-  - You are migrating from channel-message, channel-message-runtime, or legacy reply dispatch helpers
+  - You are migrating from channel-message or legacy reply dispatch helpers
 ---
 
 Channel plugins expose outbound message behavior from
@@ -12,10 +12,61 @@ Channel plugins expose outbound message behavior from
 `openclaw/plugin-sdk/channel-inbound` for receive/context/dispatch
 orchestration.
 
-Core owns queueing, durability, generic retry policy, hooks, receipts, and
-the shared `message` tool. The plugin owns native send/edit/delete calls,
-target normalization, platform threading, selected quotes, notification
-flags, account state, and platform-specific side effects.
+Core owns queueing, durability, the durable **ingress monitor and drain**
+(`createChannelIngressMonitor`, `createChannelIngressDrain`, and
+`openChannelIngressDrain`), generic retry policy, turn-adoption lifecycle
+(`turnAdoptionLifecycle` / `bindIngressLifecycleToReplyOptions`), hooks,
+receipts, and the shared `message` tool. The plugin owns native
+send/edit/delete calls, target normalization, platform threading, selected
+quotes, notification flags, account state, ingress inspection and payload
+encoding, lane keys, non-retryable predicates, optional supersede
+authorization, and platform-specific side effects.
+
+## Durable ingress monitors
+
+Use `createChannelIngressMonitor(...)` when a channel must persist accepted
+transport events before dispatch. It composes a channel ingress queue and drain
+with the shared admission, polling, pruning, delivery, and shutdown lifecycle.
+Use the lower-level `createChannelIngressDrain(...)` only when the transport
+owns a materially different admission or pump contract.
+
+The required options are:
+
+| Option                           | Contract                                                                                                                                                                                                                                                                                                         |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `queue`                          | A `ChannelIngressQueue`, or a lazy factory that opens the account-scoped queue.                                                                                                                                                                                                                                  |
+| `inspect(raw, context)`          | Returns the stable `eventId` and serialized `laneKey`, or `null` for an ignored event. Claim-time facts must match the persisted id and lane.                                                                                                                                                                    |
+| `payload`                        | Supplies the payload version plus body serialization/deserialization. Use `storage: "raw-event"` for the standard `{ version, rawEvent }` string envelope, or provide custom encode/decode callbacks for an existing channel-specific shape. `createClaimError` classifies invalid versions or changed identity. |
+| `deliver(raw, lifecycle, claim)` | Dispatches one decoded event and receives the complete adoption lifecycle. It may return `completed`, `deferred`, `failed-retryable`, or nothing.                                                                                                                                                                |
+| `pollIntervalMs`                 | Schedules recovery/drain polls while the monitor is running.                                                                                                                                                                                                                                                     |
+| `retention`                      | Supplies the prune cadence and completed/failed TTL and entry caps.                                                                                                                                                                                                                                              |
+
+The monitor serializes admissions so append backoff cannot invert a lane. The
+default bounded append delays are `0`, `100`, and `300` ms; exhaustion rejects
+the transport callback instead of dispatching an event that was not made
+durable. At claim time it decodes the versioned payload, re-runs `inspect`, and
+rejects an id or lane mismatch before delivery.
+
+`deliver` receives `onAdopted`, `onDeferred`, `onAdoptionFinalizing`,
+`onAbandoned`, and `abortSignal`. Returning without an explicit handoff marks a
+terminal no-dispatch event adopted. `admission` is always `exclusive`. A
+deferred handoff keeps the claim held, while shutdown or abort leaves unadopted
+work retryable. The monitor tracks delivery independently from claim settlement
+because adoption can tombstone a row before the channel's delivery promise
+returns.
+
+Optional settings include custom append delays, a `drain` option block for
+advanced drain ordering/concurrency/retry policy, an external `abortSignal`, a
+clock, pump error reporting, a stopped-error factory, and admission policy.
+The returned monitor exposes `admit`, `start`, `pause`, `stop`, `waitForIdle`,
+`isRunning`, and `isStopped`. `stop` first settles accepted admissions, then
+aborts and disposes the drain, waits for the pump and active deliveries, and
+disposes again to close the lazy-creation race.
+
+Keep transport-specific redaction, raw-envelope validation, non-retryable
+classification, and persisted payload shape in the plugin. Webhook transports
+should acknowledge only after `admit` resolves; non-replay transports should
+surface durable append exhaustion rather than silently dispatching.
 
 ## Adapter
 
@@ -65,6 +116,10 @@ export const demoMessageAdapter = defineChannelMessageAdapter({
 Only declare capabilities the native transport actually preserves. Cover
 each declared send, receipt, live-preview, and receive-ack capability with
 the contract helpers exported from this subpath.
+
+## Outbound echo suppression
+
+When a platform may redeliver the plugin's own outbound message as inbound, call `recordOutboundMessageIdentity(...)` with the channel, account, conversation, and a stable platform message or source identity. The shared inbound turn path drops matching identities for a bounded 30-second window before session recording or agent dispatch; a source identity may be reserved before send or refreshed when a channel route is removed to close delivery races. `isRecentOutboundMessageIdentity(...)` exposes the same query for channel diagnostics and tests. Do not maintain a parallel channel-local TTL cache for the same stable identity.
 
 ## Plain-text sanitization
 

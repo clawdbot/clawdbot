@@ -160,7 +160,7 @@ export function createDispatchReplyOperationCoordinator(params: {
     const allowGatewayQueueResolution =
       phase === "dispatch" &&
       replyTurnKind === "visible" &&
-      params.replyOptions?.queuedFollowupLifecycle !== undefined &&
+      params.replyOptions?.turnAdoptionLifecycle !== undefined &&
       replyRunRegistry.get(params.dispatchOperationSessionKey) !== undefined;
     if (allowGatewayQueueResolution) {
       // Gateway turns need to reach getReplyFromConfig while the owner is active;
@@ -193,6 +193,7 @@ export function createDispatchReplyOperationCoordinator(params: {
       waitForActive: !allowActivePreDispatch && !allowSlackRoutedThreadBypass,
       retainLifecycleAdmissionOnActive: allowActivePreDispatch || allowSlackRoutedThreadBypass,
       onLifecycleInterrupt,
+      onReplyAdmissionWaitChange: params.replyOptions?.onReplyAdmissionWaitChange,
     });
     if (
       admission.status === "skipped" &&
@@ -239,6 +240,7 @@ export function createDispatchReplyOperationCoordinator(params: {
           waitForActive: !allowActivePreDispatch && !allowSlackRoutedThreadBypass,
           retainLifecycleAdmissionOnActive: allowActivePreDispatch || allowSlackRoutedThreadBypass,
           onLifecycleInterrupt,
+          onReplyAdmissionWaitChange: params.replyOptions?.onReplyAdmissionWaitChange,
         });
       }
     }

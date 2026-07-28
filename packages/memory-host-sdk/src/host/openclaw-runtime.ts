@@ -1,4 +1,6 @@
 // Agent/runtime helpers.
+import { readTranscriptStatsSync as readAccessorTranscriptStatsSync } from "../../../../src/config/sessions/session-accessor.js";
+
 export { resolveCronStyleNow } from "../../../../src/agents/current-time.js";
 export {
   resolveAgentContextLimits,
@@ -34,11 +36,7 @@ export {
 } from "../../../../src/auto-reply/tokens.js";
 
 // CLI/runtime/config helpers.
-export { formatErrorMessage, withManager } from "../../../../src/cli/cli-utils.js";
-export { resolveCommandSecretRefsViaGateway } from "../../../../src/cli/command-secret-gateway.js";
-export { formatHelpExamples } from "../../../../src/cli/help-format.js";
 export { parseDurationMs } from "../../../../src/cli/parse-duration.js";
-export { withProgress, withProgressTotals } from "../../../../src/cli/progress.js";
 export { parseNonNegativeByteSize } from "../../../../src/config/byte-size.js";
 export {
   getRuntimeConfig,
@@ -67,13 +65,31 @@ export {
 } from "../../../../src/plugin-sdk/session-store-runtime.js";
 export { parseSqliteSessionFileMarker } from "../../../../src/plugin-sdk/session-store-runtime.js";
 export type { SessionEntry } from "../../../../src/config/sessions/types.js";
+
+/** Returns an opaque revision that changes for every canonical transcript mutation. */
+export function readTranscriptContentRevisionSync(params: {
+  agentId?: string;
+  env?: NodeJS.ProcessEnv;
+  sessionId: string;
+  sessionKey?: string;
+  storePath?: string;
+}): string {
+  const stats = readAccessorTranscriptStatsSync(params);
+  return [
+    "sqlite",
+    stats.maxSeq,
+    stats.sizeBytes,
+    stats.eventCount,
+    stats.lastMutationAtMs ?? "",
+    stats.lastObservedMutationAtMs ?? "",
+  ].join(":");
+}
 export type { SessionSendPolicyConfig } from "../../../../src/config/types.base.js";
 export type {
   MemoryBackend,
   MemoryCitationsMode,
   MemoryQmdConfig,
   MemoryQmdIndexPath,
-  MemoryQmdMcporterConfig,
   MemoryQmdSearchMode,
 } from "../../../../src/config/types.memory.js";
 export {
@@ -82,7 +98,6 @@ export {
 } from "../../../../src/config/types.secrets.js";
 export type { SecretInput } from "../../../../src/config/types.secrets.js";
 export type { MemorySearchConfig } from "../../../../src/config/types.tools.js";
-export { isVerbose, setVerbose } from "../../../../src/globals.js";
 
 // IO, network, and logging helpers.
 export { isExecCompletionEvent } from "../../../../src/infra/heartbeat-events-filter.js";
@@ -140,13 +155,10 @@ export type {
 export type { OpenClawPluginApi } from "../../../../src/plugins/types.js";
 
 // Shared session/text utilities.
-export { defaultRuntime } from "../../../../src/runtime.js";
 export { parseAgentSessionKey } from "../../../../src/routing/session-key.js";
 export { hasInterSessionUserProvenance } from "../../../../src/sessions/input-provenance.js";
 export { isCronRunSessionKey } from "../../../../src/sessions/session-key-utils.js";
 export { onSessionTranscriptUpdate } from "../../../../src/sessions/transcript-events.js";
-export { formatDocsLink } from "../../../terminal-core/src/links.js";
-export { colorize, isRich, theme } from "../../../terminal-core/src/theme.js";
 export { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../../../../src/utils/cjk-chars.js";
 export { runTasksWithConcurrency } from "../../../../src/utils/run-with-concurrency.js";
 export { splitShellArgs } from "../../../../src/utils/shell-argv.js";

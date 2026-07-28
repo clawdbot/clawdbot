@@ -32,11 +32,11 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     socket.send(JSON.stringify({ method: "initialized" }));
 
     await rpc(socket, "fs/writeFile", {
-      path: "/workspace/note.txt",
+      path: "file:///workspace/note.txt",
       dataBase64: Buffer.from("hello").toString("base64"),
     });
     await rpc(socket, "fs/writeFile", {
-      path: "/workspace/empty.txt",
+      path: "file:///workspace/%65mpty.txt",
       dataBase64: "",
     });
 
@@ -71,7 +71,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
 
     await expect(
       rpc(socket, "fs/writeFile", {
-        path: "/workspace/missing/note.txt",
+        path: "file:///workspace/missing/note.txt",
         dataBase64: Buffer.from("hello").toString("base64"),
       }),
     ).rejects.toThrow("parent directory not found");
@@ -94,7 +94,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
 
     await expect(
       rpc(socket, "fs/writeFile", {
-        path: "/workspace/read-only.txt",
+        path: "file:///workspace/read-only.txt",
         dataBase64: Buffer.from("blocked").toString("base64"),
         sandbox: codexFsSandboxContext({
           entries: [{ path: specialPath("root"), access: "read" }],
@@ -102,12 +102,12 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
       }),
     ).rejects.toThrow("Codex fs sandbox denied write access");
     await rpc(socket, "fs/writeFile", {
-      path: "/workspace/allowed.txt",
+      path: "file:///workspace/allowed.txt",
       dataBase64: Buffer.from("allowed").toString("base64"),
       sandbox: codexFsSandboxContext({
         entries: [
           { path: specialPath("root"), access: "read" },
-          { path: specialPath("project_roots"), access: "write" },
+          { path: { type: "path", path: "file:///workspace" }, access: "write" },
         ],
       }),
     });
@@ -143,14 +143,14 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
 
     await expect(
       rpc(socket, "fs/writeFile", {
-        path: "/workspace/.git/config",
+        path: "file:///workspace/.git/config",
         dataBase64: Buffer.from("blocked").toString("base64"),
         sandbox: workspacePolicy,
       }),
     ).rejects.toThrow("Codex fs sandbox denied write access");
     await expect(
       rpc(socket, "fs/remove", {
-        path: "/workspace",
+        path: "file:///workspace",
         recursive: true,
         force: true,
         sandbox: workspacePolicy,
@@ -185,13 +185,13 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
 
     await expect(
       rpc(socket, "fs/readFile", {
-        path: "/workspace/private/secret.txt",
+        path: "file:///workspace/private/secret.txt",
         sandbox: policy,
       }),
     ).rejects.toThrow("Codex fs sandbox denied read access");
     await expect(
       rpc(socket, "fs/readFile", {
-        path: "/workspace/key.pem",
+        path: "file:///workspace/key.pem",
         sandbox: codexFsSandboxContext({
           entries: [
             { path: specialPath("root"), access: "read" },
@@ -203,7 +203,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     ).rejects.toThrow("Codex fs sandbox denied read access");
     await expect(
       rpc(socket, "fs/readFile", {
-        path: "/workspace/KEY.PEM",
+        path: "file:///workspace/KEY.PEM",
         sandbox: codexFsSandboxContext({
           entries: [
             { path: specialPath("root"), access: "read" },
@@ -214,13 +214,13 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
       }),
     ).rejects.toThrow("Codex fs sandbox denied read access");
     await rpc(socket, "fs/writeFile", {
-      path: "/workspace/private/nested/allowed.txt",
+      path: "file:///workspace/private/nested/allowed.txt",
       dataBase64: Buffer.from("ok").toString("base64"),
       sandbox: policy,
     });
     await expect(
       rpc(socket, "fs/remove", {
-        path: "/workspace/private",
+        path: "file:///workspace/private",
         recursive: true,
         force: true,
         sandbox: policy,
@@ -246,7 +246,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     socket.send(JSON.stringify({ method: "initialized" }));
 
     await rpc(socket, "fs/writeFile", {
-      path: "/workspace/allowed.txt",
+      path: "file:///workspace/allowed.txt",
       dataBase64: Buffer.from("ok").toString("base64"),
       sandbox: codexFsSandboxContext({
         entries: [
@@ -279,7 +279,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
 
     await expect(
       rpc(socket, "fs/readFile", {
-        path: "/workspace/key.pem",
+        path: "file:///workspace/key.pem",
         sandbox: codexFsSandboxContext({
           entries: [
             { path: specialPath("root"), access: "read" },
@@ -315,7 +315,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
 
     await expect(
       rpc(socket, "fs/remove", {
-        path: "/workspace/src",
+        path: "file:///workspace/src",
         recursive: true,
         force: true,
         sandbox: policy,
@@ -327,11 +327,8 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
   });
 
   it("routes recursive copies through the sandbox filesystem bridge", async () => {
+    const copyFile = vi.fn(async () => undefined);
     const mkdirp = vi.fn(async () => undefined);
-    const readFile = vi.fn(async ({ filePath }: { filePath: string }) =>
-      Buffer.from(`data:${filePath}`),
-    );
-    const writeFile = vi.fn(async () => undefined);
     const runShellCommand = vi.fn(async (_params?: { args?: string[] }) => ({
       stdout: Buffer.from("f\tfile.txt\nd\tsubdir\n"),
       stderr: Buffer.alloc(0),
@@ -347,12 +344,61 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
       code: 0,
     }));
     const sandbox = createSandboxContext({
+      copyFile,
       mkdirp,
-      readFile,
       runShellCommand,
       stat: async ({ filePath }) => ({
         type: filePath.endsWith("source-dir") || filePath.endsWith("subdir") ? "directory" : "file",
         size: 1,
+        mtimeMs: 1,
+      }),
+    });
+    const client = createClient();
+    await ensureCodexSandboxExecServerEnvironment({
+      client: client as never,
+      sandbox,
+    });
+    const socket = await openSocket(execServerUrlFromClient(client));
+    await rpc(socket, "initialize", { clientName: "test" });
+    socket.send(JSON.stringify({ method: "initialized" }));
+
+    await rpc(socket, "fs/copy", {
+      sourcePath: "file:///workspace/source-dir",
+      destinationPath: "file:///workspace/destination-dir",
+      recursive: true,
+    });
+
+    expect(mkdirp).toHaveBeenCalledWith({ filePath: "/workspace/destination-dir" });
+    expect(mkdirp).toHaveBeenCalledWith({ filePath: "/workspace/destination-dir/subdir" });
+    expect(copyFile).toHaveBeenCalledWith({
+      sourcePath: "/workspace/source-dir/file.txt",
+      destinationPath: "/workspace/destination-dir/file.txt",
+      mkdir: true,
+    });
+    expect(copyFile).toHaveBeenCalledWith({
+      sourcePath: "/workspace/source-dir/subdir/nested.txt",
+      destinationPath: "/workspace/destination-dir/subdir/nested.txt",
+      mkdir: true,
+    });
+    expect(runShellCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ args: ["/workspace/source-dir"] }),
+    );
+    expect(runShellCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ args: ["/workspace/source-dir/subdir"] }),
+    );
+    socket.close();
+  });
+
+  it("streams oversized file copies through the fs bridge without buffering", async () => {
+    const copyFile = vi.fn(async () => undefined);
+    const readFile = vi.fn(async () => Buffer.from("too-large"));
+    const writeFile = vi.fn(async () => undefined);
+    const sandbox = createSandboxContext({
+      copyFile,
+      readFile,
+      stat: async () => ({
+        type: "file",
+        size: 512 * 1024 * 1024 + 1,
         mtimeMs: 1,
       }),
       writeFile,
@@ -367,29 +413,17 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     socket.send(JSON.stringify({ method: "initialized" }));
 
     await rpc(socket, "fs/copy", {
-      sourcePath: "/workspace/source-dir",
-      destinationPath: "/workspace/destination-dir",
-      recursive: true,
+      sourcePath: "file:///workspace/huge.bin",
+      destinationPath: "file:///workspace/huge-copy.bin",
     });
 
-    expect(mkdirp).toHaveBeenCalledWith({ filePath: "/workspace/destination-dir" });
-    expect(mkdirp).toHaveBeenCalledWith({ filePath: "/workspace/destination-dir/subdir" });
-    expect(writeFile).toHaveBeenCalledWith({
-      filePath: "/workspace/destination-dir/file.txt",
-      data: Buffer.from("data:/workspace/source-dir/file.txt"),
+    expect(copyFile).toHaveBeenCalledWith({
+      sourcePath: "/workspace/huge.bin",
+      destinationPath: "/workspace/huge-copy.bin",
       mkdir: true,
     });
-    expect(writeFile).toHaveBeenCalledWith({
-      filePath: "/workspace/destination-dir/subdir/nested.txt",
-      data: Buffer.from("data:/workspace/source-dir/subdir/nested.txt"),
-      mkdir: true,
-    });
-    expect(runShellCommand).toHaveBeenCalledWith(
-      expect.objectContaining({ args: ["/workspace/source-dir"] }),
-    );
-    expect(runShellCommand).toHaveBeenCalledWith(
-      expect.objectContaining({ args: ["/workspace/source-dir/subdir"] }),
-    );
+    expect(readFile).not.toHaveBeenCalled();
+    expect(writeFile).not.toHaveBeenCalled();
     socket.close();
   });
 
@@ -414,8 +448,8 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
 
     await expect(
       rpc(socket, "fs/copy", {
-        sourcePath: "/workspace/source-dir",
-        destinationPath: "/workspace/source-dir/backup",
+        sourcePath: "file:///workspace/source-dir",
+        destinationPath: "file:///workspace/source-dir/backup",
         recursive: true,
       }),
     ).rejects.toThrow("Cannot recursively copy a directory into itself");
@@ -435,9 +469,9 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     await rpc(socket, "initialize", { clientName: "test" });
     socket.send(JSON.stringify({ method: "initialized" }));
 
-    await expect(rpc(socket, "fs/getMetadata", { path: "/workspace/missing" })).rejects.toThrow(
-      "file not found",
-    );
+    await expect(
+      rpc(socket, "fs/getMetadata", { path: "file:///workspace/missing" }),
+    ).rejects.toThrow("file not found");
     socket.close();
   });
 
@@ -460,9 +494,9 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     await rpc(socket, "initialize", { clientName: "test" });
     socket.send(JSON.stringify({ method: "initialized" }));
 
-    await expect(rpc(socket, "fs/readFile", { path: "/workspace/huge.bin" })).rejects.toThrow(
-      "file is too large to read through Codex sandbox exec-server",
-    );
+    await expect(
+      rpc(socket, "fs/readFile", { path: "file:///workspace/huge.bin" }),
+    ).rejects.toThrow("file is too large to read through Codex sandbox exec-server");
 
     expect(readFile).not.toHaveBeenCalled();
     socket.close();
@@ -486,14 +520,14 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
 
     await expect(
       rpc(socket, "fs/createDirectory", {
-        path: "/workspace/missing/child",
+        path: "file:///workspace/missing/child",
         recursive: false,
       }),
     ).rejects.toThrow("parent directory not found");
     expect(mkdirp).not.toHaveBeenCalled();
 
     await rpc(socket, "fs/createDirectory", {
-      path: "/workspace/existing/child",
+      path: "file:///workspace/existing/child",
       recursive: false,
     });
     expect(mkdirp).toHaveBeenCalledWith({ filePath: "/workspace/existing/child" });
@@ -517,7 +551,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
 
     await expect(
       rpc(socket, "fs/writeFile", {
-        path: "/outside/note.txt",
+        path: "file:///outside/note.txt",
         dataBase64: Buffer.from("no").toString("base64"),
       }),
     ).rejects.toThrow("sandbox denied write outside workspace");

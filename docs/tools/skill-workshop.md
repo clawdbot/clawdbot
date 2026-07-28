@@ -116,15 +116,15 @@ Revise it to also flag anything marked urgent.
 Apply the morning-catchup proposal.
 ```
 
-Agent-initiated `apply`, `reject`, and `quarantine` show an approval prompt by
-default. Set `skills.workshop.approvalPolicy` to `"auto"` to skip it in
-trusted environments.
+Agent-initiated `apply`, `reject`, and `quarantine` run without an additional
+approval prompt by default. Set `skills.workshop.approvalPolicy` to `"pending"`
+to require operator approval before those actions.
 
-The prompt identifies the proposal id and target skill, and shows the proposal
-description, support-file count, and body size. Approval requests are bounded
-to finish before the agent tool watchdog. If no decision arrives before the
-prompt expires, the lifecycle action does not run: the proposal stays pending
-and unchanged. Decide later in the Skill Workshop UI or run
+When approval is required, the prompt identifies the proposal id and target
+skill, and shows the proposal description, support-file count, and body size.
+Approval requests are bounded to finish before the agent tool watchdog. If no
+decision arrives before the prompt expires, the lifecycle action does not run:
+the proposal stays pending and unchanged. Decide later in the Skill Workshop UI or run
 `openclaw skills workshop apply|reject|quarantine <proposal-id>`. Agents should
 not retry an expired lifecycle action in a loop.
 
@@ -283,7 +283,7 @@ the proposal threshold, and troubleshooting.
         enabled: false,
       },
       allowSymlinkTargetWrites: false,
-      approvalPolicy: "pending",
+      approvalPolicy: "auto",
       maxPending: 50,
       maxSkillBytes: 40000,
     },
@@ -291,13 +291,13 @@ the proposal threshold, and troubleshooting.
 }
 ```
 
-| Setting                    | Default     | Effect                                                                                                                                                                 |
-| -------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `autonomous.enabled`       | `false`     | Creates pending proposals from explicit corrections and, after an idle delay, substantial completed work with reusable recovery or meaningful round-trip savings.      |
-| `allowSymlinkTargetWrites` | `false`     | Lets apply write through workspace skill symlinks whose real target is listed in `skills.load.allowSymlinkTargets`.                                                    |
-| `approvalPolicy`           | `"pending"` | `"pending"` requires an approval prompt before agent-initiated `apply`, `reject`, or `quarantine`. `"auto"` skips the prompt (the agent still has to call the action). |
-| `maxPending`               | `50`        | Caps pending and quarantined proposals per workspace (1-200).                                                                                                          |
-| `maxSkillBytes`            | `40000`     | Caps proposal body size in bytes (1024-200000).                                                                                                                        |
+| Setting                    | Default  | Effect                                                                                                                                                              |
+| -------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `autonomous.enabled`       | `false`  | Creates pending proposals from explicit corrections and, after an idle delay, substantial completed work with reusable recovery or meaningful round-trip savings.   |
+| `allowSymlinkTargetWrites` | `false`  | Lets apply write through workspace skill symlinks whose real target is listed in `skills.load.allowSymlinkTargets`.                                                 |
+| `approvalPolicy`           | `"auto"` | `"auto"` skips an additional prompt for agent-initiated `apply`, `reject`, or `quarantine` (the agent still has to call the action). `"pending"` requires approval. |
+| `maxPending`               | `50`     | Caps pending and quarantined proposals per workspace (1-200).                                                                                                       |
+| `maxSkillBytes`            | `40000`  | Caps proposal body size in bytes (1024-200000).                                                                                                                     |
 
 Autonomous capture recognizes prospective rules (for example, “from now on”) and reactive
 corrections (for example, “that’s not what I asked”). It groups new instructions by topic into up

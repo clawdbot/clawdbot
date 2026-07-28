@@ -18,7 +18,7 @@ import type {
   MemoryRemHarnessOptions,
   MemorySearchCommandOptions,
 } from "./cli.types.js";
-import type { MemoryCoreLocalServiceHost } from "./memory/embedding-local-service.js";
+import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 import {
   DEFAULT_PROMOTION_MIN_RECALL_COUNT,
   DEFAULT_PROMOTION_MIN_SCORE,
@@ -29,18 +29,12 @@ const loadMemoryCliRuntime = createLazyRuntimeModule(() => import("./cli.runtime
 
 const DECIMAL_NUMBER_RE = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/;
 
-async function runMemoryStatus(
-  opts: MemoryCommandOptions,
-  hostOptions?: MemoryCoreLocalServiceHost,
-) {
+async function runMemoryStatus(opts: MemoryCommandOptions, hostOptions?: MemoryCoreRuntimeHost) {
   const runtime = await loadMemoryCliRuntime();
   await runtime.runMemoryStatus(opts, hostOptions);
 }
 
-async function runMemoryIndex(
-  opts: MemoryCommandOptions,
-  hostOptions?: MemoryCoreLocalServiceHost,
-) {
+async function runMemoryIndex(opts: MemoryCommandOptions, hostOptions?: MemoryCoreRuntimeHost) {
   const runtime = await loadMemoryCliRuntime();
   await runtime.runMemoryIndex(opts, hostOptions);
 }
@@ -48,7 +42,7 @@ async function runMemoryIndex(
 async function runMemorySearch(
   queryArg: string | undefined,
   opts: MemorySearchCommandOptions,
-  hostOptions?: MemoryCoreLocalServiceHost,
+  hostOptions?: MemoryCoreRuntimeHost,
 ) {
   const runtime = await loadMemoryCliRuntime();
   await runtime.runMemorySearch(queryArg, opts, hostOptions);
@@ -56,7 +50,7 @@ async function runMemorySearch(
 
 async function runMemoryPromote(
   opts: MemoryPromoteCommandOptions,
-  hostOptions?: MemoryCoreLocalServiceHost,
+  hostOptions?: MemoryCoreRuntimeHost,
 ) {
   const runtime = await loadMemoryCliRuntime();
   await runtime.runMemoryPromote(opts, hostOptions);
@@ -65,7 +59,7 @@ async function runMemoryPromote(
 async function runMemoryPromoteExplain(
   selectorArg: string | undefined,
   opts: MemoryPromoteExplainOptions,
-  hostOptions?: MemoryCoreLocalServiceHost,
+  hostOptions?: MemoryCoreRuntimeHost,
 ) {
   const runtime = await loadMemoryCliRuntime();
   await runtime.runMemoryPromoteExplain(selectorArg, opts, hostOptions);
@@ -73,7 +67,7 @@ async function runMemoryPromoteExplain(
 
 async function runMemoryRemHarness(
   opts: MemoryRemHarnessOptions,
-  hostOptions?: MemoryCoreLocalServiceHost,
+  hostOptions?: MemoryCoreRuntimeHost,
 ) {
   const runtime = await loadMemoryCliRuntime();
   await runtime.runMemoryRemHarness(opts, hostOptions);
@@ -81,7 +75,7 @@ async function runMemoryRemHarness(
 
 async function runMemoryRemBackfill(
   opts: MemoryRemBackfillOptions,
-  hostOptions?: MemoryCoreLocalServiceHost,
+  hostOptions?: MemoryCoreRuntimeHost,
 ) {
   const runtime = await loadMemoryCliRuntime();
   await runtime.runMemoryRemBackfill(opts, hostOptions);
@@ -121,7 +115,7 @@ function parseMemoryCliNonNegativeIntegerOption(value: string, flag: string): nu
   return parsed;
 }
 
-export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreLocalServiceHost) {
+export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRuntimeHost) {
   const memory = program
     .command("memory")
     .description("Search, inspect, and reindex memory files")

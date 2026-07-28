@@ -16,7 +16,7 @@ OpenClaw admin HTTP RPC endpoint.
 
 ## Surface
 
-contracts: gatewayMethodDispatch
+contracts: `gatewayMethodDispatch`
 
 ## Related docs
 

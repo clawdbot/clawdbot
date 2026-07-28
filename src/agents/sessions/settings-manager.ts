@@ -1076,3 +1076,4 @@ export class SettingsManager {
     this.save();
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

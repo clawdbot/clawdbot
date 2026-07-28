@@ -42,7 +42,7 @@ function normalizeMattermostDraftText(text: string, maxChars: number): string {
   return `${sliceUtf16Safe(trimmed, 0, Math.max(0, maxChars - 3)).trimEnd()}...`;
 }
 
-export type MattermostDraftPreviewBoundaryController = {
+type MattermostDraftPreviewBoundaryController = {
   noteUpdate: () => void;
   noteBoundary: () => Promise<void>;
 };

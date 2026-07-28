@@ -486,21 +486,12 @@ async function promptFileProvider(
     initialValue: base?.maxBytes,
     max: 20 * 1024 * 1024,
   });
-  const allowInsecurePath = assertNoCancel(
-    await confirm({
-      message: "Allow insecure file path checks?",
-      initialValue: base?.allowInsecurePath ?? false,
-    }),
-    "Secrets configure cancelled.",
-  );
-
   return {
     source: "file",
     path: normalizeStringifiedOptionalString(filePath) ?? "",
     mode,
     ...(timeoutMs ? { timeoutMs } : {}),
     ...(maxBytes ? { maxBytes } : {}),
-    ...(allowInsecurePath ? { allowInsecurePath: true } : {}),
   };
 }
 
@@ -611,21 +602,6 @@ async function promptExecProvider(
     "Secrets configure cancelled.",
   );
 
-  const allowInsecurePath = assertNoCancel(
-    await confirm({
-      message: "Allow insecure command path checks?",
-      initialValue: base?.allowInsecurePath ?? false,
-    }),
-    "Secrets configure cancelled.",
-  );
-  const allowSymlinkCommand = assertNoCancel(
-    await confirm({
-      message: "Allow symlink command path?",
-      initialValue: base?.allowSymlinkCommand ?? false,
-    }),
-    "Secrets configure cancelled.",
-  );
-
   const args = await parseArgsInput(normalizeStringifiedOptionalString(argsRaw) ?? "");
   const trustedDirs = parseCsv(trustedDirsRaw ?? "");
 
@@ -639,8 +615,6 @@ async function promptExecProvider(
     ...(jsonOnly ? { jsonOnly } : { jsonOnly: false }),
     ...(passEnv.length > 0 ? { passEnv } : {}),
     ...(trustedDirs.length > 0 ? { trustedDirs } : {}),
-    ...(allowInsecurePath ? { allowInsecurePath: true } : {}),
-    ...(allowSymlinkCommand ? { allowSymlinkCommand: true } : {}),
     ...(isRecord(base?.env) ? { env: base.env } : {}),
   };
 }
@@ -1077,3 +1051,4 @@ export async function runSecretsConfigureInteractive(
 
   return { plan, preflight };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

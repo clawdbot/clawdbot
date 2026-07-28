@@ -47,18 +47,18 @@ describe("command explainer tree-sitter runtime", () => {
     );
   });
 
-  it("maps parser byte offsets to JavaScript string spans for Unicode source", async () => {
-    const source = "echo café && echo ok";
+  it("uses native JavaScript string offsets for Unicode source", async () => {
+    const source = "echo café😀 && echo 雪";
     const explanation = await explainShellCommand(source);
 
     expect(explanation.topLevelCommands).toHaveLength(2);
     expect(explanation.topLevelCommands.map((command) => command.argv)).toEqual([
-      ["echo", "café"],
-      ["echo", "ok"],
+      ["echo", "café😀"],
+      ["echo", "雪"],
     ]);
     expect(explanation.topLevelCommands.map((command) => command.span)).toMatchObject([
-      { startIndex: 0, endIndex: 9 },
-      { startIndex: 13, endIndex: 20 },
+      { startIndex: 0, endIndex: 11 },
+      { startIndex: 15, endIndex: 21 },
     ]);
     for (const command of explanation.topLevelCommands) {
       expect(source.slice(command.span.startIndex, command.span.endIndex)).toBe(command.text);
@@ -469,6 +469,14 @@ describe("command explainer tree-sitter runtime", () => {
       "foo",
     ]);
     expectRisk(continuedArgument.risks, { kind: "line-continuation" });
+
+    const escapedWordBoundary = await explainShellCommand("tr x\n\\id");
+    expect(escapedWordBoundary.topLevelCommands).toHaveLength(1);
+    expect(escapedWordBoundary.topLevelCommands[0]?.argv).toEqual(["tr", "x", "\nid"]);
+    expectRisk(escapedWordBoundary.risks, {
+      kind: "line-continuation",
+      text: "\n\\id",
+    });
 
     const invalidObfuscation = await explainShellCommand("e'c'h'o hi");
     expect(invalidObfuscation.ok).toBe(false);

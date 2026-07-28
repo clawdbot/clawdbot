@@ -20,22 +20,17 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadOrCreateProcessDeviceIdentity } from "../../infra/device-identity.js";
-import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
+import { findRestartRecoveryUnsafeChatAdmissionHook } from "../../plugins/restart-recovery-hook-safety.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
 import { isAgentHarnessSessionKey } from "../../sessions/agent-harness-session-key.js";
 import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
+import type { GatewayRecoveryRuntime } from "../server-instance-runtime.types.js";
 import type { GatewayRequestContext } from "./types.js";
 
 export { hasRestartRecoveryTerminalRun };
 
-const RESTART_SAFE_CHAT_UNSAFE_HOOKS = [
-  "before_dispatch",
-  "before_agent_reply",
-  "before_agent_run",
-  "before_message_write",
-  "reply_dispatch",
-] as const;
 const RESTART_SAFE_CHAT_REQUEST_VERIFIER_DOMAIN = "openclaw.chat.restart-retry.v1";
 
 type RestartSafeChatRequest = {
@@ -151,6 +146,7 @@ export async function resolveDurableChatClaim(params: {
   persistedSessionKey: string;
   reloadEntry: () => SessionEntry | undefined;
   storePath: string;
+  recoveryRuntime?: GatewayRecoveryRuntime;
   warn: (message: string) => void;
 }): Promise<DurableChatClaimResolution> {
   let entry = params.entry;
@@ -163,6 +159,12 @@ export async function resolveDurableChatClaim(params: {
     if (recoverySessionError) {
       return { kind: "rejected", message: recoverySessionError };
     }
+    if (!params.recoveryRuntime) {
+      return {
+        kind: "pending",
+        message: "accepted chat turn recovery is waiting for the Gateway runtime; retry",
+      };
+    }
     try {
       const { retryRestartAbortedMainSessionRecovery } =
         await import("../../agents/main-session-restart-recovery.js");
@@ -174,6 +176,7 @@ export async function resolveDurableChatClaim(params: {
         expectedSessionId: entry.sessionId,
         sessionKey: params.persistedSessionKey,
         storePath: params.storePath,
+        gatewayRuntime: params.recoveryRuntime,
       });
     } catch (error) {
       params.warn(String(error));
@@ -245,7 +248,7 @@ function hasRestartUnsafeChatWork(params: {
   sessionKey: string;
 }): boolean {
   if (
-    RESTART_SAFE_CHAT_UNSAFE_HOOKS.some((hookName) => hasGlobalHooks(hookName)) ||
+    findRestartRecoveryUnsafeChatAdmissionHook() !== undefined ||
     listActiveEmbeddedRunSessionIds().includes(params.sessionId) ||
     replyRunRegistry.isActive(params.sessionKey)
   ) {
@@ -288,7 +291,7 @@ export function resolveRestartSafeChatAdmission(params: {
       now: params.now,
       resetOverride: resolveChannelResetConfig({
         sessionCfg: params.cfg.session,
-        channel: params.entry?.lastChannel ?? params.entry?.channel,
+        channel: sessionDeliveryChannel(params.entry),
       }),
       resetType: resolveSessionResetType({ sessionKey: params.sessionKey }),
       sessionCfg: params.cfg.session,
@@ -309,10 +312,20 @@ export function resolveRestartSafeChatAdmission(params: {
       ? {
           retryExpectedState: {
             abortedLastRun: entry.abortedLastRun,
+            restartRecoveryBeforeAgentReplyState: entry.restartRecoveryBeforeAgentReplyState,
+            restartRecoveryDeliveryReceiptState: entry.restartRecoveryDeliveryReceiptState,
+            restartRecoveryDeliveryToolCallId: entry.restartRecoveryDeliveryToolCallId,
             restartRecoveryDeliveryRequestFingerprint:
               entry.restartRecoveryDeliveryRequestFingerprint,
             restartRecoveryDeliveryRunId: entry.restartRecoveryDeliveryRunId,
             restartRecoveryDeliverySourceRunId: entry.restartRecoveryDeliverySourceRunId,
+            restartRecoveryRequesterAccountId: entry.restartRecoveryRequesterAccountId,
+            restartRecoveryRequesterSenderId: entry.restartRecoveryRequesterSenderId,
+            restartRecoverySameChannelThreadRequired:
+              entry.restartRecoverySameChannelThreadRequired,
+            restartRecoverySourceIngress: entry.restartRecoverySourceIngress,
+            restartRecoverySourceReplyDeliveryMode: entry.restartRecoverySourceReplyDeliveryMode,
+            restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,
             status: entry.status,
             updatedAt: entry.updatedAt,
           },
@@ -336,6 +349,11 @@ export function buildRestartSafeChatTranscriptState(params: {
       ? { expectedSessionState: params.admission.retryExpectedState }
       : {}),
     sessionLifecyclePatch: {
+      // Admission precedes runtime plugin loading. The runner atomically turns
+      // this into `pending` before a hook; recovery reloads hooks before resume.
+      restartRecoveryBeforeAgentReplyState: "admitted",
+      restartRecoveryDeliveryReceiptState: undefined,
+      restartRecoveryDeliveryToolCallId: undefined,
       status: "running",
       startedAt: params.startedAt,
       endedAt: undefined,
@@ -343,6 +361,13 @@ export function buildRestartSafeChatTranscriptState(params: {
       restartRecoveryDeliveryRequestFingerprint: params.admission.requestFingerprint,
       restartRecoveryDeliveryRunId: params.clientRunId,
       restartRecoveryDeliverySourceRunId: params.clientRunId,
+      restartRecoveryRequesterAccountId: undefined,
+      restartRecoveryRequesterSenderId: undefined,
+      restartRecoverySameChannelThreadRequired: undefined,
+      // This survives runner adoption after the retry fingerprint is cleared.
+      // Recovery uses it to recheck hooks before Gateway agent dispatch.
+      restartRecoverySourceIngress: "control-ui",
+      restartRecoverySourceReplyDeliveryMode: undefined,
       ...(params.admission.priorTerminalSourceRunId
         ? { restartRecoveryTerminalRunIds: [params.admission.priorTerminalSourceRunId] }
         : {}),

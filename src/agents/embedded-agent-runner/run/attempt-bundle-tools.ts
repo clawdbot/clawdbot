@@ -6,6 +6,7 @@ import {
 } from "../../agent-bundle-mcp-tools.js";
 import { filterLocalModelLeanTools } from "../../local-model-lean.js";
 import { normalizeAgentRuntimeTools } from "../../runtime-plan/tools.js";
+import { replaceWithEffectiveToolAllowlist } from "../../tool-policy.js";
 import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
 import { replaceWithEffectiveCronCreatorToolAllowlist } from "../../tools/cron-tool.js";
@@ -36,6 +37,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
   const {
     cronCreatorToolAllowlist,
     effectiveToolsAllow,
+    inheritedToolAllowlist,
     localModelLeanPreserveToolNames,
     runtimeCapabilityProfile,
     toolsEnabled,
@@ -87,6 +89,12 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         agentDir: params.agentDir,
         cfg: params.attempt.config,
         manifestRegistry: bundleManifestRegistry,
+        // senderId is only set from the verified inbound sender (sessionCtx.SenderId
+        // or the triggering run's sender on follow-ups). Cron/subagent/heartbeat runs
+        // leave it unset, so requester-scoped MCP stays fail-closed for those paths.
+        requesterSenderId: params.attempt.senderId,
+        agentAccountId: params.attempt.agentAccountId,
+        messageChannel: params.attempt.messageChannel ?? params.attempt.messageProvider,
       })
     : undefined;
   const bundleMcpRuntime = bundleMcpSessionRuntime
@@ -132,6 +140,8 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     const filteredBundledTools = applyFinalEffectiveToolPolicy({
       bundledTools: [...allowedBundleMcpTools, ...allowedBundleLspTools],
       config: params.attempt.config,
+      workspaceDir: params.effectiveWorkspace,
+      metadataSnapshot: bundleMetadataSnapshot,
       conversationCapabilityProfile: runtimeCapabilityProfile,
       warn: (message) => log.warn(message),
     });
@@ -144,6 +154,8 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       const allowedAppTools = applyFinalEffectiveToolPolicy({
         bundledTools: runtimeAllowedAppTools,
         config: params.attempt.config,
+        workspaceDir: params.effectiveWorkspace,
+        metadataSnapshot: bundleMetadataSnapshot,
         conversationCapabilityProfile: runtimeCapabilityProfile,
         warn: (message) => log.warn(message),
       });
@@ -189,6 +201,12 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       );
     }
     const schemaProjection = filterRuntimeCompatibleTools(projectedTools);
+    if (inheritedToolAllowlist?.length) {
+      // Spawn tools close over this ref before MCP/LSP materialize. Refresh it
+      // only after final policy and schema projection so children inherit the
+      // parent's complete authorized surface, never denied bundled tools.
+      replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, schemaProjection.tools);
+    }
     logRuntimeToolSchemaQuarantine({
       diagnostics: schemaProjection.diagnostics,
       tools: projectedTools,

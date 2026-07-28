@@ -1,0 +1,35 @@
+title: Matrix E2EE CLI encryption setup reports bootstrap failures
+scenario:
+  id: matrix-e2ee-cli-encryption-setup-bootstrap-failure
+  surface: channels
+  coverage:
+    primary:
+      - matrix.encryption-setup
+  execution:
+    profiles: { "matrix:all": 87, "matrix:e2ee-cli": 3 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 120000
+    retryCount: 0
+    config:
+      matrixConfigOverrides:
+        encryption: true
+        startupVerification: off
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: true
+            key: e2ee-cli-encryption-setup-bootstrap-failure
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA E2EE CLI Encryption Setup Failure Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-account.js
+  call: runMatrixQaE2eeCliEncryptionSetupBootstrapFailureScenario
+  args:
+    - expr: "scenarioContext"

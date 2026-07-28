@@ -1,0 +1,35 @@
+title: Matrix E2EE encrypted threads preserve reply shape
+scenario:
+  id: matrix-e2ee-thread-follow-up
+  surface: channels
+  coverage:
+    primary:
+      - matrix.matrix-thread-reply-routing
+  execution:
+    profiles: { "matrix:all": 59, "matrix:e2ee-smoke": 1 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 75000
+    retryCount: 0
+    config:
+      matrixConfigOverrides:
+        encryption: true
+        startupVerification: off
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: true
+            key: e2ee-thread-follow-up
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA E2EE Thread Follow-up Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee-messages.js
+  call: runMatrixQaE2eeThreadFollowUpScenario
+  args:
+    - expr: "scenarioContext"

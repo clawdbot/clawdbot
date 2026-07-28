@@ -17,6 +17,8 @@ vi.mock("../session-utils.js", async () => {
     ...actual,
     loadSessionEntry: (...args: unknown[]) =>
       loadSessionEntryMock(...(args as [string, { agentId?: string }?])),
+    loadSessionEntryReadOnly: (...args: unknown[]) =>
+      loadSessionEntryMock(...(args as [string, { agentId?: string }?])),
   };
 });
 
@@ -125,6 +127,7 @@ describe("sessions.messages.subscribe approval opt-in", () => {
     );
     expect(subscribeSessionMessageEvents).toHaveBeenCalledWith("conn-admin", "agent:work:global", {
       includeApprovals: true,
+      provisional: true,
     });
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -152,7 +155,7 @@ describe("sessions.messages.subscribe approval opt-in", () => {
     expect(subscribeSessionMessageEvents).toHaveBeenCalledWith(
       "conn-approval-reviewer",
       "agent:main:child",
-      { includeApprovals: true },
+      { includeApprovals: true, provisional: true },
     );
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -240,7 +243,7 @@ describe("sessions.messages.subscribe approval opt-in", () => {
     expect(subscribeSessionMessageEvents).toHaveBeenCalledWith(
       "conn-approval-reviewer",
       "agent:main:child",
-      { includeApprovals: true },
+      { includeApprovals: true, provisional: true },
     );
     expect(subscribeSessionMessageEvents.mock.invocationCallOrder[0]).toBeLessThan(
       listSessionPendingApprovals.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,

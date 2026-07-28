@@ -1,0 +1,24 @@
+title: Matrix quiet streaming preview
+scenario:
+  id: matrix-room-quiet-streaming-preview
+  surface: channels
+  coverage:
+    primary:
+      - matrix.message-presentation-metadata
+  docsRefs:
+    - docs/concepts/streaming.md
+  execution:
+    profiles: { "matrix:all": 8, "matrix:transport": 7 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 45000
+    retryCount: 0
+    config:
+      matrixConfigOverrides:
+        streaming: quiet
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-room.js
+  call: runQuietStreamingPreviewScenario
+  args:
+    - expr: "scenarioContext"

@@ -62,6 +62,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     resolveReviewerPolicyContext,
     resolveRuntimeOptionsForCurrentBinding,
     startupAuthProfileId,
+    startupAuthRequirement,
     abortFromUpstream,
   } = connection;
   let pluginAppServer = withCodexAppServerFastModeServiceTier(appServer, runtimeParams);
@@ -77,6 +78,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       pluginConfig,
       computerUseConfig,
       startupAuthProfileId: startupClientAuthProfileId,
+      startupAuthRequirement,
       startupAuthBindingFingerprint: preparedAuthBinding?.fingerprint,
       ...(runtimeArtifactRequest ? { runtimeArtifactRequest } : {}),
       startupPreparedAuth,
@@ -157,7 +159,12 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     state.codexSandboxPolicy = startupResult.sandboxPolicy;
     void emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
-      data: { phase: "thread_ready", threadId: state.thread.threadId },
+      data: {
+        phase: "thread_ready",
+        threadId: state.thread.threadId,
+        action: state.thread.lifecycle.action,
+        clientId: state.client.getInstanceId(),
+      },
     });
   } catch (error) {
     activateNativePreToolUseFailureFallback();

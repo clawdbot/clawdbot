@@ -1,0 +1,28 @@
+title: Matrix exec approval prompt carries structured metadata on one event
+scenario:
+  id: matrix-approval-exec-metadata-single-event
+  surface: channels
+  coverage:
+    primary:
+      - channels.channel-native-approval-prompts
+  execution:
+    profiles: { "matrix:all": 25, "matrix:fast": 5, "matrix:transport": 24 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 75000
+    retryCount: 0
+    config:
+      matrixConfigOverrides:
+        approvalForwarding:
+          exec: true
+        dm:
+          enabled: true
+        execApprovals:
+          enabled: true
+          target: channel
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-approval.js
+  call: runApprovalExecMetadataSingleEventScenario
+  args:
+    - expr: "scenarioContext"

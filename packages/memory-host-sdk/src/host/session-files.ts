@@ -76,6 +76,10 @@ export type BuildSessionEntryOptions = {
   generatedByCronRun?: boolean;
   /** Session key for identity-backed transcript readers. */
   sessionKey?: string;
+  /** Direct SQLite identity for live runtime transcripts. */
+  agentId?: string;
+  sessionId?: string;
+  storePath?: string;
   /** Activity timestamp for transcript sources that do not have filesystem stats. */
   updatedAtMs?: number;
   /** Override for tests or specialized callers that need a tighter parse yield cadence. */
@@ -301,6 +305,9 @@ function classifySessionTranscriptCorpusEntries(
   const dreamingTranscriptPaths = new Set<string>();
   const cronRunTranscriptPaths = new Set<string>();
   for (const entry of corpusEntries) {
+    if (entry.transcriptSource === "sqlite") {
+      continue;
+    }
     const normalizedPath = normalizeComparablePath(entry.sessionFile);
     if (entry.generatedByDreamingNarrative) {
       dreamingTranscriptPaths.add(normalizedPath);
@@ -353,9 +360,9 @@ function classifySessionTranscriptFromSessionStore(absPath: string): {
 }
 
 export async function listSessionFilesForAgent(agentId: string): Promise<string[]> {
-  return (await listSessionTranscriptCorpusEntriesForAgent(agentId)).map(
-    (entry) => entry.sessionFile,
-  );
+  return (await listSessionTranscriptCorpusEntriesForAgent(agentId))
+    .filter((entry) => entry.transcriptSource !== "sqlite")
+    .map((entry) => entry.sessionFile);
 }
 
 function extractAgentIdFromSessionPath(absPath: string): string | null {
@@ -662,21 +669,31 @@ function resolveSessionEntryParseYieldLines(opts: BuildSessionEntryOptions): num
   return SESSION_ENTRY_PARSE_YIELD_LINES;
 }
 
+function resolveBuildSessionSqliteIdentity(absPath: string, opts: BuildSessionEntryOptions) {
+  if (opts.agentId && opts.sessionId && opts.storePath) {
+    return {
+      agentId: opts.agentId,
+      sessionId: opts.sessionId,
+      ...(opts.sessionKey ? { sessionKey: opts.sessionKey } : {}),
+      storePath: opts.storePath,
+    };
+  }
+  const marker = parseSqliteSessionFileMarker(absPath);
+  return marker && opts.sessionKey ? { ...marker, sessionKey: opts.sessionKey } : marker;
+}
+
 export function statSessionEntrySync(
   absPath: string,
   opts: BuildSessionEntryOptions = {},
 ): SessionFileState | null {
-  const sqliteMarker = parseSqliteSessionFileMarker(absPath);
-  if (sqliteMarker) {
+  const sqliteIdentity = resolveBuildSessionSqliteIdentity(absPath, opts);
+  if (sqliteIdentity) {
     const stats = readTranscriptStatsSync({
-      agentId: sqliteMarker.agentId,
-      sessionId: sqliteMarker.sessionId,
-      ...(opts.sessionKey ? { sessionKey: opts.sessionKey } : {}),
-      storePath: sqliteMarker.storePath,
+      ...sqliteIdentity,
     });
     return {
       absPath,
-      path: sessionPathForSessionIdentity(sqliteMarker.agentId, sqliteMarker.sessionId),
+      path: sessionPathForSessionIdentity(sqliteIdentity.agentId, sqliteIdentity.sessionId),
       mtimeMs: opts.updatedAtMs ?? stats.maxSeq,
       size: stats.sizeBytes,
     };
@@ -712,25 +729,19 @@ export async function buildSessionEntry(
   opts: BuildSessionEntryOptions = {},
 ): Promise<SessionFileEntry | null> {
   try {
-    const sqliteMarker = parseSqliteSessionFileMarker(absPath);
-    const rawSource = sqliteMarker
+    const sqliteIdentity = resolveBuildSessionSqliteIdentity(absPath, opts);
+    const rawSource = sqliteIdentity
       ? (() => {
           const stats = readTranscriptStatsSync({
-            agentId: sqliteMarker.agentId,
-            sessionId: sqliteMarker.sessionId,
-            ...(opts.sessionKey ? { sessionKey: opts.sessionKey } : {}),
-            storePath: sqliteMarker.storePath,
+            ...sqliteIdentity,
           });
           const records = loadTranscriptEventsSync({
-            agentId: sqliteMarker.agentId,
-            sessionId: sqliteMarker.sessionId,
-            ...(opts.sessionKey ? { sessionKey: opts.sessionKey } : {}),
-            storePath: sqliteMarker.storePath,
+            ...sqliteIdentity,
           });
           const raw = serializeTranscriptEvents(records);
           return {
             mtimeMs: opts.updatedAtMs ?? stats.maxSeq,
-            path: sessionPathForSessionIdentity(sqliteMarker.agentId, sqliteMarker.sessionId),
+            path: sessionPathForSessionIdentity(sqliteIdentity.agentId, sqliteIdentity.sessionId),
             raw,
             size: stats.sizeBytes,
           };
@@ -778,15 +789,15 @@ export async function buildSessionEntry(
     const messageTimestampsMs: number[] = [];
     const parseYieldEveryLines = resolveSessionEntryParseYieldLines(opts);
     const sqliteSessionKey =
-      sqliteMarker && !opts.sessionKey
+      sqliteIdentity && !opts.sessionKey
         ? resolveTranscriptSessionKeyBySessionId({
-            agentId: sqliteMarker.agentId,
-            sessionId: sqliteMarker.sessionId,
-            storePath: sqliteMarker.storePath,
+            agentId: sqliteIdentity.agentId,
+            sessionId: sqliteIdentity.sessionId,
+            storePath: sqliteIdentity.storePath,
           })
         : undefined;
     const sessionStoreClassification =
-      !sqliteMarker &&
+      !sqliteIdentity &&
       (opts.generatedByDreamingNarrative === undefined || opts.generatedByCronRun === undefined)
         ? classifySessionTranscriptFromSessionStore(absPath)
         : null;
@@ -802,6 +813,9 @@ export async function buildSessionEntry(
       false;
     const allowArchiveRecordCronClassification =
       isUsageCountedSessionArchiveTranscriptPath(absPath);
+    // A heartbeat owns every generated response until the next user turn. The
+    // persisted runtime provenance makes this coupling safe from text spoofing.
+    let insideHeartbeatTurn = false;
     for (let jsonlIdx = 0, lineStart = 0; lineStart <= raw.length; jsonlIdx++) {
       await yieldSessionEntryParseIfNeeded(jsonlIdx, parseYieldEveryLines);
       const newlineIndex = raw.indexOf("\n", lineStart);
@@ -846,6 +860,14 @@ export async function buildSessionEntry(
       if (message.role !== "user" && message.role !== "assistant") {
         continue;
       }
+      const provenance = message.provenance as { kind?: unknown; sourceTool?: unknown } | undefined;
+      const isHeartbeatUser =
+        message.role === "user" &&
+        provenance?.kind === "internal_system" &&
+        provenance.sourceTool === "heartbeat";
+      if (message.role === "user") {
+        insideHeartbeatTurn = isHeartbeatUser;
+      }
       if (message.role === "user" && hasInterSessionUserProvenance(message)) {
         continue;
       }
@@ -853,17 +875,14 @@ export async function buildSessionEntry(
       if (rawText === null) {
         continue;
       }
+
       // User text is not trusted archive-wide provenance. Per-message sanitization
       // drops cron prompts without clearing unrelated content from the archive.
       const text = sanitizeSessionText(rawText, message.role);
       if (!text) {
-        // Assistant-side machinery (silent replies, system wrappers) is already
-        // dropped by sanitizeSessionText. We deliberately do NOT use the prior
-        // user message's pattern-match to drop the next assistant message:
-        // user-typed text can match those same patterns (`[cron:...]`,
-        // `System (untrusted): ...`) and a cross-message drop would let users
-        // exfiltrate real assistant replies from the dreaming corpus by
-        // prefixing their own prompt. See PR #70737 review (aisle-research-bot).
+        continue;
+      }
+      if (insideHeartbeatTurn) {
         continue;
       }
       if (generatedByDreamingNarrative || generatedByCronRun) {
@@ -898,3 +917,4 @@ export async function buildSessionEntry(
     return null;
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -2,10 +2,11 @@ title: Telegram status command reply
 
 scenario:
   id: telegram-status-command
-  surface: channel-framework
-  category: channel-framework.channel-actions-commands-and-approvals
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
   coverage:
-    primary: [channels.native-commands]
+    primary:
+      - channels.channel-native-commands
   regressionRefs:
     - openclaw/openclaw#74698
   objective: Verify Telegram status returns model, session, and activation details.
@@ -16,6 +17,13 @@ scenario:
     - src/auto-reply/reply/commands-status.ts
     - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
   execution:
+    profiles:
+      {
+        "telegram:adapter": 7,
+        "telegram:all": 6,
+        "telegram:mock-release": 6,
+        "telegram:release": 6,
+      }
     kind: flow
     channel: telegram
     summary: Run Telegram status and verify representative status fields.

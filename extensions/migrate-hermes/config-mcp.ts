@@ -113,7 +113,6 @@ const MCP_CONNECTION_FIELDS = [
   "url",
   "connectionTimeoutMs",
   "requestTimeoutMs",
-  "timeout",
 ] as const;
 
 export function importsMcpSensitiveValues(
@@ -173,7 +172,26 @@ export function mapMcpServer(
   } else if (!transport && readString(next.url)) {
     next.transport = "streamable-http";
   }
-  next.connectTimeout = value.connectTimeout ?? value.connect_timeout;
+  // Canonical timeout fields are finite().positive(); drop non-positive or
+  // overflowing source values instead of importing config that fails validation.
+  const connectionTimeoutSeconds = value.connectTimeout ?? value.connect_timeout;
+  if (
+    next.connectionTimeoutMs === undefined &&
+    typeof connectionTimeoutSeconds === "number" &&
+    connectionTimeoutSeconds > 0 &&
+    Number.isFinite(connectionTimeoutSeconds * 1_000)
+  ) {
+    next.connectionTimeoutMs = connectionTimeoutSeconds * 1_000;
+  }
+  const requestTimeoutSeconds = value.timeout;
+  if (
+    next.requestTimeoutMs === undefined &&
+    typeof requestTimeoutSeconds === "number" &&
+    requestTimeoutSeconds > 0 &&
+    Number.isFinite(requestTimeoutSeconds * 1_000)
+  ) {
+    next.requestTimeoutMs = requestTimeoutSeconds * 1_000;
+  }
   next.supportsParallelToolCalls = readBoolean(
     value.supportsParallelToolCalls ?? value.supports_parallel_tool_calls,
   );

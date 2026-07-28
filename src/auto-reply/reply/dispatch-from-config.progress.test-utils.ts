@@ -668,7 +668,11 @@ describe("dispatchReplyFromConfig", () => {
       await opts?.onPlanUpdate?.({
         phase: "update",
         explanation: "Inspect code, patch it, run tests.",
-        steps: ["Inspect code", "Patch code", "Run tests"],
+        steps: [
+          { step: "Inspect code", status: "completed" },
+          { step: "Patch code", status: "in_progress" },
+          { step: "Run tests", status: "pending" },
+        ],
       });
       await opts?.onApprovalEvent?.({
         phase: "requested",
@@ -681,7 +685,7 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(firstToolResultPayload(dispatcher)).toMatchObject({
-      text: "1. Inspect code\n2. Patch code\n3. Run tests",
+      text: "✅ Inspect code\n▸ Patch code\n▢ Run tests",
       isStatusNotice: true,
     });
     expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
@@ -707,11 +711,14 @@ describe("dispatchReplyFromConfig", () => {
     ) => {
       await opts?.onPlanUpdate?.({
         phase: "update",
-        steps: ["Inspect code"],
+        steps: [{ step: "Inspect code", status: "in_progress" }],
       });
       await opts?.onPlanUpdate?.({
         phase: "update",
-        steps: ["Inspect code", "Patch code"],
+        steps: [
+          { step: "Inspect code", status: "completed" },
+          { step: "Patch code", status: "in_progress" },
+        ],
       });
       return { text: "done" } satisfies ReplyPayload;
     };
@@ -720,7 +727,7 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
     expect(firstToolResultPayload(dispatcher)).toMatchObject({
-      text: "1. Inspect code",
+      text: "▸ Inspect code",
       isStatusNotice: true,
     });
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
@@ -787,7 +794,11 @@ describe("dispatchReplyFromConfig", () => {
       await opts?.onPlanUpdate?.({
         phase: "update",
         explanation: "Inspect code, patch it, run tests.",
-        steps: ["Inspect code", "Patch code", "Run tests"],
+        steps: [
+          { step: "Inspect code", status: "completed" },
+          { step: "Patch code", status: "in_progress" },
+          { step: "Run tests", status: "pending" },
+        ],
       });
       await opts?.onPatchSummary?.({
         phase: "end",
@@ -837,7 +848,11 @@ describe("dispatchReplyFromConfig", () => {
       await opts?.onPlanUpdate?.({
         phase: "update",
         explanation: "Inspect code, patch it, run tests.",
-        steps: ["Inspect code", "Patch code", "Run tests"],
+        steps: [
+          { step: "Inspect code", status: "completed" },
+          { step: "Patch code", status: "in_progress" },
+          { step: "Run tests", status: "pending" },
+        ],
       });
       await opts?.onApprovalEvent?.({
         phase: "requested",
@@ -890,7 +905,11 @@ describe("dispatchReplyFromConfig", () => {
       await opts?.onPlanUpdate?.({
         phase: "update",
         explanation: "Inspect code, patch it, run tests.",
-        steps: ["Inspect code", "Patch code", "Run tests"],
+        steps: [
+          { step: "Inspect code", status: "completed" },
+          { step: "Patch code", status: "in_progress" },
+          { step: "Run tests", status: "pending" },
+        ],
       });
       await opts?.onApprovalEvent?.({
         phase: "requested",
@@ -912,7 +931,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(sessionStoreMocks.loadSessionStore).not.toHaveBeenCalled();
     expect(sessionStoreMocks.resolveSessionStoreEntry).not.toHaveBeenCalled();
     expect(firstToolResultPayload(dispatcher)).toMatchObject({
-      text: "1. Inspect code\n2. Patch code\n3. Run tests",
+      text: "✅ Inspect code\n▸ Patch code\n▢ Run tests",
       isStatusNotice: true,
     });
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
@@ -1488,3 +1507,4 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -21,7 +21,7 @@ import {
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { detectBinary } from "./onboard-helpers.js";
-import type { NodeManagerChoice } from "./onboard-types.js";
+import { isNodeManagerChoice, type NodeManagerChoice } from "./onboard-types.js";
 
 const HOMEBREW_PROMPT_PLATFORMS = new Set(["darwin", "linux"]);
 const SKIPPED_INSTALL_NAME_LIMIT = 8;
@@ -65,7 +65,12 @@ function formatSkillHint(skill: {
   return combined.length > maxLen ? `${truncateUtf16Safe(combined, maxLen - 1)}…` : combined;
 }
 
-export const testing = { formatSkillHint, summarizeInstallFailure };
+const testing = { formatSkillHint, summarizeInstallFailure };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.onboardSkillsTestApi")] =
+    testing;
+}
 
 const SKIP_REASON_LABELS = {
   brew: "Homebrew",
@@ -116,10 +121,6 @@ function isTrustedAutoInstallableSkill(skill: { bundled: boolean; source: string
   // Onboarding can auto-run bundled recipes without another prompt. Workspace
   // skill metadata is mutable project input, so those installs stay explicit.
   return skill.bundled && skill.source === "openclaw-bundled";
-}
-
-function isNodeManagerChoice(value: unknown): value is NodeManagerChoice {
-  return value === "npm" || value === "pnpm" || value === "bun";
 }
 
 function resolveDefaultNodeManager(

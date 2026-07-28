@@ -13,7 +13,6 @@ import {
   isEmbeddedAgentRunActive,
   queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunSessionId,
-  resolveActiveEmbeddedRunSessionIdBySessionFile,
 } from "./commands-steer.runtime.js";
 import type {
   CommandHandler,
@@ -83,18 +82,6 @@ function resolveSteerSessionId(params: {
 
   for (const candidateKey of candidateKeys) {
     const entry = resolveStoredSessionEntry(params.commandParams, candidateKey);
-    const sessionFile = normalizeOptionalString(entry?.sessionFile);
-    if (!sessionFile) {
-      continue;
-    }
-    const activeSessionId = resolveActiveEmbeddedRunSessionIdBySessionFile(sessionFile);
-    if (activeSessionId) {
-      return activeSessionId;
-    }
-  }
-
-  for (const candidateKey of candidateKeys) {
-    const entry = resolveStoredSessionEntry(params.commandParams, candidateKey);
     const sessionId = normalizeOptionalString(entry?.sessionId);
     if (sessionId && isEmbeddedAgentRunActive(sessionId)) {
       return sessionId;
@@ -106,6 +93,9 @@ function resolveSteerSessionId(params: {
 
 function applySteerFallbackPrompt(ctx: HandleCommandsParams["ctx"], message: string): void {
   const mutableCtx = ctx as Record<string, unknown>;
+  mutableCtx.commandText = message;
+  mutableCtx.agentText = message;
+  mutableCtx.rawText = message;
   mutableCtx.Body = message;
   mutableCtx.RawBody = message;
   mutableCtx.CommandBody = message;
@@ -172,6 +162,7 @@ export const handleSteerCommand: CommandHandler = async (params, allowTextComman
 
   const queueOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(sessionId, message, {
     steeringMode: "all",
+    isInboundUserMessage: true,
     debounceMs: 0,
     ...(params.opts?.sourceReplyDeliveryMode
       ? { sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode }

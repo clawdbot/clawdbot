@@ -21,7 +21,7 @@ import {
 import { formatCodexDisplayText } from "./command-formatters.js";
 
 const CODEX_CLI_SESSIONS_LIST_COMMAND = "codex.cli.sessions.list";
-const CODEX_CLI_SESSION_RESUME_COMMAND = "codex.cli.session.resume";
+export const CODEX_CLI_SESSION_RESUME_COMMAND = "codex.cli.session.resume";
 
 const DEFAULT_SESSION_LIMIT = 10;
 const MAX_SESSION_LIMIT = 50;
@@ -119,6 +119,7 @@ export async function listCodexCliSessionsOnNode(params: {
       filter: params.filter,
     },
     timeoutMs: 15_000,
+    scopes: ["operator.write"],
   });
   return { node, result: parseCodexCliSessionsListResult(raw) };
 }
@@ -163,6 +164,7 @@ export async function resumeCodexCliSessionOnNode(params: {
       timeoutMs: params.timeoutMs,
     },
     timeoutMs: (params.timeoutMs ?? DEFAULT_RESUME_TIMEOUT_MS) + 5_000,
+    scopes: ["operator.write"],
   });
   const payload = unwrapNodeInvokePayload(raw);
   if (!isRecord(payload) || payload.ok !== true || typeof payload.text !== "string") {

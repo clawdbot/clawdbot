@@ -1,6 +1,6 @@
 // Tests final outcome accounting for dispatch-from-config runs.
 import { describe, expect, it } from "vitest";
-import { getDispatcherFinalOutcomeCounts } from "./dispatch-from-config.js";
+import { getDispatcherFinalOutcomeCounts } from "./dispatch-from-config.transcript.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 
 describe("getDispatcherFinalOutcomeCounts (#89116)", () => {

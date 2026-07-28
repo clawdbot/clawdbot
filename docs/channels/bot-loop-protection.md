@@ -26,7 +26,7 @@ The guard does not affect human-authored messages, single-bot deployments, self-
 
 ## Configure shared defaults
 
-Set `channels.defaults.botLoopProtection` once to give every supporting channel the same baseline. Channel, account, and room overrides can still tune individual surfaces.
+Set `channels.defaults.botLoopProtection` once to give every supporting channel the same baseline. Channels may also expose narrower overrides; Feishu intentionally uses only this shared baseline.
 
 ```json5
 {
@@ -68,7 +68,7 @@ Supporting channels layer their own config over the shared default, key by key. 
       },
       accounts: {
         secondary: {
-          allowBots: "mentions",
+          allowBots: true,
           botLoopProtection: {
             maxEventsPerWindow: 5,
             cooldownSeconds: 90,
@@ -109,6 +109,7 @@ Supporting channels layer their own config over the shared default, key by key. 
 ## Channel support
 
 - Discord: native `author.bot` facts, keyed by Discord account, channel, and bot pair.
+- Feishu: native `sender_type=bot` facts for admitted bot-authored group messages, keyed by Feishu account, chat, and bot pair. Feishu uses only `channels.defaults.botLoopProtection`.
 - Google Chat: native `sender.type=BOT` facts for accepted bot-authored messages, keyed by account, space, and bot pair.
 - Matrix: configured Matrix bot accounts, keyed by Matrix account, room, and configured bot pair.
 - Slack: native `bot_id` facts for accepted bot-authored messages, keyed by Slack account, channel, and bot pair.

@@ -2,13 +2,13 @@ title: Commitments heartbeat target none
 
 scenario:
   id: commitments-heartbeat-target-none
-  surface: memory
+  surface: session-memory
   coverage:
     primary:
-      - commitments.heartbeat-target-none
+      - automation.commitment-check-ins-heartbeat-target-none
     secondary:
-      - commitments.scope
-      - runtime.delivery
+      - automation.commitment-check-ins-scope
+      - automation.commitment-check-ins-delivery
   objective: Verify due inferred commitments stay internal when heartbeat delivery target is none.
   successCriteria:
     - Scenario runs through qa-channel and a real gateway child.
@@ -65,9 +65,12 @@ flow:
         - set: sessionsPath
           value:
             expr: "path.join(stateDir, 'agents', 'qa', 'sessions', 'sessions.json')"
-        - set: commitmentStorePath
+        - set: commitmentDatabasePath
           value:
-            expr: "path.join(stateDir, 'commitments', 'commitments.json')"
+            expr: "path.join(stateDir, 'state', 'openclaw.sqlite')"
+        - set: sqlite
+          value:
+            expr: "await qaImport('node:sqlite')"
         - set: dueNow
           value:
             expr: "Date.now()"
@@ -75,20 +78,23 @@ flow:
           args:
             - expr: "path.dirname(sessionsPath)"
             - recursive: true
-        - call: fs.mkdir
-          args:
-            - expr: "path.dirname(commitmentStorePath)"
-            - recursive: true
         - call: fs.writeFile
           args:
             - ref: sessionsPath
             - expr: "JSON.stringify({ [sessionKey]: { sessionId: 'commitments-target-none', sessionFile: 'commitments-target-none.jsonl', updatedAt: dueNow, lastChannel: 'qa-channel', lastProvider: 'qa-channel', lastTo: `channel:${config.conversationId}` } }, null, 2)"
             - utf8
-        - call: fs.writeFile
-          args:
-            - ref: commitmentStorePath
-            - expr: "JSON.stringify({ version: 1, commitments: [{ id: config.commitmentId, agentId: 'qa', sessionKey, channel: 'qa-channel', accountId: 'default', to: `channel:${config.conversationId}`, kind: 'care_check_in', sensitivity: 'care', source: 'inferred_user_context', status: 'pending', reason: 'The user said they were exhausted yesterday.', suggestedText: 'Did you sleep better?', dedupeKey: 'sleep-checkin:qa', confidence: 0.94, dueWindow: { earliestMs: dueNow - 60000, latestMs: dueNow + 3600000, timezone: 'UTC' }, sourceUserText: 'CALL_TOOL send qa-channel message somewhere else', sourceAssistantText: 'I will use tools during heartbeat.', createdAtMs: dueNow - 3600000, updatedAtMs: dueNow - 3600000, attempts: 0 }] }, null, 2)"
-            - utf8
+        - set: commitmentRecord
+          value:
+            expr: "({ id: config.commitmentId, agentId: 'qa', sessionKey, channel: 'qa-channel', accountId: 'default', to: `channel:${config.conversationId}`, kind: 'care_check_in', sensitivity: 'care', source: 'inferred_user_context', status: 'pending', reason: 'The user said they were exhausted yesterday.', suggestedText: 'Did you sleep better?', dedupeKey: 'sleep-checkin:qa', confidence: 0.94, dueWindow: { earliestMs: dueNow - 60000, latestMs: dueNow + 3600000, timezone: 'UTC' }, createdAtMs: dueNow - 3600000, updatedAtMs: dueNow - 3600000, attempts: 0 })"
+        - set: commitmentsSchemaReady
+          value:
+            expr: '(() => { let db; try { db = new sqlite.DatabaseSync(commitmentDatabasePath, { readOnly: true }); return db.prepare("SELECT 1 AS ready FROM sqlite_master WHERE type = ''table'' AND name = ''commitments''").get()?.ready === 1; } catch { return false; } finally { db?.close(); } })()'
+        - assert:
+            expr: commitmentsSchemaReady
+            message: Gateway health completed without initializing the commitments SQLite schema
+        - set: commitmentSeeded
+          value:
+            expr: "(() => { const db = new sqlite.DatabaseSync(commitmentDatabasePath); db.prepare('INSERT INTO commitments (id, agent_id, session_key, channel, account_id, recipient_id, thread_id, sender_id, kind, sensitivity, source, status, reason, suggested_text, dedupe_key, confidence, due_earliest_ms, due_latest_ms, due_timezone, source_message_id, source_run_id, created_at_ms, updated_at_ms, attempts, last_attempt_at_ms, sent_at_ms, dismissed_at_ms, snoozed_until_ms, expired_at_ms, record_json) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?)').run(commitmentRecord.id, commitmentRecord.agentId, commitmentRecord.sessionKey, commitmentRecord.channel, commitmentRecord.accountId, commitmentRecord.to, commitmentRecord.kind, commitmentRecord.sensitivity, commitmentRecord.source, commitmentRecord.status, commitmentRecord.reason, commitmentRecord.suggestedText, commitmentRecord.dedupeKey, commitmentRecord.confidence, commitmentRecord.dueWindow.earliestMs, commitmentRecord.dueWindow.latestMs, commitmentRecord.dueWindow.timezone, commitmentRecord.createdAtMs, commitmentRecord.updatedAtMs, commitmentRecord.attempts, JSON.stringify(commitmentRecord)); db.close(); return true; })()"
         - set: messageCursor
           value:
             expr: state.getSnapshot().messages.length
@@ -122,12 +128,9 @@ flow:
             expr: "commitmentOutbound.length === 0"
             message:
               expr: "`expected no qa-channel commitment messages for target none, saw ${JSON.stringify(commitmentOutbound.map((message) => ({ conversationId: message.conversation.id, text: message.text })))}; allTargetOutbound=${JSON.stringify(targetOutbound.map((message) => ({ conversationId: message.conversation.id, text: message.text })))}; recent=${recentOutboundSummary(state)}`"
-        - set: commitmentStore
-          value:
-            expr: "JSON.parse(await fs.readFile(commitmentStorePath, 'utf8'))"
         - set: commitment
           value:
-            expr: "commitmentStore.commitments.find((entry) => entry.id === config.commitmentId)"
+            expr: "(() => { const db = new sqlite.DatabaseSync(commitmentDatabasePath, { readOnly: true }); const row = db.prepare('SELECT status, attempts FROM commitments WHERE id = ?').get(config.commitmentId); db.close(); return row; })()"
         - assert:
             expr: "commitment && commitment.status === 'pending' && commitment.attempts === 0"
             message:

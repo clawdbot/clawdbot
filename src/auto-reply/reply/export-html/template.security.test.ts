@@ -33,15 +33,8 @@ type SessionData = {
   warning?: string;
 };
 
-type ParsedHtml = {
-  document: Document;
-  window: {
-    HTMLElement?: unknown;
-  };
-};
-
 type LinkedomModule = {
-  parseHTML(html: string): ParsedHtml;
+  parseHTML(html: string): { document: Document };
 };
 
 const LINKEDOM_MODULE = "linkedom";
@@ -60,34 +53,6 @@ async function loadParseHTML(): Promise<LinkedomModule["parseHTML"]> {
     (module) => module["parseHTML"],
   );
   return parseHtmlPromise;
-}
-
-function installScrollIntoViewStub(document: Document) {
-  const patchElement = <T extends Element | null>(element: T): T => {
-    if (element && !("scrollIntoView" in element)) {
-      Object.defineProperty(element, "scrollIntoView", {
-        configurable: true,
-        value: () => {},
-      });
-    }
-    return element;
-  };
-
-  for (const element of document.querySelectorAll("*")) {
-    patchElement(element);
-  }
-
-  const getElementById = document.getElementById.bind(document);
-  document.getElementById = ((id: string) =>
-    patchElement(getElementById(id))) as typeof document.getElementById;
-
-  const querySelector = document.querySelector.bind(document);
-  document.querySelector = ((selectors: string) =>
-    patchElement(querySelector(selectors))) as typeof document.querySelector;
-
-  const createElement = document.createElement.bind(document);
-  document.createElement = ((tagName: string, options?: ElementCreationOptions) =>
-    patchElement(createElement(tagName, options))) as typeof document.createElement;
 }
 
 async function renderTemplate(sessionData: SessionData) {
@@ -110,10 +75,7 @@ async function renderTemplate(sessionData: SessionData) {
   );
 
   const parseHTML = await loadParseHTML();
-  const { document, window } = parseHTML(html);
-  if (window.HTMLElement) {
-    installScrollIntoViewStub(document);
-  }
+  const { document } = parseHTML(html);
 
   const immediateTimeout = (fn: (...args: unknown[]) => void) => {
     fn();
@@ -624,6 +586,38 @@ describe("export html security hardening", () => {
     expect(elementId.startsWith("entry-")).toBe(true);
   });
 
+  it("truncates tree node text without splitting surrogate pairs", async () => {
+    const emoji = "😀";
+    const prefix = "x".repeat(99);
+    const session: SessionData = {
+      header: { id: "session-surrogate-truncation", timestamp: now() },
+      entries: [
+        {
+          id: "surrogate-user",
+          parentId: null,
+          timestamp: now(),
+          type: "message",
+          message: { role: "user", content: `${prefix}${emoji}tail` },
+        },
+      ],
+      leafId: "surrogate-user",
+      systemPrompt: "",
+      tools: [],
+    };
+
+    const { document } = await renderTemplate(session);
+    const treeText =
+      Array.from(document.querySelectorAll(".tree-content")).find((node) =>
+        node.textContent?.includes("user:"),
+      )?.textContent ?? "";
+
+    expect(treeText).toContain(`user: ${prefix}...`);
+    expect(treeText).not.toContain(emoji);
+    expect(treeText).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+    );
+  });
+
   it("copy-link round-trip: dataset.entryId matches raw entry.id after browser decoding", async () => {
     // IDs with characters that need HTML escaping but should round-trip correctly
     const specialId = `msg-with"quotes&amp's`;
@@ -796,5 +790,97 @@ describe("export html security hardening", () => {
       };
       await expect(renderTemplate(session)).resolves.toBeDefined();
     }
+  });
+});
+
+describe("export html tool call previews", () => {
+  it("truncates tool previews without splitting emoji", async () => {
+    const bashPrefix = "a".repeat(49);
+    const genericPrefix = "b".repeat(29);
+    const bashExecutionPrefix = "c".repeat(99);
+    const session: SessionData = {
+      header: { id: "session-tool-preview-emoji", timestamp: now() },
+      entries: [
+        {
+          id: "1",
+          parentId: null,
+          timestamp: now(),
+          type: "message",
+          message: { role: "user", content: "run tools" },
+        },
+        {
+          id: "2",
+          parentId: "1",
+          timestamp: now(),
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call-bash",
+                name: "bash",
+                arguments: { command: `${bashPrefix}😀tail` },
+              },
+              {
+                type: "toolCall",
+                id: "call-custom",
+                name: "custom",
+                arguments: { value: `${genericPrefix}😀tail` },
+              },
+            ],
+          },
+        },
+        {
+          id: "3",
+          parentId: "2",
+          timestamp: now(),
+          type: "message",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-bash",
+            content: "bash output",
+          },
+        },
+        {
+          id: "4",
+          parentId: "3",
+          timestamp: now(),
+          type: "message",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-custom",
+            content: "custom output",
+          },
+        },
+        {
+          id: "5",
+          parentId: "4",
+          timestamp: now(),
+          type: "message",
+          message: {
+            role: "bashExecution",
+            command: `${bashExecutionPrefix}😀tail`,
+          },
+        },
+      ],
+      leafId: "5",
+      systemPrompt: "",
+      tools: [],
+    };
+
+    const { document } = await renderTemplate(session);
+    const previews = ["3", "4", "5"].map((id) =>
+      requireElement(
+        document.querySelector(`.tree-node[data-id="${id}"] .tree-content`),
+        `tool preview ${id} missing`,
+      ).textContent,
+    );
+
+    expect(previews).toEqual([
+      `[bash: ${bashPrefix}...]`,
+      `[custom: {"value":"${genericPrefix}...]`,
+      `[bash]: ${bashExecutionPrefix}...`,
+    ]);
   });
 });

@@ -3,6 +3,7 @@
  * Converts selected auth profiles into provider API keys, refreshes OAuth
  * credentials, resolves SecretRefs, and maintains runtime store snapshots.
  */
+import { isDeepStrictEqual } from "node:util";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -12,17 +13,21 @@ import {
   getOAuthApiKey,
   getOAuthProviders,
   type OAuthCredentials,
-  type OAuthProvider,
+  type OAuthProviderId,
 } from "../../llm/oauth.js";
 import {
   formatProviderAuthProfileApiKeyWithPlugin,
   refreshProviderOAuthCredentialWithPlugin,
 } from "../../plugins/provider-runtime.runtime.js";
-import { resolveSecretRefString, type SecretRefResolveCache } from "../../secrets/resolve.js";
+import { secretRefKey } from "../../secrets/ref-contract.js";
+import { resolveAuthProfileSecretOwnerId } from "../../secrets/runtime-auth-profile-owner.js";
+import {
+  findActiveDegradedSecretOwner,
+  SecretSurfaceUnavailableError,
+} from "../../secrets/runtime-degraded-state.js";
 import { normalizeOptionalSecretInput } from "../../utils/normalize-secret-input.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
-import { log } from "./constants.js";
 import {
   evaluateStoredCredentialEligibility,
   resolveTokenExpiryState,
@@ -67,10 +72,10 @@ function listOAuthProviderIds(): string[] {
 
 const OAUTH_PROVIDER_IDS = new Set<string>(listOAuthProviderIds());
 
-const isOAuthProvider = (provider: string): provider is OAuthProvider =>
+const isOAuthProvider = (provider: string): provider is OAuthProviderId =>
   OAUTH_PROVIDER_IDS.has(provider);
 
-const resolveOAuthProvider = (provider: string): OAuthProvider | null =>
+const resolveOAuthProvider = (provider: string): OAuthProviderId | null =>
   isOAuthProvider(provider) ? provider : null;
 
 /** Bearer-token auth modes that are interchangeable (oauth tokens and raw tokens). */
@@ -161,7 +166,7 @@ function extractErrorMessage(error: unknown): string {
 }
 
 /** Detect provider errors caused by single-use OAuth refresh token races. */
-export function isRefreshTokenReusedError(error: unknown): boolean {
+function isRefreshTokenReusedError(error: unknown): boolean {
   const message = normalizeLowercaseStringOrEmpty(extractErrorMessage(error));
   return (
     message.includes("refresh_token_reused") ||
@@ -234,8 +239,15 @@ const oauthManager = createOAuthManager({
 });
 
 /** Clear in-process OAuth refresh queues between isolated tests. */
-export function resetOAuthRefreshQueuesForTest(): void {
+function resetOAuthRefreshQueuesForTest(): void {
   oauthManager.resetRefreshQueuesForTest();
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.oauthTestApi")] = {
+    isRefreshTokenReusedError,
+    resetOAuthRefreshQueuesForTest,
+  };
 }
 
 async function tryResolveOAuthProfile(
@@ -278,55 +290,84 @@ async function tryResolveOAuthProfile(
   });
 }
 
-async function resolveProfileSecretString(params: {
+function authProfileSecretRefKey(
+  profile: AuthProfileCredential,
+  defaults: SecretDefaults | undefined,
+): string | undefined {
+  const ref =
+    profile.type === "api_key"
+      ? (coerceSecretRef(profile.keyRef, defaults) ?? coerceSecretRef(profile.key, defaults))
+      : profile.type === "token"
+        ? (coerceSecretRef(profile.tokenRef, defaults) ?? coerceSecretRef(profile.token, defaults))
+        : null;
+  return ref ? secretRefKey(ref) : undefined;
+}
+
+function resolveRuntimeAuthProfile(params: {
+  agentDir?: string;
   profileId: string;
-  provider: string;
-  value: string | undefined;
-  valueRef: unknown;
-  refDefaults: SecretDefaults | undefined;
-  configForRefResolution: OpenClawConfig;
-  cache: SecretRefResolveCache;
-  inlineFailureMessage: string;
-  refFailureMessage: string;
-}): Promise<string | undefined> {
-  let resolvedValue = params.value?.trim();
-  if (resolvedValue) {
-    const inlineRef = coerceSecretRef(resolvedValue, params.refDefaults);
-    if (inlineRef) {
-      try {
-        resolvedValue = await resolveSecretRefString(inlineRef, {
-          config: params.configForRefResolution,
-          env: process.env,
-          cache: params.cache,
-        });
-      } catch (err) {
-        log.debug(params.inlineFailureMessage, {
-          profileId: params.profileId,
-          provider: params.provider,
-          error: formatErrorMessage(err),
-        });
-      }
-    }
+  profile: AuthProfileCredential;
+  defaults: SecretDefaults | undefined;
+}): { profile: AuthProfileCredential; published: boolean } {
+  const runtimeProfile = getRuntimeAuthProfileStoreSnapshot(params.agentDir)?.profiles[
+    params.profileId
+  ];
+  const inputRefKey = authProfileSecretRefKey(params.profile, params.defaults);
+  const runtimeRefKey = runtimeProfile
+    ? authProfileSecretRefKey(runtimeProfile, params.defaults)
+    : undefined;
+  const published = Boolean(
+    runtimeProfile &&
+    (isDeepStrictEqual(runtimeProfile, params.profile) ||
+      (inputRefKey &&
+        runtimeRefKey === inputRefKey &&
+        runtimeProfile.type === params.profile.type &&
+        runtimeProfile.provider === params.profile.provider)),
+  );
+  let profile = params.profile;
+  if (published && runtimeProfile?.type === "api_key" && params.profile.type === "api_key") {
+    const value = runtimeProfile.key;
+    profile = { ...params.profile, key: value };
+  } else if (published && runtimeProfile?.type === "token" && params.profile.type === "token") {
+    const value = runtimeProfile.token;
+    profile = { ...params.profile, token: value };
   }
+  return {
+    profile,
+    published,
+  };
+}
 
-  const explicitRef = coerceSecretRef(params.valueRef, params.refDefaults);
-  if (!resolvedValue && explicitRef) {
-    try {
-      resolvedValue = await resolveSecretRefString(explicitRef, {
-        config: params.configForRefResolution,
-        env: process.env,
-        cache: params.cache,
-      });
-    } catch (err) {
-      log.debug(params.refFailureMessage, {
-        profileId: params.profileId,
-        provider: params.provider,
-        error: formatErrorMessage(err),
-      });
-    }
+function assertRuntimeAuthProfileSecretOwnerAvailable(params: {
+  agentDir?: string;
+  profileId: string;
+  published: boolean;
+}): void {
+  const degraded = findActiveDegradedSecretOwner(
+    "account",
+    resolveAuthProfileSecretOwnerId(params),
+  );
+  // Match both agent store and credential ref before applying Gateway cold state; another store
+  // may reuse the profile id for unrelated credentials.
+  if (degraded && params.published) {
+    throw new SecretSurfaceUnavailableError(degraded);
   }
+}
 
-  return normalizeOptionalSecretInput(resolvedValue);
+function throwUnmaterializedAuthProfileSecretRef(params: {
+  agentDir?: string;
+  profileId: string;
+  pathSuffix: "key" | "token";
+  ref: NonNullable<ReturnType<typeof coerceSecretRef>>;
+}): never {
+  throw new SecretSurfaceUnavailableError({
+    ownerKind: "account",
+    ownerId: resolveAuthProfileSecretOwnerId(params),
+    state: "unavailable",
+    paths: [`auth-profiles.${params.profileId}.${params.pathSuffix}`],
+    refKeys: [secretRefKey(params.ref)],
+    reason: "secret reference was not materialized by the active runtime",
+  });
 }
 
 /** Resolve a selected auth profile into the provider API key string. */
@@ -334,10 +375,19 @@ export async function resolveApiKeyForProfile(
   params: ResolveApiKeyForProfileParams,
 ): Promise<ResolveApiKeyForProfileResult | null> {
   const { cfg, store, profileId } = params;
-  const cred = store.profiles[profileId];
-  if (!cred) {
+  const storedProfile = store.profiles[profileId];
+  if (!storedProfile) {
     return null;
   }
+  const configForRefResolution = cfg ?? getRuntimeConfig();
+  const refDefaults = configForRefResolution.secrets?.defaults;
+  const runtimeProfile = resolveRuntimeAuthProfile({
+    agentDir: params.agentDir,
+    profileId,
+    profile: storedProfile,
+    defaults: refDefaults,
+  });
+  const cred = runtimeProfile.profile;
   if (
     !isProfileConfigCompatible({
       cfg,
@@ -351,31 +401,32 @@ export async function resolveApiKeyForProfile(
     return null;
   }
 
-  const refResolveCache: SecretRefResolveCache = {};
-  const configForRefResolution = cfg ?? getRuntimeConfig();
-  const refDefaults = configForRefResolution.secrets?.defaults;
   assertNoOAuthSecretRefPolicyViolations({
     store,
     cfg: configForRefResolution,
     profileIds: [profileId],
     context: `auth profile ${profileId}`,
   });
-
   if (cred.type === "api_key") {
     if (!evaluateStoredCredentialEligibility({ credential: cred }).eligible) {
       return null;
     }
-    const key = await resolveProfileSecretString({
+    assertRuntimeAuthProfileSecretOwnerAvailable({
+      agentDir: params.agentDir,
       profileId,
-      provider: cred.provider,
-      value: cred.key,
-      valueRef: cred.keyRef,
-      refDefaults,
-      configForRefResolution,
-      cache: refResolveCache,
-      inlineFailureMessage: "failed to resolve inline auth profile api_key ref",
-      refFailureMessage: "failed to resolve auth profile api_key ref",
+      published: runtimeProfile.published,
     });
+    const keyRef =
+      coerceSecretRef(cred.keyRef, refDefaults) ?? coerceSecretRef(cred.key, refDefaults);
+    const key = normalizeOptionalSecretInput(cred.key);
+    if (keyRef && (!runtimeProfile.published || !key)) {
+      throwUnmaterializedAuthProfileSecretRef({
+        agentDir: params.agentDir,
+        profileId,
+        pathSuffix: "key",
+        ref: keyRef,
+      });
+    }
     if (!key) {
       return null;
     }
@@ -392,17 +443,22 @@ export async function resolveApiKeyForProfile(
     if (expiryState === "expired" || expiryState === "invalid_expires") {
       return null;
     }
-    const token = await resolveProfileSecretString({
+    assertRuntimeAuthProfileSecretOwnerAvailable({
+      agentDir: params.agentDir,
       profileId,
-      provider: cred.provider,
-      value: cred.token,
-      valueRef: cred.tokenRef,
-      refDefaults,
-      configForRefResolution,
-      cache: refResolveCache,
-      inlineFailureMessage: "failed to resolve inline auth profile token ref",
-      refFailureMessage: "failed to resolve auth profile token ref",
+      published: runtimeProfile.published,
     });
+    const tokenRef =
+      coerceSecretRef(cred.tokenRef, refDefaults) ?? coerceSecretRef(cred.token, refDefaults);
+    const token = normalizeOptionalSecretInput(cred.token);
+    if (tokenRef && (!runtimeProfile.published || !token)) {
+      throwUnmaterializedAuthProfileSecretRef({
+        agentDir: params.agentDir,
+        profileId,
+        pathSuffix: "token",
+        ref: tokenRef,
+      });
+    }
     if (!token) {
       return null;
     }

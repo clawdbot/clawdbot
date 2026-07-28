@@ -1,12 +1,13 @@
 package ai.openclaw.app.node
 
-import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.testDeviceIdentityStore
 import ai.openclaw.app.protocol.OpenClawCallLogCommand
 import ai.openclaw.app.protocol.OpenClawCameraCommand
 import ai.openclaw.app.protocol.OpenClawCanvasCommand
 import ai.openclaw.app.protocol.OpenClawDeviceCommand
 import ai.openclaw.app.protocol.OpenClawLocationCommand
+import ai.openclaw.app.protocol.OpenClawMobileUiCommand
 import ai.openclaw.app.protocol.OpenClawMotionCommand
 import ai.openclaw.app.protocol.OpenClawPhotosCommand
 import ai.openclaw.app.protocol.OpenClawSmsCommand
@@ -14,7 +15,6 @@ import ai.openclaw.app.protocol.OpenClawTalkCommand
 import android.content.Context
 import android.content.pm.PackageManager
 import android.webkit.WebView
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
@@ -229,6 +229,20 @@ class InvokeDispatcherTest {
     }
 
   @Test
+  fun handleInvoke_blocksMobileUiWhenServiceIsUnavailable() =
+    runTest {
+      val result =
+        newDispatcher(mobileUiAvailable = false)
+          .handleInvoke(OpenClawMobileUiCommand.Observe.rawValue, null)
+
+      assertEquals("MOBILE_UI_UNAVAILABLE", result.error?.code)
+      assertEquals(
+        "MOBILE_UI_UNAVAILABLE: accessibility service is not connected",
+        result.error?.message,
+      )
+    }
+
+  @Test
   fun handleInvoke_treatsDebugCommandsAsUnknownOutsideDebugBuilds() =
     runTest {
       val result = newDispatcher(debugBuild = false).handleInvoke("debug.logs", null)
@@ -343,6 +357,7 @@ class InvokeDispatcherTest {
     debugBuild: Boolean = false,
     motionActivityAvailable: Boolean = false,
     motionPedometerAvailable: Boolean = false,
+    mobileUiAvailable: Boolean = false,
     talkHandler: TalkHandler = InvokeDispatcherFakeTalkHandler(),
     canvas: CanvasController = CanvasController(),
   ): InvokeDispatcher {
@@ -374,8 +389,9 @@ class InvokeDispatcherTest {
           canvas = canvas,
           json = Json { ignoreUnknownKeys = true },
         ),
-      debugHandler = DebugHandler(appContext, DeviceIdentityStore(appContext)),
+      debugHandler = DebugHandler(appContext, testDeviceIdentityStore(appContext)),
       callLogHandler = CallLogHandler.forTesting(appContext, InvokeDispatcherFakeCallLogDataSource()),
+      mobileUiHandler = MobileUiHandler(),
       isForeground = { isForeground },
       cameraEnabled = { cameraEnabled },
       locationEnabled = { locationEnabled },
@@ -391,6 +407,7 @@ class InvokeDispatcherTest {
       onCanvasA2uiReset = {},
       motionActivityAvailable = { motionActivityAvailable },
       motionPedometerAvailable = { motionPedometerAvailable },
+      mobileUiAvailable = { mobileUiAvailable },
     )
   }
 
@@ -398,7 +415,7 @@ class InvokeDispatcherTest {
     CameraHandler(
       appContext = appContext,
       camera = CameraCaptureManager(appContext),
-      externalAudioCaptureActive = MutableStateFlow(false),
+      setCameraAudioCaptureActive = { true },
       showCameraHud = { _, _, _ -> },
       invokeErrorFromThrowable = { err -> "UNAVAILABLE" to (err.message ?: "camera failed") },
     )

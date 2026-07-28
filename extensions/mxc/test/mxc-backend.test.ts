@@ -152,7 +152,7 @@ function createSandboxBackendTestConfig(
       binds: [],
       cdpPort: 0,
       cdpSourceRange: undefined,
-      enableNoVnc: false,
+      noVncEnabled: false,
       headless: true,
       image: "",
       network: "",
@@ -1526,3 +1526,4 @@ describeOnWindows("mxcSandboxBackendManager (Windows-only MXC backend tests)", (
     ).resolves.toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

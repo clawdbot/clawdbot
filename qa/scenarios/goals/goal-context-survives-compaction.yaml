@@ -3,13 +3,13 @@ title: Active goal context survives compaction
 scenario:
   id: goal-context-survives-compaction
   surface: goals
-  category: session-memory-and-context-engine.context-engine
+  category: session-memory.context-engine
   coverage:
     primary:
-      - goals.context-injection
+      - session-memory.goal-continuance-context-injection
     secondary:
-      - goals.continuance
-      - runtime.compaction
+      - session-memory.goal-continuance-continuance
+      - session-memory.compaction
   objective: Verify compaction does not remove active session-goal context from the next model turn.
   successCriteria:
     - An authorized channel turn starts a session goal through `/goal start`.
@@ -33,8 +33,8 @@ scenario:
   execution:
     kind: flow
     summary: Start a goal, compact the session, then inspect the next mock-provider request for active-goal context.
+    channel: qa-channel
     config:
-      requiredChannelDriver: qa-channel
       requiredProviderMode: mock-openai
       conversationId: goal-context-compaction
       senderId: qa-goal-operator

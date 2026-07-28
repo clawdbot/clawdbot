@@ -33,10 +33,6 @@ type ReusableSkillSnapshotResult = {
   snapshotVersion: number;
 };
 
-export function resetResolvedSkillsCacheForTests(): void {
-  resolvedSkillsCache.clear();
-}
-
 function fingerprintSkillSnapshotConfig(config: OpenClawConfig): string {
   return crypto
     .createHash("sha256")
@@ -86,17 +82,17 @@ export function resolveReusableWorkspaceSkillSnapshot(
     });
   };
 
-  const configFingerprint = fingerprintSkillSnapshotConfig(params.config);
-  const snapshotCacheKey = JSON.stringify([
-    params.workspaceDir,
-    snapshotVersion,
-    params.skillFilter,
-    params.agentId,
-    params.eligibility,
-    configFingerprint,
-  ]);
+  const buildSnapshotCacheKey = () =>
+    JSON.stringify([
+      params.workspaceDir,
+      snapshotVersion,
+      params.skillFilter,
+      params.agentId,
+      params.eligibility,
+      fingerprintSkillSnapshotConfig(params.config),
+    ]);
 
-  const cachedRebuild = (): SkillSnapshot => {
+  const cachedRebuild = (snapshotCacheKey = buildSnapshotCacheKey()): SkillSnapshot => {
     if (resolvedSkillsCache.has(snapshotCacheKey)) {
       return { resolvedSkills: resolvedSkillsCache.get(snapshotCacheKey) } as SkillSnapshot;
     }
@@ -105,7 +101,7 @@ export function resolveReusableWorkspaceSkillSnapshot(
 
   const snapshot =
     !params.existingSnapshot || shouldRefresh
-      ? cacheResolvedSkills(snapshotCacheKey, buildSnapshot())
+      ? cacheResolvedSkills(buildSnapshotCacheKey(), buildSnapshot())
       : params.hydrateExisting === false
         ? params.existingSnapshot
         : hydrateResolvedSkills(params.existingSnapshot, cachedRebuild);

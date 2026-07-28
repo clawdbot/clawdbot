@@ -57,6 +57,45 @@ describe("memory dreaming host helpers", () => {
     expect(resolved.phases.deep.maxAgeDays).toBe(30);
   });
 
+  it("rejects hex and exponent integer strings for dreaming phase counts", () => {
+    const resolved = resolveMemoryDreamingConfig({
+      pluginConfig: {
+        dreaming: {
+          phases: {
+            deep: {
+              limit: "0x10",
+              minRecallCount: "1e3",
+              minUniqueQueries: "2.5",
+              recencyHalfLifeDays: "1.5",
+              maxAgeDays: "0x20",
+              maxPromotedSnippetTokens: "1e2",
+              execution: {
+                maxOutputTokens: "0x40",
+                timeoutMs: "1e4",
+              },
+            },
+            light: {
+              lookbackDays: "0x0a",
+              limit: "1e2",
+            },
+          },
+        },
+      },
+    });
+
+    // Non-decimal forms fall back to shipped defaults / omit optional fields.
+    expect(resolved.phases.deep.limit).toBe(10);
+    expect(resolved.phases.deep.minRecallCount).toBe(3);
+    expect(resolved.phases.deep.minUniqueQueries).toBe(3);
+    expect(resolved.phases.deep.recencyHalfLifeDays).toBe(14);
+    expect(resolved.phases.deep.maxAgeDays).toBe(30);
+    expect(resolved.phases.deep.maxPromotedSnippetTokens).toBe(160);
+    expect(resolved.phases.deep.execution.maxOutputTokens).toBeUndefined();
+    expect(resolved.phases.deep.execution.timeoutMs).toBeUndefined();
+    expect(resolved.phases.light.lookbackDays).toBe(2);
+    expect(resolved.phases.light.limit).toBe(100);
+  });
+
   it("parses true/false strings while keeping invalid-value defaults local", () => {
     const resolved = resolveMemoryDreamingConfig({
       pluginConfig: {
@@ -171,7 +210,7 @@ describe("memory dreaming host helpers", () => {
     const cfg = {
       agents: {
         list: [
-          { id: "alpha", workspace: "/workspace/shared" },
+          { id: "alpha", default: true, workspace: "/workspace/shared" },
           { id: "beta", workspace: "/workspace/beta" },
           { id: "gamma", workspace: "/workspace/shared" },
         ],
@@ -194,7 +233,7 @@ describe("memory dreaming host helpers", () => {
     const cfg = {
       agents: {
         list: [
-          { id: "agi-ceo", workspace: "/workspace/agi-ceo" },
+          { id: "agi-ceo", default: true, workspace: "/workspace/agi-ceo" },
           { id: "agi-cdo", workspace: "/workspace/agi-cdo" },
         ],
       },
@@ -227,6 +266,7 @@ describe("memory dreaming host helpers", () => {
         defaults: {
           workspace: "/workspace",
         },
+        entries: { main: { default: true } },
       },
     } as OpenClawConfig;
 

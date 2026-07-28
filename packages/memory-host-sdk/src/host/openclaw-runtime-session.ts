@@ -20,6 +20,7 @@ export {
   onSessionTranscriptUpdate,
   parseSqliteSessionFileMarker,
   parseUsageCountedSessionIdFromFileName,
+  readTranscriptContentRevisionSync,
   readTranscriptStatsSync,
   resolveSessionFilePath,
   resolveStorePath,

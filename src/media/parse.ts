@@ -29,7 +29,7 @@ type ParsedMediaOutputSegment =
     };
 
 /** Controls which non-MEDIA syntaxes may be lifted into media attachments. */
-export type SplitMediaFromOutputOptions = {
+type SplitMediaFromOutputOptions = {
   extractMarkdownImages?: boolean;
   extractMediaDirectives?: boolean;
 };

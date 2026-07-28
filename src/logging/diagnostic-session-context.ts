@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../config/paths.js";
 import { loadCronJobsStoreSync, resolveCronJobsStorePath } from "../cron/store.js";
+import { readFileWindowFullySync } from "../infra/file-read.js";
 
 const SESSION_TAIL_BYTES = 64 * 1024;
 const MAX_QUOTED_FIELD_CHARS = 140;
@@ -26,7 +27,7 @@ function quoteLogField(value: string): string {
   return `"${truncated.replace(/["\\]/g, "\\$&")}"`;
 }
 
-export function parseCronRunSessionKey(sessionKey?: string): {
+function parseCronRunSessionKey(sessionKey?: string): {
   agentId?: string;
   cronJobId?: string;
   cronRunId?: string;
@@ -71,7 +72,7 @@ function readTailText(filePath: string): { text: string; truncated: boolean } | 
     const start = Math.max(0, stat.size - length);
     const buffer = Buffer.alloc(length);
     fd = fs.openSync(filePath, "r");
-    const read = fs.readSync(fd, buffer, 0, length, start);
+    const read = readFileWindowFullySync(fd, buffer, start);
     return { text: buffer.subarray(0, read).toString("utf8"), truncated: start > 0 };
   } catch {
     return undefined;
@@ -105,7 +106,7 @@ function textFromContent(content: unknown): string | undefined {
   return texts.length ? texts.join(" ") : undefined;
 }
 
-export function readLastAssistantFromSessionFile(filePath: string | undefined): string | undefined {
+function readLastAssistantFromSessionFile(filePath: string | undefined): string | undefined {
   if (!filePath) {
     return undefined;
   }

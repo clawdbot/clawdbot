@@ -182,7 +182,7 @@ Notes:
   ```bash
   openclaw infer image providers --json
   openclaw infer image generate \
-    --model google/gemini-3.1-flash-image-preview \
+    --model google/gemini-3.1-flash-image \
     --prompt "Minimal flat test image: one blue square on a white background, no text." \
     --output ./openclaw-infer-image-smoke.png \
     --json

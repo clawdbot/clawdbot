@@ -227,7 +227,9 @@ function visibleApprovalBindingMatches(
 ): boolean {
   // Text is only a correlation check. The typed metadata/action binding remains
   // authoritative so transport copy can never choose an approval owner or id.
-  const lines = (text ?? "").split(/\r?\n/);
+  // Strip bold markers (**Exec approval required**, **ID:** …) the prompt
+  // builder emits so the canonical-format match still correlates.
+  const lines = (text ?? "").split(/\r?\n/).map((line) => line.replace(/\*\*/g, ""));
   const kindMatches = lines
     .map((line) => line.match(APPROVAL_KIND_LINE_RE))
     .filter((match): match is RegExpMatchArray => Boolean(match));

@@ -24,9 +24,13 @@ const RETIRED_GEMINI_CHAT_MODELS = [
   "gemini-1.5-flash",
   "gemini-1.5-flash-8b",
   "gemini-1.5-pro",
+  "gemini-2.0-flash",
+  "gemini-2.0-flash-001",
   "gemini-2.0-flash-exp",
   "gemini-2.0-flash-exp-image-generation",
   "gemini-2.0-flash-live-001",
+  "gemini-2.0-flash-lite",
+  "gemini-2.0-flash-lite-001",
   "gemini-2.0-flash-lite-preview",
   "gemini-2.0-flash-lite-preview-02-05",
   "gemini-2.0-flash-preview-image-generation",
@@ -86,7 +90,6 @@ describe("google manifest model catalog", () => {
       ),
     );
 
-    expect(suppressionRefs).not.toContain("google/gemini-2.0-flash");
     expect(suppressionRefs).not.toContain("google/gemini-2.5-flash");
     expect(suppressionRefs).not.toContain("google/gemini-2.5-flash-lite");
     expect(suppressionRefs).not.toContain("google/gemini-2.5-pro");

@@ -11,6 +11,7 @@ import {
   validateWorktreesRestoreParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { createManagedWorktreeOwnerProtection } from "../../agents/worktrees/owner-protection.js";
 import {
   managedWorktrees,
   resolveWorktreeCleanupLimits,
@@ -18,7 +19,6 @@ import {
 } from "../../agents/worktrees/service.js";
 import type { ManagedWorktreeService } from "../../agents/worktrees/service.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
-import { isManagedWorktreeOwnerActive } from "../worktree-owner-activity.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 type WorktreeService = Pick<
@@ -137,7 +137,12 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
         }
       }
       try {
-        respond(true, await service.listRepositoryBranches(params.repoRoot), undefined);
+        const result = params.includeRepositoryStatus
+          ? await service.listRepositoryBranches(params.repoRoot, {
+              includeRepositoryStatus: true,
+            })
+          : await service.listRepositoryBranches(params.repoRoot);
+        respond(true, result, undefined);
       } catch (error) {
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
       }
@@ -148,10 +153,14 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
         return;
       }
       try {
-        const limits = resolveWorktreeCleanupLimits(context.getRuntimeConfig().worktrees);
+        const cfg = context.getRuntimeConfig();
+        const limits = resolveWorktreeCleanupLimits();
         respond(
           true,
-          await service.gc({ limits, isOwnerActive: isManagedWorktreeOwnerActive }),
+          await service.gc({
+            limits,
+            shouldProtectOwner: createManagedWorktreeOwnerProtection(cfg),
+          }),
           undefined,
         );
       } catch (error) {

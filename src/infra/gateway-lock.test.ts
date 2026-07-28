@@ -9,7 +9,12 @@ import { setTimeout as nativeSleep } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { acquireGatewayLock, GatewayLockError, readActiveGatewayLockPort } from "./gateway-lock.js";
+import {
+  acquireGatewayLock,
+  GatewayLockError,
+  readActiveGatewayLockIdentity,
+  readActiveGatewayLockPort,
+} from "./gateway-lock.js";
 
 type GatewayLock = NonNullable<Awaited<ReturnType<typeof acquireGatewayLock>>>;
 type GatewayLockOptions = NonNullable<Parameters<typeof acquireGatewayLock>[0]>;
@@ -279,6 +284,53 @@ describe("gateway lock", () => {
       ).resolves.toBe(48789);
     } finally {
       await lock.release();
+    }
+  });
+
+  it("assigns a new verified owner identity whenever the gateway lock is reacquired", async () => {
+    const env = await makeEnv();
+    const options = {
+      platform: "darwin" as const,
+      port: 48789,
+      readProcessCmdline: () => ["openclaw-gateway"],
+    };
+    const firstLock = expectGatewayLock(await acquireForTest(env, options));
+    const firstConfigPayload = JSON.parse(await fs.readFile(firstLock.lockPath, "utf8")) as {
+      ownerId?: string;
+    };
+    const firstStatePayload = JSON.parse(await fs.readFile(firstLock.stateLockPath, "utf8")) as {
+      ownerId?: string;
+    };
+    const firstIdentity = await readActiveGatewayLockIdentity({
+      env,
+      lockDir: resolveTestLockDir(),
+      platform: "darwin",
+      readProcessCmdline: options.readProcessCmdline,
+    });
+    expect(firstConfigPayload.ownerId).toBe(firstStatePayload.ownerId);
+    await firstLock.release();
+
+    const secondLock = expectGatewayLock(await acquireForTest(env, options));
+    try {
+      const secondIdentity = await readActiveGatewayLockIdentity({
+        env,
+        lockDir: resolveTestLockDir(),
+        platform: "darwin",
+        readProcessCmdline: options.readProcessCmdline,
+      });
+      expect(firstIdentity).toMatchObject({
+        pid: process.pid,
+        ownerId: expect.any(String),
+        port: 48789,
+      });
+      expect(secondIdentity).toMatchObject({
+        pid: process.pid,
+        ownerId: expect.any(String),
+        port: 48789,
+      });
+      expect(secondIdentity?.ownerId).not.toBe(firstIdentity?.ownerId);
+    } finally {
+      await secondLock.release();
     }
   });
 

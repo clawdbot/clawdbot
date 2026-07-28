@@ -5,12 +5,11 @@
  */
 import crypto from "node:crypto";
 import { getCliSessionBinding } from "../../config/sessions/cli-session-binding.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import { removeCronRunContinuationSessionIfIdle } from "../../tasks/cron-run-continuation-cleanup.js";
 import {
@@ -27,11 +26,8 @@ import {
   resolveRequiredCompletionDeliveryFailureTerminalResult,
   type RequiredCompletionTerminalResult,
 } from "../../tasks/task-completion-contract.js";
-import { normalizeDeliveryContext, type DeliveryContext } from "../../utils/delivery-context.js";
-import {
-  INTERNAL_MESSAGE_CHANNEL,
-  isDeliverableMessageChannel,
-} from "../../utils/message-channel.js";
+import type { DeliveryContext } from "../../utils/delivery-context.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import {
   mediaUrlsFromGeneratedAttachments,
   type AgentGeneratedAttachment,
@@ -42,19 +38,12 @@ import {
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
 } from "../subagent-announce-delivery.js";
-import type { SubagentAnnounceDeliveryFailureReason } from "../subagent-announce-dispatch.js";
 import { resolveAnnounceOrigin } from "../subagent-announce-origin.js";
 
 const log = createSubsystemLogger("agents/tools/media-generate-background-shared");
 const MEDIA_GENERATION_TASK_KEEPALIVE_INTERVAL_MS = 60_000;
 const MEDIA_GENERATION_COMPLETION_HANDOFF_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000] as const;
 const MEDIA_GENERATION_COMPLETION_HANDOFF_TIMEOUT_MS = 120_000;
-const MEDIA_DIRECT_FALLBACK_DELIVERY_REASONS = new Set<SubagentAnnounceDeliveryFailureReason>([
-  "completion_handoff_unavailable",
-  "generated_media_missing",
-  "message_tool_delivery_missing",
-  "visible_reply_missing",
-]);
 
 /** Handle for a detached media generation task registered in the task ledger. */
 export type MediaGenerationTaskHandle = {
@@ -81,7 +70,7 @@ export function shouldDetachMediaGenerationTask(sessionKey: string | undefined):
     return true;
   }
   try {
-    const entry = loadSessionEntry({
+    const entry = loadSessionEntryReadOnly({
       sessionKey: normalizedSessionKey,
       clone: false,
       hydrateSkillPromptRefs: false,
@@ -522,15 +511,6 @@ export function scheduleMediaGenerationTaskCompletion<
           });
         }
       } catch (wakeError) {
-        if (params.handle) {
-          await tryDeliverMediaGenerationDirect({
-            config: params.config,
-            handle: params.handle,
-            toolName: params.toolName,
-            content: `${params.toolName} failed: ${formatErrorMessage(error)}`,
-            idempotencySuffix: "error",
-          });
-        }
         params.onWakeFailure(`${params.toolName} failure wake failed`, {
           taskId: params.handle?.taskId,
           runId: params.handle?.runId,
@@ -585,26 +565,6 @@ export function scheduleMediaGenerationTaskCompletion<
       terminalResult = resolveRequiredCompletionDeliveryFailureTerminalResult(
         formatErrorMessage(error),
       );
-      if (params.handle) {
-        const mediaUrls = Array.from(
-          new Set([
-            ...(executed.mediaUrls ?? []),
-            ...mediaUrlsFromGeneratedAttachments(executed.attachments),
-          ]),
-        );
-        // If the wake agent path failed after successful generation, try direct channel delivery.
-        const delivered = await tryDeliverMediaGenerationDirect({
-          config: params.config,
-          handle: params.handle,
-          toolName: params.toolName,
-          content: `${params.toolName} completed.`,
-          mediaUrls,
-          idempotencySuffix: "blocked",
-        });
-        if (delivered) {
-          terminalResult = undefined;
-        }
-      }
       params.onWakeFailure(
         `${params.toolName} completion wake failed after successful generation`,
         {
@@ -702,6 +662,7 @@ async function wakeMediaGenerationTaskCompletion(params: {
     sourceTool: params.toolName,
     requesterIsSubagent: false,
     expectsCompletionMessage: true,
+    durableGeneratedMediaHandoff: true,
     bestEffortDeliver: true,
     directIdempotencyKey: announceId,
   });
@@ -722,39 +683,6 @@ async function wakeMediaGenerationTaskCompletion(params: {
     // terminal acknowledgment failed, so settle without risking a duplicate.
     return { status: "delivered" };
   }
-  const canTryDirectCompletionFallback =
-    delivery.reason != null && MEDIA_DIRECT_FALLBACK_DELIVERY_REASONS.has(delivery.reason);
-  if (params.status === "ok" && canTryDirectCompletionFallback) {
-    // Direct fallback is only for successful media where missing attachments would lose the result.
-    const label = `${params.completionLabel[0]?.toUpperCase() ?? "M"}${params.completionLabel.slice(1)}`;
-    const delivered = await tryDeliverMediaGenerationDirect({
-      config: params.config,
-      handle: params.handle,
-      toolName: params.toolName,
-      content:
-        mediaUrls.length > 0
-          ? `${label} generation completed.`
-          : `${label} generation completed, but the generated media could not be attached here.`,
-      mediaUrls,
-      idempotencySuffix: "ok",
-    });
-    if (delivered) {
-      return { status: "delivered" };
-    }
-  }
-  if (params.status === "error") {
-    const label = `${params.completionLabel[0]?.toUpperCase() ?? "M"}${params.completionLabel.slice(1)}`;
-    const delivered = await tryDeliverMediaGenerationDirect({
-      config: params.config,
-      handle: params.handle,
-      toolName: params.toolName,
-      content: `${label} generation failed: ${params.result}`,
-      idempotencySuffix: "error",
-    });
-    if (delivered) {
-      return { status: "delivered" };
-    }
-  }
   if (delivery.error) {
     log.error("Media generation completion wake failed; requester session was not woken", {
       taskId: params.handle.taskId,
@@ -764,51 +692,6 @@ async function wakeMediaGenerationTaskCompletion(params: {
     });
   }
   return { status: "permanent_failure" };
-}
-
-async function tryDeliverMediaGenerationDirect(params: {
-  config?: OpenClawConfig;
-  handle: MediaGenerationTaskHandle;
-  toolName: string;
-  content: string;
-  mediaUrls?: string[];
-  idempotencySuffix: string;
-}): Promise<boolean> {
-  const origin = normalizeDeliveryContext(params.handle.requesterOrigin);
-  if (!origin?.channel || !origin.to || !isDeliverableMessageChannel(origin.channel)) {
-    return false;
-  }
-  const agentId = resolveAgentIdFromSessionKey(params.handle.requesterSessionKey);
-  const idempotencyKey = `${params.toolName}:${params.handle.taskId}:${params.idempotencySuffix}:direct`;
-  try {
-    const { sendMessage } = await import("../../tasks/task-registry-delivery-runtime.js");
-    await sendMessage({
-      cfg: params.config,
-      channel: origin.channel,
-      to: origin.to,
-      accountId: origin.accountId,
-      threadId: origin.threadId,
-      content: params.content,
-      mediaUrls: params.mediaUrls,
-      requesterSessionKey: params.handle.requesterSessionKey,
-      agentId,
-      idempotencyKey,
-      mirror: {
-        sessionKey: params.handle.requesterSessionKey,
-        agentId,
-        idempotencyKey,
-      },
-    });
-    return true;
-  } catch (error) {
-    log.warn("Direct media generation failure delivery failed; falling back to agent wake", {
-      taskId: params.handle.taskId,
-      runId: params.handle.runId,
-      toolName: params.toolName,
-      error,
-    });
-    return false;
-  }
 }
 
 /** Creates a tool-specific detached media generation lifecycle facade. */

@@ -251,6 +251,23 @@ export function buildBuiltinChatCommands(
       ],
     }),
     defineChatCommand({
+      key: "loop",
+      nativeName: "loop",
+      description: "Loop a prompt: /loop [interval] <prompt> | /loop status | /loop stop [name]",
+      textAlias: "/loop",
+      category: "tools",
+      tier: "standard",
+      args: [
+        {
+          name: "spec",
+          description: "[interval] prompt, or status/stop",
+          type: "string",
+          required: false,
+          captureRemaining: true,
+        },
+      ],
+    }),
+    defineChatCommand({
       key: "status",
       nativeName: "status",
       description: "Show current status.",
@@ -302,7 +319,7 @@ export function buildBuiltinChatCommands(
     defineChatCommand({
       key: "login",
       nativeName: "login",
-      nativeProviders: ["telegram"],
+      nativeProviders: ["discord", "slack", "telegram"],
       description: "Pair Codex login.",
       textAlias: "/login",
       category: "management",
@@ -317,9 +334,9 @@ export function buildBuiltinChatCommands(
       ],
     }),
     defineChatCommand({
-      key: "crestodian",
-      description: "Run the Crestodian setup and repair helper.",
-      textAlias: "/crestodian",
+      key: "openclaw",
+      description: "Run the OpenClaw setup and repair helper.",
+      textAlias: "/openclaw",
       acceptsArgs: true,
       scope: "text",
       category: "management",
@@ -373,7 +390,7 @@ export function buildBuiltinChatCommands(
     defineChatCommand({
       key: "export-session",
       nativeName: "export-session",
-      description: "Export current session to HTML file with full system prompt.",
+      description: "Export current session to an owner-only HTML file in the workspace.",
       textAliases: ["/export-session", "/export"],
       acceptsArgs: true,
       category: "status",
@@ -381,7 +398,7 @@ export function buildBuiltinChatCommands(
       args: [
         {
           name: "path",
-          description: "Output path (default: workspace)",
+          description: "Output path inside workspace (default: workspace)",
           type: "string",
           required: false,
         },
@@ -1059,3 +1076,4 @@ export function buildBuiltinChatCommands(
   assertCommandRegistry(commands);
   return commands;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

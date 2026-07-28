@@ -46,8 +46,3 @@ export function resolveWhatsAppGroupSessionRoute(route: ResolvedAgentRoute): Res
     sessionKey,
   };
 }
-
-export const testing = {
-  resolveWhatsAppGroupAccountThreadId,
-  resolveWhatsAppLegacyGroupSessionKey,
-};

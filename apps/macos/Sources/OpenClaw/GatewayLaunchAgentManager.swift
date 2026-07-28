@@ -1,6 +1,11 @@
 import Foundation
 
 enum GatewayLaunchAgentManager {
+    struct LoadedGatewayState: Equatable, Sendable {
+        let runningPID: Int32?
+        let reusablePID: Int32?
+    }
+
     private static let logger = Logger(subsystem: "ai.openclaw", category: "gateway.launchd")
     private static let disableLaunchAgentMarker = ".openclaw/disable-launchagent"
 
@@ -58,9 +63,34 @@ enum GatewayLaunchAgentManager {
         return nil
     }
 
-    static func isLoaded() async -> Bool {
-        guard let loaded = await self.readDaemonLoaded() else { return false }
-        return loaded
+    static func reusableLoadedGatewayPID(port: Int) async -> Int32? {
+        await self.loadedGatewayState(port: port).reusablePID
+    }
+
+    static func loadedGatewayState(port: Int) async -> LoadedGatewayState {
+        guard let service = await self.readDaemonService() else {
+            return LoadedGatewayState(runningPID: nil, reusablePID: nil)
+        }
+        let runningPID = self.runningGatewayPID(from: service)
+        let configAudit = service["configAudit"] as? [String: Any]
+        let reusablePID: Int32? = if self.configAuditAllowsReuse(configAudit),
+                                     self.gatewayPort(from: service) == port
+        {
+            runningPID
+        } else {
+            nil
+        }
+        return LoadedGatewayState(runningPID: runningPID, reusablePID: reusablePID)
+    }
+
+    private static func configAuditAllowsReuse(_ audit: [String: Any]?) -> Bool {
+        if audit?["ok"] as? Bool == true {
+            return true
+        }
+        guard let issues = audit?["issues"] as? [[String: Any]], !issues.isEmpty else { return false }
+        // The installer may require an explicit Node bin directory. Its PATH hygiene advisory
+        // must not make a healthy Gateway restart into the same advisory on every app launch.
+        return issues.allSatisfy { $0["code"] as? String == "gateway-path-nonminimal" }
     }
 
     static func runningGatewayPID() async -> Int32? {
@@ -70,7 +100,7 @@ enum GatewayLaunchAgentManager {
 
     static func set(enabled: Bool, bundlePath: String, port: Int) async -> String? {
         _ = bundlePath
-        guard !CommandResolver.connectionModeIsRemote() else {
+        if enabled, CommandResolver.connectionModeIsRemote() {
             self.logger.info("launchd change skipped (remote mode)")
             return nil
         }
@@ -96,7 +126,11 @@ enum GatewayLaunchAgentManager {
     }
 
     static func kickstart() async -> String? {
-        await self.runDaemonCommand(["restart"], timeout: 20)
+        if self.isLaunchAgentWriteDisabled() {
+            self.logger.info("launchd restart skipped (disable marker set)")
+            return nil
+        }
+        return await self.runDaemonCommand(["restart"], timeout: 20)
     }
 
     static func launchdConfigSnapshot() -> LaunchAgentPlistSnapshot? {
@@ -106,6 +140,13 @@ enum GatewayLaunchAgentManager {
             generatedEnvironmentFileURL: directory.appendingPathComponent("\(gatewayLaunchdLabel).env"),
             generatedEnvironmentWrapperURL: directory.appendingPathComponent(
                 "\(gatewayLaunchdLabel)-env-wrapper.sh"))
+    }
+
+    /// Empty means no Gateway LaunchAgent. Nil preserves an unreadable
+    /// ownership record so update callers fail closed instead of consuming it.
+    static func launchdProgramArguments() -> [String]? {
+        guard FileManager.default.fileExists(atPath: self.plistURL.path) else { return [] }
+        return self.launchdConfigSnapshot()?.programArguments
     }
 
     static func launchdGatewayLogPath() -> String {
@@ -125,10 +166,6 @@ enum GatewayLaunchAgentManager {
 }
 
 extension GatewayLaunchAgentManager {
-    private static func readDaemonLoaded() async -> Bool? {
-        await self.readDaemonService()?["loaded"] as? Bool
-    }
-
     private static func readDaemonService() async -> [String: Any]? {
         let result = await self.runDaemonCommandResult(
             ["status", "--json", "--no-probe"],
@@ -142,6 +179,33 @@ extension GatewayLaunchAgentManager {
             return nil
         }
         return service
+    }
+
+    private static func gatewayPort(from service: [String: Any]) -> Int? {
+        guard let command = service["command"] as? [String: Any] else { return nil }
+        if let arguments = command["programArguments"] as? [String] {
+            for (index, argument) in arguments.enumerated() {
+                if argument == "--port" {
+                    guard arguments.indices.contains(index + 1) else { return nil }
+                    return self.validGatewayPort(arguments[index + 1])
+                }
+                if argument.hasPrefix("--port=") {
+                    return self.validGatewayPort(String(argument.dropFirst("--port=".count)))
+                }
+            }
+        }
+        let environment = command["environment"] as? [String: Any]
+        return self.validGatewayPort(environment?["OPENCLAW_GATEWAY_PORT"] as? String)
+    }
+
+    private static func validGatewayPort(_ raw: String?) -> Int? {
+        guard let raw,
+              let port = Int(raw.trimmingCharacters(in: .whitespacesAndNewlines)),
+              (1...65535).contains(port)
+        else {
+            return nil
+        }
+        return port
     }
 
     private static func runningGatewayPID(from service: [String: Any]) -> Int32? {
@@ -186,9 +250,21 @@ extension GatewayLaunchAgentManager {
         #if DEBUG
         if self.testingInterceptDaemonCommands {
             self.testingDaemonCommandCalls.append(args)
+            if self.testingDaemonCommandDelayNanoseconds > 0 {
+                try? await Task.sleep(nanoseconds: self.testingDaemonCommandDelayNanoseconds)
+            }
+            let payload = if args.first == "status" {
+                if self.testingDaemonStatusPayloads.isEmpty {
+                    self.testingDaemonStatusPayload ?? "{\"ok\":true}"
+                } else {
+                    self.testingDaemonStatusPayloads.removeFirst()
+                }
+            } else {
+                "{\"ok\":true}"
+            }
             return CommandResult(
                 success: true,
-                payload: Data("{\"ok\":true}".utf8),
+                payload: Data(payload.utf8),
                 message: nil)
         }
         #endif
@@ -240,6 +316,9 @@ extension GatewayLaunchAgentManager {
     private nonisolated(unsafe) static var testingDisableLaunchAgentMarkerURL: URL?
     private nonisolated(unsafe) static var testingInterceptDaemonCommands = false
     private nonisolated(unsafe) static var testingDaemonCommandCalls: [[String]] = []
+    private nonisolated(unsafe) static var testingDaemonStatusPayload: String?
+    private nonisolated(unsafe) static var testingDaemonStatusPayloads: [String] = []
+    private nonisolated(unsafe) static var testingDaemonCommandDelayNanoseconds: UInt64 = 0
 
     static func setTestingDisableLaunchAgentMarkerURL(_ url: URL?) {
         self.testingDisableLaunchAgentMarkerURL = url
@@ -247,6 +326,20 @@ extension GatewayLaunchAgentManager {
 
     static func setTestingInterceptDaemonCommands(_ intercept: Bool) {
         self.testingInterceptDaemonCommands = intercept
+    }
+
+    static func setTestingDaemonStatusPayload(_ payload: String?) {
+        self.testingDaemonStatusPayload = payload
+        self.testingDaemonStatusPayloads = []
+    }
+
+    static func setTestingDaemonStatusPayloads(_ payloads: [String]) {
+        self.testingDaemonStatusPayload = nil
+        self.testingDaemonStatusPayloads = payloads
+    }
+
+    static func setTestingDaemonCommandDelayNanoseconds(_ nanoseconds: UInt64) {
+        self.testingDaemonCommandDelayNanoseconds = nanoseconds
     }
 
     static func clearTestingDaemonCommandCalls() {
@@ -265,6 +358,11 @@ extension GatewayLaunchAgentManager {
             return nil
         }
         return self.runningGatewayPID(from: service)
+    }
+
+    static func _testLaunchdProgramArguments(plistURL: URL) -> [String]? {
+        guard FileManager.default.fileExists(atPath: plistURL.path) else { return [] }
+        return LaunchAgentPlist.snapshot(url: plistURL)?.programArguments
     }
     #endif
 }

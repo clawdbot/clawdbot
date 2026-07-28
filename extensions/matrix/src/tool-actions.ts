@@ -310,7 +310,7 @@ export async function handleMatrixAction(
         const after = readStringParam(params, "after");
         const threadId = readStringParam(params, "threadId");
         const result = await withReadTarget(roomId, async (target) => {
-          return await readMatrixMessages(target.roomId, {
+          const messages = await readMatrixMessages(target.roomId, {
             limit: limit ?? undefined,
             before: before ?? undefined,
             after: after ?? undefined,
@@ -318,6 +318,11 @@ export async function handleMatrixAction(
             ...clientOpts,
             client: target.client,
           });
+          return {
+            ...messages,
+            roomId: target.roomId,
+            ...(threadId ? { threadId } : {}),
+          };
         });
         return jsonResult({ ok: true, ...result });
       }

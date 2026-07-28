@@ -219,7 +219,13 @@
   }
 }
 
-/* Commit hash + copy button cluster inside the build facts grid. */
+/* About labels are short, so the shared 120px settings label track leaves an
+   oversized gutter here. Keep the values close while preserving room to wrap. */
+.about-build-grid {
+  grid-template-columns: max-content minmax(0, 1fr);
+}
+
+/* Commit hash, age, and copy button cluster inside the build facts grid. */
 .about-commit {
   display: inline-flex;
   align-items: center;
@@ -231,6 +237,59 @@
   min-width: 0;
   overflow-wrap: anywhere;
   user-select: all;
+}
+
+/* Borderless inline copy affordance; kept tiny so the hash stays the focus. */
+.about-commit__copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    opacity var(--duration-fast, 120ms) ease,
+    color var(--duration-fast, 120ms) ease,
+    background var(--duration-fast, 120ms) ease;
+}
+
+.about-commit__copy:hover,
+.about-commit__copy:focus-visible {
+  color: var(--text-strong);
+  background: var(--bg-hover);
+}
+
+.about-commit__copy svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Hover-revealed only where hover exists; touch/keyboard keep it visible
+   (focus-within covers tabbing, coarse pointers never match the media query). */
+@media (hover: hover) and (pointer: fine) {
+  .about-commit .about-commit__copy {
+    opacity: 0;
+  }
+
+  .about-commit:hover .about-commit__copy,
+  .about-commit:focus-within .about-commit__copy {
+    opacity: 1;
+  }
+}
+
+.about-commit__age {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs, 12px);
+  white-space: nowrap;
 }
 
 /* Screen-reader-only live region for copy feedback (no shared utility yet). */

@@ -1194,3 +1194,4 @@ describe("skill workshop proposals", () => {
     ).rejects.toThrow();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -10,13 +10,12 @@ import { decodeCustomIdComponent, encodeCustomIdComponent } from "../custom-id-c
 import type { ComponentData } from "../internal/discord.js";
 
 export const DISCORD_MODEL_PICKER_CUSTOM_ID_KEY = "mdlpk";
-export const DISCORD_CUSTOM_ID_MAX_CHARS = 100;
+const DISCORD_CUSTOM_ID_MAX_CHARS = 100;
 
 const DISCORD_COMPONENT_MAX_SELECT_OPTIONS = 25;
 
-export const DISCORD_MODEL_PICKER_PROVIDER_PAGE_SIZE = DISCORD_COMPONENT_MAX_SELECT_OPTIONS;
-export const DISCORD_MODEL_PICKER_PROVIDER_SINGLE_PAGE_MAX = DISCORD_COMPONENT_MAX_SELECT_OPTIONS;
-export const DISCORD_MODEL_PICKER_MODEL_PAGE_SIZE = DISCORD_COMPONENT_MAX_SELECT_OPTIONS;
+const DISCORD_MODEL_PICKER_PROVIDER_PAGE_SIZE = DISCORD_COMPONENT_MAX_SELECT_OPTIONS;
+const DISCORD_MODEL_PICKER_MODEL_PAGE_SIZE = DISCORD_COMPONENT_MAX_SELECT_OPTIONS;
 
 function compareBucketItems(left: string, right: string): number {
   const normalized = left.toLowerCase().localeCompare(right.toLowerCase());
@@ -76,7 +75,7 @@ export type DiscordModelPickerState = {
 const DISCORD_MODEL_PICKER_BUCKET_THRESHOLD = DISCORD_COMPONENT_MAX_SELECT_OPTIONS;
 
 /** Target items per alpha bucket. Discord caps selects at 25 options. */
-export const DISCORD_MODEL_PICKER_BUCKET_TARGET_SIZE = 20;
+const DISCORD_MODEL_PICKER_BUCKET_TARGET_SIZE = 20;
 const DISCORD_MODEL_PICKER_MODEL_TOKEN_PATTERN = /^[A-Za-z0-9_-]{8}$/u;
 
 export function createDiscordModelPickerModelToken(provider: string, model: string): string {
@@ -292,31 +291,6 @@ export function buildDiscordModelPickerCustomId(params: {
   return customId;
 }
 
-export function parseDiscordModelPickerCustomId(customId: string): DiscordModelPickerState | null {
-  const trimmed = customId.trim();
-  if (!trimmed.startsWith(`${DISCORD_MODEL_PICKER_CUSTOM_ID_KEY}:`)) {
-    return null;
-  }
-
-  const rawParts = trimmed.split(";");
-  const data: Record<string, string> = {};
-  for (const part of rawParts) {
-    const equalsIndex = part.indexOf("=");
-    if (equalsIndex <= 0) {
-      continue;
-    }
-    const rawKey = part.slice(0, equalsIndex);
-    const rawValue = part.slice(equalsIndex + 1);
-    const key = rawKey.includes(":") ? rawKey.split(":").slice(1).join(":") : rawKey;
-    if (!key) {
-      continue;
-    }
-    data[key] = rawValue;
-  }
-
-  return parseDiscordModelPickerData(data);
-}
-
 export function parseDiscordModelPickerData(data: ComponentData): DiscordModelPickerState | null {
   if (!data || typeof data !== "object") {
     return null;
@@ -381,7 +355,7 @@ export function parseDiscordModelPickerData(data: ComponentData): DiscordModelPi
  * the function falls back to count-based numeric chunks so the user still
  * gets a finite-cardinality picker.
  */
-export function computeAlphaBuckets(sortedItems: string[]): DiscordModelPickerBucket[] {
+function computeAlphaBuckets(sortedItems: string[]): DiscordModelPickerBucket[] {
   if (sortedItems.length === 0) {
     return [];
   }

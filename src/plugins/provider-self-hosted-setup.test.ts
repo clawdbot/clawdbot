@@ -163,7 +163,33 @@ describe("discoverOpenAICompatibleLocalModels", () => {
 
     expect(models).toEqual([]);
     expect(loggerWarnMock).toHaveBeenCalledWith(
-      expect.stringContaining("local llama.cpp discovery response is not valid JSON"),
+      expect.stringContaining("local llama.cpp discovery: malformed JSON response"),
+    );
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("logs a warning when discovery JSON contains invalid UTF-8 bytes", async () => {
+    const release = vi.fn(async () => undefined);
+    const body = new Uint8Array([
+      ...new TextEncoder().encode('{"data":[{"id":"qwen3-'),
+      0xff,
+      ...new TextEncoder().encode('"}]}'),
+    ]);
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(body, { status: 200 }),
+      finalUrl: "http://127.0.0.1:8080/v1/models",
+      release,
+    });
+
+    const models = await discoverOpenAICompatibleLocalModels({
+      baseUrl: "http://127.0.0.1:8080/v1",
+      label: "local llama.cpp",
+      env: {},
+    });
+
+    expect(models).toEqual([]);
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("local llama.cpp discovery: malformed JSON response"),
     );
     expect(release).toHaveBeenCalledOnce();
   });

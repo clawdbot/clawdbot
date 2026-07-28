@@ -115,8 +115,8 @@ describe("Hermes migration config mapping", () => {
         enabled: false,
         command: "npx",
         args: ["-y", "mcp-server-time"],
-        timeout: 45,
-        connectTimeout: 10,
+        connectionTimeoutMs: 10_000,
+        requestTimeoutMs: 45_000,
         supportsParallelToolCalls: true,
       },
     });
@@ -738,6 +738,14 @@ describe("Hermes migration config mapping", () => {
       expectedApi: "openai-completions",
       expectedBaseUrl: "https://dashscope-proxy.example.test/compatible-mode/v1",
     },
+    {
+      sourceProvider: "qwen-oauth",
+      envName: "HERMES_QWEN_BASE_URL",
+      envValue: "https://qwen-proxy.example.test/v1",
+      targetProvider: "qwen",
+      expectedApi: "openai-completions",
+      expectedBaseUrl: "https://qwen-proxy.example.test/v1",
+    },
   ])(
     "imports $envName as the selected $sourceProvider endpoint",
     async ({ sourceProvider, envName, envValue, targetProvider, expectedApi, expectedBaseUrl }) => {
@@ -1154,3 +1162,4 @@ describe("Hermes migration config mapping", () => {
     ).toBe("beta");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

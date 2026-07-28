@@ -10,8 +10,8 @@ import {
   statRequiredDirectory,
 } from "./path-errors.js";
 
-export const DIR_LIST_DEFAULT_MAX_ENTRIES = 200;
-export const DIR_LIST_HARD_MAX_ENTRIES = 5000;
+const DIR_LIST_DEFAULT_MAX_ENTRIES = 200;
+const DIR_LIST_HARD_MAX_ENTRIES = 5000;
 
 type DirListParams = {
   path?: unknown;

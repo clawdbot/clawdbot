@@ -172,8 +172,10 @@ function hasTrustedOpenClawRootIndicator(params: {
   packageJson: PluginSdkPackageJson;
 }): boolean {
   const packageExports = params.packageJson.exports ?? {};
-  const hasPluginSdkRootExport = Object.hasOwn(packageExports, "./plugin-sdk");
-  if (!hasPluginSdkRootExport) {
+  const hasPluginSdkSubpathExport = Object.keys(packageExports).some((key) =>
+    key.startsWith("./plugin-sdk/"),
+  );
+  if (!hasPluginSdkSubpathExport) {
     return false;
   }
   const hasCliEntryExport = Object.hasOwn(packageExports, "./cli-entry");
@@ -400,80 +402,6 @@ function resolvePluginSdkAliasCandidateOrder(params: {
   return isDistRuntime || params.isProduction ? ["dist", "src"] : ["src", "dist"];
 }
 
-function listPluginSdkAliasCandidates(params: {
-  srcFile: string;
-  distFile: string;
-  modulePath: string;
-  argv1?: string;
-  cwd?: string;
-  moduleUrl?: string;
-  devSourceRoot?: string | null;
-  pluginSdkResolution?: PluginSdkResolutionPreference;
-}) {
-  const orderedKinds = resolvePluginSdkAliasCandidateOrder({
-    modulePath: params.modulePath,
-    isProduction: process.env.NODE_ENV === "production",
-    pluginSdkResolution: params.pluginSdkResolution,
-  });
-  const packageRoot = resolveLoaderPluginSdkPackageRoot(params);
-  if (packageRoot) {
-    const candidateMap = {
-      src: path.join(packageRoot, "src", "plugin-sdk", params.srcFile),
-      dist: path.join(packageRoot, "dist", "plugin-sdk", params.distFile),
-    } as const;
-    return orderedKinds.map((kind) => candidateMap[kind]);
-  }
-  let cursor = path.dirname(params.modulePath);
-  const candidates: string[] = [];
-  for (let i = 0; i < 6; i += 1) {
-    const candidateMap = {
-      src: path.join(cursor, "src", "plugin-sdk", params.srcFile),
-      dist: path.join(cursor, "dist", "plugin-sdk", params.distFile),
-    } as const;
-    for (const kind of orderedKinds) {
-      candidates.push(candidateMap[kind]);
-    }
-    const parent = path.dirname(cursor);
-    if (parent === cursor) {
-      break;
-    }
-    cursor = parent;
-  }
-  return candidates;
-}
-
-function resolvePluginSdkAliasFile(params: {
-  srcFile: string;
-  distFile: string;
-  modulePath?: string;
-  argv1?: string;
-  cwd?: string;
-  moduleUrl?: string;
-  devSourceRoot?: string | null;
-  pluginSdkResolution?: PluginSdkResolutionPreference;
-}): string | null {
-  try {
-    const modulePath = resolveLoaderModulePath(params);
-    for (const candidate of listPluginSdkAliasCandidates({
-      srcFile: params.srcFile,
-      distFile: params.distFile,
-      modulePath,
-      argv1: params.argv1,
-      cwd: params.cwd,
-      moduleUrl: params.moduleUrl,
-      devSourceRoot: params.devSourceRoot,
-      pluginSdkResolution: params.pluginSdkResolution,
-    })) {
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-    }
-  } catch {
-    // ignore
-  }
-  return null;
-}
-
 const MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES = 512;
 const cachedPluginSdkExportedSubpaths = new PluginLruCache<string[]>(
   MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
@@ -485,9 +413,33 @@ const cachedBundledPluginPublicSurfaceAliasMaps = new PluginLruCache<Record<stri
   MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
 );
 const PLUGIN_SDK_PACKAGE_NAMES = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"] as const;
-const CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH = "codex-native-task-runtime";
 const CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH = "codex-mcp-projection";
 const OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH = "ssrf-runtime-internal";
+const PRIVATE_QA_ONLY_PLUGIN_SDK_SUBPATHS = new Set([
+  "agent-runtime-test-contracts",
+  "channel-contract-testing",
+  "channel-target-testing",
+  "channel-test-helpers",
+  "plugin-test-api",
+  "plugin-test-contracts",
+  "plugin-state-test-runtime",
+  "plugin-test-runtime",
+  "provider-http-test-mocks",
+  "provider-test-contracts",
+  "qa-channel",
+  "qa-channel-protocol",
+  "qa-lab",
+  "qa-runtime",
+  "reply-payload-testing",
+  "sqlite-runtime-testing",
+  "test-env",
+  "test-fixtures",
+  "test-live",
+  "test-live-auth",
+  "test-media-generation",
+  "test-media-understanding",
+  "test-node-mocks",
+]);
 type PrivatePluginSdkSubpathOwner = {
   bundledPluginId: string;
   officialInstalledPackageName?: string;
@@ -499,10 +451,7 @@ const PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS: readonly PrivatePluginSdkSubpathOwner[]
     bundledPluginId: "codex",
     officialInstalledPackageName: "@openclaw/codex",
     allowPrivateQaCli: true,
-    subpaths: [
-      CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH,
-      CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH,
-    ],
+    subpaths: [CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH],
   },
   {
     bundledPluginId: "ollama",
@@ -529,477 +478,104 @@ const JS_STATIC_RELATIVE_DEPENDENCY_PATTERN =
 // Jiti-loaded plugin code runs outside the Vitest/tsgo resolver, so every
 // workspace package import reachable from plugin SDK barrels needs an explicit
 // source/dist alias here to keep source checkouts and packaged builds aligned.
-const WORKSPACE_PACKAGE_ALIAS_ENTRIES: WorkspacePackageAliasEntry[] = [
-  {
-    packageName: "@openclaw/gateway-client",
-    packageDir: "gateway-client",
-    subpath: "",
-    srcFile: "index.ts",
-    distFile: "index.mjs",
-  },
-  {
-    packageName: "@openclaw/gateway-client",
-    packageDir: "gateway-client",
-    subpath: "readiness",
-    srcFile: "readiness.ts",
-    distFile: "readiness.mjs",
-  },
-  {
-    packageName: "@openclaw/gateway-client",
-    packageDir: "gateway-client",
-    subpath: "timeouts",
-    srcFile: "timeouts.ts",
-    distFile: "timeouts.mjs",
-  },
-  {
-    packageName: "@openclaw/gateway-protocol",
-    packageDir: "gateway-protocol",
-    subpath: "",
-    srcFile: "index.ts",
-    distFile: "index.mjs",
-  },
-  {
-    packageName: "@openclaw/gateway-protocol",
-    packageDir: "gateway-protocol",
-    subpath: "client-info",
-    srcFile: "client-info.ts",
-    distFile: "client-info.mjs",
-  },
-  {
-    packageName: "@openclaw/gateway-protocol",
-    packageDir: "gateway-protocol",
-    subpath: "connect-error-details",
-    srcFile: "connect-error-details.ts",
-    distFile: "connect-error-details.mjs",
-  },
-  {
-    packageName: "@openclaw/gateway-protocol",
-    packageDir: "gateway-protocol",
-    subpath: "frame-guards",
-    srcFile: "frame-guards.ts",
-    distFile: "frame-guards.mjs",
-  },
-  {
-    packageName: "@openclaw/gateway-protocol",
-    packageDir: "gateway-protocol",
-    subpath: "schema",
-    srcFile: "schema.ts",
-    distFile: "schema.mjs",
-  },
-  {
-    packageName: "@openclaw/gateway-protocol",
-    packageDir: "gateway-protocol",
-    subpath: "startup-unavailable",
-    srcFile: "startup-unavailable.ts",
-    distFile: "startup-unavailable.mjs",
-  },
-  {
-    packageName: "@openclaw/gateway-protocol",
-    packageDir: "gateway-protocol",
-    subpath: "version",
-    srcFile: "version.ts",
-    distFile: "version.mjs",
-  },
-  {
-    packageName: "@openclaw/markdown-core",
-    packageDir: "markdown-core",
-    subpath: "",
-    srcFile: "index.ts",
-    distFile: "index.mjs",
-  },
-  {
-    packageName: "@openclaw/markdown-core",
-    packageDir: "markdown-core",
-    subpath: "code-spans",
-    srcFile: "code-spans.ts",
-    distFile: "code-spans.mjs",
-  },
-  {
-    packageName: "@openclaw/markdown-core",
-    packageDir: "markdown-core",
-    subpath: "fences",
-    srcFile: "fences.ts",
-    distFile: "fences.mjs",
-  },
-  {
-    packageName: "@openclaw/markdown-core",
-    packageDir: "markdown-core",
-    subpath: "frontmatter",
-    srcFile: "frontmatter.ts",
-    distFile: "frontmatter.mjs",
-  },
-  {
-    packageName: "@openclaw/markdown-core",
-    packageDir: "markdown-core",
-    subpath: "ir",
-    srcFile: "ir.ts",
-    distFile: "ir.mjs",
-  },
-  {
-    packageName: "@openclaw/markdown-core",
-    packageDir: "markdown-core",
-    subpath: "render",
-    srcFile: "render.ts",
-    distFile: "render.mjs",
-  },
-  {
-    packageName: "@openclaw/markdown-core",
-    packageDir: "markdown-core",
-    subpath: "render-aware-chunking",
-    srcFile: "render-aware-chunking.ts",
-    distFile: "render-aware-chunking.mjs",
-  },
-  {
-    packageName: "@openclaw/markdown-core",
-    packageDir: "markdown-core",
-    subpath: "tables",
-    srcFile: "tables.ts",
-    distFile: "tables.mjs",
-  },
-  {
-    packageName: "@openclaw/markdown-core",
-    packageDir: "markdown-core",
-    subpath: "types",
-    srcFile: "types.ts",
-    distFile: "types.mjs",
-  },
-  {
-    packageName: "@openclaw/media-generation-core",
-    packageDir: "media-generation-core",
-    subpath: "",
-    srcFile: "index.ts",
-    distFile: "index.mjs",
-  },
-  {
-    packageName: "@openclaw/media-generation-core",
-    packageDir: "media-generation-core",
-    subpath: "capability-model-ref",
-    srcFile: "capability-model-ref.ts",
-    distFile: "capability-model-ref.mjs",
-  },
-  {
-    packageName: "@openclaw/media-generation-core",
-    packageDir: "media-generation-core",
-    subpath: "catalog",
-    srcFile: "catalog.ts",
-    distFile: "catalog.mjs",
-  },
-  {
-    packageName: "@openclaw/media-generation-core",
-    packageDir: "media-generation-core",
-    subpath: "model-ref",
-    srcFile: "model-ref.ts",
-    distFile: "model-ref.mjs",
-  },
-  {
-    packageName: "@openclaw/media-generation-core",
-    packageDir: "media-generation-core",
-    subpath: "normalization",
-    srcFile: "normalization.ts",
-    distFile: "normalization.mjs",
-  },
-  {
-    packageName: "@openclaw/media-core",
-    packageDir: "media-core",
-    subpath: "",
-    srcFile: "index.ts",
-    distFile: "index.mjs",
-  },
-  {
-    packageName: "@openclaw/media-core",
-    packageDir: "media-core",
-    subpath: "base64",
-    srcFile: "base64.ts",
-    distFile: "base64.mjs",
-  },
-  {
-    packageName: "@openclaw/media-core",
-    packageDir: "media-core",
-    subpath: "constants",
-    srcFile: "constants.ts",
-    distFile: "constants.mjs",
-  },
-  {
-    packageName: "@openclaw/media-core",
-    packageDir: "media-core",
-    subpath: "content-length",
-    srcFile: "content-length.ts",
-    distFile: "content-length.mjs",
-  },
-  {
-    packageName: "@openclaw/media-core",
-    packageDir: "media-core",
-    subpath: "file-name",
-    srcFile: "file-name.ts",
-    distFile: "file-name.mjs",
-  },
-  {
-    packageName: "@openclaw/media-core",
-    packageDir: "media-core",
-    subpath: "inbound-path-policy",
-    srcFile: "inbound-path-policy.ts",
-    distFile: "inbound-path-policy.mjs",
-  },
-  {
-    packageName: "@openclaw/media-core",
-    packageDir: "media-core",
-    subpath: "inline-image-data-url",
-    srcFile: "inline-image-data-url.ts",
-    distFile: "inline-image-data-url.mjs",
-  },
-  {
-    packageName: "@openclaw/media-core",
-    packageDir: "media-core",
-    subpath: "media-source-url",
-    srcFile: "media-source-url.ts",
-    distFile: "media-source-url.mjs",
-  },
-  {
-    packageName: "@openclaw/media-core",
-    packageDir: "media-core",
-    subpath: "mime",
-    srcFile: "mime.ts",
-    distFile: "mime.mjs",
-  },
-  {
-    packageName: "@openclaw/media-core",
-    packageDir: "media-core",
-    subpath: "read-byte-stream-with-limit",
-    srcFile: "read-byte-stream-with-limit.ts",
-    distFile: "read-byte-stream-with-limit.mjs",
-  },
-  {
-    packageName: "@openclaw/retry",
-    packageDir: "retry",
-    subpath: "",
-    srcFile: "index.ts",
-    distFile: "index.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "",
-    srcFile: "index.ts",
-    distFile: "index.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "ansi",
-    srcFile: "ansi.ts",
-    distFile: "ansi.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "decorative-emoji",
-    srcFile: "decorative-emoji.ts",
-    distFile: "decorative-emoji.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "health-style",
-    srcFile: "health-style.ts",
-    distFile: "health-style.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "links",
-    srcFile: "links.ts",
-    distFile: "links.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "note",
-    srcFile: "note.ts",
-    distFile: "note.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "osc-progress",
-    srcFile: "osc-progress.ts",
-    distFile: "osc-progress.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "palette",
-    srcFile: "palette.ts",
-    distFile: "palette.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "progress-line",
-    srcFile: "progress-line.ts",
-    distFile: "progress-line.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "prompt-select-styled",
-    srcFile: "prompt-select-styled.ts",
-    distFile: "prompt-select-styled.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "prompt-select-styled-params",
-    srcFile: "prompt-select-styled-params.ts",
-    distFile: "prompt-select-styled-params.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "prompt-style",
-    srcFile: "prompt-style.ts",
-    distFile: "prompt-style.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "restore",
-    srcFile: "restore.ts",
-    distFile: "restore.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "safe-text",
-    srcFile: "safe-text.ts",
-    distFile: "safe-text.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "stream-writer",
-    srcFile: "stream-writer.ts",
-    distFile: "stream-writer.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "table",
-    srcFile: "table.ts",
-    distFile: "table.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "terminal-link",
-    srcFile: "terminal-link.ts",
-    distFile: "terminal-link.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "theme",
-    srcFile: "theme.ts",
-    distFile: "theme.mjs",
-  },
-  {
-    packageName: "@openclaw/net-policy",
-    packageDir: "net-policy",
-    subpath: "",
-    srcFile: "index.ts",
-    distFile: "index.mjs",
-  },
-  {
-    packageName: "@openclaw/net-policy",
-    packageDir: "net-policy",
-    subpath: "ip",
-    srcFile: "ip.ts",
-    distFile: "ip.mjs",
-  },
-  {
-    packageName: "@openclaw/net-policy",
-    packageDir: "net-policy",
-    subpath: "ipv4",
-    srcFile: "ipv4.ts",
-    distFile: "ipv4.mjs",
-  },
-  {
-    packageName: "@openclaw/net-policy",
-    packageDir: "net-policy",
-    subpath: "redact-sensitive-url",
-    srcFile: "redact-sensitive-url.ts",
-    distFile: "redact-sensitive-url.mjs",
-  },
-  {
-    packageName: "@openclaw/net-policy",
-    packageDir: "net-policy",
-    subpath: "url-protocol",
-    srcFile: "url-protocol.ts",
-    distFile: "url-protocol.mjs",
-  },
-  {
-    packageName: "@openclaw/net-policy",
-    packageDir: "net-policy",
-    subpath: "url-userinfo",
-    srcFile: "url-userinfo.ts",
-    distFile: "url-userinfo.mjs",
-  },
-  {
-    packageName: "@openclaw/model-catalog-core",
-    packageDir: "model-catalog-core",
-    subpath: "",
-    srcFile: "index.ts",
-    distFile: "index.mjs",
-  },
-  {
-    packageName: "@openclaw/model-catalog-core",
-    packageDir: "model-catalog-core",
-    subpath: "configured-model-refs",
-    srcFile: "configured-model-refs.ts",
-    distFile: "configured-model-refs.mjs",
-  },
-  {
-    packageName: "@openclaw/model-catalog-core",
-    packageDir: "model-catalog-core",
-    subpath: "model-catalog-refs",
-    srcFile: "model-catalog-refs.ts",
-    distFile: "model-catalog-refs.mjs",
-  },
-  {
-    packageName: "@openclaw/model-catalog-core",
-    packageDir: "model-catalog-core",
-    subpath: "model-catalog-normalize",
-    srcFile: "model-catalog-normalize.ts",
-    distFile: "model-catalog-normalize.mjs",
-  },
-  {
-    packageName: "@openclaw/model-catalog-core",
-    packageDir: "model-catalog-core",
-    subpath: "model-catalog-types",
-    srcFile: "model-catalog-types.ts",
-    distFile: "model-catalog-types.mjs",
-  },
-  {
-    packageName: "@openclaw/model-catalog-core",
-    packageDir: "model-catalog-core",
-    subpath: "provider-id",
-    srcFile: "provider-id.ts",
-    distFile: "provider-id.mjs",
-  },
-  {
-    packageName: "@openclaw/model-catalog-core",
-    packageDir: "model-catalog-core",
-    subpath: "provider-model-id-normalization",
-    srcFile: "provider-model-id-normalization.ts",
-    distFile: "provider-model-id-normalization.mjs",
-  },
-  {
-    packageName: "@openclaw/model-catalog-core",
-    packageDir: "model-catalog-core",
-    subpath: "provider-model-id-normalize",
-    srcFile: "provider-model-id-normalize.ts",
-    distFile: "provider-model-id-normalize.mjs",
-  },
+// Packaged installs omit workspace manifests; preserve the exact curated subpaths
+// instead of expanding aliases from package exports.
+const WORKSPACE_PACKAGE_ALIAS_SUBPATHS = [
+  ["gateway-client", ["", "readiness", "timeouts"]],
+  [
+    "gateway-protocol",
+    [
+      "",
+      "client-info",
+      "connect-error-details",
+      "frame-guards",
+      "schema",
+      "startup-unavailable",
+      "version",
+    ],
+  ],
+  [
+    "markdown-core",
+    [
+      "",
+      "code-spans",
+      "fences",
+      "frontmatter",
+      "ir",
+      "render",
+      "render-aware-chunking",
+      "tables",
+      "types",
+    ],
+  ],
+  ["media-generation-core", ["", "capability-model-ref", "catalog", "model-ref", "normalization"]],
+  [
+    "media-core",
+    [
+      "",
+      "base64",
+      "constants",
+      "content-length",
+      "file-name",
+      "inbound-path-policy",
+      "inline-image-data-url",
+      "media-source-url",
+      "mime",
+      "read-byte-stream-with-limit",
+    ],
+  ],
+  ["retry", [""]],
+  [
+    "terminal-core",
+    [
+      "",
+      "ansi",
+      "decorative-emoji",
+      "health-style",
+      "links",
+      "note",
+      "osc-progress",
+      "palette",
+      "progress-line",
+      "prompt-select-styled",
+      "prompt-select-styled-params",
+      "prompt-style",
+      "restore",
+      "safe-text",
+      "stream-writer",
+      "table",
+      "terminal-link",
+      "theme",
+    ],
+  ],
+  ["net-policy", ["", "ip", "ipv4", "redact-sensitive-url", "url-protocol", "url-userinfo"]],
+  [
+    "model-catalog-core",
+    [
+      "",
+      "configured-model-refs",
+      "model-catalog-refs",
+      "model-catalog-normalize",
+      "model-catalog-types",
+      "provider-id",
+      "provider-model-id-normalization",
+      "provider-model-id-normalize",
+    ],
+  ],
 ] as const;
+
+const WORKSPACE_PACKAGE_ALIAS_ENTRIES: WorkspacePackageAliasEntry[] =
+  WORKSPACE_PACKAGE_ALIAS_SUBPATHS.flatMap(([packageDir, subpaths]) =>
+    subpaths.map(
+      (subpath): WorkspacePackageAliasEntry => ({
+        packageName: `@openclaw/${packageDir}`,
+        packageDir,
+        subpath,
+        srcFile: `${subpath || "index"}.ts`,
+        distFile: `${subpath || "index"}.mjs`,
+      }),
+    ),
+  );
 const ROOT_PACKAGED_WORKSPACE_PACKAGE_DIRS = new Set([
   "acp-core",
   "media-core",
@@ -1152,7 +728,6 @@ function readPrivateLocalOnlyPluginSdkSubpaths(packageRoot: string): string[] {
   );
   return [
     ...new Set([
-      CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH,
       CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH,
       OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH,
       ...(Array.isArray(parsed)
@@ -1382,6 +957,13 @@ function isBundledPluginModulePath(params: {
   );
 }
 
+function isAnyBundledPluginModulePath(params: { packageRoot: string; modulePath: string }) {
+  const normalizedModulePath = path.resolve(params.modulePath);
+  return ["extensions", path.join("dist", "extensions"), path.join("dist-runtime", "extensions")]
+    .map((segment) => path.join(params.packageRoot, segment))
+    .some((root) => normalizedModulePath.startsWith(`${root}${path.sep}`));
+}
+
 function isOfficialInstalledPluginPackageRoot(params: {
   packageRoot: string;
   packageName: string;
@@ -1476,9 +1058,14 @@ function shouldIncludePrivateLocalOnlyPluginSdkSubpath(params: {
   modulePath: string;
   subpath: string;
 }) {
+  if (PRIVATE_QA_ONLY_PLUGIN_SDK_SUBPATHS.has(params.subpath)) {
+    return shouldIncludePrivateLocalOnlyPluginSdkSubpaths();
+  }
   const owners = findPrivatePluginSdkSubpathOwners(params.subpath);
   if (owners.length === 0) {
-    return shouldIncludePrivateLocalOnlyPluginSdkSubpaths();
+    // Public demotions remain loadable by bundled plugins, but never by arbitrary installed
+    // plugins. Explicit owner records below impose tighter boundaries for sensitive helpers.
+    return isAnyBundledPluginModulePath(params) || shouldIncludePrivateLocalOnlyPluginSdkSubpaths();
   }
   return owners.some(
     (owner) =>
@@ -1652,41 +1239,6 @@ function resolvePluginSdkScopedAliasMap(
   }
   cachedPluginSdkScopedAliasMaps.set(cacheKey, aliasMap);
   return aliasMap;
-}
-
-function resolveExtensionApiAlias(params: LoaderModuleResolveParams = {}): string | null {
-  try {
-    const modulePath = resolveLoaderModulePath(params);
-    const packageRoot =
-      resolveDevSourceRootParam(params) ?? resolveLoaderPackageRoot({ ...params, modulePath });
-    if (!packageRoot) {
-      return null;
-    }
-
-    const orderedKinds = resolvePluginSdkAliasCandidateOrder({
-      modulePath,
-      isProduction: process.env.NODE_ENV === "production",
-      pluginSdkResolution: params.pluginSdkResolution,
-    });
-    for (const kind of orderedKinds) {
-      if (kind === "dist") {
-        const candidate = path.join(packageRoot, "dist", "extensionAPI.js");
-        if (fs.existsSync(candidate)) {
-          return candidate;
-        }
-        continue;
-      }
-      for (const ext of PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS) {
-        const candidate = path.join(packageRoot, "src", `extensionAPI${ext}`);
-        if (fs.existsSync(candidate)) {
-          return candidate;
-        }
-      }
-    }
-  } catch {
-    // ignore
-  }
-  return null;
 }
 
 const JITI_NORMALIZED_ALIAS_SYMBOL = Symbol.for("pathe:normalizedAlias");
@@ -1871,24 +1423,7 @@ export function buildPluginLoaderAliasMap(
     return cached;
   }
 
-  const pluginSdkAlias = resolvePluginSdkAliasFile({
-    srcFile: "root-alias.cjs",
-    distFile: "root-alias.cjs",
-    modulePath,
-    argv1,
-    moduleUrl,
-    pluginSdkResolution,
-    devSourceRoot,
-  });
-  const extensionApiAlias = resolveExtensionApiAlias({
-    modulePath,
-    pluginSdkResolution,
-    devSourceRoot,
-  });
   const result: Record<string, string> = {
-    ...(extensionApiAlias
-      ? { "openclaw/extension-api": normalizeJitiAliasTargetPath(extensionApiAlias) }
-      : {}),
     ...resolveBundledPluginPackagePublicSurfaceAliasMap({
       modulePath,
       argv1,
@@ -1903,14 +1438,6 @@ export function buildPluginLoaderAliasMap(
       pluginSdkResolution,
       devSourceRoot,
     }),
-    ...(pluginSdkAlias
-      ? Object.fromEntries(
-          PLUGIN_SDK_PACKAGE_NAMES.map((packageName) => [
-            packageName,
-            normalizeJitiAliasTargetPath(pluginSdkAlias),
-          ]),
-        )
-      : {}),
     ...Object.fromEntries(
       Object.entries(
         resolvePluginSdkScopedAliasMap({
@@ -2102,3 +1629,4 @@ export function resolvePluginLoaderModuleConfig(params: {
   pluginLoaderModuleConfigCache.set(configCacheKey, result);
   return result;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,0 +1,19 @@
+title: WhatsApp group reply to bot wakes without an explicit mention
+scenario:
+  id: whatsapp-group-reply-to-bot-triggers
+  surface: channels
+  coverage:
+    primary:
+      - whatsapp.group-allowlists
+  execution:
+    profiles: { "whatsapp:mock-default": 5 }
+    kind: flow
+    channel: whatsapp
+    timeoutMs: 120000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { whatsappScenarioId: whatsapp-group-reply-to-bot-triggers }
+flow:
+  module: ./live-transports/whatsapp/scenario-runtime.js
+  call: runWhatsAppGroupReplyToBotTriggersScenario
+  args: [{ expr: whatsappScenarioContext }]

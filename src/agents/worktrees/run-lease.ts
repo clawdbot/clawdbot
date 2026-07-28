@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { formatErrorMessage as errorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
 import { lockWorktreeForProcess, unlockWorktree } from "./git-lock.js";
@@ -51,10 +52,6 @@ type LeaseCleanup = {
 };
 const pendingLeaseCleanups = new Set<LeaseCleanup>();
 let exitCleanupRegistered = false;
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 async function withGitLockTransition<T>(id: string, operation: () => Promise<T>): Promise<T> {
   const previous = gitLockTransitionTails.get(id) ?? Promise.resolve();
@@ -321,7 +318,7 @@ export function hasLiveWorktreeRunLease(env: NodeJS.ProcessEnv, worktreeId: stri
   return hasLiveWorktreeRunLeaseRow(env, worktreeId, ownerChecks);
 }
 
-export const testing = {
+const testing = {
   setProcessStartTimeResolverForTest(resolver: ((pid: number) => number | null) | null): void {
     resolveSelfStartTime = resolver ?? getFileLockProcessStartTime;
     ownerChecks = { ...ownerChecks, getProcessStartTime: resolver ?? undefined };
@@ -348,3 +345,9 @@ export const testing = {
     unlockWorktreeImpl = unlockWorktree;
   },
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.worktreeRunLeaseTestApi")] = {
+    testing,
+  };
+}
