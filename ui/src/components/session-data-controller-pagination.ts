@@ -154,8 +154,11 @@ export async function loadMoreSidebarSessions(
   const agentId = owner.sessionsAgentId;
   const offset = previous?.nextOffset;
   const state = sidebarSessionPaginationState(owner);
+  // A pending first-page refresh owns the list; its old offset cannot safely
+  // start a page that would append to a superseded session snapshot.
   if (
     !context ||
+    owner.sessionsLoading ||
     !previous?.hasMore ||
     typeof offset !== "number" ||
     !agentId ||

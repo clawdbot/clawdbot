@@ -4,12 +4,66 @@ import {
   createGateway,
   createSessionsHarness,
   createSessionState,
+  deferred,
   mountSidebar,
 } from "../app-sidebar.ts";
 import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar gateway session pagination", () => {
+  it.each(["archived", "all"] as const)(
+    "does not append a stale %s page during a full session refresh",
+    async (statusFilter) => {
+      const keys = Array.from({ length: 61 }, (_, index) => `agent:main:session-${index}`);
+      const harness = createSessionsHarness("main", ["agent:main:canonical-active"]);
+      const firstResult = createSessionState("main", keys.slice(0, 60)).result;
+      const nextResult = createSessionState("main", keys.slice(60)).result;
+      if (!firstResult || !nextResult) {
+        throw new Error("expected paginated session results");
+      }
+      const firstPage = {
+        ...firstResult,
+        count: 60,
+        totalCount: 61,
+        limitApplied: 60,
+        offset: 0,
+        nextOffset: 60,
+        hasMore: true,
+      };
+      harness.list.mockResolvedValue(firstPage);
+      const { sidebar } = await mountSidebar(
+        createGateway({} as GatewayBrowserClient),
+        harness.sessions,
+      );
+      (sidebar as unknown as { sessionsStatusFilter: "archived" | "all" }).sessionsStatusFilter =
+        statusFilter;
+      sidebar.sessionData.resetForStatusFilter(statusFilter);
+      await sidebar.sessionData.refreshSidebarSessions("main");
+      harness.list.mockClear();
+
+      const fullRefresh = deferred<typeof firstPage>();
+      harness.list.mockImplementation(async (options) =>
+        options?.offset === 60
+          ? { ...nextResult, totalCount: 61, offset: 60, nextOffset: null, hasMore: false }
+          : await fullRefresh.promise,
+      );
+      const refreshing = sidebar.sessionData.refreshSidebarSessions("main");
+
+      expect(sidebar.sessionData.sessionsLoading).toBe(true);
+      await sidebar.sessionData.loadMoreSidebarSessions();
+      expect(harness.list).toHaveBeenCalledTimes(1);
+      expect(harness.list).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "main", archivedFilter: statusFilter }),
+      );
+      expect(harness.list.mock.calls[0]?.[0]).not.toHaveProperty("offset");
+
+      fullRefresh.resolve(firstPage);
+      await refreshing;
+      expect(sidebar.sessionData.sessionsResult?.sessions).toEqual(firstPage.sessions);
+      expect(sidebar.sessionData.sessionsLoading).toBe(false);
+    },
+  );
+
   it("loads the 51st active session through the canonical paginated refresh", async () => {
     const keys = Array.from({ length: 51 }, (_, index) => `agent:main:session-${index}`);
     const harness = createSessionsHarness("main", keys.slice(0, 50));

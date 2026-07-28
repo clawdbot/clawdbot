@@ -20,6 +20,7 @@ export interface BrowserPanelControllerHost extends ReactiveControllerHost {
 type BrowserPanelInvocation = {
   epoch: number;
   readonly id: number;
+  readonly mutationId: number;
   isCurrent(): boolean;
 };
 
@@ -80,6 +81,7 @@ export class BrowserPanelOperationOwnership {
     const invocation: BrowserPanelInvocation = {
       epoch: this.lifecycleEpoch,
       id: ++this.requestedMutation,
+      mutationId: this.requestedMutation,
       isCurrent: () =>
         this.isLive(invocation.epoch, client) && invocation.id === this.requestedMutation,
     };
@@ -118,6 +120,7 @@ export class BrowserPanelOperationOwnership {
     const invocation: BrowserPanelInvocation = {
       epoch: this.lifecycleEpoch,
       id: ++this.requestedSnapshot,
+      mutationId,
       isCurrent: () =>
         this.isLive(invocation.epoch, client) &&
         invocation.id === this.requestedSnapshot &&
@@ -140,6 +143,11 @@ export class BrowserPanelOperationOwnership {
     }
     this.acceptedSnapshot = invocation.id;
     return true;
+  }
+
+  /** Older snapshots may capture the same tab unless a user mutation owns it. */
+  canCaptureSnapshot(invocation: BrowserPanelInvocation): boolean {
+    return this.isLive(invocation.epoch) && invocation.mutationId === this.requestedMutation;
   }
 
   /** A superseded open may reconcile its created tab, but never own the selected view. */

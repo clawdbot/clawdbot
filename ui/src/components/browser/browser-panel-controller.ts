@@ -147,6 +147,11 @@ export class BrowserPanelController implements ReactiveController {
       }
       this.setState("running", snapshot.running);
       this.setState("tabs", snapshot.tabs);
+      // A mutation may adopt the same tab while this snapshot is pending.
+      // Reconcile its tab strip, but never let it own document or loading state.
+      if (!this.operations.canCaptureSnapshot(invocation)) {
+        return;
+      }
       if (!snapshot.running) {
         this.setState("view", null);
       }
