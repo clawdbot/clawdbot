@@ -42,6 +42,8 @@ const mocks = vi.hoisted(() => ({
   })),
   readSetupConfigFileSnapshot: vi.fn(),
   setupChannels: vi.fn(),
+  setupSkills: vi.fn(),
+  runSearchSetupFlow: vi.fn(),
   writeWizardConfigFile: vi.fn(),
   runCollectedChannelOnboardingPostWriteHooks: vi.fn(async () => {}),
 }));
@@ -61,6 +63,16 @@ vi.mock("../commands/onboard-channels.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../commands/onboard-channels.js")>()),
   setupChannels: mocks.setupChannels,
   runCollectedChannelOnboardingPostWriteHooks: mocks.runCollectedChannelOnboardingPostWriteHooks,
+}));
+
+vi.mock("../commands/onboard-skills.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/onboard-skills.js")>()),
+  setupSkills: mocks.setupSkills,
+}));
+
+vi.mock("../flows/search-setup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../flows/search-setup.js")>()),
+  runSearchSetupFlow: mocks.runSearchSetupFlow,
 }));
 
 vi.mock("../plugins/providers.js", async (importOriginal) => ({
@@ -285,6 +297,8 @@ afterEach(() => {
   );
   mocks.readSetupConfigFileSnapshot.mockReset();
   mocks.setupChannels.mockReset();
+  mocks.setupSkills.mockReset();
+  mocks.runSearchSetupFlow.mockReset();
   mocks.writeWizardConfigFile.mockReset();
   mocks.runCollectedChannelOnboardingPostWriteHooks.mockReset();
   for (const dir of tempDirs.splice(0)) {
@@ -329,9 +343,11 @@ describe("SystemAgentChatEngine", () => {
     expect(runConfigSet).toHaveBeenCalledOnce();
   });
 
-  it("refuses a delegated channel-setup directive instead of starting the wizard", async () => {
+  it("refuses delegated hosted-setup directives instead of starting wizards", async () => {
     useTempStateDir();
     const runChannelSetupWizard = vi.fn(async () => {});
+    const runSkillsSetupWizard = vi.fn(async () => {});
+    const runSearchSetupWizard = vi.fn(async () => {});
     const engine = new SystemAgentChatEngine({
       operatorApprovalOnly: true,
       runAgentTurn: async () => ({
@@ -339,6 +355,8 @@ describe("SystemAgentChatEngine", () => {
         directive: { kind: "channel-setup", channel: "telegram" },
       }),
       runChannelSetupWizard,
+      runSkillsSetupWizard,
+      runSearchSetupWizard,
       deps: { loadOverview: fakeOverviewLoader() },
     });
 
@@ -346,7 +364,11 @@ describe("SystemAgentChatEngine", () => {
 
     expect(reply.text).toContain("human operator");
     expect(reply.action).toBe("none");
+    expect((await engine.handle("configure skills")).text).toContain("human operator");
+    expect((await engine.handle("configure search")).text).toContain("human operator");
     expect(runChannelSetupWizard).not.toHaveBeenCalled();
+    expect(runSkillsSetupWizard).not.toHaveBeenCalled();
+    expect(runSearchSetupWizard).not.toHaveBeenCalled();
   });
 
   it("applies a delegated host proposal without another model turn", async () => {
@@ -728,6 +750,154 @@ describe("SystemAgentChatEngine", () => {
     expect(done.text).toContain("telegram is configured");
     expect(done.question).toBeUndefined();
     expect(wizardRuns).toEqual(["telegram", "token:123:abc", "mode:open"]);
+  });
+
+  it("hosts the real skills setup flow and guards installs plus the final config write", async () => {
+    const baseConfig: OpenClawConfig = {
+      agents: { defaults: { workspace: "/tmp/skills-workspace" } },
+    };
+    const beforeEffects: Array<() => Promise<void>> = [];
+    const appendAuditEntry = vi.fn(async () => "state/openclaw.sqlite");
+    mocks.readSetupConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      hash: "skills-base-hash",
+      config: baseConfig,
+      sourceConfig: baseConfig,
+    });
+    mocks.setupSkills.mockImplementation(
+      async (
+        config: OpenClawConfig,
+        workspaceDir: string,
+        _runtime: unknown,
+        prompter: WizardPrompter,
+        options: { beforePersistentEffect?: () => Promise<void> },
+      ) => {
+        expect(workspaceDir).toBe("/tmp/skills-workspace");
+        expect(options.beforePersistentEffect).toBeTypeOf("function");
+        beforeEffects.push(options.beforePersistentEffect!);
+        await prompter.note("Eligible: 2\nMissing requirements: 1", "Skills status");
+        await options.beforePersistentEffect?.();
+        return { ...config, skills: { install: { nodeManager: "npm" } } };
+      },
+    );
+    mocks.writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) => config);
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      appendAuditEntry,
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const reply = await engine.handle("configure skills");
+
+    expect(reply.text).toContain("skills dependency setup is complete");
+    expect(beforeEffects).toHaveLength(1);
+    expect(mocks.writeWizardConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({ skills: { install: { nodeManager: "npm" } } }),
+      {
+        allowConfigSizeDrop: false,
+        baseHash: "skills-base-hash",
+        migrationBaseConfig: baseConfig,
+      },
+    );
+    expect(appendAuditEntry).toHaveBeenCalledWith(
+      expect.objectContaining({ operation: "skills.setup" }),
+    );
+  });
+
+  it("hosts search setup as question cards and keeps gateway credentials out of model history", async () => {
+    const baseConfig: OpenClawConfig = {};
+    const appendAuditEntry = vi.fn(async () => "state/openclaw.sqlite");
+    const beforePersistentEffects: Array<() => Promise<void>> = [];
+    mocks.readSetupConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      hash: "search-base-hash",
+      config: baseConfig,
+      sourceConfig: baseConfig,
+    });
+    mocks.runSearchSetupFlow.mockImplementation(
+      async (
+        config: OpenClawConfig,
+        _runtime: unknown,
+        prompter: WizardPrompter,
+        options: {
+          preserveDisabledSearchState?: boolean;
+          beforePersistentEffect?: () => Promise<void>;
+        },
+      ) => {
+        expect(options.preserveDisabledSearchState).toBe(false);
+        beforePersistentEffects.push(options.beforePersistentEffect!);
+        const provider = await prompter.select({
+          message: "Search provider",
+          options: [
+            { value: "brave", label: "Brave" },
+            { value: "grok", label: "Grok" },
+          ],
+          initialValue: "brave",
+        });
+        const key = await prompter.text({ message: "Provider API key", sensitive: true });
+        expect(key).toBe("search-secret-value");
+        await options.beforePersistentEffect?.();
+        return {
+          ...config,
+          tools: { web: { search: { enabled: true, provider } } },
+        } as OpenClawConfig;
+      },
+    );
+    mocks.writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) => config);
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      appendAuditEntry,
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const providerStep = await engine.handle("configure search");
+    expect(providerStep.question).toEqual({
+      id: expect.any(String),
+      header: "Choose one",
+      question: "Search provider",
+      options: [{ label: "Brave", recommended: true }, { label: "Grok" }],
+    });
+
+    const secretStep = await engine.handle("Brave");
+    expect(secretStep.text).toContain("Provider API key");
+    expect(secretStep.sensitive).toBe(true);
+    expect(secretStep.question).toBeUndefined();
+
+    const done = await engine.handle("search-secret-value");
+    expect(done.text).toContain("web search setup is complete");
+    expect(beforePersistentEffects).toHaveLength(1);
+    expect(appendAuditEntry).toHaveBeenCalledWith(
+      expect.objectContaining({ operation: "search.setup" }),
+    );
+    expect(JSON.stringify(engine.historySince(0))).not.toContain("search-secret-value");
+    expect(JSON.stringify(engine.historySince(0))).toContain("<redacted secret>");
+  });
+
+  it("hands CLI search credentials to the masked terminal wizard", async () => {
+    const engine = new SystemAgentChatEngine({
+      surface: "cli",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runSearchSetupWizard: async (prompter) => {
+        await prompter.text({ message: "Provider API key", sensitive: true });
+      },
+    });
+
+    const stopped = await engine.handle("configure search");
+    expect(stopped.text).toContain("Sensitive input is not accepted");
+    expect(stopped.text).toContain("open search wizard");
+    expect(stopped.sensitive).toBeUndefined();
+
+    const handoff = await engine.handle("open search wizard");
+    expect(handoff.action).toBe("open-setup");
+    expect(handoff.handoff).toEqual({ kind: "open-setup", target: "search" });
   });
 
   it("reports hosted channel setup success when audit persistence fails", async () => {

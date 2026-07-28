@@ -393,6 +393,7 @@ type SetupSearchOptions = {
   quickstartDefaults?: boolean;
   preserveDisabledSearchState?: boolean;
   secretInputMode?: SecretInputMode;
+  beforePersistentEffect?: () => Promise<void>;
 };
 
 async function finalizeSearchProviderSetup(params: {
@@ -421,6 +422,9 @@ async function finalizeSearchProviderSetup(params: {
       prompter: params.prompter,
       runtime: params.runtime,
       autoConfirmSingleSource: true,
+      ...(params.opts?.beforePersistentEffect
+        ? { beforePersistentEffect: params.opts.beforePersistentEffect }
+        : {}),
     });
     if (!installed.installed) {
       return params.originalConfig;

@@ -362,6 +362,27 @@ describe("parseSystemAgentOperation", () => {
     expect(isPersistentSystemAgentOperation({ kind: "channel-list" })).toBe(false);
   });
 
+  it("parses hosted skills and web-search setup requests", () => {
+    for (const input of ["configure skills", "setup skills", "set up skills"]) {
+      expect(parseSystemAgentOperation(input)).toEqual({ kind: "skills-setup" });
+    }
+    for (const input of [
+      "configure search",
+      "configure web search",
+      "setup search",
+      "web search provider setup",
+    ]) {
+      expect(parseSystemAgentOperation(input)).toEqual({ kind: "search-setup" });
+    }
+    expect(parseSystemAgentOperation("open search wizard")).toEqual({
+      kind: "open-setup",
+      target: "search",
+    });
+    expect(isPersistentSystemAgentOperation({ kind: "skills-setup" })).toBe(false);
+    expect(isPersistentSystemAgentOperation({ kind: "search-setup" })).toBe(false);
+    expect(parseSystemAgentOperation("configure search with brave").kind).toBe("none");
+  });
+
   it("parses anchored setup switches and channel info", () => {
     for (const input of [
       "open setup wizard",
@@ -403,6 +424,7 @@ describe("parseSystemAgentOperation", () => {
       { kind: "open-setup", target: "guided" } as const,
       { kind: "open-setup", target: "classic" } as const,
       { kind: "open-setup", target: "channels", channel: "slack" } as const,
+      { kind: "open-setup", target: "search" } as const,
     ]) {
       const result = await executeSystemAgentOperation(operation, runtime);
       expect(result.applied).toBe(false);
@@ -412,6 +434,17 @@ describe("parseSystemAgentOperation", () => {
     expect(output).toContain("openclaw onboard`");
     expect(output).toContain("openclaw onboard --classic");
     expect(output).toContain("openclaw channels add --channel slack");
+    expect(output).toContain("openclaw configure --section web");
+  });
+
+  it("prints one-shot pointers for hosted skills and search setup", async () => {
+    const { runtime, lines } = createSystemAgentTestRuntime();
+
+    await executeSystemAgentOperation({ kind: "skills-setup" }, runtime);
+    await executeSystemAgentOperation({ kind: "search-setup" }, runtime);
+
+    expect(lines.join("\n")).toContain("openclaw configure --section skills");
+    expect(lines.join("\n")).toContain("openclaw configure --section web");
   });
 
   it("routes one-shot model setup through the verified OpenClaw flow", async () => {

@@ -550,6 +550,22 @@ describe("runSearchSetupFlow", () => {
     expect(next.plugins?.installs?.brave?.spec).toBe("@openclaw/brave-plugin");
   });
 
+  it("forwards the persistent-effect guard to external provider installation", async () => {
+    const select = vi.fn().mockResolvedValueOnce("brave");
+    const text = vi.fn().mockResolvedValue("brave-test-key");
+    const beforePersistentEffect = vi.fn(async () => {});
+    const prompter = createWizardPrompter({
+      select: select as never,
+      text: text as never,
+    });
+
+    await runSearchSetupFlow({}, createNonExitingRuntime(), prompter, {
+      beforePersistentEffect,
+    });
+
+    expect(latestPluginInstallRequest().beforePersistentEffect).toBe(beforePersistentEffect);
+  });
+
   it("installs an external catalog search provider when web search stays disabled", async () => {
     const select = vi.fn().mockResolvedValueOnce("brave");
     const text = vi.fn().mockResolvedValue("brave-disabled-key");
