@@ -33,6 +33,7 @@ import {
   type ExecApprovalRequest,
 } from "./exec-approval.ts";
 import type { ApplicationGateway } from "./gateway.ts";
+import { hasOperatorApprovalsAccess } from "./operator-access.ts";
 import {
   isPendingUpdateHandoffSentinel,
   readUpdateAvailable,
@@ -86,6 +87,11 @@ function isGatewayEvent(value: unknown): value is GatewayEventFrame {
   return Boolean(value && typeof value === "object" && "event" in value);
 }
 
+function canReviewGatewayApprovals(snapshot: ApplicationGateway["snapshot"]): boolean {
+  const auth = snapshot.hello?.auth;
+  return !auth || hasOperatorApprovalsAccess(auth);
+}
+
 type UpdateVerificationWait = {
   timer: ReturnType<typeof globalThis.setTimeout>;
   resolve: (active: boolean) => void;
@@ -122,6 +128,8 @@ export function createApplicationOverlays(
   let activeClient = gateway.snapshot.client;
   let connectedSource: NonNullable<typeof activeClient> | null = null; // Retries start a new source epoch.
   let connectedEpoch = 0;
+  let approvalsAccess = canReviewGatewayApprovals(gateway.snapshot);
+  let approvalAccessGeneration = 0;
   let pendingUpdateExpectedVersion: string | null = null;
   let pendingUpdateHandoff = false;
   let updateRunGeneration = 0;
@@ -221,10 +229,23 @@ export function createApplicationOverlays(
   const refreshApprovals = async (
     client: NonNullable<typeof activeClient>,
     epoch = connectedEpoch,
+    accessGeneration = approvalAccessGeneration,
   ) => {
+    if (
+      !approvalsAccess ||
+      accessGeneration !== approvalAccessGeneration ||
+      !canReviewGatewayApprovals(gateway.snapshot)
+    ) {
+      return;
+    }
     const applied = await refreshPendingApprovalQueue(promptState, {
       isCurrentClient: (requestClient) =>
-        requestClient === client && epoch === connectedEpoch && isCurrentClient(client),
+        requestClient === client &&
+        epoch === connectedEpoch &&
+        accessGeneration === approvalAccessGeneration &&
+        approvalsAccess &&
+        canReviewGatewayApprovals(gateway.snapshot) &&
+        isCurrentClient(client),
     });
     if (applied && !disposed) {
       publish();
@@ -356,6 +377,12 @@ export function createApplicationOverlays(
     const connected = next.phase === "connected";
     const nextConnectedSource = connected ? next.client : null;
     const connectedSourceChanged = connectedSource !== nextConnectedSource;
+    const nextApprovalsAccess = canReviewGatewayApprovals(next);
+    const approvalAccessChanged = approvalsAccess !== nextApprovalsAccess;
+    approvalsAccess = nextApprovalsAccess;
+    if (approvalAccessChanged) {
+      approvalAccessGeneration += 1;
+    }
     activeClient = next.client;
     connectedSource = nextConnectedSource;
     promptState.client = next.client;
@@ -371,6 +398,13 @@ export function createApplicationOverlays(
       deviceAuthMigration.reset();
       closeDevicePairSetupState(devicePairSetupState);
       devicePairSetupState.pendingCount = 0;
+    }
+    if (connected && !approvalsAccess) {
+      approvalDecision = null;
+      promptState.execApprovalQueue = [];
+      promptState.execApprovalBusy = false;
+      promptState.execApprovalErrors.clear();
+      clearExecApprovalTimers(promptState);
     }
     if (!connected || !next.client) {
       promptState.execApprovalQueue = [];
@@ -399,9 +433,13 @@ export function createApplicationOverlays(
     publish();
     if (connectedSourceChanged) {
       connectedEpoch += 1;
-      void refreshApprovals(next.client, connectedEpoch);
+      if (approvalsAccess) {
+        void refreshApprovals(next.client, connectedEpoch, approvalAccessGeneration);
+      }
       void deviceAuthMigration.refresh(next.client, connectedEpoch);
       void verifyPendingUpdateVersion(next.client, connectedEpoch);
+    } else if (approvalAccessChanged && approvalsAccess) {
+      void refreshApprovals(next.client, connectedEpoch, approvalAccessGeneration);
     }
   };
   const stopGateway = gateway.subscribe(synchronizeGateway);
@@ -421,6 +459,9 @@ export function createApplicationOverlays(
       const payload = event.payload as GatewayUpdateAvailableEventPayload | undefined;
       snapshot = { ...snapshot, updateAvailable: payload?.updateAvailable ?? null };
       publish();
+      return;
+    }
+    if (!approvalsAccess || !canReviewGatewayApprovals(gateway.snapshot)) {
       return;
     }
     const requestedApproval = parseApprovalRequestedEvent(event.event, event.payload);

@@ -1,8 +1,6 @@
 /* @vitest-environment jsdom */
 
-import type { ReactiveController } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import type {
@@ -13,7 +11,7 @@ import type {
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import * as chatModels from "../chat/models.ts";
 import * as realtimeTalk from "../chat/realtime-talk.ts";
-import { ConfigPage, configSelectionFromSearch, supportsSystemInfo } from "./config-page.ts";
+import { ConfigPage, configSelectionFromSearch } from "./config-page.ts";
 import { configSectionKeysForPage } from "./config-sections.ts";
 import type { ConfigViewState } from "./view.ts";
 
@@ -65,12 +63,9 @@ describe("configSelectionFromSearch", () => {
     expect(configSectionKeysForPage("mcp")).toEqual(["mcp"]);
     expect(configSectionKeysForPage("infrastructure")).toEqual([
       "gateway",
-      "web",
       "browser",
       "nodeHost",
-      "canvasHost",
       "discovery",
-      "media",
       "acp",
     ]);
     expect(configSelectionFromSearch("mcp", "?section=browser")).toEqual({
@@ -82,20 +77,95 @@ describe("configSelectionFromSearch", () => {
       activeSubsection: null,
     });
   });
+
+  it("keeps Communications focused on messages, talk, and voice", () => {
+    expect(configSectionKeysForPage("communications")).toEqual(["messages", "talk", "tts"]);
+  });
+
+  it("keeps provider models off Agent Defaults", () => {
+    expect(configSectionKeysForPage("ai-agents")).toEqual(["agents", "skills", "tools", "session"]);
+  });
 });
 
-describe("supportsSystemInfo", () => {
-  it("requires the Gateway to advertise system.info", () => {
-    const hello = {
-      features: { methods: ["health", "system.info"] },
-    } as ApplicationGatewaySnapshot["hello"];
-    const unsupportedHello = {
-      features: { methods: ["health"] },
-    } as ApplicationGatewaySnapshot["hello"];
+describe("ConfigPage moved section routes", () => {
+  it.each([
+    ["channels", "channels", ""],
+    ["broadcast", "advanced", "?section=broadcast"],
+  ])("redirects the former Communications %s section", (section, routeId, search) => {
+    const navigate = vi.fn();
+    const page = new ConfigPage();
+    const state = page as unknown as {
+      context: { navigate: typeof navigate };
+      pageId: "communications";
+      routeData: {
+        section: string;
+        advanced: boolean;
+        tab: string | null;
+        targetBlockId: string | null;
+      };
+      syncRouteData: () => void;
+    };
+    state.context = { navigate };
+    state.pageId = "communications";
+    state.routeData = { section, advanced: false, tab: null, targetBlockId: null };
 
-    expect(supportsSystemInfo(hello)).toBe(true);
-    expect(supportsSystemInfo(unsupportedHello)).toBe(false);
-    expect(supportsSystemInfo(null)).toBe(false);
+    state.syncRouteData();
+
+    expect(navigate).toHaveBeenCalledWith(routeId, { search, hash: "" });
+  });
+
+  it("redirects the former Agent Defaults models section", () => {
+    const navigate = vi.fn();
+    const page = new ConfigPage();
+    const state = page as unknown as {
+      context: { navigate: typeof navigate };
+      pageId: "ai-agents";
+      routeData: {
+        section: string;
+        advanced: boolean;
+        tab: string | null;
+        targetBlockId: string | null;
+      };
+      syncRouteData: () => void;
+    };
+    state.context = { navigate };
+    state.pageId = "ai-agents";
+    state.routeData = { section: "models", advanced: false, tab: null, targetBlockId: null };
+
+    state.syncRouteData();
+
+    expect(navigate).toHaveBeenCalledWith("model-providers", { search: "", hash: "" });
+  });
+
+  it("redirects the former General model scroll target to the Models behavior section", () => {
+    const navigate = vi.fn();
+    const page = new ConfigPage();
+    const state = page as unknown as {
+      context: { navigate: typeof navigate };
+      pageId: "config";
+      routeData: {
+        section: string | null;
+        advanced: boolean;
+        tab: string | null;
+        targetBlockId: string | null;
+      };
+      syncRouteData: () => void;
+    };
+    state.context = { navigate };
+    state.pageId = "config";
+    state.routeData = {
+      section: null,
+      advanced: false,
+      tab: null,
+      targetBlockId: "settings-general-model",
+    };
+
+    state.syncRouteData();
+
+    expect(navigate).toHaveBeenCalledWith("model-providers", {
+      search: "",
+      hash: "#settings-model-behavior",
+    });
   });
 });
 
@@ -111,6 +181,18 @@ describe("ConfigPage advanced selection guard", () => {
     });
     expect(configSelectionFromSearch("advanced", "?section=mcp")).toEqual({
       activeSection: null,
+      activeSubsection: null,
+    });
+    expect(configSelectionFromSearch("advanced", "?section=tts")).toEqual({
+      activeSection: null,
+      activeSubsection: null,
+    });
+    expect(configSelectionFromSearch("advanced", "?section=broadcast")).toEqual({
+      activeSection: "broadcast",
+      activeSubsection: null,
+    });
+    expect(configSelectionFromSearch("advanced", "?section=models")).toEqual({
+      activeSection: "models",
       activeSubsection: null,
     });
   });
@@ -194,85 +276,6 @@ describe("ConfigPage camera selection", () => {
     state.cameraError = "Another camera error";
     await state.selectCamera("");
     expect(state.cameraError).toBeNull();
-  });
-});
-
-describe("ConfigPage system info", () => {
-  it("clears stale host info when the Gateway disconnects", () => {
-    const client = {} as GatewayBrowserClient;
-    const snapshot = {
-      client,
-      phase: "stopped",
-      hello: null,
-    } as ApplicationGatewaySnapshot;
-    const page = new ConfigPage();
-    const state = page as unknown as {
-      context: { gateway: { snapshot: ApplicationGatewaySnapshot } };
-      systemInfo: SystemInfoResult | null;
-      systemInfoClient: GatewayBrowserClient | null;
-      handleSystemInfoGatewaySnapshot: (snapshot: ApplicationGatewaySnapshot) => void;
-    };
-    state.context = { gateway: { snapshot } };
-    state.systemInfoClient = client;
-    state.systemInfo = {} as SystemInfoResult;
-
-    state.handleSystemInfoGatewaySnapshot(snapshot);
-
-    expect(state.systemInfo).toBeNull();
-  });
-
-  it("rejects an old Gateway source response when the replacement reuses its client", async () => {
-    const firstResponse = deferred<SystemInfoResult>();
-    const secondResponse = deferred<SystemInfoResult>();
-    const client = {
-      request: vi
-        .fn()
-        .mockImplementationOnce(() => firstResponse.promise)
-        .mockImplementationOnce(() => secondResponse.promise),
-    } as unknown as GatewayBrowserClient;
-    const snapshot = {
-      client,
-      phase: "connected",
-      hello: { features: { methods: ["system.info"] } },
-    } as ApplicationGatewaySnapshot;
-    const firstGateway = { snapshot } as ApplicationGateway;
-    const secondGateway = { snapshot } as ApplicationGateway;
-    const page = new ConfigPage();
-    const state = page as unknown as {
-      context: ApplicationContext;
-      subscriptions: ReactiveController;
-      shouldUpdate: () => boolean;
-      syncSystemInfoPolling: () => void;
-      synchronizeSystemInfoGateway: (gateway: ApplicationGateway) => void;
-      loadSystemInfo: () => Promise<void>;
-      systemInfo: SystemInfoResult | null;
-      systemInfoUnavailable: boolean;
-    };
-    page.removeController(state.subscriptions);
-    state.shouldUpdate = () => false;
-    state.syncSystemInfoPolling = () => undefined;
-    state.context = { gateway: firstGateway } as ApplicationContext;
-    document.body.append(page);
-    state.synchronizeSystemInfoGateway(firstGateway);
-
-    const firstLoad = state.loadSystemInfo();
-    state.systemInfo = {} as SystemInfoResult;
-    state.systemInfoUnavailable = true;
-    state.context = { gateway: secondGateway } as ApplicationContext;
-    state.synchronizeSystemInfoGateway(secondGateway);
-    const secondLoad = state.loadSystemInfo();
-
-    const stale = { platform: "stale" } as unknown as SystemInfoResult;
-    firstResponse.resolve(stale);
-    await firstLoad;
-    expect(state.systemInfo).toBeNull();
-    expect(state.systemInfoUnavailable).toBe(false);
-
-    const current = { platform: "current" } as unknown as SystemInfoResult;
-    secondResponse.resolve(current);
-    await secondLoad;
-    expect(state.systemInfo).toBe(current);
-    page.remove();
   });
 });
 

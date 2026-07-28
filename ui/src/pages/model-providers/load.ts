@@ -1,4 +1,4 @@
-// Fetches the gateway signals behind the Model Providers settings page.
+// Fetches the gateway signals behind the Models settings page.
 // Each source degrades independently: a missing usage hook or an older
 // gateway must not blank the provider list.
 import type { UsageSummary } from "../../../../src/infra/provider-usage.types.js";
@@ -88,7 +88,8 @@ export async function loadModelProvidersData(
         .catch(() => null),
     ]);
   return {
-    authStatus: authStatus.ok ? authStatus.result : null,
+    authStatus:
+      authStatus.ok && Array.isArray(authStatus.result?.providers) ? authStatus.result : null,
     models,
     catalogModels,
     config,

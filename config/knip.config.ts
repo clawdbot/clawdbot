@@ -248,6 +248,7 @@ const rootToolingAndWorkspaceDependencies = [
   "@copilotkit/aimock",
   "@lit-labs/signals",
   "@lit/context",
+  "@lit/task",
   // scripts/ui.js anchors these lookups at ui/package.json before invoking the UI workspace.
   "@vitest/browser-playwright",
   "dompurify",

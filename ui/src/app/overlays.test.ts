@@ -363,6 +363,114 @@ describe("Control UI refresh nudge", () => {
 });
 
 describe("application approval overlays", () => {
+  it.each([
+    { name: "read-only", scopes: ["operator.read"] },
+    { name: "write-only", scopes: ["operator.write"] },
+  ])("does not request or expose approvals for a $name operator", async ({ scopes }) => {
+    const request = vi.fn<RequestFn>(() => Promise.resolve([]));
+    const gatewayClient = client(request);
+    const harness = createGatewayHarness(null, false);
+    const overlays = createApplicationOverlays(harness.gateway);
+
+    harness.update({
+      client: gatewayClient,
+      phase: "connected",
+      hello: {
+        server: { version: "1.0.0" },
+        auth: { role: "operator", scopes },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    await flushMicrotasks();
+
+    expect(request).not.toHaveBeenCalledWith("exec.approval.list", {});
+    expect(request).not.toHaveBeenCalledWith("plugin.approval.list", {});
+    expect(request).not.toHaveBeenCalledWith("openclaw.approval.list", {});
+
+    harness.emitApproval("hidden-approval", 1_000);
+    expect(overlays.snapshot.approvalQueue).toEqual([]);
+    overlays.dispose();
+  });
+
+  it.each([
+    { name: "reviewer", auth: { role: "operator", scopes: ["operator.approvals"] } },
+    { name: "admin", auth: { role: "operator", scopes: ["operator.admin"] } },
+    { name: "legacy operator", auth: { role: "operator" } },
+  ])("loads pending approvals for a $name", async ({ auth }) => {
+    const request = vi.fn<RequestFn>(() => Promise.resolve([]));
+    const harness = createGatewayHarness(null, false);
+    const overlays = createApplicationOverlays(harness.gateway);
+
+    harness.update({
+      client: client(request),
+      phase: "connected",
+      hello: {
+        server: { version: "1.0.0" },
+        auth,
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    await flushMicrotasks();
+
+    expect(request).toHaveBeenCalledWith("exec.approval.list", {});
+    expect(request).toHaveBeenCalledWith("plugin.approval.list", {});
+    expect(request).toHaveBeenCalledWith("openclaw.approval.list", {});
+    overlays.dispose();
+  });
+
+  it("discards pending approvals when access changes on the same client", async () => {
+    const firstList = deferred();
+    const secondList = deferred();
+    let execListRequests = 0;
+    const request = vi.fn<RequestFn>((method) => {
+      if (method !== "exec.approval.list") {
+        return Promise.resolve([]);
+      }
+      execListRequests += 1;
+      return execListRequests === 1 ? firstList.promise : secondList.promise;
+    });
+    const gatewayClient = client(request);
+    const harness = createGatewayHarness(null, false);
+    const overlays = createApplicationOverlays(harness.gateway);
+
+    harness.update({
+      client: gatewayClient,
+      phase: "connected",
+      hello: {
+        server: { version: "1.0.0" },
+        auth: { role: "operator", scopes: ["operator.approvals"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    expect(execListRequests).toBe(1);
+
+    harness.update({
+      hello: {
+        server: { version: "1.0.0" },
+        auth: { role: "operator", scopes: ["operator.read"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    expect(overlays.snapshot.approvalQueue).toEqual([]);
+    expect(execListRequests).toBe(1);
+
+    harness.update({
+      hello: {
+        server: { version: "1.0.0" },
+        auth: { role: "operator", scopes: ["operator.admin"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    expect(execListRequests).toBe(2);
+
+    secondList.resolve([approval("approval-current", 2_000)]);
+    await vi.waitFor(() => {
+      expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual([
+        "approval-current",
+      ]);
+    });
+
+    firstList.resolve([approval("approval-stale", 1_000)]);
+    await flushMicrotasks();
+    expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual(["approval-current"]);
+    overlays.dispose();
+  });
+
   it("resolves OpenClaw changes through unified human approval", async () => {
     const request = vi.fn<RequestFn>(async (method) =>
       method.endsWith(".list") ? [] : { ok: true },

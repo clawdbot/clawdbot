@@ -1728,15 +1728,35 @@ process.on("SIGINT", shutdown);`,
     }
   });
 
-  it("keeps resource-only MCP servers available for utility tools", async () => {
+  it.each([
+    {
+      name: "resource-only servers reporting method not found",
+      capabilities: { resources: { listChanged: true } },
+      listToolsMethodNotFound: true,
+      listToolsJsonRpcErrorMessage: undefined,
+    },
+    {
+      name: "resource-only servers reporting unknown method",
+      capabilities: { resources: { listChanged: true } },
+      listToolsMethodNotFound: false,
+      listToolsJsonRpcErrorMessage: "Unknown method",
+    },
+    {
+      name: "prompt-only servers reporting unknown method",
+      capabilities: { prompts: { listChanged: true } },
+      listToolsMethodNotFound: false,
+      listToolsJsonRpcErrorMessage: "Unknown method",
+    },
+  ])("keeps $name available for utility tools", async (testCase) => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-resource-only-"));
     const serverPath = path.join(tempDir, "resource-only.mjs");
     const logPath = path.join(tempDir, "server.log");
     await writeListToolsMcpServer({
       filePath: serverPath,
       logPath,
-      capabilities: { resources: { listChanged: true } },
-      listToolsMethodNotFound: true,
+      capabilities: testCase.capabilities,
+      listToolsMethodNotFound: testCase.listToolsMethodNotFound,
+      listToolsJsonRpcErrorMessage: testCase.listToolsJsonRpcErrorMessage,
     });
 
     const runtime = await getOrCreateSessionMcpRuntime({
@@ -1762,9 +1782,53 @@ process.on("SIGINT", shutdown);`,
       expect(catalog.servers.notes).toMatchObject({
         serverName: "notes",
         toolCount: 0,
-        resources: { listChanged: true },
+        ...testCase.capabilities,
       });
+      expect(catalog.diagnostics ?? []).toEqual([]);
       await waitForFileText(logPath, "recv initialize", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not suppress unknown tools/list methods from tools-capable MCP servers", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-tools-unknown-method-"));
+    const serverPath = path.join(tempDir, "tools-unknown-method.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      capabilities: { tools: {}, resources: { listChanged: true } },
+      listToolsJsonRpcErrorMessage: "Unknown method",
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-tools-unknown-method",
+      sessionKey: "agent:test:session-tools-unknown-method",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            notes: {
+              command: process.execPath,
+              args: [serverPath],
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+
+      expect(catalog.servers).toEqual({});
+      expect(catalog.tools).toEqual([]);
+      expect(catalog.diagnostics?.[0]).toMatchObject({
+        serverName: "notes",
+        message: expect.stringContaining("Unknown method"),
+      });
+      await waitForFileText(logPath, "recv tools/list", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });

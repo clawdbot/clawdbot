@@ -164,6 +164,17 @@ Other behavior: the runner preflights Docker by default, cleans stale OpenClaw E
 | `pnpm test:docker:update-migration`                                         | Published-upgrade survivor harness in the `plugin-deps-cleanup` scenario, starting at `openclaw@2026.4.23` by default. The `Update Migration` workflow expands this with `baselines=all-since-2026.4.23` to prove configured-plugin dependency cleanup outside Full Release CI.                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `pnpm test:docker:plugins`                                                  | Install/update smoke for local path, `file:`, npm registry packages with hoisted dependencies, git moving refs, ClawHub fixtures, marketplace updates, and Claude-bundle enable/inspect.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 
+### Sandbox compatibility lanes
+
+| Command                                      | Verifies                                                                                                                                                           |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `pnpm test:e2e:openshell`                    | Real OpenShell gateway, custom image build, managed sandbox lifecycle, SSH execution, remote filesystem bridge, seeded workspace, and deny/allow network policies. |
+| `pnpm test:docker:package-install`           | Packed OpenClaw npm artifact installation into a clean global prefix, then CLI version and help startup from the installed package.                                |
+| `pnpm test:docker:openai-web-search-minimal` | Mocked TLS endpoint with a private test CA, isolated Gateway startup, and web-search request handling through the configured certificate trust path.               |
+| `pnpm test:docker:browser-cdp-snapshot`      | Chromium startup, raw CDP connectivity, isolated Gateway browser commands, doctor output, and accessibility snapshot roles.                                        |
+| `pnpm test:docker:kitchen-sink-rpc`          | Installed plugin commands and catalog tools, read-only Gateway RPC traversal, authentication boundaries, channel lifecycle, and resource ceilings.                 |
+| `pnpm test:docker:kitchen-sink-plugin`       | Packaged and registry plugin install flows, plugin execution, expected unsupported-version failures, ClawHub fallback, and npm-to-ClawHub migration.               |
+
 ## Local PR gate
 
 For local PR land/gate checks, run:

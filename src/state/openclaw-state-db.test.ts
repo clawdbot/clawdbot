@@ -3961,6 +3961,37 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     expect(journalMode?.journal_mode?.toLowerCase()).toBe("wal");
   });
 
+  it("configures the busy timeout before a doctor schema repair transaction", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    openOpenClawStateDatabase(options);
+    closeOpenClawStateDatabaseForTest();
+    const { DatabaseSync } = requireNodeSqlite();
+    const originalExec = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "exec")?.value as
+      | ((this: import("node:sqlite").DatabaseSync, sql: string) => void)
+      | undefined;
+    if (!originalExec) {
+      throw new Error("DatabaseSync.exec descriptor is unavailable");
+    }
+    const statements: string[] = [];
+    vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (
+      this: import("node:sqlite").DatabaseSync,
+      sql: string,
+    ) {
+      statements.push(sql);
+      return originalExec.call(this, sql);
+    });
+
+    expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+
+    const timeoutIndex = statements.findIndex((sql) =>
+      sql.includes(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS}`),
+    );
+    const transactionIndex = statements.indexOf("BEGIN IMMEDIATE");
+    expect(timeoutIndex).toBeGreaterThanOrEqual(0);
+    expect(transactionIndex).toBeGreaterThan(timeoutIndex);
+  });
+
   it("uses rollback journaling for shared state databases on NFS-backed volumes", () => {
     const stateDir = createTempStateDir();
     const statfs = vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0x6969));

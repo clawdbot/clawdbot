@@ -331,6 +331,33 @@ describe("server-channels auto restart", () => {
     expect(startAccount).toHaveBeenCalledTimes(11);
   });
 
+  it("claims auto-restart ownership between crash-loop attempts", async () => {
+    const startAccount = vi.fn(async () => {});
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannels();
+    await flushMicrotasks();
+
+    // The health monitor must see the supervisor own recovery here, otherwise it
+    // resets the attempt ladder and the give-up below never happens.
+    expect(manager.isAutoRestartScheduled("discord", DEFAULT_ACCOUNT_ID)).toBe(true);
+
+    // A competing restart request cannot help while the supervisor holds the
+    // account task; it returns without booting anything.
+    const startsBeforeRequest = startAccount.mock.calls.length;
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    expect(startAccount).toHaveBeenCalledTimes(startsBeforeRequest);
+
+    await advanceTimersUntil(
+      () => startAccount.mock.calls.length >= 11,
+      "expected crash-loop restarts to reach the maximum attempt cap",
+      { stepMs: 10, maxMs: 500 },
+    );
+
+    expect(manager.isAutoRestartScheduled("discord", DEFAULT_ACCOUNT_ID)).toBe(false);
+  });
+
   it("aborts the crashed task's signal before starting its replacement", async () => {
     const signals: AbortSignal[] = [];
     const startAccount = vi.fn(async (ctx: ChannelGatewayContext<TestAccount>) => {

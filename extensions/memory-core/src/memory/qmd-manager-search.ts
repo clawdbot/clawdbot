@@ -1,6 +1,7 @@
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { QmdQueryResult } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import type {
+  MemoryEntryProvenance,
   MemorySearchResult,
   MemorySearchRuntimeDebug,
   MemorySource,
@@ -17,6 +18,33 @@ import {
   MEMORY_SEARCH_DEADLINE_CONTROL,
   type MemorySearchDeadlineControlOptions,
 } from "./search-deadline.js";
+
+function resolveQmdSearchProvenance(
+  resultPath: string,
+  source: MemorySource,
+  observedAt: number,
+): MemoryEntryProvenance {
+  const normalizedPath = resultPath.replaceAll("\\", "/").toLowerCase();
+  const isSystemArtifact =
+    normalizedPath === "dreams.md" ||
+    normalizedPath.startsWith("memory/dreaming/") ||
+    normalizedPath.startsWith("memory/.dreams/");
+  const isConsolidatedMemory = normalizedPath === "memory.md";
+  return {
+    // QMD does not carry flush-recorded per-line provenance. Keep daily notes
+    // and extra paths untrusted until that metadata is available on results.
+    originClass:
+      source === "sessions"
+        ? "untrusted"
+        : isSystemArtifact
+          ? "system"
+          : isConsolidatedMemory
+            ? "agent"
+            : "untrusted",
+    sessionKind: "unknown",
+    observedAt,
+  };
+}
 
 export abstract class QmdManagerSearch extends QmdManagerSearchSupport {
   async search(
@@ -251,6 +279,7 @@ export abstract class QmdManagerSearch extends QmdManagerSearchSupport {
         score,
         snippet,
         source: doc.source,
+        provenance: resolveQmdSearchProvenance(doc.rel, doc.source, doc.observedAt),
       } satisfies MemorySearchResult;
       const artifactIdentity =
         doc.source === "sessions"

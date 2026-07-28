@@ -32,6 +32,7 @@ import {
   type ChatHistoryPagination,
   type ChatMessageCache,
   type ChatPageHost,
+  type ChatSessionScrollPosition,
   type ChatPaneHeaderAction,
   type ChatSessionSharingState,
   type ControlUiSessionBranch,
@@ -86,6 +87,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @property({ attribute: false }) paneTitle = "";
   @property({ attribute: false }) narrow = false;
   @property({ attribute: false }) mergedChrome = false;
+  @property({ attribute: false }) navDrawerOpen = false;
   @property({ attribute: false }) nativeGateways?: NativeGatewaysCapability | null;
   @property({ attribute: false }) gatewaysSnapshot?: NativeGatewaysSnapshot | null;
   @property({ attribute: false }) onboarding = false;
@@ -362,6 +364,9 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected abstract applyApplicationConfig(config: ChatPageContext["config"]["current"]): void;
   protected abstract applySessionsState(state: ChatPageContext["sessions"]["state"]): void;
   protected abstract cancelHeaderRename(): void;
-  protected abstract resetOlderMessagesViewport(): void;
+  protected abstract resetOlderMessagesViewport(
+    nextSessionKey?: string,
+  ): ChatSessionScrollPosition | null;
+  protected abstract restoreOlderMessagesViewport(sessionKey: string, scrollTop: number): void;
   protected abstract sendPendingSkillWorkshopRevision(expectedSessionKey: string): void;
 }

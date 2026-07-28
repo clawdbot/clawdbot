@@ -35,6 +35,10 @@ const mocks = vi.hoisted(() => ({
   loadAuthProfileStoreForRuntime: vi.fn(() => ({ profiles: {}, order: {} })),
   listProfilesForProvider: vi.fn(() => []),
   resolveApiKeyForProvider: vi.fn(),
+  loadManifestMetadataSnapshot: vi.fn(() => ({ manifestRegistry: { plugins: [] } })),
+  planEffectiveModelCatalogRows: vi.fn<
+    typeof import("../model-catalog/index.js").planEffectiveModelCatalogRows
+  >(() => ({ rows: [], entries: [], conflicts: [] })),
   resolveAgentDir: vi.fn((_cfg: unknown, agentId: string) => `/tmp/agent-${agentId}`),
   updateAuthProfileStoreWithLock: vi.fn(
     async ({ updater }: { updater: (store: any) => boolean }) => {
@@ -104,7 +108,9 @@ const mocks = vi.hoisted(() => ({
     model: "gpt-4.1-mini",
   })),
   generateImage: vi.fn(),
+  listRuntimeImageGenerationProviders: vi.fn(() => []),
   generateVideo: vi.fn(),
+  listRuntimeVideoGenerationProviders: vi.fn(() => []),
   transcribeAudioFile: vi.fn(async () => ({ text: "meeting notes" })),
   textToSpeech: vi.fn(async () => ({
     success: true,
@@ -115,6 +121,8 @@ const mocks = vi.hoisted(() => ({
     attempts: [],
   })),
   setTtsProvider: vi.fn(),
+  getTtsProvider: vi.fn(() => "openai"),
+  listSpeechProviders: vi.fn(() => []),
   setTtsPersona: vi.fn(),
   resolveTtsConfig: vi.fn(() => ({})),
   resolveExplicitTtsOverrides: vi.fn(
@@ -231,6 +239,14 @@ vi.mock("../config/config.js", () => ({
   loadConfig: mocks.loadConfig as typeof import("../config/config.js").loadConfig,
   setRuntimeConfigSnapshot:
     mocks.setRuntimeConfigSnapshot as typeof import("../config/config.js").setRuntimeConfigSnapshot,
+}));
+
+vi.mock("../model-catalog/index.js", () => ({
+  planEffectiveModelCatalogRows: mocks.planEffectiveModelCatalogRows,
+}));
+
+vi.mock("../plugins/manifest-contract-eligibility.js", () => ({
+  loadManifestMetadataSnapshot: mocks.loadManifestMetadataSnapshot,
 }));
 
 vi.mock("./command-config-resolution.js", () => ({
@@ -358,17 +374,17 @@ vi.mock("../plugin-sdk/memory-core-bundled-runtime.js", () => ({
 
 vi.mock("../image-generation/runtime.js", () => ({
   generateImage: (...args: unknown[]) => mocks.generateImage(...args),
-  listRuntimeImageGenerationProviders: vi.fn(() => []),
+  listRuntimeImageGenerationProviders: mocks.listRuntimeImageGenerationProviders,
 }));
 
 vi.mock("../video-generation/runtime.js", () => ({
   generateVideo: mocks.generateVideo,
-  listRuntimeVideoGenerationProviders: vi.fn(() => []),
+  listRuntimeVideoGenerationProviders: mocks.listRuntimeVideoGenerationProviders,
 }));
 
 vi.mock("../tts/tts.js", () => ({
   getTtsPersona: vi.fn(() => undefined),
-  getTtsProvider: vi.fn(() => "openai"),
+  getTtsProvider: mocks.getTtsProvider,
   listTtsPersonas: vi.fn(() => []),
   listSpeechVoices: vi.fn(async () => []),
   resolveTtsConfig:
@@ -384,7 +400,10 @@ vi.mock("../tts/tts.js", () => ({
 
 vi.mock("../tts/provider-registry.js", () => ({
   canonicalizeSpeechProviderId: vi.fn((provider: string) => provider),
-  listSpeechProviders: vi.fn(() => []),
+  listSpeechProviders: mocks.listSpeechProviders,
+  normalizeSpeechProviderId: vi.fn(
+    (provider: string | undefined) => provider?.trim().toLowerCase() || undefined,
+  ),
 }));
 
 vi.mock("../web-search/runtime.js", () => ({
@@ -494,6 +513,12 @@ describe("capability cli", () => {
     mocks.loadAuthProfileStoreForRuntime.mockReset().mockReturnValue({ profiles: {}, order: {} });
     mocks.listProfilesForProvider.mockReset().mockReturnValue([]);
     mocks.resolveApiKeyForProvider.mockReset().mockRejectedValue(new Error("no auth profile"));
+    mocks.loadManifestMetadataSnapshot
+      .mockReset()
+      .mockReturnValue({ manifestRegistry: { plugins: [] } });
+    mocks.planEffectiveModelCatalogRows
+      .mockReset()
+      .mockReturnValue({ rows: [], entries: [], conflicts: [] });
     mocks.resolveAgentDir.mockClear();
     mocks.resolveTtsConfig.mockReset().mockReturnValue({});
     mocks.getRuntimeConfigSourceSnapshot.mockReset().mockReturnValue(null);
@@ -533,12 +558,20 @@ describe("capability cli", () => {
     mocks.describePreparedImageWithModel.mockClear();
     mocks.describeImageFileWithModel.mockClear();
     mocks.generateImage.mockReset();
+    mocks.listRuntimeImageGenerationProviders.mockReset().mockReturnValue([]);
     mocks.generateVideo.mockReset();
+    mocks.listRuntimeVideoGenerationProviders.mockReset().mockReturnValue([]);
     mocks.transcribeAudioFile.mockClear();
     mocks.textToSpeech.mockClear();
     mocks.setTtsProvider.mockClear();
+    mocks.getTtsProvider.mockReset().mockReturnValue("openai");
+    mocks.listSpeechProviders.mockReset().mockReturnValue([]);
     mocks.resolveExplicitTtsOverrides.mockClear();
-    mocks.getProviderEnvVars.mockClear();
+    mocks.getProviderEnvVars
+      .mockReset()
+      .mockImplementation((providerId: string) => [
+        `${providerId.toUpperCase().replaceAll("-", "_")}_API_KEY`,
+      ]);
     mocks.buildMediaUnderstandingRegistry.mockReset().mockReturnValue(new Map());
     mocks.inspectLocalAudioSelection.mockReset().mockResolvedValue({ candidates: [], entries: [] });
     mocks.convertHeicToJpeg.mockClear();
@@ -750,6 +783,61 @@ describe("capability cli", () => {
     const ids = payload.map((entry) => entry.id);
     expect(ids).toContain("model.run");
     expect(ids).toContain("image.describe");
+  });
+
+  it.each([
+    ["list", []],
+    ["inspect", ["--model", "openai/gpt-5.4"]],
+    ["providers", []],
+  ] as const)("keeps model %s catalog inspection read-only", async (command, args) => {
+    await runCap("capability", "model", command, ...args, "--json");
+
+    expect(mocks.loadModelCatalog).toHaveBeenCalledWith({
+      config: mocks.loadConfig(),
+      readOnly: true,
+    });
+  });
+
+  it("reports model providers configured through their environment key", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "test-openai-key");
+
+    await runCap("capability", "model", "providers", "--json");
+
+    const providers = firstJsonOutput() as unknown as Array<{
+      configured?: boolean;
+      provider?: string;
+    }>;
+    expect(providers).toContainEqual(
+      expect.objectContaining({ provider: "openai", configured: true }),
+    );
+    expect(mocks.getProviderEnvVars).toHaveBeenCalledWith("openai");
+  });
+
+  it("inspects runtime-declared manifest models without live discovery", async () => {
+    mocks.loadModelCatalog.mockResolvedValueOnce([] as never);
+    mocks.planEffectiveModelCatalogRows.mockReturnValueOnce({
+      rows: [
+        {
+          provider: "openai",
+          id: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
+          ref: "openai/gpt-5.6-sol",
+          mergeKey: "openai/gpt-5.6-sol",
+          source: "manifest",
+          input: ["text"],
+          reasoning: true,
+          status: "available",
+        },
+      ],
+      entries: [],
+      conflicts: [],
+    });
+
+    await runCap("capability", "model", "inspect", "--model", "openai/gpt-5.6-sol", "--json");
+
+    expect(firstJsonOutput()).toEqual(
+      expect.objectContaining({ provider: "openai", id: "gpt-5.6-sol" }),
+    );
   });
 
   it("defaults model run to local transport", async () => {
@@ -1032,6 +1120,30 @@ describe("capability cli", () => {
       expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
       expect(mocks.callGateway).not.toHaveBeenCalled();
       expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["local", "gateway"] as const)(
+    "rejects malformed explicit model refs before %s dispatch",
+    async (transport) => {
+      await expect(
+        runCap(
+          "capability",
+          "model",
+          "run",
+          "--model",
+          "not-a-provider/",
+          "--prompt",
+          "hello",
+          ...(transport === "gateway" ? ["--gateway"] : []),
+          "--json",
+        ),
+      ).rejects.toThrow("exit 1");
+
+      expectRuntimeErrorContains("Model overrides must use the form <provider/model>.");
+      expect(mocks.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+      expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+      expect(mocks.callGateway).not.toHaveBeenCalled();
     },
   );
 
@@ -2674,6 +2786,62 @@ describe("capability cli", () => {
     expect(firstTextToSpeechCall()?.disableFallback).toBe(true);
   });
 
+  it("selects a TTS provider without inventing a model override", async () => {
+    await runCap(
+      "capability",
+      "tts",
+      "convert",
+      "--text",
+      "hello",
+      "--provider",
+      "xiaomi",
+      "--json",
+    );
+
+    expect(mocks.resolveExplicitTtsOverrides).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "xiaomi", modelId: undefined }),
+    );
+    expect(firstTextToSpeechCall()?.disableFallback).toBe(true);
+  });
+
+  it("rejects conflicting TTS provider and model selections", async () => {
+    await expect(
+      runCap(
+        "capability",
+        "tts",
+        "convert",
+        "--text",
+        "hello",
+        "--provider",
+        "xiaomi",
+        "--model",
+        "openai/gpt-4o-mini-tts",
+        "--json",
+      ),
+    ).rejects.toThrow("exit 1");
+
+    expectRuntimeErrorContains("TTS --provider must match the provider in --model.");
+  });
+
+  it("accepts equivalent TTS provider casing with a model selection", async () => {
+    await runCap(
+      "capability",
+      "tts",
+      "convert",
+      "--text",
+      "hello",
+      "--provider",
+      "OpenAI",
+      "--model",
+      "openai/gpt-4o-mini-tts",
+      "--json",
+    );
+
+    expect(mocks.resolveExplicitTtsOverrides).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "openai", modelId: "gpt-4o-mini-tts" }),
+    );
+  });
+
   it("does not infer and forward a local provider guess for gateway TTS overrides", async () => {
     await runCap(
       "capability",
@@ -3009,6 +3177,77 @@ describe("capability cli", () => {
         capabilities: ["audio"],
         defaultModels: { audio: "whisper-large-v3-turbo" },
       },
+    ]);
+  });
+
+  it("marks env-backed image providers as configured", async () => {
+    vi.stubEnv("FAL_KEY", "fal-test-key");
+    mocks.getProviderEnvVars.mockReturnValueOnce(["FAL_KEY"]);
+    mocks.listRuntimeImageGenerationProviders.mockReturnValueOnce([
+      { id: "fal", label: "fal", defaultModel: "fal-ai/flux", models: [] },
+    ] as never);
+
+    await runCap("capability", "image", "providers", "--json");
+
+    expect(firstJsonOutput()).toMatchObject([
+      { id: "fal", available: true, configured: true, selected: false },
+    ]);
+  });
+
+  it("marks env-backed video generation and description providers as configured", async () => {
+    vi.stubEnv("RUNWAYML_API_SECRET", "runway-test-key");
+    vi.stubEnv("GEMINI_API_KEY", "gemini-test-key");
+    mocks.getProviderEnvVars.mockImplementation((providerId: string) =>
+      providerId === "runway" ? ["RUNWAYML_API_SECRET"] : ["GEMINI_API_KEY"],
+    );
+    mocks.listRuntimeVideoGenerationProviders.mockReturnValueOnce([
+      { id: "runway", label: "Runway", defaultModel: "gen4", models: [] },
+    ] as never);
+    mocks.buildMediaUnderstandingRegistry.mockReturnValueOnce(
+      new Map([
+        [
+          "google",
+          {
+            id: "google",
+            capabilities: ["video"],
+            defaultModels: { video: "gemini-3-flash-preview" },
+          },
+        ],
+      ]),
+    );
+
+    await runCap("capability", "video", "providers", "--json");
+
+    expect(firstJsonOutput()).toMatchObject({
+      generation: [{ id: "runway", configured: true }],
+      description: [{ id: "google", configured: true }],
+    });
+  });
+
+  it("marks env-backed TTS providers as configured", async () => {
+    vi.stubEnv("XAI_API_KEY", "xai-test-key");
+    mocks.getProviderEnvVars.mockReturnValueOnce(["XAI_API_KEY"]);
+    mocks.listSpeechProviders.mockReturnValueOnce([
+      { id: "xai", label: "xAI", models: [], voices: [] },
+    ] as never);
+
+    await runCap("capability", "tts", "providers", "--local", "--json");
+
+    expect(firstJsonOutput()).toMatchObject({
+      providers: [{ id: "xai", configured: true, selected: false }],
+    });
+  });
+
+  it("marks env-backed embedding providers as configured", async () => {
+    vi.stubEnv("DEEPINFRA_API_KEY", "deepinfra-test-key");
+    mocks.listMemoryEmbeddingProviders.mockReturnValueOnce([
+      { id: "deepinfra", defaultModel: "BAAI/bge-m3", transport: "remote" },
+    ]);
+
+    await runCap("capability", "embedding", "providers", "--json");
+
+    expect(firstJsonOutput()).toMatchObject([
+      { id: "deepinfra", configured: true, selected: false },
     ]);
   });
 

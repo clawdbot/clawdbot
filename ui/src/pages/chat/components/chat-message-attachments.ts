@@ -13,7 +13,7 @@ import type { AttachmentItem } from "./chat-message-media.ts";
 type AssistantAttachmentAvailability =
   | { status: "checking" }
   | { status: "available"; mediaTicket?: string; mediaTicketExpiresAt?: number }
-  | { status: "unavailable"; reason: string; checkedAt: number };
+  | { status: "unavailable"; reason: string; checkedAt: number; retryAttempted?: true };
 
 const assistantAttachmentAvailabilityCache = new Map<string, AssistantAttachmentAvailability>();
 const assistantAttachmentRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -21,6 +21,18 @@ const ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS = 5_000;
 const ASSISTANT_ATTACHMENT_METADATA_FETCH_TIMEOUT_MS = 30_000;
 const ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS = 30_000;
 let assistantAttachmentAvailabilityRenderVersion = 0;
+
+function createUnavailableAssistantAttachment(
+  reason: string,
+  retryAttempted: boolean,
+): Extract<AssistantAttachmentAvailability, { status: "unavailable" }> {
+  return {
+    status: "unavailable",
+    reason,
+    checkedAt: Date.now(),
+    ...(retryAttempted ? { retryAttempted: true } : {}),
+  };
+}
 
 export function getAssistantAttachmentAvailabilityRenderVersion(): number {
   return assistantAttachmentAvailabilityRenderVersion;
@@ -34,9 +46,11 @@ function bumpAssistantAttachmentAvailabilityRenderVersion() {
 function setAssistantAttachmentAvailability(
   cacheKey: string,
   availability: AssistantAttachmentAvailability,
+  onRequestUpdate?: () => void,
 ) {
   assistantAttachmentAvailabilityCache.set(cacheKey, availability);
   bumpAssistantAttachmentAvailabilityRenderVersion();
+  scheduleAssistantAttachmentRefresh(cacheKey, availability, onRequestUpdate);
 }
 
 function deleteAssistantAttachmentAvailability(cacheKey: string) {
@@ -64,27 +78,31 @@ function scheduleAssistantAttachmentRefresh(
   onRequestUpdate: (() => void) | undefined,
 ) {
   clearAssistantAttachmentRefreshTimer(cacheKey);
-  if (
-    availability.status !== "available" ||
-    !availability.mediaTicket ||
-    !availability.mediaTicketExpiresAt ||
-    !onRequestUpdate
-  ) {
+  if (!onRequestUpdate) {
     return;
   }
-  const refreshInMs = Math.max(
-    0,
-    availability.mediaTicketExpiresAt -
-      Date.now() -
-      ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS,
-  );
+  const refreshAt =
+    availability.status === "unavailable" && !availability.retryAttempted
+      ? availability.checkedAt + ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS
+      : availability.status === "available" &&
+          availability.mediaTicket &&
+          availability.mediaTicketExpiresAt
+        ? availability.mediaTicketExpiresAt - ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS
+        : undefined;
+  if (refreshAt === undefined) {
+    return;
+  }
+  const refreshInMs = Math.max(0, refreshAt - Date.now());
   const timer = setTimeout(() => {
     assistantAttachmentRefreshTimers.delete(cacheKey);
-    const cached = assistantAttachmentAvailabilityCache.get(cacheKey);
-    if (cached?.status !== "available" || cached.mediaTicket !== availability.mediaTicket) {
+    if (assistantAttachmentAvailabilityCache.get(cacheKey) !== availability) {
       return;
     }
-    deleteAssistantAttachmentAvailability(cacheKey);
+    // Keep the failed generation until its retry can inherit the one-attempt
+    // budget; ticket refreshes must still invalidate their current generation.
+    if (availability.status !== "unavailable") {
+      deleteAssistantAttachmentAvailability(cacheKey);
+    }
     onRequestUpdate();
   }, refreshInMs);
   assistantAttachmentRefreshTimers.set(cacheKey, timer);
@@ -106,12 +124,15 @@ export function resolveAssistantAttachmentAvailability(
   const normalizedAuthToken = authToken?.trim() ?? "";
   const cacheKey = `${basePath ?? ""}::${normalizedAuthToken}::${source}`;
   const cached = assistantAttachmentAvailabilityCache.get(cacheKey);
+  let retryAttempted = false;
   if (cached) {
     const now = Date.now();
     if (
       cached.status === "unavailable" &&
+      !cached.retryAttempted &&
       now - cached.checkedAt >= ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS
     ) {
+      retryAttempted = true;
       deleteAssistantAttachmentAvailability(cacheKey);
     } else if (
       cached.status === "available" &&
@@ -157,36 +178,35 @@ export function resolveAssistantAttachmentAvailability(
           const mediaTicket = payload.mediaTicket?.trim();
           const mediaTicketExpiresAt = Date.parse(payload.mediaTicketExpiresAt ?? "");
           if (mediaTicket && !Number.isFinite(mediaTicketExpiresAt)) {
-            clearAssistantAttachmentRefreshTimer(cacheKey);
-            setAssistantAttachmentAvailability(cacheKey, {
-              status: "unavailable",
-              reason: "Attachment unavailable",
-              checkedAt: Date.now(),
-            });
+            setAssistantAttachmentAvailability(
+              cacheKey,
+              createUnavailableAssistantAttachment("Attachment unavailable", retryAttempted),
+              onRequestUpdate,
+            );
             return;
           }
           const availability: AssistantAttachmentAvailability = {
             status: "available",
             ...(mediaTicket ? { mediaTicket, mediaTicketExpiresAt } : {}),
           };
-          setAssistantAttachmentAvailability(cacheKey, availability);
-          scheduleAssistantAttachmentRefresh(cacheKey, availability, onRequestUpdate);
+          setAssistantAttachmentAvailability(cacheKey, availability, onRequestUpdate);
         } else {
-          clearAssistantAttachmentRefreshTimer(cacheKey);
-          setAssistantAttachmentAvailability(cacheKey, {
-            status: "unavailable",
-            reason: payload?.reason?.trim() || "Attachment unavailable",
-            checkedAt: Date.now(),
-          });
+          setAssistantAttachmentAvailability(
+            cacheKey,
+            createUnavailableAssistantAttachment(
+              payload?.reason?.trim() || "Attachment unavailable",
+              retryAttempted,
+            ),
+            onRequestUpdate,
+          );
         }
       })
       .catch(() => {
-        clearAssistantAttachmentRefreshTimer(cacheKey);
-        setAssistantAttachmentAvailability(cacheKey, {
-          status: "unavailable",
-          reason: "Attachment unavailable",
-          checkedAt: Date.now(),
-        });
+        setAssistantAttachmentAvailability(
+          cacheKey,
+          createUnavailableAssistantAttachment("Attachment unavailable", retryAttempted),
+          onRequestUpdate,
+        );
       })
       .finally(() => {
         clearTimeout(timeout);

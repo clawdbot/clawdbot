@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import type { LobsterPetPaletteId } from "./lobster-pet-contract.ts";
 
 type LobsterPaletteLore = {
@@ -16,23 +17,66 @@ const RARE_NAMES: Partial<Record<LobsterPetPaletteId, string>> = {
   oilslick: "Slick",
   aurora: "Borealis",
   nebula: "Cosmo",
+  banana: "Peel",
   mood: "Ringo",
+  bee: "Buzz",
+  rubberduck: "Debuggy",
   clawtron: "Clawtron",
   selene: "Selene",
   geode: "Amethyst",
   ghost: "Boo",
   glass: "Prism",
   split: "Picasso",
+  sourdough: "Boule",
+  zombie: "Shambles",
+  plush: "Buttons",
   cottoncandy: "Taffy",
+  disco: "Boogie",
   blueprint: "Prototype",
   phosphor: "TTY",
   heisenbug: "Segfault",
+  invisible: "Nobody",
   pixel: "Sprite",
   retro: "OG",
+  goldenretro: "24K",
 };
+
+const PET_NAMES = [
+  "Pinchy",
+  "Barnaby",
+  "Thermidor",
+  "Clawdette",
+  "Sheldon",
+  "Scuttles",
+  "Bisque",
+  "Crusty",
+  "Snips",
+  "Bubbles",
+  "Clawdia",
+  "Ferdinand",
+  "Maple",
+  "Pearl",
+  "Biscuit",
+  "Captain",
+  "Ziggy",
+  "Noodle",
+  "Waffles",
+  "Pippin",
+  "Squirt",
+  "Chip",
+  "Clementine",
+  "Moss",
+] as const;
 
 export function lobsterPaletteName(paletteId: LobsterPetPaletteId): string {
   return RARE_NAMES[paletteId] ?? paletteId;
+}
+
+export function lobsterRandomName(seed: number): string {
+  return expectDefined(
+    PET_NAMES[(seed >>> 3) % PET_NAMES.length],
+    "lobster pet name catalog entry",
+  );
 }
 
 // Like pet names and bottle fortunes, Lobsterdex lore is an English-only
@@ -68,7 +112,13 @@ export const LOBSTER_PALETTE_LORE: Record<LobsterPetPaletteId, LobsterPaletteLor
     flavor: "Not from any ocean on this planet.",
     hint: "Came from very far away.",
   },
+  banana: { flavor: "Banana. For scale.", hint: "For scale." },
   mood: { flavor: "Wears whatever color you're feeling.", hint: "Matches your vibe." },
+  bee: { flavor: "Technically not a bee.", hint: "Do not tell the bees." },
+  rubberduck: {
+    flavor: "Listens to your bugs. Judges silently.",
+    hint: "Quack.",
+  },
   clawtron: { flavor: "60% rivets, 40% love.", hint: "Beep boop snip." },
   selene: { flavor: "Carries the current moon on its belly.", hint: "Waxes and wanes." },
   geode: { flavor: "Rock outside, amethyst inside.", hint: "Crack the surface." },
@@ -78,10 +128,17 @@ export const LOBSTER_PALETTE_LORE: Record<LobsterPetPaletteId, LobsterPaletteLor
     hint: "Easy to miss, hard to forget.",
   },
   split: { flavor: "Two lobsters, one shell.", hint: "Can't pick a side." },
+  sourdough: {
+    flavor: "Started from a starter. 24-hour proof.",
+    hint: "Still proofing.",
+  },
+  zombie: { flavor: "Slightly used. Still friendly.", hint: "It's been better." },
+  plush: { flavor: "Machine washable. Air dry only.", hint: "Soft to the touch." },
   cottoncandy: {
     flavor: "Pastel, like the famous Maine catch.",
     hint: "Sweeter than it looks.",
   },
+  disco: { flavor: "Born under a mirror ball.", hint: "The night is still young." },
   blueprint: {
     flavor: "Final hardware pending approval.",
     hint: "Still on the drawing board.",
@@ -91,9 +148,11 @@ export const LOBSTER_PALETTE_LORE: Record<LobsterPetPaletteId, LobsterPaletteLor
     flavor: "Only renders right when nobody's watching.",
     hint: "Cannot be reproduced.",
   },
+  invisible: { flavor: "It's right there. Look closer.", hint: "Trust me, it exists." },
   pixel: { flavor: "Rendered in 1987. Still runs.", hint: "Insert coin." },
   retro: {
     flavor: "The original: big claw, no apologies.",
     hint: "The one that started it all.",
   },
+  goldenretro: { flavor: "One in a generation.", hint: "Worth the wait." },
 };

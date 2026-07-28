@@ -72,6 +72,10 @@ export type SessionMessageEvent = {
   agentId?: string;
   sessionId?: string;
   updatedAt?: number | null;
+  clientRunId?: string;
+  message?: unknown;
+  messageId?: string;
+  messageSeq?: number;
 };
 
 export type AgentEvent = {

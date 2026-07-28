@@ -676,7 +676,8 @@ describe("release validation no-push transport", () => {
     });
     expect(step(dockerProducer, "Install trusted package validation dependencies")).toMatchObject({
       if: "steps.plan.outputs.needs_package == '1' && inputs.package_artifact_id != ''",
-      run: "pnpm --dir .release-harness install --frozen-lockfile --prefer-offline --ignore-scripts",
+      "working-directory": ".release-harness",
+      run: "pnpm install --frozen-lockfile --prefer-offline --ignore-scripts",
     });
     expect(validatePackage.env).toMatchObject({
       EXPECTED_PACKAGE_FILE_NAME: "${{ inputs.package_file_name }}",

@@ -181,7 +181,7 @@ export type CodeModeConfig =
   | boolean
   | "auto"
   | {
-      /** Enable generic OpenClaw code mode. Default: false. "auto" engages it only for models whose catalog compat flags `codeMode: "preferred"`. */
+      /** Enable generic OpenClaw code mode. Default: "auto", which engages it only for models whose catalog compat flags `codeMode: "preferred"`. */
       enabled?: boolean | "auto";
       /** Guest runtime. Only quickjs-wasi is supported. */
       runtime?: "quickjs-wasi";

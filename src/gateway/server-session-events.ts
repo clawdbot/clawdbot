@@ -311,7 +311,6 @@ async function handleTranscriptUpdateBroadcast(
         ...sessionSnapshot,
       },
       connIds,
-      { dropIfSlow: true },
     );
     return;
   }

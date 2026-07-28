@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getShellConfig } from "../../agents/shell-utils.js";
@@ -41,7 +42,7 @@ const loadSupervisorLogRuntime = createLazyRuntimeModule(
   () => import("./supervisor-log.runtime.js"),
 );
 
-function clampTimeout(value?: number): number | undefined {
+function normalizeTimeoutDuration(value?: number): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return undefined;
   }
@@ -217,8 +218,8 @@ export function createProcessSupervisor(): ProcessSupervisor {
     const captureOutput = input.captureOutput !== false;
     const maxCapturedOutputChars = clampCapturedOutputChars(input.maxCapturedOutputChars);
 
-    const overallTimeoutMs = clampTimeout(input.timeoutMs);
-    const noOutputTimeoutMs = clampTimeout(input.noOutputTimeoutMs);
+    const overallTimeoutMs = normalizeTimeoutDuration(input.timeoutMs);
+    const noOutputTimeoutMs = normalizeTimeoutDuration(input.noOutputTimeoutMs);
     let overallTimeoutDeadlineMs: number | null = null;
     let noOutputTimeoutDeadlineMs: number | null = null;
 
@@ -238,6 +239,32 @@ export function createProcessSupervisor(): ProcessSupervisor {
     };
     startingRun.cancel = requestCancel;
 
+    // Node timers cannot hold the full duration of a long-running deadline.
+    // Re-arm bounded intervals so the requested deadline is never shortened.
+    const scheduleTimeout = (
+      reason: "overall-timeout" | "no-output-timeout",
+      remainingMs: number,
+      deadlineMs: number,
+    ): NodeJS.Timeout => {
+      const intervalMs = resolveTimerTimeoutMs(remainingMs, 1);
+      return setTimeout(() => {
+        if (settled) {
+          return;
+        }
+        const nextRemainingMs = Math.min(remainingMs - intervalMs, deadlineMs - performance.now());
+        if (nextRemainingMs <= 0) {
+          requestCancel(reason);
+          return;
+        }
+        const nextTimer = scheduleTimeout(reason, nextRemainingMs, deadlineMs);
+        if (reason === "overall-timeout") {
+          timeoutTimer = nextTimer;
+        } else {
+          noOutputTimer = nextTimer;
+        }
+      }, intervalMs);
+    };
+
     const touchOutput = () => {
       registry.touchOutput(runId);
       if (!noOutputTimeoutMs || settled) {
@@ -247,9 +274,11 @@ export function createProcessSupervisor(): ProcessSupervisor {
       if (noOutputTimer) {
         clearTimeout(noOutputTimer);
       }
-      noOutputTimer = setTimeout(() => {
-        requestCancel("no-output-timeout");
-      }, noOutputTimeoutMs);
+      noOutputTimer = scheduleTimeout(
+        "no-output-timeout",
+        noOutputTimeoutMs,
+        noOutputTimeoutDeadlineMs,
+      );
     };
 
     try {
@@ -327,15 +356,19 @@ export function createProcessSupervisor(): ProcessSupervisor {
 
       if (overallTimeoutMs) {
         overallTimeoutDeadlineMs = performance.now() + overallTimeoutMs;
-        timeoutTimer = setTimeout(() => {
-          requestCancel("overall-timeout");
-        }, overallTimeoutMs);
+        timeoutTimer = scheduleTimeout(
+          "overall-timeout",
+          overallTimeoutMs,
+          overallTimeoutDeadlineMs,
+        );
       }
       if (noOutputTimeoutMs) {
         noOutputTimeoutDeadlineMs = performance.now() + noOutputTimeoutMs;
-        noOutputTimer = setTimeout(() => {
-          requestCancel("no-output-timeout");
-        }, noOutputTimeoutMs);
+        noOutputTimer = scheduleTimeout(
+          "no-output-timeout",
+          noOutputTimeoutMs,
+          noOutputTimeoutDeadlineMs,
+        );
       }
 
       adapter.onStdout((chunk) => {

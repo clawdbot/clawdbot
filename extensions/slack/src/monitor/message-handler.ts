@@ -8,6 +8,7 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { ResolvedSlackAccount } from "../accounts.js";
 import type { SlackSendIdentity } from "../send.js";
 import type { SlackMessageEvent } from "../types.js";
+import { hasSlackMessageTableBlock } from "./block-text.js";
 import { stripSlackMentionsForCommandDetection } from "./commands.js";
 import type { SlackMonitorContext } from "./context.js";
 import type { SlackEventScope } from "./event-scope.js";
@@ -85,7 +86,8 @@ function shouldDebounceSlackMessage(message: SlackMessageEvent, cfg: SlackMonito
   return shouldDebounceTextInbound({
     text: textForCommandDetection,
     cfg,
-    hasMedia: Boolean(message.files && message.files.length > 0),
+    hasMedia:
+      Boolean(message.files && message.files.length > 0) || hasSlackMessageTableBlock(message),
   });
 }
 

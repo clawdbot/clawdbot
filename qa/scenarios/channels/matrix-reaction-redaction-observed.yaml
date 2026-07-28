@@ -6,7 +6,6 @@ scenario:
     primary:
       - matrix.message-send-read-edit-delete
   execution:
-    profiles: { "matrix:all": 24, "matrix:transport": 23 }
     kind: flow
     channel: matrix
     timeoutMs: 45000

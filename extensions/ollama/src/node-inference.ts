@@ -188,12 +188,16 @@ async function discoverOllamaNodeModels(
   const localModels = discovered.models.filter(
     (model) => !model.remote_host?.trim() && !isOllamaCloudModel(model.name),
   );
-  const [models, loadedNames] = await Promise.all([
-    // Paired nodes must positively confirm completion; unlike provider catalogs,
-    // failed or legacy show probes must never expose unrunnable remote commands.
-    enrichOllamaCompletionModels(apiBase, localModels, { requireCompletionCapability: true }),
-    fetchLoadedModelNames(apiBase),
-  ]);
+  const loadedNames = await fetchLoadedModelNames(apiBase);
+  // Probe loaded models before the bounded catalog can hide already-runnable node models.
+  const prioritizedModels = localModels.toSorted(
+    (left, right) => Number(loadedNames.has(right.name)) - Number(loadedNames.has(left.name)),
+  );
+  // Paired nodes must positively confirm completion; unlike provider catalogs,
+  // failed or legacy show probes must never expose unrunnable remote commands.
+  const models = await enrichOllamaCompletionModels(apiBase, prioritizedModels, {
+    requireCompletionCapability: true,
+  });
   const rows = models
     .map((model): NodeModel => {
       const details = model.details;

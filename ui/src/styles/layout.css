@@ -219,6 +219,10 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   padding: 44px clamp(28px, 5vw, 72px) 72px;
 }
 
+.shell--settings:not(.shell--mobile-nav) .content--custodian {
+  padding: 0;
+}
+
 .shell--settings:not(.shell--mobile-nav) .content-header {
   max-height: none;
 }
@@ -3560,9 +3564,13 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
      reshape the content area (shrink it) instead of overlaying the chat. The
      panels set these vars; they are 0 when closed. */
   margin-bottom: calc(
-    var(--oc-terminal-reserve-bottom, 0px) + var(--oc-browser-reserve-bottom, 0px)
+    var(--oc-terminal-reserve-bottom, 0px) + var(--oc-browser-reserve-bottom, 0px) +
+      var(--oc-custodian-reserve-bottom, 0px)
   );
-  margin-right: calc(var(--oc-terminal-reserve-right, 0px) + var(--oc-browser-reserve-right, 0px));
+  margin-right: calc(
+    var(--oc-terminal-reserve-right, 0px) + var(--oc-browser-reserve-right, 0px) +
+      var(--oc-custodian-reserve-right, 0px)
+  );
   transition:
     margin-bottom 0.16s ease,
     margin-right 0.16s ease;
@@ -3592,6 +3600,24 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
 }
 
 .content--chat > openclaw-router-outlet {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
+.content--custodian {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+
+.content--custodian > * + * {
+  margin-top: 0;
+}
+
+.content--custodian > openclaw-router-outlet {
   display: flex;
   flex: 1 1 0;
   min-width: 0;

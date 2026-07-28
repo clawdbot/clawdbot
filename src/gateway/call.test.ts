@@ -2223,7 +2223,9 @@ describe("callGateway error details", () => {
         method: "secrets.resolve",
         requiredMethods: ["secrets.resolve"],
       }),
-    ).rejects.toThrow(/does not support required method "secrets\.resolve"/i);
+    ).rejects.toThrow(
+      /does not support required method "secrets\.resolve".*update or restart the active gateway/i,
+    );
   });
 });
 

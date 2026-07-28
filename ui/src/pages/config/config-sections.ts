@@ -11,13 +11,7 @@ export type ConfigPageId =
   | "ai-agents"
   | "advanced";
 
-export const COMMUNICATION_SECTION_KEYS = [
-  "messages",
-  "broadcast",
-  "talk",
-  "audio",
-  "channels",
-] as const;
+export const COMMUNICATION_SECTION_KEYS = ["messages", "talk", "tts"] as const;
 
 export const APPEARANCE_SECTION_KEYS = ["__appearance__", "ui", "wizard"] as const;
 
@@ -37,12 +31,9 @@ export const AUTOMATION_SECTION_KEYS = [
 
 export const INFRASTRUCTURE_SECTION_KEYS = [
   "gateway",
-  "web",
   "browser",
   "nodeHost",
-  "canvasHost",
   "discovery",
-  "media",
   "acp",
 ] as const;
 
@@ -53,7 +44,7 @@ export const MCP_SECTION_KEYS = ["mcp"] as const;
 // the engine choice and dreaming's global cron are not agent defaults.
 export const MEMORY_SECTION_KEYS = ["memory"] as const;
 
-export const AI_AGENTS_SECTION_KEYS = ["agents", "models", "skills", "tools", "session"] as const;
+export const AI_AGENTS_SECTION_KEYS = ["agents", "skills", "tools", "session"] as const;
 
 export const SCOPED_CONFIG_SECTION_KEYS = new Set<string>([
   ...COMMUNICATION_SECTION_KEYS,

@@ -110,6 +110,7 @@ type ShortTermPromotionDreamingConfig = {
   recencyHalfLifeDays?: number;
   maxAgeDays?: number;
   maxPromotedSnippetTokens?: number;
+  maxPriorEntryLossFraction: number;
   verboseLogging: boolean;
   storage?: {
     mode: "inline" | "separate" | "both";
@@ -403,6 +404,7 @@ export function resolveShortTermPromotionDreamingConfig(params: {
     ...(typeof resolved.maxAgeDays === "number" ? { maxAgeDays: resolved.maxAgeDays } : {}),
     maxPromotedSnippetTokens:
       resolved.maxPromotedSnippetTokens ?? DEFAULT_MEMORY_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
+    maxPriorEntryLossFraction: resolved.maxPriorEntryLossFraction,
     verboseLogging: resolved.verboseLogging,
     storage: resolved.storage,
     ...(resolved.execution.model ? { execution: { model: resolved.execution.model } } : {}),
@@ -498,6 +500,8 @@ async function reconcileShortTermDreamingCronJob(params: {
 async function runShortTermDreamingPromotionIfTriggered(params: {
   cleanedBody: string;
   trigger?: string;
+  /** Agent whose heartbeat/cron turn triggered the sweep. */
+  agentId?: string;
   workspaceDir?: string;
   cfg?: OpenClawConfig;
   config: ShortTermPromotionDreamingConfig;
@@ -517,22 +521,38 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
   const recencyHalfLifeDays =
     params.config.recencyHalfLifeDays ?? DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS;
   const fallbackWorkspaceDir = normalizeTrimmedString(params.workspaceDir);
-  const workspaceCandidates = params.cfg
-    ? resolveMemoryDreamingWorkspaces(params.cfg, {
-        primaryWorkspaceDir: fallbackWorkspaceDir,
-        primaryAgentId: "main",
-      }).map((entry) => entry.workspaceDir)
-    : [];
+  // Narrative subagent sessions live in per-agent SQLite stores, so every swept workspace
+  // carries its owning agent. The triggering agent owns whatever the roster cannot attribute.
+  const triggerAgentId = normalizeLowercaseStringOrEmpty(params.agentId);
   const seenWorkspaces = new Set<string>();
-  const workspaces = workspaceCandidates.filter((workspaceDir) => {
-    if (seenWorkspaces.has(workspaceDir)) {
-      return false;
+  const workspaces: Array<{ agentId?: string; workspaceDir: string }> = [];
+  const addWorkspace = (workspaceDir: string, agentId: string): void => {
+    if (!workspaceDir || seenWorkspaces.has(workspaceDir)) {
+      return;
     }
     seenWorkspaces.add(workspaceDir);
-    return true;
-  });
+    workspaces.push({ ...(agentId ? { agentId } : {}), workspaceDir });
+  };
+  // The triggering agent wins its own workspace; otherwise sort so a workspace shared by
+  // several agents always resolves the same owner across sweeps.
+  const resolveWorkspaceOwnerAgentId = (agentIds: readonly string[]): string => {
+    if (triggerAgentId && agentIds.includes(triggerAgentId)) {
+      return triggerAgentId;
+    }
+    return agentIds.toSorted()[0] ?? triggerAgentId;
+  };
+  if (params.cfg) {
+    for (const entry of resolveMemoryDreamingWorkspaces(params.cfg, {
+      primaryWorkspaceDir: fallbackWorkspaceDir,
+      // Attribute the hook's own workspace to the agent whose turn triggered the sweep;
+      // the host falls back to the roster default agent when the turn has no id.
+      ...(triggerAgentId ? { primaryAgentId: triggerAgentId } : {}),
+    })) {
+      addWorkspace(entry.workspaceDir, resolveWorkspaceOwnerAgentId(entry.agentIds));
+    }
+  }
   if (workspaces.length === 0 && fallbackWorkspaceDir) {
-    workspaces.push(fallbackWorkspaceDir);
+    addWorkspace(fallbackWorkspaceDir, triggerAgentId);
   }
   if (workspaces.length === 0) {
     params.logger.warn(
@@ -558,7 +578,7 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
   const detachNarratives = params.trigger === "cron";
   const [
     { writeDeepDreamingReport },
-    { appendFallbackNarrativeEntry, generateAndAppendDreamNarrative, runDetachedDreamNarrative },
+    { appendFallbackNarrativeEntry, runDreamNarrative },
     { runDreamingSweepPhases },
     {
       applyShortTermPromotions,
@@ -571,10 +591,11 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
     import("./dreaming-phases.js"),
     import("./short-term-promotion.js"),
   ]);
-  for (const workspaceDir of workspaces) {
+  for (const { agentId, workspaceDir } of workspaces) {
     const sweepNowMs = Date.now();
     try {
       await runDreamingSweepPhases({
+        agentId,
         workspaceDir,
         pluginConfig,
         cfg: params.cfg,
@@ -635,6 +656,12 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
         minUniqueQueries: params.config.minUniqueQueries,
         maxAgeDays: params.config.maxAgeDays,
         maxPromotedSnippetTokens: params.config.maxPromotedSnippetTokens,
+        maxPriorEntryLossFraction: params.config.maxPriorEntryLossFraction,
+        consolidation: {
+          ...(params.subagent ? { subagent: params.subagent } : {}),
+          ...(params.config.execution?.model ? { model: params.config.execution.model } : {}),
+          logger: params.logger,
+        },
         timezone: params.config.timezone,
         nowMs: sweepNowMs,
       });
@@ -677,18 +704,9 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
             logger: params.logger,
             reason: "subagent runtime is unavailable",
           });
-        } else if (detachNarratives) {
-          runDetachedDreamNarrative({
-            subagent: params.subagent,
-            workspaceDir,
-            data,
-            nowMs: sweepNowMs,
-            timezone: params.config.timezone,
-            model: params.config.execution?.model,
-            logger: params.logger,
-          });
         } else {
-          await generateAndAppendDreamNarrative({
+          await runDreamNarrative({
+            agentId,
             subagent: params.subagent,
             workspaceDir,
             data,
@@ -696,6 +714,7 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
             timezone: params.config.timezone,
             model: params.config.execution?.model,
             logger: params.logger,
+            detached: detachNarratives,
           });
         }
       }
@@ -715,9 +734,14 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
       });
     }
   }
-  params.logger.info(
-    `memory-core: dreaming promotion complete (workspaces=${workspaces.length}, candidates=${totalCandidates}, applied=${totalApplied}, failed=${failedWorkspaces}).`,
-  );
+  // A summary that reads identically whether the sweep worked or failed everywhere is how
+  // a broken pipeline stays unnoticed; escalate when no workspace produced anything.
+  const summary = `memory-core: dreaming promotion complete (workspaces=${workspaces.length}, candidates=${totalCandidates}, applied=${totalApplied}, failed=${failedWorkspaces}).`;
+  if (failedWorkspaces === workspaces.length) {
+    params.logger.warn(summary);
+  } else {
+    params.logger.info(summary);
+  }
 
   return { handled: true, reason: "memory-core: short-term dreaming processed" };
 }
@@ -972,6 +996,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       return await runShortTermDreamingPromotionIfTriggered({
         cleanedBody: event.cleanedBody,
         trigger: ctx.trigger,
+        agentId: ctx.agentId,
         workspaceDir: ctx.workspaceDir,
         cfg: currentConfig,
         config,

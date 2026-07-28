@@ -121,6 +121,8 @@ export type ControlUiMockGatewayScenario = {
     provider: string;
     available?: boolean;
   }>;
+  /** Operator scopes returned by the mocked connect handshake. */
+  operatorScopes?: string[];
   sessionKey?: string;
   /** Initial gateway-owned custom group catalog (sessions.groups.*), in order. */
   sessionGroups?: string[];
@@ -197,6 +199,16 @@ export function canRunPlaywrightChromium(chromiumExecutablePath: string): boolea
     return false;
   }
   return spawnSync(chromiumExecutablePath, ["--version"], { stdio: "ignore" }).status === 0;
+}
+
+// Pause an installed virtual clock slightly ahead of its current time so
+// elapsed time advances only through clock.runFor/fastForward. Without this,
+// page.clock.install() keeps ticking at real-time rate, and slow runners break
+// assertions that a virtual deadline has or has not elapsed yet (#115187). The
+// headroom keeps the pauseAt target ahead of the still-ticking clock between
+// the Date.now() read and the pause; jumping to it fires nothing relevant.
+export async function pauseVirtualClock(page: Page): Promise<void> {
+  await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 5_000);
 }
 
 export async function startControlUiE2eServer(
@@ -324,6 +336,13 @@ function normalizeScenario(
     inFlightRun: scenario.inFlightRun ?? null,
     presenceUsers: scenario.presenceUsers ?? [],
     models: scenario.models ?? [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }],
+    operatorScopes: scenario.operatorScopes ?? [
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+      "operator.approvals",
+      "operator.pairing",
+    ],
     repeatingSessionEvents: scenario.repeatingSessionEvents ?? { events: [] },
     sessionInfo: scenario.sessionInfo ?? null,
     sessionArchiveFiltering: scenario.sessionArchiveFiltering ?? false,
@@ -985,13 +1004,7 @@ function installControlUiMockGateway(input: {
           auth: {
             ...(deviceAuthMigrationPending ? {} : { deviceToken: scenario.deviceToken }),
             role: "operator",
-            scopes: [
-              "operator.admin",
-              "operator.read",
-              "operator.write",
-              "operator.approvals",
-              "operator.pairing",
-            ],
+            scopes: scenario.operatorScopes,
           },
           features: {
             capabilities: scenario.featureCapabilities,
