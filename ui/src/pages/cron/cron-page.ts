@@ -32,6 +32,7 @@ import {
   type CronModelSuggestionsState,
   type CronState,
 } from "../../lib/cron/index.ts";
+import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -339,6 +340,9 @@ class CronPage extends OpenClawLightDomElement {
       agentsList: this.agentsList,
       modelSuggestions: this.cronModelSuggestions,
     });
+    const adminAccess = hasOperatorAdminAccess(
+      this.context.gateway.snapshot.hello?.auth ?? null,
+    );
     return html`
       <section class="content-header">
         <div>
@@ -352,6 +356,7 @@ class CronPage extends OpenClawLightDomElement {
       ${renderSettingsWorkspace(
         renderCron({
           basePath: this.context.basePath,
+          adminAccess,
           loading: this.cron.cronLoading,
           status: this.cron.cronStatus,
           failingCount: this.cron.cronFailingCount,

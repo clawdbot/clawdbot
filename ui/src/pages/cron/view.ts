@@ -49,6 +49,7 @@ export type CronDetailTab = "settings" | "history";
 
 type CronProps = {
   basePath: string;
+  adminAccess: boolean;
   loading: boolean;
   jobsLoadingMore: boolean;
   status: CronStatus | null;
@@ -485,14 +486,18 @@ function renderToolbar(props: CronProps, hasAdvancedJobsFilters: boolean) {
         >
           ${icon("refresh")}
         </button>
-        <button
-          type="button"
-          class="btn primary btn--sm cron-new-task"
-          data-test-id="cron-new-task"
-          @click=${() => props.onOpenCreate()}
-        >
-          ${icon("plus")} ${t("cron.list.newTask")}
-        </button>
+        ${
+          props.adminAccess
+            ? html`<button
+                type="button"
+                class="btn primary btn--sm cron-new-task"
+                data-test-id="cron-new-task"
+                @click=${() => props.onOpenCreate()}
+              >
+                ${icon("plus")} ${t("cron.list.newTask")}
+              </button>`
+            : nothing
+        }
       </div>
     </div>
   `;
@@ -697,21 +702,25 @@ function renderJobRow(job: CronJob, props: CronProps) {
         @click=${(e: Event) => e.stopPropagation()}
         @keydown=${(e: Event) => e.stopPropagation()}
       >
-        <button
-          type="button"
-          class="btn btn--sm btn--ghost cron-row-run"
-          data-test-id=${`cron-row-run-${job.id}`}
-          title=${t("cron.actions.runNow")}
-          aria-label=${t("cron.actions.runNow")}
-          ?disabled=${props.busy}
-          @click=${() => props.onRun(job, "force")}
-        >
-          ${icon("play")}
-        </button>
-        ${renderEnabledSwitch(props, job, {
-          compact: true,
-          testId: `cron-row-toggle-${job.id}`,
-        })}
+        ${
+          props.adminAccess
+            ? html`<button
+                type="button"
+                class="btn btn--sm btn--ghost cron-row-run"
+                data-test-id=${`cron-row-run-${job.id}`}
+                title=${t("cron.actions.runNow")}
+                aria-label=${t("cron.actions.runNow")}
+                ?disabled=${props.busy}
+                @click=${() => props.onRun(job, "force")}
+              >
+                ${icon("play")}
+              </button>
+              ${renderEnabledSwitch(props, job, {
+                compact: true,
+                testId: `cron-row-toggle-${job.id}`,
+              })}`
+            : nothing
+        }
         ${renderJobMenu(props, job)}
       </span>
     </div>
@@ -777,14 +786,23 @@ function renderJobMenu(props: CronProps, job: CronJob) {
       >
         ${icon("moreHorizontal")}
       </button>
-      ${renderMenuItem(props, "run-if-due", t("cron.actions.runIfDue"))}
-      ${renderMenuItem(props, "clone", t("cron.actions.clone"))}
-      ${renderMenuItem(props, "remove", t("cron.actions.remove"), { danger: true })}
+      ${
+        props.adminAccess
+          ? html`${renderMenuItem(props, "run-if-due", t("cron.actions.runIfDue"))}
+              ${renderMenuItem(props, "clone", t("cron.actions.clone"))}`
+          : nothing
+      }
+      ${props.adminAccess
+        ? renderMenuItem(props, "remove", t("cron.actions.remove"), { danger: true })
+        : nothing}
     </wa-dropdown>
   `;
 }
 
 function renderSuggestions(props: CronProps) {
+  if (!props.adminAccess) {
+    return nothing;
+  }
   // Starter ideas are drill-in rows: activating one prefills the create form.
   return renderSettingsSection(
     { title: t("cron.suggestions.title") },
@@ -882,7 +900,7 @@ function renderDetailHeader(props: CronProps, mode: CronPanelMode, selectedJob?:
         </div>
       </div>
       <div class="cron-detail-actions">
-        ${mode === "job" && selectedJob
+        ${mode === "job" && selectedJob && props.adminAccess
           ? html`
               <button
                 type="button"
@@ -992,30 +1010,32 @@ function renderEditor(props: CronProps, mode: CronPanelMode) {
           `
         : nothing}
       <div class="cron-editor-actions">
-        <button
-          class="btn primary"
-          data-test-id="cron-submit"
-          ?disabled=${props.busy || !props.canSubmit}
-          @click=${props.onSubmit}
-        >
-          ${props.busy
-            ? t("cron.form.saving")
-            : mode === "job"
-              ? t("cron.form.saveChanges")
-              : t("cron.form.createTask")}
-        </button>
-        ${mode === "create"
-          ? html`
-              <button
-                class="btn"
-                data-test-id="cron-submit-run"
+        ${
+          props.adminAccess
+            ? html`<button
+                class="btn primary"
+                data-test-id="cron-submit"
                 ?disabled=${props.busy || !props.canSubmit}
-                @click=${props.onSubmitRunNow}
+                @click=${props.onSubmit}
               >
-                ${t("cron.form.createAndRun")}
+                ${props.busy
+                  ? t("cron.form.saving")
+                  : mode === "job"
+                    ? t("cron.form.saveChanges")
+                    : t("cron.form.createTask")}
               </button>
-            `
-          : nothing}
+              ${mode === "create"
+                ? html`<button
+                    class="btn"
+                    data-test-id="cron-submit-run"
+                    ?disabled=${props.busy || !props.canSubmit}
+                    @click=${props.onSubmitRunNow}
+                  >
+                    ${t("cron.form.createAndRun")}
+                  </button>`
+                : nothing}`
+            : nothing
+        }
         <button class="btn" ?disabled=${props.busy} @click=${props.onClosePanel}>
           ${t("cron.form.cancel")}
         </button>
