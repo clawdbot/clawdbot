@@ -511,7 +511,8 @@ describe("openshell sandbox backend e2e", () => {
       const allowPolicyPath = path.join(rootDir, "allow-policy.yaml");
       const scopeSuffix = `${process.pid}-${Date.now()}`;
       const scopeKey = `session:openshell-e2e-deny:${scopeSuffix}`;
-      const allowSandboxName = `openclaw-policy-allow-${scopeSuffix}`;
+      const testRunId = `${process.pid.toString(36)}${Date.now().toString(36)}`;
+      const allowSandboxName = `oc-a-${testRunId.slice(-14)}`;
       let hostPolicyServer: HostPolicyServer | null | undefined;
       const sandboxCfg = {
         mode: "all" as const,
