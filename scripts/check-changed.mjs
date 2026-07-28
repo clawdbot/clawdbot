@@ -15,7 +15,7 @@ import { performance } from "node:perf_hooks";
 import {
   LIVE_DOCKER_AUTH_SHELL_TARGETS,
   detectChangedLanesForPaths,
-  hasChangedExportSignature,
+  hasDeadcodeScannedSource,
   listChangedPathsFromGit,
   listStagedChangedPaths,
 } from "./changed-lanes.mjs";
@@ -559,7 +559,7 @@ export function createChangedCheckPlan(result, options = {}) {
   }
   add("package patch guard", ["deps:patches:check"]);
   if (
-    options.exportSignatureChanged &&
+    hasDeadcodeScannedSource(result.paths) &&
     !isTruthyEnvFlag(baseEnv.OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE)
   ) {
     addCommand(
@@ -1090,12 +1090,6 @@ if (isDirectRun()) {
         head: args.head,
         staged: args.staged,
       });
-      const exportSignatureChanged = hasChangedExportSignature({
-        base: args.staged ? "HEAD" : args.base,
-        head: args.head,
-        staged: args.staged,
-        changedPaths: paths,
-      });
       if (
         shouldDelegateChangedCheckToCrabbox(argv, process.env, {
           cwd: process.cwd(),
@@ -1121,14 +1115,12 @@ if (isDirectRun()) {
           ? await runChangedCheck(result, {
               ...args,
               explicitPaths: args.paths.length > 0,
-              exportSignatureChanged,
             })
           : delegated.exitCode;
       } else {
         process.exitCode = await runChangedCheck(result, {
           ...args,
           explicitPaths: args.paths.length > 0,
-          exportSignatureChanged,
         });
       }
     }

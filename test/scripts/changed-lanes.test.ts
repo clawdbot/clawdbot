@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   createEmptyChangedLanes,
   detectChangedLanes,
-  hasChangedExportSignature,
+  hasDeadcodeScannedSource,
   isChangedLaneTestPath,
   isLiveDockerPackageScriptOnlyChange,
   isPackageScriptOnlyChange,
@@ -641,72 +641,20 @@ describe("scripts/changed-lanes", () => {
   });
 
   it.each([
-    {
-      name: "added export",
-      before: "const value = 1;\n",
-      after: "export const value = 1;\n",
-      expected: true,
-    },
-    {
-      name: "removed export",
-      before: "export const value = 1;\n",
-      after: "const value = 1;\n",
-      expected: true,
-    },
-    {
-      name: "body-only edit",
-      before: "export function value() {\n  return 1;\n}\n",
-      after: "export function value() {\n  return 2;\n}\n",
-      expected: false,
-    },
-  ])("detects changed export signatures for a $name", ({ before, after, expected }) => {
-    const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-export-signature-");
-    git(dir, ["init", "-q", "--initial-branch=main"]);
-    writeRepoFile(dir, "src/api.ts", before);
-    commitAll(dir, "initial");
-    writeRepoFile(dir, "src/api.ts", after);
-
-    expect(
-      hasChangedExportSignature({
-        base: "HEAD",
-        changedPaths: ["src/api.ts"],
-        cwd: dir,
-      }),
-    ).toBe(expected);
-  });
-
-  it("ignores changed export lines outside production scan trees", () => {
-    const dir = makeTempRepoRoot(tempDirs, "openclaw-unrelated-export-signature-");
-    git(dir, ["init", "-q", "--initial-branch=main"]);
-    writeRepoFile(dir, "docs/example.ts", "const value = 1;\n");
-    commitAll(dir, "initial");
-    writeRepoFile(dir, "docs/example.ts", "export const value = 1;\n");
-
-    expect(
-      hasChangedExportSignature({
-        base: "HEAD",
-        changedPaths: ["docs/example.ts"],
-        cwd: dir,
-      }),
-    ).toBe(false);
-  });
-
-  it("ignores non-source files inside production scan trees", () => {
-    // A docs file under `src/` can carry `export` in a code sample; knip never
-    // reads it, so it must not drag a docs-only change onto the heavy route.
-    const dir = makeTempRepoRoot(tempDirs, "openclaw-nonsource-export-signature-");
-    git(dir, ["init", "-q", "--initial-branch=main"]);
-    writeRepoFile(dir, "src/README.md", "example\n");
-    commitAll(dir, "initial");
-    writeRepoFile(dir, "src/README.md", "```ts\nexport const value = 1;\n```\n");
-
-    expect(
-      hasChangedExportSignature({
-        base: "HEAD",
-        changedPaths: ["src/README.md"],
-        cwd: dir,
-      }),
-    ).toBe(false);
+    { name: "core source", changedPaths: ["src/agents/api.ts"], expected: true },
+    { name: "extension source", changedPaths: ["extensions/copilot/src/a.ts"], expected: true },
+    { name: "ui source", changedPaths: ["ui/src/pages/a.ts"], expected: true },
+    { name: "package source", changedPaths: ["packages/x/src/a.mts"], expected: true },
+    // An import-only edit can orphan a barrel re-export in a file this diff never
+    // touches, so selection is by path; inspecting changed lines would miss it.
+    { name: "import-only edit", changedPaths: ["src/agents/tool-surface-plan.ts"], expected: true },
+    { name: "docs tree", changedPaths: ["docs/example.ts"], expected: false },
+    { name: "scripts tree", changedPaths: ["scripts/check-changed.mjs"], expected: false },
+    // knip never reads these, so they must not pull in the scan.
+    { name: "markdown under src", changedPaths: ["src/README.md"], expected: false },
+    { name: "sql under src", changedPaths: ["src/state/schema.sql"], expected: false },
+  ])("selects the dead-export scan for $name", ({ changedPaths, expected }) => {
+    expect(hasDeadcodeScannedSource(changedPaths)).toBe(expected);
   });
 
   it("ignores the explicit path separator", () => {
@@ -1091,22 +1039,20 @@ describe("scripts/changed-lanes", () => {
     expect(shouldDelegateChangedCheckToCrabbox([], {}, { result })).toBe(true);
   });
 
-  it("adds the dead export scan only for changed export signatures", () => {
-    const result = detectChangedLanes(["src/config/config.ts"]);
+  it("adds the dead export scan only for production source changes", () => {
     const command = {
       name: "dead export scan (skip with OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE=1)",
       bin: "node",
       args: ["scripts/check-deadcode-exports.mjs"],
       env: expect.any(Object),
     };
+    const sourceResult = detectChangedLanes(["src/config/config.ts"]);
+    const toolingResult = detectChangedLanes(["scripts/check-changed.mjs"]);
 
+    expect(createChangedCheckPlan(sourceResult).commands).toContainEqual(command);
+    expect(createChangedCheckPlan(toolingResult).commands).not.toContainEqual(command);
     expect(
-      createChangedCheckPlan(result, { exportSignatureChanged: true }).commands,
-    ).toContainEqual(command);
-    expect(createChangedCheckPlan(result).commands).not.toContainEqual(command);
-    expect(
-      createChangedCheckPlan(result, {
-        exportSignatureChanged: true,
+      createChangedCheckPlan(sourceResult, {
         env: { OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE: "1" },
       }).commands,
     ).not.toContainEqual(command);
@@ -1384,6 +1330,10 @@ describe("scripts/changed-lanes", () => {
       "deprecated API usage",
       "plugin boundaries",
       "package patch guard",
+      // These live-Docker paths include `src/gateway/*.live.test.ts`, and the
+      // full-tree knip scan sees test files, so a deleted last consumer can
+      // orphan an export here too.
+      "dead export scan (skip with OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE=1)",
       "test temp creation report (warning-only)",
       "typecheck core tests",
       "lint core",

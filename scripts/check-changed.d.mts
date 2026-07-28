@@ -19,7 +19,6 @@ export type ChangedCheckPlanOptions = {
   head?: string;
   platform?: NodeJS.Platform;
   swiftlintAvailable?: boolean;
-  exportSignatureChanged?: boolean;
 };
 
 export type TargetedLintOptions = {
