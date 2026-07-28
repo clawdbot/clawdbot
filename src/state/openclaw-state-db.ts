@@ -10,7 +10,10 @@ import {
 } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
-import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
+import {
+  repairCanonicalSqliteIndexes,
+  verifyAndRepairCanonicalSqliteIndexes,
+} from "../infra/sqlite-index-schema.js";
 import {
   assertSqliteIntegrity,
   confirmSqliteFileIntegrity,
@@ -463,14 +466,12 @@ function assertStateDatabaseIntegrityBeforeMutation(
       toVersion: OPENCLAW_STATE_SCHEMA_VERSION,
     });
   }
-  const rebuiltIndexes =
-    userVersion === OPENCLAW_STATE_SCHEMA_VERSION
-      ? repairCanonicalSqliteIndexes(database, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
-          allowMissingColumns: true,
-          validateAfterRepair: () => assertCurrentStateRuntimeSchema(database, pathname),
-        })
-      : [];
-  if (rebuiltIndexes.length === 0) {
+  if (userVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
+    verifyAndRepairCanonicalSqliteIndexes(database, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
+      allowMissingColumns: true,
+      validateAfterRepair: () => assertCurrentStateRuntimeSchema(database, pathname),
+    });
+  } else {
     // Every physical open proves the full file before schema mutation or exposure.
     assertSqliteIntegrity(database, pathname);
   }

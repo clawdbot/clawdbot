@@ -761,8 +761,9 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
         .toContain("GPT-5.5");
       expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
 
-      // Startup metadata now owns the initial catalog, so there is no unconditional
-      // parallel refresh. Exercise the same-agent pane refresh path explicitly.
+      // Startup metadata now owns the same-agent cache. A config change invalidates
+      // that cache, so the next pane refresh still exercises the failure fallback.
+      await gateway.emitGatewayEvent("config.changed", {});
       await page.locator("openclaw-chat-pane").evaluate((pane) => {
         (pane as HTMLElement & { sessionKey: string }).sessionKey = "agent:main:refreshed";
       });

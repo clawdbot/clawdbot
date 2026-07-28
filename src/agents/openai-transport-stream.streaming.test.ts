@@ -1,5 +1,9 @@
 import { createServer } from "node:http";
-import { createOpenAICompletionsTransportStreamFn } from "@openclaw/ai/transports";
+import {
+  createAzureOpenAIResponsesTransportStreamFn,
+  createOpenAICompletionsTransportStreamFn,
+  createOpenAIResponsesTransportStreamFn,
+} from "@openclaw/ai/transports";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -19,6 +23,10 @@ import {
   expectRecordFields,
 } from "./openai-transport-stream.test-harness.js";
 import { testing } from "./openai-transport-stream.test-support.js";
+
+// Loaded hosted runners can delay the first real loopback request well beyond
+// the shared test timeout even when this file runs in its isolated project.
+const COLD_RUNNER_HTTP_TEST_TIMEOUT_MS = 300_000;
 
 describe("openai transport stream", () => {
   it("passes provider request timeouts to OpenAI SDK clients", () => {
@@ -81,6 +89,89 @@ describe("openai transport stream", () => {
       ),
     ).toBeUndefined();
   });
+
+  it.each([
+    {
+      api: "openai-responses" as const,
+      provider: "custom-openai",
+      createStream: createOpenAIResponsesTransportStreamFn,
+    },
+    {
+      api: "azure-openai-responses" as const,
+      provider: "azure-openai-responses-devdiv",
+      createStream: createAzureOpenAIResponsesTransportStreamFn,
+    },
+    {
+      api: "openai-completions" as const,
+      provider: "openai",
+      createStream: createOpenAICompletionsTransportStreamFn,
+    },
+  ])(
+    "honors turn timeout and zero retries over real $api HTTP",
+    async (transport) => {
+      const capturedTimeouts: Array<string | undefined> = [];
+      const server = createServer((request, response) => {
+        const timeout = request.headers["x-stainless-timeout"];
+        capturedTimeouts.push(Array.isArray(timeout) ? timeout[0] : timeout);
+        request.resume();
+        request.on("end", () => {
+          response.writeHead(500, { "content-type": "application/json" });
+          response.end(
+            JSON.stringify({
+              error: { type: "server_error", message: "turn retry regression" },
+            }),
+          );
+        });
+      });
+
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      try {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("Missing loopback server address");
+        }
+
+        const model = {
+          id: "gpt-5.6-luna",
+          name: "GPT-5.6 Luna",
+          api: transport.api,
+          provider: transport.provider,
+          baseUrl: `http://127.0.0.1:${address.port}/v1`,
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128_000,
+          maxTokens: 4_096,
+          requestTimeoutMs: 900_000,
+        } satisfies Model & { requestTimeoutMs: number };
+
+        const stream = await transport.createStream()(
+          model,
+          {
+            messages: [{ role: "user", content: "Reply OK", timestamp: Date.now() }],
+            tools: [],
+          },
+          { apiKey: "test-key", timeoutMs: 1_234, maxRetries: 0 },
+        );
+
+        const eventTypes: string[] = [];
+        for await (const event of stream) {
+          eventTypes.push(event.type);
+        }
+
+        expect(eventTypes).toContain("error");
+        // The SDK advertises request timeouts in whole seconds on the wire.
+        expect(capturedTimeouts).toEqual(["1"]);
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    },
+    COLD_RUNNER_HTTP_TEST_TIMEOUT_MS,
+  );
 
   it("streams OpenAI-compatible loopback requests with the configured SDK timeout", async () => {
     let captured: { path?: string; timeout?: string; model?: string; roles?: string[] } = {};

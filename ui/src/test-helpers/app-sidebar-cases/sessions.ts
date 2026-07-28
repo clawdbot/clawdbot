@@ -404,7 +404,7 @@ describe("AppSidebar session accessibility", () => {
 });
 
 describe("AppSidebar session navigation", () => {
-  it("selects the session's agent before changing the active session", async () => {
+  it("selects a literal session's agent before changing the active session", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar, context } = await mountSidebar(
       gateway,

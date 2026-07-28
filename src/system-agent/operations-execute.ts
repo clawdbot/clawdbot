@@ -251,6 +251,24 @@ export async function executeSystemAgentOperation(
         ].join("\n"),
       );
       return { applied: false };
+    case "skills-setup":
+      runtime.log(
+        [
+          "Skills setup needs an interactive session.",
+          "Run `openclaw setup` and say `configure skills`,",
+          "or run `openclaw configure --section skills` for the terminal wizard.",
+        ].join("\n"),
+      );
+      return { applied: false };
+    case "search-setup":
+      runtime.log(
+        [
+          "Web search setup needs an interactive session.",
+          "Run `openclaw setup` and say `configure search`,",
+          "or run `openclaw configure --section web` for the masked terminal wizard.",
+        ].join("\n"),
+      );
+      return { applied: false };
     case "model-setup":
       runtime.log(
         [
@@ -265,7 +283,9 @@ export async function executeSystemAgentOperation(
           ? "openclaw onboard"
           : operation.target === "classic"
             ? "openclaw onboard --classic"
-            : `openclaw channels add${operation.channel ? ` --channel ${operation.channel}` : ""}`;
+            : operation.target === "channels"
+              ? `openclaw channels add${operation.channel ? ` --channel ${operation.channel}` : ""}`
+              : "openclaw configure --section web";
       runtime.log(
         `One-shot mode cannot open an interactive wizard. Run \`${command}\` in a terminal.`,
       );

@@ -335,7 +335,10 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
         firstEventAbort = createFirstStreamEventAbortController(options?.signal);
         const responseStream = (await client.chat.completions.create(
           params as never,
-          buildOpenAISdkRequestOptions(model, firstEventAbort.signal),
+          buildOpenAISdkRequestOptions(model, firstEventAbort.signal, {
+            timeoutMs: options?.timeoutMs,
+            maxRetries: options?.maxRetries,
+          }),
         )) as unknown as AsyncIterable<ChatCompletionChunk>;
         stream.push({ type: "start", partial: output as never });
         await processOpenAICompletionsStream(responseStream, output, model, stream, {
