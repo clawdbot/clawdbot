@@ -125,10 +125,7 @@ export class ChatPage extends OpenClawLightDomElement {
     if (changedProperties.has("data")) {
       if (
         data?.canonicalLocation &&
-        stillOwnsCanonicalLocation(
-          data.canonicalLocationSource,
-          this.consumedDraftData === data,
-        )
+        stillOwnsCanonicalLocation(data.canonicalLocationSource, this.consumedDraftData === data)
       ) {
         // data.face is the loader's resolved face, which may differ from the namespace
         // this route was matched under; replacing under it moves the URL to that board.
@@ -140,10 +137,7 @@ export class ChatPage extends OpenClawLightDomElement {
           location &&
           this.isConnected &&
           this.data === data &&
-          stillOwnsCanonicalLocation(
-            data.canonicalLocationSource,
-            this.consumedDraftData === data,
-          )
+          stillOwnsCanonicalLocation(data.canonicalLocationSource, this.consumedDraftData === data)
         ) {
           // A lazy chat canonicalization can resolve while the old page remains
           // mounted under a cold navigation. Never replace that newer route.

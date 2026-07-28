@@ -449,9 +449,7 @@ function resolvedSessionRouteData(params: {
     draft: draftFromLocation(params.location),
     face,
     ...(params.shortId && params.shortId.length > 8 ? { shortId: params.shortId } : {}),
-    ...(canonicalLocation
-      ? { canonicalLocation, canonicalLocationSource: params.location }
-      : {}),
+    ...(canonicalLocation ? { canonicalLocation, canonicalLocationSource: params.location } : {}),
   };
 }
 
@@ -488,9 +486,7 @@ function resolvedMainSessionRouteData(params: {
     agentId: params.target.agentId,
     draft: draftFromLocation(params.location),
     face,
-    ...(canonicalLocation
-      ? { canonicalLocation, canonicalLocationSource: params.location }
-      : {}),
+    ...(canonicalLocation ? { canonicalLocation, canonicalLocationSource: params.location } : {}),
   };
 }
 
