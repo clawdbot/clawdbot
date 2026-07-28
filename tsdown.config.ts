@@ -507,6 +507,9 @@ function buildUnifiedDistEntries(): Record<string, string> {
     ),
     // Private bundled Codex helper for app-server user MCP config projection.
     "plugin-sdk/codex-mcp-projection": "src/plugin-sdk/codex-mcp-projection.ts",
+    // Private bundled Codex helper for app-server transcript mirroring.
+    "plugin-sdk/codex-session-transcript-runtime":
+      "src/plugin-sdk/codex-session-transcript-runtime.ts",
     ...Object.fromEntries(
       Object.entries(buildPluginSdkEntrySources(selectedPluginSdkEntrypoints)).map(
         ([entry, source]) => [`plugin-sdk/${entry}`, source],
