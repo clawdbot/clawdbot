@@ -573,7 +573,19 @@ export function createWorkerSessionTurnPlacementProvider(
       return await executeLocalTurn({ claim, placements: options.placements, runLocal });
     },
     async executeTurn(claim, turn, runLocal) {
-      const current = options.placements.get(claim.sessionId);
+      let current = options.placements.get(claim.sessionId);
+      if (current?.state === "failed") {
+        // `failed` is otherwise a terminal sink: turns reject it via
+        // requireActivePlacement, and sessions.dispatch/sessions.reclaim both
+        // refuse it, so one bootstrap or dispatch failure would brick the
+        // session until a manual state-store repair. Degrade it to local so the
+        // turn keeps working; cloud dispatch can be requested again from `local`.
+        options.placements.reclaimFailedToLocal({
+          sessionId: current.sessionId,
+          expectedGeneration: current.generation,
+        });
+        current = options.placements.get(claim.sessionId);
+      }
       if (
         !current &&
         (options.admitNewPlacements === false ||

@@ -347,6 +347,31 @@ describe("worker turn launcher", () => {
     expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
   });
 
+  it("degrades a failed placement to local instead of rejecting every turn", async () => {
+    const environments = unusedEnvironments();
+    const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+
+    // A dispatch/bootstrap failure lands the placement in `failed` before any
+    // worker metadata is set. Without recovery this sink rejects every turn.
+    placements.startDispatch({ sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main" });
+    const failed = placements.fail({
+      sessionId: SESSION_ID,
+      recoveryError: "Worker bootstrap failed",
+    });
+    expect(failed.state).toBe("failed");
+
+    const result = await provider.executeTurn(
+      { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId: "run-after-fail" },
+      turn("run-after-fail"),
+      async () => ({ payloads: [{ text: "local fallback" }], meta: { durationMs: 1 } }),
+    );
+
+    expect(result.payloads).toEqual([{ text: "local fallback" }]);
+    const after = placements.get(SESSION_ID);
+    expect(after?.state).toBe("local");
+    expect(after?.recoveryError).toBeNull();
+  });
+
   it("leaves no placement row for an auxiliary model run without a session key", async () => {
     const provider = createWorkerSessionTurnPlacementProvider({
       environments: unusedEnvironments(),

@@ -27,7 +27,10 @@ const WORKER_SESSION_PLACEMENT_TRANSITIONS = {
   draining: ["reconciling"],
   reconciling: ["local", "reclaimed", "failed"],
   reclaimed: ["requested"],
-  failed: [],
+  // `failed` is otherwise a terminal sink: turns reject it, and sessions.dispatch
+  // and sessions.reclaim both refuse it. Reclaiming back to `local` is the only
+  // recovery path, so a single dispatch/bootstrap failure cannot brick a session.
+  failed: ["local"],
 } as const satisfies WorkerSessionPlacementTransition;
 
 export function parseWorkerSessionPlacementState(value: string): WorkerSessionPlacementState {
