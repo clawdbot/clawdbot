@@ -3,7 +3,15 @@
 // daily files plus the optional root MEMORY.md) so desktop/control clients
 // can see what the agent has persisted without an in-turn tool call.
 // Deliberately no write/delete/mutation surface.
-import fs from "node:fs/promises";
+//
+// DESIGN NOTE: memory.list is a gateway RPC rather than an
+// agents.workspace.* method because the memory/ directory is semantically
+// a persistent agent-context store, not a general workspace file browser.
+// The listing order (newest-first daily files + optional root MEMORY.md),
+// the date-prefixed file-name pattern, and the implicit "memory/" prefix
+// are domain-specific conventions that a generic workspace browser should
+// not need to replicate.  Keeping the surface read-only also avoids
+// conflating file-editing permission with memory management policy.
 import path from "node:path";
 import {
   ErrorCodes,
@@ -12,6 +20,7 @@ import {
   validateMemoryListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { root as fsSafeRoot, type FsSafeRoot } from "../../infra/fs-safe.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 import { toUpdatedAtMs } from "./workspace-fs.js";
@@ -20,6 +29,9 @@ const DEFAULT_LIST_LIMIT = 90;
 const MAX_LIST_LIMIT = 366;
 const DEFAULT_CONTENT_MAX_BYTES = 64 * 1024;
 const MAX_CONTENT_MAX_BYTES = 256 * 1024;
+
+/** Gateway frame limit: ~25 MiB. Leave margin for JSON framing overhead. */
+const AGGREGATE_CONTENT_BUDGET_BYTES = 20 * 1024 * 1024;
 
 // Daily memory files: memory/<YYYY-MM-DD>.md and slugged variants such as
 // memory/<YYYY-MM-DD>-<slug>.md.
@@ -57,50 +69,45 @@ function compareDailyFileNames(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-async function readBoundedContent(
-  absolutePath: string,
-  sizeBytes: number,
-  maxBytes: number,
-): Promise<{ content: string; truncated: boolean }> {
-  if (sizeBytes <= maxBytes) {
-    const buffer = await fs.readFile(absolutePath);
-    return { content: buffer.toString("utf8"), truncated: false };
-  }
-  const handle = await fs.open(absolutePath, "r");
+async function buildEntry(
+  workspaceRoot: FsSafeRoot,
+  params: {
+    relativePath: string;
+    name: string;
+    includeContent: boolean;
+    maxContentBytes: number;
+  },
+): Promise<MemoryFileEntry | null> {
+  let stat: Awaited<ReturnType<FsSafeRootType["stat"]>>;
   try {
-    const buffer = Buffer.alloc(maxBytes);
-    const { bytesRead } = await handle.read(buffer, 0, maxBytes, 0);
-    return { content: buffer.subarray(0, bytesRead).toString("utf8"), truncated: true };
-  } finally {
-    await handle.close();
+    stat = await workspaceRoot.stat(params.relativePath);
+  } catch (err: unknown) {
+    // ENOENT means the file disappeared between listing and stat (race).
+    // Other errors (EACCES, EIO, ELOOP) should propagate.
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw err;
+    }
+    return null;
   }
-}
-
-async function buildEntry(params: {
-  absolutePath: string;
-  relativePath: string;
-  name: string;
-  includeContent: boolean;
-  maxContentBytes: number;
-}): Promise<MemoryFileEntry | null> {
-  const stat = await fs.stat(params.absolutePath).catch(() => null);
-  if (!stat || !stat.isFile()) {
+  const kind = (stat as { kind?: unknown }).kind;
+  if (kind !== "file") {
     return null;
   }
   const entry: MemoryFileEntry = {
     path: params.relativePath,
     name: params.name,
-    sizeBytes: stat.size,
-    updatedAtMs: toUpdatedAtMs(stat.mtimeMs),
+    sizeBytes: (stat as { size?: number }).size ?? 0,
+    updatedAtMs: toUpdatedAtMs((stat as { mtimeMs?: number }).mtimeMs ?? Date.now()),
   };
   if (params.includeContent) {
-    const { content, truncated } = await readBoundedContent(
-      params.absolutePath,
-      stat.size,
-      params.maxContentBytes,
-    );
-    entry.content = content;
-    if (truncated) {
+    const readResult = await workspaceRoot.read(params.relativePath, {
+      hardlinks: "reject",
+      maxBytes: params.maxContentBytes,
+      nonBlockingRead: true,
+      symlinks: "reject",
+    });
+    entry.content = readResult.buffer.toString("utf8");
+    if (readResult.buffer.length < entry.sizeBytes) {
       entry.truncated = true;
     }
   }
@@ -132,14 +139,40 @@ export const memoryHandlers: GatewayRequestHandlers = {
       const cfg = context.getRuntimeConfig();
       const agentId = resolveDefaultAgentId(cfg);
       const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-      const memoryDir = path.join(workspaceDir, "memory");
+
+      // Route all workspace fs access through fs-safe workspace boundary
+      // (symlink/hardlink rejection) so memory files cannot escape the
+      // workspace root through symbolic-link tricks or hard-link aliasing.
+      const workspaceRoot = await fsSafeRoot(workspaceDir, {
+        hardlinks: "reject",
+        maxBytes: MAX_CONTENT_MAX_BYTES,
+        nonBlockingRead: true,
+        symlinks: "reject",
+      });
+      if (!workspaceRoot) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, "memory list failed: workspace root unavailable"),
+        );
+        return;
+      }
 
       // Newest-first daily file listing; a missing memory directory is an
       // empty result, not an error (startup-safe before any memory exists).
-      const dirents = await fs.readdir(memoryDir, { withFileTypes: true }).catch(() => []);
-      const dailyNames = dirents
-        .filter((dirent) => dirent.isFile() && DAILY_MEMORY_FILE_PATTERN.test(dirent.name))
-        .map((dirent) => dirent.name)
+      // Only ENOENT is treated as absent — other fs errors propagate.
+      let entries: Array<{ name: string; kind?: string }>;
+      try {
+        entries = await workspaceRoot.list("memory", { withFileTypes: true });
+      } catch (err: unknown) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw err;
+        }
+        entries = [];
+      }
+      const dailyNames = entries
+        .filter((entry) => entry.kind === "file" && DAILY_MEMORY_FILE_PATTERN.test(entry.name))
+        .map((entry) => entry.name)
         .toSorted(compareDailyFileNames);
 
       const files: MemoryFileEntry[] = [];
@@ -147,8 +180,7 @@ export const memoryHandlers: GatewayRequestHandlers = {
       // Root curated memory is opt-in and always leads the listing.
       let rootMemoryIncluded = false;
       if (p.includeRootMemory === true) {
-        const rootEntry = await buildEntry({
-          absolutePath: path.join(workspaceDir, ROOT_MEMORY_FILE_NAME),
+        const rootEntry = await buildEntry(workspaceRoot, {
           relativePath: ROOT_MEMORY_FILE_NAME,
           name: ROOT_MEMORY_FILE_NAME,
           includeContent,
@@ -164,8 +196,7 @@ export const memoryHandlers: GatewayRequestHandlers = {
       // exceeds the caller's cap.
       const dailyLimit = Math.max(0, limit - (rootMemoryIncluded ? 1 : 0));
       for (const name of dailyNames.slice(0, dailyLimit)) {
-        const entry = await buildEntry({
-          absolutePath: path.join(memoryDir, name),
+        const entry = await buildEntry(workspaceRoot, {
           relativePath: toWorkspaceRelativePath("memory", name),
           name,
           includeContent,
@@ -174,6 +205,26 @@ export const memoryHandlers: GatewayRequestHandlers = {
         if (entry) {
           files.push(entry);
         }
+      }
+
+      // Enforce aggregate response budget so the serialised frame stays
+      // under the Gateway 25 MiB limit (with headroom for JSON overhead).
+      let aggregateContentBytes = 0;
+      for (const file of files) {
+        if (file.content) {
+          aggregateContentBytes += file.content.length;
+        }
+      }
+      if (aggregateContentBytes > AGGREGATE_CONTENT_BUDGET_BYTES) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_PARAMS,
+            `memory list content (${aggregateContentBytes} bytes) exceeds response budget`,
+          ),
+        );
+        return;
       }
 
       const totalFiles = dailyNames.length + (rootMemoryIncluded ? 1 : 0);
