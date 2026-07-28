@@ -1,7 +1,11 @@
 // Whatsapp plugin module implements outbound media contract behavior.
 import path from "node:path";
 import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
-import { mediaKindFromMime, normalizeMimeType } from "openclaw/plugin-sdk/media-mime";
+import {
+  mediaKindFromMime,
+  mimeTypeFromFilePath,
+  normalizeMimeType,
+} from "openclaw/plugin-sdk/media-mime";
 import type { MediaKind } from "openclaw/plugin-sdk/media-mime";
 import {
   MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
@@ -127,9 +131,16 @@ function inferWhatsAppMediaKind(
     return media.kind;
   }
   const inferredKind = mediaKindFromMime(normalizeMimeType(media.contentType));
-  return !inferredKind || inferredKind === "sticker" || inferredKind === "unknown"
-    ? "document"
-    : inferredKind;
+  if (inferredKind && inferredKind !== "sticker" && inferredKind !== "unknown") {
+    return inferredKind;
+  }
+  // A buffer upload often carries a real fileName but no contentType; fall back to the filename
+  // extension so a voice.ogg / clip.mp4 / song.mp3 is not misclassified as a generic document.
+  const kindFromName = mediaKindFromMime(mimeTypeFromFilePath(media.fileName));
+  if (kindFromName && kindFromName !== "sticker" && kindFromName !== "unknown") {
+    return kindFromName;
+  }
+  return "document";
 }
 
 function normalizeWhatsAppLoadedMedia(
@@ -138,7 +149,12 @@ function normalizeWhatsAppLoadedMedia(
 ): CanonicalWhatsAppLoadedMedia {
   const kind = inferWhatsAppMediaKind(media);
   const mimetype =
-    kind === "audio" && isWhatsAppNativeVoiceAudio({ contentType: media.contentType, mediaUrl })
+    kind === "audio" &&
+    isWhatsAppNativeVoiceAudio({
+      contentType: media.contentType,
+      fileName: media.fileName,
+      mediaUrl,
+    })
       ? WHATSAPP_VOICE_MIMETYPE
       : (media.contentType ?? "application/octet-stream");
   const fileName =
