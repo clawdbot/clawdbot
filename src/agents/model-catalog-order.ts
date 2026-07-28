@@ -26,5 +26,5 @@ export function compareModelCatalogEntries(a: ModelCatalogEntry, b: ModelCatalog
   }
   const orderComparison =
     (a.providerOrder ?? Number.MAX_SAFE_INTEGER) - (b.providerOrder ?? Number.MAX_SAFE_INTEGER);
-  return orderComparison || a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
+  return orderComparison || a.id.localeCompare(b.id) || a.name.localeCompare(b.name);
 }
