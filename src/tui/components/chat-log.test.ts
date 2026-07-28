@@ -760,6 +760,71 @@ describe("ChatLog", () => {
     expect(chatLog.render(120).join("\n")).not.toContain("evicted tool must stay detached");
   });
 
+  it.each([
+    { phase: "streaming", capacity: 20 },
+    { phase: "streaming", capacity: 40 },
+    { phase: "finished", capacity: 20 },
+    { phase: "finished", capacity: 40 },
+    { phase: "tool-streaming", capacity: 20 },
+    { phase: "tool-streaming", capacity: 40 },
+    { phase: "tool-finished", capacity: 20 },
+    { phase: "tool-finished", capacity: 40 },
+    { phase: "tool-finished-direct", capacity: 20 },
+    { phase: "tool-finished-direct", capacity: 40 },
+    { phase: "tool-finished-no-tail", capacity: 20 },
+    { phase: "tool-finished-no-tail", capacity: 40 },
+    { phase: "tool-finished-retracted-tail", capacity: 20 },
+    { phase: "tool-finished-retracted-tail", capacity: 40 },
+  ])(
+    "orders a delayed prompt before a $phase reply at capacity $capacity",
+    ({ phase, capacity }) => {
+      const chatLog = new ChatLog(capacity);
+      const runId = `shared-${phase}-${capacity}`;
+      chatLog.updateAssistant("First reply segment.", runId);
+
+      if (phase.startsWith("tool-")) {
+        chatLog.startTool(`${runId}-tool`, "read_file", { path: "shared.txt" });
+        if (
+          phase === "tool-streaming" ||
+          phase === "tool-finished" ||
+          phase === "tool-finished-retracted-tail"
+        ) {
+          chatLog.updateAssistant("First reply segment.\n\nLast reply segment.", runId);
+        }
+      }
+      if (phase === "finished" || phase.startsWith("tool-finished")) {
+        chatLog.finalizeAssistant(
+          phase.startsWith("tool-") &&
+            phase !== "tool-finished-no-tail" &&
+            phase !== "tool-finished-retracted-tail"
+            ? "First reply segment.\n\nLast reply segment."
+            : "First reply segment.",
+          runId,
+        );
+      }
+      while (chatLog.children.length < capacity) {
+        chatLog.addSystem(`Old notice ${chatLog.children.length}.`);
+      }
+
+      const prompt = { messageId: `${runId}-user`, runId };
+      chatLog.addLiveUser("Authoritative shared prompt.", prompt);
+      chatLog.addLiveUser("Authoritative shared prompt.", prompt);
+
+      const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+      expect(chatLog.children).toHaveLength(capacity);
+      expect(rendered.match(/Authoritative shared prompt\./g)).toHaveLength(1);
+      expect(rendered.indexOf("Authoritative shared prompt.")).toBeLessThan(
+        rendered.indexOf("First reply segment."),
+      );
+      if (
+        phase.startsWith("tool-") &&
+        phase !== "tool-finished-no-tail" &&
+        phase !== "tool-finished-retracted-tail"
+      ) {
+        expect(rendered).toContain("Last reply segment.");
+      }
+    },
+  );
   it("deduplicates authoritative user events and adopts the matching pending prompt", () => {
     const chatLog = new ChatLog(40);
     chatLog.addPendingUser("shared-run", "Persisted prompt.");

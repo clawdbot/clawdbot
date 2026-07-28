@@ -24,6 +24,7 @@ export class ChatLog extends Container {
   private toolRunIds = new Map<string, string>();
   private streamingRuns = new Map<string, AssistantMessageComponent>();
   private frozenAssistants = new Map<string, Set<AssistantMessageComponent>>();
+  private finalizedAssistants = new Map<string, Set<AssistantMessageComponent>>();
   private committedAssistantText = new Map<string, string>();
   private latestAssistantText = new Map<string, string>();
   private liveUsers = new Map<string, UserMessageComponent>();
@@ -61,6 +62,12 @@ export class ChatLog extends Container {
       }
     }
     if (component instanceof AssistantMessageComponent) {
+      for (const [runId, messages] of this.finalizedAssistants.entries()) {
+        messages.delete(component);
+        if (messages.size === 0) {
+          this.finalizedAssistants.delete(runId);
+        }
+      }
       for (const [runId, messages] of this.frozenAssistants.entries()) {
         messages.delete(component);
         if (messages.size === 0) {
@@ -125,6 +132,7 @@ export class ChatLog extends Container {
     this.toolRunIds.clear();
     this.streamingRuns.clear();
     this.frozenAssistants.clear();
+    this.finalizedAssistants.clear();
     this.committedAssistantText.clear();
     this.latestAssistantText.clear();
     if (opts?.preserveLiveUsers) {
@@ -285,9 +293,12 @@ export class ChatLog extends Container {
     const component = new UserMessageComponent(text);
     this.liveUsers.set(options.messageId, component);
     const frozen = options.runId ? this.frozenAssistants.get(options.runId) : undefined;
+    const finalized = options.runId ? this.finalizedAssistants.get(options.runId) : undefined;
     const assistant =
       frozen?.values().next().value ??
-      (options.runId ? this.streamingRuns.get(options.runId) : undefined);
+      (options.runId
+        ? (this.streamingRuns.get(options.runId) ?? finalized?.values().next().value)
+        : undefined);
     const assistantIndex = assistant ? this.children.indexOf(assistant) : -1;
     if (assistant && assistantIndex >= 0) {
       // Transcript broadcasts can trail the first delta; insert their prompt
@@ -297,6 +308,16 @@ export class ChatLog extends Container {
       this.children.splice(assistantIndex, 0, component);
       const protectedComponents = new Set<Component>([component, assistant]);
       if (options.runId) {
+        for (const segment of frozen ?? []) {
+          protectedComponents.add(segment);
+        }
+        const streaming = this.streamingRuns.get(options.runId);
+        if (streaming) {
+          protectedComponents.add(streaming);
+        }
+        for (const segment of finalized ?? []) {
+          protectedComponents.add(segment);
+        }
         for (const [toolId, tool] of this.toolById) {
           if (this.toolRunIds.get(toolId) === options.runId) {
             protectedComponents.add(tool);
@@ -440,6 +461,7 @@ export class ChatLog extends Container {
 
   startAssistant(text: string, runId?: string) {
     const effectiveRunId = this.resolveRunId(runId);
+    this.finalizedAssistants.delete(effectiveRunId);
     this.latestAssistantText.set(effectiveRunId, text);
     const segmentText = this.resolveAssistantSegment(effectiveRunId, text);
     const existing = this.streamingRuns.get(effectiveRunId);
@@ -481,25 +503,43 @@ export class ChatLog extends Container {
     const effectiveRunId = this.resolveRunId(runId);
     const segmentText = this.resolveAssistantSegment(effectiveRunId, text);
     const existing = this.streamingRuns.get(effectiveRunId);
+    const finalized = new Set(this.frozenAssistants.get(effectiveRunId) ?? []);
+    let lastAssistant: AssistantMessageComponent | undefined;
     this.frozenAssistants.delete(effectiveRunId);
     this.committedAssistantText.delete(effectiveRunId);
     this.latestAssistantText.delete(effectiveRunId);
     if (existing) {
       if (segmentText) {
         existing.setText(segmentText);
+        lastAssistant = existing;
       } else {
         this.removeChild(existing);
       }
       this.streamingRuns.delete(effectiveRunId);
-      return;
+    } else if (segmentText) {
+      const component = new AssistantMessageComponent(segmentText);
+      this.appendNonSystem(component);
+      lastAssistant = component;
     }
-    if (segmentText) {
-      this.appendNonSystem(new AssistantMessageComponent(segmentText));
+
+    if (lastAssistant) {
+      finalized.add(lastAssistant);
+    }
+    for (const segment of finalized) {
+      if (!this.children.includes(segment)) {
+        finalized.delete(segment);
+      }
+    }
+    if (finalized.size > 0) {
+      // Persisted peer prompts can trail finalization; retain every surviving
+      // reply segment so full scrollback cannot evict the tool-split tail.
+      this.finalizedAssistants.set(effectiveRunId, finalized);
     }
   }
 
   dropAssistant(runId?: string) {
     const effectiveRunId = this.resolveRunId(runId);
+    this.finalizedAssistants.delete(effectiveRunId);
     for (const component of this.frozenAssistants.get(effectiveRunId) ?? []) {
       this.removeChild(component);
     }
