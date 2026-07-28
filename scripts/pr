@@ -103,6 +103,9 @@ if common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolute
         if [ "$dev_wrapper_opt_in" = "1" ] && [ -n "$requested_classification" ]; then
           echo "subcommand '$requested_subcommand' is classified $requested_classification; dev-wrapper opt-in is unavailable." >&2
         fi
+        # HEAD blobs are authoritative here: the uncommitted-wrapper guard above
+        # already exited for any staged or unstaged edit to these three paths, so
+        # the working tree matches HEAD and this list matches what was rejected.
         differing_wrapper_components=()
         for wrapper_component in scripts/pr scripts/pr-lib scripts/lib/plain-gh.sh; do
           linked_component_revision=$(git -C "$script_parent_dir" rev-parse "HEAD:$wrapper_component" 2>/dev/null || true)
